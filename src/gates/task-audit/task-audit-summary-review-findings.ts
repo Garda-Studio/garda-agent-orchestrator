@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 
 import { sha256RedactedJsonPayload } from '../../core/redaction';
-import { fileSha256 } from '../../gate-runtime/hash';
+import { readReviewArtifactFileSha256 } from '../../gate-runtime/review-artifacts';
 import type { ReviewFindingDispositionAction } from '../../policy/profile-resolver';
 import type { TaskQueueEntry } from '../../core/task-queue-read';
 import type { ReviewReuseTelemetryEventLike } from '../review-reuse/review-reuse-telemetry';
@@ -741,7 +741,7 @@ function readCachedCorrectionArtifactSha256(
     const cached = cache.entries.get(artifactPath) || {};
     if (cached.fileSha256 === undefined) {
         cache.workMetrics.artifact_hash_reads += 1;
-        cached.fileSha256 = fileSha256(artifactPath);
+        cached.fileSha256 = readReviewArtifactFileSha256(artifactPath);
         cache.entries.set(artifactPath, cached);
     } else {
         cache.workMetrics.artifact_hash_cache_hits += 1;

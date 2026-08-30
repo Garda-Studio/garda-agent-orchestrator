@@ -4,6 +4,11 @@ import * as path from 'node:path';
 import type { TaskEventIntegrity } from '../../gate-runtime/task-events';
 import { type ReviewReceipt } from '../../gate-runtime/review-context';
 import {
+    readReviewArtifactFileSha256,
+    readReviewArtifactFileSnapshot,
+    readReviewArtifactJsonFile
+} from '../../gate-runtime/review-artifacts';
+import {
     DEFAULT_REVIEW_EXECUTION_POLICY_MODE,
     getReviewExecutionDependencies,
     resolveReviewExecutionPolicyModeFromPreflight,
@@ -272,7 +277,15 @@ export function assessUpstreamReviewDependencyStatus(options: {
     const artifactPath = path.join(reviewsRoot, `${options.taskId}-${options.upstreamReviewType}.md`);
     let artifactBuffer: Buffer;
     try {
-        artifactBuffer = fs.readFileSync(artifactPath);
+        const artifactSnapshot = readReviewArtifactFileSnapshot(artifactPath);
+        artifactBuffer = artifactSnapshot.active
+            ? (() => {
+                if (!artifactSnapshot.valid || !artifactSnapshot.content) {
+                    throw new Error('review artifact snapshot unavailable');
+                }
+                return artifactSnapshot.content;
+            })()
+            : fs.readFileSync(artifactPath);
     } catch {
         return blockedDependencyStatus(
             options.upstreamReviewType,
@@ -283,7 +296,7 @@ export function assessUpstreamReviewDependencyStatus(options: {
     const receiptPath = artifactPath.replace(/\.md$/, '-receipt.json');
     let receipt: ReviewReceipt;
     try {
-        receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8')) as ReviewReceipt;
+        receipt = readReviewArtifactJsonFile(receiptPath) as ReviewReceipt;
     } catch {
         return blockedDependencyStatus(
             options.upstreamReviewType,
@@ -307,7 +320,17 @@ export function assessUpstreamReviewDependencyStatus(options: {
     }
 
     const artifactContent = artifactBuffer.toString('utf8');
-    const artifactHash = createHash('sha256').update(artifactBuffer).digest('hex').trim().toLowerCase();
+    const verifiedArtifactSnapshot = readReviewArtifactFileSnapshot(artifactPath);
+    const artifactHash = verifiedArtifactSnapshot.active
+        ? (verifiedArtifactSnapshot.valid ? verifiedArtifactSnapshot.sha256 : null)
+        : createHash('sha256').update(artifactBuffer).digest('hex').trim().toLowerCase();
+    if (!artifactHash) {
+        return blockedDependencyStatus(
+            options.upstreamReviewType,
+            'stale_freshness',
+            'review artifact changed or became unreadable during verification'
+        );
+    }
     if (String(receipt.review_artifact_sha256 || '').trim().toLowerCase() !== artifactHash) {
         return blockedDependencyStatus(
             options.upstreamReviewType,
@@ -323,7 +346,7 @@ export function assessUpstreamReviewDependencyStatus(options: {
     );
     let reviewContext: Record<string, unknown>;
     try {
-        reviewContext = JSON.parse(fs.readFileSync(reviewContextPath, 'utf8')) as Record<string, unknown>;
+        reviewContext = readReviewArtifactJsonFile(reviewContextPath) as Record<string, unknown>;
     } catch {
         return blockedDependencyStatus(
             options.upstreamReviewType,
@@ -333,7 +356,7 @@ export function assessUpstreamReviewDependencyStatus(options: {
     }
     const passToken = REVIEW_CONTRACTS.find(([candidate]) => candidate === options.upstreamReviewType)?.[1] || null;
     const failToken = resolveReviewFailToken(options.upstreamReviewType);
-    const reviewContextSha256 = String(gateHelpers.fileSha256(reviewContextPath) || '').trim().toLowerCase() || null;
+    const reviewContextSha256 = String(readReviewArtifactFileSha256(reviewContextPath) || '').trim().toLowerCase() || null;
     const requiresFindingsOnlyArtifact = reviewContextRequiresFindingsOnlyArtifact(reviewContext);
     if (requiresFindingsOnlyArtifact) {
         const findingsReport = parseJsonReviewFindingsArtifact(
@@ -491,7 +514,7 @@ export function buildReviewDependencyDiagnostics(options: {
     const latestAnyRecordedReviewByType = latestCompilePassSequence == null
         ? new Map<string, ReviewDependencyTimelineEvent>()
         : buildLatestAnyRecordedReviewEventMap(options.timelineEvents);
-    const currentPreflightHashSha256 = String(gateHelpers.fileSha256(options.preflightPath) || '').trim().toLowerCase() || null;
+    const currentPreflightHashSha256 = String(readReviewArtifactFileSha256(options.preflightPath) || '').trim().toLowerCase() || null;
     const dependencyStatuses = upstreamReviewTypes.map((upstreamReviewType) => assessUpstreamReviewDependencyStatus({
         taskId: options.taskId,
         preflightPath: options.preflightPath,

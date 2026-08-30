@@ -11,6 +11,7 @@ import {
     rebuildIndex,
     loadIndex,
     loadTaskIndex,
+    withTaskIndexReadSnapshot,
     writeIndex,
     resolveIndexPath,
     resolveIndexLockPath,
@@ -780,6 +781,39 @@ describe('reviews-index', () => {
             }
 
             assert.equal(unrelatedAuthorizationCount, 0);
+        });
+
+        it('reuses one validated task index only inside an invocation snapshot', () => {
+            writeArtifact(reviewsDir, 'T-ACTIVE-task-mode.json', JSON.stringify({
+                task_id: 'T-ACTIVE'
+            }));
+            loadIndex(reviewsDir);
+
+            const realFs = require('node:fs');
+            const originalReadFileSync = realFs.readFileSync;
+            const indexPath = resolveIndexPath(reviewsDir);
+            let indexReadCount = 0;
+            realFs.readFileSync = function (...args: any[]) {
+                if (path.resolve(String(args[0])) === path.resolve(indexPath)) {
+                    indexReadCount += 1;
+                }
+                return originalReadFileSync.apply(realFs, args);
+            };
+            try {
+                withTaskIndexReadSnapshot(reviewsDir, 'T-ACTIVE', () => {
+                    const first = loadTaskIndex(reviewsDir, 'T-ACTIVE');
+                    assert.equal(first.index.entries.length, 1);
+                    first.index.entries.splice(0);
+                    assert.equal(loadTaskIndex(reviewsDir, 'T-ACTIVE').index.entries.length, 1);
+                    assert.equal(loadTaskIndex(reviewsDir, 'T-ACTIVE').index.entries.length, 1);
+                });
+                assert.equal(indexReadCount, 1);
+
+                assert.equal(loadTaskIndex(reviewsDir, 'T-ACTIVE').index.entries.length, 1);
+                assert.equal(indexReadCount, 2);
+            } finally {
+                realFs.readFileSync = originalReadFileSync;
+            }
         });
 
         it('keeps overlapping parent and child artifact ownership fail-closed in a task view', () => {

@@ -8,13 +8,17 @@ import {
 } from '../../gate-runtime/review-context';
 import { reviewerIdentityMatchesDelegatedLaunchCycle } from '../../gate-runtime/review/reviewer-identity-contract';
 import {
+    readReviewArtifactFileSha256,
+    readReviewArtifactTextFile
+} from '../../gate-runtime/review-artifacts';
+import {
     DEFAULT_REVIEW_EXECUTION_POLICY_MODE,
     type EffectiveReviewExecutionPolicyMode
 } from '../../core/review-execution-policy';
 import type { CompiledReviewDependencyGraph } from '../../core/review-dependency-graph';
 import { getReviewSkillCandidates } from '../../core/review-capabilities';
 import { REVIEW_TRIVIAL_OUTPUT_THRESHOLD_MESSAGE } from '../../core/orchestration-constants';
-import { fileSha256, normalizePath } from '../shared';
+import { normalizePath } from '../shared';
 import {
     normalizeTimelineDetailString,
     getTimelineSkillId,
@@ -503,8 +507,8 @@ export function validateReviewSkillEvidence(
                         taskId: timelineTaskId || '',
                         reviewType: key,
                         receipt: receipt as unknown as Record<string, unknown>,
-                        artifactSha256: fileSha256(artifact.path),
-                        contextSha256: fileSha256(expectedReviewContextPath),
+                        artifactSha256: readReviewArtifactFileSha256(artifact.path),
+                        contextSha256: readReviewArtifactFileSha256(expectedReviewContextPath),
                         contextReviewTreeStateSha256,
                         contextExecutionMode: actualExecutionMode,
                         contextReviewerIdentity: reviewerSessionId,
@@ -688,9 +692,9 @@ export function validateReviewSkillEvidence(
                     }
                     if (reusedExistingReview) {
                         const expectedReceiptPath = normalizePath(artifact.path.replace(/\.md$/, '-receipt.json'));
-                        const currentReviewArtifactSha256 = fileSha256(artifact.path);
+                        const currentReviewArtifactSha256 = readReviewArtifactFileSha256(artifact.path);
                         const currentReviewContextSha256 = repoRoot
-                            ? fileSha256(expectedReviewContextPath)
+                            ? readReviewArtifactFileSha256(expectedReviewContextPath)
                             : null;
                         if (!currentReviewArtifactSha256) {
                             result.violations.push(
@@ -919,7 +923,7 @@ export function validateReviewSkillEvidence(
                 artifactPath = path.join(path.dirname(timelinePath.replace('task-events', 'reviews')), `${path.basename(timelinePath, '.jsonl')}-${key}.md`);
             }
             if (artifactPath && fs.existsSync(artifactPath)) {
-                const content = (artifact as any).content || fs.readFileSync(artifactPath, 'utf8');
+                const content = (artifact as any).content || readReviewArtifactTextFile(artifactPath);
                 if (isTrivialReview(content)) {
                     result.violations.push(
                         `Review artifact '${normalizePath(artifactPath)}' is trivial or obviously synthetic. ` +

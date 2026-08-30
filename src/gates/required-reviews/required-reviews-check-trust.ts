@@ -8,12 +8,13 @@ import {
     normalizeCompatibilityReviewerExecutionMode,
     type ReviewReceipt
 } from '../../gate-runtime/review-context';
+import { readReviewArtifactFileSha256 } from '../../gate-runtime/review-artifacts';
 import {
     getReviewArtifactFindingsEvidence,
     getReviewFindingsEvidenceFromValidationArtifact,
     isTrivialReview
 } from '../completion';
-import { fileSha256, normalizePath, toPlainRecord } from '../shared/helpers';
+import { normalizePath, toPlainRecord } from '../shared/helpers';
 import {
     buildReviewContextPreflightDiffExpectations,
     getReviewContextContractViolations
@@ -177,7 +178,6 @@ export function validateReviewArtifactGateEligibility(options: {
     let trustLevel: string | null = null;
     let receiptReviewContextSha256: string | null = null;
     let validatedReceipt: ReviewReceipt | null = null;
-    let currentArtifactSha256: string | null = null;
     let reusedExistingReview = false;
     let reusedFromReviewTreeStateSha256: string | null = null;
     let trivialReview = false;
@@ -371,8 +371,8 @@ export function validateReviewArtifactGateEligibility(options: {
                             errors.push(error instanceof Error ? error.message : String(error));
                         }
                     }
-                    const currentArtifactHash = receiptSnapshot.artifactSha256 ?? fileSha256(artifactPath);
-                    currentArtifactSha256 = currentArtifactHash;
+                    const currentArtifactHash = receiptSnapshot.artifactSha256
+                        ?? readReviewArtifactFileSha256(artifactPath);
                     const executionEvidenceViolations = getReviewReceiptExecutionEvidenceContractViolations({
                         reviewContext: reviewContext || null,
                         receipt: receipt as unknown as Record<string, unknown>
@@ -670,7 +670,7 @@ export function validateReviewArtifactGateEligibility(options: {
                             reviewTreeStateSha256: validatedReceipt?.review_tree_state_sha256 || null,
                             reviewScopeSha256: validatedReceipt?.review_scope_sha256,
                             codeScopeSha256: validatedReceipt?.code_scope_sha256,
-                            reviewArtifactSha256: currentArtifactSha256 ?? reviewArtifact.artifactSha256 ?? fileSha256(artifactPath),
+                            reviewArtifactSha256: readReviewArtifactFileSha256(artifactPath),
                             reusedFromReceiptPath: typeof validatedReceipt?.reused_from_receipt_path === 'string'
                                 ? validatedReceipt.reused_from_receipt_path
                                 : null,

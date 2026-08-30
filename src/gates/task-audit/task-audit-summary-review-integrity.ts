@@ -1,8 +1,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileSha256 } from '../shared/helpers';
 import { normalizeReviewReceiptReviewerProvenance } from '../../gate-runtime/review-context';
-import { withReviewArtifactReadBarrier } from '../../gate-runtime/review-artifacts';
+import {
+    readReviewArtifactTextFile,
+    withReviewArtifactReadBarrier
+} from '../../gate-runtime/review-artifacts';
 import { reviewerIdentityMatchesDelegatedLaunchCycle } from '../../gate-runtime/review/reviewer-identity-contract';
 import {
     validateHistoricalReviewRecordedTelemetryEventMatch,
@@ -18,7 +20,8 @@ import {
     isSafeCanonicalArtifactPath,
     normalizeSha256Text,
     normalizeTrustToken,
-    safeReadJson
+    safeReadJson,
+    safeReviewArtifactFileSha256
 } from './task-audit-summary-review-common';
 import { reviewReceiptMatchesCurrentReviewDomain, type FinalCloseoutReviewTrustSummary } from './task-audit-summary-review-trust';
 import {
@@ -233,7 +236,14 @@ function collectReviewIntegrityIssues(options: {
         const reviewExists = fs.existsSync(reviewPath) && fs.statSync(reviewPath).isFile();
         const receiptExists = fs.existsSync(receiptPath) && fs.statSync(receiptPath).isFile();
         const contextExists = fs.existsSync(reviewContextPath) && fs.statSync(reviewContextPath).isFile();
-        const reviewContent = reviewExists ? fs.readFileSync(reviewPath, 'utf8') : '';
+        let reviewContent = '';
+        if (reviewExists) {
+            try {
+                reviewContent = readReviewArtifactTextFile(reviewPath);
+            } catch {
+                issues.push(`${reviewType}: review artifact changed or became unreadable during verification`);
+            }
+        }
 
         if (reviewExists && reviewLooksFabricated(reviewContent)) {
             issues.push(`${reviewType}: fabricated-looking review artifact content observed`);
@@ -342,7 +352,7 @@ function collectReviewIntegrityIssues(options: {
             }
         }
         const recordedReviewArtifactHash = String(receipt.review_artifact_sha256 || '').trim().toLowerCase();
-        if (reviewExists && recordedReviewArtifactHash && fileSha256(reviewPath) !== recordedReviewArtifactHash) {
+        if (reviewExists && recordedReviewArtifactHash && safeReviewArtifactFileSha256(reviewPath) !== recordedReviewArtifactHash) {
             issues.push(`${reviewType}: review artifact hash does not match receipt`);
         }
         if (reviewExists && !recordedReviewArtifactHash) {
@@ -361,7 +371,7 @@ function collectReviewIntegrityIssues(options: {
         }
         if (!recordedReviewContextHash) {
             issues.push(`${reviewType}: receipt omits review context hash`);
-        } else if (!reviewContextPathSafe || !fs.existsSync(reviewContextPath) || fileSha256(reviewContextPath) !== recordedReviewContextHash) {
+        } else if (!reviewContextPathSafe || !fs.existsSync(reviewContextPath) || safeReviewArtifactFileSha256(reviewContextPath) !== recordedReviewContextHash) {
             issues.push(`${reviewType}: review context hash is missing or does not match receipt`);
         }
         const reviewContext = reviewContextPathSafe ? safeReadJson(reviewContextPath) : null;
@@ -385,7 +395,7 @@ function collectReviewIntegrityIssues(options: {
                     reviewType,
                     events: options.timelineEvents,
                     receiptPath,
-                    receiptSha256: fileSha256(receiptPath),
+                    receiptSha256: safeReviewArtifactFileSha256(receiptPath),
                     reviewContextSha256: recordedReviewContextHash,
                     reviewContextReuseSha256: normalizeSha256Text(receipt.review_context_reuse_sha256),
                     reviewTreeStateSha256: receiptReviewTreeStateHash,
@@ -422,7 +432,7 @@ function collectReviewIntegrityIssues(options: {
                 latestCompileTaskSequence,
                 latestReviewGateTaskSequence,
                 receiptPath,
-                receiptSha256: fileSha256(receiptPath) || '',
+                receiptSha256: safeReviewArtifactFileSha256(receiptPath) || '',
                 receipt: receipt as Record<string, unknown>,
                 reviewContextSha256: recordedReviewContextHash,
                 reviewTreeStateSha256: receiptReviewTreeStateHash,

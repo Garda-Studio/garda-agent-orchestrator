@@ -2,8 +2,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { type ReviewReceipt } from '../../gate-runtime/review-context';
-import { withReviewArtifactReadBarrier } from '../../gate-runtime/review-artifacts';
-import { fileSha256, isPathRealpathInsideRoot, normalizePath, toPlainRecord } from '../shared/helpers';
+import {
+    readReviewArtifactFileSha256,
+    readReviewArtifactJsonFile,
+    withReviewArtifactReadBarrier
+} from '../../gate-runtime/review-artifacts';
+import { isPathRealpathInsideRoot, normalizePath, toPlainRecord } from '../shared/helpers';
 
 function readPreflightPayloadForReviewValidation(preflightPath?: string | null): Record<string, unknown> | null {
     const resolvedPath = String(preflightPath || '').trim();
@@ -11,7 +15,7 @@ function readPreflightPayloadForReviewValidation(preflightPath?: string | null):
         return null;
     }
     try {
-        return toPlainRecord(JSON.parse(fs.readFileSync(resolvedPath, 'utf8')));
+        return toPlainRecord(readReviewArtifactJsonFile(resolvedPath));
     } catch {
         return null;
     }
@@ -67,7 +71,7 @@ export function readReviewReceiptSnapshot(options: {
             if (!fs.existsSync(options.artifactPath) || !fs.statSync(options.artifactPath).isFile()) {
                 return null;
             }
-            return fileSha256(options.artifactPath);
+            return readReviewArtifactFileSha256(options.artifactPath);
         } catch {
             return null;
         }
@@ -88,23 +92,23 @@ export function readReviewReceiptSnapshot(options: {
     }
     const reviewsRoot = path.dirname(path.resolve(options.receiptPath));
     return withReviewArtifactReadBarrier(reviewsRoot, () => {
-        const artifactSha256 = readArtifactSha256IfAvailable();
         if (!fs.existsSync(options.receiptPath) || !fs.statSync(options.receiptPath).isFile()) {
             return {
-                artifactSha256,
+                artifactSha256: readArtifactSha256IfAvailable(),
                 receipt: null,
                 receiptReadError: null
             };
         }
         try {
+            const receipt = readReviewArtifactJsonFile(options.receiptPath) as ReviewReceipt;
             return {
-                artifactSha256,
-                receipt: JSON.parse(fs.readFileSync(options.receiptPath, 'utf8')) as ReviewReceipt,
+                artifactSha256: readArtifactSha256IfAvailable(),
+                receipt,
                 receiptReadError: null
             };
         } catch {
             return {
-                artifactSha256,
+                artifactSha256: readArtifactSha256IfAvailable(),
                 receipt: null,
                 receiptReadError: `Review receipt for '${options.reviewKey}' is invalid JSON: ${normalizePath(options.receiptPath)}.`
             };

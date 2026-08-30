@@ -5,9 +5,12 @@ import * as path from 'node:path';
 
 import { sha256RedactedJsonPayload } from '../../core/redaction';
 import { parseCanonicalActiveTaskQueue } from '../../core/task-md-table';
-import { withReviewArtifactReadBarrier } from '../../gate-runtime/review-artifacts';
 import {
-    fileSha256,
+    readReviewArtifactFileSha256,
+    readReviewArtifactJsonFile,
+    withReviewArtifactReadBarrier
+} from '../../gate-runtime/review-artifacts';
+import {
     isPathRealpathInsideRoot,
     normalizePath,
     toPlainRecord
@@ -156,7 +159,7 @@ function readJsonRecord(filePath: string, subject: string, violations: string[])
         return null;
     }
     try {
-        return toPlainRecord(JSON.parse(fs.readFileSync(filePath, 'utf8')));
+        return toPlainRecord(readReviewArtifactJsonFile(filePath));
     } catch {
         violations.push(`${subject} '${normalizePath(filePath)}' is not valid JSON.`);
         return null;
@@ -273,7 +276,8 @@ function validateFollowUpSatisfaction(options: {
     assertEqual(violations, 'Review findings follow-up source validation accepted', sourceValidation?.accepted, true);
     const sourceReceipt = toPlainRecord(artifact.source_receipt);
     const expectedReceiptPath = normalizePath(options.expectedReceiptPath || options.receiptPath);
-    const expectedReceiptSha256 = normalizeHash(options.expectedReceiptSha256) || fileSha256(options.receiptPath);
+    const expectedReceiptSha256 = normalizeHash(options.expectedReceiptSha256)
+        || readReviewArtifactFileSha256(options.receiptPath);
     assertEqual(violations, 'Review findings follow-up source receipt path', normalizeNonEmptyPath(sourceReceipt?.receipt_path), expectedReceiptPath);
     assertEqual(violations, 'Review findings follow-up source receipt sha256', normalizeHash(sourceReceipt?.receipt_sha256), expectedReceiptSha256);
     const summary = toPlainRecord(artifact.summary);
@@ -408,7 +412,7 @@ function validateReviewFindingsDispositionEvidenceUnlocked(
     const artifactRecord = violations.length === 0
         ? readJsonRecord(artifactPathToRead, 'Review findings disposition artifact', violations)
         : null;
-    const artifactSha256 = artifactRecord ? fileSha256(artifactPathToRead) : null;
+    const artifactSha256 = artifactRecord ? readReviewArtifactFileSha256(artifactPathToRead) : null;
     if (artifactSha256 && artifactSha256 !== artifactSha256ToRead) {
         violations.push(
             `Review findings disposition artifact '${artifactPathToRead}' sha256 mismatch: ` +
@@ -435,7 +439,7 @@ function validateReviewFindingsDispositionEvidenceUnlocked(
             'Review findings disposition snapshot',
             violations
         );
-        const snapshotSha256 = snapshotRecord ? fileSha256(reference.snapshot_path) : null;
+        const snapshotSha256 = snapshotRecord ? readReviewArtifactFileSha256(reference.snapshot_path) : null;
         if (snapshotSha256 && snapshotSha256 !== reference.snapshot_sha256) {
             violations.push(
                 `Review findings disposition snapshot '${reference.snapshot_path}' sha256 mismatch: ` +

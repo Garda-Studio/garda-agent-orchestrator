@@ -3,8 +3,13 @@ import * as path from 'node:path';
 
 import { isPlainRecord } from '../../core/records';
 import type { ReviewReceipt } from '../../gate-runtime/review-context';
-import { withReviewArtifactReadBarrier } from '../../gate-runtime/review-artifacts';
-import { fileSha256, normalizePath } from '../shared/helpers';
+import {
+    readReviewArtifactFileSha256,
+    readReviewArtifactJsonFile,
+    readReviewArtifactTextFile,
+    withReviewArtifactReadBarrier
+} from '../../gate-runtime/review-artifacts';
+import { normalizePath } from '../shared/helpers';
 import { resolveCanonicalReviewContextPath } from '../review-context/review-context-paths';
 import {
     buildReviewContextPreflightDiffExpectations,
@@ -163,12 +168,12 @@ export function collectRequiredReviewEvidence(input: {
                 continue;
             }
 
-            const artifactContent = fs.readFileSync(artifactPath, 'utf8');
+            const artifactContent = readReviewArtifactTextFile(artifactPath);
             let reviewContext: Record<string, unknown> | null = null;
             let receipt: ReviewReceipt | null = null;
             if (fs.existsSync(reviewContextPath) && fs.statSync(reviewContextPath).isFile()) {
                 try {
-                    const parsedReviewContext = JSON.parse(fs.readFileSync(reviewContextPath, 'utf8'));
+                    const parsedReviewContext = readReviewArtifactJsonFile(reviewContextPath);
                     if (parsedReviewContext && typeof parsedReviewContext === 'object' && !Array.isArray(parsedReviewContext)) {
                         reviewContext = parsedReviewContext as Record<string, unknown>;
                         const diffExpectations = buildReviewContextPreflightDiffExpectations(input.preflight, reviewKey);
@@ -210,14 +215,14 @@ export function collectRequiredReviewEvidence(input: {
             }
             if (fs.existsSync(receiptPath) && fs.statSync(receiptPath).isFile()) {
                 try {
-                    const parsedReceipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+                    const parsedReceipt = readReviewArtifactJsonFile(receiptPath);
                     if (parsedReceipt && typeof parsedReceipt === 'object' && !Array.isArray(parsedReceipt)) {
                         receipt = parsedReceipt as ReviewReceipt;
                         const recordedReviewArtifactSha256 = getReceiptString(
                             receipt,
                             'review_artifact_sha256'
                         )?.toLowerCase() ?? null;
-                        const actualReviewArtifactSha256 = fileSha256(artifactPath);
+                        const actualReviewArtifactSha256 = readReviewArtifactFileSha256(artifactPath);
                         if (
                             recordedReviewArtifactSha256
                             && recordedReviewArtifactSha256 !== actualReviewArtifactSha256
@@ -264,11 +269,11 @@ export function collectRequiredReviewEvidence(input: {
                         expectedTaskId: input.taskId,
                         expectedReviewType: reviewKey,
                         expectedReviewOutputSha256: getReceiptString(receipt, 'review_output_sha256'),
-                        expectedReviewArtifactSha256: fileSha256(artifactPath),
+                        expectedReviewArtifactSha256: readReviewArtifactFileSha256(artifactPath),
                         expectedReviewContextPath: reusedExistingReview ? null : reviewContextPath,
                         expectedReviewContextSha256: reusedExistingReview
                             ? getReceiptString(receipt, 'reused_from_review_context_sha256')
-                            : fileSha256(reviewContextPath),
+                            : readReviewArtifactFileSha256(reviewContextPath),
                         expectedPreflightPath: reusedExistingReview ? null : input.preflightPath,
                         expectedPreflightSha256: reusedExistingReview ? null : input.preflightSha256,
                         expectedScopeSha256: reusedExistingReview ? null : getPreflightScopeSha256(input.preflight),

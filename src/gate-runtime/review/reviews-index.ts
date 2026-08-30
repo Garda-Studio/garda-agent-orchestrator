@@ -34,6 +34,10 @@ const REVIEW_PATTERN_CACHE_LIMIT = 64;
 const immutableReviewSnapshotPatternCache = new Map<string, RegExp | null>();
 const immutableReviewArtifactTypePatternCache = new Map<string, RegExp | null>();
 const inProcessReviewTransactionSnapshots = new Map<string, { depth: number; index: ReviewsIndex }>();
+const inProcessTaskIndexReadSnapshots = new Map<string, {
+    depth: number;
+    index: ReviewsIndex | null;
+}>();
 
 export const KNOWN_SUFFIXES = KNOWN_REVIEW_ARTIFACT_SUFFIXES;
 
@@ -92,6 +96,21 @@ function cloneReviewsIndex(index: ReviewsIndex): ReviewsIndex {
         entries_sha256: index.entries_sha256 ?? computeEntriesSha256(index.entries),
         entries: index.entries.map((entry) => ({ ...entry }))
     };
+}
+
+function resolveTaskIndexReadSnapshotKey(reviewsDir: string, taskId: string): string {
+    return `${path.resolve(reviewsDir)}\u0000${taskId}`;
+}
+
+function releaseTaskIndexReadSnapshot(snapshotKey: string): void {
+    const snapshot = inProcessTaskIndexReadSnapshots.get(snapshotKey);
+    if (!snapshot) {
+        return;
+    }
+    snapshot.depth -= 1;
+    if (snapshot.depth <= 0) {
+        inProcessTaskIndexReadSnapshots.delete(snapshotKey);
+    }
 }
 
 function computeEntriesSha256(entries: readonly ReviewsIndexEntry[]): string {
@@ -1068,6 +1087,23 @@ export function loadIndex(
  */
 export function loadTaskIndex(reviewsDir: string, taskId: string): ReviewsIndexLoadResult {
     const safeTaskId = assertCanonicalTaskId(taskId);
+    const snapshotKey = resolveTaskIndexReadSnapshotKey(reviewsDir, safeTaskId);
+    const activeReadSnapshot = inProcessTaskIndexReadSnapshots.get(snapshotKey);
+    if (activeReadSnapshot?.index) {
+        return {
+            index: cloneReviewsIndex(activeReadSnapshot.index),
+            source: 'cache'
+        };
+    }
+
+    const result = loadTaskIndexUncached(reviewsDir, safeTaskId);
+    if (activeReadSnapshot) {
+        activeReadSnapshot.index = cloneReviewsIndex(result.index);
+    }
+    return result;
+}
+
+function loadTaskIndexUncached(reviewsDir: string, safeTaskId: string): ReviewsIndexLoadResult {
     if (currentProcessOwnsReviewTransactionLock(reviewsDir)) {
         const transactionSnapshot = getInProcessReviewTransactionSnapshot(reviewsDir);
         if (transactionSnapshot) {
@@ -1104,6 +1140,30 @@ export function loadTaskIndex(reviewsDir: string, taskId: string): ReviewsIndexL
             source: 'rebuilt' as const
         };
     }, { readOnly: true });
+}
+
+/**
+ * Reuse one fully validated task-scoped index during a synchronous read-only
+ * operation. The snapshot is always released at the invocation boundary.
+ */
+export function withTaskIndexReadSnapshot<T>(
+    reviewsDir: string,
+    taskId: string,
+    callback: () => T
+): T {
+    const safeTaskId = assertCanonicalTaskId(taskId);
+    const snapshotKey = resolveTaskIndexReadSnapshotKey(reviewsDir, safeTaskId);
+    const existing = inProcessTaskIndexReadSnapshots.get(snapshotKey);
+    if (existing) {
+        existing.depth += 1;
+    } else {
+        inProcessTaskIndexReadSnapshots.set(snapshotKey, { depth: 1, index: null });
+    }
+    try {
+        return callback();
+    } finally {
+        releaseTaskIndexReadSnapshot(snapshotKey);
+    }
 }
 
 export function rebuildAndPersistIndex(reviewsDir: string): ReviewsIndexMutationResult {

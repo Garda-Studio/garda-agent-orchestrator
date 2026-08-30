@@ -6,6 +6,12 @@ import {
     normalizeReviewReceiptReviewerProvenance,
     type ReviewReceipt
 } from '../../gate-runtime/review-context';
+import {
+    readReviewArtifactFileSha256,
+    readReviewArtifactFileSnapshot,
+    readReviewArtifactJsonFile,
+    readReviewArtifactTextFile
+} from '../../gate-runtime/review-artifacts';
 import * as gateHelpers from '../shared/helpers';
 import {
     computeReviewReuseCodeScopeFingerprint,
@@ -296,10 +302,16 @@ function readVerifiedCandidateReceipt(
         };
     }
     try {
+        const receipt = readReviewArtifactJsonFile(receiptPath) as ReviewReceipt;
+        const fileSnapshot = readReviewArtifactFileSnapshot(receiptPath);
         return {
-            receipt: JSON.parse(fs.readFileSync(receiptPath, 'utf8')) as ReviewReceipt,
+            receipt,
             receiptPath,
-            receiptSha256: String(gateHelpers.fileSha256(receiptPath) || '').trim().toLowerCase() || null,
+            receiptSha256: String(
+                (fileSnapshot.active
+                    ? (fileSnapshot.valid ? fileSnapshot.sha256 : null)
+                    : gateHelpers.fileSha256(receiptPath)) || ''
+            ).trim().toLowerCase() || null,
             reason: null
         };
     } catch {
@@ -354,11 +366,19 @@ function readVerifiedCandidateReviewArtifact(
             reason: `prior review artifact is missing at ${gateHelpers.normalizePath(artifactPath)}`
         };
     }
-    return {
-        artifactPath,
-        artifactText: fs.readFileSync(artifactPath, 'utf8'),
-        reason: null
-    };
+    try {
+        return {
+            artifactPath,
+            artifactText: readReviewArtifactTextFile(artifactPath),
+            reason: null
+        };
+    } catch {
+        return {
+            artifactPath,
+            artifactText: null,
+            reason: `prior review artifact is unreadable at ${gateHelpers.normalizePath(artifactPath)}`
+        };
+    }
 }
 
 function findHistoricalReviewRecordedEventForLatestReceiptCandidate(options: {
@@ -599,7 +619,7 @@ export function validateHistoricalReviewReuseCandidate(options: {
         };
     }
     const artifactText = verifiedArtifact.artifactText;
-    const historicalReviewArtifactSha256 = String(gateHelpers.fileSha256(verifiedArtifact.artifactPath) || '')
+    const historicalReviewArtifactSha256 = String(readReviewArtifactFileSha256(verifiedArtifact.artifactPath) || '')
         .trim()
         .toLowerCase();
     if (receiptRequiresFindingsValidation(receipt)) {

@@ -1,10 +1,13 @@
 // Extracted from review-reuse-telemetry.ts; keep behavior changes covered by facade tests.
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
     buildReviewVerdictTokenSet,
     extractReviewVerdictSectionTokenMatch
 } from '../../gate-runtime/review-context';
+import {
+    readReviewArtifactFileSha256,
+    readReviewArtifactTextFile
+} from '../../gate-runtime/review-artifacts';
 import {
     normalizeReviewFindingsValidationReceiptReference,
     validateReviewFindingsValidationArtifactForReceipt
@@ -13,7 +16,7 @@ import {
     resolveLockedReviewFindingPolicyFromReceiptDisposition,
     reviewFindingsValidationArtifactHasBlockingFindings
 } from '../review/review-finding-disposition';
-import { fileSha256, joinOrchestratorPath, normalizePath } from '../shared/helpers';
+import { joinOrchestratorPath, normalizePath } from '../shared/helpers';
 import {
     type ReviewReuseTelemetryMatchResult,
     type StrictEventEvidence,
@@ -184,7 +187,7 @@ function resolveStrictCurrentReceiptSha256(
     if (!pathValidation.valid) {
         return { valid: false, reason: pathValidation.message };
     }
-    const actualSha256 = normalizeLowerString(fileSha256(pathValidation.resolvedPath));
+    const actualSha256 = normalizeLowerString(readReviewArtifactFileSha256(pathValidation.resolvedPath));
     if (!isSha256(actualSha256)) {
         return { valid: false, reason: 'current reused review receipt hash is unavailable' };
     }
@@ -216,7 +219,7 @@ function resolveStrictCurrentReviewArtifactSha256(
     if (!pathValidation.valid) {
         return { valid: false, reason: pathValidation.message };
     }
-    const actualSha256 = normalizeLowerString(fileSha256(pathValidation.resolvedPath));
+    const actualSha256 = normalizeLowerString(readReviewArtifactFileSha256(pathValidation.resolvedPath));
     if (!isSha256(actualSha256)) {
         return { valid: false, reason: 'current reused review artifact hash is unavailable' };
     }
@@ -675,7 +678,7 @@ function validateReviewRecordedPassVerdict(
         }
         return null;
     }
-    const artifactText = fs.readFileSync(artifactValidation.resolvedPath, 'utf8');
+    const artifactText = readReviewArtifactTextFile(artifactValidation.resolvedPath);
     const verdict = extractReviewVerdictSectionTokenMatch(
         artifactText,
         buildReviewVerdictTokenSet(input.reviewType, getReviewPassVerdict(input.reviewType))

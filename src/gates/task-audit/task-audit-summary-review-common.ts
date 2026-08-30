@@ -1,7 +1,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { isPlainRecord } from '../../core/records';
+import {
+    readReviewArtifactFileSnapshot,
+    readReviewArtifactJsonSnapshot
+} from '../../gate-runtime/review-artifacts';
 import { resolveEffectiveReviewLaneSetOrLegacy } from '../../policy/effective-review-lane-set';
+import { fileSha256 } from '../shared/helpers';
 export { isPlainRecord };
 
 export const REVIEW_TRUST_COMPATIBILITY_TYPES = [
@@ -102,10 +107,22 @@ export function getCanonicalReviewContextPath(reviewsRoot: string, taskId: strin
 }
 
 export function safeReadJson(filePath: string): Record<string, unknown> | null {
+    const snapshot = readReviewArtifactJsonSnapshot(filePath);
+    if (snapshot.active) {
+        return snapshot.valid ? snapshot.value as Record<string, unknown> : null;
+    }
     try {
         if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return null;
         return JSON.parse(fs.readFileSync(filePath, 'utf8')) as Record<string, unknown>;
     } catch {
         return null;
     }
+}
+
+export function safeReviewArtifactFileSha256(filePath: string): string | null {
+    const snapshot = readReviewArtifactFileSnapshot(filePath);
+    if (snapshot.active) {
+        return snapshot.valid ? snapshot.sha256 : null;
+    }
+    return fileSha256(filePath);
 }

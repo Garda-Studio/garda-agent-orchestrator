@@ -18,9 +18,9 @@ import {
     stripReviewTimingProvenanceTimestamps
 } from '../review/review-timing-trust';
 import {
-    fileSha256,
     normalizePath
 } from '../shared/helpers';
+import { readReviewArtifactFileSha256 } from '../../gate-runtime/review-artifacts';
 import {
     toRepoDisplayPath
 } from './next-step-command-formatters';
@@ -61,8 +61,8 @@ function validateStrictReviewReuseForState(
     ) {
         return { valid: false, reason: 'reused review evidence is not current or complete' };
     }
-    const reviewContextSha256 = fileSha256(state.contextPath);
-    const reviewArtifactSha256 = fileSha256(state.artifactPath);
+    const reviewContextSha256 = readReviewArtifactFileSha256(state.contextPath);
+    const reviewArtifactSha256 = readReviewArtifactFileSha256(state.artifactPath);
     const latestCompileSequence = getLatestTaskSequenceForEventTypes(eventsRoot, taskId, ['COMPILE_GATE_PASSED']);
     if (!reviewContextSha256 || !reviewArtifactSha256 || latestCompileSequence == null) {
         return { valid: false, reason: 'reused review evidence cannot be bound to current compile telemetry' };

@@ -1,7 +1,8 @@
 // Extracted from review-reuse-telemetry.ts; keep behavior changes covered by facade tests.
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileSha256, joinOrchestratorPath, normalizePath } from '../shared/helpers';
+import { readReviewArtifactFileSha256 } from '../../gate-runtime/review-artifacts';
+import { joinOrchestratorPath, normalizePath } from '../shared/helpers';
 import {
     type HistoricalReviewRecordedRuntimeReviewPathValidation,
     type HistoricalReviewRecordedSnapshotValidation
@@ -171,7 +172,7 @@ export function validateHistoricalReviewRecordedReviewArtifactPath(
             actualSha256: null
         };
     }
-    const actualSha256 = normalizeLowerString(fileSha256(pathValidation.resolvedPath));
+    const actualSha256 = normalizeLowerString(readReviewArtifactFileSha256(pathValidation.resolvedPath));
     if (actualSha256 !== expectedSha256) {
         return {
             valid: false,
@@ -258,7 +259,7 @@ export function validateHistoricalReviewRecordedReceiptSnapshot(
         };
     }
     const resolvedPath = pathValidation.resolvedPath;
-    const actualSha256 = normalizeLowerString(fileSha256(resolvedPath));
+    const actualSha256 = normalizeLowerString(readReviewArtifactFileSha256(resolvedPath));
     if (actualSha256 !== expectedSha256) {
         return {
             valid: false,

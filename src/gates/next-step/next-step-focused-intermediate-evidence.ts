@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 
+import { readReviewArtifactTextFile } from '../../gate-runtime/review-artifacts';
 import { normalizePath } from '../shared/helpers';
 import {
     isFocusedReviewTestPath,
@@ -44,7 +45,7 @@ export function readFocusedTestRequiredByReview(options: {
         return null;
     }
     try {
-        const reviewContent = fs.readFileSync(options.reviewArtifactPath, 'utf8');
+        const reviewContent = readReviewArtifactTextFile(options.reviewArtifactPath);
         const findingTestPaths = findReviewFocusedFindingTestPaths(reviewContent)
             .map((filePath) => normalizePath(filePath))
             .filter((filePath) => filePath && isFocusedReviewTestPath(filePath));

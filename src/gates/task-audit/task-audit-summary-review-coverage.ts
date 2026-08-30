@@ -1,6 +1,4 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { createHash } from 'node:crypto';
 import {
     buildReviewCoverageContract,
     getReviewCoverageContractViolations,
@@ -16,6 +14,10 @@ import {
     type ReviewRemediationReviewContract,
     type ReviewRemediationReviewContractValidationAuthority
 } from '../review-remediation/review-remediation-review-contract';
+import {
+    safeReadJson,
+    safeReviewArtifactFileSha256
+} from './task-audit-summary-review-common';
 
 export interface ReviewCoverageAuditEntry {
     review_type: string;
@@ -43,22 +45,6 @@ export interface ReviewCoverageAuditSummary {
         legacy_unknown_count: number;
     };
     visible_summary_line: string;
-}
-
-function readJson(filePath: string): Record<string, unknown> | null {
-    try {
-        return JSON.parse(fs.readFileSync(filePath, 'utf8')) as Record<string, unknown>;
-    } catch {
-        return null;
-    }
-}
-
-function sha256File(filePath: string): string | null {
-    try {
-        return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
-    } catch {
-        return null;
-    }
 }
 
 function eventDetails(event: Record<string, unknown>): Record<string, unknown> {
@@ -110,17 +96,17 @@ export function buildReviewCoverageAuditSummary(options: {
     const entries: ReviewCoverageAuditEntry[] = [];
     const repoRoot = path.resolve(options.reviewsRoot, '..', '..', '..');
     const preflightPath = path.join(options.reviewsRoot, `${options.taskId}-preflight.json`);
-    const preflight = readJson(preflightPath);
-    const preflightSha256 = sha256File(preflightPath);
+    const preflight = safeReadJson(preflightPath);
+    const preflightSha256 = safeReviewArtifactFileSha256(preflightPath);
     for (const reviewType of Object.keys(options.requiredReviews).filter((key) => options.requiredReviews[key]).sort()) {
         const contextPath = path.join(options.reviewsRoot, `${options.taskId}-${reviewType}-review-context.json`);
         const receiptPath = path.join(options.reviewsRoot, `${options.taskId}-${reviewType}-receipt.json`);
-        const context = readJson(contextPath);
-        const receipt = readJson(receiptPath);
+        const context = safeReadJson(contextPath);
+        const receipt = safeReadJson(receiptPath);
         const reviewExecutionTelemetry = resolveReviewExecutionTelemetry(context, receipt);
         const contextSchemaVersion = Number(context?.schema_version);
         if (Number.isInteger(contextSchemaVersion) && contextSchemaVersion > 0 && contextSchemaVersion < 3) {
-            const contextSha256 = sha256File(contextPath);
+            const contextSha256 = safeReviewArtifactFileSha256(contextPath);
             const receiptContextSha256 = String(receipt?.review_context_sha256 || '').trim().toLowerCase();
             const receiptPreflightSha256 = String(receipt?.preflight_sha256 || '').trim().toLowerCase();
             const recordedEventMatches = (options.orderedEvents || []).some((event) => {
@@ -240,11 +226,11 @@ export function buildReviewCoverageAuditSummary(options: {
                 expectedTaskId: options.taskId,
                 expectedReviewType: reviewType,
                 expectedReviewOutputSha256: stringValue(receipt.review_output_sha256),
-                expectedReviewArtifactSha256: sha256File(reviewArtifactPath),
+                expectedReviewArtifactSha256: safeReviewArtifactFileSha256(reviewArtifactPath),
                 expectedReviewContextPath: reusedExistingReview ? null : contextPath,
                 expectedReviewContextSha256: reusedExistingReview
                     ? stringValue(receipt.reused_from_review_context_sha256)
-                    : sha256File(contextPath),
+                    : safeReviewArtifactFileSha256(contextPath),
                 expectedPreflightPath: reusedExistingReview ? null : preflightPath,
                 expectedPreflightSha256: reusedExistingReview ? null : preflightSha256,
                 expectedReviewTreeStateSha256: reusedExistingReview

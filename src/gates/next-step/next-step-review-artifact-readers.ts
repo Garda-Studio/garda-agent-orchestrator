@@ -8,12 +8,13 @@ import {
     formatReviewVerdictTokenList
 } from '../../gate-runtime/review-context';
 import {
+    readReviewArtifactFileSha256,
+    readReviewArtifactTextFile
+} from '../../gate-runtime/review-artifacts';
+import {
     safeReadJson
 } from '../task-audit/task-audit-summary-collectors';
-import {
-    fileSha256,
-    normalizePath
-} from '../shared/helpers';
+import { normalizePath } from '../shared/helpers';
 import {
     REVIEW_CONTRACTS
 } from '../required-reviews/required-reviews-check';
@@ -800,8 +801,8 @@ export function readReviewArtifactState(
     if (!artifactExists) {
         violations.push('review artifact is missing');
     } else {
-        const content = fs.readFileSync(artifactPath, 'utf8');
-        const contextSha256 = contextExists ? fileSha256(contextPath) : null;
+        const content = readReviewArtifactTextFile(artifactPath);
+        const contextSha256 = contextExists ? readReviewArtifactFileSha256(contextPath) : null;
         const contentLooksLikeJson = String(content || '').trim().startsWith('{');
         const parsedVerdictToken = requiresFindingsOnlyArtifact || contentLooksLikeJson
             ? null
@@ -884,8 +885,8 @@ export function readReviewArtifactState(
     }
 
     if (context && receipt && artifactExists) {
-        const artifactHash = fileSha256(artifactPath);
-        const contextHash = fileSha256(contextPath);
+        const artifactHash = readReviewArtifactFileSha256(artifactPath);
+        const contextHash = readReviewArtifactFileSha256(contextPath);
         const reviewScopeFingerprint = computeReviewRelevantScopeFingerprint(preflightPayload || {}, repoRoot || '.');
         const codeScopeFingerprint = computeReviewReuseCodeScopeFingerprint(reviewType, preflightPayload || {}, repoRoot || '.');
         const reviewerRouting = isPlainRecord(context.reviewer_routing)
@@ -1084,7 +1085,7 @@ export function readReviewArtifactState(
                         const dispositionArtifactPayload = reviewFindingsDispositionArtifactPath
                             && reviewFindingsDispositionArtifactSha256
                             && fileExists(reviewFindingsDispositionArtifactPath)
-                            && fileSha256(reviewFindingsDispositionArtifactPath) === reviewFindingsDispositionArtifactSha256
+                            && readReviewArtifactFileSha256(reviewFindingsDispositionArtifactPath) === reviewFindingsDispositionArtifactSha256
                             ? safeReadJson(reviewFindingsDispositionArtifactPath)
                             : null;
                         reviewFindingsFollowUpSatisfied = (
@@ -1136,7 +1137,7 @@ export function readReviewArtifactState(
             : null;
     }
     if (requiresFindingsOnlyArtifact && !receiptCurrent && fileExists(getReviewFindingsValidationArtifactPath(artifactPath))) {
-        const contextHash = contextExists ? fileSha256(contextPath) : null;
+        const contextHash = contextExists ? readReviewArtifactFileSha256(contextPath) : null;
         const rejectedValidationArtifact = validateReviewFindingsValidationArtifact({
             artifactPath: getReviewFindingsValidationArtifactPath(artifactPath),
             expectedTaskId: taskId,
@@ -1206,7 +1207,7 @@ export function readReviewArtifactState(
                             ].filter(Boolean).join(' ');
                         }
                     }
-                    const correctionInputSha256 = fileSha256(correctionPath);
+                    const correctionInputSha256 = readReviewArtifactFileSha256(correctionPath);
                     const correctionLaunchPath = getReviewOutputCorrectionLaunchArtifactPath(artifactPath);
                     const correctionLaunch = fileExists(correctionLaunchPath)
                         ? safeReadJson(correctionLaunchPath)

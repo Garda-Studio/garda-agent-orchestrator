@@ -3,11 +3,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { assertValidTaskId, inspectTaskEventFile } from '../../gate-runtime/task-events';
 import { withReviewArtifactReadBarrier } from '../../gate-runtime/review-artifacts';
+import { withTaskIndexReadSnapshot } from '../../gate-runtime/reviews-index';
 import {
     inspectCompletionGateFinalizationLock,
     type FinalizationLockInspection
 } from '../locks/finalization-lock';
-import { toPosix } from '../shared/helpers';
+import { isPathRealpathInsideRoot, toPosix } from '../shared/helpers';
 import {
     buildTokenEconomySummary,
     resolveTaskCycleBindingSnapshot
@@ -264,6 +265,22 @@ function filterNotRequiredEvidenceArtifacts(
 }
 
 export function buildTaskAuditSummary(options: TaskAuditSummaryOptions): TaskAuditSummaryResult {
+    const repoRoot = path.resolve(options.repoRoot);
+    const safeTaskId = assertValidTaskId(options.taskId);
+    const reviewsRoot = resolveReviewsRoot(repoRoot, options.reviewsRoot);
+    if (!isPathRealpathInsideRoot(reviewsRoot, repoRoot, { allowMissing: true })) {
+        throw new Error(
+            `ReviewsRoot must resolve inside repo root without symlink or junction escape: ${toPosix(reviewsRoot)}.`
+        );
+    }
+    return withReviewArtifactReadBarrier(reviewsRoot, () => (
+        withTaskIndexReadSnapshot(reviewsRoot, safeTaskId, () => (
+            buildTaskAuditSummaryFromSnapshot(options)
+        ))
+    ));
+}
+
+function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): TaskAuditSummaryResult {
     const repoRoot = path.resolve(options.repoRoot);
     const workspaceSnapshotRequest = resolveWorkspaceSnapshotRequest(
         repoRoot,

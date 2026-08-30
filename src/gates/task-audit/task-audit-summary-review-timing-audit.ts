@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileSha256, toPosix } from '../shared/helpers';
+import { toPosix } from '../shared/helpers';
 import {
     LEGACY_REVIEW_EXECUTION_POLICY_MODE,
     resolveReviewExecutionPolicyModeFromPreflight,
@@ -15,7 +15,14 @@ import {
     parseTimestamp,
     type TaskCycleBindingSnapshot
 } from '../task-events-summary/task-events-summary';
-import { safeReadJson } from './task-audit-summary-collectors';
+import {
+    safeReadJson,
+    safeReviewArtifactFileSha256
+} from './task-audit-summary-collectors';
+import {
+    createReviewAttemptArtifactIndex,
+    type ReviewAttemptArtifactIndex
+} from '../review-attempts/review-attempt-artifact-index';
 import type { TaskAuditEvent } from './task-audit-summary-lifecycle';
 import type {
     FinalCloseoutReviewTimingAuditEntry,
@@ -118,50 +125,73 @@ function latestCompileSequence(events: readonly TaskAuditEvent[]): number | null
     return latest;
 }
 
-function listReviewReceiptPaths(reviewsRoot: string, taskId: string, reviewType: string): string[] {
+interface ReviewTimingReceiptSnapshot {
+    path: string;
+    record: Record<string, unknown>;
+    sha256: string | null;
+}
+
+function listReviewReceiptSnapshots(
+    reviewsRoot: string,
+    taskId: string,
+    reviewType: string,
+    artifactIndex: ReviewAttemptArtifactIndex
+): ReviewTimingReceiptSnapshot[] {
     const canonicalPath = path.join(reviewsRoot, `${taskId}-${reviewType}-receipt.json`);
-    const candidates = new Set<string>();
+    const candidates: ReviewTimingReceiptSnapshot[] = [];
     if (fs.existsSync(canonicalPath) && fs.statSync(canonicalPath).isFile()) {
-        candidates.add(canonicalPath);
-    }
-    if (fs.existsSync(reviewsRoot) && fs.statSync(reviewsRoot).isDirectory()) {
-        const prefix = `${taskId}-${reviewType}-receipt-`;
-        for (const entry of fs.readdirSync(reviewsRoot)) {
-            if (entry.startsWith(prefix) && entry.endsWith('.json')) {
-                candidates.add(path.join(reviewsRoot, entry));
-            }
+        const record = safeReadJson(canonicalPath);
+        if (record) {
+            candidates.push({
+                path: canonicalPath,
+                record,
+                sha256: safeReviewArtifactFileSha256(canonicalPath)
+            });
         }
     }
-    return [...candidates].sort((left, right) => {
-        const leftReceipt = safeReadJson(left);
-        const rightReceipt = safeReadJson(right);
-        const leftTime = Date.parse(readAuditTimestamp(leftReceipt?.review_result_recorded_at_utc ?? leftReceipt?.recorded_at_utc) || '');
-        const rightTime = Date.parse(readAuditTimestamp(rightReceipt?.review_result_recorded_at_utc ?? rightReceipt?.recorded_at_utc) || '');
+    for (const fileName of artifactIndex.listReceiptSnapshotFileNames(reviewType)) {
+        const receiptFilePrefix = `${taskId}-${reviewType}-receipt-`;
+        const expectedSha256 = readAuditSha256(fileName.slice(
+            receiptFilePrefix.length,
+            -'.json'.length
+        ));
+        const snapshot = artifactIndex.readJsonSnapshot(fileName, fileName, expectedSha256);
+        if (snapshot.valid && snapshot.record) {
+            candidates.push({
+                path: path.join(reviewsRoot, fileName),
+                record: snapshot.record,
+                sha256: snapshot.sha256
+            });
+        }
+    }
+    return candidates.sort((left, right) => {
+        const leftTime = Date.parse(readAuditTimestamp(
+            left.record.review_result_recorded_at_utc ?? left.record.recorded_at_utc
+        ) || '');
+        const rightTime = Date.parse(readAuditTimestamp(
+            right.record.review_result_recorded_at_utc ?? right.record.recorded_at_utc
+        ) || '');
         const leftOrder = Number.isFinite(leftTime) ? leftTime : Number.MAX_SAFE_INTEGER;
         const rightOrder = Number.isFinite(rightTime) ? rightTime : Number.MAX_SAFE_INTEGER;
-        return leftOrder - rightOrder || left.localeCompare(right);
+        return leftOrder - rightOrder || left.path.localeCompare(right.path);
     });
 }
 
 function buildReviewTimingAuditEntry(
     taskId: string,
     reviewType: string,
-    receiptPath: string,
+    receiptSnapshot: ReviewTimingReceiptSnapshot,
     events: readonly TaskAuditEvent[],
     compileSequence: number | null
 ): FinalCloseoutReviewTimingAuditEntry | null {
-    if (!fs.existsSync(receiptPath) || !fs.statSync(receiptPath).isFile()) {
-        return null;
-    }
-    const receipt = safeReadJson(receiptPath);
-    if (!receipt || receipt.task_id !== taskId || receipt.review_type !== reviewType) {
+    const receipt = receiptSnapshot.record;
+    if (receipt.task_id !== taskId || receipt.review_type !== reviewType) {
         return null;
     }
     const receiptProvenance = asAuditRecord(receipt.reviewer_provenance);
     if (isReusedReceiptExcludedFromFinalTimingAudit(receipt)) {
         return null;
     }
-    const receiptSha256 = fileSha256(receiptPath);
     const provenance = receiptProvenance;
     const invocationEvent = findReviewerInvocationEvent(events, provenance);
     const invocationDetails = asAuditRecord(invocationEvent?.details);
@@ -199,8 +229,8 @@ function buildReviewTimingAuditEntry(
         reviewer_identity: readAuditString(receipt.reviewer_identity),
         reviewer_execution_mode: readAuditString(receipt.reviewer_execution_mode),
         reused_existing_review: false,
-        receipt_path: toPosix(receiptPath),
-        receipt_sha256: receiptSha256,
+        receipt_path: toPosix(receiptSnapshot.path),
+        receipt_sha256: receiptSnapshot.sha256,
         review_output_path: readAuditString(receipt.review_output_path),
         review_output_sha256: readAuditSha256(receipt.review_output_sha256),
         provider: readAuditString(
@@ -238,10 +268,11 @@ export function buildReviewTimingAuditSummary(
     const compileSequence = latestCompileSequence(events);
     const entries: FinalCloseoutReviewTimingAuditEntry[] = [];
     const seenReceiptHashes = new Set<string>();
+    const artifactIndex = createReviewAttemptArtifactIndex(reviewsRoot, taskId);
 
     for (const reviewType of collectEffectiveReviewTypeIds(currentPreflight)) {
-        for (const receiptPath of listReviewReceiptPaths(reviewsRoot, taskId, reviewType)) {
-            const entry = buildReviewTimingAuditEntry(taskId, reviewType, receiptPath, events, compileSequence);
+        for (const receiptSnapshot of listReviewReceiptSnapshots(reviewsRoot, taskId, reviewType, artifactIndex)) {
+            const entry = buildReviewTimingAuditEntry(taskId, reviewType, receiptSnapshot, events, compileSequence);
             if (entry) {
                 const receiptIdentity = entry.provider_invocation_id
                     ? `${entry.review_type}:invocation:${entry.provider_invocation_id}`

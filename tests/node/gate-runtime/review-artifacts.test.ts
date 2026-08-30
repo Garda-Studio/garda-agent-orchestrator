@@ -12,6 +12,11 @@ import {
     cleanupStaleReviewArtifactLocks,
     getReviewArtifactLockPath,
     getReviewArtifactTransactionLockPath,
+    readReviewArtifactFileSha256,
+    readReviewArtifactFileSnapshot,
+    readReviewArtifactJsonFile,
+    readReviewArtifactJsonSnapshot,
+    readReviewArtifactTextFile,
     scanReviewArtifactLocks,
     withReviewArtifactLockAsync,
     withReviewArtifactReadBarrier,
@@ -24,6 +29,7 @@ import {
     resolveIndexPath,
     resolveIndexLockPath
 } from '../../../src/gate-runtime/review/reviews-index';
+import { createReviewAttemptArtifactIndex } from '../../../src/gates/review-attempts/review-attempt-artifact-index';
 import {
     acquireFilesystemLock,
     releaseFilesystemLock
@@ -776,6 +782,98 @@ test('withReviewArtifactReadBarrier waits for a live external review transaction
         if (cleanupChild) {
             await cleanupChild();
         }
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('review read barrier reuses one immutable JSON read and releases it after the invocation', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-snapshot-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const receiptPath = path.join(reviewsDir, 'T-022-code-receipt.json');
+    fs.writeFileSync(receiptPath, '{"version":1}\n', 'utf8');
+    const fsModule = require('node:fs') as typeof fs;
+    const originalReadFileSync = fsModule.readFileSync;
+    let receiptReadCount = 0;
+    fsModule.readFileSync = ((targetPath: fs.PathOrFileDescriptor, options?: unknown) => {
+        if (typeof targetPath !== 'number' && path.resolve(String(targetPath)) === path.resolve(receiptPath)) {
+            receiptReadCount += 1;
+        }
+        return originalReadFileSync(targetPath, options as never);
+    }) as typeof fsModule.readFileSync;
+    try {
+        withReviewArtifactReadBarrier(reviewsDir, () => {
+            const first = readReviewArtifactJsonFile(receiptPath) as Record<string, unknown>;
+            const second = readReviewArtifactJsonFile(receiptPath) as Record<string, unknown>;
+            const text = readReviewArtifactTextFile(receiptPath);
+            const fileSnapshot = readReviewArtifactFileSnapshot(receiptPath);
+            assert.equal(first, second);
+            assert.equal(Object.isFrozen(first), true);
+            assert.equal(fileSnapshot.valid, true);
+            assert.equal(first.version, 1);
+            assert.equal(text, '{"version":1}\n');
+            assert.equal(readReviewArtifactFileSha256(receiptPath), fileSnapshot.sha256);
+        });
+        fs.writeFileSync(receiptPath, '{"version":2,"fresh":true}\n', 'utf8');
+        withReviewArtifactReadBarrier(reviewsDir, () => {
+            const refreshed = readReviewArtifactJsonFile(receiptPath) as Record<string, unknown>;
+            assert.equal(refreshed.version, 2);
+        });
+    } finally {
+        fsModule.readFileSync = originalReadFileSync;
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+    assert.equal(receiptReadCount, 2);
+});
+
+test('review read barrier rejects an artifact replaced after its first snapshot read', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-snapshot-race-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const receiptPath = path.join(reviewsDir, 'T-023-code-receipt.json');
+    fs.writeFileSync(receiptPath, '{"version":1}\n', 'utf8');
+    try {
+        withReviewArtifactReadBarrier(reviewsDir, () => {
+            assert.equal(readReviewArtifactTextFile(receiptPath), '{"version":1}\n');
+            fs.writeFileSync(receiptPath, '{"version":200,"replacement":true}\n', 'utf8');
+            assert.equal(readReviewArtifactJsonSnapshot(receiptPath).valid, false);
+            assert.equal(readReviewArtifactFileSha256(receiptPath), null);
+            assert.throws(
+                () => readReviewArtifactTextFile(receiptPath),
+                /Review artifact text snapshot is unavailable/
+            );
+        });
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('review-attempt artifact index invalidates a cached read when the shared snapshot changes', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-attempt-snapshot-race-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const taskId = 'T-024';
+    const receiptFileName = `${taskId}-code-receipt-${'a'.repeat(64)}.json`;
+    const receiptPath = path.join(reviewsDir, receiptFileName);
+    const originalContent = '{"version":1}\n';
+    fs.writeFileSync(receiptPath, originalContent, 'utf8');
+    loadIndex(reviewsDir);
+    const expectedSha256 = fileSha256(receiptPath);
+    assert.ok(expectedSha256);
+
+    try {
+        withReviewArtifactReadBarrier(reviewsDir, () => {
+            const artifactIndex = createReviewAttemptArtifactIndex(reviewsDir, taskId);
+            assert.equal(
+                artifactIndex.readJsonSnapshot(receiptPath, receiptFileName, expectedSha256).valid,
+                true
+            );
+            const replacementPath = `${receiptPath}.replacement`;
+            fs.writeFileSync(replacementPath, '{"version":2}\n', 'utf8');
+            fs.renameSync(replacementPath, receiptPath);
+            assert.equal(
+                artifactIndex.readJsonSnapshot(receiptPath, receiptFileName, expectedSha256).valid,
+                false
+            );
+        });
+    } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
 });

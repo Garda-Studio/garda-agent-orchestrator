@@ -1,6 +1,7 @@
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as childProcess from 'node:child_process';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -25,6 +26,14 @@ import {
     buildTaskProfilePolicySnapshot,
     type TaskProfilePolicySnapshot
 } from '../../../../src/policy/task-profile-policy-snapshot';
+import {
+    rebuildIndex,
+    resolveIndexPath,
+    writeIndex
+} from '../../../../src/gate-runtime/reviews-index';
+import { getReviewArtifactTransactionLockPath } from '../../../../src/gate-runtime/review-artifacts';
+import { buildReviewTimingAuditSummary } from '../../../../src/gates/task-audit/task-audit-summary-review-timing-audit';
+import { buildTaskAuditSummary } from '../../../../src/gates/task-audit/task-audit-summary';
 import { initGitRepo } from '../git-fixtures';
 
 const TASK_ID = 'T-CONTRACT-1';
@@ -350,6 +359,7 @@ function seedOptionalSkillSelectionPreflight(
         selectionPhase?: 'pre_implementation' | 'post_diff';
         pathEvidenceSource?: 'none' | 'planned_changed_files' | 'task_plan_scope' | 'explicit_scope' | 'actual_changed_files';
         includeMetrics?: boolean;
+        requireCode?: boolean;
     } = {}
 ): void {
     const policyMode = options.policyMode || 'advisory';
@@ -412,7 +422,7 @@ function seedOptionalSkillSelectionPreflight(
             }
         } : {}),
         required_reviews: {
-            code: false,
+            code: options.requireCode === true,
             db: false,
             security: false,
             refactor: false,
@@ -583,6 +593,180 @@ function buildTaskStartReviewSnapshot(options: { zeroDiff?: boolean; requireCode
 }
 
 describe('next-step refactor contract baseline', () => {
+    it('reads one large reviews index snapshot without per-lane directory scans', () => {
+        const repoRoot = makeContractRepo();
+        seedStartedTask(repoRoot, TASK_ID);
+        const root = reviewsRoot(repoRoot);
+        const indexPath = resolveIndexPath(root);
+        const largeIndex = rebuildIndex(root);
+        for (let index = 0; index < 10_000; index += 1) {
+            const taskId = `T-HISTORY-${String(index).padStart(5, '0')}`;
+            largeIndex.entries.push({
+                fileName: `${taskId}-task-mode.json`,
+                taskId,
+                artifactType: 'task-mode.json',
+                mtimeMs: 0,
+                sizeBytes: 0
+            });
+        }
+        largeIndex.directoryEntryCount = largeIndex.entries.length;
+        largeIndex.directoryUnindexedEntryCount = 0;
+        largeIndex.generatedAtMs = Date.now();
+        writeIndex(indexPath, largeIndex);
+
+        const fsModule = require('node:fs') as typeof fs;
+        const originalReadFileSync = fsModule.readFileSync;
+        const originalReaddirSync = fsModule.readdirSync;
+        let indexReadCount = 0;
+        let reviewsDirectoryReadCount = 0;
+        fsModule.readFileSync = ((targetPath: fs.PathOrFileDescriptor, options?: unknown) => {
+            if (typeof targetPath !== 'number' && path.resolve(String(targetPath)) === path.resolve(indexPath)) {
+                indexReadCount += 1;
+            }
+            return originalReadFileSync(targetPath, options as never);
+        }) as typeof fsModule.readFileSync;
+        fsModule.readdirSync = ((targetPath: fs.PathLike, options?: unknown) => {
+            if (path.resolve(String(targetPath)) === path.resolve(root)) {
+                reviewsDirectoryReadCount += 1;
+            }
+            return originalReaddirSync(targetPath, options as never);
+        }) as typeof fsModule.readdirSync;
+        try {
+            const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+            assert.equal(result.next_gate, 'record-strict-decomposition-decision');
+        } finally {
+            fsModule.readFileSync = originalReadFileSync;
+            fsModule.readdirSync = originalReaddirSync;
+        }
+
+        assert.equal(indexReadCount, 1);
+        assert.equal(reviewsDirectoryReadCount, 0);
+    });
+
+    it('keeps readiness and receipt probes inside one barrier during a concurrent publication race', () => {
+        const repoRoot = makeContractRepo();
+        seedStartedTask(repoRoot, TASK_ID);
+        seedOptionalSkillSelectionPreflight(repoRoot, TASK_ID, {
+            policyMode: 'advisory',
+            requireCode: true
+        });
+        seedStrictDecompositionDecision(repoRoot, TASK_ID);
+        const root = reviewsRoot(repoRoot);
+        const receiptPath = path.join(root, `${TASK_ID}-code-receipt.json`);
+        const preflightPath = path.join(root, `${TASK_ID}-preflight.json`);
+        const transactionLockPath = getReviewArtifactTransactionLockPath(root);
+        writeJson(receiptPath, {
+            task_id: TASK_ID,
+            review_type: 'code'
+        });
+        const preflight = JSON.parse(
+            fs.readFileSync(preflightPath, 'utf8')
+        ) as Record<string, unknown>;
+        const requiredReviews = preflight.required_reviews as Record<string, boolean>;
+        assert.equal(requiredReviews.code, true);
+
+        const fsModule = require('node:fs') as typeof fs;
+        const originalExistsSync = fsModule.existsSync;
+        const originalReadFileSync = fsModule.readFileSync;
+        let receiptProbeCount = 0;
+        let unprotectedReceiptProbeCount = 0;
+        let readinessReadCount = 0;
+        let unprotectedReadinessReadCount = 0;
+        let receiptReadCount = 0;
+        fsModule.existsSync = ((targetPath: fs.PathLike) => {
+            if (path.resolve(String(targetPath)) === path.resolve(receiptPath)) {
+                receiptProbeCount += 1;
+                if (!originalExistsSync(transactionLockPath)) {
+                    unprotectedReceiptProbeCount += 1;
+                }
+            }
+            return originalExistsSync(targetPath);
+        }) as typeof fsModule.existsSync;
+        fsModule.readFileSync = ((targetPath: fs.PathOrFileDescriptor, options?: unknown) => {
+            if (typeof targetPath !== 'number' && path.resolve(String(targetPath)) === path.resolve(receiptPath)) {
+                receiptReadCount += 1;
+            }
+            if (typeof targetPath !== 'number' && path.resolve(String(targetPath)) === path.resolve(preflightPath)) {
+                readinessReadCount += 1;
+                if (!originalExistsSync(transactionLockPath)) {
+                    unprotectedReadinessReadCount += 1;
+                }
+            }
+            return originalReadFileSync(targetPath, options as never);
+        }) as typeof fsModule.readFileSync;
+        let firstInvocationReceiptReadCount = 0;
+        try {
+            resolveNextStep({ taskId: TASK_ID, repoRoot });
+            firstInvocationReceiptReadCount = receiptReadCount;
+            writeJson(receiptPath, {
+                task_id: TASK_ID,
+                review_type: 'code',
+                invocation_marker: 'second'
+            });
+            resolveNextStep({ taskId: TASK_ID, repoRoot });
+        } finally {
+            fsModule.existsSync = originalExistsSync;
+            fsModule.readFileSync = originalReadFileSync;
+        }
+
+        assert.ok(receiptProbeCount > 1);
+        assert.equal(unprotectedReceiptProbeCount, 0);
+        assert.equal(firstInvocationReceiptReadCount, 1);
+        assert.equal(receiptReadCount - firstInvocationReceiptReadCount, 1);
+        assert.ok(readinessReadCount > 0);
+        assert.equal(unprotectedReadinessReadCount, 0);
+    });
+
+    it('rejects a replaced immutable receipt whose content no longer matches its hash filename', () => {
+        const repoRoot = makeContractRepo();
+        const root = reviewsRoot(repoRoot);
+        const originalReceipt = {
+            task_id: TASK_ID,
+            review_type: 'code',
+            reviewer_identity: 'agent:original',
+            reviewer_execution_mode: 'delegated_subagent',
+            reused_existing_review: false,
+            recorded_at_utc: '2026-01-01T00:00:06.000Z',
+            review_result_recorded_at_utc: '2026-01-01T00:00:06.000Z'
+        };
+        const originalContent = `${JSON.stringify(originalReceipt, null, 2)}\n`;
+        const originalSha256 = createHash('sha256').update(originalContent, 'utf8').digest('hex');
+        const receiptPath = path.join(root, `${TASK_ID}-code-receipt-${originalSha256}.json`);
+        const replacedContent = originalContent.replace('agent:original', 'agent:replaced');
+        fs.writeFileSync(receiptPath, replacedContent, 'utf8');
+        const index = rebuildIndex(root);
+        writeIndex(resolveIndexPath(root), index);
+
+        const summary = buildReviewTimingAuditSummary(root, TASK_ID, [], repoRoot);
+
+        assert.equal(summary, null);
+    });
+
+    it('rejects a foreign default reviews-root junction before task-audit lock acquisition', (t) => {
+        const repoRoot = makeContractRepo();
+        const root = reviewsRoot(repoRoot);
+        const foreignRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-foreign-reviews-'));
+        tempRoots.push(foreignRoot);
+        fs.rmSync(root, { recursive: true, force: true });
+        try {
+            fs.symlinkSync(foreignRoot, root, process.platform === 'win32' ? 'junction' : 'dir');
+        } catch (error: unknown) {
+            const code = error && typeof error === 'object' && 'code' in error
+                ? String((error as NodeJS.ErrnoException).code || '')
+                : '';
+            if (code === 'EPERM' || code === 'EACCES' || code === 'ENOTSUP') {
+                t.skip(`filesystem junctions unavailable: ${code}`);
+                return;
+            }
+            throw error;
+        }
+
+        assert.throws(
+            () => buildTaskAuditSummary({ taskId: TASK_ID, repoRoot }),
+            /ReviewsRoot must resolve inside repo root without symlink or junction escape/u
+        );
+    });
+
     it('builds direct task-start suggestions from current skill and required review snapshots', () => {
         const repoRoot = makeContractRepo();
         const guidance = buildNextStepTaskStartGuidance({

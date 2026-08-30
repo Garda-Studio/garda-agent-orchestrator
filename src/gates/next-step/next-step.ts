@@ -42,10 +42,17 @@ import {
     formatAcceptedReviewVerdictTokens
 } from '../../gate-runtime/review-context';
 import {
+    readReviewArtifactFileSha256,
+    withReviewArtifactReadBarrier
+} from '../../gate-runtime/review-artifacts';
+import { withTaskIndexReadSnapshot } from '../../gate-runtime/reviews-index';
+import { assertValidTaskId } from '../../gate-runtime/task-events';
+import {
     buildTaskAuditSummary,
     type TaskAuditSummaryResult
 } from '../task-audit/task-audit-summary';
 import {
+    resolveReviewsRoot,
     type GateOutcome
 } from '../task-audit/task-audit-summary-collectors';
 import {
@@ -4330,7 +4337,8 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                             reviewType,
                             state.reviewOutputCorrectionArtifactPath || state.artifactPath,
                             state.reviewOutputCorrectionArtifactPath
-                                ? fileSha256(state.reviewOutputCorrectionArtifactPath) || '<persisted correction input sha256>'
+                                ? readReviewArtifactFileSha256(state.reviewOutputCorrectionArtifactPath)
+                                    || '<persisted correction input sha256>'
                                 : '<persisted correction input sha256>',
                             taskModePath,
                             state.reviewOutputCorrectionLaunchState === 'delegation_started'
@@ -4829,7 +4837,27 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
 }
 
 export function resolveNextStep(options: NextStepOptions): NextStepResult {
-    return resolveNextStepDecisionRoute(createNextStepResolutionContext(options));
+    const repoRoot = path.resolve(options.repoRoot || '.');
+    const taskId = assertValidTaskId(options.taskId);
+    const reviewsRoot = resolvePathInsideRepo(
+        resolveReviewsRoot(repoRoot, options.reviewsRoot),
+        repoRoot,
+        { allowMissing: true }
+    );
+    if (!reviewsRoot) {
+        throw new Error('ReviewsRoot must resolve inside repo root without symlink or junction escape.');
+    }
+    return withReviewArtifactReadBarrier(reviewsRoot, () => (
+        withTaskIndexReadSnapshot(reviewsRoot, taskId, () => {
+            const context = createNextStepResolutionContext({
+                ...options,
+                repoRoot,
+                taskId,
+                reviewsRoot
+            });
+            return resolveNextStepDecisionRoute(context);
+        })
+    ));
 }
 
 

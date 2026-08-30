@@ -1,6 +1,5 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileSha256 } from '../shared/helpers';
 import { withReviewArtifactReadBarrier } from '../../gate-runtime/review-artifacts';
 import { buildReviewTrustSummary, type ReviewTrustSummary } from '../review/review-trust-summary';
 import { computeReviewRelevantScopeFingerprint } from '../review-reuse';
@@ -17,7 +16,8 @@ import {
     isSafeCanonicalArtifactPath,
     normalizeSha256Text,
     normalizeTrustToken,
-    safeReadJson
+    safeReadJson,
+    safeReviewArtifactFileSha256
 } from './task-audit-summary-review-common';
 import {
     getReviewLaneArtifactEvidenceViolations,
@@ -229,7 +229,7 @@ function readReviewTrustSummaryUnlocked(
         if (!fs.existsSync(reviewPath)) {
             return [];
         }
-        const actualReviewArtifactHash = fileSha256(reviewPath);
+        const actualReviewArtifactHash = safeReviewArtifactFileSha256(reviewPath);
         const recordedReviewArtifactHash = typeof receipt.review_artifact_sha256 === 'string'
             ? receipt.review_artifact_sha256.trim().toLowerCase()
             : '';
@@ -264,7 +264,7 @@ function readReviewTrustSummaryUnlocked(
         }
         if (recordedReviewContextHash) {
             const actualReviewContextHash = fs.existsSync(reviewContextPath) && isSafeCanonicalArtifactPath(reviewContextPath, reviewsRoot)
-                ? fileSha256(reviewContextPath)
+                ? safeReviewArtifactFileSha256(reviewContextPath)
                 : null;
             if (!actualReviewContextHash || recordedReviewContextHash !== actualReviewContextHash) {
                 return [];

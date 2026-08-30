@@ -5,6 +5,10 @@ import * as path from 'node:path';
 import { isPlainRecord } from '../../core/records';
 import { assertCanonicalTaskId } from '../../core/task-ids';
 import {
+    readReviewArtifactFileSnapshot,
+    readReviewArtifactJsonSnapshot
+} from '../../gate-runtime/review-artifacts';
+import {
     entriesForTask,
     loadTaskIndex,
     type ReviewsIndexEntry
@@ -125,6 +129,21 @@ export function createReviewAttemptArtifactIndex(
         const cacheKey = `${expectedFileName}|${normalizedExpectedSha256}`;
         const cached = cachedReads.get(cacheKey);
         if (cached) {
+            if (cached.valid) {
+                const sharedSnapshot = readReviewArtifactFileSnapshot(expectedPath);
+                if (
+                    sharedSnapshot.active
+                    && (
+                        !sharedSnapshot.valid
+                        || !sharedSnapshot.content
+                        || sharedSnapshot.sha256 !== cached.sha256
+                    )
+                ) {
+                    const divergent = { content: null, parsedRecord: null, valid: false, sha256: null };
+                    cachedReads.set(cacheKey, divergent);
+                    return divergent;
+                }
+            }
             return cached;
         }
         const indexEntry = entriesByFileName.get(expectedFileName);
@@ -140,7 +159,15 @@ export function createReviewAttemptArtifactIndex(
                 cachedReads.set(cacheKey, divergent);
                 return divergent;
             }
-            const contentBuffer = fs.readFileSync(expectedPath);
+            const sharedSnapshot = readReviewArtifactFileSnapshot(expectedPath);
+            const contentBuffer = sharedSnapshot.active
+                ? sharedSnapshot.content
+                : fs.readFileSync(expectedPath);
+            if (!contentBuffer || (sharedSnapshot.active && !sharedSnapshot.valid)) {
+                const unreadable = { content: null, parsedRecord: null, valid: false, sha256: null };
+                cachedReads.set(cacheKey, unreadable);
+                return unreadable;
+            }
             const afterRead = fs.lstatSync(expectedPath);
             const actualSha256 = createHash('sha256').update(contentBuffer).digest('hex');
             const valid = sameFileIdentity(beforeRead, afterRead)
@@ -197,11 +224,20 @@ export function createReviewAttemptArtifactIndex(
                 return { record: null, valid: false, sha256: result.sha256 };
             }
             if (result.parsedRecord === undefined) {
-                try {
-                    const parsed = JSON.parse(result.content) as unknown;
-                    result.parsedRecord = isPlainRecord(parsed) ? freezeRecord(parsed) : null;
-                } catch {
-                    result.parsedRecord = null;
+                const sharedJsonSnapshot = readReviewArtifactJsonSnapshot(
+                    path.resolve(resolvedReviewsRoot, expectedFileName)
+                );
+                if (sharedJsonSnapshot.active) {
+                    result.parsedRecord = sharedJsonSnapshot.valid && isPlainRecord(sharedJsonSnapshot.value)
+                        ? sharedJsonSnapshot.value
+                        : null;
+                } else {
+                    try {
+                        const parsed = JSON.parse(result.content) as unknown;
+                        result.parsedRecord = isPlainRecord(parsed) ? freezeRecord(parsed) : null;
+                    } catch {
+                        result.parsedRecord = null;
+                    }
                 }
             }
             return {

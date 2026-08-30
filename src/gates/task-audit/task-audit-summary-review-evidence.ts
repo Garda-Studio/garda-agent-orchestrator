@@ -8,6 +8,7 @@ import { type ProjectMemoryImpactLifecycleEvidence } from '../project-memory-imp
 import {
     collectKnownRequiredReviewTypes,
     safeReadJson,
+    safeReviewArtifactFileSha256,
     type BlockerEntry,
     type EvidenceArtifact
 } from './task-audit-summary-collectors';
@@ -91,7 +92,7 @@ function buildRequiredReviewBlocker(reviewType: string, taskId: string, reviewsR
         };
     }
     if (typeof receipt.review_artifact_sha256 === 'string' && receipt.review_artifact_sha256) {
-        const actualHash = fileSha256(reviewPath);
+        const actualHash = safeReviewArtifactFileSha256(reviewPath);
         if (actualHash && receipt.review_artifact_sha256 !== actualHash) {
             return {
                 gate,
@@ -186,7 +187,7 @@ export function collectEvidenceArtifacts(
                 kind,
                 path: toPosix(artifactPath),
                 exists,
-                sha256: exists ? fileSha256(artifactPath) : null
+                sha256: exists ? safeReviewArtifactFileSha256(artifactPath) : null
             };
         })
     ));
@@ -202,7 +203,7 @@ export function collectEvidenceArtifacts(
                 kind,
                 path: toPosix(resolvedPath),
                 exists,
-                sha256: exists ? fileSha256(resolvedPath) : null
+                sha256: exists ? safeReviewArtifactFileSha256(resolvedPath) : null
             });
         }
     }

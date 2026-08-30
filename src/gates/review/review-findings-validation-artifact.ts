@@ -1,7 +1,10 @@
 import * as fs from 'node:fs';
 
 import { sha256RedactedJsonPayload } from '../../core/redaction';
-import { fileSha256 } from '../../gate-runtime/hash';
+import {
+    readReviewArtifactFileSha256,
+    readReviewArtifactJsonFile
+} from '../../gate-runtime/review-artifacts';
 import { normalizePath } from '../shared/helpers';
 import type { ReviewCoverageContract, ReviewCoverageValidationSummary } from './review-coverage-ledger';
 import type { JsonReviewFindingsArtifactValidation } from './review-findings-artifact-verdict';
@@ -320,7 +323,7 @@ function buildBindings(options: BuildReviewFindingsValidationArtifactOptions): R
     let execution: ReviewExecutionEvidenceBindings | null = null;
     if (options.reviewContextPath) {
         try {
-            const reviewContext = JSON.parse(fs.readFileSync(options.reviewContextPath, 'utf8')) as unknown;
+            const reviewContext = readReviewArtifactJsonFile(options.reviewContextPath);
             if (isRecord(reviewContext)) {
                 execution = resolveReviewContextExecutionEvidenceBindings(reviewContext).bindings;
             }
@@ -472,7 +475,7 @@ export function validateReviewFindingsValidationArtifact(
             violations: [`Review findings validation artifact '${artifactPath}' is missing.`]
         };
     }
-    const artifactSha256 = fileSha256(artifactPath);
+    const artifactSha256 = readReviewArtifactFileSha256(artifactPath);
     const violations: string[] = [];
     if (normalizeHash(options.expectedArtifactSha256) && artifactSha256 !== normalizeHash(options.expectedArtifactSha256)) {
         violations.push(
@@ -482,7 +485,7 @@ export function validateReviewFindingsValidationArtifact(
     }
     let parsed: unknown;
     try {
-        parsed = JSON.parse(fs.readFileSync(artifactPath, 'utf8')) as unknown;
+        parsed = readReviewArtifactJsonFile(artifactPath);
     } catch {
         return {
             valid: false,

@@ -1,7 +1,8 @@
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileSha256, joinOrchestratorPath, resolvePathInsideRepo, toPosix } from '../shared/helpers';
+import { readReviewArtifactFileSha256 } from '../../gate-runtime/review-artifacts';
+import { joinOrchestratorPath, resolvePathInsideRepo, toPosix } from '../shared/helpers';
 import {
     computeOptionalSkillTaskTextSha256,
     buildCurrentCycleOptionalSkillActivationIndex,
@@ -18,7 +19,11 @@ import {
 import type { DomainScopeFingerprints } from '../scope/domain-scope-fingerprints';
 import type { TaskQueueEntry } from '../../core/task-queue-read';
 
-export { collectKnownRequiredReviewTypes, safeReadJson } from './task-audit-summary-review-common';
+export {
+    collectKnownRequiredReviewTypes,
+    safeReadJson,
+    safeReviewArtifactFileSha256
+} from './task-audit-summary-review-common';
 export {
     buildReviewAttemptSummary,
     readReviewVerdicts,
@@ -432,7 +437,7 @@ export function updateEvidenceArtifactState(
 ): void {
     const normalizedPath = toPosix(path.resolve(artifactPath));
     const entry = evidence.find((candidate) => candidate.kind === kind);
-    const sha256 = exists ? fileSha256(artifactPath) : null;
+    const sha256 = exists ? readReviewArtifactFileSha256(artifactPath) : null;
     if (entry) {
         entry.path = normalizedPath;
         entry.exists = exists;
