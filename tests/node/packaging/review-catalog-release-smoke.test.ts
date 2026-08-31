@@ -306,6 +306,11 @@ test('packed release fixture materializes a custom catalog across CLI, UI, and m
             assert.equal(fs.readFileSync(filePath, 'utf8'), beforeText, `${filePath} changed during preview`);
         }
     } finally {
-        fs.rmSync(tempRoot, { recursive: true, force: true });
+        fs.rmSync(tempRoot, {
+            recursive: true,
+            force: true,
+            maxRetries: 20,
+            retryDelay: 100
+        });
     }
 });
