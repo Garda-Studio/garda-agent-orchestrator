@@ -20,6 +20,12 @@ import {
     forEachJsonlLine
 } from '../../../src/gate-runtime/timeline/task-events';
 import {
+    appendTaskEventLineAsync,
+    appendTaskEventLineSync
+} from '../../../src/gate-runtime/timeline/task-events-io-write';
+import { MAX_TASK_TIMELINE_JSON_RECORD_BYTES } from '../../../src/gate-runtime/timeline/task-events-helpers';
+import type { TaskEvent } from '../../../src/gate-runtime/timeline/task-events-io-types';
+import {
     __setTimelineSummaryTestHooks,
     collectTimelineSummaryForDoctor
 } from '../../../src/gate-runtime/timeline/timeline-summary';
@@ -86,14 +92,13 @@ test('normalizeIntegrityValue passes through primitives', () => {
     assert.equal(normalizeIntegrityValue(null), null);
 });
 
-test('normalizeIntegrityValue forward-slashes backslash strings', () => {
+test('normalizeIntegrityValue preserves its legacy public slash-normalization contract', () => {
     assert.equal(normalizeIntegrityValue('runtime\\task-events\\log.jsonl'), 'runtime/task-events/log.jsonl');
     assert.equal(normalizeIntegrityValue('C:\\Users\\dev\\project'), 'C:/Users/dev/project');
-    // Already-forward-slashed strings are unchanged
     assert.equal(normalizeIntegrityValue('runtime/task-events/log.jsonl'), 'runtime/task-events/log.jsonl');
 });
 
-test('normalizeIntegrityValue forward-slashes paths inside nested objects and arrays', () => {
+test('normalizeIntegrityValue normalizes slash variants inside nested objects and arrays', () => {
     const input = {
         path: 'src\\gate-runtime\\task-events.ts',
         nested: { deep: 'a\\b\\c' },
@@ -106,9 +111,18 @@ test('normalizeIntegrityValue forward-slashes paths inside nested objects and ar
     assert.equal((result.list as unknown[])[1], 'already/fine');
 });
 
-// buildEventIntegrityHash — cross-platform regression
+test('normalizeIntegrityValue preserves own __proto__ data properties without prototype mutation', () => {
+    const input = JSON.parse('{"__proto__":{"path":"a\\\\b"},"ordinary":true}') as Record<string, unknown>;
+    const result = normalizeIntegrityValue(input) as Record<string, unknown>;
 
-test('buildEventIntegrityHash produces identical hash for Windows and Unix paths', () => {
+    assert.equal(Object.getPrototypeOf(result), Object.prototype);
+    assert.equal(Object.prototype.hasOwnProperty.call(result, '__proto__'), true);
+    assert.deepEqual(result.__proto__, { path: 'a/b' });
+});
+
+// buildEventIntegrityHash — exact-string integrity regression
+
+test('buildEventIntegrityHash distinguishes slash variants in arbitrary strings', () => {
     const unixEvent = {
         timestamp_utc: '2024-06-01T12:00:00.000Z',
         task_id: 'T-090',
@@ -117,7 +131,7 @@ test('buildEventIntegrityHash produces identical hash for Windows and Unix paths
         actor: 'verify',
         message: 'runtime/task-events/T-090.task-event.jsonl',
         details: { source: 'src/gate-runtime/task-events.ts' },
-        integrity: { schema_version: 1, task_sequence: 1, prev_event_sha256: null }
+        integrity: { schema_version: 2, task_sequence: 1, prev_event_sha256: null }
     };
     const windowsEvent = {
         timestamp_utc: '2024-06-01T12:00:00.000Z',
@@ -127,11 +141,65 @@ test('buildEventIntegrityHash produces identical hash for Windows and Unix paths
         actor: 'verify',
         message: 'runtime\\task-events\\T-090.task-event.jsonl',
         details: { source: 'src\\gate-runtime\\task-events.ts' },
-        integrity: { schema_version: 1, task_sequence: 1, prev_event_sha256: null }
+        integrity: { schema_version: 2, task_sequence: 1, prev_event_sha256: null }
     };
     const unixHash = buildEventIntegrityHash(unixEvent);
     const windowsHash = buildEventIntegrityHash(windowsEvent);
-    assert.equal(unixHash, windowsHash, 'Windows and Unix path variants must produce the same integrity hash');
+    assert.notEqual(unixHash, windowsHash, 'Distinct serialized audit values must not share an integrity hash');
+});
+
+test('buildEventIntegrityHash schema v2 matches an independent Python canonical fixture', () => {
+    const event = {
+        timestamp_utc: '2024-06-01T12:00:00.000Z',
+        task_id: 'T-V2-ORACLE',
+        event_type: 'gate_pass',
+        outcome: 'PASS',
+        message: 'runtime\\task-events\\T-V2-ORACLE.jsonl',
+        details: {
+            source: 'src\\gate-runtime\\task-events.ts',
+            label: 'exact-string'
+        },
+        integrity: {
+            schema_version: 2,
+            task_sequence: 7,
+            prev_event_sha256: null
+        }
+    };
+
+    // Generated independently with Python json.dumps(sort_keys=True,
+    // ensure_ascii=False, separators=(',', ':')) and hashlib.sha256.
+    assert.equal(
+        buildEventIntegrityHash(event),
+        '9c8bc72353c28e33fd2f5972fa0cbcff890aa59baa41820cccb19108ce71be6d'
+    );
+});
+
+test('buildEventIntegrityHash preserves legacy v1 slash normalization for existing timelines', () => {
+    const unixEvent = {
+        task_id: 'T-LEGACY',
+        message: 'runtime/task-events/T-LEGACY.jsonl',
+        integrity: { schema_version: 1, task_sequence: 1, prev_event_sha256: null }
+    };
+    const windowsEvent = {
+        task_id: 'T-LEGACY',
+        message: 'runtime\\task-events\\T-LEGACY.jsonl',
+        integrity: { schema_version: 1, task_sequence: 1, prev_event_sha256: null }
+    };
+
+    assert.equal(buildEventIntegrityHash(windowsEvent), buildEventIntegrityHash(unixEvent));
+});
+
+test('buildEventIntegrityHash authenticates own __proto__ fields in schema v2', () => {
+    const first = JSON.parse(
+        '{"task_id":"T-PROTO","details":{"__proto__":{"value":"first"}},'
+        + '"integrity":{"schema_version":2,"task_sequence":1,"prev_event_sha256":null}}'
+    ) as Record<string, unknown>;
+    const second = JSON.parse(
+        '{"task_id":"T-PROTO","details":{"__proto__":{"value":"second"}},'
+        + '"integrity":{"schema_version":2,"task_sequence":1,"prev_event_sha256":null}}'
+    ) as Record<string, unknown>;
+
+    assert.notEqual(buildEventIntegrityHash(first), buildEventIntegrityHash(second));
 });
 
 
@@ -346,9 +414,77 @@ test('inspectTaskEventFile detects tampered event', () => {
         event.message = 'tampered!';
 
         fs.writeFileSync(filePath, JSON.stringify(event) + '\n', 'utf8');
-        const result = inspectTaskEventFile(filePath, 'T-001');
+        let observerCalls = 0;
+        const result = inspectTaskEventFile(filePath, 'T-001', {
+            onIntegrityEvent: () => {
+                observerCalls += 1;
+            }
+        });
         assert.equal(result.status, 'FAILED');
         assert.ok(result.violations.some(v => v.includes('event_sha256 mismatch')));
+        assert.equal(observerCalls, 0);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('inspectTaskEventFile detects slash-variant tampering in arbitrary audit fields', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-task-events-slash-tamper-'));
+    try {
+        const filePath = path.join(tempDir, 'slash-tamper.jsonl');
+        const event: Record<string, unknown> = {
+            timestamp_utc: new Date().toISOString(),
+            task_id: 'T-001',
+            event_type: 'test',
+            outcome: 'PASS',
+            message: 'literal\\audit\\value',
+            integrity: {
+                schema_version: 2,
+                task_sequence: 1,
+                prev_event_sha256: null
+            } as Record<string, unknown>
+        };
+        (event.integrity as Record<string, unknown>).event_sha256 = buildEventIntegrityHash(event);
+        event.message = 'literal/audit/value';
+        fs.writeFileSync(filePath, `${JSON.stringify(event)}\n`, 'utf8');
+
+        const result = inspectTaskEventFile(filePath, 'T-001');
+        assert.equal(result.status, 'FAILED');
+        assert.ok(result.violations.some((violation) => violation.includes('event_sha256 mismatch')));
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('inspectTaskEventFile accepts a v1 to v2 transition and rejects a downgrade to v1', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-task-events-schema-transition-'));
+    try {
+        const filePath = path.join(tempDir, 'schema-transition.jsonl');
+        const events: Array<Record<string, unknown>> = [];
+        let previousHash: string | null = null;
+        for (const [index, schemaVersion] of [1, 2, 1].entries()) {
+            const event: Record<string, unknown> = {
+                task_id: 'T-001',
+                event_type: `event-${index + 1}`,
+                message: `runtime\\event-${index + 1}`,
+                integrity: {
+                    schema_version: schemaVersion,
+                    task_sequence: index + 1,
+                    prev_event_sha256: previousHash
+                } as Record<string, unknown>
+            };
+            previousHash = buildEventIntegrityHash(event);
+            (event.integrity as Record<string, unknown>).event_sha256 = previousHash;
+            events.push(event);
+        }
+        fs.writeFileSync(filePath, `${events.map((event) => JSON.stringify(event)).join('\n')}\n`, 'utf8');
+
+        const result = inspectTaskEventFile(filePath, 'T-001');
+        assert.equal(result.status, 'FAILED');
+        assert.ok(result.violations.some((violation) => violation.includes('schema downgrade')));
+
+        fs.writeFileSync(filePath, `${events.slice(0, 2).map((event) => JSON.stringify(event)).join('\n')}\n`, 'utf8');
+        assert.equal(inspectTaskEventFile(filePath, 'T-001').status, 'PASS');
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -368,6 +504,26 @@ test('inspectTaskEventFile detects foreign task_id', () => {
 
         const result = inspectTaskEventFile(filePath, 'T-001');
         assert.equal(result.task_id_mismatches, 1);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('inspectTaskEventFile rejects integrity records without an explicit task_id binding', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-task-events-unbound-'));
+    try {
+        const filePath = path.join(tempDir, 'unbound.jsonl');
+        const event: Record<string, unknown> = {
+            event_type: 'test',
+            integrity: { schema_version: 2, task_sequence: 1, prev_event_sha256: null }
+        };
+        (event.integrity as Record<string, unknown>).event_sha256 = buildEventIntegrityHash(event);
+        fs.writeFileSync(filePath, `${JSON.stringify(event)}\n`, 'utf8');
+
+        const result = inspectTaskEventFile(filePath, 'T-001');
+        assert.equal(result.status, 'FAILED');
+        assert.equal(result.task_id_mismatches, 1);
+        assert.match(result.violations.join(' '), /missing task_id/);
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -446,6 +602,7 @@ test('appendTaskEvent creates chain with correct integrity', () => {
 
         const firstEvent = JSON.parse(fs.readFileSync(eventFile, 'utf8').trim().split('\n')[0]) as Record<string, unknown>;
         assert.equal(firstEvent.schema_version, 2);
+        assert.equal((firstEvent.integrity as Record<string, unknown>).schema_version, 2);
         assert.equal(firstEvent.event_source, 'task-events');
         assert.deepEqual(firstEvent.public_metadata, {
             lifecycle_phase: 'unknown',
@@ -457,6 +614,42 @@ test('appendTaskEvent creates chain with correct integrity', () => {
         // Also verify all-tasks.jsonl
         const allTasksFile = path.join(orchestratorRoot, 'runtime', 'task-events', 'all-tasks.jsonl');
         assert.ok(fs.existsSync(allTasksFile));
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('appendTaskEvent preserves JSONL framing after a valid final record without a newline', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-append-no-final-newline-'));
+    try {
+        const first = appendTaskEvent(
+            tempDir,
+            'T-NO-FINAL-NL',
+            'FIRST',
+            'PASS',
+            'First event',
+            {},
+            { passThru: true, lowNoiseRuntimeWrites: true }
+        );
+        assert.equal(first?.canonical_committed, true);
+        const eventFile = path.join(tempDir, 'runtime', 'task-events', 'T-NO-FINAL-NL.jsonl');
+        fs.writeFileSync(eventFile, fs.readFileSync(eventFile, 'utf8').trimEnd(), 'utf8');
+
+        const second = appendTaskEvent(
+            tempDir,
+            'T-NO-FINAL-NL',
+            'SECOND',
+            'PASS',
+            'Second event',
+            {},
+            { passThru: true, lowNoiseRuntimeWrites: true }
+        );
+
+        assert.equal(second?.canonical_committed, true);
+        const content = fs.readFileSync(eventFile, 'utf8');
+        assert.match(content, /\}\n\{/u);
+        assert.equal(content.trim().split('\n').length, 2);
+        assert.equal(inspectTaskEventFile(eventFile, 'T-NO-FINAL-NL').status, 'PASS');
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -548,6 +741,162 @@ test('appendTaskEventAsync rejects invalid task ids before writing task or aggre
         assert.equal(fs.existsSync(eventsRoot), false);
         assert.equal(fs.existsSync(path.join(eventsRoot, '.hidden.jsonl')), false);
         assert.equal(fs.existsSync(path.join(eventsRoot, 'all-tasks.jsonl')), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('low-level append APIs reject a task path and task ID mismatch without recursive snapshot entry', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-append-path-task-mismatch-'));
+    try {
+        const eventsRoot = path.join(tempDir, 'runtime', 'task-events');
+        const taskFilePath = path.join(eventsRoot, 'T-PATH.jsonl');
+        const event: TaskEvent = {
+            schema_version: 2,
+            event_source: 'task-events',
+            timestamp_utc: new Date().toISOString(),
+            task_id: 'T-OTHER',
+            event_type: 'MUST_NOT_BE_WRITTEN',
+            outcome: 'PASS',
+            actor: 'test',
+            message: 'Mismatched low-level append request',
+            details: {},
+            public_metadata: {
+                lifecycle_phase: 'unknown',
+                status_signal: 'pass',
+                health_state: 'healthy',
+                terminal_outcome: 'none'
+            }
+        };
+
+        assert.throws(
+            () => appendTaskEventLineSync(taskFilePath, 'T-OTHER', structuredClone(event), false),
+            /path does not match task ID 'T-OTHER'/
+        );
+        await assert.rejects(
+            () => appendTaskEventLineAsync(
+                taskFilePath,
+                'T-OTHER',
+                structuredClone(event),
+                0,
+                false
+            ),
+            /path does not match task ID 'T-OTHER'/
+        );
+        assert.equal(fs.existsSync(eventsRoot), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('low-level append APIs reject foreign or missing event task_id before snapshot entry', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-append-payload-task-mismatch-'));
+    try {
+        const eventsRoot = path.join(tempDir, 'runtime', 'task-events');
+        const taskFilePath = path.join(eventsRoot, 'T-PATH.jsonl');
+        const foreignEvent: TaskEvent = {
+            schema_version: 2,
+            event_source: 'task-events',
+            timestamp_utc: new Date().toISOString(),
+            task_id: 'T-OTHER',
+            event_type: 'MUST_NOT_BE_WRITTEN',
+            outcome: 'PASS',
+            actor: 'test',
+            message: 'Foreign low-level append payload',
+            details: {},
+            public_metadata: {
+                lifecycle_phase: 'unknown',
+                status_signal: 'pass',
+                health_state: 'healthy',
+                terminal_outcome: 'none'
+            }
+        };
+        const missingTaskIdEvent = structuredClone(foreignEvent);
+        delete (missingTaskIdEvent as { task_id?: string }).task_id;
+
+        assert.throws(
+            () => appendTaskEventLineSync(taskFilePath, 'T-PATH', foreignEvent, false),
+            /payload task_id 'T-OTHER' does not match canonical task ID 'T-PATH'/
+        );
+        await assert.rejects(
+            () => appendTaskEventLineAsync(taskFilePath, 'T-PATH', missingTaskIdEvent, 0, false),
+            /TaskId must not be empty/
+        );
+        assert.equal(fs.existsSync(eventsRoot), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('delayed async append rejects a canonical path replacement during its await window', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-append-async-delay-race-'));
+    try {
+        const taskId = 'T-ASYNC-RACE';
+        const seeded = appendTaskEvent(
+            tempDir,
+            taskId,
+            'SEEDED',
+            'PASS',
+            'Seed timeline before delayed append',
+            {},
+            { passThru: true, lowNoiseRuntimeWrites: true }
+        );
+        assert.equal(seeded?.canonical_committed, true);
+        const taskFilePath = path.join(tempDir, 'runtime', 'task-events', `${taskId}.jsonl`);
+        const originalContent = fs.readFileSync(taskFilePath, 'utf8');
+        const event: TaskEvent = {
+            schema_version: 2,
+            event_source: 'task-events',
+            timestamp_utc: new Date().toISOString(),
+            task_id: taskId,
+            event_type: 'MUST_NOT_BE_WRITTEN',
+            outcome: 'PASS',
+            actor: 'test',
+            message: 'Delayed append after path replacement',
+            details: {},
+            public_metadata: {
+                lifecycle_phase: 'unknown',
+                status_signal: 'pass',
+                health_state: 'healthy',
+                terminal_outcome: 'none'
+            }
+        };
+
+        const pendingAppend = appendTaskEventLineAsync(taskFilePath, taskId, event, 25, false);
+        fs.rmSync(taskFilePath);
+        fs.writeFileSync(taskFilePath, originalContent, { encoding: 'utf8', mode: 0o600 });
+
+        await assert.rejects(
+            pendingAppend,
+            /(?:append authority changed|snapshot changed while reading)/
+        );
+        assert.equal(fs.readFileSync(taskFilePath, 'utf8').includes('MUST_NOT_BE_WRITTEN'), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('canonical append rejects a record that the authenticated reader cannot accept', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-append-record-bound-'));
+    try {
+        const taskId = 'T-APPEND-RECORD-BOUND';
+        const result = appendTaskEvent(
+            tempDir,
+            taskId,
+            'MUST_NOT_BE_WRITTEN',
+            'PASS',
+            'x'.repeat(MAX_TASK_TIMELINE_JSON_RECORD_BYTES),
+            {},
+            { passThru: true, lowNoiseRuntimeWrites: true }
+        );
+        const taskFilePath = path.join(tempDir, 'runtime', 'task-events', `${taskId}.jsonl`);
+
+        assert.equal(result?.canonical_committed, false);
+        assert.match(
+            result?.warnings.join(' ') || '',
+            new RegExp(`${MAX_TASK_TIMELINE_JSON_RECORD_BYTES} byte limit`)
+        );
+        assert.equal(fs.existsSync(taskFilePath), false);
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -800,9 +1149,23 @@ test('appendTaskEvent emitOnce cache invalidates after external task-file edits'
         assert.equal(first?.commit_status, 'committed');
 
         const eventFile = path.join(eventsRoot, 'T-EXT.jsonl');
+        const previousEvent = JSON.parse(
+            fs.readFileSync(eventFile, 'utf8').trim()
+        ) as Record<string, unknown>;
+        const previousIntegrity = previousEvent.integrity as Record<string, unknown>;
+        const externalEvent = structuredClone(previousEvent);
+        const externalIntegrity = externalEvent.integrity as Record<string, unknown>;
+        externalEvent.timestamp_utc = new Date().toISOString();
+        externalEvent.event_type = 'EXTERNAL_ONLY';
+        externalEvent.message = 'manual edit';
+        externalEvent.details = {};
+        externalIntegrity.task_sequence = Number(previousIntegrity.task_sequence) + 1;
+        externalIntegrity.prev_event_sha256 = previousIntegrity.event_sha256;
+        delete externalIntegrity.event_sha256;
+        externalIntegrity.event_sha256 = buildEventIntegrityHash(externalEvent);
         fs.appendFileSync(
             eventFile,
-            `${JSON.stringify({ task_id: 'T-EXT', event_type: 'EXTERNAL_ONLY', message: 'manual edit' })}\n`,
+            `${JSON.stringify(externalEvent)}\n`,
             'utf8'
         );
 
@@ -843,7 +1206,11 @@ test('appendTaskEvent emitOnce cache invalidates after same-size external rewrit
         const eventFile = path.join(eventsRoot, 'T-SAME-SIZE.jsonl');
         const originalStat = fs.statSync(eventFile);
         const originalContent = fs.readFileSync(eventFile, 'utf8');
-        const replacementContent = originalContent.replace('"event_type":"AAAA"', '"event_type":"BBBB"');
+        const replacementEvent = JSON.parse(originalContent.trim()) as Record<string, unknown>;
+        replacementEvent.event_type = 'BBBB';
+        const replacementIntegrity = replacementEvent.integrity as Record<string, unknown>;
+        replacementIntegrity.event_sha256 = buildEventIntegrityHash(replacementEvent);
+        const replacementContent = `${JSON.stringify(replacementEvent)}\n`;
         assert.equal(Buffer.byteLength(replacementContent), Buffer.byteLength(originalContent));
         fs.writeFileSync(eventFile, replacementContent, 'utf8');
         fs.utimesSync(eventFile, originalStat.atime, originalStat.mtime);
@@ -1191,6 +1558,30 @@ test('readTaskEventAppendState streaming fallback counts parse errors', () => {
         const state = readTaskEventAppendState(filePath, 'T-001');
         assert.equal(state.matching_events, 1);
         assert.equal(state.parse_errors, 1);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('readTaskEventAppendState excludes records without the requested task_id binding', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-append-state-unbound-'));
+    try {
+        const filePath = path.join(tempDir, 'unbound.jsonl');
+        const unbound = {
+            event_type: 'unbound',
+            integrity: {
+                schema_version: 2,
+                task_sequence: 7,
+                prev_event_sha256: null,
+                event_sha256: 'a'.repeat(64)
+            }
+        };
+        fs.writeFileSync(filePath, `${JSON.stringify(unbound)}\n`, 'utf8');
+
+        const state = readTaskEventAppendState(filePath, 'T-001');
+        assert.equal(state.matching_events, 0);
+        assert.equal(state.last_integrity_sequence, null);
+        assert.equal(state.last_event_sha256, null);
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }

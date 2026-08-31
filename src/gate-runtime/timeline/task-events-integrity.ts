@@ -1,11 +1,23 @@
-import * as fs from 'node:fs';
-
 import {
     buildEventIntegrityHash,
-    forEachJsonlLine,
+    forEachTaskTimelineJsonlEntry,
+    LEGACY_TASK_EVENT_INTEGRITY_SCHEMA_VERSION,
+    TASK_EVENT_INTEGRITY_SCHEMA_VERSION,
     toTrimmedLowerCaseString,
     toTrimmedString
 } from './task-events-helpers';
+import {
+    assertTaskTimelineReadSnapshotCurrent,
+    captureTaskTimelineReadSnapshotSha256,
+    createTaskTimelineMemoizationKey,
+    isTaskTimelineReadSnapshotActive,
+    memoizeTaskTimelineSnapshot,
+    readTaskTimelineFileMetadataSnapshot,
+    taskTimelineAwareFileExists,
+    type TaskTimelineDeepReadonly,
+    type TaskTimelineMemoizedRead,
+    withTaskTimelineFileReadSnapshot
+} from './task-timeline-read-snapshot';
 
 export interface InspectTaskEventResult {
     source_path: string;
@@ -26,6 +38,44 @@ export interface InspectTaskEventOptions {
     onIntegrityEvent?: (event: Readonly<Record<string, unknown>>, lineNumber: number) => void;
 }
 
+const INTEGRITY_INSPECTION_MEMOIZATION_KEY = createTaskTimelineMemoizationKey<InspectTaskEventResult>(
+    'integrity-inspection'
+);
+
+function isMissingPathError(error: unknown): boolean {
+    const code = error && typeof error === 'object' && 'code' in error
+        ? String((error as NodeJS.ErrnoException).code || '')
+        : '';
+    return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+function recordTaskTimelineReadFailure(
+    result: InspectTaskEventResult,
+    taskEventFile: string,
+    error: unknown
+): void {
+    const snapshotMetadata = readTaskTimelineFileMetadataSnapshot(taskEventFile);
+    if (snapshotMetadata.active && !snapshotMetadata.valid) {
+        result.status = 'FAILED';
+        const diagnostic = error instanceof Error ? error.message : String(error || '');
+        result.violations.push(
+            diagnostic.includes(' limit')
+                ? `Task timeline read failed: ${diagnostic}`
+                : 'Task timeline snapshot changed or became unavailable during this invocation.'
+        );
+        return;
+    }
+    if (isMissingPathError(error)) {
+        result.status = 'MISSING';
+        result.violations.push(`Task events file not found: ${result.source_path}`);
+        return;
+    }
+    result.status = 'FAILED';
+    result.violations.push(
+        `Task timeline read failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+}
+
 export function normalizeIntegrityValue(value: unknown): unknown {
     if (value == null) {
         return value;
@@ -44,7 +94,12 @@ export function normalizeIntegrityValue(value: unknown): unknown {
         const obj = value as Record<string, unknown>;
         const keys = Object.keys(obj).sort();
         for (const key of keys) {
-            sorted[key] = normalizeIntegrityValue(obj[key]);
+            Object.defineProperty(sorted, key, {
+                configurable: true,
+                enumerable: true,
+                value: normalizeIntegrityValue(obj[key]),
+                writable: true
+            });
         }
         return sorted;
     }
@@ -56,7 +111,7 @@ export function normalizeIntegrityValue(value: unknown): unknown {
     return value;
 }
 
-export function inspectTaskEventFile(
+function inspectTaskEventFileUncached(
     taskEventFile: string,
     taskId: string,
     options: InspectTaskEventOptions = {}
@@ -77,39 +132,52 @@ export function inspectTaskEventFile(
     };
 
     try {
-        if (!fs.existsSync(taskEventFile) || !fs.statSync(taskEventFile).isFile()) {
-            result.status = 'MISSING';
-            result.violations.push(`Task events file not found: ${result.source_path}`);
+        if (!taskTimelineAwareFileExists(taskEventFile)) {
+            const snapshotMetadata = readTaskTimelineFileMetadataSnapshot(taskEventFile);
+            if (snapshotMetadata.active && !snapshotMetadata.valid) {
+                result.status = 'FAILED';
+                result.violations.push('Task timeline snapshot changed or became unavailable during this invocation.');
+            } else {
+                result.status = 'MISSING';
+                result.violations.push(`Task events file not found: ${result.source_path}`);
+            }
             return result;
         }
-    } catch {
-        result.status = 'MISSING';
-        result.violations.push(`Task events file not found: ${result.source_path}`);
+    } catch (error: unknown) {
+        recordTaskTimelineReadFailure(result, taskEventFile, error);
         return result;
     }
 
     let lastEventHash: string | null = null;
     let expectedSequence: number | null = null;
     let integrityStarted = false;
+    let latestIntegritySchemaVersion: number | null = null;
     const seenHashes = new Set<string>();
+    const validatedIntegrityEvents: Array<{
+        event: Readonly<Record<string, unknown>>;
+        lineNumber: number;
+    }> = [];
 
     try {
-        forEachJsonlLine(taskEventFile, (rawLine: string, lineNumber: number) => {
+        forEachTaskTimelineJsonlEntry(taskEventFile, (timelineEntry) => {
+            const lineNumber = timelineEntry.lineNumber;
             result.events_scanned++;
 
-            let event: Record<string, unknown>;
-            try {
-                event = JSON.parse(rawLine) as Record<string, unknown>;
-            } catch {
+            const event = timelineEntry.record;
+            if (!event) {
                 result.parse_errors++;
                 result.violations.push(`Task timeline contains invalid JSON at line ${lineNumber}.`);
                 return;
             }
 
             const eventTaskId = toTrimmedString(event.task_id);
-            if (eventTaskId && eventTaskId !== taskId) {
+            if (eventTaskId !== taskId) {
                 result.task_id_mismatches++;
-                result.violations.push(`Task timeline contains foreign task_id '${eventTaskId}' at line ${lineNumber}.`);
+                result.violations.push(
+                    eventTaskId
+                        ? `Task timeline contains foreign task_id '${eventTaskId}' at line ${lineNumber}.`
+                        : `Task timeline is missing task_id at line ${lineNumber}.`
+                );
                 return;
             }
 
@@ -132,9 +200,24 @@ export function inspectTaskEventFile(
             let prevEventSha256 = integrityRecord.prev_event_sha256;
             const eventSha256 = toTrimmedLowerCaseString(integrityRecord.event_sha256);
 
-            if (schemaVersion !== 1) {
+            if (
+                schemaVersion !== LEGACY_TASK_EVENT_INTEGRITY_SCHEMA_VERSION
+                && schemaVersion !== TASK_EVENT_INTEGRITY_SCHEMA_VERSION
+            ) {
                 result.violations.push(
-                    `Task timeline integrity schema mismatch at line ${lineNumber}: expected 1, got '${schemaVersion}'.`
+                    `Task timeline integrity schema mismatch at line ${lineNumber}: expected `
+                    + `${LEGACY_TASK_EVENT_INTEGRITY_SCHEMA_VERSION} or `
+                    + `${TASK_EVENT_INTEGRITY_SCHEMA_VERSION}, got '${schemaVersion}'.`
+                );
+                return;
+            }
+            if (
+                latestIntegritySchemaVersion === TASK_EVENT_INTEGRITY_SCHEMA_VERSION
+                && schemaVersion === LEGACY_TASK_EVENT_INTEGRITY_SCHEMA_VERSION
+            ) {
+                result.violations.push(
+                    `Task timeline integrity schema downgrade at line ${lineNumber}: `
+                    + `${TASK_EVENT_INTEGRITY_SCHEMA_VERSION} to ${LEGACY_TASK_EVENT_INTEGRITY_SCHEMA_VERSION}.`
                 );
                 return;
             }
@@ -185,13 +268,8 @@ export function inspectTaskEventFile(
             }
             seenHashes.add(eventSha256);
 
-            try {
-                options.onIntegrityEvent?.(event, lineNumber);
-            } catch (error: unknown) {
-                result.violations.push(
-                    `Task timeline integrity-event observer failed at line ${lineNumber}: `
-                    + (error instanceof Error ? error.message : String(error))
-                );
+            if (options.onIntegrityEvent) {
+                validatedIntegrityEvents.push({ event, lineNumber });
             }
 
             result.integrity_event_count++;
@@ -201,11 +279,44 @@ export function inspectTaskEventFile(
             result.last_integrity_sequence = taskSequence;
             lastEventHash = eventSha256;
             expectedSequence = taskSequence + 1;
+            latestIntegritySchemaVersion = schemaVersion;
         });
-    } catch {
-        result.status = 'MISSING';
-        result.violations.push(`Task events file not found: ${result.source_path}`);
+    } catch (error: unknown) {
+        recordTaskTimelineReadFailure(result, taskEventFile, error);
         return result;
+    }
+
+    if (result.violations.length === 0 && options.onIntegrityEvent) {
+        let expectedSnapshotSha256: string;
+        try {
+            expectedSnapshotSha256 = captureTaskTimelineReadSnapshotSha256(taskEventFile);
+        } catch (error: unknown) {
+            recordTaskTimelineReadFailure(result, taskEventFile, error);
+            return result;
+        }
+        for (const { event, lineNumber } of validatedIntegrityEvents) {
+            let observerFailed = false;
+            let observerError: unknown = null;
+            try {
+                options.onIntegrityEvent(event, lineNumber);
+            } catch (error: unknown) {
+                observerFailed = true;
+                observerError = error;
+            }
+            try {
+                assertTaskTimelineReadSnapshotCurrent(taskEventFile, expectedSnapshotSha256);
+            } catch (error: unknown) {
+                recordTaskTimelineReadFailure(result, taskEventFile, error);
+                return result;
+            }
+            if (observerFailed) {
+                result.violations.push(
+                    `Task timeline integrity-event observer failed at line ${lineNumber}: `
+                    + (observerError instanceof Error ? observerError.message : String(observerError))
+                );
+                break;
+            }
+        }
     }
 
     if (result.violations.length > 0) {
@@ -220,5 +331,53 @@ export function inspectTaskEventFile(
         result.status = 'PASS';
     }
 
+    return result;
+}
+
+function cloneInspectTaskEventResult(
+    result: TaskTimelineDeepReadonly<InspectTaskEventResult>
+): InspectTaskEventResult {
+    return {
+        ...result,
+        duplicate_event_hashes: [...result.duplicate_event_hashes],
+        violations: [...result.violations]
+    };
+}
+
+export function inspectTaskEventFile(
+    taskEventFile: string,
+    taskId: string,
+    options: InspectTaskEventOptions = {}
+): InspectTaskEventResult {
+    if (!isTaskTimelineReadSnapshotActive(taskEventFile)) {
+        return withTaskTimelineFileReadSnapshot(taskEventFile, () => (
+            inspectTaskEventFile(taskEventFile, taskId, options)
+        ));
+    }
+    if (options.onIntegrityEvent) {
+        return inspectTaskEventFileUncached(taskEventFile, taskId, options);
+    }
+    let memoized: TaskTimelineMemoizedRead<InspectTaskEventResult>;
+    try {
+        memoized = memoizeTaskTimelineSnapshot(
+            taskEventFile,
+            INTEGRITY_INSPECTION_MEMOIZATION_KEY,
+            `integrity-inspection-v2:${taskId}`,
+            () => inspectTaskEventFileUncached(taskEventFile, taskId)
+        );
+    } catch {
+        return inspectTaskEventFileUncached(taskEventFile, taskId, options);
+    }
+    if (!memoized.active) {
+        return inspectTaskEventFileUncached(taskEventFile, taskId);
+    }
+    if (memoized.valid && memoized.exists && memoized.value) {
+        return cloneInspectTaskEventResult(memoized.value);
+    }
+    const result = inspectTaskEventFileUncached(taskEventFile, taskId);
+    if (!memoized.valid) {
+        result.status = 'FAILED';
+        result.violations.push('Task timeline snapshot changed or became unavailable during this invocation.');
+    }
     return result;
 }

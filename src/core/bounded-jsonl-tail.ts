@@ -18,13 +18,15 @@ export interface BoundedJsonlTailResult<T> {
 }
 
 function positiveInteger(value: number, name: keyof BoundedJsonlTailLimits): number {
-    if (!Number.isInteger(value) || value <= 0) {
-        throw new Error(`${name} must be a positive integer.`);
+    if (!Number.isSafeInteger(value) || value <= 0) {
+        throw new Error(`${name} must be a positive safe integer.`);
     }
     return value;
 }
 
-function normalizeLimits(limits: BoundedJsonlTailLimits): BoundedJsonlTailLimits {
+export function normalizeBoundedJsonlTailLimits(
+    limits: BoundedJsonlTailLimits
+): BoundedJsonlTailLimits {
     return {
         maxBytes: positiveInteger(limits.maxBytes, 'maxBytes'),
         maxLines: positiveInteger(limits.maxLines, 'maxLines'),
@@ -33,27 +35,60 @@ function normalizeLimits(limits: BoundedJsonlTailLimits): BoundedJsonlTailLimits
     };
 }
 
+function normalizeTotalSize(totalSize: number, sourceLength: number): number {
+    if (!Number.isSafeInteger(totalSize) || totalSize < sourceLength) {
+        throw new Error('totalSize must be a non-negative safe integer not smaller than the source buffer.');
+    }
+    return totalSize;
+}
+
 export function readBoundedJsonlTail<T>(
     filePath: string,
     requestedLimits: BoundedJsonlTailLimits
 ): BoundedJsonlTailResult<T> {
-    const limits = normalizeLimits(requestedLimits);
+    const limits = normalizeBoundedJsonlTailLimits(requestedLimits);
     const stats = fs.statSync(filePath);
     const bytesRead = Math.min(stats.size, limits.maxBytes);
     const start = Math.max(0, stats.size - bytesRead);
     const buffer = Buffer.alloc(bytesRead);
     const handle = fs.openSync(filePath, 'r');
     try {
-        if (bytesRead > 0) {
-            fs.readSync(handle, buffer, 0, bytesRead, start);
+        let offset = 0;
+        while (offset < bytesRead) {
+            const chunkSize = fs.readSync(
+                handle,
+                buffer,
+                offset,
+                bytesRead - offset,
+                start + offset
+            );
+            if (chunkSize <= 0) {
+                throw new Error(`Bounded JSONL tail changed while reading: ${filePath}`);
+            }
+            offset += chunkSize;
         }
     } finally {
         fs.closeSync(handle);
     }
 
+    return readBoundedJsonlTailBuffer(buffer, stats.size, limits);
+}
+
+export function readBoundedJsonlTailBuffer<T>(
+    source: Buffer,
+    totalSize: number,
+    requestedLimits: BoundedJsonlTailLimits
+): BoundedJsonlTailResult<T> {
+    const limits = normalizeBoundedJsonlTailLimits(requestedLimits);
+    const normalizedTotalSize = normalizeTotalSize(totalSize, source.length);
+    const bytesRead = Math.min(source.length, limits.maxBytes);
+    const start = Math.max(0, source.length - bytesRead);
+    const buffer = source.subarray(start);
+
     let text = buffer.toString('utf8');
-    let truncated = start > 0;
-    if (start > 0) {
+    const sourceStart = normalizedTotalSize - bytesRead;
+    let truncated = sourceStart > 0;
+    if (sourceStart > 0) {
         const firstNewline = text.indexOf('\n');
         text = firstNewline >= 0 ? text.slice(firstNewline + 1) : '';
     }

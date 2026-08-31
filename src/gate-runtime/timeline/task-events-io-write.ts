@@ -1,7 +1,19 @@
-import * as fs from 'node:fs';
+import * as path from 'node:path';
 
-import { buildEventIntegrityHash } from './task-events-helpers';
+import { assertCanonicalTaskId } from '../../core/task-ids';
+import {
+    assertTaskTimelineJsonlAppendWithinLimits,
+    buildEventIntegrityHash,
+    TASK_EVENT_INTEGRITY_SCHEMA_VERSION
+} from './task-events-helpers';
 import { readTaskEventAppendReadiness, refreshTaskEventAppendIndexAfterAppend } from './task-events-io-index';
+import {
+    appendTaskTimelineLineSync,
+    assertTaskTimelinePathMatchesTaskId,
+    captureTaskTimelineAppendAuthority,
+    isTaskTimelineReadSnapshotActive,
+    withTaskTimelineReadSnapshot
+} from './task-timeline-read-snapshot';
 import type { TaskEvent } from './task-events-io-types';
 
 function sleepMsAsync(milliseconds: number): Promise<void> {
@@ -19,7 +31,7 @@ function assignEventIntegrity(event: TaskEvent, matchingEvents: number, previous
         : matchingEvents + 1;
 
     event.integrity = {
-        schema_version: 1,
+        schema_version: TASK_EVENT_INTEGRITY_SCHEMA_VERSION,
         task_sequence: nextSequence,
         prev_event_sha256: previousHash
     };
@@ -37,6 +49,15 @@ export function toPositiveInteger(value: unknown, fallback: number): number {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function assertTaskEventPayloadMatchesTaskId(event: TaskEvent, taskId: string): void {
+    const eventTaskId = assertCanonicalTaskId(event.task_id);
+    if (eventTaskId !== taskId) {
+        throw new Error(
+            `Task event payload task_id '${eventTaskId}' does not match canonical task ID '${taskId}'.`
+        );
+    }
+}
+
 export function appendTaskEventLineSync(
     taskFilePath: string,
     taskId: string,
@@ -44,7 +65,15 @@ export function appendTaskEventLineSync(
     emitOnce: boolean,
     onCanonicalAppend?: () => void
 ): string | null {
-    const readiness = readTaskEventAppendReadiness(taskFilePath, taskId, event.event_type, emitOnce);
+    const safeTaskId = assertTaskTimelinePathMatchesTaskId(taskFilePath, taskId);
+    assertTaskEventPayloadMatchesTaskId(event, safeTaskId);
+    if (!isTaskTimelineReadSnapshotActive(taskFilePath)) {
+        return withTaskTimelineReadSnapshot(path.dirname(taskFilePath), safeTaskId, () => (
+            appendTaskEventLineSync(taskFilePath, safeTaskId, event, emitOnce, onCanonicalAppend)
+        ));
+    }
+    const appendAuthority = captureTaskTimelineAppendAuthority(taskFilePath);
+    const readiness = readTaskEventAppendReadiness(taskFilePath, safeTaskId, event.event_type, emitOnce);
     if (readiness.duplicate) {
         return null;
     }
@@ -58,9 +87,10 @@ export function appendTaskEventLineSync(
     );
 
     const serializedLine = JSON.stringify(event);
-    fs.appendFileSync(taskFilePath, serializedLine + '\n', 'utf8');
+    assertTaskTimelineJsonlAppendWithinLimits(taskFilePath, serializedLine);
+    appendTaskTimelineLineSync(taskFilePath, serializedLine, appendAuthority);
     onCanonicalAppend?.();
-    refreshTaskEventAppendIndexAfterAppend(taskFilePath, taskId, event);
+    refreshTaskEventAppendIndexAfterAppend(taskFilePath, safeTaskId, event);
     return serializedLine;
 }
 
@@ -72,7 +102,22 @@ export async function appendTaskEventLineAsync(
     emitOnce: boolean,
     onCanonicalAppend?: () => void
 ): Promise<string | null> {
-    const readiness = readTaskEventAppendReadiness(taskFilePath, taskId, event.event_type, emitOnce);
+    const safeTaskId = assertTaskTimelinePathMatchesTaskId(taskFilePath, taskId);
+    assertTaskEventPayloadMatchesTaskId(event, safeTaskId);
+    if (!isTaskTimelineReadSnapshotActive(taskFilePath)) {
+        return withTaskTimelineReadSnapshot(path.dirname(taskFilePath), safeTaskId, () => (
+            appendTaskEventLineAsync(
+                taskFilePath,
+                safeTaskId,
+                event,
+                preWriteDelayMs,
+                emitOnce,
+                onCanonicalAppend
+            )
+        ));
+    }
+    const appendAuthority = captureTaskTimelineAppendAuthority(taskFilePath);
+    const readiness = readTaskEventAppendReadiness(taskFilePath, safeTaskId, event.event_type, emitOnce);
     if (readiness.duplicate) {
         return null;
     }
@@ -86,11 +131,12 @@ export async function appendTaskEventLineAsync(
     );
 
     const serializedLine = JSON.stringify(event);
+    assertTaskTimelineJsonlAppendWithinLimits(taskFilePath, serializedLine);
     if (preWriteDelayMs > 0) {
         await sleepMsAsync(preWriteDelayMs);
     }
-    fs.appendFileSync(taskFilePath, serializedLine + '\n', 'utf8');
+    appendTaskTimelineLineSync(taskFilePath, serializedLine, appendAuthority);
     onCanonicalAppend?.();
-    refreshTaskEventAppendIndexAfterAppend(taskFilePath, taskId, event);
+    refreshTaskEventAppendIndexAfterAppend(taskFilePath, safeTaskId, event);
     return serializedLine;
 }

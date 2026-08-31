@@ -28,8 +28,10 @@ export {
     assertValidTaskId,
     buildEventIntegrityHash,
     forEachJsonlLine,
+    readTaskTimelineJsonlEntries,
     toTrimmedLowerCaseString,
     toTrimmedString,
+    type TaskTimelineJsonlEntry,
 } from './task-events-helpers';
 export {
     inspectTaskEventFile,
@@ -37,6 +39,17 @@ export {
     type InspectTaskEventOptions,
     type InspectTaskEventResult
 } from './task-events-integrity';
+export {
+    MAX_TASK_TIMELINE_SNAPSHOT_BYTES,
+    readTaskTimelineBoundedJsonlTail,
+    readTaskTimelineFileMetadataSnapshot,
+    readTaskTimelineFileSnapshot,
+    readTaskTimelineTextFile,
+    taskTimelineAwareFileExists,
+    withTaskTimelineReadSnapshot,
+    type TaskTimelineFileReadSnapshot,
+    type TaskTimelineFileMetadataSnapshot
+} from './task-timeline-read-snapshot';
 export {
     TASK_EVENT_LEGACY_SCHEMA_VERSION,
     TASK_EVENT_PUBLIC_EVENT_SOURCE,

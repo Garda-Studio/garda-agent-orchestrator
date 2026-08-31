@@ -1,7 +1,21 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { forEachJsonlLine, toTrimmedLowerCaseString, toTrimmedString } from './task-events-helpers';
+import {
+    forEachTaskTimelineJsonlEntry,
+    parseTaskTimelineJsonObjectLine,
+    toTrimmedLowerCaseString,
+    toTrimmedString
+} from './task-events-helpers';
+import {
+    createTaskTimelineMemoizationKey,
+    isTaskTimelineReadSnapshotActive,
+    memoizeTaskTimelineSnapshot,
+    readTaskTimelineFileMetadataSnapshot,
+    taskTimelineAwareFileExists,
+    withTaskTimelineFileReadSnapshot
+} from './task-timeline-read-snapshot';
+import { inspectTaskEventFile } from './task-events-integrity';
 import type { TaskEvent, TaskEventAppendState } from './task-events-io-types';
 
 const TAIL_READ_CHUNK_SIZE = 4096;
@@ -13,8 +27,11 @@ interface TaskEventAppendIndex {
     size: number;
     mtimeMs: number;
     ctimeMs: number;
+    sha256: string | null;
     state: TaskEventAppendState;
     eventTypes: Set<string>;
+    integrityStatus: string;
+    integrityViolations: string[];
 }
 
 interface TaskEventAppendReadiness {
@@ -23,6 +40,16 @@ interface TaskEventAppendReadiness {
 }
 
 const taskEventAppendIndexCache = new Map<string, TaskEventAppendIndex>();
+const APPENDABLE_TASK_TIMELINE_STATUSES = new Set([
+    'MISSING',
+    'EMPTY',
+    'LEGACY_ONLY',
+    'PASS_WITH_LEGACY_PREFIX',
+    'PASS'
+]);
+const LAST_NON_EMPTY_LINE_MEMOIZATION_KEY = createTaskTimelineMemoizationKey<string | null>(
+    'last-non-empty-line'
+);
 
 function createEmptyAppendState(): TaskEventAppendState {
     return {
@@ -34,6 +61,33 @@ function createEmptyAppendState(): TaskEventAppendState {
 }
 
 function readLastNonEmptyLine(filePath: string): string | null {
+    const memoized = memoizeTaskTimelineSnapshot(
+        filePath,
+        LAST_NON_EMPTY_LINE_MEMOIZATION_KEY,
+        'default',
+        (content) => {
+            let end = content.length;
+            while (end > 0) {
+                const newlineIndex = content.lastIndexOf('\n', end - 1);
+                const line = content.slice(newlineIndex + 1, end).trim();
+                if (line) {
+                    return line;
+                }
+                if (newlineIndex < 0) {
+                    break;
+                }
+                end = newlineIndex;
+            }
+            return null;
+        }
+    );
+    if (memoized.active) {
+        if (!memoized.valid) {
+            throw new Error(`Task timeline snapshot changed while reading: ${filePath}`);
+        }
+        return memoized.exists ? memoized.value : null;
+    }
+
     let fd: number | null = null;
     try {
         let stat: fs.Stats;
@@ -86,11 +140,21 @@ function getTaskEventAppendIndexCacheKey(taskFilePath: string, taskId: string): 
     return `${path.resolve(taskFilePath)}\0${taskId}`;
 }
 
-function getTaskEventFileStat(taskFilePath: string): { size: number; mtimeMs: number; ctimeMs: number } | null {
+function getTaskEventFileStat(
+    taskFilePath: string
+): { size: number; mtimeMs: number; ctimeMs: number; sha256: string | null } | null {
+    const snapshotMetadata = readTaskTimelineFileMetadataSnapshot(taskFilePath);
     try {
         const stat = fs.statSync(taskFilePath);
         return stat.isFile()
-            ? { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs }
+            ? {
+                size: stat.size,
+                mtimeMs: stat.mtimeMs,
+                ctimeMs: stat.ctimeMs,
+                sha256: snapshotMetadata.active && snapshotMetadata.valid
+                    ? snapshotMetadata.sha256
+                    : null
+            }
             : null;
     } catch {
         return null;
@@ -119,30 +183,53 @@ function readTaskEventAppendIndex(taskFilePath: string, taskId: string): TaskEve
             size: 0,
             mtimeMs: 0,
             ctimeMs: 0,
+            sha256: null,
             state: createEmptyAppendState(),
-            eventTypes: new Set<string>()
+            eventTypes: new Set<string>(),
+            integrityStatus: 'MISSING',
+            integrityViolations: []
         });
     }
 
     const cached = taskEventAppendIndexCache.get(cacheKey);
-    if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs && cached.ctimeMs === stat.ctimeMs) {
+    if (
+        cached
+        && cached.size === stat.size
+        && cached.mtimeMs === stat.mtimeMs
+        && cached.ctimeMs === stat.ctimeMs
+        && cached.sha256 === stat.sha256
+    ) {
         return cached;
     }
 
     const state = createEmptyAppendState();
     const eventTypes = new Set<string>();
+    const inspection = inspectTaskEventFile(taskFilePath, taskId);
 
-    forEachJsonlLine(taskFilePath, (rawLine: string) => {
-        let event: Record<string, unknown>;
-        try {
-            event = JSON.parse(rawLine) as Record<string, unknown>;
-        } catch {
+    if (!APPENDABLE_TASK_TIMELINE_STATUSES.has(inspection.status)) {
+        return rememberTaskEventAppendIndex(cacheKey, {
+            taskFilePath,
+            taskId,
+            size: stat.size,
+            mtimeMs: stat.mtimeMs,
+            ctimeMs: stat.ctimeMs,
+            sha256: stat.sha256,
+            state,
+            eventTypes,
+            integrityStatus: inspection.status,
+            integrityViolations: [...inspection.violations]
+        });
+    }
+
+    forEachTaskTimelineJsonlEntry(taskFilePath, (timelineEntry) => {
+        const event = timelineEntry.record;
+        if (!event) {
             state.parse_errors++;
             return;
         }
 
         const eventTaskId = toTrimmedString(event.task_id);
-        if (eventTaskId && eventTaskId !== taskId) {
+        if (eventTaskId !== taskId) {
             return;
         }
 
@@ -172,8 +259,11 @@ function readTaskEventAppendIndex(taskFilePath: string, taskId: string): TaskEve
         size: stat.size,
         mtimeMs: stat.mtimeMs,
         ctimeMs: stat.ctimeMs,
+        sha256: stat.sha256,
         state,
-        eventTypes
+        eventTypes,
+        integrityStatus: inspection.status,
+        integrityViolations: [...inspection.violations]
     });
 }
 
@@ -183,14 +273,27 @@ export function readTaskEventAppendReadiness(
     eventType: string,
     emitOnce: boolean
 ): TaskEventAppendReadiness {
+    if (!isTaskTimelineReadSnapshotActive(taskFilePath)) {
+        return withTaskTimelineFileReadSnapshot(taskFilePath, () => (
+            readTaskEventAppendReadiness(taskFilePath, taskId, eventType, emitOnce)
+        ));
+    }
+    const index = readTaskEventAppendIndex(taskFilePath, taskId);
+    if (!APPENDABLE_TASK_TIMELINE_STATUSES.has(index.integrityStatus)) {
+        const diagnostics = index.integrityViolations.length > 0
+            ? ` ${index.integrityViolations.join(' ')}`
+            : '';
+        throw new Error(
+            `Task timeline integrity validation failed before append: ${taskFilePath}.${diagnostics}`
+        );
+    }
     if (!emitOnce) {
         return {
-            state: readTaskEventAppendState(taskFilePath, taskId),
+            state: index.state,
             duplicate: false
         };
     }
 
-    const index = readTaskEventAppendIndex(taskFilePath, taskId);
     const targetEventType = toTrimmedLowerCaseString(eventType);
     return {
         state: index.state,
@@ -222,29 +325,38 @@ export function refreshTaskEventAppendIndexAfterAppend(
     cached.size = stat.size;
     cached.mtimeMs = stat.mtimeMs;
     cached.ctimeMs = stat.ctimeMs;
+    cached.sha256 = stat.sha256;
     cached.state = {
         matching_events: cached.state.matching_events + 1,
         parse_errors: cached.state.parse_errors,
         last_integrity_sequence: event.integrity?.task_sequence ?? cached.state.last_integrity_sequence,
         last_event_sha256: event.integrity?.event_sha256 ?? cached.state.last_event_sha256
     };
+    cached.integrityStatus = cached.integrityStatus === 'LEGACY_ONLY'
+        || cached.integrityStatus === 'PASS_WITH_LEGACY_PREFIX'
+        ? 'PASS_WITH_LEGACY_PREFIX'
+        : 'PASS';
+    cached.integrityViolations = [];
 }
 
 export function readTaskEventAppendStateFast(taskFilePath: string, taskId: string): TaskEventAppendState | null {
+    if (!isTaskTimelineReadSnapshotActive(taskFilePath)) {
+        return withTaskTimelineFileReadSnapshot(taskFilePath, () => (
+            readTaskEventAppendStateFast(taskFilePath, taskId)
+        ));
+    }
     const rawLine = readLastNonEmptyLine(taskFilePath);
     if (!rawLine || !rawLine.trim()) {
         return null;
     }
 
-    let event: Record<string, unknown>;
-    try {
-        event = JSON.parse(rawLine) as Record<string, unknown>;
-    } catch {
+    const event = parseTaskTimelineJsonObjectLine(rawLine);
+    if (!event) {
         return null;
     }
 
     const eventTaskId = toTrimmedString(event.task_id);
-    if (eventTaskId && eventTaskId !== taskId) {
+    if (eventTaskId !== taskId) {
         return null;
     }
 
@@ -269,13 +381,14 @@ export function readTaskEventAppendStateFast(taskFilePath: string, taskId: strin
 }
 
 export function readTaskEventAppendState(taskFilePath: string, taskId: string): TaskEventAppendState {
+    if (!isTaskTimelineReadSnapshotActive(taskFilePath)) {
+        return withTaskTimelineFileReadSnapshot(taskFilePath, () => (
+            readTaskEventAppendState(taskFilePath, taskId)
+        ));
+    }
     const state = createEmptyAppendState();
 
-    try {
-        if (!fs.existsSync(taskFilePath) || !fs.statSync(taskFilePath).isFile()) {
-            return state;
-        }
-    } catch {
+    if (!taskTimelineAwareFileExists(taskFilePath)) {
         return state;
     }
 
@@ -284,17 +397,15 @@ export function readTaskEventAppendState(taskFilePath: string, taskId: string): 
         return fastState;
     }
 
-    forEachJsonlLine(taskFilePath, (rawLine: string) => {
-        let event: Record<string, unknown>;
-        try {
-            event = JSON.parse(rawLine) as Record<string, unknown>;
-        } catch {
+    forEachTaskTimelineJsonlEntry(taskFilePath, (timelineEntry) => {
+        const event = timelineEntry.record;
+        if (!event) {
             state.parse_errors++;
             return;
         }
 
         const eventTaskId = toTrimmedString(event.task_id);
-        if (eventTaskId && eventTaskId !== taskId) {
+        if (eventTaskId !== taskId) {
             return;
         }
 
