@@ -74,6 +74,10 @@ export function isGeneratedRuntimeControlPlaneArtifactPath(pathValue: string | n
         return true;
     }
 
+    if (/(^|\/)runtime\/\.reviews-(?:index|transaction)\.lock(?:\/|$)/i.test(normalizedPath)) {
+        return true;
+    }
+
     if (/(^|\/)runtime\/\.runtime-mutation-generation\.anchor\.json$/i.test(normalizedPath)) {
         return true;
     }

@@ -432,17 +432,23 @@ test('runNodeFoundationTests runs contention-sensitive tests after parallel shar
     }
 });
 
-test('runNodeFoundationTests isolates completion rollback suite from grouped shard peers', async () => {
+test('runNodeFoundationTests isolates mutation-sensitive suites from grouped shard peers', async () => {
     const { buildResult, cleanup } = createBuildResultFixture();
     const originalArgv = process.argv;
     const originalBuildNodeFoundation = mutableBuildModule.buildNodeFoundation;
     const originalBuildPublishRuntime = mutableBuildModule.buildPublishRuntime;
     const originalSpawn = mutableChildProcess.spawn;
-    const isolatedTestPath = addCompiledTestFile(
+    const isolatedTestArgs = [
+        'tests/node/cli/commands/gates/completion/gates-completion-rollback.test.js',
+        'tests/node/cli/commands/gates/review-cycle/gates-review-cycle-restart.test.js',
+        'tests/node/cli/commands/gates/review-reuse/gates-review-reuse-historical-rejections.test.js',
+        'tests/node/cli/commands/gates/review-reuse/gates-review-reuse-upstream.test.js',
+        'tests/node/cli/commands/task-events-human-format.test.js',
+        'tests/node/gate-runtime/task-timeline-performance-acceptance.test.js'
+    ].map((relativePath) => toNodeTestFileArg(
         buildResult,
-        'tests/node/cli/commands/gates/completion/gates-completion-rollback.test.js'
-    );
-    const isolatedTestArg = toNodeTestFileArg(buildResult, isolatedTestPath);
+        addCompiledTestFile(buildResult, relativePath)
+    ));
     const observedShardArgs: string[][] = [];
 
     try {
@@ -462,10 +468,12 @@ test('runNodeFoundationTests isolates completion rollback suite from grouped sha
         const exitCode = await testModule.runNodeFoundationTests();
 
         assert.equal(exitCode, 0);
-        assert.equal(observedShardArgs.length, 3);
-        const isolatedShardArgs = observedShardArgs.filter((args) => args.includes(isolatedTestArg));
-        assert.equal(isolatedShardArgs.length, 1);
-        assert.deepEqual(isolatedShardArgs[0], [...DEFAULT_SHARDED_NODE_TEST_ARGS, isolatedTestArg]);
+        assert.equal(observedShardArgs.length, 2 + isolatedTestArgs.length);
+        for (const isolatedTestArg of isolatedTestArgs) {
+            const isolatedShardArgs = observedShardArgs.filter((args) => args.includes(isolatedTestArg));
+            assert.equal(isolatedShardArgs.length, 1);
+            assert.deepEqual(isolatedShardArgs[0], [...DEFAULT_SHARDED_NODE_TEST_ARGS, isolatedTestArg]);
+        }
     } finally {
         process.argv = originalArgv;
         mutableBuildModule.buildNodeFoundation = originalBuildNodeFoundation;

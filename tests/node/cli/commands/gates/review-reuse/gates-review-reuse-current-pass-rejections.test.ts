@@ -341,7 +341,7 @@ function replaceCurrentReviewWithMissingFocusedValidation(options: {
 }
 
 describe('cli/commands/gates - current-cycle review reuse rejections', () => {
-    it('rebuilds current-cycle fresh PASS context when review-recorded telemetry lacks integrity', async () => {
+    it('fails closed when current-cycle review-recorded telemetry lacks timeline integrity', async () => {
         const repoRoot = createTempRepo();
         const taskId = 'T-904a-current-pass-untrusted-recorded';
         seedTaskQueue(repoRoot, taskId);
@@ -390,16 +390,16 @@ describe('cli/commands/gates - current-cycle review reuse rejections', () => {
         });
         fs.writeFileSync(timelinePath, tamperedLines.join('\n') + '\n', 'utf8');
 
-        const result = await runBuildReviewContextCommand({
-            reviewType: 'code',
-            depth: '2',
-            preflightPath,
-            outputPath: reviewContextPath,
-            repoRoot
-        });
-
-        assert.ok(result.outputLines.includes('CurrentPassReviewEvidence: rejected'));
-        assert.ok(result.outputLines.some((line) => line.includes('trusted current-cycle REVIEW_RECORDED telemetry')));
+        await assert.rejects(
+            () => runBuildReviewContextCommand({
+                reviewType: 'code',
+                depth: '2',
+                preflightPath,
+                outputPath: reviewContextPath,
+                repoRoot
+            }),
+            /timeline contains legacy\/unverified event after integrity chain start/iu
+        );
 
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });

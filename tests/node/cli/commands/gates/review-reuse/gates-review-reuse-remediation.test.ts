@@ -27,7 +27,7 @@ import {
     seedTaskQueue,
     writeCompilePassEvidence,
     writePreflight,
-    insertTaskEventWithoutIntegrityBeforeLatest,
+    insertTaskEventBeforeLatestWithCurrentIntegrity,
     tamperLatestHistoricalReceiptSnapshot,
     tamperLatestHistoricalArtifactSnapshot,
     listReviewSnapshotArtifactNames
@@ -594,12 +594,12 @@ describe('cli/commands/gates - review reuse remediation', () => {
         assert.equal(codeBuild.reusedReviewEvidence, true);
 
         const receiptPath = path.join(reviewsRoot, `${taskId}-code-receipt.json`);
-        insertTaskEventWithoutIntegrityBeforeLatest(
+        insertTaskEventBeforeLatestWithCurrentIntegrity(
             repoRoot,
             taskId,
             'REVIEW_RECORDED',
             'PASS',
-            'stale current-cycle reuse event without integrity',
+            'stale current-cycle reuse event missing strict reuse fields',
             {
                 review_type: 'code',
                 reused_existing_review: true,

@@ -320,13 +320,16 @@ describe('cli/commands/gates', () => {
             `${parentTaskId}.jsonl`
         );
         const mutableFs = require('node:fs') as typeof fs;
-        const originalAppendFileSync = mutableFs.appendFileSync;
-        mutableFs.appendFileSync = ((filePath: fs.PathOrFileDescriptor, data: string | Uint8Array, options?: unknown): void => {
-            if (typeof filePath === 'string' && path.resolve(filePath) === path.resolve(parentTimelinePath)) {
+        const originalOpenSync = mutableFs.openSync;
+        mutableFs.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode): number => {
+            const opensForAppend = typeof flags === 'number'
+                ? (flags & fs.constants.O_APPEND) !== 0
+                : String(flags).includes('a');
+            if (opensForAppend && typeof filePath === 'string' && path.resolve(filePath) === path.resolve(parentTimelinePath)) {
                 throw new Error('Injected decomposed parent event append failure');
             }
-            return (originalAppendFileSync as unknown as (...args: unknown[]) => void)(filePath, data, options);
-        }) as typeof fs.appendFileSync;
+            return originalOpenSync(filePath, flags, mode);
+        }) as typeof fs.openSync;
 
         try {
             const error = await captureExpectedAsyncError(async () => {
@@ -338,7 +341,7 @@ describe('cli/commands/gates', () => {
             });
             assert.match(error.message, /mandatory decomposed parent auto-close failed/i);
         } finally {
-            mutableFs.appendFileSync = originalAppendFileSync;
+            mutableFs.openSync = originalOpenSync;
         }
 
         assert.equal(readTaskQueueStatusFromTaskFile(repoRoot, taskId), 'IN_REVIEW');
@@ -389,13 +392,16 @@ describe('cli/commands/gates', () => {
             `${rootParentTaskId}.jsonl`
         );
         const mutableFs = require('node:fs') as typeof fs;
-        const originalAppendFileSync = mutableFs.appendFileSync;
-        mutableFs.appendFileSync = ((filePath: fs.PathOrFileDescriptor, data: string | Uint8Array, options?: unknown): void => {
-            if (typeof filePath === 'string' && path.resolve(filePath) === path.resolve(rootParentTimelinePath)) {
+        const originalOpenSync = mutableFs.openSync;
+        mutableFs.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode): number => {
+            const opensForAppend = typeof flags === 'number'
+                ? (flags & fs.constants.O_APPEND) !== 0
+                : String(flags).includes('a');
+            if (opensForAppend && typeof filePath === 'string' && path.resolve(filePath) === path.resolve(rootParentTimelinePath)) {
                 throw new Error('Injected root parent event append failure');
             }
-            return (originalAppendFileSync as unknown as (...args: unknown[]) => void)(filePath, data, options);
-        }) as typeof fs.appendFileSync;
+            return originalOpenSync(filePath, flags, mode);
+        }) as typeof fs.openSync;
 
         try {
             const error = await captureExpectedAsyncError(async () => {
@@ -407,7 +413,7 @@ describe('cli/commands/gates', () => {
             });
             assert.match(error.message, /mandatory decomposed parent auto-close failed/i);
         } finally {
-            mutableFs.appendFileSync = originalAppendFileSync;
+            mutableFs.openSync = originalOpenSync;
         }
 
         assert.equal(readTaskQueueStatusFromTaskFile(repoRoot, taskId), 'IN_REVIEW');

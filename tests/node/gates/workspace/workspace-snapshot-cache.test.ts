@@ -653,7 +653,9 @@ describe('gates/workspace-snapshot-cache', () => {
                 'runtime/.runtime-mutation-generation/head.json',
                 'runtime/.runtime-mutation-generation/state-a.json',
                 'runtime/.runtime-mutation-generation/state-b.json',
-                'runtime/.runtime-mutation-generation.lock/owner.json'
+                'runtime/.runtime-mutation-generation.lock/owner.json',
+                'runtime/.reviews-index.lock/owner.json',
+                'runtime/.reviews-transaction.lock/owner.json'
             ];
             for (const generatedRelativePath of generatedRelativePaths) {
                 const generatedPath = path.join(repoRoot, generatedRelativePath);

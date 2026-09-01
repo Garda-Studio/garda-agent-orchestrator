@@ -19,7 +19,10 @@ import {
     runCliWithCapturedOutput,
     writeBudgetOutputFilters
 } from '../../gate-test-helpers';
-import { appendTaskEvent } from '../../../../../../src/gate-runtime/task-events';
+import {
+    appendTaskEvent,
+    buildEventIntegrityHash
+} from '../../../../../../src/gate-runtime/task-events';
 import { buildDefaultWorkflowConfig } from '../../../../../../src/core/workflow-config';
 import { formatReviewFollowUpTaskClosurePolicyMetadata } from '../../../../../../src/core/review-follow-up-task-closure-policy';
 import {
@@ -508,6 +511,18 @@ function updateLatestTaskModeEventDetails(
         break;
     }
     assert.equal(updated, true, `Expected TASK_MODE_ENTERED event for ${taskId}`);
+    let previousEventSha256: string | null = null;
+    for (let index = 0; index < timelineLines.length; index += 1) {
+        const event = JSON.parse(timelineLines[index]) as Record<string, unknown>;
+        const integrity = event.integrity as Record<string, unknown>;
+        integrity.prev_event_sha256 = previousEventSha256;
+        delete integrity.event_sha256;
+        const eventSha256 = buildEventIntegrityHash(event);
+        assert.match(String(eventSha256 || ''), /^[a-f0-9]{64}$/u);
+        integrity.event_sha256 = eventSha256;
+        previousEventSha256 = eventSha256;
+        timelineLines[index] = JSON.stringify(event);
+    }
     fs.writeFileSync(eventsPath, `${timelineLines.join('\n')}\n`, 'utf8');
 }
 

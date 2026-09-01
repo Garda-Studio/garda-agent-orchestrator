@@ -18,6 +18,7 @@ import {
     handleRecordReviewerDelegationStarted
 } from '../../../../src/cli/commands/gate-review-handlers';
 import { bindFixtureEffectiveReviewSnapshot } from '../../cli/commands/gate-test-seed-helpers';
+import { appendTaskEvent } from '../../../../src/gate-runtime/task-events';
 
 const REVIEWER_IDENTITY = 'agent:019de361-0000-7000-a000-000000000001';
 
@@ -31,16 +32,14 @@ function writeJson(filePath: string, payload: unknown): void {
 }
 
 function appendTimelineEvent(repoRoot: string, taskId: string, eventType: string, details: Record<string, unknown> = {}): void {
-    const timelinePath = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events', `${taskId}.jsonl`);
-    fs.mkdirSync(path.dirname(timelinePath), { recursive: true });
-    fs.appendFileSync(
-        timelinePath,
-        `${JSON.stringify({
-            event_type: eventType,
-            timestamp_utc: new Date().toISOString(),
-            details
-        })}\n`,
-        'utf8'
+    appendTaskEvent(
+        path.join(repoRoot, 'garda-agent-orchestrator'),
+        taskId,
+        eventType,
+        'PASS',
+        eventType,
+        details,
+        { actor: 'test' }
     );
 }
 

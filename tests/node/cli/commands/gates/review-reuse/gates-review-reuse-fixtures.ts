@@ -30,7 +30,10 @@ import {
     isNonTestReviewScope,
     resolveReviewContextReuseContractBindings
 } from '../../../../../../src/gates/review-reuse';
-import { appendTaskEvent } from '../../../../../../src/gate-runtime/task-events';
+import {
+    appendTaskEvent,
+    buildEventIntegrityHash
+} from '../../../../../../src/gate-runtime/task-events';
 import {
     createTempRepo,
     findLastTimelineEventIndex,
@@ -207,7 +210,27 @@ export function ensureReviewDiffFixture(repoRoot: string, preflightPath: string)
     }
 }
 
-export function insertTaskEventWithoutIntegrityBeforeLatest(
+function rehashTaskTimelineLines(lines: string[]): void {
+    let previousEventSha256: string | null = null;
+    for (let index = 0; index < lines.length; index += 1) {
+        const event = JSON.parse(lines[index]) as Record<string, unknown>;
+        const integrity = event.integrity && typeof event.integrity === 'object' && !Array.isArray(event.integrity)
+            ? event.integrity as Record<string, unknown>
+            : {};
+        event.integrity = integrity;
+        integrity.schema_version = 2;
+        integrity.task_sequence = index + 1;
+        integrity.prev_event_sha256 = previousEventSha256;
+        delete integrity.event_sha256;
+        const eventSha256 = buildEventIntegrityHash(event);
+        assert.match(String(eventSha256 || ''), /^[a-f0-9]{64}$/u);
+        integrity.event_sha256 = eventSha256;
+        previousEventSha256 = eventSha256;
+        lines[index] = JSON.stringify(event);
+    }
+}
+
+export function insertTaskEventBeforeLatestWithCurrentIntegrity(
     repoRoot: string,
     taskId: string,
     eventType: string,
@@ -235,6 +258,7 @@ export function insertTaskEventWithoutIntegrityBeforeLatest(
         message,
         details
     }));
+    rehashTaskTimelineLines(lines);
     fs.writeFileSync(timelinePath, lines.join('\n') + '\n', 'utf8');
 }
 
@@ -315,6 +339,7 @@ export function stripLatestHistoricalReceiptSnapshotTelemetry(repoRoot: string, 
         }
     }
     assert.equal(stripped, true);
+    rehashTaskTimelineLines(lines);
     fs.writeFileSync(timelinePath, `${lines.join('\n')}\n`, 'utf8');
 }
 
@@ -356,5 +381,6 @@ export function updateLatestHistoricalReviewRecordedDetails(
         }
     }
     assert.equal(updated, true);
+    rehashTaskTimelineLines(lines);
     fs.writeFileSync(timelinePath, `${lines.join('\n')}\n`, 'utf8');
 }

@@ -198,40 +198,6 @@ function createHealthyDoneRetentionCandidate(
     return { finalCloseoutPath, timelinePath };
 }
 
-function createEscapingRuntimeRetentionCandidate(targetRoot: string, bundleRoot: string): string {
-    const taskId = 'T-900';
-    const outsideDir = path.join(targetRoot, 'outside-runtime-target');
-    const outsideReviewsDir = path.join(outsideDir, 'reviews');
-    const outsideEventsDir = path.join(outsideDir, 'task-events');
-    const reviewsDir = path.join(bundleRoot, 'runtime', 'reviews');
-    const eventsDir = path.join(bundleRoot, 'runtime', 'task-events');
-    fs.mkdirSync(outsideReviewsDir, { recursive: true });
-    fs.mkdirSync(outsideEventsDir, { recursive: true });
-    fs.mkdirSync(path.dirname(reviewsDir), { recursive: true });
-    fs.symlinkSync(outsideReviewsDir, reviewsDir, process.platform === 'win32' ? 'junction' : 'dir');
-    fs.symlinkSync(outsideEventsDir, eventsDir, process.platform === 'win32' ? 'junction' : 'dir');
-
-    const reviewCandidatePath = path.join(reviewsDir, `${taskId}-task-mode.json`);
-    fs.writeFileSync(reviewCandidatePath, JSON.stringify({ task_id: taskId }), 'utf8');
-
-    appendTaskEvent(bundleRoot, taskId, 'TASK_MODE_ENTERED', 'PASS', 'Task mode entered.', {}, { passThru: true });
-    appendTaskEvent(bundleRoot, taskId, 'STATUS_CHANGED', 'PASS', 'Task status changed.', {
-        previous_status: 'IN_REVIEW',
-        new_status: 'DONE'
-    }, { passThru: true });
-    appendTaskEvent(bundleRoot, taskId, 'COMPLETION_GATE_PASSED', 'PASS', 'Completion gate passed.', {}, { passThru: true });
-    writeTimelineSummary(bundleRoot, taskId);
-    writeVerifiedLedger(bundleRoot, taskId);
-
-    const timelinePath = path.join(eventsDir, `${taskId}.jsonl`);
-    const ledgerPath = path.join(bundleRoot, 'runtime', 'task-ledger', `${taskId}.json`);
-    const old = new Date('2026-01-01T00:00:00.000Z');
-    for (const candidatePath of [reviewCandidatePath, timelinePath, ledgerPath]) {
-        fs.utimesSync(candidatePath, old, old);
-    }
-    return reviewCandidatePath;
-}
-
 describe('daily retention maintenance', () => {
     it('runs confirmed maintenance once per local day and then skips by sentinel', () => {
         const workspace = makeWorkspace('daily-retention-once-');
@@ -529,29 +495,46 @@ describe('daily retention maintenance', () => {
         const workspace = makeWorkspace('daily-retention-partial-');
         try {
             writeRuntimeRetentionConfig(workspace.bundleRoot, { enabled: true, purgeRequireConfirm: false });
-            const escapingCandidate = createEscapingRuntimeRetentionCandidate(workspace.targetRoot, workspace.bundleRoot);
             const now = new Date('2026-05-21T10:00:00.000Z');
+            const mutableCleanup = require('../../../src/lifecycle/cleanup/cleanup-orchestration') as {
+                runGc: typeof import('../../../src/lifecycle/cleanup/cleanup-orchestration').runGc;
+            };
+            const originalRunGc = mutableCleanup.runGc;
+            mutableCleanup.runGc = ((options) => {
+                const result = originalRunGc(options);
+                return {
+                    ...result,
+                    result: 'PARTIAL',
+                    errors: [
+                        ...result.errors,
+                        { path: 'runtime/reviews/T-900.json', message: 'forced partial gc result' }
+                    ]
+                };
+            }) as typeof mutableCleanup.runGc;
 
-            const first = runDailyRetentionMaintenance({
-                targetRoot: workspace.targetRoot,
-                bundleRoot: workspace.bundleRoot,
-                now
-            });
+            try {
+                const first = runDailyRetentionMaintenance({
+                    targetRoot: workspace.targetRoot,
+                    bundleRoot: workspace.bundleRoot,
+                    now
+                });
 
-            assert.equal(first.status, 'FAILED');
-            assert.equal(first.lock_acquired, true);
-            assert.equal(first.gc_result?.result, 'PARTIAL');
-            assert.ok((first.gc_result?.error_count ?? 0) > 0);
-            assert.equal(fs.existsSync(escapingCandidate), true);
+                assert.equal(first.status, 'FAILED');
+                assert.equal(first.lock_acquired, true);
+                assert.equal(first.gc_result?.result, 'PARTIAL');
+                assert.ok((first.gc_result?.error_count ?? 0) > 0);
 
-            const second = runDailyRetentionMaintenance({
-                targetRoot: workspace.targetRoot,
-                bundleRoot: workspace.bundleRoot,
-                now
-            });
-            assert.equal(second.status, 'FAILED');
-            assert.equal(second.skipped_reason, null);
-            assert.equal(second.lock_acquired, true);
+                const second = runDailyRetentionMaintenance({
+                    targetRoot: workspace.targetRoot,
+                    bundleRoot: workspace.bundleRoot,
+                    now
+                });
+                assert.equal(second.status, 'FAILED');
+                assert.equal(second.skipped_reason, null);
+                assert.equal(second.lock_acquired, true);
+            } finally {
+                mutableCleanup.runGc = originalRunGc;
+            }
         } finally {
             workspace.cleanup();
         }

@@ -12,6 +12,7 @@ import {
 } from '../../../../src/gates/full-suite/full-suite-validation';
 import { getCurrentWorkflowConfigFileHashes } from '../../../../src/gates/workflow-config/workflow-config-work';
 import { buildTaskModeArtifact } from '../../../../src/gates/task-mode';
+import { buildEventIntegrityHash } from '../../../../src/gate-runtime/task-events';
 import { runCliWithCapturedOutput } from '../../cli/commands/gate-test-helpers';
 import { getWorkspaceSnapshot } from '../next-step/next-step-test-support';
 
@@ -83,24 +84,49 @@ function writeFullSuitePreflight(
             }, null, 2),
             'utf8'
         );
-        fs.appendFileSync(
-            path.join(eventsDir, `${taskId}.jsonl`),
-            `${JSON.stringify({
-                task_id: taskId,
-                event_type: 'COMPILE_GATE_PASSED',
-                timestamp_utc: compileTimestamp,
-                outcome: 'PASS',
-                details: {
-                    preflight_path: preflightPath.replace(/\\/g, '/'),
-                    preflight_hash_sha256: preflightSha256,
-                    preflight_changed_files_sha256: snapshot.changed_files_sha256,
-                    preflight_scope_sha256: snapshot.scope_sha256,
-                    preflight_scope_content_sha256: snapshot.scope_content_sha256
-                }
-            })}\n`,
-            'utf8'
-        );
+        writeAuthenticatedTimeline(repoRoot, taskId, [{
+            event_type: 'COMPILE_GATE_PASSED',
+            outcome: 'PASS',
+            actor: 'gate',
+            message: 'Compile gate fixture passed.',
+            timestamp_utc: compileTimestamp,
+            details: {
+                preflight_path: preflightPath.replace(/\\/g, '/'),
+                preflight_hash_sha256: preflightSha256,
+                preflight_changed_files_sha256: snapshot.changed_files_sha256,
+                preflight_scope_sha256: snapshot.scope_sha256,
+                preflight_scope_content_sha256: snapshot.scope_content_sha256
+            }
+        }]);
     }
+}
+
+function writeAuthenticatedTimeline(
+    repoRoot: string,
+    taskId: string,
+    events: Array<Record<string, unknown>>
+): void {
+    let previousEventSha256: string | null = null;
+    const lines = events.map((sourceEvent, index) => {
+        const event: Record<string, unknown> = {
+            ...sourceEvent,
+            task_id: taskId,
+            integrity: {
+                schema_version: 2,
+                task_sequence: index + 1,
+                prev_event_sha256: previousEventSha256
+            }
+        };
+        const integrity = event.integrity as Record<string, unknown>;
+        const eventSha256 = buildEventIntegrityHash(event);
+        assert.match(String(eventSha256 || ''), /^[a-f0-9]{64}$/u);
+        integrity.event_sha256 = eventSha256;
+        previousEventSha256 = eventSha256;
+        return JSON.stringify(event);
+    });
+    const timelinePath = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events', `${taskId}.jsonl`);
+    fs.mkdirSync(path.dirname(timelinePath), { recursive: true });
+    fs.writeFileSync(timelinePath, `${lines.join('\n')}\n`, 'utf8');
 }
 
 function writeFullSuiteTaskModeBaseline(repoRoot: string, taskId: string): void {
@@ -172,8 +198,8 @@ describe('gates/full-suite-validation', () => {
                 ...compileArtifact,
                 timestamp_utc: currentCompileTimestamp
             }, null, 2), 'utf8');
-            fs.writeFileSync(path.join(eventsDir, `${taskId}.jsonl`), [
-                JSON.stringify({
+            writeAuthenticatedTimeline(tempDir, taskId, [
+                {
                     event_type: 'FULL_SUITE_VALIDATION_PASSED',
                     timestamp_utc: '2026-01-01T00:00:01.000Z',
                     outcome: 'PASS',
@@ -190,8 +216,8 @@ describe('gates/full-suite-validation', () => {
                             }
                         }
                     }
-                }),
-                JSON.stringify({
+                },
+                {
                     event_type: 'COMPILE_GATE_PASSED',
                     timestamp_utc: currentCompileTimestamp,
                     outcome: 'PASS',
@@ -202,9 +228,8 @@ describe('gates/full-suite-validation', () => {
                         preflight_scope_sha256: scopeSha,
                         preflight_scope_content_sha256: scopeContentSha
                     }
-                }),
-                ''
-            ].join('\n'), 'utf8');
+                }
+            ]);
             const outputArtifactPath = path.join(reviewsDir, `${taskId}-full-suite-output.log`);
             fs.writeFileSync(outputArtifactPath, 'cached pass output\n', 'utf8');
             fs.writeFileSync(path.join(reviewsDir, `${taskId}-full-suite-validation.json`), JSON.stringify({
@@ -304,8 +329,8 @@ describe('gates/full-suite-validation', () => {
                 ...compileArtifact,
                 timestamp_utc: currentCompileTimestamp
             }, null, 2), 'utf8');
-            fs.writeFileSync(path.join(eventsDir, `${taskId}.jsonl`), [
-                JSON.stringify({
+            writeAuthenticatedTimeline(tempDir, taskId, [
+                {
                     event_type: 'FULL_SUITE_VALIDATION_PASSED',
                     timestamp_utc: '2026-01-01T00:00:01.000Z',
                     outcome: 'PASS',
@@ -322,8 +347,8 @@ describe('gates/full-suite-validation', () => {
                             }
                         }
                     }
-                }),
-                JSON.stringify({
+                },
+                {
                     event_type: 'COMPILE_GATE_PASSED',
                     timestamp_utc: currentCompileTimestamp,
                     outcome: 'PASS',
@@ -334,9 +359,8 @@ describe('gates/full-suite-validation', () => {
                         preflight_scope_sha256: scopeSha,
                         preflight_scope_content_sha256: scopeContentSha
                     }
-                }),
-                ''
-            ].join('\n'), 'utf8');
+                }
+            ]);
             const outputArtifactPath = path.join(reviewsDir, `${taskId}-full-suite-output.log`);
             fs.writeFileSync(outputArtifactPath, 'cached pass output with warning\n', 'utf8');
             fs.writeFileSync(path.join(reviewsDir, `${taskId}-full-suite-validation.json`), JSON.stringify({
@@ -419,20 +443,18 @@ describe('gates/full-suite-validation', () => {
             const artifactPath = path.join(reviewsDir, 'T-STALE-PENDING-full-suite-validation.json');
             const pendingArtifactPath = `${artifactPath}.pending`;
             const pendingMetaPath = `${artifactPath}.pending.meta.json`;
-            const timelinePath = path.join(eventsDir, 'T-STALE-PENDING.jsonl');
-
             fs.writeFileSync(pendingArtifactPath, `${JSON.stringify({ status: 'FAILED', marker: 'stale-pending' }, null, 2)}\n`, 'utf8');
             fs.writeFileSync(pendingMetaPath, `${JSON.stringify({ transaction_id: 'stale-transaction-id' }, null, 2)}\n`, 'utf8');
-            fs.appendFileSync(
-                timelinePath,
-                `${JSON.stringify({
+            const timelinePath = path.join(eventsDir, 'T-STALE-PENDING.jsonl');
+            const compileEvent = JSON.parse(
+                fs.readFileSync(timelinePath, 'utf8').trim().split('\n').at(-1) || '{}'
+            ) as Record<string, unknown>;
+            writeAuthenticatedTimeline(tempDir, 'T-STALE-PENDING', [compileEvent, {
                     event_type: 'FULL_SUITE_VALIDATION_PASSED',
                     details: {
                         artifact_transaction_id: 'different-transaction-id'
                     }
-                })}\n`,
-                'utf8'
-            );
+                }]);
 
             const fsModule = require('node:fs') as typeof import('node:fs');
             const originalCopyFileSync = fsModule.copyFileSync;
