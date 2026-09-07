@@ -108,10 +108,13 @@ function writePreflight(repoRoot: string, changedFiles: string[]): string {
     return preflightPath;
 }
 
-function makeBackupRestoreFixture(onCleanup: (callback: () => void) => void, count = 2) {
+function makeBackupRestoreFixture(
+    onCleanup: (callback: () => void) => void,
+    count = 2,
+    originalContent = 'authenticated original\n'.repeat(400)
+) {
     const repoRoot = makeRepo(onCleanup);
     const candidateWorktreeRoot = path.join(repoRoot, 'garda-agent-orchestrator/runtime/candidate');
-    const originalContent = 'authenticated original\n'.repeat(400);
     const originalDigest = createHash('sha256').update(originalContent).digest('hex');
     const files: SplitRequiredWipTrackedFileEvidence[] = Array.from({ length: count }, (_, index) => ({
         path: `src/backup-${index}.ts`,
@@ -137,6 +140,81 @@ function makeBackupRestoreFixture(onCleanup: (callback: () => void) => void, cou
 }
 
 describe('split-required WIP restore planning', () => {
+    for (const fileCount of [64, 96]) it(`bounds retained backup memory for ${fileCount * 4} MiB of preimages and rolls every file back`, (context) => {
+        const fixture = makeBackupRestoreFixture(callback => context.after(callback), fileCount, 'x'.repeat(4 * 1024 * 1024));
+        const input = JSON.stringify({
+            repoRoot: fixture.repoRoot,
+            files: fixture.files,
+            plan: { ...fixture.plan, targetSha256: [...fixture.plan.targetSha256] }
+        });
+        const measure = (mode: string) => JSON.parse(childProcess.execFileSync(process.execPath, [
+            '--expose-gc', '-e',
+            'const worker = require(process.argv[1]); worker.measureBackupStorage(process.argv[2]);',
+            require.resolve('./fixtures/backup-storage-measurement'), mode
+        ], { input, encoding: 'utf8', timeout: 60_000, maxBuffer: 64 * 1024 }));
+        const retained = measure('retained-baseline');
+        const spooled = measure('spooled');
+        const totalBytes = Buffer.byteLength(fixture.originalContent) * fixture.files.length;
+        assert.ok(retained.retainedArrayBufferBytes >= totalBytes);
+        // The same absolute ceiling covers both corpus sizes: one 4 MiB preimage plus
+        // fixed buffer/runtime headroom. The permitted retention must not scale with totalBytes.
+        assert.ok(spooled.retainedArrayBufferBytes <= 8 * 1024 * 1024, JSON.stringify(spooled));
+        // Compare isolated processes with generous headroom for runtime and instrumentation overhead.
+        // Unlike the fsync checkpoint, the OS high-water mark detects buffers released before sealing.
+        assert.ok(spooled.peakRssKiB < retained.peakRssKiB * 0.75, JSON.stringify({ retained, spooled }));
+        // Bound the whole process peak independently of corpus size, including transient buffers.
+        // This budget includes Node, loaded modules, GC headroom and the active per-file preimage.
+        assert.ok(spooled.peakRssKiB < 256 * 1024, JSON.stringify(spooled));
+        assert.deepEqual(retained.captureIo, {
+            readCalls: fixture.files.length, readBytes: totalBytes, writeCalls: 0, writeBytes: 0
+        });
+        // Compare capture with capture; spooled rollback reads are counted separately below.
+        assert.deepEqual(spooled.captureIo, {
+            readCalls: retained.captureIo.readCalls, readBytes: retained.captureIo.readBytes,
+            writeCalls: totalBytes / (64 * 1024), writeBytes: totalBytes
+        });
+        assert.equal(spooled.spoolBytes, totalBytes);
+        assert.equal(spooled.spoolWrites, totalBytes / (64 * 1024));
+        assert.equal(spooled.spoolReads, 2 * totalBytes / (64 * 1024));
+        assert.equal(spooled.spoolClosed, true);
+        assert.match(spooled.violations.join('\n'), /failed without retained mutations/u);
+        const digest = createHash('sha256').update(fixture.originalContent).digest('hex');
+        for (const file of fixture.files) assert.equal(sha256(path.join(fixture.repoRoot, file.path)), digest);
+        assert.equal(fs.readdirSync(fixture.repoRoot).some(name => name.startsWith('.garda-restore-backup-')), false);
+        context.diagnostic(JSON.stringify({ totalBytes, retained, spooled }));
+    });
+
+    it('publishes all candidates and cleans up backup storage after a successful 384 MiB restore', (context) => {
+        const fixture = makeBackupRestoreFixture(callback => context.after(callback), 96, 'x'.repeat(4 * 1024 * 1024));
+        const indexPath = path.join(fixture.repoRoot, '.git/index');
+        fs.copyFileSync(indexPath, fixture.plan.candidateIndexPath);
+        const expectedIndexSha256 = sha256(fixture.plan.candidateIndexPath);
+        const originalOpen = fs.openSync;
+        const originalClose = fs.closeSync;
+        let backupDescriptor: number | null = null;
+        let backupClosed = false;
+        context.mock.method(mutableFs, 'openSync', (...args: Parameters<typeof fs.openSync>) => {
+            const descriptor = originalOpen(...args);
+            if (String(args[0]).includes('.garda-restore-backup-') && args[1] === fs.constants.O_RDWR) {
+                backupDescriptor = descriptor;
+            }
+            return descriptor;
+        });
+        context.mock.method(mutableFs, 'closeSync', (descriptor: number) => {
+            originalClose(descriptor);
+            if (descriptor === backupDescriptor) backupClosed = true;
+        });
+
+        assert.deepEqual(applyAdvancedRestorePlan(fixture.repoRoot, fixture.plan, fixture.files, []), []);
+        assert.notEqual(backupDescriptor, null);
+        assert.equal(backupClosed, true);
+        for (const file of fixture.files) {
+            assert.equal(fs.readFileSync(path.join(fixture.repoRoot, file.path), 'utf8'), 'restored candidate\n');
+        }
+        assert.equal(sha256(indexPath), expectedIndexSha256);
+        assert.equal(fs.readdirSync(fixture.repoRoot).some(name => name.startsWith('.garda-restore-backup-')), false);
+    });
+
     it('preserves authenticated manifest contents when the exported identity contains forged metadata', (context) => {
         const repoRoot = makeRepo(callback => context.after(callback));
         const filePath = 'src/new-handoff.ts';
