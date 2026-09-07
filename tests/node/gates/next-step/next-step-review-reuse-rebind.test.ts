@@ -496,7 +496,7 @@ describe('gates/next-step review reuse rebind routing', () => {
         assert.doesNotMatch(result.title, /Materialize 'performance' review reuse/);
     });
 
-    it('routes to test after upstream code reuse has already been materialized for failed test remediation', () => {
+    for (const history of ['recent', 'outside-tail', 'compile-outside-tail', 'invalid-old-json', 'forged-source', 'invalid-old-timing']) it(`routes materialized code reuse safely with ${history} history`, () => {
         const repoRoot = makeTempRepo();
         seedStartedTask(repoRoot, TASK_ID);
         const testFile = path.join(repoRoot, 'tests', 'materialized-code-reuse.test.ts');
@@ -518,6 +518,12 @@ describe('gates/next-step review reuse rebind routing', () => {
             verdict: 'fail',
             body: 'P1: Missing rerun coverage in the test-only remediation path.\n\n'
         });
+        if (history === 'invalid-old-timing') {
+            const receiptPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-code-receipt.json`);
+            const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+            receipt.review_output_source_mtime_utc = '2026-04-27T23:59:59.000Z';
+            writeJson(receiptPath, receipt);
+        }
         markReviewEvidenceAsStrictReuse(repoRoot, TASK_ID, 'code');
 
         fs.writeFileSync(
@@ -534,11 +540,31 @@ describe('gates/next-step review reuse rebind routing', () => {
             changedFiles,
             includeDomainScopeFingerprints: true
         });
+        if (history !== 'recent') {
+            appendEvent(repoRoot, TASK_ID, 'DIAGNOSTIC_NOISE', 'INFO', { padding: 'x'.repeat(2 * 1024 * 1024) });
+        }
         seedCompilePass(repoRoot, TASK_ID);
+        if (history === 'compile-outside-tail') {
+            appendEvent(repoRoot, TASK_ID, 'DIAGNOSTIC_NOISE', 'INFO', { padding: 'x'.repeat(2 * 1024 * 1024) });
+        }
         materializeCurrentStrictReuse(repoRoot, TASK_ID, 'code');
+        if (history === 'invalid-old-json') {
+            const timelinePath = path.join(repoRoot, 'garda-agent-orchestrator/runtime/task-events', `${TASK_ID}.jsonl`);
+            fs.writeFileSync(timelinePath, '{invalid JSON}\n' + fs.readFileSync(timelinePath, 'utf8'));
+        }
+        if (history === 'forged-source') {
+            const receipt = JSON.parse(fs.readFileSync(path.join(reviewsRoot(repoRoot), `${TASK_ID}-code-receipt.json`), 'utf8'));
+            const sourceSnapshotPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-code-receipt-${receipt.reused_from_receipt_sha256}.json`);
+            fs.writeFileSync(sourceSnapshotPath, '{}');
+        }
 
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
 
+        if (history === 'invalid-old-json' || history === 'forged-source' || history === 'invalid-old-timing') {
+            assert.equal(result.status, 'BLOCKED');
+            assert.notEqual(result.review.next_review_type, 'test', 'invalid historical evidence must not authorize downstream review');
+            return;
+        }
         assert.equal(result.next_gate, 'build-review-context', result.reason);
         assert.equal(result.review.next_review_type, 'test', result.reason);
         assert.ok(result.commands[0].command.includes('--review-type "test"'));

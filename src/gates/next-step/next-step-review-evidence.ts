@@ -21,6 +21,7 @@ import {
     normalizePath
 } from '../shared/helpers';
 import { readReviewArtifactFileSha256 } from '../../gate-runtime/review-artifacts';
+import { readTaskTimelineJsonlEntries } from '../../gate-runtime/timeline/task-events-helpers';
 import {
     toRepoDisplayPath
 } from './next-step-command-formatters';
@@ -47,6 +48,25 @@ export function timelineHasReviewReuseRecordedAfterCompile(
     return validateStrictReviewReuseForState(eventsRoot, taskId, state).valid;
 }
 
+function readCompleteReviewTimelineEvidence(eventsRoot: string, taskId: string): {
+    events: ReviewReuseTelemetryEventLike[];
+    latestCompileSequence: number | null;
+} | null {
+    // Reuse references historical proof and invocation timing outside the recent tail.
+    // The authenticated snapshot reader bounds bytes and parsed structure for the full history.
+    const events: ReviewReuseTelemetryEventLike[] = [];
+    let latestCompileSequence: number | null = null;
+    for (const entry of readTaskTimelineJsonlEntries(path.join(eventsRoot, `${taskId}.jsonl`))) {
+        if (!entry.record) return null;
+        events.push(entry.record);
+        if (entry.record.event_type === 'COMPILE_GATE_PASSED') {
+            const sequence = getTimelineEventTaskSequence(entry.record);
+            if (sequence != null) latestCompileSequence = Math.max(latestCompileSequence ?? 0, sequence);
+        }
+    }
+    return { events, latestCompileSequence };
+}
+
 function validateStrictReviewReuseForState(
     eventsRoot: string,
     taskId: string,
@@ -63,16 +83,22 @@ function validateStrictReviewReuseForState(
     }
     const reviewContextSha256 = readReviewArtifactFileSha256(state.contextPath);
     const reviewArtifactSha256 = readReviewArtifactFileSha256(state.artifactPath);
-    const latestCompileSequence = getLatestTaskSequenceForEventTypes(eventsRoot, taskId, ['COMPILE_GATE_PASSED']);
-    if (!reviewContextSha256 || !reviewArtifactSha256 || latestCompileSequence == null) {
+    if (!reviewContextSha256 || !reviewArtifactSha256) {
         return { valid: false, reason: 'reused review evidence cannot be bound to current compile telemetry' };
     }
     const repoRoot = path.resolve(eventsRoot, '..', '..', '..');
+    const timeline = readCompleteReviewTimelineEvidence(eventsRoot, taskId);
+    if (!timeline) {
+        return { valid: false, reason: 'reused review timeline contains malformed historical JSON' };
+    }
+    if (timeline.latestCompileSequence == null) {
+        return { valid: false, reason: 'reused review evidence cannot be bound to current compile telemetry' };
+    }
     return validateStrictReusedReviewEvidence({
         repoRoot,
         taskId,
         reviewType: state.reviewType,
-        events: readTaskTimelineEventLikes(eventsRoot, taskId),
+        events: timeline.events,
         receiptPath: state.receiptPath,
         reviewContextSha256,
         reviewContextReuseSha256: state.receiptReviewContextReuseSha256,
@@ -90,7 +116,7 @@ function validateStrictReviewReuseForState(
         reviewerExecutionMode: state.reviewerProvenance?.reviewer_execution_mode || null,
         reviewerIdentity: state.reviewerIdentity,
         reviewerProvenance: state.reviewerProvenance as unknown as Record<string, unknown> | null,
-        latestCompileTaskSequence: latestCompileSequence
+        latestCompileTaskSequence: timeline.latestCompileSequence
     });
 }
 
@@ -254,8 +280,13 @@ export function getHiddenReviewTimingTrustRemediation(
     taskId: string,
     state: ReviewArtifactState
 ): string | null {
-    const timelineEvents = readTaskTimelineEventLikes(eventsRoot, taskId);
-    const latestCompileSequence = getLatestTaskSequenceForEventTypes(eventsRoot, taskId, ['COMPILE_GATE_PASSED']);
+    const completeTimeline = state.reusedExistingReview
+        ? readCompleteReviewTimelineEvidence(eventsRoot, taskId)
+        : null;
+    const timelineEvents = completeTimeline?.events ?? readTaskTimelineEventLikes(eventsRoot, taskId);
+    const latestCompileSequence = completeTimeline
+        ? completeTimeline.latestCompileSequence
+        : getLatestTaskSequenceForEventTypes(eventsRoot, taskId, ['COMPILE_GATE_PASSED']);
     const strictReusedReviewRecordedDetails = state.reusedExistingReview
         ? getStrictReusedReviewRecordedDetailsForTimingTrust(eventsRoot, taskId, state)
         : null;
