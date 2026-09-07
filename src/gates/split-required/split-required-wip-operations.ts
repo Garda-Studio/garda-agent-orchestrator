@@ -1,12 +1,10 @@
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import {
     appendMandatoryTaskEvent
 } from '../../gate-runtime/task-events';
-import {
-    runGit
-} from '../../core/git-helpers';
 import {
     joinOrchestratorPath,
     normalizePath
@@ -37,16 +35,158 @@ import {
     hasPatchContent,
     normalizeSelectedPaths,
     planAdvancedRestore,
+    readAuthenticatedRepoFileSnapshot,
     runGitStatus,
     selectedFiles,
     validateAdvancedManifestBlobs,
-    validateManifestFileReferences,
     validateNoSymlinkPaths,
     validateSequentialRestoreWorkspace,
     validateSelectedTargetsClean,
-    validateTrackedTargetObstructions
+    validateTrackedTargetObstructions,
+    writeExclusiveRepoFileWithRemovalHandle
 } from './split-required-wip-restore-plan';
 import type { AdvancedRestorePlan } from './split-required-wip-restore-plan';
+import type {
+    AuthenticatedRepoFileRemovalHandle,
+    SplitRequiredWipRestoreArtifactSnapshots
+} from './split-required-wip-restore-plan';
+import {
+    readAndVerifySplitRequiredWipRestoreHandoffSnapshot
+} from './split-required-wip-runtime-handoff-contracts';
+import type {
+    SplitRequiredWipRestoreHandoffIdentity
+} from './split-required-wip-runtime-handoff-contracts';
+
+interface SplitRequiredWipRestoreParams {
+    repoRoot: string;
+    taskId: string;
+    manifestPath: string;
+    includePaths?: readonly string[];
+    dryRun?: boolean;
+}
+
+const MAX_RESTORE_ARTIFACT_BYTES = 64 * 1024 * 1024;
+const MAX_RESTORE_ARTIFACT_AGGREGATE_BYTES = 256 * 1024 * 1024;
+
+function readAuthenticatedArtifactSnapshot(
+    repoRoot: string,
+    label: string,
+    inputPath: string,
+    expectedSha256: string,
+    expectedBytes: number
+): Buffer {
+    if (!Number.isSafeInteger(expectedBytes)
+        || expectedBytes < 0
+        || expectedBytes > MAX_RESTORE_ARTIFACT_BYTES) {
+        throw new Error(`${label} byte length exceeds the restore artifact limit.`);
+    }
+    const artifactPath = resolveInputPathInsideRepo(repoRoot, inputPath, label);
+    const relativePath = normalizeGitPath(path.relative(repoRoot, artifactPath));
+    const snapshot = readAuthenticatedRepoFileSnapshot(
+        repoRoot,
+        relativePath,
+        MAX_RESTORE_ARTIFACT_BYTES
+    );
+    if (!snapshot.exists || snapshot.content === null || snapshot.identity === null) {
+        throw new Error(`${label} must remain a regular file while being authenticated.`);
+    }
+    if (snapshot.identity.size !== expectedBytes) {
+        throw new Error(`${label} identity or byte length changed while opening.`);
+    }
+    const actualSha256 = createHash('sha256').update(snapshot.content).digest('hex');
+    if (actualSha256 !== expectedSha256) {
+        throw new Error(
+            `${label} sha256 mismatch: expected=${expectedSha256}; actual=${actualSha256}`
+        );
+    }
+    return snapshot.content;
+}
+
+function validateRestoreArtifactAggregateBytes(
+    manifest: SplitRequiredWipManifest,
+    selectedUntrackedFiles: readonly SplitRequiredWipUntrackedFileEvidence[]
+): void {
+    const retainedBytes = [
+        manifest.patches.staged.bytes,
+        manifest.patches.unstaged.bytes,
+        ...selectedUntrackedFiles.map((entry) => entry.bytes)
+    ].reduce((total, value) => total + value, 0);
+    if (!Number.isSafeInteger(retainedBytes)
+        || retainedBytes > MAX_RESTORE_ARTIFACT_AGGREGATE_BYTES) {
+        throw new Error(
+            `selected restore artifacts exceed the ${MAX_RESTORE_ARTIFACT_AGGREGATE_BYTES} byte aggregate limit.`
+        );
+    }
+}
+
+function captureRestoreArtifactSnapshots(
+    repoRoot: string,
+    manifest: SplitRequiredWipManifest,
+    selectedUntrackedFiles: readonly SplitRequiredWipUntrackedFileEvidence[]
+): SplitRequiredWipRestoreArtifactSnapshots {
+    const staged = readAuthenticatedArtifactSnapshot(
+        repoRoot,
+        'staged patch',
+        manifest.patches.staged.path,
+        manifest.patches.staged.sha256,
+        manifest.patches.staged.bytes
+    );
+    const unstaged = readAuthenticatedArtifactSnapshot(
+        repoRoot,
+        'unstaged patch',
+        manifest.patches.unstaged.path,
+        manifest.patches.unstaged.sha256,
+        manifest.patches.unstaged.bytes
+    );
+    const untrackedFiles = new Map<string, Buffer>();
+    for (const entry of selectedUntrackedFiles) {
+        untrackedFiles.set(normalizeGitPath(entry.path), readAuthenticatedArtifactSnapshot(
+            repoRoot,
+            `untracked artifact ${entry.path}`,
+            entry.artifact_path,
+            entry.sha256,
+            entry.bytes
+        ));
+    }
+    return {
+        patches: { staged, unstaged },
+        untrackedFiles
+    };
+}
+
+function validateSelectedUntrackedArtifactReferences(
+    repoRoot: string,
+    selectedUntrackedFiles: readonly SplitRequiredWipUntrackedFileEvidence[]
+): string[] {
+    const violations: string[] = [];
+    for (const entry of selectedUntrackedFiles) {
+        try {
+            readAuthenticatedArtifactSnapshot(
+                repoRoot,
+                `untracked artifact ${entry.path}`,
+                entry.artifact_path,
+                entry.sha256,
+                entry.bytes
+            );
+        } catch (error: unknown) {
+            violations.push(error instanceof Error ? error.message : String(error));
+        }
+    }
+    return violations;
+}
+
+function applyPatchSnapshot(
+    repoRoot: string,
+    args: string[],
+    content: Buffer,
+    allowFailure = false
+): boolean {
+    const result = runGitStatus(repoRoot, [...args, '-'], process.env, content);
+    if (result.status !== 0 && !allowFailure) {
+        throw new Error(gitFailureMessage([...args, '-'], result));
+    }
+    return result.status === 0;
+}
 
 export function listSplitRequiredWip(params: {
     repoRoot: string;
@@ -87,13 +227,11 @@ export function listSplitRequiredWip(params: {
     };
 }
 
-export function restoreSplitRequiredWip(params: {
-    repoRoot: string;
-    taskId: string;
-    manifestPath: string;
-    includePaths?: readonly string[];
-    dryRun?: boolean;
-}): SplitRequiredWipRestoreResult {
+function restoreSplitRequiredWipCore(
+    params: SplitRequiredWipRestoreParams,
+    deferRestoredEvent: boolean,
+    verifiedManifest?: SplitRequiredWipManifest
+): SplitRequiredWipRestoreResult {
     const repoRoot = path.resolve(params.repoRoot || '.');
     let manifestPath = '';
     try {
@@ -110,10 +248,11 @@ export function restoreSplitRequiredWip(params: {
         };
     }
     const selectedPaths = normalizeSelectedPaths(params.includePaths || []);
-    const manifest = readManifest(manifestPath);
+    const manifest = verifiedManifest || readManifest(manifestPath);
     const violations: string[] = [];
     let advancedHead = false;
     let advancedPlan: AdvancedRestorePlan | null = null;
+    let artifactSnapshots: SplitRequiredWipRestoreArtifactSnapshots | null = null;
     let selectedTrackedFiles: SplitRequiredWipTrackedFileEvidence[] = [];
     let selectedUntrackedFiles: SplitRequiredWipUntrackedFileEvidence[] = [];
     if (!manifest) {
@@ -159,14 +298,34 @@ export function restoreSplitRequiredWip(params: {
         } else {
             violations.push(...validateSequentialRestoreWorkspace(repoRoot, manifest));
         }
-        violations.push(...validateManifestFileReferences(repoRoot, manifest));
+        if (violations.length === 0) {
+            try {
+                validateRestoreArtifactAggregateBytes(manifest, selectedUntrackedFiles);
+                artifactSnapshots = captureRestoreArtifactSnapshots(
+                    repoRoot,
+                    manifest,
+                    params.dryRun ? [] : selectedUntrackedFiles
+                );
+            } catch (error: unknown) {
+                violations.push(error instanceof Error ? error.message : String(error));
+            }
+        }
+        if (params.dryRun && violations.length === 0) {
+            violations.push(...validateSelectedUntrackedArtifactReferences(repoRoot, selectedUntrackedFiles));
+        }
         for (const entry of selectedUntrackedFiles) {
             if (fs.existsSync(resolveRepoPath(repoRoot, entry.path))) {
                 violations.push(`untracked restore target already exists: ${entry.path}`);
             }
         }
         if (advancedHead && violations.length === 0) {
-            const planned = planAdvancedRestore(repoRoot, manifest, selectedPaths, selectedTrackedFiles);
+            const planned = planAdvancedRestore(
+                repoRoot,
+                manifest,
+                selectedPaths,
+                selectedTrackedFiles,
+                artifactSnapshots || undefined
+            );
             advancedPlan = planned.plan;
             violations.push(...planned.violations);
         }
@@ -207,7 +366,8 @@ export function restoreSplitRequiredWip(params: {
             repoRoot,
             advancedPlan,
             selectedTrackedFiles,
-            selectedUntrackedFiles
+            selectedUntrackedFiles,
+            artifactSnapshots || undefined
         );
         fs.rmSync(advancedPlan.tempRoot, { recursive: true, force: true });
         if (advancedViolations.length > 0) {
@@ -225,71 +385,119 @@ export function restoreSplitRequiredWip(params: {
         }
     }
     const includeArgs = buildGitApplyIncludeArgs(selectedPaths);
+    let stagedApplied = false;
+    let unstagedApplied = false;
+    const createdUntrackedFiles = new Map<string, AuthenticatedRepoFileRemovalHandle>();
     try {
         if (advancedHead) {
             // Advanced restore was applied transactionally from the validated temporary plan above.
         } else if (hasPatchContent(manifest.patches.staged)) {
-            runGit(repoRoot, ['apply', ...includeArgs, '--check', '--index', manifest.patches.staged.path]);
-            runGit(repoRoot, ['apply', ...includeArgs, '--index', manifest.patches.staged.path]);
+            if (!artifactSnapshots) {
+                throw new Error('authenticated restore artifact snapshots are missing.');
+            }
+            applyPatchSnapshot(repoRoot, ['apply', ...includeArgs, '--check', '--index'], artifactSnapshots.patches.staged);
+            applyPatchSnapshot(repoRoot, ['apply', ...includeArgs, '--index'], artifactSnapshots.patches.staged);
+            stagedApplied = true;
             for (const entry of selectedTrackedFiles.filter((file) => file.staged)) {
                 restoredFiles.add(entry.path);
             }
         }
         if (!advancedHead && hasPatchContent(manifest.patches.unstaged)) {
-            runGit(repoRoot, ['apply', ...includeArgs, '--check', manifest.patches.unstaged.path]);
-            runGit(repoRoot, ['apply', ...includeArgs, manifest.patches.unstaged.path]);
+            if (!artifactSnapshots) {
+                throw new Error('authenticated restore artifact snapshots are missing.');
+            }
+            applyPatchSnapshot(repoRoot, ['apply', ...includeArgs, '--check'], artifactSnapshots.patches.unstaged);
+            applyPatchSnapshot(repoRoot, ['apply', ...includeArgs], artifactSnapshots.patches.unstaged);
+            unstagedApplied = true;
             for (const entry of selectedTrackedFiles.filter((file) => file.unstaged)) {
                 restoredFiles.add(entry.path);
             }
         }
+        for (const entry of advancedHead ? [] : selectedUntrackedFiles) {
+            const normalizedPath = normalizeGitPath(entry.path);
+            const content = artifactSnapshots?.untrackedFiles.get(normalizedPath);
+            if (content === undefined) {
+                throw new Error(`authenticated untracked artifact snapshot is missing: ${entry.path}`);
+            }
+            const removalHandle = writeExclusiveRepoFileWithRemovalHandle(
+                repoRoot,
+                normalizedPath,
+                content
+            );
+            createdUntrackedFiles.set(normalizedPath, removalHandle);
+            restoredFiles.add(entry.path);
+        }
     } catch (error: unknown) {
-        if (!advancedHead && hasPatchContent(manifest.patches.staged)) {
-            runGit(repoRoot, ['apply', '--reverse', '--index', manifest.patches.staged.path], { allowFailure: true });
+        const rollbackFailures: string[] = [];
+        for (const removalHandle of [...createdUntrackedFiles.values()].reverse()) {
+            try {
+                removalHandle.remove();
+            } catch (rollbackError: unknown) {
+                rollbackFailures.push(
+                    rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
+                );
+            } finally {
+                try {
+                    removalHandle.close();
+                } catch (closeError: unknown) {
+                    rollbackFailures.push(
+                        closeError instanceof Error ? closeError.message : String(closeError)
+                    );
+                }
+            }
+        }
+        if (!advancedHead && unstagedApplied && artifactSnapshots
+            && !applyPatchSnapshot(
+                repoRoot,
+                ['apply', ...includeArgs, '--reverse'],
+                artifactSnapshots.patches.unstaged,
+                true
+            )) {
+            rollbackFailures.push('failed to reverse the applied unstaged patch');
+        }
+        if (!advancedHead && stagedApplied && artifactSnapshots
+            && !applyPatchSnapshot(
+                repoRoot,
+                ['apply', ...includeArgs, '--reverse', '--index'],
+                artifactSnapshots.patches.staged,
+                true
+            )) {
+            rollbackFailures.push('failed to reverse the applied staged patch');
         }
         const message = error instanceof Error ? error.message : String(error);
+        const rollbackSuffix = rollbackFailures.length === 0
+            ? ''
+            : `; rollback failures: ${rollbackFailures.join(' | ')}`;
         return {
             status: 'BLOCKED',
             manifest_path: normalizePath(manifestPath),
             restored_files: [],
             selected_paths: [...selectedPaths].sort(),
-            violations: [`patch restore failed: ${message}`],
-            output_lines: ['SPLIT_REQUIRED_WIP_RESTORE_BLOCKED', `Violation: patch restore failed: ${message}`]
+            violations: [`patch restore failed: ${message}${rollbackSuffix}`],
+            output_lines: [
+                'SPLIT_REQUIRED_WIP_RESTORE_BLOCKED',
+                `Violation: patch restore failed: ${message}${rollbackSuffix}`
+            ]
         };
     }
-    for (const entry of advancedHead ? [] : selectedUntrackedFiles) {
-        const targetPath = resolveRepoPath(repoRoot, entry.path);
-        const artifactPath = resolveInputPathInsideRepo(repoRoot, entry.artifact_path, `untracked artifact ${entry.path}`);
-        const actualSha256 = sha256FileRequired(artifactPath);
-        if (actualSha256 !== entry.sha256) {
-            return {
-                status: 'BLOCKED',
+    for (const removalHandle of createdUntrackedFiles.values()) {
+        removalHandle.close();
+    }
+    if (!deferRestoredEvent) {
+        appendMandatoryTaskEvent(
+            joinOrchestratorPath(repoRoot, ''),
+            manifest.task_id,
+            'SPLIT_REQUIRED_WIP_RESTORED',
+            'PASS',
+            'Split-required WIP restored by explicit command.',
+            {
                 manifest_path: normalizePath(manifestPath),
                 restored_files: [...restoredFiles].sort(),
-                selected_paths: [...selectedPaths].sort(),
-                violations: [`untracked artifact ${entry.path} sha256 mismatch: expected=${entry.sha256}; actual=${actualSha256}`],
-                output_lines: [
-                    'SPLIT_REQUIRED_WIP_RESTORE_BLOCKED',
-                    `Violation: untracked artifact ${entry.path} sha256 mismatch: expected=${entry.sha256}; actual=${actualSha256}`
-                ]
-            };
-        }
-        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-        fs.copyFileSync(artifactPath, targetPath);
-        restoredFiles.add(entry.path);
+                selected_paths: [...selectedPaths].sort()
+            },
+            { actor: 'orchestrator' }
+        );
     }
-    appendMandatoryTaskEvent(
-        joinOrchestratorPath(repoRoot, ''),
-        manifest.task_id,
-        'SPLIT_REQUIRED_WIP_RESTORED',
-        'PASS',
-        'Split-required WIP restored by explicit command.',
-        {
-            manifest_path: normalizePath(manifestPath),
-            restored_files: [...restoredFiles].sort(),
-            selected_paths: [...selectedPaths].sort()
-        },
-        { actor: 'orchestrator' }
-    );
 
     return {
         status: 'RESTORED',
@@ -298,12 +506,41 @@ export function restoreSplitRequiredWip(params: {
         selected_paths: [...selectedPaths].sort(),
         violations: [],
         output_lines: [
-            'SPLIT_REQUIRED_WIP_RESTORED',
+            deferRestoredEvent
+                ? 'SPLIT_REQUIRED_WIP_FILES_RESTORED_EVENT_PENDING'
+                : 'SPLIT_REQUIRED_WIP_RESTORED',
             `ManifestPath: ${normalizePath(manifestPath)}`,
             `SelectedPaths: ${[...selectedPaths].sort().join(', ') || 'all'}`,
             `RestoredFiles: ${[...restoredFiles].sort().join(', ') || 'none'}`
         ]
     };
+}
+
+/**
+ * Requires exclusive operational access to repository targets, their parents and
+ * restore working files. Concurrent filesystem mutation is unsupported: checks
+ * provide defense in depth, not atomic publication or crash-recovery guarantees.
+ */
+export function restoreSplitRequiredWip(
+    params: SplitRequiredWipRestoreParams
+): SplitRequiredWipRestoreResult {
+    return restoreSplitRequiredWipCore(params, false);
+}
+
+/** Uses the same exclusive-access contract as restoreSplitRequiredWip. */
+export function restoreSplitRequiredWipForPreparedRuntimeHandoff(
+    identity: SplitRequiredWipRestoreHandoffIdentity
+): SplitRequiredWipRestoreResult {
+    const { handoff, manifest: verifiedManifest } = readAndVerifySplitRequiredWipRestoreHandoffSnapshot(identity);
+    if (handoff.status !== 'prepared') {
+        throw new Error(`restore handoff must be prepared before deferred restoration; found ${handoff.status}.`);
+    }
+    return restoreSplitRequiredWipCore({
+        repoRoot: identity.repoRoot,
+        taskId: identity.taskId,
+        manifestPath: identity.manifestPath,
+        includePaths: identity.selectedPaths
+    }, true, verifiedManifest);
 }
 
 export function retireSplitRequiredWip(params: {
