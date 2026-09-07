@@ -680,6 +680,58 @@ describe('cli/commands/gates review launch routing', () => {
         });
     }
 
+    for (const resultState of ['consumed', 'unconsumed', 'wrong-reviewer', 'corrupt-integrity', 'wrong-actor', 'wrong-latest-actor']) {
+        it(`reroutes a cleaned completed control file only when ${resultState} result evidence permits it`, async () => {
+            const repoRoot = createTempRepo();
+            const taskId = `T-cleaned-launch-${resultState}`;
+            const fixture = await seedResolvedCompletedUnconsumedLaunch(repoRoot, taskId);
+            const previousArtifact = JSON.parse(fs.readFileSync(fixture.launchArtifactPath, 'utf8'));
+            if (resultState !== 'unconsumed') {
+                appendTaskEvent(getOrchestratorRoot(repoRoot), taskId, 'REVIEW_RECORDED', 'PASS', 'Consume completed review.', {
+                    task_id: taskId,
+                    review_type: 'code',
+                    reviewer_identity: resultState === 'wrong-reviewer' ? 'agent:other-reviewer' : previousArtifact.reviewer_identity,
+                    review_context_sha256: previousArtifact.review_context_sha256
+                }, { actor: resultState === 'wrong-actor' ? 'reviewer' : 'orchestrator' });
+            }
+            if (resultState === 'wrong-latest-actor') {
+                const completed = readTaskTimelineEvents(repoRoot, taskId).find((event) => event.event_type === 'REVIEWER_LAUNCH_COMPLETED');
+                appendTaskEvent(getOrchestratorRoot(repoRoot), taskId, 'REVIEWER_LAUNCH_COMPLETED', 'PASS', 'Duplicate completion under wrong actor.',
+                    completed?.details || {}, { actor: 'reviewer' });
+            }
+            appendRestartBoundary(repoRoot, taskId, 'REVIEW_CYCLE_RESTARTED', { invalidatedReviewTypes: ['code'] });
+            appendTaskEvent(getOrchestratorRoot(repoRoot), taskId, 'REVIEW_PHASE_STARTED', 'INFO', 'Rebuild code context after restart.', {
+                task_id: taskId, review_type: 'code'
+            }, { actor: 'orchestrator' });
+            const cleanup = await runCliWithCapturedOutput([
+                'gate', 'log-task-event', '--task-id', taskId, '--event-type', 'TASK_BLOCKED',
+                '--outcome', 'BLOCKED', '--message', 'Pause before recovery.', '--actor', 'orchestrator', '--repo-root', repoRoot
+            ], { cwd: repoRoot });
+            assert.equal(cleanup.exitCode, 0, cleanup.errors.join('\n'));
+            assert.equal(fs.existsSync(fixture.launchArtifactPath), false);
+            if (resultState === 'corrupt-integrity') {
+                const timelinePath = path.join(getOrchestratorRoot(repoRoot), 'runtime', 'task-events', `${taskId}.jsonl`);
+                const timeline = fs.readFileSync(timelinePath, 'utf8');
+                fs.writeFileSync(timelinePath, timeline.replace('Consume completed review.', 'Tampered completed review.'));
+            }
+            const reviewerIdentity = 'agent:replacement-after-cleanup';
+            const reroute = await runCliWithCapturedOutput([
+                'gate', 'record-review-routing', '--task-id', taskId, '--review-type', 'code',
+                '--repo-root', repoRoot, '--reviewer-execution-mode', 'delegated_subagent', '--reviewer-identity', reviewerIdentity
+            ], { cwd: repoRoot });
+            if (resultState === 'consumed') {
+                assert.equal(reroute.exitCode, 0, reroute.errors.join('\n'));
+                await prepareReviewerLaunchForTest({ repoRoot, taskId, reviewerIdentity, launchArtifactPath: fixture.launchArtifactPath });
+                const replacement = JSON.parse(fs.readFileSync(fixture.launchArtifactPath, 'utf8'));
+                assert.notEqual(replacement.reviewer_launch_attempt_id, previousArtifact.reviewer_launch_attempt_id);
+            } else {
+                assert.notEqual(reroute.exitCode, 0);
+                assert.match(reroute.errors.join('\n'), /control artifact is missing/);
+            }
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        });
+    }
+
     it('record-review-routing and prepare-reviewer-launch replace a launched attempt invalidated by an authenticated review restart', async () => {
         const repoRoot = createTempRepo();
         const taskId = 'T-979-57-invalidated';

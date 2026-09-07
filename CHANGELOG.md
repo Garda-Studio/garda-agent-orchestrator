@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed review rerouting after terminal cleanup removes a completed launch control file whose result has already been recorded. Active, unconsumed, mismatched, and malformed launch evidence still blocks replacement.
+
 - Fixed a `next-step` review-reuse loop when the original review falls outside the recent timeline window. Reuse now checks the complete authenticated history within existing snapshot limits and continues to reject malformed history and invalid receipt snapshots.
 
 ## 1.4.0

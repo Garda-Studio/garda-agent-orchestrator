@@ -19,6 +19,7 @@ import {
     type ParsedOptionsRecord
 } from '../../shared-command-utils';
 import { readDependencyTimelineEvents } from '../result/review-dependency-timeline';
+import { inspectTaskEventFile } from '../../../../gate-runtime/task-events-integrity';
 import { createPrepareReviewerLaunchHandler } from './review-launch-prepare-handler';
 import { createCompleteReviewerLaunchHandler } from './review-launch-complete-handler';
 import { createReviewerDelegationStartedHandler } from './review-launch-delegation-started-handler';
@@ -99,6 +100,28 @@ function buildNavigatorCommand(repoRoot: string, taskId: string): string {
     return `${buildCliPrefix(repoRoot)} next-step "${taskId}" --repo-root "."`;
 }
 
+function isCleanedLaunchConsumptionAuthenticated(
+    timelinePath: string,
+    taskId: string,
+    timelineEvents: ReturnType<typeof readDependencyTimelineEvents>,
+    completionSequence: number,
+    launchDetails: Record<string, unknown>
+): boolean {
+    if (!inspectTaskEventFile(timelinePath, taskId).status.startsWith('PASS')) return false;
+    const authenticatedHashes = new Set<string>();
+    for (const line of fs.readFileSync(timelinePath, 'utf8').split('\n').filter((entry) => entry.trim())) {
+        const event = JSON.parse(line);
+        if (event.task_id === taskId && event.actor === 'orchestrator' && event.details?.task_id === taskId
+            && event.integrity?.event_sha256) {
+            authenticatedHashes.add(event.integrity.event_sha256);
+        }
+    }
+    const authenticatedEvents = timelineEvents.filter((event) => event.sequence >= completionSequence
+        && event.integrity?.event_sha256 && authenticatedHashes.has(event.integrity.event_sha256));
+    return authenticatedEvents.some((event) => event.sequence === completionSequence)
+        && isCompletedReviewerLaunchAttemptConsumed(authenticatedEvents, launchDetails);
+}
+
 export function createReviewRoutingLaunchHandlers(deps: ReviewRoutingLaunchHandlerDependencies) {
     const {
         assertExplicitReviewContextRuntimeIdentity,
@@ -171,6 +194,8 @@ async function handleRecordReviewRouting(gateArgv: string[]): Promise<void> {
     const latestLaunchEventByArtifactPath = new Map<string, {
         eventType: string;
         attemptId: string;
+        sequence: number;
+        details: Record<string, unknown>;
     }>();
     const laneReservationPath = getReviewerLaunchLaneReservationPath(canonicalLaunchArtifactPath);
     const laneReservationExists = fs.existsSync(laneReservationPath);
@@ -240,6 +265,8 @@ async function handleRecordReviewRouting(gateArgv: string[]): Promise<void> {
             launchArtifactPaths.add(resolvedArtifactPath);
             latestLaunchEventByArtifactPath.set(getReviewerLaunchSemanticPathKey(resolvedArtifactPath), {
                 eventType: timelineEvent.event_type,
+                sequence: timelineEvent.sequence,
+                details: details || {},
                 attemptId: getStringField(
                     details || {},
                     'reviewer_launch_attempt_id',
@@ -255,6 +282,14 @@ async function handleRecordReviewRouting(gateArgv: string[]): Promise<void> {
             const latestLaunchEvent = latestLaunchEventByArtifactPath.get(
                 getReviewerLaunchSemanticPathKey(launchArtifactPath)
             );
+            // Terminal cleanup can remove control files after the result has consumed the launch.
+            if (!launchArtifactExists
+                && latestLaunchEvent?.eventType === 'REVIEWER_LAUNCH_COMPLETED'
+                && isCleanedLaunchConsumptionAuthenticated(
+                    timelinePath, taskId, timelineEvents, latestLaunchEvent.sequence, latestLaunchEvent.details
+                )) {
+                continue;
+            }
             if (launchArtifactExists || (
                 latestLaunchEvent
                 && latestLaunchEvent.eventType !== 'REVIEWER_LAUNCH_FAILED'
