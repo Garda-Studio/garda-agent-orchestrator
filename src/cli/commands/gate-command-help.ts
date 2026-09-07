@@ -299,8 +299,8 @@ function buildPreflightGateHelpEntries(
         },
         'restart-coherent-cycle': {
             ...createSingleUsageEntry(
-                'Refresh preflight and downstream compile evidence for the current task after scope drift. This reruns the configured compile gate and can take the full project compile duration.',
-                `${cliPrefix} gate restart-coherent-cycle --task-id "${TASK_ID_PLACEHOLDER}" --task-intent "<task summary>" --changed-file "src/<file>" --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>" --repo-root "."`,
+                'Refresh preflight and downstream compile evidence for the current task after scope drift. This reruns the configured compile gate and can take the full project compile duration. Confirmation flags are required when re-entering protected task mode requires fresh operator approval; an ordinary unprotected restart does not require them. Follow next-step for the applicable command.',
+                `${cliPrefix} gate restart-coherent-cycle --task-id "${TASK_ID_PLACEHOLDER}" --task-intent "<task summary>" --changed-file "src/<file>" [--operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>"] --repo-root "."`,
                 true
             )
         },
@@ -450,7 +450,7 @@ function buildLifecycleGateHelpEntries(
         },
         'full-suite-validation': {
             ...createSingleUsageEntry(
-                'Run repository-wide test suite as part of mandatory closeout (when enabled). Configuration: edit garda-agent-orchestrator/live/config/workflow-config.json to set full_suite_validation.enabled=true. Integrated into completion-gate when enabled.',
+                'Run repository-wide test suite as part of mandatory closeout (when enabled). Enable it through workflow set --full-suite-enabled true --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>" after operator approval. Follow next-step for the configured full-suite placement; do not edit workflow-config.json directly.',
                 `${cliPrefix} gate full-suite-validation --task-id "${TASK_ID_PLACEHOLDER}" --preflight-path "${buildBundleRelativePath(bundleName, `runtime/reviews/${TASK_ID_PLACEHOLDER}-preflight.json`)}" --repo-root "."`,
                 true
             )

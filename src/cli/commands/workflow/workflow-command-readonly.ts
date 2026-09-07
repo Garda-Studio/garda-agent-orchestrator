@@ -58,7 +58,7 @@ export function handleExplain(options: ParsedOptionsRecord): WorkflowExplainResu
         topic: 'workflow-guards',
         explanation: [
             'Compile gate command: workflow-config compile_gate.command is the executable compile-gate source; missing values or __COMPILE_GATE_COMMAND_UNCONFIGURED__ fail closed instead of falling back to 40-commands.md.',
-            'Set compile_gate.command with workflow set --compile-gate-command "<compile/build/type-check command>" after operator approval; 40-commands.md is human guidance only.',
+            'Set compile_gate.command with workflow set --compile-gate-command "<compile/build/type-check command>" --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>" after operator approval; 40-commands.md is human guidance only.',
             'Compile gate command changes are validated as compile/build/type-check commands and must not match the configured full-suite validation command.',
             'Scope budget guard: warns on large configured-profile tasks and blocks oversized tasks before compile/review loops.',
             'Scope budget guard compares changed file count, changed line count, distinct required review type count, and estimated review tokens against tiered warning and blocking workflow-config.json limits.',
@@ -78,7 +78,7 @@ export function handleExplain(options: ParsedOptionsRecord): WorkflowExplainResu
             'When review_cycle_guard.action is WARN_ONLY, next-step continues to the next gate but prints the review-cycle violation under Warnings.',
             'Task reset: confirmed reset mutations are disabled by default and require audited opt-in with workflow set --task-reset on --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>".',
             'Optional quality checks: advisory self-check rules are default-enabled, run before expensive gates when routed by next-step, are configurable through guarded workflow settings, and do not replace compile, review, or full-suite validation.',
-            'workflow set requires explicit operator approval with --operator-confirmed yes and --operator-confirmed-at-utc; agents must not approve workflow-config mutations for themselves.',
+            'workflow set changes require explicit operator approval with --operator-confirmed yes and --operator-confirmed-at-utc, except a standalone --garda-self-guard on change. A true no-op needs no approval unless repairing task-reset audit evidence; agents must not approve workflow-config mutations for themselves.',
             'Task reset dry-run remains available while disabled because it only reports reset scope and does not mutate task status or artifacts.'
         ]
     };

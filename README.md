@@ -44,6 +44,12 @@ Garda adds a governance layer:
 - local Node/TypeScript CLI runtime
 - token-economy defaults for compact green-path execution
 
+## Is Garda a Good Fit?
+
+Garda fits repositories where several coding agents need a shared workflow, changes require independent review, or maintainers need reproducible validation and an audit trail. Budget for local Git, build/test tooling, and the review time required by your project.
+
+For a disposable prototype, a small script, or occasional edits already covered by a simple test-and-review process, Garda's setup and lifecycle overhead may be unnecessary. Start with the workflow your project needs and adopt Garda when explicit gates and traceable completion solve a recurring problem.
+
 ## Quick Start
 
 ```shell
@@ -162,6 +168,8 @@ Full reference: **[docs/cli-reference.md](docs/cli-reference.md)**
 | Document | Description |
 |---|---|
 | **[HOW_TO.md](HOW_TO.md)** | Step-by-step user guide |
+| **[CONTRIBUTING.md](CONTRIBUTING.md)** | Source checkout, developer checks, task queue formatting, and contribution workflow |
+| **[docs/run-methods.md](docs/run-methods.md)** | Choose between global install, one-off execution, and source checkout |
 | **[docs/cli-reference.md](docs/cli-reference.md)** | Complete CLI command reference |
 | **[docs/architecture.md](docs/architecture.md)** | Design, runtime model, deployed files |
 | **[docs/configuration.md](docs/configuration.md)** | Token economy, output filters, review capabilities, and review catalog management |
@@ -171,6 +179,10 @@ Full reference: **[docs/cli-reference.md](docs/cli-reference.md)**
 | **[docs/database/sqlite-query-adoption-evidence.md](docs/database/sqlite-query-adoption-evidence.md)** | Benchmark evidence for adopted and rejected SQLite query paths |
 | **[docs/release-readiness.md](docs/release-readiness.md)** | Versioned static release checklist and package handoff contract |
 | **[docs/work-example.md](docs/work-example.md)** | Task lifecycle walkthrough |
+| **[docs/task-plan-workflow.md](docs/task-plan-workflow.md)** | Optional planning guide and worked plan example |
+| **[docs/threat-model.md](docs/threat-model.md)** | Trust boundaries and security assumptions |
+| **[docs/sbom.md](docs/sbom.md)** | Generate and inspect the dependency inventory |
+| **[docs/branch-protection.md](docs/branch-protection.md)** | CI check names and repository protection guidance |
 | **[AGENT_INIT_PROMPT.md](AGENT_INIT_PROMPT.md)** | Setup prompt for coding agents |
 | **[CHANGELOG.md](CHANGELOG.md)** | Full changelog |
 | **[MANIFEST.md](MANIFEST.md)** | Bundle file manifest |
@@ -178,17 +190,6 @@ Full reference: **[docs/cli-reference.md](docs/cli-reference.md)**
 ## Release Background
 
 Garda was not started from scratch in this repository. Earlier versions were developed privately as shell/Python prototypes before being rewritten and consolidated into the current Node/TypeScript implementation. This public repository intentionally starts from the first stable public release, `v1.0.0`, so the earlier internal incubation history is not reflected in the public commit log.
-
-## Recent Changes
-
-- A guarded review catalog now supports repository-specific review lanes, profile states, dependency order, CLI management, and matching local UI controls.
-- Active task cycles freeze their effective review catalog and policy, so later configuration changes cannot rewrite in-flight review requirements.
-- Authenticated review remediation can reuse valid evidence or run a bounded `DELTA` review; stale, ambiguous, protected, or oversized changes fall back to `FULL` review.
-- Review correction, recovery, follow-up, reuse, and closeout paths now retain stricter cycle, scope, launch, and evidence provenance.
-- Declarative lifecycle and workflow-settings manifests keep runtime routing, help, documentation, configuration, and UI behavior aligned.
-- `garda uninstall` preserves `TASK.md` by default; removing the task queue now requires the explicit `--keep-task-file no` override.
-
-See **[CHANGELOG.md](CHANGELOG.md)** for the complete 1.4.0 release notes.
 
 ## Important Notes
 

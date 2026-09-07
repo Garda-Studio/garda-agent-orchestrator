@@ -28,7 +28,22 @@ in the GitHub repository.
 |---|---|---|
 | **Require status checks to pass before merging** | ✅ Enabled | Prevents merging when CI is red. |
 | **Require branches to be up to date before merging** | ✅ Enabled | Ensures the PR branch includes the latest target commits. |
-| **Status checks that are required** | `ci` (the main CI workflow) | At minimum, the primary build/test workflow must pass. |
+| **Status checks that are required** | Individual job checks listed below | `CI` is a workflow name; there is no aggregate check named `ci`. |
+
+The job names below come from [ci.yml](../.github/workflows/ci.yml). Select each expanded check reported by a recent pull-request run; `{node}` and `{os}` below describe matrix values and are not literal check names.
+
+| Job check pattern | Required matrix values |
+|---|---|
+| `Static Checks / Node {node}` | `22.13.0`, `24` |
+| `Unit Tests / Node {node}` | `22.13.0`, `24` |
+| `Gate Tests / Node {node}` | `22.13.0`, `24` |
+| `CLI Tests / Node {node}` | `22.13.0`, `24` |
+| `Lifecycle Tests / Node {node}` | `22.13.0`, `24` |
+| `Binary Tests / Node {node}` | `22.13.0`, `24` |
+| `Release Validation / {os} / Node {node}` | `ubuntu-latest`, `windows-latest`, each on `22.13.0` and `24` |
+| `Smoke / {os} / Node {node}` | `ubuntu-latest`, `windows-latest`, `macos-latest`, each on `22.13.0` and `24` |
+
+For example, select `Static Checks / Node 24` and `Release Validation / windows-latest / Node 22.13.0`. GitHub may group these beneath the `CI` workflow in its display. Recheck the actual emitted check names after a matrix or reusable-workflow change; this document does not assert that repository settings already require them.
 
 ### Release Security Required Checks
 
@@ -39,8 +54,8 @@ protection and release-readiness diagnostics stay explicit.
 
 | Check | Label | Branch-protection guidance | Rationale |
 |---|---|---|---|
-| `CI` / release validation matrix | `blocking` | Required | Proves build, test shards, package smoke, release readiness, and lifecycle smoke. |
-| `Security / npm audit` | `blocking` | Required | Fails on high or critical production dependency advisories. |
+| Individual `CI` job checks above | `blocking` | Required | Proves build, test shards, package smoke, release readiness, and lifecycle smoke. |
+| `Security / npm audit` | `blocking` | Required | Fails on high or critical dependency advisories, including devDependencies; the workflow does not omit dev dependencies. |
 | `Secret Scanning / Gitleaks` | `blocking` | Required | Prevents committed secrets from reaching protected branches. |
 | `Security / OSV Vulnerability Scan` | `informational` | Optional required check | Keeps SARIF-backed vulnerability visibility; make it required only when the team accepts upstream advisory noise as merge-blocking. |
 | `SBOM / Generate SBOM` | `informational` | Optional required check | Produces the CycloneDX artifact for release evidence; artifact absence is still surfaced by the workflow itself. |
@@ -163,7 +178,7 @@ bypasses or post-dates the local gate.
    checkout or your fork's maintainers.
 3. [ ] Enable **Require pull request reviews before merging** on target branches.
 4. [ ] Enable **Require review from Code Owners**.
-5. [ ] Add the main CI workflow as a **required status check**.
+5. [ ] Select the expanded CI job checks above, plus the chosen security checks, as **required status checks**; verify their names on a current PR run.
 6. [ ] Enable **Dismiss stale approvals when new commits are pushed**.
 7. [ ] Enable **Include administrators** to prevent bypass.
 8. [ ] Disable **Allow force pushes** and **Allow deletions**.

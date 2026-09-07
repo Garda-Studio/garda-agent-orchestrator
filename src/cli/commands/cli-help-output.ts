@@ -224,7 +224,7 @@ export const COMMAND_HELP: Readonly<Record<CommandHelpName, CommandHelpDescripto
             'Task reset mutations are disabled by default and can be enabled with --task-reset on.',
             'Optional quality checks are advisory, default-enabled, routed before expensive gates when current implementation changes need checklist evidence, and configurable with --optional-checks on|off plus --optional-checks-review-failure-cadence-interval and --optional-check-rule-* without replacing mandatory compile/review/full-suite gates. Use --optional-check-rule-exclude-test-only true to skip one rule only for pure test changes.',
             'Garda self-guard defaults to on for application workspaces and blocks agent self-entry into --orchestrator-work.',
-            'workflow set writes require --operator-confirmed yes and --operator-confirmed-at-utc after explicit operator approval; agents must not approve workflow-config mutations for themselves.'
+            'workflow set changes require --operator-confirmed yes and --operator-confirmed-at-utc after explicit operator approval, except a standalone --garda-self-guard on change. A true no-op needs no approval unless repairing task-reset audit evidence. Confirmation parsing trims whitespace and ignores letter case; use canonical yes in commands. Agents must not approve workflow-config mutations for themselves.'
         ])
     }),
     stats: Object.freeze({

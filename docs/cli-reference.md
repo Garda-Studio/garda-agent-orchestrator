@@ -582,7 +582,7 @@ Notes:
 - `compile_gate.command` is the executable compile-gate source. Missing values or `__COMPILE_GATE_COMMAND_UNCONFIGURED__` fail closed instead of falling back to `40-commands.md`.
 - `--compile-gate-command` must stay a compile/build/type-check command and must not match the configured full-suite validation command.
 - Scheduled auto-backups are disabled by default and run only through the existing daily maintenance trigger when enabled; configure them with `--auto-backup-enabled`, `--auto-backup-interval-days`, and `--auto-backup-keep-latest`.
-- `workflow set` requires explicit operator approval with `--operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>"`; agents must not approve workflow-config mutations for themselves.
+- `workflow set` changes require explicit operator approval with `--operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>"`. A standalone `--garda-self-guard on` change is permitted without confirmation because it tightens protection. A true no-op needs no approval; requesting a task-reset audit repair still requires fresh confirmation. Agents must not approve workflow-config mutations for themselves.
 - `--garda-self-guard on` maps to `orchestrator_work_policy.mode=deny_agent_entry`; `off` maps to `require_operator_confirmation` and requires explicit operator approval.
 - Supported `review_execution_policy` modes are `parallel_all`, `test_after_code`, `code_first_optional`, and `strict_sequential`.
 - `parallel_all` can make code, security, refactor, API, and other specialist lanes independent. Full-suite placement still applies: `before_test_review` gates only `test`, `after_compile_before_reviews` gates all reviewers after compile, and `before_completion` defers enforcement until completion.
@@ -601,6 +601,16 @@ Notes:
 - `next-step` also supports parents that were already marked `DECOMPOSED` by an agent or operator rather than by a Garda split gate. Record this audibly in Notes as `Decomposition source: manual-agent` or `Decomposition source: manual-operator` followed by an explicit `child tasks:` list or `child range <first> through <last>`. The older `Manual operator-requested decomposition (...): child range ...` form remains compatible. Manual provenance suppresses any expectation of nonexistent split-decision artifacts, but it does not weaken routing: the parent is never executed directly, missing declared child rows are named, and no child is inferred from unrelated or merely parent-prefixed task IDs.
 - `WARN_ONLY` does not block the next gate, but `next-step` prints the review-cycle violation under `Warnings` so the operator still sees the over-budget review cycle.
 - Task reset mutations are controlled by `task_reset.enabled`, default to `false`, and can be changed with `--task-reset-enabled true|false`. Enabling task reset through `workflow set` records the audit evidence required by confirmed `garda gate task-reset` mutations.
+
+#### Operator Confirmation and Automation
+
+Use canonical `--operator-confirmed yes` in commands. The confirmation parser trims surrounding whitespace and compares case-insensitively, so `YES` and ` Yes ` have the same meaning; `true`, `1`, an empty value, or a missing approval are not substitutes. This normalization does not supply operator authorization.
+
+Where fresh approval is required, pass the actual approval time in `--operator-confirmed-at-utc` as an ISO-8601 timestamp. The shared validator rejects invalid timestamps, approvals older than ten minutes, and timestamps more than one minute in the future. Do not replay a stored approval or manufacture one in unattended automation.
+
+For `restart-coherent-cycle`, confirmation is conditional on re-entry into the prior protected task mode. Ordinary unprotected restarts do not require it; follow the command printed by `next-step`. Recovery preserves the previous protected-work intent and does not use optional-looking help flags to bypass entry policy.
+
+Inspect settings with `workflow show` or `workflow explain`. For an authorized change, invoke `workflow set` with the required confirmation flags instead of writing `workflow-config.json` directly. A wrapper must pass the real approval and propagate command failure. In `garda ui --actions`, the server checks the action boundary and the typed confirmation phrase before invoking the same audited command with a current timestamp; a preview does not apply settings. Setup/init/update materialization and test fixtures have their own configuration-writing responsibilities and are not an approval bypass for ordinary setting changes.
 
 ### `garda templates`
 
