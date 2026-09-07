@@ -111,7 +111,8 @@ function isCleanedLaunchConsumptionAuthenticated(
     const authenticatedHashes = new Set<string>();
     for (const line of fs.readFileSync(timelinePath, 'utf8').split('\n').filter((entry) => entry.trim())) {
         const event = JSON.parse(line);
-        if (event.task_id === taskId && event.actor === 'orchestrator' && event.details?.task_id === taskId
+        const expectedActor = event.event_type === 'REVIEW_RECORDED' ? 'gate' : 'orchestrator';
+        if (event.task_id === taskId && event.actor === expectedActor && event.details?.task_id === taskId
             && event.integrity?.event_sha256) {
             authenticatedHashes.add(event.integrity.event_sha256);
         }

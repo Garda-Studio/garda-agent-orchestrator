@@ -692,7 +692,7 @@ describe('cli/commands/gates review launch routing', () => {
                     review_type: 'code',
                     reviewer_identity: resultState === 'wrong-reviewer' ? 'agent:other-reviewer' : previousArtifact.reviewer_identity,
                     review_context_sha256: previousArtifact.review_context_sha256
-                }, { actor: resultState === 'wrong-actor' ? 'reviewer' : 'orchestrator' });
+                }, { actor: resultState === 'wrong-actor' ? 'reviewer' : 'gate' });
             }
             if (resultState === 'wrong-latest-actor') {
                 const completed = readTaskTimelineEvents(repoRoot, taskId).find((event) => event.event_type === 'REVIEWER_LAUNCH_COMPLETED');
