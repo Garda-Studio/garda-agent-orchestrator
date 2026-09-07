@@ -281,6 +281,15 @@ jobs:
       - name: Validate release
         run: npm run validate:release:fast
 
+      - name: Upload lcov coverage
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: coverage-lcov-${{ matrix.os }}-node-${{ matrix.node-version }}
+          path: coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 15
+
   # ── 7. Cross-platform lifecycle smoke matrix ─────────────────────────────────
   # Runs after all test shards pass. Covers: setup → update git → doctor → uninstall on all 3 OSes.
   smoke:

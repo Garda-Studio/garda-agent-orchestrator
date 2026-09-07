@@ -79,7 +79,6 @@ test('package quality scripts expose lint, coverage, audit, and composed release
 
     assert.equal(scripts.coverage, 'c8 npm test');
     assert.equal(scripts['coverage:fast'], 'c8 npm run test:fast');
-    assert.doesNotMatch(scripts.coverage, /--check-coverage/);
 
     assert.equal(scripts['audit:prod'], 'npm audit --omit=dev');
     assert.equal(scripts['audit:all'], 'npm audit');
@@ -118,6 +117,11 @@ test('coverage configuration measures maintained source boundaries without gener
     const c8 = getC8Config();
 
     assert.equal(c8.all, true);
+    assert.equal(c8['check-coverage'], true);
+    assert.equal(c8.statements, 35);
+    assert.equal(c8.branches, 55);
+    assert.equal(c8.functions, 35);
+    assert.equal(c8.lines, 35);
     assert.deepEqual(c8.reporter, ['text', 'lcov']);
     assert.deepEqual(c8.include, [
         '.node-build/src/**/*.js',
@@ -161,6 +165,12 @@ test('release validation CI covers Windows quality:fast script execution', () =>
     assert.match(releaseJob, /runs-on:\s*\$\{\{ matrix\.os \}\}/);
     assert.deepEqual(extractYamlListAfterKey(releaseJob, 'os'), ['ubuntu-latest', 'windows-latest']);
     assert.match(releaseJob, /run:\s*npm run validate:release:fast/);
+    assert.match(releaseJob, /name:\s*Upload lcov coverage/);
+    assert.match(releaseJob, /if:\s*always\(\)/);
+    assert.match(releaseJob, /uses:\s*actions\/upload-artifact@v7\.0\.1/);
+    assert.match(releaseJob, /name:\s*coverage-lcov-\$\{\{ matrix\.os \}\}-node-\$\{\{ matrix\.node-version \}\}/);
+    assert.match(releaseJob, /path:\s*coverage\/lcov\.info/);
+    assert.match(releaseJob, /if-no-files-found:\s*warn/);
 });
 
 test('CI defines focused test shard jobs covering unit, gates, CLI, lifecycle, and bin on supported Node lines', () => {
