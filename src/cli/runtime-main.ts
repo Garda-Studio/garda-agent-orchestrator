@@ -1,4 +1,3 @@
-import { dispatchCliCommand } from './commands/command-dispatch';
 import {
     applyNoColorFlag,
     extractGlobalFlags,
@@ -92,6 +91,7 @@ export async function runCliRuntimeMain(
         }
     }
 
+    const { dispatchCliCommand } = await import('./commands/command-dispatch');
     await dispatchCliCommand({
         commandName,
         commandArgv,

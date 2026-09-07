@@ -16,6 +16,18 @@ const NPM_PACK_TIMEOUT_MS = 120_000;
 const NPM_INSTALL_TARBALL_TIMEOUT_MS = process.platform === 'win32' ? 300_000 : 120_000;
 const LOCAL_TARBALL_INSTALL_BUDGET_MS = 60_000;
 const CLI_COLD_START_BUDGET_MS = 10_000;
+const CLI_FAST_PATH_MODULE_BUDGET = 500;
+const CLI_STARTUP_PROBE_PREFIX = 'GARDA_CLI_STARTUP_PROBE ';
+
+interface CliStartupProbeEvidence {
+    loaded_package_module_count: number;
+    command_dispatch_loaded: boolean;
+}
+
+interface CliStartupProbeResult {
+    result: childProcess.SpawnSyncReturns<string>;
+    evidence: CliStartupProbeEvidence;
+}
 
 function getErrorCode(error: unknown): string {
     return error && typeof error === 'object' && 'code' in error
@@ -308,17 +320,59 @@ function npmInstallTarball(tarballPath: string, installDir: string): number {
     return durationMs;
 }
 
-function runCli(cliScriptPath: string, args: string[], cwd: string): childProcess.SpawnSyncReturns<string> {
-    return childProcess.spawnSync(
-        process.execPath,
-        [cliScriptPath, ...args],
-        {
-            cwd,
-            encoding: 'utf8',
-            env: buildPackagingEnv(),
-            timeout: 30_000
+function runCliStartupProbe(
+    cliScriptPath: string,
+    args: string[],
+    cwd: string,
+    packageRoot: string
+): CliStartupProbeResult {
+    const probeScript = [
+        "const path = require('node:path');",
+        `const packageRoot = ${JSON.stringify(packageRoot)};`,
+        "process.once('beforeExit', () => {",
+        '  const packageModules = Object.keys(require.cache).filter((modulePath) => {',
+        '    const relativePath = path.relative(packageRoot, modulePath);',
+        "    return relativePath && !relativePath.startsWith('..' + path.sep) && !path.isAbsolute(relativePath);",
+        '  });',
+        "  const commandDispatchPath = path.join('dist', 'src', 'cli', 'commands', 'command-dispatch.js');",
+        '  const commandDispatchLoaded = packageModules.some((modulePath) =>',
+        '    path.relative(packageRoot, modulePath) === commandDispatchPath',
+        '  );',
+        `  process.stderr.write(${JSON.stringify(`\n${CLI_STARTUP_PROBE_PREFIX}`)} + JSON.stringify({`,
+        '    loaded_package_module_count: packageModules.length,',
+        '    command_dispatch_loaded: commandDispatchLoaded',
+        "  }) + '\\n');",
+        '});'
+    ].join('\n');
+    const probeScriptPath = path.join(path.dirname(packageRoot), '.garda-cli-startup-probe.cjs');
+    fs.writeFileSync(probeScriptPath, probeScript, 'utf8');
+    const result = (() => {
+        try {
+            return childProcess.spawnSync(
+                process.execPath,
+                ['--require', probeScriptPath, cliScriptPath, ...args],
+                {
+                    cwd,
+                    encoding: 'utf8',
+                    env: buildPackagingEnv(),
+                    timeout: 30_000
+                }
+            );
+        } finally {
+            fs.rmSync(probeScriptPath, { force: true });
         }
-    );
+    })();
+    const evidenceLine = result.stderr
+        .split(/\r?\n/u)
+        .find((line) => line.startsWith(CLI_STARTUP_PROBE_PREFIX));
+    if (!evidenceLine) {
+        throw new Error(formatSpawnFailure(`CLI startup probe ${args.join(' ')}`, result));
+    }
+
+    return {
+        result,
+        evidence: JSON.parse(evidenceLine.slice(CLI_STARTUP_PROBE_PREFIX.length)) as CliStartupProbeEvidence
+    };
 }
 
 test('npm pack -> install -> CLI invoke smoke test', () => {
@@ -380,7 +434,8 @@ test('npm pack -> install -> CLI invoke smoke test', () => {
 
         // 2. --version prints the correct version
         const versionStartedAt = performance.now();
-        const versionResult = runCli(cliScript, ['--version'], installRoot);
+        const versionProbe = runCliStartupProbe(cliScript, ['--version'], installRoot, installedPackageRoot);
+        const versionResult = versionProbe.result;
         const versionDurationMs = Math.round(performance.now() - versionStartedAt);
         assert.equal(versionResult.status, 0, `--version failed: ${versionResult.stderr}`);
         assert.match(versionResult.stdout.trim(), new RegExp(`^${expectedVersion.replace(/\./g, '\\.')}$`));
@@ -388,23 +443,64 @@ test('npm pack -> install -> CLI invoke smoke test', () => {
             versionDurationMs <= CLI_COLD_START_BUDGET_MS,
             `cold packaged CLI startup exceeded budget: observed=${versionDurationMs}ms budget=${CLI_COLD_START_BUDGET_MS}ms`
         );
-        console.log(
-            `PACK_SMOKE_PERFORMANCE install_ms=${installDurationMs} install_budget_ms=${LOCAL_TARBALL_INSTALL_BUDGET_MS} `
-            + `cli_version_start_ms=${versionDurationMs} cli_start_budget_ms=${CLI_COLD_START_BUDGET_MS}`
+        assert.equal(
+            versionProbe.evidence.command_dispatch_loaded,
+            false,
+            '--version fast path must not load command-dispatch'
+        );
+        assert.ok(
+            versionProbe.evidence.loaded_package_module_count <= CLI_FAST_PATH_MODULE_BUDGET,
+            '--version loaded package module count exceeded budget: '
+            + `observed=${versionProbe.evidence.loaded_package_module_count} `
+            + `budget=${CLI_FAST_PATH_MODULE_BUDGET}`
         );
 
         // 3. --help prints usage information
-        const helpResult = runCli(cliScript, ['--help'], installRoot);
+        const helpStartedAt = performance.now();
+        const helpProbe = runCliStartupProbe(cliScript, ['--help'], installRoot, installedPackageRoot);
+        const helpResult = helpProbe.result;
+        const helpDurationMs = Math.round(performance.now() - helpStartedAt);
         assert.equal(helpResult.status, 0, `--help failed: ${helpResult.stderr}`);
         assert.match(helpResult.stdout, /Usage:/);
         assert.match(helpResult.stdout, /setup/);
+        assert.ok(
+            helpDurationMs <= CLI_COLD_START_BUDGET_MS,
+            `cold packaged --help startup exceeded budget: observed=${helpDurationMs}ms budget=${CLI_COLD_START_BUDGET_MS}ms`
+        );
+        assert.equal(
+            helpProbe.evidence.command_dispatch_loaded,
+            false,
+            '--help fast path must not load command-dispatch'
+        );
+        assert.ok(
+            helpProbe.evidence.loaded_package_module_count <= CLI_FAST_PATH_MODULE_BUDGET,
+            '--help loaded package module count exceeded budget: '
+            + `observed=${helpProbe.evidence.loaded_package_module_count} `
+            + `budget=${CLI_FAST_PATH_MODULE_BUDGET}`
+        );
+
+        console.log(
+            `PACK_SMOKE_PERFORMANCE install_ms=${installDurationMs} install_budget_ms=${LOCAL_TARBALL_INSTALL_BUDGET_MS} `
+            + `cli_version_start_ms=${versionDurationMs} cli_help_start_ms=${helpDurationMs} `
+            + `cli_start_budget_ms=${CLI_COLD_START_BUDGET_MS} `
+            + `cli_version_modules=${versionProbe.evidence.loaded_package_module_count} `
+            + `cli_help_modules=${helpProbe.evidence.loaded_package_module_count} `
+            + `cli_module_budget=${CLI_FAST_PATH_MODULE_BUDGET}`
+        );
 
         // 4. status command works against a bare workspace (exercises compiled runtime)
         const workspaceRoot = path.join(installRoot, 'workspace');
         fs.mkdirSync(workspaceRoot, { recursive: true });
-        const statusResult = runCli(cliScript, ['status', '--target-root', workspaceRoot], workspaceRoot);
+        const statusProbe = runCliStartupProbe(
+            cliScript,
+            ['status', '--target-root', workspaceRoot],
+            workspaceRoot,
+            installedPackageRoot
+        );
+        const statusResult = statusProbe.result;
         assert.equal(statusResult.status, 0, `status failed: ${statusResult.stderr || statusResult.stdout}`);
         assert.match(statusResult.stdout, /GARDA_STATUS/);
+        assert.equal(statusProbe.evidence.command_dispatch_loaded, true, 'commands must still load command-dispatch');
 
         // 5. No TypeScript stripping warnings from node_modules
         const combinedOutput = [
