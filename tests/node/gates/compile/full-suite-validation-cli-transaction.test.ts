@@ -1575,11 +1575,37 @@ describe('gates/full-suite-validation', () => {
         it('fails loudly and removes the canonical artifact when lifecycle event emission fails', async () => {
             const repoRoot = path.resolve(process.cwd());
             const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-fsv-cli-emit-fail-'));
+            const configDir = path.join(tempDir, 'garda-agent-orchestrator', 'live', 'config');
             const runtimeDir = path.join(tempDir, 'garda-agent-orchestrator', 'runtime');
             const reviewsDir = path.join(runtimeDir, 'reviews');
             const blockedEventsPath = path.join(runtimeDir, 'task-events');
+            fs.mkdirSync(configDir, { recursive: true });
             fs.mkdirSync(reviewsDir, { recursive: true });
-            fs.writeFileSync(blockedEventsPath, 'blocked', 'utf8');
+
+            const helperScript = path.join(tempDir, 'pass-before-emit-failure.js');
+            const commandRanPath = path.join(tempDir, 'emit-failure-command-ran');
+            fs.writeFileSync(
+                helperScript,
+                [
+                    "const fs = require('node:fs');",
+                    `fs.writeFileSync(${JSON.stringify(commandRanPath)}, 'ran', 'utf8');`,
+                    `fs.rmSync(${JSON.stringify(blockedEventsPath)}, { recursive: true, force: true });`,
+                    `fs.writeFileSync(${JSON.stringify(blockedEventsPath)}, 'blocked', 'utf8');`,
+                    'process.stdout.write("emit failure setup passed\\n");'
+                ].join('\n'),
+                'utf8'
+            );
+            fs.writeFileSync(path.join(configDir, 'workflow-config.json'), JSON.stringify({
+                full_suite_validation: {
+                    enabled: true,
+                    command: `"${process.execPath.replace(/\\/g, '/')}" "${helperScript.replace(/\\/g, '/')}"`,
+                    timeout_ms: 30000,
+                    green_summary_max_lines: 5,
+                    red_failure_chunk_lines: 10,
+                    out_of_scope_failure_policy: 'AUDIT_AND_BLOCK',
+                    placement: 'after_compile_before_reviews'
+                }
+            }), 'utf8');
 
             const preflightPath = path.join(reviewsDir, 'T-EMIT-FAIL-preflight.json');
             writeFullSuitePreflight(tempDir, preflightPath, {
@@ -1596,12 +1622,17 @@ describe('gates/full-suite-validation', () => {
 
             assert.notEqual(result.exitCode, 0, `stdout=${result.logs.join('\n')}\nstderr=${result.errors.join('\n')}`);
             assert.ok(result.errors.some((line) => line.includes('Mandatory lifecycle event')));
+            assert.equal(fs.existsSync(commandRanPath), true);
             const artifactPath = path.join(reviewsDir, 'T-EMIT-FAIL-full-suite-validation.json');
             const pendingArtifactPath = `${artifactPath}.pending`;
             const pendingMetaPath = `${artifactPath}.pending.meta.json`;
             assert.equal(fs.existsSync(artifactPath), false);
             assert.equal(fs.existsSync(pendingArtifactPath), false);
             assert.equal(fs.existsSync(pendingMetaPath), false);
+            assert.equal(
+                fs.existsSync(resolveFullSuiteValidationRunMarkerPath(tempDir, 'T-EMIT-FAIL')),
+                false
+            );
             fs.rmSync(tempDir, { recursive: true, force: true });
         });
 

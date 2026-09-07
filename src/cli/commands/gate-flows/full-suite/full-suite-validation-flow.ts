@@ -427,169 +427,211 @@ export async function runFullSuiteValidationCommand(
     const maxAttempts = Math.max(1, 1 + timeoutRetryCount);
     const timeoutCleanupObservations: string[] = [];
     const timeoutAttempts: FullSuiteTimeoutAttemptEvidence[] = [];
-    writeFullSuiteValidationRunMarker({
-        repoRoot,
-        taskId,
-        command: config.command,
-        cwd: repoRoot,
-        timeoutMs: executionConfig.timeout_ms,
-        cycleBinding
-    });
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        try {
-            const execution = await executeCommandAsync(config.command, {
-                cwd: repoRoot,
-                env: buildFullSuiteValidationCommandEnv(executionConfig.timeout_ms),
-                timeoutMs: executionConfig.timeout_ms,
-                onSpawn: (child) => updateFullSuiteValidationRunMarkerChildProcess(repoRoot, taskId, child)
-            });
-            commandExitCode = execution.exitCode;
-            timedOut = execution.timedOut;
-            cancelled = execution.cancelled;
-            const attemptLines = maxAttempts > 1 && (attempt > 1 || execution.timedOut)
-                ? [`FULL_SUITE_ATTEMPT ${attempt}/${maxAttempts}`]
-                : [];
-            outputLines = [
-                ...outputLines,
-                ...attemptLines,
-                ...execution.outputLines
-            ];
-        } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : String(error);
-            commandExitCode = EXIT_GENERAL_FAILURE;
-            timedOut = false;
-            cancelled = false;
-            const attemptLines = maxAttempts > 1 && attempt > 1
-                ? [`FULL_SUITE_ATTEMPT ${attempt}/${maxAttempts}`]
-                : [];
-            outputLines = [
-                ...outputLines,
-                ...attemptLines,
-                message
-            ];
-        }
-        timeoutAttempts.push({
-            attempt,
-            exit_code: commandExitCode,
-            timed_out: timedOut,
-            cancelled
-        });
-
-        if (timedOut) {
-            const generatedLockCleanup = cleanupGeneratedLocksAfterTimedOutFullSuite(repoRoot);
-            if (generatedLockCleanup.length > 0) {
-                const cleanupObservations = generatedLockCleanup.map(formatGeneratedLockCleanupObservation);
-                timeoutCleanupObservations.push(...cleanupObservations);
-                outputLines = [
-                    ...outputLines,
-                    ...cleanupObservations
-                ];
-            }
-        }
-
-        if (!timedOut || attempt >= maxAttempts) {
-            break;
-        }
-
-        outputLines.push(
-            `FULL_SUITE_TIMEOUT_RETRY attempt=${attempt} next_attempt=${attempt + 1} max_attempts=${maxAttempts} timeout_ms=${executionConfig.timeout_ms}`
-        );
-    }
-    const durationMs = Math.max(1, Date.now() - startedAtMs);
-    const retryContaminated = timeoutAttempts.some((attempt) => attempt.timed_out || attempt.cancelled === true);
-    outputLines = outputLines.map((line) => redactSecretText(line));
-    const rawOutputText = serializeCapturedOutputLines(outputLines);
-    const result = buildValidationResult(
-        executionConfig,
-        commandExitCode,
-        timedOut,
-        outputLines,
-        outputArtifactPath,
-        changedFiles,
-        cycleBinding
-    );
-    result.command_provenance = commandContract.provenance;
-    const timeoutAttemptsExhausted = timedOut && timeoutAttempts.length >= maxAttempts;
-    const timeoutBlockerEvidence = timeoutAttemptsExhausted && executionConfig.timeout_blocker !== false
-        ? resolveFullSuiteTimeoutBlockerEvidence({
+    try {
+        writeFullSuiteValidationRunMarker({
             repoRoot,
             taskId,
+            command: config.command,
+            cwd: repoRoot,
+            timeoutMs: executionConfig.timeout_ms,
             cycleBinding
-        })
-        : null;
-    result.timeout_policy = {
-        timeout_blocker: executionConfig.timeout_blocker !== false,
-        timeout_retry_count: timeoutRetryCount,
-        max_attempts: maxAttempts,
-        attempts: timeoutAttempts,
-        attempts_exhausted: timeoutAttemptsExhausted,
-        warning_only_continuation: timedOut && executionConfig.timeout_blocker === false,
-        repair_task_proposal: timeoutAttemptsExhausted && executionConfig.timeout_blocker !== false
-            ? buildFullSuiteTimeoutRepairTaskProposal(taskId)
-            : null,
-        blocker_identity: timeoutBlockerEvidence?.blocker_identity || null,
-        repeated_blocker_analysis: timeoutBlockerEvidence?.repeated_blocker_analysis || null
-    };
-    if (result.timeout_policy.repair_task_proposal) {
-        result.violations.push(
-            'Full-suite timeout blocker exhausted the configured retry policy; materialize the proposed repair follow-up before reviewer launch.'
+        });
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            try {
+                const execution = await executeCommandAsync(config.command, {
+                    cwd: repoRoot,
+                    env: buildFullSuiteValidationCommandEnv(executionConfig.timeout_ms),
+                    timeoutMs: executionConfig.timeout_ms,
+                    onSpawn: (child) => updateFullSuiteValidationRunMarkerChildProcess(repoRoot, taskId, child)
+                });
+                commandExitCode = execution.exitCode;
+                timedOut = execution.timedOut;
+                cancelled = execution.cancelled;
+                const attemptLines = maxAttempts > 1 && (attempt > 1 || execution.timedOut)
+                    ? [`FULL_SUITE_ATTEMPT ${attempt}/${maxAttempts}`]
+                    : [];
+                outputLines = [
+                    ...outputLines,
+                    ...attemptLines,
+                    ...execution.outputLines
+                ];
+            } catch (error: unknown) {
+                const message = error instanceof Error ? error.message : String(error);
+                commandExitCode = EXIT_GENERAL_FAILURE;
+                timedOut = false;
+                cancelled = false;
+                const attemptLines = maxAttempts > 1 && attempt > 1
+                    ? [`FULL_SUITE_ATTEMPT ${attempt}/${maxAttempts}`]
+                    : [];
+                outputLines = [
+                    ...outputLines,
+                    ...attemptLines,
+                    message
+                ];
+            }
+            timeoutAttempts.push({
+                attempt,
+                exit_code: commandExitCode,
+                timed_out: timedOut,
+                cancelled
+            });
+
+            if (timedOut) {
+                const generatedLockCleanup = cleanupGeneratedLocksAfterTimedOutFullSuite(repoRoot);
+                if (generatedLockCleanup.length > 0) {
+                    const cleanupObservations = generatedLockCleanup.map(formatGeneratedLockCleanupObservation);
+                    timeoutCleanupObservations.push(...cleanupObservations);
+                    outputLines = [
+                        ...outputLines,
+                        ...cleanupObservations
+                    ];
+                }
+            }
+
+            if (!timedOut || attempt >= maxAttempts) {
+                break;
+            }
+
+            outputLines.push(
+                `FULL_SUITE_TIMEOUT_RETRY attempt=${attempt} next_attempt=${attempt + 1} max_attempts=${maxAttempts} timeout_ms=${executionConfig.timeout_ms}`
+            );
+        }
+        const durationMs = Math.max(1, Date.now() - startedAtMs);
+        const retryContaminated = timeoutAttempts.some((attempt) => attempt.timed_out || attempt.cancelled === true);
+        outputLines = outputLines.map((line) => redactSecretText(line));
+        const rawOutputText = serializeCapturedOutputLines(outputLines);
+        const result = buildValidationResult(
+            executionConfig,
+            commandExitCode,
+            timedOut,
+            outputLines,
+            outputArtifactPath,
+            changedFiles,
+            cycleBinding
         );
-    }
-    if (result.timeout_policy.repeated_blocker_analysis) {
-        result.violations.push(
-            'Repeated full-suite blocker fingerprint matches a repair ancestor; do not create another automatic nested repair child. '
-            + 'Record a true multi-child decomposition or an explicit recovery decision.'
-        );
-    }
-    fs.writeFileSync(outputArtifactPath, rawOutputText, 'utf8');
-    result.output_retention = buildRawOutputRetentionEvidence(rawOutputText, true);
-    result.failure_evidence = persistFullSuiteFailureEvidence({
-        repoRoot,
-        reviewsRoot,
-        taskId,
-        result,
-        outputLines
-    });
-    if (timeoutCleanupObservations.length > 0) {
-        result.warnings.push(...timeoutCleanupObservations);
-    }
-    result.duration_ms = durationMs;
-    result.output_telemetry = buildFullSuiteValidationOutputTelemetry(outputLines, result);
-    const postWorkflowConfigChanges = getCurrentWorkflowConfigChanges(repoRoot, workflowConfigBaseline, {
-        allowProtectedManifestFallback: false
-    });
-    const postWorkflowConfigViolations = getWorkflowConfigWorkViolations({
-        repoRoot,
-        changedFiles: postWorkflowConfigChanges.changed_files,
-        taskModeEvidence,
-        phaseLabel: 'full-suite validation output validation',
-        baselineFileHashes: postWorkflowConfigChanges.baseline_file_hashes,
-        currentFileHashes: postWorkflowConfigChanges.current_file_hashes
-    });
-    if (postWorkflowConfigViolations.length > 0) {
-        const blockedResult = buildWorkflowConfigWorkBlockedResult(
-            config,
-            cycleBinding,
-            postWorkflowConfigViolations,
-            postWorkflowConfigChanges.scan_error
-        );
-        blockedResult.command_provenance = commandContract.provenance;
-        blockedResult.output_artifact_path = gateHelpers.normalizePath(outputArtifactPath);
-        blockedResult.output_retention = buildRawOutputRetentionEvidence(rawOutputText, true);
-        blockedResult.duration_ms = durationMs;
-        blockedResult.duration_history_comparison = buildFullSuiteDurationHistoryComparison(repoRoot, config, durationMs);
-        blockedResult.failure_evidence = persistFullSuiteFailureEvidence({
+        result.command_provenance = commandContract.provenance;
+        const timeoutAttemptsExhausted = timedOut && timeoutAttempts.length >= maxAttempts;
+        const timeoutBlockerEvidence = timeoutAttemptsExhausted && executionConfig.timeout_blocker !== false
+            ? resolveFullSuiteTimeoutBlockerEvidence({
+                repoRoot,
+                taskId,
+                cycleBinding
+            })
+            : null;
+        result.timeout_policy = {
+            timeout_blocker: executionConfig.timeout_blocker !== false,
+            timeout_retry_count: timeoutRetryCount,
+            max_attempts: maxAttempts,
+            attempts: timeoutAttempts,
+            attempts_exhausted: timeoutAttemptsExhausted,
+            warning_only_continuation: timedOut && executionConfig.timeout_blocker === false,
+            repair_task_proposal: timeoutAttemptsExhausted && executionConfig.timeout_blocker !== false
+                ? buildFullSuiteTimeoutRepairTaskProposal(taskId)
+                : null,
+            blocker_identity: timeoutBlockerEvidence?.blocker_identity || null,
+            repeated_blocker_analysis: timeoutBlockerEvidence?.repeated_blocker_analysis || null
+        };
+        if (result.timeout_policy.repair_task_proposal) {
+            result.violations.push(
+                'Full-suite timeout blocker exhausted the configured retry policy; materialize the proposed repair follow-up before reviewer launch.'
+            );
+        }
+        if (result.timeout_policy.repeated_blocker_analysis) {
+            result.violations.push(
+                'Repeated full-suite blocker fingerprint matches a repair ancestor; do not create another automatic nested repair child. '
+                + 'Record a true multi-child decomposition or an explicit recovery decision.'
+            );
+        }
+        fs.writeFileSync(outputArtifactPath, rawOutputText, 'utf8');
+        result.output_retention = buildRawOutputRetentionEvidence(rawOutputText, true);
+        result.failure_evidence = persistFullSuiteFailureEvidence({
             repoRoot,
             reviewsRoot,
             taskId,
-            result: blockedResult,
+            result,
             outputLines
         });
-        if (blockedResult.status !== 'SKIPPED') {
+        if (timeoutCleanupObservations.length > 0) {
+            result.warnings.push(...timeoutCleanupObservations);
+        }
+        result.duration_ms = durationMs;
+        result.output_telemetry = buildFullSuiteValidationOutputTelemetry(outputLines, result);
+        const postWorkflowConfigChanges = getCurrentWorkflowConfigChanges(repoRoot, workflowConfigBaseline, {
+            allowProtectedManifestFallback: false
+        });
+        const postWorkflowConfigViolations = getWorkflowConfigWorkViolations({
+            repoRoot,
+            changedFiles: postWorkflowConfigChanges.changed_files,
+            taskModeEvidence,
+            phaseLabel: 'full-suite validation output validation',
+            baselineFileHashes: postWorkflowConfigChanges.baseline_file_hashes,
+            currentFileHashes: postWorkflowConfigChanges.current_file_hashes
+        });
+        if (postWorkflowConfigViolations.length > 0) {
+            const blockedResult = buildWorkflowConfigWorkBlockedResult(
+                config,
+                cycleBinding,
+                postWorkflowConfigViolations,
+                postWorkflowConfigChanges.scan_error
+            );
+            blockedResult.command_provenance = commandContract.provenance;
+            blockedResult.output_artifact_path = gateHelpers.normalizePath(outputArtifactPath);
+            blockedResult.output_retention = buildRawOutputRetentionEvidence(rawOutputText, true);
+            blockedResult.duration_ms = durationMs;
+            blockedResult.duration_history_comparison = buildFullSuiteDurationHistoryComparison(repoRoot, config, durationMs);
+            blockedResult.failure_evidence = persistFullSuiteFailureEvidence({
+                repoRoot,
+                reviewsRoot,
+                taskId,
+                result: blockedResult,
+                outputLines
+            });
+            if (blockedResult.status !== 'SKIPPED') {
+                recordFullSuiteValidationDuration(repoRoot, config, {
+                    timestamp_utc: new Date().toISOString(),
+                    task_id: taskId,
+                    status: blockedResult.status,
+                    duration_ms: durationMs,
+                    timed_out: timedOut,
+                    cancelled,
+                    retry_contaminated: retryContaminated,
+                    exit_code: commandExitCode
+                });
+            }
+            blockedResult.timeout_forecast = buildFullSuiteTimeoutForecast(repoRoot, config);
+            blockedResult.output_telemetry = buildFullSuiteValidationOutputTelemetry(outputLines, blockedResult);
+            await writeArtifactThenEmitMandatoryFullSuiteEvent(repoRoot, eventsRoot, taskId, artifactPath, blockedResult.status, blockedResult, {
+                status: blockedResult.status,
+                enabled: blockedResult.enabled,
+                command: blockedResult.command,
+                placement: blockedResult.placement,
+                exit_code: blockedResult.exit_code,
+                timed_out: blockedResult.timed_out,
+                preflight_path: cycleBinding.preflight_path,
+                artifact_path: gateHelpers.normalizePath(artifactPath),
+                output_artifact_path: gateHelpers.normalizePath(outputArtifactPath),
+                duration_ms: blockedResult.duration_ms,
+                duration_history_comparison: blockedResult.duration_history_comparison,
+                timeout_forecast: blockedResult.timeout_forecast,
+                cycle_binding: blockedResult.cycle_binding,
+                violations: blockedResult.violations,
+                warnings: blockedResult.warnings,
+                output_telemetry: blockedResult.output_telemetry,
+                output_retention: blockedResult.output_retention,
+                timeout_policy: blockedResult.timeout_policy,
+                failure_evidence: blockedResult.failure_evidence
+            });
+            return {
+                outputText: `${formatFullSuiteValidationResult(blockedResult)}\n`,
+                exitCode: EXIT_GATE_FAILURE
+            };
+        }
+        if (result.status !== 'SKIPPED') {
+            result.duration_history_comparison = buildFullSuiteDurationHistoryComparison(repoRoot, config, durationMs);
             recordFullSuiteValidationDuration(repoRoot, config, {
                 timestamp_utc: new Date().toISOString(),
                 task_id: taskId,
-                status: blockedResult.status,
+                status: result.status,
                 duration_ms: durationMs,
                 timed_out: timedOut,
                 cancelled,
@@ -597,81 +639,41 @@ export async function runFullSuiteValidationCommand(
                 exit_code: commandExitCode
             });
         }
-        blockedResult.timeout_forecast = buildFullSuiteTimeoutForecast(repoRoot, config);
-        blockedResult.output_telemetry = buildFullSuiteValidationOutputTelemetry(outputLines, blockedResult);
-        await writeArtifactThenEmitMandatoryFullSuiteEvent(repoRoot, eventsRoot, taskId, artifactPath, blockedResult.status, blockedResult, {
-            status: blockedResult.status,
-            enabled: blockedResult.enabled,
-            command: blockedResult.command,
-            placement: blockedResult.placement,
-            exit_code: blockedResult.exit_code,
-            timed_out: blockedResult.timed_out,
+        if (shouldOmitSuccessfulFullSuiteOutput(result)) {
+            fs.rmSync(outputArtifactPath, { force: true });
+            result.output_artifact_path = null;
+            result.output_retention = buildRawOutputRetentionEvidence(rawOutputText, false);
+        }
+        result.timeout_forecast = buildFullSuiteTimeoutForecast(repoRoot, config);
+        result.output_telemetry = buildFullSuiteValidationOutputTelemetry(outputLines, result);
+        await writeArtifactThenEmitMandatoryFullSuiteEvent(repoRoot, eventsRoot, taskId, artifactPath, result.status, result, {
+            status: result.status,
+            enabled: result.enabled,
+            command: result.command,
+            placement: result.placement,
+            exit_code: result.exit_code,
+            timed_out: result.timed_out,
             preflight_path: cycleBinding.preflight_path,
             artifact_path: gateHelpers.normalizePath(artifactPath),
-            output_artifact_path: gateHelpers.normalizePath(outputArtifactPath),
-            duration_ms: blockedResult.duration_ms,
-            duration_history_comparison: blockedResult.duration_history_comparison,
-            timeout_forecast: blockedResult.timeout_forecast,
-            cycle_binding: blockedResult.cycle_binding,
-            violations: blockedResult.violations,
-            warnings: blockedResult.warnings,
-            output_telemetry: blockedResult.output_telemetry,
-            output_retention: blockedResult.output_retention,
-            timeout_policy: blockedResult.timeout_policy,
-            failure_evidence: blockedResult.failure_evidence
+            output_artifact_path: result.output_artifact_path,
+            duration_ms: result.duration_ms,
+            duration_history_comparison: result.duration_history_comparison,
+            timeout_forecast: result.timeout_forecast,
+            cycle_binding: result.cycle_binding,
+            out_of_scope_audit_verdict: result.out_of_scope_audit_verdict,
+            violations: result.violations,
+            warnings: result.warnings,
+            output_telemetry: result.output_telemetry,
+            output_retention: result.output_retention,
+            timeout_policy: result.timeout_policy,
+            failure_evidence: result.failure_evidence
         });
-        clearFullSuiteValidationRunMarker(repoRoot, taskId);
-        return {
-            outputText: `${formatFullSuiteValidationResult(blockedResult)}\n`,
-            exitCode: EXIT_GATE_FAILURE
-        };
-    }
-    if (result.status !== 'SKIPPED') {
-        result.duration_history_comparison = buildFullSuiteDurationHistoryComparison(repoRoot, config, durationMs);
-        recordFullSuiteValidationDuration(repoRoot, config, {
-            timestamp_utc: new Date().toISOString(),
-            task_id: taskId,
-            status: result.status,
-            duration_ms: durationMs,
-            timed_out: timedOut,
-            cancelled,
-            retry_contaminated: retryContaminated,
-            exit_code: commandExitCode
-        });
-    }
-    if (shouldOmitSuccessfulFullSuiteOutput(result)) {
-        fs.rmSync(outputArtifactPath, { force: true });
-        result.output_artifact_path = null;
-        result.output_retention = buildRawOutputRetentionEvidence(rawOutputText, false);
-    }
-    result.timeout_forecast = buildFullSuiteTimeoutForecast(repoRoot, config);
-    result.output_telemetry = buildFullSuiteValidationOutputTelemetry(outputLines, result);
-    await writeArtifactThenEmitMandatoryFullSuiteEvent(repoRoot, eventsRoot, taskId, artifactPath, result.status, result, {
-        status: result.status,
-        enabled: result.enabled,
-        command: result.command,
-        placement: result.placement,
-        exit_code: result.exit_code,
-        timed_out: result.timed_out,
-        preflight_path: cycleBinding.preflight_path,
-        artifact_path: gateHelpers.normalizePath(artifactPath),
-        output_artifact_path: result.output_artifact_path,
-        duration_ms: result.duration_ms,
-        duration_history_comparison: result.duration_history_comparison,
-        timeout_forecast: result.timeout_forecast,
-        cycle_binding: result.cycle_binding,
-        out_of_scope_audit_verdict: result.out_of_scope_audit_verdict,
-        violations: result.violations,
-        warnings: result.warnings,
-        output_telemetry: result.output_telemetry,
-        output_retention: result.output_retention,
-        timeout_policy: result.timeout_policy,
-        failure_evidence: result.failure_evidence
-    });
-    clearFullSuiteValidationRunMarker(repoRoot, taskId);
 
-    return {
-        outputText: `${formatFullSuiteValidationResult(result)}\n`,
-        exitCode: result.status === 'FAILED' ? EXIT_GATE_FAILURE : 0
-    };
+        return {
+            outputText: `${formatFullSuiteValidationResult(result)}\n`,
+            exitCode: result.status === 'FAILED' ? EXIT_GATE_FAILURE : 0
+        };
+    } finally {
+        clearFullSuiteValidationRunMarker(repoRoot, taskId);
+    }
 }
