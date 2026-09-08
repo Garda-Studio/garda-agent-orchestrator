@@ -376,13 +376,16 @@ describe('gates/next-step decomposed parent status sync', () => {
             'T-950.jsonl'
         );
         const mutableFs = requireFromTest('node:fs') as typeof fs;
-        const originalAppendFileSync = mutableFs.appendFileSync;
-        mutableFs.appendFileSync = ((filePath: fs.PathOrFileDescriptor, data: string | Uint8Array, options?: unknown): void => {
-            if (typeof filePath === 'string' && path.resolve(filePath) === path.resolve(targetEventPath)) {
+        const originalOpenSync = mutableFs.openSync;
+        mutableFs.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode): number => {
+            const opensForAppend = typeof flags === 'number'
+                ? (flags & fs.constants.O_APPEND) !== 0
+                : String(flags).includes('a');
+            if (opensForAppend && typeof filePath === 'string' && path.resolve(filePath) === path.resolve(targetEventPath)) {
                 throw new Error('forced event append failure');
             }
-            return (originalAppendFileSync as unknown as (...args: unknown[]) => void)(filePath, data, options);
-        }) as typeof fs.appendFileSync;
+            return originalOpenSync(filePath, flags, mode);
+        }) as typeof fs.openSync;
 
         try {
             const result = resolveNextStep({ taskId: 'T-950', repoRoot });
@@ -396,7 +399,7 @@ describe('gates/next-step decomposed parent status sync', () => {
             assert.doesNotMatch(upperQueue, /^\|---\|---\|---\|---\|---\|---\|---\|---\|---\|$/mu);
             assert.ok(lowerSummary.includes('|---|---|---|---|---|---|---|---|---|'));
         } finally {
-            mutableFs.appendFileSync = originalAppendFileSync;
+            mutableFs.openSync = originalOpenSync;
         }
     });
 
@@ -419,17 +422,20 @@ describe('gates/next-step decomposed parent status sync', () => {
             'T-960.jsonl'
         );
         const mutableFs = requireFromTest('node:fs') as typeof fs;
-        const originalAppendFileSync = mutableFs.appendFileSync;
-        let targetAppendCount = 0;
-        mutableFs.appendFileSync = ((filePath: fs.PathOrFileDescriptor, data: string | Uint8Array, options?: unknown): void => {
-            if (typeof filePath === 'string' && path.resolve(filePath) === path.resolve(targetEventPath)) {
-                targetAppendCount += 1;
-                if (targetAppendCount === 2) {
+        const originalOpenSync = mutableFs.openSync;
+        let targetOpenCount = 0;
+        mutableFs.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode): number => {
+            const opensForAppend = typeof flags === 'number'
+                ? (flags & fs.constants.O_APPEND) !== 0
+                : String(flags).includes('a');
+            if (opensForAppend && typeof filePath === 'string' && path.resolve(filePath) === path.resolve(targetEventPath)) {
+                targetOpenCount += 1;
+                if (targetOpenCount === 2) {
                     throw new Error('forced completion event append failure');
                 }
             }
-            return (originalAppendFileSync as unknown as (...args: unknown[]) => void)(filePath, data, options);
-        }) as typeof fs.appendFileSync;
+            return originalOpenSync(filePath, flags, mode);
+        }) as typeof fs.openSync;
 
         try {
             const result = resolveNextStep({ taskId: 'T-960', repoRoot });
@@ -447,7 +453,7 @@ describe('gates/next-step decomposed parent status sync', () => {
             assert.ok(taskMd.includes('| T-960 | 🟪 DECOMPOSED |'));
             assert.deepEqual(statusEvents.map((event) => event.details?.new_status), ['DONE', 'DECOMPOSED']);
         } finally {
-            mutableFs.appendFileSync = originalAppendFileSync;
+            mutableFs.openSync = originalOpenSync;
         }
     });
 
