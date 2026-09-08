@@ -14,7 +14,8 @@ export async function main(argv: string[] = process.argv.slice(2), cwd: string =
     const packageRoot = findPackageRoot(__dirname);
     const delegatedCli = resolveDelegatedLauncherTarget(argv, cwd, __filename, packageRoot);
     if (delegatedCli) {
-        await delegateToLocalCli(delegatedCli, argv);
+        process.exitCode = await delegateToLocalCli(delegatedCli, argv);
+        return;
     }
     const { runCliMainWithHandling } = loadCliMainModule(packageRoot);
     await runCliMainWithHandling(argv, packageRoot);

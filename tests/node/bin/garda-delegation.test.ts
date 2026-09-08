@@ -28,9 +28,11 @@ function writeDelegationHarness(tempRoot: string): string {
     const compiledLauncherPath = path.resolve(__dirname, '../../../src/bin/garda.js');
     writeFile(harnessPath, `
 const { delegateToLocalCli } = require(${JSON.stringify(compiledLauncherPath)});
-delegateToLocalCli(process.argv[2], process.argv.slice(3)).catch((error) => {
+delegateToLocalCli(process.argv[2], process.argv.slice(3)).then((exitCode) => {
+  process.exitCode = exitCode;
+}, (error) => {
   console.error(error && error.stack ? error.stack : error);
-  process.exit(1);
+  process.exitCode = 1;
 });
 `);
     return harnessPath;

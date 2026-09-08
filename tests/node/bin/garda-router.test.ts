@@ -166,6 +166,46 @@ test('global launcher delegates to source checkout in current workspace', () => 
     }
 });
 
+test('global launcher stops after delegated CLI completes', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-router-delegated-once-'));
+    try {
+        const workspaceRoot = path.join(tempRoot, 'workspace');
+        const bundleRoot = path.join(workspaceRoot, 'garda-agent-orchestrator');
+        const globalPackageRoot = path.join(tempRoot, 'global', 'node_modules', 'garda-agent-orchestrator');
+        writeFile(path.join(workspaceRoot, 'TASK.md'), '# Tasks\n');
+        createGardaPackageRoot(bundleRoot, '2.4.0', { deployedBundle: true });
+        createGardaPackageRoot(globalPackageRoot, '2.3.0');
+        writeFile(
+            path.join(bundleRoot, 'bin', 'garda.js'),
+            "#!/usr/bin/env node\nprocess.stdout.write('delegated-only\\n');\n"
+        );
+        const compiledLauncherPath = path.resolve(__dirname, '../../../src/bin/garda.js');
+        fs.copyFileSync(compiledLauncherPath, path.join(globalPackageRoot, 'bin', 'garda.js'));
+        fs.cpSync(
+            path.join(path.dirname(compiledLauncherPath), 'garda'),
+            path.join(globalPackageRoot, 'bin', 'garda'),
+            { recursive: true }
+        );
+
+        const result = childProcess.spawnSync(
+            process.execPath,
+            [path.join(globalPackageRoot, 'bin', 'garda.js'), 'status'],
+            {
+                cwd: workspaceRoot,
+                encoding: 'utf8',
+                timeout: 30_000
+            }
+        );
+
+        assert.equal(result.error, undefined);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stdout, 'delegated-only\n');
+        assert.equal(result.stderr, '');
+    } finally {
+        cleanupRouterTempRoot(tempRoot);
+    }
+});
+
 test('global launcher delegates to deployed bundle when workspace contains managed bundle', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-router-bundle-'));
     try {

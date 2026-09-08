@@ -42,7 +42,7 @@ function readDelegationTimeoutMs(): number | null {
     return timeoutMs;
 }
 
-export async function delegateToLocalCli(cliPath: string, argv: string[]): Promise<never> {
+export async function delegateToLocalCli(cliPath: string, argv: string[]): Promise<number> {
     const timeoutMs = readDelegationTimeoutMs();
     const child = childProcess.spawn(process.execPath, [cliPath, ...argv], {
         stdio: 'inherit',
@@ -76,7 +76,7 @@ export async function delegateToLocalCli(cliPath: string, argv: string[]): Promi
                 resolve({ status, signal });
             });
         });
-        process.exit(getDelegationExitCode(result.status, result.signal));
+        return getDelegationExitCode(result.status, result.signal);
     } finally {
         for (const { signal, handler } of forwardedSignalHandlers) {
             process.removeListener(signal, handler);
@@ -88,6 +88,4 @@ export async function delegateToLocalCli(cliPath: string, argv: string[]): Promi
             clearTimeout(hardKillHandle);
         }
     }
-    throw new Error(`${PRODUCT_NAME} delegated CLI exited without a terminal status.`);
 }
-
