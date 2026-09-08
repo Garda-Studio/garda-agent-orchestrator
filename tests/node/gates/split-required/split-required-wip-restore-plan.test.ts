@@ -1270,6 +1270,220 @@ describe('split-required WIP restore planning', () => {
         assert.equal(fs.readFileSync(preservedReplacementPath, 'utf8'), replacementContent);
     });
 
+    it('preserves original failure and closes descriptors after replacement cleanup errors', (context) => {
+        let verifiedScenarios = 0;
+        for (const failedArtifact of ['temporary', 'rollback', 'lock']) {
+            const repoRoot = makeRepo((callback) => context.after(callback));
+            const relativePath = 'handoff/cleanup-failure.json';
+            writeFile(repoRoot, relativePath, 'authenticated original\n');
+            const expected = readAuthenticatedRepoFileSnapshot(repoRoot, relativePath);
+            const originalOpen = mutableFs.openSync;
+            const originalClose = mutableFs.closeSync;
+            const originalWrite = mutableFs.writeSync;
+            const originalUnlink = mutableFs.unlinkSync;
+            const retainedDescriptors = new Set<number>();
+            let stagingDescriptor: number | null = null;
+            let cleanupFailureInjected = false;
+            context.mock.method(mutableFs, 'openSync', (...args: Parameters<typeof fs.openSync>) => {
+                const descriptor = originalOpen(...args);
+                retainedDescriptors.add(descriptor);
+                if (String(args[0]).includes('.garda-replace-')
+                    && !String(args[0]).includes('.garda-replace-displaced-')) stagingDescriptor = descriptor;
+                return descriptor;
+            });
+            context.mock.method(mutableFs, 'closeSync', (descriptor: number) => {
+                originalClose(descriptor);
+                retainedDescriptors.delete(descriptor);
+            });
+            context.mock.method(mutableFs, 'writeSync', (...args: Parameters<typeof fs.writeSync>) => {
+                if (args[0] === stagingDescriptor) throw new Error('simulated staging write failure');
+                return originalWrite(...args);
+            });
+            context.mock.method(mutableFs, 'unlinkSync', (file: fs.PathLike) => {
+                const fileName = path.basename(String(file));
+                const matchesArtifact = failedArtifact === 'lock'
+                    ? fileName.endsWith('.garda-replace.lock')
+                    : fileName.includes(failedArtifact === 'rollback' ? '.garda-rollback-' : '.garda-replace-');
+                if (matchesArtifact) {
+                    cleanupFailureInjected = true;
+                    throw new Error(`simulated ${failedArtifact} cleanup failure`);
+                }
+                return originalUnlink(file);
+            });
+            try {
+                assert.throws(() => replaceAuthenticatedRepoFile(
+                    repoRoot, relativePath, Buffer.from('replacement\n'), expected
+                ), (error: Error) => {
+                    assert.match(error.message, /simulated staging write failure/u);
+                    assert.match(error.message, new RegExp(`simulated ${failedArtifact} cleanup failure`, 'u'));
+                    return true;
+                });
+                assert.equal(cleanupFailureInjected, true);
+                assert.equal(retainedDescriptors.size, 0, 'all replacement and parent descriptors must close');
+                assert.equal(fs.readFileSync(path.join(repoRoot, relativePath), 'utf8'), 'authenticated original\n');
+                if (failedArtifact === 'temporary') {
+                    assert.equal(fs.existsSync(`${path.join(repoRoot, relativePath)}.garda-replace.lock`), false);
+                }
+            } finally {
+                context.mock.restoreAll();
+                for (const descriptor of retainedDescriptors) originalClose(descriptor);
+            }
+            verifiedScenarios += 1;
+        }
+        assert.equal(verifiedScenarios, 3, 'temporary, rollback and lock cleanup failures must all be verified');
+    });
+
+    it('preserves recovery and releases resources when displaced cleanup fails after compensation', (context) => {
+        let verifiedScenarios = 0;
+        for (const failedOperation of ['unlink', 'rmdir']) {
+            const repoRoot = makeRepo((callback) => context.after(callback));
+            const relativePath = 'handoff/displaced-cleanup-failure.json';
+            const targetPath = path.join(repoRoot, relativePath);
+            const originalContent = 'authenticated original\n';
+            writeFile(repoRoot, relativePath, originalContent);
+            const expected = readAuthenticatedRepoFileSnapshot(repoRoot, relativePath);
+            const originalOpen = mutableFs.openSync;
+            const originalClose = mutableFs.closeSync;
+            const originalLink = mutableFs.linkSync;
+            const originalFsync = mutableFs.fsyncSync;
+            const originalUnlink = mutableFs.unlinkSync;
+            const originalRmdir = mutableFs.rmdirSync;
+            const retainedDescriptors = new Set<number>();
+            let publicationLinked = false;
+            let primaryFailureInjected = false;
+            let cleanupFailureCount = 0;
+            let recoveryPath: string | null = null;
+            context.mock.method(mutableFs, 'openSync', (...args: Parameters<typeof fs.openSync>) => {
+                const descriptor = originalOpen(...args);
+                retainedDescriptors.add(descriptor);
+                return descriptor;
+            });
+            context.mock.method(mutableFs, 'closeSync', (descriptor: number) => {
+                originalClose(descriptor);
+                retainedDescriptors.delete(descriptor);
+            });
+            context.mock.method(mutableFs, 'linkSync', (...args: Parameters<typeof fs.linkSync>) => {
+                originalLink(...args);
+                publicationLinked = true;
+            });
+            context.mock.method(mutableFs, 'fsyncSync', (descriptor: number) => {
+                if (publicationLinked && !primaryFailureInjected) {
+                    primaryFailureInjected = true;
+                    throw new Error('simulated post-commit sync failure');
+                }
+                originalFsync(descriptor);
+            });
+            context.mock.method(mutableFs, 'unlinkSync', (file: fs.PathLike) => {
+                if (failedOperation === 'unlink' && String(file).includes('.garda-replace-displaced-')) {
+                    cleanupFailureCount += 1;
+                    recoveryPath = fs.realpathSync.native(file);
+                    throw new Error('simulated displaced unlink failure');
+                }
+                originalUnlink(file);
+            });
+            context.mock.method(mutableFs, 'rmdirSync', (...args: Parameters<typeof fs.rmdirSync>) => {
+                if (failedOperation === 'rmdir'
+                    && path.basename(String(args[0])).startsWith('.garda-replace-displaced-')) {
+                    cleanupFailureCount += 1;
+                    recoveryPath = fs.realpathSync.native(args[0]);
+                    throw new Error('simulated displaced rmdir failure');
+                }
+                originalRmdir(...args);
+            });
+            try {
+                assert.throws(() => replaceAuthenticatedRepoFile(
+                    repoRoot, relativePath, Buffer.from('replacement\n'), expected
+                ), (error: Error) => {
+                    assert.match(error.message, /simulated post-commit sync failure/u);
+                    assert.match(error.message, new RegExp(`simulated displaced ${failedOperation} failure`, 'u'));
+                    if (failedOperation === 'unlink') assert.match(error.message, /preserved at/u);
+                    return true;
+                });
+                assert.equal(primaryFailureInjected, true);
+                assert.ok(cleanupFailureCount > 0);
+                assert.equal(retainedDescriptors.size, 0, 'displaced cleanup must not skip lock or parent release');
+                assert.equal(fs.readFileSync(targetPath, 'utf8'), originalContent);
+                assert.equal(fs.existsSync(`${targetPath}.garda-replace.lock`), false);
+                assert.ok(recoveryPath);
+                if (failedOperation === 'unlink') {
+                    assert.equal(fs.readFileSync(recoveryPath, 'utf8'), originalContent);
+                } else {
+                    assert.equal(cleanupFailureCount, 2, 'both compensation and final directory cleanup must be attempted');
+                    assert.deepEqual(fs.readdirSync(recoveryPath), []);
+                }
+            } finally {
+                context.mock.restoreAll();
+                for (const descriptor of retainedDescriptors) originalClose(descriptor);
+            }
+            verifiedScenarios += 1;
+        }
+        assert.equal(verifiedScenarios, 2, 'displaced file removal and directory removal failures must both be verified');
+    });
+
+    for (const replacedArtifact of ['temporary', 'rollback', 'displaced', 'lock']) {
+        it(`preserves a substituted ${replacedArtifact} at the replacement cleanup boundary`, {
+            skip: process.platform === 'win32' ? 'Windows prevents replacing an open file; POSIX quarantine regression.' : false
+        }, (context) => {
+            const repoRoot = makeRepo((callback) => context.after(callback));
+            const relativePath = 'handoff/replaced-cleanup.json';
+            const targetPath = path.join(repoRoot, relativePath);
+            const originalContent = 'authenticated original\n';
+            const substitutedContent = 'substituted artifact must survive\n';
+            writeFile(repoRoot, relativePath, originalContent);
+            const expected = readAuthenticatedRepoFileSnapshot(repoRoot, relativePath);
+            const originalRename = mutableFs.renameSync;
+            const originalOpen = mutableFs.openSync;
+            const originalClose = mutableFs.closeSync;
+            const retainedDescriptors = new Set<number>();
+            let preservedPath: string | null = null;
+            context.mock.method(mutableFs, 'openSync', (...args: Parameters<typeof fs.openSync>) => {
+                const descriptor = originalOpen(...args);
+                retainedDescriptors.add(descriptor);
+                return descriptor;
+            });
+            context.mock.method(mutableFs, 'closeSync', (descriptor: number) => {
+                originalClose(descriptor);
+                retainedDescriptors.delete(descriptor);
+            });
+            context.mock.method(mutableFs, 'renameSync', (oldPath: fs.PathLike, newPath: fs.PathLike) => {
+                const source = String(oldPath);
+                const sourceName = path.basename(source);
+                const matchesArtifact = replacedArtifact === 'lock'
+                    ? sourceName.endsWith('.garda-replace.lock')
+                    : replacedArtifact === 'displaced'
+                        ? path.basename(path.dirname(source)).startsWith('.garda-replace-displaced-')
+                        : sourceName.includes(replacedArtifact === 'rollback' ? '.garda-rollback-' : '.garda-replace-');
+                if (preservedPath === null && matchesArtifact
+                    && path.basename(path.dirname(String(newPath))).startsWith('.garda-restore-remove-')) {
+                    originalRename(oldPath, `${source}.authenticated`);
+                    fs.writeFileSync(oldPath, substitutedContent, 'utf8');
+                    preservedPath = path.join(fs.realpathSync.native(path.dirname(String(newPath))), sourceName);
+                }
+                return originalRename(oldPath, newPath);
+            });
+            try {
+                assert.throws(() => replaceAuthenticatedRepoFile(
+                    repoRoot, relativePath, Buffer.from('replacement\n'), expected
+                ), /restore target identity changed during removal/u);
+                assert.ok(preservedPath, 'the selected artifact must reach its cleanup boundary');
+                assert.equal(retainedDescriptors.size, 0, 'all replacement and parent descriptors must close');
+                assert.equal(fs.readFileSync(preservedPath, 'utf8'), substitutedContent);
+                // A missing rollback pathname prevents compensation; its authenticated bytes remain recoverable.
+                if (replacedArtifact === 'rollback') {
+                    const rollbackName = fs.readdirSync(path.dirname(targetPath))
+                        .find((name) => name.includes('.garda-rollback-') && name.endsWith('.authenticated'));
+                    assert.ok(rollbackName);
+                    assert.equal(fs.readFileSync(path.join(path.dirname(targetPath), rollbackName), 'utf8'), originalContent);
+                } else {
+                    assert.equal(fs.readFileSync(targetPath, 'utf8'), originalContent);
+                }
+            } finally {
+                context.mock.restoreAll();
+                for (const descriptor of retainedDescriptors) originalClose(descriptor);
+            }
+        });
+    }
+
     it('rejects handoff replacement when the verified preimage is concurrently replaced', (context) => {
         const repoRoot = makeRepo((callback) => context.after(callback));
         const relativeHandoffPath = 'handoff/restore.json';

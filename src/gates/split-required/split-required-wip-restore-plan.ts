@@ -282,6 +282,7 @@ function unlinkTargetBoundToOpenedParent(
     let preserveQuarantine = false;
     try {
         fs.renameSync(parentTarget.targetPath, quarantineTargetPath);
+        preserveQuarantine = true;
         const quarantinedTarget = fs.lstatSync(quarantineTargetPath);
         if (quarantinedTarget.isSymbolicLink()
             || !quarantinedTarget.isFile()
@@ -295,6 +296,22 @@ function unlinkTargetBoundToOpenedParent(
             );
         }
         fs.unlinkSync(quarantineTargetPath);
+        preserveQuarantine = false;
+    } catch (error: unknown) {
+        if (preserveQuarantine) {
+            const message = error instanceof Error ? error.message : String(error);
+            let recoverySuffix = '; removal quarantine was preserved';
+            try {
+                const recoveryDirectory = fs.realpathSync.native(quarantineDirectory);
+                recoverySuffix = `; removal quarantine preserved at ${path.join(
+                    recoveryDirectory, path.basename(quarantineTargetPath)
+                )}`;
+            } catch {
+                // Resolving a diagnostic path must not mask the removal failure.
+            }
+            throw new Error(`${message}${recoverySuffix}`, { cause: error });
+        }
+        throw error;
     } finally {
         if (!preserveQuarantine) {
             removeEmptyDirectoryIfPresent(quarantineDirectory);
@@ -888,6 +905,58 @@ function removeAuthenticatedLinkSourceIfMatches(
     );
 }
 
+interface ReplacementCleanupArtifact {
+    path: string | null;
+    descriptor: number | null;
+    identity: fs.Stats | null;
+    exists: boolean;
+    preserve?: boolean;
+    directory?: string | null;
+}
+
+function cleanupReplacementResources(options: {
+    artifacts: ReplacementCleanupArtifact[];
+    relativePath: string;
+    parentDescriptor: number;
+    primaryFailure: unknown;
+}): void {
+    const failures: unknown[] = [];
+    const attempt = (action: () => void): void => {
+        try {
+            action();
+        } catch (error: unknown) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') failures.push(error);
+        }
+    };
+    for (const artifact of options.artifacts) {
+        if (artifact.descriptor !== null) {
+            const descriptor = artifact.descriptor;
+            attempt(() => {
+                if (!artifact.exists || artifact.preserve || artifact.path === null) return;
+                if (artifact.identity === null || !removeAuthenticatedLinkSourceIfMatches(
+                    artifact.path, descriptor, artifact.identity, options.relativePath
+                )) {
+                    // lstat also detects dangling symlinks; only ENOENT means cleanup is complete.
+                    fs.lstatSync(artifact.path);
+                    throw new Error(`restore cleanup identity is unverified; artifact preserved at ${artifact.path}`);
+                }
+            });
+            // A removal failure must not prevent this close or the remaining resource releases.
+            attempt(() => fs.closeSync(descriptor));
+        }
+        if (artifact.directory && !artifact.preserve) {
+            const directory = artifact.directory;
+            attempt(() => removeEmptyDirectoryIfPresent(directory));
+        }
+    }
+    attempt(() => fs.closeSync(options.parentDescriptor));
+    if (failures.length > 0) {
+        const errors = options.primaryFailure === undefined ? failures : [options.primaryFailure, ...failures];
+        const message = errors.map((error) => error instanceof Error ? error.message : String(error)).join('; ');
+        throw new AggregateError(errors, message, { cause: options.primaryFailure });
+    }
+}
+
 export function replaceAuthenticatedRepoFile(
     repoRoot: string,
     relativePath: string,
@@ -926,6 +995,7 @@ export function replaceAuthenticatedRepoFile(
     let replacementCommitted = false;
     let replacementComplete = false;
     let preserveRollback = false;
+    let replacementFailure: unknown;
     try {
         try {
             lockDescriptor = fs.openSync(
@@ -1117,6 +1187,7 @@ export function replaceAuthenticatedRepoFile(
         replacementComplete = true;
         return replacedIdentity;
     } catch (error: unknown) {
+        replacementFailure = error;
         if (!replacementCommitted
             && displacedExists
             && displacedMatchesExpected
@@ -1191,9 +1262,10 @@ export function replaceAuthenticatedRepoFile(
                         recoverySuffix = '; authenticated rollback staging artifact was preserved';
                     }
                 }
-                throw new Error(
+                replacementFailure = new Error(
                     `${originalMessage}; pre-commit replacement compensation also failed: ${compensationMessage}${recoverySuffix}`
                 );
+                throw replacementFailure;
             }
         }
         if (replacementCommitted
@@ -1327,100 +1399,25 @@ export function replaceAuthenticatedRepoFile(
                         recoverySuffix = '; authenticated preimage quarantine was preserved';
                     }
                 }
-                throw new Error(
+                replacementFailure = new Error(
                     `${originalMessage}; atomic replacement compensation also failed: ${compensationMessage}${recoverySuffix}`
                 );
+                throw replacementFailure;
             }
         }
         throw error;
     } finally {
-        if (temporaryDescriptor !== null) {
-            try {
-                if (temporaryExists
-                    && temporaryIdentity !== null
-                    && removeAuthenticatedLinkSourceIfMatches(
-                        temporaryPath,
-                        temporaryDescriptor,
-                        temporaryIdentity,
-                        relativePath
-                    )) {
-                    temporaryExists = false;
-                }
-            } catch (error: unknown) {
-                if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-                    throw error;
-                }
-            } finally {
-                fs.closeSync(temporaryDescriptor);
-            }
-        }
-        if (rollbackDescriptor !== null) {
-            try {
-                if (rollbackExists
-                    && rollbackIdentity !== null
-                    && !preserveRollback
-                    && removeAuthenticatedLinkSourceIfMatches(
-                        rollbackPath,
-                        rollbackDescriptor,
-                        rollbackIdentity,
-                        relativePath
-                    )) {
-                    rollbackExists = false;
-                }
-            } catch (error: unknown) {
-                if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-                    throw error;
-                }
-            } finally {
-                fs.closeSync(rollbackDescriptor);
-            }
-        }
-        if (displacedDescriptor !== null) {
-            if (displacedExists
-                && displacedPath !== null
-                && displacedIdentity !== null
-                && !preserveDisplaced) {
-                try {
-                    if (removeAuthenticatedLinkSourceIfMatches(
-                        displacedPath,
-                        displacedDescriptor,
-                        displacedIdentity,
-                        relativePath
-                    )) {
-                        displacedExists = false;
-                    }
-                } catch (error: unknown) {
-                    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-                        throw error;
-                    }
-                }
-            }
-            fs.closeSync(displacedDescriptor);
-        }
-        if (displacedDirectory !== null && !preserveDisplaced) {
-            removeEmptyDirectoryIfPresent(displacedDirectory);
-        }
-        if (lockDescriptor !== null) {
-            try {
-                if (lockExists
-                    && lockIdentity !== null
-                    && removeAuthenticatedLinkSourceIfMatches(
-                        lockPath,
-                        lockDescriptor,
-                        lockIdentity,
-                        relativePath
-                    )) {
-                    lockExists = false;
-                }
-            } catch (error: unknown) {
-                if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-                    throw error;
-                }
-            } finally {
-                fs.closeSync(lockDescriptor);
-            }
-        }
-        fs.closeSync(parentTarget.descriptor);
+        cleanupReplacementResources({
+            relativePath,
+            parentDescriptor: parentTarget.descriptor,
+            primaryFailure: replacementFailure,
+            artifacts: [
+                { path: temporaryPath, descriptor: temporaryDescriptor, identity: temporaryIdentity, exists: temporaryExists },
+                { path: rollbackPath, descriptor: rollbackDescriptor, identity: rollbackIdentity, exists: rollbackExists, preserve: preserveRollback },
+                { path: displacedPath, descriptor: displacedDescriptor, identity: displacedIdentity, exists: displacedExists, preserve: preserveDisplaced, directory: displacedDirectory },
+                { path: lockPath, descriptor: lockDescriptor, identity: lockIdentity, exists: lockExists }
+            ]
+        });
     }
 }
 
