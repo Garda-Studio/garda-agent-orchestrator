@@ -22,6 +22,9 @@ export interface AppendTaskEventOptions {
     aggregateMaxLines?: unknown;
     runtimeWritesMode?: unknown;
     lowNoiseRuntimeWrites?: unknown;
+    expectedPreviousState?: TaskEventAppendState;
+    /** Must complete synchronously; throwing or returning a promise prevents canonical append. */
+    validateBeforeCanonicalAppend?: () => void;
 }
 
 export interface TaskEventIntegrity {

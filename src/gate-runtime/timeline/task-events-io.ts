@@ -200,7 +200,7 @@ export function appendTaskEvent(
         const taskLockResult = withFilesystemLock(paths.taskLockPath, lockOptions, function (): void {
             line = appendTaskEventLineSync(paths.taskFilePath, safeTaskId, event, emitOnce, () => {
                 taskEventPersisted = true;
-            });
+            }, options.expectedPreviousState, options.validateBeforeCanonicalAppend);
             if (line == null) {
                 if (mutationTicket) {
                     abortRuntimeMutationGeneration(mutationTicket);
@@ -294,9 +294,18 @@ export async function appendTaskEventAsync(
 
         const taskLockResult = await withFilesystemLockAsync(paths.taskLockPath, lockOptions, async function (): Promise<void> {
             const preWriteDelayMs = toPositiveInteger(options.preWriteDelayMs, 0);
-            line = await appendTaskEventLineAsync(paths.taskFilePath, safeTaskId, event, preWriteDelayMs, emitOnce, () => {
-                taskEventPersisted = true;
-            });
+            line = await appendTaskEventLineAsync(
+                paths.taskFilePath,
+                safeTaskId,
+                event,
+                preWriteDelayMs,
+                emitOnce,
+                () => {
+                    taskEventPersisted = true;
+                },
+                options.expectedPreviousState,
+                options.validateBeforeCanonicalAppend
+            );
             if (line == null) {
                 if (mutationTicket) {
                     abortRuntimeMutationGeneration(mutationTicket);

@@ -34,6 +34,9 @@ import {
     MAX_TASK_TIMELINE_JSONL_LINES
 } from '../../../src/gate-runtime/timeline/task-events-helpers';
 
+const mutableChildProcess = require('node:child_process') as typeof childProcess & {
+    spawnSync: typeof childProcess.spawnSync;
+};
 const tempRoots: string[] = [];
 
 function seedTimeline(taskId: string): { orchestratorRoot: string; eventsRoot: string; timelinePath: string } {
@@ -845,7 +848,7 @@ test('Windows ACL cache invalidates a trusted decision when file metadata change
     const grant = childProcess.spawnSync(
         'icacls.exe',
         [timelinePath, '/grant', '*S-1-1-0:(W)'],
-        { encoding: 'utf8', windowsHide: true }
+        { encoding: 'utf8', windowsHide: true, timeout: 1_000 }
     );
     assert.equal(grant.status, 0, String(grant.stderr || grant.stdout || grant.error || 'icacls grant failed'));
     try {
@@ -858,8 +861,105 @@ test('Windows ACL cache invalidates a trusted decision when file metadata change
         childProcess.spawnSync(
             'icacls.exe',
             [timelinePath, '/remove:g', '*S-1-1-0'],
-            { encoding: 'utf8', windowsHide: true }
+            { encoding: 'utf8', windowsHide: true, timeout: 1_000 }
         );
+    }
+});
+
+test('Windows ACL inspection retries a transient timeout without caching an indeterminate result', {
+    skip: process.platform !== 'win32' ? 'Windows ACL metadata is unavailable on this platform.' : false
+}, () => {
+    const orchestratorRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-timeline-acl-retry-'));
+    tempRoots.push(orchestratorRoot);
+    const eventsRoot = path.join(orchestratorRoot, 'runtime', 'task-events');
+    const timelinePath = path.join(eventsRoot, 'T-ACL-RETRY.jsonl');
+    fs.mkdirSync(eventsRoot, { recursive: true });
+    fs.writeFileSync(timelinePath, '{}\n', 'utf8');
+
+    const originalSpawnSync = mutableChildProcess.spawnSync;
+    const attempts = new Map<string, number>();
+    try {
+        mutableChildProcess.spawnSync = ((
+            command: string,
+            args: readonly string[] = [],
+            options?: childProcess.SpawnSyncOptions
+        ) => {
+            assert.equal(command, 'icacls.exe');
+            assert.equal(options?.timeout, 1_000);
+            const targetPath = path.resolve(String(args[0] || ''));
+            const attempt = (attempts.get(targetPath) || 0) + 1;
+            attempts.set(targetPath, attempt);
+            if (targetPath === path.resolve(eventsRoot) && attempt === 1) {
+                return {
+                    pid: 0,
+                    status: null,
+                    signal: 'SIGTERM',
+                    stdout: '',
+                    stderr: '',
+                    output: [null, '', ''],
+                    error: Object.assign(new Error('spawnSync icacls.exe ETIMEDOUT'), { code: 'ETIMEDOUT' })
+                } as childProcess.SpawnSyncReturns<string>;
+            }
+            return {
+                pid: 0,
+                status: 0,
+                signal: null,
+                stdout: `${targetPath} BUILTIN\\Administrators:(I)(F)\r\n`,
+                stderr: '',
+                output: [null, `${targetPath} BUILTIN\\Administrators:(I)(F)\r\n`, '']
+            } as childProcess.SpawnSyncReturns<string>;
+        }) as typeof childProcess.spawnSync;
+
+        assert.equal(readTaskTimelineTextFile(timelinePath), '{}\n');
+        assert.equal(readTaskTimelineTextFile(timelinePath), '{}\n');
+        assert.equal(attempts.get(path.resolve(eventsRoot)), 2);
+        assert.equal(attempts.get(path.resolve(timelinePath)), 1);
+    } finally {
+        mutableChildProcess.spawnSync = originalSpawnSync;
+    }
+});
+
+test('Windows ACL inspection caches an indeterminate fail-closed decision', {
+    skip: process.platform !== 'win32' ? 'Windows ACL metadata is unavailable on this platform.' : false
+}, () => {
+    const orchestratorRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-timeline-acl-negative-cache-'));
+    tempRoots.push(orchestratorRoot);
+    const eventsRoot = path.join(orchestratorRoot, 'runtime', 'task-events');
+    const timelinePath = path.join(eventsRoot, 'T-ACL-NEGATIVE-CACHE.jsonl');
+    fs.mkdirSync(eventsRoot, { recursive: true });
+    fs.writeFileSync(timelinePath, '{}\n', 'utf8');
+
+    const originalSpawnSync = mutableChildProcess.spawnSync;
+    let attempts = 0;
+    try {
+        mutableChildProcess.spawnSync = ((
+            command: string,
+            _args: readonly string[] = [],
+            options?: childProcess.SpawnSyncOptions
+        ) => {
+            assert.equal(command, 'icacls.exe');
+            assert.equal(options?.timeout, 1_000);
+            attempts += 1;
+            return {
+                pid: 0,
+                status: null,
+                signal: 'SIGTERM',
+                stdout: '',
+                stderr: '',
+                output: [null, '', ''],
+                error: Object.assign(new Error('spawnSync icacls.exe ETIMEDOUT'), { code: 'ETIMEDOUT' })
+            } as childProcess.SpawnSyncReturns<string>;
+        }) as typeof childProcess.spawnSync;
+
+        for (let read = 0; read < 2; read += 1) {
+            assert.throws(
+                () => readTaskTimelineTextFile(timelinePath),
+                /must retain trusted owner\/DACL write authority/u
+            );
+        }
+        assert.equal(attempts, 2);
+    } finally {
+        mutableChildProcess.spawnSync = originalSpawnSync;
     }
 });
 

@@ -96,6 +96,7 @@ const MAX_TASK_TIMELINE_MEMOIZED_OBJECTS = 500_000;
 const MAX_TASK_TIMELINE_MEMOIZED_DEPTH = 256;
 const TASK_TIMELINE_FILE_CREATE_MODE = 0o600;
 const WINDOWS_ACL_INSPECTION_TIMEOUT_MS = 1_000;
+const WINDOWS_ACL_INSPECTION_MAX_ATTEMPTS = 2;
 const WINDOWS_ACL_CACHE_MAX_ENTRIES = 128;
 
 const TASK_TIMELINE_TEXT_MEMOIZATION_KEY = createTaskTimelineMemoizationKey<string>('utf8-text');
@@ -207,18 +208,21 @@ function hasTrustedWindowsWriteAuthority(filePath: string, identity: fs.Stats): 
         return cached.trusted;
     }
 
-    const inspection = childProcess.spawnSync('icacls.exe', [path.resolve(filePath)], {
-        encoding: 'utf8',
-        maxBuffer: 256 * 1024,
-        timeout: WINDOWS_ACL_INSPECTION_TIMEOUT_MS,
-        windowsHide: true
-    });
-    const output = String(inspection.stdout || '');
-    const hasAclEntries = output.split(/\r?\n/u).some((line) => line.lastIndexOf(':(') >= 0);
-    const trusted = inspection.status === 0
-        && !inspection.error
-        && hasAclEntries
-        && !windowsAclOutputHasExplicitWriteGrant(output);
+    let trusted = false;
+    for (let attempt = 0; attempt < WINDOWS_ACL_INSPECTION_MAX_ATTEMPTS; attempt += 1) {
+        const inspection = childProcess.spawnSync('icacls.exe', [path.resolve(filePath)], {
+            encoding: 'utf8',
+            maxBuffer: 256 * 1024,
+            timeout: WINDOWS_ACL_INSPECTION_TIMEOUT_MS,
+            windowsHide: true
+        });
+        const output = String(inspection.stdout || '');
+        const hasAclEntries = output.split(/\r?\n/u).some((line) => line.lastIndexOf(':(') >= 0);
+        if (inspection.status === 0 && !inspection.error && hasAclEntries) {
+            trusted = !windowsAclOutputHasExplicitWriteGrant(output);
+            break;
+        }
+    }
     return rememberWindowsAclAuthority(cacheKey, {
         dev: identity.dev,
         ino: identity.ino,

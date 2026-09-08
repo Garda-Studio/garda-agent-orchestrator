@@ -33,6 +33,130 @@ import { stringSha256 } from '../../../src/gate-runtime/hash';
 
 const requireFromTest = createRequire(__filename);
 
+test('conditional append rejects every stale state field and skips an exact-once replay', async () => {
+    let verifiedModes = 0;
+    for (const append of [appendTaskEvent, appendTaskEventAsync]) {
+        const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-conditional-append-'));
+        const eventsRoot = path.join(repoRoot, 'runtime', 'task-events');
+        const taskId = 'T-CONDITIONAL';
+        const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
+        const options = { passThru: true, lowNoiseRuntimeWrites: true };
+        try {
+            assert.equal((await append(repoRoot, taskId, 'SEED', 'PASS', '', {}, options))?.canonical_committed, true);
+            const state = readTaskEventAppendState(timelinePath, taskId);
+            const originalBytes = fs.readFileSync(timelinePath, 'utf8');
+            let validations = 0;
+            const validateBeforeCanonicalAppend = (): void => { validations += 1; };
+            const staleStates = [
+                { ...state, matching_events: state.matching_events + 1 },
+                { ...state, parse_errors: state.parse_errors + 1 },
+                { ...state, last_integrity_sequence: (state.last_integrity_sequence || 0) + 1 },
+                { ...state, last_event_sha256: '0'.repeat(64) }
+            ];
+            for (const expectedPreviousState of staleStates) {
+                const result = await append(repoRoot, taskId, 'CONDITIONAL', 'PASS', '', {}, {
+                    ...options, expectedPreviousState, validateBeforeCanonicalAppend
+                });
+                assert.equal(result?.canonical_committed, false);
+                assert.equal(result?.commit_status, 'not_committed');
+                assert.match(result!.warnings.join(' '), /changed before conditional append/);
+                assert.equal(fs.readFileSync(timelinePath, 'utf8'), originalBytes);
+            }
+            assert.equal(validations, 0);
+            const conditionalOptions = {
+                ...options, emitOnce: true, expectedPreviousState: state, validateBeforeCanonicalAppend
+            };
+            assert.equal((await append(repoRoot, taskId, 'CONDITIONAL', 'PASS', '', {}, conditionalOptions))?.canonical_committed, true);
+            const committedBytes = fs.readFileSync(timelinePath, 'utf8');
+            const replay = await append(repoRoot, taskId, 'CONDITIONAL', 'PASS', '', {}, conditionalOptions);
+            assert.equal(replay?.commit_status, 'skipped_duplicate');
+            assert.equal(replay?.canonical_committed, false);
+            assert.equal(validations, 1);
+            assert.equal(fs.readFileSync(timelinePath, 'utf8'), committedBytes);
+            assert.equal(readTaskEventAppendState(timelinePath, taskId).matching_events, 2);
+            assert.equal(inspectTaskEventFile(timelinePath, taskId).status, 'PASS');
+            verifiedModes += 1;
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    }
+    assert.equal(verifiedModes, 2);
+});
+
+test('canonical validation rejects stale generation after the async delay and allows a clean retry', async () => {
+    let verifiedModes = 0;
+    for (const append of [appendTaskEvent, appendTaskEventAsync]) {
+        const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-append-generation-'));
+        const taskId = 'T-GENERATION';
+        const timelinePath = path.join(repoRoot, 'runtime', 'task-events', `${taskId}.jsonl`);
+        const options = { passThru: true, lowNoiseRuntimeWrites: true };
+        try {
+            assert.equal((await append(repoRoot, taskId, 'SEED', 'PASS', '', {}, options))?.canonical_committed, true);
+            const expectedPreviousState = readTaskEventAppendState(timelinePath, taskId);
+            const originalBytes = fs.readFileSync(timelinePath, 'utf8');
+            let generationCurrent = append === appendTaskEventAsync;
+            let validations = 0;
+            const guardedOptions = {
+                ...options, expectedPreviousState, preWriteDelayMs: 20,
+                validateBeforeCanonicalAppend: (): void => {
+                    validations += 1;
+                    if (!generationCurrent) throw new Error('authenticated generation changed');
+                }
+            };
+            const pending = append(repoRoot, taskId, 'GUARDED', 'PASS', '', {}, guardedOptions);
+            generationCurrent = false;
+            const rejected = await pending;
+            assert.equal(rejected?.canonical_committed, false);
+            assert.equal(rejected?.commit_status, 'not_committed');
+            assert.match(rejected!.warnings.join(' '), /authenticated generation changed/);
+            assert.equal(validations, 1);
+            assert.equal(fs.readFileSync(timelinePath, 'utf8'), originalBytes);
+            generationCurrent = true;
+            assert.equal((await append(repoRoot, taskId, 'GUARDED', 'PASS', '', {}, guardedOptions))?.canonical_committed, true);
+            assert.equal(validations, 2);
+            assert.equal(inspectTaskEventFile(timelinePath, taskId).status, 'PASS');
+            verifiedModes += 1;
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    }
+    assert.equal(verifiedModes, 2);
+});
+
+test('append rejects promise-returning validators before publication without unhandled rejections', async () => {
+    let verifiedCases = 0;
+    for (const append of [appendTaskEvent, appendTaskEventAsync]) {
+        for (const rejectValidation of [false, true]) {
+            const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-async-validator-'));
+            const taskId = 'T-ASYNC-VALIDATOR';
+            const timelinePath = path.join(repoRoot, 'runtime', 'task-events', `${taskId}.jsonl`);
+            const options = { passThru: true, lowNoiseRuntimeWrites: true };
+            try {
+                assert.equal((await append(repoRoot, taskId, 'SEED', 'PASS', '', {}, options))?.canonical_committed, true);
+                const originalBytes = fs.readFileSync(timelinePath, 'utf8');
+                const result = await append(repoRoot, taskId, 'GUARDED', 'PASS', '', {}, {
+                    ...options,
+                    validateBeforeCanonicalAppend: async (): Promise<void> => {
+                        await Promise.resolve();
+                        if (rejectValidation) throw new Error('late generation rejection');
+                    }
+                });
+                assert.equal(result?.canonical_committed, false);
+                assert.equal(result?.commit_status, 'not_committed');
+                assert.match(result!.warnings.join(' '), /validator must complete synchronously/);
+                assert.equal(fs.readFileSync(timelinePath, 'utf8'), originalBytes);
+                await new Promise<void>((resolve) => setImmediate(resolve));
+                assert.equal((await append(repoRoot, taskId, 'RETRY', 'PASS', '', {}, options))?.canonical_committed, true);
+                assert.equal(inspectTaskEventFile(timelinePath, taskId).status, 'PASS');
+                verifiedCases += 1;
+            } finally {
+                fs.rmSync(repoRoot, { recursive: true, force: true });
+            }
+        }
+    }
+    assert.equal(verifiedCases, 4);
+});
+
 test('assertValidTaskId accepts valid IDs', () => {
     assert.equal(assertValidTaskId('T-001'), 'T-001');
     assert.equal(assertValidTaskId('T-704-1'), 'T-704-1');
@@ -823,6 +947,52 @@ test('low-level append APIs reject foreign or missing event task_id before snaps
             /TaskId must not be empty/
         );
         assert.equal(fs.existsSync(eventsRoot), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('low-level append APIs preserve legacy positional canonical-append callbacks', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-append-legacy-callback-'));
+    try {
+        const eventsRoot = path.join(tempDir, 'runtime', 'task-events');
+        fs.mkdirSync(eventsRoot, { recursive: true });
+        const createEvent = (taskId: string): TaskEvent => ({
+            schema_version: 2,
+            event_source: 'task-events',
+            timestamp_utc: new Date().toISOString(),
+            task_id: taskId,
+            event_type: 'LEGACY_CALLBACK',
+            outcome: 'PASS',
+            actor: 'test',
+            message: 'Preserve the exported positional callback contract',
+            details: {},
+            public_metadata: {
+                lifecycle_phase: 'unknown',
+                status_signal: 'pass',
+                health_state: 'healthy',
+                terminal_outcome: 'none'
+            }
+        });
+        let syncCallbackCount = 0;
+        let asyncCallbackCount = 0;
+
+        const syncTaskId = 'T-LEGACY-CALLBACK-SYNC';
+        const syncPath = path.join(eventsRoot, `${syncTaskId}.jsonl`);
+        appendTaskEventLineSync(syncPath, syncTaskId, createEvent(syncTaskId), false, () => {
+            syncCallbackCount += 1;
+        });
+
+        const asyncTaskId = 'T-LEGACY-CALLBACK-ASYNC';
+        const asyncPath = path.join(eventsRoot, `${asyncTaskId}.jsonl`);
+        await appendTaskEventLineAsync(asyncPath, asyncTaskId, createEvent(asyncTaskId), 0, false, () => {
+            asyncCallbackCount += 1;
+        });
+
+        assert.equal(syncCallbackCount, 1);
+        assert.equal(asyncCallbackCount, 1);
+        assert.equal(inspectTaskEventFile(syncPath, syncTaskId).status, 'PASS');
+        assert.equal(inspectTaskEventFile(asyncPath, asyncTaskId).status, 'PASS');
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
