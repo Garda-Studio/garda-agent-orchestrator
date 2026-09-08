@@ -87,10 +87,12 @@ export function measureBackupStorage(mode: string): void {
             input.repoRoot, file.path, 64 * 1024 * 1024
         ));
         global.gc();
-        const retainedArrayBufferBytes = process.memoryUsage().arrayBuffers - initialBytes;
+        const arrayBufferBytes = process.memoryUsage().arrayBuffers;
+        const retainedArrayBufferBytes = arrayBufferBytes - initialBytes;
         const retainedBytes = snapshots.reduce((sum, snapshot) => sum + (snapshot.content?.length ?? 0), 0);
         mock.restoreAll();
         process.stdout.write(JSON.stringify({
+            arrayBufferBytes, initialArrayBufferBytes: initialBytes,
             retainedArrayBufferBytes, retainedBytes, captureIo, peakRssKiB: process.resourceUsage().maxRSS
         }));
         return;

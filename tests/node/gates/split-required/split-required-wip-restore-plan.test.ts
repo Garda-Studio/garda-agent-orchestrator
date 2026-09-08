@@ -155,7 +155,10 @@ describe('split-required WIP restore planning', () => {
         const retained = measure('retained-baseline');
         const spooled = measure('spooled');
         const totalBytes = Buffer.byteLength(fixture.originalContent) * fixture.files.length;
-        assert.ok(retained.retainedArrayBufferBytes >= totalBytes);
+        assert.equal(retained.retainedBytes, totalBytes);
+        // GC may release buffers that existed at the initial sample. Check the live
+        // retained corpus against the absolute counter rather than its net growth.
+        assert.ok(retained.arrayBufferBytes >= totalBytes, JSON.stringify(retained));
         // The same absolute ceiling covers both corpus sizes: one 4 MiB preimage plus
         // fixed buffer/runtime headroom. The permitted retention must not scale with totalBytes.
         assert.ok(spooled.retainedArrayBufferBytes <= 8 * 1024 * 1024, JSON.stringify(spooled));
