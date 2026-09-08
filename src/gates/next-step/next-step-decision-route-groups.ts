@@ -39,7 +39,9 @@ import {
     hasGateOwnedDecomposedParentCompletionEvidence,
     hasReviewCycleContinuationClearedEvidence,
     hasSplitRequiredClearedEvidence,
-    readSplitRequiredLatchEvidence
+    readSplitRequiredLatchEvidence,
+    suspendSplitRequiredWipBeforeDecomposition,
+    type SplitRequiredLatchEvidence
 } from './next-step-split-required-latch';
 import type {
     ReviewCycleContinuationAssessment
@@ -390,6 +392,25 @@ function isSuccessfulStatusSync(summary: { outcome: string }): boolean {
     return summary.outcome === 'updated' || summary.outcome === 'already_synced';
 }
 
+function transitionSplitRequiredParentAfterWipSuspension(options: {
+    repoRoot: string;
+    reviewsRoot: string;
+    eventsRoot: string;
+    taskId: string;
+    latchEvidence: SplitRequiredLatchEvidence;
+}): { outcome: string; error_message: string | null } {
+    const wipSuspension = suspendSplitRequiredWipBeforeDecomposition(options);
+    if (wipSuspension.status === 'BLOCKED') {
+        return {
+            outcome: 'write_failed',
+            error_message:
+                'Parent WIP could not be captured and suspended before child routing: ' +
+                (wipSuspension.violations.join('; ') || 'unknown capture violation')
+        };
+    }
+    return transitionSplitRequiredParentToDecomposed(options);
+}
+
 function resolveCompletedFullSuiteRepairWipRestoreRoute(options: {
     repoRoot: string;
     reviewsRoot: string;
@@ -544,12 +565,14 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
             extractExplicitLinkedChildTaskIds
         );
         const hasChildren = hasLinkedChildTasks(options.taskEntries, options.taskId);
-        let syncResult: ReturnType<typeof transitionSplitRequiredParentToDecomposed> | null = null;
+        let syncResult: ReturnType<typeof transitionSplitRequiredParentAfterWipSuspension> | null = null;
         if (hasChildren && isSuccessfulStatusSync(restoreResult)) {
-            syncResult = transitionSplitRequiredParentToDecomposed({
+            syncResult = transitionSplitRequiredParentAfterWipSuspension({
                 repoRoot: options.repoRoot,
+                reviewsRoot: options.reviewsRoot,
                 eventsRoot: options.eventsRoot,
-                taskId: options.taskId
+                taskId: options.taskId,
+                latchEvidence: permanentSplitRequiredLatchEvidence
             });
         }
 
@@ -648,10 +671,12 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
             }
         }
         const syncResult = latchEvidence.valid && hasChildren
-            ? transitionSplitRequiredParentToDecomposed({
+            ? transitionSplitRequiredParentAfterWipSuspension({
                 repoRoot: options.repoRoot,
+                reviewsRoot: options.reviewsRoot,
                 eventsRoot: options.eventsRoot,
-                taskId: options.taskId
+                taskId: options.taskId,
+                latchEvidence
             })
             : null;
         const splitRoute = resolveSplitRequiredTaskQueueRoute({

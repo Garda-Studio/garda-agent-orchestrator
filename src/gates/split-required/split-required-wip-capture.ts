@@ -856,10 +856,8 @@ function isCapturedWorkspaceStillSuspended(
     repoRoot: string,
     manifest: SplitRequiredWipManifest
 ): boolean {
-    const trackedChanges = new Set(
-        excludeGateOwnedQueueFiles(collectTrackedChangeFiles(repoRoot)).all
-    );
-    if (manifest.tracked_files.some((entry) => trackedChanges.has(entry.path))) {
+    const trackedChanges = excludeGateOwnedQueueFiles(collectTrackedChangeFiles(repoRoot)).all;
+    if (trackedChanges.length > 0 || collectVisibleUntrackedFiles(repoRoot).length > 0) {
         return false;
     }
     return manifest.untracked_files.every((entry) => (

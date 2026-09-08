@@ -1,6 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { syncTaskQueueStatusFromSplitRequiredToDecomposed } from '../../../../src/gates/next-step/next-step-task-queue-status-sync';
+import { captureAndSuspendSplitRequiredWip } from '../../../../src/gates/split-required/split-required-wip';
+import {
+    initializeGitRepo,
+    runGit
+} from '../../cli/commands/gate-test-repo-bootstrap';
 import * as fx from './next-step-review-cycle-fixtures';
 
 const {
@@ -159,6 +164,11 @@ describe('gates/next-step split-required latch finalization', () => {
 
     it('transitions a reset split-required parent to decomposed when child tasks are linked', () => {
         const repoRoot = makeTempRepo();
+        fs.writeFileSync(
+            path.join(repoRoot, '.gitignore'),
+            'garda-agent-orchestrator/runtime/\n',
+            'utf8'
+        );
         fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
             '# TASK.md',
             '',
@@ -169,11 +179,28 @@ describe('gates/next-step split-required latch finalization', () => {
             '| T-648 | TODO | P1 | workflow/validation | Validate transition boundary | gpt-5.4 | 2026-05-05 | strict | Verify the atomic transition contract. |',
             ''
         ].join('\n'), 'utf8');
+        initializeGitRepo(repoRoot);
+        const preflightPath = writePreflight(repoRoot, 'T-646', {
+            ...ALL_REVIEW_FLAGS,
+            code: true
+        }, { changedFiles: ['src/app.ts'] });
+        const restoredContent = 'export const value = 646;\n';
+        fs.writeFileSync(path.join(repoRoot, 'src', 'app.ts'), restoredContent, 'utf8');
+        const initialCapture = captureAndSuspendSplitRequiredWip({
+            repoRoot,
+            taskId: 'T-646',
+            preflightPath,
+            guardKind: 'scope_budget',
+            guardReason: 'Initial permanent-latch capture.'
+        });
+        assert.equal(initialCapture.status, 'CAPTURED', initialCapture.violations.join('\n'));
         seedSplitRequiredLatchEvidence(repoRoot, 'T-646');
+        fs.writeFileSync(path.join(repoRoot, 'src', 'app.ts'), restoredContent, 'utf8');
 
         const result = resolveNextStep({ taskId: 'T-646', repoRoot });
         const taskMd = fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8');
         const events = fs.readFileSync(path.join(eventsRoot(repoRoot), 'T-646.jsonl'), 'utf8');
+        const appStatus = runGit(repoRoot, ['status', '--short', '--', 'src/app.ts']).stdout.trim();
 
         assert.equal(result.status, 'DECOMPOSED');
         assert.equal(result.next_gate, 'child-task');
@@ -185,6 +212,56 @@ describe('gates/next-step split-required latch finalization', () => {
         assert.ok(taskMd.includes('| T-646 | 🟪 DECOMPOSED |'));
         assert.ok(events.includes('"event_type":"SPLIT_REQUIRED_RESTORED"'));
         assert.ok(events.includes('"event_type":"SPLIT_REQUIRED_CLEARED"'));
+        assert.equal((events.match(/"event_type":"SPLIT_REQUIRED_WIP_CAPTURED"/gu) || []).length, 2);
+        assert.equal(appStatus, '');
+    });
+
+    it('keeps a restored permanent latch active when parent WIP cannot be suspended', () => {
+        const repoRoot = makeTempRepo();
+        const taskId = 'T-649';
+        fs.writeFileSync(
+            path.join(repoRoot, '.gitignore'),
+            'garda-agent-orchestrator/runtime/\n',
+            'utf8'
+        );
+        fs.writeFileSync(path.join(repoRoot, 'src', 'outside.ts'), 'export const outside = 1;\n', 'utf8');
+        fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
+            '# TASK.md',
+            '',
+            '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+            '|---|---|---|---|---|---|---|---|---|',
+            `| ${taskId} | TODO | P1 | workflow | Parent | gpt-5.6-terra | 2026-09-08 | balanced | Child tasks: \`${taskId}-1\` and \`${taskId}-2\`. |`,
+            `| ${taskId}-1 | TODO | P1 | workflow/parser | Parser child | gpt-5.6-terra | 2026-09-08 | balanced | Implement parser boundary. |`,
+            `| ${taskId}-2 | TODO | P1 | workflow/validation | Validation child | gpt-5.6-terra | 2026-09-08 | balanced | Validate transition boundary. |`,
+            ''
+        ].join('\n'), 'utf8');
+        initializeGitRepo(repoRoot);
+        const preflightPath = writePreflight(repoRoot, taskId, {
+            ...ALL_REVIEW_FLAGS,
+            code: true
+        }, { changedFiles: ['src/app.ts'] });
+        const initialCapture = captureAndSuspendSplitRequiredWip({
+            repoRoot,
+            taskId,
+            preflightPath,
+            guardKind: 'scope_budget',
+            guardReason: 'Initial permanent-latch capture.'
+        });
+        assert.equal(initialCapture.status, 'CAPTURED', initialCapture.violations.join('\n'));
+        seedSplitRequiredLatchEvidence(repoRoot, taskId);
+        fs.writeFileSync(path.join(repoRoot, 'src', 'outside.ts'), 'export const outside = 2;\n', 'utf8');
+
+        const result = resolveNextStep({ taskId, repoRoot });
+        const taskMd = fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8');
+        const events = fs.readFileSync(path.join(eventsRoot(repoRoot), `${taskId}.jsonl`), 'utf8');
+
+        assert.equal(result.status, 'SPLIT_REQUIRED');
+        assert.equal(result.next_gate, 'split-required-latch');
+        assert.match(result.reason, /Parent WIP could not be captured and suspended before child routing/iu);
+        assert.match(result.reason, /tracked changes outside current preflight scope: src\/outside\.ts/iu);
+        assert.ok(taskMd.includes(`| ${taskId} | 🟫 SPLIT_REQUIRED |`));
+        assert.ok(events.includes('SPLIT_REQUIRED_RESTORED'));
+        assert.ok(!events.includes('SPLIT_REQUIRED_CLEARED'));
     });
 
     it('does not clear split-required latch for unrelated task mentions in parent notes', () => {
@@ -258,6 +335,111 @@ describe('gates/next-step split-required latch finalization', () => {
         assert.ok(result.reason.includes('never retarget during an active child cycle'));
         assert.ok(fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8').includes('| T-640 | 🟪 DECOMPOSED |'));
         assert.ok(text.includes('Status: DECOMPOSED'));
+    });
+
+    it('recaptures restored parent WIP before routing a linked child task', () => {
+        const repoRoot = makeTempRepo();
+        const taskId = 'T-644';
+        fs.writeFileSync(
+            path.join(repoRoot, '.gitignore'),
+            'garda-agent-orchestrator/runtime/\n',
+            'utf8'
+        );
+        fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
+            '# TASK.md',
+            '',
+            '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+            '|---|---|---|---|---|---|---|---|---|',
+            `| ${taskId} | SPLIT_REQUIRED | P1 | workflow | Parent | gpt-5.6-terra | 2026-09-08 | balanced | Child tasks: \`${taskId}-1\` and \`${taskId}-2\`. |`,
+            `| ${taskId}-1 | TODO | P1 | workflow/parser | Parser child | gpt-5.6-terra | 2026-09-08 | balanced | Implement parser boundary. |`,
+            `| ${taskId}-2 | TODO | P1 | workflow/validation | Validation child | gpt-5.6-terra | 2026-09-08 | balanced | Validate transition boundary. |`,
+            ''
+        ].join('\n'), 'utf8');
+        initializeGitRepo(repoRoot);
+        const preflightPath = writePreflight(repoRoot, taskId, {
+            ...ALL_REVIEW_FLAGS,
+            code: true
+        }, { changedFiles: ['src/app.ts'] });
+        const restoredContent = 'export const value = 2;\n';
+        fs.writeFileSync(path.join(repoRoot, 'src', 'app.ts'), restoredContent, 'utf8');
+        const initialCapture = captureAndSuspendSplitRequiredWip({
+            repoRoot,
+            taskId,
+            preflightPath,
+            guardKind: 'scope_budget',
+            guardReason: 'Initial split-required capture.'
+        });
+        assert.equal(initialCapture.status, 'CAPTURED', initialCapture.violations.join('\n'));
+        seedSplitRequiredLatchEvidence(repoRoot, taskId);
+
+        fs.writeFileSync(path.join(repoRoot, 'src', 'app.ts'), restoredContent, 'utf8');
+        const result = resolveNextStep({ taskId, repoRoot });
+        const appStatus = runGit(repoRoot, ['status', '--short', '--', 'src/app.ts']).stdout.trim();
+        const captureEvents = fs.readFileSync(path.join(eventsRoot(repoRoot), `${taskId}.jsonl`), 'utf8')
+            .trim()
+            .split(/\r?\n/u)
+            .map((line) => JSON.parse(line) as Record<string, unknown>)
+            .filter((event) => event.event_type === 'SPLIT_REQUIRED_WIP_CAPTURED');
+        const latestCaptureDetails = captureEvents.at(-1)?.details as Record<string, unknown> | undefined;
+        const latestManifestPath = String(latestCaptureDetails?.manifest_path || '');
+        const latestManifest = JSON.parse(fs.readFileSync(latestManifestPath, 'utf8')) as {
+            tracked_files: Array<{ path: string; worktree_sha256: string | null }>;
+        };
+
+        assert.equal(result.status, 'DECOMPOSED');
+        assert.equal(appStatus, '');
+        assert.equal(captureEvents.length, 2);
+        assert.notEqual(latestManifestPath, initialCapture.manifest_path);
+        assert.equal(latestManifest.tracked_files.length, 1);
+        assert.equal(latestManifest.tracked_files[0]?.path, 'src/app.ts');
+        assert.equal(latestManifest.tracked_files[0]?.worktree_sha256, sha256Text(restoredContent));
+    });
+
+    it('keeps a split-required parent latched when WIP cannot be suspended safely', () => {
+        const repoRoot = makeTempRepo();
+        const taskId = 'T-645';
+        fs.writeFileSync(
+            path.join(repoRoot, '.gitignore'),
+            'garda-agent-orchestrator/runtime/\n',
+            'utf8'
+        );
+        fs.writeFileSync(path.join(repoRoot, 'src', 'outside.ts'), 'export const outside = 1;\n', 'utf8');
+        fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
+            '# TASK.md',
+            '',
+            '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+            '|---|---|---|---|---|---|---|---|---|',
+            `| ${taskId} | SPLIT_REQUIRED | P1 | workflow | Parent | gpt-5.6-terra | 2026-09-08 | balanced | Child tasks: \`${taskId}-1\` and \`${taskId}-2\`. |`,
+            `| ${taskId}-1 | TODO | P1 | workflow/parser | Parser child | gpt-5.6-terra | 2026-09-08 | balanced | Implement parser boundary. |`,
+            `| ${taskId}-2 | TODO | P1 | workflow/validation | Validation child | gpt-5.6-terra | 2026-09-08 | balanced | Validate transition boundary. |`,
+            ''
+        ].join('\n'), 'utf8');
+        initializeGitRepo(repoRoot);
+        const preflightPath = writePreflight(repoRoot, taskId, {
+            ...ALL_REVIEW_FLAGS,
+            code: true
+        }, { changedFiles: ['src/app.ts'] });
+        const initialCapture = captureAndSuspendSplitRequiredWip({
+            repoRoot,
+            taskId,
+            preflightPath,
+            guardKind: 'scope_budget',
+            guardReason: 'Initial split-required capture.'
+        });
+        assert.equal(initialCapture.status, 'CAPTURED', initialCapture.violations.join('\n'));
+        seedSplitRequiredLatchEvidence(repoRoot, taskId);
+        fs.writeFileSync(path.join(repoRoot, 'src', 'outside.ts'), 'export const outside = 2;\n', 'utf8');
+
+        const result = resolveNextStep({ taskId, repoRoot });
+        const taskMd = fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8');
+        const events = fs.readFileSync(path.join(eventsRoot(repoRoot), `${taskId}.jsonl`), 'utf8');
+
+        assert.equal(result.status, 'SPLIT_REQUIRED');
+        assert.equal(result.next_gate, 'split-required-latch');
+        assert.match(result.reason, /Parent WIP could not be captured and suspended before child routing/iu);
+        assert.match(result.reason, /tracked changes outside current preflight scope: src\/outside\.ts/iu);
+        assert.ok(taskMd.includes(`| ${taskId} | SPLIT_REQUIRED |`));
+        assert.ok(!events.includes('SPLIT_REQUIRED_CLEARED'));
     });
 
     it('keeps the parent and split evidence unchanged when only one child is linked', () => {

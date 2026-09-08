@@ -64,6 +64,15 @@ export interface ReviewCycleContinuationSplitLatchClearance {
     resume_status: 'IN_PROGRESS' | 'IN_REVIEW' | null;
 }
 
+export type SplitRequiredDecompositionWipSuspensionResult = SplitRequiredWipCaptureResult | {
+    status: 'NOT_REQUIRED';
+    manifest_path: null;
+    manifest_sha256: null;
+    tracked_files: string[];
+    untracked_files: string[];
+    violations: string[];
+};
+
 function getOrchestratorRootFromEventsRoot(eventsRoot: string): string {
     return path.resolve(eventsRoot, '..', '..');
 }
@@ -143,6 +152,38 @@ function buildSplitRequiredArtifact(params: {
 
 function shouldCaptureGenericSplitRequiredWip(guardKind: SplitRequiredGuardKind): guardKind is 'scope_budget' | 'review_cycle' {
     return guardKind === 'scope_budget' || guardKind === 'review_cycle';
+}
+
+export function suspendSplitRequiredWipBeforeDecomposition(params: {
+    repoRoot: string;
+    reviewsRoot: string;
+    taskId: string;
+    latchEvidence: SplitRequiredLatchEvidence;
+}): SplitRequiredDecompositionWipSuspensionResult {
+    const guardKind = params.latchEvidence.guard_kind;
+    if (
+        !params.latchEvidence.valid
+        || (guardKind !== 'scope_budget' && guardKind !== 'review_cycle')
+        || !canCaptureSplitRequiredWip(params.repoRoot)
+    ) {
+        return {
+            status: 'NOT_REQUIRED',
+            manifest_path: null,
+            manifest_sha256: null,
+            tracked_files: [],
+            untracked_files: [],
+            violations: []
+        };
+    }
+
+    return captureAndSuspendSplitRequiredWip({
+        repoRoot: params.repoRoot,
+        taskId: params.taskId,
+        preflightPath: path.join(params.reviewsRoot, `${params.taskId}-preflight.json`),
+        guardKind,
+        guardReason:
+            `The active ${guardKind} split-required latch requires parent WIP to remain suspended before child execution.`
+    });
 }
 
 export function readSplitRequiredLatchEvidence(params: {
