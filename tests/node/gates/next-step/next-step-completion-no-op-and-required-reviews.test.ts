@@ -360,6 +360,33 @@ describe('gates/next-step', () => {
         assert.equal(result.missing_artifacts.some((artifact) => artifact.key === 'completion-gate'), true);
     });
 
+    it('routes an audited zero-diff no-op through compile before required reviews', () => {
+        const repoRoot = makeTempRepo();
+        initGitRepo(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        const preflightPath = writeGitAutoPreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+        preflight.scope_category = 'empty';
+        preflight.zero_diff_guard = {
+            zero_diff_detected: true,
+            status: 'BASELINE_ONLY',
+            completion_requires_audited_no_op: true
+        };
+        preflight.profile_guardrails = {
+            zero_diff_no_reviewable_scope: true
+        };
+        writeJson(preflightPath, preflight);
+        seedPostPreflightRulePack(repoRoot, TASK_ID, preflightPath);
+        writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+
+        assert.equal(result.next_gate, 'compile-gate');
+        assert.ok(result.reason.includes('Compile gate evidence missing'));
+        assert.ok(result.commands[0].command.includes('gate compile-gate'));
+        assert.ok(!result.commands[0].command.includes('gate required-reviews-check'));
+    });
+
     it('accepts an external-input rationale as audited zero-diff evidence', () => {
         const repoRoot = makeTempRepo();
         initGitRepo(repoRoot);

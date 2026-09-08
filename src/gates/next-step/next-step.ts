@@ -3817,7 +3817,9 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
     };
     const validationDecisionRoute = resolveValidationDecisionRoute({
         lifecycleGateIds: getActiveTaskLifecycleGateIds('validation', {
-            changes_exist: Array.isArray(preflight?.changed_files) && preflight.changed_files.length > 0,
+            changes_exist:
+                (Array.isArray(preflight?.changed_files) && preflight.changed_files.length > 0)
+                || resolveAuditedNoOpState().passed,
             optional_quality_checks_enabled: qualityChecklistReadiness?.enabled === true,
             full_suite_after_compile_before_reviews:
                 fullSuiteConfig.enabled && fullSuiteConfig.placement === 'after_compile_before_reviews'
