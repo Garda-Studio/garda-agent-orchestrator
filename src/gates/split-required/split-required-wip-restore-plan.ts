@@ -238,7 +238,7 @@ function fsyncRepoParentDescriptor(descriptor: number): void {
 
 function unlinkTargetBoundToOpenedParent(
     parentTarget: RepoParentDescriptorTarget,
-    relativePath: string,
+    _relativePath: string,
     expectedIdentity: fs.Stats,
     targetDescriptor: number,
     requireSnapshot: boolean
