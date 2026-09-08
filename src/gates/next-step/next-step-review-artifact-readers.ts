@@ -751,8 +751,11 @@ export function readReviewArtifactState(
                         taskId,
                         reviewType,
                         preflightSha256: expectedPreflightHash,
+                        preflightPath,
                         fullReviewScope: preflightDiffExpectations.expectedChangedFiles,
-                        reviewExecution
+                        reviewExecution,
+                        reviewContextPath: contextPath,
+                        receiptPath
                     })
                     : null;
                 const contractViolations = getReviewContextContractViolations({

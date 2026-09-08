@@ -7,15 +7,49 @@ import type {
     ReviewRemediationReviewContractValidationAuthority
 } from './review-remediation-review-contract';
 import type { ReviewRemediationDecisionClassification } from './review-remediation-recovery-routing';
+import { pathsEqual } from '../review-reuse/review-reuse-telemetry-normalization';
+import { fileSha256 } from '../shared/helpers';
 
-export function resolvePersistedRemediationReviewExecutionAuthority(options: {
+interface PersistedRemediationReviewExecutionAuthorityOptions {
     reviewsRoot: string;
     taskId: string;
     reviewType: string;
     preflightSha256: string;
+    preflightPath?: string;
     fullReviewScope: readonly string[];
     reviewExecution: ReviewRemediationReviewContract;
-}): ReviewRemediationReviewContractValidationAuthority | null {
+    reviewContextPath?: string;
+    receiptPath?: string;
+}
+
+function normalizeSha256(value: unknown): string {
+    const normalized = String(value || '').trim().toLowerCase();
+    return /^[0-9a-f]{64}$/u.test(normalized) ? normalized : '';
+}
+
+function buildAuthority(
+    options: PersistedRemediationReviewExecutionAuthorityOptions,
+    decision: Record<string, unknown>,
+    classification: ReviewRemediationDecisionClassification
+): ReviewRemediationReviewContractValidationAuthority {
+    const decisionSha256 = normalizeSha256(decision.decision_sha256);
+    return {
+        taskId: options.taskId,
+        reviewType: options.reviewType,
+        preflightSha256: options.preflightSha256.trim().toLowerCase(),
+        mode: options.reviewExecution.mode,
+        fullReviewScope: options.fullReviewScope,
+        persistedDecisionSha256: decisionSha256,
+        authoritativeDecisionSha256: decisionSha256,
+        authoritativeClassificationSha256: normalizeSha256(decision.classification_sha256),
+        authoritativeDecision: decision as unknown as ReviewRemediationReviewContractValidationAuthority['authoritativeDecision'],
+        authoritativeClassification: classification
+    };
+}
+
+export function resolvePersistedRemediationReviewExecutionAuthority(
+    options: PersistedRemediationReviewExecutionAuthorityOptions
+): ReviewRemediationReviewContractValidationAuthority | null {
     if (options.reviewExecution.source === 'initial_full') {
         return null;
     }
@@ -54,25 +88,84 @@ export function resolvePersistedRemediationReviewExecutionAuthority(options: {
                 isPlainRecord(value) && value.review_type === options.reviewType
             ))
             : null;
-        if (
-            !isPlainRecord(lane)
-            || lane.mode !== options.reviewExecution.mode
-            || decision.preflight_sha256 !== normalizedPreflightSha256
-        ) {
+        if (!isPlainRecord(lane) || lane.mode !== options.reviewExecution.mode
+            || decision.preflight_sha256 !== normalizedPreflightSha256) {
             return null;
         }
-        return {
-            taskId: options.taskId,
-            reviewType: options.reviewType,
-            preflightSha256: normalizedPreflightSha256,
-            mode: options.reviewExecution.mode,
-            fullReviewScope: options.fullReviewScope,
-            persistedDecisionSha256: String(decision.decision_sha256 || '').trim().toLowerCase(),
-            authoritativeDecisionSha256: String(decision.decision_sha256 || '').trim().toLowerCase(),
-            authoritativeClassificationSha256: String(decision.classification_sha256 || '').trim().toLowerCase(),
-            authoritativeDecision: decision as unknown as ReviewRemediationReviewContractValidationAuthority['authoritativeDecision'],
-            authoritativeClassification: classification
-        };
+        if (
+            normalizeSha256(options.reviewExecution.authoritative_decision_sha256)
+                === normalizeSha256(decision.decision_sha256)
+            && normalizeSha256(options.reviewExecution.classification_sha256)
+                === normalizeSha256(decision.classification_sha256)
+        ) {
+            return buildAuthority(options, decision, classification);
+        }
+
+        const preservedPending = lane.mode === 'FULL'
+            && lane.reuse_eligible === true
+            && lane.invalidated === false
+            && lane.satisfied === false
+            && lane.reason_code === 'authoritative_reuse_pending';
+        const reviewContextSha256 = options.reviewContextPath ? fileSha256(options.reviewContextPath) : null;
+        const receiptSha256 = options.receiptPath ? fileSha256(options.receiptPath) : null;
+        const acceptedAfterRestart = preservedPending && reviewContextSha256 && receiptSha256
+            ? events.slice(index + 1).some((candidate) => {
+                const accepted = isPlainRecord(candidate.details) ? candidate.details : null;
+                return candidate.event_type === 'REVIEW_CONTEXT_REUSE_ACCEPTED'
+                    && candidate.actor === 'gate'
+                    && candidate.outcome === 'PASS'
+                    && accepted?.current_pass_review_evidence === true
+                    && accepted.review_type === options.reviewType
+                    && pathsEqual(String(accepted.preflight_path || ''), options.preflightPath || '')
+                    && normalizeSha256(accepted.preflight_sha256) === normalizedPreflightSha256
+                    && pathsEqual(
+                        String(accepted.review_context_path || accepted.output_path || ''),
+                        options.reviewContextPath || ''
+                    )
+                    && normalizeSha256(accepted.review_context_sha256) === reviewContextSha256
+                    && pathsEqual(String(accepted.receipt_path || ''), options.receiptPath || '')
+                    && normalizeSha256(accepted.receipt_sha256) === receiptSha256;
+            })
+            : false;
+        if (!acceptedAfterRestart) {
+            return null;
+        }
+
+        for (let priorIndex = index - 1; priorIndex >= 0; priorIndex -= 1) {
+            const priorEvent = events[priorIndex];
+            const priorDetails = isPlainRecord(priorEvent.details) ? priorEvent.details : null;
+            const priorDecision = isPlainRecord(priorDetails?.authoritative_review_decision)
+                ? priorDetails.authoritative_review_decision
+                : null;
+            const priorClassification = priorDetails?.authoritative_review_classification;
+            const priorLane = priorDecision && Array.isArray(priorDecision.lane_decisions)
+                ? priorDecision.lane_decisions.find((value) => (
+                    isPlainRecord(value) && value.review_type === options.reviewType
+                ))
+                : null;
+            if (
+                priorEvent.event_type === 'REVIEW_CYCLE_RESTARTED'
+                && priorDetails?.task_id === options.taskId
+                && priorDetails.event_type === 'REVIEW_CYCLE_RESTARTED'
+                && priorDetails.status === 'PASSED'
+                && normalizeSha256(priorDetails.preflight_sha256) === normalizedPreflightSha256
+                && priorDecision
+                && isPlainRecord(priorClassification)
+                && isPlainRecord(priorLane)
+                && priorLane.mode === options.reviewExecution.mode
+                && normalizeSha256(priorDecision.decision_sha256)
+                    === normalizeSha256(options.reviewExecution.authoritative_decision_sha256)
+                && normalizeSha256(priorDecision.classification_sha256)
+                    === normalizeSha256(options.reviewExecution.classification_sha256)
+            ) {
+                return buildAuthority(
+                    options,
+                    priorDecision,
+                    priorClassification as unknown as ReviewRemediationDecisionClassification
+                );
+            }
+        }
+        return null;
     }
     return null;
 }

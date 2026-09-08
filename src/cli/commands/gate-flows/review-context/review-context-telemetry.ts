@@ -92,6 +92,16 @@ export async function emitCurrentPassReviewContextReuseAccepted(options: {
     telemetryLockRetryMs?: unknown;
 }): Promise<void> {
     const orchestratorRoot = gateHelpers.joinOrchestratorPath(options.repoRoot, '');
+    const preflightSha256 = gateHelpers.fileSha256(options.preflightPath);
+    const reviewContextSha256 = gateHelpers.fileSha256(options.reviewContextPath);
+    const receiptSha256 = options.currentPassReviewEvidence.receiptPath
+        ? gateHelpers.fileSha256(options.currentPassReviewEvidence.receiptPath)
+        : null;
+    if (!preflightSha256 || !reviewContextSha256 || !receiptSha256) {
+        throw new Error(
+            'Current PASS review context reuse telemetry requires readable preflight, context, and receipt hashes.'
+        );
+    }
     const telemetryAppendOptions = buildTelemetryAppendOptions(options);
     await serializeReviewContextTelemetry(orchestratorRoot, options.taskId, async () => {
         assertReviewPreparationTelemetryCommitted(
@@ -105,15 +115,18 @@ export async function emitCurrentPassReviewContextReuseAccepted(options: {
                     review_type: options.reviewType,
                     depth: options.depth,
                     preflight_path: gateHelpers.normalizePath(options.preflightPath),
+                    preflight_sha256: preflightSha256,
                     output_path: gateHelpers.normalizePath(options.reviewContextPath),
                     review_context_path: gateHelpers.normalizePath(options.reviewContextPath),
+                    review_context_sha256: reviewContextSha256,
                     review_context_artifact_path: options.ruleContextArtifactPath
                         ? gateHelpers.normalizePath(options.ruleContextArtifactPath)
                         : null,
                     current_pass_review_evidence: true,
                     review_reuse_evidence: options.currentPassReviewEvidence.reusedExistingReview ? 'REUSED' : 'FRESH',
                     reused_existing_review: options.currentPassReviewEvidence.reusedExistingReview,
-                    receipt_path: options.currentPassReviewEvidence.receiptPath,
+                    receipt_path: gateHelpers.normalizePath(options.currentPassReviewEvidence.receiptPath),
+                    receipt_sha256: receiptSha256,
                     reviewer_execution_mode: options.currentPassReviewEvidence.reviewerExecutionMode,
                     reviewer_identity: options.currentPassReviewEvidence.reviewerIdentity
                 },

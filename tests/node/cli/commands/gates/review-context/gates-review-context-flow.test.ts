@@ -117,6 +117,10 @@ describe('gate build-review-context CLI flow binding', () => {
                     const appendedEvents = fs.readFileSync(timelinePath, 'utf8').slice(timelineBefore.length)
                         .trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
                     assert.deepEqual(appendedEvents.map((event) => event.event_type), ['REVIEW_CONTEXT_REUSE_ACCEPTED']);
+                    const acceptedDetails = appendedEvents[0].details as Record<string, unknown>;
+                    assert.equal(acceptedDetails.preflight_sha256, fileSha256(preflightPath));
+                    assert.equal(acceptedDetails.review_context_sha256, fileSha256(reviewContextPath));
+                    assert.equal(acceptedDetails.receipt_sha256, fileSha256(receiptPath));
                 } else {
                     assert.ok(result.outputLines.includes('CurrentPassReviewEvidence: rejected'), result.outputLines.join('\n'));
                     assert.equal(result.reusedReviewEvidence, false);

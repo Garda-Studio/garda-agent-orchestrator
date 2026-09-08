@@ -55,7 +55,9 @@ test('reconstructs remediation review execution authority only from an integrity
     });
     const reviewExecution = {
         source: 'remediation_full',
-        mode: 'FULL'
+        mode: 'FULL',
+        authoritative_decision_sha256: boundDecision.decision_sha256,
+        classification_sha256: boundDecision.classification_sha256
     } as Parameters<typeof resolvePersistedRemediationReviewExecutionAuthority>[0]['reviewExecution'];
 
     const authority = resolvePersistedRemediationReviewExecutionAuthority({
@@ -68,6 +70,136 @@ test('reconstructs remediation review execution authority only from an integrity
     });
     assert.equal(authority?.authoritativeDecisionSha256, boundDecision.decision_sha256);
     assert.equal(authority?.authoritativeClassificationSha256, boundDecision.classification_sha256);
+
+    const preservedClassification = {
+        source: 'runtime_fix' as const,
+        classification: {
+            category: 'review_evidence_only',
+            reason: 'Only the downstream test reviewer evidence changed.',
+            blocked_before_reuse: false,
+            invalidated_review_types: ['test']
+        }
+    };
+    const preservedDecision = resolveAuthoritativeReviewRemediationDecision({
+        taskId,
+        currentReviewType: 'test',
+        classification: preservedClassification,
+        requiredReviews: { code: true, test: true },
+        reviewExecutionPolicyMode: 'strict_sequential'
+    });
+    const preservedDecisionWithoutHash = {
+        ...preservedDecision,
+        preflight_sha256: preflightSha256
+    } as Record<string, unknown>;
+    delete preservedDecisionWithoutHash.decision_sha256;
+    const boundPreservedDecision = {
+        ...preservedDecisionWithoutHash,
+        decision_sha256: sha256RedactedJsonPayload(preservedDecisionWithoutHash)
+    };
+    appendTaskEvent(bundleRoot, taskId, 'REVIEW_CYCLE_RESTARTED', 'PASS', 'Downstream review cycle restarted.', {
+        task_id: taskId,
+        event_type: 'REVIEW_CYCLE_RESTARTED',
+        status: 'PASSED',
+        preflight_sha256: preflightSha256,
+        authoritative_review_decision: boundPreservedDecision,
+        authoritative_review_classification: preservedClassification
+    });
+    const reviewContextPath = path.join(reviewsRoot, `${taskId}-code-review-context.json`);
+    const receiptPath = path.join(reviewsRoot, `${taskId}-code-receipt.json`);
+    const preflightPath = path.join(reviewsRoot, `${taskId}-preflight.json`);
+    fs.mkdirSync(reviewsRoot, { recursive: true });
+    fs.writeFileSync(reviewContextPath, '{"context":true}\n', 'utf8');
+    fs.writeFileSync(receiptPath, '{"receipt":true}\n', 'utf8');
+    const preservedOptions = {
+        reviewsRoot,
+        taskId,
+        reviewType: 'code',
+        preflightSha256,
+        preflightPath,
+        fullReviewScope: ['src/app.ts'],
+        reviewExecution,
+        reviewContextPath,
+        receiptPath
+    };
+    assert.equal(resolvePersistedRemediationReviewExecutionAuthority(preservedOptions), null);
+    appendTaskEvent(bundleRoot, taskId, 'REVIEW_CONTEXT_REUSE_ACCEPTED', 'PASS', 'Current PASS accepted.', {
+        review_type: 'code',
+        current_pass_review_evidence: true,
+        preflight_path: preflightPath,
+        preflight_sha256: preflightSha256,
+        review_context_path: reviewContextPath,
+        review_context_sha256: createHash('sha256').update(fs.readFileSync(reviewContextPath)).digest('hex'),
+        receipt_path: receiptPath,
+        receipt_sha256: createHash('sha256').update(fs.readFileSync(receiptPath)).digest('hex')
+    });
+    const preservedAuthority = resolvePersistedRemediationReviewExecutionAuthority(preservedOptions);
+    assert.equal(preservedAuthority?.authoritativeDecisionSha256, boundDecision.decision_sha256);
+    assert.equal(preservedAuthority?.authoritativeClassificationSha256, boundDecision.classification_sha256);
+    assert.equal(resolvePersistedRemediationReviewExecutionAuthority({
+        ...preservedOptions,
+        preflightPath: path.join(reviewsRoot, 'same-bytes-other-preflight.json')
+    }), null);
+    assert.equal(resolvePersistedRemediationReviewExecutionAuthority({
+        ...preservedOptions,
+        preflightSha256: createHash('sha256').update('other-preflight').digest('hex')
+    }), null);
+    assert.equal(resolvePersistedRemediationReviewExecutionAuthority({
+        ...preservedOptions,
+        reviewExecution: {
+            ...reviewExecution,
+            classification_sha256: createHash('sha256').update('wrong-classification').digest('hex')
+        }
+    }), null);
+    assert.equal(resolvePersistedRemediationReviewExecutionAuthority({
+        ...preservedOptions,
+        reviewExecution: { ...reviewExecution, mode: 'DELTA', source: 'remediation_delta' }
+    }), null);
+    if (process.platform !== 'win32') {
+        const caseVariantContextPath = path.join(reviewsRoot, `${taskId}-CODE-review-context.json`);
+        fs.copyFileSync(reviewContextPath, caseVariantContextPath);
+        assert.equal(resolvePersistedRemediationReviewExecutionAuthority({
+            ...preservedOptions,
+            reviewContextPath: caseVariantContextPath
+        }), null);
+    }
+
+    fs.writeFileSync(receiptPath, '{"receipt":"changed"}\n', 'utf8');
+    assert.equal(resolvePersistedRemediationReviewExecutionAuthority(preservedOptions), null);
+    fs.writeFileSync(receiptPath, '{"receipt":true}\n', 'utf8');
+
+    const invalidatedClassification = {
+        source: 'runtime_fix' as const,
+        classification: {
+            category: 'production',
+            reason: 'The code lane changed.',
+            blocked_before_reuse: false,
+            invalidated_review_types: ['code', 'test']
+        }
+    };
+    const invalidatedDecision = resolveAuthoritativeReviewRemediationDecision({
+        taskId,
+        currentReviewType: 'code',
+        classification: invalidatedClassification,
+        requiredReviews: { code: true, test: true },
+        reviewExecutionPolicyMode: 'strict_sequential'
+    });
+    const invalidatedDecisionWithoutHash = {
+        ...invalidatedDecision,
+        preflight_sha256: preflightSha256
+    } as Record<string, unknown>;
+    delete invalidatedDecisionWithoutHash.decision_sha256;
+    appendTaskEvent(bundleRoot, taskId, 'REVIEW_CYCLE_RESTARTED', 'PASS', 'Code review cycle restarted.', {
+        task_id: taskId,
+        event_type: 'REVIEW_CYCLE_RESTARTED',
+        status: 'PASSED',
+        preflight_sha256: preflightSha256,
+        authoritative_review_decision: {
+            ...invalidatedDecisionWithoutHash,
+            decision_sha256: sha256RedactedJsonPayload(invalidatedDecisionWithoutHash)
+        },
+        authoritative_review_classification: invalidatedClassification
+    });
+    assert.equal(resolvePersistedRemediationReviewExecutionAuthority(preservedOptions), null);
 
     const timelinePath = path.join(bundleRoot, 'runtime', 'task-events', `${taskId}.jsonl`);
     fs.appendFileSync(timelinePath, '{"forged":true}\n', 'utf8');
