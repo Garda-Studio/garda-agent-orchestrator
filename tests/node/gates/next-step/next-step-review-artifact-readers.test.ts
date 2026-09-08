@@ -29,6 +29,8 @@ import { sha256RedactedJsonPayload } from '../../../../src/core/redaction';
 import { resolveReviewContextExecutionEvidenceBindings } from '../../../../src/gates/review/review-evidence-contract';
 import { REVIEW_FINDINGS_SCHEMA_VERSION } from '../../../../src/gates/review/review-findings-schema';
 import { buildReviewRemediationReviewContract } from '../../../../src/gates/review-remediation/review-remediation-review-contract';
+import { appendMandatoryTaskEvent } from '../../../../src/gate-runtime/task-events';
+import { getReviewOutputCorrectionArtifactPath } from '../../../../src/gates/review/review-output-correction';
 
 const TREE_STATE_SHA256 = 'b'.repeat(64);
 const COVERAGE_CONTRACT_SHA256 = 'c'.repeat(64);
@@ -931,7 +933,8 @@ test('readReviewArtifactState uses receipt disposition for reused findings JSON 
 });
 
 test('readReviewArtifactState rejects malformed findings JSON instead of deriving a clean pass', () => {
-    const reviewsRoot = tempRoot('garda-next-step-review-json-invalid-readers-');
+    const fixtureRoot = tempRoot('garda-next-step-review-json-invalid-readers-');
+    const reviewsRoot = path.join(fixtureRoot, 'runtime', 'reviews');
     const preflightPath = path.join(reviewsRoot, 'T-100-preflight.json');
     const contextPath = path.join(reviewsRoot, 'T-100-code-review-context.json');
     const artifactPath = path.join(reviewsRoot, 'T-100-code.md');
@@ -1019,6 +1022,46 @@ test('readReviewArtifactState rejects malformed findings JSON instead of derivin
     assert.equal(state.failureKind, 'review-correction-full-review-required');
     assert.equal(state.reviewFindingsValidationRejected, true);
     assert.ok(state.violations.some((violation) => violation.includes('review findings validation artifact is rejected')));
+
+    const correctionPath = getReviewOutputCorrectionArtifactPath(artifactPath);
+    writeJson(correctionPath, { state: 'FULL_REVIEW_REQUIRED' });
+    const readState = () => readReviewArtifactState(
+        reviewsRoot, 'T-100', 'code', preflightPath, null, findingsPreflightPayload()
+    );
+    const restartDetails = {
+        task_id: 'T-100', event_type: 'REVIEW_CYCLE_RESTARTED', status: 'PASSED',
+        invalidated_review_types: ['code']
+    };
+    const restart = (details = restartDetails, actor = 'orchestrator') => appendMandatoryTaskEvent(
+        fixtureRoot, 'T-100', 'REVIEW_CYCLE_RESTARTED', 'PASS', 'Restart fixture.', details, { actor }
+    );
+    restart();
+    assert.equal(readState().failed, true, 'A restart before this correction cannot supersede it.');
+    appendMandatoryTaskEvent(fixtureRoot, 'T-100', 'REVIEW_OUTPUT_CORRECTION_FULL_REVIEW_REQUIRED', 'FAIL',
+        'Correction fallback fixture.', {
+            task_id: 'T-100', review_type: 'code',
+            correction_artifact_path: correctionPath,
+            correction_artifact_sha256: 'a'.repeat(64),
+            correction_package_sha256: sha256File(correctionPath)
+        }, { actor: 'orchestrator' });
+    restart(restartDetails, 'reviewer');
+    assert.equal(readState().failed, true, 'A reviewer cannot supersede its own rejected output.');
+    restart({ ...restartDetails, invalidated_review_types: ['security'] });
+    assert.equal(readState().failed, true, 'An unrelated lane restart cannot supersede code evidence.');
+    restart();
+    const restarted = readState();
+    assert.equal(restarted.failed, false);
+    assert.equal(restarted.failureKind, null);
+    assert.equal(restarted.receiptContractCurrent, false);
+    assert.notEqual(restarted.verdictToken, 'REVIEW PASSED');
+    assert.equal(fs.existsSync(correctionPath), true, 'Rejected evidence remains available for audit.');
+    writeJson(correctionPath, { state: 'FULL_REVIEW_REQUIRED', changed: true });
+    assert.equal(readState().failed, true, 'Replaced correction bytes cannot inherit the old restart.');
+    writeJson(correctionPath, { state: 'FULL_REVIEW_REQUIRED' });
+    const timelinePath = path.join(fixtureRoot, 'runtime', 'task-events', 'T-100.jsonl');
+    fs.appendFileSync(timelinePath, '{broken timeline}\n');
+    assert.equal(readState().failed, true, 'A broken chain cannot authenticate supersession.');
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
 test('getScopedDiffMetadataReadiness rejects missing and empty scoped diff metadata', () => {

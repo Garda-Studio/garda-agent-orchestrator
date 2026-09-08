@@ -83,6 +83,7 @@ import {
     readReviewOutputCorrectionArtifact
 } from '../review/review-output-correction';
 import { readTaskTimelineEventLikes } from './next-step-review-timeline-evidence';
+import { reviewCorrectionWasSuperseded } from './next-step-review-correction-supersession';
 
 const REVIEW_VERDICT_PASS_TOKENS: Record<string, string> = Object.freeze(Object.fromEntries(REVIEW_CONTRACTS));
 const REVIEW_VERDICT_FAIL_TOKENS: Record<string, string> = Object.freeze(
@@ -1157,7 +1158,12 @@ export function readReviewArtifactState(
         });
         if (!rejectedValidationArtifact.valid) {
             violations.push(...rejectedValidationArtifact.violations);
-        } else if (!rejectedValidationArtifact.accepted) {
+        } else if (!rejectedValidationArtifact.accepted && !reviewCorrectionWasSuperseded(
+            path.join(path.dirname(reviewsRoot), 'task-events'),
+            taskId,
+            reviewType,
+            getReviewOutputCorrectionArtifactPath(artifactPath)
+        )) {
             reviewFindingsValidationArtifactPath = getReviewFindingsValidationArtifactPath(artifactPath);
             reviewFindingsValidationAccepted = false;
             reviewFindingsValidationRejected = true;
