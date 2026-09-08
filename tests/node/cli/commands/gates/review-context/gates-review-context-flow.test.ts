@@ -34,6 +34,102 @@ import {
 import { seedRemediationRepoBase } from '../review-cycle/gates-review-cycle-fixtures';
 
 describe('gate build-review-context CLI flow binding', () => {
+    for (const scenario of ['preserved', 'invalidated', 'reuse-rejected', 'tampered-receipt', 'stale-tree', 'forged-decision'] as const) {
+        it(`validates current PASS evidence before applying a remediation fallback contract: ${scenario}`, async () => {
+            const repoRoot = createTempRepo();
+            const taskId = `T-current-pass-remediation-${scenario}`;
+            try {
+                seedTaskQueue(repoRoot, taskId);
+                seedInitAnswers(repoRoot, 'Qwen');
+                runEnterTaskMode({ repoRoot, taskId, taskSummary: 'Preserve authenticated current PASS evidence' });
+                const preflightPath = writePreflight(repoRoot, taskId, {
+                    changed_files: ['src/app.ts'],
+                    required_reviews: { code: true, test: true },
+                    review_execution_policy: { mode: 'test_after_code' }
+                });
+                writeCompilePassEvidence(repoRoot, taskId, preflightPath);
+                const reviewContextPath = path.join(getReviewsRoot(repoRoot), `${taskId}-code-review-context.json`);
+                seedReusableReviewEvidence(
+                    repoRoot, taskId, 'code', 'REVIEW PASSED', preflightPath, reviewContextPath, 'agent:code-reviewer'
+                );
+                const receiptPath = path.join(getReviewsRoot(repoRoot), `${taskId}-code-receipt.json`);
+                const contextBefore = fs.readFileSync(reviewContextPath, 'utf8');
+                const receiptBefore = fs.readFileSync(receiptPath, 'utf8');
+                const preflightSha256 = fileSha256(preflightPath)!;
+                const classification = {
+                    source: 'runtime_fix' as const,
+                    classification: {
+                        category: 'review_evidence_only',
+                        reason: 'Replace downstream reviewer evidence without changing source or compile evidence.',
+                        blocked_before_reuse: false,
+                        invalidated_review_types: scenario === 'invalidated' ? ['code', 'test'] : ['test']
+                    }
+                };
+                const decision = bindAuthoritativeRemediationDecisionToPreflight(
+                    resolveAuthoritativeReviewRemediationDecision({
+                        taskId,
+                        currentReviewType: scenario === 'invalidated' ? 'code' : 'test',
+                        classification,
+                        requiredReviews: { code: true, test: true },
+                        reviewExecutionPolicyMode: 'test_after_code',
+                        reusableReceipts: scenario === 'reuse-rejected' ? [{
+                            review_type: 'code', reuse_status: 'REJECTED', findings_satisfied: false
+                        }] : []
+                    }),
+                    preflightSha256
+                );
+                if (scenario === 'forged-decision') {
+                    decision.decision_sha256 = '0'.repeat(64);
+                }
+                appendTaskEvent(path.join(repoRoot, 'garda-agent-orchestrator'), taskId, 'REVIEW_CYCLE_RESTARTED', 'PASS',
+                    'Restart downstream review evidence.', {
+                        task_id: taskId,
+                        event_type: 'REVIEW_CYCLE_RESTARTED',
+                        status: 'PASSED',
+                        preflight_sha256: preflightSha256,
+                        authoritative_review_decision: decision,
+                        authoritative_review_classification: classification
+                    });
+                if (scenario === 'tampered-receipt') {
+                    const receipt = JSON.parse(receiptBefore) as Record<string, unknown>;
+                    receipt.review_context_sha256 = '0'.repeat(64);
+                    fs.writeFileSync(receiptPath, JSON.stringify(receipt), 'utf8');
+                }
+                if (scenario === 'stale-tree') {
+                    fs.writeFileSync(path.join(repoRoot, 'src', 'app.ts'), 'export const changed = true;\n', 'utf8');
+                }
+                const timelinePath = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events', `${taskId}.jsonl`);
+                const timelineBefore = fs.readFileSync(timelinePath, 'utf8');
+                const build = () => runBuildReviewContextCommand({
+                    repoRoot, reviewType: 'code', depth: '2', preflightPath, outputPath: reviewContextPath
+                });
+                if (scenario === 'forged-decision') {
+                    await assert.rejects(build, /persisted authoritative remediation decision.*failed validation/i);
+                    assert.equal(fs.readFileSync(reviewContextPath, 'utf8'), contextBefore);
+                    return;
+                }
+                const result = await build();
+                if (scenario === 'preserved') {
+                    assert.ok(result.outputLines.includes('CurrentPassReviewEvidence: True'), result.outputLines.join('\n'));
+                    assert.equal(result.acceptedReviewEvidenceKind, 'FRESH');
+                    assert.equal(fs.readFileSync(reviewContextPath, 'utf8'), contextBefore);
+                    assert.equal(fs.readFileSync(receiptPath, 'utf8'), receiptBefore);
+                    const appendedEvents = fs.readFileSync(timelinePath, 'utf8').slice(timelineBefore.length)
+                        .trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+                    assert.deepEqual(appendedEvents.map((event) => event.event_type), ['REVIEW_CONTEXT_REUSE_ACCEPTED']);
+                } else {
+                    assert.ok(result.outputLines.includes('CurrentPassReviewEvidence: rejected'), result.outputLines.join('\n'));
+                    assert.equal(result.reusedReviewEvidence, false);
+                    const context = JSON.parse(fs.readFileSync(reviewContextPath, 'utf8')) as Record<string, unknown>;
+                    assert.equal((context.review_execution as Record<string, unknown>).mode, 'FULL');
+                    assert.notEqual(fs.readFileSync(reviewContextPath, 'utf8'), contextBefore);
+                }
+            } finally {
+                fs.rmSync(repoRoot, { recursive: true, force: true });
+            }
+        });
+    }
+
     it('preserves custom review-context output path wiring', async () => {
         const repoRoot = createTempRepo();
         const taskId = 'T-review-context-cli-binding-custom-output';

@@ -89,6 +89,7 @@ export interface PersistedRemediationReusePolicy {
     reviewExecutionContract?: ReviewRemediationReviewContract | null;
     reviewExecutionValidationAuthority?: ReviewRemediationReviewContractValidationAuthority | null;
     persistedRemediationReuseRequired?: boolean;
+    acceptsPreservedCurrentPassContract?: boolean;
     failClosed?: boolean;
 }
 
@@ -376,6 +377,12 @@ export function resolvePersistedRemediationReusePolicy(options: {
             return emptyPersistedRemediationReusePolicy({
                 blockedReason: '',
                 preservedScopeMismatchReason: String(laneDecision.reason || '').trim(),
+                acceptsPreservedCurrentPassContract: authoritativeClassification !== undefined
+                    && laneDecision.mode === 'FULL'
+                    && laneDecision.reuse_eligible === true
+                    && laneDecision.invalidated === false
+                    && laneDecision.satisfied === false
+                    && laneDecision.reason_code === 'authoritative_reuse_pending',
                 reviewExecutionContract: execution.contract,
                 reviewExecutionValidationAuthority: execution.validationAuthority
             });
@@ -555,7 +562,10 @@ export async function runBuildReviewContextCommand(
         effectiveReviewReuseBlockedReason
     ) && reviewContextMatchesExecutionContract(
         currentPassReviewEvidence?.reviewContextPath || outputPath,
-        effectiveReviewExecutionContract
+        reviewExecutionContract
+            || (persistedRemediationReusePolicy.acceptsPreservedCurrentPassContract
+                ? undefined
+                : effectiveReviewExecutionContract)
     );
     if (currentPassReviewEvidenceAccepted && currentPassReviewEvidence) {
         await emitCurrentPassReviewContextReuseAccepted({
