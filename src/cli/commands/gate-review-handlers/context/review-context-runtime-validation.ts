@@ -215,12 +215,19 @@ export function assertReviewContextContractOrThrow(options: {
         : null;
     const reviewExecutionValidationAuthority = reviewExecution && options.preflightSha256
         ? resolvePersistedRemediationReviewExecutionAuthority({
-            reviewsRoot: path.dirname(options.contextPath),
+            reviewsRoot: path.dirname(options.preflightPath),
             taskId: options.taskId,
             reviewType: options.reviewType,
             preflightSha256: options.preflightSha256,
+            preflightPath: options.preflightPath,
             fullReviewScope: diffExpectations.expectedChangedFiles,
-            reviewExecution
+            reviewExecution,
+            reviewContextPath: options.contextPath,
+            receiptPath: resolveCanonicalReviewReceiptPath(
+                options.preflightPath,
+                options.taskId,
+                options.reviewType
+            )
         })
         : null;
     const violations = getReviewContextContractViolations({
@@ -252,6 +259,14 @@ export function assertReviewContextContractOrThrow(options: {
     if (violations.length > 0) {
         throw new Error(violations.join(' '));
     }
+}
+
+export function resolveCanonicalReviewReceiptPath(
+    preflightPath: string,
+    taskId: string,
+    reviewType: string
+): string {
+    return path.join(path.dirname(preflightPath), `${taskId}-${reviewType}-receipt.json`);
 }
 
 export function assertExplicitReviewContextRuntimeIdentity(options: {

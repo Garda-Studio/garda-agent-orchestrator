@@ -199,8 +199,11 @@ export function buildReviewCoverageAuditSummary(options: {
                         taskId: options.taskId,
                         reviewType,
                         preflightSha256,
+                        preflightPath,
                         fullReviewScope,
-                        reviewExecution
+                        reviewExecution,
+                        reviewContextPath: contextPath,
+                        receiptPath
                     });
                 if (!authority) {
                     violations.push('review context remediation review_execution authority is unavailable');

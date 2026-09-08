@@ -5,6 +5,7 @@ import * as path from 'node:path';
 
 import { runBuildReviewContextCommand } from '../../../../../../src/cli/commands/gate-build-handlers';
 import { runFullSuiteValidationCommand } from '../../../../../../src/cli/commands/gates';
+import { resolveCanonicalReviewReceiptPath } from '../../../../../../src/cli/commands/gate-review-handlers/context/review-context-runtime-validation';
 import {
     bindAuthoritativeRemediationDecisionToPreflight
 } from '../../../../../../src/cli/commands/gate-flows/review-context/review-context-flow';
@@ -157,6 +158,14 @@ describe('gate build-review-context CLI flow binding', () => {
         assert.equal(fs.existsSync(outputPath), true);
         assert.equal(result.outputLines.includes(`ReviewContextPath: ${normalizePath(outputPath)}`), true);
         assert.equal(result.outputLines.includes(`OutputPath: ${normalizePath(outputPath)}`), true);
+        assert.equal(
+            normalizePath(resolveCanonicalReviewReceiptPath(preflightPath, taskId, 'code')),
+            normalizePath(path.join(getReviewsRoot(repoRoot), `${taskId}-code-receipt.json`))
+        );
+        assert.notEqual(
+            path.dirname(resolveCanonicalReviewReceiptPath(preflightPath, taskId, 'code')),
+            path.dirname(outputPath)
+        );
 
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });

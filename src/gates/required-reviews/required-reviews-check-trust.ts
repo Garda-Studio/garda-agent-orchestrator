@@ -228,8 +228,11 @@ export function validateReviewArtifactGateEligibility(options: {
                     taskId: resolvedTaskId,
                     reviewType: reviewKey,
                     preflightSha256: options.preflightSha256,
+                    preflightPath: options.preflightPath || undefined,
                     fullReviewScope: diffExpectations.expectedChangedFiles,
-                    reviewExecution
+                    reviewExecution,
+                    reviewContextPath,
+                    receiptPath: artifactPath.replace(/\.md$/, '-receipt.json')
                 })
                 : null;
             errors.push(...getReviewContextContractViolations({

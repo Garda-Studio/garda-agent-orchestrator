@@ -104,10 +104,10 @@ test('reconstructs remediation review execution authority only from an integrity
         authoritative_review_decision: boundPreservedDecision,
         authoritative_review_classification: preservedClassification
     });
-    const reviewContextPath = path.join(reviewsRoot, `${taskId}-code-review-context.json`);
+    const reviewContextPath = path.join(reviewsRoot, 'custom', `${taskId}-code-review-context.json`);
     const receiptPath = path.join(reviewsRoot, `${taskId}-code-receipt.json`);
     const preflightPath = path.join(reviewsRoot, `${taskId}-preflight.json`);
-    fs.mkdirSync(reviewsRoot, { recursive: true });
+    fs.mkdirSync(path.dirname(reviewContextPath), { recursive: true });
     fs.writeFileSync(reviewContextPath, '{"context":true}\n', 'utf8');
     fs.writeFileSync(receiptPath, '{"receipt":true}\n', 'utf8');
     const preservedOptions = {
@@ -155,7 +155,7 @@ test('reconstructs remediation review execution authority only from an integrity
         reviewExecution: { ...reviewExecution, mode: 'DELTA', source: 'remediation_delta' }
     }), null);
     if (process.platform !== 'win32') {
-        const caseVariantContextPath = path.join(reviewsRoot, `${taskId}-CODE-review-context.json`);
+        const caseVariantContextPath = path.join(reviewsRoot, 'custom', `${taskId}-CODE-review-context.json`);
         fs.copyFileSync(reviewContextPath, caseVariantContextPath);
         assert.equal(resolvePersistedRemediationReviewExecutionAuthority({
             ...preservedOptions,

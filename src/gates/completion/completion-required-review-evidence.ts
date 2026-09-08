@@ -186,8 +186,11 @@ export function collectRequiredReviewEvidence(input: {
                                 taskId: input.taskId,
                                 reviewType: reviewKey,
                                 preflightSha256: input.preflightSha256,
+                                preflightPath: input.preflightPath,
                                 fullReviewScope: diffExpectations.expectedChangedFiles,
-                                reviewExecution
+                                reviewExecution,
+                                reviewContextPath,
+                                receiptPath
                             })
                             : null;
                         input.errors.push(...getReviewContextContractViolations({
