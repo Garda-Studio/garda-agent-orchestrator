@@ -1050,7 +1050,11 @@ function resolveAuthenticatedReviewOutputCorrectionCapabilities(options: {
         // Native Codex agent tools can continue a reviewer conversation, but do not
         // expose a provider response receipt that Garda can bind to corrected
         // output bytes. Keep that controller on the correction-only fallback.
-        && !['multi_agent_v1.spawn_agent', 'collaboration.spawn_agent'].includes(attestationSource.toLowerCase())
+        && ![
+            'multi_agent_v1',
+            'multi_agent_v1.spawn_agent',
+            'collaboration.spawn_agent'
+        ].includes(attestationSource.toLowerCase())
         && Number.isFinite(Date.parse(launchCompletedAtUtc))
     );
     return {

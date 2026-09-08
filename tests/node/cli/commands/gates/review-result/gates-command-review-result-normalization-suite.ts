@@ -3444,7 +3444,11 @@ describe('gates command review result - normalization', () => {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });
 
-    for (const attestationSource of ['multi_agent_v1.spawn_agent', 'collaboration.spawn_agent'])
+    for (const attestationSource of [
+        'multi_agent_v1',
+        'multi_agent_v1.spawn_agent',
+        'collaboration.spawn_agent'
+    ])
     it(`routes ${attestationSource} Codex corrections through a clean correction-only reviewer`, async () => {
         const repoRoot = createTempRepo();
         const taskId = 'T-979-7-result-multi-agent-correction-only';
