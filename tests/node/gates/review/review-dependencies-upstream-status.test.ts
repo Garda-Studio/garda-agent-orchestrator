@@ -7,8 +7,12 @@ import * as path from 'node:path';
 
 import {
     assessUpstreamReviewDependencyStatus,
+    resolveValidatedUpstreamReviewDependencyStatus,
     type ReviewDependencyTimelineEvent
 } from '../../../../src/gates/review/review-dependencies';
+import { resolveLockedReviewFindingPolicyFromPreflight } from '../../../../src/gates/review/review-finding-disposition';
+import { getReviewFindingsEvidenceFromValidationArtifact } from '../../../../src/gates/completion/completion-verdict-findings';
+import { type ReviewFindingsValidationArtifact } from '../../../../src/gates/review/review-findings-validation-artifact';
 import { writeSchema4ReviewPackage } from './review-execution-lineage-test-fixture';
 
 function writeJson(filePath: string, value: unknown): void {
@@ -343,7 +347,7 @@ test('assessUpstreamReviewDependencyStatus rejects malformed verdict-free JSON a
     }
 });
 
-test('assessUpstreamReviewDependencyStatus treats verdict-free JSON residual risks as active upstream failures', () => {
+test('assessUpstreamReviewDependencyStatus blocks verdict-free JSON residual risks under strict fallback policy', () => {
     const fixture = createReviewDependencyTaxonomyFixture({
         taskId: 'T-979-json-residual-risk'
     });
@@ -369,8 +373,69 @@ test('assessUpstreamReviewDependencyStatus treats verdict-free JSON residual ris
         });
 
         assert.equal(result.ready, false);
-        assert.equal(result.blockerCode, 'missing_upstream_pass');
-        assert.match(result.reason, /upstream review failed with 'REVIEW FAILED'/);
+        assert.equal(result.blockerCode, 'stale_freshness');
+        assert.match(result.reason, /fix_now residual risks/u);
+    } finally {
+        fs.rmSync(fixture.repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('assessUpstreamReviewDependencyStatus permits non-blocking findings under the locked profile policy', () => {
+    const fixture = createReviewDependencyTaxonomyFixture({
+        taskId: 'T-979-json-non-blocking-finding'
+    });
+    try {
+        fixture.preflightPayload.profile_policy_snapshot = {
+            review_finding_policy: {
+                schema_version: 1,
+                policy_id: 'custom',
+                findings: {
+                    critical: 'fix_now',
+                    high: 'fix_now',
+                    medium: 'create_follow_up',
+                    low: 'create_follow_up'
+                },
+                residual_risk: 'create_follow_up'
+            }
+        };
+        writeJson(fixture.preflightPath, fixture.preflightPayload);
+        const currentPreflightSha256 = sha256Buffer(fs.readFileSync(fixture.preflightPath));
+        const reviewPackage = writeSchema4ReviewPackage({
+            reviewsRoot: path.dirname(fixture.preflightPath),
+            repoRoot: fixture.repoRoot,
+            taskId: 'T-979-json-non-blocking-finding',
+            reviewType: 'code',
+            preflightPath: fixture.preflightPath,
+            preflight: fixture.preflightPayload,
+            residualRisks: ['Residual risk is assigned to a follow-up task by the locked profile policy.']
+        });
+
+        const result = assessUpstreamReviewDependencyStatus({
+            taskId: 'T-979-json-non-blocking-finding',
+            preflightPath: fixture.preflightPath,
+            preflightPayload: fixture.preflightPayload,
+            preflightHashSha256: currentPreflightSha256,
+            latestRecordedReviewByType: fixture.latestRecordedReviewByType,
+            upstreamReviewType: 'code',
+            timelineEvents: fixture.timelineEvents
+        });
+
+        assert.notEqual(result.blockerCode, 'missing_upstream_pass');
+        const findingsEvidence = getReviewFindingsEvidenceFromValidationArtifact(
+            reviewPackage.artifactPath,
+            JSON.parse(fs.readFileSync(
+                reviewPackage.validationArtifactPath,
+                'utf8'
+            )) as ReviewFindingsValidationArtifact,
+            resolveLockedReviewFindingPolicyFromPreflight(fixture.preflightPayload)
+        );
+        assert.equal(findingsEvidence.residual_risks.length, 1);
+        const dispositionStatus = resolveValidatedUpstreamReviewDependencyStatus('code', {
+            violations: [],
+            findingsEvidence
+        });
+        assert.equal(dispositionStatus.ready, true, dispositionStatus.reason);
+        assert.equal(dispositionStatus.blockerCode, null);
     } finally {
         fs.rmSync(fixture.repoRoot, { recursive: true, force: true });
     }

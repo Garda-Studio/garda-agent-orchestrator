@@ -23,8 +23,6 @@ import { reviewContextLaneScopeMatchesCurrentPreflight } from '../scope/domain-s
 import { REVIEW_CONTRACTS, validateReviewArtifactGateEligibility } from '../required-reviews/required-reviews-check';
 import { resolveCanonicalReviewContextPath } from '../review-context/review-context-paths';
 import {
-    jsonReviewFindingsArtifactContainsOnlyMissingFocusedValidation,
-    jsonReviewFindingsArtifactHasActiveFindings,
     parseJsonReviewFindingsArtifact,
     reviewContextRequiresFindingsOnlyArtifact,
     resolveReviewFindingsArtifactVerdictToken
@@ -45,6 +43,22 @@ export interface ReviewDependencyStatus {
     reason: string;
     blockerCode: ReviewDependencyBlockerCode | null;
     dependencyEdge: boolean;
+}
+
+export function resolveValidatedUpstreamReviewDependencyStatus(
+    reviewType: string,
+    validation: {
+        violations: readonly string[];
+        findingsEvidence: { violations: readonly string[] } | null;
+    }
+): ReviewDependencyStatus {
+    const validationViolations = [
+        ...validation.violations,
+        ...(validation.findingsEvidence?.violations ?? [])
+    ];
+    return validationViolations.length > 0
+        ? blockedDependencyStatus(reviewType, 'stale_freshness', validationViolations.join('; '))
+        : readyDependencyStatus(reviewType);
 }
 
 export const REVIEW_DEPENDENCY_BLOCKER_CODES = Object.freeze([
@@ -371,18 +385,6 @@ export function assessUpstreamReviewDependencyStatus(options: {
                 `review artifact verdict is 'missing' instead of '${passToken || 'unknown'}'`
             );
         }
-        if (
-            failToken
-            && jsonReviewFindingsArtifactHasActiveFindings(findingsReport)
-            && !jsonReviewFindingsArtifactContainsOnlyMissingFocusedValidation(findingsReport)
-        ) {
-            return blockedDependencyStatus(
-                options.upstreamReviewType,
-                'missing_upstream_pass',
-                `upstream review failed with '${failToken}'; fix implementation and rerun compile plus ` +
-                `'${options.upstreamReviewType}' review before launching dependent reviews`
-            );
-        }
     } else {
         const reviewVerdict = resolveReviewFindingsArtifactVerdictToken({
             content: artifactContent,
@@ -467,15 +469,7 @@ export function assessUpstreamReviewDependencyStatus(options: {
         timelineEvents: options.timelineEvents,
         repoRoot
     });
-    if (validation.violations.length > 0) {
-        return blockedDependencyStatus(
-            options.upstreamReviewType,
-            'stale_freshness',
-            validation.violations.join('; ')
-        );
-    }
-
-    return readyDependencyStatus(options.upstreamReviewType);
+    return resolveValidatedUpstreamReviewDependencyStatus(options.upstreamReviewType, validation);
 }
 
 export function buildReviewDependencyDiagnostics(options: {
