@@ -65,6 +65,148 @@ function notifySpawnedProcess(
 }
 
 const PROCESS_TERMINATION_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+const WINDOWS_PROCESS_TREE_QUERY_TIMEOUT_MS = 5_000;
+const WINDOWS_PROCESS_TREE_FALLBACK_SCRIPT = `
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Threading;
+public static class GardaProcessTree {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+    private struct PROCESSENTRY32 {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szExeFile;
+    }
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool Process32First(IntPtr snapshot, ref PROCESSENTRY32 entry);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool Process32Next(IntPtr snapshot, ref PROCESSENTRY32 entry);
+    [DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint access, bool inheritHandle, uint processId);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateProcess(IntPtr process, uint exitCode);
+    private static List<Tuple<uint, uint>> SnapshotPairs() {
+        var pairs = new List<Tuple<uint, uint>>();
+        IntPtr snapshot = CreateToolhelp32Snapshot(0x00000002, 0);
+        if (snapshot == new IntPtr(-1)) return pairs;
+        try {
+            var entry = new PROCESSENTRY32();
+            entry.dwSize = (uint)Marshal.SizeOf(entry);
+            if (Process32First(snapshot, ref entry)) {
+                do { pairs.Add(Tuple.Create(entry.th32ProcessID, entry.th32ParentProcessID)); }
+                while (Process32Next(snapshot, ref entry));
+            }
+            return pairs;
+        } finally { CloseHandle(snapshot); }
+    }
+    public static int Terminate(uint rootPid) {
+        const uint PROCESS_TERMINATE = 0x0001;
+        const uint SYNCHRONIZE = 0x00100000;
+        var known = new HashSet<uint>();
+        var handles = new Dictionary<uint, IntPtr>();
+        IntPtr rootHandle = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, false, rootPid);
+        if (rootHandle == IntPtr.Zero) return -1;
+        known.Add(rootPid);
+        handles.Add(rootPid, rootHandle);
+        int quietPasses = 0;
+        try {
+            for (int pass = 0; pass < 8 && quietPasses < 2; pass++) {
+                bool discovered = false;
+                var pairs = SnapshotPairs();
+                bool expanded;
+                do {
+                    expanded = false;
+                    foreach (var pair in pairs) {
+                        uint processId = pair.Item1;
+                        uint parentId = pair.Item2;
+                        if (!known.Contains(parentId) || known.Contains(processId)) continue;
+                        known.Add(processId);
+                        IntPtr handle = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, false, processId);
+                        if (handle != IntPtr.Zero) handles[processId] = handle;
+                        discovered = true;
+                        expanded = true;
+                    }
+                } while (expanded);
+                foreach (var handle in handles.Values) TerminateProcess(handle, 1);
+                quietPasses = discovered ? 0 : quietPasses + 1;
+                Thread.Sleep(25);
+            }
+            return handles.Count;
+        } finally {
+            foreach (var handle in handles.Values) CloseHandle(handle);
+        }
+    }
+}
+'@
+[GardaProcessTree]::Terminate([uint32]$env:GARDA_PROCESS_TREE_ROOT_PID)
+`;
+
+function terminateWindowsProcessTreeFallback(rootPid: number): boolean {
+    if (!Number.isInteger(rootPid) || rootPid <= 0) {
+        return false;
+    }
+    try {
+        const windowsRoot = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
+        const powershellPath = path.join(
+            windowsRoot,
+            'System32',
+            'WindowsPowerShell',
+            'v1.0',
+            'powershell.exe'
+        );
+        const output = childProcess.execFileSync(powershellPath, [
+            '-NoLogo',
+            '-NoProfile',
+            '-NonInteractive',
+            '-EncodedCommand',
+            Buffer.from(WINDOWS_PROCESS_TREE_FALLBACK_SCRIPT, 'utf16le').toString('base64')
+        ], {
+            encoding: 'utf8',
+            env: { ...process.env, GARDA_PROCESS_TREE_ROOT_PID: String(rootPid) },
+            stdio: ['ignore', 'pipe', 'ignore'],
+            windowsHide: true,
+            timeout: WINDOWS_PROCESS_TREE_QUERY_TIMEOUT_MS,
+            maxBuffer: 1024 * 1024
+        });
+        const terminatedCount = Number(output.trim());
+        return Number.isInteger(terminatedCount) && terminatedCount > 0;
+    } catch (_error) {
+        return false;
+    }
+}
+
+function killWindowsProcessTree(child: ChildProcess): void {
+    if (!child.pid) {
+        return;
+    }
+    try {
+        childProcess.execFileSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+            stdio: 'ignore',
+            windowsHide: true,
+            timeout: 5000
+        });
+        return;
+    } catch (_error) {
+        if (child.exitCode !== null || child.signalCode !== null) {
+            return;
+        }
+        terminateWindowsProcessTreeFallback(child.pid);
+        try { child.kill('SIGKILL'); } catch (_killError) { /* Already exited. */ }
+    }
+}
 
 function sliceChunkToFit(chunk: string, maxBytes: number): string {
     if (maxBytes <= 0 || chunk.length === 0) {
@@ -360,15 +502,7 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
             }
             try {
                 if (process.platform === 'win32') {
-                    try {
-                        childProcess.execFileSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
-                            stdio: 'ignore',
-                            windowsHide: true,
-                            timeout: 5000
-                        });
-                    } catch (_e) {
-                        child.kill('SIGKILL');
-                    }
+                    killWindowsProcessTree(child);
                 } else {
                     try {
                         process.kill(-child.pid, force ? 'SIGKILL' : 'SIGTERM');
@@ -587,15 +721,7 @@ export function spawnShellCommand(
                 return;
             }
             try {
-                try {
-                    childProcess.execFileSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
-                        stdio: 'ignore',
-                        windowsHide: true,
-                        timeout: 5000
-                    });
-                } catch (_e) {
-                    child.kill('SIGKILL');
-                }
+                killWindowsProcessTree(child);
             } catch (_e) {
                 // Child already exited
             }

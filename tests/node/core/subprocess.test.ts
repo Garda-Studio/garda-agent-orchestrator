@@ -35,6 +35,15 @@ async function waitForProcessExit(pid: number, timeoutMs = 5000): Promise<boolea
     return !isProcessAlive(pid);
 }
 
+async function waitForFile(filePath: string, timeoutMs = 5000): Promise<boolean> {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+        if (fs.existsSync(filePath)) return true;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return fs.existsSync(filePath);
+}
+
 function createNodeBatchFixture(scriptSource = 'console.log("shelltest")'): { scriptPath: string; cleanup: () => void } {
     const batchRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-batch-'));
     const jsPath = path.join(batchRoot, 'payload.js');
@@ -436,6 +445,51 @@ describe('shell-surface hardening', () => {
             assert.notEqual(result.exitCode, 0);
         } finally {
             fixture.cleanup();
+        }
+    });
+
+    it('spawnShellCommand terminates inherited-pipe descendants when taskkill is unavailable', async () => {
+        if (process.platform !== 'win32') return;
+        const fakeToolRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-fake-taskkill-'));
+        const fakeTaskkillPath = path.join(fakeToolRoot, 'taskkill.exe');
+        fs.copyFileSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'where.exe'), fakeTaskkillPath);
+        const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') || 'PATH';
+        const originalPath = process.env[pathKey];
+        const fixture = createNodeBatchFixture([
+            "const cp = require('node:child_process');",
+            "const fs = require('node:fs');",
+            "const descendant = cp.spawn(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], { stdio: 'inherit' });",
+            "fs.writeFileSync(require('node:path').join(__dirname, 'descendant.pid'), String(descendant.pid));",
+            'setTimeout(()=>{},60000);'
+        ].join('\n'));
+        let descendantPid: number | null = null;
+        try {
+            process.env[pathKey] = `${fakeToolRoot}${path.delimiter}${originalPath || ''}`;
+            try {
+                const startedAt = Date.now();
+                const descendantPidPath = path.join(path.dirname(fixture.scriptPath), 'descendant.pid');
+                const pending = spawnShellCommand(fixture.scriptPath, [], { timeoutMs: 3_000 });
+                try {
+                    assert.equal(await waitForFile(descendantPidPath, 2_000), true, 'descendant PID was not recorded');
+                    descendantPid = Number(fs.readFileSync(descendantPidPath, 'utf8'));
+                    const result = await pending;
+                    const elapsed = Date.now() - startedAt;
+                    assert.equal(result.timedOut, true);
+                    assert.ok(elapsed < 8_000, `Expected prompt process-tree cleanup, took ${elapsed}ms`);
+                    assert.equal(await waitForProcessExit(descendantPid), true);
+                } finally {
+                    await pending.catch(() => undefined);
+                }
+            } finally {
+                if (originalPath === undefined) delete process.env[pathKey];
+                else process.env[pathKey] = originalPath;
+            }
+        } finally {
+            if (descendantPid !== null && isProcessAlive(descendantPid)) {
+                try { process.kill(descendantPid, 'SIGKILL'); } catch { /* Already exited. */ }
+            }
+            fixture.cleanup();
+            fs.rmSync(fakeToolRoot, { recursive: true, force: true });
         }
     });
 
