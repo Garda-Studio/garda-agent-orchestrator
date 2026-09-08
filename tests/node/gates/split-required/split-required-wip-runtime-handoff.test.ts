@@ -921,9 +921,7 @@ describe('split-required WIP restored-runtime handoff', () => {
         }
     });
 
-    it('does not write handoff bytes through a replaced parent directory', {
-        skip: process.platform === 'win32' ? 'Windows prevents renaming a directory with an open child handle.' : false
-    }, () => {
+    it('does not write handoff bytes through a replaced parent directory', () => {
         const { repoRoot, identity } = preparePendingHandoff();
         const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-wip-handoff-parent-swap-'));
         const parentPath = path.dirname(identity.handoffPath);
@@ -934,10 +932,15 @@ describe('split-required WIP restored-runtime handoff', () => {
         const originalOpenSync = fsModule.openSync;
         let parentReplaced = false;
         fsModule.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
-            if (!parentReplaced
+            const resolvedFilePath = typeof filePath === 'string' ? path.resolve(filePath) : '';
+            const replaceBeforeParentOpen = process.platform === 'win32'
+                && resolvedFilePath === path.resolve(parentPath)
+                && isReadOnlyOpen(flags);
+            const replaceAfterParentOpen = process.platform !== 'win32'
                 && typeof filePath === 'string'
                 && path.basename(filePath).startsWith(`${path.basename(identity.handoffPath)}.garda-replace-`)
-                && isExclusiveCreate(flags)) {
+                && isExclusiveCreate(flags);
+            if (!parentReplaced && (replaceBeforeParentOpen || replaceAfterParentOpen)) {
                 parentReplaced = true;
                 fs.renameSync(parentPath, originalParentPath);
                 fs.symlinkSync(outsideRoot, parentPath, process.platform === 'win32' ? 'junction' : 'dir');
