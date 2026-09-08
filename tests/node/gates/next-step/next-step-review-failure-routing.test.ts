@@ -276,7 +276,7 @@ function appendEvent(
         timestamp_utc: timestampUtc || new Date().toISOString(),
         details,
         integrity: {
-            schema_version: 1,
+            schema_version: 2,
             task_sequence: taskSequence,
             prev_event_sha256: previousEventSha256,
             event_sha256: null

@@ -157,21 +157,16 @@ describe('gates/next-step review cycle continuation', () => {
         });
         const targetEventPath = path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`);
         const mutableFs = requireFromTest('node:fs') as typeof fs;
-        const originalAppendFileSync = mutableFs.appendFileSync;
-        mutableFs.appendFileSync = ((
-            filePath: fs.PathOrFileDescriptor,
-            data: string | Uint8Array,
-            options?: unknown
-        ): void => {
-            if (
-                typeof filePath === 'string'
-                && path.resolve(filePath) === path.resolve(targetEventPath)
-                && String(data).includes('"event_type":"SPLIT_REQUIRED_CLEARED"')
-            ) {
+        const originalOpenSync = mutableFs.openSync;
+        mutableFs.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode): number => {
+            const opensForAppend = typeof flags === 'number'
+                ? (flags & fs.constants.O_APPEND) !== 0
+                : String(flags).includes('a');
+            if (opensForAppend && typeof filePath === 'string' && path.resolve(filePath) === path.resolve(targetEventPath)) {
                 throw new Error('forced continuation clear append failure');
             }
-            return (originalAppendFileSync as unknown as (...args: unknown[]) => void)(filePath, data, options);
-        }) as typeof fs.appendFileSync;
+            return originalOpenSync(filePath, flags, mode);
+        }) as typeof fs.openSync;
 
         try {
             const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
@@ -181,7 +176,7 @@ describe('gates/next-step review cycle continuation', () => {
             assert.ok(readTaskMd(repoRoot).includes(`| ${TASK_ID} | 🟫 SPLIT_REQUIRED |`));
             assert.equal(countEvents(repoRoot, 'SPLIT_REQUIRED_CLEARED'), 0);
         } finally {
-            mutableFs.appendFileSync = originalAppendFileSync;
+            mutableFs.openSync = originalOpenSync;
         }
     });
 
@@ -196,28 +191,26 @@ describe('gates/next-step review cycle continuation', () => {
         });
         const targetEventPath = path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`);
         const mutableFs = requireFromTest('node:fs') as typeof fs;
-        const originalAppendFileSync = mutableFs.appendFileSync;
-        mutableFs.appendFileSync = ((
-            filePath: fs.PathOrFileDescriptor,
-            data: string | Uint8Array,
-            options?: unknown
-        ): void => {
-            if (
-                typeof filePath === 'string'
-                && path.resolve(filePath) === path.resolve(targetEventPath)
-                && String(data).includes('"event_type":"STATUS_CHANGED"')
-                && String(data).includes('"reason":"review_cycle_continuation_approved"')
-            ) {
-                throw new Error('forced continuation status telemetry failure');
+        const originalOpenSync = mutableFs.openSync;
+        let targetOpenCount = 0;
+        mutableFs.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode): number => {
+            const opensForAppend = typeof flags === 'number'
+                ? (flags & fs.constants.O_APPEND) !== 0
+                : String(flags).includes('a');
+            if (opensForAppend && typeof filePath === 'string' && path.resolve(filePath) === path.resolve(targetEventPath)) {
+                targetOpenCount += 1;
+                if (targetOpenCount === 2) {
+                    throw new Error('forced continuation status telemetry failure');
+                }
             }
-            return (originalAppendFileSync as unknown as (...args: unknown[]) => void)(filePath, data, options);
-        }) as typeof fs.appendFileSync;
+            return originalOpenSync(filePath, flags, mode);
+        }) as typeof fs.openSync;
 
         let failedResult: ReturnType<typeof resolveNextStep> | null = null;
         try {
             failedResult = resolveNextStep({ taskId: TASK_ID, repoRoot });
         } finally {
-            mutableFs.appendFileSync = originalAppendFileSync;
+            mutableFs.openSync = originalOpenSync;
         }
 
         assert.ok(failedResult);
@@ -697,7 +690,7 @@ function appendEvent(
         timestamp_utc: new Date().toISOString(),
         details,
         integrity: {
-            schema_version: 1,
+            schema_version: 2,
             task_sequence: taskSequence,
             prev_event_sha256: previousEventSha256,
             event_sha256: null
