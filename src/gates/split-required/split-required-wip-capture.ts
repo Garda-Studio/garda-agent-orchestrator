@@ -852,6 +852,30 @@ function blockedCaptureResult(params: {
     };
 }
 
+function isCapturedWorkspaceStillSuspended(
+    repoRoot: string,
+    manifest: SplitRequiredWipManifest
+): boolean {
+    const trackedChanges = new Set(
+        excludeGateOwnedQueueFiles(collectTrackedChangeFiles(repoRoot)).all
+    );
+    if (manifest.tracked_files.some((entry) => trackedChanges.has(entry.path))) {
+        return false;
+    }
+    return manifest.untracked_files.every((entry) => (
+        isRepoPathAbsent(repoRoot, entry.path)
+    ));
+}
+
+function isRepoPathAbsent(repoRoot: string, relativePath: string): boolean {
+    try {
+        fs.lstatSync(resolveRepoPath(repoRoot, relativePath));
+        return false;
+    } catch (error: unknown) {
+        return (error as NodeJS.ErrnoException)?.code === 'ENOENT';
+    }
+}
+
 export function captureAndSuspendSplitRequiredWip(params: {
     repoRoot: string;
     taskId: string;
@@ -875,7 +899,7 @@ export function captureAndSuspendSplitRequiredWip(params: {
         preflightPath,
         guardKind: params.guardKind
     });
-    if (current) {
+    if (current && isCapturedWorkspaceStillSuspended(repoRoot, current.manifest)) {
         return {
             status: 'ALREADY_CAPTURED',
             manifest_path: normalizePath(current.path),

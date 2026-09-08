@@ -226,6 +226,61 @@ describe('split-required WIP capture boundary', () => {
         );
     });
 
+    it('recaptures restored WIP instead of reusing a manifest whose files are present', (context) => {
+        const repoRoot = makeRepo();
+        context.after(() => removeTempRoot(repoRoot));
+        writeFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
+        writeFile(repoRoot, 'src/new.ts', 'export const added = true;\n');
+
+        const first = capture(repoRoot, ['src/app.ts', 'src/new.ts']);
+        assert.equal(first.status, 'CAPTURED', first.violations.join('\n'));
+        assert.ok(first.manifest_path);
+        const restored = restoreSplitRequiredWip({
+            repoRoot,
+            taskId: TASK_ID,
+            manifestPath: first.manifest_path
+        });
+        assert.equal(restored.status, 'RESTORED', restored.violations.join('\n'));
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'src/app.ts'), 'utf8'), 'export const value = 2;\n');
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'src/new.ts'), 'utf8'), 'export const added = true;\n');
+
+        const second = capture(repoRoot, ['src/app.ts', 'src/new.ts']);
+
+        assert.equal(second.status, 'CAPTURED', second.violations.join('\n'));
+        assert.ok(second.manifest_path);
+        assert.notEqual(second.manifest_path, first.manifest_path);
+        assert.deepEqual(second.untracked_files, ['src/new.ts']);
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'src/app.ts'), 'utf8'), 'export const value = 1;\n');
+        assert.equal(fs.existsSync(path.join(repoRoot, 'src/new.ts')), false);
+    });
+
+    it('does not reuse a capture when a dangling symlink occupies an untracked path', (context) => {
+        const repoRoot = makeRepo();
+        context.after(() => removeTempRoot(repoRoot));
+        writeFile(repoRoot, 'src/new.ts', 'export const added = true;\n');
+        const first = capture(repoRoot, ['src/new.ts']);
+        assert.equal(first.status, 'CAPTURED', first.violations.join('\n'));
+        assert.ok(first.manifest_path);
+
+        const targetPath = path.join(repoRoot, 'missing-target.ts');
+        const linkPath = path.join(repoRoot, 'src', 'new.ts');
+        try {
+            fs.symlinkSync(targetPath, linkPath, 'file');
+        } catch (error: unknown) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (process.platform === 'win32' && ['EACCES', 'EPERM', 'UNKNOWN'].includes(String(code))) {
+                context.skip(`Symlink creation unavailable: ${String(code)}`);
+                return;
+            }
+            throw error;
+        }
+
+        const second = capture(repoRoot, ['src/new.ts']);
+
+        assert.equal(second.status, 'BLOCKED');
+        assert.notEqual(second.manifest_path, first.manifest_path);
+    });
+
     it('blocks a preflight without task identity before workspace mutation', (context) => {
         const repoRoot = makeRepo();
         context.after(() => removeTempRoot(repoRoot));
