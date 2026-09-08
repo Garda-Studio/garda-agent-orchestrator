@@ -4214,6 +4214,14 @@ describe('gates command review result - normalization', () => {
         )) as { state: string; recovery: { selected_transport: string } };
         assert.equal(correctionArtifact.state, 'FULL_REVIEW_REQUIRED');
         assert.equal(correctionArtifact.recovery.selected_transport, 'full_reviewer_relaunch');
+        const fullReviewRequiredEvent = [...readTaskTimelineEvents(repoRoot, taskId)]
+            .reverse()
+            .find((event) => event.event_type === 'REVIEW_OUTPUT_CORRECTION_FULL_REVIEW_REQUIRED');
+        assert.ok(fullReviewRequiredEvent?.details);
+        assert.equal(
+            String((fullReviewRequiredEvent.details as Record<string, unknown>).correction_package_sha256 || ''),
+            fileSha256(correctionArtifactPath)
+        );
         assert.equal(
             readTaskTimelineEvents(repoRoot, taskId)
                 .filter((event) => event.event_type === 'REVIEW_RECORDED').length,

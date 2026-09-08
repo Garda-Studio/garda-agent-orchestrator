@@ -3115,6 +3115,7 @@ async function handleRecordReviewResultUnlocked(
                     reviewer_attempt_id: pendingCorrectionOriginalReviewerAttemptId,
                     correction_artifact_path: normalizePath(correctionArtifactPath),
                     correction_artifact_sha256: updated.artifact_sha256,
+                    correction_package_sha256: fileSha256(correctionArtifactPath),
                     reasons
                 }
             );
