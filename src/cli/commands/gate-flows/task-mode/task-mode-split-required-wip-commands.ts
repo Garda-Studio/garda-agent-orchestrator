@@ -1,8 +1,10 @@
 import {
     listSplitRequiredWip,
-    restoreSplitRequiredWip,
     retireSplitRequiredWip
 } from '../../../../gates/split-required/split-required-wip';
+import {
+    restoreSplitRequiredWipThroughRuntimeHandoff
+} from '../../../../gates/split-required/split-required-wip-runtime-reexec';
 import {
     EXIT_GATE_FAILURE,
     EXIT_SUCCESS
@@ -63,10 +65,10 @@ export function runListSplitRequiredWipCommand(
     };
 }
 
-export function runRestoreSplitRequiredWipCommand(
+export async function runRestoreSplitRequiredWipCommand(
     options: RestoreSplitRequiredWipCommandOptions
-): SplitRequiredWipCommandResult {
-    const result = restoreSplitRequiredWip({
+): Promise<SplitRequiredWipCommandResult> {
+    const result = await restoreSplitRequiredWipThroughRuntimeHandoff({
         repoRoot: String(options.repoRoot || '.'),
         taskId: requiredText(options.taskId, 'TaskId'),
         manifestPath: requiredText(options.manifestPath, 'ManifestPath'),
