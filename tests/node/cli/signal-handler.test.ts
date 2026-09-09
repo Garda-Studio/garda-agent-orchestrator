@@ -14,6 +14,7 @@ import {
     computeSignalExitCode
 } from '../../../src/cli/signal-handler';
 import {
+    SHUTDOWN_CLEANUP_CONCURRENCY,
     spawnStreamed,
     SUBPROCESS_TERMINATION_TIMEOUT_MS
 } from '../../../src/core/subprocess';
@@ -233,6 +234,24 @@ describe('onSignal integration — exit code propagation', () => {
         assert.equal(exitCode, 129);
     });
 
+    it('SIGBREAK invokes coordinated cleanup and preserves exit code 149 on Windows', async () => {
+        if (process.platform !== 'win32') return;
+        let cleanupFinished = false;
+        const signalListenersBefore = process.listeners('SIGBREAK');
+        installSignalHandlers();
+        registerCleanup(async function () {
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            cleanupFinished = true;
+        });
+        const handler = process.listeners('SIGBREAK').find((listener) => !signalListenersBefore.includes(listener));
+        assert.ok(handler, 'coordinator SIGBREAK listener should be installed');
+
+        handler('SIGBREAK');
+        assert.equal(await waitForCondition(() => exitCode !== null), true);
+        assert.equal(cleanupFinished, true);
+        assert.equal(exitCode, 149);
+    });
+
     it('ignores replay signal and does not exit again', async () => {
         installSignalHandlers();
         const handler = (process.listeners('SIGTERM').pop() as Function) || (() => {});
@@ -259,6 +278,59 @@ describe('onSignal integration — exit code propagation', () => {
         assert.equal(exitCode, null);
         assert.equal(await waitForCondition(() => exitCode !== null), true);
         assert.equal(cleanupFinished, true);
+        assert.equal(exitCode, 143);
+    });
+
+    it('prevents unbounded cleanup callback fan-out', async () => {
+        let active = 0;
+        let peakActive = 0;
+        let completed = 0;
+        installSignalHandlers();
+        for (let index = 0; index < SHUTDOWN_CLEANUP_CONCURRENCY * 3; index += 1) {
+            registerCleanup(async function () {
+                active += 1;
+                peakActive = Math.max(peakActive, active);
+                await new Promise((resolve) => setTimeout(resolve, 15));
+                active -= 1;
+                completed += 1;
+            });
+        }
+        const handler = process.listeners('SIGTERM').at(-1);
+        assert.ok(handler);
+
+        handler('SIGTERM');
+        assert.equal(await waitForCondition(() => exitCode !== null), true);
+        assert.equal(completed, SHUTDOWN_CLEANUP_CONCURRENCY * 3);
+        assert.equal(peakActive, SHUTDOWN_CLEANUP_CONCURRENCY);
+        assert.equal(exitCode, 143);
+    });
+
+    it('prevents a non-settling cleanup callback from blocking shutdown past its deadline', async () => {
+        installSignalHandlers();
+        registerCleanup(function () {
+            return new Promise<void>(() => {});
+        });
+        const handler = process.listeners('SIGTERM').at(-1);
+        assert.ok(handler);
+        const startedAt = Date.now();
+
+        handler('SIGTERM');
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        assert.equal(exitCode, null, 'shutdown skipped its bounded cleanup wait');
+        assert.equal(
+            await waitForCondition(() => exitCode !== null, SUBPROCESS_TERMINATION_TIMEOUT_MS + 2_000),
+            true,
+            'shutdown remained blocked beyond its cleanup deadline'
+        );
+        const elapsedMs = Date.now() - startedAt;
+        assert.ok(
+            elapsedMs >= SUBPROCESS_TERMINATION_TIMEOUT_MS - 250,
+            `cleanup deadline fired too early: ${elapsedMs}ms`
+        );
+        assert.ok(
+            elapsedMs < SUBPROCESS_TERMINATION_TIMEOUT_MS + 1_000,
+            `cleanup deadline fired too late: ${elapsedMs}ms`
+        );
         assert.equal(exitCode, 143);
     });
 

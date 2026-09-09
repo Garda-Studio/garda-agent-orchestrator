@@ -69,11 +69,14 @@ const PROCESS_TERMINATION_SIGNALS: NodeJS.Signals[] = process.platform === 'win3
     ? ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']
     : ['SIGINT', 'SIGTERM', 'SIGHUP'];
 const WINDOWS_PROCESS_TREE_COMMAND_TIMEOUT_MS = 2_500;
+export const WINDOWS_PROCESS_TREE_TARGET_BATCH_MAX_CHARS = 12_000;
+export const WINDOWS_EXIT_CLEANUP_BUDGET_MS = 2_500;
 const WINDOWS_SYSTEM32_ROOT = process.platform === 'win32'
     ? path.join(fs.realpathSync.native('\\\\?\\GLOBALROOT\\SystemRoot'), 'System32')
     : '';
 const CHILD_GRACEFUL_TERMINATION_MS = 3_000;
 export const SUBPROCESS_TERMINATION_TIMEOUT_MS = 6_000;
+export const SHUTDOWN_CLEANUP_CONCURRENCY = 4;
 const SIGNAL_EXIT_CODE_MAP: Readonly<Record<string, number>> = Object.freeze({
     SIGHUP: 1,
     SIGINT: 2,
@@ -85,6 +88,8 @@ const SIGNAL_EXIT_CODE_MAP: Readonly<Record<string, number>> = Object.freeze({
 
 interface ManagedChildProcess {
     child: ChildProcess;
+    creationWindowStartUtcMs: number;
+    creationWindowEndUtcMs: number;
     closed: Promise<void>;
     resolveClosed: () => void;
     gracefulTerminationStarted: boolean;
@@ -104,10 +109,14 @@ let subprocessSignalHandler: SubprocessSignalHandler | null = null;
 let processExitListenerInstalled = false;
 let acceptingChildren = true;
 let terminationCleanup: Promise<void> | null = null;
+const pendingWindowsForceTerminations = new Map<ManagedChildProcess, () => void>();
+let windowsForceDrainScheduled = false;
+let windowsForceDrainRunning = false;
 const WINDOWS_PROCESS_TREE_FALLBACK_SCRIPT = `
 Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Threading;
 public static class GardaProcessTree {
@@ -124,6 +133,11 @@ public static class GardaProcessTree {
         public uint dwFlags;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szExeFile;
     }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FILETIME {
+        public uint dwLowDateTime;
+        public uint dwHighDateTime;
+    }
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -136,43 +150,156 @@ public static class GardaProcessTree {
     private static extern IntPtr OpenProcess(uint access, bool inheritHandle, uint processId);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool TerminateProcess(IntPtr process, uint exitCode);
-    private static List<Tuple<uint, uint>> SnapshotPairs() {
-        var pairs = new List<Tuple<uint, uint>>();
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetProcessTimes(
+        IntPtr process,
+        out FILETIME creation,
+        out FILETIME exit,
+        out FILETIME kernel,
+        out FILETIME user
+    );
+    [DllImport("kernel32.dll")]
+    private static extern void GetSystemTimePreciseAsFileTime(out FILETIME systemTimeAsFileTime);
+    private sealed class ProcessSnapshot {
+        public readonly List<Tuple<uint, uint>> Pairs = new List<Tuple<uint, uint>>();
+        public ulong ExistingBeforeFileTime;
+    }
+    private static ulong ToFileTimeTicks(FILETIME value) {
+        return ((ulong)value.dwHighDateTime << 32) | value.dwLowDateTime;
+    }
+    private static ProcessSnapshot SnapshotPairs() {
+        var result = new ProcessSnapshot();
+        FILETIME snapshotBoundary;
+        GetSystemTimePreciseAsFileTime(out snapshotBoundary);
+        result.ExistingBeforeFileTime = ToFileTimeTicks(snapshotBoundary);
         IntPtr snapshot = CreateToolhelp32Snapshot(0x00000002, 0);
-        if (snapshot == new IntPtr(-1)) return pairs;
+        if (snapshot == new IntPtr(-1)) return result;
         try {
             var entry = new PROCESSENTRY32();
             entry.dwSize = (uint)Marshal.SizeOf(entry);
             if (Process32First(snapshot, ref entry)) {
-                do { pairs.Add(Tuple.Create(entry.th32ProcessID, entry.th32ParentProcessID)); }
+                do { result.Pairs.Add(Tuple.Create(entry.th32ProcessID, entry.th32ParentProcessID)); }
                 while (Process32Next(snapshot, ref entry));
             }
-            return pairs;
+            return result;
         } finally { CloseHandle(snapshot); }
     }
-    public static int Terminate(uint rootPid) {
+    private static double ToUnixMilliseconds(FILETIME value) {
+        ulong fileTime = ToFileTimeTicks(value);
+        return (fileTime / 10000.0) - 11644473600000.0;
+    }
+    private static bool MatchesExpectedCreationWindow(IntPtr process, double earliestUtcMs, double latestUtcMs) {
+        FILETIME creation;
+        FILETIME exit;
+        FILETIME kernel;
+        FILETIME user;
+        if (!GetProcessTimes(process, out creation, out exit, out kernel, out user)) return false;
+        double creationUtcMs = ToUnixMilliseconds(creation);
+        return creationUtcMs >= earliestUtcMs - 1.0 && creationUtcMs <= latestUtcMs;
+    }
+    private static bool MatchesExpectedDescendantInstance(
+        IntPtr process,
+        double earliestUtcMs,
+        ulong existingBeforeFileTime
+    ) {
+        FILETIME creation;
+        FILETIME exit;
+        FILETIME kernel;
+        FILETIME user;
+        if (!GetProcessTimes(process, out creation, out exit, out kernel, out user)) return false;
+        return ToUnixMilliseconds(creation) >= earliestUtcMs - 1.0
+            && ToFileTimeTicks(creation) <= existingBeforeFileTime;
+    }
+    private sealed class TerminationTarget {
+        public uint RootPid;
+        public double EarliestUtcMs;
+        public double LatestUtcMs;
+    }
+    private static List<TerminationTarget> TargetsFromEnvironment() {
+        var targets = new List<TerminationTarget>();
+        string rawTargets = Environment.GetEnvironmentVariable("GARDA_PROCESS_TREE_TARGETS");
+        if (String.IsNullOrWhiteSpace(rawTargets)) return targets;
+        foreach (string rawTarget in rawTargets.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)) {
+            string[] fields = rawTarget.Split(',');
+            uint rootPid;
+            double earliestUtcMs;
+            double latestUtcMs;
+            if (fields.Length != 3
+                || !uint.TryParse(fields[0], NumberStyles.None, CultureInfo.InvariantCulture, out rootPid)
+                || !double.TryParse(fields[1], NumberStyles.Float, CultureInfo.InvariantCulture, out earliestUtcMs)
+                || !double.TryParse(fields[2], NumberStyles.Float, CultureInfo.InvariantCulture, out latestUtcMs)
+                || rootPid == 0
+                || double.IsNaN(earliestUtcMs)
+                || double.IsInfinity(earliestUtcMs)
+                || double.IsNaN(latestUtcMs)
+                || double.IsInfinity(latestUtcMs)
+                || earliestUtcMs > latestUtcMs) {
+                continue;
+            }
+            targets.Add(new TerminationTarget {
+                RootPid = rootPid,
+                EarliestUtcMs = earliestUtcMs,
+                LatestUtcMs = latestUtcMs
+            });
+        }
+        return targets;
+    }
+    public static int TerminateFromEnvironment() {
         const uint PROCESS_TERMINATE = 0x0001;
         const uint SYNCHRONIZE = 0x00100000;
-        var known = new HashSet<uint>();
+        const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+        var targets = TargetsFromEnvironment();
+        if (targets.Count == 0) return 0;
+        var earliestByPid = new Dictionary<uint, double>();
         var handles = new Dictionary<uint, IntPtr>();
-        IntPtr rootHandle = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, false, rootPid);
-        known.Add(rootPid);
-        if (rootHandle != IntPtr.Zero) handles.Add(rootPid, rootHandle);
+        var initialSnapshot = SnapshotPairs();
+        foreach (var target in targets) {
+            if (handles.ContainsKey(target.RootPid)) continue;
+            IntPtr rootHandle = OpenProcess(
+                PROCESS_TERMINATE | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                false,
+                target.RootPid
+            );
+            if (rootHandle == IntPtr.Zero) continue;
+            if (!MatchesExpectedCreationWindow(rootHandle, target.EarliestUtcMs, target.LatestUtcMs)) {
+                CloseHandle(rootHandle);
+                continue;
+            }
+            handles.Add(target.RootPid, rootHandle);
+            earliestByPid.Add(target.RootPid, target.EarliestUtcMs);
+        }
+        if (handles.Count == 0) return 0;
         int quietPasses = 0;
         try {
             for (int pass = 0; pass < 8 && quietPasses < 2; pass++) {
                 bool discovered = false;
-                var pairs = SnapshotPairs();
+                var processSnapshot = pass == 0 ? initialSnapshot : SnapshotPairs();
+                var pairs = processSnapshot.Pairs;
                 bool expanded;
                 do {
                     expanded = false;
                     foreach (var pair in pairs) {
                         uint processId = pair.Item1;
                         uint parentId = pair.Item2;
-                        if (!known.Contains(parentId) || known.Contains(processId)) continue;
-                        known.Add(processId);
-                        IntPtr handle = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, false, processId);
-                        if (handle != IntPtr.Zero) handles[processId] = handle;
+                        double earliestUtcMs;
+                        if (!earliestByPid.TryGetValue(parentId, out earliestUtcMs)
+                            || earliestByPid.ContainsKey(processId)) continue;
+                        IntPtr handle = OpenProcess(
+                            PROCESS_TERMINATE | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                            false,
+                            processId
+                        );
+                        if (handle == IntPtr.Zero) continue;
+                        if (!MatchesExpectedDescendantInstance(
+                            handle,
+                            earliestUtcMs,
+                            processSnapshot.ExistingBeforeFileTime
+                        )) {
+                            CloseHandle(handle);
+                            continue;
+                        }
+                        earliestByPid.Add(processId, earliestUtcMs);
+                        handles[processId] = handle;
                         discovered = true;
                         expanded = true;
                     }
@@ -188,7 +315,7 @@ public static class GardaProcessTree {
     }
 }
 '@
-[GardaProcessTree]::Terminate([uint32]$env:GARDA_PROCESS_TREE_ROOT_PID)
+[GardaProcessTree]::TerminateFromEnvironment()
 `;
 
 function runExecFile(
@@ -206,48 +333,57 @@ function runExecFile(
     });
 }
 
-async function terminateWindowsProcessTreeFallback(rootPid: number): Promise<boolean> {
-    if (!Number.isInteger(rootPid) || rootPid <= 0) {
-        return false;
+function windowsProcessTreeTargetBatches(entries: readonly ManagedChildProcess[]): string[] {
+    const batches: string[] = [];
+    let currentTargets: string[] = [];
+    let currentLength = 0;
+    for (const entry of entries) {
+        if (!entry.child.pid) continue;
+        const target = [
+            entry.child.pid,
+            entry.creationWindowStartUtcMs,
+            entry.creationWindowEndUtcMs
+        ].join(',');
+        if (target.length > WINDOWS_PROCESS_TREE_TARGET_BATCH_MAX_CHARS) continue;
+        const separatorLength = currentTargets.length > 0 ? 1 : 0;
+        if (currentLength + separatorLength + target.length > WINDOWS_PROCESS_TREE_TARGET_BATCH_MAX_CHARS) {
+            batches.push(currentTargets.join(';'));
+            currentTargets = [];
+            currentLength = 0;
+        }
+        currentTargets.push(target);
+        currentLength += (currentTargets.length > 1 ? 1 : 0) + target.length;
     }
-    const powershellPath = path.join(
-        WINDOWS_SYSTEM32_ROOT,
-        'WindowsPowerShell',
-        'v1.0',
-        'powershell.exe'
-    );
-    const result = await runExecFile(powershellPath, [
-        '-NoLogo',
-        '-NoProfile',
-        '-NonInteractive',
-        '-EncodedCommand',
-        Buffer.from(WINDOWS_PROCESS_TREE_FALLBACK_SCRIPT, 'utf16le').toString('base64')
-    ], {
-        encoding: 'utf8',
-        env: { ...process.env, GARDA_PROCESS_TREE_ROOT_PID: String(rootPid) },
-        windowsHide: true,
-        timeout: WINDOWS_PROCESS_TREE_COMMAND_TIMEOUT_MS,
-        maxBuffer: 1024 * 1024
-    });
-    if (result.error) {
-        return false;
-    }
-    const terminatedCount = Number(result.stdout.trim());
-    return Number.isInteger(terminatedCount) && terminatedCount > 0;
+    if (currentTargets.length > 0) batches.push(currentTargets.join(';'));
+    return batches;
 }
 
-function terminateWindowsProcessTreeFallbackSync(rootPid: number): boolean {
-    if (!Number.isInteger(rootPid) || rootPid <= 0) {
-        return false;
+function windowsProcessTreeEnvironment(targets: string): NodeJS.ProcessEnv {
+    const windowsRoot = path.dirname(WINDOWS_SYSTEM32_ROOT);
+    const environment: NodeJS.ProcessEnv = {
+        SystemRoot: windowsRoot,
+        WINDIR: windowsRoot,
+        GARDA_PROCESS_TREE_TARGETS: targets
+    };
+    for (const name of ['TEMP', 'TMP'] as const) {
+        const value = process.env[name];
+        if (value && value.length <= 1_024) environment[name] = value;
     }
+    return environment;
+}
+
+async function terminateWindowsProcessTrees(entries: readonly ManagedChildProcess[]): Promise<boolean> {
+    const targetBatches = windowsProcessTreeTargetBatches(entries);
+    if (targetBatches.length === 0) return false;
     const powershellPath = path.join(
         WINDOWS_SYSTEM32_ROOT,
         'WindowsPowerShell',
         'v1.0',
         'powershell.exe'
     );
-    try {
-        const output = childProcess.execFileSync(powershellPath, [
+    let terminatedAny = false;
+    await settleWithShutdownConcurrency(targetBatches, async function (targets) {
+        const result = await runExecFile(powershellPath, [
             '-NoLogo',
             '-NoProfile',
             '-NonInteractive',
@@ -255,52 +391,107 @@ function terminateWindowsProcessTreeFallbackSync(rootPid: number): boolean {
             Buffer.from(WINDOWS_PROCESS_TREE_FALLBACK_SCRIPT, 'utf16le').toString('base64')
         ], {
             encoding: 'utf8',
-            env: { ...process.env, GARDA_PROCESS_TREE_ROOT_PID: String(rootPid) },
-            stdio: ['ignore', 'pipe', 'ignore'],
+            env: windowsProcessTreeEnvironment(targets),
             windowsHide: true,
             timeout: WINDOWS_PROCESS_TREE_COMMAND_TIMEOUT_MS,
             maxBuffer: 1024 * 1024
         });
-        const terminatedCount = Number(output.trim());
-        return Number.isInteger(terminatedCount) && terminatedCount > 0;
-    } catch (_error) {
-        return false;
-    }
-}
-
-async function killWindowsProcessTree(child: ChildProcess): Promise<void> {
-    if (!child.pid) {
-        return;
-    }
-    const taskkillPath = path.join(WINDOWS_SYSTEM32_ROOT, 'taskkill.exe');
-    const taskkillResult = await runExecFile(taskkillPath, ['/pid', String(child.pid), '/T', '/F'], {
-        encoding: 'utf8',
-        windowsHide: true,
-        timeout: WINDOWS_PROCESS_TREE_COMMAND_TIMEOUT_MS,
-        maxBuffer: 1024 * 1024
+        if (result.error) return;
+        const terminatedCount = Number(result.stdout.trim());
+        if (Number.isInteger(terminatedCount) && terminatedCount > 0) terminatedAny = true;
     });
-    if (!taskkillResult.error) {
-        return;
-    }
-    await terminateWindowsProcessTreeFallback(child.pid);
-    try { child.kill('SIGKILL'); } catch (_killError) { /* Already exited. */ }
+    return terminatedAny;
 }
 
-function killWindowsProcessTreeOnExit(child: ChildProcess): void {
-    if (!child.pid) {
+function terminateWindowsProcessTreesSync(
+    entries: readonly ManagedChildProcess[],
+    timeoutMs: number
+): boolean {
+    const targetBatches = windowsProcessTreeTargetBatches(entries);
+    if (targetBatches.length === 0 || timeoutMs <= 0) return false;
+    const powershellPath = path.join(
+        WINDOWS_SYSTEM32_ROOT,
+        'WindowsPowerShell',
+        'v1.0',
+        'powershell.exe'
+    );
+    const deadline = Date.now() + timeoutMs;
+    let terminatedAny = false;
+    for (const targets of targetBatches) {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) break;
+        try {
+            const output = childProcess.execFileSync(powershellPath, [
+                '-NoLogo',
+                '-NoProfile',
+                '-NonInteractive',
+                '-EncodedCommand',
+                Buffer.from(WINDOWS_PROCESS_TREE_FALLBACK_SCRIPT, 'utf16le').toString('base64')
+            ], {
+                encoding: 'utf8',
+                env: windowsProcessTreeEnvironment(targets),
+                stdio: ['ignore', 'pipe', 'ignore'],
+                windowsHide: true,
+                timeout: Math.min(remainingMs, WINDOWS_PROCESS_TREE_COMMAND_TIMEOUT_MS),
+                maxBuffer: 1024 * 1024
+            });
+            const terminatedCount = Number(output.trim());
+            if (Number.isInteger(terminatedCount) && terminatedCount > 0) terminatedAny = true;
+        } catch (_error) {
+            // Continue while budget remains so one failed chunk does not starve later identities.
+        }
+    }
+    return terminatedAny;
+}
+
+function killWindowsProcessTreesOnExit(entries: readonly ManagedChildProcess[], timeoutMs: number): void {
+    if (timeoutMs <= 0) {
         return;
     }
-    try {
-        childProcess.execFileSync(path.join(WINDOWS_SYSTEM32_ROOT, 'taskkill.exe'), ['/pid', String(child.pid), '/T', '/F'], {
-            stdio: 'ignore',
-            windowsHide: true,
-            timeout: WINDOWS_PROCESS_TREE_COMMAND_TIMEOUT_MS
+    terminateWindowsProcessTreesSync(entries, timeoutMs);
+}
+
+async function drainWindowsForceTerminations(): Promise<void> {
+    while (pendingWindowsForceTerminations.size > 0) {
+        const scheduledEntries = [...pendingWindowsForceTerminations.entries()];
+        pendingWindowsForceTerminations.clear();
+        const admittedEntries = scheduledEntries.map(([entry]) => entry);
+        try {
+            if (admittedEntries.length > 0) {
+                await terminateWindowsProcessTrees(admittedEntries);
+            }
+        } catch (_error) {
+            // Shutdown remains best-effort; settle every admitted request so later batches can run.
+        } finally {
+            for (const [, resolve] of scheduledEntries) resolve();
+        }
+    }
+}
+
+function scheduleWindowsForceTerminationDrain(): void {
+    if (windowsForceDrainScheduled || windowsForceDrainRunning) return;
+    windowsForceDrainScheduled = true;
+    setImmediate(function () {
+        windowsForceDrainScheduled = false;
+        windowsForceDrainRunning = true;
+        void drainWindowsForceTerminations().finally(function () {
+            windowsForceDrainRunning = false;
+            if (pendingWindowsForceTerminations.size > 0) {
+                scheduleWindowsForceTerminationDrain();
+            }
         });
-        return;
-    } catch (_error) {
-        terminateWindowsProcessTreeFallbackSync(child.pid);
-        try { child.kill('SIGKILL'); } catch (_killError) { /* Already exited. */ }
-    }
+    });
+}
+
+function enqueueWindowsForceTermination(entry: ManagedChildProcess): Promise<void> {
+    if (entry.forceTermination) return entry.forceTermination;
+    let resolveTermination = function (): void {};
+    entry.forceTermination = new Promise<void>(function (resolve) {
+        resolveTermination = resolve;
+    });
+    pendingWindowsForceTerminations.set(entry, resolveTermination);
+    scheduleWindowsForceTerminationDrain();
+    return entry.forceTermination;
 }
 
 function killPosixProcessGroup(child: ChildProcess, signal: 'SIGTERM' | 'SIGKILL'): void {
@@ -321,7 +512,7 @@ function forceTerminateManagedChild(entry: ManagedChildProcess): Promise<void> {
     }
     if (!entry.forceTermination) {
         entry.forceTermination = process.platform === 'win32'
-            ? killWindowsProcessTree(entry.child)
+            ? enqueueWindowsForceTermination(entry)
             : Promise.resolve(killPosixProcessGroup(entry.child, 'SIGKILL'));
     }
     return entry.forceTermination;
@@ -395,13 +586,15 @@ function releaseManagedChild(entry: ManagedChildProcess): void {
     synchronizeCoordinatorListeners();
 }
 
-function registerManagedChild(child: ChildProcess): ManagedChildProcess {
+function registerManagedChild(child: ChildProcess, creationWindowStartUtcMs: number): ManagedChildProcess {
     let resolveClosed = function (): void {};
     const closed = new Promise<void>(function (resolve) {
         resolveClosed = resolve;
     });
     const entry: ManagedChildProcess = {
         child,
+        creationWindowStartUtcMs,
+        creationWindowEndUtcMs: performance.timeOrigin + performance.now(),
         closed,
         resolveClosed,
         gracefulTerminationStarted: false,
@@ -414,11 +607,41 @@ function registerManagedChild(child: ChildProcess): ManagedChildProcess {
     return entry;
 }
 
-function boundedChildCleanup(entries: readonly ManagedChildProcess[]): Promise<void> {
-    const cleanup = Promise.allSettled(entries.map(async function (entry) {
-        await terminateManagedChild(entry, true);
-        await entry.closed;
+export async function settleWithShutdownConcurrency<T>(
+    items: readonly T[],
+    worker: (item: T) => void | Promise<void>
+): Promise<void> {
+    let nextIndex = 0;
+    const workerCount = Math.min(SHUTDOWN_CLEANUP_CONCURRENCY, items.length);
+    const workers = Array.from({ length: workerCount }, async function () {
+        while (nextIndex < items.length) {
+            const item = items[nextIndex];
+            nextIndex += 1;
+            try {
+                await worker(item);
+            } catch (_error) {
+                // Shutdown is best-effort; one failed cleanup must not starve the remaining queue.
+            }
+        }
+    });
+    await Promise.all(workers);
+}
+
+function forceTerminateWindowsChildren(entries: readonly ManagedChildProcess[]): Promise<void> {
+    return Promise.all(entries.map(function (entry) {
+        return terminateManagedChild(entry, true);
     })).then(function () {});
+}
+
+function boundedChildCleanup(entries: readonly ManagedChildProcess[]): Promise<void> {
+    const termination = process.platform === 'win32'
+        ? forceTerminateWindowsChildren(entries)
+        : settleWithShutdownConcurrency(entries, function (entry) {
+            return terminateManagedChild(entry, true);
+        });
+    const cleanup = termination.then(function () {
+        return Promise.all(entries.map((entry) => entry.closed));
+    }).then(function () {});
     return new Promise(function (resolve) {
         let finished = false;
         const timeoutHandle = setTimeout(function () {
@@ -469,14 +692,12 @@ function onProcessExit(): void {
         // synchronous exit fallback here would make the signal path unbounded.
         return;
     }
+    if (process.platform === 'win32') {
+        killWindowsProcessTreesOnExit([...activeChildren], WINDOWS_EXIT_CLEANUP_BUDGET_MS);
+        return;
+    }
     for (const entry of activeChildren) {
-        if (process.platform === 'win32') {
-            // The exit event cannot await asynchronous cleanup. Keep this synchronous
-            // tree kill isolated from signal handling, which completes cleanup first.
-            killWindowsProcessTreeOnExit(entry.child);
-        } else {
-            killPosixProcessGroup(entry.child, 'SIGKILL');
-        }
+        killPosixProcessGroup(entry.child, 'SIGKILL');
     }
 }
 
@@ -777,8 +998,9 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
             spawnOpts.env = opts.envMode === 'replace' ? opts.env : { ...process.env, ...opts.env };
         }
 
+        const creationWindowStartUtcMs = performance.timeOrigin + performance.now();
         const child: ChildProcess = childProcess.spawn(command, args, spawnOpts);
-        const managedChild = registerManagedChild(child);
+        const managedChild = registerManagedChild(child, creationWindowStartUtcMs);
         notifySpawnedProcess(opts.onSpawn, {
             pid: child.pid ?? null,
             command,
@@ -961,8 +1183,9 @@ export function spawnShellCommand(
         }
         const shellCommand = getWindowsCommandProcessor();
         const shellArgs = ['/d', '/s', '/c', commandLine];
+        const creationWindowStartUtcMs = performance.timeOrigin + performance.now();
         const child: ChildProcess = childProcess.spawn(shellCommand, shellArgs, spawnOptions);
-        const managedChild = registerManagedChild(child);
+        const managedChild = registerManagedChild(child, creationWindowStartUtcMs);
         notifySpawnedProcess(opts.onSpawn, {
             pid: child.pid ?? null,
             command: shellCommand,

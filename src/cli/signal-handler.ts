@@ -4,6 +4,7 @@ import { EXIT_SIGNAL_INTERRUPT } from './exit-codes';
 import {
     computeTerminationSignalExitCode,
     registerSubprocessSignalHandler,
+    settleWithShutdownConcurrency,
     SUBPROCESS_TERMINATION_TIMEOUT_MS
 } from '../core/process/subprocess';
 
@@ -58,12 +59,13 @@ function waitForCleanup(
     subprocessCleanup: Promise<void>,
     callbacks: readonly CleanupCallback[]
 ): Promise<void> {
-    const cleanup = Promise.allSettled([
-        subprocessCleanup,
-        ...callbacks.map(function (callback) {
-            return Promise.resolve().then(callback);
-        })
-    ]).then(function () {});
+    const cleanupTasks: Array<() => void | Promise<void>> = [
+        function () { return subprocessCleanup; },
+        ...callbacks
+    ];
+    const cleanup = settleWithShutdownConcurrency(cleanupTasks, function (callback) {
+        return Promise.resolve().then(callback);
+    });
     return new Promise(function (resolve) {
         let finished = false;
         const timeoutHandle = setTimeout(function () {

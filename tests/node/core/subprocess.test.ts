@@ -13,7 +13,11 @@ import {
     DEFAULT_GIT_TIMEOUT_MS,
     DEFAULT_NPM_TIMEOUT_MS,
     registerSubprocessSignalHandler,
+    settleWithShutdownConcurrency,
+    SHUTDOWN_CLEANUP_CONCURRENCY,
     SUBPROCESS_TERMINATION_TIMEOUT_MS,
+    WINDOWS_EXIT_CLEANUP_BUDGET_MS,
+    WINDOWS_PROCESS_TREE_TARGET_BATCH_MAX_CHARS,
     spawnStreamed,
     spawnShellCommand,
     spawnSyncWithTimeout
@@ -343,7 +347,7 @@ describe('spawnStreamed – kill-path cleanup', () => {
         }
     });
 
-    it('runs the Windows fallback when taskkill reports that the managed root already exited', async () => {
+    it('uses the trusted identity-bound Windows tree terminator and fails closed without a root handle', async () => {
         if (process.platform !== 'win32') return;
         const mutableChildProcess = require('node:child_process') as typeof childProcess;
         const originalSpawn = mutableChildProcess.spawn;
@@ -353,6 +357,7 @@ describe('spawnStreamed – kill-path cleanup', () => {
         const subprocessModulePath = require.resolve('../../../src/core/subprocess');
         const cachedSubprocessModule = require.cache[subprocessModulePath];
         const commands: string[] = [];
+        const helperScripts: string[] = [];
         const fakeChild = new EventEmitter() as childProcess.ChildProcess;
         Object.defineProperties(fakeChild, {
             pid: { value: 2_147_483_647 },
@@ -376,25 +381,29 @@ describe('spawnStreamed – kill-path cleanup', () => {
             };
             (mutableChildProcess as any).execFile = function (...invocation: any[]) {
                 const command = String(invocation[0]);
+                const commandArgs = invocation[1] as string[];
                 const callback = invocation[3] as (error: Error | null, stdout: string, stderr: string) => void;
                 commands.push(command);
-                if (command.toLowerCase().endsWith('taskkill.exe')) {
-                    queueMicrotask(() => callback(new Error('root process was not found'), '', ''));
-                } else {
-                    queueMicrotask(() => callback(null, '1\n', ''));
-                }
+                helperScripts.push(Buffer.from(commandArgs.at(-1)!, 'base64').toString('utf16le'));
+                queueMicrotask(() => {
+                    callback(null, '1\n', '');
+                    fakeChild.emit('close', 1, 'SIGKILL');
+                });
                 return fakeChild;
             };
 
             const result = await freshSubprocess.spawnStreamed('mock-command', [], { timeoutMs: 10 });
             assert.equal(result.timedOut, true);
-            assert.equal(commands.length, 2);
+            assert.equal(commands.length, 1);
             const trustedSystemRoot = fs.realpathSync.native('\\\\?\\GLOBALROOT\\SystemRoot');
-            assert.equal(commands[0].toLowerCase(), path.join(trustedSystemRoot, 'System32', 'taskkill.exe').toLowerCase());
             assert.equal(
-                commands[1].toLowerCase(),
+                commands[0].toLowerCase(),
                 path.join(trustedSystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe').toLowerCase()
             );
+            assert.match(helperScripts[0], /GetSystemTimePreciseAsFileTime/);
+            assert.match(helperScripts[0], /processSnapshot\.ExistingBeforeFileTime/);
+            assert.match(helperScripts[0], /if \(rootHandle == IntPtr\.Zero\) continue;/);
+            assert.match(helperScripts[0], /GARDA_PROCESS_TREE_TARGETS/);
         } finally {
             (mutableChildProcess as any).spawn = originalSpawn;
             (mutableChildProcess as any).execFile = originalExecFile;
@@ -407,9 +416,67 @@ describe('spawnStreamed – kill-path cleanup', () => {
         }
     });
 
-    it('kills process that traps SIGTERM (exercises taskkill /F on Windows)', async () => {
-        // Process installs a SIGTERM handler so child.kill('SIGTERM') alone would
-        // not terminate it. On Windows the taskkill /F flag force-kills regardless.
+    it('does not terminate a different Windows process outside the managed creation window', async () => {
+        if (process.platform !== 'win32') return;
+        const victim = childProcess.spawn(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], { stdio: 'ignore' });
+        assert.ok(victim.pid);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        const mutableChildProcess = require('node:child_process') as typeof childProcess;
+        const originalSpawn = mutableChildProcess.spawn;
+        const originalExecFile = mutableChildProcess.execFile;
+        const fakeChild = new EventEmitter() as childProcess.ChildProcess;
+        let pidOnlyKillCalls = 0;
+        let pending: ReturnType<typeof spawnStreamed> | null = null;
+        let resolveHelperCompletion = function (_result: { error: Error | null; stdout: string }): void {};
+        const helperCompletion = new Promise<{ error: Error | null; stdout: string }>(function (resolve) {
+            resolveHelperCompletion = resolve;
+        });
+        Object.defineProperties(fakeChild, {
+            pid: { value: victim.pid },
+            exitCode: { value: null, configurable: true },
+            signalCode: { value: null, configurable: true },
+            stdout: { value: null },
+            stderr: { value: null }
+        });
+        fakeChild.kill = function (signal?: NodeJS.Signals | number): boolean {
+            pidOnlyKillCalls += 1;
+            return victim.kill(signal);
+        };
+
+        try {
+            (mutableChildProcess as any).spawn = function () { return fakeChild; };
+            (mutableChildProcess as any).execFile = function (...invocation: any[]) {
+                const callback = invocation[3] as (error: Error | null, stdout: string, stderr: string) => void;
+                invocation[3] = function (error: Error | null, stdout: string, stderr: string) {
+                    callback(error, stdout, stderr);
+                    resolveHelperCompletion({ error, stdout });
+                };
+                return (originalExecFile as any)(...invocation);
+            };
+            pending = spawnStreamed('mock-command', [], { timeoutMs: 10 });
+            const helperResult = await helperCompletion;
+            assert.equal(helperResult.error, null, 'the executable identity check did not complete');
+            assert.equal(helperResult.stdout.trim(), '0', 'the stale PID passed its creation-window check');
+            assert.equal(pidOnlyKillCalls, 0, 'identity rejection fell back to PID-only ChildProcess.kill');
+            assert.equal(isProcessAlive(victim.pid!), true, 'identity mismatch terminated an unrelated process');
+            fakeChild.emit('close', 1, 'SIGKILL');
+            const result = await pending;
+            assert.equal(result.timedOut, true);
+        } finally {
+            fakeChild.emit('close', 1, 'SIGKILL');
+            if (pending) await pending.catch(() => undefined);
+            (mutableChildProcess as any).spawn = originalSpawn;
+            (mutableChildProcess as any).execFile = originalExecFile;
+            if (victim.pid && isProcessAlive(victim.pid)) {
+                try { victim.kill('SIGKILL'); } catch { /* Already exited. */ }
+            }
+        }
+    });
+
+    it('kills a process that traps SIGTERM', async () => {
+        // Process installs a SIGTERM handler so a PID-only graceful signal would
+        // not terminate it. The identity-bound platform tree terminator force-kills it.
         const script = 'process.on("SIGTERM",()=>{});setTimeout(()=>{},60000)';
         const result = await spawnStreamed(process.execPath, ['-e', script], {
             timeoutMs: 800
@@ -443,6 +510,375 @@ describe('timeout constants', () => {
         assert.equal(typeof DEFAULT_COMPILE_TIMEOUT_MS, 'number');
         assert.ok(DEFAULT_GIT_TIMEOUT_MS > 0);
         assert.ok(DEFAULT_COMPILE_TIMEOUT_MS >= DEFAULT_GIT_TIMEOUT_MS);
+    });
+});
+
+describe('shutdown cleanup concurrency', () => {
+    it('prevents a 128-item cleanup load from exceeding four workers or half the shutdown deadline', async () => {
+        const itemCount = 128;
+        const simulatedCleanupLatencyMs = 5;
+        const expectedWaves = Math.ceil(itemCount / SHUTDOWN_CLEANUP_CONCURRENCY);
+        let active = 0;
+        let peakActive = 0;
+        let completed = 0;
+        const startedAt = Date.now();
+
+        await settleWithShutdownConcurrency(
+            Array.from({ length: itemCount }, (_value, index) => index),
+            async function () {
+                active += 1;
+                peakActive = Math.max(peakActive, active);
+                await new Promise((resolve) => setTimeout(resolve, simulatedCleanupLatencyMs));
+                active -= 1;
+                completed += 1;
+            }
+        );
+
+        const elapsedMs = Date.now() - startedAt;
+        assert.equal(completed, itemCount);
+        assert.equal(peakActive, SHUTDOWN_CLEANUP_CONCURRENCY);
+        assert.ok(
+            elapsedMs >= (expectedWaves - 1) * simulatedCleanupLatencyMs,
+            `cleanup queue did not execute in bounded waves: ${elapsedMs}ms`
+        );
+        assert.ok(
+            elapsedMs < SUBPROCESS_TERMINATION_TIMEOUT_MS / 2,
+            `128-item cleanup load exceeded half the shutdown deadline: ${elapsedMs}ms`
+        );
+    });
+
+    it('prevents slow Windows closes from leaving queued child trees unsubmitted', async () => {
+        if (process.platform !== 'win32') return;
+        const mutableChildProcess = require('node:child_process') as typeof childProcess;
+        const originalSpawn = mutableChildProcess.spawn;
+        const originalExecFile = mutableChildProcess.execFile;
+        const baselineSignalListeners = process.listeners('SIGTERM');
+        const fakeChildren: childProcess.ChildProcess[] = [];
+        const pendingResults: Array<Promise<unknown>> = [];
+        let cleanup: Promise<void> | null = null;
+        let helperCalls = 0;
+        let helperTargets = '';
+        const helperState: {
+            settled: boolean;
+            callback: ((error: Error | null, stdout: string, stderr: string) => void) | null;
+        } = { settled: false, callback: null };
+        const dispose = registerSubprocessSignalHandler(function (_signal, childCleanup) {
+            cleanup = childCleanup;
+        });
+
+        try {
+            (mutableChildProcess as any).spawn = function () {
+                const child = new EventEmitter() as childProcess.ChildProcess;
+                Object.defineProperties(child, {
+                    pid: { value: 2_100_000_000 + fakeChildren.length },
+                    exitCode: { value: null, configurable: true },
+                    signalCode: { value: null, configurable: true },
+                    stdout: { value: null },
+                    stderr: { value: null }
+                });
+                fakeChildren.push(child);
+                return child;
+            };
+            (mutableChildProcess as any).execFile = function (...invocation: any[]) {
+                helperCalls += 1;
+                const options = invocation[2] as { env?: NodeJS.ProcessEnv };
+                helperTargets = options.env?.GARDA_PROCESS_TREE_TARGETS ?? '';
+                helperState.callback = invocation[3];
+                return new EventEmitter();
+            };
+
+            for (let index = 0; index < SHUTDOWN_CLEANUP_CONCURRENCY * 3; index += 1) {
+                pendingResults.push(spawnStreamed('mock-command', [], { timeoutMs: 30_000 }));
+            }
+            const signalHandler = process.listeners('SIGTERM').find(
+                (listener) => !baselineSignalListeners.includes(listener)
+            );
+            assert.ok(signalHandler, 'coordinator signal listener should be installed');
+
+            signalHandler('SIGTERM');
+            await new Promise((resolve) => setImmediate(resolve));
+            assert.equal(helperCalls, 1, 'managed Windows trees were not submitted in one bounded helper launch');
+            assert.equal(
+                helperTargets.split(';').filter(Boolean).length,
+                fakeChildren.length,
+                'the batch helper did not receive every active child identity'
+            );
+            assert.ok(cleanup, 'coordinator should expose bounded child cleanup');
+
+            helperState.settled = true;
+            helperState.callback!(null, `${fakeChildren.length}\n`, '');
+            for (const child of fakeChildren) child.emit('close', 1, 'SIGKILL');
+            await cleanup;
+            await Promise.all(pendingResults);
+        } finally {
+            if (!helperState.settled && helperState.callback) {
+                helperState.settled = true;
+                helperState.callback(null, '0\n', '');
+            }
+            for (const child of fakeChildren) child.emit('close', 1, 'SIGKILL');
+            await Promise.allSettled(pendingResults);
+            dispose();
+            (mutableChildProcess as any).spawn = originalSpawn;
+            (mutableChildProcess as any).execFile = originalExecFile;
+        }
+    });
+
+    it('prevents a root-close race from dropping an admitted Windows process-tree cleanup', async () => {
+        if (process.platform !== 'win32') return;
+        const mutableChildProcess = require('node:child_process') as typeof childProcess;
+        const originalSpawn = mutableChildProcess.spawn;
+        const originalExecFile = mutableChildProcess.execFile;
+        const baselineSignalListeners = process.listeners('SIGTERM');
+        const fakeChild = new EventEmitter() as childProcess.ChildProcess;
+        const managedPid = 2_075_000_000;
+        let cleanup: Promise<void> | null = null;
+        let helperTargets = '';
+        const helperState: {
+            callback: ((error: Error | null, stdout: string, stderr: string) => void) | null;
+        } = { callback: null };
+        let pending: ReturnType<typeof spawnStreamed> | null = null;
+        const dispose = registerSubprocessSignalHandler(function (_signal, childCleanup) {
+            cleanup = childCleanup;
+        });
+        Object.defineProperties(fakeChild, {
+            pid: { value: managedPid },
+            exitCode: { value: null, configurable: true },
+            signalCode: { value: null, configurable: true },
+            stdout: { value: null },
+            stderr: { value: null }
+        });
+
+        try {
+            (mutableChildProcess as any).spawn = function () { return fakeChild; };
+            (mutableChildProcess as any).execFile = function (...invocation: any[]) {
+                const options = invocation[2] as { env?: NodeJS.ProcessEnv };
+                helperTargets = options.env?.GARDA_PROCESS_TREE_TARGETS ?? '';
+                helperState.callback = invocation[3];
+                return new EventEmitter();
+            };
+
+            pending = spawnStreamed('mock-command', [], { timeoutMs: 30_000 });
+            const signalHandler = process.listeners('SIGTERM').find(
+                (listener) => !baselineSignalListeners.includes(listener)
+            );
+            assert.ok(signalHandler, 'coordinator signal listener should be installed');
+
+            signalHandler('SIGTERM');
+            fakeChild.emit('close', 0, null);
+            await new Promise((resolve) => setImmediate(resolve));
+
+            assert.equal(
+                helperTargets.split(';')[0]?.split(',')[0],
+                String(managedPid),
+                'the deferred drain dropped a root that closed after force termination was admitted'
+            );
+            assert.ok(helperState.callback, 'the identity-bound helper should receive the admitted root');
+            helperState.callback(null, '0\n', '');
+            helperState.callback = null;
+            assert.ok(cleanup, 'coordinator should expose child cleanup');
+            await cleanup;
+            await pending;
+        } finally {
+            if (helperState.callback) helperState.callback(null, '0\n', '');
+            fakeChild.emit('close', 0, null);
+            if (pending) await pending.catch(() => undefined);
+            dispose();
+            (mutableChildProcess as any).spawn = originalSpawn;
+            (mutableChildProcess as any).execFile = originalExecFile;
+        }
+    });
+
+    it('prevents simultaneous Windows child timeouts from launching one helper per child', async () => {
+        if (process.platform !== 'win32') return;
+        const mutableChildProcess = require('node:child_process') as typeof childProcess;
+        const originalSpawn = mutableChildProcess.spawn;
+        const originalExecFile = mutableChildProcess.execFile;
+        const fakeChildren: childProcess.ChildProcess[] = [];
+        const pendingResults: Array<Promise<unknown>> = [];
+        const helperCallbacks: Array<(error: Error | null, stdout: string, stderr: string) => void> = [];
+        const helperTargetCounts: number[] = [];
+
+        try {
+            (mutableChildProcess as any).spawn = function () {
+                const child = new EventEmitter() as childProcess.ChildProcess;
+                Object.defineProperties(child, {
+                    pid: { value: 2_050_000_000 + fakeChildren.length },
+                    exitCode: { value: null, configurable: true },
+                    signalCode: { value: null, configurable: true },
+                    stdout: { value: null },
+                    stderr: { value: null }
+                });
+                fakeChildren.push(child);
+                return child;
+            };
+            (mutableChildProcess as any).execFile = function (...invocation: any[]) {
+                const options = invocation[2] as { env?: NodeJS.ProcessEnv };
+                helperTargetCounts.push(
+                    (options.env?.GARDA_PROCESS_TREE_TARGETS ?? '').split(';').filter(Boolean).length
+                );
+                helperCallbacks.push(invocation[3]);
+                return new EventEmitter();
+            };
+
+            for (let index = 0; index < SHUTDOWN_CLEANUP_CONCURRENCY * 3; index += 1) {
+                pendingResults.push(spawnStreamed('mock-command', [], { timeoutMs: 10 }));
+            }
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            assert.deepEqual(
+                helperTargetCounts,
+                [fakeChildren.length],
+                'simultaneous child timeouts were not coalesced into one bounded helper launch'
+            );
+
+            helperCallbacks.shift()!(null, `${fakeChildren.length}\n`, '');
+            for (const child of fakeChildren) child.emit('close', 1, 'SIGKILL');
+            await Promise.all(pendingResults);
+        } finally {
+            for (const callback of helperCallbacks) callback(null, '0\n', '');
+            for (const child of fakeChildren) child.emit('close', 1, 'SIGKILL');
+            await Promise.allSettled(pendingResults);
+            (mutableChildProcess as any).spawn = originalSpawn;
+            (mutableChildProcess as any).execFile = originalExecFile;
+        }
+    });
+
+    it('prevents an oversized Windows target registry from exceeding helper environment limits', async () => {
+        if (process.platform !== 'win32') return;
+        const mutableChildProcess = require('node:child_process') as typeof childProcess;
+        const originalSpawn = mutableChildProcess.spawn;
+        const originalExecFile = mutableChildProcess.execFile;
+        const baselineSignalListeners = process.listeners('SIGTERM');
+        const inheritedProbeName = 'GARDA_OVERSIZED_PARENT_ENVIRONMENT';
+        const originalInheritedProbe = process.env[inheritedProbeName];
+        const childCount = 512;
+        const fakeChildren: childProcess.ChildProcess[] = [];
+        const pendingResults: Array<Promise<unknown>> = [];
+        const helperEnvironments: NodeJS.ProcessEnv[] = [];
+        let cleanup: Promise<void> | null = null;
+        const dispose = registerSubprocessSignalHandler(function (_signal, childCleanup) {
+            cleanup = childCleanup;
+        });
+
+        try {
+            process.env[inheritedProbeName] = 'x'.repeat(20_000);
+            (mutableChildProcess as any).spawn = function () {
+                const child = new EventEmitter() as childProcess.ChildProcess;
+                Object.defineProperties(child, {
+                    pid: { value: 1_900_000_000 + fakeChildren.length },
+                    exitCode: { value: null, configurable: true },
+                    signalCode: { value: null, configurable: true },
+                    stdout: { value: null },
+                    stderr: { value: null }
+                });
+                fakeChildren.push(child);
+                return child;
+            };
+            (mutableChildProcess as any).execFile = function (...invocation: any[]) {
+                const options = invocation[2] as { env?: NodeJS.ProcessEnv };
+                helperEnvironments.push(options.env ?? {});
+                const callback = invocation[3] as (error: Error | null, stdout: string, stderr: string) => void;
+                queueMicrotask(() => callback(null, '0\n', ''));
+                return new EventEmitter();
+            };
+
+            for (let index = 0; index < childCount; index += 1) {
+                pendingResults.push(spawnStreamed('mock-command', [], { timeoutMs: 30_000 }));
+            }
+            const signalHandler = process.listeners('SIGTERM').find(
+                (listener) => !baselineSignalListeners.includes(listener)
+            );
+            assert.ok(signalHandler, 'coordinator signal listener should be installed');
+
+            signalHandler('SIGTERM');
+            await new Promise((resolve) => setImmediate(resolve));
+
+            assert.ok(helperEnvironments.length > 1, 'oversized target registry was not chunked');
+            assert.equal(
+                helperEnvironments.reduce(function (count, environment) {
+                    return count + (environment.GARDA_PROCESS_TREE_TARGETS ?? '').split(';').filter(Boolean).length;
+                }, 0),
+                childCount,
+                'chunked helper launches did not receive every admitted child identity'
+            );
+            for (const environment of helperEnvironments) {
+                assert.ok(
+                    (environment.GARDA_PROCESS_TREE_TARGETS ?? '').length
+                        <= WINDOWS_PROCESS_TREE_TARGET_BATCH_MAX_CHARS,
+                    'a helper target payload exceeded its environment budget'
+                );
+                assert.equal(
+                    Object.hasOwn(environment, inheritedProbeName),
+                    false,
+                    'the helper inherited an unrelated oversized parent environment value'
+                );
+            }
+
+            for (const child of fakeChildren) child.emit('close', 1, 'SIGKILL');
+            assert.ok(cleanup, 'coordinator should expose bounded child cleanup');
+            await cleanup;
+            await Promise.all(pendingResults);
+        } finally {
+            for (const child of fakeChildren) child.emit('close', 1, 'SIGKILL');
+            await Promise.allSettled(pendingResults);
+            if (originalInheritedProbe === undefined) delete process.env[inheritedProbeName];
+            else process.env[inheritedProbeName] = originalInheritedProbe;
+            dispose();
+            (mutableChildProcess as any).spawn = originalSpawn;
+            (mutableChildProcess as any).execFile = originalExecFile;
+        }
+    });
+
+    it('prevents unbounded synchronous Windows exit cleanup across a larger registry', async () => {
+        if (process.platform !== 'win32') return;
+        const mutableChildProcess = require('node:child_process') as typeof childProcess;
+        const originalSpawn = mutableChildProcess.spawn;
+        const originalExecFileSync = mutableChildProcess.execFileSync;
+        const baselineExitListeners = process.listeners('exit');
+        const fakeChildren: childProcess.ChildProcess[] = [];
+        let syncCalls = 0;
+
+        try {
+            (mutableChildProcess as any).spawn = function () {
+                const child = new EventEmitter() as childProcess.ChildProcess;
+                Object.defineProperties(child, {
+                    pid: { value: 2_000_000_000 + fakeChildren.length },
+                    exitCode: { value: null, configurable: true },
+                    signalCode: { value: null, configurable: true },
+                    stdout: { value: null },
+                    stderr: { value: null }
+                });
+                child.kill = function (): boolean { return true; };
+                fakeChildren.push(child);
+                return child;
+            };
+            (mutableChildProcess as any).execFileSync = function (...invocation: any[]) {
+                syncCalls += 1;
+                const options = invocation[2] as { timeout?: number };
+                const waitMs = Math.min(800, options.timeout ?? 0);
+                Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs);
+                return '0\n';
+            };
+
+            const pending = Array.from({ length: 8 }, () => spawnStreamed('mock-command', []));
+            const exitHandler = process.listeners('exit').find((listener) => !baselineExitListeners.includes(listener));
+            assert.ok(exitHandler, 'managed registry should install one exit listener');
+            const startedAt = Date.now();
+            exitHandler(0);
+            const elapsedMs = Date.now() - startedAt;
+
+            assert.equal(syncCalls, 1, 'exit cleanup did not batch the active child registry');
+            assert.ok(
+                elapsedMs <= WINDOWS_EXIT_CLEANUP_BUDGET_MS + 250,
+                `exit cleanup exceeded its total budget: ${elapsedMs}ms`
+            );
+
+            for (const child of fakeChildren) child.emit('close', 1, 'SIGKILL');
+            await Promise.all(pending);
+        } finally {
+            (mutableChildProcess as any).spawn = originalSpawn;
+            (mutableChildProcess as any).execFileSync = originalExecFileSync;
+            for (const child of fakeChildren) child.emit('close', 1, 'SIGKILL');
+        }
     });
 });
 
