@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import * as fx from './next-step-review-cycle-fixtures';
 
 const {
@@ -737,6 +738,8 @@ describe('gates/next-step split-required latch status', () => {
         const repoRoot = makeTempRepo();
         const taskPath = path.join(repoRoot, 'TASK.md');
         const lockPath = `${taskPath}.garda-status-sync.lock`;
+        const trackedWipPath = path.join(repoRoot, 'src', 'app.ts');
+        const trackedWipContent = 'export const value = 2;\n';
         fs.writeFileSync(taskPath, [
             '# TASK.md',
             '',
@@ -747,17 +750,39 @@ describe('gates/next-step split-required latch status', () => {
             '| T-980-2 | 🟦 TODO | P1 | workflow/validation | Validate routing boundary | gpt-5.4 | 2026-05-05 | strict | Validate the independent routing contract. |',
             ''
         ].join('\n'), 'utf8');
+        execFileSync('git', ['init', '--quiet'], { cwd: repoRoot });
+        execFileSync('git', ['add', 'TASK.md', 'src/app.ts'], { cwd: repoRoot });
+        execFileSync('git', [
+            '-c', 'user.name=Garda Test',
+            '-c', 'user.email=garda-test@example.invalid',
+            'commit', '--quiet', '-m', 'fixture baseline'
+        ], { cwd: repoRoot });
+        fs.writeFileSync(trackedWipPath, trackedWipContent, 'utf8');
         seedSplitRequiredLatchEvidence(repoRoot, 'T-980');
         fs.writeFileSync(lockPath, 'held by another status sync\n', 'utf8');
 
         try {
             const result = resolveNextStep({ taskId: 'T-980', repoRoot });
             const taskMd = fs.readFileSync(taskPath, 'utf8');
+            const events = fs.readFileSync(path.join(eventsRoot(repoRoot), 'T-980.jsonl'), 'utf8');
 
             assert.equal(result.status, 'SPLIT_REQUIRED');
             assert.equal(result.next_gate, 'split-required-latch');
             assert.ok(result.reason.includes('Could not acquire TASK.md status-sync lock'));
             assert.ok(taskMd.includes('| T-980 | 🟫 SPLIT_REQUIRED |'));
+            assert.equal(fs.readFileSync(trackedWipPath, 'utf8'), trackedWipContent);
+            assert.equal(
+                execFileSync('git', ['status', '--short', '--', 'src/app.ts'], {
+                    cwd: repoRoot,
+                    encoding: 'utf8'
+                }).trim(),
+                'M src/app.ts'
+            );
+            assert.equal(events.includes('"event_type":"SPLIT_REQUIRED_WIP_CAPTURED"'), false);
+            assert.equal(
+                fs.existsSync(path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'wip', 'T-980')),
+                false
+            );
         } finally {
             fs.unlinkSync(lockPath);
         }
