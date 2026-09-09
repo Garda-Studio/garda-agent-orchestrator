@@ -118,7 +118,7 @@ The provider list is maintained in [docs/providers.md](docs/providers.md). That 
 | `garda update git` | Apply or preview an update from a git repo or local clone |
 | `garda rollback` | Roll back to a specific version or restore from the latest rollback snapshot |
 | `garda cleanup` | Preview/apply tiered runtime retention and inspect review-artifact policy |
-| `garda repair` | Inspect or rebuild runtime indexes, protected manifests, and stale lock state |
+| `garda repair` | Inspect or repair runtime indexes, authenticated task timelines, protected manifests, and stale lock state |
 | `garda uninstall` | Remove orchestrator while preserving `TASK.md` by default; queue removal requires explicit `--keep-task-file no` |
 | `garda skills` | List, suggest, add, remove, and validate optional built-in skill packs |
 | `garda profile` | List, switch, create, delete, and validate workspace profiles |

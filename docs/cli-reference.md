@@ -507,6 +507,8 @@ garda repair catalog repair --target-root "."
 garda repair catalog repair --target-root "." --confirm
 garda repair catalog rebuild --target-root "."
 garda repair catalog rebuild --target-root "." --confirm
+garda repair task-events migrate-legacy-suffix --task-id T-123 --target-root "." --json
+garda repair task-events migrate-legacy-suffix --task-id T-123 --target-root "." --apply --expected-plan-sha256 HASH --json
 ```
 
 Notes:
@@ -518,6 +520,9 @@ Notes:
 - `repair catalog health` validates canonical inputs, SQLite compatibility, and exact snapshot parity without changing canonical files.
 - `repair catalog drift` reports the canonical sources whose hashes differ from the current derived catalog.
 - `repair catalog repair` and `repair catalog rebuild` are dry-run by default. `--confirm` repairs drift or performs an explicit batched rebuild; confirmed corruption repair quarantines the database, WAL, and SHM recovery unit before rebuilding from canonical files.
+- `repair task-events migrate-legacy-suffix` previews a migration only when a valid terminal integrity-schema-v1 suffix is anchored directly to a trusted schema-v2 event. It preserves event payloads and rebuilds only suffix integrity metadata.
+- Applying a task-event suffix migration requires `--apply` and the exact `--expected-plan-sha256` emitted by the current preview. Apply revalidates identity and content under the task lock, creates and verifies a root-confined backup, atomically replaces the timeline, and verifies canonical integrity before reporting success.
+- Invalid, unanchored, mixed, replayed, foreign-task, symlinked, raced, oversized, or already-current timelines are not modified. A repeated apply against an already-current timeline is an idempotent no-op.
 
 ### `garda gc`
 

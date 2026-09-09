@@ -63,7 +63,7 @@ export const COMMAND_SUMMARY = Object.freeze<readonly CommandSummaryEntry[]>([
     ['backup', 'Create manual backup snapshots'],
     ['uninstall', 'Remove orchestrator'],
     ['cleanup', 'Remove retained runtime artifacts and manage review-artifact storage policy'],
-    ['repair', 'Inspect and rebuild runtime indexes, protected manifests, and stale locks'],
+    ['repair', 'Inspect and repair runtime indexes, task timelines, protected manifests, and stale locks'],
     ['gc', 'Extended cleanup with dry-run default and alias clean'],
     ['verify', 'Verify workspace layout'],
     ['check-update', 'Check for available updates'],

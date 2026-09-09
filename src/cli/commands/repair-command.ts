@@ -49,9 +49,15 @@ import {
     rebuildDerivedSqliteCatalog,
     repairDerivedSqliteCatalog
 } from '../../runtime/sqlite-catalog';
+import {
+    applyTaskEventSuffixMigration,
+    previewTaskEventSuffixMigration,
+    type TaskEventSuffixMigrationResult
+} from './repair/task-event-suffix-migration';
 
-type RepairAction = 'inspect' | 'rebuild-indexes' | 'protected-manifest' | 'locks' | 'catalog';
+type RepairAction = 'inspect' | 'rebuild-indexes' | 'protected-manifest' | 'locks' | 'catalog' | 'task-events';
 type CatalogRepairAction = 'health' | 'drift' | 'repair' | 'rebuild';
+type TaskEventsRepairAction = 'migrate-legacy-suffix';
 
 export interface RepairInspectResult {
     targetRoot: string;
@@ -133,6 +139,11 @@ export interface RepairLocksResult {
     removed_review_artifact_locks: string[];
     retained_live_locks: string[];
     warnings: string[];
+}
+
+export interface RepairTaskEventSuffixMigrationOptions {
+    apply: boolean;
+    expectedPlanSha256?: string;
 }
 
 function getReviewsRoot(bundleRoot: string): string {
@@ -507,13 +518,63 @@ function printCatalogResult(action: CatalogRepairAction, result: unknown): void 
     }
 }
 
+export function runRepairTaskEventSuffixMigration(
+    targetRoot: string,
+    taskId: string,
+    options: RepairTaskEventSuffixMigrationOptions
+): TaskEventSuffixMigrationResult {
+    const resolvedTargetRoot = path.resolve(targetRoot);
+    const bundleRoot = ensureBundleExists(resolvedTargetRoot, 'repair task-events migrate-legacy-suffix');
+    if (!options.apply) {
+        return previewTaskEventSuffixMigration(resolvedTargetRoot, bundleRoot, taskId);
+    }
+    return applyTaskEventSuffixMigration(resolvedTargetRoot, bundleRoot, taskId, {
+        expectedPlanSha256: options.expectedPlanSha256 || ''
+    });
+}
+
+function printTaskEventSuffixMigrationResult(result: TaskEventSuffixMigrationResult): void {
+    console.log('GARDA_REPAIR_TASK_EVENT_LEGACY_SUFFIX');
+    if (result.dry_run && result.status === 'READY') {
+        console.log(yellow(
+            'Preview only - pass --apply with --expected-plan-sha256 from this preview to migrate.'
+        ));
+    }
+    formatKeyValueOutput(result as unknown as Record<string, unknown>, [
+        'task_id',
+        'status',
+        'dry_run',
+        'changed',
+        'reason_code',
+        'source_path',
+        'source_sha256',
+        'source_identity_sha256',
+        'migrated_sha256',
+        'plan_sha256',
+        'anchor_line',
+        'suffix_start_line',
+        'suffix_event_count',
+        'backup_path',
+        'backup_manifest_path',
+        'integrity_status',
+        'diagnostic'
+    ]);
+    if (result.warnings.length > 0) {
+        console.log(yellow(`Warnings: ${result.warnings.length}`));
+        for (const warning of result.warnings) console.log(`  - ${warning}`);
+    }
+    if (result.status === 'APPLIED') {
+        console.log(green('Authenticated legacy task-event suffix migrated.'));
+    }
+}
+
 export function handleRepair(commandArgv: string[], packageJson: PackageJsonLike): void {
     const firstArg = String(commandArgv[0] || '').trim();
     const hasExplicitAction = firstArg.length > 0 && !firstArg.startsWith('-') && firstArg !== 'help';
     const action = (hasExplicitAction ? firstArg : 'inspect') as RepairAction;
     let actionArgv = hasExplicitAction ? commandArgv.slice(1) : commandArgv;
-    if (!['inspect', 'rebuild-indexes', 'protected-manifest', 'locks', 'catalog'].includes(action)) {
-        throw new Error(`Unknown repair action: ${action}. Allowed values: inspect, rebuild-indexes, protected-manifest, locks, catalog.`);
+    if (!['inspect', 'rebuild-indexes', 'protected-manifest', 'locks', 'catalog', 'task-events'].includes(action)) {
+        throw new Error(`Unknown repair action: ${action}. Allowed values: inspect, rebuild-indexes, protected-manifest, locks, catalog, task-events.`);
     }
 
     const catalogActionText = action === 'catalog'
@@ -527,11 +588,26 @@ export function handleRepair(commandArgv: string[], packageJson: PackageJsonLike
     }
     const catalogAction = catalogActionText as CatalogRepairAction;
 
+    const taskEventsActionText = action === 'task-events'
+        ? String(actionArgv[0] || '').trim().toLowerCase()
+        : 'migrate-legacy-suffix';
+    if (action === 'task-events') actionArgv = actionArgv.slice(actionArgv.length > 0 ? 1 : 0);
+    if (action === 'task-events' && taskEventsActionText !== 'migrate-legacy-suffix') {
+        throw new Error(
+            `Unknown repair task-events action: ${taskEventsActionText || '<missing>'}. `
+            + 'Allowed value: migrate-legacy-suffix.'
+        );
+    }
+    const taskEventsAction = taskEventsActionText as TaskEventsRepairAction;
+
     const definitions = {
         '--target-root': { key: 'targetRoot', type: 'string' },
         '--json': { key: 'json', type: 'boolean' },
         '--confirm': { key: 'confirm', type: 'boolean' },
-        '--cleanup-stale': { key: 'cleanupStale', type: 'boolean' }
+        '--cleanup-stale': { key: 'cleanupStale', type: 'boolean' },
+        '--task-id': { key: 'taskId', type: 'string' },
+        '--apply': { key: 'apply', type: 'boolean' },
+        '--expected-plan-sha256': { key: 'expectedPlanSha256', type: 'string' }
     };
     const { options: rawOptions } = parseOptions(actionArgv, definitions);
     const options = rawOptions as ParsedOptionsRecord;
@@ -568,6 +644,27 @@ export function handleRepair(commandArgv: string[], packageJson: PackageJsonLike
     if (action === 'catalog') {
         const result = runCatalogRepairAction(targetRoot, catalogAction, options.confirm === true);
         json ? printJson(result) : printCatalogResult(catalogAction, result);
+        return;
+    }
+
+    if (action === 'task-events' && taskEventsAction === 'migrate-legacy-suffix') {
+        const taskId = String(options.taskId || '').trim();
+        if (!taskId) {
+            throw new Error('repair task-events migrate-legacy-suffix requires --task-id.');
+        }
+        if (options.confirm === true) {
+            throw new Error(
+                'repair task-events migrate-legacy-suffix uses --apply with a preview plan hash; --confirm is unsupported.'
+            );
+        }
+        if (options.apply !== true && options.expectedPlanSha256) {
+            throw new Error('--expected-plan-sha256 is only valid together with --apply.');
+        }
+        const result = runRepairTaskEventSuffixMigration(targetRoot, taskId, {
+            apply: options.apply === true,
+            expectedPlanSha256: String(options.expectedPlanSha256 || '')
+        });
+        json ? printJson(result) : printTaskEventSuffixMigrationResult(result);
         return;
     }
 

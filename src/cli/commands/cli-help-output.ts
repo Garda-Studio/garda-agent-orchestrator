@@ -437,7 +437,7 @@ export const COMMAND_HELP: Readonly<Record<CommandHelpName, CommandHelpDescripto
         ])
     }),
     repair: Object.freeze({
-        summary: 'Inspect and rebuild derived runtime indexes, protected manifests, and stale lock state.',
+        summary: 'Inspect and repair runtime indexes, task timelines, protected manifests, and stale lock state.',
         usage: Object.freeze([
             `${PRIMARY_CLI_NAME} repair [inspect] [--target-root PATH] [--json]`,
             `${PRIMARY_CLI_NAME} repair rebuild-indexes [--target-root PATH] [--confirm] [--json]`,
@@ -446,7 +446,9 @@ export const COMMAND_HELP: Readonly<Record<CommandHelpName, CommandHelpDescripto
             `${PRIMARY_CLI_NAME} repair catalog health [--target-root PATH] [--json]`,
             `${PRIMARY_CLI_NAME} repair catalog drift [--target-root PATH] [--json]`,
             `${PRIMARY_CLI_NAME} repair catalog repair [--target-root PATH] [--confirm] [--json]`,
-            `${PRIMARY_CLI_NAME} repair catalog rebuild [--target-root PATH] [--confirm] [--json]`
+            `${PRIMARY_CLI_NAME} repair catalog rebuild [--target-root PATH] [--confirm] [--json]`,
+            `${PRIMARY_CLI_NAME} repair task-events migrate-legacy-suffix --task-id ID [--target-root PATH] [--json]`,
+            `${PRIMARY_CLI_NAME} repair task-events migrate-legacy-suffix --task-id ID --apply --expected-plan-sha256 HASH [--target-root PATH] [--json]`
         ]),
         examples: Object.freeze([
             `${PRIMARY_CLI_NAME} repair inspect`,
@@ -457,13 +459,16 @@ export const COMMAND_HELP: Readonly<Record<CommandHelpName, CommandHelpDescripto
             `${PRIMARY_CLI_NAME} repair catalog health`,
             `${PRIMARY_CLI_NAME} repair catalog drift`,
             `${PRIMARY_CLI_NAME} repair catalog repair --confirm`,
-            `${PRIMARY_CLI_NAME} repair catalog rebuild --confirm`
+            `${PRIMARY_CLI_NAME} repair catalog rebuild --confirm`,
+            `${PRIMARY_CLI_NAME} repair task-events migrate-legacy-suffix --task-id T-123 --json`,
+            `${PRIMARY_CLI_NAME} repair task-events migrate-legacy-suffix --task-id T-123 --apply --expected-plan-sha256 HASH --json`
         ]),
         hints: Object.freeze([
             'inspect is read-only and names canonical versus derived runtime state.',
             'rebuild-indexes and protected-manifest are dry-run by default; pass --confirm to write.',
             'locks reports task-event, review-artifact, and completion-finalization locks; cleanup only removes proven-stale task-event/review-artifact locks after --cleanup-stale --confirm.',
-            'catalog health and drift are read-only; catalog repair and rebuild are preview-first and require --confirm to write.'
+            'catalog health and drift are read-only; catalog repair and rebuild are preview-first and require --confirm to write.',
+            'task-events migrate-legacy-suffix is read-only by default; apply requires the exact plan hash from a current eligible preview.'
         ])
     }),
     gc: Object.freeze({

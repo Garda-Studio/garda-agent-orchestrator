@@ -11,6 +11,7 @@ import {
     runRepairProtectedManifest,
     runRepairRebuildIndexes
 } from '../../../src/cli/commands/repair-command';
+import { buildEventIntegrityHash } from '../../../src/gate-runtime/timeline/task-events-helpers';
 
 function makeRepairFixture(): { root: string; bundleRoot: string; cleanup: () => void } {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-repair-command-'));
@@ -50,6 +51,28 @@ function captureStdout(callback: () => void): string {
         process.stdout.write = originalWrite;
     }
     return output;
+}
+
+function writeMigratableTimeline(timelinePath: string, taskId: string): string {
+    let previousHash: string | null = null;
+    const events = [1, 2, 1].map((schemaVersion, index) => {
+        const event: Record<string, unknown> = {
+            task_id: taskId,
+            event_type: `event-${index + 1}`,
+            message: `event ${index + 1}`,
+            integrity: {
+                schema_version: schemaVersion,
+                task_sequence: index + 1,
+                prev_event_sha256: previousHash
+            } as Record<string, unknown>
+        };
+        previousHash = buildEventIntegrityHash(event);
+        (event.integrity as Record<string, unknown>).event_sha256 = previousHash;
+        return event;
+    });
+    const content = `${events.map((event) => JSON.stringify(event)).join('\n')}\n`;
+    fs.writeFileSync(timelinePath, content, 'utf8');
+    return content;
 }
 
 test('repair inspect reports canonical and derived runtime state without mutating files', () => {
@@ -122,6 +145,72 @@ test('repair CLI defaults to inspect and rejects unknown actions', () => {
             () => handleRepair(['unknown-action', '--target-root', fixture.root, '--json'], { name: 'garda', version: '1.2.3' }),
             /Unknown repair action: unknown-action/
         );
+    } finally {
+        fixture.cleanup();
+    }
+});
+
+test('repair task-events migration requires preview-bound explicit apply', () => {
+    const fixture = makeRepairFixture();
+    try {
+        const timelinePath = path.join(fixture.bundleRoot, 'runtime', 'task-events', 'T-001.jsonl');
+        const original = writeMigratableTimeline(timelinePath, 'T-001');
+        const previewOutput = captureStdout(() => {
+            handleRepair([
+                'task-events',
+                'migrate-legacy-suffix',
+                '--task-id',
+                'T-001',
+                '--target-root',
+                fixture.root,
+                '--json'
+            ], { name: 'garda', version: '1.2.3' });
+        });
+        const preview = JSON.parse(previewOutput) as Record<string, unknown>;
+        assert.equal(preview.status, 'READY');
+        assert.equal(preview.dry_run, true);
+        assert.match(String(preview.plan_sha256), /^[0-9a-f]{64}$/u);
+        assert.equal(fs.readFileSync(timelinePath, 'utf8'), original);
+
+        assert.throws(() => handleRepair([
+            'task-events',
+            'migrate-legacy-suffix',
+            '--task-id',
+            'T-001',
+            '--target-root',
+            fixture.root,
+            '--apply',
+            '--json'
+        ], { name: 'garda', version: '1.2.3' }), /expected-plan-sha256/u);
+
+        const appliedOutput = captureStdout(() => {
+            handleRepair([
+                'task-events',
+                'migrate-legacy-suffix',
+                '--task-id',
+                'T-001',
+                '--target-root',
+                fixture.root,
+                '--apply',
+                '--expected-plan-sha256',
+                String(preview.plan_sha256),
+                '--json'
+            ], { name: 'garda', version: '1.2.3' });
+        });
+        const applied = JSON.parse(appliedOutput) as Record<string, unknown>;
+        assert.equal(applied.status, 'APPLIED');
+        assert.equal(applied.integrity_status, 'PASS');
+        assert.equal(fs.existsSync(String(applied.backup_path)), true);
+
+        assert.throws(() => handleRepair([
+            'task-events',
+            'migrate-legacy-suffix',
+            '--task-id',
+            'T-001',
+            '--target-root',
+            fixture.root,
+            '--confirm'
+        ], { name: 'garda', version: '1.2.3' }), /--confirm is unsupported/u);
     } finally {
         fixture.cleanup();
     }
