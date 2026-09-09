@@ -1874,6 +1874,8 @@ describe('gates/next-step preflight routing', () => {
 
         assert.equal(result.next_gate, 'classify-change');
         assert.ok(command.includes('--use-staged'));
+        assert.ok(command.includes('--task-intent "First split child"'), command);
+        assert.ok(!command.includes('--task-intent "First split child staged implementation"'), command);
         assert.ok(!command.includes('src/sibling-drift.ts'));
     });
 
@@ -2351,6 +2353,8 @@ describe('gates/next-step preflight routing', () => {
 
         assert.equal(result.next_gate, 'classify-change', result.reason);
         assert.match(result.reason, /Preflight evidence is older than the latest TASK_MODE_ENTERED/);
+        assert.ok(command.includes('--task-intent "Child checkpoint"'), command);
+        assert.ok(!command.includes('--task-intent "Seeded next-step task"'), command);
         assert.ok(command.includes(`--detection-source "${checkpoint.detectionSource}"`), command);
         assert.ok(command.includes('--changed-file "src/app.ts"'), command);
         assert.ok(!command.includes('--changed-file "<path>"'), command);
