@@ -1429,6 +1429,43 @@ test('validateReviewFindingsReport accepts a focused target tied to changed beha
     assert.equal(result.valid, true, result.violations.join('\n'));
 });
 
+test('validateReviewFindingsReport accepts a focused target tied to the authenticated task contract', () => {
+    const report = missingFocusedValidationReport();
+    const note = (report.validation_notes as Array<Record<string, unknown>>)[0];
+    note.evidence = [evidence(
+        'tests/node/example.test.ts:42',
+        "The focused command target tests/node/example.test.ts is relevant to T-979-1 because it asserts T-979-1's oversized-timeline rejection contract."
+    )];
+
+    const result = validateReviewFindingsReport(report, {
+        ...validationOptions,
+        expectedChangedFilePaths: ['src/example.ts', 'tests/node/example.test.ts']
+    });
+
+    assert.equal(result.valid, true, result.violations.join('\n'));
+});
+
+test('validateReviewFindingsReport rejects a focused target tied to another task contract', () => {
+    for (const otherTaskId of ['T-978', 'T-979-1-forged']) {
+        const report = missingFocusedValidationReport();
+        const note = (report.validation_notes as Array<Record<string, unknown>>)[0];
+        note.evidence = [evidence(
+            'tests/node/example.test.ts:42',
+            `The focused command target tests/node/example.test.ts is relevant to ${otherTaskId} because it asserts ${otherTaskId}'s oversized-timeline rejection contract.`
+        )];
+
+        const result = validateReviewFindingsReport(report, {
+            ...validationOptions,
+            expectedChangedFilePaths: ['src/example.ts', 'tests/node/example.test.ts']
+        });
+
+        assert.equal(result.valid, false, otherTaskId);
+        assert.ok(result.violations.some((entry) => entry.includes(
+            'name the exact focused command target and why it is relevant'
+        )), otherTaskId);
+    }
+});
+
 test('validateReviewFindingsReport rejects an existing but unrelated F-000 target with repo context', () => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-focused-unrelated-target-'));
     try {

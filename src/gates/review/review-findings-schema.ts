@@ -553,7 +553,8 @@ function validateFocusedValidationNoteFindingLinks(
 function validateFocusedValidationNoteCommand(
     fields: ParsedValidationNoteFields,
     violations: string[],
-    repoRoot?: string
+    repoRoot?: string,
+    expectedTaskId?: string
 ): void {
     if (!fields.command) {
         return;
@@ -569,7 +570,7 @@ function validateFocusedValidationNoteCommand(
         );
     } else if (
         fields.commandOutcome !== 'passed'
-        && !focusedEvidenceExplainsTargetRelevance(fields.evidence, commandTargets[0])
+        && !focusedEvidenceExplainsTargetRelevance(fields.evidence, commandTargets[0], expectedTaskId)
     ) {
         violations.push(
             'Reviewer focused self-validation authenticated changed-file evidence must name the exact focused command target and why it is relevant.'
@@ -580,14 +581,15 @@ function validateFocusedValidationNoteCommand(
 function validateFocusedValidationNote(
     fields: ParsedValidationNoteFields,
     violations: string[],
-    repoRoot?: string
+    repoRoot?: string,
+    expectedTaskId?: string
 ): void {
     if (!fields.requiresFocusedCommandFields) {
         return;
     }
     validateFocusedValidationNoteMetadata(fields, violations);
     validateFocusedValidationNoteFindingLinks(fields, violations);
-    validateFocusedValidationNoteCommand(fields, violations, repoRoot);
+    validateFocusedValidationNoteCommand(fields, violations, repoRoot, expectedTaskId);
 }
 
 function buildValidationNote(fields: ParsedValidationNoteFields): ReviewFindingsValidationNote | null {
@@ -622,7 +624,8 @@ function buildValidationNote(fields: ParsedValidationNoteFields): ReviewFindings
 function parseValidationNotes(
     value: unknown,
     violations: string[],
-    repoRoot?: string
+    repoRoot?: string,
+    expectedTaskId?: string
 ): ReviewFindingsValidationNote[] {
     if (!Array.isArray(value)) {
         violations.push('validation_notes must be an array.');
@@ -638,7 +641,7 @@ function parseValidationNotes(
         }
         const fields = readValidationNoteFields(entry, subject, violations);
         validateValidationNoteIdentity(fields, violations);
-        validateFocusedValidationNote(fields, violations, repoRoot);
+        validateFocusedValidationNote(fields, violations, repoRoot, expectedTaskId);
         if (fields.id && REVIEW_VALIDATION_NOTE_ID_PATTERN.test(fields.id)) {
             ids.push(fields.id);
         }
@@ -1170,11 +1173,12 @@ function focusedCommandExecutesMarkerTarget(command: string, markerTarget: strin
 const FOCUSED_EVIDENCE_CHANGED_BEHAVIOR_PATTERN =
     /\b(?:affected|changed|modified|new|updated)\b/u;
 const FOCUSED_EVIDENCE_RELATIONSHIP_PATTERN =
-    /\b(?:consume(?:s|d|ing)?|cover(?:s|ed|ing)?|exercise(?:s|d|ing)?|guard(?:s|ed|ing)?|motivat(?:e|es|ed|ing)|own(?:s|ed|ing)?|validat(?:e|es|ed|ing)|verif(?:y|ies|ied|ying))\b/u;
+    /\b(?:assert(?:s|ed|ing)?|consume(?:s|d|ing)?|cover(?:s|ed|ing)?|exercise(?:s|d|ing)?|guard(?:s|ed|ing)?|motivat(?:e|es|ed|ing)|own(?:s|ed|ing)?|validat(?:e|es|ed|ing)|verif(?:y|ies|ied|ying))\b/u;
 
 function focusedEvidenceExplainsTargetRelevance(
     evidence: readonly ReviewFindingsEvidence[],
-    markerTarget: string
+    markerTarget: string,
+    expectedTaskId?: string
 ): boolean {
     const normalizedTarget = normalizeFocusedTargetPath(markerTarget);
     const escapedTarget = normalizedTarget.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
@@ -1182,6 +1186,12 @@ function focusedEvidenceExplainsTargetRelevance(
         `(?<![a-z0-9._/\\-])${escapedTarget}(?![a-z0-9_/\\-]|\\.[a-z0-9])`,
         'u'
     );
+    const expectedTaskPattern = expectedTaskId
+        ? new RegExp(
+            `(?<![a-z0-9-])${expectedTaskId.toLowerCase().replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?![a-z0-9-])`,
+            'u'
+        )
+        : null;
     return evidence.some((entry) => {
         const normalizedObservation = entry.observation.replace(/\\/gu, '/');
         const location = parseReviewEvidenceLocation(entry.location);
@@ -1201,14 +1211,19 @@ function focusedEvidenceExplainsTargetRelevance(
                 return false;
             }
             const rationale = clause.replace(targetMarker, ' ').toLowerCase();
-            return FOCUSED_EVIDENCE_CHANGED_BEHAVIOR_PATTERN.test(rationale)
+            const namesExpectedTask = expectedTaskPattern?.test(rationale) || false;
+            return (FOCUSED_EVIDENCE_CHANGED_BEHAVIOR_PATTERN.test(rationale) || namesExpectedTask)
                 && FOCUSED_EVIDENCE_RELATIONSHIP_PATTERN.test(rationale);
         });
     });
 }
 
-function focusedAttemptBindsTargetToEvidence(note: ReviewFindingsValidationNote, markerTarget: string): boolean {
-    return focusedEvidenceExplainsTargetRelevance(note.evidence, markerTarget);
+function focusedAttemptBindsTargetToEvidence(
+    note: ReviewFindingsValidationNote,
+    markerTarget: string,
+    expectedTaskId?: string
+): boolean {
+    return focusedEvidenceExplainsTargetRelevance(note.evidence, markerTarget, expectedTaskId);
 }
 
 function isSafeRepositoryRelativeFocusedTarget(markerTarget: string): boolean {
@@ -1333,7 +1348,8 @@ interface FocusedTargetAttempts {
 function getFocusedTargetAttempts(
     attemptNotes: readonly ReviewFindingsValidationNote[],
     markerTarget: string,
-    repoRoot?: string
+    repoRoot?: string,
+    expectedTaskId?: string
 ): FocusedTargetAttempts {
     const commandTargetAttempts = attemptNotes.filter((note) => (
         Boolean(note.command)
@@ -1343,7 +1359,7 @@ function getFocusedTargetAttempts(
         commandTargetAttempts,
         authenticatedTargetAttempts: commandTargetAttempts.filter((note) => (
             isActionableFocusedDiagnostics(note.diagnostics as string)
-            && focusedAttemptBindsTargetToEvidence(note, markerTarget)
+            && focusedAttemptBindsTargetToEvidence(note, markerTarget, expectedTaskId)
         ))
     };
 }
@@ -1377,7 +1393,8 @@ function validateEvidenceOnlyFocusedTarget(
     markerTarget: string,
     attemptNotes: readonly ReviewFindingsValidationNote[],
     violations: string[],
-    repoRoot?: string
+    repoRoot?: string,
+    expectedTaskId?: string
 ): void {
     if (!isSafeRepositoryRelativeFocusedTarget(markerTarget)) {
         violations.push(
@@ -1385,7 +1402,7 @@ function validateEvidenceOnlyFocusedTarget(
         );
         return;
     }
-    const attempts = getFocusedTargetAttempts(attemptNotes, markerTarget, repoRoot);
+    const attempts = getFocusedTargetAttempts(attemptNotes, markerTarget, repoRoot, expectedTaskId);
     if (attempts.authenticatedTargetAttempts.length === 0) {
         violations.push(
             `F-000 missing-focused-validation requires the exact attempted command to execute target '${markerTarget}' through a focused test or validation runner and authenticated validation-note evidence to name that target's relevance.`
@@ -1398,11 +1415,12 @@ function validateEvidenceOnlyFocusedFinding(
     finding: ReviewFinding,
     attemptNotes: readonly ReviewFindingsValidationNote[],
     violations: string[],
-    repoRoot?: string
+    repoRoot?: string,
+    expectedTaskId?: string
 ): void {
     const markerTargets = [...new Set(getMissingFocusedValidationMarkerTargets(finding))];
     for (const markerTarget of markerTargets) {
-        validateEvidenceOnlyFocusedTarget(markerTarget, attemptNotes, violations, repoRoot);
+        validateEvidenceOnlyFocusedTarget(markerTarget, attemptNotes, violations, repoRoot, expectedTaskId);
     }
 }
 
@@ -1411,7 +1429,8 @@ function validateMissingFocusedValidationPostAttemptEvidence(
     findings: ReviewFindingsBySeverity | null,
     residualRisks: readonly ReviewResidualRisk[],
     violations: string[],
-    repoRoot?: string
+    repoRoot?: string,
+    expectedTaskId?: string
 ): void {
     const allFindings = getAllFindings(findings);
     validateFailedFocusedFindingLinks(validationNotes, allFindings, violations);
@@ -1428,7 +1447,7 @@ function validateMissingFocusedValidationPostAttemptEvidence(
         return;
     }
     for (const finding of evidenceOnlyFindings) {
-        validateEvidenceOnlyFocusedFinding(finding, attemptNotes, violations, repoRoot);
+        validateEvidenceOnlyFocusedFinding(finding, attemptNotes, violations, repoRoot, expectedTaskId);
     }
 }
 
@@ -1855,7 +1874,8 @@ export function validateReviewFindingsReport(
     const validationNotes = parseValidationNotes(
         value.validation_notes,
         violations,
-        options.repoRoot
+        options.repoRoot,
+        options.expectedTaskId
     );
     const coverageLedger = parseCoverageLedger(value.coverage_ledger, violations);
     const reviewExecution = parseReviewExecutionDeclaration(value.review_execution, violations);
@@ -1896,7 +1916,8 @@ export function validateReviewFindingsReport(
         findings,
         residualRisks,
         violations,
-        options.repoRoot
+        options.repoRoot,
+        options.expectedTaskId
     );
     validateConcreteReviewEvidenceLocations(
         { validationNotes, coverageLedger, findings, residualRisks },
