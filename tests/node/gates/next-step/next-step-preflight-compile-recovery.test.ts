@@ -936,6 +936,10 @@ describe('gates/next-step preflight compile recovery', () => {
         assert.ok(result.reason.includes('HANDSHAKE_DIAGNOSTICS_RECORDED'));
         assert.ok(result.commands[0].command.includes('gate restart-coherent-cycle'));
         assert.ok(result.commands[0].command.includes('--preflight-path'));
+        assert.ok(result.commands[0].command.includes(
+            "--task-intent 'Make next-step output executable in tests'"
+        ));
+        assert.ok(!result.commands[0].command.includes("--task-intent 'Seeded next-step task'"));
     });
 
     it('prints operator confirmation placeholders for protected coherent-cycle restart commands', () => {
@@ -967,6 +971,8 @@ describe('gates/next-step preflight compile recovery', () => {
 
         assert.equal(result.next_gate, 'restart-coherent-cycle');
         assert.ok(command.includes('gate restart-coherent-cycle'));
+        assert.ok(command.includes("--task-intent 'Make next-step output executable in tests'"));
+        assert.ok(!command.includes("--task-intent 'Restart protected coherent cycle'"));
         assert.ok(command.includes('--operator-confirmed yes'));
         assert.ok(command.includes("--operator-confirmed-at-utc '<ISO-8601 timestamp>'"));
     });

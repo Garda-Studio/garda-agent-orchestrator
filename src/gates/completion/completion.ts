@@ -86,6 +86,7 @@ import {
     resolveCompletionReviewTrustSummary
 } from './completion-required-review-evidence';
 import { collectFullSuiteValidationEvidence } from './completion-full-suite-evidence';
+import { readTaskQueueEntries } from '../../core/task-queue-read';
 
 export { detectCodeChanged, preflightRequiresAnyReview } from '../preflight';
 
@@ -623,6 +624,9 @@ export function runCompletionGate(options: RunCompletionGateOptions) {
 
     const status = errors.length > 0 ? 'FAILED' : 'PASSED';
     const outcome = errors.length > 0 ? 'FAIL' : 'PASS';
+    const currentTaskIntent = resolvedTaskId
+        ? readTaskQueueEntries(repoRoot).get(resolvedTaskId)?.title || taskModeEvidence.task_summary
+        : taskModeEvidence.task_summary;
     const coherentCycleRestartCommand = stageSequence.violations.length > 0 && resolvedTaskId
         ? buildCoherentCycleRestartCommand(
             repoRoot,
@@ -634,7 +638,8 @@ export function runCompletionGate(options: RunCompletionGateOptions) {
             {
                 requiresOperatorConfirmation:
                     taskModeEvidence.orchestrator_work === true
-                    || taskModeEvidence.workflow_config_work === true
+                    || taskModeEvidence.workflow_config_work === true,
+                taskIntent: currentTaskIntent
             }
         )
         : null;

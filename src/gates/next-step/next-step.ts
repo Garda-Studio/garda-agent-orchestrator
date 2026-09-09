@@ -3417,7 +3417,8 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         reviewsRoot,
         taskId,
         preflightPath,
-        taskModePath
+        taskModePath,
+        taskEntry?.title || getStringField(taskMode, 'task_summary', taskId)
     );
     const postPreflightRulePackReadiness = readPostPreflightRulePackReadiness(
         repoRoot,
@@ -3537,7 +3538,8 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                                 requiresOperatorConfirmation: Boolean(
                                     taskMode?.orchestrator_work === true
                                     || taskMode?.workflow_config_work === true
-                                )
+                                ),
+                                taskIntent: taskEntry?.title || getStringField(taskMode, 'task_summary', taskId)
                             }
                         )
                     }

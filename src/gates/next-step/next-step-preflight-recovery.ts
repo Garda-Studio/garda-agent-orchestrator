@@ -820,7 +820,8 @@ export function readCoherentCycleReadiness(
     reviewsRoot: string,
     taskId: string,
     preflightPath: string,
-    taskModePath: string | null
+    taskModePath: string | null,
+    taskIntent: string | null = null
 ): CoherentCycleReadiness {
     const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
     const timelineErrors: string[] = [];
@@ -913,7 +914,7 @@ export function readCoherentCycleReadiness(
                         taskModePath,
                         commandsPath,
                         outputFiltersPath,
-                        { requiresOperatorConfirmation }
+                        { requiresOperatorConfirmation, taskIntent }
                     )
                 };
             }
@@ -947,7 +948,7 @@ export function readCoherentCycleReadiness(
                         taskModePath,
                         commandsPath,
                         outputFiltersPath,
-                        { requiresOperatorConfirmation }
+                        { requiresOperatorConfirmation, taskIntent }
                     )
                 };
             }
@@ -1004,7 +1005,7 @@ export function readCoherentCycleReadiness(
                 taskModePath,
                 commandsPath,
                 outputFiltersPath,
-                { requiresOperatorConfirmation }
+                { requiresOperatorConfirmation, taskIntent }
             )
         };
     }
@@ -1061,7 +1062,7 @@ export function readCoherentCycleReadiness(
             taskModePath,
             commandsPath,
             outputFiltersPath,
-            { requiresOperatorConfirmation }
+            { requiresOperatorConfirmation, taskIntent }
         )
     };
 }

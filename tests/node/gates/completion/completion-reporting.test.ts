@@ -26,6 +26,25 @@ function writeTaskMode(repoRoot: string, taskId: string, payload: Record<string,
 }
 
 describe('gates/completion-reporting', () => {
+    it('carries and PowerShell-quotes the current task intent in coherent-cycle restart guidance', () => {
+        const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-completion-restart-intent-'));
+        try {
+            const command = buildCoherentCycleRestartCommand(
+                repoRoot,
+                'T-123',
+                'preflight.json',
+                null,
+                null,
+                null,
+                { taskIntent: "Preserve the task's current review triggers" }
+            );
+
+            assert.ok(command.includes("--task-intent 'Preserve the task''s current review triggers'"), command);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+
     it('carries attributed workflow-config scope in coherent-cycle restart guidance', () => {
         const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-completion-restart-scope-'));
         try {

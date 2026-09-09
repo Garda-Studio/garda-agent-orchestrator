@@ -3680,6 +3680,30 @@ describe('gates/next-step', { concurrency: 2 }, () => {
         assert.ok(!result.commands[0].command.includes('compile-gate'));
     });
 
+    it('preserves current task intent when closed-review remediation requires a coherent restart', () => {
+        const repoRoot = makeTempRepo();
+        seedStartedTask(repoRoot, TASK_ID);
+        markTaskInProgress(repoRoot, TASK_ID);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+        seedCompilePass(repoRoot, TASK_ID);
+        appendEvent(repoRoot, TASK_ID, 'REVIEW_PHASE_STARTED', 'INFO', {
+            review_type: 'code'
+        });
+        writeReviewEvidence(repoRoot, TASK_ID, 'code', { verdict: 'fail' });
+        appendEvent(repoRoot, TASK_ID, 'REVIEW_GATE_PASSED', 'PASS');
+
+        fs.writeFileSync(path.join(repoRoot, 'src', 'app.ts'), 'export const value = 2;\n', 'utf8');
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        const command = result.commands[0]?.command || '';
+
+        assert.equal(result.status, 'BLOCKED');
+        assert.equal(result.next_gate, 'restart-coherent-cycle', result.reason);
+        assert.ok(command.includes('gate restart-coherent-cycle'), command);
+        assert.ok(command.includes("--task-intent 'Make next-step output executable in tests'"), command);
+        assert.ok(!command.includes("--task-intent 'Seeded next-step task'"), command);
+    });
+
     it('refreshes preflight before restart-review-cycle when failed-review remediation expands non-test scope', () => {
         const repoRoot = makeTempRepo();
         initGitRepo(repoRoot);

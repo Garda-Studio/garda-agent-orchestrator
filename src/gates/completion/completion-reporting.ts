@@ -19,7 +19,11 @@ export function buildCoherentCycleRestartCommand(
     taskModePath: string | null,
     commandsPath: string | null,
     outputFiltersPath: string | null,
-    options: { requiresOperatorConfirmation?: boolean; changedFiles?: readonly string[] } = {}
+    options: {
+        requiresOperatorConfirmation?: boolean;
+        changedFiles?: readonly string[];
+        taskIntent?: string | null;
+    } = {}
 ): string {
     const cliPrefix = isOrchestratorSourceCheckout(repoRoot)
         ? getSourceCliCommand()
@@ -30,6 +34,10 @@ export function buildCoherentCycleRestartCommand(
         `--task-id ${quotePowerShellCliValue(taskId)}`,
         `--preflight-path ${quotePowerShellCliValue(preflightPath)}`
     ];
+    const taskIntent = String(options.taskIntent || '').trim();
+    if (taskIntent) {
+        parts.push(`--task-intent ${quotePowerShellCliValue(taskIntent)}`);
+    }
     if (taskModePath) {
         parts.push(`--task-mode-path ${quotePowerShellCliValue(taskModePath)}`);
     }

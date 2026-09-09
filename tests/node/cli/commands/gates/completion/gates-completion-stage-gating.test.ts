@@ -402,9 +402,12 @@ describe('cli/commands/gates', () => {
         });
         assert.equal(completionResult.outcome, 'FAIL');
         assert.ok(completionResult.stage_sequence_evidence.violations.some((item) => item.includes("Do not backfill 'COMPILE_GATE_PASSED' from an older execution cycle.")));
-        assert.match(String((completionResult as Record<string, unknown>).coherent_cycle_restart_command || ''), /restart-coherent-cycle/);
-        assert.match(String((completionResult as Record<string, unknown>).coherent_cycle_restart_command || ''), new RegExp(escapeRegExp(taskId)));
-        assert.match(String((completionResult as Record<string, unknown>).coherent_cycle_restart_command || ''), new RegExp(escapeRegExp(outputFiltersPath.replace(/\\/g, '/'))));
+        const restartCommand = String((completionResult as Record<string, unknown>).coherent_cycle_restart_command || '');
+        assert.match(restartCommand, /restart-coherent-cycle/);
+        assert.match(restartCommand, new RegExp(escapeRegExp(taskId)));
+        assert.match(restartCommand, new RegExp(escapeRegExp(outputFiltersPath.replace(/\\/g, '/'))));
+        assert.ok(restartCommand.includes("--task-intent 'Update app flow'"), restartCommand);
+        assert.ok(!restartCommand.includes("--task-intent 'Recover a later coherent completion cycle'"), restartCommand);
 
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });
