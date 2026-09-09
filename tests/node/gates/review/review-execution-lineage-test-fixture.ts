@@ -17,8 +17,9 @@ import {
     computeReviewReuseCodeScopeFingerprint
 } from '../../../../src/gates/review-reuse';
 import { buildReviewRemediationReviewContract } from '../../../../src/gates/review-remediation/review-remediation-review-contract';
-
-const TREE_STATE_SHA256 = 'b'.repeat(64);
+import type { ReviewDependencyTimelineEvent } from '../../../../src/gates/review/review-dependencies';
+import type { RuntimeReviewerIdentity } from '../../../../src/gates/review/reviewer-routing';
+import { buildReviewTreeState } from '../../../../src/gates/review/review-tree-state';
 
 function writeJson(filePath: string, value: unknown): void {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -48,6 +49,40 @@ export interface Schema4ReviewPackage {
     receipt: ReviewReceipt;
     receiptPath: string;
     validationArtifactPath: string;
+    delegationEvents: ReviewDependencyTimelineEvent[];
+}
+
+export function codexRuntimeReviewerIdentityFixture(): RuntimeReviewerIdentity {
+    return {
+        canonical_source_of_truth: 'Codex',
+        canonical_entrypoint: 'AGENTS.md',
+        execution_entrypoint: 'AGENTS.md',
+        execution_provider: 'Codex',
+        execution_provider_source: 'explicit_provider',
+        task_mode_identity_backfilled: false,
+        routed_to: null,
+        provider_bridge: null,
+        identity_status: 'resolved',
+        capability_level: 'delegation_required',
+        delegation_required: true,
+        fallback_allowed: false,
+        fallback_reason_required: false,
+        expected_execution_mode: 'delegated_subagent',
+        no_delegate_mode: {
+            active: false,
+            source: 'none',
+            env_var: 'GARDA_NO_DELEGATE',
+            config_path: null,
+            reason: null,
+            remediation: null
+        },
+        reviewer_subagent_launch_status: 'launchable',
+        reviewer_subagent_launch_route: 'AGENTS.md',
+        reviewer_subagent_launch_reason: 'Codex delegated reviewer launch is available.',
+        reviewer_subagent_launch_remediation: null,
+        note: '',
+        violations: []
+    };
 }
 
 export function writeSchema4ReviewPackage(options: {
@@ -57,11 +92,22 @@ export function writeSchema4ReviewPackage(options: {
     reviewType: string;
     preflightPath: string;
     preflight: Record<string, unknown>;
+    mediumFindings?: readonly string[];
     residualRisks?: readonly string[];
 }): Schema4ReviewPackage {
     const changedFiles = Array.isArray(options.preflight.changed_files)
         ? options.preflight.changed_files.map(String)
         : [];
+    const treeState = fs.existsSync(path.join(options.repoRoot, '.git'))
+        ? buildReviewTreeState({
+            repoRoot: options.repoRoot,
+            detectionSource: options.preflight.detection_source,
+            includeUntracked: options.preflight.include_untracked !== false,
+            changedFiles,
+            metrics: options.preflight.metrics as Record<string, unknown> | undefined
+        })
+        : { tree_state_sha256: 'b'.repeat(64) };
+    const treeStateSha256 = treeState.tree_state_sha256;
     const evidenceFile = changedFiles[0] || 'src/example.ts';
     const preflightSha256 = fileSha256(options.preflightPath);
     const coverageContract = buildReviewCoverageContract({
@@ -78,6 +124,12 @@ export function writeSchema4ReviewPackage(options: {
         options.reviewsRoot,
         `${options.taskId}-${options.reviewType}-review-context.json`
     );
+    const promptArtifactPath = path.join(
+        options.reviewsRoot,
+        `${options.taskId}-${options.reviewType}-review-prompt.md`
+    );
+    fs.writeFileSync(promptArtifactPath, `Review ${evidenceFile} for authenticated execution lineage.\n`, 'utf8');
+    const promptArtifactSha256 = fileSha256(promptArtifactPath);
     const context: Record<string, unknown> = {
         schema_version: 4,
         task_id: options.taskId,
@@ -88,7 +140,10 @@ export function writeSchema4ReviewPackage(options: {
             changed_files: changedFiles,
             diff: { available: true, source: 'test-fixture', char_count: 120 }
         },
-        tree_state: { tree_state_sha256: TREE_STATE_SHA256 },
+        coverage_scope: {
+            changed_files: changedFiles
+        },
+        tree_state: treeState,
         coverage_contract: coverageContract,
         review_execution: reviewExecution,
         reviewer_routing: {
@@ -99,6 +154,11 @@ export function writeSchema4ReviewPackage(options: {
             identity_status: 'resolved',
             actual_execution_mode: 'delegated_subagent',
             reviewer_session_id: `agent:${options.taskId}-${options.reviewType}`
+        },
+        rule_context: {
+            artifact_path: promptArtifactPath.replace(/\\/gu, '/'),
+            preferred_prompt_artifact: promptArtifactPath.replace(/\\/gu, '/'),
+            artifact_sha256: promptArtifactSha256
         }
     };
     writeJson(contextPath, context);
@@ -108,7 +168,7 @@ export function writeSchema4ReviewPackage(options: {
         task_id: options.taskId,
         review_type: options.reviewType,
         review_context_sha256: contextSha256,
-        tree_state_sha256: TREE_STATE_SHA256,
+        tree_state_sha256: treeStateSha256,
         validation_notes: [{
             id: 'N-001',
             topic: 'execution lineage',
@@ -120,13 +180,16 @@ export function writeSchema4ReviewPackage(options: {
         }],
         coverage_ledger: {
             coverage_contract_sha256: coverageContract.contract_sha256,
-            entries: coverageContract.obligations.map((obligation) => ({
+            entries: coverageContract.obligations.map((obligation, index) => ({
                 obligation_id: obligation.id,
                 evidence: [{
                     location: `${evidenceFile}:1`,
                     observation: `Execution lineage was checked for ${obligation.id}.`
                 }],
-                finding_ids: []
+                finding_ids: index === 0
+                    ? (options.mediumFindings || []).map((_, findingIndex) =>
+                        `F-${String(findingIndex + 1).padStart(3, '0')}`)
+                    : []
             }))
         },
         review_execution: {
@@ -135,7 +198,23 @@ export function writeSchema4ReviewPackage(options: {
             covered_delta_targets: [],
             inspected_prior_finding_ids: []
         },
-        findings: { critical: [], high: [], medium: [], low: [] },
+        findings: {
+            critical: [],
+            high: [],
+            medium: (options.mediumFindings || []).map((description, index) => ({
+                id: `F-${String(index + 1).padStart(3, '0')}`,
+                title: `Medium execution-lineage finding ${index + 1}`,
+                description,
+                evidence: [{
+                    location: `${evidenceFile}:1`,
+                    observation: 'The finding remains active for locked-policy disposition.'
+                }],
+                coverage_obligation_ids: coverageContract.obligations.length > 0
+                    ? [coverageContract.obligations[0].id]
+                    : []
+            })),
+            low: []
+        },
         residual_risks: (options.residualRisks || []).map((description, index) => ({
             id: `R-${String(index + 1).padStart(3, '0')}`,
             description,
@@ -154,7 +233,7 @@ export function writeSchema4ReviewPackage(options: {
         expectedTaskId: options.taskId,
         expectedReviewType: options.reviewType,
         expectedReviewContextSha256: contextSha256,
-        expectedTreeStateSha256: TREE_STATE_SHA256,
+        expectedTreeStateSha256: treeStateSha256,
         coverageContract,
         expectedReviewExecutionContract: reviewExecution
     });
@@ -186,7 +265,7 @@ export function writeSchema4ReviewPackage(options: {
         scopeSha256,
         reviewScopeSha256,
         codeScopeSha256,
-        reviewTreeStateSha256: TREE_STATE_SHA256,
+        reviewTreeStateSha256: treeStateSha256,
         coverageContract
     });
     writeJson(validationArtifactPath, validationArtifact);
@@ -203,7 +282,7 @@ export function writeSchema4ReviewPackage(options: {
         reviewScopeSha256,
         codeScopeSha256,
         reviewContextSha256: contextSha256,
-        reviewTreeStateSha256: TREE_STATE_SHA256,
+        reviewTreeStateSha256: treeStateSha256,
         reviewExecutionMode: executionBindings.review_execution_mode,
         reviewExecutionContractSha256: executionBindings.review_execution_contract_sha256,
         reviewExecutionFullScopeSha256: executionBindings.review_execution_full_scope_sha256,
@@ -216,6 +295,33 @@ export function writeSchema4ReviewPackage(options: {
         reviewerIdentity: `agent:${options.taskId}-${options.reviewType}`,
         trustLevel: 'INDEPENDENT_AUDITED'
     }) as ReviewReceipt & Record<string, unknown>;
+    const routingEventSha256 = 'c'.repeat(64);
+    const invocationEventSha256 = 'd'.repeat(64);
+    const reviewerIdentity = `agent:${options.taskId}-${options.reviewType}`;
+    const launchPreparedAtUtc = '2026-05-19T10:00:00.000Z';
+    const launchedAtUtc = '2026-05-19T10:00:05.000Z';
+    const launchCompletedAtUtc = '2026-05-19T10:00:16.000Z';
+    const invocationAttestedAtUtc = '2026-05-19T10:00:20.000Z';
+    receipt.reviewer_provenance = {
+        schema_version: 1,
+        attestation_type: 'reviewer_invocation_attestation',
+        controller_event_type: 'REVIEWER_INVOCATION_ATTESTED',
+        task_sequence: 3,
+        prev_event_sha256: routingEventSha256,
+        event_sha256: invocationEventSha256,
+        task_id: options.taskId,
+        review_type: options.reviewType,
+        reviewer_execution_mode: 'delegated_subagent',
+        reviewer_identity: reviewerIdentity,
+        review_context_sha256: contextSha256,
+        review_tree_state_sha256: treeStateSha256,
+        routing_event_sha256: routingEventSha256,
+        launch_prepared_at_utc: launchPreparedAtUtc,
+        delegation_started_at_utc: launchedAtUtc,
+        launched_at_utc: launchedAtUtc,
+        launch_completed_at_utc: launchCompletedAtUtc,
+        invocation_attested_at_utc: invocationAttestedAtUtc
+    };
     receipt.review_output_sha256 = artifactSha256;
     receipt.review_coverage = validation.coverage_validation;
     receipt.review_findings_validation = {
@@ -237,11 +343,11 @@ export function writeSchema4ReviewPackage(options: {
         raw_output_sha256: artifactSha256,
         review_artifact_sha256: artifactSha256,
         review_context_sha256: contextSha256,
-        review_tree_state_sha256: TREE_STATE_SHA256,
+        review_tree_state_sha256: treeStateSha256,
         coverage_contract_sha256: coverageContract.contract_sha256,
         ...executionBindings,
-        reviewer_identity: `agent:${options.taskId}-${options.reviewType}`,
-        reviewer_provenance_event_sha256: null
+        reviewer_identity: reviewerIdentity,
+        reviewer_provenance_event_sha256: invocationEventSha256
     };
     const receiptPath = path.join(options.reviewsRoot, `${options.taskId}-${options.reviewType}-receipt.json`);
     writeJson(receiptPath, receipt);
@@ -253,7 +359,48 @@ export function writeSchema4ReviewPackage(options: {
         contextSha256,
         receipt,
         receiptPath,
-        validationArtifactPath
+        validationArtifactPath,
+        delegationEvents: [{
+            event_type: 'REVIEWER_DELEGATION_ROUTED',
+            sequence: 2,
+            details: {
+                review_type: options.reviewType,
+                reviewer_execution_mode: 'delegated_subagent',
+                reviewer_session_id: reviewerIdentity
+            },
+            integrity: {
+                schema_version: 1,
+                task_sequence: 2,
+                prev_event_sha256: null,
+                event_sha256: routingEventSha256
+            }
+        }, {
+            event_type: 'REVIEWER_INVOCATION_ATTESTED',
+            sequence: 3,
+            details: {
+                task_id: options.taskId,
+                review_type: options.reviewType,
+                reviewer_execution_mode: 'delegated_subagent',
+                reviewer_identity: reviewerIdentity,
+                reviewer_session_id: reviewerIdentity,
+                review_context_sha256: contextSha256,
+                review_tree_state_sha256: treeStateSha256,
+                routing_event_sha256: routingEventSha256,
+                provider_invocation_id: `${options.taskId}-${options.reviewType}-invocation`,
+                reviewer_launch_attestation_source: 'provider_native',
+                launch_prepared_at_utc: launchPreparedAtUtc,
+                delegation_started_at_utc: launchedAtUtc,
+                launched_at_utc: launchedAtUtc,
+                launch_completed_at_utc: launchCompletedAtUtc,
+                invocation_attested_at_utc: invocationAttestedAtUtc
+            },
+            integrity: {
+                schema_version: 1,
+                task_sequence: 3,
+                prev_event_sha256: routingEventSha256,
+                event_sha256: invocationEventSha256
+            }
+        }]
     };
 }
 

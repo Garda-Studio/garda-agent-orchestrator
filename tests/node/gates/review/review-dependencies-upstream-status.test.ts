@@ -7,13 +7,13 @@ import * as path from 'node:path';
 
 import {
     assessUpstreamReviewDependencyStatus,
-    resolveValidatedUpstreamReviewDependencyStatus,
     type ReviewDependencyTimelineEvent
 } from '../../../../src/gates/review/review-dependencies';
-import { resolveLockedReviewFindingPolicyFromPreflight } from '../../../../src/gates/review/review-finding-disposition';
-import { getReviewFindingsEvidenceFromValidationArtifact } from '../../../../src/gates/completion/completion-verdict-findings';
-import { type ReviewFindingsValidationArtifact } from '../../../../src/gates/review/review-findings-validation-artifact';
-import { writeSchema4ReviewPackage } from './review-execution-lineage-test-fixture';
+import {
+    codexRuntimeReviewerIdentityFixture,
+    writeSchema4ReviewPackage
+} from './review-execution-lineage-test-fixture';
+import { initGitRepo } from '../git-fixtures';
 
 function writeJson(filePath: string, value: unknown): void {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -185,7 +185,7 @@ function createReviewDependencyTaxonomyFixture(options: {
     }
     const recordedEvent: ReviewDependencyTimelineEvent = {
         event_type: 'REVIEW_RECORDED',
-        sequence: 2,
+        sequence: 4,
         details: {
             review_type: 'code',
             review_context_path: reviewContextPath
@@ -385,6 +385,11 @@ test('assessUpstreamReviewDependencyStatus permits non-blocking findings under t
         taskId: 'T-979-json-non-blocking-finding'
     });
     try {
+        const changedFilePath = path.join(fixture.repoRoot, 'src', 'gates', 'review', 'review-dependencies.ts');
+        fs.mkdirSync(path.dirname(changedFilePath), { recursive: true });
+        fs.writeFileSync(changedFilePath, 'export const dependencyState = "baseline";\n', 'utf8');
+        initGitRepo(fixture.repoRoot);
+        fs.writeFileSync(changedFilePath, 'export const dependencyState = "changed";\n', 'utf8');
         fixture.preflightPayload.profile_policy_snapshot = {
             review_finding_policy: {
                 schema_version: 1,
@@ -407,8 +412,10 @@ test('assessUpstreamReviewDependencyStatus permits non-blocking findings under t
             reviewType: 'code',
             preflightPath: fixture.preflightPath,
             preflight: fixture.preflightPayload,
+            mediumFindings: ['Medium finding is assigned to a follow-up task by the locked profile policy.'],
             residualRisks: ['Residual risk is assigned to a follow-up task by the locked profile policy.']
         });
+        fixture.timelineEvents.splice(1, 0, ...reviewPackage.delegationEvents);
 
         const result = assessUpstreamReviewDependencyStatus({
             taskId: 'T-979-json-non-blocking-finding',
@@ -417,25 +424,12 @@ test('assessUpstreamReviewDependencyStatus permits non-blocking findings under t
             preflightHashSha256: currentPreflightSha256,
             latestRecordedReviewByType: fixture.latestRecordedReviewByType,
             upstreamReviewType: 'code',
-            timelineEvents: fixture.timelineEvents
+            timelineEvents: fixture.timelineEvents,
+            runtimeReviewerIdentity: codexRuntimeReviewerIdentityFixture()
         });
 
-        assert.notEqual(result.blockerCode, 'missing_upstream_pass');
-        const findingsEvidence = getReviewFindingsEvidenceFromValidationArtifact(
-            reviewPackage.artifactPath,
-            JSON.parse(fs.readFileSync(
-                reviewPackage.validationArtifactPath,
-                'utf8'
-            )) as ReviewFindingsValidationArtifact,
-            resolveLockedReviewFindingPolicyFromPreflight(fixture.preflightPayload)
-        );
-        assert.equal(findingsEvidence.residual_risks.length, 1);
-        const dispositionStatus = resolveValidatedUpstreamReviewDependencyStatus('code', {
-            violations: [],
-            findingsEvidence
-        });
-        assert.equal(dispositionStatus.ready, true, dispositionStatus.reason);
-        assert.equal(dispositionStatus.blockerCode, null);
+        assert.equal(result.ready, true, result.reason);
+        assert.equal(result.blockerCode, null);
     } finally {
         fs.rmSync(fixture.repoRoot, { recursive: true, force: true });
     }
