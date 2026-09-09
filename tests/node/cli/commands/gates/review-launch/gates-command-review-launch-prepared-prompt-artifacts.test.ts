@@ -75,8 +75,9 @@ describe('cli/commands/gates review launch prepared prompt artifacts', () => {
         assert.ok(prompt.includes('execute the smallest safe relevant local test or validation command yourself for exactly one relevant repository test or validation target'));
         assert.ok(prompt.includes('command_outcome (`passed`, `failed`, `unavailable`, or `prohibited`)'));
         assert.ok(prompt.includes(
-            'put the exact command target path and its concrete relationship to changed behavior in at least one validation-note evidence.location or evidence.observation'
+            "keep evidence.location as a concrete path:line inside the assigned lane's authenticated changed-file evidence domain"
         ));
+        assert.ok(prompt.includes('Put the exact command target path and its concrete relationship to changed behavior in evidence.observation when the target itself is outside that domain'));
         assert.ok(prompt.includes(
             '[garda:evidence-only:missing-focused-validation] test=<exact-repository-relative-test-path>; action=run-and-record-focused-test'
         ));
@@ -100,6 +101,7 @@ describe('cli/commands/gates review launch prepared prompt artifacts', () => {
             assert.ok(prompt.includes('Missing prior focused execution evidence is not by itself a finding or residual risk'), reviewType);
             assert.ok(prompt.includes('If the focused command passes, do not report missing prior execution'), reviewType);
             assert.ok(prompt.includes('Naming the target only in note, command, or diagnostics does not satisfy the evidence contract'), reviewType);
+            assert.ok(prompt.includes("Reuse a finding's exact changed-file evidence location when finding_ids links the note"), reviewType);
             assert.ok(prompt.includes(
                 '[garda:evidence-only:missing-focused-validation] target=<exact-repository-relative-validation-path>; action=run-and-record-focused-validation'
             ), reviewType);
