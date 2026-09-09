@@ -1595,6 +1595,10 @@ describe('gates/next-step', { concurrency: 2 }, () => {
         assert.equal(result.next_gate, 'restart-review-cycle');
         assert.match(result.reason, /cannot safely continue|provenance or semantic binding is unavailable/u);
         assert.ok(result.commands[0].command.includes('--review-type "code"'));
+        assert.ok(result.commands[0].command.includes(
+            '--task-intent "Make next-step output executable in tests"'
+        ));
+        assert.ok(!result.commands[0].command.includes('--task-intent "Seeded next-step task"'));
         assert.ok(result.commands[0].command.includes('--review-evidence-only'));
         assert.equal(result.commands[0].command.includes('--changed-file'), false);
         assert.equal(result.commands[0].command.includes('forged-provider-invocation'), false);
@@ -3665,6 +3669,10 @@ describe('gates/next-step', { concurrency: 2 }, () => {
         assert.match(result.reason, /before refreshing preflight/);
         assert.ok(result.commands[0].command.includes('gate restart-review-cycle'));
         assert.ok(result.commands[0].command.includes('--review-type "code"'));
+        assert.ok(result.commands[0].command.includes(
+            '--task-intent "Make next-step output executable in tests"'
+        ));
+        assert.ok(!result.commands[0].command.includes('--task-intent "Seeded next-step task"'));
         assert.ok(result.commands[0].command.includes(`--preflight-path "garda-agent-orchestrator/runtime/reviews/${TASK_ID}-preflight.json"`));
         assert.ok(result.commands[0].command.includes('--impact-analysis'));
         assert.ok(!result.commands[0].command.includes('gate classify-change'));

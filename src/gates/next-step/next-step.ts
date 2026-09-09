@@ -3546,7 +3546,7 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                     repoRoot,
                     cliPrefix,
                     taskId,
-                    getStringField(taskMode, 'task_summary', taskEntry?.title || taskId),
+                    taskEntry?.title || getStringField(taskMode, 'task_summary', taskId),
                     preflightCommandPath,
                     taskModePath,
                     failedReviewIgnoredRemediationChangedFiles,
@@ -4194,7 +4194,7 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
             }
             const correctionFullReviewRestart =
                 state.failureKind === 'review-correction-full-review-required';
-            const taskIntent = getStringField(taskMode, 'task_summary', taskEntry?.title || taskId);
+            const taskIntent = taskEntry?.title || getStringField(taskMode, 'task_summary', taskId);
             const downstreamReviewTypes = getDownstreamReviewTypesFor(
                 reviewType,
                 requiredReviewTypes,
@@ -4553,7 +4553,7 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         const stateViolations = state.violations.length > 0
             ? state.violations.join('; ')
             : 'review artifact or receipt is missing';
-        const reviewCycleTaskIntent = getStringField(taskMode, 'task_summary', taskEntry?.title || taskId);
+        const reviewCycleTaskIntent = taskEntry?.title || getStringField(taskMode, 'task_summary', taskId);
         return resolveDelegatedReadinessLifecycleRoute({
             contextReady: true,
             contextReviewerIdentity,

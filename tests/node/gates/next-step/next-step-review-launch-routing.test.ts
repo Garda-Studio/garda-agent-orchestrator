@@ -1817,6 +1817,10 @@ describe('gates/next-step', () => {
         assert.equal(result.next_gate, 'restart-review-cycle', result.reason);
         assert.equal(result.commands[0].label, 'Restart/supersede failed delegated reviewer launch');
         assert.ok(result.commands[0].command.includes('gate restart-review-cycle'));
+        assert.ok(result.commands[0].command.includes(
+            '--task-intent "Make next-step output executable in tests"'
+        ));
+        assert.ok(!result.commands[0].command.includes('--task-intent "Seeded next-step task"'));
         assert.ok(result.commands[0].command.includes(`--preflight-path "garda-agent-orchestrator/runtime/reviews/${TASK_ID}-preflight.json"`));
         assert.ok(result.commands[0].command.includes('--review-type "code"'));
         assert.ok(result.commands[0].command.includes('--review-evidence-only'));
@@ -1925,6 +1929,10 @@ describe('gates/next-step', () => {
         assert.equal(result.next_gate, 'restart-review-cycle', result.reason);
         assert.equal(result.commands[0].label, 'Restart/supersede orphaned delegated reviewer launch');
         assert.ok(result.commands[0].command.includes('gate restart-review-cycle'));
+        assert.ok(result.commands[0].command.includes(
+            '--task-intent "Make next-step output executable in tests"'
+        ));
+        assert.ok(!result.commands[0].command.includes('--task-intent "Seeded next-step task"'));
         assert.ok(result.commands[0].command.includes(`--preflight-path "garda-agent-orchestrator/runtime/reviews/${TASK_ID}-preflight.json"`));
         assert.ok(result.commands[0].command.includes('--review-type "code"'));
         assert.ok(result.commands[0].command.includes('--review-evidence-only'));
