@@ -248,6 +248,52 @@ test('auditReviewArtifactCompaction warns on budget exceed', () => {
     assert.ok(result.warnings.some((w: string) => w.includes('exceeds compact line budget')));
 });
 
+test('auditReviewArtifactCompaction ignores pretty-print lines for structured JSON', () => {
+    const structuredContent = JSON.stringify({
+        schema_version: 2,
+        coverage_ledger: {
+            entries: Array.from({ length: 40 }, (_, index) => ({
+                obligation_id: `O-${index}`,
+                finding_ids: []
+            }))
+        }
+    }, null, 2);
+    const result = auditReviewArtifactCompaction({
+        artifactPath: 'test.md',
+        content: structuredContent,
+        reviewContext: {
+            token_economy_active: true,
+            token_economy: {
+                active: true,
+                flags: { compact_reviewer_output: true, fail_tail_lines: 50 }
+            }
+        }
+    });
+
+    assert.ok(result.line_count > result.budget.max_lines);
+    assert.ok(result.char_count < result.budget.max_chars);
+    assert.equal(result.line_budget_mode, 'character_only_for_structured_json');
+    assert.equal(result.warning_count, 0);
+});
+
+test('auditReviewArtifactCompaction retains the character budget for structured JSON', () => {
+    const structuredContent = JSON.stringify({ reviewer_notes: ['x'.repeat(13000)] }, null, 2);
+    const result = auditReviewArtifactCompaction({
+        artifactPath: 'test.md',
+        content: structuredContent,
+        reviewContext: {
+            token_economy_active: true,
+            token_economy: {
+                active: true,
+                flags: { compact_reviewer_output: true, fail_tail_lines: 50 }
+            }
+        }
+    });
+
+    assert.equal(result.line_budget_mode, 'character_only_for_structured_json');
+    assert.ok(result.warnings.some((warning: string) => warning.includes('exceeds compact char budget')));
+});
+
 
 test('buildReviewContextSections builds artifact from mock files', () => {
     const files: Record<string, string> = {

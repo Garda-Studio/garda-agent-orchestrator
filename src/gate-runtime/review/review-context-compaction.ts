@@ -248,6 +248,7 @@ export interface AuditReviewArtifactResult {
     expected: boolean;
     token_economy_active: boolean;
     review_context_path: string | null;
+    line_budget_mode: 'line_and_character' | 'character_only_for_structured_json';
     line_count: number;
     char_count: number;
     code_fence_line_count: number;
@@ -255,6 +256,19 @@ export interface AuditReviewArtifactResult {
     budget: ReturnType<typeof getCompactReviewBudget>;
     warnings: string[];
     warning_count: number;
+}
+
+function isStructuredJsonObject(content: string): boolean {
+    const trimmed = content.trim();
+    if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+        return false;
+    }
+    try {
+        const parsed = JSON.parse(trimmed) as unknown;
+        return parsed != null && typeof parsed === 'object' && !Array.isArray(parsed);
+    } catch {
+        return false;
+    }
 }
 
 /**
@@ -269,6 +283,7 @@ export function auditReviewArtifactCompaction(options: AuditReviewArtifactOption
     const tokenEconomyActive = !!(reviewContext.token_economy_active) || !!(tokenEconomy.active);
     const compactExpected = tokenEconomyActive && !!(flags.compact_reviewer_output);
     const budget = getCompactReviewBudget(flags.fail_tail_lines);
+    const structuredJsonObject = isStructuredJsonObject(content);
 
     const lines = content.split('\n');
     const codeFenceLines = lines.filter(line => /^\s*```/.test(line)).length;
@@ -278,7 +293,7 @@ export function auditReviewArtifactCompaction(options: AuditReviewArtifactOption
 
     const warnings: string[] = [];
     if (compactExpected) {
-        if (lines.length > budget.max_lines) {
+        if (!structuredJsonObject && lines.length > budget.max_lines) {
             warnings.push(
                 `Review artifact '${String(artifactPath).replace(/\\/g, '/')}' exceeds compact line budget (${lines.length} > ${budget.max_lines}).`
             );
@@ -306,6 +321,9 @@ export function auditReviewArtifactCompaction(options: AuditReviewArtifactOption
         review_context_path: reviewContext.output_path
             ? String(reviewContext.output_path).replace(/\\/g, '/')
             : null,
+        line_budget_mode: structuredJsonObject
+            ? 'character_only_for_structured_json'
+            : 'line_and_character',
         line_count: lines.length,
         char_count: content.length,
         code_fence_line_count: codeFenceLines,
