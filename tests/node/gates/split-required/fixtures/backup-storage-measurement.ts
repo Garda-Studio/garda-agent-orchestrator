@@ -10,6 +10,17 @@ import {
 import type { AdvancedRestorePlan } from '../../../../../src/gates/split-required/split-required-wip-restore-plan';
 import type { SplitRequiredWipTrackedFileEvidence } from '../../../../../src/gates/split-required/split-required-wip-contracts';
 
+const ARRAY_BUFFER_GC_STABILIZATION_PASSES = 4;
+
+function measureArrayBuffersAfterCollection(): number {
+    let lowestBytes = Number.POSITIVE_INFINITY;
+    for (let pass = 0; pass < ARRAY_BUFFER_GC_STABILIZATION_PASSES; pass++) {
+        global.gc!();
+        lowestBytes = Math.min(lowestBytes, process.memoryUsage().arrayBuffers);
+    }
+    return lowestBytes;
+}
+
 export function measureBackupStorage(mode: string): void {
     const input = JSON.parse(fs.readFileSync(0, 'utf8')) as {
         repoRoot: string;
@@ -17,8 +28,7 @@ export function measureBackupStorage(mode: string): void {
         plan: Omit<AdvancedRestorePlan, 'targetSha256'> & { targetSha256: [string, string | null][] };
     };
     assert.ok(global.gc, 'measurement subprocess requires --expose-gc');
-    global.gc();
-    const initialBytes = process.memoryUsage().arrayBuffers;
+    const initialBytes = measureArrayBuffersAfterCollection();
     assert.ok(mode === 'retained-baseline' || mode === 'spooled');
     const originalOpen = mutableFs.openSync;
     const originalRead = mutableFs.readSync;
@@ -72,8 +82,7 @@ export function measureBackupStorage(mode: string): void {
     mock.method(mutableFs, 'fsyncSync', (opened: number) => {
         originalSync(opened);
         if (opened === descriptor && !result.spoolClosed) {
-            global.gc!();
-            result.retainedArrayBufferBytes = process.memoryUsage().arrayBuffers - initialBytes;
+            result.retainedArrayBufferBytes = measureArrayBuffersAfterCollection() - initialBytes;
             capturing = false;
         }
     });
@@ -86,8 +95,7 @@ export function measureBackupStorage(mode: string): void {
         const snapshots = input.files.map(file => readAuthenticatedRepoFileSnapshot(
             input.repoRoot, file.path, 64 * 1024 * 1024
         ));
-        global.gc();
-        const arrayBufferBytes = process.memoryUsage().arrayBuffers;
+        const arrayBufferBytes = measureArrayBuffersAfterCollection();
         const retainedArrayBufferBytes = arrayBufferBytes - initialBytes;
         const retainedBytes = snapshots.reduce((sum, snapshot) => sum + (snapshot.content?.length ?? 0), 0);
         mock.restoreAll();
