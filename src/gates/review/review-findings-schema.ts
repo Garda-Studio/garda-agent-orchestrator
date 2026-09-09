@@ -573,7 +573,7 @@ function validateFocusedValidationNoteCommand(
         && !focusedEvidenceExplainsTargetRelevance(fields.evidence, commandTargets[0], expectedTaskId)
     ) {
         violations.push(
-            'Reviewer focused self-validation authenticated changed-file evidence must name the exact focused command target and why it is relevant.'
+            'Reviewer focused self-validation authenticated changed-file evidence must name the exact focused command target and why it is relevant; put both in evidence.location or evidence.observation rather than only in note, command, or diagnostics.'
         );
     }
 }
