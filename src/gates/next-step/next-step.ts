@@ -2257,6 +2257,12 @@ function buildAuthenticatedScopeClassifyChangeCommand(params: {
     taskIntent?: string | null;
     taskQueueEntries: ReadonlyMap<string, TaskQueueEntry>;
 }): string {
+    const authenticatedTaskIntent = params.taskQueueEntries.get(params.taskId)?.title
+        || params.taskIntent;
+    const classifyParams = {
+        ...params,
+        taskIntent: authenticatedTaskIntent
+    };
     const splitCheckpointScope = resolveAuthenticatedSplitCheckpointCommandScope(
         params.repoRoot,
         params.taskId,
@@ -2273,16 +2279,16 @@ function buildAuthenticatedScopeClassifyChangeCommand(params: {
             callerChangedFiles.length > 0
             && !sameChangedFileSet(callerChangedFiles, splitCheckpointScope.changedFiles)
         ) {
-            return buildClassifyChangeCommand(params);
+            return buildClassifyChangeCommand(classifyParams);
         }
         return buildClassifyChangeCommand({
-            ...params,
+            ...classifyParams,
             includePlannedScope: false,
             changedFiles: splitCheckpointScope.changedFiles,
             detectionSource: splitCheckpointScope.detectionSource
         });
     }
-    return buildClassifyChangeCommand(params);
+    return buildClassifyChangeCommand(classifyParams);
 }
 
 function normalizeChangedFileSet(changedFiles: readonly string[]): string[] {

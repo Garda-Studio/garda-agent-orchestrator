@@ -723,7 +723,7 @@ afterEach(() => {
 });
 
 describe('gates/next-step preflight routing', () => {
-    it('routes to classify-change before preflight and POST_PREFLIGHT rules after preflight', () => {
+    it('prevents stale task-mode intent from replacing the current TASK title during classification', () => {
         const repoRoot = makeTempRepo();
         seedTaskModeOnly(repoRoot, TASK_ID);
         seedRulePack(repoRoot, TASK_ID, 'TASK_ENTRY');
@@ -732,6 +732,10 @@ describe('gates/next-step preflight routing', () => {
 
         const missingPreflight = resolveNextStep({ taskId: TASK_ID, repoRoot });
         assert.equal(missingPreflight.next_gate, 'classify-change');
+        assert.ok(missingPreflight.commands[0].command.includes(
+            '--task-intent "Make next-step output executable in tests"'
+        ));
+        assert.ok(!missingPreflight.commands[0].command.includes('--task-intent "Seeded next-step task"'));
 
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS }, { seedPostPreflight: false });
         const missingPostPreflight = resolveNextStep({ taskId: TASK_ID, repoRoot });
@@ -1426,7 +1430,8 @@ describe('gates/next-step preflight routing', () => {
         const command = result.commands[0].command;
 
         assert.equal(result.next_gate, 'classify-change');
-        assert.ok(command.includes('--task-intent "Polish next-step planned scope"'));
+        assert.ok(command.includes('--task-intent "Make next-step output executable in tests"'));
+        assert.ok(!command.includes('--task-intent "Polish next-step planned scope"'));
         assert.ok(command.includes('--changed-file "docs/cli-reference.md"'));
         assert.ok(command.includes('--changed-file "src/gates/next-step.ts"'));
         assert.ok(!command.includes('<path>'));
@@ -1969,12 +1974,13 @@ describe('gates/next-step preflight routing', () => {
         const command = result.commands[0].command;
 
         assert.equal(result.next_gate, 'classify-change');
-        assert.ok(command.includes('--task-intent "Classify custom task-mode scope"'));
+        assert.ok(command.includes('--task-intent "Make next-step output executable in tests"'));
+        assert.ok(!command.includes('--task-intent "Classify custom task-mode scope"'));
         assert.ok(command.includes('--changed-file "src/app.ts"'));
         assert.ok(command.includes(`--task-mode-path "${normalizeForTimeline(path.relative(repoRoot, customTaskModePath))}"`));
     });
 
-    it('preserves planned changed files when refreshing a stale scoped preflight', () => {
+    it('prevents stale task-mode intent when refreshing a scoped preflight', () => {
         const repoRoot = makeTempRepo();
         writeJson(path.join(reviewsRoot(repoRoot), `${TASK_ID}-task-mode.json`), buildTaskModeArtifact({
             taskId: TASK_ID,
@@ -2005,6 +2011,8 @@ describe('gates/next-step preflight routing', () => {
         assert.equal(result.next_gate, 'classify-change');
         assert.ok(command.includes('--changed-file "docs/cli-reference.md"'));
         assert.ok(command.includes('--changed-file "src/app.ts"'));
+        assert.ok(command.includes('--task-intent "Make next-step output executable in tests"'));
+        assert.ok(!command.includes('--task-intent "Refresh a scoped next-step preflight"'));
         assert.ok(!command.includes('<path>'));
     });
 
