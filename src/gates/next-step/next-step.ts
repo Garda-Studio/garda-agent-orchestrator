@@ -133,6 +133,7 @@ import {
     buildCurrentCycleOptionalSkillActivationIndex,
     buildCurrentCycleOptionalSkillDeclineIndex,
     buildMandatoryCurrentCycleOptionalSkillActivationIndex,
+    computeOptionalSkillTaskTextSha256,
     getOptionalSkillSelectionArtifactViolations,
     getOptionalSkillSelectionConfigPath,
     isMandatoryOptionalSkillSelectionPolicyMode,
@@ -1617,7 +1618,8 @@ function buildOptionalSkillSelectionSummary(
     repoRoot: string,
     cliPrefix: string,
     taskId: string,
-    preflight: Record<string, unknown> | null
+    preflight: Record<string, unknown> | null,
+    taskText: string | null
 ): NextStepOptionalSkillSelectionSummary | null {
     const preflightOptional = preflight?.optional_skill_selection;
     if (!preflightOptional || typeof preflightOptional !== 'object' || Array.isArray(preflightOptional)) {
@@ -1645,6 +1647,7 @@ function buildOptionalSkillSelectionSummary(
             requireMaterializedArtifact: false,
             validateAgainstCurrentHeadlines: false,
             validateAgainstCurrentInventory: false,
+            expectedTaskTextSha256: computeOptionalSkillTaskTextSha256(String(taskText || '')),
             ...(currentPolicyMode ? { expectedPolicyMode: currentPolicyMode } : {})
         })
         : [];
@@ -2251,6 +2254,7 @@ function buildAuthenticatedScopeClassifyChangeCommand(params: {
     preflightCommandPath: string;
     includePlannedScope: boolean;
     changedFiles?: string[];
+    taskIntent?: string | null;
     taskQueueEntries: ReadonlyMap<string, TaskQueueEntry>;
 }): string {
     const splitCheckpointScope = resolveAuthenticatedSplitCheckpointCommandScope(
@@ -2487,7 +2491,13 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
             residual_risk: findingPolicyResolution.policy.residual_risk
         }
     };
-    const optionalSkillSelectionSummary = buildOptionalSkillSelectionSummary(repoRoot, cliPrefix, taskId, preflight);
+    const optionalSkillSelectionSummary = buildOptionalSkillSelectionSummary(
+        repoRoot,
+        cliPrefix,
+        taskId,
+        preflight,
+        taskEntry?.title || null
+    );
     let workflowReviewPolicy: ResolvedReviewExecutionPolicyConfig = {
         mode: LEGACY_REVIEW_EXECUTION_POLICY_MODE,
         configured: false
@@ -3370,6 +3380,7 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         taskModePath,
         preflightCommandPath,
         includePlannedScope: false,
+        taskIntent: taskEntry?.title || null,
         taskQueueEntries: taskEntries,
         changedFiles: getPreflightRefreshCommandChangedFiles({
             repoRoot,

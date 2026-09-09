@@ -17,7 +17,10 @@ import {
     resolveNextStep
 } from './next-step-test-support';
 import { buildDefaultWorkflowConfig } from './next-step-test-support';
-import { computeOptionalSkillSelectionFingerprint } from '../../../../src/runtime/optional-skill-selection';
+import {
+    computeOptionalSkillSelectionFingerprint,
+    computeOptionalSkillTaskTextSha256
+} from '../../../../src/runtime/optional-skill-selection';
 import { normalizeReviewCatalog } from '../../../../src/core/review-catalog';
 import type { ReviewCapabilitiesConfigMap } from '../../../../src/core/review-capabilities';
 import { resolveProfileReviewCatalogPolicy } from '../../../../src/policy/profile-review-catalog-policy';
@@ -392,7 +395,7 @@ function seedOptionalSkillSelectionPreflight(
         recommended_missing_packs: [],
         as_is_reason: null,
         task_text_present: true,
-        task_text_sha256: 'fixture-task-text',
+        task_text_sha256: computeOptionalSkillTaskTextSha256(TASK_TITLE),
         changed_paths: ['src/api/orders.ts'],
         preflight_path: preflightPath.replace(/\\/g, '/'),
         preflight_sha256: 'fixture-preflight',
@@ -970,7 +973,7 @@ describe('next-step refactor contract baseline', () => {
             recommended_missing_packs: [],
             as_is_reason: null,
             task_text_present: true,
-            task_text_sha256: 'fixture-task-text',
+            task_text_sha256: computeOptionalSkillTaskTextSha256(TASK_TITLE),
             changed_paths: ['src/api/orders.ts'],
             preflight_path: preflightPath.replace(/\\/g, '/'),
             preflight_sha256: 'fixture-preflight',
@@ -1067,6 +1070,40 @@ describe('next-step refactor contract baseline', () => {
         assert.match(text, /^Commands:$/mu);
         assert.match(text, /^  Activate optional skill node-backend: node bin\/garda\.js gate activate-optional-skill /mu);
         assert.match(text, /^OptionalSkillPendingActivation: node-backend$/mu);
+    });
+
+    it('refreshes classification before activation when the task summary changes', () => {
+        const repoRoot = makeContractRepo();
+        fs.mkdirSync(path.join(repoRoot, 'src', 'api'), { recursive: true });
+        fs.writeFileSync(path.join(repoRoot, 'src', 'api', 'orders.ts'), 'export const route = true;\n', 'utf8');
+        seedStartedTask(repoRoot, TASK_ID);
+        seedOptionalSkillSelectionPreflight(repoRoot, TASK_ID, { policyMode: 'required' });
+        seedStrictDecompositionDecision(repoRoot, TASK_ID);
+        const taskPath = path.join(repoRoot, 'TASK.md');
+        const changedTaskTitle = 'Pin changed next-step contract';
+        fs.writeFileSync(
+            taskPath,
+            fs.readFileSync(taskPath, 'utf8').replace(TASK_TITLE, changedTaskTitle),
+            'utf8'
+        );
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        const text = formatNextStepText(result);
+
+        assert.equal(result.status, 'BLOCKED');
+        assert.equal(result.next_gate, 'classify-change');
+        assert.deepEqual(result.optional_skill_selection?.pending_activation_skill_ids, []);
+        assert.deepEqual(result.optional_skill_selection?.activation_commands, []);
+        assert.ok(
+            result.optional_skill_selection?.artifact_violations.some((entry) => (
+                entry.includes('current task summary hash')
+            ))
+        );
+        assert.match(result.commands[0]?.command || '', /gate classify-change/u);
+        assert.match(result.commands[0]?.command || '', /--task-intent "Pin changed next-step contract"/u);
+        assert.doesNotMatch(result.commands[0]?.command || '', /activate-optional-skill/u);
+        assert.match(text, /^OptionalSkillArtifactViolations: .*current task summary hash/mu);
+        assert.doesNotMatch(text, /^OptionalSkillPendingActivation:/mu);
     });
 
     it('does not let declined evidence suppress mandatory optional-skill activation', () => {
@@ -1309,7 +1346,7 @@ describe('next-step refactor contract baseline', () => {
         }, '2026-01-01T00:00:06.000Z');
         const refreshedOptionalSkillArtifact = {
             ...optionalSkillArtifact,
-            task_text_sha256: 'refreshed-task-text',
+            task_text_sha256: computeOptionalSkillTaskTextSha256(TASK_TITLE),
             changed_paths: ['src/api/refreshed-orders.ts'],
             headlines_sha256: 'refreshed-headlines',
             selected_installed_skills: [
@@ -1516,7 +1553,7 @@ describe('next-step refactor contract baseline', () => {
             ],
             as_is_reason: 'no_relevant_installed_skill',
             task_text_present: true,
-            task_text_sha256: 'fixture-task-text',
+            task_text_sha256: computeOptionalSkillTaskTextSha256(TASK_TITLE),
             changed_paths: ['src/bot/telegram.ts'],
             preflight_path: preflightPath.replace(/\\/g, '/'),
             preflight_sha256: 'fixture-preflight',
@@ -1591,7 +1628,7 @@ describe('next-step refactor contract baseline', () => {
             recommended_missing_packs: [],
             as_is_reason: null,
             task_text_present: true,
-            task_text_sha256: 'fixture-task-text',
+            task_text_sha256: computeOptionalSkillTaskTextSha256(TASK_TITLE),
             changed_paths: ['src/telegram/client.ts'],
             preflight_path: preflightPath.replace(/\\/g, '/'),
             preflight_sha256: 'fixture-preflight',
@@ -1667,7 +1704,7 @@ describe('next-step refactor contract baseline', () => {
             ],
             as_is_reason: 'no_relevant_installed_skill',
             task_text_present: true,
-            task_text_sha256: 'fixture-task-text',
+            task_text_sha256: computeOptionalSkillTaskTextSha256(TASK_TITLE),
             changed_paths: ['src/bot/telegram.ts'],
             preflight_path: preflightPath.replace(/\\/g, '/'),
             preflight_sha256: 'fixture-preflight',
@@ -1746,7 +1783,7 @@ describe('next-step refactor contract baseline', () => {
             recommended_missing_packs: [],
             as_is_reason: 'no_relevant_installed_skill',
             task_text_present: true,
-            task_text_sha256: 'fixture-task-text',
+            task_text_sha256: computeOptionalSkillTaskTextSha256(TASK_TITLE),
             changed_paths: ['src/main/kotlin/App.kt'],
             preflight_path: preflightPath.replace(/\\/g, '/'),
             preflight_sha256: 'fixture-preflight',
@@ -1826,7 +1863,7 @@ describe('next-step refactor contract baseline', () => {
             ],
             as_is_reason: 'no_relevant_installed_skill',
             task_text_present: true,
-            task_text_sha256: 'fixture-task-text',
+            task_text_sha256: computeOptionalSkillTaskTextSha256(TASK_TITLE),
             changed_paths: ['src/main/kotlin/App.kt'],
             preflight_path: preflightPath.replace(/\\/g, '/'),
             preflight_sha256: 'fixture-preflight',
@@ -1896,7 +1933,7 @@ describe('next-step refactor contract baseline', () => {
             recommended_missing_packs: [],
             as_is_reason: 'generic_context_sufficient',
             task_text_present: true,
-            task_text_sha256: 'fixture-task-text',
+            task_text_sha256: computeOptionalSkillTaskTextSha256(TASK_TITLE),
             changed_paths: ['src/bot/telegram.ts'],
             preflight_path: preflightPath.replace(/\\/g, '/'),
             preflight_sha256: 'fixture-preflight',
@@ -1969,7 +2006,7 @@ describe('next-step refactor contract baseline', () => {
             ],
             as_is_reason: 'no_relevant_installed_skill',
             task_text_present: true,
-            task_text_sha256: 'fixture-task-text',
+            task_text_sha256: computeOptionalSkillTaskTextSha256(TASK_TITLE),
             changed_paths: ['src/bot/telegram.ts'],
             preflight_path: preflightPath.replace(/\\/g, '/'),
             preflight_sha256: 'fixture-preflight',
@@ -2034,7 +2071,7 @@ describe('next-step refactor contract baseline', () => {
             recommended_missing_packs: [],
             as_is_reason: 'low_confidence_match',
             task_text_present: true,
-            task_text_sha256: 'fixture-task-text',
+            task_text_sha256: computeOptionalSkillTaskTextSha256(TASK_TITLE),
             changed_paths: [],
             preflight_path: preflightPath.replace(/\\/g, '/'),
             preflight_sha256: 'fixture-preflight',

@@ -492,11 +492,14 @@ export function buildClassifyChangeCommand(params: {
     includePlannedScope: boolean;
     changedFiles?: string[];
     detectionSource?: string | null;
+    taskIntent?: string | null;
 }): string {
+    const taskIntent = String(params.taskIntent || '').trim()
+        || getStringField(params.taskMode, 'task_summary', '<task summary>');
     const parts = [
         `${params.cliPrefix} gate classify-change`,
         `--task-id ${quoteCommandValue(params.taskId)}`,
-        `--task-intent ${quoteCommandValue(getStringField(params.taskMode, 'task_summary', '<task summary>'))}`
+        `--task-intent ${quoteCommandValue(taskIntent)}`
     ];
     const changedFiles = params.changedFiles || (params.includePlannedScope
         ? getTaskModeClassifyChangedFiles(params.repoRoot, params.taskMode)
