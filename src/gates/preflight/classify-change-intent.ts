@@ -220,7 +220,9 @@ export function hasApiReviewIntent(taskIntent: string): boolean {
 }
 
 export function hasPerformanceReviewIntent(taskIntent: string): boolean {
-    return /\b(queue|worker|workers|job queue|retry[-\s]?storm|retry storm|backoff|throttle|rate[-\s]?limit|throughput|latency|concurrency|parallelism|pool|batch|bulkhead)\b/i.test(taskIntent);
+    const directIntent = /\b(performance|perf|queue|worker|workers|job queue|retry[-\s]?storm|retry storm|backoff|throttle|rate[-\s]?limit|throughput|latency|concurrency|parallelism|pool|batch|bulkhead)\b/i;
+    const memoryIntent = /(?:\b(?:memory|heap)\b.{0,40}\b(?:allocat(?:e|ed|ing|ion|ions)|consumption|footprint|growth|leak|limit|peak|pressure|usage)\b|\b(?:allocat(?:e|ed|ing|ion|ions)|consumption|footprint|growth|leak|limit|peak|pressure|usage)\b.{0,40}\b(?:memory|heap)\b)/i;
+    return directIntent.test(taskIntent) || memoryIntent.test(taskIntent);
 }
 
 export function hasRefactorIntent(taskIntent: string): boolean {

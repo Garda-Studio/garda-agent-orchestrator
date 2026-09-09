@@ -167,6 +167,53 @@ describe('gates/classify-change performance triggers', () => {
         assert.equal(retryStormResult.required_reviews.performance, true);
     });
 
+    it('treats explicit performance and memory findings as runtime performance intent', () => {
+        for (const taskIntent of [
+            'Address grouped performance review findings',
+            'Address grouped perf review findings',
+            'Reduce maximum timeline memory allocation',
+            'Reduce heap pressure during timeline parsing',
+            'Limit allocation growth in the process heap'
+        ]) {
+            const result = classifyChange({
+                normalizedFiles: ['src/runtime/task-timeline.ts'],
+                taskIntent,
+                changedLinesTotal: 20,
+                additionsTotal: 12,
+                deletionsTotal: 8,
+                renameCount: 0,
+                detectionSource: 'git_auto',
+                classificationConfig: makeConfig(),
+                reviewCapabilities: { ...defaultCapabilities, performance: true }
+            });
+
+            assert.equal(result.triggers.performance_intent, true, taskIntent);
+            assert.equal(result.required_reviews.performance, true, taskIntent);
+        }
+    });
+
+    it('does not trigger on unrelated or distant memory terms', () => {
+        for (const taskIntent of [
+            'Update durable project memory handling',
+            `Update memory ${'diagnostic context '.repeat(3)}allocation metadata`
+        ]) {
+            const result = classifyChange({
+                normalizedFiles: ['src/runtime/project-memory-store.ts'],
+                taskIntent,
+                changedLinesTotal: 20,
+                additionsTotal: 12,
+                deletionsTotal: 8,
+                renameCount: 0,
+                detectionSource: 'git_auto',
+                classificationConfig: makeConfig(),
+                reviewCapabilities: { ...defaultCapabilities, performance: true }
+            });
+
+            assert.equal(result.triggers.performance_intent, false, taskIntent);
+            assert.equal(result.required_reviews.performance, false, taskIntent);
+        }
+    });
+
     it('keeps performance review triggers for benchmark and profiling surfaces', () => {
         const profilingFilenameResult = classifyChange({
             normalizedFiles: ['src/runtime/RequestProfiling.ts'],
