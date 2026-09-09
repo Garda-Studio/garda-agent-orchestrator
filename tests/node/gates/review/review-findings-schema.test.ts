@@ -1416,17 +1416,42 @@ test('validateReviewFindingsReport rejects focused targets disconnected from the
     }
 });
 
+test('validateReviewFindingsReport explains the single-clause focused evidence contract', () => {
+    for (const observation of [
+        'The focused command target tests/node/example.test.ts exercises this parser assertion; it validates the changed behavior.',
+        'The focused command target tests/node/example.test.ts exercises this parser assertion\nIt validates the changed behavior.',
+        'The focused command target tests/node/example.test.ts exercises this parser assertion, but it validates the affected behavior.',
+        'The focused command target tests/node/example.test.ts exercises this parser assertion, however, it validates the affected behavior.',
+        'The focused command target tests/node/example.test.ts exercises this parser assertion while it validates the affected behavior.'
+    ]) {
+        const report = missingFocusedValidationReport();
+        const note = (report.validation_notes as Array<Record<string, unknown>>)[0];
+        note.evidence = [evidence('src/example.ts:10', observation)];
+
+        const result = validateReviewFindingsReport(report, validationOptions);
+
+        assert.equal(result.valid, false, result.violations.join('\n'));
+        assert.ok(result.violations.some((entry) => (
+            entry.includes('why it is relevant in one clause')
+            && entry.includes('Semicolons, newlines, sentence punctuation')
+            && entry.includes('affected/changed/modified/new/updated')
+        )), result.violations.join('\n'));
+    }
+});
+
 test('validateReviewFindingsReport accepts a focused target tied to changed behavior by a concrete relationship', () => {
-    const report = missingFocusedValidationReport();
-    const note = (report.validation_notes as Array<Record<string, unknown>>)[0];
-    note.evidence = [evidence(
-        'src/example.ts:10',
-        'tests/node/example.test.ts validates the changed parser branch.'
-    )];
+    for (const observation of [
+        'tests/node/example.test.ts validates the changed parser branch.',
+        'tests/node/example.test.ts validates the affected parser branch.'
+    ]) {
+        const report = missingFocusedValidationReport();
+        const note = (report.validation_notes as Array<Record<string, unknown>>)[0];
+        note.evidence = [evidence('src/example.ts:10', observation)];
 
-    const result = validateReviewFindingsReport(report, validationOptions);
+        const result = validateReviewFindingsReport(report, validationOptions);
 
-    assert.equal(result.valid, true, result.violations.join('\n'));
+        assert.equal(result.valid, true, `${observation}\n${result.violations.join('\n')}`);
+    }
 });
 
 test('validateReviewFindingsReport accepts a focused target tied to the authenticated task contract', () => {

@@ -573,7 +573,7 @@ function validateFocusedValidationNoteCommand(
         && !focusedEvidenceExplainsTargetRelevance(fields.evidence, commandTargets[0], expectedTaskId)
     ) {
         violations.push(
-            'Reviewer focused self-validation authenticated changed-file evidence must name the exact focused command target and why it is relevant; keep evidence.location inside the assigned lane domain and put the target path in evidence.observation when necessary, rather than only in note, command, or diagnostics.'
+            'Reviewer focused self-validation authenticated changed-file evidence must name the exact focused command target and why it is relevant in one clause: that same clause must include the current task id or affected/changed/modified/new/updated plus a relationship verb such as validates/covers/exercises/asserts. Semicolons, newlines, sentence punctuation, and contrastive conjunctions but/however/whereas/while start a new clause. Keep evidence.location inside the assigned lane domain and put the target path in evidence.observation when necessary, rather than only in note, command, or diagnostics.'
         );
     }
 }
@@ -1204,7 +1204,7 @@ function focusedEvidenceExplainsTargetRelevance(
         const clauses = (locationNamesExactTarget && observationWithTargetMarker === normalizedObservation
             ? `${targetMarker} ${normalizedObservation}`
             : observationWithTargetMarker).split(
-            /(?:[\n.;!?]+|,?\s+\b(?:but|however|whereas|while)\b\s+)/u
+            /(?:[\n.;!?]+|,?\s+\b(?:but|however|whereas|while)\b[,;:]?\s+)/u
         );
         return clauses.some((clause) => {
             if (!clause.includes(targetMarker)) {

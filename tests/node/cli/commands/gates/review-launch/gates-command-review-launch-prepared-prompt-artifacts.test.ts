@@ -77,7 +77,10 @@ describe('cli/commands/gates review launch prepared prompt artifacts', () => {
         assert.ok(prompt.includes(
             "keep evidence.location as a concrete path:line inside the assigned lane's authenticated changed-file evidence domain"
         ));
-        assert.ok(prompt.includes('Put the exact command target path and its concrete relationship to changed behavior in evidence.observation when the target itself is outside that domain'));
+        assert.ok(prompt.includes('Put the exact command target path and its concrete relationship to changed behavior in one clause of evidence.observation'));
+        assert.ok(prompt.includes('`affected`/`changed`/`modified`/`new`/`updated`'));
+        assert.ok(prompt.includes('Semicolons, newlines, sentence punctuation, and contrastive conjunctions'));
+        assert.ok(prompt.includes('`but`/`however`/`whereas`/`while`'));
         assert.ok(prompt.includes(
             '[garda:evidence-only:missing-focused-validation] test=<exact-repository-relative-test-path>; action=run-and-record-focused-test'
         ));
