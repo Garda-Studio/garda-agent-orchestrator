@@ -46,6 +46,7 @@ import {
     writeCompilePassEvidence,
     writePreflight
 } from '../../gate-test-helpers';
+import { buildOperatorConfirmationArgs } from '../../operator-confirmation-test-helpers';
 
 const PACKAGE_JSON = { name: 'garda-agent-orchestrator', version: '1.0.0' };
 
@@ -1750,8 +1751,7 @@ describe('cli/commands/gates — workflow-config protected control-plane', () =>
                 'set',
                 '--bundle-root', bundleRoot,
                 '--full-suite-out-of-scope-failure-policy', 'audit_and_warn',
-                '--operator-confirmed', 'yes',
-                '--operator-confirmed-at-utc', new Date().toISOString()
+                ...buildOperatorConfirmationArgs()
             ], PACKAGE_JSON));
             assert.ok(workflowResult && workflowResult.action === 'set');
             assert.equal(workflowResult.status, 'CHANGED');
@@ -1797,8 +1797,7 @@ describe('cli/commands/gates — workflow-config protected control-plane', () =>
                 '--bundle-root', bundleRoot,
                 '--full-suite-out-of-scope-failure-policy', 'audit_and_warn',
                 '--mutation-source', 'local-ui',
-                '--operator-confirmed', 'yes',
-                '--operator-confirmed-at-utc', new Date().toISOString()
+                ...buildOperatorConfirmationArgs()
             ], PACKAGE_JSON));
             assert.ok(workflowResult && workflowResult.action === 'set');
             assert.equal(workflowResult.status, 'CHANGED');

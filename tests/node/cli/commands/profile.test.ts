@@ -25,6 +25,9 @@ import {
     buildDefaultReviewRemediationModePolicy,
     resolveReviewRemediationModePolicyFromProfile
 } from '../../../../src/policy/review-remediation-mode-policy';
+import {
+    buildOperatorConfirmationArgs as freshOperatorConfirmationArgs
+} from './operator-confirmation-test-helpers';
 
 const PACKAGE_JSON = { name: 'test-pkg', version: '1.0.0' };
 
@@ -175,13 +178,6 @@ function stripAnsi(value: string): string {
 function captureJsonProfileCommand(argv: string[]): Record<string, unknown> {
     const { lines } = captureConsole(() => handleProfile(argv, PACKAGE_JSON));
     return JSON.parse(lines.join('\n')) as Record<string, unknown>;
-}
-
-function freshOperatorConfirmationArgs(): string[] {
-    return [
-        '--operator-confirmed', 'yes',
-        '--operator-confirmed-at-utc', new Date().toISOString()
-    ];
 }
 
 async function invokeUiProfileRequest(

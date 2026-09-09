@@ -17,15 +17,12 @@ import {
 import { OPERATOR_CONFIRMATION_MAX_AGE_MS } from '../../../../src/core/operator-confirmation';
 import { UNCONFIGURED_COMPILE_GATE_COMMAND } from '../../../../src/core/constants';
 import { resolveTaskResetAvailability } from '../../../../src/core/task-reset-availability';
+import { buildOperatorConfirmationArgs } from './operator-confirmation-test-helpers';
 
 const PACKAGE_JSON = { name: 'garda-agent-orchestrator', version: '1.0.0' };
 
 function stripAnsi(value: string): string {
     return value.replace(/\x1B\[[0-9;?]*[ -/]*[@-~]/g, '');
-}
-
-function buildOperatorConfirmationArgs(): string[] {
-    return ['--operator-confirmed', 'yes', '--operator-confirmed-at-utc', new Date().toISOString()];
 }
 
 function createBundleRoot(
@@ -1327,7 +1324,7 @@ test('workflow help describes project-memory update as the default policy', () =
     assert.ok(helpText.includes('workflow set --optional-checks-review-failure-cadence-interval 3'));
     assert.ok(helpText.includes('workflow set --optional-skill-selection-mode mandatory'));
     assert.ok(helpText.includes('workflow set --garda-self-guard on'));
-    assert.ok(helpText.includes('workflow set writes require --operator-confirmed yes and --operator-confirmed-at-utc'));
+    assert.ok(helpText.includes('workflow set changes require --operator-confirmed yes and --operator-confirmed-at-utc'));
     assert.ok(helpText.includes('Task reset mutations are disabled by default'));
     assert.ok(helpText.includes('Optional quality checks are advisory, default-enabled'));
     assert.ok(helpText.includes('Full-suite timeout blocker controls whether repeated timeout evidence blocks task progress'));

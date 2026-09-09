@@ -43,6 +43,9 @@ import {
 import {
     runCliMain
 } from '../../../../../../src/cli/main';
+import {
+    OPERATOR_CONFIRMATION_MAX_FUTURE_SKEW_MS
+} from '../../../../../../src/core/operator-confirmation';
 
 function escapeRegExp(value: string): string {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -813,6 +816,34 @@ describe('cli/commands/gates — task-start', () => {
             }),
             /enter-task-mode --orchestrator-work operator confirmation is stale/
         );
+
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    });
+
+    it('rejects future-skewed orchestrator-work operator confirmation timestamps', () => {
+        const repoRoot = createTempRepo();
+        const taskId = 'T-900planned-protected-future-confirm';
+        const futureConfirmation = new Date(
+            Date.now() + OPERATOR_CONFIRMATION_MAX_FUTURE_SKEW_MS + 30_000
+        ).toISOString();
+        seedTaskQueue(repoRoot, taskId);
+        seedInitAnswers(repoRoot);
+        markAsSourceCheckout(repoRoot);
+        const artifactPath = path.join(getReviewsRoot(repoRoot), `${taskId}-task-mode.json`);
+
+        assert.throws(
+            () => runEnterTaskMode({
+                repoRoot,
+                taskId,
+                taskSummary: 'Reject future-skewed operator approval for protected planned scope',
+                orchestratorWork: true,
+                operatorConfirmed: 'yes',
+                operatorConfirmedAtUtc: futureConfirmation,
+                plannedChangedFiles: ['.github/agents/orchestrator.md']
+            }),
+            /enter-task-mode --orchestrator-work operator confirmation timestamp is in the future/
+        );
+        assert.equal(fs.existsSync(artifactPath), false);
 
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });
