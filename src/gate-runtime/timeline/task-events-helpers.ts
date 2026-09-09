@@ -182,6 +182,12 @@ function buildTaskTimelineJsonlEntries(content: string): TaskTimelineParsedJsonl
     };
 }
 
+export function parseTaskTimelineJsonlContent(
+    content: string
+): readonly TaskTimelineJsonlEntry[] {
+    return buildTaskTimelineJsonlEntries(content).entries;
+}
+
 export function assertTaskTimelineJsonlAppendWithinLimits(
     filePath: string,
     rawLine: string

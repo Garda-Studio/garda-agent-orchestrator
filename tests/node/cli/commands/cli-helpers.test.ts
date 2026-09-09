@@ -905,6 +905,7 @@ test('buildHelpText includes all command descriptions', () => {
     assert.ok(text.includes('skills'));
     assert.ok(text.includes('review-capabilities'));
     assert.ok(text.includes('review-catalog'));
+    assert.match(text, /repair\s+.*task-event suffixes/u);
     assert.ok(text.includes('workflow'));
     assert.ok(text.includes('suggest'));
     assert.ok(text.includes('--help'));

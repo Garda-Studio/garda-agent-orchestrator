@@ -1,3 +1,4 @@
+import { isUtf8 } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -6,16 +7,12 @@ import {
     buildEventIntegrityHash,
     LEGACY_TASK_EVENT_INTEGRITY_SCHEMA_VERSION,
     MAX_TASK_TIMELINE_JSONL_LINES,
-    readTaskTimelineJsonlEntries,
+    parseTaskTimelineJsonlContent,
     TASK_EVENT_INTEGRITY_SCHEMA_VERSION,
     toTrimmedLowerCaseString,
     toTrimmedString
 } from '../../../gate-runtime/timeline/task-events-helpers';
-import {
-    readTaskTimelineFileSnapshot,
-    withTaskTimelineFileReadSnapshot,
-    MAX_TASK_TIMELINE_SNAPSHOT_BYTES
-} from '../../../gate-runtime/timeline/task-timeline-read-snapshot';
+import { MAX_TASK_TIMELINE_SNAPSHOT_BYTES } from '../../../gate-runtime/timeline/task-timeline-read-snapshot';
 import { inspectTaskEventFile } from '../../../gate-runtime/timeline/task-events-integrity';
 import { withFilesystemLock } from '../../../gate-runtime/timeline/task-events-locking';
 import { reconcileTimelineSummaryForTask } from '../../../gate-runtime/timeline-summary';
@@ -58,11 +55,7 @@ export interface TaskEventSuffixMigrationResult {
 export interface ApplyTaskEventSuffixMigrationOptions {
     expectedPlanSha256: string;
     beforeReplace?: () => void;
-}
-
-interface ParsedTimelineEntry {
-    lineNumber: number;
-    record: Record<string, unknown> | null;
+    afterReplace?: () => void;
 }
 
 interface TimelineAnalysis {
@@ -171,11 +164,11 @@ function cloneEventWithMigratedIntegrity(
     return { event: migratedEvent, eventHash };
 }
 
-function analyzeTimeline(
-    taskId: string,
-    sourceContent: Buffer,
-    entries: readonly ParsedTimelineEntry[]
-): TimelineAnalysis {
+function analyzeTimeline(taskId: string, sourceContent: Buffer): TimelineAnalysis {
+    if (!isUtf8(sourceContent)) {
+        return rejectAnalysis('invalid_utf8', 'Task timeline is not valid UTF-8.');
+    }
+    const entries = parseTaskTimelineJsonlContent(sourceContent.toString('utf8'));
     if (entries.length === 0) {
         return rejectAnalysis('timeline_empty', 'Task timeline contains no event records.');
     }
@@ -318,19 +311,40 @@ function analyzeTimeline(
         );
     }
 
-    const sourceText = sourceContent.toString('utf8');
-    if (!Buffer.from(sourceText, 'utf8').equals(sourceContent)) {
-        return rejectAnalysis('invalid_utf8', 'Task timeline is not valid UTF-8.');
-    }
-    const rawLines = sourceText.split('\n');
+    const replacements = new Map<number, Buffer>();
     let migratedPreviousHash = toTrimmedLowerCaseString(anchorIntegrity.event_sha256);
     for (let index = suffixStartIndex; index < entries.length; index += 1) {
         const entry = entries[index];
         const event = entry.record as Record<string, unknown>;
         const migrated = cloneEventWithMigratedIntegrity(event, migratedPreviousHash);
-        rawLines[entry.lineNumber - 1] = JSON.stringify(migrated.event);
+        replacements.set(entry.lineNumber, Buffer.from(JSON.stringify(migrated.event), 'utf8'));
         migratedPreviousHash = migrated.eventHash;
     }
+
+    const migratedChunks: Buffer[] = [];
+    let lineNumber = 1;
+    let lineStart = 0;
+    let unchangedStart = 0;
+    for (let offset = 0; offset <= sourceContent.length; offset += 1) {
+        if (offset < sourceContent.length && sourceContent[offset] !== 0x0A) {
+            continue;
+        }
+        const replacement = replacements.get(lineNumber);
+        if (replacement) {
+            const lineEndingStart = offset > lineStart && sourceContent[offset - 1] === 0x0D
+                ? offset - 1
+                : offset;
+            migratedChunks.push(
+                sourceContent.subarray(unchangedStart, lineStart),
+                replacement,
+                sourceContent.subarray(lineEndingStart, offset)
+            );
+            unchangedStart = offset;
+        }
+        lineStart = offset + 1;
+        lineNumber += 1;
+    }
+    migratedChunks.push(sourceContent.subarray(unchangedStart));
 
     return {
         status: 'READY',
@@ -339,27 +353,8 @@ function analyzeTimeline(
         anchorLine: anchorEntry.lineNumber,
         suffixStartLine: entries[suffixStartIndex].lineNumber,
         suffixEventCount: entries.length - suffixStartIndex,
-        migratedContent: Buffer.from(rawLines.join('\n'), 'utf8')
+        migratedContent: Buffer.concat(migratedChunks)
     };
-}
-
-function captureParsedTimeline(
-    timelinePath: string
-): { content: Buffer; entries: ParsedTimelineEntry[] } | null {
-    return withTaskTimelineFileReadSnapshot(timelinePath, () => {
-        const snapshot = readTaskTimelineFileSnapshot(timelinePath);
-        if (!snapshot.valid) {
-            throw new Error('Task timeline is unsafe or changed while it was being authenticated.');
-        }
-        if (!snapshot.exists || !snapshot.content) {
-            return null;
-        }
-        const entries = readTaskTimelineJsonlEntries(timelinePath).map((entry) => ({
-            lineNumber: entry.lineNumber,
-            record: entry.record
-        }));
-        return { content: snapshot.content, entries };
-    });
 }
 
 function identitySha256(identity: fs.Stats): string {
@@ -401,16 +396,8 @@ function prepareMigration(repoRoot: string, bundleRoot: string, rawTaskId: strin
         if (sourceSnapshot.identity.nlink !== 1) {
             throw new Error('Task timeline must be a uniquely linked regular file.');
         }
-        const parsed = captureParsedTimeline(timelinePath);
-        if (!parsed) {
-            throw new Error('Task timeline became unavailable while it was being authenticated.');
-        }
-        if (!sourceSnapshot.content.equals(parsed.content)) {
-            throw new Error('Task timeline changed while the migration preview was being prepared.');
-        }
-
-        const analysis = analyzeTimeline(taskId, parsed.content, parsed.entries);
-        const sourceSha256 = sha256(parsed.content);
+        const analysis = analyzeTimeline(taskId, sourceSnapshot.content);
+        const sourceSha256 = sha256(sourceSnapshot.content);
         const sourceIdentitySha256 = identitySha256(sourceSnapshot.identity);
         if (analysis.status !== 'READY' || !analysis.migratedContent) {
             return {
@@ -688,7 +675,10 @@ export function applyTaskEventSuffixMigration(
     const safeTaskId = assertCanonicalTaskId(taskId);
     const expectedPlanSha256 = assertExpectedPlanSha256(options.expectedPlanSha256);
     const timelinePath = path.join(bundleRoot, 'runtime', 'task-events', `${safeTaskId}.jsonl`);
-    const taskLockPath = path.join(path.dirname(timelinePath), `.${safeTaskId}.lock`);
+    const taskLockPath = path.join(
+        path.resolve(repoRoot),
+        `.garda-task-event-suffix-migration-${safeTaskId}.lock`
+    );
 
     return withFilesystemLock(taskLockPath, {
         ownerLabel: `task-event-suffix-migration:${safeTaskId}`
@@ -741,6 +731,7 @@ export function applyTaskEventSuffixMigration(
         );
 
         try {
+            options.afterReplace?.();
             verifyRepoFile(
                 repoRoot,
                 prepared.repoRelativeTimelinePath,

@@ -162,6 +162,56 @@ test('preview is read-only, apply migrates the authenticated terminal legacy suf
     }
 });
 
+test('apply preserves CRLF line endings while migrating the legacy suffix', () => {
+    const fixture = makeFixture();
+    try {
+        const events = buildTimelineEvents('T-MIGRATE', [1, 2, 1, 1]);
+        const originalContent = Buffer.from(
+            serializeTimeline(events).toString('utf8').replaceAll('\n', '\r\n'),
+            'utf8'
+        );
+        fs.writeFileSync(fixture.timelinePath, originalContent, { mode: 0o600 });
+        const preview = previewTaskEventSuffixMigration(fixture.root, fixture.bundleRoot, 'T-MIGRATE');
+
+        const applied = applyTaskEventSuffixMigration(fixture.root, fixture.bundleRoot, 'T-MIGRATE', {
+            expectedPlanSha256: preview.plan_sha256 || ''
+        });
+
+        const migratedContent = fs.readFileSync(fixture.timelinePath);
+        const migratedText = migratedContent.toString('utf8');
+        assert.equal(applied.status, 'APPLIED');
+        assert.equal(migratedText.split('\r\n').length - 1, events.length);
+        assert.equal(migratedText.replaceAll('\r\n', '').includes('\n'), false);
+        assert.deepEqual(
+            migratedText.split('\r\n').slice(0, 2),
+            originalContent.toString('utf8').split('\r\n').slice(0, 2)
+        );
+        assert.equal(inspectTaskEventFile(fixture.timelinePath, 'T-MIGRATE').status, 'PASS');
+    } finally {
+        fixture.cleanup();
+    }
+});
+
+test('preview rejects invalid UTF-8 timeline bytes without mutation', () => {
+    const fixture = makeFixture();
+    try {
+        const original = Buffer.from([0x7B, 0x22, 0xFF, 0x22, 0x7D, 0x0A]);
+        fs.writeFileSync(fixture.timelinePath, original, { mode: 0o600 });
+
+        const preview = previewTaskEventSuffixMigration(
+            fixture.root,
+            fixture.bundleRoot,
+            'T-MIGRATE'
+        );
+
+        assert.equal(preview.status, 'REJECTED');
+        assert.equal(preview.reason_code, 'invalid_utf8');
+        assert.deepEqual(fs.readFileSync(fixture.timelinePath), original);
+    } finally {
+        fixture.cleanup();
+    }
+});
+
 test('preview rejects invalid, unanchored, mixed, replayed, foreign, and already-current histories without mutation', () => {
     const cases: Array<{
         name: string;
@@ -238,21 +288,32 @@ test('preview rejects invalid, unanchored, mixed, replayed, foreign, and already
     }
 });
 
-test('preview rejects a symlinked timeline without touching its evidence', (context) => {
+test('preview rejects a symlinked timeline directory without touching its evidence', () => {
     const symlinkFixture = makeFixture();
     try {
-        const externalPath = path.join(symlinkFixture.root, 'external.jsonl');
+        const externalEventsRoot = path.join(symlinkFixture.root, 'external-events');
+        const externalPath = path.join(externalEventsRoot, 'T-MIGRATE.jsonl');
         const externalContent = serializeTimeline(buildTimelineEvents('T-MIGRATE', [1, 2, 1]));
+        fs.mkdirSync(externalEventsRoot);
         fs.writeFileSync(externalPath, externalContent);
-        try {
-            fs.symlinkSync(externalPath, symlinkFixture.timelinePath, 'file');
-        } catch (error: unknown) {
-            if ((error as NodeJS.ErrnoException).code === 'EPERM') {
-                context.skip('File symlink creation is unavailable on this Windows host.');
-                return;
-            }
-            throw error;
-        }
+        fs.rmSync(symlinkFixture.eventsRoot, { recursive: true });
+        fs.symlinkSync(
+            externalEventsRoot,
+            symlinkFixture.eventsRoot,
+            process.platform === 'win32' ? 'junction' : 'dir'
+        );
+        const externalLockPath = path.join(externalEventsRoot, '.T-MIGRATE.lock');
+        const externalOwnerPath = path.join(externalLockPath, 'owner.json');
+        const externalOwner = JSON.stringify({
+            lock_id: 'external-sentinel',
+            pid: process.pid,
+            hostname: os.hostname(),
+            created_at_utc: new Date().toISOString(),
+            heartbeat_at_utc: new Date().toISOString(),
+            command: 'external sentinel'
+        });
+        fs.mkdirSync(externalLockPath);
+        fs.writeFileSync(externalOwnerPath, externalOwner);
         const preview = previewTaskEventSuffixMigration(
             symlinkFixture.root,
             symlinkFixture.bundleRoot,
@@ -260,11 +321,45 @@ test('preview rejects a symlinked timeline without touching its evidence', (cont
         );
         assert.equal(preview.status, 'REJECTED');
         assert.equal(preview.reason_code, 'timeline_unsafe_or_changed');
+        assert.throws(() => applyTaskEventSuffixMigration(
+            symlinkFixture.root,
+            symlinkFixture.bundleRoot,
+            'T-MIGRATE',
+            { expectedPlanSha256: '0'.repeat(64) }
+        ), /not eligible.*timeline_unsafe_or_changed/u);
         assert.deepEqual(fs.readFileSync(externalPath), externalContent);
+        assert.equal(fs.readFileSync(externalOwnerPath, 'utf8'), externalOwner);
+        assert.equal(
+            fs.existsSync(path.join(symlinkFixture.root, '.garda-task-event-suffix-migration-T-MIGRATE.lock')),
+            false
+        );
     } finally {
         symlinkFixture.cleanup();
     }
 
+});
+
+test('apply rolls back authenticated source bytes after a post-replacement failure', () => {
+    const fixture = makeFixture();
+    try {
+        const original = writeTimeline(fixture, buildTimelineEvents('T-MIGRATE', [1, 2, 1, 1]));
+        const preview = previewTaskEventSuffixMigration(fixture.root, fixture.bundleRoot, 'T-MIGRATE');
+
+        assert.throws(() => applyTaskEventSuffixMigration(
+            fixture.root,
+            fixture.bundleRoot,
+            'T-MIGRATE',
+            {
+                expectedPlanSha256: preview.plan_sha256 || '',
+                afterReplace: () => {
+                    throw new Error('forced post-replacement validation failure');
+                }
+            }
+        ), /failed and was rolled back.*forced post-replacement validation failure/u);
+        assert.deepEqual(fs.readFileSync(fixture.timelinePath), original);
+    } finally {
+        fixture.cleanup();
+    }
 });
 
 test('preview rejects an oversized timeline without touching its evidence', () => {

@@ -704,7 +704,7 @@ export function buildHelpText(packageJson: PackageJsonLike): string {
             '  backup        Create a manual rollback backup snapshot.',
             '  uninstall     Remove the deployed orchestrator bundle and managed files; preserve TASK.md by default (--keep-task-file no removes it).',
             '  cleanup       Remove stale runtime artifacts and manage review-artifact storage policy.',
-            '  repair        Inspect and rebuild runtime indexes, protected manifests, and stale lock state.',
+            '  repair        Inspect and rebuild indexes, manifests, stale locks, and task-event suffixes.',
             '  gc            Extended cleanup with dry-run default, allowlist, stale locks, and isolation sandbox (alias: clean).',
             '  verify        Validate deployment consistency and rule contracts.',
             '  check-update  Compare current deployment with a newer npm package or local source.',
