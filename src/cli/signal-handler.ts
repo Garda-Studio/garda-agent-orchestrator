@@ -1,22 +1,31 @@
 import * as fs from 'node:fs';
 
 import { EXIT_SIGNAL_INTERRUPT } from './exit-codes';
+import {
+    computeTerminationSignalExitCode,
+    registerSubprocessSignalHandler,
+    SUBPROCESS_TERMINATION_TIMEOUT_MS
+} from '../core/process/subprocess';
 
-const cleanupCallbacks: Set<() => void> = new Set();
+type CleanupCallback = () => void | Promise<void>;
+
+const cleanupCallbacks: Set<CleanupCallback> = new Set();
 
 let controller: AbortController | null = null;
 
 let shuttingDown = false;
 
 let installed = false;
-export function registerCleanup(fn: () => void): () => void {
+let disposeSubprocessSignalHandler: (() => void) | null = null;
+
+export function registerCleanup(fn: CleanupCallback): () => void {
     cleanupCallbacks.add(fn);
     return function dispose() {
         cleanupCallbacks.delete(fn);
     };
 }
 
-export function unregisterCleanup(fn: () => void): void {
+export function unregisterCleanup(fn: CleanupCallback): void {
     cleanupCallbacks.delete(fn);
 }
 
@@ -24,43 +33,54 @@ export function getShutdownSignal(): AbortSignal | null {
     return controller ? controller.signal : null;
 }
 
-export function installSignalHandlers() {
+export function installSignalHandlers(): void {
     if (installed) return;
     installed = true;
 
     controller = new AbortController();
 
-    process.on('SIGINT', onSignal);
-    process.on('SIGTERM', onSignal);
-
-    // SIGBREAK is Windows-specific (Ctrl+Break). Only listen when supported.
-    if (process.platform === 'win32') {
-        try {
-            process.on('SIGBREAK', onSignal);
-        } catch (_e) {
-            // Silently ignore if SIGBREAK is unsupported in this Node build.
-        }
-    }
+    disposeSubprocessSignalHandler = registerSubprocessSignalHandler(onSignal);
 }
 
-export function uninstallSignalHandlers() {
+export function uninstallSignalHandlers(): void {
     if (!installed) return;
     installed = false;
 
-    process.removeListener('SIGINT', onSignal);
-    process.removeListener('SIGTERM', onSignal);
-    if (process.platform === 'win32') {
-        try {
-            process.removeListener('SIGBREAK', onSignal);
-        } catch (_e) { /* ignore */ }
-    }
+    disposeSubprocessSignalHandler?.();
+    disposeSubprocessSignalHandler = null;
 
     cleanupCallbacks.clear();
     controller = null;
     shuttingDown = false;
 }
 
-function onSignal(sig: NodeJS.Signals | null) {
+function waitForCleanup(
+    subprocessCleanup: Promise<void>,
+    callbacks: readonly CleanupCallback[]
+): Promise<void> {
+    const cleanup = Promise.allSettled([
+        subprocessCleanup,
+        ...callbacks.map(function (callback) {
+            return Promise.resolve().then(callback);
+        })
+    ]).then(function () {});
+    return new Promise(function (resolve) {
+        let finished = false;
+        const timeoutHandle = setTimeout(function () {
+            if (finished) return;
+            finished = true;
+            resolve();
+        }, SUBPROCESS_TERMINATION_TIMEOUT_MS);
+        cleanup.then(function () {
+            if (finished) return;
+            finished = true;
+            clearTimeout(timeoutHandle);
+            resolve();
+        });
+    });
+}
+
+function onSignal(sig: NodeJS.Signals, subprocessCleanup: Promise<void>): void {
     if (shuttingDown) return;
     shuttingDown = true;
 
@@ -69,40 +89,17 @@ function onSignal(sig: NodeJS.Signals | null) {
         try { controller.abort(); } catch (_e) { /* ignore */ }
     }
 
-    // Run every registered cleanup callback (best-effort, synchronous).
-    for (const fn of cleanupCallbacks) {
-        try {
-            fn();
-        } catch (_e) {
-            // Cleanup must never throw during shutdown – ignore errors.
-        }
-    }
+    const callbacks = [...cleanupCallbacks];
     cleanupCallbacks.clear();
 
-    // Exit with conventional signal exit code (128 + signal number).
-    // SIGINT = 2  → 130, SIGTERM = 15 → 143, SIGHUP = 1 → 129.
     const exitCode = computeSignalExitCode(sig);
-    process.exit(exitCode);
+    void waitForCleanup(subprocessCleanup, callbacks).then(function () {
+        process.exit(exitCode);
+    });
 }
 
-const SIGNAL_EXIT_CODE_MAP: Readonly<Record<string, number>> = Object.freeze({
-    SIGHUP: 1,
-    SIGINT: 2,
-    SIGPIPE: 13,
-    SIGTERM: 15,
-    SIGBREAK: 21,
-    SIGWINCH: 28,
-});
-
 export function computeSignalExitCode(sig: NodeJS.Signals | null): number {
-    if (!sig) {
-        return EXIT_SIGNAL_INTERRUPT;
-    }
-    const signalNumber = SIGNAL_EXIT_CODE_MAP[sig];
-    if (signalNumber != null) {
-        return 128 + signalNumber;
-    }
-    return EXIT_SIGNAL_INTERRUPT;
+    return sig ? computeTerminationSignalExitCode(sig) : EXIT_SIGNAL_INTERRUPT;
 }
 
 export function registerTempRoot(dirPath: string): () => void {

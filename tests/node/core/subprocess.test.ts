@@ -1,5 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import * as childProcess from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -10,6 +12,8 @@ import {
     DEFAULT_GIT_CLONE_TIMEOUT_MS,
     DEFAULT_GIT_TIMEOUT_MS,
     DEFAULT_NPM_TIMEOUT_MS,
+    registerSubprocessSignalHandler,
+    SUBPROCESS_TERMINATION_TIMEOUT_MS,
     spawnStreamed,
     spawnShellCommand,
     spawnSyncWithTimeout
@@ -59,6 +63,26 @@ function createNodeBatchFixture(scriptSource = 'console.log("shelltest")'): { sc
 }
 
 describe('spawnStreamed', () => {
+    it('shares one termination listener across concurrent children and removes it when idle', async () => {
+        const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+        if (process.platform === 'win32') signals.push('SIGBREAK');
+        const baseline = new Map(signals.map((signal) => [signal, process.listenerCount(signal)]));
+        const children = [1, 2].map(() => spawnStreamed(
+            process.execPath,
+            ['-e', 'setTimeout(()=>{},250)'],
+            { timeoutMs: 5000 }
+        ));
+
+        for (const signal of signals) {
+            assert.equal(process.listenerCount(signal), (baseline.get(signal) || 0) + 1, signal);
+        }
+
+        await Promise.all(children);
+        for (const signal of signals) {
+            assert.equal(process.listenerCount(signal), baseline.get(signal), signal);
+        }
+    });
+
     it('captures stdout from a successful process', async () => {
         const result = await spawnStreamed(process.execPath, ['-e', 'console.log("hello")'], {
             timeoutMs: 5000
@@ -319,6 +343,70 @@ describe('spawnStreamed – kill-path cleanup', () => {
         }
     });
 
+    it('runs the Windows fallback when taskkill reports that the managed root already exited', async () => {
+        if (process.platform !== 'win32') return;
+        const mutableChildProcess = require('node:child_process') as typeof childProcess;
+        const originalSpawn = mutableChildProcess.spawn;
+        const originalExecFile = mutableChildProcess.execFile;
+        const originalSystemRoot = process.env.SystemRoot;
+        const originalWindir = process.env.WINDIR;
+        const subprocessModulePath = require.resolve('../../../src/core/subprocess');
+        const cachedSubprocessModule = require.cache[subprocessModulePath];
+        const commands: string[] = [];
+        const fakeChild = new EventEmitter() as childProcess.ChildProcess;
+        Object.defineProperties(fakeChild, {
+            pid: { value: 2_147_483_647 },
+            exitCode: { value: 0, configurable: true },
+            signalCode: { value: null, configurable: true },
+            stdout: { value: null },
+            stderr: { value: null }
+        });
+        fakeChild.kill = function (): boolean {
+            queueMicrotask(() => fakeChild.emit('close', 1, 'SIGKILL'));
+            return true;
+        };
+
+        try {
+            process.env.SystemRoot = path.join(os.tmpdir(), 'attacker-system-root');
+            process.env.WINDIR = path.join(os.tmpdir(), 'attacker-windir');
+            delete require.cache[subprocessModulePath];
+            const freshSubprocess = require('../../../src/core/subprocess') as typeof import('../../../src/core/subprocess');
+            (mutableChildProcess as any).spawn = function () {
+                return fakeChild;
+            };
+            (mutableChildProcess as any).execFile = function (...invocation: any[]) {
+                const command = String(invocation[0]);
+                const callback = invocation[3] as (error: Error | null, stdout: string, stderr: string) => void;
+                commands.push(command);
+                if (command.toLowerCase().endsWith('taskkill.exe')) {
+                    queueMicrotask(() => callback(new Error('root process was not found'), '', ''));
+                } else {
+                    queueMicrotask(() => callback(null, '1\n', ''));
+                }
+                return fakeChild;
+            };
+
+            const result = await freshSubprocess.spawnStreamed('mock-command', [], { timeoutMs: 10 });
+            assert.equal(result.timedOut, true);
+            assert.equal(commands.length, 2);
+            const trustedSystemRoot = fs.realpathSync.native('\\\\?\\GLOBALROOT\\SystemRoot');
+            assert.equal(commands[0].toLowerCase(), path.join(trustedSystemRoot, 'System32', 'taskkill.exe').toLowerCase());
+            assert.equal(
+                commands[1].toLowerCase(),
+                path.join(trustedSystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe').toLowerCase()
+            );
+        } finally {
+            (mutableChildProcess as any).spawn = originalSpawn;
+            (mutableChildProcess as any).execFile = originalExecFile;
+            if (originalSystemRoot === undefined) delete process.env.SystemRoot;
+            else process.env.SystemRoot = originalSystemRoot;
+            if (originalWindir === undefined) delete process.env.WINDIR;
+            else process.env.WINDIR = originalWindir;
+            delete require.cache[subprocessModulePath];
+            if (cachedSubprocessModule) require.cache[subprocessModulePath] = cachedSubprocessModule;
+        }
+    });
+
     it('kills process that traps SIGTERM (exercises taskkill /F on Windows)', async () => {
         // Process installs a SIGTERM handler so child.kill('SIGTERM') alone would
         // not terminate it. On Windows the taskkill /F flag force-kills regardless.
@@ -448,7 +536,37 @@ describe('shell-surface hardening', () => {
         }
     });
 
-    it('spawnShellCommand terminates inherited-pipe descendants when taskkill is unavailable', async () => {
+    it('registers Windows shell and streamed children with the same signal coordinator', async () => {
+        if (process.platform !== 'win32') return;
+        const fixture = createNodeBatchFixture('setTimeout(()=>{},60000)');
+        const baselineListeners = process.listeners('SIGTERM');
+        let cleanup: Promise<void> | null = null;
+        const dispose = registerSubprocessSignalHandler(function (_signal, childCleanup) {
+            cleanup = childCleanup;
+        });
+        const handler = process.listeners('SIGTERM').find((listener) => !baselineListeners.includes(listener));
+        assert.ok(handler, 'coordinator signal listener should be installed');
+
+        try {
+            const streamed = spawnStreamed(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], {
+                timeoutMs: 30_000
+            });
+            const shell = spawnShellCommand(fixture.scriptPath, [], { timeoutMs: 30_000 });
+            assert.equal(process.listenerCount('SIGTERM'), baselineListeners.length + 1);
+
+            handler('SIGTERM');
+            await Promise.all([streamed, shell]);
+            assert.ok(cleanup, 'coordinator should expose bounded child cleanup');
+            await cleanup;
+        } finally {
+            dispose();
+            fixture.cleanup();
+        }
+
+        assert.equal(process.listenerCount('SIGTERM'), baselineListeners.length);
+    });
+
+    it('spawnShellCommand rejects an adversarial PATH taskkill replacement and terminates inherited-pipe descendants', async () => {
         if (process.platform !== 'win32') return;
         const fakeToolRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-fake-taskkill-'));
         const fakeTaskkillPath = path.join(fakeToolRoot, 'taskkill.exe');
@@ -490,6 +608,117 @@ describe('shell-surface hardening', () => {
             }
             fixture.cleanup();
             fs.rmSync(fakeToolRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('terminates Windows descendant trees when the managed parent exits outside the signal path', async () => {
+        if (process.platform !== 'win32') return;
+        const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-parent-exit-'));
+        const descendantPidPath = path.join(tempRoot, 'descendant.pid');
+        const subprocessModulePath = require.resolve('../../../src/core/subprocess');
+        const managedChildScript = [
+            "const cp = require('node:child_process');",
+            "const fs = require('node:fs');",
+            "const descendant = cp.spawn(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], { stdio: 'ignore' });",
+            `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
+            'setTimeout(()=>{},60000);'
+        ].join('\n');
+        const harnessScript = [
+            `const { spawnStreamed } = require(${JSON.stringify(subprocessModulePath)});`,
+            "const fs = require('node:fs');",
+            `const descendantPidPath = ${JSON.stringify(descendantPidPath)};`,
+            `void spawnStreamed(process.execPath, ['-e', ${JSON.stringify(managedChildScript)}], { timeoutMs: 60000 });`,
+            'const poll = setInterval(() => {',
+            '  if (!fs.existsSync(descendantPidPath)) return;',
+            '  clearInterval(poll);',
+            '  process.exit(0);',
+            '}, 25);'
+        ].join('\n');
+        const harness = childProcess.spawn(process.execPath, ['-e', harnessScript], { stdio: 'ignore' });
+        let descendantPid: number | null = null;
+
+        try {
+            const harnessExit = new Promise<number | null>((resolve, reject) => {
+                harness.once('error', reject);
+                harness.once('exit', resolve);
+            });
+            const exitCode = await Promise.race([
+                harnessExit,
+                new Promise<never>((_resolve, reject) => {
+                    setTimeout(() => reject(new Error('parent-exit harness timed out')), 10_000).unref?.();
+                })
+            ]);
+            assert.equal(exitCode, 0);
+            assert.equal(await waitForFile(descendantPidPath), true, 'descendant PID was not recorded');
+            descendantPid = Number(fs.readFileSync(descendantPidPath, 'utf8'));
+            assert.equal(await waitForProcessExit(descendantPid), true, 'descendant survived managed parent exit');
+        } finally {
+            if (harness.pid && isProcessAlive(harness.pid)) {
+                try { harness.kill('SIGKILL'); } catch { /* Already exited. */ }
+            }
+            if (descendantPid !== null && isProcessAlive(descendantPid)) {
+                try { process.kill(descendantPid, 'SIGKILL'); } catch { /* Already exited. */ }
+            }
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('does not re-enter synchronous Windows cleanup after the bounded signal deadline', async () => {
+        if (process.platform !== 'win32') return;
+        const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-signal-bound-'));
+        const childPidPath = path.join(tempRoot, 'child.pid');
+        const syncCleanupMarkerPath = path.join(tempRoot, 'sync-cleanup.marker');
+        const subprocessModulePath = require.resolve('../../../src/core/subprocess');
+        const harnessScript = [
+            "const cp = require('node:child_process');",
+            "const fs = require('node:fs');",
+            `const childPidPath = ${JSON.stringify(childPidPath)};`,
+            `const syncCleanupMarkerPath = ${JSON.stringify(syncCleanupMarkerPath)};`,
+            'cp.execFile = function () { return {}; };',
+            'cp.execFileSync = function () { fs.writeFileSync(syncCleanupMarkerPath, "called"); return ""; };',
+            `const subprocess = require(${JSON.stringify(subprocessModulePath)});`,
+            'subprocess.registerSubprocessSignalHandler(function (signal, cleanup) {',
+            '  void cleanup.then(function () { process.exit(subprocess.computeTerminationSignalExitCode(signal)); });',
+            '});',
+            'void subprocess.spawnStreamed(process.execPath, ["-e", "setTimeout(()=>{},60000)"], {',
+            '  timeoutMs: 60000,',
+            '  onSpawn: function (child) { fs.writeFileSync(childPidPath, String(child.pid)); }',
+            '});',
+            'const poll = setInterval(function () {',
+            '  if (!fs.existsSync(childPidPath)) return;',
+            '  clearInterval(poll);',
+            '  process.listeners("SIGTERM").at(-1)("SIGTERM");',
+            '}, 25);'
+        ].join('\n');
+        const harness = childProcess.spawn(process.execPath, ['-e', harnessScript], { stdio: 'ignore' });
+        let childPid: number | null = null;
+
+        try {
+            const startedAt = Date.now();
+            const harnessExit = new Promise<number | null>((resolve, reject) => {
+                harness.once('error', reject);
+                harness.once('exit', resolve);
+            });
+            const exitCode = await Promise.race([
+                harnessExit,
+                new Promise<never>((_resolve, reject) => {
+                    setTimeout(() => reject(new Error('bounded-signal harness timed out')), 12_000).unref?.();
+                })
+            ]);
+            const elapsed = Date.now() - startedAt;
+            assert.equal(exitCode, 143);
+            assert.ok(elapsed < SUBPROCESS_TERMINATION_TIMEOUT_MS + 1_500, `signal exit exceeded bound: ${elapsed}ms`);
+            assert.equal(fs.existsSync(syncCleanupMarkerPath), false, 'signal exit invoked synchronous cleanup');
+            assert.equal(await waitForFile(childPidPath), true, 'managed child PID was not recorded');
+            childPid = Number(fs.readFileSync(childPidPath, 'utf8'));
+        } finally {
+            if (harness.pid && isProcessAlive(harness.pid)) {
+                try { harness.kill('SIGKILL'); } catch { /* Already exited. */ }
+            }
+            if (childPid !== null && isProcessAlive(childPid)) {
+                try { process.kill(childPid, 'SIGKILL'); } catch { /* Already exited. */ }
+            }
+            fs.rmSync(tempRoot, { recursive: true, force: true });
         }
     });
 

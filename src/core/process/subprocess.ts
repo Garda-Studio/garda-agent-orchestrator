@@ -1,4 +1,5 @@
 import * as childProcess from 'node:child_process';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { ChildProcess, SpawnSyncReturns, SpawnSyncOptions, StdioOptions } from 'node:child_process';
 
@@ -64,8 +65,45 @@ function notifySpawnedProcess(
     }
 }
 
-const PROCESS_TERMINATION_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
-const WINDOWS_PROCESS_TREE_QUERY_TIMEOUT_MS = 5_000;
+const PROCESS_TERMINATION_SIGNALS: NodeJS.Signals[] = process.platform === 'win32'
+    ? ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']
+    : ['SIGINT', 'SIGTERM', 'SIGHUP'];
+const WINDOWS_PROCESS_TREE_COMMAND_TIMEOUT_MS = 2_500;
+const WINDOWS_SYSTEM32_ROOT = process.platform === 'win32'
+    ? path.join(fs.realpathSync.native('\\\\?\\GLOBALROOT\\SystemRoot'), 'System32')
+    : '';
+const CHILD_GRACEFUL_TERMINATION_MS = 3_000;
+export const SUBPROCESS_TERMINATION_TIMEOUT_MS = 6_000;
+const SIGNAL_EXIT_CODE_MAP: Readonly<Record<string, number>> = Object.freeze({
+    SIGHUP: 1,
+    SIGINT: 2,
+    SIGPIPE: 13,
+    SIGTERM: 15,
+    SIGBREAK: 21,
+    SIGWINCH: 28
+});
+
+interface ManagedChildProcess {
+    child: ChildProcess;
+    closed: Promise<void>;
+    resolveClosed: () => void;
+    gracefulTerminationStarted: boolean;
+    forceTermination: Promise<void> | null;
+    forceKillHandle: ReturnType<typeof setTimeout> | null;
+    released: boolean;
+}
+
+export type SubprocessSignalHandler = (
+    signal: NodeJS.Signals,
+    cleanup: Promise<void>
+) => void;
+
+const activeChildren = new Set<ManagedChildProcess>();
+const installedTerminationSignals = new Set<NodeJS.Signals>();
+let subprocessSignalHandler: SubprocessSignalHandler | null = null;
+let processExitListenerInstalled = false;
+let acceptingChildren = true;
+let terminationCleanup: Promise<void> | null = null;
 const WINDOWS_PROCESS_TREE_FALLBACK_SCRIPT = `
 Add-Type -TypeDefinition @'
 using System;
@@ -118,9 +156,8 @@ public static class GardaProcessTree {
         var known = new HashSet<uint>();
         var handles = new Dictionary<uint, IntPtr>();
         IntPtr rootHandle = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, false, rootPid);
-        if (rootHandle == IntPtr.Zero) return -1;
         known.Add(rootPid);
-        handles.Add(rootPid, rootHandle);
+        if (rootHandle != IntPtr.Zero) handles.Add(rootPid, rootHandle);
         int quietPasses = 0;
         try {
             for (int pass = 0; pass < 8 && quietPasses < 2; pass++) {
@@ -154,19 +191,62 @@ public static class GardaProcessTree {
 [GardaProcessTree]::Terminate([uint32]$env:GARDA_PROCESS_TREE_ROOT_PID)
 `;
 
-function terminateWindowsProcessTreeFallback(rootPid: number): boolean {
+function runExecFile(
+    command: string,
+    args: readonly string[],
+    options: childProcess.ExecFileOptionsWithStringEncoding
+): Promise<{ error: NodeJS.ErrnoException | null; stdout: string }> {
+    return new Promise(function (resolve) {
+        childProcess.execFile(command, [...args], options, function (error, stdout) {
+            resolve({
+                error: error as NodeJS.ErrnoException | null,
+                stdout
+            });
+        });
+    });
+}
+
+async function terminateWindowsProcessTreeFallback(rootPid: number): Promise<boolean> {
     if (!Number.isInteger(rootPid) || rootPid <= 0) {
         return false;
     }
+    const powershellPath = path.join(
+        WINDOWS_SYSTEM32_ROOT,
+        'WindowsPowerShell',
+        'v1.0',
+        'powershell.exe'
+    );
+    const result = await runExecFile(powershellPath, [
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-EncodedCommand',
+        Buffer.from(WINDOWS_PROCESS_TREE_FALLBACK_SCRIPT, 'utf16le').toString('base64')
+    ], {
+        encoding: 'utf8',
+        env: { ...process.env, GARDA_PROCESS_TREE_ROOT_PID: String(rootPid) },
+        windowsHide: true,
+        timeout: WINDOWS_PROCESS_TREE_COMMAND_TIMEOUT_MS,
+        maxBuffer: 1024 * 1024
+    });
+    if (result.error) {
+        return false;
+    }
+    const terminatedCount = Number(result.stdout.trim());
+    return Number.isInteger(terminatedCount) && terminatedCount > 0;
+}
+
+function terminateWindowsProcessTreeFallbackSync(rootPid: number): boolean {
+    if (!Number.isInteger(rootPid) || rootPid <= 0) {
+        return false;
+    }
+    const powershellPath = path.join(
+        WINDOWS_SYSTEM32_ROOT,
+        'WindowsPowerShell',
+        'v1.0',
+        'powershell.exe'
+    );
     try {
-        const windowsRoot = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
-        const powershellPath = path.join(
-            windowsRoot,
-            'System32',
-            'WindowsPowerShell',
-            'v1.0',
-            'powershell.exe'
-        );
         const output = childProcess.execFileSync(powershellPath, [
             '-NoLogo',
             '-NoProfile',
@@ -178,7 +258,7 @@ function terminateWindowsProcessTreeFallback(rootPid: number): boolean {
             env: { ...process.env, GARDA_PROCESS_TREE_ROOT_PID: String(rootPid) },
             stdio: ['ignore', 'pipe', 'ignore'],
             windowsHide: true,
-            timeout: WINDOWS_PROCESS_TREE_QUERY_TIMEOUT_MS,
+            timeout: WINDOWS_PROCESS_TREE_COMMAND_TIMEOUT_MS,
             maxBuffer: 1024 * 1024
         });
         const terminatedCount = Number(output.trim());
@@ -188,23 +268,240 @@ function terminateWindowsProcessTreeFallback(rootPid: number): boolean {
     }
 }
 
-function killWindowsProcessTree(child: ChildProcess): void {
+async function killWindowsProcessTree(child: ChildProcess): Promise<void> {
+    if (!child.pid) {
+        return;
+    }
+    const taskkillPath = path.join(WINDOWS_SYSTEM32_ROOT, 'taskkill.exe');
+    const taskkillResult = await runExecFile(taskkillPath, ['/pid', String(child.pid), '/T', '/F'], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: WINDOWS_PROCESS_TREE_COMMAND_TIMEOUT_MS,
+        maxBuffer: 1024 * 1024
+    });
+    if (!taskkillResult.error) {
+        return;
+    }
+    await terminateWindowsProcessTreeFallback(child.pid);
+    try { child.kill('SIGKILL'); } catch (_killError) { /* Already exited. */ }
+}
+
+function killWindowsProcessTreeOnExit(child: ChildProcess): void {
     if (!child.pid) {
         return;
     }
     try {
-        childProcess.execFileSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+        childProcess.execFileSync(path.join(WINDOWS_SYSTEM32_ROOT, 'taskkill.exe'), ['/pid', String(child.pid), '/T', '/F'], {
             stdio: 'ignore',
             windowsHide: true,
-            timeout: 5000
+            timeout: WINDOWS_PROCESS_TREE_COMMAND_TIMEOUT_MS
         });
         return;
     } catch (_error) {
-        if (child.exitCode !== null || child.signalCode !== null) {
+        terminateWindowsProcessTreeFallbackSync(child.pid);
+        try { child.kill('SIGKILL'); } catch (_killError) { /* Already exited. */ }
+    }
+}
+
+function killPosixProcessGroup(child: ChildProcess, signal: 'SIGTERM' | 'SIGKILL'): void {
+    if (!child.pid) {
+        return;
+    }
+    try {
+        process.kill(-child.pid, signal);
+    } catch (_error) {
+        try { child.kill(signal); } catch (_inner) { /* Already exited. */ }
+    }
+}
+
+function forceTerminateManagedChild(entry: ManagedChildProcess): Promise<void> {
+    if (entry.forceKillHandle) {
+        clearTimeout(entry.forceKillHandle);
+        entry.forceKillHandle = null;
+    }
+    if (!entry.forceTermination) {
+        entry.forceTermination = process.platform === 'win32'
+            ? killWindowsProcessTree(entry.child)
+            : Promise.resolve(killPosixProcessGroup(entry.child, 'SIGKILL'));
+    }
+    return entry.forceTermination;
+}
+
+function terminateManagedChild(entry: ManagedChildProcess, force: boolean): Promise<void> {
+    if (entry.released) {
+        return Promise.resolve();
+    }
+    if (force || process.platform === 'win32') {
+        return forceTerminateManagedChild(entry);
+    }
+    if (!entry.gracefulTerminationStarted) {
+        entry.gracefulTerminationStarted = true;
+        killPosixProcessGroup(entry.child, 'SIGTERM');
+        entry.forceKillHandle = setTimeout(function () {
+            void forceTerminateManagedChild(entry);
+        }, CHILD_GRACEFUL_TERMINATION_MS);
+        entry.forceKillHandle.unref?.();
+    }
+    return Promise.resolve();
+}
+
+function removeCoordinatorSignalListeners(): void {
+    for (const signal of installedTerminationSignals) {
+        process.removeListener(signal, onProcessTerminationSignal);
+    }
+    installedTerminationSignals.clear();
+}
+
+function synchronizeCoordinatorListeners(): void {
+    const signalsRequired = subprocessSignalHandler !== null || activeChildren.size > 0;
+    if (signalsRequired && installedTerminationSignals.size === 0) {
+        for (const signal of PROCESS_TERMINATION_SIGNALS) {
+            try {
+                process.on(signal, onProcessTerminationSignal);
+                installedTerminationSignals.add(signal);
+            } catch (_error) {
+                // Some Node/platform combinations do not expose every named signal.
+            }
+        }
+    } else if (!signalsRequired && installedTerminationSignals.size > 0) {
+        removeCoordinatorSignalListeners();
+    }
+
+    const exitListenerRequired = activeChildren.size > 0;
+    if (exitListenerRequired && !processExitListenerInstalled) {
+        process.once('exit', onProcessExit);
+        processExitListenerInstalled = true;
+    } else if (!exitListenerRequired && processExitListenerInstalled) {
+        process.removeListener('exit', onProcessExit);
+        processExitListenerInstalled = false;
+    }
+}
+
+function releaseManagedChild(entry: ManagedChildProcess): void {
+    if (entry.released) {
+        return;
+    }
+    // The coordinator owns the lifetime of an active ChildProcess. Do not retain
+    // a bare PID after close: operating systems can reuse it for an unrelated
+    // process, while intentionally detached descendants are outside this active
+    // launch contract.
+    entry.released = true;
+    if (entry.forceKillHandle) {
+        clearTimeout(entry.forceKillHandle);
+        entry.forceKillHandle = null;
+    }
+    entry.resolveClosed();
+    activeChildren.delete(entry);
+    synchronizeCoordinatorListeners();
+}
+
+function registerManagedChild(child: ChildProcess): ManagedChildProcess {
+    let resolveClosed = function (): void {};
+    const closed = new Promise<void>(function (resolve) {
+        resolveClosed = resolve;
+    });
+    const entry: ManagedChildProcess = {
+        child,
+        closed,
+        resolveClosed,
+        gracefulTerminationStarted: false,
+        forceTermination: null,
+        forceKillHandle: null,
+        released: false
+    };
+    activeChildren.add(entry);
+    synchronizeCoordinatorListeners();
+    return entry;
+}
+
+function boundedChildCleanup(entries: readonly ManagedChildProcess[]): Promise<void> {
+    const cleanup = Promise.allSettled(entries.map(async function (entry) {
+        await terminateManagedChild(entry, true);
+        await entry.closed;
+    })).then(function () {});
+    return new Promise(function (resolve) {
+        let finished = false;
+        const timeoutHandle = setTimeout(function () {
+            if (finished) return;
+            finished = true;
+            for (const entry of entries) {
+                if (!entry.released && process.platform !== 'win32') {
+                    killPosixProcessGroup(entry.child, 'SIGKILL');
+                }
+            }
+            resolve();
+        }, SUBPROCESS_TERMINATION_TIMEOUT_MS);
+        cleanup.then(function () {
+            if (finished) return;
+            finished = true;
+            clearTimeout(timeoutHandle);
+            resolve();
+        });
+    });
+}
+
+export function computeTerminationSignalExitCode(signal: NodeJS.Signals | null): number {
+    if (!signal) {
+        return 130;
+    }
+    return 128 + (SIGNAL_EXIT_CODE_MAP[signal] ?? 2);
+}
+
+function onProcessTerminationSignal(signal: NodeJS.Signals): void {
+    if (terminationCleanup) {
+        return;
+    }
+    acceptingChildren = false;
+    terminationCleanup = boundedChildCleanup([...activeChildren]);
+    if (subprocessSignalHandler) {
+        subprocessSignalHandler(signal, terminationCleanup);
+        return;
+    }
+    void terminationCleanup.then(function () {
+        process.exit(computeTerminationSignalExitCode(signal));
+    });
+}
+
+function onProcessExit(): void {
+    processExitListenerInstalled = false;
+    if (terminationCleanup) {
+        // Signal cleanup already owns termination and its deadline. Re-entering the
+        // synchronous exit fallback here would make the signal path unbounded.
+        return;
+    }
+    for (const entry of activeChildren) {
+        if (process.platform === 'win32') {
+            // The exit event cannot await asynchronous cleanup. Keep this synchronous
+            // tree kill isolated from signal handling, which completes cleanup first.
+            killWindowsProcessTreeOnExit(entry.child);
+        } else {
+            killPosixProcessGroup(entry.child, 'SIGKILL');
+        }
+    }
+}
+
+export function registerSubprocessSignalHandler(handler: SubprocessSignalHandler): () => void {
+    if (subprocessSignalHandler && subprocessSignalHandler !== handler) {
+        throw new Error('A subprocess signal handler is already registered.');
+    }
+    subprocessSignalHandler = handler;
+    synchronizeCoordinatorListeners();
+    return function dispose(): void {
+        if (subprocessSignalHandler !== handler) {
             return;
         }
-        terminateWindowsProcessTreeFallback(child.pid);
-        try { child.kill('SIGKILL'); } catch (_killError) { /* Already exited. */ }
+        subprocessSignalHandler = null;
+        if (activeChildren.size === 0) {
+            acceptingChildren = true;
+            terminationCleanup = null;
+        }
+        synchronizeCoordinatorListeners();
+    };
+}
+
+function assertChildAdmission(): void {
+    if (!acceptingChildren) {
+        throw new Error('Cannot start a child process while process termination is in progress.');
     }
 }
 
@@ -437,6 +734,12 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
     const inheritStdio = opts.inheritStdio || false;
 
     return new Promise(function (resolve, reject) {
+        try {
+            assertChildAdmission();
+        } catch (error) {
+            reject(error);
+            return;
+        }
         if (signal && signal.aborted) {
             return resolve({
                 exitCode: 1,
@@ -475,6 +778,7 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
         }
 
         const child: ChildProcess = childProcess.spawn(command, args, spawnOpts);
+        const managedChild = registerManagedChild(child);
         notifySpawnedProcess(opts.onSpawn, {
             pid: child.pid ?? null,
             command,
@@ -490,37 +794,11 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
             if (signal) {
                 signal.removeEventListener('abort', onAbort);
             }
-            process.removeListener('exit', onParentExit);
-            for (const terminationSignal of PROCESS_TERMINATION_SIGNALS) {
-                process.removeListener(terminationSignal, onParentTermination);
-            }
+            releaseManagedChild(managedChild);
         }
 
         function killChild(force = false): void {
-            if (!child.pid) {
-                return;
-            }
-            try {
-                if (process.platform === 'win32') {
-                    killWindowsProcessTree(child);
-                } else {
-                    try {
-                        process.kill(-child.pid, force ? 'SIGKILL' : 'SIGTERM');
-                    } catch (_e) {
-                        child.kill(force ? 'SIGKILL' : 'SIGTERM');
-                    }
-                    if (!force) {
-                        const forceKillHandle = setTimeout(function () {
-                            try { process.kill(-child.pid!, 'SIGKILL'); } catch (_e) {
-                                try { child.kill('SIGKILL'); } catch (_inner) { /* already exited */ }
-                            }
-                        }, 3000);
-                        forceKillHandle.unref?.();
-                    }
-                }
-            } catch (_e) {
-                // Child already exited
-            }
+            void terminateManagedChild(managedChild, force);
         }
 
         function settle(result: SpawnStreamedResult): void {
@@ -536,25 +814,8 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
             killChild();
         }
 
-        function onParentExit(): void {
-            if (!settled) {
-                killChild(true);
-            }
-        }
-
-        function onParentTermination(): void {
-            if (!settled) {
-                killChild(true);
-            }
-            process.exit(1);
-        }
-
         if (signal) {
             signal.addEventListener('abort', onAbort, { once: true });
-        }
-        process.once('exit', onParentExit);
-        for (const terminationSignal of PROCESS_TERMINATION_SIGNALS) {
-            process.once(terminationSignal, onParentTermination);
         }
 
         if (timeoutMs > 0) {
@@ -656,6 +917,12 @@ export function spawnShellCommand(
     const commandLine = buildWindowsBatchCommandLine(batchExecutablePath, args);
 
     return new Promise(function (resolve, reject) {
+        try {
+            assertChildAdmission();
+        } catch (error) {
+            reject(error);
+            return;
+        }
         if (signal && signal.aborted) {
             return resolve({
                 exitCode: 1,
@@ -695,6 +962,7 @@ export function spawnShellCommand(
         const shellCommand = getWindowsCommandProcessor();
         const shellArgs = ['/d', '/s', '/c', commandLine];
         const child: ChildProcess = childProcess.spawn(shellCommand, shellArgs, spawnOptions);
+        const managedChild = registerManagedChild(child);
         notifySpawnedProcess(opts.onSpawn, {
             pid: child.pid ?? null,
             command: shellCommand,
@@ -710,21 +978,11 @@ export function spawnShellCommand(
             if (signal) {
                 signal.removeEventListener('abort', onAbort);
             }
-            process.removeListener('exit', onParentExit);
-            for (const terminationSignal of PROCESS_TERMINATION_SIGNALS) {
-                process.removeListener(terminationSignal, onParentTermination);
-            }
+            releaseManagedChild(managedChild);
         }
 
-        function killChild(_force = false): void {
-            if (!child.pid) {
-                return;
-            }
-            try {
-                killWindowsProcessTree(child);
-            } catch (_e) {
-                // Child already exited
-            }
+        function killChild(force = false): void {
+            void terminateManagedChild(managedChild, force);
         }
 
         function settle(result: SpawnStreamedResult): void {
@@ -740,25 +998,8 @@ export function spawnShellCommand(
             killChild();
         }
 
-        function onParentExit(): void {
-            if (!settled) {
-                killChild(true);
-            }
-        }
-
-        function onParentTermination(): void {
-            if (!settled) {
-                killChild(true);
-            }
-            process.exit(1);
-        }
-
         if (signal) {
             signal.addEventListener('abort', onAbort, { once: true });
-        }
-        process.once('exit', onParentExit);
-        for (const terminationSignal of PROCESS_TERMINATION_SIGNALS) {
-            process.once(terminationSignal, onParentTermination);
         }
 
         if (timeoutMs > 0) {
