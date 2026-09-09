@@ -285,6 +285,7 @@ function buildReviewFindingSections(closeout: FinalCloseoutArtifact): {
     if (!summary) {
         return sections;
     }
+    const materializedFollowUpTaskIds = new Set<string>();
     for (const lane of summary.lanes) {
         for (const id of lane.remaining_blocker_ids) {
             const retainedItem = lane.findings.find((item) => (
@@ -310,7 +311,11 @@ function buildReviewFindingSections(closeout: FinalCloseoutArtifact): {
                     + (item.follow_up_task_id ? ` -> ${item.follow_up_task_id}` : '')
                 ));
             }
-            if (hasMaterializedFollowUp) {
+            if (
+                hasMaterializedFollowUp
+                && !materializedFollowUpTaskIds.has(item.follow_up_task_id!)
+            ) {
+                materializedFollowUpTaskIds.add(item.follow_up_task_id!);
                 appendFinalUserReportSectionEntry(sections.followUps, () => item.follow_up_task_id!);
             }
             if (missingRequiredFollowUp) {

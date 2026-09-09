@@ -224,6 +224,41 @@ describe('gates/task-audit-summary', () => {
             assert.ok(renderedReport.includes('WARNING: review-output validation caused a full reviewer relaunch for test.'));
             assert.ok(renderedReport.includes('WARNING: review accepted, but timing looked unusual'));
 
+            const groupedFollowUpLane = closeout.review_findings_audit!.lanes[0];
+            const groupedFollowUpReport = formatFinalUserReport({
+                ...closeout,
+                review_findings_audit: {
+                    ...closeout.review_findings_audit!,
+                    lanes: [
+                        {
+                            ...groupedFollowUpLane,
+                            findings: [
+                                groupedFollowUpLane.findings[0],
+                                {
+                                    ...groupedFollowUpLane.findings[0],
+                                    id: 'F-002',
+                                    title: 'Second finding assigned to the same grouped follow-up'
+                                }
+                            ]
+                        },
+                        {
+                            ...groupedFollowUpLane,
+                            review_type: 'security',
+                            findings: [{
+                                ...groupedFollowUpLane.findings[0],
+                                id: 'F-003',
+                                title: 'Finding from another lane assigned to the same grouped follow-up'
+                            }]
+                        }
+                    ]
+                }
+            });
+            assert.equal(
+                groupedFollowUpReport.match(/^T-AUDIT-1-F1$/gmu)?.length,
+                1,
+                'the follow-up section should list each grouped task once'
+            );
+
             const pendingFollowUpReport = formatFinalUserReport({
                 ...closeout,
                 review_findings_audit: {
