@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { seedCompiledRuntimeLayout } from '../bundle-source-fixtures';
 
 import {
     BASE_REQUIRED_PATHS,
@@ -456,15 +457,10 @@ test('compiled-only deployment requires runtime files, not TypeScript sources', 
             .map(directory => `garda-agent-orchestrator/dist/src/${directory}`)
     ];
     try {
+        seedCompiledRuntimeLayout(path.join(tmpDir, 'garda-agent-orchestrator'));
         const requiredPaths = buildRequiredPaths({});
         for (const runtimePath of runtimePaths) {
             assert.ok(requiredPaths.includes(runtimePath), `Required compiled runtime: ${runtimePath}`);
-            const absolutePath = path.join(tmpDir, runtimePath);
-            if (runtimePath.endsWith('.js')) {
-                fs.writeFileSync(absolutePath, 'module.exports = {};\n', 'utf8');
-            } else {
-                fs.mkdirSync(absolutePath, { recursive: true });
-            }
         }
         assert.equal(fs.existsSync(path.join(tmpDir, 'garda-agent-orchestrator', 'src')), false);
         assert.deepEqual(detectMissingPaths(tmpDir, runtimePaths), []);

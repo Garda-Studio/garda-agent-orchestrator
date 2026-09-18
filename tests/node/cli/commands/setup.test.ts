@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { createBundleSourceFixture } from '../../bundle-source-fixtures';
 
 import {
     SETUP_DEFINITIONS,
@@ -33,23 +34,6 @@ const TEST_COMPILE_GATE_COMMAND = 'npm run build';
 
 function stripAnsi(value: string): string {
     return value.replace(/\x1B\[[0-9;?]*[ -/]*[@-~]/g, '');
-}
-
-function findRepoRoot(startDir: string): string {
-    let current = path.resolve(startDir);
-    while (true) {
-        const packageJsonPath = path.join(current, 'package.json');
-        const cliPath = path.join(current, 'bin', 'garda.js');
-        if (fs.existsSync(packageJsonPath) && fs.existsSync(cliPath)) {
-            return current;
-        }
-
-        const parent = path.dirname(current);
-        if (parent === current) {
-            throw new Error(`Could not resolve repository root from: ${startDir}`);
-        }
-        current = parent;
-    }
 }
 
 function materializeProjectCommands(bundleRoot: string): void {
@@ -385,8 +369,8 @@ test('getSetupAnswerDefaults reconciles preserved active agent files with an exp
     }
 });
 
-test('handleSetup --no-prompt preserves existing active agent files and rematerializes their entrypoints', async () => {
-    const repoRoot = findRepoRoot(__dirname);
+test('handleSetup --no-prompt preserves existing active agent files and rematerializes their entrypoints', async (context) => {
+    const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-preserve-active-files-'));
     const answersDir = path.join(workspaceRoot, DEFAULT_BUNDLE_NAME, 'runtime');
@@ -433,8 +417,8 @@ test('handleSetup --no-prompt preserves existing active agent files and remateri
     }
 });
 
-test('handleSetup runs contract migrations before verify so stale live task workflow snippets do not block refresh', async () => {
-    const repoRoot = findRepoRoot(__dirname);
+test('handleSetup runs contract migrations before verify so stale live task workflow snippets do not block refresh', async (context) => {
+    const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-contract-migrations-'));
     const bundleRoot = path.join(workspaceRoot, DEFAULT_BUNDLE_NAME);
@@ -477,8 +461,8 @@ test('handleSetup runs contract migrations before verify so stale live task work
     }
 });
 
-test('handleSetup preserves project-specific compile gate command during contract migration refresh', async () => {
-    const repoRoot = findRepoRoot(__dirname);
+test('handleSetup preserves project-specific compile gate command during contract migration refresh', async (context) => {
+    const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-compile-gate-preserve-'));
     const bundleRoot = path.join(workspaceRoot, DEFAULT_BUNDLE_NAME);
@@ -539,8 +523,8 @@ test('handleSetup preserves project-specific compile gate command during contrac
     }
 });
 
-test('handleSetup preserves explicit workflow-config full-suite settings across repeated refreshes', async () => {
-    const repoRoot = findRepoRoot(__dirname);
+test('handleSetup preserves explicit workflow-config full-suite settings across repeated refreshes', async (context) => {
+    const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-workflow-config-preserve-'));
     const workflowConfigPath = path.join(workspaceRoot, DEFAULT_BUNDLE_NAME, 'live', 'config', 'workflow-config.json');
@@ -611,8 +595,8 @@ test('handleSetup preserves explicit workflow-config full-suite settings across 
     }
 });
 
-test('handleSetup migrates exact legacy generated project-memory maintenance default during refresh', async () => {
-    const repoRoot = findRepoRoot(__dirname);
+test('handleSetup migrates exact legacy generated project-memory maintenance default during refresh', async (context) => {
+    const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-project-memory-legacy-default-'));
     const workflowConfigPath = path.join(workspaceRoot, DEFAULT_BUNDLE_NAME, 'live', 'config', 'workflow-config.json');
@@ -673,8 +657,8 @@ test('handleSetup migrates exact legacy generated project-memory maintenance def
     }
 });
 
-test('handleSetup migrates exact legacy scope-budget guard default during refresh', async () => {
-    const repoRoot = findRepoRoot(__dirname);
+test('handleSetup migrates exact legacy scope-budget guard default during refresh', async (context) => {
+    const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-scope-budget-legacy-default-'));
     const workflowConfigPath = path.join(workspaceRoot, DEFAULT_BUNDLE_NAME, 'live', 'config', 'workflow-config.json');
@@ -732,8 +716,8 @@ test('handleSetup migrates exact legacy scope-budget guard default during refres
     }
 });
 
-test('handleSetup preserves custom scope-budget guard settings during refresh', async () => {
-    const repoRoot = findRepoRoot(__dirname);
+test('handleSetup preserves custom scope-budget guard settings during refresh', async (context) => {
+    const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-scope-budget-custom-'));
     const workflowConfigPath = path.join(workspaceRoot, DEFAULT_BUNDLE_NAME, 'live', 'config', 'workflow-config.json');
@@ -802,8 +786,8 @@ test('handleSetup preserves custom scope-budget guard settings during refresh', 
     }
 });
 
-test('handleSetup preserves disabled scope-budget guard settings during refresh', async () => {
-    const repoRoot = findRepoRoot(__dirname);
+test('handleSetup preserves disabled scope-budget guard settings during refresh', async (context) => {
+    const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-scope-budget-disabled-'));
     const workflowConfigPath = path.join(workspaceRoot, DEFAULT_BUNDLE_NAME, 'live', 'config', 'workflow-config.json');
@@ -872,8 +856,8 @@ test('handleSetup preserves disabled scope-budget guard settings during refresh'
     }
 });
 
-test('handleSetup migrates exact legacy review-cycle guard default during refresh', async () => {
-    const repoRoot = findRepoRoot(__dirname);
+test('handleSetup migrates exact legacy review-cycle guard default during refresh', async (context) => {
+    const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-review-cycle-legacy-default-'));
     const workflowConfigPath = path.join(workspaceRoot, DEFAULT_BUNDLE_NAME, 'live', 'config', 'workflow-config.json');
@@ -934,8 +918,8 @@ test('handleSetup migrates exact legacy review-cycle guard default during refres
     }
 });
 
-test('handleSetup preserves custom review-cycle guard limits during refresh', async () => {
-    const repoRoot = findRepoRoot(__dirname);
+test('handleSetup preserves custom review-cycle guard limits during refresh', async (context) => {
+    const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-review-cycle-custom-'));
     const workflowConfigPath = path.join(workspaceRoot, DEFAULT_BUNDLE_NAME, 'live', 'config', 'workflow-config.json');
@@ -996,8 +980,8 @@ test('handleSetup preserves custom review-cycle guard limits during refresh', as
     }
 });
 
-test('handleSetup reports workflow-config template fallback when preserved refresh finds a missing live config', async () => {
-    const repoRoot = findRepoRoot(__dirname);
+test('handleSetup reports workflow-config template fallback when preserved refresh finds a missing live config', async (context) => {
+    const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-workflow-config-missing-diagnostic-'));
     const workflowConfigPath = path.join(workspaceRoot, DEFAULT_BUNDLE_NAME, 'live', 'config', 'workflow-config.json');
@@ -1039,8 +1023,8 @@ test('handleSetup reports workflow-config template fallback when preserved refre
     }
 });
 
-test('handleSetup reports workflow-config template fallback when preserved refresh finds invalid JSON', async () => {
-    const repoRoot = findRepoRoot(__dirname);
+test('handleSetup reports workflow-config template fallback when preserved refresh finds invalid JSON', async (context) => {
+    const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-workflow-config-invalid-diagnostic-'));
     const workflowConfigPath = path.join(workspaceRoot, DEFAULT_BUNDLE_NAME, 'live', 'config', 'workflow-config.json');
@@ -1079,8 +1063,8 @@ test('handleSetup reports workflow-config template fallback when preserved refre
     }
 });
 
-test('handleSetup reports workflow-config template fallback when preserved refresh finds a non-object config', async () => {
-    const repoRoot = findRepoRoot(__dirname);
+test('handleSetup reports workflow-config template fallback when preserved refresh finds a non-object config', async (context) => {
+    const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-workflow-config-non-object-diagnostic-'));
     const workflowConfigPath = path.join(workspaceRoot, DEFAULT_BUNDLE_NAME, 'live', 'config', 'workflow-config.json');
@@ -1119,8 +1103,8 @@ test('handleSetup reports workflow-config template fallback when preserved refre
     }
 });
 
-test('handleSetup materializes strict_sequential review_execution_policy for a fresh workspace', async () => {
-    const repoRoot = findRepoRoot(__dirname);
+test('handleSetup materializes strict_sequential review_execution_policy for a fresh workspace', async (context) => {
+    const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-workflow-config-fresh-default-'));
     const workflowConfigPath = path.join(workspaceRoot, DEFAULT_BUNDLE_NAME, 'live', 'config', 'workflow-config.json');
@@ -1159,8 +1143,8 @@ test('handleSetup materializes strict_sequential review_execution_policy for a f
     }
 });
 
-test('handleSetup prints optional quality checks notice once when workflow config is seeded', async () => {
-    const repoRoot = findRepoRoot(__dirname);
+test('handleSetup prints optional quality checks notice once when workflow config is seeded', async (context) => {
+    const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-optional-checks-notice-'));
 
@@ -1189,8 +1173,8 @@ test('handleSetup prints optional quality checks notice once when workflow confi
     }
 });
 
-test('handleSetup preserves custom optional quality check rules across refreshes', async () => {
-    const repoRoot = findRepoRoot(__dirname);
+test('handleSetup preserves custom optional quality check rules across refreshes', async (context) => {
+    const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-optional-checks-refresh-'));
     const workflowConfigPath = path.join(workspaceRoot, DEFAULT_BUNDLE_NAME, 'live', 'config', 'workflow-config.json');
@@ -1243,8 +1227,8 @@ test('handleSetup preserves custom optional quality check rules across refreshes
     }
 });
 
-test('handleSetup preserves legacy workflow-config omission for review_execution_policy across repeated refreshes', async () => {
-    const repoRoot = findRepoRoot(__dirname);
+test('handleSetup preserves legacy workflow-config omission for review_execution_policy across repeated refreshes', async (context) => {
+    const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-workflow-config-legacy-compat-'));
     const workflowConfigPath = path.join(workspaceRoot, DEFAULT_BUNDLE_NAME, 'live', 'config', 'workflow-config.json');

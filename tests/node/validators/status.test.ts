@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { seedCompiledRuntimeLayout } from '../bundle-source-fixtures';
 
 import {
     getStatusSnapshot,
@@ -260,8 +261,8 @@ function seedMatchingSourceCheckoutParity(tmpDir: string) {
     writeStatusFixtureFile(path.join(tmpDir, 'VERSION'), '1.0.0\n');
     writeStatusFixtureFile(path.join(tmpDir, 'src', 'index.ts'), 'export {};\n');
     writeStatusFixtureFile(path.join(tmpDir, 'bin', 'garda.js'), '#!/usr/bin/env node\n');
-    writeStatusFixtureFile(path.join(tmpDir, 'dist', 'src', 'index.js'), 'module.exports = {};\n');
-    writeStatusFixtureFile(path.join(bundlePath, 'dist', 'src', 'index.js'), 'module.exports = {};\n');
+    seedCompiledRuntimeLayout(tmpDir);
+    seedCompiledRuntimeLayout(bundlePath);
     writeStatusFixtureFile(path.join(bundlePath, 'template', 'AGENTS.md'), '# template\n');
     writeStatusFixtureFile(path.join(bundlePath, 'template', 'entrypoints', 'canonical-rule-index.md'), '# template\n');
     writeStatusFixtureFile(path.join(bundlePath, 'template', 'config', 'garda.config.json'), '{}\n');
