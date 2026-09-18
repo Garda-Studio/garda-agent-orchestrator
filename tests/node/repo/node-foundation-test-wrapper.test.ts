@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { beforeEach, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
@@ -7,6 +7,9 @@ import * as path from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import type { BuildResult } from '../../../scripts/node-foundation/build';
+import { isolateTestRunnerEnvironment, TEST_RUNNER_ENV_KEYS } from '../process-environment-fixtures';
+
+beforeEach((context) => (context as TestContext).after(isolateTestRunnerEnvironment()));
 
 const testModule = require('../../../scripts/node-foundation/test') as typeof import('../../../scripts/node-foundation/test');
 const mutableBuildModule = require('../../../scripts/node-foundation/build') as typeof import('../../../scripts/node-foundation/build') & {
@@ -82,6 +85,32 @@ function createCompletingNodeTestChild(output = 'ok\n'): childProcess.ChildProce
     });
     return events;
 }
+
+test('isolated runner fixtures ignore hostile inherited controls and restore them after execution', async (context) => {
+    const { buildResult, cleanup } = createBuildResultFixture();
+    context.after(cleanup);
+    const originalArgv = process.argv;
+    context.after(() => { process.argv = originalArgv; });
+    for (const key of TEST_RUNNER_ENV_KEYS) process.env[key] = `hostile ${key}`;
+    const inherited = Object.fromEntries(TEST_RUNNER_ENV_KEYS.map((key) => [key, process.env[key]]));
+    const restore = isolateTestRunnerEnvironment();
+    let observedArgs: string[] = [];
+    context.mock.method(mutableBuildModule, 'buildNodeFoundation', () => buildResult);
+    context.mock.method(mutableBuildModule, 'buildPublishRuntime', () => buildResult);
+    context.mock.method(mutableChildProcess, 'spawn', (_command: string, args: readonly string[] = []) => {
+        observedArgs = Array.from(args);
+        return createCompletingNodeTestChild();
+    });
+    try {
+        process.argv = ['node', 'scripts/node-foundation/test.js', 'tests/node/cli/commands/gates.test.ts'];
+        assert.equal(await testModule.runNodeFoundationTests(), 0);
+        assert.deepEqual(observedArgs, ['--test', toNodeTestFileArg(buildResult,
+            path.join(buildResult.buildRoot, 'tests', 'node', 'cli', 'commands', 'gates.test.js'))]);
+    } finally {
+        restore();
+    }
+    assert.deepEqual(Object.fromEntries(TEST_RUNNER_ENV_KEYS.map((key) => [key, process.env[key]])), inherited);
+});
 
 test('runNodeFoundationTests forwards test-name-pattern args before compiled test files', async () => {
     const { buildResult, cleanup } = createBuildResultFixture();

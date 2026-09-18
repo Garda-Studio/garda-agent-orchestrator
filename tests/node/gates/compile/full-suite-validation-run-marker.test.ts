@@ -1,9 +1,23 @@
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { createDeadProcessInspectionFixture, isolateTestRunnerEnvironment } from '../../process-environment-fixtures';
+
+beforeEach((context) => {
+    const testContext = context as TestContext;
+    testContext.after(isolateTestRunnerEnvironment());
+    const mutableChildProcess = require('node:child_process') as typeof childProcess;
+    const originalExecFileSync = mutableChildProcess.execFileSync;
+    testContext.mock.method(mutableChildProcess, 'execFileSync', (...args: Parameters<typeof childProcess.execFileSync>) => {
+        assert.notEqual(path.basename(String(args[0])), 'ps', 'Marker fixtures must not scan the host process table');
+        assert.doesNotMatch(JSON.stringify(args.slice(0, 2)), /Get-CimInstance|Win32_Process/iu,
+            'Marker fixtures must inject process snapshots instead of scanning the host');
+        return originalExecFileSync(...args);
+    });
+});
 
 import {
     parsePosixProcessRows,
@@ -147,10 +161,7 @@ describe('full-suite validation run marker', () => {
                 preflightPath,
                 preflightSha256,
                 null,
-                {
-                    isProcessAlive: () => false,
-                    processTableSnapshot: { entries: [], warning: null }
-                }
+                createDeadProcessInspectionFixture()
             );
             assert.equal(inspection?.markerState, 'STALE');
             assert.match(String(inspection?.markerStateReason), /cycle_binding\.task_id mismatch/u);
@@ -163,10 +174,7 @@ describe('full-suite validation run marker', () => {
                 preflightPath,
                 clearDeadMarker: true,
                 operatorConfirmed: 'yes',
-                inspectionOptions: {
-                    isProcessAlive: () => false,
-                    processTableSnapshot: { entries: [], warning: null }
-                }
+                inspectionOptions: createDeadProcessInspectionFixture()
             });
             assert.ok(recovery.outputLines.some((line) => line.includes('Status: CLEARED_STALE_MARKER')));
             assert.equal(fs.existsSync(path.join(reviewsRoot, `${taskId}-full-suite-validation.json`)), false);
@@ -217,14 +225,16 @@ describe('full-suite validation run marker', () => {
                 taskId,
                 preflightPath,
                 preflightSha256,
-                '2026-06-07T02:00:00.000Z'
+                '2026-06-07T02:00:00.000Z',
+                createDeadProcessInspectionFixture()
             );
             const current = readInterruptedFullSuiteValidationRunMarker(
                 repoRoot,
                 taskId,
                 preflightPath,
                 preflightSha256,
-                '2026-06-07T01:00:00.000Z'
+                '2026-06-07T01:00:00.000Z',
+                createDeadProcessInspectionFixture()
             );
             const recoverable = readRecoverableFullSuiteValidationRunMarker(
                 repoRoot,
@@ -232,10 +242,7 @@ describe('full-suite validation run marker', () => {
                 preflightPath,
                 preflightSha256,
                 '2026-06-07T02:00:00.000Z',
-                {
-                    isProcessAlive: () => false,
-                    processTableSnapshot: { entries: [], warning: null }
-                }
+                createDeadProcessInspectionFixture()
             );
 
             assert.equal(stale, null);
@@ -333,7 +340,8 @@ describe('full-suite validation run marker', () => {
                 taskId,
                 preflightPath,
                 clearDeadMarker: true,
-                operatorConfirmed: 'yes'
+                operatorConfirmed: 'yes',
+                inspectionOptions: createDeadProcessInspectionFixture()
             });
 
             assert.equal(result.exitCode, 0);
@@ -467,7 +475,8 @@ describe('full-suite validation run marker', () => {
                 taskId,
                 preflightPath,
                 clearDeadMarker: true,
-                operatorConfirmed: 'yes'
+                operatorConfirmed: 'yes',
+                inspectionOptions: createDeadProcessInspectionFixture()
             });
 
             assert.equal(result.exitCode, 0);
@@ -540,7 +549,8 @@ describe('full-suite validation run marker', () => {
                 taskId,
                 preflightPath,
                 clearDeadMarker: true,
-                operatorConfirmed: 'yes'
+                operatorConfirmed: 'yes',
+                inspectionOptions: createDeadProcessInspectionFixture()
             });
 
             assert.equal(result.exitCode, 0);
@@ -589,7 +599,8 @@ describe('full-suite validation run marker', () => {
                 taskId,
                 preflightPath,
                 clearDeadMarker: true,
-                operatorConfirmed: 'yes'
+                operatorConfirmed: 'yes',
+                inspectionOptions: createDeadProcessInspectionFixture()
             }));
 
             assert.equal(fs.existsSync(markerPath), true);
@@ -627,7 +638,8 @@ describe('full-suite validation run marker', () => {
             const result = await runFullSuiteRunMarkerRecoveryCommand({
                 repoRoot,
                 taskId,
-                preflightPath
+                preflightPath,
+                inspectionOptions: createDeadProcessInspectionFixture()
             });
 
             assert.equal(result.exitCode, 0);
@@ -656,7 +668,8 @@ describe('full-suite validation run marker', () => {
                     preflightPath,
                     artifactPath: markerPath,
                     clearDeadMarker: true,
-                    operatorConfirmed: 'yes'
+                    operatorConfirmed: 'yes',
+                    inspectionOptions: createDeadProcessInspectionFixture()
                 }),
                 /ArtifactPath must not equal the full-suite run marker path/u
             );
@@ -823,10 +836,7 @@ it('blocks cleanup when no child pid was recorded before the gate exited', async
             preflightPath,
             clearDeadMarker: true,
             operatorConfirmed: 'yes',
-            inspectionOptions: {
-                isProcessAlive: () => false,
-                processTableSnapshot: { entries: [], warning: null }
-            }
+            inspectionOptions: createDeadProcessInspectionFixture()
         });
 
         assert.notEqual(result.exitCode, 0);
@@ -898,10 +908,7 @@ it('blocks cleanup when a live marker replaces the inspected stale marker', asyn
                 preflightPath,
                 clearDeadMarker: true,
                 operatorConfirmed: 'yes',
-                inspectionOptions: {
-                    isProcessAlive: () => false,
-                    processTableSnapshot: { entries: [], warning: null }
-                },
+                inspectionOptions: createDeadProcessInspectionFixture(),
                 beforeCleanupLock: () => {
                     writeCurrentMarker({
                         repoRoot,
@@ -969,10 +976,7 @@ it('clears a dead stale marker with exact binding evidence and is idempotent', a
                 preflightPath,
                 clearDeadMarker: true,
                 operatorConfirmed: 'yes',
-                inspectionOptions: {
-                    isProcessAlive: () => false,
-                    processTableSnapshot: { entries: [], warning: null }
-                }
+                inspectionOptions: createDeadProcessInspectionFixture()
             });
 
             assert.equal(result.exitCode, 0);
@@ -997,7 +1001,8 @@ it('clears a dead stale marker with exact binding evidence and is idempotent', a
                 taskId,
                 preflightPath,
                 clearDeadMarker: true,
-                operatorConfirmed: 'yes'
+                operatorConfirmed: 'yes',
+                inspectionOptions: createDeadProcessInspectionFixture()
             });
             assert.equal(repeated.exitCode, 0);
             assert.ok(repeated.outputLines.some((line) => line.includes('Status: MISSING')));
@@ -1036,10 +1041,7 @@ it('finalizes prepared cleanup evidence after the final artifact write is interr
                 preflightPath,
                 clearDeadMarker: true,
                 operatorConfirmed: 'yes',
-                inspectionOptions: {
-                    isProcessAlive: () => false,
-                    processTableSnapshot: { entries: [], warning: null }
-                },
+                inspectionOptions: createDeadProcessInspectionFixture(),
                 beforeFinalArtifactWrite: () => {
                     throw new Error('simulated final artifact write interruption');
                 }
@@ -1058,7 +1060,8 @@ it('finalizes prepared cleanup evidence after the final artifact write is interr
             taskId,
             preflightPath,
             clearDeadMarker: true,
-            operatorConfirmed: 'yes'
+            operatorConfirmed: 'yes',
+            inspectionOptions: createDeadProcessInspectionFixture()
         });
         assert.equal(repeated.exitCode, 0);
         assert.ok(repeated.outputLines.some((line) => line.includes('Status: MISSING')));
@@ -1092,7 +1095,8 @@ it('reports invalid marker state without clearing unverifiable ownership', async
                 taskId,
                 preflightPath,
                 clearDeadMarker: true,
-                operatorConfirmed: 'yes'
+                operatorConfirmed: 'yes',
+                inspectionOptions: createDeadProcessInspectionFixture()
             });
 
             assert.notEqual(result.exitCode, 0);

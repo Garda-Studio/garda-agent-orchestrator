@@ -1,8 +1,11 @@
-import { afterEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { isolateTestRunnerEnvironment } from '../../process-environment-fixtures';
+
+beforeEach((context) => (context as TestContext).after(isolateTestRunnerEnvironment()));
 
 import { EXIT_GATE_FAILURE } from '../../../../src/cli/exit-codes';
 import { UNCONFIGURED_FULL_SUITE_VALIDATION_COMMAND } from '../../../../src/core/constants';
