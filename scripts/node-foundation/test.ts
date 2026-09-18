@@ -11,6 +11,7 @@ import {
     hasGreenNodeTestSummaryContent
 } from '../../src/core/node-foundation-test-shard-log-analysis';
 import { buildNodeFoundation, buildPublishRuntime, BuildResult } from './build';
+import { ShardOutputForwarder } from './shard-output-forwarding';
 
 const NODE_FOUNDATION_TEST_SHARDS_ENV = 'GARDA_NODE_FOUNDATION_TEST_SHARDS';
 const NODE_FOUNDATION_TEST_SHARD_LOG_DIR_ENV = 'GARDA_NODE_FOUNDATION_TEST_SHARD_LOG_DIR';
@@ -1270,31 +1271,6 @@ function resolveShardLogDir(repoRoot: string, buildRoot: string, requestedShardL
     return path.join(buildRoot, 'test-shard-logs', `run-${process.pid}`);
 }
 
-function writeShardOutput(
-    stream: NodeJS.ReadableStream | null | undefined,
-    logStream: fs.WriteStream,
-    consoleStream: NodeJS.WritableStream,
-    onData?: () => void
-): void {
-    if (!stream) {
-        return;
-    }
-    stream.on('data', (chunk: Buffer | string) => {
-        if (onData) {
-            onData();
-        }
-        logStream.write(chunk);
-        consoleStream.write(chunk);
-    });
-}
-
-function writeShardDiagnostic(logStream: fs.WriteStream, line: string, emitToConsole: boolean): void {
-    logStream.write(`${line}\n`);
-    if (emitToConsole) {
-        console.error(line);
-    }
-}
-
 function killShardChildTree(child: childProcess.ChildProcess): string {
     if (process.platform === 'win32' && child.pid) {
         try {
@@ -1370,6 +1346,25 @@ function runNodeTestShard(
         });
         let exitCode = 1;
         let exitSignal: NodeJS.Signals | null = null;
+        let finishing = false;
+        let outputFailed = false;
+        const output = new ShardOutputForwarder(logStream, process.stdout, process.stderr, (error) => {
+            if (settled) return;
+            outputFailed = true;
+            output.diagnostic(`Node test output forwarding failed: ${error.message}`, process.stderr);
+            if (exitCode === 0) exitCode = 1;
+            killShardChildTree(child);
+            scheduleCleanupGrace();
+            finishShard();
+        });
+        logStream.once('error', () => {
+            if (settled || outputFailed) return;
+            outputFailed = true;
+            if (exitCode === 0) exitCode = 1;
+            killShardChildTree(child);
+            scheduleCleanupGrace();
+            finishShard();
+        });
 
         function cleanupTimers(): void {
             if (timeoutHandle) {
@@ -1393,19 +1388,20 @@ function runNodeTestShard(
                 + `command=${JSON.stringify(childCommand)} argv=${JSON.stringify(childArgs)} log=${logPath}`;
         }
 
-        function finishShard(): void {
+        function settleShard(): void {
             if (settled) {
                 return;
             }
             settled = true;
             cleanupTimers();
+            output.cancel();
             const durationMs = Math.max(1, Date.now() - startedAt);
             console.log(formatNodeFoundationTestMarker(
                 NODE_FOUNDATION_TEST_MARKERS.SHARD_DONE,
                 `${shardIndex + 1}/${shardCount} exit=${exitCode} `
                 + `duration_ms=${durationMs} timed_out=${timedOut} signal=${exitSignal ?? 'none'} log=${logPath}`
             ));
-            logStream.end(() => resolve({
+            resolve({
                 exitCode,
                 durationMs,
                 shardFiles,
@@ -1413,7 +1409,45 @@ function runNodeTestShard(
                 shardCount,
                 logPath,
                 timedOut
-            }));
+            });
+        }
+
+        function finishShard(force = false): void {
+            if (settled || (finishing && !force)) return;
+            finishing = true;
+            if (heartbeatHandle) { clearInterval(heartbeatHandle); heartbeatHandle = null; }
+            if (force) {
+                output.cancel();
+                if (logStream.destroyed) { settleShard(); return; }
+                if (!logStream.writableEnded) endShardLog();
+                cleanupGraceHandle = setTimeout(() => {
+                    logStream.destroy();
+                    settleShard();
+                }, NODE_FOUNDATION_TEST_SHARD_CLEANUP_GRACE_MS);
+                return;
+            }
+            void output.flush().then(() => {
+                if (settled) return;
+                output.cancel();
+                endShardLog();
+            }, () => {
+                if (settled) return;
+                if (exitCode === 0) exitCode = 1;
+                scheduleCleanupGrace();
+                if (logStream.destroyed) settleShard();
+                else endShardLog();
+            });
+        }
+
+        function endShardLog(): void {
+            logStream.end((error?: Error | null) => {
+                if (error) {
+                    outputFailed = true;
+                    if (exitCode === 0) exitCode = 1;
+                    output.diagnostic(`Node test log finalization failed: ${error.message}`, process.stderr);
+                }
+                settleShard();
+            });
         }
 
         function scheduleCleanupGrace(): void {
@@ -1424,15 +1458,14 @@ function runNodeTestShard(
                 if (settled) {
                     return;
                 }
-                writeShardDiagnostic(
-                    logStream,
+                output.diagnostic(
                     formatNodeFoundationTestMarker(
                         NODE_FOUNDATION_TEST_MARKERS.SHARD_CLEANUP_GRACE_EXPIRED,
                         `${shardIndex + 1}/${shardCount} ${buildProgressFields()}`
                     ),
-                    true
+                    process.stderr
                 );
-                finishShard();
+                finishShard(true);
             }, NODE_FOUNDATION_TEST_SHARD_CLEANUP_GRACE_MS);
         }
 
@@ -1455,13 +1488,12 @@ function runNodeTestShard(
                 timedOut = true;
                 exitCode = 1;
                 const cleanupMethod = killShardChildTree(child);
-                writeShardDiagnostic(
-                    logStream,
+                output.diagnostic(
                     formatNodeFoundationTestMarker(
                         NODE_FOUNDATION_TEST_MARKERS.SHARD_TIMEOUT,
                         `${shardIndex + 1}/${shardCount} ${buildProgressFields()} cleanup=${cleanupMethod}`
                     ),
-                    true
+                    process.stderr
                 );
                 scheduleCleanupGrace();
             }, runtimeConfig.timeoutMs);
@@ -1472,36 +1504,33 @@ function runNodeTestShard(
             scheduleIdleTimeout();
         }
 
-        writeShardOutput(child.stdout, logStream, process.stdout, () => {
-            recordProgress();
-        });
-        writeShardOutput(child.stderr, logStream, process.stderr, () => {
-            recordProgress();
-        });
+        output.forward(child.stdout, process.stdout, recordProgress);
+        output.forward(child.stderr, process.stderr, recordProgress);
         scheduleIdleTimeout();
         if (runtimeConfig.heartbeatMs > 0) {
             heartbeatHandle = setInterval(() => {
-                if (settled) {
+                if (settled || finishing) {
                     return;
                 }
-                writeShardDiagnostic(
-                    logStream,
+                output.diagnostic(
                     formatNodeFoundationTestMarker(
                         NODE_FOUNDATION_TEST_MARKERS.SHARD_HEARTBEAT,
                         `${shardIndex + 1}/${shardCount} ${buildProgressFields()}`
                     ),
-                    false
+                    null
                 );
             }, runtimeConfig.heartbeatMs);
         }
         child.once('error', (error) => {
+            if (settled) return;
             settled = true;
             cleanupTimers();
+            output.cancel();
             logStream.destroy();
             reject(error);
         });
         child.once('exit', (code, signal) => {
-            if (!timedOut) {
+            if (!timedOut && !outputFailed) {
                 exitCode = code == null ? 1 : code;
             }
             exitSignal = signal;
