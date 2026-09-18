@@ -72,3 +72,11 @@ test('bundle fixtures fail clearly when a required tracked source asset is missi
     });
     assert.throws(() => createBundleSourceFixture(context, sourceRoot), /Tracked bundle fixture input is missing: VERSION/u);
 });
+
+test('bundle fixtures reject a missing tracked source entrypoint even when a tracked launcher exists', (context) => {
+    const sourceRoot = createTrackedSource(context);
+    childProcess.execFileSync('git', ['rm', '--cached', '--quiet', 'src/bin/garda.ts'], {
+        cwd: sourceRoot, windowsHide: true, timeout: 30_000
+    });
+    assert.throws(() => createBundleSourceFixture(context, sourceRoot), /Tracked bundle fixture input is missing: src\/bin\/garda\.ts/u);
+});

@@ -44,6 +44,9 @@ export function createBundleSourceFixture(context: TestContext, sourceRoot = fin
     const trackedPaths = childProcess.execFileSync('git', ['ls-files', '-z', '--', ...DEPLOY_ITEMS, SOURCE_CLI_ENTRYPOINT], {
         cwd: sourceRoot, encoding: 'utf8', windowsHide: true, timeout: 30_000, maxBuffer: 4 * 1024 * 1024
     }).split('\0').filter(Boolean);
+    if (!trackedPaths.includes(SOURCE_CLI_ENTRYPOINT)) {
+        throw new Error(`Tracked bundle fixture input is missing: ${SOURCE_CLI_ENTRYPOINT}`);
+    }
     for (const relativePath of trackedPaths) {
         const sourcePath = path.join(sourceRoot, relativePath);
         if (!fs.lstatSync(sourcePath).isFile()) {
