@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed bounded DELTA remediation after test-only fixes to source-linked review findings. Baselines now preserve the authenticated originating coverage contract, required reinspection includes the prior finding targets, and unresolved legacy mappings choose FULL before rerun setup. Actual changed-file classification and dependency-based lane preservation remain unchanged.
+
 - Hardened authenticated replacement cleanup so an artifact-removal failure still releases the remaining descriptors and retains the original operation error. Failed removal quarantines and substituted artifacts remain preserved for recovery.
 
 - Fixed review rerouting after terminal cleanup removes a completed launch control file whose result has already been recorded. Active, unconsumed, mismatched, and malformed launch evidence still blocks replacement.

@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 
 import { serializeRedactedJson, sha256RedactedJsonPayload } from '../../../../src/core/redaction';
+import { buildReviewCoverageContract } from '../../../../src/gates/review/review-coverage-ledger';
 import type { ReviewFindingsDispositionArtifact } from '../../../../src/gates/review/review-findings-disposition-artifact';
 import type { ReviewFindingsValidationArtifact } from '../../../../src/gates/review/review-findings-validation-artifact';
 import {
@@ -63,6 +64,9 @@ function buildFixture(root: string) {
     const preflightSha256 = hash('preflight');
     const reviewScopeSha256 = hash('review-scope');
     const codeScopeSha256 = hash('code-scope');
+    const originCoverageContract = buildReviewCoverageContract({
+        reviewType, changedFiles: ['src/example.ts', 'src/second.ts']
+    });
     const validationResult = {
         status: 'accepted' as const,
         accepted: true,
@@ -119,7 +123,7 @@ function buildFixture(root: string) {
                 code_scope_sha256: codeScopeSha256
             },
             tree: { review_tree_state_sha256: treeSha256 },
-            coverage_contract_sha256: hash('coverage')
+            coverage_contract_sha256: originCoverageContract.contract_sha256
         }
     };
     const validationArtifact: ReviewFindingsValidationArtifact = {
@@ -264,6 +268,7 @@ function buildFixture(root: string) {
         dispositionArtifactSha256,
         dispositionArtifact,
         profilePolicySnapshot: { snapshot_hash: profilePolicySnapshotSha256 },
+        originCoverageContract,
         deltaBase
     };
     const baseline = buildReviewRemediationBaselineArtifact(builderOptions);
@@ -321,6 +326,41 @@ describe('review remediation baseline', () => {
             { path: 'src/example.ts', line: 17, item_ids: ['F-001'] },
             { path: 'src/second.ts', line: 23, item_ids: ['F-002'] }
         ]);
+    });
+
+    it('rejects a substituted origin FILE mapping even when its own contract hash is valid', () => {
+        const fixture = buildFixture(createTempRoot());
+        const forgedCoverage = buildReviewCoverageContract({
+            reviewType: fixture.reviewType, changedFiles: ['src/example.ts', 'tests/node/example.test.ts']
+        });
+        assert.throws(() => buildReviewRemediationBaselineArtifact({
+            ...fixture.builderOptions, originCoverageContract: forgedCoverage
+        }), /authenticated findings-validation coverage hash/u);
+        const forgedBaseline = { ...fixture.baseline, origin_coverage_contract: forgedCoverage };
+        const forgedSha256 = writeJson(fixture.baselinePath, forgedBaseline);
+        const result = validateReviewRemediationBaselineArtifact({
+            artifactPath: fixture.baselinePath, expectedArtifactSha256: forgedSha256,
+            expectedTaskId: fixture.taskId, expectedReviewType: fixture.reviewType
+        });
+        assert.equal(result.valid, false);
+        assert.match(result.violations.join('\n'), /authenticated findings-validation coverage hash/u);
+    });
+
+    it('rejects malformed and foreign-lane origin coverage contracts', () => {
+        const fixture = buildFixture(createTempRoot());
+        for (const contract of [
+            null,
+            { ...fixture.baseline.origin_coverage_contract, obligations: [null] },
+            buildReviewCoverageContract({ reviewType: 'security', changedFiles: ['src/example.ts', 'src/second.ts'] })
+        ]) {
+            const artifact = { ...fixture.baseline, origin_coverage_contract: contract };
+            const artifactSha256 = writeJson(fixture.baselinePath, artifact);
+            const result = validateReviewRemediationBaselineArtifact({
+                artifactPath: fixture.baselinePath, expectedArtifactSha256: artifactSha256,
+                expectedTaskId: fixture.taskId, expectedReviewType: fixture.reviewType
+            });
+            assert.equal(result.valid, false);
+        }
     });
 
     it('preserves legacy baseline construction until delta capture wiring is supplied', () => {

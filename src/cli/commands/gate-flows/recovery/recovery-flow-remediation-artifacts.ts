@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { writeReviewArtifactJson } from '../../../../gate-runtime/review-artifacts';
 import { getWorkspaceSnapshot } from '../../../../gates/compile/compile-gate';
 import * as gateHelpers from '../../../../gates/shared/helpers';
-import { normalizeChangedFiles } from './recovery-flow-shared';
+import { excludeUnchangedDirtyWorkspaceBaselineFiles, normalizeChangedFiles } from './recovery-flow-shared';
 import type {
     ResolvedReplayScope,
     ReviewRemediationScopeBoundary
@@ -11,16 +11,22 @@ import type {
 
 export function resolveCurrentRemediationChangedFiles(
     repoRoot: string,
-    replayScope: ResolvedReplayScope
+    replayScope: ResolvedReplayScope,
+    dirtyWorkspaceBaseline?: unknown
 ): string[] {
     const detectionSource = replayScope.useStaged
         ? (replayScope.includeUntracked ? 'git_staged_plus_untracked' : 'git_staged_only')
         : 'git_auto';
     const includeUntracked = replayScope.includeUntracked ?? !replayScope.useStaged;
     const snapshot = getWorkspaceSnapshot(repoRoot, detectionSource, includeUntracked, []);
+    const currentTaskChanges = excludeUnchangedDirtyWorkspaceBaselineFiles(
+        repoRoot,
+        snapshot.changed_files as string[],
+        dirtyWorkspaceBaseline
+    );
     return normalizeChangedFiles([
         ...(replayScope.changedFiles ?? []),
-        ...(snapshot.changed_files as string[])
+        ...currentTaskChanges
     ]);
 }
 

@@ -154,6 +154,22 @@ garda gate materialize-review-follow-up-tasks \
 
 ## Selective Remediation and Recovery
 
+For DELTA remediation, new baselines preserve `origin_coverage_contract`, bound
+to the accepted findings-validation coverage hash. Lane-local `FILE-NNN` ids
+are resolved from that contract, never from task-wide file ordering. The
+reviewer's required targets include the actual changed files plus the original
+targets of blocking findings, all within the authenticated task scope. Thus a
+test-only fix can recheck its source-linked finding without pretending the
+source changed. The reviewer must cover every assigned target and explicitly
+inspect each resolvable prior finding.
+
+The actual content diff still determines remediation category and affected
+review lanes. Mandatory reinspection does not invalidate independent lanes;
+the frozen dependency graph still controls downstream invalidation. When an
+original file mapping cannot be resolved safely, including legacy baselines
+without that mapping, Garda selects FULL before rerun setup rather than failing
+while building a DELTA context.
+
 After a `fix_now` finding, change only the required implementation/test scope
 and rerun `garda next-step <task-id>`. When recovery is eligible, the navigator
 prints one `restart-review-cycle` command. Its impact analysis classifies the

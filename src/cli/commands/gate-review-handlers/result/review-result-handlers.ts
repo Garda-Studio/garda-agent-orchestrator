@@ -352,6 +352,7 @@ function buildReviewRemediationBaselineEvidence(options: {
     validationEvidence: ReviewFindingsValidationEvidence;
     dispositionEvidence: ReviewFindingsDispositionEvidence;
     profilePolicySnapshot: unknown;
+    originCoverageContract?: ReviewCoverageContract;
 }): ReviewRemediationBaselineEvidence {
     const artifactPath = getReviewRemediationBaselineArtifactPath(options.reviewArtifactPath);
     const deltaBase = buildReviewRemediationDeltaBase({
@@ -376,6 +377,7 @@ function buildReviewRemediationBaselineEvidence(options: {
         dispositionArtifactSha256: options.dispositionEvidence.artifactSha256,
         dispositionArtifact: options.dispositionEvidence.payload,
         profilePolicySnapshot: options.profilePolicySnapshot,
+        originCoverageContract: options.originCoverageContract,
         deltaBase
     });
     const artifactSha256 = sha256RedactedJsonPayload(payload);
@@ -2520,7 +2522,8 @@ async function recordReviewReceiptFromArtifacts(options: {
             receiptSha256: receiptPayloadSha256,
             validationEvidence: findingsValidationEvidence,
             dispositionEvidence: findingsDispositionEvidence,
-            profilePolicySnapshot: preflight.profile_policy_snapshot
+            profilePolicySnapshot: preflight.profile_policy_snapshot,
+            originCoverageContract: parsedReviewContext.coverage_contract as ReviewCoverageContract | undefined
         });
     }
     const completedLaunchRestoration = findingsValidationEvidence?.payload.validation_result.accepted

@@ -2613,7 +2613,7 @@ describe('cli/commands/gates – review-cycle restart suite', () => {
         assert.match(output, /ReviewExecutionPolicy: parallel_all/);
         assert.match(output, /PreparedReviewTypes: none/);
         assert.match(output, /LaunchRequiredReviewTypes: none/);
-        assert.match(output, /PendingReviewTypes: code, security, refactor, test/);
+        assert.match(output, /PendingReviewTypes: code, security, refactor, performance, test/);
         assert.match(output, /PendingReason: Review context cannot be built because required trust-boundary analysis is/);
         assert.equal(
             fs.existsSync(path.join(getReviewsRoot(repoRoot), `${taskId}-performance-review-context.json`)),

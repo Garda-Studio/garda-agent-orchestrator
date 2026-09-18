@@ -1,7 +1,10 @@
 import { sha256RedactedJsonPayload } from '../../core/redaction';
 import { isPlainRecord } from '../../core/records';
 import { normalizePath } from '../shared/helpers';
-import { parseReviewEvidenceLocation } from '../review/review-coverage-ledger';
+import {
+    buildReviewRemediationFindingScope,
+    getReviewRemediationFindingPaths
+} from './review-remediation-finding-scope';
 import {
     validateReviewRemediationBaselineArtifact,
     type ReviewRemediationBaselineArtifact
@@ -267,30 +270,6 @@ function readAuthenticatedBaseline(
     return validation.artifact;
 }
 
-function findingEvidencePaths(
-    finding: ReviewRemediationBaselineArtifact['accepted_findings'][number]
-): string[] {
-    return finding.evidence_locations.flatMap((location) => {
-        const parsed = parseReviewEvidenceLocation(location);
-        return parsed ? [normalizePath(parsed.filePath)] : [];
-    });
-}
-
-function findingCoverageObligationPaths(
-    finding: ReviewRemediationBaselineArtifact['accepted_findings'][number]
-): string[] | null {
-    const hasFileObligations = finding.coverage_obligation_ids.some((obligationId) => (
-        /^FILE-\d{3}$/u.test(String(obligationId || '').trim())
-    ));
-    if (!hasFileObligations) {
-        return [];
-    }
-    // FILE-nnn is indexed by the originating lane's coverage contract, not by the
-    // task-wide delta-base file order. Until that authenticated mapping is carried
-    // by the baseline, keep the finding protected instead of guessing a path.
-    return null;
-}
-
 export function buildReviewRemediationFindingReconciliation(
     baseline: ReviewRemediationBaselineArtifact | null,
     deltaTargets: readonly string[]
@@ -302,12 +281,8 @@ export function buildReviewRemediationFindingReconciliation(
     const resolvableFindingIds = normalizeCanonicalIds(
         baseline?.accepted_findings
             .filter((finding) => {
-                const evidencePaths = normalizeCanonicalPaths(findingEvidencePaths(finding));
-                const obligationPaths = findingCoverageObligationPaths(finding);
-                return evidencePaths.length > 0
-                    && obligationPaths !== null
-                    && [...evidencePaths, ...obligationPaths]
-                        .every((filePath) => targetSet.has(filePath));
+                const paths = getReviewRemediationFindingPaths(baseline!, finding);
+                return paths !== null && paths.every((filePath) => targetSet.has(filePath));
             })
             .map((finding) => finding.id) ?? []
     );
@@ -437,8 +412,18 @@ export function getRemediationContractClassificationBindingViolations(
             if (baselineBindingViolation) {
                 violations.push(baselineBindingViolation);
             }
-            const expectedTargets = normalizeCanonicalPaths(deltaScope.required_delta_targets);
-            const expectedContextFiles = normalizeCanonicalPaths(deltaScope.optional_context_files);
+            let findingScope;
+            try {
+                findingScope = buildReviewRemediationFindingScope(
+                    readAuthenticatedBaseline(delta), deltaScope.required_delta_targets, deltaScope.full_review_scope
+                );
+            } catch (error: unknown) {
+                violations.push(error instanceof Error ? error.message : String(error));
+                return violations;
+            }
+            violations.push(...findingScope.fullReviewReasons);
+            const expectedTargets = normalizeCanonicalPaths(findingScope.requiredTargets);
+            const expectedContextFiles = normalizeCanonicalPaths(findingScope.contextFiles);
             const expectedDelta = {
                 origin_review_type: delta.review_type,
                 classification_sha256: delta.classification_sha256,
@@ -541,12 +526,15 @@ export function buildReviewRemediationReviewContract(options: {
     ) {
         throw new Error('Remediation delta does not match the current task, review lane, or authoritative decision.');
     }
-    const requiredDeltaTargets = mode === 'DELTA'
-        ? normalizeCanonicalPaths(delta!.scope.required_delta_targets)
-        : [];
-    const contextFiles = mode === 'DELTA'
-        ? normalizeCanonicalPaths(delta!.scope.optional_context_files)
-        : [];
+    const baseline = mode === 'DELTA' ? readAuthenticatedBaseline(delta!) : null;
+    const findingScope = baseline && delta ? buildReviewRemediationFindingScope(
+        baseline, delta.scope.required_delta_targets, delta.scope.full_review_scope
+    ) : null;
+    if (findingScope?.fullReviewReasons.length) {
+        throw new Error(`DELTA review cannot cover the blocking baseline: ${findingScope.fullReviewReasons.join(' ')}`);
+    }
+    const requiredDeltaTargets = normalizeCanonicalPaths(findingScope?.requiredTargets ?? []);
+    const contextFiles = normalizeCanonicalPaths(findingScope?.contextFiles ?? []);
     if (mode === 'DELTA') {
         const deltaFullReviewScope = normalizeCanonicalPaths(delta!.scope.full_review_scope);
         const fullScopeSet = new Set(fullReviewScope);
@@ -568,7 +556,6 @@ export function buildReviewRemediationReviewContract(options: {
             );
         }
     }
-    const baseline = mode === 'DELTA' ? readAuthenticatedBaseline(delta!) : null;
     const base: ReviewRemediationReviewContractBase | null = baseline && delta
         ? {
             baseline_artifact_path: normalizePath(delta.baseline.artifact_path),

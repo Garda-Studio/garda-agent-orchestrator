@@ -11,6 +11,7 @@ import {
 } from '../../policy/review-remediation-mode-policy';
 import { normalizePath } from '../shared/helpers';
 import { isTestLikeRemediationPath } from './review-remediation-scope-boundary';
+import { buildReviewRemediationFindingScope } from './review-remediation-finding-scope';
 import {
     buildReviewRemediationDeltaBase,
     getReviewRemediationDeltaBaseViolations,
@@ -393,6 +394,10 @@ function classifyFromBaseline(options: {
         : categories.length === 1
             ? `all changed files classify as ${categories[0]}`
             : `mixed remediation delta classes: ${categories.join(', ')}`;
+    const findingScope = buildReviewRemediationFindingScope(
+        options.baseline, fileDeltas.map((entry) => entry.path), allFiles
+    );
+    fullReviewReasons.push(...findingScope.fullReviewReasons);
     const normalizedFullReviewReasons = [...new Set(fullReviewReasons)].sort();
     const reason = normalizedFullReviewReasons.length > 0
         ? `${baseReason}; FULL review required: ${normalizedFullReviewReasons.join('; ')}`

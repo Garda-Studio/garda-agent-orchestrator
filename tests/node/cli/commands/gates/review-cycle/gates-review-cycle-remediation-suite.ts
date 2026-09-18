@@ -3375,7 +3375,15 @@ describe('cli/commands/gates – review-cycle remediation scope expansion', {
         );
         assert.deepEqual(
             (remediationArtifact.remediation_scope as Record<string, unknown>).expanded_files,
-            ['tests/baseline.test.ts']
+            []
+        );
+        assert.deepEqual(
+            (remediationArtifact.remediation_scope as Record<string, unknown>).current_changed_files,
+            ['src/app.ts']
+        );
+        assert.equal(
+            fs.readFileSync(path.join(repoRoot, 'tests', 'baseline.test.ts'), 'utf8'),
+            'it("unrelated", () => {});\n'
         );
 
         fs.rmSync(repoRoot, { recursive: true, force: true });

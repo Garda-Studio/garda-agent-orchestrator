@@ -6,6 +6,11 @@ import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { sha256RedactedJsonPayload } from '../../../../src/core/redaction';
+import {
+    buildDefaultReviewRemediationRerunPolicy,
+    resolveReviewRemediationRerunLanes
+} from '../../../../src/policy/review-remediation-rerun-policy';
+import { buildReviewCoverageContract } from '../../../../src/gates/review/review-coverage-ledger';
 import type { ReviewFindingsDispositionArtifact } from '../../../../src/gates/review/review-findings-disposition-artifact';
 import type { ReviewFindingsValidationArtifact } from '../../../../src/gates/review/review-findings-validation-artifact';
 import {
@@ -236,6 +241,10 @@ function writeJson(filePath: string, payload: unknown): string {
 
 function createAuthenticatedDeltaFixture(options: {
     changedFile?: 'source' | 'test';
+    withFileObligation?: boolean;
+    withOriginCoverage?: boolean;
+    findingEvidence?: string[];
+    fileObligationIds?: string[];
 } = {}): {
     root: string;
     delta: ReviewRemediationDeltaClassification;
@@ -252,6 +261,10 @@ function createAuthenticatedDeltaFixture(options: {
     const reviewArtifactSha256 = sha256Text('review-artifact');
     const findingsReportSha256 = sha256Text('findings-report');
     const profilePolicySnapshotSha256 = sha256Text('profile-policy-snapshot');
+    const originCoverageContract = buildReviewCoverageContract({
+        reviewType: REVIEW_TYPE,
+        changedFiles: ['src/app.ts']
+    });
     const sourcePath = path.join(root, 'src', 'app.ts');
     const testPath = path.join(root, 'tests', 'app.test.ts');
     fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
@@ -276,8 +289,8 @@ function createAuthenticatedDeltaFixture(options: {
                     severity: 'high' as const,
                     title: 'Bound source defect',
                     description: 'The source change resolves the authenticated finding.',
-                    evidence_locations: ['src/app.ts:1'],
-                    coverage_obligation_ids: []
+                    evidence_locations: options.findingEvidence ?? ['src/app.ts:1'],
+                    coverage_obligation_ids: options.fileObligationIds ?? (options.withFileObligation ? ['FILE-001'] : [])
                 }],
                 medium: [],
                 low: []
@@ -309,7 +322,7 @@ function createAuthenticatedDeltaFixture(options: {
                 code_scope_sha256: null
             },
             tree: { review_tree_state_sha256: treeSha256 },
-            coverage_contract_sha256: sha256Text('coverage')
+            coverage_contract_sha256: originCoverageContract.contract_sha256
         }
     };
     const validationArtifact: ReviewFindingsValidationArtifact = {
@@ -424,6 +437,7 @@ function createAuthenticatedDeltaFixture(options: {
         dispositionArtifactSha256,
         dispositionArtifact,
         profilePolicySnapshot: { snapshot_hash: profilePolicySnapshotSha256 },
+        ...(options.withOriginCoverage ? { originCoverageContract } : {}),
         deltaBase
     });
     fs.copyFileSync(receiptPath, baseline.bindings.receipt.snapshot_path);
@@ -1423,7 +1437,7 @@ describe('review remediation FULL/DELTA execution contract', () => {
     });
 
     it('rejects protected fix-now findings outside DELTA targets during construction and validation', () => {
-        const protectedFixture = createAuthenticatedDeltaFixture({ changedFile: 'test' });
+        const protectedFixture = createAuthenticatedDeltaFixture({ changedFile: 'test', withFileObligation: true });
         const coveredFixture = createAuthenticatedDeltaFixture();
         try {
             const protectedDecision = decisionBinding({
@@ -1437,6 +1451,7 @@ describe('review remediation FULL/DELTA execution contract', () => {
                 baselineProfilePolicySnapshotSha256: '8'.repeat(64)
             };
             assert.deepEqual(protectedFixture.delta.scope.required_delta_targets, ['tests/app.test.ts']);
+            assert.equal(protectedFixture.delta.full_review_required, true);
             assert.throws(() => buildReviewRemediationReviewContract({
                 taskId: TASK_ID,
                 reviewType: REVIEW_TYPE,
@@ -1444,7 +1459,7 @@ describe('review remediation FULL/DELTA execution contract', () => {
                 fullReviewScope: ['src/app.ts', 'tests/app.test.ts'],
                 authoritativeDecision: protectedDecision,
                 classification: protectedClassification
-            }), /fix-now findings remain outside the covered targets: F-001/u);
+            }), /non-FULL remediation delta classification/u);
 
             const coveredDecision = decisionBinding({
                 mode: 'DELTA',
@@ -1681,6 +1696,93 @@ describe('review remediation FULL/DELTA execution contract', () => {
         assert.deepEqual(complete.resolvable_finding_ids, ['F-001', 'F-002']);
         assert.deepEqual(complete.protected_open_finding_ids, []);
         assert.deepEqual(complete.protected_fix_now_finding_ids, []);
+    });
+
+    it('includes the original finding context without reclassifying a test-only remediation', () => {
+        const fixture = createAuthenticatedDeltaFixture({
+            changedFile: 'test', withFileObligation: true, withOriginCoverage: true
+        });
+        try {
+            const decision = decisionBinding({ mode: 'DELTA', classificationSha256: fixture.delta.classification_sha256 });
+            const classification: ReviewRemediationDecisionClassification = {
+                source: 'delta', delta: fixture.delta, profilePolicySnapshot: null,
+                baselineProfilePolicySnapshotSha256: '8'.repeat(64)
+            };
+            assert.equal(fixture.delta.category, 'leaf_test');
+            assert.equal(fixture.delta.full_review_required, false);
+            assert.deepEqual(fixture.delta.changed_files, ['tests/app.test.ts']);
+            const rerun = resolveReviewRemediationRerunLanes({
+                policy: buildDefaultReviewRemediationRerunPolicy(), category: fixture.delta.category,
+                currentReviewType: REVIEW_TYPE, requiredReviews: { code: true, security: true, test: true },
+                reviewExecutionPolicyMode: 'strict_sequential'
+            });
+            assert.deepEqual(rerun.ordered_rerun_lanes, ['test']);
+            const contract = buildReviewRemediationReviewContract({
+                taskId: TASK_ID, reviewType: REVIEW_TYPE, preflightSha256: PREFLIGHT_SHA256,
+                fullReviewScope: ['src/app.ts', 'tests/app.test.ts'], authoritativeDecision: decision, classification
+            });
+            assert.deepEqual(contract.delta?.required_delta_targets, ['src/app.ts', 'tests/app.test.ts']);
+            assert.deepEqual(contract.delta?.context_files, []);
+            assert.deepEqual(contract.finding_reconciliation.resolvable_finding_ids, ['F-001']);
+            assert.deepEqual(getReviewRemediationReviewContractViolations(contract,
+                validationAuthority({ mode: 'DELTA', decision, classification })), []);
+            assert.ok(getReviewerRemediationCoverageViolations({
+                mode: 'DELTA', contract_sha256: contract.contract_sha256,
+                covered_delta_targets: ['tests/app.test.ts'], inspected_prior_finding_ids: ['F-001']
+            }, contract).some((entry) => entry.includes('exhaust every assigned delta target')));
+            assert.ok(getReviewerRemediationCoverageViolations({
+                mode: 'DELTA', contract_sha256: contract.contract_sha256,
+                covered_delta_targets: ['src/app.ts', 'tests/app.test.ts'], inspected_prior_finding_ids: []
+            }, contract).some((entry) => entry.includes('must exhaust, prior findings')));
+            const forged = rehash({
+                ...contract,
+                delta: {
+                    ...contract.delta!, required_delta_targets: ['tests/app.test.ts'],
+                    required_delta_targets_sha256: sha256RedactedJsonPayload(['tests/app.test.ts']),
+                    context_files: ['src/app.ts'], context_files_sha256: sha256RedactedJsonPayload(['src/app.ts'])
+                }
+            });
+            assert.ok(getReviewRemediationReviewContractViolations(forged,
+                validationAuthority({ mode: 'DELTA', decision, classification }))
+                .some((entry) => entry.includes('do not match the authenticated classification')));
+        } finally {
+            fs.rmSync(fixture.root, { recursive: true, force: true });
+        }
+    });
+
+    it('selects FULL early for unknown FILE ids or finding evidence outside the original task scope', () => {
+        for (const options of [
+            { fileObligationIds: ['FILE-999'] },
+            { findingEvidence: ['src/outside.ts:1'] }
+        ]) {
+            const fixture = createAuthenticatedDeltaFixture({
+                changedFile: 'test', withOriginCoverage: true, ...options
+            });
+            try {
+                assert.equal(fixture.delta.category, 'leaf_test');
+                assert.equal(fixture.delta.full_review_required, true);
+                assert.match(fixture.delta.full_review_reasons.join('\n'), /fix-now item F-001/u);
+                assert.deepEqual(fixture.delta.changed_files, ['tests/app.test.ts']);
+            } finally {
+                fs.rmSync(fixture.root, { recursive: true, force: true });
+            }
+        }
+    });
+
+    it('uses the originating lane FILE mapping, not the task-wide delta-base file order', () => {
+        const baseline = reconciliationBaseline();
+        baseline.accepted_findings = [{
+            id: 'F-003', severity: 'high', title: 'Lane-specific obligation',
+            description: 'The evidence and originating FILE obligation refer to different files.',
+            evidence_locations: ['src/covered.ts:40'], coverage_obligation_ids: ['FILE-001']
+        }];
+        Object.assign(baseline, { origin_coverage_contract: buildReviewCoverageContract({
+            reviewType: REVIEW_TYPE, changedFiles: ['src/uncovered.ts']
+        }) });
+        assert.deepEqual(buildReviewRemediationFindingReconciliation(baseline,
+            ['src/covered.ts']).protected_open_finding_ids, ['F-003']);
+        assert.deepEqual(buildReviewRemediationFindingReconciliation(baseline,
+            ['src/covered.ts', 'src/uncovered.ts']).resolvable_finding_ids, ['F-003']);
     });
 
     it('keeps FILE obligations protected without an authenticated lane-specific path mapping', () => {

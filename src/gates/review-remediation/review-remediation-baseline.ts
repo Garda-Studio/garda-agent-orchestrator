@@ -4,7 +4,11 @@ import { sha256RedactedJsonPayload } from '../../core/redaction';
 import { fileSha256 } from '../../gate-runtime/hash';
 import type { ReviewFindingPolicy } from '../../policy/profile-resolver';
 import { normalizePath } from '../shared/helpers';
-import { parseReviewEvidenceLocation } from '../review/review-coverage-ledger';
+import {
+    getReviewCoverageContractViolations,
+    parseReviewEvidenceLocation,
+    type ReviewCoverageContract
+} from '../review/review-coverage-ledger';
 import {
     REVIEW_FINDINGS_DISPOSITION_ARTIFACT_SCHEMA_VERSION,
     REVIEW_FINDINGS_DISPOSITION_ARTIFACT_TYPE,
@@ -77,6 +81,7 @@ interface ReviewRemediationBaselineArtifactCommon {
     fix_now_items_sha256: string;
     path_line_inventory: ReviewRemediationPathLineInventoryEntry[];
     path_line_inventory_sha256: string;
+    origin_coverage_contract?: ReviewCoverageContract;
     bindings: {
         receipt: ReviewRemediationSnapshotBinding;
         review_artifact: ReviewRemediationSnapshotBinding;
@@ -143,6 +148,7 @@ export interface BuildReviewRemediationBaselineOptions {
     dispositionArtifact: ReviewFindingsDispositionArtifact;
     profilePolicySnapshot: unknown;
     deltaBase?: ReviewRemediationDeltaBase;
+    originCoverageContract?: ReviewCoverageContract;
 }
 
 export interface ReviewRemediationBaselineValidationOptions {
@@ -334,6 +340,27 @@ export function getReviewRemediationBaselineSnapshotPath(artifactPath: string, a
     return String(artifactPath || '').replace(/\.json$/u, `-${artifactSha256}.json`);
 }
 
+function getOriginCoverageContractViolations(
+    value: unknown,
+    reviewType: string,
+    expectedSha256: unknown
+): string[] {
+    if (!isRecord(value) || !Array.isArray(value.obligations)
+        || !value.obligations.every((entry) => isRecord(entry) && typeof entry.target === 'string')) {
+        return ['origin_coverage_contract has invalid shape.'];
+    }
+    const obligations = value.obligations as ReviewCoverageContract['obligations'];
+    const violations = getReviewCoverageContractViolations(value, {
+        reviewType,
+        changedFiles: obligations.filter((entry) => entry.kind === 'file').map((entry) => entry.target),
+        categoryIds: obligations.filter((entry) => entry.kind === 'category').map((entry) => entry.target)
+    });
+    if (!normalizeHash(expectedSha256) || value.contract_sha256 !== normalizeHash(expectedSha256)) {
+        violations.push('origin_coverage_contract does not match the authenticated findings-validation coverage hash.');
+    }
+    return violations;
+}
+
 export function buildReviewRemediationBaselineArtifact(
     options: BuildReviewRemediationBaselineOptions & { deltaBase: ReviewRemediationDeltaBase }
 ): CurrentReviewRemediationBaselineArtifact;
@@ -399,6 +426,14 @@ export function buildReviewRemediationBaselineArtifact(
     const validationArtifactPath = requirePath(options.validationArtifactPath, 'validation artifact path');
     const dispositionArtifactPath = requirePath(options.dispositionArtifactPath, 'disposition artifact path');
     const policy = options.dispositionArtifact.policy.review_finding_policy;
+    if (options.originCoverageContract !== undefined) {
+        const violations = getOriginCoverageContractViolations(
+            options.originCoverageContract, options.reviewType, validationResult.bindings.coverage_contract_sha256
+        );
+        if (violations.length > 0) {
+            throw new Error(`Review remediation baseline origin coverage is invalid: ${violations.join(' ')}`);
+        }
+    }
     if (options.deltaBase) {
         const deltaBaseViolations = getReviewRemediationDeltaBaseViolations(options.deltaBase, {
             taskId: options.taskId,
@@ -420,6 +455,9 @@ export function buildReviewRemediationBaselineArtifact(
         fix_now_items_sha256: sha256RedactedJsonPayload(fixNowItems),
         path_line_inventory: pathLineInventory,
         path_line_inventory_sha256: sha256RedactedJsonPayload(pathLineInventory),
+        ...(options.originCoverageContract !== undefined ? {
+            origin_coverage_contract: structuredClone(options.originCoverageContract)
+        } : {}),
         bindings: {
             receipt: snapshotBinding(
                 receiptPath,
@@ -859,6 +897,12 @@ function validateAcceptedInventorySnapshotBinding(
         violations.push('bindings.findings_validation snapshot belongs to a foreign task or review type.');
     }
     const validationResult = parsed.validation_result;
+    if (artifact.origin_coverage_contract !== undefined) {
+        const validationBindings = isRecord(validationResult.bindings) ? validationResult.bindings : null;
+        violations.push(...getOriginCoverageContractViolations(
+            artifact.origin_coverage_contract, artifact.review_type, validationBindings?.coverage_contract_sha256
+        ));
+    }
     if (validationResult.status !== 'accepted' || validationResult.accepted !== true) {
         violations.push('bindings.findings_validation snapshot is not accepted evidence.');
     }

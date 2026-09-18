@@ -401,7 +401,7 @@ export async function runRestartReviewCycleCommand(
     const previousChangedFiles = normalizeChangedFiles(previousPreflight.changed_files as unknown[]);
     let currentRemediationChangedFiles = reviewEvidenceOnly
         ? []
-        : resolveCurrentRemediationChangedFiles(repoRoot, replayScope);
+        : resolveCurrentRemediationChangedFiles(repoRoot, replayScope, previousTaskMode.dirty_workspace_baseline);
     const taskModeArtifactRelativePath = resolvedTaskModePath
         ? gateHelpers.normalizePath(path.relative(repoRoot, path.resolve(resolvedTaskModePath)))
         : '';
