@@ -8,6 +8,14 @@ import {
 } from '../../gate-runtime/task-events';
 import { isAuthenticatedReviewRestartBoundary } from '../review/review-restart-boundary';
 
+const REVIEW_CORRECTION_EVENT_OUTCOMES = new Map([
+    ['REVIEW_OUTPUT_CORRECTION_REQUIRED', 'INFO'],
+    ['REVIEW_OUTPUT_CORRECTION_ONLY_INVOCATION', 'INFO'],
+    ['REVIEW_OUTPUT_CORRECTION_API_CONTINUATION', 'INFO'],
+    ['REVIEW_OUTPUT_CORRECTION_LIVE_CONTINUATION', 'INFO'],
+    ['REVIEW_OUTPUT_CORRECTION_FULL_REVIEW_REQUIRED', 'FAIL']
+]);
+
 export function reviewCorrectionWasSuperseded(
     eventsRoot: string,
     taskId: string,
@@ -33,11 +41,12 @@ export function reviewCorrectionWasSuperseded(
                 }
                 const details = isPlainRecord(event.details) ? event.details : {};
                 const integrity = isPlainRecord(event.integrity) ? event.integrity : {};
+                const correctionOutcome = REVIEW_CORRECTION_EVENT_OUTCOMES.get(String(event.event_type || ''));
                 if (
-                    event.event_type === 'REVIEW_OUTPUT_CORRECTION_FULL_REVIEW_REQUIRED'
+                    correctionOutcome
                     && event.task_id === taskId
                     && event.actor === 'orchestrator'
-                    && event.outcome === 'FAIL'
+                    && event.outcome === correctionOutcome
                     && details.task_id === taskId
                     && details.review_type === reviewType
                     && details.correction_package_sha256 === correctionSha256

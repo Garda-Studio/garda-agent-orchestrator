@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed review restarts returning to a superseded pending report correction. Navigator recovery now recognizes authenticated pending-correction events as well as exhausted-correction events, while preserving package hashes, event ordering, lane boundaries, and rejected audit evidence.
+
 - Fixed reviewer report validation rejecting focused Node `--check` syntax checks. Only the exact Node runtime option before the target is accepted; unknown options, preloads, inline code, and other runners remain rejected.
 
 - Fixed untracked binary review fixtures being decoded as text. Binary and invalid UTF-8 files remain in dirty scope but contribute no text-line budget, and scoped diffs retain their paths with an explicit binary-content marker.

@@ -1058,6 +1058,31 @@ test('readReviewArtifactState rejects malformed findings JSON instead of derivin
     writeJson(correctionPath, { state: 'FULL_REVIEW_REQUIRED', changed: true });
     assert.equal(readState().failed, true, 'Replaced correction bytes cannot inherit the old restart.');
     writeJson(correctionPath, { state: 'FULL_REVIEW_REQUIRED' });
+    for (const eventType of [
+        'REVIEW_OUTPUT_CORRECTION_REQUIRED',
+        'REVIEW_OUTPUT_CORRECTION_ONLY_INVOCATION',
+        'REVIEW_OUTPUT_CORRECTION_API_CONTINUATION',
+        'REVIEW_OUTPUT_CORRECTION_LIVE_CONTINUATION'
+    ]) {
+        writeJson(correctionPath, { state: 'REVIEW_OUTPUT_CORRECTION_REQUIRED', transport: eventType });
+        const details = {
+            task_id: 'T-100', review_type: 'code', correction_artifact_path: correctionPath,
+            correction_package_sha256: sha256File(correctionPath)
+        };
+        appendMandatoryTaskEvent(fixtureRoot, 'T-100', eventType, 'FAIL',
+            'Wrong correction outcome fixture.', details, { actor: 'orchestrator' });
+        restart();
+        assert.equal(readState().failed, true, 'A wrong outcome cannot authenticate pending correction supersession.');
+        appendMandatoryTaskEvent(fixtureRoot, 'T-100', eventType, 'INFO',
+            'Pending correction fixture.', details, { actor: 'orchestrator' });
+        restart(restartDetails, 'reviewer');
+        assert.equal(readState().failed, true, 'Pending correction still requires an orchestrator restart.');
+        restart({ ...restartDetails, invalidated_review_types: ['security'] });
+        assert.equal(readState().failed, true, 'Pending correction still requires the affected lane.');
+        restart();
+        assert.equal(readState().failed, false, eventType);
+        assert.equal(readState().receiptContractCurrent, false, 'Supersession does not produce an accepted receipt.');
+    }
     const timelinePath = path.join(fixtureRoot, 'runtime', 'task-events', 'T-100.jsonl');
     fs.appendFileSync(timelinePath, '{broken timeline}\n');
     assert.equal(readState().failed, true, 'A broken chain cannot authenticate supersession.');
