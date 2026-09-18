@@ -8,7 +8,12 @@
 
 - Fixed a `next-step` review-reuse loop when the original review falls outside the recent timeline window. Reuse now checks the complete authenticated history within existing snapshot limits and continues to reject malformed history and invalid receipt snapshots.
 
-## 1.4.0
+## 1.4.3
+
+- Fixed workspace verification for compiled-only npm installations: deployed bundles require their executable dist/src runtime instead of the intentionally excluded TypeScript src tree.
+- Added compiled-runtime layout regressions and a packed-package setup/verify smoke check. Missing runtime entrypoints and required runtime directories still fail verification.
+
+## 1.4.2
 
 ### Extensible Review Catalog
 
@@ -34,6 +39,7 @@
 
 ### Reliability And Compatibility
 
+- Fixed clean-checkout release validation on Node 22 for Windows, isolated review-catalog tests from ignored materialized configuration, serialized mutable review-cycle fixtures on concurrent Linux runners, and made the Windows package-install performance ceiling resilient to shared-runner filesystem variance without weakening the functional timeout.
 - Strengthened semantic-cycle rebind and resume transactions, mutation-journal recovery, lifecycle-event reconstruction, full-review reuse, correction rollback, materialized follow-up reconciliation, and frozen-policy handling across configuration drift.
 - Fixed review-catalog transaction cleanup so lock-release failures are reported without throwing from `finally`, while simultaneous operation and cleanup failures retain both causes.
 - Fixed downstream review and rule-pack validation for repositories that keep the task-mode artifact at an explicit non-default path; the supplied path remains constrained to the repository boundary.

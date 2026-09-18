@@ -431,7 +431,8 @@ test('BASE_REQUIRED_PATHS is a frozen non-empty array', () => {
     assert.ok(Array.isArray(BASE_REQUIRED_PATHS));
     assert.ok(BASE_REQUIRED_PATHS.length > 25);
     assert.ok(Object.isFrozen(BASE_REQUIRED_PATHS));
-    assert.ok(BASE_REQUIRED_PATHS.includes('garda-agent-orchestrator/src'));
+    assert.ok(BASE_REQUIRED_PATHS.includes('garda-agent-orchestrator/dist/src/index.js'));
+    assert.ok(!BASE_REQUIRED_PATHS.some(requiredPath => /^garda-agent-orchestrator\/src(?:\/|$)/.test(requiredPath)));
     assert.ok(BASE_REQUIRED_PATHS.includes('garda-agent-orchestrator/live/config/skills-index.json'));
     assert.ok(BASE_REQUIRED_PATHS.includes('garda-agent-orchestrator/live/config/skills-headlines.json'));
     assert.ok(!BASE_REQUIRED_PATHS.includes('garda-agent-orchestrator/live/config/optional-skill-selection-policy.json'));
@@ -442,6 +443,36 @@ test('BASE_REQUIRED_PATHS is a frozen non-empty array', () => {
     assert.ok(BASE_REQUIRED_PATHS.includes('garda-agent-orchestrator/live/skills/orchestration/skill.json'));
     assert.ok(BASE_REQUIRED_PATHS.includes('garda-agent-orchestrator/live/skills/dependency-review/skill.json'));
     assert.ok(!BASE_REQUIRED_PATHS.includes('.qwen/settings.json'));
+});
+
+test('compiled-only deployment requires runtime files, not TypeScript sources', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'compiled-layout-'));
+    const runtimePaths = [
+        'garda-agent-orchestrator/dist/src',
+        'garda-agent-orchestrator/dist/src/index.js',
+        ...['cli', 'gates', 'lifecycle', 'materialization', 'validators']
+            .map(directory => `garda-agent-orchestrator/dist/src/${directory}`)
+    ];
+    try {
+        const requiredPaths = buildRequiredPaths({});
+        for (const runtimePath of runtimePaths) {
+            assert.ok(requiredPaths.includes(runtimePath), `Required compiled runtime: ${runtimePath}`);
+            const absolutePath = path.join(tmpDir, runtimePath);
+            if (runtimePath.endsWith('.js')) {
+                fs.writeFileSync(absolutePath, 'module.exports = {};\n', 'utf8');
+            } else {
+                fs.mkdirSync(absolutePath, { recursive: true });
+            }
+        }
+        assert.equal(fs.existsSync(path.join(tmpDir, 'garda-agent-orchestrator', 'src')), false);
+        assert.deepEqual(detectMissingPaths(tmpDir, runtimePaths), []);
+        fs.unlinkSync(path.join(tmpDir, runtimePaths[1]));
+        assert.deepEqual(detectMissingPaths(tmpDir, runtimePaths), [runtimePaths[1]]);
+        fs.rmdirSync(path.join(tmpDir, runtimePaths[6]));
+        assert.deepEqual(detectMissingPaths(tmpDir, runtimePaths), [runtimePaths[1], runtimePaths[6]]);
+    } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
 });
 
 test('RULE_FILES contains all 12 standard rule files', () => {

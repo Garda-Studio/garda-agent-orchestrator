@@ -3384,6 +3384,7 @@ describe('cli/commands/gates – review-cycle remediation scope expansion', {
 });
 
 describe('cli/commands/gates – ignored changelog remediation binding', {
+    concurrency: false,
     skip: process.env[REMEDIATION_PART_ENV] !== 'ignored-changelog-binding'
 }, () => {
     it('restart-review-cycle accepts an explicit ignored changelog remediation target named by the blocker', { concurrency: false }, async () => {
@@ -3765,6 +3766,7 @@ describe('cli/commands/gates – ignored changelog remediation binding', {
 });
 
 describe('cli/commands/gates – ignored changelog remediation guards', {
+    concurrency: false,
     skip: process.env[REMEDIATION_PART_ENV] !== 'ignored-changelog-guards'
 }, () => {
     it('restart-review-cycle rejects ignored paths mentioned only as failed-review diagnostics', { concurrency: false }, async () => {

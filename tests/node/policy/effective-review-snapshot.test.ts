@@ -818,7 +818,7 @@ test('downstream routing preserves frozen policy across non-routing profile drif
         const bundleRoot = path.join(tmpRoot, 'garda-agent-orchestrator');
         const configDir = path.join(bundleRoot, 'live', 'config');
         const reviewsDir = path.join(bundleRoot, 'runtime', 'reviews');
-        fs.cpSync(path.resolve('garda-agent-orchestrator', 'live', 'config'), configDir, { recursive: true });
+        fs.cpSync(path.resolve('template', 'config'), configDir, { recursive: true });
         fs.mkdirSync(reviewsDir, { recursive: true });
 
         const frozenProfileSnapshot = buildTaskProfilePolicySnapshot(bundleRoot, 'balanced', {

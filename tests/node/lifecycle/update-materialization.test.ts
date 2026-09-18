@@ -160,9 +160,7 @@ function setupSyncedUpdateWorkspace(repoRoot: string) {
     }
 
     copyDirRecursive(path.join(repoRoot, 'bin'), path.join(bundle, 'bin'));
-    fs.mkdirSync(path.join(bundle, 'dist', 'src'), { recursive: true });
-    fs.writeFileSync(path.join(bundle, 'dist', 'src', 'index.js'), 'module.exports = {};', 'utf8');
-    copyDirRecursive(path.join(repoRoot, 'src'), path.join(bundle, 'src'));
+    copyDirRecursive(path.join(repoRoot, 'dist'), path.join(bundle, 'dist'));
     copyDirRecursive(path.join(repoRoot, 'template'), path.join(bundle, 'template'));
 
     fs.mkdirSync(path.join(bundle, 'live', 'config'), { recursive: true });

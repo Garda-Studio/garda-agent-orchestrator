@@ -74,8 +74,18 @@ function normalizeOutputPath(filePath: string): string {
     return path.resolve(filePath).replace(/\\/gu, '/');
 }
 
-function sameFileIdentity(left: fs.Stats, right: fs.Stats): boolean {
-    return left.dev === right.dev && left.ino === right.ino;
+export function sameManagedReviewCatalogFileIdentity(
+    left: Pick<fs.BigIntStats, 'dev' | 'ino'>,
+    right: Pick<fs.BigIntStats, 'dev' | 'ino'>,
+    platform: NodeJS.Platform = process.platform
+): boolean {
+    if (left.ino !== right.ino) return false;
+    if (left.dev === right.dev) return true;
+    // Node 22 on Windows can report dev=0 for path-based stats while fstat
+    // returns the volume id for the same file. Callers have already pinned the
+    // real parent directory inside the bundle, so an exact bigint inode match
+    // is sufficient only for that Windows compatibility case.
+    return platform === 'win32' && (left.dev === 0n || right.dev === 0n);
 }
 
 function ensureRealDirectoryInsideBundle(bundleRoot: string, directoryPath: string, label: string): void {
@@ -251,15 +261,15 @@ function writeExclusiveReceipt(receiptPath: string, content: string): void {
     try {
         fs.writeFileSync(fd, content, 'utf8');
         fs.fsyncSync(fd);
-        const openedIdentity = fs.fstatSync(fd);
-        const pathIdentity = fs.lstatSync(receiptPath);
+        const openedIdentity = fs.fstatSync(fd, { bigint: true });
+        const pathIdentity = fs.lstatSync(receiptPath, { bigint: true });
         if (
             !openedIdentity.isFile()
             || !pathIdentity.isFile()
             || pathIdentity.isSymbolicLink()
-            || openedIdentity.nlink !== 1
-            || pathIdentity.nlink !== 1
-            || !sameFileIdentity(openedIdentity, pathIdentity)
+            || openedIdentity.nlink !== 1n
+            || pathIdentity.nlink !== 1n
+            || !sameManagedReviewCatalogFileIdentity(openedIdentity, pathIdentity)
         ) {
             throw new Error('Review catalog confirmation receipt identity changed while writing.');
         }
@@ -425,15 +435,15 @@ function appendAuditRecord(
         0o600
     );
     try {
-        const openedIdentity = fs.fstatSync(fd);
-        const pathIdentity = fs.lstatSync(auditPath);
+        const openedIdentity = fs.fstatSync(fd, { bigint: true });
+        const pathIdentity = fs.lstatSync(auditPath, { bigint: true });
         if (
             !openedIdentity.isFile()
             || !pathIdentity.isFile()
             || pathIdentity.isSymbolicLink()
-            || openedIdentity.nlink !== 1
-            || pathIdentity.nlink !== 1
-            || !sameFileIdentity(openedIdentity, pathIdentity)
+            || openedIdentity.nlink !== 1n
+            || pathIdentity.nlink !== 1n
+            || !sameManagedReviewCatalogFileIdentity(openedIdentity, pathIdentity)
         ) {
             throw new Error('Review catalog management audit identity changed while opening.');
         }

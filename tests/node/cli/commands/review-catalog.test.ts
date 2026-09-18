@@ -16,6 +16,7 @@ import { resolveReviewCatalogRoots } from '../../../../src/cli/commands/review-c
 import {
     commitReviewCatalogManagementPlan,
     issueReviewCatalogConfirmationReceipt,
+    sameManagedReviewCatalogFileIdentity,
     type ReviewCatalogManagementPlan
 } from '../../../../src/cli/commands/review-catalog/review-catalog-transaction';
 
@@ -200,6 +201,36 @@ function createTransactionPlanFixture(workspace: TestWorkspace): {
     } as unknown as ReviewCatalogManagementPlan;
     return { catalogPath, capabilitiesPath, beforeCapabilities, beforeStateSha256, plan };
 }
+
+test('review-catalog file identity accepts the Node 22 Windows zero-device stat only for the same inode', () => {
+    const descriptorIdentity = { dev: 543659348n, ino: 105834591244330142n };
+    const node22PathIdentity = { dev: 0n, ino: descriptorIdentity.ino };
+
+    assert.equal(
+        sameManagedReviewCatalogFileIdentity(descriptorIdentity, node22PathIdentity, 'win32'),
+        true
+    );
+    assert.equal(
+        sameManagedReviewCatalogFileIdentity(descriptorIdentity, node22PathIdentity, 'linux'),
+        false
+    );
+    assert.equal(
+        sameManagedReviewCatalogFileIdentity(
+            descriptorIdentity,
+            { dev: 0n, ino: descriptorIdentity.ino + 1n },
+            'win32'
+        ),
+        false
+    );
+    assert.equal(
+        sameManagedReviewCatalogFileIdentity(
+            descriptorIdentity,
+            { dev: descriptorIdentity.dev + 1n, ino: descriptorIdentity.ino },
+            'win32'
+        ),
+        false
+    );
+});
 
 function addTransactionLockAlias(bundleRoot: string): void {
     const lockPath = path.join(bundleRoot, 'runtime', 'review-catalog-management.lock');
@@ -492,29 +523,32 @@ test('review-catalog list and validate preserve built-in compatibility when the 
 });
 
 test('review-catalog routes through parity-protected CLI dispatch', async () => {
-    const repoRoot = process.cwd();
-    const bundleRoot = path.join(repoRoot, 'garda-agent-orchestrator');
-    const argv = ['list', '--target-root', repoRoot, '--bundle-root', bundleRoot, '--json'];
-    const policy = resolveCommandParityPolicy('review-catalog', argv);
-    assert.equal(policy.mode, 'block');
-    assert.equal(path.resolve(policy.root), path.resolve(repoRoot));
-
-    const originalLog = console.log;
-    const lines: string[] = [];
-    console.log = (...items: unknown[]) => lines.push(items.join(' '));
+    const workspace = createWorkspace();
     try {
-        await dispatchCliCommand({
-            commandName: 'review-catalog',
-            commandArgv: argv,
-            packageJson: PACKAGE_JSON,
-            packageRoot: repoRoot,
-            globalFlags: { offline: false, forceNetwork: false }
-        });
-        const payload = JSON.parse(lines.join('\n'));
-        assert.equal(payload.action, 'list');
-        assert.ok(Array.isArray(payload.lanes));
+        const argv = ['list', ...sharedArgs(workspace)];
+        const policy = resolveCommandParityPolicy('review-catalog', argv);
+        assert.equal(policy.mode, 'block');
+        assert.equal(path.resolve(policy.root), path.resolve(workspace.repoRoot));
+
+        const originalLog = console.log;
+        const lines: string[] = [];
+        console.log = (...items: unknown[]) => lines.push(items.join(' '));
+        try {
+            await dispatchCliCommand({
+                commandName: 'review-catalog',
+                commandArgv: argv,
+                packageJson: PACKAGE_JSON,
+                packageRoot: process.cwd(),
+                globalFlags: { offline: false, forceNetwork: false }
+            });
+            const payload = JSON.parse(lines.join('\n'));
+            assert.equal(payload.action, 'list');
+            assert.ok(Array.isArray(payload.lanes));
+        } finally {
+            console.log = originalLog;
+        }
     } finally {
-        console.log = originalLog;
+        fs.rmSync(workspace.repoRoot, { recursive: true, force: true });
     }
 });
 

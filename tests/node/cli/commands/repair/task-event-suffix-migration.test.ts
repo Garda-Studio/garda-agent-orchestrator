@@ -8,10 +8,7 @@ import {
     applyTaskEventSuffixMigration,
     previewTaskEventSuffixMigration
 } from '../../../../../src/cli/commands/repair/task-event-suffix-migration';
-import {
-    buildEventIntegrityHash,
-    TASK_EVENT_INTEGRITY_SCHEMA_VERSION
-} from '../../../../../src/gate-runtime/timeline/task-events-helpers';
+import { buildEventIntegrityHash } from '../../../../../src/gate-runtime/timeline/task-events-helpers';
 import { inspectTaskEventFile } from '../../../../../src/gate-runtime/timeline/task-events-integrity';
 import { MAX_TASK_TIMELINE_SNAPSHOT_BYTES } from '../../../../../src/gate-runtime/timeline/task-timeline-read-snapshot';
 

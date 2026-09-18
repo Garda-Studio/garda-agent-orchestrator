@@ -122,8 +122,8 @@ test('local UI review catalog inspects and applies only the guarded previewed pl
                     expected_plan_sha256: preview.plan_sha256
                 })
             });
-            assert.equal(response.status, 200);
             const result = await response.json() as any;
+            assert.equal(response.status, 200, JSON.stringify(result));
             assert.equal(result.status, 'executed');
             assert.equal(result.transaction_status, 'APPLIED');
             assert.match(result.audit_path, /review-catalog-management-audit\.jsonl$/u);

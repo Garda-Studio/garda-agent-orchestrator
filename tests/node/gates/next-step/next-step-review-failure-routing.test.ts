@@ -1,4 +1,4 @@
-import { describe, it, after } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -188,20 +188,32 @@ function getSharedRepoTemplateRoot(): string {
     if (sharedRepoTemplateRoot) {
         return sharedRepoTemplateRoot;
     }
-    sharedRepoTemplateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-next-step-template-'));
-    populateTempRepo(sharedRepoTemplateRoot);
-    seedRunnableFocusedIntermediateCommand(sharedRepoTemplateRoot, { markTestChanged: false });
-    initGitRepo(sharedRepoTemplateRoot, {
-        gitignoreContent: 'TASK.md\ngarda-agent-orchestrator/runtime/\n'
-    });
-    return sharedRepoTemplateRoot;
+    const templateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-next-step-template-'));
+    try {
+        populateTempRepo(templateRoot);
+        seedRunnableFocusedIntermediateCommand(templateRoot, { markTestChanged: false });
+        initGitRepo(templateRoot, {
+            gitignoreContent: 'TASK.md\ngarda-agent-orchestrator/runtime/\n'
+        });
+        sharedRepoTemplateRoot = templateRoot;
+        return templateRoot;
+    } catch (error) {
+        fs.rmSync(templateRoot, { recursive: true, force: true });
+        throw error;
+    }
 }
 
 function makeTempRepo(): string {
+    const templateRoot = getSharedRepoTemplateRoot();
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-next-step-'));
-    fs.cpSync(getSharedRepoTemplateRoot(), repoRoot, { recursive: true });
-    tempRoots.push(repoRoot);
-    return repoRoot;
+    try {
+        fs.cpSync(templateRoot, repoRoot, { recursive: true });
+        tempRoots.push(repoRoot);
+        return repoRoot;
+    } catch (error) {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+        throw error;
+    }
 }
 
 function markTaskInProgress(repoRoot: string, taskId: string): void {
@@ -1507,6 +1519,10 @@ after(() => {
 
 
 describe('gates/next-step', { concurrency: 2 }, () => {
+    before(() => {
+        getSharedRepoTemplateRoot();
+    });
+
     it('routes back to failed code remediation instead of independent review lanes after a current failed code review', () => {
         const repoRoot = makeTempRepo();
         seedStartedTask(repoRoot, TASK_ID);

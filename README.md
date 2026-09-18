@@ -191,6 +191,8 @@ Full reference: **[docs/cli-reference.md](docs/cli-reference.md)**
 
 Garda was not started from scratch in this repository. Earlier versions were developed privately as shell/Python prototypes before being rewritten and consolidated into the current Node/TypeScript implementation. This public repository intentionally starts from the first stable public release, `v1.0.0`, so the earlier internal incubation history is not reflected in the public commit log.
 
+See **[CHANGELOG.md](CHANGELOG.md)** for the complete release notes.
+
 ## Important Notes
 
 - `garda setup` can collect the 6 init answers itself and write `runtime/init-answers.json` without an agent.

@@ -14,7 +14,7 @@ const CONSUMER_INSTALL_LIFECYCLE_SCRIPTS = ['preinstall', 'install', 'postinstal
 const FORBIDDEN_PUBLISHED_ROOTS = ['.node-build', '.scripts-build', 'src', 'tests'];
 const NPM_PACK_TIMEOUT_MS = 120_000;
 const NPM_INSTALL_TARBALL_TIMEOUT_MS = process.platform === 'win32' ? 300_000 : 120_000;
-const LOCAL_TARBALL_INSTALL_BUDGET_MS = 60_000;
+const LOCAL_TARBALL_INSTALL_BUDGET_MS = process.platform === 'win32' ? 180_000 : 60_000;
 const CLI_COLD_START_BUDGET_MS = 10_000;
 const CLI_FAST_PATH_MODULE_BUDGET = 500;
 const CLI_STARTUP_PROBE_PREFIX = 'GARDA_CLI_STARTUP_PROBE ';
@@ -320,6 +320,19 @@ function npmInstallTarball(tarballPath: string, installDir: string): number {
     return durationMs;
 }
 
+function runCli(cliScriptPath: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = {}): childProcess.SpawnSyncReturns<string> {
+    return childProcess.spawnSync(
+        process.execPath,
+        [cliScriptPath, ...args],
+        {
+            cwd,
+            encoding: 'utf8',
+            env: { ...buildPackagingEnv(), ...env },
+            timeout: 30_000
+        }
+    );
+}
+
 function runCliStartupProbe(
     cliScriptPath: string,
     args: string[],
@@ -502,11 +515,50 @@ test('npm pack -> install -> CLI invoke smoke test', () => {
         assert.match(statusResult.stdout, /GARDA_STATUS/);
         assert.equal(statusProbe.evidence.command_dispatch_loaded, true, 'commands must still load command-dispatch');
 
+        // A real packaged deployment must verify without development sources.
+        const setupResult = runCli(cliScript, [
+            'setup', '--target-root', workspaceRoot, '--no-prompt',
+            '--assistant-language', 'English', '--assistant-brevity', 'concise',
+            '--source-of-truth', 'Codex', '--active-agent-files', 'AGENTS.md',
+            '--enforce-no-auto-commit', 'no', '--claude-orchestrator-full-access', 'no',
+            '--token-economy-enabled', 'yes'
+        ], workspaceRoot);
+        assert.equal(setupResult.status, 0, formatSpawnFailure('packaged setup', setupResult));
+        const deployedBundleRoot = path.join(workspaceRoot, 'garda-agent-orchestrator');
+        assert.equal(fs.existsSync(path.join(deployedBundleRoot, 'src')), false);
+        fs.writeFileSync(path.join(workspaceRoot, 'index.js'), 'module.exports = {};\n', 'utf8');
+        const workflowResult = runCli(cliScript, [
+            'workflow', 'set', '--target-root', workspaceRoot,
+            '--compile-gate-command', 'node --check index.js',
+            '--operator-confirmed', 'yes', '--operator-confirmed-at-utc', new Date().toISOString()
+        ], workspaceRoot);
+        assert.equal(workflowResult.status, 0, formatSpawnFailure('packaged workflow configuration', workflowResult));
+        const verifyResult = runCli(cliScript, ['verify', '--target-root', workspaceRoot], workspaceRoot);
+        assert.equal(verifyResult.status, 0, formatSpawnFailure('packaged verify', verifyResult));
+        assert.match(verifyResult.stdout, /MissingPathCount: 0/);
+
+        const deployedRuntimeEntrypoint = path.join(deployedBundleRoot, 'dist', 'src', 'index.js');
+        fs.unlinkSync(deployedRuntimeEntrypoint);
+        // Target-root delegation would load the damaged runtime before verification.
+        const missingRuntimeResult = runCli(cliScript, ['verify', '--target-root', workspaceRoot], installRoot, {
+            GARDA_NO_DELEGATE: '1'
+        });
+        assert.equal(missingRuntimeResult.status, 4, formatSpawnFailure('missing runtime validation', missingRuntimeResult));
+        assert.match(missingRuntimeResult.stdout, /MissingPathCount: 1/);
+        assert.match(
+            `${missingRuntimeResult.stdout}\n${missingRuntimeResult.stderr}`,
+            /garda-agent-orchestrator\/dist\/src\/index\.js/,
+            'verify must identify the missing runtime entrypoint'
+        );
+
         // 5. No TypeScript stripping warnings from node_modules
         const combinedOutput = [
             versionResult.stdout, versionResult.stderr,
             helpResult.stdout, helpResult.stderr,
-            statusResult.stdout, statusResult.stderr
+            statusResult.stdout, statusResult.stderr,
+            setupResult.stdout, setupResult.stderr,
+            workflowResult.stdout, workflowResult.stderr,
+            verifyResult.stdout, verifyResult.stderr
         ].join('\n');
         assert.doesNotMatch(
             combinedOutput,

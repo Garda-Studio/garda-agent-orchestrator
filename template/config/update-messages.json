@@ -39,10 +39,10 @@
       ]
     },
     {
-      "version": "1.4.0",
+      "version": "1.4.2",
       "title": "Extensible reviews and safer remediation",
       "body": [
-        "Garda 1.4.0 adds a guarded review catalog for custom review lanes, profile states, and dependency graphs, with matching CLI and local UI controls.",
+        "Garda 1.4.2 adds a guarded review catalog for custom review lanes, profile states, and dependency graphs, with matching CLI and local UI controls.",
         "Review remediation can now reuse authenticated evidence or run a bounded DELTA review; stale, ambiguous, protected, oversized, or dependency-invalidated changes continue through a full review.",
         "After updating, run garda review-catalog validate --target-root \".\" to inspect the effective configuration. Existing workspaces remain compatible without a mandatory migration.",
         "Use garda review-catalog migrate --target-root \".\" only to preview an explicit normalized catalog for a legacy workspace; the preview is read-only and custom lanes remain disabled until deliberately configured."

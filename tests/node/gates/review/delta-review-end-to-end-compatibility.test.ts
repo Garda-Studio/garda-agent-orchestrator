@@ -21,7 +21,7 @@ function makeBundle(explicitPolicy: boolean): { root: string; bundleRoot: string
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-delta-e2e-'));
     const bundleRoot = path.join(root, 'garda-agent-orchestrator');
     const configDir = path.join(bundleRoot, 'live', 'config');
-    fs.cpSync(path.resolve('garda-agent-orchestrator', 'live', 'config'), configDir, { recursive: true });
+    fs.cpSync(path.resolve('template', 'config'), configDir, { recursive: true });
     const profiles = JSON.parse(fs.readFileSync(path.resolve('template', 'config', 'profiles.json'), 'utf8')) as {
         built_in_profiles: Record<string, Record<string, unknown>>;
     };

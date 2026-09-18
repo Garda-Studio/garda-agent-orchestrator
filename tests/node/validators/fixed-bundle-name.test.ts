@@ -25,7 +25,8 @@ test('BASE_REQUIRED_PATHS is backwards compatible with default bundle name', () 
     assert.ok(Array.isArray(BASE_REQUIRED_PATHS));
     assert.ok(BASE_REQUIRED_PATHS.length > 25);
     assert.ok(Object.isFrozen(BASE_REQUIRED_PATHS));
-    assert.ok(BASE_REQUIRED_PATHS.includes('garda-agent-orchestrator/src'));
+    assert.ok(BASE_REQUIRED_PATHS.includes('garda-agent-orchestrator/dist/src/index.js'));
+    assert.ok(!BASE_REQUIRED_PATHS.some(requiredPath => /^garda-agent-orchestrator\/src(?:\/|$)/.test(requiredPath)));
 });
 
 test('getBundlePath uses default bundle name', () => {

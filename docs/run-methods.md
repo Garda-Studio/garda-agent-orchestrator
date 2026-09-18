@@ -151,7 +151,7 @@ Direct `npm pack` and `npm pack --dry-run` run the package `prepack` lifecycle, 
 
 The primary npm release path is now tag-driven through `.github/workflows/publish.yml`, not a local `npm publish`.
 
-Before pushing `v1.4.0`, complete these repository and registry checks:
+Before pushing `v1.4.2`, complete these repository and registry checks:
 
 1. Run `npm run release:preflight` from a clean local worktree before creating the release tag. Local readiness fails if the target version tag already exists.
 2. Configure the GitHub repository Environment `npm-release` for release tags. Use selected deployment branches/tags so only tags matching `v*` can deploy to this environment. GitHub required reviewers are optional for the solo-maintainer flow and must not be treated as the release approval control when no second reviewer exists.
@@ -184,8 +184,8 @@ After npm staged approval completes, verify:
 
 ```text
 npm view garda-agent-orchestrator@latest version dist.integrity
-npm view garda-agent-orchestrator@1.4.0 version dist.integrity
-npx --yes garda-agent-orchestrator@1.4.0 --version
+npm view garda-agent-orchestrator@1.4.2 version dist.integrity
+npx --yes garda-agent-orchestrator@1.4.2 --version
 ```
 
 Also verify the package page or npm metadata shows provenance/attestation for the public package before claiming provenance in release notes. After that verification, set npm Publishing access to `Require two-factor authentication and disallow tokens`, then remove obsolete long-lived publish tokens from npm and GitHub secrets.
