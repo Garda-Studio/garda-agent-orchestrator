@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { UNCONFIGURED_COMPILE_GATE_COMMAND } from '../../core/constants';
-import { stringSha256, normalizePath, joinOrchestratorPath } from '../shared/helpers';
+import { countFileLines, stringSha256, normalizePath, joinOrchestratorPath } from '../shared/helpers';
 import { DEFAULT_GIT_TIMEOUT_MS, spawnSyncWithTimeout } from '../../core/subprocess';
 import {
     readStagedBlobFingerprints,
@@ -844,15 +844,7 @@ function countWorktreeFileLines(repoRoot: string, relativePath: string): number 
     if (!normalized || getSafeWorktreePathState(repoRoot, normalized).status !== 'file') {
         return 0;
     }
-    const filePath = path.join(repoRoot, normalized);
-    try {
-        let count = 0;
-        const content = fs.readFileSync(filePath, 'utf8');
-        for (const line of content.split(/\r?\n/)) {
-            if (line.trimEnd() !== '') count++;
-        }
-        return count;
-    } catch { return 0; }
+    return countFileLines(path.join(repoRoot, normalized));
 }
 
 function resolvePreflightContainingGitRoot(preflightPath: string): string {

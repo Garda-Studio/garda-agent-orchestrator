@@ -350,6 +350,25 @@ describe('gates/compile-gate', () => {
             }
         });
 
+        it('retains untracked binary scope and content bindings without counting binary text lines', (context) => {
+            const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'compile-gate-binary-'));
+            context.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+            initGitRepo(repoRoot);
+            const fixturePath = path.join(repoRoot, 'fixture.tgz');
+            fs.writeFileSync(fixturePath, Buffer.from('binary\0payload\nline\n'));
+            for (const source of ['git_auto', 'explicit_changed_files']) {
+                const snapshot = getWorkspaceSnapshot(repoRoot, source, true, ['fixture.tgz']);
+                assert.deepEqual(snapshot.changed_files, ['fixture.tgz']);
+                assert.equal(snapshot.changed_lines_total, 0);
+                assert.deepEqual(snapshot.changed_file_stats['fixture.tgz'], { additions: 0, deletions: 0, changed_lines: 0 });
+                fs.writeFileSync(fixturePath, Buffer.from([0xff, 0x0a, 0x61]));
+                const modified = getWorkspaceSnapshot(repoRoot, source, true, ['fixture.tgz']);
+                assert.equal(modified.changed_lines_total, 0);
+                assert.notEqual(modified.scope_content_sha256, snapshot.scope_content_sha256);
+                fs.writeFileSync(fixturePath, Buffer.from('binary\0payload\nline\n'));
+            }
+        });
+
         it('ignores generated orchestrator lock directories in workspace scope', () => {
             const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'compile-gate-locks-'));
             const repoRoot = path.join(tempDir, 'repo');
