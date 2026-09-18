@@ -5,9 +5,17 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { PassThrough } from 'node:stream';
+import { pathToFileURL } from 'node:url';
 
 import type { BuildResult } from '../../../scripts/node-foundation/build';
 import { isolateTestRunnerEnvironment, TEST_RUNNER_ENV_KEYS } from '../process-environment-fixtures';
+import {
+    addDurationReporterOptions,
+    calibrateDurationWeights,
+    createShardDurationCapture,
+    formatDurationForecastAccuracy,
+    SHARD_DURATION_OUTPUT_ENV
+} from '../../../scripts/node-foundation/test-duration-telemetry';
 
 beforeEach((context) => (context as TestContext).after(isolateTestRunnerEnvironment()));
 
@@ -1662,6 +1670,167 @@ test('duration telemetry writer preserves concurrent single-file updates', async
     } finally {
         cleanup();
     }
+});
+
+test('duration fallback calibrates size in milliseconds and resists an outlier', () => {
+    const weights = calibrateDurationWeights([
+        { durationMs: 100, fallbackSize: 10 },
+        { durationMs: 200, fallbackSize: 20 },
+        { durationMs: 10_000, fallbackSize: 10 },
+        { durationMs: null, fallbackSize: 30 }
+    ]);
+    assert.equal(weights[3].weight, 300);
+    assert.equal(weights[3].estimatedDurationMs, 300);
+    const uncalibrated = calibrateDurationWeights([{ durationMs: null, fallbackSize: 30 }]);
+    assert.equal(uncalibrated[0].weight, 30);
+    assert.equal(uncalibrated[0].estimatedDurationMs, null);
+});
+
+test('forecast accuracy exposes the audited 6.42x underestimate and includes unknown work', () => {
+    // TASK.md preserves the audited ratio; normalized times retain it without inventing original wall times.
+    const fixture = { formerlyEstimatedMs: 1_000, observedMs: 6_420 };
+    assert.match(formatDurationForecastAccuracy(fixture.formerlyEstimatedMs, fixture.observedMs),
+        /estimated_wall_error_ms=5420 observed_to_estimated_ratio=6\.42$/);
+    const calibrated = calibrateDurationWeights([
+        { durationMs: 1_000, fallbackSize: 100 }, { durationMs: null, fallbackSize: 100 }
+    ]);
+    const estimatedMs = calibrated.reduce((sum, item) => sum + item.estimatedDurationMs!, 0);
+    assert.equal(estimatedMs, 2_000);
+    assert.match(formatDurationForecastAccuracy(estimatedMs, fixture.observedMs), /observed_to_estimated_ratio=3\.21$/);
+    assert.match(formatDurationForecastAccuracy(0, fixture.observedMs), /observed_to_estimated_ratio=unavailable$/);
+});
+
+test('duration reporter options preserve version defaults, custom destinations and Windows file URLs', () => {
+    const reporter = pathToFileURL(path.join(__dirname, 'path with spaces', 'reporter.js')).href;
+    const options = ['--test-reporter', 'tap', '--test-reporter=dot',
+        '--test-reporter-destination=stderr', '--test-reporter-destination', 'custom.txt'];
+    assert.deepEqual(addDurationReporterOptions(options, reporter), [...options,
+        `--test-reporter=${reporter}`, '--test-reporter-destination=stdout']);
+    assert.deepEqual(addDurationReporterOptions(['--test-reporter=tap'], reporter), [
+        '--test-reporter=tap', '--test-reporter-destination=stdout',
+        `--test-reporter=${reporter}`, '--test-reporter-destination=stdout'
+    ]);
+    assert.deepEqual(addDurationReporterOptions(['--test-name-pattern', '--test-reporter=dot'], reporter, 24), [
+        '--test-name-pattern', '--test-reporter=dot', '--test-reporter=spec',
+        '--test-reporter-destination=stdout', `--test-reporter=${reporter}`, '--test-reporter-destination=stdout'
+    ]);
+    const invalid = ['--test-reporter=tap', '--test-reporter=dot'];
+    assert.deepEqual(addDurationReporterOptions(invalid, reporter), invalid);
+    assert.ok(addDurationReporterOptions([], reporter, 22).includes('--test-reporter=tap'));
+    assert.ok(addDurationReporterOptions([], reporter, 24).includes('--test-reporter=spec'));
+});
+
+test('duration captures accept only selected files and discard corrupt or oversized input', (context) => {
+    const { buildResult, cleanup } = createBuildResultFixture();
+    context.after(cleanup);
+    const selected = path.join(buildResult.buildRoot, buildResult.copiedFiles[0]);
+    const capture = createShardDurationCapture(buildResult.repoRoot, [selected])!;
+    fs.writeFileSync(capture.destination, [
+        { file: selected, durationMs: 100 }, { file: selected, durationMs: 200 },
+        { file: path.join(buildResult.repoRoot, 'unselected.js'), durationMs: 300 },
+        { file: selected, durationMs: -1 }
+    ].map((record) => JSON.stringify(record)).join('\n'));
+    assert.deepEqual(capture.finish(), [{ file: selected, durationMs: 200 }]);
+    assert.equal(fs.existsSync(path.dirname(capture.destination)), false);
+    for (const content of ['{bad-json', 'x'.repeat(4_097)]) {
+        const invalid = createShardDurationCapture(buildResult.repoRoot, [selected])!;
+        fs.writeFileSync(invalid.destination, content);
+        assert.deepEqual(invalid.finish(), []);
+        assert.equal(fs.existsSync(path.dirname(invalid.destination)), false);
+    }
+    assert.equal(createShardDurationCapture(path.join(buildResult.repoRoot, 'missing'), [selected]), null);
+});
+
+test('duration reporter consumes events after optional write failure and omits failed or cumulative summaries', async (context) => {
+    const { buildResult, cleanup } = createBuildResultFixture();
+    context.after(cleanup);
+    const previous = process.env[SHARD_DURATION_OUTPUT_ENV];
+    context.after(() => {
+        if (previous === undefined) delete process.env[SHARD_DURATION_OUTPUT_ENV];
+        else process.env[SHARD_DURATION_OUTPUT_ENV] = previous;
+    });
+    const reporter = require('../../../scripts/node-foundation/test-duration-reporter') as
+        typeof import('../../../scripts/node-foundation/test-duration-reporter');
+    const destination = path.join(buildResult.repoRoot, 'records.jsonl');
+    const events = [
+        { type: 'test:summary', data: { file: 'passed.js', duration_ms: 100, success: true } },
+        { type: 'test:summary', data: { file: 'failed.js', duration_ms: 200, success: false } },
+        { type: 'test:summary', data: { duration_ms: 300, success: true } },
+        { type: 'test:summary', data: { file: 'invalid.js', duration_ms: Number.NaN, success: true } }
+    ];
+    let consumed = 0;
+    async function* source() { for (const event of events) { consumed += 1; yield event; } }
+    process.env[SHARD_DURATION_OUTPUT_ENV] = destination;
+    for await (const output of reporter(source())) assert.fail(`Unexpected reporter output ${output}`);
+    assert.deepEqual(fs.readFileSync(destination, 'utf8').trim().split('\n').map((line) => JSON.parse(line)),
+        [{ file: 'passed.js', durationMs: 100 }]);
+    process.env[SHARD_DURATION_OUTPUT_ENV] = buildResult.repoRoot;
+    consumed = 0;
+    for await (const output of reporter(source())) assert.fail(`Unexpected reporter output ${output}`);
+    assert.equal(consumed, events.length);
+});
+
+test('real grouped execution learns both file durations with missing or corrupt telemetry and preserves selection', async (context) => {
+    const { buildResult, cleanup } = createBuildResultFixture();
+    context.after(cleanup);
+    const originalArgv = process.argv;
+    context.after(() => { process.argv = originalArgv; });
+    context.mock.method(mutableBuildModule, 'buildNodeFoundation', () => buildResult);
+    context.mock.method(mutableBuildModule, 'buildPublishRuntime', () => buildResult);
+    const originalSpawn = mutableChildProcess.spawn;
+    context.mock.method(mutableChildProcess, 'spawn', (command: string, args: readonly string[], options: childProcess.SpawnOptions) => {
+        const environment = { ...options.env };
+        delete environment.NODE_TEST_CONTEXT;
+        return originalSpawn(command, args, { ...options, env: environment });
+    });
+    const lines: string[] = [];
+    context.mock.method(console, 'log', (...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
+    for (const relativePath of buildResult.copiedFiles) {
+        fs.writeFileSync(path.join(buildResult.buildRoot, relativePath),
+            "require('node:test')('selected file ran', async () => { await new Promise(r => setTimeout(r, 20)); });\n");
+    }
+    const telemetryPath = path.join(buildResult.repoRoot, 'telemetry.json');
+    for (const corrupt of [false, true]) {
+        if (corrupt) fs.writeFileSync(telemetryPath, '{bad-json');
+        process.argv = ['node', 'scripts/node-foundation/test.js', '--garda-shards=1',
+            '--garda-duration-file', telemetryPath];
+        assert.equal(await testModule.runNodeFoundationTests(), 0);
+        const telemetry = JSON.parse(fs.readFileSync(telemetryPath, 'utf8')) as {
+            entries: Record<string, { duration_ms: number; samples: number; }>;
+        };
+        assert.deepEqual(Object.keys(telemetry.entries).sort(), buildResult.copiedFiles
+            .map((file) => file.replace(/\.js$/, '.ts')).sort());
+        assert.ok(Object.values(telemetry.entries).every((entry) => entry.duration_ms >= 10 && entry.samples === 1));
+    }
+    assert.ok(lines.some((line) => /files=2$/.test(line)));
+});
+
+test('partial shard forecasts include calibrated unknown work and compare the original forecast with actual time', async (context) => {
+    const { buildResult, cleanup } = createBuildResultFixture();
+    context.after(cleanup);
+    const originalArgv = process.argv;
+    context.after(() => { process.argv = originalArgv; });
+    context.mock.method(mutableBuildModule, 'buildNodeFoundation', () => buildResult);
+    context.mock.method(mutableBuildModule, 'buildPublishRuntime', () => buildResult);
+    const lines: string[] = [];
+    context.mock.method(console, 'log', (...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
+    context.mock.method(mutableChildProcess, 'spawn', () => createCompletingNodeTestChild());
+    const durationFile = path.join(buildResult.repoRoot, 'partial.json');
+    fs.writeFileSync(durationFile, JSON.stringify({ entries: {
+        'tests/node/cli/commands/gates.test.ts': {
+            file: 'tests/node/cli/commands/gates.test.ts', duration_ms: 1_000, samples: 1, updated_at_utc: 'fixture'
+        }
+    } }));
+    process.argv = ['node', 'scripts/node-foundation/test.js', '--garda-shards=2',
+        '--garda-shard-concurrency=1', '--garda-duration-file', durationFile];
+    assert.equal(await testModule.runNodeFoundationTests(), 0);
+    const before = lines.find((line) => line.includes('source=pre_run_telemetry'))!;
+    const observed = lines.find((line) => line.includes('source=observed_run'))!;
+    assert.match(before, /current_estimated_wall_ms=2000 /);
+    assert.match(before, /telemetry_known=1\/2 forecast=partial fallback=calibrated_size/);
+    assert.match(observed, /current_estimated_wall_ms=2000 /);
+    assert.match(observed, /observed_wall_ms=\d+ estimated_wall_error_ms=-?\d+ observed_to_estimated_ratio=/);
+    assert.ok(lines.some((line) => /source=post_run_telemetry/.test(line) && /forecast=complete/.test(line)));
 });
 
 test('runNodeFoundationTests balances partition wrappers by their shared suite fallback weight', async () => {

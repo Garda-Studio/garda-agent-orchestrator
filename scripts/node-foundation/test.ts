@@ -1,6 +1,7 @@
 import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import {
     formatNodeFoundationTestMarker,
@@ -12,6 +13,14 @@ import {
 } from '../../src/core/node-foundation-test-shard-log-analysis';
 import { buildNodeFoundation, buildPublishRuntime, BuildResult } from './build';
 import { ShardOutputForwarder } from './shard-output-forwarding';
+import {
+    addDurationReporterOptions,
+    calibrateDurationWeights,
+    createShardDurationCapture,
+    FileDurationObservation,
+    formatDurationForecastAccuracy,
+    SHARD_DURATION_OUTPUT_ENV
+} from './test-duration-telemetry';
 
 const NODE_FOUNDATION_TEST_SHARDS_ENV = 'GARDA_NODE_FOUNDATION_TEST_SHARDS';
 const NODE_FOUNDATION_TEST_SHARD_LOG_DIR_ENV = 'GARDA_NODE_FOUNDATION_TEST_SHARD_LOG_DIR';
@@ -19,6 +28,7 @@ const NODE_FOUNDATION_TEST_SHARD_TIMEOUT_MS_ENV = 'GARDA_NODE_FOUNDATION_TEST_SH
 const NODE_FOUNDATION_TEST_SHARD_HEARTBEAT_MS_ENV = 'GARDA_NODE_FOUNDATION_TEST_SHARD_HEARTBEAT_MS';
 const NODE_FOUNDATION_TEST_SHARD_CONCURRENCY_ENV = 'GARDA_NODE_FOUNDATION_TEST_SHARD_CONCURRENCY';
 const NODE_FOUNDATION_TEST_DURATION_FILE_ENV = 'GARDA_NODE_FOUNDATION_TEST_DURATION_FILE';
+const DURATION_REPORTER_URL = pathToFileURL(path.join(__dirname, 'test-duration-reporter.js')).href;
 const NODE_FOUNDATION_TEST_DURATION_LOCK_TIMEOUT_MS = 30_000;
 const NODE_FOUNDATION_TEST_DURATION_LOCK_RETRY_MS = 25;
 const NODE_FOUNDATION_TEST_DURATION_LOCK_STALE_MS = 120_000;
@@ -528,6 +538,7 @@ interface TestFileWeight {
     weight: number;
     durationMs: number | null;
     fallbackSize: number;
+    estimatedDurationMs: number | null;
 }
 
 interface NodeTestShardResult {
@@ -538,6 +549,7 @@ interface NodeTestShardResult {
     shardCount: number;
     logPath: string;
     timedOut?: boolean;
+    fileDurations?: FileDurationObservation[];
 }
 
 interface NodeTestShardRuntimeConfig {
@@ -921,7 +933,7 @@ function buildTestFileWeights(
             );
         }
     }
-    return fallbackDescriptors.map((descriptor) => {
+    return calibrateDurationWeights(fallbackDescriptors.map((descriptor) => {
         const { file } = descriptor;
         const key = compiledTestFileToTelemetryKey(buildResult, file);
         const entry = telemetry.entries[key];
@@ -935,11 +947,10 @@ function buildTestFileWeights(
         return {
             file,
             key,
-            weight: durationMs ?? fallbackSize,
             durationMs,
             fallbackSize
         };
-    });
+    }));
 }
 
 function printSlowestKnownTests(fileWeights: TestFileWeight[]): void {
@@ -980,7 +991,7 @@ function buildNodeFoundationTestShards(
         ? 'size_fallback'
         : knownDurationCount === fileWeights.length
             ? 'duration'
-            : 'duration_with_size_fallback';
+            : 'duration_with_calibrated_size_fallback';
     console.log(formatNodeFoundationTestMarker(
         NODE_FOUNDATION_TEST_MARKERS.SHARD_PLAN,
         `source=${source} duration_known=${knownDurationCount}/${fileWeights.length}`
@@ -996,57 +1007,38 @@ function getKnownTestDurationMs(buildResult: BuildResult, file: string, telemetr
     return Number.isFinite(durationMs) && durationMs > 0 ? Math.trunc(durationMs) : 0;
 }
 
-function sumKnownTestDurationMs(
-    buildResult: BuildResult,
-    files: string[],
-    telemetry: TestDurationTelemetry
-): number {
-    return files.reduce((sum, file) => sum + getKnownTestDurationMs(buildResult, file, telemetry), 0);
-}
-
-function getTestFileSchedulingPriority(
-    buildResult: BuildResult,
-    files: string[],
-    telemetry: TestDurationTelemetry
-): { knownDurationMs: number; fallbackWeight: number; } {
-    return buildTestFileWeights(buildResult, files, telemetry)
-        .reduce((priority, item) => ({
-            knownDurationMs: priority.knownDurationMs + (item.durationMs ?? 0),
-            fallbackWeight: priority.fallbackWeight + item.fallbackSize
-        }), {
-            knownDurationMs: 0,
-            fallbackWeight: 0
-        });
-}
-
 function sortNodeFoundationScheduledShards(
     buildResult: BuildResult,
     scheduledShards: string[][],
     telemetry: TestDurationTelemetry
 ): string[][] {
+    const weights = new Map(buildTestFileWeights(buildResult, scheduledShards.flat(), telemetry)
+        .map((item) => [item.file, item.weight]));
     return scheduledShards
         .map((files, index) => ({
             files,
             index,
-            ...getTestFileSchedulingPriority(buildResult, files, telemetry)
+            weight: files.reduce((sum, file) => sum + (weights.get(file) ?? 1), 0)
         }))
         .sort((a, b) => (
-            b.knownDurationMs - a.knownDurationMs
-            || b.fallbackWeight - a.fallbackWeight
+            b.weight - a.weight
             || a.index - b.index
         ))
         .map((item) => item.files);
 }
 
-function estimateKnownDurationWallMs(
+function estimateDurationWallMs(
     buildResult: BuildResult,
     scheduledShards: string[][],
     serialFiles: string[],
     workerCount: number,
     telemetry: TestDurationTelemetry
 ): number {
+    const estimates = new Map(buildTestFileWeights(buildResult, [...scheduledShards.flat(), ...serialFiles], telemetry)
+        .map((item) => [item.file, item.estimatedDurationMs ?? 0]));
+    const sumDurations = (files: string[]): number => files.reduce((sum, file) => sum + (estimates.get(file) ?? 0), 0);
     if (scheduledShards.length === 0) {
-        return sumKnownTestDurationMs(buildResult, serialFiles, telemetry);
+        return sumDurations(serialFiles);
     }
     const workerTotals = Array.from({ length: Math.max(1, workerCount) }, () => 0);
     for (const shardFiles of scheduledShards) {
@@ -1056,9 +1048,9 @@ function estimateKnownDurationWallMs(
                 minWorkerIndex = index;
             }
         }
-        workerTotals[minWorkerIndex] += sumKnownTestDurationMs(buildResult, shardFiles, telemetry);
+        workerTotals[minWorkerIndex] += sumDurations(shardFiles);
     }
-    return Math.max(...workerTotals) + sumKnownTestDurationMs(buildResult, serialFiles, telemetry);
+    return Math.ceil(Math.max(...workerTotals) + sumDurations(serialFiles));
 }
 
 function summarizeNodeFoundationShardSchedule(
@@ -1109,7 +1101,7 @@ function summarizeNodeFoundationShardSchedule(
         maxWorkerProcesses,
         knownDurationFiles,
         totalFiles: selectedTestFiles.length,
-        estimatedWallMs: estimateKnownDurationWallMs(
+        estimatedWallMs: estimateDurationWallMs(
             buildResult,
             scheduledShards,
             executionPlan.serialFiles,
@@ -1122,7 +1114,8 @@ function summarizeNodeFoundationShardSchedule(
 function printShardScheduleComparison(
     current: NodeFoundationTestShardScheduleSummary,
     baseline: NodeFoundationTestShardScheduleSummary,
-    source: 'pre_run_telemetry' | 'post_run_telemetry'
+    source: 'pre_run_telemetry' | 'post_run_telemetry' | 'observed_run',
+    observedWallMs?: number
 ): void {
     console.log(formatNodeFoundationTestMarker(
         NODE_FOUNDATION_TEST_MARKERS.SHARD_COMPARISON,
@@ -1133,7 +1126,10 @@ function printShardScheduleComparison(
         + `current_scheduled_shards=${current.scheduledShardCount} baseline_scheduled_shards=${baseline.scheduledShardCount} `
         + `current_grouped_shards=${current.groupedShardCount} baseline_grouped_shards=${baseline.groupedShardCount} `
         + `max_worker_processes=${current.maxWorkerProcesses} baseline_max_worker_processes=${baseline.maxWorkerProcesses} `
-        + `serial_files=${current.serialFileCount} telemetry_known=${current.knownDurationFiles}/${current.totalFiles}`
+        + `serial_files=${current.serialFileCount} telemetry_known=${current.knownDurationFiles}/${current.totalFiles} `
+        + `forecast=${current.knownDurationFiles === 0 ? 'unavailable' : current.knownDurationFiles < current.totalFiles ? 'partial' : 'complete'} `
+        + `fallback=${current.knownDurationFiles === 0 ? 'uncalibrated_size' : current.knownDurationFiles < current.totalFiles ? 'calibrated_size' : 'none'}`
+        + (observedWallMs === undefined ? '' : ` ${formatDurationForecastAccuracy(current.estimatedWallMs, observedWallMs)}`)
     ));
 }
 
@@ -1142,7 +1138,9 @@ async function recordTestDurationTelemetry(
     buildResult: BuildResult,
     results: NodeTestShardResult[]
 ): Promise<TestDurationTelemetry | null> {
-    const measurableResults = results.filter((result) => result.exitCode === 0 && result.shardFiles.length === 1);
+    const measurableResults = results.filter((result) => result.exitCode === 0).flatMap((result) =>
+        result.fileDurations?.length ? result.fileDurations : result.shardFiles.length === 1
+            ? [{ file: result.shardFiles[0], durationMs: result.durationMs }] : []);
     if (measurableResults.length === 0) {
         return null;
     }
@@ -1153,7 +1151,7 @@ async function recordTestDurationTelemetry(
         const updatedAt = new Date().toISOString();
         const nextEntries = { ...latestTelemetry.entries };
         for (const result of measurableResults) {
-            const key = compiledTestFileToTelemetryKey(buildResult, result.shardFiles[0]);
+            const key = compiledTestFileToTelemetryKey(buildResult, result.file);
             const previous = nextEntries[key];
             const previousSamples = previous ? Math.max(1, Math.trunc(previous.samples)) : 0;
             const nextSamples = Math.min(previousSamples + 1, 20);
@@ -1231,7 +1229,8 @@ async function runSingleNodeTestProcess(
         0,
         1,
         shardLogDir,
-        runtimeConfig
+        runtimeConfig,
+        updateDurationTelemetry
     );
     diagnoseGreenSummaryShardFailure(repoRoot, buildResult, optionArgs, result);
     diagnoseFailedShardSummary(result);
@@ -1309,12 +1308,16 @@ function runNodeTestShard(
     shardIndex: number,
     shardCount: number,
     shardLogDir: string,
-    runtimeConfig: NodeTestShardRuntimeConfig
+    runtimeConfig: NodeTestShardRuntimeConfig,
+    collectFileDurations: boolean
 ): Promise<NodeTestShardResult> {
-    const shardOptionArgs = buildNodeTestShardOptionArgs(optionArgs, runtimeConfig);
+    let shardOptionArgs = buildNodeTestShardOptionArgs(optionArgs, runtimeConfig);
+    const captureEnabled = collectFileDurations && shardFiles.length > 1;
+    if (captureEnabled) shardOptionArgs = addDurationReporterOptions(shardOptionArgs, DURATION_REPORTER_URL);
     assertNodeTestArgCharsWithinLimit(repoRoot, shardOptionArgs, shardFiles);
     return new Promise((resolve, reject) => {
         fs.mkdirSync(shardLogDir, { recursive: true });
+        const durationCapture = captureEnabled ? createShardDurationCapture(shardLogDir, shardFiles) : null;
         const logPath = path.join(shardLogDir, `shard-${String(shardIndex + 1).padStart(2, '0')}-of-${String(shardCount).padStart(2, '0')}.log`);
         const logStream = fs.createWriteStream(logPath, { flags: 'w' });
         const startedAt = Date.now();
@@ -1342,6 +1345,7 @@ function runNodeTestShard(
             cwd: repoRoot,
             detached: process.platform !== 'win32',
             stdio: ['ignore', 'pipe', 'pipe'],
+            env: { ...process.env, [SHARD_DURATION_OUTPUT_ENV]: durationCapture?.destination ?? '' },
             windowsHide: true
         });
         let exitCode = 1;
@@ -1408,7 +1412,8 @@ function runNodeTestShard(
                 shardIndex,
                 shardCount,
                 logPath,
-                timedOut
+                timedOut,
+                fileDurations: durationCapture?.finish()
             });
         }
 
@@ -1527,6 +1532,7 @@ function runNodeTestShard(
             cleanupTimers();
             output.cancel();
             logStream.destroy();
+            durationCapture?.finish();
             reject(error);
         });
         child.once('exit', (code, signal) => {
@@ -1646,7 +1652,10 @@ async function runShardedNodeTestProcesses(
         requestedShardConcurrency,
         DEFAULT_SHARDED_NODE_TEST_CONCURRENCY
     );
-    const shardOptionArgs = buildNodeTestShardOptionArgs(optionArgs, runtimeConfig);
+    const baseShardOptionArgs = buildNodeTestShardOptionArgs(optionArgs, runtimeConfig);
+    const shardOptionArgs = updateDurationTelemetry
+        ? addDurationReporterOptions(baseShardOptionArgs, DURATION_REPORTER_URL)
+        : baseShardOptionArgs;
     const executionPlan = splitNodeFoundationTestExecutionPlan(buildResult, selectedTestFiles, shardCount, telemetry);
     const parallelShards = executionPlan.parallelFiles.length === 0
         ? []
@@ -1684,27 +1693,26 @@ async function runShardedNodeTestProcesses(
         + `grouped_shards=${parallelShards.length} max_shard_arg_chars=${NODE_FOUNDATION_AUTO_SHARD_ARG_CHAR_LIMIT} `
         + `isolated_files=${executionPlan.isolatedFiles.length} serial_files=${executionPlan.serialFiles.length}`
     ));
-    printShardScheduleComparison(
-        summarizeNodeFoundationShardSchedule(
-            buildResult,
-            selectedTestFiles,
-            shardOptionArgs,
-            shardCount,
-            requestedConcurrency,
-            telemetry,
-            NODE_FOUNDATION_SINGLE_FILE_SHARD_MIN_DURATION_MS
-        ),
-        summarizeNodeFoundationShardSchedule(
-            buildResult,
-            selectedTestFiles,
-            shardOptionArgs,
-            shardCount,
-            requestedConcurrency,
-            telemetry,
-            NODE_FOUNDATION_BASELINE_SINGLE_FILE_SHARD_MIN_DURATION_MS
-        ),
-        'pre_run_telemetry'
+    const preRunSchedule = summarizeNodeFoundationShardSchedule(
+        buildResult,
+        selectedTestFiles,
+        shardOptionArgs,
+        shardCount,
+        requestedConcurrency,
+        telemetry,
+        NODE_FOUNDATION_SINGLE_FILE_SHARD_MIN_DURATION_MS
     );
+    const preRunBaseline = summarizeNodeFoundationShardSchedule(
+        buildResult,
+        selectedTestFiles,
+        shardOptionArgs,
+        shardCount,
+        requestedConcurrency,
+        telemetry,
+        NODE_FOUNDATION_BASELINE_SINGLE_FILE_SHARD_MIN_DURATION_MS
+    );
+    printShardScheduleComparison(preRunSchedule, preRunBaseline, 'pre_run_telemetry');
+    const executionStartedAt = Date.now();
     const results: NodeTestShardResult[] = [];
     const scheduledResults: NodeTestShardResult[] = new Array(scheduledShards.length);
     let nextShardIndex = 0;
@@ -1717,7 +1725,7 @@ async function runShardedNodeTestProcesses(
                 return;
             }
             const shardFiles = scheduledShards[shardIndex];
-            const result = await runNodeTestShard(repoRoot, optionArgs, shardFiles, shardIndex, totalShardCount, shardLogDir, runtimeConfig);
+            const result = await runNodeTestShard(repoRoot, optionArgs, shardFiles, shardIndex, totalShardCount, shardLogDir, runtimeConfig, updateDurationTelemetry);
             scheduledResults[shardIndex] = result;
             diagnoseGreenSummaryShardFailure(repoRoot, buildResult, optionArgs, result);
             diagnoseFailedShardSummary(result);
@@ -1736,12 +1744,14 @@ async function runShardedNodeTestProcesses(
             scheduledShards.length + index,
             totalShardCount,
             shardLogDir,
-            runtimeConfig
+            runtimeConfig,
+            updateDurationTelemetry
         );
         results.push(result);
         diagnoseGreenSummaryShardFailure(repoRoot, buildResult, optionArgs, result);
         diagnoseFailedShardSummary(result);
     }
+    printShardScheduleComparison(preRunSchedule, preRunBaseline, 'observed_run', Math.max(1, Date.now() - executionStartedAt));
     const updatedTelemetry = updateDurationTelemetry
         ? await recordTestDurationTelemetry(telemetryPath, buildResult, results)
         : null;
