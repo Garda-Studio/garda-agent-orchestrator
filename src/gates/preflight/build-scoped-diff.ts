@@ -216,7 +216,14 @@ function readUntrackedFileBody(gitRoot: string, relativeFile: string, maxChars: 
         try {
             const buffer = Buffer.alloc(Math.min(stat.size, effectiveMaxChars + 4096));
             const bytesRead = fs.readSync(file, buffer, 0, buffer.length, 0);
-            const rawContent = buffer.subarray(0, bytesRead).toString('utf8');
+            const bytes = buffer.subarray(0, bytesRead);
+            let rawContent: string;
+            try {
+                if (bytes.includes(0)) throw new TypeError('Binary content');
+                rawContent = new TextDecoder('utf-8', { fatal: true }).decode(bytes, { stream: bytesRead < stat.size });
+            } catch {
+                return { mode: '100644', body: '+[untracked file content omitted: binary]', truncated: false };
+            }
             content = rawContent.slice(0, effectiveMaxChars);
             truncated = rawContent.length > effectiveMaxChars || stat.size > bytesRead;
         } finally {

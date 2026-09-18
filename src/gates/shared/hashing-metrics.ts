@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { isUtf8 } from 'node:buffer';
 import {
     BOOLEAN_FALSE_VALUES,
     BOOLEAN_TRUE_VALUES
@@ -43,7 +44,9 @@ export { fileSha256, stringSha256 };
 export function countFileLines(filePath: string): number {
     try {
         if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return 0;
-        const content = fs.readFileSync(filePath, 'utf8');
+        const bytes = fs.readFileSync(filePath);
+        if (bytes.includes(0) || !isUtf8(bytes)) return 0;
+        const content = bytes.toString('utf8');
         return content.split('\n').filter(line => line.trimEnd() !== '').length;
     } catch {
         return 0;

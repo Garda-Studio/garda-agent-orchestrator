@@ -624,6 +624,43 @@ test('buildScopedDiff includes untracked explicit changed files in scoped metada
     }
 });
 
+test('buildScopedDiff retains untracked binary paths without exposing bytes as review text', (context) => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'scoped-diff-binary-'));
+    context.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+    runGit(['init', repoRoot]);
+    runGit(['-C', repoRoot, 'config', 'user.name', 'Garda Test']);
+    runGit(['-C', repoRoot, 'config', 'user.email', 'garda@example.com']);
+    runGit(['-C', repoRoot, 'commit', '--allow-empty', '-m', 'baseline']);
+    const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+    fs.mkdirSync(reviewsRoot, { recursive: true });
+    const preflightPath = path.join(reviewsRoot, 'T-707-preflight.json');
+    const pathsConfigPath = path.join(reviewsRoot, 'paths.json');
+    const outputPath = path.join(reviewsRoot, 'scoped.diff');
+    const metadataPath = path.join(reviewsRoot, 'scoped.json');
+    fs.writeFileSync(preflightPath, JSON.stringify({
+        task_id: 'T-707', detection_source: 'explicit_changed_files', changed_files: ['fixture.tgz']
+    }));
+    fs.writeFileSync(pathsConfigPath, JSON.stringify({ triggers: { security: ['^fixture'] } }));
+    for (const bytes of [Buffer.from('binary\0DO_NOT_EXPOSE\n'), Buffer.from([0xff, 0x0a, 0x61])]) {
+        fs.writeFileSync(path.join(repoRoot, 'fixture.tgz'), bytes);
+        const result = buildScopedDiff({ reviewType: 'security', preflightPath, pathsConfigPath,
+            outputPath, metadataPath, repoRoot });
+        const output = fs.readFileSync(outputPath, 'utf8');
+        assert.match(output, /diff --git a\/fixture\.tgz b\/fixture\.tgz/u);
+        assert.match(output, /untracked file content omitted: binary/u);
+        assert.doesNotMatch(output, /DO_NOT_EXPOSE|\u0000|\uFFFD/u);
+        assert.deepEqual(result.untracked_files, ['fixture.tgz']);
+        assert.equal(result.untracked_diff_truncated, false);
+    }
+    fs.writeFileSync(path.join(repoRoot, 'fixture.tgz'), `A${'é'.repeat(SCOPED_DIFF_UNTRACKED_TOTAL_MAX_CHARS + 4096)}`);
+    const unicodeResult = buildScopedDiff({ reviewType: 'security', preflightPath, pathsConfigPath,
+        outputPath, metadataPath, repoRoot });
+    const unicodeOutput = fs.readFileSync(outputPath, 'utf8');
+    assert.match(unicodeOutput, /\+Aé/u);
+    assert.doesNotMatch(unicodeOutput, /omitted: binary|\uFFFD/u);
+    assert.equal(unicodeResult.untracked_diff_truncated, true);
+});
+
 test('buildScopedDiff bounds large untracked file content in scoped output', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scoped-diff-untracked-large-'));
     const repoRoot = path.join(tempDir, 'repo');

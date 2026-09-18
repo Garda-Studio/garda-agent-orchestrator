@@ -4,7 +4,19 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { appendMetricsEvent } from '../../../../src/gates/shared/hashing-metrics';
+import { appendMetricsEvent, countFileLines } from '../../../../src/gates/shared/hashing-metrics';
+
+test('countFileLines excludes binary and invalid UTF-8 while retaining Unicode text counts', (context) => {
+    const tmpDir = makeTmpDir();
+    context.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+    const inputPath = path.join(tmpDir, 'input');
+    for (const bytes of [Buffer.from('binary\0payload\nline\n'), Buffer.from([0xff, 0x0a, 0x61])]) {
+        fs.writeFileSync(inputPath, bytes);
+        assert.equal(countFileLines(inputPath), 0);
+    }
+    fs.writeFileSync(inputPath, 'первая\r\n\n  \n二行\n', 'utf8');
+    assert.equal(countFileLines(inputPath), 2);
+});
 
 function makeTmpDir(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'garda-hashing-metrics-test-'));
