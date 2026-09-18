@@ -4,6 +4,18 @@ This tracked checklist is the release-cut source of truth for static readiness.
 Local `TASK.md` and `TASK_DONE.md` files are intentionally gitignored operator
 queues and must not be treated as publish blockers by release validation.
 
+## 1.4.3
+
+- [x] Package metadata is aligned to `1.4.3` in `package.json`, `package-lock.json`, `VERSION`, and the tracked package-surface baseline.
+- [x] The changelog adds a patch-release section without changing prior release notes.
+- [x] Deployed workspace validation requires compiled `dist/src` runtime paths instead of the intentionally unpublished TypeScript source tree; compiled-only packaging remains unchanged.
+- [x] Regression coverage includes real packed installation, setup, successful verification, and rejection of a missing deployed runtime entrypoint.
+- [x] The release pipeline retains full tests, coverage, lint, type checks, and packed-package validation without bypassing release gates.
+
+Publication uses the existing tag-driven workflow and npm staged approval with maintainer 2FA. No production dependencies, consumer install scripts, or CI safety controls are changed.
+
+Before creating the new tag, the release commit must pass the clean-tree `npm run release:preflight`. This static checklist records the release scope, not a substitute for that execution evidence.
+
 ## 1.4.2
 
 - [x] Package metadata is aligned to `1.4.2` in `package.json`, `package-lock.json`, `VERSION`, and the tracked package-surface baseline.

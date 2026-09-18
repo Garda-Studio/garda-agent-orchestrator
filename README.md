@@ -188,7 +188,7 @@ Garda was not started from scratch in this repository. Earlier versions were dev
 - Declarative lifecycle and workflow-settings manifests keep runtime routing, help, documentation, configuration, and UI behavior aligned.
 - `garda uninstall` preserves `TASK.md` by default; removing the task queue now requires the explicit `--keep-task-file no` override.
 
-See **[CHANGELOG.md](CHANGELOG.md)** for the complete 1.4.2 release notes.
+See **[CHANGELOG.md](CHANGELOG.md)** for the complete release notes.
 
 ## Important Notes
 

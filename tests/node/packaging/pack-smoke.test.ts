@@ -406,11 +406,47 @@ test('npm pack -> install -> CLI invoke smoke test', () => {
         assert.equal(statusResult.status, 0, `status failed: ${statusResult.stderr || statusResult.stdout}`);
         assert.match(statusResult.stdout, /GARDA_STATUS/);
 
+        // A real packaged deployment must verify without development sources.
+        const setupResult = runCli(cliScript, [
+            'setup', '--target-root', workspaceRoot, '--no-prompt',
+            '--assistant-language', 'English', '--assistant-brevity', 'concise',
+            '--source-of-truth', 'Codex', '--active-agent-files', 'AGENTS.md',
+            '--enforce-no-auto-commit', 'no', '--claude-orchestrator-full-access', 'no',
+            '--token-economy-enabled', 'yes'
+        ], workspaceRoot);
+        assert.equal(setupResult.status, 0, formatSpawnFailure('packaged setup', setupResult));
+        const deployedBundleRoot = path.join(workspaceRoot, 'garda-agent-orchestrator');
+        assert.equal(fs.existsSync(path.join(deployedBundleRoot, 'src')), false);
+        fs.writeFileSync(path.join(workspaceRoot, 'index.js'), 'module.exports = {};\n', 'utf8');
+        const workflowResult = runCli(cliScript, [
+            'workflow', 'set', '--target-root', workspaceRoot,
+            '--compile-gate-command', 'node --check index.js',
+            '--operator-confirmed', 'yes', '--operator-confirmed-at-utc', new Date().toISOString()
+        ], workspaceRoot);
+        assert.equal(workflowResult.status, 0, formatSpawnFailure('packaged workflow configuration', workflowResult));
+        const verifyResult = runCli(cliScript, ['verify', '--target-root', workspaceRoot], workspaceRoot);
+        assert.equal(verifyResult.status, 0, formatSpawnFailure('packaged verify', verifyResult));
+        assert.match(verifyResult.stdout, /MissingPathCount: 0/);
+
+        const deployedRuntimeEntrypoint = path.join(deployedBundleRoot, 'dist', 'src', 'index.js');
+        fs.unlinkSync(deployedRuntimeEntrypoint);
+        const missingRuntimeResult = runCli(cliScript, ['verify', '--target-root', workspaceRoot], installRoot);
+        assert.equal(missingRuntimeResult.status, 4, formatSpawnFailure('missing runtime validation', missingRuntimeResult));
+        assert.match(missingRuntimeResult.stdout, /MissingPathCount: 1/);
+        assert.match(
+            `${missingRuntimeResult.stdout}\n${missingRuntimeResult.stderr}`,
+            /garda-agent-orchestrator\/dist\/src\/index\.js/,
+            'verify must identify the missing runtime entrypoint'
+        );
+
         // 5. No TypeScript stripping warnings from node_modules
         const combinedOutput = [
             versionResult.stdout, versionResult.stderr,
             helpResult.stdout, helpResult.stderr,
-            statusResult.stdout, statusResult.stderr
+            statusResult.stdout, statusResult.stderr,
+            setupResult.stdout, setupResult.stderr,
+            workflowResult.stdout, workflowResult.stderr,
+            verifyResult.stdout, verifyResult.stderr
         ].join('\n');
         assert.doesNotMatch(
             combinedOutput,

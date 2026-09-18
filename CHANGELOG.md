@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.3
+
+- Fixed workspace verification for compiled-only npm installations: deployed bundles require their executable dist/src runtime instead of the intentionally excluded TypeScript src tree.
+- Added compiled-runtime layout regressions and a packed-package setup/verify smoke check. Missing runtime entrypoints and required runtime directories still fail verification.
+
 ## 1.4.2
 
 ### Extensible Review Catalog
