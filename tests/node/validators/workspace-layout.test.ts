@@ -59,6 +59,8 @@ test('detectSourceBundleParity detects stale bundle when version differs', () =>
         assert.equal(result.isSourceCheckout, true);
         assert.equal(result.isStale, true);
         assert.ok(result.violations.some(v => v.includes('version')));
+        assert.ok(result.remediation?.includes('setup --no-prompt'));
+        assert.ok(!result.remediation?.includes('reinit'));
     } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     }

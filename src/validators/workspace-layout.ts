@@ -352,7 +352,7 @@ export function detectSourceBundleParity(targetRoot: string): SourceBundleParity
     }
 
     if (result.isStale) {
-        result.remediation = `Run 'npm run build' followed by '${getSourceCliCommand()} setup' or 'reinit' to update the deployed bundle.`;
+        result.remediation = `Run 'npm run build' followed by '${getSourceCliCommand()} setup --no-prompt' to update the deployed bundle.`;
     }
 
     return result;

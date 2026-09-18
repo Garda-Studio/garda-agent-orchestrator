@@ -347,6 +347,28 @@ test('local bundle refresh commands warn on parity drift so setup recovery remai
     }
 });
 
+test('init and reinit warnings do not claim to synchronize stale source artifacts', () => {
+    const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'parity-rematerialize-target-'));
+    try {
+        seedStaleSourceCheckoutBundle(targetDir);
+        for (const commandName of ['init', 'reinit']) {
+            const result = childProcess.spawnSync(
+                process.execPath,
+                [CLI_PATH, commandName, '--target-root', targetDir, '--help'],
+                { cwd: targetDir, windowsHide: true, encoding: 'utf8', timeout: CLI_CHILD_TIMEOUT_MS }
+            );
+            const combined = (result.stdout || '') + (result.stderr || '');
+            assert.equal(result.status, 0);
+            assert.ok(combined.includes('PARITY_WARNING'));
+            assert.ok(combined.includes(`${commandName} rematerializes the existing deployed bundle without synchronizing source artifacts`));
+            assert.ok(combined.includes('setup --no-prompt'));
+            assert.ok(!combined.includes(`${commandName} refreshes the deployed bundle from the current trusted source checkout`));
+        }
+    } finally {
+        fs.rmSync(targetDir, { recursive: true, force: true });
+    }
+});
+
 test('remote-source setup remains blocked on target parity drift', () => {
     const callerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'parity-setup-remote-caller-'));
     const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'parity-setup-remote-target-'));

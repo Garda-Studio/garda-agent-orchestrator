@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Corrected source-parity recovery guidance to use `setup --no-prompt` after a build. `init` and `reinit` warnings now accurately describe rematerializing the existing bundle without synchronizing updated source artifacts.
+
 - Fixed bounded DELTA remediation after test-only fixes to source-linked review findings. Baselines now preserve the authenticated originating coverage contract, required reinspection includes the prior finding targets, and unresolved legacy mappings choose FULL before rerun setup. Actual changed-file classification and dependency-based lane preservation remain unchanged.
 
 - Hardened authenticated replacement cleanup so an artifact-removal failure still releases the remaining descriptors and retains the original operation error. Failed removal quarantines and substituted artifacts remain preserved for recovery.

@@ -318,6 +318,10 @@ garda init --target-root "." --init-answers-path "garda-agent-orchestrator/runti
 
 Change init answers without a full reinstall.
 
+To synchronize a stale deployed bundle with a source checkout, run `npm run build`
+then `node bin/garda.js setup --no-prompt`. `init` and `reinit` rematerialize the
+existing bundle and do not copy updated source artifacts.
+
 ```text
 garda reinit --target-root "." --init-answers-path "garda-agent-orchestrator/runtime/init-answers.json"
 ```

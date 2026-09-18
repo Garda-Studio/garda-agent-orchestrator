@@ -60,6 +60,10 @@ function isTrustedLocalBundleRefreshCommand(commandName: string, commandArgv: st
 }
 
 function buildLocalBundleRefreshParityReason(commandName: string): string {
+    if (commandName === 'init' || commandName === 'reinit') {
+        return `${commandName} rematerializes the existing deployed bundle without synchronizing source artifacts; ` +
+            'use setup after building to update a stale deployment.';
+    }
     return `${commandName} refreshes the deployed bundle from the current trusted source checkout, ` +
         'so stale source parity is surfaced without blocking the documented repair path.';
 }
