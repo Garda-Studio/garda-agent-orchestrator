@@ -308,14 +308,14 @@ function npmInstallTarball(tarballPath: string, installDir: string): number {
     return durationMs;
 }
 
-function runCli(cliScriptPath: string, args: string[], cwd: string): childProcess.SpawnSyncReturns<string> {
+function runCli(cliScriptPath: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = {}): childProcess.SpawnSyncReturns<string> {
     return childProcess.spawnSync(
         process.execPath,
         [cliScriptPath, ...args],
         {
             cwd,
             encoding: 'utf8',
-            env: buildPackagingEnv(),
+            env: { ...buildPackagingEnv(), ...env },
             timeout: 30_000
         }
     );
@@ -430,7 +430,10 @@ test('npm pack -> install -> CLI invoke smoke test', () => {
 
         const deployedRuntimeEntrypoint = path.join(deployedBundleRoot, 'dist', 'src', 'index.js');
         fs.unlinkSync(deployedRuntimeEntrypoint);
-        const missingRuntimeResult = runCli(cliScript, ['verify', '--target-root', workspaceRoot], installRoot);
+        // Target-root delegation would load the damaged runtime before verification.
+        const missingRuntimeResult = runCli(cliScript, ['verify', '--target-root', workspaceRoot], installRoot, {
+            GARDA_NO_DELEGATE: '1'
+        });
         assert.equal(missingRuntimeResult.status, 4, formatSpawnFailure('missing runtime validation', missingRuntimeResult));
         assert.match(missingRuntimeResult.stdout, /MissingPathCount: 1/);
         assert.match(
