@@ -853,6 +853,14 @@ function hasInlineInterpreterOption(firstToken: string, tokens: readonly string[
     return false;
 }
 
+function isNodeSyntaxCheckOption(tokens: readonly string[], optionIndex: number): boolean {
+    return /^node(?:\.exe)?$/iu.test(tokens[0] || '')
+        && tokens[optionIndex] === '--check'
+        && optionIndex > 0
+        && optionIndex < findNextFocusedCommandToken(tokens, 1)
+        && !tokens.slice(1, optionIndex).includes('--');
+}
+
 function getUnsafeFocusedCommandTokenReason(command: string): string | null {
     const tokens = getFocusedCommandTokens(command);
     const firstToken = tokens[0] || '';
@@ -881,7 +889,9 @@ function getUnsafeFocusedCommandTokenReason(command: string): string | null {
     if (/^tsc$/iu.test(firstToken) && !optionNames.includes('--noemit')) {
         return 'run TypeScript compilation without --noEmit, which may write output artifacts';
     }
-    if (optionNames.some((option) => !REVIEWER_SAFE_FOCUSED_OPTION_NAMES.has(option))) {
+    if (tokens.some((token, index) => token.startsWith('-')
+        && !REVIEWER_SAFE_FOCUSED_OPTION_NAMES.has(normalizeFocusedOptionName(token))
+        && !isNodeSyntaxCheckOption(tokens, index))) {
         return 'use unrecognized validation-runner options whose side effects are not authenticated';
     }
     return null;

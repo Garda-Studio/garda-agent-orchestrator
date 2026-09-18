@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -651,6 +652,37 @@ test('validateReviewFindingsReport accepts safe no-emit TypeScript validation', 
     assert.equal(result.valid, true, result.violations.join('\n'));
 });
 
+test('validateReviewFindingsReport accepts Node syntax checks without executing the target', () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-node-check-'));
+    try {
+        fs.mkdirSync(path.join(repoRoot, 'src'));
+        fs.writeFileSync(path.join(repoRoot, 'src', 'example.ts'),
+            Array.from({ length: 25 }, (_, index) => `// line ${index + 1}`).join('\n') + '\n', 'utf8');
+        fs.writeFileSync(path.join(repoRoot, 'src', 'example.js'),
+            "require('node:fs').writeFileSync('executed.txt', 'unexpected');\n", 'utf8');
+        execFileSync(process.execPath, ['--check', 'src/example.js'], { cwd: repoRoot });
+        assert.equal(fs.existsSync(path.join(repoRoot, 'executed.txt')), false);
+
+        for (const command of [
+            'node --check src/example.js',
+            'node --no-warnings --check src/example.js',
+            'node.exe --check src/example.js'
+        ]) {
+            const report = validReport();
+            report.validation_notes = [{
+                id: 'N-001', topic: 'focused-self-validation',
+                note: 'The reviewer checked the changed JavaScript syntax without executing it.',
+                command, command_outcome: 'passed', diagnostics: 'JavaScript syntax check completed without parse errors.',
+                evidence: [evidence('src/example.ts:10', 'The changed entrypoint consumes src/example.js, which motivated the syntax check.')]
+            }];
+            const result = validateReviewFindingsReport(report, { ...validationOptions, repoRoot });
+            assert.equal(result.valid, true, `${command}\n${result.violations.join('\n')}`);
+        }
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
 test('validateReviewFindingsReport rejects F-000 when the command only prints the marker target', () => {
     for (const command of ['echo tests/node/example.test.ts', 'echo --test tests/node/example.test.ts']) {
         const report = missingFocusedValidationReport();
@@ -1163,6 +1195,12 @@ test('validateReviewFindingsReport rejects unsafe network, mutation, and backgro
         ['node --test --watch tests/node/example.test.ts', 'interactive, watching, serving, or debugger'],
         ['node --inspect --test tests/node/example.test.ts', 'interactive, watching, serving, or debugger'],
         ['node --test --cache-location=src/core/templates.ts tests/node/example.test.ts', 'unrecognized validation-runner options'],
+        ['python --check src/example.js', 'unrecognized validation-runner options'],
+        ['eslint --check src/example.js', 'unrecognized validation-runner options'],
+        ['node src/example.js --check', 'unrecognized validation-runner options'],
+        ['node -- --check src/example.js', 'unrecognized validation-runner options'],
+        ['node --check=src/example.js src/example.js', 'unrecognized validation-runner options'],
+        ['node --check --require src/preload.js src/example.js', 'unrecognized validation-runner options'],
         ['node --test tests/../outside.test.ts', 'escape authenticated repository scope'],
         ['node --test C:outside.test.ts', 'escape authenticated repository scope'],
         ['tsc src/example.ts', 'without --noEmit'],

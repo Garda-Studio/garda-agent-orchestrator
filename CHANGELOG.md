@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed reviewer report validation rejecting focused Node `--check` syntax checks. Only the exact Node runtime option before the target is accepted; unknown options, preloads, inline code, and other runners remain rejected.
+
 - Fixed untracked binary review fixtures being decoded as text. Binary and invalid UTF-8 files remain in dirty scope but contribute no text-line budget, and scoped diffs retain their paths with an explicit binary-content marker.
 
 - Corrected source-parity recovery guidance to use `setup --no-prompt` after a build. `init` and `reinit` warnings now accurately describe rematerializing the existing bundle without synchronizing updated source artifacts.
