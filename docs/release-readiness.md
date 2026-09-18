@@ -16,6 +16,8 @@ Publication uses the existing tag-driven workflow and npm staged approval with m
 
 Before creating the new tag, the release commit must pass the clean-tree `npm run release:preflight`. This static checklist records the release scope, not a substitute for that execution evidence.
 
+After npm-side staged approval, verify npm `latest`, integrity/provenance visibility, and `npx --yes garda-agent-orchestrator@1.4.3 --version`.
+
 ## 1.4.2
 
 - [x] Package metadata is aligned to `1.4.2` in `package.json`, `package-lock.json`, `VERSION`, and the tracked package-surface baseline.
