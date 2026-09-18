@@ -1,5 +1,6 @@
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -22,9 +23,56 @@ import {
     readUpdateSentinel,
     withLifecycleOperationLockAsync
 } from '../../../src/lifecycle/common';
-const FIRST_NPM_RELEASE_PACKAGE_SPEC = process.env.GARDA_FIRST_NPM_RELEASE_PACKAGE_SPEC || 'garda-agent-orchestrator@1.0.0';
-const NEXT_RELEASE_TEST_VERSION = process.env.GARDA_NEXT_RELEASE_TEST_VERSION || '1.0.1';
+const FIRST_NPM_RELEASE_PACKAGE_SPEC = 'garda-agent-orchestrator@1.0.0';
+const FIRST_NPM_RELEASE_FILENAME = 'garda-agent-orchestrator-1.0.0.tgz';
+const NEXT_RELEASE_TEST_VERSION = '1.0.1';
+const NPM_NETWORK_TESTS_ENABLED = process.env.GARDA_NPM_NETWORK_TESTS === '1';
 const TEST_COMPILE_GATE_COMMAND = 'node -e "console.log(\'build ok\')"';
+
+function isNpmFixtureEnvironmentKey(key: string): boolean {
+    return key.toUpperCase().startsWith('NPM_CONFIG_') || ['NPM_TOKEN', 'NODE_AUTH_TOKEN'].includes(key.toUpperCase());
+}
+
+beforeEach((context) => {
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-offline-npm-'));
+    const inherited = Object.entries(process.env).filter(([key]) => isNpmFixtureEnvironmentKey(key));
+    const clear = () => {
+        for (const key of Object.keys(process.env).filter(isNpmFixtureEnvironmentKey)) delete process.env[key];
+    };
+    (context as TestContext).after(() => {
+        clear();
+        for (const [key, value] of inherited) process.env[key] = value;
+        fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    });
+    clear();
+    const userConfig = path.join(fixtureRoot, 'user.npmrc');
+    const globalConfig = path.join(fixtureRoot, 'global.npmrc');
+    fs.writeFileSync(userConfig, '', 'utf8');
+    fs.writeFileSync(globalConfig, '', 'utf8');
+    Object.assign(process.env, {
+        npm_config_userconfig: userConfig,
+        npm_config_globalconfig: globalConfig,
+        npm_config_cache: path.join(fixtureRoot, 'cache'),
+        npm_config_offline: String(!NPM_NETWORK_TESTS_ENABLED),
+        npm_config_registry: NPM_NETWORK_TESTS_ENABLED ? 'https://registry.npmjs.org' : 'http://127.0.0.1:9',
+        npm_config_ignore_scripts: 'true',
+        npm_config_audit: 'false',
+        npm_config_fund: 'false'
+    });
+});
+
+function getLockedLegacyPackageSpec(repoRoot: string, candidatePath?: string): string {
+    const fixtureRoot = path.join(repoRoot, 'tests', 'fixtures', 'npm');
+    const lock = JSON.parse(fs.readFileSync(path.join(fixtureRoot, 'garda-agent-orchestrator-1.0.0.lock.json'), 'utf8'));
+    assert.equal(lock.name, 'garda-agent-orchestrator');
+    assert.equal(lock.version, '1.0.0');
+    assert.equal(lock.filename, FIRST_NPM_RELEASE_FILENAME);
+    assert.match(lock.integrity, /^sha512-[A-Za-z0-9+/]{86}==$/u);
+    const tarballPath = candidatePath ?? path.join(fixtureRoot, FIRST_NPM_RELEASE_FILENAME);
+    const actualIntegrity = `sha512-${createHash('sha512').update(fs.readFileSync(tarballPath)).digest('base64')}`;
+    assert.equal(actualIntegrity, lock.integrity, 'Locked legacy release tarball integrity mismatch');
+    return tarballPath;
+}
 
 function findRepoRoot() {
     let dir = __dirname;
@@ -609,10 +657,40 @@ describe('runCheckUpdate', () => {
         }
     });
 
-    it('updates a workspace seeded from the published 1.0.0 npm release through the npm-backed legacy caller path', async () => {
+    it('rejects a damaged locked release tarball before package acquisition', (context) => {
+        const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-damaged-release-'));
+        context.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+        const damagedPath = path.join(fixtureRoot, FIRST_NPM_RELEASE_FILENAME);
+        const bytes = fs.readFileSync(getLockedLegacyPackageSpec(repoRoot));
+        bytes[0] ^= 1;
+        fs.writeFileSync(damagedPath, bytes);
+        assert.throws(() => getLockedLegacyPackageSpec(repoRoot, damagedPath), /tarball integrity mismatch/u);
+    });
+
+    it('covers network-enabled npm acquisition from the pinned published release', { skip: !NPM_NETWORK_TESTS_ENABLED }, async () => {
+        const { projectRoot, bundleRoot } = setupCheckUpdateWorkspace(repoRoot, '0.0.1');
+        try {
+            const result = await runCheckUpdate({
+                targetRoot: projectRoot,
+                bundleRoot,
+                packageSpec: FIRST_NPM_RELEASE_PACKAGE_SPEC,
+                noPrompt: true,
+                dryRun: true,
+                trustOverride: true
+            });
+            assert.equal(result.sourceType, 'npm');
+            assert.equal(result.latestVersion, '1.0.0');
+            assert.equal(result.updateAvailable, true);
+            assert.equal(result.updateApplied, false);
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('updates from the locked local 1.0.0 tarball through the npm-backed legacy caller path without registry access', async () => {
         const candidateTarball = createCandidateTarball(repoRoot);
         try {
-            const { projectRoot, bundleRoot } = setupPublishedReleaseSeededCheckUpdateWorkspace(FIRST_NPM_RELEASE_PACKAGE_SPEC);
+            const { projectRoot, bundleRoot } = setupPublishedReleaseSeededCheckUpdateWorkspace(getLockedLegacyPackageSpec(repoRoot));
             try {
                 const legacyUpdateSourceBefore = fs.readFileSync(path.join(bundleRoot, 'src', 'lifecycle', 'update.ts'), 'utf8');
                 assert.doesNotMatch(legacyUpdateSourceBefore, /hasLegacyOuterUpdateLock/);

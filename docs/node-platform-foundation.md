@@ -58,6 +58,26 @@ Compiles the lightweight helper graph into `.scripts-build/`, rebuilds the wider
 
 When an operator needs to run direct compiled tests from `.node-build/`, the producer-consumer chain must stay sequential: refresh `.node-build/` first with `npm run build:node-foundation` or `npm test`, then run the direct `node --test .node-build/...` consumer. The runtime now blocks stale or concurrently-written `.node-build/` consumers instead of letting them run against untrusted artifacts.
 
+### Offline lifecycle fixtures and explicit npm network coverage
+
+Default lifecycle tests use the tracked `tests/fixtures/npm/garda-agent-orchestrator-1.0.0.tgz`, verified against its adjacent SHA-512 integrity lock before installation. This preserves the real published legacy caller without requiring registry access or an existing npm cache. Each fixture clears inherited npm configuration and credentials, uses empty temporary user/global config files and an owned cache, enables npm offline mode, and points registry requests at an unavailable loopback endpoint. Cleanup restores the inherited environment.
+
+Live acquisition of the exact published `garda-agent-orchestrator@1.0.0` package is an explicit lane:
+
+```text
+npm run test:lifecycle:network
+```
+
+This command enables `GARDA_NPM_NETWORK_TESTS=1` in its child runner and selects only the network acquisition test. It requires access to `https://registry.npmjs.org`, uses a fresh owned cache, disables lifecycle scripts and npm audit/funding requests, and does not reuse user credentials. Default `npm test` and `npm run test:lifecycle` skip this single network case while exercising the local legacy update path. Do not enable the network flag for an offline proof.
+
+Clean-checkout integration for bundle ownership, deterministic process snapshots, runner-environment cleanup, and local npm acquisition uses the following exact selection after provisioning the locked development dependencies:
+
+```text
+node scripts/node-foundation/build-scripts.cjs test.js tests/node/bundle-source-fixtures.test.ts tests/node/validators/workspace-layout.test.ts tests/node/validators/status.test.ts tests/node/cli/commands/setup.test.ts tests/node/process-environment-fixtures.test.ts tests/node/gates/compile/full-suite-validation-run-marker.test.ts tests/node/gates/compile/full-suite-validation-cli-transaction.test.ts tests/node/repo/node-foundation-test-wrapper.test.ts tests/node/lifecycle/check-update-runtime-policy.test.ts
+```
+
+Start from a tracked checkout without `garda-agent-orchestrator/`, `dist/`, `.node-build/`, or `.scripts-build/`. Git, npm, and the supported Node runtime must be available; TypeScript and Node typings come from the locked development dependency installation. Dependency provisioning is separate from test package acquisition. The runner builds the required generated graphs before executing tests; test npm cache/config roots and bundle roots belong to individual fixtures.
+
 ### `npm run validate:release`
 
 Runs the explicit release proof path:

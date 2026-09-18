@@ -33,6 +33,7 @@
     "test:gates": "node scripts/node-foundation/build-scripts.cjs test.js tests/node/gates",
     "test:cli": "node scripts/node-foundation/build-scripts.cjs test.js tests/node/cli",
     "test:lifecycle": "node scripts/node-foundation/build-scripts.cjs test.js tests/node/lifecycle",
+    "test:lifecycle:network": "node scripts/node-foundation/test-lifecycle-network.cjs",
     "test:bin": "node scripts/node-foundation/build-scripts.cjs test.js tests/node/bin tests/node/materialization",
     "test:packaging": "node scripts/node-foundation/build-scripts.cjs test.js tests/node/packaging/pack-smoke.test.ts tests/node/packaging/publish-runtime.test.ts tests/node/packaging/package-surface.test.ts",
     "test:sharded": "node scripts/node-foundation/build-scripts.cjs test.js --garda-shards 2 --garda-shard-concurrency 2 tests/node/core tests/node/gate-runtime tests/node/schemas tests/node/validators tests/node/repo tests/node/reports tests/node/compat tests/node/policy tests/node/runtime tests/node/gates tests/node/cli tests/node/lifecycle tests/node/bin tests/node/materialization",
