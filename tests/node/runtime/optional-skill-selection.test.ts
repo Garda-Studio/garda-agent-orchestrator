@@ -308,7 +308,7 @@ test('writeOptionalSkillSelectionArtifact persists artifact without emitting syn
         assert.equal(artifact.artifactPath, artifactPath);
         assert.equal(fs.existsSync(artifactPath), true);
 
-        const eventsPath = path.join(bundleRoot, 'custom-task-events', 'T-149.jsonl');
+        const eventsPath = path.join(bundleRoot, 'runtime', 'task-events', 'T-149.jsonl');
         assert.equal(fs.existsSync(eventsPath), false);
     } finally {
         fs.rmSync(bundleRoot, { recursive: true, force: true });

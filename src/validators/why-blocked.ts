@@ -110,12 +110,7 @@ function readTimelineEvents(timelinePath: string): TimelineEventsSnapshot {
             return { events: eventTypes, exists: false };
         }
 
-        let entries;
-        try {
-            entries = readTaskTimelineJsonlEntries(timelinePath);
-        } catch {
-            return { events: eventTypes, exists: true };
-        }
+        const entries = readTaskTimelineJsonlEntries(timelinePath);
 
         for (const timelineEntry of entries) {
             const parsed = timelineEntry.record;

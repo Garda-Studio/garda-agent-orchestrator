@@ -303,6 +303,34 @@ test('getWhyBlocked preserves healthy output when a complete timeline contains m
     }
 });
 
+test('getWhyBlocked rejects a structurally unsafe timeline snapshot', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'why-blocked-test-'));
+    const bundleDir = path.join(tmpDir, 'garda-agent-orchestrator');
+    const eventsDir = path.join(bundleDir, 'runtime', 'task-events');
+
+    try {
+        fs.mkdirSync(eventsDir, { recursive: true });
+        fs.writeFileSync(
+            path.join(tmpDir, 'TASK.md'),
+            makeTaskMd(['| T-011A | 🟨 IN_PROGRESS | P1 | area | Unsafe timeline | me | 2026-01-01 | default | Notes |']),
+            'utf8'
+        );
+        const nestedValue = `${'['.repeat(257)}0${']'.repeat(257)}`;
+        fs.writeFileSync(
+            path.join(eventsDir, 'T-011A.jsonl'),
+            `{"event_type":"TASK_MODE_ENTERED","details":${nestedValue}}\n`,
+            'utf8'
+        );
+
+        assert.throws(
+            () => getWhyBlocked(tmpDir),
+            /Task timeline JSON exceeds the 256 level depth limit/u
+        );
+    } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+});
+
 test('getWhyBlocked does not stall docs-only tasks when canonical non-code review phase is present', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'why-blocked-test-'));
     const bundleDir = path.join(tmpDir, 'garda-agent-orchestrator');
