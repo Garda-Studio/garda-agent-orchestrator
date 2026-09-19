@@ -5,7 +5,13 @@ import {
     normalizeOrchestratorStartBanner,
     ORCHESTRATOR_START_BANNER_EXAMPLES_INLINE
 } from '../../core/orchestrator-start-banner';
-import { assertValidTaskId } from '../../gate-runtime/task-events';
+import {
+    assertValidTaskId,
+    readTaskTimelineJsonlEntries,
+    taskTimelineAwareFileExists,
+    withTaskTimelineReadSnapshot
+} from '../../gate-runtime/task-events';
+import { withTaskTimelineFileReadSnapshot } from '../../gate-runtime/timeline/task-timeline-read-snapshot';
 import { fileSha256, joinOrchestratorPath, normalizePath } from '../shared/helpers';
 import { normalizeDirtyWorkspaceBaseline } from '../workspace/dirty-worktree-protection';
 import { normalizeWorkflowConfigFileHashes } from '../workflow-config/workflow-config-work';
@@ -33,7 +39,65 @@ function getLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): {
     profile_policy_snapshot_hash: string | null;
 } {
     const timelinePath = getTaskTimelinePath(repoRoot, taskId);
-    if (!fs.existsSync(timelinePath) || !fs.statSync(timelinePath).isFile()) {
+    return withTaskTimelineReadSnapshot(path.dirname(timelinePath), taskId, () => {
+        if (!taskTimelineAwareFileExists(timelinePath)) {
+            return {
+                artifact_path: null,
+                declares_runtime_identity_metadata: false,
+                declares_start_banner: false,
+                start_banner: null,
+                declares_profile_policy_snapshot: false,
+                profile_policy_snapshot_hash: null
+            };
+        }
+
+        const entries = readTaskTimelineJsonlEntries(timelinePath);
+        for (let index = entries.length - 1; index >= 0; index -= 1) {
+            const parsed = entries[index].record;
+            if (!parsed) {
+                continue;
+            }
+            try {
+                if (String(parsed.event_type || '').trim().toUpperCase() !== 'TASK_MODE_ENTERED') {
+                    continue;
+                }
+                const details = parsed.details && typeof parsed.details === 'object' && !Array.isArray(parsed.details)
+                    ? parsed.details as Record<string, unknown>
+                    : null;
+                const artifactPath = String(details?.artifact_path || details?.artifactPath || '').trim();
+                const declaresRuntimeIdentityMetadata = [
+                    'canonical_source_of_truth',
+                    'execution_provider_source',
+                    'reviewer_capability_level',
+                    'reviewer_expected_execution_mode',
+                    'reviewer_fallback_allowed',
+                    'reviewer_fallback_reason_required',
+                    'reviewer_subagent_launch_status',
+                    'reviewer_subagent_launch_route',
+                    'reviewer_subagent_launch_reason',
+                    'reviewer_subagent_launch_remediation',
+                    'runtime_identity_status',
+                    'runtime_identity_violations'
+                ].some((key) => Object.prototype.hasOwnProperty.call(details || {}, key));
+                const declaresStartBanner = Object.prototype.hasOwnProperty.call(details || {}, 'start_banner');
+                const profilePolicySnapshotHash = String(details?.profile_policy_snapshot_hash || '').trim().toLowerCase();
+                const validProfilePolicySnapshotHash = /^[a-f0-9]{64}$/u.test(profilePolicySnapshotHash)
+                    ? profilePolicySnapshotHash
+                    : null;
+                return {
+                    artifact_path: artifactPath ? normalizePath(artifactPath) : null,
+                    declares_runtime_identity_metadata: declaresRuntimeIdentityMetadata,
+                    declares_start_banner: declaresStartBanner,
+                    start_banner: normalizeOrchestratorStartBanner(details?.start_banner),
+                    declares_profile_policy_snapshot: details?.profile_policy_snapshot_required === true
+                        || validProfilePolicySnapshotHash !== null,
+                    profile_policy_snapshot_hash: validProfilePolicySnapshotHash
+                };
+            } catch {
+                continue;
+            }
+        }
+
         return {
             artifact_path: null,
             declares_runtime_identity_metadata: false,
@@ -42,64 +106,7 @@ function getLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): {
             declares_profile_policy_snapshot: false,
             profile_policy_snapshot_hash: null
         };
-    }
-
-    const lines = fs.readFileSync(timelinePath, 'utf8')
-        .split('\n')
-        .filter(function (line) {
-            return line.trim().length > 0;
-        });
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-        try {
-            const parsed = JSON.parse(lines[index]) as Record<string, unknown>;
-            if (String(parsed.event_type || '').trim().toUpperCase() !== 'TASK_MODE_ENTERED') {
-                continue;
-            }
-            const details = parsed.details && typeof parsed.details === 'object' && !Array.isArray(parsed.details)
-                ? parsed.details as Record<string, unknown>
-                : null;
-            const artifactPath = String(details?.artifact_path || details?.artifactPath || '').trim();
-            const declaresRuntimeIdentityMetadata = [
-                'canonical_source_of_truth',
-                'execution_provider_source',
-                'reviewer_capability_level',
-                'reviewer_expected_execution_mode',
-                'reviewer_fallback_allowed',
-                'reviewer_fallback_reason_required',
-                'reviewer_subagent_launch_status',
-                'reviewer_subagent_launch_route',
-                'reviewer_subagent_launch_reason',
-                'reviewer_subagent_launch_remediation',
-                'runtime_identity_status',
-                'runtime_identity_violations'
-            ].some((key) => Object.prototype.hasOwnProperty.call(details || {}, key));
-            const declaresStartBanner = Object.prototype.hasOwnProperty.call(details || {}, 'start_banner');
-            const profilePolicySnapshotHash = String(details?.profile_policy_snapshot_hash || '').trim().toLowerCase();
-            const validProfilePolicySnapshotHash = /^[a-f0-9]{64}$/u.test(profilePolicySnapshotHash)
-                ? profilePolicySnapshotHash
-                : null;
-            return {
-                artifact_path: artifactPath ? normalizePath(artifactPath) : null,
-                declares_runtime_identity_metadata: declaresRuntimeIdentityMetadata,
-                declares_start_banner: declaresStartBanner,
-                start_banner: normalizeOrchestratorStartBanner(details?.start_banner),
-                declares_profile_policy_snapshot: details?.profile_policy_snapshot_required === true
-                    || validProfilePolicySnapshotHash !== null,
-                profile_policy_snapshot_hash: validProfilePolicySnapshotHash
-            };
-        } catch {
-            continue;
-        }
-    }
-
-    return {
-        artifact_path: null,
-        declares_runtime_identity_metadata: false,
-        declares_start_banner: false,
-        start_banner: null,
-        declares_profile_policy_snapshot: false,
-        profile_policy_snapshot_hash: null
-    };
+    });
 }
 
 export function getTaskModeEvidence(repoRoot: string, taskId: string | null, artifactPath = ''): TaskModeEvidenceResult {
@@ -178,7 +185,7 @@ export function getTaskModeEvidence(repoRoot: string, taskId: string | null, art
     result.timeline_declares_profile_policy_snapshot = timelineMetadata.declares_profile_policy_snapshot;
     result.timeline_profile_policy_snapshot_hash = timelineMetadata.profile_policy_snapshot_hash;
 
-    if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) {
+    if (!taskTimelineAwareFileExists(resolvedPath)) {
         result.evidence_status = 'EVIDENCE_FILE_MISSING';
         return result;
     }
@@ -518,26 +525,29 @@ export function getTaskModeEvidenceViolations(result: TaskModeEvidenceResult): s
 export function collectTaskTimelineEventTypes(timelinePath: string, errors: string[]): Set<string> {
     const eventTypes = new Set<string>();
     const resolvedPath = path.resolve(String(timelinePath || ''));
-    if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) {
-        errors.push(`Task timeline not found: ${normalizePath(resolvedPath)}`);
-        return eventTypes;
-    }
-
-    const lines = fs.readFileSync(resolvedPath, 'utf8').split('\n').filter(function (line: string) {
-        return line.trim().length > 0;
-    });
-    for (const line of lines) {
-        try {
-            const parsed = JSON.parse(line) as Record<string, unknown>;
-            const eventType = String(parsed.event_type || '').trim().toUpperCase();
-            if (eventType) {
-                eventTypes.add(eventType);
-            }
-        } catch {
-            errors.push(`Task timeline contains invalid JSON line: ${normalizePath(resolvedPath)}`);
-            break;
+    return withTaskTimelineFileReadSnapshot(resolvedPath, () => {
+        if (!taskTimelineAwareFileExists(resolvedPath)) {
+            errors.push(`Task timeline not found: ${normalizePath(resolvedPath)}`);
+            return eventTypes;
         }
-    }
 
-    return eventTypes;
+        for (const timelineEntry of readTaskTimelineJsonlEntries(resolvedPath)) {
+            const parsed = timelineEntry.record;
+            if (!parsed) {
+                errors.push(`Task timeline contains invalid JSON line: ${normalizePath(resolvedPath)}`);
+                break;
+            }
+            try {
+                const eventType = String(parsed.event_type || '').trim().toUpperCase();
+                if (eventType) {
+                    eventTypes.add(eventType);
+                }
+            } catch {
+                errors.push(`Task timeline contains invalid JSON line: ${normalizePath(resolvedPath)}`);
+                break;
+            }
+        }
+
+        return eventTypes;
+    });
 }

@@ -1,5 +1,9 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { readTaskTimelineJsonlEntries } from '../../gate-runtime/task-events';
+import {
+    taskTimelineAwareFileExists,
+    withTaskTimelineFileReadSnapshot
+} from '../../gate-runtime/timeline/task-timeline-read-snapshot';
 
 import { joinOrchestratorPath, normalizePath } from '../shared/helpers';
 
@@ -43,13 +47,15 @@ const REVIEW_RESET_EVENTS = new Set([
 
 function collectTimelineEntries(timelinePath: string, errors: string[]): ReviewLifecycleTimelineEntry[] {
     const entries: ReviewLifecycleTimelineEntry[] = [];
-    const lines = fs.readFileSync(timelinePath, 'utf8')
-        .split('\n')
-        .filter((line) => line.trim().length > 0);
     let sequence = 0;
-    for (const line of lines) {
+    for (const timelineEntry of readTaskTimelineJsonlEntries(timelinePath)) {
+        const parsed = timelineEntry.record;
+        if (!parsed) {
+            errors.push(`Task timeline '${normalizePath(timelinePath)}' contains invalid JSON.`);
+            sequence += 1;
+            continue;
+        }
         try {
-            const parsed = JSON.parse(line) as Record<string, unknown>;
             const eventType = String(parsed.event_type || '').trim().toUpperCase();
             if (eventType) {
                 entries.push({
@@ -165,24 +171,26 @@ export function getReviewLifecycleGuard(
     actionType: ReviewLifecycleActionType
 ): ReviewLifecycleGuardResult {
     const timelinePath = resolveTimelinePath(repoRoot, taskId);
-    if (!fs.existsSync(timelinePath) || !fs.statSync(timelinePath).isFile()) {
-        return {
-            status: 'ALLOW',
-            timeline_path: normalizePath(timelinePath),
-            blocking_event: null,
-            violations: []
-        };
-    }
+    return withTaskTimelineFileReadSnapshot(timelinePath, () => {
+        if (!taskTimelineAwareFileExists(timelinePath)) {
+            return {
+                status: 'ALLOW',
+                timeline_path: normalizePath(timelinePath),
+                blocking_event: null,
+                violations: []
+            };
+        }
 
-    const timelineErrors: string[] = [];
-    const timelineEntries = collectTimelineEntries(timelinePath, timelineErrors);
-    return getReviewLifecycleGuardFromEntries(
-        timelinePath,
-        timelineEntries,
-        timelineErrors.length > 0,
-        actionLabel,
-        actionType
-    );
+        const timelineErrors: string[] = [];
+        const timelineEntries = collectTimelineEntries(timelinePath, timelineErrors);
+        return getReviewLifecycleGuardFromEntries(
+            timelinePath,
+            timelineEntries,
+            timelineErrors.length > 0,
+            actionLabel,
+            actionType
+        );
+    });
 }
 
 export function assertReviewLifecycleGuardFromEntries(

@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { withTaskTimelineReadSnapshot } from '../../../../src/gate-runtime/timeline/task-events';
 import { getReviewLifecycleGuard } from '../../../../src/gates/review/review-lifecycle-guard';
 
 function writeTimeline(root: string, taskId: string, eventTypes: string[]): string {
@@ -79,6 +80,33 @@ describe('gates/review-lifecycle-guard', () => {
             const result = getReviewLifecycleGuard(repoRoot, taskId, 'record-review-routing', 'review_phase');
             assert.equal(result.status, 'ALLOW');
             assert.equal(result.blocking_event, null);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('fails closed when a captured timeline is removed before lifecycle evaluation', () => {
+        const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-guard-'));
+        const taskId = 'T-guard-removed';
+        try {
+            const timelinePath = writeTimeline(repoRoot, taskId, [
+                'TASK_MODE_ENTERED',
+                'PREFLIGHT_CLASSIFIED',
+                'COMPILE_GATE_PASSED'
+            ]);
+            const eventsRoot = path.dirname(timelinePath);
+
+            withTaskTimelineReadSnapshot(eventsRoot, taskId, () => {
+                assert.equal(
+                    getReviewLifecycleGuard(repoRoot, taskId, 'record-review-routing', 'review_phase').status,
+                    'ALLOW'
+                );
+                fs.rmSync(timelinePath);
+                assert.throws(
+                    () => getReviewLifecycleGuard(repoRoot, taskId, 'record-review-routing', 'review_phase'),
+                    /snapshot is unavailable/
+                );
+            });
         } finally {
             fs.rmSync(repoRoot, { recursive: true, force: true });
         }
