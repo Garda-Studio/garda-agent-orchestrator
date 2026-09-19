@@ -2871,6 +2871,21 @@ async function handleRecordReviewResultUnlocked(
     let findingsDisposition: ReviewFindingsDispositionEvaluation | null = null;
     const rawReviewOutputSha256 = sha256ReviewArtifactContent(reviewOutput.reviewContent);
     const correctionComparisonOutputSha256 = computeRawReviewOutputSha256(reviewOutput.reviewContent);
+    const hasCorrectionProducerClaim = Boolean(
+        String(options.correctionProducerIdentity || '').trim()
+        || String(options.correctionProviderInvocationId || '').trim()
+        || String(options.correctionProviderInvocationEventSha256 || '').trim()
+        || String(options.correctionAttestationSource || '').trim()
+        || String(options.correctionLaunchInputSha256 || '').trim()
+        || typeof options.correctionForkContext === 'boolean'
+    );
+    const shouldHandlePendingCorrectionResponse = Boolean(
+        pendingCorrectionArtifact
+        && (
+            correctionComparisonOutputSha256 !== pendingCorrectionArtifact.binding.original_output_sha256
+            || hasCorrectionProducerClaim
+        )
+    );
     const reviewContentLooksLikeFindingsJson = String(reviewContent || '').trim().startsWith('{');
     if (strictFindingsOnlyOutput || (reviewContentLooksLikeFindingsJson && !verdictToken)) {
         let findingsValidation = validateFindingsOnlyReviewOutput({
@@ -2964,7 +2979,7 @@ async function handleRecordReviewResultUnlocked(
                 && pendingCorrectionProducerAttestation
                 && pendingCorrectionLaunchInputSha256
                 && pendingCorrectionOriginalReviewerAttemptId
-                && correctionComparisonOutputSha256 !== pendingCorrectionArtifact.binding.original_output_sha256
+                && shouldHandlePendingCorrectionResponse
             ) {
                 const verification = verifyCorrectedReviewOutput({
                     artifact: pendingCorrectionArtifact,
@@ -3035,7 +3050,7 @@ async function handleRecordReviewResultUnlocked(
                 && pendingCorrectionProducerAttestation
                 && pendingCorrectionLaunchInputSha256
                 && pendingCorrectionOriginalReviewerAttemptId
-                && correctionComparisonOutputSha256 !== pendingCorrectionArtifact.binding.original_output_sha256
+                && shouldHandlePendingCorrectionResponse
             ) {
                 await persistReviewOutputCorrectionRequired({
                     repoRoot,

@@ -3747,13 +3747,11 @@ describe('gates command review result - normalization', () => {
             || originalInvocationDetails.provider_invocation_id
             || originalInvocationSha256
         );
-        const rawOutput = `${JSON.stringify(
-            buildNoFindingsJsonReport(fixture.reviewContextPath, taskId),
-            null,
-            2
-        )}\n`;
+        const originalRejectedReport = buildNoFindingsJsonReport(fixture.reviewContextPath, taskId);
+        originalRejectedReport.unexpected = 'original-rejected-output';
+        const rawOutput = `${JSON.stringify(originalRejectedReport, null, 2)}\n`;
         const invalidCorrectionReport = buildNoFindingsJsonReport(fixture.reviewContextPath, taskId);
-        invalidCorrectionReport.unexpected = true;
+        invalidCorrectionReport.unexpected = 'first-correction-output';
         const invalidCorrectionOutput = `${JSON.stringify(invalidCorrectionReport, null, 2)}\n`;
         const rejectedOutputPath = path.join(fixture.reviewsRoot, `${taskId}-code-rejected-placeholder.md`);
         const validationArtifactContent = '{}\n';
@@ -3944,6 +3942,71 @@ describe('gates command review result - normalization', () => {
         )) as Record<string, unknown>;
         assert.equal(correctionLaunchArtifact.state, 'prepared');
         assert.equal(correctionLaunchArtifact.correction_producer_identity, undefined);
+
+        const secondCorrectionInputSha256 = fileSha256(persisted.artifactPath)!;
+        const secondProducerIdentity = 'agent:/root/correction-only-reviewer-2';
+        const secondProviderInvocationId = '/root/correction-only-reviewer-2';
+        const secondInvocationArgs = [
+            'gate', 'record-review-output-correction-invocation',
+            '--task-id', taskId,
+            '--review-type', 'code',
+            '--correction-artifact-path', persisted.artifactPath,
+            '--correction-producer-identity', secondProducerIdentity,
+            '--provider-invocation-id', secondProviderInvocationId,
+            '--attestation-source', 'codex_collaboration_spawn_agent',
+            '--launch-input-sha256', secondCorrectionInputSha256,
+            '--fork-context', 'false',
+            '--repo-root', repoRoot
+        ];
+        const secondStarted = await runCliWithCapturedOutput(secondInvocationArgs, { cwd: repoRoot });
+        assert.equal(secondStarted.exitCode, 0, secondStarted.errors.join('\n'));
+        const secondLaunchArtifact = JSON.parse(fs.readFileSync(
+            persisted.correctionLaunchArtifactPath!,
+            'utf8'
+        )) as { provider_response_output_path: string };
+        assert.match(secondLaunchArtifact.provider_response_output_path, /\.attempt-2\.provider-response\.json$/u);
+        fs.writeFileSync(secondLaunchArtifact.provider_response_output_path, rawOutput, 'utf8');
+
+        const secondCompleted = await runCliWithCapturedOutput(completionArgs, { cwd: repoRoot });
+        assert.equal(secondCompleted.exitCode, 0, secondCompleted.errors.join('\n'));
+        const secondInvocationTelemetry = [...readTaskTimelineEvents(repoRoot, taskId)]
+            .reverse()
+            .find((event) => {
+                const details = event.details as Record<string, unknown> | undefined;
+                return event.event_type === 'REVIEW_OUTPUT_CORRECTION_INVOCATION_ATTESTED'
+                    && details?.reviewer_identity === secondProducerIdentity;
+            });
+        assert.ok(secondInvocationTelemetry?.details);
+        const secondInvocationDetails = secondInvocationTelemetry.details as Record<string, unknown>;
+        const exhaustedCorrection = await runCliWithCapturedOutput([
+            'gate', 'record-review-result',
+            '--task-id', taskId,
+            '--review-type', 'code',
+            '--preflight-path', fixture.preflightPath,
+            '--review-output-path', secondLaunchArtifact.provider_response_output_path,
+            '--reviewer-execution-mode', 'delegated_subagent',
+            '--reviewer-identity', fixture.reviewerIdentity,
+            '--correction-producer-identity', secondProducerIdentity,
+            '--correction-provider-invocation-id', secondProviderInvocationId,
+            '--correction-provider-invocation-event-sha256', String(
+                secondInvocationDetails.provider_invocation_event_sha256 || ''
+            ),
+            '--correction-attestation-source', 'codex_collaboration_spawn_agent',
+            '--correction-launch-input-sha256', secondCorrectionInputSha256,
+            '--correction-fork-context', 'false',
+            '--repo-root', repoRoot
+        ], { cwd: repoRoot });
+        assert.notEqual(exhaustedCorrection.exitCode, 0);
+        const exhaustedArtifact = JSON.parse(fs.readFileSync(persisted.artifactPath, 'utf8')) as {
+            state: string;
+            recovery: { correction_attempt: number; selected_transport: string };
+        };
+        assert.equal(exhaustedArtifact.recovery.correction_attempt, 3);
+        assert.equal(exhaustedArtifact.state, 'FULL_REVIEW_REQUIRED');
+        assert.equal(exhaustedArtifact.recovery.selected_transport, 'full_reviewer_relaunch');
+        assert.equal(readTaskTimelineEvents(repoRoot, taskId).some((event) => (
+            event.event_type === 'REVIEW_OUTPUT_CORRECTION_FULL_REVIEW_REQUIRED'
+        )), true);
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });
 
