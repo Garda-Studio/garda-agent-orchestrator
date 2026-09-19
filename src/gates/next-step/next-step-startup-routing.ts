@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { resolveBundleRootForTarget } from '../../core/constants';
-import { inspectTaskEventFile } from '../../gate-runtime/task-events';
+import { inspectTaskEventFile, readTaskTimelineJsonlEntries } from '../../gate-runtime/task-events';
 import { evaluateProtectedControlPlaneManifest, normalizePath } from '../shared/helpers';
 import type {
     NextStepCommand,
@@ -30,22 +30,13 @@ function formatFailureReason(value: unknown): string {
     return String(value || 'unavailable').replace(/[\u0000-\u001f\u007f]+/gu, ' ').replace(/\s+/gu, ' ').trim().slice(0, 1000) || 'unavailable';
 }
 
-function readJsonRecordFromText(value: string): Record<string, unknown> | null {
-    try {
-        const parsed = JSON.parse(value);
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
-    } catch {
-        return null;
-    }
-}
-
-function latestEventDetails(repoRoot: string, taskId: string, eventType: string, outcome: string): Record<string, unknown> | null {
-    const timelinePath = path.join(resolveBundleRootForTarget(repoRoot), 'runtime', 'task-events', `${taskId}.jsonl`);
+function latestEventDetails(eventsRoot: string, taskId: string, eventType: string, outcome: string): Record<string, unknown> | null {
+    const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
     const inspection = inspectTaskEventFile(timelinePath, taskId);
     if (inspection.status !== 'PASS' && inspection.status !== 'PASS_WITH_LEGACY_PREFIX') return null;
-    const lines = fs.readFileSync(timelinePath, 'utf8').split('\n').filter((line) => line.trim());
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-        const event = readJsonRecordFromText(lines[index]);
+    const entries = readTaskTimelineJsonlEntries(timelinePath);
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+        const event = entries[index].record;
         if (event?.event_type === eventType && event.outcome === outcome) {
             return event.details && typeof event.details === 'object' && !Array.isArray(event.details)
                 ? event.details as Record<string, unknown> : null;
@@ -54,12 +45,12 @@ function latestEventDetails(repoRoot: string, taskId: string, eventType: string,
     return null;
 }
 
-function recoveryEventDetails(repoRoot: string, taskId: string): Record<string, unknown> | null {
-    return latestEventDetails(repoRoot, taskId, 'TASK_MODE_PROTECTED_MANIFEST_RECOVERED', 'PASS');
+function recoveryEventDetails(eventsRoot: string, taskId: string): Record<string, unknown> | null {
+    return latestEventDetails(eventsRoot, taskId, 'TASK_MODE_PROTECTED_MANIFEST_RECOVERED', 'PASS');
 }
 
-function trustedFailureArtifact(repoRoot: string, taskId: string, failurePath: string, failure: Record<string, unknown>): boolean {
-    const details = latestEventDetails(repoRoot, taskId, 'TASK_MODE_ENTRY_FAILED', 'FAIL');
+function trustedFailureArtifact(eventsRoot: string, taskId: string, failurePath: string, failure: Record<string, unknown>): boolean {
+    const details = latestEventDetails(eventsRoot, taskId, 'TASK_MODE_ENTRY_FAILED', 'FAIL');
     const attemptPath = path.resolve(String(details?.artifact_path || ''));
     const reviewsRoot = path.dirname(failurePath);
     const expectedAttemptName = new RegExp(`^${taskId.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}-task-mode-entry-failure-[0-9a-f-]{36}\\.json$`, 'iu');
@@ -112,19 +103,24 @@ function buildValidatedFreshEntryCommand(cliPrefix: string, taskId: string, valu
     return parts.join(' ');
 }
 
-export function readTaskModeProtectedManifestRecoveryRoute(repoRoot: string, taskId: string, cliPrefix: string): {
+export function readTaskModeProtectedManifestRecoveryRoute(
+    repoRoot: string,
+    eventsRoot: string,
+    taskId: string,
+    cliPrefix: string
+): {
     recovered: boolean; reason: string; command: string;
 } | null {
     const reviewsRoot = path.join(resolveBundleRootForTarget(repoRoot), 'runtime', 'reviews');
     const failurePath = path.join(reviewsRoot, `${taskId}-task-mode-entry-failure.json`);
     const failure = readJsonRecord(failurePath);
     if (!failure) return null;
-    if (!trustedFailureArtifact(repoRoot, taskId, failurePath, failure)) return null;
+    if (!trustedFailureArtifact(eventsRoot, taskId, failurePath, failure)) return null;
     const taskMode = readJsonRecord(path.join(reviewsRoot, `${taskId}-task-mode.json`));
     if (taskMode && Date.parse(String(taskMode.timestamp_utc || '')) > Date.parse(String(failure.timestamp_utc || ''))) return null;
     const recoveryPath = path.join(reviewsRoot, `${taskId}-task-mode-entry-recovery.json`);
     const recovery = readJsonRecord(recoveryPath);
-    const eventDetails = recoveryEventDetails(repoRoot, taskId);
+    const eventDetails = recoveryEventDetails(eventsRoot, taskId);
     const requestedEntry = failure.requested_entry;
     const freshEntryCommand = buildValidatedFreshEntryCommand(cliPrefix, taskId, requestedEntry);
     const recoveryMatchesFailure = recovery

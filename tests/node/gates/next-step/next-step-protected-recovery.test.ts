@@ -153,7 +153,11 @@ function writeRecoveryEvent(repoRoot: string, details: Record<string, unknown>, 
     fs.appendFileSync(timelinePath, `${JSON.stringify(event)}\n`, 'utf8');
 }
 
-function writeTrustedFailure(repoRoot: string, overrides: Record<string, unknown> = {}): {
+function writeTrustedFailure(
+    repoRoot: string,
+    overrides: Record<string, unknown> = {},
+    targetEventsRoot = eventsRoot(repoRoot)
+): {
     failurePath: string; failure: Record<string, unknown>;
 } {
     const attemptId = '11111111-1111-4111-8111-111111111111';
@@ -185,7 +189,8 @@ function writeTrustedFailure(repoRoot: string, overrides: Record<string, unknown
         public_metadata: {}, integrity: { schema_version: 1, task_sequence: 1, prev_event_sha256: null }
     };
     (event.integrity as Record<string, unknown>).event_sha256 = buildEventIntegrityHash(event);
-    fs.writeFileSync(path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`), `${JSON.stringify(event)}\n`, 'utf8');
+    fs.mkdirSync(targetEventsRoot, { recursive: true });
+    fs.writeFileSync(path.join(targetEventsRoot, `${TASK_ID}.jsonl`), `${JSON.stringify(event)}\n`, 'utf8');
     return { failurePath, failure };
 }
 
@@ -482,6 +487,21 @@ describe('gates/next-step protected recovery', () => {
         assert.doesNotMatch(result.reason, /repair protected-manifest/);
         assert.ok(result.commands[0].command.includes('--operator-confirmed yes'));
         assert.ok(result.commands[0].command.includes('--operator-confirmed-at-utc "<ISO-8601 timestamp>"'));
+    });
+
+    it('uses an overridden events root for protected-manifest recovery evidence', () => {
+        const repoRoot = makeTempRepo();
+        const customEventsRoot = path.join(repoRoot, 'custom-runtime', 'task-events');
+        writeTrustedFailure(repoRoot, {
+            manifest_status: 'INVALID',
+            affected_protected_paths: ['src/gates/next-step/next-step.ts'],
+            reason: 'Trusted protected manifest is invalid.'
+        }, customEventsRoot);
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot, eventsRoot: customEventsRoot });
+
+        assert.equal(result.next_gate, 'recover-task-mode-protected-manifest');
+        assert.match(result.reason, /status is INVALID/);
     });
 
     it('persisted task-mode manifest failure rejects forged, replaced, foreign, or mismatched evidence', () => {

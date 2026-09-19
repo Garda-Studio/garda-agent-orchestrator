@@ -46,12 +46,13 @@ import {
     withReviewArtifactReadBarrier
 } from '../../gate-runtime/review-artifacts';
 import { withTaskIndexReadSnapshot } from '../../gate-runtime/reviews-index';
-import { assertValidTaskId } from '../../gate-runtime/task-events';
+import { assertValidTaskId, withTaskTimelineReadSnapshot } from '../../gate-runtime/task-events';
 import {
     buildTaskAuditSummary,
     type TaskAuditSummaryResult
 } from '../task-audit/task-audit-summary';
 import {
+    resolveEventsRoot,
     resolveReviewsRoot,
     type GateOutcome
 } from '../task-audit/task-audit-summary-collectors';
@@ -3288,7 +3289,7 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
     });
     const startupRoute = resolveStartupDecisionRoute({
         enterTaskModePassed: isGatePassed(summary, 'enter-task-mode'),
-        protectedManifestRecovery: readTaskModeProtectedManifestRecoveryRoute(repoRoot, taskId, cliPrefix),
+        protectedManifestRecovery: readTaskModeProtectedManifestRecoveryRoute(repoRoot, eventsRoot, taskId, cliPrefix),
         defaultExecutionProvider,
         enterTaskModeCommand: buildEnterTaskModeCommand(repoRoot, cliPrefix, taskId, taskEntry, defaultExecutionProvider),
         startupCycleReadiness,
@@ -4860,6 +4861,14 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
 export function resolveNextStep(options: NextStepOptions): NextStepResult {
     const repoRoot = path.resolve(options.repoRoot || '.');
     const taskId = assertValidTaskId(options.taskId);
+    const eventsRoot = resolvePathInsideRepo(
+        resolveEventsRoot(repoRoot, options.eventsRoot),
+        repoRoot,
+        { allowMissing: true }
+    );
+    if (!eventsRoot) {
+        throw new Error('EventsRoot must resolve inside repo root without symlink or junction escape.');
+    }
     const reviewsRoot = resolvePathInsideRepo(
         resolveReviewsRoot(repoRoot, options.reviewsRoot),
         repoRoot,
@@ -4868,16 +4877,19 @@ export function resolveNextStep(options: NextStepOptions): NextStepResult {
     if (!reviewsRoot) {
         throw new Error('ReviewsRoot must resolve inside repo root without symlink or junction escape.');
     }
-    return withReviewArtifactReadBarrier(reviewsRoot, () => (
-        withTaskIndexReadSnapshot(reviewsRoot, taskId, () => {
-            const context = createNextStepResolutionContext({
-                ...options,
-                repoRoot,
-                taskId,
-                reviewsRoot
-            });
-            return resolveNextStepDecisionRoute(context);
-        })
+    return withTaskTimelineReadSnapshot(eventsRoot, taskId, () => (
+        withReviewArtifactReadBarrier(reviewsRoot, () => (
+            withTaskIndexReadSnapshot(reviewsRoot, taskId, () => {
+                const context = createNextStepResolutionContext({
+                    ...options,
+                    repoRoot,
+                    taskId,
+                    eventsRoot,
+                    reviewsRoot
+                });
+                return resolveNextStepDecisionRoute(context);
+            })
+        ))
     ));
 }
 

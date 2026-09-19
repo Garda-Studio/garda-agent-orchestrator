@@ -96,6 +96,52 @@ function appendEvent(
     fs.appendFileSync(timelinePath, `${JSON.stringify(line)}\n`, 'utf8');
 }
 
+function inflateTaskTimeline(repoRoot: string, taskId: string, minimumBytes: number): string {
+    const timelinePath = path.join(eventsRoot(repoRoot), `${taskId}.jsonl`);
+    const existingText = fs.readFileSync(timelinePath, 'utf8');
+    const existingLines = existingText.split('\n').filter((line) => line.trim());
+    const previousEvent = existingLines.length > 0
+        ? JSON.parse(existingLines[existingLines.length - 1]) as Record<string, unknown>
+        : null;
+    const previousIntegrity = previousEvent?.integrity && typeof previousEvent.integrity === 'object'
+        ? previousEvent.integrity as Record<string, unknown>
+        : null;
+    let previousHash = typeof previousIntegrity?.event_sha256 === 'string'
+        ? previousIntegrity.event_sha256
+        : null;
+    let taskSequence = existingLines.length;
+    const chunks = [existingText.endsWith('\n') ? existingText : `${existingText}\n`];
+    let totalBytes = Buffer.byteLength(chunks[0], 'utf8');
+    while (totalBytes < minimumBytes) {
+        taskSequence += 1;
+        const event: Record<string, unknown> = {
+            task_id: taskId,
+            event_type: 'PERFORMANCE_FIXTURE_EVENT',
+            outcome: 'PASS',
+            actor: 'test',
+            message: 'large timeline fixture',
+            timestamp_utc: new Date(1_700_000_000_000 + taskSequence).toISOString(),
+            details: {
+                fixture_index: taskSequence,
+                padding: 'x'.repeat(2048)
+            },
+            integrity: {
+                schema_version: 1,
+                task_sequence: taskSequence,
+                prev_event_sha256: previousHash,
+                event_sha256: null
+            }
+        };
+        previousHash = buildEventIntegrityHash(event);
+        (event.integrity as Record<string, unknown>).event_sha256 = previousHash;
+        const serialized = `${JSON.stringify(event)}\n`;
+        chunks.push(serialized);
+        totalBytes += Buffer.byteLength(serialized, 'utf8');
+    }
+    fs.writeFileSync(timelinePath, chunks.join(''), 'utf8');
+    return timelinePath;
+}
+
 function normalizeForTimeline(filePath: string): string {
     return filePath.replace(/\\/g, '/');
 }
@@ -596,6 +642,36 @@ function buildTaskStartReviewSnapshot(options: { zeroDiff?: boolean; requireCode
 }
 
 describe('next-step refactor contract baseline', () => {
+    it('physically reads one authenticated multi-megabyte task timeline snapshot per resolution', () => {
+        const repoRoot = makeContractRepo();
+        seedStartedTask(repoRoot, TASK_ID);
+        const timelinePath = inflateTaskTimeline(repoRoot, TASK_ID, 3 * 1024 * 1024);
+
+        const fsModule = require('node:fs') as typeof fs;
+        const originalOpenSync = fsModule.openSync;
+        let authenticatedTimelineReadCount = 0;
+        const timelineReadSites: string[] = [];
+        fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+            const stack = new Error().stack || 'stack unavailable';
+            if (
+                path.resolve(String(targetPath)) === path.resolve(timelinePath)
+                && stack.includes('captureTaskTimelineRead')
+            ) {
+                authenticatedTimelineReadCount += 1;
+                timelineReadSites.push(`openSync: ${stack}`);
+            }
+            return originalOpenSync(targetPath, flags, mode);
+        }) as typeof fsModule.openSync;
+        try {
+            const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+            assert.equal(result.next_gate, 'record-strict-decomposition-decision');
+        } finally {
+            fsModule.openSync = originalOpenSync;
+        }
+
+        assert.equal(authenticatedTimelineReadCount, 1, timelineReadSites.join('\n\n'));
+    });
+
     it('reads one large reviews index snapshot without per-lane directory scans', () => {
         const repoRoot = makeContractRepo();
         seedStartedTask(repoRoot, TASK_ID);
