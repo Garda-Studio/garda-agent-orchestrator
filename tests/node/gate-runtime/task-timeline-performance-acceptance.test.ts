@@ -14,6 +14,7 @@ import {
     readTaskTimelineTextFile,
     withTaskTimelineReadSnapshot
 } from '../../../src/gate-runtime/timeline/task-events';
+import { isTaskTimelineReadSnapshotActive } from '../../../src/gate-runtime/timeline/task-timeline-read-snapshot';
 
 const MULTI_MEGABYTE_FIXTURE_BYTES = 2 * 1024 * 1024;
 const LATENCY_SAMPLE_COUNT = 20;
@@ -722,23 +723,50 @@ async function verifyOverlappingInvocations(context: TestContext, fixtureSize: '
             const beforeAppendByteLength = ioProbe.withoutRecording(() => fs.statSync(fixture.timelinePath).size);
             let releaseFirst!: () => void;
             let signalFirstReady!: () => void;
+            let signalSecondReady!: () => void;
+            let signalFirstOverlapConfirmed!: () => void;
+            let firstInvocationSettled = false;
             const firstReady = new Promise<void>((resolve) => {
                 signalFirstReady = resolve;
+            });
+            const secondReady = new Promise<void>((resolve) => {
+                signalSecondReady = resolve;
+            });
+            const firstOverlapConfirmed = new Promise<void>((resolve) => {
+                signalFirstOverlapConfirmed = resolve;
             });
             const firstRelease = new Promise<void>((resolve) => {
                 releaseFirst = resolve;
             });
             const startedAt = performance.now();
             const firstInvocation = withTaskTimelineReadSnapshot(fixture.eventsRoot, taskId, async () => {
-                readTaskTimelineTextFile(fixture.timelinePath);
-                signalFirstReady();
-                await firstRelease;
-                assert.throws(() => readTaskTimelineTextFile(fixture.timelinePath), /snapshot is unavailable/);
+                try {
+                    readTaskTimelineTextFile(fixture.timelinePath);
+                    assert.equal(isTaskTimelineReadSnapshotActive(fixture.timelinePath), true);
+                    signalFirstReady();
+                    await secondReady;
+                    try {
+                        assert.equal(isTaskTimelineReadSnapshotActive(fixture.timelinePath), true);
+                    } finally {
+                        signalFirstOverlapConfirmed();
+                    }
+                    await firstRelease;
+                    assert.equal(isTaskTimelineReadSnapshotActive(fixture.timelinePath), true);
+                    assert.throws(() => readTaskTimelineTextFile(fixture.timelinePath), /snapshot is unavailable/);
+                } finally {
+                    firstInvocationSettled = true;
+                }
             });
             await Promise.race([firstReady, firstInvocation]);
 
             try {
                 await withTaskTimelineReadSnapshot(fixture.eventsRoot, taskId, async () => {
+                    signalSecondReady();
+                    assert.equal(isTaskTimelineReadSnapshotActive(fixture.timelinePath), true);
+                    assert.equal(firstInvocationSettled, false);
+                    await firstOverlapConfirmed;
+                    assert.equal(isTaskTimelineReadSnapshotActive(fixture.timelinePath), true);
+                    assert.equal(firstInvocationSettled, false);
                     const result = appendTaskEvent(
                         fixture.orchestratorRoot,
                         taskId,
@@ -750,6 +778,7 @@ async function verifyOverlappingInvocations(context: TestContext, fixtureSize: '
                     );
                     assert.equal(result?.commit_status, 'committed');
                     assert.match(readTaskTimelineTextFile(fixture.timelinePath), /PERFORMANCE_ACCEPTANCE_OVERLAP_/);
+                    assert.equal(firstInvocationSettled, false);
                     heapProbe.sample();
                 });
                 const appendedByteLength = ioProbe.withoutRecording(() => fs.statSync(fixture.timelinePath).size);
