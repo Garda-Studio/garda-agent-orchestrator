@@ -410,6 +410,37 @@ describe('gates/next-step quality checklist routing', () => {
         assert.equal(resolveNextStep({ taskId: TASK_ID, repoRoot }).next_gate, 'compile-gate');
     });
 
+    it('surfaces completed answer validation failures instead of reporting zero answers', () => {
+        const repoRoot = makeTempRepo();
+        writeWorkflowConfig(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+
+        const initial = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        assert.equal(initial.next_gate, 'quality-checklist', initial.reason);
+        const answersPath = qualityChecklistAnswersPath(repoRoot);
+        const template = JSON.parse(fs.readFileSync(answersPath, 'utf8')) as {
+            answers: Array<Record<string, unknown>>;
+        };
+        template.answers = template.answers.map((answer, index) => ({
+            ...answer,
+            status: index === 0 ? 'INVALID' : 'PASS',
+            answer: `Completed answer for ${String(answer.rule_id)}.`
+        }));
+        fs.writeFileSync(answersPath, JSON.stringify(template, null, 2) + '\n', 'utf8');
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+
+        assert.equal(result.next_gate, 'quality-checklist', result.reason);
+        assert.equal(result.commands.length, 0);
+        assert.equal(result.quality_checklist?.evidence_status, 'invalid');
+        assert.equal(result.quality_checklist?.status, 'CONFIG_ERROR');
+        assert.equal(result.quality_checklist?.answer_count, template.answers.length - 1);
+        assert.match(result.reason, /Completed quality checklist answers failed validation/u);
+        assert.match(result.reason, /Missing answer for active quality-check rule 'code_simplification'/u);
+        assert.match(result.reason, /Correct the answers template and rerun next-step/u);
+    });
+
     it('keeps a current blank answers template in the manual completion route', () => {
         const repoRoot = makeTempRepo();
         writeWorkflowConfig(repoRoot);

@@ -658,6 +658,54 @@ export function readQualityChecklistReadiness(options: {
             options.repoRoot,
             path.join('runtime', 'tmp', `${options.taskId}-quality-checklist-questions.md`)
         );
+        if (templateMaterialization.answersPath && !templateMaterialization.error) {
+            try {
+                const assessment = assessQualityChecklistAnswersTemplateFile({
+                    repoRoot: options.repoRoot,
+                    taskId: options.taskId,
+                    preflightPath: options.preflightPath,
+                    answersPath: templateMaterialization.answersPath
+                });
+                const completedTemplate = assessment.status === 'current' && assessment.template
+                    && assessment.template.answers.every((answer) => (
+                        String(answer.status || '').trim().length > 0
+                        && String(answer.answer || '').trim().length > 0
+                    ));
+                if (completedTemplate && assessment.template) {
+                    const candidate = buildQualityChecklistArtifact({
+                        repoRoot: options.repoRoot,
+                        taskId: options.taskId,
+                        preflightPath: options.preflightPath,
+                        answers: assessment.template
+                    }) as unknown as Record<string, unknown>;
+                    const candidateStatus = String(candidate.status || '').trim().toUpperCase();
+                    if (candidateStatus === 'CONFIG_ERROR') {
+                        return buildReadiness({
+                            enabled,
+                            required,
+                            ready: false,
+                            status: candidateStatus,
+                            evidenceStatus: 'invalid',
+                            effect: 'invalid',
+                            reason:
+                                'Completed quality checklist answers failed validation. ' +
+                                `Violations: ${formatQualityChecklistActions(candidate.violations) || 'unknown validation error'}. ` +
+                                'Correct the answers template and rerun next-step.',
+                            artifactPath,
+                            artifact: candidate,
+                            changedFilesCount,
+                            scopeCategory,
+                            enabledRuleCount,
+                            activeRuleCount,
+                            skippedByScopeRuleCount,
+                            answersTemplatePath: templateMaterialization.answersPath
+                        });
+                    }
+                }
+            } catch {
+                // Template assessment diagnostics remain owned by the existing materialization path.
+            }
+        }
         return buildReadiness({
             enabled,
             required,
