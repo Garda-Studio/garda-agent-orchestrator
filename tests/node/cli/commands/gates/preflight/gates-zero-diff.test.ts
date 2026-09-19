@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -25,6 +26,60 @@ import {
 import { createManagedTestTempDirectory } from '../../gate-test-temp-manager';
 
 const TEST_COMPILE_GATE_COMMAND = 'node -e "console.log(\'build ok\')"';
+const CLI_EXECUTION_TIMEOUT_MS = 30_000;
+
+function findSourceRepoRoot(): string {
+    let current = path.resolve(__dirname);
+    while (current !== path.dirname(current)) {
+        if (fs.existsSync(path.join(current, 'package.json')) && fs.existsSync(path.join(current, 'bin', 'garda.js'))) {
+            return current;
+        }
+        current = path.dirname(current);
+    }
+    throw new Error(`Cannot resolve source repo root from ${__dirname}`);
+}
+
+const SOURCE_REPO_ROOT = findSourceRepoRoot();
+
+function writeBundleCliProxy(repoRoot: string): string {
+    const cliPath = path.join(repoRoot, 'garda-agent-orchestrator', 'bin', 'garda.js');
+    fs.mkdirSync(path.dirname(cliPath), { recursive: true });
+    fs.writeFileSync(
+        cliPath,
+        `const { main } = require(${JSON.stringify(path.join(SOURCE_REPO_ROOT, 'bin', 'garda.js'))});\nvoid main();\n`,
+        'utf8'
+    );
+    return cliPath;
+}
+
+function runCli(repoRoot: string, cliPath: string, args: string[]) {
+    return spawnSync(process.execPath, [cliPath, ...args], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        timeout: CLI_EXECUTION_TIMEOUT_MS,
+        windowsHide: true
+    });
+}
+
+function executePrintedCommand(repoRoot: string, command: string) {
+    return spawnSync(command, {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        shell: true,
+        timeout: CLI_EXECUTION_TIMEOUT_MS,
+        windowsHide: true
+    });
+}
+
+function combinedCliOutput(result: ReturnType<typeof spawnSync>): string {
+    return `${result.stdout || ''}\n${result.stderr || ''}`;
+}
+
+function readPrintedCommand(output: string): string {
+    const match = /^  Command: (.+)$/mu.exec(output);
+    assert.ok(match, output);
+    return match[1].trim();
+}
 
 function createTempRepo(): string {
     const root = createManagedTestTempDirectory('repo-');
@@ -204,7 +259,8 @@ function appendPreflightClassifiedEvent(repoRoot: string, taskId: string, prefli
             changed_files_count: changedFilesCount,
             changed_lines_total: changedLinesTotal,
             required_reviews: preflight.required_reviews || {},
-            zero_diff_guard: zeroDiffGuard
+            zero_diff_guard: zeroDiffGuard,
+            effective_review_snapshot: preflight.effective_review_snapshot
         }
     );
 }
@@ -505,6 +561,7 @@ describe('cli/commands/gates', () => {
     it('requires audited no-op evidence before zero-diff completion can pass', { concurrency: false }, async () => {
         const repoRoot = createTempRepo();
         const taskId = 'T-903b';
+        const cliPath = writeBundleCliProxy(repoRoot);
         const workflowConfigPath = path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config', 'workflow-config.json');
         const workflowConfig = JSON.parse(fs.readFileSync(workflowConfigPath, 'utf8')) as ReturnType<typeof buildDefaultWorkflowConfig>;
         workflowConfig.full_suite_validation.enabled = true;
@@ -573,15 +630,17 @@ describe('cli/commands/gates', () => {
         });
         assert.equal(noOpResult.exitCode, 0);
 
-        // Review gate should now pass with no-op artifact and no compile artifact.
-        const passedReviewResult = runRequiredReviewsCheckCommand({
-            repoRoot,
-            taskId,
-            preflightPath,
-            outputFiltersPath,
-            emitMetrics: false
-        });
-        assert.equal(passedReviewResult.exitCode, 0);
+        // Execute the exact closeout command printed by next-step through the CLI boundary.
+        const nextStepResult = runCli(repoRoot, cliPath, ['next-step', taskId, '--repo-root', '.']);
+        const nextStepOutput = combinedCliOutput(nextStepResult);
+        assert.equal(nextStepResult.status, 0, nextStepOutput);
+        const printedCommand = readPrintedCommand(nextStepOutput);
+        assert.match(printedCommand, /^node garda-agent-orchestrator\/bin\/garda\.js gate required-reviews-check /u);
+
+        const passedReviewResult = executePrintedCommand(repoRoot, printedCommand);
+        const passedReviewOutput = combinedCliOutput(passedReviewResult);
+        assert.equal(passedReviewResult.status, 0, passedReviewOutput);
+        assert.match(passedReviewOutput, /REVIEW_GATE_PASSED/u);
         assert.equal(
             readTaskTimelineEvents(repoRoot, taskId)
                 .some((event) => event.event_type === 'COMPILE_GATE_PASSED'),
