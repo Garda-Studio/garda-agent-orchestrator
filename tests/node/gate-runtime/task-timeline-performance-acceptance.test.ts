@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 
 import {
     appendTaskEvent,
@@ -21,6 +21,9 @@ const MAX_ACCEPTANCE_SCENARIO_P95_LATENCY_MS = 5_000;
 const MAX_ACCEPTANCE_SCENARIO_P95_MEDIAN_SPREAD_MS = 1_000;
 const SCENARIO_HEAP_GROWTH_SAMPLE_BUDGET_BYTES = 2 * 1024 * 1024;
 const SCENARIO_HEAP_GROWTH_PAYLOAD_MULTIPLIER = 32;
+const OVERLAPPING_INVOCATION_COUNT = 2;
+// Direct seeding leaves the append index cold; its first reconstruction adds paired path checks.
+const COLD_APPEND_INDEX_AUTHORITY_CHECKS = 22;
 const tempRoots: string[] = [];
 
 interface TimelineFixture {
@@ -375,12 +378,16 @@ function createHeapUsageProbe(): HeapUsageProbe {
     };
 }
 
-function assertHeapUsageBounded(probe: HeapUsageProbe, payloadBytes: number): void {
-    probe.sample();
-    const budgetBytes = Math.max(
+function scenarioHeapBudgetBytes(payloadBytes: number, concurrentInvocations: number): number {
+    return Math.max(
         LATENCY_SAMPLE_COUNT * SCENARIO_HEAP_GROWTH_SAMPLE_BUDGET_BYTES,
-        payloadBytes * SCENARIO_HEAP_GROWTH_PAYLOAD_MULTIPLIER
+        payloadBytes * SCENARIO_HEAP_GROWTH_PAYLOAD_MULTIPLIER * concurrentInvocations
     );
+}
+
+function assertHeapUsageBounded(probe: HeapUsageProbe, payloadBytes: number, concurrentInvocations = 1): void {
+    probe.sample();
+    const budgetBytes = scenarioHeapBudgetBytes(payloadBytes, concurrentInvocations);
     assert.ok(
         probe.maxGrowthBytes() <= budgetBytes,
         `Scenario heap growth exceeded ${budgetBytes} bytes: ${probe.maxGrowthBytes()} bytes.`
@@ -401,7 +408,7 @@ function authorityCallMetrics(metrics: TimelineReadMetrics): Record<string, numb
     };
 }
 
-function assertStableScenarioLatency(samplesMs: number[]): void {
+function assertStableScenarioLatency(samplesMs: number[]): { medianMs: number; p95Ms: number } {
     assert.equal(samplesMs.length, LATENCY_SAMPLE_COUNT);
     assert.ok(LATENCY_SAMPLE_COUNT >= 20, 'A p95 order statistic requires at least 20 measured samples.');
     const sortedSamples = [...samplesMs].sort((left, right) => left - right);
@@ -418,6 +425,55 @@ function assertStableScenarioLatency(samplesMs: number[]): void {
         p95Ms - medianMs <= MAX_ACCEPTANCE_SCENARIO_P95_MEDIAN_SPREAD_MS,
         `Acceptance scenario p95-to-median spread exceeded ${MAX_ACCEPTANCE_SCENARIO_P95_MEDIAN_SPREAD_MS} ms: ${(p95Ms - medianMs).toFixed(1)} ms.`
     );
+    return { medianMs, p95Ms };
+}
+
+function assertAppendAuthoritySamples(
+    samples: Array<{ lstat: number; realpath: number }>,
+    baseline: { lstat: number; realpath: number },
+    coldIndexChecks: number
+): void {
+    assert.deepEqual(samples, Array.from({ length: LATENCY_SAMPLE_COUNT }, (_, index) => ({
+        lstat: baseline.lstat + (index === 0 ? coldIndexChecks : 0),
+        realpath: baseline.realpath + (index === 0 ? coldIndexChecks : 0)
+    })));
+}
+
+function recordScenarioMeasurements(
+    context: TestContext,
+    latencySamplesMs: number[],
+    payloadBytes: number,
+    probes: {
+        io: TimelineReadProbe;
+        allocation: BufferAllocationProbe;
+        heap: HeapUsageProbe;
+        concurrentInvocations?: number;
+        retainedPayloadBytes?: number;
+    }
+): void {
+    const latency = assertStableScenarioLatency(latencySamplesMs);
+    context.diagnostic(`TIMELINE_ACCEPTANCE_MEASUREMENTS ${JSON.stringify({
+        schema_version: 1,
+        scenario: context.name,
+        node_version: process.versions.node,
+        platform: process.platform,
+        payload_bytes: payloadBytes,
+        retained_payload_bytes: probes.retainedPayloadBytes ?? payloadBytes,
+        concurrent_invocations: probes.concurrentInvocations ?? 1,
+        sample_count: latencySamplesMs.length,
+        median_ms: Number(latency.medianMs.toFixed(3)),
+        p95_ms: Number(latency.p95Ms.toFixed(3)),
+        max_ms: Number(Math.max(...latencySamplesMs).toFixed(3)),
+        io_scope: 'canonical_timeline_and_events_root',
+        physical_io: { ...probes.io.metrics },
+        buffer_metrics: {
+            full_payload_allocations: probes.allocation.fullPayloadAllocationCount(),
+            full_payload_concats: probes.allocation.fullPayloadConcatCount(),
+            full_payload_string_conversions: probes.allocation.fullPayloadStringConversionCount()
+        },
+        heap_growth_bytes: probes.heap.maxGrowthBytes(),
+        heap_budget_bytes: scenarioHeapBudgetBytes(probes.retainedPayloadBytes ?? payloadBytes, probes.concurrentInvocations ?? 1)
+    })}`);
 }
 
 test.afterEach(() => {
@@ -426,7 +482,7 @@ test.afterEach(() => {
     }
 });
 
-test('multi-megabyte read-only invocation captures and allocates the canonical payload once', () => {
+test('multi-megabyte read-only invocation captures and allocates the canonical payload once', (context) => {
     const taskId = 'T-PERFORMANCE-LARGE-READ';
     const fixture = seedLargeIntegrityTimeline(taskId);
     withTaskTimelineReadSnapshot(fixture.eventsRoot, taskId, () => {
@@ -435,6 +491,7 @@ test('multi-megabyte read-only invocation captures and allocates the canonical p
     const ioProbe = installTimelineReadProbe(fixture.timelinePath);
     const allocationProbe = installBufferAllocationProbe(fixture.byteLength);
     const heapProbe = createHeapUsageProbe();
+    const latencySamplesMs: number[] = [];
     const originalJsonParse = JSON.parse;
     let jsonParseCalls = 0;
     JSON.parse = ((text: string, reviver?: (this: unknown, key: string, value: unknown) => unknown) => {
@@ -443,7 +500,6 @@ test('multi-megabyte read-only invocation captures and allocates the canonical p
     }) as typeof JSON.parse;
 
     try {
-        const latencySamplesMs: number[] = [];
         for (let sampleIndex = 0; sampleIndex < LATENCY_SAMPLE_COUNT; sampleIndex += 1) {
             const startedAt = performance.now();
             withTaskTimelineReadSnapshot(fixture.eventsRoot, taskId, () => {
@@ -461,7 +517,6 @@ test('multi-megabyte read-only invocation captures and allocates the canonical p
             });
             latencySamplesMs.push(performance.now() - startedAt);
         }
-        assertStableScenarioLatency(latencySamplesMs);
 
         const expectedBytes = fixture.byteLength * LATENCY_SAMPLE_COUNT;
         assert.equal(ioProbe.metrics.descriptorOpenCount, LATENCY_SAMPLE_COUNT);
@@ -493,9 +548,12 @@ test('multi-megabyte read-only invocation captures and allocates the canonical p
         allocationProbe.restore();
         ioProbe.restore();
     }
+    recordScenarioMeasurements(context, latencySamplesMs, fixture.byteLength, {
+        io: ioProbe, allocation: allocationProbe, heap: heapProbe
+    });
 });
 
-test('standalone bounded-tail capture reads and allocates only its configured window', () => {
+test('standalone bounded-tail capture reads and allocates only its configured window', (context) => {
     const taskId = 'T-PERFORMANCE-BOUNDED-TAIL';
     const fixture = createTimelineFixture(taskId);
     const record = JSON.stringify({ task_id: taskId, sequence: 1, payload: 'x'.repeat(512) });
@@ -515,9 +573,9 @@ test('standalone bounded-tail capture reads and allocates only its configured wi
     const ioProbe = installTimelineReadProbe(fixture.timelinePath);
     const allocationProbe = installBufferAllocationProbe(configuredWindowBytes + 1);
     const heapProbe = createHeapUsageProbe();
+    const latencySamplesMs: number[] = [];
 
     try {
-        const latencySamplesMs: number[] = [];
         for (let sampleIndex = 0; sampleIndex < LATENCY_SAMPLE_COUNT; sampleIndex += 1) {
             const startedAt = performance.now();
             const result = readTaskTimelineBoundedJsonlTail<Record<string, unknown>>(
@@ -529,7 +587,6 @@ test('standalone bounded-tail capture reads and allocates only its configured wi
             assert.ok(result.records.length > 0);
             heapProbe.sample();
         }
-        assertStableScenarioLatency(latencySamplesMs);
 
         const expectedBytes = configuredWindowBytes * LATENCY_SAMPLE_COUNT;
         assert.equal(ioProbe.metrics.descriptorOpenCount, LATENCY_SAMPLE_COUNT);
@@ -557,22 +614,33 @@ test('standalone bounded-tail capture reads and allocates only its configured wi
         allocationProbe.restore();
         ioProbe.restore();
     }
+    recordScenarioMeasurements(context, latencySamplesMs, (Buffer.byteLength(record) + 1) * recordCount, {
+        io: ioProbe, allocation: allocationProbe, heap: heapProbe, retainedPayloadBytes: configuredWindowBytes
+    });
 });
 
-test('repeated canonical appends perform one authenticated payload capture per generation', () => {
-    const taskId = 'T-PERFORMANCE-REPEATED-APPEND';
-    const fixture = seedSmallTimeline(taskId);
+function verifyCanonicalSelfWrite(context: TestContext, fixtureSize: 'small' | 'multi-megabyte'): void {
+    const taskId = `T-PERFORMANCE-REPEATED-APPEND-${fixtureSize === 'small' ? 'SMALL' : 'LARGE'}`;
+    const fixture = fixtureSize === 'small' ? seedSmallTimeline(taskId) : seedLargeIntegrityTimeline(taskId);
     const initialByteLength = fs.statSync(fixture.timelinePath).size;
+    const coldIndexChecks = fixtureSize === 'small' ? 0 : COLD_APPEND_INDEX_AUTHORITY_CHECKS;
+    if (fixtureSize === 'multi-megabyte') assert.ok(initialByteLength >= MULTI_MEGABYTE_FIXTURE_BYTES);
+    withTaskTimelineReadSnapshot(fixture.eventsRoot, taskId, () => {
+        assert.equal(inspectTaskEventFile(fixture.timelinePath, taskId).status, 'PASS');
+    });
     const ioProbe = installTimelineReadProbe(fixture.timelinePath);
     const allocationProbe = installBufferAllocationProbe(initialByteLength);
     const heapProbe = createHeapUsageProbe();
     const generationByteLengths = [initialByteLength];
+    const latencySamplesMs: number[] = [];
+    const appendAuthoritySamples: Array<{ lstat: number; realpath: number }> = [];
 
     try {
-        const latencySamplesMs: number[] = [];
         withTaskTimelineReadSnapshot(fixture.eventsRoot, taskId, () => {
-            assert.match(readTaskTimelineTextFile(fixture.timelinePath), /PERFORMANCE_ACCEPTANCE_SEED/);
+            const seedEventType = fixtureSize === 'small' ? 'PERFORMANCE_ACCEPTANCE_SEED' : 'PERFORMANCE_ACCEPTANCE';
+            assert.ok(readTaskTimelineTextFile(fixture.timelinePath).includes(`"event_type":"${seedEventType}"`));
             for (let index = 0; index < LATENCY_SAMPLE_COUNT; index += 1) {
+                const beforeAuthority = { lstat: ioProbe.metrics.pathLstatCount, realpath: ioProbe.metrics.pathRealpathCount };
                 const startedAt = performance.now();
                 const result = appendTaskEvent(
                     fixture.orchestratorRoot,
@@ -588,6 +656,10 @@ test('repeated canonical appends perform one authenticated payload capture per g
                 assert.match(readTaskTimelineTextFile(fixture.timelinePath), /PERFORMANCE_ACCEPTANCE_APPEND_/);
                 heapProbe.sample();
                 latencySamplesMs.push(performance.now() - startedAt);
+                appendAuthoritySamples.push({
+                    lstat: ioProbe.metrics.pathLstatCount - beforeAuthority.lstat,
+                    realpath: ioProbe.metrics.pathRealpathCount - beforeAuthority.realpath
+                });
             }
 
             const parseCallsBeforeInspection = ioProbe.metrics.readCallCount;
@@ -595,7 +667,6 @@ test('repeated canonical appends perform one authenticated payload capture per g
             assert.equal(inspectTaskEventFile(fixture.timelinePath, taskId).status, 'PASS');
             assert.equal(ioProbe.metrics.readCallCount, parseCallsBeforeInspection);
         });
-        assertStableScenarioLatency(latencySamplesMs);
 
         const expectedGenerationBytes = generationByteLengths.reduce((total, byteLength) => total + byteLength, 0);
         assert.equal(ioProbe.metrics.descriptorOpenCount, generationByteLengths.length);
@@ -607,11 +678,12 @@ test('repeated canonical appends perform one authenticated payload capture per g
         assert.deepEqual(allocationProbe.fullPayloadAllocationSizes(), generationByteLengths);
         assert.equal(allocationProbe.fullPayloadConcatCount(), 0);
         assert.equal(allocationProbe.fullPayloadStringConversionCount(), generationByteLengths.length);
+        assertAppendAuthoritySamples(appendAuthoritySamples, { lstat: 31, realpath: 30 }, coldIndexChecks);
         assert.deepEqual(authorityCallMetrics(ioProbe.metrics), {
-            pathLstatCount: (32 * LATENCY_SAMPLE_COUNT) + 4,
+            pathLstatCount: (32 * LATENCY_SAMPLE_COUNT) + 4 + coldIndexChecks,
             pathStatCount: 2 * LATENCY_SAMPLE_COUNT,
             descriptorStatCount: (5 * LATENCY_SAMPLE_COUNT) + 2,
-            pathRealpathCount: (31 * LATENCY_SAMPLE_COUNT) + 4,
+            pathRealpathCount: (31 * LATENCY_SAMPLE_COUNT) + 4 + coldIndexChecks,
             pathExistsCount: 0,
             pathAccessCount: 0,
             pathReadlinkCount: 0,
@@ -623,23 +695,30 @@ test('repeated canonical appends perform one authenticated payload capture per g
         allocationProbe.restore();
         ioProbe.restore();
     }
-});
+    recordScenarioMeasurements(context, latencySamplesMs, generationByteLengths.at(-1) || initialByteLength, {
+        io: ioProbe, allocation: allocationProbe, heap: heapProbe
+    });
+}
 
-test('overlapping invocations keep independent bounded generations without a recovery reread', async () => {
-    const taskId = 'T-PERFORMANCE-OVERLAPPING';
-    const fixture = seedSmallTimeline(taskId);
+async function verifyOverlappingInvocations(context: TestContext, fixtureSize: 'small' | 'multi-megabyte'): Promise<void> {
+    const taskId = `T-PERFORMANCE-OVERLAPPING-${fixtureSize === 'small' ? 'SMALL' : 'LARGE'}`;
+    const fixture = fixtureSize === 'small' ? seedSmallTimeline(taskId) : seedLargeIntegrityTimeline(taskId);
     const initialByteLength = fs.statSync(fixture.timelinePath).size;
+    const coldIndexChecks = fixtureSize === 'small' ? 0 : COLD_APPEND_INDEX_AUTHORITY_CHECKS;
+    if (fixtureSize === 'multi-megabyte') assert.ok(initialByteLength >= MULTI_MEGABYTE_FIXTURE_BYTES);
     withTaskTimelineReadSnapshot(fixture.eventsRoot, taskId, () => {
         readTaskTimelineTextFile(fixture.timelinePath);
     });
     const ioProbe = installTimelineReadProbe(fixture.timelinePath);
     const allocationProbe = installBufferAllocationProbe(initialByteLength);
     const heapProbe = createHeapUsageProbe();
+    const latencySamplesMs: number[] = [];
+    const generationByteLengths: number[] = [];
+    const appendAuthoritySamples: Array<{ lstat: number; realpath: number }> = [];
 
     try {
-        const latencySamplesMs: number[] = [];
-        const generationByteLengths: number[] = [];
         for (let index = 0; index < LATENCY_SAMPLE_COUNT; index += 1) {
+            const beforeAuthority = { lstat: ioProbe.metrics.pathLstatCount, realpath: ioProbe.metrics.pathRealpathCount };
             const beforeAppendByteLength = ioProbe.withoutRecording(() => fs.statSync(fixture.timelinePath).size);
             let releaseFirst!: () => void;
             let signalFirstReady!: () => void;
@@ -656,31 +735,36 @@ test('overlapping invocations keep independent bounded generations without a rec
                 await firstRelease;
                 assert.throws(() => readTaskTimelineTextFile(fixture.timelinePath), /snapshot is unavailable/);
             });
-            await firstReady;
+            await Promise.race([firstReady, firstInvocation]);
 
-            await withTaskTimelineReadSnapshot(fixture.eventsRoot, taskId, async () => {
-                const result = appendTaskEvent(
-                    fixture.orchestratorRoot,
-                    taskId,
-                    `PERFORMANCE_ACCEPTANCE_OVERLAP_${index + 1}`,
-                    'PASS',
-                    `Measured overlapping append ${index + 1}`,
-                    { index },
-                    { passThru: true, lowNoiseRuntimeWrites: true }
-                );
-                assert.equal(result?.commit_status, 'committed');
-                assert.match(readTaskTimelineTextFile(fixture.timelinePath), /PERFORMANCE_ACCEPTANCE_OVERLAP_/);
-                heapProbe.sample();
-            });
-            const appendedByteLength = ioProbe.withoutRecording(() => fs.statSync(fixture.timelinePath).size);
-            generationByteLengths.push(beforeAppendByteLength, beforeAppendByteLength, appendedByteLength);
-
-            releaseFirst();
-            await firstInvocation;
+            try {
+                await withTaskTimelineReadSnapshot(fixture.eventsRoot, taskId, async () => {
+                    const result = appendTaskEvent(
+                        fixture.orchestratorRoot,
+                        taskId,
+                        `PERFORMANCE_ACCEPTANCE_OVERLAP_${index + 1}`,
+                        'PASS',
+                        `Measured overlapping append ${index + 1}`,
+                        { index },
+                        { passThru: true, lowNoiseRuntimeWrites: true }
+                    );
+                    assert.equal(result?.commit_status, 'committed');
+                    assert.match(readTaskTimelineTextFile(fixture.timelinePath), /PERFORMANCE_ACCEPTANCE_OVERLAP_/);
+                    heapProbe.sample();
+                });
+                const appendedByteLength = ioProbe.withoutRecording(() => fs.statSync(fixture.timelinePath).size);
+                generationByteLengths.push(beforeAppendByteLength, beforeAppendByteLength, appendedByteLength);
+            } finally {
+                releaseFirst();
+                await firstInvocation;
+            }
             heapProbe.sample();
             latencySamplesMs.push(performance.now() - startedAt);
+            appendAuthoritySamples.push({
+                lstat: ioProbe.metrics.pathLstatCount - beforeAuthority.lstat,
+                realpath: ioProbe.metrics.pathRealpathCount - beforeAuthority.realpath
+            });
         }
-        assertStableScenarioLatency(latencySamplesMs);
 
         const expectedGenerationBytes = generationByteLengths.reduce((total, byteLength) => total + byteLength, 0);
         assert.equal(ioProbe.metrics.descriptorOpenCount, generationByteLengths.length);
@@ -692,20 +776,34 @@ test('overlapping invocations keep independent bounded generations without a rec
         assert.deepEqual(allocationProbe.fullPayloadAllocationSizes(), generationByteLengths);
         assert.equal(allocationProbe.fullPayloadConcatCount(), 0);
         assert.equal(allocationProbe.fullPayloadStringConversionCount(), generationByteLengths.length);
+        assertAppendAuthoritySamples(appendAuthoritySamples, { lstat: 41, realpath: 40 }, coldIndexChecks);
         assert.deepEqual(authorityCallMetrics(ioProbe.metrics), {
-            pathLstatCount: 41 * LATENCY_SAMPLE_COUNT,
+            pathLstatCount: (41 * LATENCY_SAMPLE_COUNT) + coldIndexChecks,
             pathStatCount: 2 * LATENCY_SAMPLE_COUNT,
             descriptorStatCount: 9 * LATENCY_SAMPLE_COUNT,
-            pathRealpathCount: 40 * LATENCY_SAMPLE_COUNT,
+            pathRealpathCount: (40 * LATENCY_SAMPLE_COUNT) + coldIndexChecks,
             pathExistsCount: 0,
             pathAccessCount: 0,
             pathReadlinkCount: 0,
             directoryEnumerationCount: 0,
             directFileReadCount: 0
         });
-        assertHeapUsageBounded(heapProbe, generationByteLengths.at(-1) || initialByteLength);
+        assertHeapUsageBounded(heapProbe, generationByteLengths.at(-1) || initialByteLength, OVERLAPPING_INVOCATION_COUNT);
     } finally {
         allocationProbe.restore();
         ioProbe.restore();
     }
-});
+    recordScenarioMeasurements(context, latencySamplesMs, generationByteLengths.at(-1) || initialByteLength, {
+        io: ioProbe, allocation: allocationProbe, heap: heapProbe, concurrentInvocations: OVERLAPPING_INVOCATION_COUNT
+    });
+}
+
+for (const fixtureSize of ['small', 'multi-megabyte'] as const) {
+    const prefix = fixtureSize === 'small' ? '' : 'multi-megabyte ';
+    test(`${prefix}repeated canonical appends perform one authenticated payload capture per generation`, (context) => {
+        verifyCanonicalSelfWrite(context, fixtureSize);
+    });
+    test(`${prefix}overlapping invocations keep independent bounded generations without a recovery reread`, async (context) => {
+        await verifyOverlappingInvocations(context, fixtureSize);
+    });
+}
