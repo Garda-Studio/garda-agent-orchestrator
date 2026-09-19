@@ -1,6 +1,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { TaskEventIntegrity } from '../../gate-runtime/task-events';
+import {
+    readTaskTimelineJsonlEntries,
+    type TaskEventIntegrity
+} from '../../gate-runtime/task-events';
+import {
+    taskTimelineAwareFileExists,
+    withTaskTimelineFileReadSnapshot
+} from '../../gate-runtime/timeline/task-timeline-read-snapshot';
 import { normalizePath } from '../shared/helpers';
 
 export interface TimelineEventEntry {
@@ -13,18 +20,31 @@ export interface TimelineEventEntry {
 }
 
 export function collectOrderedTimelineEvents(timelinePath: string, errors: string[]): TimelineEventEntry[] {
-    const entries: TimelineEventEntry[] = [];
     const resolvedPath = path.resolve(String(timelinePath || ''));
-    if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) {
+    return withTaskTimelineFileReadSnapshot(resolvedPath, () => (
+        collectOrderedTimelineEventsFromSnapshot(resolvedPath, errors)
+    ));
+}
+
+function collectOrderedTimelineEventsFromSnapshot(
+    resolvedPath: string,
+    errors: string[]
+): TimelineEventEntry[] {
+    const entries: TimelineEventEntry[] = [];
+    if (!taskTimelineAwareFileExists(resolvedPath)) {
         errors.push(`Task timeline not found: ${normalizePath(resolvedPath)}`);
         return entries;
     }
 
-    const lines = fs.readFileSync(resolvedPath, 'utf8').split('\n').filter(line => line.trim().length > 0);
     let seq = 0;
-    for (const line of lines) {
+    for (const timelineEntry of readTaskTimelineJsonlEntries(resolvedPath)) {
+        const parsed = timelineEntry.record;
+        if (!parsed) {
+            errors.push(`Task timeline contains invalid JSON line: ${normalizePath(resolvedPath)}`);
+            seq++;
+            continue;
+        }
         try {
-            const parsed = JSON.parse(line) as Record<string, unknown>;
             const eventType = String(parsed.event_type || '').trim().toUpperCase();
             const timestampUtc = String(parsed.timestamp_utc || '').trim();
             const details = parsed.details && typeof parsed.details === 'object' && !Array.isArray(parsed.details)

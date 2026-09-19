@@ -1,5 +1,6 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import type { Mode, OpenMode, PathLike } from 'node:fs';
 
 import {
     fs,
@@ -36,6 +37,36 @@ import {
 } from '../next-step/next-step-review-reuse-fixtures';
 import { buildDomainScopeFingerprints } from '../../../../src/gates/scope/domain-scope-fingerprints';
 import { formatFinalUserReport } from '../../../../src/gates/task-audit/task-audit-summary';
+
+function isReadOnlyOpen(flags: OpenMode): boolean {
+    if (typeof flags === 'string') {
+        return flags === 'r' || flags === 'rs' || flags === 'sr';
+    }
+    return (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR)) === 0;
+}
+
+function captureTimelineReadOpens<T>(
+    timelinePath: string,
+    callback: () => T
+): { result: T; readSites: string[] } {
+    const fsModule = require('node:fs') as typeof import('node:fs');
+    const originalOpenSync = fsModule.openSync;
+    const readSites: string[] = [];
+    fsModule.openSync = ((targetPath: PathLike, flags: OpenMode, mode?: Mode) => {
+        if (
+            path.resolve(String(targetPath)) === path.resolve(timelinePath)
+            && isReadOnlyOpen(flags)
+        ) {
+            readSites.push(new Error().stack || 'stack unavailable');
+        }
+        return originalOpenSync(targetPath, flags, mode);
+    }) as typeof fsModule.openSync;
+    try {
+        return { result: callback(), readSites };
+    } finally {
+        fsModule.openSync = originalOpenSync;
+    }
+}
 
 function appendCurrentStrictReuseRecordedForAudit(repoRoot: string, taskId: string, reviewType: string): void {
     const root = reuseReviewsRoot(repoRoot);
@@ -159,6 +190,38 @@ describe('gates/task-audit-summary', () => {
             const rulePackGate = result.gates.find(g => g.gate === 'load-rule-pack');
             assert.ok(rulePackGate);
             assert.equal(rulePackGate.status, 'PASS');
+        });
+
+        it('shares one authenticated capture with the optional-skill timeline reader', () => {
+            writeEvent(eventsDir, TASK_ID, {
+                timestamp_utc: '2026-01-01T00:00:00.000Z',
+                task_id: TASK_ID,
+                event_type: 'TASK_MODE_ENTERED',
+                outcome: 'PASS',
+                actor: 'gate',
+                message: 'Task mode entered.'
+            });
+            const timelinePath = path.join(eventsDir, `${TASK_ID}.jsonl`);
+            const expectedSha256 = computeFileSha256(timelinePath);
+
+            const { result, readSites } = captureTimelineReadOpens(timelinePath, () => (
+                buildTaskAuditSummary({
+                    taskId: TASK_ID,
+                    repoRoot: tmpDir,
+                    eventsRoot: eventsDir,
+                    reviewsRoot: reviewsDir
+                })
+            ));
+
+            const taskEventsEvidence = result.evidence.find((entry) => entry.kind === 'task-events');
+            assert.equal(taskEventsEvidence?.exists, true);
+            assert.equal(taskEventsEvidence?.sha256, expectedSha256);
+            assert.equal(readSites.length, 1, readSites.join('\n\n'));
+            assert.equal(
+                readSites.filter((site) => site.includes('captureTaskTimelineRead')).length,
+                1,
+                readSites.join('\n\n')
+            );
         });
 
         it('surfaces partial task-cycle diagnostics from status timeline warnings', () => {

@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { withReviewArtifactReadBarrier } from '../../gate-runtime/review-artifacts';
 import { resolveTaskHistoryLedgerPath } from '../../gate-runtime/task-history-ledger';
+import { readTaskTimelineFileMetadataSnapshot } from '../../gate-runtime/task-events';
 import { fileSha256, toPosix } from '../shared/helpers';
 import { parseTimestamp, type TaskCycleBindingSnapshot } from '../task-events-summary/task-events-summary';
 import { type ProjectMemoryImpactLifecycleEvidence } from '../project-memory-impact';
@@ -208,11 +209,17 @@ export function collectEvidenceArtifacts(
         }
     }
 
+    const taskTimelineSnapshot = readTaskTimelineFileMetadataSnapshot(taskEventFile);
+    const taskTimelineExists = taskTimelineSnapshot.active
+        ? taskTimelineSnapshot.valid && taskTimelineSnapshot.exists
+        : fs.existsSync(taskEventFile);
     evidence.push({
         kind: 'task-events',
         path: toPosix(taskEventFile),
-        exists: fs.existsSync(taskEventFile),
-        sha256: fs.existsSync(taskEventFile) ? fileSha256(taskEventFile) : null
+        exists: taskTimelineExists,
+        sha256: taskTimelineSnapshot.active
+            ? taskTimelineSnapshot.sha256
+            : taskTimelineExists ? fileSha256(taskEventFile) : null
     });
     evidence.push({
         kind: 'task-ledger',

@@ -1,6 +1,8 @@
 import * as path from 'node:path';
-import { pathExists } from '../../core/filesystem';
-import { readBoundedJsonlTail } from '../../core/bounded-jsonl-tail';
+import {
+    readTaskTimelineBoundedJsonlTail,
+    taskTimelineAwareFileExists
+} from '../../gate-runtime/task-events';
 import { BASELINE_SKILL_DIRECTORIES } from '../skill-manifest';
 
 import {
@@ -94,7 +96,7 @@ export function readOptionalSkillSelectionTimelineEvidence(
     let latestImplementationStarted: TimelinePoint = { timestampUtc: null, taskSequence: null };
     let latestCoherentCycleRestarted: TimelinePoint = { timestampUtc: null, taskSequence: null };
 
-    if (!pathExists(resolvedTaskEventsPath)) {
+    if (!taskTimelineAwareFileExists(resolvedTaskEventsPath)) {
         return {
             timelinePath: resolvedTaskEventsPath,
             exists: false,
@@ -115,7 +117,7 @@ export function readOptionalSkillSelectionTimelineEvidence(
     }
 
     const liveSkillsRoot = path.join(bundleRoot, 'live', 'skills');
-    const boundedRead = readBoundedJsonlTail<Record<string, unknown>>(
+    const boundedRead = readTaskTimelineBoundedJsonlTail<Record<string, unknown>>(
         resolvedTaskEventsPath,
         OPTIONAL_SKILL_TIMELINE_READ_LIMITS
     );

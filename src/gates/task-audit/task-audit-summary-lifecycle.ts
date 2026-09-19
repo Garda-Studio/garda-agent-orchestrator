@@ -1,4 +1,9 @@
-import * as fs from 'node:fs';
+import { readTaskTimelineJsonlEntries } from '../../gate-runtime/task-events';
+import {
+    createTaskTimelineMemoizationKey,
+    memoizeTaskTimelineSnapshot,
+    type TaskTimelineDeepReadonly
+} from '../../gate-runtime/timeline/task-timeline-read-snapshot';
 import {
     formatTimestamp,
     parseTimestamp,
@@ -33,6 +38,10 @@ export interface OrderedTaskEvents {
     firstEventUtc: string | null;
     lastEventUtc: string | null;
 }
+
+const ORDERED_TASK_EVENTS_MEMOIZATION_KEY = createTaskTimelineMemoizationKey<OrderedTaskEvents>(
+    'ordered-task-events'
+);
 
 
 const BASE_LIFECYCLE_GATES: ReadonlyArray<LifecycleGateSpec> = [
@@ -83,22 +92,12 @@ export function getLifecycleGates(fullSuiteValidationEnabled: boolean, projectMe
     return gates;
 }
 
-export function readOrderedTaskEvents(taskEventFile: string): OrderedTaskEvents {
+function parseOrderedTaskEvents(taskEventFile: string): OrderedTaskEvents {
     const events: TaskAuditEvent[] = [];
 
-    if (fs.existsSync(taskEventFile) && fs.statSync(taskEventFile).isFile()) {
-        const rawLines = fs.readFileSync(taskEventFile, 'utf8')
-            .split('\n')
-            .filter((line) => line.trim());
-        for (const line of rawLines) {
-            try {
-                const event = JSON.parse(line);
-                if (event != null) {
-                    events.push(event);
-                }
-            } catch {
-                // Skip malformed event lines so one bad write does not hide the rest of the timeline.
-            }
+    for (const entry of readTaskTimelineJsonlEntries(taskEventFile)) {
+        if (entry.record) {
+            events.push(entry.record as TaskAuditEvent);
         }
     }
 
@@ -114,6 +113,38 @@ export function readOrderedTaskEvents(taskEventFile: string): OrderedTaskEvents 
         firstEventUtc: events.length > 0 ? formatTimestamp(events[0].timestamp_utc) : null,
         lastEventUtc: events.length > 0 ? formatTimestamp(events[events.length - 1].timestamp_utc) : null
     };
+}
+
+function cloneOrderedTaskEvents(result: TaskTimelineDeepReadonly<OrderedTaskEvents>): OrderedTaskEvents {
+    return {
+        events: [...result.events] as TaskAuditEvent[],
+        count: result.count,
+        firstEventUtc: result.firstEventUtc,
+        lastEventUtc: result.lastEventUtc
+    };
+}
+
+export function readOrderedTaskEvents(taskEventFile: string): OrderedTaskEvents {
+    const memoized = memoizeTaskTimelineSnapshot(
+        taskEventFile,
+        ORDERED_TASK_EVENTS_MEMOIZATION_KEY,
+        'default',
+        () => parseOrderedTaskEvents(taskEventFile)
+    );
+    if (memoized.active) {
+        if (!memoized.valid) {
+            throw new Error(`Task timeline snapshot changed while reading: ${taskEventFile}`);
+        }
+        return memoized.exists && memoized.value
+            ? cloneOrderedTaskEvents(memoized.value)
+            : {
+                events: [],
+                count: 0,
+                firstEventUtc: null,
+                lastEventUtc: null
+            };
+    }
+    return parseOrderedTaskEvents(taskEventFile);
 }
 
 function findLatestEventForTypes(

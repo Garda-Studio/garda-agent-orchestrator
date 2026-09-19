@@ -2,7 +2,6 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-
 import {
     collectOrderedTimelineEvents,
     readJsonArtifact,
@@ -19,6 +18,36 @@ import {
     findLatestRecordedReviewContextPath
 } from '../../../../src/gates/completion/completion-evidence';
 import type { TimelineEventEntry } from '../../../../src/gates/completion/completion-evidence';
+
+function isReadOnlyOpen(flags: fs.OpenMode): boolean {
+    if (typeof flags === 'string') {
+        return flags === 'r' || flags === 'rs' || flags === 'sr';
+    }
+    return (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR)) === 0;
+}
+
+function captureTimelineReadOpens<T>(
+    timelinePath: string,
+    callback: () => T
+): { result: T; readSites: string[] } {
+    const fsModule = require('node:fs') as typeof fs;
+    const originalOpenSync = fsModule.openSync;
+    const readSites: string[] = [];
+    fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+        if (
+            path.resolve(String(targetPath)) === path.resolve(timelinePath)
+            && isReadOnlyOpen(flags)
+        ) {
+            readSites.push(new Error().stack || 'stack unavailable');
+        }
+        return originalOpenSync(targetPath, flags, mode);
+    }) as typeof fsModule.openSync;
+    try {
+        return { result: callback(), readSites };
+    } finally {
+        fsModule.openSync = originalOpenSync;
+    }
+}
 
 describe('gates/completion-evidence', () => {
     describe('collectOrderedTimelineEvents', () => {
@@ -64,6 +93,35 @@ describe('gates/completion-evidence', () => {
             assert.equal(errors.length, 1);
             assert.ok(errors[0].includes('invalid JSON'));
             fs.rmSync(tmpDir, { recursive: true });
+        });
+
+        it('reuses one authenticated capture for repeated long-history reads', () => {
+            const tmpDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-ce-snapshot-'));
+            const taskId = 'T-COMP-SNAPSHOT';
+            const timelinePath = path.join(tmpDir, `${taskId}.jsonl`);
+            const lines = Array.from({ length: 5_000 }, (_, index) => JSON.stringify({
+                event_type: index === 0 ? 'TASK_MODE_ENTERED' : 'PERFORMANCE_FIXTURE_EVENT',
+                timestamp_utc: new Date(1_700_000_000_000 + index).toISOString(),
+                details: { fixture_index: index }
+            }));
+            fs.writeFileSync(timelinePath, `${lines.join('\n')}\n`, 'utf8');
+
+            try {
+                const { result, readSites } = captureTimelineReadOpens(timelinePath, () => {
+                    const firstErrors: string[] = [];
+                    return {
+                        first: collectOrderedTimelineEvents(timelinePath, firstErrors),
+                        firstErrors
+                    };
+                });
+
+                assert.equal(result.first.length, lines.length);
+                assert.deepEqual(result.firstErrors, []);
+                assert.equal(readSites.length, 1, readSites.join('\n\n'));
+                assert.ok(readSites[0].includes('captureTaskTimelineRead'), readSites[0]);
+            } finally {
+                fs.rmSync(tmpDir, { recursive: true, force: true });
+            }
         });
     });
 

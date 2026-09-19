@@ -1,7 +1,11 @@
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { assertValidTaskId, inspectTaskEventFile } from '../../gate-runtime/task-events';
+import {
+    assertValidTaskId,
+    inspectTaskEventFile,
+    withTaskTimelineReadSnapshot
+} from '../../gate-runtime/task-events';
 import { withReviewArtifactReadBarrier } from '../../gate-runtime/review-artifacts';
 import { withTaskIndexReadSnapshot } from '../../gate-runtime/reviews-index';
 import {
@@ -267,15 +271,23 @@ function filterNotRequiredEvidenceArtifacts(
 export function buildTaskAuditSummary(options: TaskAuditSummaryOptions): TaskAuditSummaryResult {
     const repoRoot = path.resolve(options.repoRoot);
     const safeTaskId = assertValidTaskId(options.taskId);
+    const eventsRoot = resolveEventsRoot(repoRoot, options.eventsRoot);
+    if (!isPathRealpathInsideRoot(eventsRoot, repoRoot, { allowMissing: true })) {
+        throw new Error(
+            `EventsRoot must resolve inside repo root without symlink or junction escape: ${toPosix(eventsRoot)}.`
+        );
+    }
     const reviewsRoot = resolveReviewsRoot(repoRoot, options.reviewsRoot);
     if (!isPathRealpathInsideRoot(reviewsRoot, repoRoot, { allowMissing: true })) {
         throw new Error(
             `ReviewsRoot must resolve inside repo root without symlink or junction escape: ${toPosix(reviewsRoot)}.`
         );
     }
-    return withReviewArtifactReadBarrier(reviewsRoot, () => (
-        withTaskIndexReadSnapshot(reviewsRoot, safeTaskId, () => (
-            buildTaskAuditSummaryFromSnapshot(options)
+    return withTaskTimelineReadSnapshot(eventsRoot, safeTaskId, () => (
+        withReviewArtifactReadBarrier(reviewsRoot, () => (
+            withTaskIndexReadSnapshot(reviewsRoot, safeTaskId, () => (
+                buildTaskAuditSummaryFromSnapshot(options)
+            ))
         ))
     ));
 }
