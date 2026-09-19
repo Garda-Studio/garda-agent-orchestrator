@@ -134,8 +134,13 @@ function writeJson(filePath: string, payload: unknown): void {
     fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
 }
 
-function writeRecoveryEvent(repoRoot: string, details: Record<string, unknown>, timestampUtc: string): void {
-    const timelinePath = path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`);
+function writeRecoveryEvent(
+    repoRoot: string,
+    details: Record<string, unknown>,
+    timestampUtc: string,
+    targetEventsRoot = eventsRoot(repoRoot)
+): void {
+    const timelinePath = path.join(targetEventsRoot, `${TASK_ID}.jsonl`);
     const existingLines = fs.existsSync(timelinePath)
         ? fs.readFileSync(timelinePath, 'utf8').split('\n').filter((line) => line.trim()) : [];
     const previous = existingLines.length > 0 ? JSON.parse(existingLines[existingLines.length - 1]) as Record<string, unknown> : null;
@@ -537,39 +542,48 @@ describe('gates/next-step protected recovery', () => {
         }
     });
 
-    it('routes confirmed manifest recovery to the original fresh task-mode entry', () => {
-        const repoRoot = makeTempRepo();
-        writeProtectedControlPlaneManifest(repoRoot);
-        const requestedEntry = {
-            taskId: TASK_ID, entryMode: 'EXPLICIT_TASK_EXECUTION', requestedDepth: '2',
-            taskSummary: 'Recover entry', provider: 'Codex'
-        };
-        const { failurePath } = writeTrustedFailure(repoRoot, {
-            manifest_status: 'DRIFT', affected_protected_paths: ['src/gates/next-step/next-step.ts'], requested_entry: requestedEntry
-        });
-        const recoveryPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-task-mode-entry-recovery.json`);
-        const failureHash = createHash('sha256').update(fs.readFileSync(failurePath)).digest('hex');
-        writeJson(recoveryPath, {
-            schema_version: 1, timestamp_utc: '2026-07-11T00:01:00.000Z', task_id: TASK_ID, status: 'RECOVERED', status_after: 'MATCH',
-            failure_artifact_path: failurePath.replace(/\\/g, '/'),
-            failure_artifact_sha256: failureHash, inspected_protected_snapshot_sha256: 'a'.repeat(64),
-            operator_confirmed_at_utc: '2026-07-11T00:00:30.000Z', requested_entry: requestedEntry,
-            fresh_entry_command: 'attacker-controlled command is ignored'
-        });
-        writeRecoveryEvent(repoRoot, {
-            artifact_path: recoveryPath.replace(/\\/g, '/'),
-            artifact_sha256: createHash('sha256').update(fs.readFileSync(recoveryPath)).digest('hex'),
-            failure_artifact_sha256: failureHash, inspected_protected_snapshot_sha256: 'a'.repeat(64),
-            operator_confirmed_at_utc: '2026-07-11T00:00:30.000Z', requested_entry: requestedEntry
-        }, '2026-07-11T00:01:00.000Z');
+    it('routes confirmed manifest recovery from default and overridden events roots', () => {
+        for (const useOverriddenEventsRoot of [false, true]) {
+            const repoRoot = makeTempRepo();
+            const selectedEventsRoot = useOverriddenEventsRoot
+                ? path.join(repoRoot, 'custom-runtime', 'task-events')
+                : eventsRoot(repoRoot);
+            writeProtectedControlPlaneManifest(repoRoot);
+            const requestedEntry = {
+                taskId: TASK_ID, entryMode: 'EXPLICIT_TASK_EXECUTION', requestedDepth: '2',
+                taskSummary: 'Recover entry', provider: 'Codex'
+            };
+            const { failurePath } = writeTrustedFailure(repoRoot, {
+                manifest_status: 'DRIFT', affected_protected_paths: ['src/gates/next-step/next-step.ts'], requested_entry: requestedEntry
+            }, selectedEventsRoot);
+            const recoveryPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-task-mode-entry-recovery.json`);
+            const failureHash = createHash('sha256').update(fs.readFileSync(failurePath)).digest('hex');
+            writeJson(recoveryPath, {
+                schema_version: 1, timestamp_utc: '2026-07-11T00:01:00.000Z', task_id: TASK_ID, status: 'RECOVERED', status_after: 'MATCH',
+                failure_artifact_path: failurePath.replace(/\\/g, '/'),
+                failure_artifact_sha256: failureHash, inspected_protected_snapshot_sha256: 'a'.repeat(64),
+                operator_confirmed_at_utc: '2026-07-11T00:00:30.000Z', requested_entry: requestedEntry,
+                fresh_entry_command: 'attacker-controlled command is ignored'
+            });
+            writeRecoveryEvent(repoRoot, {
+                artifact_path: recoveryPath.replace(/\\/g, '/'),
+                artifact_sha256: createHash('sha256').update(fs.readFileSync(recoveryPath)).digest('hex'),
+                failure_artifact_sha256: failureHash, inspected_protected_snapshot_sha256: 'a'.repeat(64),
+                operator_confirmed_at_utc: '2026-07-11T00:00:30.000Z', requested_entry: requestedEntry
+            }, '2026-07-11T00:01:00.000Z', selectedEventsRoot);
 
-        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+            const result = resolveNextStep({
+                taskId: TASK_ID,
+                repoRoot,
+                ...(useOverriddenEventsRoot ? { eventsRoot: selectedEventsRoot } : {})
+            });
 
-        assert.equal(result.next_gate, 'enter-task-mode');
-        assert.match(result.reason, /Confirmed protected-manifest recovery/);
-        assert.match(result.commands[0].command, /gate enter-task-mode/);
-        assert.match(result.commands[0].command, /--task-summary "Recover entry"/);
-        assert.doesNotMatch(result.commands[0].command, /attacker-controlled/);
+            assert.equal(result.next_gate, 'enter-task-mode');
+            assert.match(result.reason, /Confirmed protected-manifest recovery/);
+            assert.match(result.commands[0].command, /gate enter-task-mode/);
+            assert.match(result.commands[0].command, /--task-summary "Recover entry"/);
+            assert.doesNotMatch(result.commands[0].command, /attacker-controlled/);
+        }
     });
 
     it('confirmed manifest recovery does not reuse a receipt bound to an older task-mode entry failure', () => {

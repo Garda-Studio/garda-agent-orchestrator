@@ -37,6 +37,11 @@ import {
 import { getReviewArtifactTransactionLockPath } from '../../../../src/gate-runtime/review-artifacts';
 import { buildReviewTimingAuditSummary } from '../../../../src/gates/task-audit/task-audit-summary-review-timing-audit';
 import { buildTaskAuditSummary } from '../../../../src/gates/task-audit/task-audit-summary';
+import {
+    appendTaskEvent,
+    readTaskTimelineJsonlEntries,
+    withTaskTimelineReadSnapshot
+} from '../../../../src/gate-runtime/task-events';
 import { initGitRepo } from '../git-fixtures';
 
 const TASK_ID = 'T-CONTRACT-1';
@@ -55,6 +60,36 @@ function reviewsRoot(repoRoot: string): string {
 
 function eventsRoot(repoRoot: string): string {
     return path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events');
+}
+
+function isReadOnlyOpen(flags: fs.OpenMode): boolean {
+    if (typeof flags === 'string') {
+        return flags === 'r' || flags === 'rs' || flags === 'sr';
+    }
+    return (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR)) === 0;
+}
+
+function captureTimelineReadOpens<T>(
+    timelinePath: string,
+    callback: () => T
+): { result: T; readSites: string[] } {
+    const fsModule = require('node:fs') as typeof fs;
+    const originalOpenSync = fsModule.openSync;
+    const readSites: string[] = [];
+    fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+        if (
+            path.resolve(String(targetPath)) === path.resolve(timelinePath)
+            && isReadOnlyOpen(flags)
+        ) {
+            readSites.push(new Error().stack || 'stack unavailable');
+        }
+        return originalOpenSync(targetPath, flags, mode);
+    }) as typeof fsModule.openSync;
+    try {
+        return { result: callback(), readSites };
+    } finally {
+        fsModule.openSync = originalOpenSync;
+    }
 }
 
 function appendEvent(
@@ -642,34 +677,58 @@ function buildTaskStartReviewSnapshot(options: { zeroDiff?: boolean; requireCode
 }
 
 describe('next-step refactor contract baseline', () => {
-    it('physically reads one authenticated multi-megabyte task timeline snapshot per resolution', () => {
+    it('uses one authenticated capture while accounting for every physical timeline read', () => {
         const repoRoot = makeContractRepo();
         seedStartedTask(repoRoot, TASK_ID);
         const timelinePath = inflateTaskTimeline(repoRoot, TASK_ID, 3 * 1024 * 1024);
 
-        const fsModule = require('node:fs') as typeof fs;
-        const originalOpenSync = fsModule.openSync;
-        let authenticatedTimelineReadCount = 0;
-        const timelineReadSites: string[] = [];
-        fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
-            const stack = new Error().stack || 'stack unavailable';
-            if (
-                path.resolve(String(targetPath)) === path.resolve(timelinePath)
-                && stack.includes('captureTaskTimelineRead')
-            ) {
-                authenticatedTimelineReadCount += 1;
-                timelineReadSites.push(`openSync: ${stack}`);
-            }
-            return originalOpenSync(targetPath, flags, mode);
-        }) as typeof fsModule.openSync;
-        try {
+        const { result, readSites } = captureTimelineReadOpens(timelinePath, () => {
             const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
-            assert.equal(result.next_gate, 'record-strict-decomposition-decision');
-        } finally {
-            fsModule.openSync = originalOpenSync;
-        }
+            return result;
+        });
 
-        assert.equal(authenticatedTimelineReadCount, 1, timelineReadSites.join('\n\n'));
+        assert.equal(result.next_gate, 'record-strict-decomposition-decision');
+        assert.equal(readSites.length, 3, readSites.join('\n\n'));
+        assert.equal(
+            readSites.filter((site) => site.includes('captureTaskTimelineRead')).length,
+            1,
+            readSites.join('\n\n')
+        );
+    });
+
+    it('authenticates one post-append reread within the shared resolution snapshot', () => {
+        const repoRoot = makeContractRepo();
+        seedStartedTask(repoRoot, TASK_ID);
+        const timelinePath = inflateTaskTimeline(repoRoot, TASK_ID, 3 * 1024 * 1024);
+
+        const { result, readSites } = captureTimelineReadOpens(timelinePath, () => (
+            withTaskTimelineReadSnapshot(eventsRoot(repoRoot), TASK_ID, () => {
+                assert.ok(readTaskTimelineJsonlEntries(timelinePath).length > 0);
+                const appendResult = appendTaskEvent(
+                    path.join(repoRoot, 'garda-agent-orchestrator'),
+                    TASK_ID,
+                    'POST_APPEND_FIXTURE_EVENT',
+                    'PASS',
+                    'Exercise authenticated snapshot recapture.',
+                    {},
+                    {
+                        eventsRoot: eventsRoot(repoRoot),
+                        lowNoiseRuntimeWrites: true,
+                        passThru: true
+                    }
+                );
+                assert.equal(appendResult?.canonical_committed, true);
+                return resolveNextStep({ taskId: TASK_ID, repoRoot });
+            })
+        ));
+
+        assert.equal(result.next_gate, 'record-strict-decomposition-decision');
+        assert.equal(readSites.length, 4, readSites.join('\n\n'));
+        assert.equal(
+            readSites.filter((site) => site.includes('captureTaskTimelineRead')).length,
+            2,
+            readSites.join('\n\n')
+        );
     });
 
     it('reads one large reviews index snapshot without per-lane directory scans', () => {
