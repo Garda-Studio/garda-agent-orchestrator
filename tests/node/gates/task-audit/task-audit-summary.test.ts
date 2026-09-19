@@ -224,6 +224,39 @@ describe('gates/task-audit-summary', () => {
             );
         });
 
+        it('rejects an events root redirected outside the repository', (t) => {
+            const foreignEventsRoot = makeTempDir();
+            fs.rmSync(eventsDir, { recursive: true, force: true });
+            try {
+                try {
+                    fs.symlinkSync(
+                        foreignEventsRoot,
+                        eventsDir,
+                        process.platform === 'win32' ? 'junction' : 'dir'
+                    );
+                } catch (error) {
+                    t.skip(
+                        `directory symlink creation unavailable in this environment: ${
+                            error instanceof Error ? error.message : String(error)
+                        }`
+                    );
+                    return;
+                }
+
+                assert.throws(
+                    () => buildTaskAuditSummary({
+                        taskId: TASK_ID,
+                        repoRoot: tmpDir,
+                        eventsRoot: eventsDir,
+                        reviewsRoot: reviewsDir
+                    }),
+                    /Path must resolve inside repo root without symlink or junction escapes/u
+                );
+            } finally {
+                fs.rmSync(foreignEventsRoot, { recursive: true, force: true });
+            }
+        });
+
         it('surfaces partial task-cycle diagnostics from status timeline warnings', () => {
             fs.writeFileSync(
                 path.join(tmpDir, 'TASK.md'),
