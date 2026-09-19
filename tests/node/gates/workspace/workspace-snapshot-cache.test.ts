@@ -672,16 +672,24 @@ describe('gates/workspace-snapshot-cache', () => {
             assert.equal(result.ignored_generated_runtime_files_count, generatedRelativePaths.length);
         });
 
-        it('prevents generated runtime filtering from hiding user-owned lookalikes', () => {
-            const userOwnedRelativePath = 'src/runtime/.runtime-mutation-generation/state-a.json';
-            const userOwnedPath = path.join(repoRoot, userOwnedRelativePath);
-            fs.mkdirSync(path.dirname(userOwnedPath), { recursive: true });
-            fs.writeFileSync(userOwnedPath, '{"userOwned":true}\n', 'utf8');
+        it('prevents generated runtime filtering from hiding unrelated lock names and user-owned lookalikes', () => {
+            const reviewableRelativePaths = [
+                'runtime/.reviews-external.lock/owner.json',
+                'src/runtime/.reviews-index.lock/owner.json',
+                'src/runtime/.runtime-mutation-generation/state-a.json'
+            ];
+            for (const reviewableRelativePath of reviewableRelativePaths) {
+                const reviewablePath = path.join(repoRoot, reviewableRelativePath);
+                fs.mkdirSync(path.dirname(reviewablePath), { recursive: true });
+                fs.writeFileSync(reviewablePath, '{"userOwned":true}\n', 'utf8');
+            }
 
             const result = getWorkspaceSnapshotCached(repoRoot, 'git_auto', true, []);
 
-            assert.ok(result.changed_files.includes(userOwnedRelativePath));
-            assert.ok(!result.ignored_generated_runtime_files.includes(userOwnedRelativePath));
+            assert.deepEqual(result.changed_files, reviewableRelativePaths.sort());
+            for (const reviewableRelativePath of reviewableRelativePaths) {
+                assert.ok(!result.ignored_generated_runtime_files.includes(reviewableRelativePath));
+            }
         });
 
         it('invalidates cache when untracked file content changes and includeUntracked=true', () => {

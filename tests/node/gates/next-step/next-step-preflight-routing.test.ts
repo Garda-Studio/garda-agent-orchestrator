@@ -2280,6 +2280,71 @@ describe('gates/next-step preflight routing', () => {
         assert.ok(command.includes('--changed-file "src/extra/unplanned.ts"'));
     });
 
+    it('ignores review index and transaction lock churn when checking current preflight scope', () => {
+        for (const lockState of ['created', 'removed'] as const) {
+            const repoRoot = makeTempRepo();
+            const lockRelativePaths = [
+                'garda-agent-orchestrator/runtime/.reviews-index.lock/owner.json',
+                'garda-agent-orchestrator/runtime/.reviews-transaction.lock/owner.json'
+            ];
+            if (lockState === 'removed') {
+                for (const lockRelativePath of lockRelativePaths) {
+                    const lockPath = path.join(repoRoot, lockRelativePath);
+                    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+                    fs.writeFileSync(lockPath, '{"lock_id":"baseline"}\n', 'utf8');
+                }
+            }
+            initGitRepo(repoRoot, { gitignoreContent: null });
+            seedStartedTask(repoRoot, TASK_ID);
+            fs.appendFileSync(path.join(repoRoot, 'src', 'app.ts'), 'export const plannedLockScope = true;\n', 'utf8');
+            writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS }, { changedFiles: ['src/app.ts'] });
+
+            if (lockState === 'created') {
+                for (const lockRelativePath of lockRelativePaths) {
+                    const lockPath = path.join(repoRoot, lockRelativePath);
+                    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+                    fs.writeFileSync(lockPath, '{"lock_id":"current"}\n', 'utf8');
+                }
+            } else {
+                for (const lockRelativePath of lockRelativePaths) {
+                    fs.rmSync(path.dirname(path.join(repoRoot, lockRelativePath)), { recursive: true, force: true });
+                }
+            }
+
+            const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+
+            assert.equal(result.next_gate, 'compile-gate', `${lockState}: ${result.reason}`);
+            assert.ok(result.commands[0].command.includes('gate compile-gate'));
+            assert.ok(!result.commands[0].command.includes('gate classify-change'));
+        }
+    });
+
+    it('keeps unrelated lock-like and user-owned files in stale preflight scope', () => {
+        const repoRoot = makeTempRepo();
+        initGitRepo(repoRoot, { gitignoreContent: null });
+        seedStartedTask(repoRoot, TASK_ID);
+        fs.appendFileSync(path.join(repoRoot, 'src', 'app.ts'), 'export const plannedLockScope = true;\n', 'utf8');
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS }, { changedFiles: ['src/app.ts'] });
+        const reviewableRelativePaths = [
+            'garda-agent-orchestrator/runtime/.reviews-external.lock/owner.json',
+            'src/runtime/.reviews-index.lock/owner.json'
+        ];
+        for (const reviewableRelativePath of reviewableRelativePaths) {
+            const reviewablePath = path.join(repoRoot, reviewableRelativePath);
+            fs.mkdirSync(path.dirname(reviewablePath), { recursive: true });
+            fs.writeFileSync(reviewablePath, '{"foreign":true}\n', 'utf8');
+        }
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        const command = result.commands[0].command;
+
+        assert.equal(result.next_gate, 'classify-change', result.reason);
+        for (const reviewableRelativePath of reviewableRelativePaths) {
+            assert.ok(result.reason.includes(reviewableRelativePath), result.reason);
+            assert.ok(command.includes(`--changed-file "${reviewableRelativePath}"`), command);
+        }
+    });
+
     it('keeps ignored task-owned TASK.md metadata in stale preflight refresh commands', () => {
         const repoRoot = makeTempRepo();
         initGitRepo(repoRoot, {
