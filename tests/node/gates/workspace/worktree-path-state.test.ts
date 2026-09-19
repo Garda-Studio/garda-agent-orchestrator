@@ -130,4 +130,54 @@ describe('worktree path state', () => {
             fs.rmSync(repoRoot, { recursive: true, force: true });
         }
     });
+
+    it('classifies a symlink target access error through the resolver branch', () => {
+        const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-worktree-state-'));
+        const relativePath = 'blocked-link.txt';
+        const linkPath = path.join(repoRoot, relativePath);
+        fs.writeFileSync(linkPath, 'placeholder\n', 'utf8');
+
+        const fsModule = require('node:fs') as typeof import('node:fs');
+        const originalLstatSync = fsModule.lstatSync;
+        const originalReadlinkSync = fsModule.readlinkSync;
+        const originalRealpathSync = fsModule.realpathSync;
+        const simulatedLinkStat = {
+            ...originalLstatSync(linkPath),
+            isSymbolicLink: () => true
+        } as fs.Stats;
+
+        Reflect.set(fsModule, 'lstatSync', ((filePath: fs.PathLike, options?: unknown) => (
+            path.resolve(String(filePath)) === path.resolve(linkPath)
+                ? simulatedLinkStat
+                : originalLstatSync(filePath, options as never)
+        )) as typeof originalLstatSync);
+        fsModule.readlinkSync = ((filePath: fs.PathLike, options?: unknown) => (
+            path.resolve(String(filePath)) === path.resolve(linkPath)
+                ? relativePath
+                : originalReadlinkSync(filePath, options as never)
+        )) as typeof originalReadlinkSync;
+        fsModule.realpathSync = ((filePath: fs.PathLike, options?: unknown) => {
+            if (path.resolve(String(filePath)) === path.resolve(linkPath)) {
+                throw Object.assign(new Error('target access denied'), { code: 'EACCES' });
+            }
+            return originalRealpathSync(filePath, options as never);
+        }) as typeof originalRealpathSync;
+
+        try {
+            const defaultState = getSafeWorktreePathState(repoRoot, relativePath);
+            const failClosedState = getSafeWorktreePathState(repoRoot, relativePath, {
+                distinguishAccessErrors: true
+            });
+
+            assert.equal(defaultState.status, 'symbolic_link');
+            assert.equal(defaultState.target_status, 'missing');
+            assert.equal(failClosedState.status, 'symbolic_link');
+            assert.equal(failClosedState.target_status, 'unreviewable');
+        } finally {
+            Reflect.set(fsModule, 'lstatSync', originalLstatSync);
+            fsModule.readlinkSync = originalReadlinkSync;
+            fsModule.realpathSync = originalRealpathSync;
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
 });
