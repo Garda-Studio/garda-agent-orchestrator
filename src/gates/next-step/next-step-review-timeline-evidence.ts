@@ -1,6 +1,10 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { readBoundedJsonlTail, type BoundedJsonlTailResult } from '../../core/bounded-jsonl-tail';
+import type { BoundedJsonlTailResult } from '../../core/bounded-jsonl-tail';
+import {
+    readTaskTimelineBoundedJsonlTail,
+    taskTimelineAwareFileExists,
+    withTaskTimelineReadSnapshot
+} from '../../gate-runtime/timeline/task-timeline-read-snapshot';
 
 import type {
     ReviewReuseTelemetryEventLike
@@ -9,7 +13,15 @@ import { isPlainRecord } from '../../core/records';
 export { isPlainRecord };
 
 export function fileExists(filePath: string): boolean {
-    return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+    return taskTimelineAwareFileExists(filePath);
+}
+
+export function withNextStepReviewEvidenceSnapshot<T>(
+    eventsRoot: string,
+    taskId: string,
+    callback: () => T
+): T {
+    return withTaskTimelineReadSnapshot(eventsRoot, taskId, callback);
 }
 
 export const NEXT_STEP_REVIEW_TIMELINE_READ_LIMITS = Object.freeze({
@@ -29,33 +41,35 @@ export interface TaskTimelineEventWindow {
 }
 
 function readTaskTimelineWindowFromPath(timelinePath: string): BoundedJsonlTailResult<ReviewReuseTelemetryEventLike> {
-    return readBoundedJsonlTail<ReviewReuseTelemetryEventLike>(
+    return readTaskTimelineBoundedJsonlTail<ReviewReuseTelemetryEventLike>(
         timelinePath,
         NEXT_STEP_REVIEW_TIMELINE_READ_LIMITS
     );
 }
 
 export function readTaskTimelineEventWindow(eventsRoot: string, taskId: string): TaskTimelineEventWindow {
-    const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
-    if (!fileExists(timelinePath)) {
+    return withNextStepReviewEvidenceSnapshot(eventsRoot, taskId, () => {
+        const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
+        if (!fileExists(timelinePath)) {
+            return {
+                events: [],
+                truncated: false,
+                invalidJson: false,
+                bytesRead: 0,
+                retainedLineCount: 0,
+                parseAttempts: 0
+            };
+        }
+        const result = readTaskTimelineWindowFromPath(timelinePath);
         return {
-            events: [],
-            truncated: false,
-            invalidJson: false,
-            bytesRead: 0,
-            retainedLineCount: 0,
-            parseAttempts: 0
+            events: result.invalidJson ? [] : result.records,
+            truncated: result.truncated,
+            invalidJson: result.invalidJson,
+            bytesRead: result.bytesRead,
+            retainedLineCount: result.retainedLineCount,
+            parseAttempts: result.parseAttempts
         };
-    }
-    const result = readTaskTimelineWindowFromPath(timelinePath);
-    return {
-        events: result.invalidJson ? [] : result.records,
-        truncated: result.truncated,
-        invalidJson: result.invalidJson,
-        bytesRead: result.bytesRead,
-        retainedLineCount: result.retainedLineCount,
-        parseAttempts: result.parseAttempts
-    };
+    });
 }
 
 export function getLatestTaskSequenceForEventTypes(
@@ -63,29 +77,31 @@ export function getLatestTaskSequenceForEventTypes(
     taskId: string,
     eventTypes: string[]
 ): number | null {
-    const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
-    if (!fileExists(timelinePath)) {
-        return null;
-    }
-    const window = readTaskTimelineEventWindow(eventsRoot, taskId);
-    if (window.invalidJson) {
-        return null;
-    }
-    const wanted = new Set(eventTypes);
-    let latestSequence: number | null = null;
-    for (const event of window.events) {
-        if (!wanted.has(String(event.event_type || '').trim())) {
-            continue;
+    return withNextStepReviewEvidenceSnapshot(eventsRoot, taskId, () => {
+        const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
+        if (!fileExists(timelinePath)) {
+            return null;
         }
-        const integrity = isPlainRecord(event.integrity) ? event.integrity : null;
-        const sequence = typeof integrity?.task_sequence === 'number'
-            ? integrity.task_sequence
-            : Number(integrity?.task_sequence);
-        if (Number.isInteger(sequence) && sequence > 0) {
-            latestSequence = latestSequence == null ? sequence : Math.max(latestSequence, sequence);
+        const window = readTaskTimelineEventWindow(eventsRoot, taskId);
+        if (window.invalidJson) {
+            return null;
         }
-    }
-    return latestSequence;
+        const wanted = new Set(eventTypes);
+        let latestSequence: number | null = null;
+        for (const event of window.events) {
+            if (!wanted.has(String(event.event_type || '').trim())) {
+                continue;
+            }
+            const integrity = isPlainRecord(event.integrity) ? event.integrity : null;
+            const sequence = typeof integrity?.task_sequence === 'number'
+                ? integrity.task_sequence
+                : Number(integrity?.task_sequence);
+            if (Number.isInteger(sequence) && sequence > 0) {
+                latestSequence = latestSequence == null ? sequence : Math.max(latestSequence, sequence);
+            }
+        }
+        return latestSequence;
+    });
 }
 
 export function readTaskTimelineEventLikes(eventsRoot: string, taskId: string): ReviewReuseTelemetryEventLike[] {

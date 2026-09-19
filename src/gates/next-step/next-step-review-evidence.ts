@@ -1,4 +1,3 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import {
@@ -34,7 +33,8 @@ import {
     getLatestTaskSequenceForEventTypes,
     getTimelineEventTaskSequence,
     isPlainRecord,
-    readTaskTimelineEventLikes
+    readTaskTimelineEventLikes,
+    withNextStepReviewEvidenceSnapshot
 } from './next-step-review-timeline-evidence';
 import type {
     ReviewArtifactState
@@ -45,7 +45,11 @@ export function timelineHasReviewReuseRecordedAfterCompile(
     taskId: string,
     state: ReviewArtifactState
 ): boolean {
-    return validateStrictReviewReuseForState(eventsRoot, taskId, state).valid;
+    return withNextStepReviewEvidenceSnapshot(
+        eventsRoot,
+        taskId,
+        () => validateStrictReviewReuseForState(eventsRoot, taskId, state).valid
+    );
 }
 
 function readCompleteReviewTimelineEvidence(eventsRoot: string, taskId: string): {
@@ -170,42 +174,44 @@ export function timelineHasReviewContextPreparedAfterCompile(
     reviewType: string,
     contextPath: string
 ): boolean {
-    const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
-    if (!fileExists(timelinePath)) {
-        return false;
-    }
-    const latestCompileSequence = getLatestTaskSequenceForEventTypes(eventsRoot, taskId, ['COMPILE_GATE_PASSED']);
-    if (latestCompileSequence == null) {
-        return false;
-    }
-    const expectedContextPath = normalizePath(contextPath).toLowerCase();
-    for (const line of fs.readFileSync(timelinePath, 'utf8').split('\n')) {
-        if (!line.trim()) {
-            continue;
+    return withNextStepReviewEvidenceSnapshot(eventsRoot, taskId, () => {
+        const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
+        if (!fileExists(timelinePath)) {
+            return false;
         }
-        try {
-            const event = JSON.parse(line) as Record<string, unknown>;
-            if (String(event.event_type || '').trim() !== 'REVIEW_PHASE_STARTED') {
+        const latestCompileSequence = getLatestTaskSequenceForEventTypes(eventsRoot, taskId, ['COMPILE_GATE_PASSED']);
+        if (latestCompileSequence == null) {
+            return false;
+        }
+        const expectedContextPath = normalizePath(contextPath).toLowerCase();
+        for (const timelineEntry of readTaskTimelineJsonlEntries(timelinePath)) {
+            const event = timelineEntry.record;
+            if (!event) {
                 continue;
             }
-            const integrity = isPlainRecord(event.integrity) ? event.integrity : null;
-            const taskSequence = typeof integrity?.task_sequence === 'number'
-                ? integrity.task_sequence
-                : Number(integrity?.task_sequence);
-            if (!Number.isInteger(taskSequence) || taskSequence <= latestCompileSequence) {
-                continue;
+            try {
+                if (String(event.event_type || '').trim() !== 'REVIEW_PHASE_STARTED') {
+                    continue;
+                }
+                const integrity = isPlainRecord(event.integrity) ? event.integrity : null;
+                const taskSequence = typeof integrity?.task_sequence === 'number'
+                    ? integrity.task_sequence
+                    : Number(integrity?.task_sequence);
+                if (!Number.isInteger(taskSequence) || taskSequence <= latestCompileSequence) {
+                    continue;
+                }
+                const details = isPlainRecord(event.details) ? event.details : {};
+                const eventReviewType = String(details.review_type || details.reviewType || '').trim();
+                const outputPath = normalizePath(details.output_path || details.outputPath || '').toLowerCase();
+                if (eventReviewType === reviewType && outputPath === expectedContextPath) {
+                    return true;
+                }
+            } catch {
+                // Ignore malformed lines; timeline integrity is reported by task-audit-summary.
             }
-            const details = isPlainRecord(event.details) ? event.details : {};
-            const eventReviewType = String(details.review_type || details.reviewType || '').trim();
-            const outputPath = normalizePath(details.output_path || details.outputPath || '').toLowerCase();
-            if (eventReviewType === reviewType && outputPath === expectedContextPath) {
-                return true;
-            }
-        } catch {
-            // Ignore malformed lines; timeline integrity is reported by task-audit-summary.
         }
-    }
-    return false;
+        return false;
+    });
 }
 
 export function reviewStateHasSatisfiedEvidence(
@@ -214,27 +220,29 @@ export function reviewStateHasSatisfiedEvidence(
     taskId: string,
     state: ReviewArtifactState
 ): boolean {
-    if (!state.ready) {
-        return false;
-    }
-    if (getHiddenReviewTimingTrustRemediation(eventsRoot, taskId, state)) {
-        return false;
-    }
-    if (
-        state.reviewFindingsDisposition
-        && state.reviewFindingsDisposition.counts_by_action.create_follow_up > 0
-        && !state.reviewFindingsFollowUpSatisfied
-        && state.reviewFollowUpMaterializationMode !== 'grouped_by_parent'
-    ) {
-        return false;
-    }
-    if (state.reusedExistingReview) {
-        return timelineHasReviewReuseRecordedAfterCompile(eventsRoot, taskId, state);
-    }
-    if (state.domainScopeCurrent && !state.contextCurrent) {
-        return false;
-    }
-    return timelineHasDelegatedReviewInvocationAttestation(repoRoot, eventsRoot, taskId, state);
+    return withNextStepReviewEvidenceSnapshot(eventsRoot, taskId, () => {
+        if (!state.ready) {
+            return false;
+        }
+        if (getHiddenReviewTimingTrustRemediation(eventsRoot, taskId, state)) {
+            return false;
+        }
+        if (
+            state.reviewFindingsDisposition
+            && state.reviewFindingsDisposition.counts_by_action.create_follow_up > 0
+            && !state.reviewFindingsFollowUpSatisfied
+            && state.reviewFollowUpMaterializationMode !== 'grouped_by_parent'
+        ) {
+            return false;
+        }
+        if (state.reusedExistingReview) {
+            return timelineHasReviewReuseRecordedAfterCompile(eventsRoot, taskId, state);
+        }
+        if (state.domainScopeCurrent && !state.contextCurrent) {
+            return false;
+        }
+        return timelineHasDelegatedReviewInvocationAttestation(repoRoot, eventsRoot, taskId, state);
+    });
 }
 
 function getStringArrayField(value: unknown): string[] {
@@ -280,31 +288,33 @@ export function getHiddenReviewTimingTrustRemediation(
     taskId: string,
     state: ReviewArtifactState
 ): string | null {
-    const completeTimeline = state.reusedExistingReview
-        ? readCompleteReviewTimelineEvidence(eventsRoot, taskId)
-        : null;
-    const timelineEvents = completeTimeline?.events ?? readTaskTimelineEventLikes(eventsRoot, taskId);
-    const latestCompileSequence = completeTimeline
-        ? completeTimeline.latestCompileSequence
-        : getLatestTaskSequenceForEventTypes(eventsRoot, taskId, ['COMPILE_GATE_PASSED']);
-    const strictReusedReviewRecordedDetails = state.reusedExistingReview
-        ? getStrictReusedReviewRecordedDetailsForTimingTrust(eventsRoot, taskId, state)
-        : null;
-    if (state.reusedExistingReview && !strictReusedReviewRecordedDetails) {
-        return null;
-    }
-    const timingTrust = evaluateHiddenReviewTimingTrust({
-        reviewType: state.reviewType,
-        reusedExistingReview: state.reusedExistingReview,
-        reviewerProvenance: stripReviewTimingProvenanceTimestamps(state.reviewerProvenance),
-        reviewResultRecordedAtUtc: state.reviewResultRecordedAtUtc,
-        recordedAtUtc: state.recordedAtUtc,
-        reviewOutputSourceMtimeUtc: state.reviewOutputSourceMtimeUtc,
-        strictReusedReviewRecordedDetails,
-        timelineEvents,
-        latestCompileSequence
+    return withNextStepReviewEvidenceSnapshot(eventsRoot, taskId, () => {
+        const completeTimeline = state.reusedExistingReview
+            ? readCompleteReviewTimelineEvidence(eventsRoot, taskId)
+            : null;
+        const timelineEvents = completeTimeline?.events ?? readTaskTimelineEventLikes(eventsRoot, taskId);
+        const latestCompileSequence = completeTimeline
+            ? completeTimeline.latestCompileSequence
+            : getLatestTaskSequenceForEventTypes(eventsRoot, taskId, ['COMPILE_GATE_PASSED']);
+        const strictReusedReviewRecordedDetails = state.reusedExistingReview
+            ? getStrictReusedReviewRecordedDetailsForTimingTrust(eventsRoot, taskId, state)
+            : null;
+        if (state.reusedExistingReview && !strictReusedReviewRecordedDetails) {
+            return null;
+        }
+        const timingTrust = evaluateHiddenReviewTimingTrust({
+            reviewType: state.reviewType,
+            reusedExistingReview: state.reusedExistingReview,
+            reviewerProvenance: stripReviewTimingProvenanceTimestamps(state.reviewerProvenance),
+            reviewResultRecordedAtUtc: state.reviewResultRecordedAtUtc,
+            recordedAtUtc: state.recordedAtUtc,
+            reviewOutputSourceMtimeUtc: state.reviewOutputSourceMtimeUtc,
+            strictReusedReviewRecordedDetails,
+            timelineEvents,
+            latestCompileSequence
+        });
+        return timingTrust.trusted ? null : timingTrust.message;
     });
-    return timingTrust.trusted ? null : timingTrust.message;
 }
 
 function isReviewFailTokenViolation(state: ReviewArtifactState, violation: string): boolean {
@@ -341,25 +351,27 @@ export function reviewStateHasCurrentRecordedEvidence(
     taskId: string,
     state: ReviewArtifactState
 ): boolean {
-    if (!state.contextExists || !state.artifactExists || !state.receiptExists) {
-        return false;
-    }
-    const nonVerdictViolations = state.violations.filter(
-        (violation) => !isFailedReviewOutcomeViolation(state, violation)
-    );
-    if (nonVerdictViolations.length > 0) {
-        return false;
-    }
-    if (getHiddenReviewTimingTrustRemediation(eventsRoot, taskId, state)) {
-        return false;
-    }
-    if (state.reusedExistingReview) {
-        return timelineHasReviewReuseRecordedAfterCompile(eventsRoot, taskId, state);
-    }
-    if (state.domainScopeCurrent && !state.contextCurrent && !state.failed) {
-        return false;
-    }
-    return timelineHasDelegatedReviewInvocationAttestation(repoRoot, eventsRoot, taskId, state);
+    return withNextStepReviewEvidenceSnapshot(eventsRoot, taskId, () => {
+        if (!state.contextExists || !state.artifactExists || !state.receiptExists) {
+            return false;
+        }
+        const nonVerdictViolations = state.violations.filter(
+            (violation) => !isFailedReviewOutcomeViolation(state, violation)
+        );
+        if (nonVerdictViolations.length > 0) {
+            return false;
+        }
+        if (getHiddenReviewTimingTrustRemediation(eventsRoot, taskId, state)) {
+            return false;
+        }
+        if (state.reusedExistingReview) {
+            return timelineHasReviewReuseRecordedAfterCompile(eventsRoot, taskId, state);
+        }
+        if (state.domainScopeCurrent && !state.contextCurrent && !state.failed) {
+            return false;
+        }
+        return timelineHasDelegatedReviewInvocationAttestation(repoRoot, eventsRoot, taskId, state);
+    });
 }
 
 export function findStrictSequentialUpstreamNeedingCurrentCycleReuse(params: {
@@ -372,6 +384,7 @@ export function findStrictSequentialUpstreamNeedingCurrentCycleReuse(params: {
     reviewStates: readonly ReviewArtifactState[];
     latestCompileSequence?: number | null;
 }): { upstreamState: ReviewArtifactState; upstreamReviewType: string; latestCompileSequence: number } | null {
+    return withNextStepReviewEvidenceSnapshot(params.eventsRoot, params.taskId, () => {
     if (params.policyMode !== 'strict_sequential') {
         return null;
     }
@@ -439,6 +452,7 @@ export function findStrictSequentialUpstreamNeedingCurrentCycleReuse(params: {
         };
     }
     return null;
+    });
 }
 
 export function findReviewGateStaleUpstreamRecovery(params: {
@@ -450,6 +464,7 @@ export function findReviewGateStaleUpstreamRecovery(params: {
     policyMode: EffectiveReviewExecutionPolicyMode;
     reviewStates: readonly ReviewArtifactState[];
 }): { downstreamReviewType: string; upstreamState: ReviewArtifactState; upstreamReviewType: string; latestReviewGateFailureSequence: number } | null {
+    return withNextStepReviewEvidenceSnapshot(params.eventsRoot, params.taskId, () => {
     const latestReviewGateFailureSequence = getLatestTaskSequenceForEventTypes(
         params.eventsRoot,
         params.taskId,
@@ -523,6 +538,7 @@ export function findReviewGateStaleUpstreamRecovery(params: {
         }
     }
     return null;
+    });
 }
 
 export function findReviewGateStaleContextPrecheckRecovery(params: {
@@ -532,6 +548,7 @@ export function findReviewGateStaleContextPrecheckRecovery(params: {
     requiredReviewTypes: string[];
     reviewStates: readonly ReviewArtifactState[];
 }): { state: ReviewArtifactState; reviewType: string } | null {
+    return withNextStepReviewEvidenceSnapshot(params.eventsRoot, params.taskId, () => {
     const stateByReviewType = new Map(params.reviewStates.map((state) => [state.reviewType, state]));
     for (const reviewType of params.requiredReviewTypes) {
         const state = stateByReviewType.get(reviewType);
@@ -549,6 +566,7 @@ export function findReviewGateStaleContextPrecheckRecovery(params: {
         return { state, reviewType };
     }
     return null;
+    });
 }
 
 export function findDownstreamReviewNeedingDependencyRebind(params: {
@@ -559,6 +577,7 @@ export function findDownstreamReviewNeedingDependencyRebind(params: {
     policyMode: EffectiveReviewExecutionPolicyMode;
     reviewStates: readonly ReviewArtifactState[];
 }): { downstreamState: ReviewArtifactState; upstreamReviewType: string } | null {
+    return withNextStepReviewEvidenceSnapshot(params.eventsRoot, params.taskId, () => {
     const timelineEvents = readTaskTimelineEventLikes(params.eventsRoot, params.taskId);
     if (timelineEvents.length === 0) {
         return null;
@@ -586,6 +605,7 @@ export function findDownstreamReviewNeedingDependencyRebind(params: {
         }
     }
     return null;
+    });
 }
 
 function getLatestDownstreamReviewRebindSequence(

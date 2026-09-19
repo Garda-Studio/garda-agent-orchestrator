@@ -1,5 +1,5 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { readTaskTimelineJsonlEntries } from '../../gate-runtime/timeline/task-events-helpers';
 
 import {
     REVIEW_EVIDENCE_REQUIRED_EXECUTION_MODE,
@@ -12,7 +12,8 @@ import {
 import {
     fileExists,
     getLatestTaskSequenceForEventTypes,
-    isPlainRecord
+    isPlainRecord,
+    withNextStepReviewEvidenceSnapshot
 } from './next-step-review-timeline-evidence';
 import type {
     ReviewArtifactState
@@ -45,18 +46,8 @@ function readTimelineEvents(eventsRoot: string, taskId: string): Record<string, 
     if (!fileExists(timelinePath)) {
         return [];
     }
-    return fs.readFileSync(timelinePath, 'utf8')
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .flatMap((line) => {
-            try {
-                return [JSON.parse(line) as Record<string, unknown>];
-            } catch {
-                // Ignore malformed lines; timeline integrity is reported by task-audit-summary.
-                return [];
-            }
-        });
+    return readTaskTimelineJsonlEntries(timelinePath)
+        .flatMap((entry) => entry.record ? [entry.record] : []);
 }
 
 export function timelineHasMatchingDelegatedReviewInvocationAttestation(
@@ -164,31 +155,33 @@ export function timelineHasDelegatedReviewInvocationAttestation(
     taskId: string,
     state: ReviewArtifactState
 ): boolean {
-    const reviewerLaunchArtifactEvidence = getCurrentReviewerLaunchArtifactEvidenceForInvocation(
-        repoRoot,
-        eventsRoot,
-        taskId,
-        state
-    );
-    if (reviewerLaunchArtifactEvidence.state !== 'launched' || !reviewerLaunchArtifactEvidence.sha256) {
-        return false;
-    }
-    const latestCompileSequence = getLatestTaskSequenceForEventTypes(eventsRoot, taskId, ['COMPILE_GATE_PASSED']);
-    if (
-        latestCompileSequence == null
-        || !state.reviewerProvenance?.task_sequence
-        || state.reviewerProvenance.task_sequence <= latestCompileSequence
-    ) {
-        return false;
-    }
-    const expectation = buildDelegatedReviewInvocationExpectation(taskId, state, {
-        requireReviewContextSha256: false,
-        launchArtifactSha256: reviewerLaunchArtifactEvidence.sha256
+    return withNextStepReviewEvidenceSnapshot(eventsRoot, taskId, () => {
+        const reviewerLaunchArtifactEvidence = getCurrentReviewerLaunchArtifactEvidenceForInvocation(
+            repoRoot,
+            eventsRoot,
+            taskId,
+            state
+        );
+        if (reviewerLaunchArtifactEvidence.state !== 'launched' || !reviewerLaunchArtifactEvidence.sha256) {
+            return false;
+        }
+        const latestCompileSequence = getLatestTaskSequenceForEventTypes(eventsRoot, taskId, ['COMPILE_GATE_PASSED']);
+        if (
+            latestCompileSequence == null
+            || !state.reviewerProvenance?.task_sequence
+            || state.reviewerProvenance.task_sequence <= latestCompileSequence
+        ) {
+            return false;
+        }
+        const expectation = buildDelegatedReviewInvocationExpectation(taskId, state, {
+            requireReviewContextSha256: false,
+            launchArtifactSha256: reviewerLaunchArtifactEvidence.sha256
+        });
+        if (!expectation) {
+            return false;
+        }
+        return timelineHasMatchingDelegatedReviewInvocationAttestation(eventsRoot, expectation);
     });
-    if (!expectation) {
-        return false;
-    }
-    return timelineHasMatchingDelegatedReviewInvocationAttestation(eventsRoot, expectation);
 }
 
 export function timelineHasHistoricalDelegatedReviewInvocationAttestation(

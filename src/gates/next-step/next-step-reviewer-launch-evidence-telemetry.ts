@@ -1,5 +1,8 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
+import {
+    readTaskTimelineJsonlEntries,
+    type TaskTimelineJsonlEntry
+} from '../../gate-runtime/timeline/task-events-helpers';
 
 import {
     buildPlannedReviewerIdentity,
@@ -21,13 +24,14 @@ import {
     getLatestTaskSequenceForEventTypes,
     isPlainRecord
 } from './next-step-reviewer-launch-evidence-shared';
+import { withNextStepReviewEvidenceSnapshot } from './next-step-review-timeline-evidence';
 
 export interface MatchingReviewerDelegationStartedTelemetry {
     taskSequence: number | null;
 }
 
 export function findMatchingReviewerDelegationStartedTelemetry(options: {
-    lines: string[];
+    lines: readonly TaskTimelineJsonlEntry[];
     taskId: string;
     reviewType: string;
     reviewerIdentity: string;
@@ -44,7 +48,10 @@ export function findMatchingReviewerDelegationStartedTelemetry(options: {
     const normalizedRoutingEventSha256 = options.routingEventSha256.toLowerCase();
     for (let index = options.lines.length - 1; index >= 0; index -= 1) {
         try {
-            const event = JSON.parse(options.lines[index]) as Record<string, unknown>;
+            const event = options.lines[index].record;
+            if (!event) {
+                continue;
+            }
             if (String(event.event_type || '').trim() !== 'REVIEWER_DELEGATION_STARTED') {
                 continue;
             }
@@ -90,7 +97,7 @@ export function hasMatchingReviewerDelegationStartedTelemetry(
     return findMatchingReviewerDelegationStartedTelemetry(options) != null;
 }
 
-export function hasControllerResumeAfterSequence(lines: string[], sequence: number | null): boolean {
+export function hasControllerResumeAfterSequence(lines: readonly TaskTimelineJsonlEntry[], sequence: number | null): boolean {
     if (sequence == null) {
         return false;
     }
@@ -102,7 +109,10 @@ export function hasControllerResumeAfterSequence(lines: string[], sequence: numb
     ]);
     for (let index = lines.length - 1; index >= 0; index -= 1) {
         try {
-            const event = JSON.parse(lines[index]) as Record<string, unknown>;
+            const event = lines[index].record;
+            if (!event) {
+                continue;
+            }
             if (!resumeEventTypes.has(String(event.event_type || '').trim())) {
                 continue;
             }
@@ -119,7 +129,7 @@ export function hasControllerResumeAfterSequence(lines: string[], sequence: numb
 
 export function hasMatchingReviewerProviderFailureTelemetry(options: {
     timelineIntegrityVerified: boolean;
-    lines: string[];
+    lines: readonly TaskTimelineJsonlEntry[];
     taskId: string;
     reviewType: string;
     reviewerIdentity: string;
@@ -143,7 +153,10 @@ export function hasMatchingReviewerProviderFailureTelemetry(options: {
     const normalizedRoutingEventSha256 = options.routingEventSha256.toLowerCase();
     for (let index = options.lines.length - 1; index >= 0; index -= 1) {
         try {
-            const event = JSON.parse(options.lines[index]) as Record<string, unknown>;
+            const event = options.lines[index].record;
+            if (!event) {
+                continue;
+            }
             const eventType = String(event.event_type || '').trim();
             if (!REVIEWER_PROVIDER_FAILURE_EVENT_TYPES.has(eventType)) {
                 continue;
@@ -224,7 +237,7 @@ export function hasMatchingReviewerProviderFailureTelemetry(options: {
 }
 
 export function hasMatchingReviewerLaunchCompletedTelemetry(options: {
-    lines: string[];
+    lines: readonly TaskTimelineJsonlEntry[];
     taskId: string;
     reviewType: string;
     reviewerIdentity: string;
@@ -242,7 +255,10 @@ export function hasMatchingReviewerLaunchCompletedTelemetry(options: {
     const normalizedLaunchArtifactSha256 = options.launchArtifactSha256.toLowerCase();
     for (let index = options.lines.length - 1; index >= 0; index -= 1) {
         try {
-            const event = JSON.parse(options.lines[index]) as Record<string, unknown>;
+            const event = options.lines[index].record;
+            if (!event) {
+                continue;
+            }
             const eventType = String(event.event_type || '').trim();
             if (eventType !== 'REVIEWER_LAUNCH_COMPLETED') {
                 continue;
@@ -311,13 +327,13 @@ function lookupDelegatedReviewRoutingShaAfterCompile(
     latestCompileSequence: number
 ): string | null {
     const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
-    const lines = fs.readFileSync(timelinePath, 'utf8')
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean);
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const entries = readTaskTimelineJsonlEntries(timelinePath);
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
         try {
-            const event = JSON.parse(lines[index]) as Record<string, unknown>;
+            const event = entries[index].record;
+            if (!event) {
+                continue;
+            }
             if (String(event.event_type || '').trim() !== 'REVIEWER_DELEGATION_ROUTED') {
                 continue;
             }
@@ -350,37 +366,39 @@ export function getDelegatedReviewRoutingShaAfterCompile(
     reviewType: string,
     reviewerIdentity: string
 ): string | null {
-    if (!reviewerIdentity.startsWith('agent:')) {
-        return null;
-    }
-    const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
-    if (!fileExists(timelinePath)) {
-        return null;
-    }
-    const latestCompileSequence = getLatestTaskSequenceForEventTypes(eventsRoot, taskId, ['COMPILE_GATE_PASSED']);
-    if (latestCompileSequence == null) {
-        return null;
-    }
-    const directMatch = lookupDelegatedReviewRoutingShaAfterCompile(
-        eventsRoot,
-        taskId,
-        reviewType,
-        reviewerIdentity,
-        latestCompileSequence
-    );
-    if (directMatch) {
-        return directMatch;
-    }
-    if (isResolvedReviewerIdentity(reviewerIdentity)) {
-        return lookupDelegatedReviewRoutingShaAfterCompile(
+    return withNextStepReviewEvidenceSnapshot(eventsRoot, taskId, () => {
+        if (!reviewerIdentity.startsWith('agent:')) {
+            return null;
+        }
+        const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
+        if (!fileExists(timelinePath)) {
+            return null;
+        }
+        const latestCompileSequence = getLatestTaskSequenceForEventTypes(eventsRoot, taskId, ['COMPILE_GATE_PASSED']);
+        if (latestCompileSequence == null) {
+            return null;
+        }
+        const directMatch = lookupDelegatedReviewRoutingShaAfterCompile(
             eventsRoot,
             taskId,
             reviewType,
-            buildPlannedReviewerIdentity(taskId, reviewType),
+            reviewerIdentity,
             latestCompileSequence
         );
-    }
-    return null;
+        if (directMatch) {
+            return directMatch;
+        }
+        if (isResolvedReviewerIdentity(reviewerIdentity)) {
+            return lookupDelegatedReviewRoutingShaAfterCompile(
+                eventsRoot,
+                taskId,
+                reviewType,
+                buildPlannedReviewerIdentity(taskId, reviewType),
+                latestCompileSequence
+            );
+        }
+        return null;
+    });
 }
 
 export function timelineHasDelegatedReviewRoutingAfterCompile(

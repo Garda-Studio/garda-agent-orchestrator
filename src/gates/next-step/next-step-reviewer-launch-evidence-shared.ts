@@ -1,7 +1,9 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isPlainRecord } from '../../core/records';
+import { readTaskTimelineJsonlEntries } from '../../gate-runtime/timeline/task-events-helpers';
+import { taskTimelineAwareFileExists } from '../../gate-runtime/timeline/task-timeline-read-snapshot';
+import { withNextStepReviewEvidenceSnapshot } from './next-step-review-timeline-evidence';
 export { isPlainRecord };
 
 export const PREPARED_REVIEWER_LAUNCH_EVIDENCE_TYPE = 'delegated_reviewer_launch_preparation';
@@ -15,7 +17,7 @@ export const REVIEWER_PROVIDER_FAILURE_EVENT_TYPES = new Set([
 ]);
 
 export function fileExists(filePath: string): boolean {
-    return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+    return taskTimelineAwareFileExists(filePath);
 }
 
 export function stringSha256(value: string): string {
@@ -23,33 +25,35 @@ export function stringSha256(value: string): string {
 }
 
 export function getLatestTaskSequenceForEventTypes(eventsRoot: string, taskId: string, eventTypes: string[]): number | null {
-    const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
-    if (!fileExists(timelinePath)) {
-        return null;
-    }
-    const wanted = new Set(eventTypes);
-    let latestSequence: number | null = null;
-    for (const line of fs.readFileSync(timelinePath, 'utf8').split('\n')) {
-        if (!line.trim()) {
-            continue;
+    return withNextStepReviewEvidenceSnapshot(eventsRoot, taskId, () => {
+        const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
+        if (!fileExists(timelinePath)) {
+            return null;
         }
-        try {
-            const event = JSON.parse(line) as Record<string, unknown>;
-            if (!wanted.has(String(event.event_type || '').trim())) {
+        const wanted = new Set(eventTypes);
+        let latestSequence: number | null = null;
+        for (const timelineEntry of readTaskTimelineJsonlEntries(timelinePath)) {
+            const event = timelineEntry.record;
+            if (!event) {
                 continue;
             }
-            const integrity = isPlainRecord(event.integrity) ? event.integrity : null;
-            const sequence = typeof integrity?.task_sequence === 'number'
-                ? integrity.task_sequence
-                : Number(integrity?.task_sequence);
-            if (Number.isInteger(sequence) && sequence > 0) {
-                latestSequence = latestSequence == null ? sequence : Math.max(latestSequence, sequence);
+            try {
+                if (!wanted.has(String(event.event_type || '').trim())) {
+                    continue;
+                }
+                const integrity = isPlainRecord(event.integrity) ? event.integrity : null;
+                const sequence = typeof integrity?.task_sequence === 'number'
+                    ? integrity.task_sequence
+                    : Number(integrity?.task_sequence);
+                if (Number.isInteger(sequence) && sequence > 0) {
+                    latestSequence = latestSequence == null ? sequence : Math.max(latestSequence, sequence);
+                }
+            } catch {
+                // Ignore malformed lines; timeline integrity is reported by task-audit-summary.
             }
-        } catch {
-            // Ignore malformed lines; timeline integrity is reported by task-audit-summary.
         }
-    }
-    return latestSequence;
+        return latestSequence;
+    });
 }
 
 export function getArtifactStringField(artifact: Record<string, unknown>, ...fieldNames: string[]): string {

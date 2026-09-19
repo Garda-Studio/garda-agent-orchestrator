@@ -1,5 +1,9 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
+
+import {
+    readTaskTimelineJsonlEntries,
+    type TaskTimelineJsonlEntry
+} from '../../gate-runtime/timeline/task-events-helpers';
 
 import {
     getProviderEntryById,
@@ -53,6 +57,7 @@ import {
     hasMatchingReviewerProviderFailureTelemetry,
     resolveReviewerLaunchArtifactPathFromTelemetry
 } from './next-step-reviewer-launch-evidence-telemetry';
+import { withNextStepReviewEvidenceSnapshot } from './next-step-review-timeline-evidence';
 
 export {
     getDelegatedReviewRoutingShaAfterCompile
@@ -95,7 +100,7 @@ function reviewerLaunchEvidencePathsEqual(left: string, right: string): boolean 
 
 function findPreparedReviewerLaunchInputPin(options: {
     repoRoot: string;
-    lines: string[];
+    lines: readonly TaskTimelineJsonlEntry[];
     preparedEventIndex: number;
     preparedLaunchEventSha256: string;
     launchArtifactPath: string;
@@ -118,7 +123,10 @@ function findPreparedReviewerLaunchInputPin(options: {
     }
     for (let index = options.preparedEventIndex + 1; index < options.lines.length; index += 1) {
         try {
-            const event = JSON.parse(options.lines[index]) as Record<string, unknown>;
+            const event = options.lines[index].record;
+            if (!event) {
+                continue;
+            }
             if (isAuthenticatedReviewRestartBoundary(event, options.taskId, options.reviewType)) {
                 return null;
             }
@@ -203,7 +211,7 @@ function findPreparedReviewerLaunchInputPin(options: {
 
 function resolveLaunchArtifactPathForPreparedEvent(options: {
     repoRoot: string;
-    lines: string[];
+    lines: readonly TaskTimelineJsonlEntry[];
     preparedEventIndex: number;
     preparedLaunchEventSha256: string;
     preparedArtifactPath: unknown;
@@ -221,7 +229,10 @@ function resolveLaunchArtifactPathForPreparedEvent(options: {
     };
     for (let index = options.lines.length - 1; index > options.preparedEventIndex; index -= 1) {
         try {
-            const event = JSON.parse(options.lines[index]) as Record<string, unknown>;
+            const event = options.lines[index].record;
+            if (!event) {
+                continue;
+            }
             const details = isPlainRecord(event.details) ? event.details : {};
             if (
                 getArtifactStringField(details, 'task_id', 'taskId') === options.taskId
@@ -324,7 +335,7 @@ function getReviewContextSha256CandidatesForInvocationMatching(
 }
 
 function timelineHasMatchingReviewerRoutingEventSha(options: {
-    lines: string[];
+    lines: readonly TaskTimelineJsonlEntry[];
     taskId: string;
     reviewType: string;
     reviewerIdentity: string;
@@ -333,7 +344,10 @@ function timelineHasMatchingReviewerRoutingEventSha(options: {
 }): boolean {
     return options.lines.some((line) => {
         try {
-            const event = JSON.parse(line) as Record<string, unknown>;
+            const event = line.record;
+            if (!event) {
+                return false;
+            }
             if (String(event.event_type || '').trim() !== 'REVIEWER_DELEGATION_ROUTED') {
                 return false;
             }
@@ -356,13 +370,16 @@ function timelineHasMatchingReviewerRoutingEventSha(options: {
 }
 
 function findReviewerRoutingEventIndexBySha(
-    lines: string[],
+    lines: readonly TaskTimelineJsonlEntry[],
     reviewType: string,
     routingEventSha256: string
 ): number {
     for (let index = lines.length - 1; index >= 0; index -= 1) {
         try {
-            const event = JSON.parse(lines[index]) as Record<string, unknown>;
+            const event = lines[index].record;
+            if (!event) {
+                continue;
+            }
             const integrity = isPlainRecord(event.integrity) ? event.integrity : {};
             const details = isPlainRecord(event.details) ? event.details : {};
             if (
@@ -385,42 +402,44 @@ export function timelineHasDelegatedReviewRoutingAfterCompile(
     reviewType: string,
     reviewerIdentity: string
 ): boolean {
-    const routingEventSha256 = getDelegatedReviewRoutingShaAfterCompile(
-        eventsRoot,
-        taskId,
-        reviewType,
-        reviewerIdentity
-    );
-    if (!routingEventSha256) {
-        return false;
-    }
-    const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
-    if (!fileExists(timelinePath)) {
-        return false;
-    }
-    const timelineIntegrityStatus = inspectTaskEventFile(timelinePath, taskId).status;
-    if (timelineIntegrityStatus !== 'PASS' && timelineIntegrityStatus !== 'PASS_WITH_LEGACY_PREFIX') {
-        return false;
-    }
-    const lines = fs.readFileSync(timelinePath, 'utf8')
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean);
-    const routingEventIndex = findReviewerRoutingEventIndexBySha(lines, reviewType, routingEventSha256);
-    for (let index = lines.length - 1; index > routingEventIndex; index -= 1) {
-        try {
-            const event = JSON.parse(lines[index]) as Record<string, unknown>;
-            if (isAuthenticatedReviewRestartBoundary(event, taskId, reviewType)) {
-                return false;
-            }
-        } catch {
-            // Timeline integrity is verified above.
+    return withNextStepReviewEvidenceSnapshot(eventsRoot, taskId, () => {
+        const routingEventSha256 = getDelegatedReviewRoutingShaAfterCompile(
+            eventsRoot,
+            taskId,
+            reviewType,
+            reviewerIdentity
+        );
+        if (!routingEventSha256) {
+            return false;
         }
-    }
-    return routingEventIndex >= 0;
+        const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
+        if (!fileExists(timelinePath)) {
+            return false;
+        }
+        const timelineIntegrityStatus = inspectTaskEventFile(timelinePath, taskId).status;
+        if (timelineIntegrityStatus !== 'PASS' && timelineIntegrityStatus !== 'PASS_WITH_LEGACY_PREFIX') {
+            return false;
+        }
+        const lines = readTaskTimelineJsonlEntries(timelinePath);
+        const routingEventIndex = findReviewerRoutingEventIndexBySha(lines, reviewType, routingEventSha256);
+        for (let index = lines.length - 1; index > routingEventIndex; index -= 1) {
+            try {
+                const event = lines[index].record;
+                if (!event) {
+                    continue;
+                }
+                if (isAuthenticatedReviewRestartBoundary(event, taskId, reviewType)) {
+                    return false;
+                }
+            } catch {
+                // Timeline integrity is verified above.
+            }
+        }
+        return routingEventIndex >= 0;
+    });
 }
 
-export function getCurrentReviewerLaunchArtifactEvidenceForInvocation(
+function getCurrentReviewerLaunchArtifactEvidenceForInvocationFromSnapshot(
     repoRoot: string,
     eventsRoot: string,
     taskId: string,
@@ -470,14 +489,14 @@ export function getCurrentReviewerLaunchArtifactEvidenceForInvocation(
     if (timelineIntegrityStatus !== 'PASS' && timelineIntegrityStatus !== 'PASS_WITH_LEGACY_PREFIX') {
         return missing;
     }
-    const lines = fs.readFileSync(timelinePath, 'utf8')
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean);
+    const lines = readTaskTimelineJsonlEntries(timelinePath);
     let latestRestartBoundaryIndex = -1;
     for (let index = lines.length - 1; index >= 0; index -= 1) {
         try {
-            const event = JSON.parse(lines[index]) as Record<string, unknown>;
+            const event = lines[index].record;
+            if (!event) {
+                continue;
+            }
             if (isAuthenticatedReviewRestartBoundary(event, taskId, state.reviewType)) {
                 latestRestartBoundaryIndex = index;
                 break;
@@ -503,7 +522,10 @@ export function getCurrentReviewerLaunchArtifactEvidenceForInvocation(
         : [];
     for (let index = lines.length - 1; index >= 0; index -= 1) {
         try {
-            const event = JSON.parse(lines[index]) as Record<string, unknown>;
+            const event = lines[index].record;
+            if (!event) {
+                continue;
+            }
             if (isAuthenticatedReviewRestartBoundary(event, taskId, state.reviewType)) {
                 break;
             }
@@ -554,7 +576,10 @@ export function getCurrentReviewerLaunchArtifactEvidenceForInvocation(
         const { reviewContextSha256, routingEventSha256 } = invocationCandidate;
     for (let index = lines.length - 1; index >= 0; index -= 1) {
         try {
-            const event = JSON.parse(lines[index]) as Record<string, unknown>;
+            const event = lines[index].record;
+            if (!event) {
+                continue;
+            }
             if (String(event.event_type || '').trim() !== 'REVIEWER_LAUNCH_PREPARED') {
                 continue;
             }
@@ -1083,6 +1108,22 @@ export function getCurrentReviewerLaunchArtifactEvidenceForInvocation(
     return missing;
 }
 
+export function getCurrentReviewerLaunchArtifactEvidenceForInvocation(
+    repoRoot: string,
+    eventsRoot: string,
+    taskId: string,
+    state: ReviewArtifactState
+): CurrentReviewerLaunchArtifactEvidence {
+    return withNextStepReviewEvidenceSnapshot(eventsRoot, taskId, () => (
+        getCurrentReviewerLaunchArtifactEvidenceForInvocationFromSnapshot(
+            repoRoot,
+            eventsRoot,
+            taskId,
+            state
+        )
+    ));
+}
+
 function getCurrentReviewerLaunchArtifactStateForInvocation(
     repoRoot: string,
     eventsRoot: string,
@@ -1092,7 +1133,7 @@ function getCurrentReviewerLaunchArtifactStateForInvocation(
     return getCurrentReviewerLaunchArtifactEvidenceForInvocation(repoRoot, eventsRoot, taskId, state).state;
 }
 
-export function timelineHasDelegatedReviewInvocationForCurrentContext(
+function timelineHasDelegatedReviewInvocationForCurrentContextFromSnapshot(
     repoRoot: string,
     eventsRoot: string,
     taskId: string,
@@ -1137,17 +1178,8 @@ export function timelineHasDelegatedReviewInvocationForCurrentContext(
     if (!routingEventSha256) {
         return false;
     }
-    const events = fs.readFileSync(timelinePath, 'utf8')
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .flatMap((line) => {
-            try {
-                return [JSON.parse(line) as Record<string, unknown>];
-            } catch {
-                return [];
-            }
-        });
+    const events = readTaskTimelineJsonlEntries(timelinePath)
+        .flatMap((entry) => entry.record ? [entry.record] : []);
     let routingSequence: number | null = null;
     for (let index = events.length - 1; index >= 0; index -= 1) {
         const event = events[index];
@@ -1211,7 +1243,23 @@ export function timelineHasDelegatedReviewInvocationForCurrentContext(
     return false;
 }
 
-export function buildReviewerReadinessChainSummary(
+export function timelineHasDelegatedReviewInvocationForCurrentContext(
+    repoRoot: string,
+    eventsRoot: string,
+    taskId: string,
+    state: ReviewArtifactState
+): boolean {
+    return withNextStepReviewEvidenceSnapshot(eventsRoot, taskId, () => (
+        timelineHasDelegatedReviewInvocationForCurrentContextFromSnapshot(
+            repoRoot,
+            eventsRoot,
+            taskId,
+            state
+        )
+    ));
+}
+
+function buildReviewerReadinessChainSummaryFromSnapshot(
     repoRoot: string,
     eventsRoot: string,
     taskId: string,
@@ -1303,6 +1351,26 @@ export function buildReviewerReadinessChainSummary(
         `invocation=${invocationStatus}`,
         `review output/receipt=${resultStatus}.`
     ].join(' -> ')}`;
+}
+
+export function buildReviewerReadinessChainSummary(
+    repoRoot: string,
+    eventsRoot: string,
+    taskId: string,
+    reviewType: string,
+    state: ReviewArtifactState | undefined,
+    reviewStateHasSatisfiedEvidence: (state: ReviewArtifactState) => boolean
+): string {
+    return withNextStepReviewEvidenceSnapshot(eventsRoot, taskId, () => (
+        buildReviewerReadinessChainSummaryFromSnapshot(
+            repoRoot,
+            eventsRoot,
+            taskId,
+            reviewType,
+            state,
+            reviewStateHasSatisfiedEvidence
+        )
+    ));
 }
 
 export function buildProviderNativeReviewerLaunchTargetSummary(taskMode: Record<string, unknown> | null): string {
