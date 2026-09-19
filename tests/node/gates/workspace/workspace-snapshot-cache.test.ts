@@ -1,6 +1,7 @@
 import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -53,6 +54,45 @@ function initTestRepo(): string {
 
 function cleanupTestRepo(tempDir: string): void {
     try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
+}
+
+function canonicalJsonForForgery(value: unknown): string {
+    if (value === null) return 'null';
+    if (typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') {
+        return JSON.stringify(value);
+    }
+    if (Array.isArray(value)) {
+        return `[${value.map((entry) => canonicalJsonForForgery(entry === undefined ? null : entry)).join(',')}]`;
+    }
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+        .filter((key) => record[key] !== undefined)
+        .sort()
+        .map((key) => `${JSON.stringify(key)}:${canonicalJsonForForgery(record[key])}`)
+        .join(',')}}`;
+}
+
+function hashCanonicalForgery(value: unknown): string {
+    return createHash('sha256').update(canonicalJsonForForgery(value), 'utf8').digest('hex');
+}
+
+function recomputeAttackerControlledHashes(entry: WorkspaceSnapshotCacheEntry): void {
+    entry.integrity.snapshot_sha256 = hashCanonicalForgery(entry.snapshot);
+    entry.integrity.params_sha256 = hashCanonicalForgery(entry.params);
+    entry.integrity.workspace_identity_sha256 = hashCanonicalForgery({
+        repo_root: process.platform === 'win32' ? entry.params.repo_root.toLowerCase() : entry.params.repo_root,
+        fingerprint: entry.fingerprint
+    });
+    entry.integrity.entry_sha256 = hashCanonicalForgery({
+        cache_version: entry.cache_version,
+        fingerprint: entry.fingerprint,
+        timestamp_utc: entry.timestamp_utc,
+        params: entry.params,
+        git_state: entry.git_state,
+        snapshot_sha256: entry.integrity.snapshot_sha256,
+        params_sha256: entry.integrity.params_sha256,
+        workspace_identity_sha256: entry.integrity.workspace_identity_sha256
+    });
 }
 
 describe('gates/workspace-snapshot-cache', () => {
@@ -444,27 +484,18 @@ describe('gates/workspace-snapshot-cache', () => {
         it('round-trips a valid cache entry', () => {
             const cachePath = path.join(tempDir, 'cache.json');
             fs.writeFileSync(path.join(repoRoot, 'file.ts'), 'export const a = 2;\n', 'utf8');
-            const entry: WorkspaceSnapshotCacheEntry = {
-                cache_version: 4,
-                fingerprint: 'abc123',
-                snapshot: getWorkspaceSnapshot(repoRoot, 'git_auto', true, []),
-                timestamp_utc: new Date().toISOString(),
-                params: {
-                    repo_root: '/repo',
-                    detection_source: 'git_auto',
-                    include_untracked: true,
-                    explicit_changed_files_hash: null
-                },
-                git_state: {
-                    head_sha: 'abc',
-                    index_mtime_ms: 12345,
-                    index_size: 678
-                }
-            };
+            getWorkspaceSnapshotCached(repoRoot, 'git_auto', true, []);
+            const entry = readSnapshotCache(resolveSnapshotCachePath(repoRoot));
+            assert.ok(entry);
             writeSnapshotCache(cachePath, entry);
             const read = readSnapshotCache(cachePath);
             assert.ok(read);
-            assert.equal(read.fingerprint, 'abc123');
+            assert.match(read.fingerprint, /^[0-9a-f]{64}$/u);
+            assert.match(read.integrity.snapshot_sha256, /^[0-9a-f]{64}$/u);
+            assert.match(read.integrity.params_sha256, /^[0-9a-f]{64}$/u);
+            assert.match(read.integrity.workspace_identity_sha256, /^[0-9a-f]{64}$/u);
+            assert.match(read.integrity.entry_sha256, /^[0-9a-f]{64}$/u);
+            assert.match(read.integrity.entry_hmac_sha256, /^[0-9a-f]{64}$/u);
             assert.deepEqual(read.snapshot.changed_files, ['file.ts']);
         });
 
@@ -488,8 +519,8 @@ describe('gates/workspace-snapshot-cache', () => {
         it('returns null for current-version snapshots without changed file stats', () => {
             const cachePath = path.join(tempDir, 'missing-stats.json');
             fs.writeFileSync(cachePath, JSON.stringify({
-                cache_version: 4,
-                fingerprint: 'abc123',
+                cache_version: 6,
+                fingerprint: 'a'.repeat(64),
                 snapshot: {
                     detection_source: 'git_auto',
                     use_staged: false,
@@ -541,6 +572,111 @@ describe('gates/workspace-snapshot-cache', () => {
             assert.deepEqual(second.changed_files, first.changed_files);
             assert.equal(second.changed_lines_total, first.changed_lines_total);
             assert.equal(second.scope_sha256, first.scope_sha256);
+        });
+
+        it('rejects a forged persisted snapshot payload and recomputes canonical scope', () => {
+            fs.writeFileSync(path.join(repoRoot, 'file.ts'), 'export const a = 2;\n', 'utf8');
+            const expected = getWorkspaceSnapshotCached(repoRoot, 'git_auto', false, []);
+            const cachePath = resolveSnapshotCachePath(repoRoot);
+            const persisted = readSnapshotCache(cachePath);
+            assert.ok(persisted);
+            invalidateSnapshotCache(repoRoot);
+
+            const forged = structuredClone(persisted) as WorkspaceSnapshotCacheEntry;
+            forged.snapshot.changed_file_stats['file.ts'].additions += 10;
+            forged.snapshot.changed_file_stats['file.ts'].changed_lines += 10;
+            forged.snapshot.additions_total += 10;
+            forged.snapshot.changed_lines_total += 10;
+            forged.snapshot.scope_content_sha256 = 'f'.repeat(64);
+            forged.snapshot.scope_sha256 = createHash('sha256').update([
+                forged.snapshot.detection_source,
+                forged.snapshot.use_staged,
+                forged.snapshot.include_untracked,
+                forged.snapshot.changed_files_count,
+                forged.snapshot.changed_lines_total,
+                forged.snapshot.changed_files_sha256,
+                forged.snapshot.scope_content_sha256
+            ].join('|')).digest('hex');
+            recomputeAttackerControlledHashes(forged);
+            writeSnapshotCache(cachePath, forged);
+
+            const resolved = getWorkspaceSnapshotCached(repoRoot, 'git_auto', false, []);
+            assert.equal(resolved.cache_hit, false);
+            assert.deepEqual(resolved.changed_file_stats, expected.changed_file_stats);
+            assert.equal(resolved.scope_sha256, expected.scope_sha256);
+        });
+
+        it('rejects persisted cache entries with mismatched request parameters or scope bindings', () => {
+            fs.writeFileSync(path.join(repoRoot, 'file.ts'), 'export const a = 2;\n', 'utf8');
+            getWorkspaceSnapshotCached(repoRoot, 'git_auto', false, []);
+            const cachePath = resolveSnapshotCachePath(repoRoot);
+            const persisted = readSnapshotCache(cachePath);
+            assert.ok(persisted);
+            invalidateSnapshotCache(repoRoot);
+
+            const mismatchedParams = structuredClone(persisted) as WorkspaceSnapshotCacheEntry;
+            mismatchedParams.params.detection_source = 'explicit_changed_files';
+            writeSnapshotCache(cachePath, mismatchedParams);
+            const afterParamsMismatch = getWorkspaceSnapshotCached(repoRoot, 'git_auto', false, []);
+            assert.equal(afterParamsMismatch.cache_hit, false);
+
+            const refreshed = readSnapshotCache(cachePath);
+            assert.ok(refreshed);
+            invalidateSnapshotCache(repoRoot);
+            const mismatchedScope = structuredClone(refreshed) as WorkspaceSnapshotCacheEntry;
+            mismatchedScope.snapshot.scope_sha256 = '0'.repeat(64);
+            writeSnapshotCache(cachePath, mismatchedScope);
+            const afterScopeMismatch = getWorkspaceSnapshotCached(repoRoot, 'git_auto', false, []);
+            assert.equal(afterScopeMismatch.cache_hit, false);
+            assert.notEqual(afterScopeMismatch.scope_sha256, '0'.repeat(64));
+        });
+
+        it('rejects a stale persisted workspace generation without TTL authority', () => {
+            fs.writeFileSync(path.join(repoRoot, 'file.ts'), 'export const a = 2;\n', 'utf8');
+            const stale = getWorkspaceSnapshotCached(repoRoot, 'git_auto', false, []);
+            const cachePath = resolveSnapshotCachePath(repoRoot);
+            const persisted = readSnapshotCache(cachePath);
+            assert.ok(persisted);
+            invalidateSnapshotCache(repoRoot);
+            fs.writeFileSync(path.join(repoRoot, 'file.ts'), 'export const a = 3;\n', 'utf8');
+            writeSnapshotCache(cachePath, persisted);
+
+            const current = getWorkspaceSnapshotCached(repoRoot, 'git_auto', false, []);
+            assert.equal(current.cache_hit, false);
+            assert.notEqual(current.scope_content_sha256, stale.scope_content_sha256);
+        });
+
+        it('rejects workspace mutation between fingerprint and snapshot generation', () => {
+            fs.writeFileSync(path.join(repoRoot, 'file.ts'), 'export const a = 2;\n', 'utf8');
+            const childProcessModule = require('node:child_process') as typeof import('node:child_process');
+            const originalSpawnSync = childProcessModule.spawnSync;
+            const originalExecFileSync = childProcessModule.execFileSync;
+            let mutationInjected = false;
+            const injectMutationBeforeGitConfig = (command: string, args: readonly string[]): void => {
+                if (command === 'git' && args.includes('config') && !mutationInjected) {
+                    mutationInjected = true;
+                    fs.writeFileSync(path.join(repoRoot, 'file.ts'), 'export const a = 3;\n', 'utf8');
+                }
+            };
+            childProcessModule.spawnSync = ((command: string, args: string[], options: unknown) => {
+                injectMutationBeforeGitConfig(command, args);
+                return originalSpawnSync(command, args, options as never);
+            }) as typeof originalSpawnSync;
+            childProcessModule.execFileSync = ((command: string, args: string[], options: unknown) => {
+                injectMutationBeforeGitConfig(command, args);
+                return originalExecFileSync(command, args, options as never);
+            }) as typeof originalExecFileSync;
+            try {
+                assert.throws(
+                    () => getWorkspaceSnapshotCached(repoRoot, 'git_auto', false, []),
+                    /generation changed during authenticated snapshot resolution/u
+                );
+                assert.equal(mutationInjected, true);
+                assert.equal(readSnapshotCache(resolveSnapshotCachePath(repoRoot)), null);
+            } finally {
+                childProcessModule.spawnSync = originalSpawnSync;
+                childProcessModule.execFileSync = originalExecFileSync;
+            }
         });
 
         it('invalidates cache when file is staged', () => {
