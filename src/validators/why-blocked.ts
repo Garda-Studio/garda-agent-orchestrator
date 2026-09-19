@@ -11,7 +11,13 @@ import {
     hasSatisfiedLifecycleEvent,
     resolveFullSuiteValidationRequirementForTaskEvents
 } from '../gate-runtime/lifecycle-event-types';
-import { scanTaskEventLocks, type TaskEventLockHealth } from '../gate-runtime/task-events';
+import {
+    readTaskTimelineJsonlEntries,
+    scanTaskEventLocks,
+    taskTimelineAwareFileExists,
+    type TaskEventLockHealth
+} from '../gate-runtime/task-events';
+import { withTaskTimelineFileReadSnapshot } from '../gate-runtime/timeline/task-timeline-read-snapshot';
 import { scanReviewArtifactLocks, type ReviewArtifactLockHealth } from '../gate-runtime/review-artifacts';
 import { scanCompletionGateFinalizationLocks, type FinalizationLockInspection } from '../gates/locks/finalization-lock';
 import { loadFullSuiteValidationConfig } from '../gates/full-suite/full-suite-validation';
@@ -91,36 +97,43 @@ function parseTaskMd(taskMdPath: string): TaskStatus[] {
     return tasks;
 }
 
-function readTimelineEvents(timelinePath: string): string[] {
+interface TimelineEventsSnapshot {
+    events: string[];
+    exists: boolean;
+}
+
+function readTimelineEvents(timelinePath: string): TimelineEventsSnapshot {
     const eventTypes: string[] = [];
 
-    if (!pathExists(timelinePath)) {
-        return eventTypes;
-    }
-
-    let content: string;
-    try {
-        content = fs.readFileSync(timelinePath, 'utf8');
-    } catch {
-        return eventTypes;
-    }
-
-    for (const line of content.split('\n')) {
-        if (!line.trim()) {
-            continue;
+    return withTaskTimelineFileReadSnapshot(timelinePath, () => {
+        if (!taskTimelineAwareFileExists(timelinePath)) {
+            return { events: eventTypes, exists: false };
         }
+
+        let entries;
         try {
-            const parsed = JSON.parse(line) as Record<string, unknown>;
-            const eventType = String(parsed.event_type || '').trim().toUpperCase();
-            if (eventType) {
-                eventTypes.push(eventType);
-            }
+            entries = readTaskTimelineJsonlEntries(timelinePath);
         } catch {
-            // Malformed line, skip
+            return { events: eventTypes, exists: true };
         }
-    }
 
-    return eventTypes;
+        for (const timelineEntry of entries) {
+            const parsed = timelineEntry.record;
+            if (!parsed) {
+                continue;
+            }
+            try {
+                const eventType = String(parsed.event_type || '').trim().toUpperCase();
+                if (eventType) {
+                    eventTypes.push(eventType);
+                }
+            } catch {
+                // Malformed record, skip
+            }
+        }
+
+        return { events: eventTypes, exists: true };
+    });
 }
 
 function getFailedGates(events: string[]): string[] {
@@ -283,11 +296,11 @@ function analyseTask(
     completionFinalizationLockObservations: FinalizationLockInspection[]
 ): WhyBlockedTask {
     const timelinePath = path.join(bundlePath, 'runtime', 'task-events', task.id + '.jsonl');
-    const events = readTimelineEvents(timelinePath);
+    const timeline = readTimelineEvents(timelinePath);
+    const events = timeline.events;
 
-    const hasTimeline = pathExists(timelinePath);
     let timelineStatus = 'MISSING';
-    if (hasTimeline) {
+    if (timeline.exists) {
         timelineStatus = events.length > 0 ? 'PRESENT' : 'EMPTY';
     }
 

@@ -369,7 +369,7 @@ describe('gates/shell-smoke-preflight', () => {
             assert.ok(result.violations.some(v => v.includes('hash mismatch')));
         });
 
-        it('uses the latest SHELL_SMOKE_PREFLIGHT_RECORDED event when the gate is rerun', () => {
+        it('uses the latest shell-smoke event from a custom events root after malformed lines', () => {
             const reviewsDir = path.join(tempDir, 'garda-agent-orchestrator', 'runtime', 'reviews');
             fs.mkdirSync(reviewsDir, { recursive: true });
             const artifactPath = path.join(reviewsDir, 'T-650-shell-smoke.json');
@@ -388,7 +388,9 @@ describe('gates/shell-smoke-preflight', () => {
             const crypto = require('node:crypto');
             const hash = crypto.createHash('sha256').update(fs.readFileSync(artifactPath)).digest('hex');
 
-            const timelinePath = path.join(tempDir, 'T-650-timeline.jsonl');
+            const timelineDir = path.join(tempDir, 'custom-task-events');
+            fs.mkdirSync(timelineDir, { recursive: true });
+            const timelinePath = path.join(timelineDir, 'T-650.jsonl');
             fs.writeFileSync(
                 timelinePath,
                 [
@@ -403,6 +405,7 @@ describe('gates/shell-smoke-preflight', () => {
                         timestamp_utc: '2026-04-03T09:59:30.000Z',
                         details: { artifact_hash: 'handshake-v1' }
                     }),
+                    'not-json',
                     JSON.stringify({
                         event_type: 'SHELL_SMOKE_PREFLIGHT_RECORDED',
                         task_id: 'T-650',

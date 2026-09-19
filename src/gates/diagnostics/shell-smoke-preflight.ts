@@ -13,7 +13,12 @@ import {
 } from '../../core/git-change-classification';
 
 import { redactPath } from '../../core/redaction';
-import { assertValidTaskId } from '../../gate-runtime/task-events';
+import {
+    assertValidTaskId,
+    readTaskTimelineJsonlEntries,
+    taskTimelineAwareFileExists
+} from '../../gate-runtime/task-events';
+import { withTaskTimelineFileReadSnapshot } from '../../gate-runtime/timeline/task-timeline-read-snapshot';
 import {
     describePrePreflightCycleAnchor,
     getLatestPrePreflightCycleAnchor
@@ -83,13 +88,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function readTimelineEvents(timelinePath: string): TimelineEventEntry[] {
-    const lines = fs.readFileSync(timelinePath, 'utf8').split('\n').filter(line => line.trim().length > 0);
     const events: TimelineEventEntry[] = [];
     let sequence = 0;
 
-    for (const line of lines) {
+    for (const timelineEntry of readTaskTimelineJsonlEntries(timelinePath)) {
+        const parsed = timelineEntry.record;
+        if (!parsed) {
+            sequence += 1;
+            continue;
+        }
         try {
-            const parsed = JSON.parse(line) as Record<string, unknown>;
             const eventType = String(parsed.event_type || '').trim().toUpperCase();
             if (!eventType) {
                 sequence += 1;
@@ -107,6 +115,12 @@ function readTimelineEvents(timelinePath: string): TimelineEventEntry[] {
     }
 
     return events;
+}
+
+function readTimelineEventsIfPresent(timelinePath: string): TimelineEventEntry[] | null {
+    return withTaskTimelineFileReadSnapshot(timelinePath, () => (
+        taskTimelineAwareFileExists(timelinePath) ? readTimelineEvents(timelinePath) : null
+    ));
 }
 
 function findLatestTimelineEvent(
@@ -426,11 +440,11 @@ function verifyShellSmokeTimelineBinding(
     if (!timelinePath) return [];
 
     const resolvedTimeline = path.resolve(timelinePath);
-    if (!fs.existsSync(resolvedTimeline) || !fs.statSync(resolvedTimeline).isFile()) {
+    const events = readTimelineEventsIfPresent(resolvedTimeline);
+    if (!events) {
         return [];
     }
 
-    const events = readTimelineEvents(resolvedTimeline);
     const latestCycleAnchor = getLatestPrePreflightCycleAnchor(events);
     const latestHandshake = findLatestTimelineEvent(events, 'HANDSHAKE_DIAGNOSTICS_RECORDED');
     const latestShellSmoke = findLatestTimelineEvent(events, 'SHELL_SMOKE_PREFLIGHT_RECORDED');

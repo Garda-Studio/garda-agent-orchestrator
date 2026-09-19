@@ -264,7 +264,7 @@ test('getWhyBlocked reports stale completion finalization locks for affected tas
     }
 });
 
-test('getWhyBlocked returns empty in_progress_tasks when timeline is complete', () => {
+test('getWhyBlocked preserves healthy output when a complete timeline contains malformed lines', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'why-blocked-test-'));
     const bundleDir = path.join(tmpDir, 'garda-agent-orchestrator');
     const eventsDir = path.join(bundleDir, 'runtime', 'task-events');
@@ -292,6 +292,7 @@ test('getWhyBlocked returns empty in_progress_tasks when timeline is complete', 
                 message: 'Test'
             });
         });
+        lines.splice(2, 0, 'not-json');
         fs.writeFileSync(path.join(eventsDir, 'T-011.jsonl'), lines.join('\n') + '\n', 'utf8');
 
         const result = getWhyBlocked(tmpDir);

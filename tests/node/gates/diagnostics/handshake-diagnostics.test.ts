@@ -725,7 +725,7 @@ describe('gates/handshake-diagnostics', () => {
             assert.ok(evidence.violations.some(v => v.includes('hash mismatch')));
         });
 
-        it('passes when timeline has matching HANDSHAKE_DIAGNOSTICS_RECORDED hash', () => {
+        it('passes for a custom events root with malformed lines before matching handshake evidence', () => {
             const artifact: HandshakeDiagnosticsArtifact = {
                 schema_version: 1,
                 timestamp_utc: new Date().toISOString(),
@@ -763,7 +763,7 @@ describe('gates/handshake-diagnostics', () => {
             const crypto = require('node:crypto');
             const hash = crypto.createHash('sha256').update(fs.readFileSync(artifactPath)).digest('hex');
 
-            const timelineDir = path.join(tempDir, 'garda-agent-orchestrator', 'runtime', 'task-events');
+            const timelineDir = path.join(tempDir, 'custom-task-events');
             fs.mkdirSync(timelineDir, { recursive: true });
             const timelinePath = path.join(timelineDir, 'T-HASHOK-01.jsonl');
             fs.writeFileSync(timelinePath, [
@@ -771,6 +771,7 @@ describe('gates/handshake-diagnostics', () => {
                     event_type: 'TASK_MODE_ENTERED',
                     timestamp_utc: '2026-04-16T09:00:00.000Z'
                 }),
+                'not-json',
                 JSON.stringify({
                     event_type: 'HANDSHAKE_DIAGNOSTICS_RECORDED',
                     timestamp_utc: new Date().toISOString(),

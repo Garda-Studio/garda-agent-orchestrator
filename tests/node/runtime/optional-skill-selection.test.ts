@@ -308,7 +308,7 @@ test('writeOptionalSkillSelectionArtifact persists artifact without emitting syn
         assert.equal(artifact.artifactPath, artifactPath);
         assert.equal(fs.existsSync(artifactPath), true);
 
-        const eventsPath = path.join(bundleRoot, 'runtime', 'task-events', 'T-149.jsonl');
+        const eventsPath = path.join(bundleRoot, 'custom-task-events', 'T-149.jsonl');
         assert.equal(fs.existsSync(eventsPath), false);
     } finally {
         fs.rmSync(bundleRoot, { recursive: true, force: true });
@@ -1595,6 +1595,7 @@ test('readOptionalSkillSelectionTimelineEvidence scans a bounded recent task-eve
             [
                 '{"not_valid_json":',
                 'x'.repeat(1024 * 1024),
+                'not-json',
                 eventLine(400, 'PREFLIGHT_CLASSIFIED', 5),
                 eventLine(500, 'COHERENT_CYCLE_RESTARTED', 6, {
                     optional_skill_activation_rebound_skill_ids: ['node-backend'],
@@ -1610,7 +1611,7 @@ test('readOptionalSkillSelectionTimelineEvidence scans a bounded recent task-eve
             timelineEvidence
         );
 
-        assert.equal(timelineEvidence.invalidJson, false);
+        assert.equal(timelineEvidence.invalidJson, true);
         assert.equal(timelineEvidence.boundedRead?.truncated, true);
         assert.ok((timelineEvidence.boundedRead?.bytesRead || 0) <= OPTIONAL_SKILL_TIMELINE_READ_LIMITS.maxBytes);
         assert.ok((timelineEvidence.boundedRead?.parseAttempts || 0) <= OPTIONAL_SKILL_TIMELINE_READ_LIMITS.maxParseAttempts);
