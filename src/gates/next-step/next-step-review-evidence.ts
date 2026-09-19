@@ -187,7 +187,7 @@ export function timelineHasReviewContextPreparedAfterCompile(
         for (const timelineEntry of readTaskTimelineJsonlEntries(timelinePath)) {
             const event = timelineEntry.record;
             if (!event) {
-                continue;
+                return false;
             }
             try {
                 if (String(event.event_type || '').trim() !== 'REVIEW_PHASE_STARTED') {

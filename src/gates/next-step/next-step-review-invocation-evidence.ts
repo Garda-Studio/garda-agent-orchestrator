@@ -41,20 +41,29 @@ function normalizeOptionalSha256(value: unknown): string | null {
     return normalized || null;
 }
 
-function readTimelineEvents(eventsRoot: string, taskId: string): Record<string, unknown>[] {
+function readTimelineEvents(eventsRoot: string, taskId: string): ReadonlyArray<Readonly<Record<string, unknown>>> | null {
     const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
     if (!fileExists(timelinePath)) {
         return [];
     }
-    return readTaskTimelineJsonlEntries(timelinePath)
-        .flatMap((entry) => entry.record ? [entry.record] : []);
+    const events: Array<Readonly<Record<string, unknown>>> = [];
+    for (const entry of readTaskTimelineJsonlEntries(timelinePath)) {
+        if (!entry.record) {
+            return null;
+        }
+        events.push(entry.record);
+    }
+    return events;
 }
 
-export function timelineHasMatchingDelegatedReviewInvocationAttestation(
+function timelineHasMatchingDelegatedReviewInvocationAttestationFromSnapshot(
     eventsRoot: string,
     expectation: DelegatedReviewInvocationExpectation
 ): boolean {
     const events = readTimelineEvents(eventsRoot, expectation.taskId);
+    if (!events) {
+        return false;
+    }
     for (let index = events.length - 1; index >= 0; index -= 1) {
         const event = events[index];
         if (String(event.event_type || '').trim() !== REVIEW_EVIDENCE_REQUIRED_PROVENANCE_EVENT_TYPE) {
@@ -101,6 +110,15 @@ export function timelineHasMatchingDelegatedReviewInvocationAttestation(
         return true;
     }
     return false;
+}
+
+export function timelineHasMatchingDelegatedReviewInvocationAttestation(
+    eventsRoot: string,
+    expectation: DelegatedReviewInvocationExpectation
+): boolean {
+    return withNextStepReviewEvidenceSnapshot(eventsRoot, expectation.taskId, () => (
+        timelineHasMatchingDelegatedReviewInvocationAttestationFromSnapshot(eventsRoot, expectation)
+    ));
 }
 
 function buildDelegatedReviewInvocationExpectation(
@@ -180,7 +198,7 @@ export function timelineHasDelegatedReviewInvocationAttestation(
         if (!expectation) {
             return false;
         }
-        return timelineHasMatchingDelegatedReviewInvocationAttestation(eventsRoot, expectation);
+        return timelineHasMatchingDelegatedReviewInvocationAttestationFromSnapshot(eventsRoot, expectation);
     });
 }
 
@@ -189,11 +207,13 @@ export function timelineHasHistoricalDelegatedReviewInvocationAttestation(
     taskId: string,
     state: ReviewArtifactState
 ): boolean {
-    const expectation = buildDelegatedReviewInvocationExpectation(taskId, state, {
-        requireReviewContextSha256: true
+    return withNextStepReviewEvidenceSnapshot(eventsRoot, taskId, () => {
+        const expectation = buildDelegatedReviewInvocationExpectation(taskId, state, {
+            requireReviewContextSha256: true
+        });
+        if (!expectation) {
+            return false;
+        }
+        return timelineHasMatchingDelegatedReviewInvocationAttestationFromSnapshot(eventsRoot, expectation);
     });
-    if (!expectation) {
-        return false;
-    }
-    return timelineHasMatchingDelegatedReviewInvocationAttestation(eventsRoot, expectation);
 }

@@ -35,7 +35,7 @@ export function getLatestTaskSequenceForEventTypes(eventsRoot: string, taskId: s
         for (const timelineEntry of readTaskTimelineJsonlEntries(timelinePath)) {
             const event = timelineEntry.record;
             if (!event) {
-                continue;
+                return null;
             }
             try {
                 if (!wanted.has(String(event.event_type || '').trim())) {

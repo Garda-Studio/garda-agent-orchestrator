@@ -6,8 +6,10 @@ import {
     readReviewArtifactState
 } from '../../../../src/gates/next-step/next-step-review-artifact-readers';
 import {
+    type DelegatedReviewInvocationExpectation,
     timelineHasDelegatedReviewInvocationAttestation,
-    timelineHasHistoricalDelegatedReviewInvocationAttestation
+    timelineHasHistoricalDelegatedReviewInvocationAttestation,
+    timelineHasMatchingDelegatedReviewInvocationAttestation
 } from '../../../../src/gates/next-step/next-step-review-invocation-evidence';
 import {
     findDownstreamReviewNeedingDependencyRebind,
@@ -59,6 +61,29 @@ function readState(repoRoot: string, reviewType: string) {
         JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>,
         repoRoot
     );
+}
+
+function buildInvocationExpectation(
+    state: ReturnType<typeof readState>
+): DelegatedReviewInvocationExpectation {
+    const provenance = state.reviewerProvenance;
+    assert.ok(state.reviewerIdentity);
+    assert.ok(state.contextReviewTreeStateSha256);
+    assert.ok(provenance?.task_sequence);
+    assert.ok(provenance.event_sha256);
+    assert.ok(provenance.review_context_sha256);
+    assert.ok(provenance.routing_event_sha256);
+    return {
+        taskId: TASK_ID,
+        reviewType: state.reviewType,
+        reviewerIdentity: state.reviewerIdentity,
+        reviewContextSha256: provenance.review_context_sha256.toLowerCase(),
+        reviewTreeStateSha256: state.contextReviewTreeStateSha256.toLowerCase(),
+        routingEventSha256: provenance.routing_event_sha256.toLowerCase(),
+        taskSequence: provenance.task_sequence,
+        eventSha256: provenance.event_sha256,
+        prevEventSha256: provenance.prev_event_sha256
+    };
 }
 
 function seedReviewedRepo(options: { includeLaunchArtifact?: boolean } = {}): string {
@@ -202,6 +227,15 @@ test('six next-step evidence readers share one authenticated timeline payload ca
             operation();
             assert.equal(timelineOpenCount - opensBeforeOperation, 1);
         };
+        const invocationExpectation = buildInvocationExpectation(state);
+        assertOneTimelineOpen(() => assert.equal(
+            timelineHasHistoricalDelegatedReviewInvocationAttestation(taskEventsRoot, TASK_ID, state),
+            true
+        ));
+        assertOneTimelineOpen(() => assert.equal(
+            timelineHasMatchingDelegatedReviewInvocationAttestation(taskEventsRoot, invocationExpectation),
+            true
+        ));
         assertOneTimelineOpen(() => getHiddenReviewTimingTrustRemediation(taskEventsRoot, TASK_ID, state));
         assertOneTimelineOpen(() => reviewStateHasCurrentRecordedEvidence(
             repoRoot,
@@ -247,4 +281,78 @@ test('six next-step evidence readers share one authenticated timeline payload ca
         mutableFs.readSync = originalReadSync;
         mutableFs.closeSync = originalCloseSync;
     }
+});
+
+test('review eligibility readers fail closed on a malformed authenticated timeline entry', () => {
+    const repoRoot = seedReviewedRepo();
+    const taskEventsRoot = eventsRoot(repoRoot);
+    const timelinePath = path.join(taskEventsRoot, `${TASK_ID}.jsonl`);
+    const state = readState(repoRoot, 'code');
+    const expectation = buildInvocationExpectation(state);
+    const reviewerIdentity = state.contextReviewerIdentity || '';
+    const contextEvent = {
+        event_type: 'REVIEW_PHASE_STARTED',
+        details: {
+            review_type: 'code',
+            output_path: state.contextPath
+        },
+        integrity: {
+            task_sequence: expectation.taskSequence + 1
+        }
+    };
+    fs.appendFileSync(timelinePath, `${JSON.stringify(contextEvent)}\n`, 'utf8');
+
+    assert.equal(
+        timelineHasReviewContextPreparedAfterCompile(
+            taskEventsRoot,
+            TASK_ID,
+            'code',
+            state.contextPath
+        ),
+        true
+    );
+    assert.equal(
+        timelineHasHistoricalDelegatedReviewInvocationAttestation(taskEventsRoot, TASK_ID, state),
+        true
+    );
+    assert.ok(getLatestAuthenticatedTaskSequence(taskEventsRoot, TASK_ID, ['COMPILE_GATE_PASSED']));
+    assert.match(
+        getDelegatedReviewRoutingShaAfterCompile(
+            taskEventsRoot,
+            TASK_ID,
+            'code',
+            reviewerIdentity
+        ) || '',
+        /^[0-9a-f]{64}$/
+    );
+
+    fs.appendFileSync(timelinePath, '{ malformed timeline entry\n', 'utf8');
+
+    assert.equal(
+        timelineHasReviewContextPreparedAfterCompile(
+            taskEventsRoot,
+            TASK_ID,
+            'code',
+            state.contextPath
+        ),
+        false
+    );
+    assert.equal(
+        timelineHasHistoricalDelegatedReviewInvocationAttestation(taskEventsRoot, TASK_ID, state),
+        false
+    );
+    assert.equal(
+        timelineHasMatchingDelegatedReviewInvocationAttestation(taskEventsRoot, expectation),
+        false
+    );
+    assert.equal(getLatestAuthenticatedTaskSequence(taskEventsRoot, TASK_ID, ['COMPILE_GATE_PASSED']), null);
+    assert.equal(
+        getDelegatedReviewRoutingShaAfterCompile(
+            taskEventsRoot,
+            TASK_ID,
+            'code',
+            reviewerIdentity
+        ),
+        null
+    );
 });

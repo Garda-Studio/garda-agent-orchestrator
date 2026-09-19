@@ -332,7 +332,7 @@ function lookupDelegatedReviewRoutingShaAfterCompile(
         try {
             const event = entries[index].record;
             if (!event) {
-                continue;
+                return null;
             }
             if (String(event.event_type || '').trim() !== 'REVIEWER_DELEGATION_ROUTED') {
                 continue;
