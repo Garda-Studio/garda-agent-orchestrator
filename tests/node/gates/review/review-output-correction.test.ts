@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { fileSha256 } from '../../../../src/gate-runtime/hash';
+import { sha256RedactedJsonPayload } from '../../../../src/core/redaction';
 import {
     buildReviewOutputCorrectionApiContinuationAcceptance,
     buildReviewOutputCorrectionArtifact,
@@ -17,6 +18,7 @@ import {
     hasCommittedReviewOutputCorrectionTransportEvent,
     normalizeReviewOutputMechanically,
     persistReviewOutputCorrection,
+    persistReviewOutputCorrectionTransportSelection,
     readReviewOutputCorrectionArtifact,
     resolveReviewOutputCorrectionTransport,
     verifyCorrectedReviewOutput,
@@ -447,6 +449,95 @@ describe('review output correction contract', () => {
         }), /capability evidence is invalid/iu);
     });
 
+    it('upgrades an authenticated v1 artifact before emitting a correction-only handoff', () => {
+        const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-correction-v1-upgrade-'));
+        try {
+            const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+            fs.mkdirSync(reviewsRoot, { recursive: true });
+            const reviewArtifactPath = path.join(reviewsRoot, 'T-1-code.md');
+            const rejectedOutputPath = path.join(reviewsRoot, 'placeholder.md');
+            const contextPath = path.join(reviewsRoot, 'T-1-code-review-context.json');
+            const validationPath = path.join(reviewsRoot, 'T-1-code-findings-validation.json');
+            const rawOutput = findingsOutput();
+            fs.writeFileSync(rejectedOutputPath, rawOutput, 'utf8');
+            fs.writeFileSync(contextPath, '{}\n', 'utf8');
+            fs.writeFileSync(validationPath, '{}\n', 'utf8');
+            const initial = buildReviewOutputCorrectionArtifact({
+                taskId: 'T-1',
+                reviewType: 'code',
+                rejectedOutputPath,
+                rejectedOutputSha256: fileSha256(rejectedOutputPath)!,
+                rejectedOutputContent: rawOutput,
+                reviewContextPath: contextPath,
+                reviewContextSha256: SHA_A,
+                reviewTreeStateSha256: SHA_B,
+                reviewerIdentity: 'agent:/root/code-review',
+                reviewerAttemptId: 'attempt-1',
+                reviewerInvocationEventSha256: SHA_D,
+                validationArtifactPath: validationPath,
+                validationArtifactSha256: fileSha256(validationPath)!,
+                violations: ['findings.high[0].description is required.'],
+                capabilities: {
+                    live_reviewer_continuation: true,
+                    correction_only_invocation: true
+                },
+                providerId: 'Codex',
+                providerInvocationId: '/root/code-review'
+            });
+            const persisted = persistReviewOutputCorrection({
+                repoRoot,
+                reviewArtifactPath,
+                rawOutput,
+                artifact: initial
+            });
+            const v1Artifact = structuredClone(persisted.artifact);
+            v1Artifact.schema_version = 1;
+            delete v1Artifact.binding.correction_input_path;
+            delete v1Artifact.binding.correction_input_sha256;
+            delete v1Artifact.artifact_sha256;
+            v1Artifact.artifact_sha256 = sha256RedactedJsonPayload(v1Artifact);
+            fs.writeFileSync(persisted.artifactPath, `${JSON.stringify(v1Artifact, null, 2)}\n`, 'utf8');
+
+            const legacy = readReviewOutputCorrectionArtifact(persisted.artifactPath);
+            assert.deepEqual(legacy.violations, []);
+            assert.equal(legacy.artifact?.schema_version, 1);
+
+            const selected = persistReviewOutputCorrectionTransportSelection({
+                repoRoot,
+                artifactPath: persisted.artifactPath,
+                artifact: legacy.artifact!,
+                sessionAvailability: 'closed',
+                reviewerIdentity: 'agent:/root/code-review',
+                providerInvocationId: '/root/code-review',
+                attestationSource: REVIEW_OUTPUT_CORRECTION_FAIL_CLOSED_ATTESTATION_SOURCE,
+                now: '2026-08-20T00:01:00.000Z'
+            });
+            assert.equal(selected.artifact.schema_version, 2);
+            assert.equal(
+                selected.artifact.binding.correction_input_path,
+                selected.artifact.binding.original_output_path
+            );
+            assert.equal(
+                selected.artifact.binding.correction_input_sha256,
+                selected.artifact.binding.original_output_sha256
+            );
+            assert.match(
+                selected.artifact.recovery.handoff?.instruction || '',
+                /binding\.correction_input_path/u
+            );
+            assert.match(
+                selected.artifact.recovery.handoff?.provider_response_output_path || '',
+                /\.attempt-1\.provider-response\.json$/u
+            );
+            assert.deepEqual(
+                readReviewOutputCorrectionArtifact(persisted.artifactPath).violations,
+                []
+            );
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+
     it('requires a provider-bound response receipt for API-only stateless correction packages', () => {
         const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-correction-api-only-'));
         try {
@@ -738,8 +829,21 @@ describe('review output correction contract', () => {
                 persisted.artifactPath.replace(/\\/gu, '/')
             );
             assert.equal(loaded.artifact!.recovery.handoff?.fork_context, false);
+            assert.equal(loaded.artifact!.schema_version, 2);
+            assert.equal(
+                loaded.artifact!.binding.correction_input_path,
+                persisted.rejectedOutputPath.replace(/\\/gu, '/')
+            );
+            assert.equal(
+                loaded.artifact!.binding.correction_input_sha256,
+                fileSha256(persisted.rejectedOutputPath)
+            );
+            assert.match(
+                loaded.artifact!.recovery.handoff?.provider_response_output_path || '',
+                /\.attempt-1\.provider-response\.json$/u
+            );
             const correctionInstruction = loaded.artifact!.recovery.handoff?.instruction || '';
-            assert.match(correctionInstruction, /binding\.original_output_path/u);
+            assert.match(correctionInstruction, /binding\.correction_input_path/u);
             assert.match(correctionInstruction, /recovery\.handoff\.provider_response_output_path/u);
             assert.match(correctionInstruction, /without a wrapper or prose/u);
             assert.match(correctionInstruction, /must not run Garda/u);
@@ -906,6 +1010,7 @@ describe('review output correction contract', () => {
                 artifact: firstArtifact
             });
             const firstBinding = firstPersisted.artifact.binding;
+            const firstResponsePath = firstPersisted.artifact.recovery.handoff?.provider_response_output_path;
             const secondRejectedOutput = findingsOutput({
                 reviewer_notes: ['The correction still contains a validation-only defect.']
             });
@@ -938,11 +1043,38 @@ describe('review output correction contract', () => {
             assert.equal(secondPersisted.artifact.binding.original_output_path, firstBinding.original_output_path);
             assert.equal(secondPersisted.artifact.binding.original_output_sha256, firstBinding.original_output_sha256);
             assert.equal(
+                secondPersisted.artifact.binding.correction_input_path,
+                secondPersisted.rejectedOutputPath.replace(/\\/gu, '/')
+            );
+            assert.equal(
+                secondPersisted.artifact.binding.correction_input_sha256,
+                fileSha256(secondPersisted.rejectedOutputPath)
+            );
+            assert.notEqual(
+                secondPersisted.artifact.recovery.handoff?.provider_response_output_path,
+                firstResponsePath
+            );
+            assert.match(
+                secondPersisted.artifact.recovery.handoff?.provider_response_output_path || '',
+                /\.attempt-2\.provider-response\.json$/u
+            );
+            assert.match(
+                secondPersisted.artifact.recovery.handoff?.instruction || '',
+                /binding\.correction_input_path/u
+            );
+            assert.equal(
                 secondPersisted.artifact.binding.findings_semantic_fingerprint,
                 firstBinding.findings_semantic_fingerprint
             );
             assert.equal(fs.readFileSync(firstBinding.original_output_path, 'utf8'), firstRejectedOutput);
             assert.equal(fs.readFileSync(secondPersisted.rejectedOutputPath, 'utf8'), secondRejectedOutput);
+            assert.deepEqual(readReviewOutputCorrectionArtifact(secondPersisted.artifactPath).violations, []);
+
+            fs.appendFileSync(secondPersisted.rejectedOutputPath, 'tampered', 'utf8');
+            assert.match(
+                readReviewOutputCorrectionArtifact(secondPersisted.artifactPath).violations.join(' '),
+                /latest input binding.*tampered/iu
+            );
         } finally {
             fs.rmSync(repoRoot, { recursive: true, force: true });
         }

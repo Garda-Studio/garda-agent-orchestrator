@@ -9,7 +9,7 @@ import { normalizePath } from '../shared/helpers';
 
 export const REVIEW_OUTPUT_CORRECTION_ARTIFACT_TYPE = 'review_output_correction';
 export const REVIEW_OUTPUT_CORRECTION_LAUNCH_ARTIFACT_TYPE = 'review_output_correction_launch';
-export const REVIEW_OUTPUT_CORRECTION_SCHEMA_VERSION = 1;
+export const REVIEW_OUTPUT_CORRECTION_SCHEMA_VERSION = 2;
 export const REVIEW_OUTPUT_CORRECTION_REQUIRED = 'REVIEW_OUTPUT_CORRECTION_REQUIRED';
 export const DEFAULT_REVIEW_OUTPUT_CORRECTION_LIMIT = 2;
 export const REVIEW_OUTPUT_CORRECTION_FAIL_CLOSED_ATTESTATION_SOURCE =
@@ -99,6 +99,8 @@ export interface ReviewOutputCorrectionTransportBinding {
 export interface ReviewOutputCorrectionBinding {
     original_output_path: string;
     original_output_sha256: string;
+    correction_input_path?: string;
+    correction_input_sha256?: string;
     review_context_path: string;
     review_context_sha256: string;
     review_tree_state_sha256: string;
@@ -129,7 +131,7 @@ export interface ReviewOutputCorrectionHandoff {
 }
 
 export interface ReviewOutputCorrectionArtifact {
-    schema_version: 1;
+    schema_version: 1 | typeof REVIEW_OUTPUT_CORRECTION_SCHEMA_VERSION;
     artifact_type: typeof REVIEW_OUTPUT_CORRECTION_ARTIFACT_TYPE;
     task_id: string;
     review_type: string;
@@ -310,6 +312,7 @@ export function buildReviewOutputCorrectionHandoff(options: {
     transport: ReviewOutputCorrectionTransport;
     reviewerIdentity: string;
     correctionArtifactPath?: string | null;
+    correctionAttempt?: number;
 }): ReviewOutputCorrectionHandoff {
     const launchInputArtifactPath = options.correctionArtifactPath
         ? normalizePath(options.correctionArtifactPath)
@@ -344,8 +347,9 @@ export function buildReviewOutputCorrectionHandoff(options: {
         };
     }
     if (options.transport === 'correction_only_invocation') {
+        const correctionAttempt = Math.max(1, options.correctionAttempt || 1);
         const providerResponseOutputPath = options.correctionArtifactPath
-            ? normalizePath(`${options.correctionArtifactPath}.provider-response.json`)
+            ? normalizePath(`${options.correctionArtifactPath}.attempt-${correctionAttempt}.provider-response.json`)
             : null;
         return {
             ...common,
@@ -355,7 +359,7 @@ export function buildReviewOutputCorrectionHandoff(options: {
             fork_context: false,
             instruction:
                 'Launch one clean-context correction-only reviewer with only ReviewerCorrectionInputArtifactPath. ' +
-                'The reviewer must read the rejected review JSON from binding.original_output_path, apply only the bound diagnostics, ' +
+                'The reviewer must read the latest rejected review JSON from binding.correction_input_path, apply only the bound diagnostics, ' +
                 'and preserve the findings object exactly. It must write exactly one corrected review JSON object, without a wrapper or prose, ' +
                 'to recovery.handoff.provider_response_output_path, return those same bytes, and stop. ' +
                 'The reviewer must not run Garda, invoke workflow gates, or modify any other source, task, review, receipt, or control artifact. ' +
@@ -617,7 +621,7 @@ export function buildReviewOutputCorrectionArtifact(options: {
     });
     const timestamp = options.now || new Date().toISOString();
     const artifact: Omit<ReviewOutputCorrectionArtifact, 'artifact_sha256'> = {
-        schema_version: REVIEW_OUTPUT_CORRECTION_SCHEMA_VERSION as 1,
+        schema_version: REVIEW_OUTPUT_CORRECTION_SCHEMA_VERSION,
         artifact_type: REVIEW_OUTPUT_CORRECTION_ARTIFACT_TYPE,
         task_id: options.taskId,
         review_type: options.reviewType,
@@ -629,6 +633,8 @@ export function buildReviewOutputCorrectionArtifact(options: {
         binding: {
             original_output_path: normalizePath(options.rejectedOutputPath),
             original_output_sha256: options.rejectedOutputSha256.toLowerCase(),
+            correction_input_path: normalizePath(options.rejectedOutputPath),
+            correction_input_sha256: options.rejectedOutputSha256.toLowerCase(),
             review_context_path: normalizePath(options.reviewContextPath),
             review_context_sha256: options.reviewContextSha256.toLowerCase(),
             review_tree_state_sha256: options.reviewTreeStateSha256.toLowerCase(),
@@ -659,7 +665,8 @@ export function buildReviewOutputCorrectionArtifact(options: {
             reason: recovery.reason,
             handoff: buildReviewOutputCorrectionHandoff({
                 transport: recovery.transport,
-                reviewerIdentity: options.reviewerIdentity
+                reviewerIdentity: options.reviewerIdentity,
+                correctionAttempt
             })
         }
     };
@@ -780,9 +787,23 @@ export function buildReviewOutputCorrectionTransportSelection(options: {
         sessionAvailability: options.sessionAvailability
     });
     const timestamp = options.now || new Date().toISOString();
+    const correctionInputPath = options.artifact.binding.correction_input_path
+        || options.artifact.binding.original_output_path;
+    const correctionInputSha256 = normalizeSha256(
+        options.artifact.binding.correction_input_sha256
+    ) || normalizeSha256(options.artifact.binding.original_output_sha256);
+    if (!correctionInputSha256) {
+        throw new Error('Correction transport selection requires an authenticated correction input binding.');
+    }
     const updatedWithoutHash: Omit<ReviewOutputCorrectionArtifact, 'artifact_sha256'> = {
         ...options.artifact,
+        schema_version: REVIEW_OUTPUT_CORRECTION_SCHEMA_VERSION,
         updated_at_utc: timestamp,
+        binding: {
+            ...options.artifact.binding,
+            correction_input_path: correctionInputPath,
+            correction_input_sha256: correctionInputSha256
+        },
         transport_binding: {
             ...binding,
             session_availability: options.sessionAvailability,
@@ -805,7 +826,8 @@ export function buildReviewOutputCorrectionTransportSelection(options: {
             handoff: buildReviewOutputCorrectionHandoff({
                 transport: recovery.transport,
                 reviewerIdentity: options.artifact.binding.reviewer_identity,
-                correctionArtifactPath: options.artifactPath
+                correctionArtifactPath: options.artifactPath,
+                correctionAttempt: options.artifact.recovery.correction_attempt
             })
         }
     };
@@ -888,7 +910,8 @@ function buildReviewOutputCorrectionProviderContinuationAcceptance(
             handoff: buildReviewOutputCorrectionHandoff({
                 transport: selectedTransport,
                 reviewerIdentity: options.reviewerIdentity,
-                correctionArtifactPath: options.artifactPath
+                correctionArtifactPath: options.artifactPath,
+                correctionAttempt: options.artifact.recovery.correction_attempt
             })
         }
     });
@@ -962,7 +985,8 @@ export function buildReviewOutputCorrectionCorrectionOnlyAcceptance(
             handoff: buildReviewOutputCorrectionHandoff({
                 transport: 'correction_only_invocation',
                 reviewerIdentity: options.artifact.binding.reviewer_identity,
-                correctionArtifactPath: options.artifactPath
+                correctionArtifactPath: options.artifactPath,
+                correctionAttempt: options.artifact.recovery.correction_attempt
             })
         }
     });
@@ -1100,6 +1124,8 @@ export function persistReviewOutputCorrection(options: {
         ...artifactWithoutHash.binding,
         original_output_path: normalizePath(preservedOriginalOutputPath),
         original_output_sha256: preservedOriginalOutputSha256,
+        correction_input_path: normalizePath(rejectedOutputPath),
+        correction_input_sha256: rawOutputSha256,
         findings_semantic_fingerprint: findingsSemanticFingerprint
     };
     artifactWithoutHash.recovery = {
@@ -1107,7 +1133,8 @@ export function persistReviewOutputCorrection(options: {
         handoff: buildReviewOutputCorrectionHandoff({
             transport: artifactWithoutHash.recovery.selected_transport,
             reviewerIdentity: artifactWithoutHash.binding.reviewer_identity,
-            correctionArtifactPath: artifactPath
+            correctionArtifactPath: artifactPath,
+            correctionAttempt: artifactWithoutHash.recovery.correction_attempt
         })
     };
     if (!findingsSemanticFingerprint) {
@@ -1119,7 +1146,8 @@ export function persistReviewOutputCorrection(options: {
             handoff: buildReviewOutputCorrectionHandoff({
                 transport: 'full_reviewer_relaunch',
                 reviewerIdentity: artifactWithoutHash.binding.reviewer_identity,
-                correctionArtifactPath: artifactPath
+                correctionArtifactPath: artifactPath,
+                correctionAttempt: artifactWithoutHash.recovery.correction_attempt
             })
         };
     }
@@ -1220,7 +1248,7 @@ export function readReviewOutputCorrectionArtifact(artifactPath: string): {
     const artifact = parsed as unknown as ReviewOutputCorrectionArtifact;
     const violations: string[] = [];
     if (
-        artifact.schema_version !== REVIEW_OUTPUT_CORRECTION_SCHEMA_VERSION
+        ![1, REVIEW_OUTPUT_CORRECTION_SCHEMA_VERSION].includes(artifact.schema_version)
         || artifact.artifact_type !== REVIEW_OUTPUT_CORRECTION_ARTIFACT_TYPE
         || !isRecord(artifact.binding)
         || !isRecord(artifact.recovery)
@@ -1330,6 +1358,17 @@ export function readReviewOutputCorrectionArtifact(artifactPath: string): {
     ) {
         violations.push('Review output correction original output binding is missing or tampered.');
     }
+    if (artifact.schema_version >= 2) {
+        const correctionInputSha256 = normalizeSha256(artifact.binding.correction_input_sha256);
+        if (
+            !correctionInputSha256
+            || !artifact.binding.correction_input_path
+            || !fs.existsSync(artifact.binding.correction_input_path)
+            || fileSha256(artifact.binding.correction_input_path) !== correctionInputSha256
+        ) {
+            violations.push('Review output correction latest input binding is missing or tampered.');
+        }
+    }
     const validationArtifactSha256 = normalizeSha256(artifact.binding.validation_artifact_sha256);
     if (
         !validationArtifactSha256
@@ -1360,7 +1399,8 @@ export function buildReviewOutputCorrectionStateTransition(options: {
                     handoff: buildReviewOutputCorrectionHandoff({
                         transport: 'full_reviewer_relaunch',
                         reviewerIdentity: options.artifact.binding.reviewer_identity,
-                        correctionArtifactPath: options.artifactPath
+                        correctionArtifactPath: options.artifactPath,
+                        correctionAttempt: options.artifact.recovery.correction_attempt
                     })
                 }
                 : {}),
