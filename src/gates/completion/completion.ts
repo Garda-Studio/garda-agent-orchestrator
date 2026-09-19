@@ -220,6 +220,10 @@ export function runCompletionGate(options: RunCompletionGateOptions) {
 
     const fullSuiteNotRequiredForDocsOnly = isFullSuiteNotRequiredForDocsOnlyScope(preflight);
     const fullSuiteNotRequiredForZeroDiffNoReviewableScope = isFullSuiteNotRequiredForZeroDiffNoReviewableScope(preflight);
+    const compileGateRequired = !(
+        fullSuiteNotRequiredForZeroDiffNoReviewableScope
+        && noOpEvidence.evidence_status === 'PASS'
+    );
     const fullSuiteValidationRequired = fullSuiteValidationConfig.enabled
         && !fullSuiteNotRequiredForDocsOnly
         && !fullSuiteNotRequiredForZeroDiffNoReviewableScope;
@@ -233,7 +237,9 @@ export function runCompletionGate(options: RunCompletionGateOptions) {
     const preflightProtectedSnapshotDigest = String(preflightTriggers.protected_control_plane_snapshot_sha256 || '').trim().toLowerCase();
     const hasProtectedSnapshotDigest = /^[a-f0-9]{64}$/.test(preflightProtectedSnapshotDigest);
     const orchestratorWork = !!taskModeEvidence.orchestrator_work;
-    const compileEvidence = readJsonArtifact(compileEvidencePath, 'Compile gate', errors);
+    const compileEvidence = compileGateRequired
+        ? readJsonArtifact(compileEvidencePath, 'Compile gate', errors)
+        : null;
     const hasCompileGeneratedProtectedArtifactEvidence = !!toPlainRecord(
         compileEvidence?.compile_generated_protected_artifacts
     );
@@ -364,7 +370,9 @@ export function runCompletionGate(options: RunCompletionGateOptions) {
     const compileCommandsPath = readOptionalArtifactStringField(compileEvidence, 'commands_path');
     const compileOutputFiltersPath = readOptionalArtifactStringField(compileEvidence, 'output_filters_path');
 
-    ensurePassedArtifactStatus(compileEvidence, 'Compile gate', errors);
+    if (compileGateRequired) {
+        ensurePassedArtifactStatus(compileEvidence, 'Compile gate', errors);
+    }
     ensurePassedArtifactStatus(docImpactEvidence, 'Doc impact gate', errors);
     errors.push(...getTaskModeEvidenceViolations(taskModeEvidence));
     errors.push(...getRulePackEvidenceViolations(rulePackEvidence));
@@ -433,7 +441,7 @@ export function runCompletionGate(options: RunCompletionGateOptions) {
     if (!timelineEventTypes.has('SHELL_SMOKE_PREFLIGHT_RECORDED')) {
         errors.push(`Task timeline '${normalizePath(timelinePath)}' is missing SHELL_SMOKE_PREFLIGHT_RECORDED. Run shell-smoke-preflight before preflight.`);
     }
-    if (!timelineEventTypes.has('COMPILE_GATE_PASSED')) {
+    if (compileGateRequired && !timelineEventTypes.has('COMPILE_GATE_PASSED')) {
         errors.push(`Task timeline '${normalizePath(timelinePath)}' is missing COMPILE_GATE_PASSED.`);
     }
     if (reviewRecordedRequired && !timelineEventTypes.has('REVIEW_PHASE_STARTED')) {
@@ -454,7 +462,13 @@ export function runCompletionGate(options: RunCompletionGateOptions) {
     );
     errors.push(...zeroDiffEvidence.violations);
 
-    const stageSequence = validateStageSequence(orderedEvents, codeChanged, timelinePath, reviewRecordedRequired);
+    const stageSequence = validateStageSequence(
+        orderedEvents,
+        codeChanged,
+        timelinePath,
+        reviewRecordedRequired,
+        compileGateRequired
+    );
     errors.push(...stageSequence.violations);
 
     const requiredReviews = validatedPreflight.preflight && typeof validatedPreflight.preflight.required_reviews === 'object'

@@ -1963,11 +1963,15 @@ function filterNotRequiredCoreMissingArtifacts(
     missingArtifacts: NextStepArtifactState[],
     options: {
         fullSuiteRequired: boolean;
+        compileGateRequired: boolean;
         completionGatePassed: boolean;
     }
 ): NextStepArtifactState[] {
     return missingArtifacts.filter((artifact) => {
         if (!options.fullSuiteRequired && artifact.key === 'full-suite-validation') {
+            return false;
+        }
+        if (!options.compileGateRequired && artifact.key === 'compile-gate') {
             return false;
         }
         if (options.completionGatePassed && artifact.key === 'completion-gate') {
@@ -2858,6 +2862,7 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
     );
     const filteredMissingArtifacts = filterNotRequiredCoreMissingArtifacts(coreArtifacts.missing, {
         fullSuiteRequired: fullSuiteConfig.enabled && !fullSuiteNotRequiredForCurrentScope,
+        compileGateRequired: summary.gates.some((gate) => gate.gate === 'compile-gate'),
         completionGatePassed: isGatePassed(summary, 'completion-gate')
     });
 
@@ -3838,8 +3843,7 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
     const validationDecisionRoute = resolveValidationDecisionRoute({
         lifecycleGateIds: getActiveTaskLifecycleGateIds('validation', {
             changes_exist:
-                (Array.isArray(preflight?.changed_files) && preflight.changed_files.length > 0)
-                || resolveAuditedNoOpState().passed,
+                Array.isArray(preflight?.changed_files) && preflight.changed_files.length > 0,
             optional_quality_checks_enabled: qualityChecklistReadiness?.enabled === true,
             full_suite_after_compile_before_reviews:
                 fullSuiteConfig.enabled && fullSuiteConfig.placement === 'after_compile_before_reviews'

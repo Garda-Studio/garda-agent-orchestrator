@@ -19,6 +19,7 @@ import {
 } from '../../../../gate-runtime/lifecycle-events';
 import { appendMandatoryTaskEvent } from '../../../../gate-runtime/task-events';
 import { assessDocImpact } from '../../../../gates/doc-impact/doc-impact';
+import { isFullSuiteNotRequiredForZeroDiffNoReviewableScope } from '../../../../gates/full-suite/full-suite-validation';
 import {
     buildReviewAuthorshipAttestation,
     checkRequiredReviews,
@@ -339,6 +340,18 @@ export function runRequiredReviewsCheckCommand(options: RequiredReviewsCheckComm
         dependency: String(options.dependencyReviewVerdict || '').trim()
     };
 
+    const zeroDiffGuard = validateZeroDiffForReviewGate(
+        preflight,
+        String(resolvedTaskId || ''),
+        repoRoot,
+        options.noOpArtifactPath || '',
+        validatedPreflight.preflight_path
+    );
+    const compileGateRequired = !(
+        isFullSuiteNotRequiredForZeroDiffNoReviewableScope(preflight)
+        && zeroDiffGuard.status === 'SATISFIED_BY_AUDITED_NO_OP'
+    );
+
     const compileGateEvidence = getCompileGateEvidence(
         repoRoot,
         resolvedTaskId,
@@ -346,7 +359,7 @@ export function runRequiredReviewsCheckCommand(options: RequiredReviewsCheckComm
         validatedPreflight.preflight_hash,
         options.compileEvidencePath || ''
     );
-    const scopeDrift = compileGateEvidence.status === 'PASS'
+    const scopeDrift = compileGateRequired && compileGateEvidence.status === 'PASS'
         ? testCompileScopeDrift(repoRoot, compileGateEvidence)
         : null;
     const dirtyWorkspaceProtectionDrift = detectProtectedDirtyWorkspaceDrift(
@@ -371,39 +384,41 @@ export function runRequiredReviewsCheckCommand(options: RequiredReviewsCheckComm
     errors.push(...getTaskModeEvidenceViolations(taskModeEvidence));
     errors.push(...getRulePackEvidenceViolations(rulePackEvidence));
 
-    switch (compileGateEvidence.status) {
-        case 'TASK_ID_MISSING':
-            errors.push('Compile gate evidence cannot be verified: task id is missing.');
-            break;
-        case 'EVIDENCE_FILE_MISSING':
-            errors.push(`Compile gate evidence missing: file not found at '${compileGateEvidence.evidence_path}'. Run compile-gate first.`);
-            break;
-        case 'EVIDENCE_PATH_OUTSIDE_REPO':
-            errors.push(`Compile gate evidence path must resolve inside repo root without symlink or junction escape: ${compileGateEvidence.evidence_path}.`);
-            break;
-        case 'EVIDENCE_INVALID_JSON':
-            errors.push(`Compile gate evidence is invalid JSON at '${compileGateEvidence.evidence_path}'. Re-run compile-gate.`);
-            break;
-        case 'EVIDENCE_TASK_MISMATCH':
-            errors.push(`Compile gate evidence task mismatch. Expected '${resolvedTaskId}', got '${compileGateEvidence.evidence_task_id}'.`);
-            break;
-        case 'EVIDENCE_SOURCE_INVALID':
-            errors.push(`Compile gate evidence source is invalid. Expected 'compile-gate', got '${compileGateEvidence.evidence_source}'.`);
-            break;
-        case 'EVIDENCE_PREFLIGHT_HASH_MISMATCH':
-            errors.push('Compile gate evidence preflight hash mismatch. Re-run compile-gate for the current preflight artifact.');
-            break;
-        case 'EVIDENCE_PREFLIGHT_PATH_MISMATCH':
-            errors.push(`Compile gate evidence preflight path mismatch. Evidence path='${compileGateEvidence.evidence_preflight_path}'.`);
-            break;
-        case 'EVIDENCE_SCOPE_MISSING':
-            errors.push('Compile gate evidence is missing scope snapshot fields. Re-run compile-gate.');
-            break;
-        case 'EVIDENCE_NOT_PASS':
-            errors.push(`Compile gate did not pass. Evidence status='${compileGateEvidence.evidence_status}', outcome='${compileGateEvidence.evidence_outcome}'.`);
-            break;
-        default:
-            break;
+    if (compileGateRequired) {
+        switch (compileGateEvidence.status) {
+            case 'TASK_ID_MISSING':
+                errors.push('Compile gate evidence cannot be verified: task id is missing.');
+                break;
+            case 'EVIDENCE_FILE_MISSING':
+                errors.push(`Compile gate evidence missing: file not found at '${compileGateEvidence.evidence_path}'. Run compile-gate first.`);
+                break;
+            case 'EVIDENCE_PATH_OUTSIDE_REPO':
+                errors.push(`Compile gate evidence path must resolve inside repo root without symlink or junction escape: ${compileGateEvidence.evidence_path}.`);
+                break;
+            case 'EVIDENCE_INVALID_JSON':
+                errors.push(`Compile gate evidence is invalid JSON at '${compileGateEvidence.evidence_path}'. Re-run compile-gate.`);
+                break;
+            case 'EVIDENCE_TASK_MISMATCH':
+                errors.push(`Compile gate evidence task mismatch. Expected '${resolvedTaskId}', got '${compileGateEvidence.evidence_task_id}'.`);
+                break;
+            case 'EVIDENCE_SOURCE_INVALID':
+                errors.push(`Compile gate evidence source is invalid. Expected 'compile-gate', got '${compileGateEvidence.evidence_source}'.`);
+                break;
+            case 'EVIDENCE_PREFLIGHT_HASH_MISMATCH':
+                errors.push('Compile gate evidence preflight hash mismatch. Re-run compile-gate for the current preflight artifact.');
+                break;
+            case 'EVIDENCE_PREFLIGHT_PATH_MISMATCH':
+                errors.push(`Compile gate evidence preflight path mismatch. Evidence path='${compileGateEvidence.evidence_preflight_path}'.`);
+                break;
+            case 'EVIDENCE_SCOPE_MISSING':
+                errors.push('Compile gate evidence is missing scope snapshot fields. Re-run compile-gate.');
+                break;
+            case 'EVIDENCE_NOT_PASS':
+                errors.push(`Compile gate did not pass. Evidence status='${compileGateEvidence.evidence_status}', outcome='${compileGateEvidence.evidence_outcome}'.`);
+                break;
+            default:
+                break;
+        }
     }
 
     if (scopeDrift) {
@@ -431,13 +446,6 @@ export function runRequiredReviewsCheckCommand(options: RequiredReviewsCheckComm
         errors.push(...timelineReadiness.violations);
     }
 
-    const zeroDiffGuard = validateZeroDiffForReviewGate(
-        preflight,
-        String(resolvedTaskId || ''),
-        repoRoot,
-        options.noOpArtifactPath || '',
-        validatedPreflight.preflight_path
-    );
     errors.push(...zeroDiffGuard.violations);
 
     const required = validatedPreflight.required_reviews;
@@ -588,7 +596,9 @@ export function runRequiredReviewsCheckCommand(options: RequiredReviewsCheckComm
         validatedPreflight: { ...validatedPreflight, errors },
         verdicts,
         skipReviews: skipReviewsList,
-        compileGateEvidence: compileGateEvidence.status === 'PASS' ? { status: 'PASSED' } : null,
+        compileGateEvidence: !compileGateRequired || compileGateEvidence.status === 'PASS'
+            ? { status: 'PASSED' }
+            : null,
         reviewArtifacts: reviewArtifactsMap,
         preflightPayload: preflight,
         canonicalSourceOfTruth: runtimeIdentity.canonical_source_of_truth,

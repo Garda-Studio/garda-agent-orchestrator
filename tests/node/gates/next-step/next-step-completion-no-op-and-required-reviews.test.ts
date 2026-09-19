@@ -348,7 +348,6 @@ describe('gates/next-step', () => {
         };
         writeJson(preflightPath, preflight);
         seedPostPreflightRulePack(repoRoot, TASK_ID, preflightPath);
-        seedGitAutoCompilePass(repoRoot, TASK_ID);
         writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
 
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
@@ -356,11 +355,13 @@ describe('gates/next-step', () => {
         assert.equal(result.next_gate, 'required-reviews-check');
         assert.equal(result.title, 'Validate zero-diff no-review closeout.');
         assert.ok(result.commands[0].command.includes('gate required-reviews-check'));
+        assert.ok(!result.commands[0].command.includes('gate compile-gate'));
+        assert.equal(result.missing_artifacts.some((artifact) => artifact.key === 'compile-gate'), false);
         assert.equal(result.missing_artifacts.some((artifact) => artifact.key === 'full-suite-validation'), false);
         assert.equal(result.missing_artifacts.some((artifact) => artifact.key === 'completion-gate'), true);
     });
 
-    it('routes an audited zero-diff no-op through compile before required reviews', () => {
+    it('does not route an authenticated audited zero-diff no-op back through compile', () => {
         const repoRoot = makeTempRepo();
         initGitRepo(repoRoot);
         seedStartedTask(repoRoot, TASK_ID);
@@ -381,10 +382,10 @@ describe('gates/next-step', () => {
 
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
 
-        assert.equal(result.next_gate, 'compile-gate');
-        assert.ok(result.reason.includes('Compile gate evidence missing'));
-        assert.ok(result.commands[0].command.includes('gate compile-gate'));
-        assert.ok(!result.commands[0].command.includes('gate required-reviews-check'));
+        assert.equal(result.next_gate, 'required-reviews-check');
+        assert.ok(result.commands[0].command.includes('gate required-reviews-check'));
+        assert.ok(!result.commands[0].command.includes('gate compile-gate'));
+        assert.equal(result.missing_artifacts.some((artifact) => artifact.key === 'compile-gate'), false);
     });
 
     it('accepts an external-input rationale as audited zero-diff evidence', () => {

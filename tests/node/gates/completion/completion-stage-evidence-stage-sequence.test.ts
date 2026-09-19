@@ -73,6 +73,21 @@ describe('gates/completion — stage and evidence validation', () => {
             assert.deepEqual(result.expected_order, [...NON_CODE_STAGE_SEQUENCE_ORDER]);
         });
 
+        it('allows an authenticated audited no-op cycle to omit compile evidence', () => {
+            const events = makeTimelineEvents(
+                'TASK_MODE_ENTERED',
+                'HANDSHAKE_DIAGNOSTICS_RECORDED',
+                'SHELL_SMOKE_PREFLIGHT_RECORDED',
+                'PREFLIGHT_CLASSIFIED',
+                'REVIEW_GATE_PASSED'
+            );
+            const result = validateStageSequence(events, false, '/timeline.jsonl', false, false);
+            assert.equal(result.violations.length, 0);
+            assert.equal(result.expected_order.includes('IMPLEMENTATION_STARTED'), false);
+            assert.equal(result.expected_order.includes('COMPILE_GATE_PASSED'), false);
+            assert.deepEqual(result.observed_order, result.expected_order);
+        });
+
         it('still requires REVIEW_RECORDED when the current code-changing cycle required reviews', () => {
             const events = makeTimelineEvents(
                 'TASK_MODE_ENTERED',

@@ -64,14 +64,21 @@ export function validateStageSequence(
     events: TimelineEventEntry[],
     codeChanged: boolean,
     timelinePath: string,
-    reviewRecordedRequired: boolean = codeChanged
+    reviewRecordedRequired: boolean = codeChanged,
+    compileGateRequired = true
 ): StageSequenceEvidence {
     const normalizedTimelinePath = normalizePath(timelinePath);
     const violations: string[] = [];
     const observedOrder: string[] = [];
-    const expectedStages = reviewRecordedRequired
+    const baseExpectedStages = reviewRecordedRequired
         ? [...STAGE_SEQUENCE_ORDER]
         : [...NO_REVIEW_RECORDED_STAGE_SEQUENCE_ORDER];
+    const expectedStages = compileGateRequired
+        ? baseExpectedStages
+        : baseExpectedStages.filter((stage) => (
+            stage !== 'IMPLEMENTATION_STARTED'
+            && stage !== 'COMPILE_GATE_PASSED'
+        ));
 
     const anchorStage = expectedStages[expectedStages.length - 1];
     const anchorEntry = anchorStage

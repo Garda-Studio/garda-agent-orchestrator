@@ -538,14 +538,7 @@ describe('cli/commands/gates', () => {
                 rationale: 'Preflight on a clean workspace is baseline-only.'
             }
         });
-        const commandsPath = path.join(repoRoot, 'commands-zero.md');
         const outputFiltersPath = writeBudgetOutputFilters(repoRoot);
-        fs.writeFileSync(commandsPath, [
-            '### Compile Gate (Mandatory)',
-            '```bash',
-            'node -e "console.log(\'build ok\')"',
-            '```'
-        ].join('\n'), 'utf8');
 
         runEnterTaskMode({
             repoRoot,
@@ -557,17 +550,8 @@ describe('cli/commands/gates', () => {
         runShellSmokeForTask(repoRoot, taskId);
         loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
 
-        const compileResult = await runCompileGateCommand({
-            repoRoot,
-            taskId,
-            preflightPath,
-            commandsPath,
-            outputFiltersPath,
-            emitMetrics: false
-        });
-        assert.equal(compileResult.exitCode, 0);
-
-        // Review gate must fail when zero-diff preflight has no no-op artifact.
+        // Review gate must fail when zero-diff preflight has no no-op artifact,
+        // even though this exact audit-only route does not require compile evidence.
         const failedReviewResult = runRequiredReviewsCheckCommand({
             repoRoot,
             taskId,
@@ -589,7 +573,7 @@ describe('cli/commands/gates', () => {
         });
         assert.equal(noOpResult.exitCode, 0);
 
-        // Review gate should now pass with no-op artifact
+        // Review gate should now pass with no-op artifact and no compile artifact.
         const passedReviewResult = runRequiredReviewsCheckCommand({
             repoRoot,
             taskId,
@@ -598,31 +582,10 @@ describe('cli/commands/gates', () => {
             emitMetrics: false
         });
         assert.equal(passedReviewResult.exitCode, 0);
-
-        // A later compile+review rerun must emit a fresh REVIEW_PHASE_STARTED
-        // for the latest no-required-review cycle, otherwise completion would
-        // incorrectly demand a missing same-cycle review phase.
-        const rerunCompileResult = await runCompileGateCommand({
-            repoRoot,
-            taskId,
-            preflightPath,
-            commandsPath,
-            outputFiltersPath,
-            emitMetrics: false
-        });
-        assert.equal(rerunCompileResult.exitCode, 0);
-
-        const rerunReviewResult = runRequiredReviewsCheckCommand({
-            repoRoot,
-            taskId,
-            preflightPath,
-            outputFiltersPath,
-            emitMetrics: false
-        });
-        assert.equal(rerunReviewResult.exitCode, 0);
-        assert.ok(
+        assert.equal(
             readTaskTimelineEvents(repoRoot, taskId)
-                .filter((event) => event.event_type === 'REVIEW_PHASE_STARTED').length >= 2
+                .some((event) => event.event_type === 'COMPILE_GATE_PASSED'),
+            false
         );
 
         const docImpactResult = runDocImpactGateCommand({
@@ -643,7 +606,7 @@ describe('cli/commands/gates', () => {
             preflightPath,
             taskId
         });
-        assert.equal(passedCompletion.outcome, 'PASS');
+        assert.equal(passedCompletion.outcome, 'PASS', passedCompletion.violations.join('\n'));
         assert.equal(passedCompletion.zero_diff_evidence.status, 'SATISFIED_BY_AUDITED_NO_OP');
         assert.equal(passedCompletion.full_suite_validation_evidence.status, 'NOT_REQUIRED');
         appendTaskEvent(
@@ -670,6 +633,7 @@ describe('cli/commands/gates', () => {
         });
         assert.equal(auditResult.exitCode, 0, auditResult.rendered);
         assert.ok(auditResult.rendered.includes('FinalReportContract: READY'));
+        assert.ok(!auditResult.rendered.includes('[ ] compile-gate'));
 
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });

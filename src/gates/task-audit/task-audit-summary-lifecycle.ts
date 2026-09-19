@@ -57,12 +57,18 @@ const BASE_LIFECYCLE_GATES: ReadonlyArray<LifecycleGateSpec> = [
     { gate: 'completion-gate', pass_event: 'COMPLETION_GATE_PASSED', fail_events: ['COMPLETION_GATE_FAILED'] }
 ];
 
-export function getLifecycleGates(fullSuiteValidationEnabled: boolean, projectMemoryImpactRequired: boolean): LifecycleGateSpec[] {
-    const gates = BASE_LIFECYCLE_GATES.map((entry) => ({
-        gate: entry.gate,
-        pass_event: entry.pass_event,
-        fail_events: [...entry.fail_events]
-    }));
+export function getLifecycleGates(
+    fullSuiteValidationEnabled: boolean,
+    projectMemoryImpactRequired: boolean,
+    compileGateRequired = true
+): LifecycleGateSpec[] {
+    const gates = BASE_LIFECYCLE_GATES
+        .filter((entry) => compileGateRequired || entry.gate !== 'compile-gate')
+        .map((entry) => ({
+            gate: entry.gate,
+            pass_event: entry.pass_event,
+            fail_events: [...entry.fail_events]
+        }));
     if (fullSuiteValidationEnabled) {
         const completionIndex = gates.findIndex((entry) => entry.gate === 'completion-gate');
         const fullSuiteGate = {

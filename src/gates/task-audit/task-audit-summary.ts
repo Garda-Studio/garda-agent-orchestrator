@@ -73,6 +73,7 @@ import {
     type WorkspaceSnapshotRequest
 } from '../workspace/workspace-snapshot-cache';
 import { getTaskOwnedPreflightScopeFromPreflight } from '../workspace/dirty-worktree-protection';
+import { getNoOpEvidence } from '../task-mode';
 import {
     collectEvidenceArtifacts,
     collectRequiredReviewBlockers
@@ -251,6 +252,7 @@ function filterNotRequiredEvidenceArtifacts(
     evidence: EvidenceArtifact[],
     options: {
         fullSuiteRequired: boolean;
+        compileGateRequired: boolean;
         completionGatePassed: boolean;
     }
 ): EvidenceArtifact[] {
@@ -259,6 +261,9 @@ function filterNotRequiredEvidenceArtifacts(
             return true;
         }
         if (!options.fullSuiteRequired && artifact.kind === 'full-suite-validation') {
+            return false;
+        }
+        if (!options.compileGateRequired && (artifact.kind === 'compile-gate' || artifact.kind === 'compile-output')) {
             return false;
         }
         if (options.completionGatePassed && artifact.kind === 'completion-gate') {
@@ -320,6 +325,16 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): Ta
     const preflightForLifecycle = safeReadJson(path.join(reviewsRoot, `${safeTaskId}-preflight.json`));
     const fullSuiteValidationRequiredForLifecycle = fullSuiteValidationEnabled
         && !isFullSuiteNotRequiredForZeroDiffNoReviewableScope(preflightForLifecycle || {});
+    const noOpEvidenceForLifecycle = getNoOpEvidence(
+        repoRoot,
+        safeTaskId,
+        '',
+        path.join(reviewsRoot, `${safeTaskId}-preflight.json`)
+    );
+    const compileGateRequiredForLifecycle = !(
+        isFullSuiteNotRequiredForZeroDiffNoReviewableScope(preflightForLifecycle || {})
+        && noOpEvidenceForLifecycle.evidence_status === 'PASS'
+    );
     const projectMemoryImpactEvidence = getProjectMemoryImpactLifecycleEvidence({
         repoRoot,
         taskId: safeTaskId,
@@ -335,7 +350,11 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): Ta
         undefined,
         options.taskQueueEntries
     );
-    const lifecycleGates = getLifecycleGates(fullSuiteValidationRequiredForLifecycle, projectMemoryImpactRequired);
+    const lifecycleGates = getLifecycleGates(
+        fullSuiteValidationRequiredForLifecycle,
+        projectMemoryImpactRequired,
+        compileGateRequiredForLifecycle
+    );
     let integrityStatus: string;
     if (fs.existsSync(taskEventFile) && fs.statSync(taskEventFile).isFile()) {
         try {
@@ -458,6 +477,7 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): Ta
             preflight
         ), {
             fullSuiteRequired: fullSuiteValidationRequiredForLifecycle,
+            compileGateRequired: compileGateRequiredForLifecycle,
             completionGatePassed: hasCompletionPass
         });
         const reviewGate = safeReadJson(reviewGatePath);
