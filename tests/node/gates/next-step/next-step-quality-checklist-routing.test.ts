@@ -109,6 +109,20 @@ function qualityChecklistAnswersCommandPath(taskId = TASK_ID): string {
     return `garda-agent-orchestrator/runtime/tmp/${taskId}-quality-checklist-answers.json`;
 }
 
+function completeChecklistAnswersWithInvalidFirstStatus(repoRoot: string): number {
+    const answersPath = qualityChecklistAnswersPath(repoRoot);
+    const template = JSON.parse(fs.readFileSync(answersPath, 'utf8')) as {
+        answers: Array<Record<string, unknown>>;
+    };
+    template.answers = template.answers.map((answer, index) => ({
+        ...answer,
+        status: index === 0 ? 'INVALID' : 'PASS',
+        answer: `Completed answer for ${String(answer.rule_id)}.`
+    }));
+    fs.writeFileSync(answersPath, JSON.stringify(template, null, 2) + '\n', 'utf8');
+    return template.answers.length;
+}
+
 function qualityChecklistRepairAnswersCommandPath(taskId = TASK_ID): string {
     return `${qualityChecklistAnswersCommandPath(taskId)}.repair.json`;
 }
@@ -439,6 +453,48 @@ describe('gates/next-step quality checklist routing', () => {
         assert.match(result.reason, /Completed quality checklist answers failed validation/u);
         assert.match(result.reason, /Missing answer for active quality-check rule 'code_simplification'/u);
         assert.match(result.reason, /Correct the answers template and rerun next-step/u);
+    });
+
+    it('surfaces replacement answer validation failures when prior checklist evidence is stale', () => {
+        const repoRoot = makeTempRepo();
+        writeWorkflowConfig(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        const preflightPath = writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+
+        resolveNextStep({ taskId: TASK_ID, repoRoot });
+        const answersPath = qualityChecklistAnswersPath(repoRoot);
+        const template = JSON.parse(fs.readFileSync(answersPath, 'utf8')) as {
+            answers: Array<Record<string, unknown>>;
+        };
+        template.answers = template.answers.map((answer) => ({
+            ...answer,
+            status: 'PASS',
+            answer: `Initial answer for ${String(answer.rule_id)}.`
+        }));
+        fs.writeFileSync(answersPath, JSON.stringify(template, null, 2) + '\n', 'utf8');
+        assert.equal(runQualityChecklistCommand({
+            repoRoot,
+            taskId: TASK_ID,
+            preflightPath,
+            answersPath,
+            emitMetrics: false
+        }).exitCode, 0);
+
+        const refreshedPreflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+        refreshedPreflight.timestamp_utc = '2026-01-02T00:00:00.000Z';
+        writeJson(preflightPath, refreshedPreflight);
+        resolveNextStep({ taskId: TASK_ID, repoRoot });
+        const answerCount = completeChecklistAnswersWithInvalidFirstStatus(repoRoot);
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+
+        assert.equal(result.next_gate, 'quality-checklist', result.reason);
+        assert.equal(result.commands.length, 0);
+        assert.equal(result.quality_checklist?.evidence_status, 'invalid');
+        assert.equal(result.quality_checklist?.status, 'CONFIG_ERROR');
+        assert.equal(result.quality_checklist?.answer_count, answerCount - 1);
+        assert.match(result.reason, /Completed quality checklist answers failed validation/u);
+        assert.match(result.reason, /Missing answer for active quality-check rule 'code_simplification'/u);
     });
 
     it('keeps a current blank answers template in the manual completion route', () => {
@@ -996,6 +1052,40 @@ describe('gates/next-step quality checklist routing', () => {
         }
     });
 
+    it('surfaces answer validation failures when review-failure cadence requires fresh evidence', () => {
+        const repoRoot = makeTempRepo();
+        writeWorkflowConfig(repoRoot, {
+            configure(config) {
+                config.optional_quality_checks.review_failure_cadence_interval = 1;
+            }
+        });
+        seedStartedTask(repoRoot, TASK_ID);
+        initializeWorkspaceBaseline(repoRoot, ['src/cadence-fix.ts']);
+        writeWorkspaceChange(repoRoot, 'src/app.ts');
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+        writeQualityChecklistArtifact(repoRoot, TASK_ID, 'PASS');
+        appendReviewFailure(repoRoot);
+        restoreWorkspaceChanges(repoRoot, 'src/app.ts');
+        writeWorkspaceChange(repoRoot, 'src/cadence-fix.ts');
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true }, {
+            changedFiles: ['src/cadence-fix.ts']
+        });
+
+        const stale = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        assert.equal(stale.quality_checklist?.evidence_status, 'stale', stale.reason);
+        const answerCount = completeChecklistAnswersWithInvalidFirstStatus(repoRoot);
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+
+        assert.equal(result.next_gate, 'quality-checklist', result.reason);
+        assert.equal(result.commands.length, 0);
+        assert.equal(result.quality_checklist?.evidence_status, 'invalid');
+        assert.equal(result.quality_checklist?.status, 'CONFIG_ERROR');
+        assert.equal(result.quality_checklist?.answer_count, answerCount - 1);
+        assert.match(result.reason, /Completed quality checklist answers failed validation/u);
+        assert.match(result.reason, /Missing answer for active quality-check rule 'code_simplification'/u);
+    });
+
     it('does not cadence-skip mandatory trust-boundary analysis after a review failure', () => {
         const repoRoot = makeTempRepo();
         writeWorkflowConfig(repoRoot);
@@ -1505,6 +1595,54 @@ describe('gates/next-step quality checklist routing', () => {
         assert.equal(result.quality_checklist?.evidence_status, 'stale');
         assert.match(result.reason, /custom_team_release_safety/u);
         assert.match(result.reason, /Custom quality-check rule .* changed/u);
+    });
+
+    it('surfaces answer validation failures when workflow configuration makes prior evidence stale', () => {
+        const repoRoot = makeTempRepo();
+        writeWorkflowConfig(repoRoot, {
+            configure(config) {
+                config.optional_quality_checks.rules = [
+                    ...config.optional_quality_checks.rules,
+                    {
+                        id: 'custom_team_release_safety',
+                        title: 'Team release safety',
+                        prompt: 'Check updated team release safeguards.',
+                        enabled: true
+                    }
+                ];
+            }
+        });
+        seedStartedTask(repoRoot, TASK_ID);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+        const artifactConfig = buildDefaultWorkflowConfig();
+        artifactConfig.optional_quality_checks.rules = [
+            ...artifactConfig.optional_quality_checks.rules,
+            {
+                id: 'custom_team_release_safety',
+                title: 'Team release safety',
+                prompt: 'Check original team release safeguards.',
+                enabled: true
+            }
+        ];
+        writeQualityChecklistArtifact(repoRoot, TASK_ID, 'PASS', {
+            workflowConfigSha256: '0'.repeat(64),
+            rules: buildQualityChecklistRuleSnapshot({ rules: artifactConfig.optional_quality_checks.rules }),
+            answers: buildQualityChecklistAnswers({ rules: artifactConfig.optional_quality_checks.rules })
+        });
+
+        const stale = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        assert.equal(stale.quality_checklist?.evidence_status, 'stale', stale.reason);
+        const answerCount = completeChecklistAnswersWithInvalidFirstStatus(repoRoot);
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+
+        assert.equal(result.next_gate, 'quality-checklist', result.reason);
+        assert.equal(result.commands.length, 0);
+        assert.equal(result.quality_checklist?.evidence_status, 'invalid');
+        assert.equal(result.quality_checklist?.status, 'CONFIG_ERROR');
+        assert.equal(result.quality_checklist?.answer_count, answerCount - 1);
+        assert.match(result.reason, /Completed quality checklist answers failed validation/u);
+        assert.match(result.reason, /Missing answer for active quality-check rule 'code_simplification'/u);
     });
 
     it('reruns quality checklist when a current active baseline rule has no recorded answer after config normalization', () => {
