@@ -7,7 +7,11 @@ import {
 } from '../../../exit-codes';
 import { buildOutputTelemetry, formatVisibleSavingsLine } from '../../../../gate-runtime/token-telemetry';
 import { applyOutputFilterProfile } from '../../../../gate-runtime/output-filters';
-import { withReviewArtifactReadBarrier } from '../../../../gate-runtime/review-artifacts';
+import {
+    readReviewArtifactJsonSnapshot,
+    readReviewArtifactTextSnapshot,
+    withReviewArtifactReadBarrier
+} from '../../../../gate-runtime/review-artifacts';
 import { type ReviewReceipt } from '../../../../gate-runtime/review-context';
 import {
     emitMandatoryReviewPhaseStartedEvent,
@@ -500,12 +504,17 @@ export function runRequiredReviewsCheckCommand(options: RequiredReviewsCheckComm
                 try {
                     let reviewContext: Record<string, unknown> | undefined;
                     let reviewContextPath: string | null = null;
+                    let reviewContextSha256: string | null = null;
                     const artifactPath = path.resolve(entry.path);
                     if (!isReviewArtifactPathInsideRoots(repoRoot, artifactReviewsRoot, artifactPath)) {
                         errors.push(formatReviewArtifactPathEscapeViolation('Review artifact path', artifactPath));
                         continue;
                     }
-                    const artifactSha256 = gateHelpers.fileSha256(artifactPath);
+                    const artifactSnapshot = readReviewArtifactTextSnapshot(artifactPath);
+                    if (!artifactSnapshot.valid || artifactSnapshot.value === null || !artifactSnapshot.sha256) {
+                        errors.push(`Review artifact changed or became unavailable during validation: ${gateHelpers.normalizePath(artifactPath)}.`);
+                        continue;
+                    }
                     const receiptPath = artifactPath.replace(/\.md$/, '-receipt.json');
                     let receipt: ReviewReceipt | null = null;
                     let receiptReadError: string | null = null;
@@ -515,7 +524,11 @@ export function runRequiredReviewsCheckCommand(options: RequiredReviewsCheckComm
                             continue;
                         } else {
                             try {
-                                receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8')) as ReviewReceipt;
+                                const receiptSnapshot = readReviewArtifactJsonSnapshot(receiptPath);
+                                if (!receiptSnapshot.valid || !isPlainObject(receiptSnapshot.value)) {
+                                    throw new Error('invalid receipt snapshot');
+                                }
+                                receipt = receiptSnapshot.value as unknown as ReviewReceipt;
                             } catch {
                                 receiptReadError = `Review receipt for '${entry.review}' is invalid JSON: ${gateHelpers.normalizePath(receiptPath)}.`;
                                 receipt = null;
@@ -528,21 +541,20 @@ export function runRequiredReviewsCheckCommand(options: RequiredReviewsCheckComm
                             errors.push(formatReviewArtifactPathEscapeViolation('Review context artifact path', reviewContextPath));
                             reviewContextPath = null;
                         } else if (fs.existsSync(reviewContextPath) && fs.statSync(reviewContextPath).isFile()) {
-                            const parsedReviewContext = JSON.parse(fs.readFileSync(reviewContextPath, 'utf8'));
-                            if (isPlainObject(parsedReviewContext)) {
-                                reviewContext = parsedReviewContext;
+                            const reviewContextSnapshot = readReviewArtifactJsonSnapshot(reviewContextPath);
+                            if (reviewContextSnapshot.valid && isPlainObject(reviewContextSnapshot.value)) {
+                                reviewContext = reviewContextSnapshot.value;
+                                reviewContextSha256 = reviewContextSnapshot.sha256;
                             }
                         }
                     }
                     reviewArtifactsMap[entry.review] = {
                         path: artifactPath,
-                        content: fs.readFileSync(artifactPath, 'utf8'),
+                        content: artifactSnapshot.value,
                         reviewContext,
                         reviewContextPath,
-                        reviewContextSha256: reviewContextPath && fs.existsSync(reviewContextPath)
-                            ? gateHelpers.fileSha256(reviewContextPath)
-                            : null,
-                        artifactSha256,
+                        reviewContextSha256,
+                        artifactSha256: artifactSnapshot.sha256,
                         receipt,
                         receiptReadError
                     };

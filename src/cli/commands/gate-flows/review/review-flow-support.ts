@@ -7,7 +7,11 @@ import {
     extractReviewVerdictToken,
     formatReviewVerdictTokenList
 } from '../../../../gate-runtime/review-context';
-import { withReviewArtifactReadBarrier } from '../../../../gate-runtime/review-artifacts';
+import {
+    readReviewArtifactJsonSnapshot,
+    readReviewArtifactTextSnapshot,
+    withReviewArtifactReadBarrier
+} from '../../../../gate-runtime/review-artifacts';
 import { getWorkspaceSnapshot } from '../../../../gates/compile/compile-gate';
 import * as gateHelpers from '../../../../gates/shared/helpers';
 import {
@@ -250,9 +254,15 @@ export function testReviewArtifacts(
                 continue;
             }
 
+            const artifactSnapshot = readReviewArtifactTextSnapshot(artifactPath);
+            if (!artifactSnapshot.valid || artifactSnapshot.value === null || !artifactSnapshot.sha256) {
+                result.violations.push(`Review artifact changed or became unavailable while validating claimed '${passToken}': ${entry.path}`);
+                result.checked.push(entry);
+                continue;
+            }
             entry.present = true;
-            entry.sha256 = gateHelpers.fileSha256(artifactPath);
-            const content = fs.readFileSync(artifactPath, 'utf8');
+            entry.sha256 = artifactSnapshot.sha256;
+            const content = artifactSnapshot.value;
             const failToken = passToken.replace(/\bPASSED\b/g, 'FAILED');
             const acceptedTokens = buildReviewVerdictTokenSet(reviewKey, passToken, failToken);
             const legacyVerdictToken = extractReviewVerdictToken(content, passToken, failToken, reviewKey);
@@ -274,12 +284,18 @@ export function testReviewArtifacts(
             );
         }
         let reviewContext: Record<string, unknown> | undefined;
+        let reviewContextSha256: string | null = null;
         if (reviewContextPath && reviewContextPathSafe && fs.existsSync(reviewContextPath) && fs.statSync(reviewContextPath).isFile()) {
             entry.review_context_present = true;
             try {
-                const parsedReviewContext = JSON.parse(fs.readFileSync(reviewContextPath, 'utf8'));
-                reviewContext = isPlainObject(parsedReviewContext) ? parsedReviewContext : undefined;
-                entry.review_context_valid = true;
+                const reviewContextSnapshot = readReviewArtifactJsonSnapshot(reviewContextPath);
+                reviewContext = reviewContextSnapshot.valid && isPlainObject(reviewContextSnapshot.value)
+                    ? reviewContextSnapshot.value
+                    : undefined;
+                reviewContextSha256 = reviewContextSnapshot.valid
+                    ? reviewContextSnapshot.sha256
+                    : null;
+                entry.review_context_valid = reviewContext !== undefined && reviewContextSha256 !== null;
             } catch (error) {
                 result.compaction_warnings.push(
                     `Review context artifact '${entry.review_context_path}' is invalid JSON: ${getErrorMessage(error)}`
@@ -321,8 +337,10 @@ export function testReviewArtifacts(
             }
             let receipt: Record<string, unknown> | null = null;
             try {
-                const parsedReceipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8')) as unknown;
-                receipt = isPlainObject(parsedReceipt) ? parsedReceipt : null;
+                const receiptSnapshot = readReviewArtifactJsonSnapshot(receiptPath);
+                receipt = receiptSnapshot.valid && isPlainObject(receiptSnapshot.value)
+                    ? receiptSnapshot.value
+                    : null;
             } catch {
                 receipt = null;
             }
@@ -346,7 +364,7 @@ export function testReviewArtifacts(
                 expectedReviewContextSha256: reusedExistingReview
                     ? getReceiptString(receipt, 'reused_from_review_context_sha256')
                     : reviewContextPath && entry.review_context_valid
-                        ? gateHelpers.fileSha256(reviewContextPath)
+                        ? reviewContextSha256
                         : null,
                 expectedReviewTreeStateSha256: reusedExistingReview
                     ? getReceiptString(receipt, 'reused_from_review_tree_state_sha256')
@@ -378,7 +396,7 @@ export function testReviewArtifacts(
                 reviewType: reviewKey,
                 expectedTaskId: resolvedTaskId || undefined,
                 expectedReviewContextSha256: reviewContextPath && entry.review_context_valid
-                    ? gateHelpers.fileSha256(reviewContextPath)
+                    ? reviewContextSha256
                     : null,
                 expectedTreeStateSha256: getReviewContextTreeStateSha256(reviewContext),
                 coverageContract: getReviewContextCoverageContract(reviewContext)

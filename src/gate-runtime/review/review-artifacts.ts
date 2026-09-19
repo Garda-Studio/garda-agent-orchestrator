@@ -70,6 +70,13 @@ export interface ReviewArtifactJsonReadSnapshot {
     value: unknown;
 }
 
+export interface ReviewArtifactTextReadSnapshot {
+    active: boolean;
+    sha256: string | null;
+    valid: boolean;
+    value: string | null;
+}
+
 export interface ReviewArtifactLockOptions {
     lockTimeoutMs?: unknown;
     lockRetryMs?: unknown;
@@ -706,14 +713,26 @@ export function readReviewArtifactFileSnapshot(filePath: string): ReviewArtifact
 }
 
 export function readReviewArtifactTextFile(filePath: string): string {
-    const snapshot = readReviewArtifactFileSnapshot(filePath);
+    const snapshot = readReviewArtifactTextSnapshot(filePath);
     if (snapshot.active) {
-        if (!snapshot.valid || !snapshot.content) {
+        if (!snapshot.valid || snapshot.value === null) {
             throw new Error(`Review artifact text snapshot is unavailable: ${path.resolve(filePath)}`);
         }
-        return snapshot.content.toString('utf8');
+        return snapshot.value;
     }
     return fs.readFileSync(filePath, 'utf8');
+}
+
+export function readReviewArtifactTextSnapshot(filePath: string): ReviewArtifactTextReadSnapshot {
+    const fileSnapshot = readReviewArtifactFileSnapshot(filePath);
+    return {
+        active: fileSnapshot.active,
+        sha256: fileSnapshot.sha256,
+        valid: fileSnapshot.valid && fileSnapshot.content !== null,
+        value: fileSnapshot.valid && fileSnapshot.content !== null
+            ? fileSnapshot.content.toString('utf8')
+            : null
+    };
 }
 
 export function readReviewArtifactFileSha256(filePath: string): string | null {

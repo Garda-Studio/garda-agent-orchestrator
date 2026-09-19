@@ -486,19 +486,44 @@ describe('gates command required reviews', () => {
         });
 
         writeCleanReviewArtifact(repoRoot, taskId, 'code', 'REVIEW PASSED');
+        const reviewArtifactPaths = new Set([
+            path.resolve(reviewsRoot, `${taskId}-code.md`),
+            path.resolve(reviewsRoot, `${taskId}-code-review-context.json`),
+            path.resolve(reviewsRoot, `${taskId}-code-receipt.json`)
+        ]);
+        const reviewReadSites = new Map<string, string[]>();
+        const fsModule = require('node:fs') as typeof fs;
+        const originalReadFileSync = fsModule.readFileSync;
+        fsModule.readFileSync = ((targetPath: fs.PathOrFileDescriptor, options?: unknown) => {
+            if (typeof targetPath !== 'number') {
+                const resolvedPath = path.resolve(String(targetPath));
+                if (reviewArtifactPaths.has(resolvedPath)) {
+                    const sites = reviewReadSites.get(resolvedPath) || [];
+                    sites.push(new Error().stack || 'missing stack');
+                    reviewReadSites.set(resolvedPath, sites);
+                }
+            }
+            return originalReadFileSync(targetPath, options as never);
+        }) as typeof fsModule.readFileSync;
 
-        const result = runRequiredReviewsCheckCommand({
-            repoRoot,
-            taskId,
-            preflightPath,
-            codeReviewVerdict: 'REVIEW PASSED',
-            reviewAuthorshipAttestationJson: '{"code":true}',
-            outputFiltersPath,
-            emitMetrics: false
-        });
+        let result: ReturnType<typeof runRequiredReviewsCheckCommand> | null = null;
+        try {
+            result = runRequiredReviewsCheckCommand({
+                repoRoot,
+                taskId,
+                preflightPath,
+                codeReviewVerdict: 'REVIEW PASSED',
+                reviewAuthorshipAttestationJson: '{"code":true}',
+                outputFiltersPath,
+                emitMetrics: false
+            });
+        } finally {
+            fsModule.readFileSync = originalReadFileSync;
+        }
 
         const evidencePath = path.join(reviewsRoot, `${taskId}-review-gate.json`);
         const evidence = JSON.parse(fs.readFileSync(evidencePath, 'utf8'));
+        assert.ok(result);
         assert.equal(result.exitCode, 0, result.outputLines.join('\n'));
         assert.equal(result.outputLines[0], 'REVIEW_GATE_PASSED');
         assert.equal(evidence.status, 'PASSED');
@@ -513,6 +538,11 @@ describe('gates command required reviews', () => {
         )));
         assert.equal(readTaskQueueStatusFromTaskFile(repoRoot, taskId), 'IN_REVIEW');
         assert.match(fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8'), /\|\s*T-903\s*\|\s*🟧 IN_REVIEW\s*\|/);
+        for (const reviewArtifactPath of reviewArtifactPaths) {
+            const sites = reviewReadSites.get(reviewArtifactPath) || [];
+            assert.equal(sites.length, 1, `${reviewArtifactPath}\n${sites.join('\n\n')}`);
+            assert.match(sites[0], /readReviewArtifactFileSnapshot/u, sites[0]);
+        }
 
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });

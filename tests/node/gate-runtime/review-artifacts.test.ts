@@ -17,6 +17,7 @@ import {
     readReviewArtifactJsonFile,
     readReviewArtifactJsonSnapshot,
     readReviewArtifactTextFile,
+    readReviewArtifactTextSnapshot,
     scanReviewArtifactLocks,
     withReviewArtifactLockAsync,
     withReviewArtifactReadBarrier,
@@ -832,7 +833,9 @@ test('review read barrier rejects an artifact replaced after its first snapshot 
     fs.writeFileSync(receiptPath, '{"version":1}\n', 'utf8');
     try {
         withReviewArtifactReadBarrier(reviewsDir, () => {
-            assert.equal(readReviewArtifactTextFile(receiptPath), '{"version":1}\n');
+            const originalSnapshot = readReviewArtifactTextSnapshot(receiptPath);
+            assert.equal(originalSnapshot.value, '{"version":1}\n');
+            assert.equal(originalSnapshot.sha256, fileSha256(receiptPath));
             fs.writeFileSync(receiptPath, '{"version":200,"replacement":true}\n', 'utf8');
             assert.equal(readReviewArtifactJsonSnapshot(receiptPath).valid, false);
             assert.equal(readReviewArtifactFileSha256(receiptPath), null);
