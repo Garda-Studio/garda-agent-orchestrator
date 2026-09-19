@@ -37,21 +37,27 @@ import {
 const DEFAULT_REVIEW_ARTIFACT_LOCK_TIMEOUT_MS = 5000;
 const DEFAULT_REVIEW_ARTIFACT_LOCK_RETRY_MS = 25;
 const DEFAULT_REVIEW_ARTIFACT_LOCK_STALE_MS = 30 * 1000;
+const DEFAULT_REVIEW_ARTIFACT_SNAPSHOT_MAX_ARTIFACTS = 4096;
+const DEFAULT_REVIEW_ARTIFACT_SNAPSHOT_MAX_BYTES = 64 * 1024 * 1024;
 const REVIEWS_INDEX_FILE_NAME = 'reviews-index.json';
 const inProcessReviewLockQueues = new Map<string, Promise<void>>();
-const inProcessReviewArtifactReadSnapshots = new Map<string, {
+
+interface ReviewArtifactReadSnapshotState {
     depth: number;
     rootPath: string;
     realRootPath: string;
     reads: Map<string, CachedReviewArtifactRead>;
-}>();
+    retainedBytes: number;
+    maxArtifacts: number;
+    maxBytes: number;
+    budgetError: ReviewArtifactReadBudgetError | null;
+}
+
+const inProcessReviewArtifactReadSnapshots = new Map<string, ReviewArtifactReadSnapshotState>();
 
 interface CachedReviewArtifactRead {
     content: Buffer | null;
     identity?: fs.Stats;
-    jsonParsed: boolean;
-    jsonValid: boolean;
-    jsonValue: unknown;
     sha256: string | null;
     valid: boolean;
 }
@@ -86,6 +92,18 @@ export interface ReviewArtifactLockOptions {
     excludeCompletionFinalizationLocks?: unknown;
     runtimeWritesMode?: unknown;
     lowNoiseRuntimeWrites?: unknown;
+    snapshotMaxArtifacts?: unknown;
+    snapshotMaxBytes?: unknown;
+}
+
+export class ReviewArtifactReadBudgetError extends Error {
+    readonly code: 'ARTIFACT_COUNT_EXCEEDED' | 'BYTE_LIMIT_EXCEEDED';
+
+    constructor(code: ReviewArtifactReadBudgetError['code'], message: string) {
+        super(message);
+        this.name = 'ReviewArtifactReadBudgetError';
+        this.code = code;
+    }
 }
 
 export interface ReviewArtifactLockTelemetry {
@@ -555,7 +573,16 @@ function freezeReviewArtifactJson(value: unknown): unknown {
     return Object.freeze(value);
 }
 
-function withReviewArtifactReadSnapshot<T>(reviewsDir: string, callback: () => T): T {
+function positiveReviewArtifactSnapshotLimit(value: unknown, fallback: number): number {
+    const parsed = Number(value ?? fallback);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function withReviewArtifactReadSnapshot<T>(
+    reviewsDir: string,
+    callback: () => T,
+    options: ReviewArtifactLockOptions = {}
+): T {
     const rootPath = path.resolve(reviewsDir);
     const snapshotKey = normalizeReviewArtifactReadSnapshotKey(rootPath);
     const existing = inProcessReviewArtifactReadSnapshots.get(snapshotKey);
@@ -578,11 +605,25 @@ function withReviewArtifactReadSnapshot<T>(reviewsDir: string, callback: () => T
         depth: 1,
         rootPath,
         realRootPath,
-        reads: new Map<string, CachedReviewArtifactRead>()
+        reads: new Map<string, CachedReviewArtifactRead>(),
+        retainedBytes: 0,
+        maxArtifacts: positiveReviewArtifactSnapshotLimit(
+            options.snapshotMaxArtifacts,
+            DEFAULT_REVIEW_ARTIFACT_SNAPSHOT_MAX_ARTIFACTS
+        ),
+        maxBytes: positiveReviewArtifactSnapshotLimit(
+            options.snapshotMaxBytes,
+            DEFAULT_REVIEW_ARTIFACT_SNAPSHOT_MAX_BYTES
+        ),
+        budgetError: null
     };
     inProcessReviewArtifactReadSnapshots.set(snapshotKey, snapshot);
     try {
-        return callback();
+        const result = callback();
+        if (snapshot.budgetError) {
+            throw snapshot.budgetError;
+        }
+        return result;
     } finally {
         snapshot.depth -= 1;
         if (snapshot.depth <= 0) {
@@ -591,17 +632,9 @@ function withReviewArtifactReadSnapshot<T>(reviewsDir: string, callback: () => T
     }
 }
 
-function findReviewArtifactReadSnapshot(filePath: string): {
-    rootPath: string;
-    realRootPath: string;
-    reads: Map<string, CachedReviewArtifactRead>;
-} | null {
+function findReviewArtifactReadSnapshot(filePath: string): ReviewArtifactReadSnapshotState | null {
     const resolvedPath = path.resolve(filePath);
-    let bestMatch: {
-        rootPath: string;
-        realRootPath: string;
-        reads: Map<string, CachedReviewArtifactRead>;
-    } | null = null;
+    let bestMatch: ReviewArtifactReadSnapshotState | null = null;
     for (const snapshot of inProcessReviewArtifactReadSnapshots.values()) {
         if (
             isPathInsideReviewArtifactSnapshot(resolvedPath, snapshot.rootPath)
@@ -617,7 +650,89 @@ function invalidReviewArtifactRead(active: boolean): ReviewArtifactFileReadSnaps
     return { active, content: null, sha256: null, valid: false };
 }
 
-export function readReviewArtifactFileSnapshot(filePath: string): ReviewArtifactFileReadSnapshot {
+function cacheInvalidReviewArtifactRead(
+    snapshot: ReviewArtifactReadSnapshotState,
+    cacheKey: string
+): ReviewArtifactFileReadSnapshot {
+    const invalid = invalidReviewArtifactRead(true);
+    snapshot.reads.set(cacheKey, {
+        content: null,
+        sha256: null,
+        valid: false
+    });
+    return invalid;
+}
+
+function invalidateCachedReviewArtifactRead(
+    snapshot: ReviewArtifactReadSnapshotState,
+    cached: CachedReviewArtifactRead
+): void {
+    if (cached.content) {
+        snapshot.retainedBytes -= cached.content.length;
+    }
+    cached.content = null;
+    cached.sha256 = null;
+    cached.valid = false;
+}
+
+function failReviewArtifactReadBudget(
+    snapshot: ReviewArtifactReadSnapshotState,
+    code: ReviewArtifactReadBudgetError['code'],
+    message: string
+): never {
+    const error = snapshot.budgetError || new ReviewArtifactReadBudgetError(code, message);
+    snapshot.budgetError = error;
+    throw error;
+}
+
+function assertReviewArtifactCountBudget(snapshot: ReviewArtifactReadSnapshotState): void {
+    if (snapshot.reads.size >= snapshot.maxArtifacts) {
+        failReviewArtifactReadBudget(
+            snapshot,
+            'ARTIFACT_COUNT_EXCEEDED',
+            `Review artifact read snapshot exceeds the ${snapshot.maxArtifacts}-artifact limit.`
+        );
+    }
+}
+
+function assertReviewArtifactByteBudget(snapshot: ReviewArtifactReadSnapshotState, nextBytes: number): void {
+    if (
+        !Number.isSafeInteger(nextBytes)
+        || nextBytes < 0
+        || nextBytes > snapshot.maxBytes - snapshot.retainedBytes
+    ) {
+        failReviewArtifactReadBudget(
+            snapshot,
+            'BYTE_LIMIT_EXCEEDED',
+            `Review artifact read snapshot exceeds the ${snapshot.maxBytes}-byte aggregate limit.`
+        );
+    }
+}
+
+function readReviewArtifactBytesBounded(filePath: string, identity: fs.Stats): Buffer | null {
+    const handle = fs.openSync(filePath, 'r');
+    try {
+        const openedIdentity = fs.fstatSync(handle);
+        if (!sameReviewArtifactFileIdentity(identity, openedIdentity)) {
+            return null;
+        }
+        const content = Buffer.allocUnsafe(identity.size);
+        let offset = 0;
+        while (offset < content.length) {
+            const bytesRead = fs.readSync(handle, content, offset, content.length - offset, offset);
+            if (bytesRead === 0) {
+                return null;
+            }
+            offset += bytesRead;
+        }
+        const afterReadIdentity = fs.fstatSync(handle);
+        return sameReviewArtifactFileIdentity(openedIdentity, afterReadIdentity) ? content : null;
+    } finally {
+        fs.closeSync(handle);
+    }
+}
+
+function readReviewArtifactCanonicalSnapshot(filePath: string): ReviewArtifactFileReadSnapshot {
     const resolvedPath = path.resolve(filePath);
     const snapshot = findReviewArtifactReadSnapshot(resolvedPath);
     if (!snapshot) {
@@ -630,86 +745,62 @@ export function readReviewArtifactFileSnapshot(filePath: string): ReviewArtifact
             try {
                 const currentIdentity = fs.lstatSync(resolvedPath);
                 if (!cached.identity || !sameReviewArtifactFileIdentity(cached.identity, currentIdentity)) {
-                    cached.content = null;
-                    cached.jsonParsed = true;
-                    cached.jsonValid = false;
-                    cached.jsonValue = null;
-                    cached.sha256 = null;
-                    cached.valid = false;
+                    invalidateCachedReviewArtifactRead(snapshot, cached);
                 }
             } catch {
-                cached.content = null;
-                cached.jsonParsed = true;
-                cached.jsonValid = false;
-                cached.jsonValue = null;
-                cached.sha256 = null;
-                cached.valid = false;
+                invalidateCachedReviewArtifactRead(snapshot, cached);
             }
         }
         return {
             active: true,
-            content: cached.content ? Buffer.from(cached.content) : null,
+            content: cached.content,
             sha256: cached.sha256,
             valid: cached.valid
         };
     }
 
+    assertReviewArtifactCountBudget(snapshot);
     try {
         const beforeRead = fs.lstatSync(resolvedPath);
         if (!beforeRead.isFile() || beforeRead.isSymbolicLink()) {
-            const invalid = invalidReviewArtifactRead(true);
-            snapshot.reads.set(cacheKey, {
-                ...invalid,
-                jsonParsed: false,
-                jsonValid: false,
-                jsonValue: null
-            });
-            return invalid;
+            return cacheInvalidReviewArtifactRead(snapshot, cacheKey);
         }
         const realPath = fs.realpathSync.native(resolvedPath);
         if (!isPathInsideReviewArtifactSnapshot(realPath, snapshot.realRootPath)) {
-            const invalid = invalidReviewArtifactRead(true);
-            snapshot.reads.set(cacheKey, {
-                ...invalid,
-                jsonParsed: false,
-                jsonValid: false,
-                jsonValue: null
-            });
-            return invalid;
+            return cacheInvalidReviewArtifactRead(snapshot, cacheKey);
         }
-        const content = fs.readFileSync(resolvedPath);
+        assertReviewArtifactByteBudget(snapshot, beforeRead.size);
+        const content = readReviewArtifactBytesBounded(resolvedPath, beforeRead);
+        if (!content) {
+            return cacheInvalidReviewArtifactRead(snapshot, cacheKey);
+        }
         const afterRead = fs.lstatSync(resolvedPath);
         if (!sameReviewArtifactFileIdentity(beforeRead, afterRead)) {
-            const invalid = invalidReviewArtifactRead(true);
-            snapshot.reads.set(cacheKey, {
-                ...invalid,
-                jsonParsed: false,
-                jsonValid: false,
-                jsonValue: null
-            });
-            return invalid;
+            return cacheInvalidReviewArtifactRead(snapshot, cacheKey);
         }
         const sha256 = createHash('sha256').update(content).digest('hex').toLowerCase();
         snapshot.reads.set(cacheKey, {
             content,
             identity: afterRead,
-            jsonParsed: false,
-            jsonValid: false,
-            jsonValue: null,
             sha256,
             valid: true
         });
-        return { active: true, content: Buffer.from(content), sha256, valid: true };
-    } catch {
-        const invalid = invalidReviewArtifactRead(true);
-        snapshot.reads.set(cacheKey, {
-            ...invalid,
-            jsonParsed: false,
-            jsonValid: false,
-            jsonValue: null
-        });
-        return invalid;
+        snapshot.retainedBytes += content.length;
+        return { active: true, content, sha256, valid: true };
+    } catch (error: unknown) {
+        if (error instanceof ReviewArtifactReadBudgetError) {
+            throw error;
+        }
+        return cacheInvalidReviewArtifactRead(snapshot, cacheKey);
     }
+}
+
+export function readReviewArtifactFileSnapshot(filePath: string): ReviewArtifactFileReadSnapshot {
+    const snapshot = readReviewArtifactCanonicalSnapshot(filePath);
+    return {
+        ...snapshot,
+        content: snapshot.content ? Buffer.from(snapshot.content) : null
+    };
 }
 
 export function readReviewArtifactTextFile(filePath: string): string {
@@ -724,7 +815,7 @@ export function readReviewArtifactTextFile(filePath: string): string {
 }
 
 export function readReviewArtifactTextSnapshot(filePath: string): ReviewArtifactTextReadSnapshot {
-    const fileSnapshot = readReviewArtifactFileSnapshot(filePath);
+    const fileSnapshot = readReviewArtifactCanonicalSnapshot(filePath);
     return {
         active: fileSnapshot.active,
         sha256: fileSnapshot.sha256,
@@ -736,7 +827,7 @@ export function readReviewArtifactTextSnapshot(filePath: string): ReviewArtifact
 }
 
 export function readReviewArtifactFileSha256(filePath: string): string | null {
-    const snapshot = readReviewArtifactFileSnapshot(filePath);
+    const snapshot = readReviewArtifactCanonicalSnapshot(filePath);
     if (snapshot.active) {
         return snapshot.valid ? snapshot.sha256 : null;
     }
@@ -744,7 +835,7 @@ export function readReviewArtifactFileSha256(filePath: string): string | null {
 }
 
 export function readReviewArtifactJsonSnapshot(filePath: string): ReviewArtifactJsonReadSnapshot {
-    const fileSnapshot = readReviewArtifactFileSnapshot(filePath);
+    const fileSnapshot = readReviewArtifactCanonicalSnapshot(filePath);
     if (!fileSnapshot.active || !fileSnapshot.valid || !fileSnapshot.content) {
         return {
             active: fileSnapshot.active,
@@ -753,31 +844,21 @@ export function readReviewArtifactJsonSnapshot(filePath: string): ReviewArtifact
             value: null
         };
     }
-    const snapshot = findReviewArtifactReadSnapshot(filePath);
-    if (!snapshot) {
-        return { active: false, sha256: null, valid: false, value: null };
+    try {
+        return {
+            active: true,
+            sha256: fileSnapshot.sha256,
+            valid: true,
+            value: freezeReviewArtifactJson(JSON.parse(fileSnapshot.content.toString('utf8')) as unknown)
+        };
+    } catch {
+        return {
+            active: true,
+            sha256: fileSnapshot.sha256,
+            valid: false,
+            value: null
+        };
     }
-    const cacheKey = normalizeReviewArtifactReadSnapshotKey(filePath);
-    const cached = snapshot.reads.get(cacheKey);
-    if (!cached) {
-        return { active: true, sha256: fileSnapshot.sha256, valid: false, value: null };
-    }
-    if (!cached.jsonParsed) {
-        cached.jsonParsed = true;
-        try {
-            cached.jsonValue = freezeReviewArtifactJson(JSON.parse(cached.content!.toString('utf8')) as unknown);
-            cached.jsonValid = true;
-        } catch {
-            cached.jsonValue = null;
-            cached.jsonValid = false;
-        }
-    }
-    return {
-        active: true,
-        sha256: cached.sha256,
-        valid: cached.jsonValid,
-        value: cached.jsonValue
-    };
 }
 
 export function readReviewArtifactJsonFile(filePath: string): unknown {
@@ -791,14 +872,23 @@ export function readReviewArtifactJsonFile(filePath: string): unknown {
     return JSON.parse(fs.readFileSync(filePath, 'utf8')) as unknown;
 }
 
-export function withReviewArtifactReadBarrier<T>(
-    reviewsDir: string,
-    callback: () => T,
-    options: ReviewArtifactLockOptions = {}
-): T {
-    if (currentProcessOwnsReviewTransactionLock(reviewsDir)) {
-        return withReviewArtifactReadSnapshot(reviewsDir, callback);
+interface ReviewArtifactGenerationCapture {
+    reviewsDirectoryIdentity: fs.Stats | null;
+    indexIdentity: fs.Stats | null;
+}
+
+function captureOptionalReviewArtifactIdentity(targetPath: string): fs.Stats | null {
+    try {
+        return fs.lstatSync(targetPath);
+    } catch {
+        return null;
     }
+}
+
+function captureReviewArtifactGenerationUnderLock(
+    reviewsDir: string,
+    options: ReviewArtifactLockOptions
+): ReviewArtifactGenerationCapture {
     const lockPath = resolveReviewTransactionLockPath(reviewsDir);
     fs.mkdirSync(path.dirname(lockPath), { recursive: true });
     const { handle } = acquireFilesystemLock(lockPath, {
@@ -806,13 +896,53 @@ export function withReviewArtifactReadBarrier<T>(
         retryMs: options.lockRetryMs ?? DEFAULT_REVIEW_ARTIFACT_LOCK_RETRY_MS,
         staleMs: options.lockStaleMs ?? DEFAULT_REVIEW_ARTIFACT_LOCK_STALE_MS,
         allowForeignHostStaleRecovery: options.allowForeignHostStaleRecovery,
-        ownerLabel: 'review-artifact-read-barrier'
+        ownerLabel: 'review-artifact-read-generation'
     });
     try {
-        return withReviewArtifactReadSnapshot(reviewsDir, callback);
+        return {
+            reviewsDirectoryIdentity: captureOptionalReviewArtifactIdentity(reviewsDir),
+            indexIdentity: captureOptionalReviewArtifactIdentity(resolveIndexPath(reviewsDir))
+        };
     } finally {
         releaseFilesystemLock(handle);
     }
+}
+
+function assertReviewArtifactGenerationUnchanged(
+    reviewsDir: string,
+    capture: ReviewArtifactGenerationCapture,
+    options: ReviewArtifactLockOptions
+): void {
+    const current = captureReviewArtifactGenerationUnderLock(reviewsDir, options);
+    const directoryUnchanged = capture.reviewsDirectoryIdentity === null
+        ? current.reviewsDirectoryIdentity === null
+        : current.reviewsDirectoryIdentity !== null
+            && sameReviewArtifactFileIdentity(capture.reviewsDirectoryIdentity, current.reviewsDirectoryIdentity);
+    const indexUnchanged = capture.indexIdentity === null
+        ? current.indexIdentity === null
+        : current.indexIdentity !== null
+            && sameReviewArtifactFileIdentity(capture.indexIdentity, current.indexIdentity);
+    if (!directoryUnchanged || !indexUnchanged) {
+        throw new Error('Review artifact read snapshot was invalidated by a concurrent review publication.');
+    }
+}
+
+export function withReviewArtifactReadBarrier<T>(
+    reviewsDir: string,
+    callback: () => T,
+    options: ReviewArtifactLockOptions = {}
+): T {
+    const snapshotKey = normalizeReviewArtifactReadSnapshotKey(path.resolve(reviewsDir));
+    if (inProcessReviewArtifactReadSnapshots.has(snapshotKey)) {
+        return withReviewArtifactReadSnapshot(reviewsDir, callback, options);
+    }
+    if (currentProcessOwnsReviewTransactionLock(reviewsDir)) {
+        return withReviewArtifactReadSnapshot(reviewsDir, callback, options);
+    }
+    const generationCapture = captureReviewArtifactGenerationUnderLock(reviewsDir, options);
+    const result = withReviewArtifactReadSnapshot(reviewsDir, callback, options);
+    assertReviewArtifactGenerationUnchanged(reviewsDir, generationCapture, options);
+    return result;
 }
 
 async function withInProcessReviewLockQueue<T>(lockPath: string, callback: () => Promise<T>): Promise<T> {

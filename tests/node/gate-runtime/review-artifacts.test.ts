@@ -18,6 +18,7 @@ import {
     readReviewArtifactJsonSnapshot,
     readReviewArtifactTextFile,
     readReviewArtifactTextSnapshot,
+    ReviewArtifactReadBudgetError,
     scanReviewArtifactLocks,
     withReviewArtifactLockAsync,
     withReviewArtifactReadBarrier,
@@ -118,6 +119,67 @@ async function holdReviewArtifactLock(lockPath: string, holdMs: number): Promise
             setTimeout(resolve, 250);
         });
     };
+}
+
+function resolveReviewArtifactsModulePath(): string {
+    return path.resolve(__dirname, '../../../src/gate-runtime/review/review-artifacts.js');
+}
+
+function startReviewPublicationWorker(
+    reviewsDir: string,
+    artifactPath: string,
+    startSignalPath: string,
+    resultPath: string
+): Promise<{ code: number | null; stderr: string }> {
+    const workerScript = [
+        "const fs = require('node:fs');",
+        "const { writeReviewArtifactText } = require(process.argv[1]);",
+        'const reviewsDir = process.argv[2];',
+        'const artifactPath = process.argv[3];',
+        'const startSignalPath = process.argv[4];',
+        'const resultPath = process.argv[5];',
+        'const sleeper = new Int32Array(new SharedArrayBuffer(4));',
+        'while (!fs.existsSync(startSignalPath)) { Atomics.wait(sleeper, 0, 0, 2); }',
+        'try {',
+        "  writeReviewArtifactText(artifactPath, 'published\\n', { lockTimeoutMs: 300, lockRetryMs: 5 });",
+        "  fs.writeFileSync(resultPath, JSON.stringify({ status: 'ok' }), 'utf8');",
+        '} catch (error) {',
+        "  fs.writeFileSync(resultPath, JSON.stringify({ status: 'error', message: String(error && error.message || error) }), 'utf8');",
+        '  process.exitCode = 1;',
+        '}',
+        'void reviewsDir;'
+    ].join('\n');
+    const child = spawn(process.execPath, [
+        '--input-type=commonjs',
+        '--eval',
+        workerScript,
+        resolveReviewArtifactsModulePath(),
+        reviewsDir,
+        artifactPath,
+        startSignalPath,
+        resultPath
+    ], {
+        stdio: ['ignore', 'ignore', 'pipe']
+    });
+    return new Promise((resolve, reject) => {
+        let stderr = '';
+        child.stderr.on('data', (chunk) => {
+            stderr += String(chunk);
+        });
+        child.once('error', reject);
+        child.once('close', (code) => resolve({ code, stderr }));
+    });
+}
+
+function waitForFileSync(filePath: string, timeoutMs: number): void {
+    const sleeper = new Int32Array(new SharedArrayBuffer(4));
+    const deadline = Date.now() + timeoutMs;
+    while (!fs.existsSync(filePath)) {
+        if (Date.now() >= deadline) {
+            throw new Error(`Timed out waiting for ${filePath}`);
+        }
+        Atomics.wait(sleeper, 0, 0, 5);
+    }
 }
 
 test('writeReviewArtifactJson writes JSON and cleans up the transient lock', () => {
@@ -787,27 +849,148 @@ test('withReviewArtifactReadBarrier waits for a live external review transaction
     }
 });
 
-test('review read barrier reuses one immutable JSON read and releases it after the invocation', () => {
+test('slow review reads release the transaction lock before concurrent publication', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-short-read-lock-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const existingPath = path.join(reviewsDir, 'T-022-code.md');
+    const publicationPath = path.join(reviewsDir, 'T-022-test.md');
+    const startSignalPath = path.join(tempDir, 'publish.start');
+    const resultPath = path.join(tempDir, 'publish.result.json');
+    try {
+        writeReviewArtifactText(existingPath, 'existing\n');
+        const publication = startReviewPublicationWorker(
+            reviewsDir,
+            publicationPath,
+            startSignalPath,
+            resultPath
+        );
+        const startedAt = Date.now();
+        assert.throws(
+            () => withReviewArtifactReadBarrier(reviewsDir, () => {
+                assert.equal(readReviewArtifactTextFile(existingPath), 'existing\n');
+                fs.writeFileSync(startSignalPath, 'go\n', 'utf8');
+                waitForFileSync(resultPath, 2_000);
+                const publicationResult = JSON.parse(fs.readFileSync(resultPath, 'utf8')) as {
+                    status: string;
+                    message?: string;
+                };
+                assert.deepEqual(publicationResult, { status: 'ok' });
+                Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 450);
+            }, {
+                lockTimeoutMs: 1_000,
+                lockRetryMs: 5
+            }),
+            /invalidated by a concurrent review publication/
+        );
+        const workerResult = await publication;
+        assert.equal(workerResult.code, 0, workerResult.stderr);
+        assert.ok(Date.now() - startedAt < 2_000);
+        assert.equal(fs.readFileSync(publicationPath, 'utf8'), 'published\n');
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('large receipt histories stop at the aggregate snapshot artifact budget', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-count-budget-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const receiptPaths = Array.from({ length: 256 }, (_, index) => {
+        const receiptPath = path.join(reviewsDir, `T-HISTORY-code-receipt-${String(index).padStart(4, '0')}.json`);
+        fs.writeFileSync(receiptPath, `{"index":${index}}\n`, 'utf8');
+        return receiptPath;
+    });
+    const fsModule = require('node:fs') as typeof fs;
+    const originalOpenSync = fsModule.openSync;
+    let openedReceiptCount = 0;
+    fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+        if (String(targetPath).includes('T-HISTORY-code-receipt-')) {
+            openedReceiptCount += 1;
+        }
+        return originalOpenSync(targetPath, flags, mode);
+    }) as typeof fsModule.openSync;
+    try {
+        assert.throws(
+            () => withReviewArtifactReadBarrier(reviewsDir, () => {
+                for (const receiptPath of receiptPaths) {
+                    readReviewArtifactJsonSnapshot(receiptPath);
+                }
+            }, {
+                snapshotMaxArtifacts: 32,
+                snapshotMaxBytes: 1024 * 1024
+            }),
+            (error: unknown) => (
+                error instanceof ReviewArtifactReadBudgetError
+                && error.code === 'ARTIFACT_COUNT_EXCEEDED'
+            )
+        );
+        assert.equal(openedReceiptCount, 32);
+    } finally {
+        fsModule.openSync = originalOpenSync;
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('aggregate snapshot byte budget rejects the next receipt before allocation or I/O', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-byte-budget-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const receiptPaths = Array.from({ length: 3 }, (_, index) => {
+        const receiptPath = path.join(reviewsDir, `T-BYTES-code-receipt-${index}.json`);
+        fs.writeFileSync(receiptPath, Buffer.alloc(1024, index + 1));
+        return receiptPath;
+    });
+    const fsModule = require('node:fs') as typeof fs;
+    const originalOpenSync = fsModule.openSync;
+    let thirdReceiptOpenCount = 0;
+    fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+        if (path.resolve(String(targetPath)) === path.resolve(receiptPaths[2])) {
+            thirdReceiptOpenCount += 1;
+        }
+        return originalOpenSync(targetPath, flags, mode);
+    }) as typeof fsModule.openSync;
+    try {
+        assert.throws(
+            () => withReviewArtifactReadBarrier(reviewsDir, () => {
+                for (const receiptPath of receiptPaths) {
+                    readReviewArtifactFileSha256(receiptPath);
+                }
+            }, {
+                snapshotMaxArtifacts: 10,
+                snapshotMaxBytes: 2048
+            }),
+            (error: unknown) => (
+                error instanceof ReviewArtifactReadBudgetError
+                && error.code === 'BYTE_LIMIT_EXCEEDED'
+            )
+        );
+        assert.equal(thirdReceiptOpenCount, 0);
+    } finally {
+        fsModule.openSync = originalOpenSync;
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('review read barrier reuses one immutable byte read without retaining parsed JSON', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-snapshot-'));
     const reviewsDir = createReviewsDir(tempDir);
     const receiptPath = path.join(reviewsDir, 'T-022-code-receipt.json');
     fs.writeFileSync(receiptPath, '{"version":1}\n', 'utf8');
     const fsModule = require('node:fs') as typeof fs;
-    const originalReadFileSync = fsModule.readFileSync;
+    const originalOpenSync = fsModule.openSync;
     let receiptReadCount = 0;
-    fsModule.readFileSync = ((targetPath: fs.PathOrFileDescriptor, options?: unknown) => {
-        if (typeof targetPath !== 'number' && path.resolve(String(targetPath)) === path.resolve(receiptPath)) {
+    fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+        if (path.resolve(String(targetPath)) === path.resolve(receiptPath)) {
             receiptReadCount += 1;
         }
-        return originalReadFileSync(targetPath, options as never);
-    }) as typeof fsModule.readFileSync;
+        return originalOpenSync(targetPath, flags, mode);
+    }) as typeof fsModule.openSync;
     try {
         withReviewArtifactReadBarrier(reviewsDir, () => {
             const first = readReviewArtifactJsonFile(receiptPath) as Record<string, unknown>;
             const second = readReviewArtifactJsonFile(receiptPath) as Record<string, unknown>;
             const text = readReviewArtifactTextFile(receiptPath);
             const fileSnapshot = readReviewArtifactFileSnapshot(receiptPath);
-            assert.equal(first, second);
+            assert.deepEqual(first, second);
+            assert.notEqual(first, second);
             assert.equal(Object.isFrozen(first), true);
             assert.equal(fileSnapshot.valid, true);
             assert.equal(first.version, 1);
@@ -820,7 +1003,7 @@ test('review read barrier reuses one immutable JSON read and releases it after t
             assert.equal(refreshed.version, 2);
         });
     } finally {
-        fsModule.readFileSync = originalReadFileSync;
+        fsModule.openSync = originalOpenSync;
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
     assert.equal(receiptReadCount, 2);
@@ -862,20 +1045,23 @@ test('review-attempt artifact index invalidates a cached read when the shared sn
     assert.ok(expectedSha256);
 
     try {
-        withReviewArtifactReadBarrier(reviewsDir, () => {
-            const artifactIndex = createReviewAttemptArtifactIndex(reviewsDir, taskId);
-            assert.equal(
-                artifactIndex.readJsonSnapshot(receiptPath, receiptFileName, expectedSha256).valid,
-                true
-            );
-            const replacementPath = `${receiptPath}.replacement`;
-            fs.writeFileSync(replacementPath, '{"version":2}\n', 'utf8');
-            fs.renameSync(replacementPath, receiptPath);
-            assert.equal(
-                artifactIndex.readJsonSnapshot(receiptPath, receiptFileName, expectedSha256).valid,
-                false
-            );
-        });
+        assert.throws(
+            () => withReviewArtifactReadBarrier(reviewsDir, () => {
+                const artifactIndex = createReviewAttemptArtifactIndex(reviewsDir, taskId);
+                assert.equal(
+                    artifactIndex.readJsonSnapshot(receiptPath, receiptFileName, expectedSha256).valid,
+                    true
+                );
+                const replacementPath = `${receiptPath}.replacement`;
+                fs.writeFileSync(replacementPath, '{"version":2}\n', 'utf8');
+                fs.renameSync(replacementPath, receiptPath);
+                assert.equal(
+                    artifactIndex.readJsonSnapshot(receiptPath, receiptFileName, expectedSha256).valid,
+                    false
+                );
+            }),
+            /invalidated by a concurrent review publication/
+        );
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }

@@ -204,7 +204,7 @@ describe('gates/task-audit-summary', () => {
 
             const fsModule = require('node:fs') as typeof fs;
             const originalReaddirSync = fsModule.readdirSync;
-            const originalReadFileSync = fsModule.readFileSync;
+            const originalOpenSync = fsModule.openSync;
             let reviewDirectoryReads = 0;
             let immutableSnapshotReads = 0;
             fsModule.readdirSync = ((targetPath: fs.PathLike, options?: unknown) => {
@@ -213,16 +213,15 @@ describe('gates/task-audit-summary', () => {
                 }
                 return originalReaddirSync(targetPath, options as never);
             }) as typeof fsModule.readdirSync;
-            fsModule.readFileSync = ((targetPath: fs.PathOrFileDescriptor, options?: unknown) => {
+            fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
                 if (
-                    typeof targetPath !== 'number'
-                    && path.resolve(String(targetPath)).startsWith(`${path.resolve(reviewsDir)}${path.sep}`)
+                    path.resolve(String(targetPath)).startsWith(`${path.resolve(reviewsDir)}${path.sep}`)
                     && /-(?:receipt|artifact)-[0-9a-f]{64}\.(?:json|md)$/u.test(path.basename(String(targetPath)))
                 ) {
                     immutableSnapshotReads += 1;
                 }
-                return originalReadFileSync(targetPath, options as never);
-            }) as typeof fsModule.readFileSync;
+                return originalOpenSync(targetPath, flags, mode);
+            }) as typeof fsModule.openSync;
 
             try {
                 const summary = buildReviewAttemptSummary({
@@ -239,7 +238,7 @@ describe('gates/task-audit-summary', () => {
                 assert.equal(immutableSnapshotReads, 2);
             } finally {
                 fsModule.readdirSync = originalReaddirSync;
-                fsModule.readFileSync = originalReadFileSync;
+                fsModule.openSync = originalOpenSync;
             }
         });
 

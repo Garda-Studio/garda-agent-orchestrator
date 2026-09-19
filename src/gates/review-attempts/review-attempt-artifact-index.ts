@@ -5,8 +5,9 @@ import * as path from 'node:path';
 import { isPlainRecord } from '../../core/records';
 import { assertCanonicalTaskId } from '../../core/task-ids';
 import {
-    readReviewArtifactFileSnapshot,
-    readReviewArtifactJsonSnapshot
+    readReviewArtifactFileSha256,
+    readReviewArtifactJsonSnapshot,
+    readReviewArtifactTextSnapshot
 } from '../../gate-runtime/review-artifacts';
 import {
     entriesForTask,
@@ -45,10 +46,12 @@ export interface ReviewAttemptArtifactIndex {
 }
 
 interface CachedSnapshotRead {
-    content: string | null;
-    parsedRecord: Record<string, unknown> | null | undefined;
     valid: boolean;
     sha256: string | null;
+}
+
+interface ResolvedSnapshotRead extends CachedSnapshotRead {
+    expectedPath: string | null;
 }
 
 function normalizeSha256(value: unknown): string | null {
@@ -109,7 +112,7 @@ export function createReviewAttemptArtifactIndex(
         candidatePath: unknown,
         expectedFileName: string,
         expectedSha256: unknown
-    ): CachedSnapshotRead => {
+    ): ResolvedSnapshotRead => {
         const normalizedExpectedSha256 = normalizeSha256(expectedSha256);
         const normalizedCandidate = String(candidatePath || '').trim();
         if (
@@ -117,73 +120,60 @@ export function createReviewAttemptArtifactIndex(
             || !normalizedCandidate
             || path.basename(expectedFileName) !== expectedFileName
         ) {
-            return { content: null, parsedRecord: null, valid: false, sha256: null };
+            return { expectedPath: null, valid: false, sha256: null };
         }
         const expectedPath = path.resolve(resolvedReviewsRoot, expectedFileName);
         const candidateResolvedPath = path.isAbsolute(normalizedCandidate)
             ? path.resolve(normalizedCandidate)
             : path.resolve(resolvedReviewsRoot, normalizedCandidate);
         if (candidateResolvedPath !== expectedPath) {
-            return { content: null, parsedRecord: null, valid: false, sha256: null };
+            return { expectedPath: null, valid: false, sha256: null };
         }
         const cacheKey = `${expectedFileName}|${normalizedExpectedSha256}`;
         const cached = cachedReads.get(cacheKey);
         if (cached) {
             if (cached.valid) {
-                const sharedSnapshot = readReviewArtifactFileSnapshot(expectedPath);
-                if (
-                    sharedSnapshot.active
-                    && (
-                        !sharedSnapshot.valid
-                        || !sharedSnapshot.content
-                        || sharedSnapshot.sha256 !== cached.sha256
-                    )
-                ) {
-                    const divergent = { content: null, parsedRecord: null, valid: false, sha256: null };
+                const currentSha256 = readReviewArtifactFileSha256(expectedPath);
+                if (currentSha256 !== cached.sha256) {
+                    const divergent = { valid: false, sha256: null };
                     cachedReads.set(cacheKey, divergent);
-                    return divergent;
+                    return { expectedPath, ...divergent };
                 }
             }
-            return cached;
+            return { expectedPath, ...cached };
         }
         const indexEntry = entriesByFileName.get(expectedFileName);
         if (!indexEntry || duplicateFileNames.has(expectedFileName)) {
-            const missing = { content: null, parsedRecord: null, valid: false, sha256: null };
+            const missing = { valid: false, sha256: null };
             cachedReads.set(cacheKey, missing);
-            return missing;
+            return { expectedPath, ...missing };
         }
         try {
             const beforeRead = fs.lstatSync(expectedPath);
             if (!indexEntryMatchesFile(indexEntry, beforeRead)) {
-                const divergent = { content: null, parsedRecord: null, valid: false, sha256: null };
+                const divergent = { valid: false, sha256: null };
                 cachedReads.set(cacheKey, divergent);
-                return divergent;
+                return { expectedPath, ...divergent };
             }
-            const sharedSnapshot = readReviewArtifactFileSnapshot(expectedPath);
-            const contentBuffer = sharedSnapshot.active
-                ? sharedSnapshot.content
-                : fs.readFileSync(expectedPath);
-            if (!contentBuffer || (sharedSnapshot.active && !sharedSnapshot.valid)) {
-                const unreadable = { content: null, parsedRecord: null, valid: false, sha256: null };
+            const actualSha256 = readReviewArtifactFileSha256(expectedPath);
+            if (!actualSha256) {
+                const unreadable = { valid: false, sha256: null };
                 cachedReads.set(cacheKey, unreadable);
-                return unreadable;
+                return { expectedPath, ...unreadable };
             }
             const afterRead = fs.lstatSync(expectedPath);
-            const actualSha256 = createHash('sha256').update(contentBuffer).digest('hex');
             const valid = sameFileIdentity(beforeRead, afterRead)
                 && actualSha256 === normalizedExpectedSha256;
             const result: CachedSnapshotRead = {
-                content: valid ? contentBuffer.toString('utf8') : null,
-                parsedRecord: valid ? undefined : null,
                 valid,
                 sha256: actualSha256
             };
             cachedReads.set(cacheKey, result);
-            return result;
+            return { expectedPath, ...result };
         } catch {
-            const unreadable = { content: null, parsedRecord: null, valid: false, sha256: null };
+            const unreadable = { valid: false, sha256: null };
             cachedReads.set(cacheKey, unreadable);
-            return unreadable;
+            return { expectedPath, ...unreadable };
         }
     };
 
@@ -208,11 +198,32 @@ export function createReviewAttemptArtifactIndex(
             expectedSha256: unknown
         ): ReviewAttemptTextSnapshot {
             const result = readSnapshot(candidatePath, expectedFileName, expectedSha256);
-            return {
-                content: result.content,
-                valid: result.valid,
-                sha256: result.sha256
-            };
+            if (!result.valid || !result.expectedPath || !result.sha256) {
+                return { content: null, valid: false, sha256: result.sha256 };
+            }
+            const sharedSnapshot = readReviewArtifactTextSnapshot(result.expectedPath);
+            if (sharedSnapshot.active) {
+                const valid = sharedSnapshot.valid
+                    && sharedSnapshot.value !== null
+                    && sharedSnapshot.sha256 === result.sha256;
+                return {
+                    content: valid ? sharedSnapshot.value : null,
+                    valid,
+                    sha256: valid ? result.sha256 : null
+                };
+            }
+            try {
+                const content = fs.readFileSync(result.expectedPath);
+                const actualSha256 = createHash('sha256').update(content).digest('hex');
+                const valid = actualSha256 === result.sha256;
+                return {
+                    content: valid ? content.toString('utf8') : null,
+                    valid,
+                    sha256: valid ? actualSha256 : null
+                };
+            } catch {
+                return { content: null, valid: false, sha256: null };
+            }
         },
         readJsonSnapshot(
             candidatePath: unknown,
@@ -220,31 +231,37 @@ export function createReviewAttemptArtifactIndex(
             expectedSha256: unknown
         ): ReviewAttemptJsonSnapshot {
             const result = readSnapshot(candidatePath, expectedFileName, expectedSha256);
-            if (!result.valid || result.content === null) {
+            if (!result.valid || !result.expectedPath || !result.sha256) {
                 return { record: null, valid: false, sha256: result.sha256 };
             }
-            if (result.parsedRecord === undefined) {
-                const sharedJsonSnapshot = readReviewArtifactJsonSnapshot(
-                    path.resolve(resolvedReviewsRoot, expectedFileName)
-                );
-                if (sharedJsonSnapshot.active) {
-                    result.parsedRecord = sharedJsonSnapshot.valid && isPlainRecord(sharedJsonSnapshot.value)
-                        ? sharedJsonSnapshot.value
-                        : null;
-                } else {
-                    try {
-                        const parsed = JSON.parse(result.content) as unknown;
-                        result.parsedRecord = isPlainRecord(parsed) ? freezeRecord(parsed) : null;
-                    } catch {
-                        result.parsedRecord = null;
-                    }
-                }
+            const sharedSnapshot = readReviewArtifactJsonSnapshot(result.expectedPath);
+            if (sharedSnapshot.active) {
+                const record = sharedSnapshot.valid
+                    && sharedSnapshot.sha256 === result.sha256
+                    && isPlainRecord(sharedSnapshot.value)
+                    ? sharedSnapshot.value
+                    : null;
+                return {
+                    record,
+                    valid: record !== null,
+                    sha256: record === null ? null : result.sha256
+                };
             }
-            return {
-                record: result.parsedRecord,
-                valid: result.parsedRecord !== null,
-                sha256: result.sha256
-            };
+            try {
+                const content = fs.readFileSync(result.expectedPath);
+                const actualSha256 = createHash('sha256').update(content).digest('hex');
+                const parsed = actualSha256 === result.sha256
+                    ? JSON.parse(content.toString('utf8')) as unknown
+                    : null;
+                const record = isPlainRecord(parsed) ? freezeRecord(parsed) : null;
+                return {
+                    record,
+                    valid: record !== null,
+                    sha256: record === null ? null : actualSha256
+                };
+            } catch {
+                return { record: null, valid: false, sha256: null };
+            }
         }
     });
 }

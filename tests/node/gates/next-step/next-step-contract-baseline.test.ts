@@ -34,7 +34,6 @@ import {
     resolveIndexPath,
     writeIndex
 } from '../../../../src/gate-runtime/reviews-index';
-import { getReviewArtifactTransactionLockPath } from '../../../../src/gate-runtime/review-artifacts';
 import { buildReviewTimingAuditSummary } from '../../../../src/gates/task-audit/task-audit-summary-review-timing-audit';
 import { buildTaskAuditSummary } from '../../../../src/gates/task-audit/task-audit-summary';
 import {
@@ -781,7 +780,7 @@ describe('next-step refactor contract baseline', () => {
         assert.equal(reviewsDirectoryReadCount, 0);
     });
 
-    it('keeps readiness and receipt probes inside one barrier during a concurrent publication race', () => {
+    it('uses one bounded artifact read per invocation after the generation lock is released', () => {
         const repoRoot = makeContractRepo();
         seedStartedTask(repoRoot, TASK_ID);
         seedOptionalSkillSelectionPreflight(repoRoot, TASK_ID, {
@@ -792,7 +791,7 @@ describe('next-step refactor contract baseline', () => {
         const root = reviewsRoot(repoRoot);
         const receiptPath = path.join(root, `${TASK_ID}-code-receipt.json`);
         const preflightPath = path.join(root, `${TASK_ID}-preflight.json`);
-        const transactionLockPath = getReviewArtifactTransactionLockPath(root);
+        const transactionLockPath = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', '.reviews-transaction.lock');
         writeJson(receiptPath, {
             task_id: TASK_ID,
             review_type: 'code'
@@ -804,34 +803,26 @@ describe('next-step refactor contract baseline', () => {
         assert.equal(requiredReviews.code, true);
 
         const fsModule = require('node:fs') as typeof fs;
-        const originalExistsSync = fsModule.existsSync;
-        const originalReadFileSync = fsModule.readFileSync;
-        let receiptProbeCount = 0;
-        let unprotectedReceiptProbeCount = 0;
+        const originalOpenSync = fsModule.openSync;
         let readinessReadCount = 0;
-        let unprotectedReadinessReadCount = 0;
         let receiptReadCount = 0;
-        fsModule.existsSync = ((targetPath: fs.PathLike) => {
-            if (path.resolve(String(targetPath)) === path.resolve(receiptPath)) {
-                receiptProbeCount += 1;
-                if (!originalExistsSync(transactionLockPath)) {
-                    unprotectedReceiptProbeCount += 1;
-                }
-            }
-            return originalExistsSync(targetPath);
-        }) as typeof fsModule.existsSync;
-        fsModule.readFileSync = ((targetPath: fs.PathOrFileDescriptor, options?: unknown) => {
-            if (typeof targetPath !== 'number' && path.resolve(String(targetPath)) === path.resolve(receiptPath)) {
+        let readsWhileTransactionLockHeld = 0;
+        fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+            const resolvedTargetPath = path.resolve(String(targetPath));
+            if (resolvedTargetPath === path.resolve(receiptPath)) {
                 receiptReadCount += 1;
             }
-            if (typeof targetPath !== 'number' && path.resolve(String(targetPath)) === path.resolve(preflightPath)) {
+            if (resolvedTargetPath === path.resolve(preflightPath)) {
                 readinessReadCount += 1;
-                if (!originalExistsSync(transactionLockPath)) {
-                    unprotectedReadinessReadCount += 1;
-                }
             }
-            return originalReadFileSync(targetPath, options as never);
-        }) as typeof fsModule.readFileSync;
+            if (
+                (resolvedTargetPath === path.resolve(receiptPath) || resolvedTargetPath === path.resolve(preflightPath))
+                && fs.existsSync(transactionLockPath)
+            ) {
+                readsWhileTransactionLockHeld += 1;
+            }
+            return originalOpenSync(targetPath, flags, mode);
+        }) as typeof fsModule.openSync;
         let firstInvocationReceiptReadCount = 0;
         try {
             resolveNextStep({ taskId: TASK_ID, repoRoot });
@@ -843,16 +834,13 @@ describe('next-step refactor contract baseline', () => {
             });
             resolveNextStep({ taskId: TASK_ID, repoRoot });
         } finally {
-            fsModule.existsSync = originalExistsSync;
-            fsModule.readFileSync = originalReadFileSync;
+            fsModule.openSync = originalOpenSync;
         }
 
-        assert.ok(receiptProbeCount > 1);
-        assert.equal(unprotectedReceiptProbeCount, 0);
         assert.equal(firstInvocationReceiptReadCount, 1);
         assert.equal(receiptReadCount - firstInvocationReceiptReadCount, 1);
         assert.ok(readinessReadCount > 0);
-        assert.equal(unprotectedReadinessReadCount, 0);
+        assert.equal(readsWhileTransactionLockHeld, 0);
     });
 
     it('rejects a replaced immutable receipt whose content no longer matches its hash filename', () => {
