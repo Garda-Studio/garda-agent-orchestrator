@@ -176,6 +176,202 @@ describe('gates/workspace-snapshot-cache', () => {
             assert.notEqual(fp1.fingerprint, fp2.fingerprint);
         });
 
+        it('streams complete large binary fingerprints through cache hits with bounded reads', () => {
+            const largeFilePath = path.join(repoRoot, 'large.bin');
+            const largeContent = Buffer.alloc((2 * 1024 * 1024) + 19, 0x5a);
+            largeContent[largeContent.length - 1] = 0x7f;
+            fs.writeFileSync(largeFilePath, largeContent);
+
+            const fsModule = require('node:fs') as typeof import('node:fs');
+            const originalOpenSync = fsModule.openSync;
+            const originalCloseSync = fsModule.closeSync;
+            const originalReadSync = fsModule.readSync;
+            const originalReadFileSync = fsModule.readFileSync;
+            const targetDescriptors = new Set<number>();
+            const targetReadLengths: number[] = [];
+
+            fsModule.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+                const descriptor = originalOpenSync(filePath, flags, mode);
+                if (path.resolve(String(filePath)) === path.resolve(largeFilePath)) {
+                    targetDescriptors.add(descriptor);
+                }
+                return descriptor;
+            }) as typeof originalOpenSync;
+            fsModule.closeSync = ((descriptor: number) => {
+                targetDescriptors.delete(descriptor);
+                return originalCloseSync(descriptor);
+            }) as typeof originalCloseSync;
+            fsModule.readSync = ((
+                descriptor: number,
+                buffer: NodeJS.ArrayBufferView,
+                offset: number,
+                length: number,
+                position: number | bigint | null
+            ) => {
+                if (targetDescriptors.has(descriptor)) targetReadLengths.push(length);
+                return originalReadSync(descriptor, buffer, offset, length, position);
+            }) as typeof originalReadSync;
+            fsModule.readFileSync = ((filePath: fs.PathOrFileDescriptor, options?: unknown) => {
+                if (typeof filePath !== 'number' && path.resolve(String(filePath)) === path.resolve(largeFilePath)) {
+                    throw new Error('large fingerprint file must not be buffered by readFileSync');
+                }
+                return originalReadFileSync(filePath as never, options as never);
+            }) as typeof originalReadFileSync;
+
+            try {
+                const first = getWorkspaceSnapshotCached(repoRoot, 'git_auto', true, []);
+                const second = getWorkspaceSnapshotCached(repoRoot, 'git_auto', true, []);
+                assert.equal(first.cache_hit, false);
+                assert.equal(second.cache_hit, true);
+                assert.ok(second.changed_files.includes('large.bin'));
+                assert.ok(targetReadLengths.length > 2);
+                assert.ok(Math.max(...targetReadLengths) <= 64 * 1024);
+
+                const descriptor = fs.openSync(largeFilePath, 'r+');
+                try {
+                    fs.writeSync(descriptor, Buffer.from([0x01]), 0, 1, largeContent.length - 1);
+                } finally {
+                    fs.closeSync(descriptor);
+                }
+                const afterTailMutation = getWorkspaceSnapshotCached(repoRoot, 'git_auto', true, []);
+                assert.equal(afterTailMutation.cache_hit, false);
+                assert.notEqual(afterTailMutation.scope_content_sha256, second.scope_content_sha256);
+            } finally {
+                fsModule.openSync = originalOpenSync;
+                fsModule.closeSync = originalCloseSync;
+                fsModule.readSync = originalReadSync;
+                fsModule.readFileSync = originalReadFileSync;
+            }
+        });
+
+        it('fails closed when an untracked file changes between streamed chunks', () => {
+            const changingFilePath = path.join(repoRoot, 'changing.bin');
+            fs.writeFileSync(changingFilePath, Buffer.alloc((256 * 1024) + 7, 0x31));
+
+            const fsModule = require('node:fs') as typeof import('node:fs');
+            const originalOpenSync = fsModule.openSync;
+            const originalCloseSync = fsModule.closeSync;
+            const originalReadSync = fsModule.readSync;
+            const targetDescriptors = new Set<number>();
+            let mutationInjected = false;
+
+            fsModule.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+                const descriptor = originalOpenSync(filePath, flags, mode);
+                if (path.resolve(String(filePath)) === path.resolve(changingFilePath)) {
+                    targetDescriptors.add(descriptor);
+                }
+                return descriptor;
+            }) as typeof originalOpenSync;
+            fsModule.closeSync = ((descriptor: number) => {
+                targetDescriptors.delete(descriptor);
+                return originalCloseSync(descriptor);
+            }) as typeof originalCloseSync;
+            fsModule.readSync = ((
+                descriptor: number,
+                buffer: NodeJS.ArrayBufferView,
+                offset: number,
+                length: number,
+                position: number | bigint | null
+            ) => {
+                const bytesRead = originalReadSync(descriptor, buffer, offset, length, position);
+                if (targetDescriptors.has(descriptor) && bytesRead > 0 && !mutationInjected) {
+                    mutationInjected = true;
+                    fs.appendFileSync(changingFilePath, Buffer.from([0x32]));
+                }
+                return bytesRead;
+            }) as typeof originalReadSync;
+
+            try {
+                assert.throws(
+                    () => computeSnapshotFingerprint(repoRoot, 'git_auto', true, []),
+                    /changed while hashing/u
+                );
+                assert.equal(mutationInjected, true);
+            } finally {
+                fsModule.openSync = originalOpenSync;
+                fsModule.closeSync = originalCloseSync;
+                fsModule.readSync = originalReadSync;
+            }
+        });
+
+        it('fails closed when a symlink is replaced after target hashing', () => {
+            const linkPath = path.join(repoRoot, 'link.ts');
+            const targetPath = path.join(repoRoot, 'target-a.ts');
+            fs.writeFileSync(linkPath, 'placeholder\n', 'utf8');
+            fs.writeFileSync(targetPath, 'export const target = "a";\n', 'utf8');
+
+            const fsModule = require('node:fs') as typeof import('node:fs');
+            const originalLstatSync = fsModule.lstatSync;
+            const originalReadlinkSync = fsModule.readlinkSync;
+            const originalRealpathSync = fsModule.realpathSync;
+            const originalStatSync = fsModule.statSync;
+            const originalLinkStat = originalLstatSync(linkPath);
+            const simulatedLinkStat = {
+                ...originalLinkStat,
+                isSymbolicLink: () => true
+            } as fs.Stats;
+            let linkTargetReads = 0;
+
+            Reflect.set(fsModule, 'lstatSync', ((filePath: fs.PathLike, options?: unknown) => (
+                path.resolve(String(filePath)) === path.resolve(linkPath)
+                    ? simulatedLinkStat
+                    : originalLstatSync(filePath, options as never)
+            )) as typeof originalLstatSync);
+            fsModule.readlinkSync = ((filePath: fs.PathLike, options?: unknown) => {
+                if (path.resolve(String(filePath)) !== path.resolve(linkPath)) {
+                    return originalReadlinkSync(filePath, options as never);
+                }
+                linkTargetReads += 1;
+                return linkTargetReads === 1 ? 'target-a.ts' : 'target-b.ts';
+            }) as typeof originalReadlinkSync;
+            fsModule.realpathSync = ((filePath: fs.PathLike, options?: unknown) => (
+                path.resolve(String(filePath)) === path.resolve(linkPath)
+                    ? targetPath
+                    : originalRealpathSync(filePath, options as never)
+            )) as typeof originalRealpathSync;
+            Reflect.set(fsModule, 'statSync', ((filePath: fs.PathLike, options?: unknown) => (
+                path.resolve(String(filePath)) === path.resolve(linkPath)
+                    ? originalStatSync(targetPath, options as never)
+                    : originalStatSync(filePath, options as never)
+            )) as typeof originalStatSync);
+
+            try {
+                assert.throws(
+                    () => computeSnapshotFingerprint(repoRoot, 'explicit_changed_files', true, ['link.ts']),
+                    /changed while hashing/u
+                );
+                assert.ok(linkTargetReads >= 2);
+            } finally {
+                Reflect.set(fsModule, 'lstatSync', originalLstatSync);
+                fsModule.readlinkSync = originalReadlinkSync;
+                fsModule.realpathSync = originalRealpathSync;
+                Reflect.set(fsModule, 'statSync', originalStatSync);
+            }
+        });
+
+        it('fails closed when a symlink target cannot be inspected', () => {
+            const pathStateModule = require(
+                '../../../../src/gates/workspace/worktree-path-state'
+            ) as typeof import('../../../../src/gates/workspace/worktree-path-state');
+            const originalGetSafeWorktreePathState = pathStateModule.getSafeWorktreePathState;
+            Reflect.set(pathStateModule, 'getSafeWorktreePathState', () => ({
+                status: 'symbolic_link',
+                size: 12,
+                link_sha256: 'link-digest',
+                link_target: 'blocked-target.ts',
+                target_status: 'unreviewable'
+            }));
+
+            try {
+                assert.throws(
+                    () => computeSnapshotFingerprint(repoRoot, 'explicit_changed_files', true, ['link.ts']),
+                    /changed while hashing/u
+                );
+            } finally {
+                Reflect.set(pathStateModule, 'getSafeWorktreePathState', originalGetSafeWorktreePathState);
+            }
+        });
+
         it('fingerprint changes when parameters differ', () => {
             const fp1 = computeSnapshotFingerprint(repoRoot, 'git_auto', true, []);
             const fp2 = computeSnapshotFingerprint(repoRoot, 'git_auto', false, []);

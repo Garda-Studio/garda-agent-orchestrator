@@ -53,6 +53,33 @@ function isMissingPathError(error: unknown): boolean {
     return errorCode === 'ENOENT' || errorCode === 'ENOTDIR';
 }
 
+function samePathIdentity(left: fs.Stats, right: fs.Stats): boolean {
+    return left.dev === right.dev
+        && left.ino === right.ino
+        && left.mode === right.mode
+        && left.nlink === right.nlink
+        && left.size === right.size
+        && left.mtimeMs === right.mtimeMs
+        && left.ctimeMs === right.ctimeMs;
+}
+
+function symlinkStillMatches(
+    linkPath: string,
+    expectedStat: fs.Stats,
+    expectedTarget: string,
+    expectedRealPath: string
+): boolean {
+    try {
+        const currentStat = fs.lstatSync(linkPath);
+        return currentStat.isSymbolicLink()
+            && samePathIdentity(expectedStat, currentStat)
+            && fs.readlinkSync(linkPath) === expectedTarget
+            && fs.realpathSync(linkPath) === expectedRealPath;
+    } catch {
+        return false;
+    }
+}
+
 export function getSafeWorktreePathState(
     repoRoot: string,
     relativeFile: string,
@@ -88,11 +115,31 @@ export function getSafeWorktreePathState(
                     target_size: targetStat.size
                 };
                 if (targetStat.isFile()) {
+                    const targetSha256 = includeContentHashes
+                        ? fileSha256(worktreeRealPath, targetStat)
+                        : null;
+                    if (
+                        (includeContentHashes && !targetSha256)
+                        || !symlinkStillMatches(resolvedPath, stat, linkTarget, worktreeRealPath)
+                    ) {
+                        return {
+                            ...targetBase,
+                            status: 'unreviewable_symlink',
+                            target_status: 'unreviewable'
+                        };
+                    }
                     return {
                         ...targetBase,
                         status: 'symbolic_link',
                         target_status: 'file',
-                        target_sha256: includeContentHashes ? fileSha256(worktreeRealPath) || null : null
+                        target_sha256: targetSha256
+                    };
+                }
+                if (!symlinkStillMatches(resolvedPath, stat, linkTarget, worktreeRealPath)) {
+                    return {
+                        ...targetBase,
+                        status: 'unreviewable_symlink',
+                        target_status: 'unreviewable'
                     };
                 }
                 return {
@@ -121,10 +168,16 @@ export function getSafeWorktreePathState(
             size: stat.size
         };
         if (stat.isFile()) {
+            const sha256 = includeContentHashes
+                ? fileSha256(resolvedPath, stat)
+                : null;
+            if (includeContentHashes && !sha256) {
+                return { ...base, status: 'unreviewable' };
+            }
             return {
                 ...base,
                 status: 'file',
-                sha256: includeContentHashes ? fileSha256(resolvedPath) || null : null
+                sha256
             };
         }
         if (stat.isDirectory()) {

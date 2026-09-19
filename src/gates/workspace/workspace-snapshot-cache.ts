@@ -812,12 +812,20 @@ function buildPathStateToken(repoRoot: string, relativePath: string, repoRealPat
     const state = getSafeWorktreePathState(
         repoRoot,
         normalized,
-        repoRealPath ? { repoRealPath } : undefined
+        {
+            ...(repoRealPath ? { repoRealPath } : {}),
+            distinguishAccessErrors: true
+        }
     );
     if (state.status === 'file') {
         return `file|${state.size ?? 0}|${state.sha256 || ''}`;
     }
     if (state.status === 'symbolic_link') {
+        if (state.target_status === 'unreviewable') {
+            throw new Error(
+                `Unable to compute workspace snapshot cache fingerprint: '${normalized}' changed while hashing.`
+            );
+        }
         return [
             'symlink',
             state.size ?? 0,
@@ -830,6 +838,11 @@ function buildPathStateToken(repoRoot: string, relativePath: string, repoRealPat
         ].join('|');
     }
     if (state.status === 'unreviewable_symlink') {
+        if (state.target_status === 'unreviewable') {
+            throw new Error(
+                `Unable to compute workspace snapshot cache fingerprint: '${normalized}' changed while hashing.`
+            );
+        }
         return [
             'unreviewable_symlink',
             state.size ?? 0,
@@ -853,6 +866,11 @@ function buildPathStateToken(repoRoot: string, relativePath: string, repoRealPat
     }
     if (state.status === 'special') {
         return `other|${state.mode ?? 0}|${state.size ?? 0}`;
+    }
+    if (state.status === 'unreviewable') {
+        throw new Error(
+            `Unable to compute workspace snapshot cache fingerprint: '${normalized}' changed while hashing.`
+        );
     }
     return state.status;
 }
