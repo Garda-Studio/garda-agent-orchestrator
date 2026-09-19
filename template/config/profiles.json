@@ -34,8 +34,8 @@
         "schema_version": 1,
         "materialization_mode": "grouped_by_parent",
         "task_profile": {
-          "mode": "one_level_lighter",
-          "fixed_profile": null
+          "mode": "fixed_profile",
+          "fixed_profile": "balanced"
         }
       },
       "review_remediation_mode_policy": {
@@ -105,8 +105,8 @@
         "schema_version": 1,
         "materialization_mode": "grouped_by_parent",
         "task_profile": {
-          "mode": "one_level_lighter",
-          "fixed_profile": null
+          "mode": "fixed_profile",
+          "fixed_profile": "balanced"
         }
       },
       "review_remediation_mode_policy": {
@@ -176,8 +176,8 @@
         "schema_version": 1,
         "materialization_mode": "per_finding",
         "task_profile": {
-          "mode": "one_level_lighter",
-          "fixed_profile": null
+          "mode": "fixed_profile",
+          "fixed_profile": "balanced"
         }
       },
       "review_remediation_mode_policy": {
@@ -247,8 +247,8 @@
         "schema_version": 1,
         "materialization_mode": "per_finding",
         "task_profile": {
-          "mode": "one_level_lighter",
-          "fixed_profile": null
+          "mode": "fixed_profile",
+          "fixed_profile": "balanced"
         }
       },
       "review_remediation_mode_policy": {
