@@ -688,7 +688,7 @@ describe('next-step refactor contract baseline', () => {
         });
 
         assert.equal(result.next_gate, 'record-strict-decomposition-decision');
-        assert.equal(readSites.length, 3, readSites.join('\n\n'));
+        assert.equal(readSites.length, 1, readSites.join('\n\n'));
         assert.equal(
             readSites.filter((site) => site.includes('captureTaskTimelineRead')).length,
             1,
@@ -723,7 +723,7 @@ describe('next-step refactor contract baseline', () => {
         ));
 
         assert.equal(result.next_gate, 'record-strict-decomposition-decision');
-        assert.equal(readSites.length, 4, readSites.join('\n\n'));
+        assert.equal(readSites.length, 2, readSites.join('\n\n'));
         assert.equal(
             readSites.filter((site) => site.includes('captureTaskTimelineRead')).length,
             2,
