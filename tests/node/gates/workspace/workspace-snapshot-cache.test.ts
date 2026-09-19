@@ -7,6 +7,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 
 import * as gitChangeClassification from '../../../../src/core/git-change-classification';
+import * as compileGate from '../../../../src/gates/compile/compile-gate';
 import {
     createWorkspaceSnapshotGitGeneration,
     getWorkspaceSnapshot
@@ -415,6 +416,129 @@ describe('gates/workspace-snapshot-cache', () => {
     });
 
     describe('performance characterization', () => {
+        it('evicts the oldest in-process snapshot when aggregate bytes exceed the budget', () => {
+            fs.writeFileSync(path.join(repoRoot, 'file.ts'), 'export const a = 2;\n', 'utf8');
+            const originalGetWorkspaceSnapshot = compileGate.getWorkspaceSnapshot;
+            const padding = 'x'.repeat(6 * 1024 * 1024);
+            let snapshotBuilds = 0;
+            mock.method(compileGate, 'getWorkspaceSnapshot', ((
+                ...args: Parameters<typeof originalGetWorkspaceSnapshot>
+            ): ReturnType<typeof originalGetWorkspaceSnapshot> => {
+                snapshotBuilds += 1;
+                return {
+                    ...originalGetWorkspaceSnapshot(...args),
+                    cache_test_padding: padding
+                } as unknown as ReturnType<typeof originalGetWorkspaceSnapshot>;
+            }) as typeof originalGetWorkspaceSnapshot);
+
+            try {
+                for (const variant of ['one', 'two', 'three']) {
+                    const snapshot = getWorkspaceSnapshotCached(
+                        repoRoot,
+                        'git_auto',
+                        true,
+                        [`cache-budget-${variant}.ts`],
+                        { readOnly: true }
+                    );
+                    assert.equal(snapshot.cache_hit, false);
+                }
+                assert.equal(snapshotBuilds, 3);
+
+                const oldestVariant = getWorkspaceSnapshotCached(
+                    repoRoot,
+                    'git_auto',
+                    true,
+                    ['cache-budget-one.ts'],
+                    { readOnly: true }
+                );
+                assert.equal(oldestVariant.cache_hit, false);
+                assert.equal(snapshotBuilds, 4, 'oldest entry should be rebuilt after byte-budget eviction');
+            } finally {
+                invalidateSnapshotCache(repoRoot);
+                mock.restoreAll();
+            }
+        });
+
+        it('keeps persisted-hit allocation steps and HMAC input bounded for a large snapshot payload', () => {
+            for (let index = 0; index < 256; index += 1) {
+                fs.writeFileSync(
+                    path.join(repoRoot, `large-snapshot-${String(index).padStart(3, '0')}.ts`),
+                    `export const value${index} = ${index};\n`,
+                    'utf8'
+                );
+            }
+            const cryptoModule = require('node:crypto') as typeof import('node:crypto');
+            const originalCreateHmac = cryptoModule.createHmac;
+            const originalStructuredClone = globalThis.structuredClone;
+            const originalStringify = JSON.stringify;
+            const hmacUpdateBytes: number[] = [];
+            let snapshotCloneCount = 0;
+            let fullSnapshotSerializationCount = 0;
+            const isWorkspaceSnapshot = (value: unknown): boolean => Boolean(
+                value
+                && typeof value === 'object'
+                && Array.isArray((value as { changed_files?: unknown }).changed_files)
+                && (value as { changed_file_stats?: unknown }).changed_file_stats
+            );
+            mock.method(cryptoModule, 'createHmac', ((...args: Parameters<typeof originalCreateHmac>) => {
+                const hmac = originalCreateHmac(...args);
+                const originalUpdate = hmac.update.bind(hmac);
+                (hmac as unknown as {
+                    update(data: string | NodeJS.ArrayBufferView, inputEncoding?: BufferEncoding): typeof hmac;
+                }).update = (data, inputEncoding) => {
+                    hmacUpdateBytes.push(
+                        typeof data === 'string'
+                            ? Buffer.byteLength(data, inputEncoding)
+                            : data.byteLength
+                    );
+                    return originalUpdate(data as never, inputEncoding as never);
+                };
+                return hmac;
+            }) as typeof cryptoModule.createHmac);
+            mock.method(globalThis, 'structuredClone', ((value: unknown, options?: StructuredSerializeOptions) => {
+                if (isWorkspaceSnapshot(value)) snapshotCloneCount += 1;
+                return originalStructuredClone(value, options);
+            }) as typeof structuredClone);
+            mock.method(JSON, 'stringify', ((value: unknown, ...args: unknown[]) => {
+                if (isWorkspaceSnapshot(value)) fullSnapshotSerializationCount += 1;
+                return originalStringify(value, ...(args as []));
+            }) as typeof JSON.stringify);
+            try {
+                const first = getWorkspaceSnapshotCached(repoRoot, 'git_auto', true, []);
+                assert.equal(first.cache_hit, false);
+                const cachePath = resolveSnapshotCachePath(repoRoot);
+                const persisted = readSnapshotCache(cachePath);
+                assert.ok(persisted);
+                const persistedBytes = fs.statSync(cachePath).size;
+                assert.ok(persistedBytes > 32 * 1024, `expected a large cache fixture, received ${persistedBytes} bytes`);
+
+                assert.equal(invalidateSnapshotCache(repoRoot), true);
+                writeSnapshotCache(cachePath, persisted);
+                hmacUpdateBytes.length = 0;
+                snapshotCloneCount = 0;
+                fullSnapshotSerializationCount = 0;
+                const cached = getWorkspaceSnapshotCached(repoRoot, 'git_auto', true, []);
+
+                assert.equal(cached.cache_hit, true);
+                assert.ok(
+                    snapshotCloneCount > 0 && snapshotCloneCount <= 2,
+                    `persisted hit should use at most two snapshot clones, received ${snapshotCloneCount}`
+                );
+                assert.equal(fullSnapshotSerializationCount, 0, 'persisted hit must not stringify the full snapshot');
+                assert.ok(hmacUpdateBytes.length > 0);
+                assert.ok(
+                    Math.max(...hmacUpdateBytes) <= 160,
+                    `expected compact HMAC input, received ${Math.max(...hmacUpdateBytes)} bytes`
+                );
+                assert.ok(
+                    persistedBytes > Math.max(...hmacUpdateBytes) * 200,
+                    'large persisted payload must not be replayed through HMAC authentication'
+                );
+            } finally {
+                mock.restoreAll();
+            }
+        });
+
         it('rejects mixed workspace generations across shared audit and report consumers', () => {
             const childProcessModule = require('node:child_process') as typeof import('node:child_process');
             const originalSpawnSync = childProcessModule.spawnSync;
@@ -706,6 +830,38 @@ describe('gates/workspace-snapshot-cache', () => {
             assert.equal(readSnapshotCache(cachePath), null);
         });
 
+        it('rejects oversized persisted cache files before parsing or materialization', () => {
+            const cachePath = path.join(tempDir, 'oversized.json');
+            fs.writeFileSync(cachePath, Buffer.alloc((8 * 1024 * 1024) + 1, 0x7b));
+
+            assert.equal(readSnapshotCache(cachePath), null);
+        });
+
+        it('refuses to write cache entries above the persisted byte budget', () => {
+            fs.writeFileSync(path.join(repoRoot, 'file.ts'), 'export const a = 2;\n', 'utf8');
+            getWorkspaceSnapshotCached(repoRoot, 'git_auto', true, []);
+            const entry = readSnapshotCache(resolveSnapshotCachePath(repoRoot));
+            assert.ok(entry);
+            const oversized = structuredClone(entry) as WorkspaceSnapshotCacheEntry;
+            oversized.snapshot.changed_files = ['x'.repeat((8 * 1024 * 1024) + 1)];
+            const originalStringify = JSON.stringify;
+            let fullEntrySerializationAttempted = false;
+            mock.method(JSON, 'stringify', ((value: unknown, ...args: unknown[]) => {
+                if (value === oversized) fullEntrySerializationAttempted = true;
+                return originalStringify(value, ...(args as []));
+            }) as typeof JSON.stringify);
+
+            try {
+                assert.throws(
+                    () => writeSnapshotCache(path.join(tempDir, 'oversized-write.json'), oversized),
+                    /exceeds 8388608 bytes/u
+                );
+                assert.equal(fullEntrySerializationAttempted, false);
+            } finally {
+                mock.restoreAll();
+            }
+        });
+
         it('returns null for wrong cache version', () => {
             const cachePath = path.join(tempDir, 'old.json');
             fs.writeFileSync(cachePath, JSON.stringify({ cache_version: 1, fingerprint: 'x', snapshot: {} }), 'utf8');
@@ -768,6 +924,41 @@ describe('gates/workspace-snapshot-cache', () => {
             assert.deepEqual(second.changed_files, first.changed_files);
             assert.equal(second.changed_lines_total, first.changed_lines_total);
             assert.equal(second.scope_sha256, first.scope_sha256);
+        });
+
+        it('accepts an authenticated persisted entry after process-local cache eviction', () => {
+            fs.writeFileSync(path.join(repoRoot, 'file.ts'), 'export const a = 2;\n', 'utf8');
+            const first = getWorkspaceSnapshotCached(repoRoot, 'git_auto', false, []);
+            const cachePath = resolveSnapshotCachePath(repoRoot);
+            const persisted = readSnapshotCache(cachePath);
+            assert.ok(persisted);
+
+            assert.equal(invalidateSnapshotCache(repoRoot), true);
+            writeSnapshotCache(cachePath, persisted);
+
+            const fromPersistedCache = getWorkspaceSnapshotCached(repoRoot, 'git_auto', false, []);
+            assert.equal(fromPersistedCache.cache_hit, true);
+            assert.deepEqual(fromPersistedCache.changed_files, first.changed_files);
+            assert.equal(fromPersistedCache.scope_content_sha256, first.scope_content_sha256);
+            assert.equal(fromPersistedCache.scope_sha256, first.scope_sha256);
+        });
+
+        it('treats malformed persisted cache parameters as a cache miss', () => {
+            fs.writeFileSync(path.join(repoRoot, 'file.ts'), 'export const a = 2;\n', 'utf8');
+            const expected = getWorkspaceSnapshotCached(repoRoot, 'git_auto', false, []);
+            const cachePath = resolveSnapshotCachePath(repoRoot);
+            const persisted = readSnapshotCache(cachePath);
+            assert.ok(persisted);
+            invalidateSnapshotCache(repoRoot);
+
+            const malformed = structuredClone(persisted) as WorkspaceSnapshotCacheEntry;
+            malformed.params = {} as WorkspaceSnapshotCacheEntry['params'];
+            malformed.integrity.params_sha256 = hashCanonicalForgery(malformed.params);
+            writeSnapshotCache(cachePath, malformed);
+
+            const resolved = getWorkspaceSnapshotCached(repoRoot, 'git_auto', false, []);
+            assert.equal(resolved.cache_hit, false);
+            assert.equal(resolved.scope_sha256, expected.scope_sha256);
         });
 
         it('rejects a forged persisted snapshot payload and recomputes canonical scope', () => {

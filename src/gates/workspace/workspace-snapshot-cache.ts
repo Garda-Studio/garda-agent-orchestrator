@@ -14,17 +14,21 @@ import { getSafeWorktreePathState } from './worktree-path-state';
 import { normalizeGitChangeClassificationEvidence } from '../../core/git-change-classification';
 
 const CACHE_VERSION = 6;
-const CACHE_INTEGRITY_SCHEMA_VERSION = 2;
+const CACHE_INTEGRITY_SCHEMA_VERSION = 3;
 const CACHE_RELATIVE_PATH = path.join('runtime', 'cache', 'workspace-snapshot.json');
 const CACHE_AUTH_KEY_RELATIVE_PATH = path.join('garda-agent-orchestrator', 'workspace-snapshot-cache.key');
 const MAX_IN_PROCESS_CACHE_ENTRIES = 32;
+const MAX_PERSISTED_CACHE_BYTES = 8 * 1024 * 1024;
+const MAX_IN_PROCESS_CACHE_BYTES = 16 * 1024 * 1024;
 
 interface InProcessSnapshotCacheEntry {
     repoKey: string;
     snapshot: WorkspaceSnapshot;
+    byteSize: number;
 }
 
 const inProcessSnapshotCache = new Map<string, InProcessSnapshotCacheEntry>();
+let inProcessSnapshotCacheBytes = 0;
 const workspaceSnapshotRequestRoots = new WeakMap<WorkspaceSnapshotRequest, string>();
 
 export type WorkspaceSnapshot = ReturnType<typeof getWorkspaceSnapshot>;
@@ -255,12 +259,14 @@ function buildCacheEntrySha256(entry: Omit<WorkspaceSnapshotCacheEntry, 'integri
 }
 
 function buildCacheEntryHmacSha256(
-    entry: Omit<WorkspaceSnapshotCacheEntry, 'integrity'>,
-    integrity: Omit<WorkspaceSnapshotCacheEntry['integrity'], 'entry_hmac_sha256'>,
+    entrySha256: string,
     authenticationKey: Buffer
 ): string {
     return createHmac('sha256', authenticationKey)
-        .update(canonicalJson({ entry, integrity }), 'utf8')
+        .update(canonicalJson({
+            schema_version: CACHE_INTEGRITY_SCHEMA_VERSION,
+            entry_sha256: entrySha256
+        }), 'utf8')
         .digest('hex');
 }
 
@@ -285,42 +291,46 @@ function sealWorkspaceSnapshotCacheEntry(
         ...entry,
         integrity: {
             ...integrityWithoutHmac,
-            entry_hmac_sha256: buildCacheEntryHmacSha256(entry, integrityWithoutHmac, authenticationKey)
+            entry_hmac_sha256: buildCacheEntryHmacSha256(integrityWithoutHmac.entry_sha256, authenticationKey)
         }
     };
 }
 
 function hasValidCacheEntryIntegrity(entry: WorkspaceSnapshotCacheEntry): boolean {
-    const integrity = entry.integrity;
-    if (
-        !integrity
-        || integrity.schema_version !== CACHE_INTEGRITY_SCHEMA_VERSION
-        || ![
-            integrity.snapshot_sha256,
-            integrity.params_sha256,
-            integrity.workspace_identity_sha256,
-            integrity.entry_sha256,
-            integrity.entry_hmac_sha256
-        ]
-            .every((value) => /^[0-9a-f]{64}$/u.test(String(value || '')))
-    ) {
+    try {
+        const integrity = entry.integrity;
+        if (
+            !integrity
+            || integrity.schema_version !== CACHE_INTEGRITY_SCHEMA_VERSION
+            || ![
+                integrity.snapshot_sha256,
+                integrity.params_sha256,
+                integrity.workspace_identity_sha256,
+                integrity.entry_sha256,
+                integrity.entry_hmac_sha256
+            ]
+                .every((value) => /^[0-9a-f]{64}$/u.test(String(value || '')))
+        ) {
+            return false;
+        }
+        const unsealedEntry: Omit<WorkspaceSnapshotCacheEntry, 'integrity'> = {
+            cache_version: entry.cache_version,
+            fingerprint: entry.fingerprint,
+            snapshot: entry.snapshot,
+            timestamp_utc: entry.timestamp_utc,
+            params: entry.params,
+            git_state: entry.git_state
+        };
+        return integrity.snapshot_sha256 === hashCanonicalJson(entry.snapshot)
+            && integrity.params_sha256 === hashCanonicalJson(entry.params)
+            && integrity.workspace_identity_sha256 === buildWorkspaceIdentitySha256(
+                normalizeRepoCacheKey(entry.params.repo_root),
+                entry.fingerprint
+            )
+            && integrity.entry_sha256 === buildCacheEntrySha256(unsealedEntry, integrity);
+    } catch {
         return false;
     }
-    const unsealedEntry: Omit<WorkspaceSnapshotCacheEntry, 'integrity'> = {
-        cache_version: entry.cache_version,
-        fingerprint: entry.fingerprint,
-        snapshot: entry.snapshot,
-        timestamp_utc: entry.timestamp_utc,
-        params: entry.params,
-        git_state: entry.git_state
-    };
-    return integrity.snapshot_sha256 === hashCanonicalJson(entry.snapshot)
-        && integrity.params_sha256 === hashCanonicalJson(entry.params)
-        && integrity.workspace_identity_sha256 === buildWorkspaceIdentitySha256(
-            normalizeRepoCacheKey(entry.params.repo_root),
-            entry.fingerprint
-        )
-        && integrity.entry_sha256 === buildCacheEntrySha256(unsealedEntry, integrity);
 }
 
 function hasValidCacheEntryAuthentication(
@@ -328,23 +338,8 @@ function hasValidCacheEntryAuthentication(
     authenticationKey: Buffer
 ): boolean {
     if (!hasValidCacheEntryIntegrity(entry)) return false;
-    const unsealedEntry: Omit<WorkspaceSnapshotCacheEntry, 'integrity'> = {
-        cache_version: entry.cache_version,
-        fingerprint: entry.fingerprint,
-        snapshot: entry.snapshot,
-        timestamp_utc: entry.timestamp_utc,
-        params: entry.params,
-        git_state: entry.git_state
-    };
-    const integrityWithoutHmac = {
-        schema_version: entry.integrity.schema_version,
-        snapshot_sha256: entry.integrity.snapshot_sha256,
-        params_sha256: entry.integrity.params_sha256,
-        workspace_identity_sha256: entry.integrity.workspace_identity_sha256,
-        entry_sha256: entry.integrity.entry_sha256
-    };
     const expected = Buffer.from(
-        buildCacheEntryHmacSha256(unsealedEntry, integrityWithoutHmac, authenticationKey),
+        buildCacheEntryHmacSha256(entry.integrity.entry_sha256, authenticationKey),
         'hex'
     );
     const actual = Buffer.from(entry.integrity.entry_hmac_sha256, 'hex');
@@ -627,20 +622,143 @@ function makeInProcessCacheKey(repoRoot: string, fingerprint: string): string {
 }
 
 function cloneWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
-    return JSON.parse(JSON.stringify(snapshot)) as WorkspaceSnapshot;
+    return structuredClone(snapshot);
 }
 
-function rememberInProcessSnapshot(repoRoot: string, fingerprint: string, snapshot: WorkspaceSnapshot): void {
+function measureJsonStringUtf8Bytes(value: string, limit: number): number | null {
+    let byteLength = 2;
+    for (let index = 0; index < value.length; index += 1) {
+        const codeUnit = value.charCodeAt(index);
+        if (codeUnit === 0x22 || codeUnit === 0x5c || codeUnit === 0x08
+            || codeUnit === 0x0c || codeUnit === 0x0a || codeUnit === 0x0d || codeUnit === 0x09) {
+            byteLength += 2;
+        } else if (codeUnit <= 0x1f) {
+            byteLength += 6;
+        } else if (codeUnit <= 0x7f) {
+            byteLength += 1;
+        } else if (codeUnit <= 0x7ff) {
+            byteLength += 2;
+        } else if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+            const nextCodeUnit = value.charCodeAt(index + 1);
+            if (nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff) {
+                byteLength += 4;
+                index += 1;
+            } else {
+                byteLength += 6;
+            }
+        } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+            byteLength += 6;
+        } else {
+            byteLength += 3;
+        }
+        if (byteLength > limit) return null;
+    }
+    return byteLength;
+}
+
+function measureBoundedJsonUtf8Bytes(value: unknown, limit: number): number | null {
+    const ancestors = new WeakSet<object>();
+
+    const measure = (current: unknown, remaining: number, inArray: boolean): number | null => {
+        if (current === null) return remaining >= 4 ? 4 : null;
+        if (typeof current === 'string') return measureJsonStringUtf8Bytes(current, remaining);
+        if (typeof current === 'boolean') {
+            const size = current ? 4 : 5;
+            return remaining >= size ? size : null;
+        }
+        if (typeof current === 'number') {
+            const serialized = Number.isFinite(current) ? String(current) : 'null';
+            return remaining >= serialized.length ? serialized.length : null;
+        }
+        if (typeof current === 'bigint') return null;
+        if (current === undefined || typeof current === 'function' || typeof current === 'symbol') {
+            return inArray && remaining >= 4 ? 4 : null;
+        }
+        if (!current || typeof current !== 'object' || ancestors.has(current)) return null;
+
+        ancestors.add(current);
+        let byteLength = 2;
+        if (byteLength > remaining) {
+            ancestors.delete(current);
+            return null;
+        }
+
+        if (Array.isArray(current)) {
+            for (let index = 0; index < current.length; index += 1) {
+                if (index > 0) byteLength += 1;
+                const entrySize = measure(current[index], remaining - byteLength, true);
+                if (entrySize === null) {
+                    ancestors.delete(current);
+                    return null;
+                }
+                byteLength += entrySize;
+            }
+        } else {
+            if (Object.getPrototypeOf(current) !== Object.prototype && Object.getPrototypeOf(current) !== null) {
+                ancestors.delete(current);
+                return null;
+            }
+            let emittedEntries = 0;
+            for (const key of Object.keys(current)) {
+                const entry = (current as Record<string, unknown>)[key];
+                if (entry === undefined || typeof entry === 'function' || typeof entry === 'symbol') continue;
+                if (emittedEntries > 0) byteLength += 1;
+                const keySize = measureJsonStringUtf8Bytes(key, remaining - byteLength);
+                if (keySize === null) {
+                    ancestors.delete(current);
+                    return null;
+                }
+                byteLength += keySize + 1;
+                const entrySize = measure(entry, remaining - byteLength, false);
+                if (entrySize === null) {
+                    ancestors.delete(current);
+                    return null;
+                }
+                byteLength += entrySize;
+                emittedEntries += 1;
+            }
+        }
+        ancestors.delete(current);
+        return byteLength <= remaining ? byteLength : null;
+    };
+
+    return measure(value, limit, false);
+}
+
+function rememberInProcessSnapshot(
+    repoRoot: string,
+    fingerprint: string,
+    snapshot: WorkspaceSnapshot,
+    measuredByteSize?: number
+): void {
     const cacheKey = makeInProcessCacheKey(repoRoot, fingerprint);
+    const byteSize = measuredByteSize
+        ?? measureBoundedJsonUtf8Bytes(snapshot, MAX_PERSISTED_CACHE_BYTES);
+    const previous = inProcessSnapshotCache.get(cacheKey);
     inProcessSnapshotCache.delete(cacheKey);
+    if (previous) {
+        inProcessSnapshotCacheBytes -= previous.byteSize;
+    }
+    if (byteSize === null || byteSize > MAX_IN_PROCESS_CACHE_BYTES) {
+        return;
+    }
     inProcessSnapshotCache.set(cacheKey, {
         repoKey: normalizeRepoCacheKey(repoRoot),
-        snapshot: cloneWorkspaceSnapshot(snapshot)
+        snapshot: cloneWorkspaceSnapshot(snapshot),
+        byteSize
     });
-    while (inProcessSnapshotCache.size > MAX_IN_PROCESS_CACHE_ENTRIES) {
+    inProcessSnapshotCacheBytes += byteSize;
+    while (
+        inProcessSnapshotCache.size > MAX_IN_PROCESS_CACHE_ENTRIES
+        || inProcessSnapshotCacheBytes > MAX_IN_PROCESS_CACHE_BYTES
+    ) {
         const oldestKey = inProcessSnapshotCache.keys().next().value as string | undefined;
         if (!oldestKey) break;
+        const oldest = inProcessSnapshotCache.get(oldestKey);
         inProcessSnapshotCache.delete(oldestKey);
+        if (oldest) {
+            inProcessSnapshotCacheBytes -= oldest.byteSize;
+        }
     }
 }
 
@@ -650,6 +768,7 @@ function forgetInProcessSnapshots(repoRoot: string): boolean {
     for (const [cacheKey, entry] of inProcessSnapshotCache) {
         if (entry.repoKey === repoKey) {
             inProcessSnapshotCache.delete(cacheKey);
+            inProcessSnapshotCacheBytes -= entry.byteSize;
             removed = true;
         }
     }
@@ -1051,11 +1170,42 @@ function isSnapshotCachePathSafe(repoRoot: string, cachePath: string): boolean {
  * Read the persisted snapshot cache from disk.
  * Returns null if the file is missing, corrupt, or schema-incompatible.
  */
-export function readSnapshotCache(cachePath: string): WorkspaceSnapshotCacheEntry | null {
+function readSnapshotCacheEnvelope(cachePath: string): WorkspaceSnapshotCacheEntry | null {
     try {
         const resolved = path.resolve(cachePath);
         if (!fs.existsSync(resolved)) return null;
-        const raw = fs.readFileSync(resolved, 'utf8');
+        const descriptor = fs.openSync(resolved, 'r');
+        let raw: string;
+        try {
+            const stat = fs.fstatSync(descriptor);
+            if (
+                !stat.isFile()
+                || !Number.isSafeInteger(stat.size)
+                || stat.size < 0
+                || stat.size > MAX_PERSISTED_CACHE_BYTES
+            ) {
+                return null;
+            }
+            const buffer = Buffer.allocUnsafe(stat.size + 1);
+            let bytesRead = 0;
+            while (bytesRead < buffer.length) {
+                const count = fs.readSync(
+                    descriptor,
+                    buffer,
+                    bytesRead,
+                    buffer.length - bytesRead,
+                    bytesRead
+                );
+                if (count === 0) break;
+                bytesRead += count;
+            }
+            if (bytesRead > MAX_PERSISTED_CACHE_BYTES || bytesRead !== stat.size) {
+                return null;
+            }
+            raw = buffer.subarray(0, bytesRead).toString('utf8');
+        } finally {
+            fs.closeSync(descriptor);
+        }
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         if (parsed.cache_version !== CACHE_VERSION) return null;
         if (!/^[0-9a-f]{64}$/u.test(String(parsed.fingerprint || ''))) return null;
@@ -1065,12 +1215,15 @@ export function readSnapshotCache(cachePath: string): WorkspaceSnapshotCacheEntr
         if (!parsed.params || typeof parsed.params !== 'object') return null;
         if (!parsed.git_state || typeof parsed.git_state !== 'object') return null;
         if (!parsed.integrity || typeof parsed.integrity !== 'object') return null;
-        const entry = parsed as unknown as WorkspaceSnapshotCacheEntry;
-        if (!hasValidCacheEntryIntegrity(entry)) return null;
-        return entry;
+        return parsed as unknown as WorkspaceSnapshotCacheEntry;
     } catch {
         return null;
     }
+}
+
+export function readSnapshotCache(cachePath: string): WorkspaceSnapshotCacheEntry | null {
+    const entry = readSnapshotCacheEnvelope(cachePath);
+    return entry && hasValidCacheEntryIntegrity(entry) ? entry : null;
 }
 
 /**
@@ -1078,7 +1231,12 @@ export function readSnapshotCache(cachePath: string): WorkspaceSnapshotCacheEntr
  */
 export function writeSnapshotCache(cachePath: string, entry: WorkspaceSnapshotCacheEntry): void {
     const resolved = path.resolve(cachePath);
-    writeFileAtomically(resolved, JSON.stringify(entry, null, 2) + '\n', { encoding: 'utf8', fsync: false });
+    const measuredByteSize = measureBoundedJsonUtf8Bytes(entry, MAX_PERSISTED_CACHE_BYTES - 1);
+    if (measuredByteSize === null) {
+        throw new Error(`Workspace snapshot cache exceeds ${MAX_PERSISTED_CACHE_BYTES} bytes.`);
+    }
+    const serialized = JSON.stringify(entry) + '\n';
+    writeFileAtomically(resolved, serialized, { encoding: 'utf8', fsync: false });
 }
 
 /**
@@ -1172,7 +1330,7 @@ function getWorkspaceSnapshotCachedFromGeneration(
     }
 
     // Attempt cache hit
-    const cached = cachePathSafe ? readSnapshotCache(cachePath) : null;
+    const cached = cachePathSafe ? readSnapshotCacheEnvelope(cachePath) : null;
     const authenticationKey = cached
         ? readWorkspaceSnapshotCacheAuthKey(repoRoot, false)
         : null;
@@ -1192,11 +1350,14 @@ function getWorkspaceSnapshotCachedFromGeneration(
     );
     authenticateWorkspaceSnapshot(fresh, generation.params);
     assertWorkspaceSnapshotCacheGenerationStable(repoRoot, explicitChangedFiles, generation);
-    if (cachePathSafe) {
-        rememberInProcessSnapshot(repoRoot, generation.fingerprint.fingerprint, fresh);
+    const freshByteSize = cachePathSafe
+        ? measureBoundedJsonUtf8Bytes(fresh, MAX_PERSISTED_CACHE_BYTES)
+        : null;
+    if (cachePathSafe && freshByteSize !== null) {
+        rememberInProcessSnapshot(repoRoot, generation.fingerprint.fingerprint, fresh, freshByteSize);
     }
 
-    if (!options.readOnly && cachePathSafe) {
+    if (!options.readOnly && cachePathSafe && freshByteSize !== null) {
         const writeAuthenticationKey = readWorkspaceSnapshotCacheAuthKey(repoRoot, true);
         if (writeAuthenticationKey) {
             const entry = sealWorkspaceSnapshotCacheEntry({
