@@ -30,6 +30,14 @@ function getTaskTimelinePath(repoRoot: string, taskId: string): string {
     return joinOrchestratorPath(repoRoot, path.join('runtime', 'task-events', `${taskId}.jsonl`));
 }
 
+function isTrustedTaskModeArtifact(filePath: string): boolean {
+    try {
+        return taskTimelineAwareFileExists(filePath);
+    } catch {
+        return false;
+    }
+}
+
 function getLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): {
     artifact_path: string | null;
     declares_runtime_identity_metadata: boolean;
@@ -185,7 +193,7 @@ export function getTaskModeEvidence(repoRoot: string, taskId: string | null, art
     result.timeline_declares_profile_policy_snapshot = timelineMetadata.declares_profile_policy_snapshot;
     result.timeline_profile_policy_snapshot_hash = timelineMetadata.profile_policy_snapshot_hash;
 
-    if (!taskTimelineAwareFileExists(resolvedPath)) {
+    if (!isTrustedTaskModeArtifact(resolvedPath)) {
         result.evidence_status = 'EVIDENCE_FILE_MISSING';
         return result;
     }
