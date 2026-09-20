@@ -120,6 +120,11 @@ export async function dispatchCliCommand(options: DispatchCliCommandOptions): Pr
             handlePreprompt(commandArgv, packageJson);
             return;
         }
+        case 'compact': {
+            const { handleCompact } = await import('./compact-command');
+            await handleCompact(commandArgv);
+            return;
+        }
         case 'next-step': {
             const { handleGate } = await import('./gate-command');
             await handleGate(['next-step', ...commandArgv]);

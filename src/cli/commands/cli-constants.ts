@@ -44,6 +44,7 @@ export const COMMAND_SUMMARY = Object.freeze<readonly CommandSummaryEntry[]>([
     ['agent-init', 'Finalize mandatory agent onboarding'],
     ['preprompt', 'Read-only task bootstrap context and exact next commands'],
     ['next-step', 'Show the deterministic next command for a task'],
+    ['compact', 'Bounded Git/file/search inspection with retained-output retrieval'],
     ['status', 'Show workspace status'],
     ['doctor', 'Run verify + manifest validation'],
     ['debug env', 'Show environment triage snapshot'],
