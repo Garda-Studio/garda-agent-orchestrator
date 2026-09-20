@@ -1,14 +1,19 @@
-# Scheduled smoke matrix for Garda Agent Orchestrator.
-# Runs the cross-platform lifecycle smoke suite on a weekly schedule to detect
-# runner image drift, Node.js default-version changes, and other environment
-# regressions even when no pushes or PRs are active.
-name: Scheduled Smoke
+# Manually dispatched cross-platform smoke matrix.
+name: Manual Smoke
 
 on:
-  schedule:
-    # Weekly: every Sunday at 04:15 UTC.
-    - cron: '15 4 * * 0'
   workflow_dispatch:
+    inputs:
+      smoke_runner:
+        description: Runner for smoke
+        type: choice
+        required: true
+        default: ubuntu-latest
+        options:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+          - all
 
 permissions:
   contents: read
@@ -20,10 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
+        os: ${{ fromJSON(inputs.smoke_runner == 'all' && '["ubuntu-latest","windows-latest","macos-latest"]' || format('["{0}"]', inputs.smoke_runner)) }}
         node-version:
           - '22.13.0'
           - '24'
