@@ -548,6 +548,12 @@ function withReviewArtifactTransactionLock<T>(
     options: ReviewArtifactLockOptions = {}
 ): { result: T; lock_path: string; telemetry: ReviewArtifactLockTelemetry } {
     const lockPath = resolveReviewTransactionLockPath(reviewsDir);
+    if (inProcessReviewLockQueues.has(lockPath)) {
+        throw new Error(
+            'Synchronous review artifact transaction cannot start while an asynchronous transaction is active or queued. '
+            + 'Await the asynchronous transaction before starting the synchronous write.'
+        );
+    }
     fs.mkdirSync(path.dirname(lockPath), { recursive: true });
     const { handle, telemetry } = acquireFilesystemLock(lockPath, {
         timeoutMs: options.lockTimeoutMs ?? DEFAULT_REVIEW_ARTIFACT_LOCK_TIMEOUT_MS,

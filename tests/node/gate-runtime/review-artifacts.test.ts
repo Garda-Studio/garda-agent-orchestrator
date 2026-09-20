@@ -1982,6 +1982,80 @@ test('writeReviewArtifactsWithRollback uses an async transaction lock for concur
     }
 });
 
+test('sync review artifact writes reject overtaking an earlier queued async transaction', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-transaction-sync-queued-'));
+    const artifactPath = path.join(createReviewsDir(tempDir), 'T-032-code.md');
+
+    try {
+        const asyncWrite = writeReviewArtifactsWithRollback([{
+            artifactPath,
+            contentType: 'text',
+            content: 'async write\n'
+        }], async () => 'async-complete');
+
+        assert.throws(
+            () => writeReviewArtifactText(artifactPath, 'sync write\n'),
+            /Synchronous review artifact transaction cannot start while an asynchronous transaction is active or queued/
+        );
+
+        assert.equal(await asyncWrite, 'async-complete');
+        assert.equal(fs.readFileSync(artifactPath, 'utf8'), 'async write\n');
+
+        writeReviewArtifactText(artifactPath, 'sync write after await\n');
+        assert.equal(fs.readFileSync(artifactPath, 'utf8'), 'sync write after await\n');
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('sync review artifact writes fail fast while an async transaction callback is active', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-transaction-sync-active-'));
+    const artifactPath = path.join(createReviewsDir(tempDir), 'T-032-code.md');
+    let notifyCallbackStarted = (): void => {
+        throw new Error('Callback-start resolver was not initialized.');
+    };
+    let allowCallbackToFinish = (): void => {
+        throw new Error('Callback-finish resolver was not initialized.');
+    };
+    const callbackStarted = new Promise<void>((resolve) => {
+        notifyCallbackStarted = resolve;
+    });
+    const callbackCanFinish = new Promise<void>((resolve) => {
+        allowCallbackToFinish = resolve;
+    });
+
+    try {
+        const asyncWrite = writeReviewArtifactsWithRollback([{
+            artifactPath,
+            contentType: 'text',
+            content: 'async write\n'
+        }], async () => {
+            notifyCallbackStarted();
+            await callbackCanFinish;
+            return 'async-complete';
+        }, { lockTimeoutMs: 1_000, lockRetryMs: 10 });
+
+        await callbackStarted;
+        const startedAt = Date.now();
+        assert.throws(
+            () => writeReviewArtifactText(
+                artifactPath,
+                'sync write\n',
+                { lockTimeoutMs: 1_000, lockRetryMs: 10 }
+            ),
+            /Synchronous review artifact transaction cannot start while an asynchronous transaction is active or queued/
+        );
+        assert.ok(Date.now() - startedAt < 100, 'sync write should reject without waiting for its lock timeout');
+
+        allowCallbackToFinish();
+        assert.equal(await asyncWrite, 'async-complete');
+        assert.equal(fs.readFileSync(artifactPath, 'utf8'), 'async write\n');
+    } finally {
+        allowCallbackToFinish();
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
 test('context lock prevents rebuild after post-write assertion until reuse transaction commits', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-context-reuse-lock-'));
     const reviewsDir = createReviewsDir(tempDir);
