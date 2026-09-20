@@ -2,8 +2,18 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { handleNextStep } from '../../../../src/cli/commands/gate-task-handlers';
+import {
+    assertNextStepEffectExecutionComplete,
+    createNextStepEffectExecutor,
+    createNextStepEffectPlanner,
+    NextStepEffectPlanStaleError
+} from '../../../../src/gates/next-step/next-step-effects';
 import * as fx from './next-step-review-cycle-fixtures';
-import { executeNextStepEffects, inspectNextStep } from './next-step-test-support';
+import {
+    buildStrictDecompositionDecisionArtifact,
+    executeNextStepEffects,
+    inspectNextStep
+} from './next-step-test-support';
 
 const {
     ALL_REVIEW_FLAGS,
@@ -91,6 +101,81 @@ async function captureNextStepHandler(argv: string[]): Promise<string> {
 }
 
 describe('gates/next-step split-required latch status', () => {
+    it('rejects a stale authenticated effect plan when execution consumes only its prefix', () => {
+        const planner = createNextStepEffectPlanner();
+        planner.run({
+            kind: 'first-effect',
+            summary: 'first effect',
+            input: { step: 1 },
+            preview: () => 'first-preview',
+            execute: () => 'first-executed'
+        });
+        planner.run({
+            kind: 'second-effect',
+            summary: 'second effect',
+            input: { step: 2 },
+            preview: () => 'second-preview',
+            execute: () => 'second-executed'
+        });
+        const plan = planner.pendingPlan();
+        assert.ok(plan);
+
+        const executor = createNextStepEffectExecutor(plan);
+        executor.run({
+            kind: 'first-effect',
+            summary: 'first effect',
+            input: { step: 1 },
+            preview: () => 'first-preview',
+            execute: () => 'first-executed'
+        });
+
+        assert.throws(
+            () => assertNextStepEffectExecutionComplete(executor, plan),
+            (error: unknown) => error instanceof NextStepEffectPlanStaleError
+                && /executed 1 of 2 expected effects/u.test(error.message)
+        );
+    });
+
+    it('rejects a stale plan when an effect is appended after the authenticated plan is exhausted', () => {
+        const planner = createNextStepEffectPlanner();
+        planner.run({
+            kind: 'expected-effect',
+            summary: 'expected effect',
+            input: { step: 1 },
+            preview: () => 'expected-preview',
+            execute: () => 'expected-executed'
+        });
+        const plan = planner.pendingPlan();
+        assert.ok(plan);
+
+        let unexpectedExecuted = false;
+        const executor = createNextStepEffectExecutor(plan);
+        executor.run({
+            kind: 'expected-effect',
+            summary: 'expected effect',
+            input: { step: 1 },
+            preview: () => 'expected-preview',
+            execute: () => 'expected-executed'
+        });
+        assert.equal(executor.run({
+            kind: 'unexpected-effect',
+            summary: 'unexpected effect',
+            input: { step: 2 },
+            preview: () => 'unexpected-preview',
+            execute: () => {
+                unexpectedExecuted = true;
+                return 'unexpected-executed';
+            }
+        }), 'unexpected-preview');
+
+        assert.equal(unexpectedExecuted, false);
+        assert.throws(
+            () => assertNextStepEffectExecutionComplete(executor, plan),
+            (error: unknown) => error instanceof NextStepEffectPlanStaleError
+                && /executed 1 of 1 expected effects and encountered 1 unexpected effects/u.test(error.message)
+        );
+    });
+
     it('resolves and validates split-required latch helper evidence directly', () => {
         const repoRoot = makeTempRepo();
         fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
@@ -708,8 +793,11 @@ describe('gates/next-step split-required latch status', () => {
         assert.ok(text.includes('Status: SPLIT_REQUIRED'));
     });
 
-    it('restores split-required latch after a parent status reset and budget config increase', () => {
+    it('keeps restore and decomposed-parent synchronization inspection side-effect free', () => {
         const repoRoot = makeTempRepo();
+        const parentTaskId = 'T-629';
+        const childTaskId = 'T-630';
+        const secondChildTaskId = 'T-631';
         const config = buildDefaultWorkflowConfig();
         config.full_suite_validation.enabled = false;
         config.full_suite_validation.command = 'npm test';
@@ -724,25 +812,136 @@ describe('gates/next-step split-required latch status', () => {
             '',
             '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
             '|---|---|---|---|---|---|---|---|---|',
-            `| ${TASK_ID} | TODO | P1 | workflow/scope-budget | Add decomposition guard | gpt-5.4 | 2026-05-03 | strict | Latch artifact still exists after a reset attempt. |`,
+            `| ${parentTaskId} | TODO | P1 | workflow/scope-budget | Add decomposition guard | gpt-5.4 | 2026-05-03 | strict | Child tasks: \`${childTaskId}\` and \`${secondChildTaskId}\`. |`,
+            `| ${childTaskId} | TODO | P1 | workflow/parser | Implement parser boundary | gpt-5.4 | 2026-05-03 | strict | Parse the bounded child contract. Child of ${parentTaskId}. |`,
+            `| ${secondChildTaskId} | TODO | P1 | workflow/validation | Validate routing boundary | gpt-5.4 | 2026-05-03 | strict | Validate the independent routing contract. Child of ${parentTaskId}. |`,
             ''
         ].join('\n'), 'utf8');
-        seedStartedTask(repoRoot, TASK_ID);
-        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
-        seedSplitRequiredLatchEvidence(repoRoot, TASK_ID);
+        seedStartedTask(repoRoot, parentTaskId);
+        writePreflight(repoRoot, parentTaskId, { ...ALL_REVIEW_FLAGS, code: true });
+        seedSplitRequiredLatchEvidence(repoRoot, parentTaskId);
 
-        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
-        const text = formatNextStepText(result);
+        const taskPath = path.join(repoRoot, 'TASK.md');
+        const eventPath = path.join(eventsRoot(repoRoot), `${parentTaskId}.jsonl`);
+        const taskBeforeInspection = fs.readFileSync(taskPath, 'utf8');
+        const eventsBeforeInspection = fs.readFileSync(eventPath, 'utf8');
+
+        const inspection = inspectNextStep({ taskId: parentTaskId, repoRoot });
+        const planSha256 = (inspection.commands[0]?.command || '')
+            .match(/--effect-plan-sha256\s+["']?([a-f0-9]{64})/u)?.[1] || '';
+
+        assert.equal(inspection.next_gate, 'next-step-effect', inspection.reason);
+        assert.match(inspection.reason, /contains 2 ordered effect\(s\)/u);
+        assert.equal(fs.readFileSync(taskPath, 'utf8'), taskBeforeInspection);
+        assert.equal(fs.readFileSync(eventPath, 'utf8'), eventsBeforeInspection);
+
+        const result = executeNextStepEffects({ taskId: parentTaskId, repoRoot }, planSha256);
         const taskMd = fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8');
-        const events = fs.readFileSync(path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`), 'utf8');
+        const events = fs.readFileSync(path.join(eventsRoot(repoRoot), `${parentTaskId}.jsonl`), 'utf8');
 
-        assert.equal(result.status, 'SPLIT_REQUIRED');
-        assert.equal(result.next_gate, 'split-required-latch');
-        assert.equal(result.commands.length, 0);
-        assert.ok(result.reason.includes('permanent for this task attempt'));
-        assert.ok(taskMd.includes(`| ${TASK_ID} | 🟫 SPLIT_REQUIRED |`));
+        assert.equal(result.status, 'DECOMPOSED', result.reason);
+        assert.equal(result.next_gate, 'child-task');
+        assert.ok(result.commands[0].command.includes(`next-step "${childTaskId}"`));
+        assert.ok(taskMd.includes(`| ${parentTaskId} | 🟪 DECOMPOSED |`));
         assert.ok(events.includes('"event_type":"SPLIT_REQUIRED_RESTORED"'));
-        assert.ok(text.includes('Status: SPLIT_REQUIRED'));
+        assert.ok(events.includes('"event_type":"SPLIT_REQUIRED_CLEARED"'));
+    });
+
+    it('keeps strict-decomposition WIP capture and status transition inspection side-effect free', () => {
+        const repoRoot = makeTempRepo();
+        const taskPath = path.join(repoRoot, 'TASK.md');
+        fs.writeFileSync(taskPath, [
+            '# TASK.md',
+            '',
+            '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+            '|---|---|---|---|---|---|---|---|---|',
+            `| ${TASK_ID} | TODO | P1 | workflow/strict-decomposition | Split parent work | gpt-5.4 | 2026-05-03 | strict | Child tasks: \`${TASK_ID}-1\` and \`${TASK_ID}-2\`. |`,
+            `| ${TASK_ID}-1 | TODO | P1 | workflow/parser | Implement parser boundary | gpt-5.4 | 2026-05-03 | strict | Parse the bounded child contract. Child of ${TASK_ID}. |`,
+            `| ${TASK_ID}-2 | TODO | P1 | workflow/validation | Validate routing boundary | gpt-5.4 | 2026-05-03 | strict | Validate the independent routing contract. Child of ${TASK_ID}. |`,
+            ''
+        ].join('\n'), 'utf8');
+        fs.writeFileSync(
+            path.join(repoRoot, '.gitignore'),
+            'garda-agent-orchestrator/runtime/\n',
+            'utf8'
+        );
+        seedStartedTask(repoRoot, TASK_ID);
+        const proposedChildTaskIds = [`${TASK_ID}-1`, `${TASK_ID}-2`];
+        writeJson(
+            path.join(reviewsRoot(repoRoot), `${TASK_ID}-strict-decomposition-decision.json`),
+            buildStrictDecompositionDecisionArtifact({
+                taskId: TASK_ID,
+                decision: 'split-required',
+                taskSummary: 'Seeded next-step task',
+                reason: 'The parent work is split into two independently executable child packages.',
+                scopeRisk: 'The parent has active implementation WIP that must be suspended before child routing.',
+                expectedReviewTypes: ['code'],
+                atomicityConstraints: ['Suspend the parent before entering either child.'],
+                proposedChildTaskIds,
+                workPackageContract: {
+                    schema_version: 1,
+                    finding_obligations: [],
+                    work_packages: proposedChildTaskIds.map((childTaskId, index) => ({
+                        task_id: childTaskId,
+                        profile: 'strict',
+                        root_cause_area: `root-cause-${index + 1}`,
+                        objective: `Implement child package ${index + 1}.`,
+                        scope_obligations: [`Preserve child scope ${index + 1}.`],
+                        validation_contract: [`Validate child package ${index + 1}.`],
+                        finding_obligation_ids: [],
+                        required_review_types: ['code']
+                    }))
+                }
+            })
+        );
+        execFileSync('git', ['init', '--quiet'], { cwd: repoRoot });
+        execFileSync('git', ['add', '.'], { cwd: repoRoot });
+        execFileSync('git', [
+            '-c', 'user.name=Garda Test',
+            '-c', 'user.email=garda-test@example.invalid',
+            'commit', '--quiet', '-m', 'fixture baseline'
+        ], { cwd: repoRoot });
+        fs.writeFileSync(path.join(repoRoot, 'src', 'app.ts'), 'export const value = 2;\n', 'utf8');
+        writePreflight(
+            repoRoot,
+            TASK_ID,
+            { ...ALL_REVIEW_FLAGS, code: true },
+            { changedFiles: ['src/app.ts'] }
+        );
+
+        const eventPath = path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`);
+        const wipRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'wip', TASK_ID);
+        const taskBeforeInspection = fs.readFileSync(taskPath, 'utf8');
+        const eventsBeforeInspection = fs.readFileSync(eventPath, 'utf8');
+        const sourceBeforeInspection = fs.readFileSync(path.join(repoRoot, 'src', 'app.ts'), 'utf8');
+
+        const inspection = inspectNextStep({ taskId: TASK_ID, repoRoot });
+        const planSha256 = (inspection.commands[0]?.command || '')
+            .match(/--effect-plan-sha256\s+["']?([a-f0-9]{64})/u)?.[1] || '';
+
+        assert.equal(inspection.next_gate, 'next-step-effect', inspection.reason);
+        assert.match(inspection.reason, /contains 2 ordered effect\(s\)/u);
+        assert.equal(fs.readFileSync(taskPath, 'utf8'), taskBeforeInspection);
+        assert.equal(fs.readFileSync(eventPath, 'utf8'), eventsBeforeInspection);
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'src', 'app.ts'), 'utf8'), sourceBeforeInspection);
+        assert.equal(fs.existsSync(wipRoot), false);
+
+        const result = executeNextStepEffects({ taskId: TASK_ID, repoRoot }, planSha256);
+
+        assert.equal(result.status, 'DECOMPOSED', result.reason);
+        assert.equal(result.next_gate, 'child-task');
+        assert.ok(fs.readFileSync(taskPath, 'utf8').includes(`| ${TASK_ID} | 🟪 DECOMPOSED |`));
+        assert.equal(fs.existsSync(wipRoot), true);
+        assert.equal(
+            execFileSync('git', ['status', '--short', '--', 'src/app.ts'], {
+                cwd: repoRoot,
+                encoding: 'utf8'
+            }).trim(),
+            ''
+        );
+        const events = fs.readFileSync(eventPath, 'utf8');
+        assert.ok(events.includes('"event_type":"SPLIT_REQUIRED_WIP_CAPTURED"'));
+        assert.ok(events.includes('"event_type":"STRICT_DECOMPOSITION_SPLIT_ROUTED"'));
     });
 
     it('restores split-required latch after a parent status is changed to done', () => {
@@ -1080,13 +1279,16 @@ describe('gates/next-step split-required latch status', () => {
             summary: 'second code failure'
         });
 
-        const result = resolveNextStep({ taskId, repoRoot });
+        const inspection = inspectNextStep({ taskId, repoRoot });
+        const planSha256 = (inspection.commands[0]?.command || '')
+            .match(/--effect-plan-sha256\s+["']?([a-f0-9]{64})/u)?.[1] || '';
 
-        assert.equal(result.status, 'BLOCKED');
-        assert.equal(result.next_gate, 'split-required-latch');
-        assert.match(result.reason, /TASK\.md status sync failed/i);
-        assert.match(result.reason, /Review cycle guard: BLOCK_FOR_OPERATOR_DECISION/i);
-        assert.equal(result.review_cycle_block?.auto_split_enabled, true);
+        assert.equal(inspection.next_gate, 'next-step-effect', inspection.reason);
+        assert.match(inspection.reason, /contains 2 ordered effect\(s\)/u);
+        assert.throws(
+            () => executeNextStepEffects({ taskId, repoRoot }, planSha256),
+            /executed 1 of 2 expected effects/iu
+        );
         const latch = JSON.parse(fs.readFileSync(path.join(reviewsRoot(repoRoot), `${taskId}-split-required.json`), 'utf8')) as Record<string, unknown>;
         assert.equal(latch.guard_kind, 'review_cycle');
         assert.deepEqual(latch.status_sync, {

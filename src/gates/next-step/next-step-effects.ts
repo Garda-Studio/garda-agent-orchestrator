@@ -141,6 +141,23 @@ export function createNextStepEffectExecutor(
     };
 }
 
+export function assertNextStepEffectExecutionComplete(
+    controller: NextStepEffectController,
+    expectedPlan: NextStepEffectPlan
+): void {
+    const executed = controller.executedCount();
+    const unexpectedPlan = controller.pendingPlan();
+    if (executed === expectedPlan.effects.length && !unexpectedPlan) {
+        return;
+    }
+    throw new NextStepEffectPlanStaleError(
+        `Next-step effect plan became stale during execution: ` +
+        `executed ${executed} of ${expectedPlan.effects.length} expected effects` +
+        `${unexpectedPlan ? ` and encountered ${unexpectedPlan.effects.length} unexpected effects` : ''}. ` +
+        'Rerun next-step inspection.'
+    );
+}
+
 export function assertNextStepEffectPlanHash(
     plan: NextStepEffectPlan | null,
     expectedPlanSha256: string

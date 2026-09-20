@@ -440,6 +440,7 @@ import {
     renderNextStepOutput
 } from './next-step-output-rendering';
 import {
+    assertNextStepEffectExecutionComplete,
     assertNextStepEffectPlanHash,
     createNextStepEffectExecutor,
     createNextStepEffectPlanner,
@@ -5254,9 +5255,7 @@ export function executeNextStepEffects(
     assertNextStepEffectPlanHash(inspected.plan, expectedPlanSha256);
     const effects = createNextStepEffectExecutor(inspected.plan);
     const result = resolveNextStepWithEffectController(options, effects);
-    if (effects.executedCount() === 0) {
-        throw new Error('Next-step effect plan became stale before execution. Rerun next-step inspection.');
-    }
+    assertNextStepEffectExecutionComplete(effects, inspected.plan);
     return result;
 }
 
