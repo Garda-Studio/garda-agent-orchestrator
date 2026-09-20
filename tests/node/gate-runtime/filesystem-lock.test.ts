@@ -906,6 +906,44 @@ test('releaseFilesystemLock retries transient EPERM and removes lock directory',
     }
 });
 
+test('releaseFilesystemLock reports failure when a transient path remains after removal returns', () => {
+    const tmp = mkTmpDir();
+    const lockPath = path.join(tmp, '.test-release-incomplete-removal.lock');
+    const realFs = require('node:fs');
+    const originalRmSync = realFs.rmSync;
+    const originalStderrWrite = process.stderr.write;
+    let retainedReleasingPath = '';
+    let stderrOutput = '';
+
+    try {
+        const { handle } = acquireFilesystemLock(lockPath);
+        realFs.rmSync = function (...args: unknown[]) {
+            const targetPath = typeof args[0] === 'string' ? path.resolve(args[0]) : '';
+            if (targetPath.startsWith(path.resolve(`${lockPath}.releasing-`))) {
+                retainedReleasingPath = targetPath;
+                return;
+            }
+            return originalRmSync.apply(realFs, args as [string, fs.RmOptions?]);
+        };
+        (process.stderr as unknown as { write: (...args: unknown[]) => boolean }).write = function (chunk: unknown): boolean {
+            stderrOutput += String(chunk);
+            return true;
+        };
+
+        assert.throws(
+            () => releaseFilesystemLock(handle),
+            /Lock path still exists after recursive removal/
+        );
+        assert.ok(retainedReleasingPath, 'release should have claimed a transient path');
+        assert.ok(fs.existsSync(retainedReleasingPath), 'incomplete removal should leave evidence for diagnostics');
+        assert.match(stderrOutput, /LOCK_RELEASE_FAILED/);
+    } finally {
+        realFs.rmSync = originalRmSync;
+        (process.stderr as unknown as { write: typeof process.stderr.write }).write = originalStderrWrite;
+        fs.rmSync(tmp, { recursive: true, force: true });
+    }
+});
+
 test('releaseFilesystemLock retries transient EPERM while publishing release intent', () => {
     const tmp = mkTmpDir();
     const lockPath = path.join(tmp, '.test-release-intent-publish-retry.lock');
@@ -1362,6 +1400,62 @@ test('releaseFilesystemLock restores replacement lock if owner changes during re
     }
 });
 
+test('releaseFilesystemLock reports a claimed owner mismatch that cannot be restored', () => {
+    const tmp = mkTmpDir();
+    const lockPath = path.join(tmp, '.test-release-owner-restore-failure.lock');
+    const realFs = require('node:fs');
+    const originalRenameSync = realFs.renameSync;
+    const originalStderrWrite = process.stderr.write;
+    let retainedReleasingPath = '';
+    let stderrOutput = '';
+
+    try {
+        const { handle } = acquireFilesystemLock(lockPath);
+        const ownerPath = path.join(lockPath, 'owner.json');
+        const initialOwner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
+        const changedOwner = {
+            ...initialOwner,
+            lock_id: 'changed-owner-during-release',
+            created_at_utc: new Date(Date.now() + 1000).toISOString(),
+            heartbeat_at_utc: new Date(Date.now() + 1000).toISOString()
+        };
+
+        realFs.renameSync = function (...args: unknown[]) {
+            const fromPath = typeof args[0] === 'string' ? path.resolve(args[0]) : '';
+            const toPath = typeof args[1] === 'string' ? path.resolve(args[1]) : '';
+            if (fromPath === path.resolve(lockPath)
+                && toPath.startsWith(path.resolve(`${lockPath}.releasing-`))) {
+                fs.writeFileSync(ownerPath, JSON.stringify(changedOwner, null, 2) + '\n', 'utf8');
+                const result = originalRenameSync.apply(realFs, args as [fs.PathLike, fs.PathLike]);
+                retainedReleasingPath = toPath;
+                fs.mkdirSync(lockPath);
+                fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+                    ...changedOwner,
+                    lock_id: 'canonical-replacement-owner'
+                }, null, 2) + '\n', 'utf8');
+                return result;
+            }
+            return originalRenameSync.apply(realFs, args as [fs.PathLike, fs.PathLike]);
+        };
+        (process.stderr as unknown as { write: (...args: unknown[]) => boolean }).write = function (chunk: unknown): boolean {
+            stderrOutput += String(chunk);
+            return true;
+        };
+
+        assert.throws(
+            () => releaseFilesystemLock(handle),
+            /Failed to restore claimed lock:.*Canonical lock path is already occupied/
+        );
+        assert.ok(fs.existsSync(lockPath), 'canonical replacement lock must survive');
+        assert.ok(retainedReleasingPath && fs.existsSync(retainedReleasingPath), 'unrestored claim must remain inspectable');
+        assert.match(stderrOutput, /LOCK_RELEASE_RESTORE_FAILED/);
+    } finally {
+        realFs.renameSync = originalRenameSync;
+        (process.stderr as unknown as { write: typeof process.stderr.write }).write = originalStderrWrite;
+        fs.rmSync(tmp, { recursive: true, force: true });
+    }
+});
+
 test('acquireFilesystemLock retries when a fresh lock is reclaimed before owner metadata write', () => {
     const tmp = mkTmpDir();
     const lockPath = path.join(tmp, '.test-owner-metadata-race.lock');
@@ -1583,6 +1677,48 @@ test('cleanupStaleTaskEventLocks removes stale locks on non-dry-run', () => {
         assert.ok(result.removed_locks.includes('.T-STALE.lock'));
         assert.ok(!fs.existsSync(staleLock));
     } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+    }
+});
+
+test('cleanupStaleTaskEventLocks reports failure when a stale transient path remains after removal returns', () => {
+    const tmp = mkTmpDir();
+    const orchRoot = path.join(tmp, 'orch');
+    const eventsRoot = path.join(orchRoot, 'runtime', 'task-events');
+    const staleLock = path.join(eventsRoot, '.T-STALE-INCOMPLETE.lock');
+    const realFs = require('node:fs');
+    const originalRmSync = realFs.rmSync;
+    const originalStderrWrite = process.stderr.write;
+    let retainedStalePath = '';
+
+    fs.mkdirSync(staleLock, { recursive: true });
+    fs.writeFileSync(path.join(staleLock, 'owner.json'), JSON.stringify({
+        pid: 999999999,
+        hostname: os.hostname(),
+        created_at_utc: new Date().toISOString()
+    }, null, 2) + '\n', 'utf8');
+
+    try {
+        realFs.rmSync = function (...args: unknown[]) {
+            const targetPath = typeof args[0] === 'string' ? path.resolve(args[0]) : '';
+            if (targetPath.startsWith(path.resolve(`${staleLock}.stale-`))) {
+                retainedStalePath = targetPath;
+                return;
+            }
+            return originalRmSync.apply(realFs, args as [string, fs.RmOptions?]);
+        };
+        (process.stderr as unknown as { write: (...args: unknown[]) => boolean }).write = () => true;
+
+        const result = cleanupStaleTaskEventLocks(orchRoot, { dryRun: false });
+
+        assert.deepEqual(result.removed_locks, []);
+        assert.deepEqual(result.failed_locks, ['.T-STALE-INCOMPLETE.lock']);
+        assert.ok(result.warnings.some((warning) => warning.includes('Lock path still exists after recursive removal')));
+        assert.ok(retainedStalePath, 'cleanup should have claimed a stale transient path');
+        assert.ok(fs.existsSync(retainedStalePath), 'failed cleanup should leave evidence for diagnostics');
+    } finally {
+        realFs.rmSync = originalRmSync;
+        (process.stderr as unknown as { write: typeof process.stderr.write }).write = originalStderrWrite;
         fs.rmSync(tmp, { recursive: true, force: true });
     }
 });

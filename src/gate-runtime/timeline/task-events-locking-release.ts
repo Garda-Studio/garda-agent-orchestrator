@@ -212,6 +212,11 @@ export function removeLockPathWithRetry(lockPath: string, kind = 'filesystem_loc
     while (true) {
         try {
             fs.rmSync(lockPath, { recursive: true, force: true });
+            if (fs.existsSync(lockPath)) {
+                const error = new Error('Lock path still exists after recursive removal') as NodeJS.ErrnoException;
+                error.code = 'EIO';
+                throw error;
+            }
             if (retries > 0) {
                 process.stderr.write(
                     `LOCK_RELEASE_RETRY_RESOLVED: kind=${kind}; lock=${redactLockPath(lockPath)}; retries=${retries}; elapsed_ms=${Date.now() - startedAt}\n`
@@ -294,13 +299,19 @@ export function lockMetadataMatchesCandidate(before: LockOwnerMetadata, after: L
 
 export function restoreMismatchedClaimedLock(claimedPath: string, originalPath: string): void {
     try {
-        if (!fs.existsSync(originalPath)) {
-            fs.renameSync(claimedPath, originalPath);
+        if (fs.existsSync(originalPath)) {
+            throw new Error('Canonical lock path is already occupied');
         }
+        fs.renameSync(claimedPath, originalPath);
     } catch (error: unknown) {
-        process.stderr.write(
-            `WARNING: LOCK_RELEASE_RESTORE_FAILED: lock=${redactLockPath(originalPath)}; claimed=${redactLockPath(claimedPath)}; message=${getErrorMessage(error)}\n`
-        );
+        const diagnostic = [
+            `lock=${redactLockPath(originalPath)}`,
+            `claimed=${redactLockPath(claimedPath)}`,
+            `code=${getErrorCode(error) || 'UNKNOWN'}`,
+            `message=${getErrorMessage(error)}`
+        ].join('; ');
+        process.stderr.write(`WARNING: LOCK_RELEASE_RESTORE_FAILED: ${diagnostic}\n`);
+        throw new Error(`Failed to restore claimed lock: ${diagnostic}`);
     }
 }
 

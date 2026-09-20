@@ -172,11 +172,7 @@ export function tryRemoveStaleLock(lockPath: string, staleMs: number, options: L
         return { removed: false, inspection: claimedInspection.exists ? claimedInspection : inspection };
     }
 
-    try {
-        removeLockPath(tempPath);
-    } catch {
-        // Best-effort cleanup of the renamed stale directory.
-    }
+    removeLockPath(tempPath);
 
     return { removed: true, inspection };
 }
