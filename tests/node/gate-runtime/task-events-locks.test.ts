@@ -687,6 +687,66 @@ test('appendTaskEventAsync waits for aggregate lock and records contention telem
     }
 });
 
+test('appendTaskEvent fails if aggregate lock begins while task lock remains active', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-sync-lock-order-'));
+    const taskId = 'T-SYNC-LOCK-ORDER';
+    const taskLockName = `.${taskId}.lock`;
+    const aggregateLockName = '.all-tasks.lock';
+    const lockingModule = require('../../../src/gate-runtime/timeline/task-events-locking-acquire') as typeof import('../../../src/gate-runtime/timeline/task-events-locking-acquire');
+    const originalWithFilesystemLock = lockingModule.withFilesystemLock;
+    const enteredLocks: string[] = [];
+    const activeLocks: string[] = [];
+
+    assert.equal(activeLocks.length, 0, 'lock stack must start empty before the instrumented append');
+
+    lockingModule.withFilesystemLock = function instrumentedWithFilesystemLock<T>(
+        lockPath: string,
+        options: LockOptions,
+        callback: () => T
+    ): { result: T; telemetry: AcquireLockTelemetry } {
+        const lockName = path.basename(lockPath);
+        if (lockName !== taskLockName && lockName !== aggregateLockName) {
+            return originalWithFilesystemLock(lockPath, options, callback);
+        }
+        return originalWithFilesystemLock(lockPath, options, () => {
+            if (lockName === aggregateLockName) {
+                assert.deepEqual(
+                    activeLocks,
+                    [],
+                    'aggregate append must begin only after the task lock callback has completed'
+                );
+            }
+            enteredLocks.push(lockName);
+            activeLocks.push(lockName);
+            try {
+                return callback();
+            } finally {
+                assert.equal(activeLocks.pop(), lockName);
+            }
+        });
+    };
+
+    let result: ReturnType<typeof appendTaskEvent> = null;
+    try {
+        result = appendTaskEvent(
+            tempDir,
+            taskId,
+            'test',
+            'PASS',
+            'Verify synchronous task and aggregate lock ordering',
+            null,
+            { passThru: true }
+        );
+    } finally {
+        lockingModule.withFilesystemLock = originalWithFilesystemLock;
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+
+    assert.ok(result !== null);
+    assert.deepEqual(enteredLocks, [taskLockName, aggregateLockName]);
+    assert.deepEqual(activeLocks, []);
+});
+
 test('appendTaskEventAsync fails if aggregate lock begins while task lock remains active', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-lock-order-'));
     const taskId = 'T-LOCK-ORDER';
