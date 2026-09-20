@@ -1,6 +1,7 @@
 import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import type { ChildProcess, SpawnSyncReturns, SpawnSyncOptions, StdioOptions } from 'node:child_process';
 
 export const DEFAULT_GIT_TIMEOUT_MS = 60_000;         // 60 s for routine git ops
@@ -9,6 +10,7 @@ export const DEFAULT_NPM_TIMEOUT_MS = 300_000;        // 5 min for npm operation
 export const DEFAULT_COMPILE_TIMEOUT_MS = 600_000;    // 10 min for compile/test/lint
 
 export interface SpawnStreamedOptions {
+    outputSink?: { write(stream: 'stdout' | 'stderr', chunk: Buffer, signal: AbortSignal): Promise<void> };
     cwd?: string;
     timeoutMs?: number;
     signal?: AbortSignal;
@@ -30,6 +32,7 @@ export interface SpawnedProcessInfo {
 }
 
 export interface SpawnStreamedResult {
+    sinkError?: string;
     exitCode: number;
     stdout: string;
     stderr: string;
@@ -981,6 +984,19 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
         let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
         const stdoutCapture = createOutputCapture(maxBuffer, opts.capturePolicy);
         const stderrCapture = createOutputCapture(maxBuffer, opts.capturePolicy);
+        let sinkError: string | undefined;
+        const sinkReads: Promise<void>[] = [];
+        let sinkQueue = Promise.resolve();
+        const sinkController = new AbortController();
+        function awaitSink(write: Promise<void>): Promise<void> {
+            const signal = sinkController.signal;
+            return new Promise((resolveWrite, rejectWrite) => {
+                const abort = (): void => rejectWrite(new Error('Output sink interrupted.'));
+                signal.addEventListener('abort', abort, { once: true });
+                if (signal.aborted) abort();
+                void write.then(resolveWrite, rejectWrite).finally(() => signal.removeEventListener('abort', abort));
+            });
+        }
 
         const spawnOpts: {
             cwd: string;
@@ -1033,6 +1049,7 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
         function onAbort(): void {
             if (settled) return;
             cancelled = true;
+            sinkController.abort();
             killChild();
         }
 
@@ -1044,6 +1061,7 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
             timeoutHandle = setTimeout(function () {
                 if (settled) return;
                 timedOut = true;
+                sinkController.abort();
                 killChild();
             }, timeoutMs);
         }
@@ -1059,7 +1077,38 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
             }
         });
 
-        if (!inheritStdio) {
+        if (!inheritStdio && opts.outputSink) {
+            const sink = opts.outputSink;
+            const consume = async (stream: 'stdout' | 'stderr'): Promise<void> => {
+                const readable = child[stream];
+                if (!readable) return;
+                const decoder = new StringDecoder('utf8');
+                const capture = stream === 'stdout' ? stdoutCapture : stderrCapture;
+                const callback = stream === 'stdout' ? opts.onStdout : opts.onStderr;
+                try {
+                    for await (const chunk of readable) {
+                        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+                        const text = decoder.write(bytes);
+                        capture.append(text);
+                        callback?.(text);
+                        const write = sinkQueue.then(() => {
+                            sinkController.signal.throwIfAborted();
+                            return sink.write(stream, bytes, sinkController.signal);
+                        });
+                        sinkQueue = write.catch(() => undefined);
+                        await awaitSink(write);
+                    }
+                    const remainder = decoder.end();
+                    capture.append(remainder);
+                    if (remainder) callback?.(remainder);
+                } catch (error) {
+                    sinkError ??= (error instanceof Error ? error.message : String(error)) || 'Output sink failed.';
+                    sinkController.abort();
+                    killChild();
+                }
+            };
+            sinkReads.push(consume('stdout'), consume('stderr'));
+        } else if (!inheritStdio) {
             if (child.stdout) {
                 child.stdout.setEncoding('utf8');
                 child.stdout.on('data', function (chunk: string) {
@@ -1080,7 +1129,8 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
             }
         }
 
-        child.once('close', function (code: number | null) {
+        child.once('close', async function (code: number | null) {
+            await Promise.all(sinkReads);
             const stdout = stdoutCapture.finish();
             const stderr = stderrCapture.finish();
             settle({
@@ -1089,6 +1139,7 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
                 stderr: stderr.text,
                 timedOut,
                 cancelled,
+                ...(sinkError !== undefined ? { sinkError } : {}),
                 stdoutTruncated: stdout.truncated,
                 stderrTruncated: stderr.truncated,
                 stdoutOriginalBytes: stdout.originalBytes,
