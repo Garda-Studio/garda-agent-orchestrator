@@ -1162,7 +1162,28 @@ describe('cli/commands/gates – review-cycle remediation reuse basics', {
             freshFollowUpPassResult.outputLines.join('\n'),
             /invalidated 'code'.*FULL review is required/su
         );
-        writeReceiptBackedReviewArtifact(repoRoot, taskId, 'code', 'REVIEW PASSED');
+        writeReceiptBackedReviewArtifact(
+            repoRoot,
+            taskId,
+            'code',
+            'REVIEW PASSED',
+            undefined,
+            { preserveExistingReviewContext: true }
+        );
+        prepareScopedDiffFixture(repoRoot, preflightPath, 'code');
+        const authenticatedFreshPassResult = await runBuildReviewContextCommand({
+            repoRoot,
+            reviewType: 'code',
+            depth: 3,
+            preflightPath,
+            outputPath: path.join(getReviewsRoot(repoRoot), `${taskId}-code-review-context.json`)
+        });
+        assert.equal(
+            authenticatedFreshPassResult.acceptedReviewEvidenceKind,
+            'FRESH',
+            authenticatedFreshPassResult.outputLines.join('\n')
+        );
+        assert.equal(authenticatedFreshPassResult.reusedReviewEvidence, false);
 
         const timelinePath = path.join(
             repoRoot,

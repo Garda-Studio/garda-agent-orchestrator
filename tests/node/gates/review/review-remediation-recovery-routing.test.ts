@@ -629,7 +629,7 @@ describe('review remediation selective recovery routing', () => {
         }
     });
 
-    it('requires fresh post-restart evidence to bypass an invalidated persisted lane', () => {
+    it('rejects stale or mismatched evidence and requires a fresh post-restart pass to bypass an invalidated persisted lane', () => {
         const fixture = makePersistedReusePolicyFixture();
         try {
             const profilePolicySnapshot = makeSnapshot();
@@ -646,17 +646,45 @@ describe('review remediation selective recovery routing', () => {
                 reviewExecutionPolicyMode: 'strict_sequential',
                 reusableReceipts: [acceptedReceipt('code'), acceptedReceipt('test')]
             });
+            appendRecordedReview(fixture, false);
+            const preRestartReviewSequence = latestReviewRecordedSequence(fixture);
             appendRestartDecision(fixture, decision);
             appendRecordedReview(fixture, true);
             assert.match(resolvePersistedPolicy(fixture, 'test').blockedReason, /bounded DELTA review is required/iu);
 
             appendRecordedReview(fixture, false);
             assert.match(resolvePersistedPolicy(fixture, 'test').blockedReason, /bounded DELTA review is required/iu);
-            assert.deepEqual(resolvePersistedPolicy(fixture, 'test', {
+            const matchingEvidence = {
                 reviewRecordedSequence: latestReviewRecordedSequence(fixture),
                 remediationMode: 'DELTA',
                 authoritativeDecisionSha256: decision.decision_sha256,
                 classificationSha256: decision.classification_sha256
+            };
+            for (const rejectedEvidence of [
+                {
+                    ...matchingEvidence,
+                    reviewRecordedSequence: preRestartReviewSequence
+                },
+                {
+                    ...matchingEvidence,
+                    remediationMode: 'FULL'
+                },
+                {
+                    ...matchingEvidence,
+                    authoritativeDecisionSha256: 'f'.repeat(64)
+                },
+                {
+                    ...matchingEvidence,
+                    classificationSha256: 'e'.repeat(64)
+                }
+            ]) {
+                assert.match(
+                    resolvePersistedPolicy(fixture, 'test', rejectedEvidence).blockedReason,
+                    /bounded DELTA review is required/iu
+                );
+            }
+            assert.deepEqual(resolvePersistedPolicy(fixture, 'test', {
+                ...matchingEvidence
             }), {
                 blockedReason: '',
                 preservedScopeMismatchReason: ''

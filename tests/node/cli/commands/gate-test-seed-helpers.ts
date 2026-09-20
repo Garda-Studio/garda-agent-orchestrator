@@ -1542,6 +1542,7 @@ export function writeReceiptBackedReviewArtifact(
         allowLegacyManualReviewContext?: boolean;
         findingSeverity?: 'critical' | 'high' | 'medium' | 'low' | null;
         legacyMarkdownArtifact?: boolean;
+        preserveExistingReviewContext?: boolean;
         rawArtifactContent?: boolean;
         residualRisk?: boolean;
     } = {}
@@ -1568,10 +1569,18 @@ export function writeReceiptBackedReviewArtifact(
     ].join('\n');
     const artifactPath = path.join(reviewsRoot, `${taskId}-${reviewKey}.md`);
     const reviewContextPath = path.join(reviewsRoot, `${taskId}-${reviewKey}-review-context.json`);
+    const existingReviewContextText = options.preserveExistingReviewContext === true
+        ? fs.readFileSync(reviewContextPath, 'utf8')
+        : null;
     const {
         reviewContext,
         reviewContextText
-    } = buildReceiptBackedReviewContextFixture(repoRoot, taskId, reviewKey, reviewerEvidence, options);
+    } = existingReviewContextText === null
+        ? buildReceiptBackedReviewContextFixture(repoRoot, taskId, reviewKey, reviewerEvidence, options)
+        : {
+            reviewContext: JSON.parse(existingReviewContextText) as Record<string, unknown>,
+            reviewContextText: existingReviewContextText
+        };
     fs.writeFileSync(reviewContextPath, reviewContextText, 'utf8');
     const coverageContract = reviewContext.coverage_contract as ReviewCoverageContract;
     const reviewExecution = resolveFixtureReviewExecution(reviewContext);
