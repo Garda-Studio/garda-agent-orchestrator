@@ -886,6 +886,7 @@ function rollbackTaskEventArtifacts(options: TaskEventRollbackOptions): TaskEven
             const transactionEventIdentities = getTransactionOwnedRollbackEventIdentities(appendedRawLines);
             restoreFileSnapshot(options.timelineSnapshot);
             rollbackResult.timeline_restored = true;
+            // Global lock order: nested completion rollback always acquires task before aggregate.
             withFilesystemLock(aggregateLockPath, {}, () => {
                 rollbackAggregateTaskEntriesUnsafe({
                     taskId: options.taskId,

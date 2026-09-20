@@ -11,6 +11,10 @@ import {
     runDocImpactGateCommand
 } from '../../../../../../src/cli/commands/gates';
 import { appendTaskEvent } from '../../../../../../src/gate-runtime/task-events';
+import type {
+    AcquireLockTelemetry,
+    LockOptions
+} from '../../../../../../src/gate-runtime/timeline/task-events-locking-types';
 
 import {
     captureExpectedAsyncError,
@@ -91,11 +95,43 @@ describe('cli/commands/gates', () => {
         assert.equal(docImpactResult.exitCode, 0);
         const taskEventsIoModule = loadTaskEventsIoModule();
         const originalAppendTaskEventAsync = taskEventsIoModule.appendTaskEventAsync;
+        const lockingModule = require('../../../../../../src/gate-runtime/timeline/task-events-locking-acquire') as typeof import('../../../../../../src/gate-runtime/timeline/task-events-locking-acquire');
+        const originalWithFilesystemLock = lockingModule.withFilesystemLock;
+        const taskLockName = `.${taskId}.lock`;
+        const aggregateLockName = '.all-tasks.lock';
+        const rollbackLockOrder: string[] = [];
+        const activeRollbackLocks: string[] = [];
         taskEventsIoModule.appendTaskEventAsync = async (...args: unknown[]) => {
             if (String(args[2] || '') === 'COMPLETION_GATE_PASSED') {
                 throw new Error('Injected COMPLETION_GATE_PASSED append failure');
             }
             return originalAppendTaskEventAsync(...args);
+        };
+        lockingModule.withFilesystemLock = function instrumentedWithFilesystemLock<T>(
+            lockPath: string,
+            options: LockOptions,
+            callback: () => T
+        ): { result: T; telemetry: AcquireLockTelemetry } {
+            const lockName = path.basename(lockPath);
+            if (lockName !== taskLockName && lockName !== aggregateLockName) {
+                return originalWithFilesystemLock(lockPath, options, callback);
+            }
+            return originalWithFilesystemLock(lockPath, options, () => {
+                if (lockName === aggregateLockName) {
+                    assert.deepEqual(
+                        activeRollbackLocks,
+                        [taskLockName],
+                        'completion rollback must enter aggregate while holding the task lock'
+                    );
+                }
+                rollbackLockOrder.push(lockName);
+                activeRollbackLocks.push(lockName);
+                try {
+                    return callback();
+                } finally {
+                    assert.equal(activeRollbackLocks.pop(), lockName);
+                }
+            });
         };
 
         try {
@@ -110,7 +146,11 @@ describe('cli/commands/gates', () => {
             assert.match(error.message, /gate completion-gate/i);
         } finally {
             taskEventsIoModule.appendTaskEventAsync = originalAppendTaskEventAsync;
+            lockingModule.withFilesystemLock = originalWithFilesystemLock;
         }
+
+        assert.deepEqual(rollbackLockOrder, [taskLockName, aggregateLockName]);
+        assert.deepEqual(activeRollbackLocks, []);
 
         const failedAttemptEvents = readTaskTimelineEvents(repoRoot, taskId);
         assert.equal(

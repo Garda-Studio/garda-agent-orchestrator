@@ -16,6 +16,10 @@ import {
     holdTaskEventLockInChildProcess,
     type TaskEventLockHolder
 } from './task-events-test-helpers';
+import type {
+    AcquireLockTelemetry,
+    LockOptions
+} from '../../../src/gate-runtime/timeline/task-events-locking-types';
 
 
 test('appendTaskEvent removes orphaned task lock when owner pid is no longer alive', () => {
@@ -681,6 +685,66 @@ test('appendTaskEventAsync waits for aggregate lock and records contention telem
         }
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
+});
+
+test('appendTaskEventAsync fails if aggregate lock begins while task lock remains active', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-lock-order-'));
+    const taskId = 'T-LOCK-ORDER';
+    const taskLockName = `.${taskId}.lock`;
+    const aggregateLockName = '.all-tasks.lock';
+    const lockingModule = require('../../../src/gate-runtime/timeline/task-events-locking-acquire') as typeof import('../../../src/gate-runtime/timeline/task-events-locking-acquire');
+    const originalWithFilesystemLockAsync = lockingModule.withFilesystemLockAsync;
+    const enteredLocks: string[] = [];
+    const activeLocks: string[] = [];
+
+    assert.equal(activeLocks.length, 0, 'lock stack must start empty before the instrumented append');
+
+    lockingModule.withFilesystemLockAsync = async function instrumentedWithFilesystemLockAsync<T>(
+        lockPath: string,
+        options: LockOptions,
+        callback: () => Promise<T> | T
+    ): Promise<{ result: T; telemetry: AcquireLockTelemetry }> {
+        const lockName = path.basename(lockPath);
+        if (lockName !== taskLockName && lockName !== aggregateLockName) {
+            return originalWithFilesystemLockAsync(lockPath, options, callback);
+        }
+        return originalWithFilesystemLockAsync(lockPath, options, async () => {
+            if (lockName === aggregateLockName) {
+                assert.deepEqual(
+                    activeLocks,
+                    [],
+                    'aggregate append must begin only after the task lock callback has completed'
+                );
+            }
+            enteredLocks.push(lockName);
+            activeLocks.push(lockName);
+            try {
+                return await callback();
+            } finally {
+                assert.equal(activeLocks.pop(), lockName);
+            }
+        });
+    };
+
+    let result: Awaited<ReturnType<typeof appendTaskEventAsync>> = null;
+    try {
+        result = await appendTaskEventAsync(
+            tempDir,
+            taskId,
+            'test',
+            'PASS',
+            'Verify task and aggregate lock ordering',
+            null,
+            { passThru: true }
+        );
+    } finally {
+        lockingModule.withFilesystemLockAsync = originalWithFilesystemLockAsync;
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+
+    assert.ok(result !== null);
+    assert.deepEqual(enteredLocks, [taskLockName, aggregateLockName]);
+    assert.deepEqual(activeLocks, []);
 });
 
 test('appendTaskEventAsync warns instead of bypassing held aggregate lock when timeout expires', async () => {

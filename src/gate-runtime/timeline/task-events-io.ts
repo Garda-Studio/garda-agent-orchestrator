@@ -230,6 +230,7 @@ export function appendTaskEvent(
     if (lowNoiseRuntimeWrites) {
         applyAggregateLockTelemetry(result, 'skipped_low_noise');
     } else {
+        // Global lock order: finish the task-lock section before acquiring the aggregate lock.
         try {
             const retentionResult = appendAggregateEventSync(
                 paths.allTasksPath,
@@ -335,6 +336,7 @@ export async function appendTaskEventAsync(
     if (lowNoiseRuntimeWrites) {
         applyAggregateLockTelemetry(result, 'skipped_low_noise');
     } else {
+        // Global lock order: finish the task-lock section before acquiring the aggregate lock.
         try {
             const retentionResult = await appendAggregateEventAsync(
                 paths.allTasksPath,
