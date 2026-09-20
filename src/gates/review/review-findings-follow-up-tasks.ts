@@ -1443,10 +1443,16 @@ function isParentFollowUpTaskId(parentTaskId: string, taskId: string): boolean {
 
 function appendParentFollowUpNote(existingNotes: string, childTaskIds: readonly string[], artifactPath: string): string {
     const newTaskIds = childTaskIds.filter((taskId) => !existingNotes.includes(taskId));
-    if (newTaskIds.length === 0) {
+    const normalizedArtifactPath = normalizePath(artifactPath);
+    const artifactAlreadyLinked = existingNotes.includes(`artifact \`${normalizedArtifactPath}\`.`);
+    if (newTaskIds.length === 0 && artifactAlreadyLinked) {
         return existingNotes;
     }
-    const suffix = `Review follow-up tasks materialized: ${newTaskIds.map((taskId) => `\`${taskId}\``).join(', ')}; artifact \`${normalizePath(artifactPath)}\`.`;
+    const linkedTaskIds = newTaskIds.length > 0 ? newTaskIds : [...new Set(childTaskIds)];
+    if (linkedTaskIds.length === 0) {
+        return existingNotes;
+    }
+    const suffix = `Review follow-up tasks materialized: ${linkedTaskIds.map((taskId) => `\`${taskId}\``).join(', ')}; artifact \`${normalizedArtifactPath}\`.`;
     return existingNotes.trim() ? `${existingNotes.trim()} ${suffix}` : suffix;
 }
 
@@ -1634,6 +1640,28 @@ function materializeTaskQueueRows(params: {
                         };
                     }
                     lines[groupedRow.lineIndex] = updatedLine;
+                    const nextParentNotes = appendParentFollowUpNote(
+                        parentRow.notes,
+                        [groupedRow.taskId],
+                        params.artifactPath
+                    );
+                    const updatedParentLine = replaceTaskMdTableCell(
+                        parentRow.rawLine,
+                        8,
+                        ` ${nextParentNotes} `
+                    );
+                    if (!updatedParentLine) {
+                        return {
+                            outcome: 'write_failed',
+                            task_path: normalizePath(taskPath),
+                            created: [],
+                            reused: [],
+                            blocked_fingerprints: params.obligations.map((obligation) => obligation.fingerprint),
+                            error_message: 'Failed to update grouped TASK.md parent artifact registry.',
+                            rollback_content: null
+                        };
+                    }
+                    lines[parentRow.lineIndex] = updatedParentLine;
                     const nextContent = formatActiveTaskQueueTable(lines.join(newline));
                     if (nextContent !== original) {
                         fs.writeFileSync(taskPath, nextContent, 'utf8');

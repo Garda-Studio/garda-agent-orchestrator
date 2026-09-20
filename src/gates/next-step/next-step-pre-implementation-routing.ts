@@ -9,15 +9,23 @@ import { isPlainRecord } from '../../core/records';
 import {
     normalizePath,
     isPathRealpathInsideRoot,
-    resolvePathInsideRepo
+    resolvePathInsideRepo,
+    testPathPrefix
 } from '../shared/helpers';
+import {
+    getClassificationConfig
+} from '../preflight/classify-change';
 import {
     formatNextStepInlineList
 } from './next-step-command-formatters';
 import {
+    buildOrchestratorWorkRestartCommand,
     getStringField,
     getTaskModePlannedChangedFiles
 } from './next-step-lifecycle-command-builders';
+import {
+    resolveAuthenticatedGroupedReviewFollowUpScope
+} from './next-step-review-artifact-readers';
 import type {
     TaskQueueEntry
 } from './next-step-task-queue';
@@ -30,13 +38,15 @@ interface StructuredPlannedScope {
 }
 
 export interface NextStepPreImplementationRoute {
-    nextGate: 'implementation' | 'materialize-planned-scope';
+    nextGate: 'implementation' | 'materialize-planned-scope' | 'enter-task-mode' | 'follow-up-scope-evidence';
     title: string;
     reason: string;
+    commands: Array<{ label: string; command: string }>;
 }
 
 export interface BaselineOnlyPreImplementationRouteOptions {
     repoRoot: string;
+    cliPrefix: string;
     taskEntry: TaskQueueEntry | null;
     taskMode: Record<string, unknown> | null;
     preflight: Record<string, unknown> | null;
@@ -229,6 +239,61 @@ function taskIntentLooksCodeChanging(taskEntry: TaskQueueEntry | null, taskMode:
 export function buildBaselineOnlyPreImplementationRoute(
     params: BaselineOnlyPreImplementationRouteOptions
 ): NextStepPreImplementationRoute | null {
+    const followUpScope = resolveAuthenticatedGroupedReviewFollowUpScope(params.repoRoot, params.taskEntry);
+    if (followUpScope.status === 'invalid') {
+        return {
+            nextGate: 'follow-up-scope-evidence',
+            title: 'Restore authenticated review follow-up scope before implementation.',
+            reason:
+                'The current task is a grouped review follow-up, but its authenticated lane artifacts cannot provide a safe planned scope. ' +
+                `${followUpScope.diagnostics.join(' ')} Refuse implementation until the task-owned follow-up evidence is restored.`,
+            commands: []
+        };
+    }
+    const activeTaskId = params.taskEntry?.taskId || getStringField(params.taskMode, 'task_id', '');
+    const structuredPlannedScope = getStructuredPlannedScope(params.repoRoot, activeTaskId || null, params.taskMode);
+    const structuredPlannedFiles = normalizePlannedFiles([
+        ...structuredPlannedScope.files,
+        ...followUpScope.files
+    ]);
+    if (followUpScope.status === 'valid' && params.taskMode?.orchestrator_work !== true) {
+        let protectedFiles: string[] = [];
+        try {
+            const classificationConfig = getClassificationConfig(params.repoRoot);
+            protectedFiles = structuredPlannedFiles.filter((file) => (
+                testPathPrefix(file, classificationConfig.protected_control_plane_roots)
+            ));
+        } catch (error) {
+            return {
+                nextGate: 'follow-up-scope-evidence',
+                title: 'Resolve protected follow-up scope before implementation.',
+                reason:
+                    'Authenticated review follow-up scope exists, but protected-path classification failed closed: ' +
+                    `${error instanceof Error ? error.message : String(error)}`,
+                commands: []
+            };
+        }
+        if (protectedFiles.length > 0) {
+            return {
+                nextGate: 'enter-task-mode',
+                title: 'Upgrade task mode for authenticated protected follow-up scope.',
+                reason:
+                    'The current BASELINE_ONLY task is bound to accepted review findings that reference protected orchestrator files, ' +
+                    `but task mode lacks --orchestrator-work. Protected scope: ${formatNextStepInlineList(protectedFiles)}. ` +
+                    'Restart task mode with operator confirmation and the authenticated follow-up evidence files before implementation.',
+                commands: [{
+                    label: 'Upgrade task mode for protected follow-up scope',
+                    command: buildOrchestratorWorkRestartCommand(
+                        params.repoRoot,
+                        params.cliPrefix,
+                        activeTaskId,
+                        params.taskMode,
+                        structuredPlannedFiles
+                    )
+                }]
+            };
+        }
+    }
     if (params.auditedNoOpPassed || !preflightRequiresAuditedNoOp(params.preflight)) {
         return null;
     }
@@ -238,9 +303,6 @@ export function buildBaselineOnlyPreImplementationRoute(
     if (changedFiles.length > 0) {
         return null;
     }
-    const activeTaskId = params.taskEntry?.taskId || getStringField(params.taskMode, 'task_id', '');
-    const structuredPlannedScope = getStructuredPlannedScope(params.repoRoot, activeTaskId || null, params.taskMode);
-    const structuredPlannedFiles = structuredPlannedScope.files;
     const codeChangingIntent = taskIntentLooksCodeChanging(params.taskEntry, params.taskMode);
     if (structuredPlannedFiles.length === 0 && !codeChangingIntent && structuredPlannedScope.diagnostics.length === 0) {
         return null;
@@ -266,6 +328,7 @@ export function buildBaselineOnlyPreImplementationRoute(
             'The current preflight is BASELINE_ONLY with no reviewable diff, but this task has implementation intent. ' +
             'Do not run compile-gate against a clean pre-implementation baseline. ' +
             `${plannedFilesNote}${ignoredFilesNote}${taskPlanDiagnosticsNote} ` +
-            'Implement or create the planned files first, then rerun next-step so classify-change can bind the real workspace scope before compile/review.'
+            'Implement or create the planned files first, then rerun next-step so classify-change can bind the real workspace scope before compile/review.',
+        commands: []
     };
 }

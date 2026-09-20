@@ -9,13 +9,24 @@ import {
     materializeReviewFindingsFollowUpTasks
 } from '../../../../src/gates/review/review-findings-follow-up-tasks';
 import {
-    followUpArtifactMatchesCurrentTaskQueue
+    followUpArtifactMatchesCurrentTaskQueue,
+    resolveAuthenticatedGroupedReviewFollowUpScope
 } from '../../../../src/gates/next-step/next-step-review-artifact-readers';
+import {
+    buildBaselineOnlyPreImplementationRoute
+} from '../../../../src/gates/next-step/next-step-pre-implementation-routing';
+import {
+    getReviewFindingsDispositionArtifactSnapshotPath
+} from '../../../../src/gates/review/review-findings-disposition-artifact';
+import {
+    getReviewFindingsValidationArtifactSnapshotPath
+} from '../../../../src/gates/review/review-findings-validation-artifact';
 import {
     parseCanonicalActiveTaskQueue
 } from '../../../../src/core/task-md-table';
 import {
     appendEvent,
+    markReviewEvidenceAsStrictReuse,
     seedCompletedReviewerLaunchAndInvocation
 } from '../next-step/next-step-full-suite-fixtures';
 
@@ -102,15 +113,21 @@ function seedReviewArtifacts(repoRoot: string, options: {
     reviewType?: string;
     followUpSeverity?: 'critical' | 'high' | 'medium' | 'low';
     taskId?: string;
+    artifactStem?: string;
+    receiptPath?: string;
+    includeFullSuiteValidation?: boolean;
 } = {}): SeededReviewArtifacts {
     const taskId = options.taskId || TASK_ID;
     const reviewType = options.reviewType || REVIEW_TYPE;
     const followUpSeverity = options.followUpSeverity || 'medium';
     const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
-    const reviewArtifactPath = path.join(reviewsRoot, `${taskId}-${reviewType}.md`);
-    const validationArtifactPath = path.join(reviewsRoot, `${taskId}-${reviewType}-findings-validation.json`);
-    const dispositionArtifactPath = path.join(reviewsRoot, `${taskId}-${reviewType}-findings-disposition.json`);
-    const receiptPath = path.join(reviewsRoot, `${taskId}-${reviewType}-receipt.json`);
+    const artifactStem = options.artifactStem || `${taskId}-${reviewType}`;
+    const reviewArtifactPath = path.join(reviewsRoot, `${artifactStem}.md`);
+    const validationArtifactPath = path.join(reviewsRoot, `${artifactStem}-findings-validation.json`);
+    const dispositionArtifactPath = path.join(reviewsRoot, `${artifactStem}-findings-disposition.json`);
+    const receiptPath = options.receiptPath
+        ? path.resolve(options.receiptPath)
+        : path.join(reviewsRoot, `${artifactStem}-receipt.json`);
     const preflightPath = path.join(reviewsRoot, `${taskId}-preflight.json`);
     const compileGatePath = path.join(reviewsRoot, `${taskId}-compile-gate.json`);
     fs.mkdirSync(reviewsRoot, { recursive: true });
@@ -127,10 +144,17 @@ function seedReviewArtifacts(repoRoot: string, options: {
             .at(-1)?.timestamp_utc
         : null;
     const compileGateTimestamp = String(compileTimelineTimestamp || compileGate?.timestamp_utc || '').trim() || null;
-    const reviewContextPath = path.join(reviewsRoot, `${taskId}-${reviewType}-review-context.json`);
+    const reviewContextPath = path.join(reviewsRoot, `${artifactStem}-review-context.json`);
+    const reviewExecutionEvidence = {
+        review_execution_mode: 'FULL',
+        review_execution_contract_sha256: '2'.repeat(64),
+        review_execution_full_scope_sha256: '3'.repeat(64),
+        review_execution_complete_scope_lineage_sha256: '4'.repeat(64),
+        review_execution_finding_reconciliation_sha256: '5'.repeat(64)
+    };
+    const reviewTreeStateSha256 = sha256JsonPayload({ task_id: taskId, review_type: reviewType });
     let reviewContextSha256: string | null = null;
     if (preflightSha256 && compileGateTimestamp) {
-        const reviewTreeStateSha256 = sha256JsonPayload({ task_id: taskId, review_type: reviewType });
         writeJson(reviewContextPath, {
             task_id: taskId,
             review_type: reviewType,
@@ -143,7 +167,8 @@ function seedReviewArtifacts(repoRoot: string, options: {
                 actual_execution_mode: 'delegated_subagent',
                 reviewer_session_id: `agent:${reviewType}-reviewer`
             },
-            full_suite_validation: {
+            review_execution: reviewExecutionEvidence,
+            full_suite_validation: options.includeFullSuiteValidation === false ? null : {
                 cycle_binding_valid: true,
                 matches_current_preflight: true,
                 matches_current_compile_gate: true,
@@ -215,9 +240,10 @@ function seedReviewArtifacts(repoRoot: string, options: {
                 code_scope_sha256: null
             },
             tree: {
-                review_tree_state_sha256: null
+                review_tree_state_sha256: reviewContextSha256 ? reviewTreeStateSha256 : null
             },
-            coverage_contract_sha256: null
+            coverage_contract_sha256: null,
+            execution: reviewExecutionEvidence
         }
     };
     const validationArtifact = {
@@ -230,30 +256,40 @@ function seedReviewArtifacts(repoRoot: string, options: {
     };
     writeJson(validationArtifactPath, validationArtifact);
     const validationArtifactSha256 = fileSha256(validationArtifactPath);
+    const validationSnapshotPath = getReviewFindingsValidationArtifactSnapshotPath(
+        validationArtifactPath,
+        validationArtifactSha256
+    );
+    fs.copyFileSync(validationArtifactPath, validationSnapshotPath);
 
     const dispositionResult = {
         schema_version: 1,
-        policy_id: 'test_policy',
+        policy_id: 'custom',
         policy_source: 'preflight_profile_policy_snapshot',
         policy_diagnostics: [],
         findings: {
-            critical: { action: followUpSeverity === 'critical' ? 'create_follow_up' : 'fix_now', ids: followUpSeverity === 'critical' ? ['F-001'] : [] },
-            high: { action: followUpSeverity === 'high' ? 'create_follow_up' : 'fix_now', ids: [...(followUpSeverity === 'high' ? ['F-001'] : []), ...(options.includeFixNowFinding ? ['F-002'] : [])] },
-            medium: { action: 'create_follow_up', ids: followUpSeverity === 'medium' ? ['F-001'] : [] },
-            low: { action: followUpSeverity === 'low' ? 'create_follow_up' : 'ignore', ids: followUpSeverity === 'low' ? ['F-001'] : [] }
+            critical: { action: followUpSeverity === 'critical' ? 'create_follow_up' : 'fix_now', ids: followUpSeverity === 'critical' ? ['F-001'] : [], count: followUpSeverity === 'critical' ? 1 : 0 },
+            high: { action: followUpSeverity === 'high' ? 'create_follow_up' : 'fix_now', ids: [...(followUpSeverity === 'high' ? ['F-001'] : []), ...(options.includeFixNowFinding ? ['F-002'] : [])], count: (followUpSeverity === 'high' ? 1 : 0) + (options.includeFixNowFinding ? 1 : 0) },
+            medium: { action: 'create_follow_up', ids: followUpSeverity === 'medium' ? ['F-001'] : [], count: followUpSeverity === 'medium' ? 1 : 0 },
+            low: { action: followUpSeverity === 'low' ? 'create_follow_up' : 'ignore', ids: followUpSeverity === 'low' ? ['F-001'] : [], count: followUpSeverity === 'low' ? 1 : 0 }
         },
-        residual_risks: { action: 'ignore', ids: [] },
+        residual_risks: { action: 'ignore', ids: [], count: 0 },
         counts_by_action: {
             fix_now: options.includeFixNowFinding ? 1 : 0,
             create_follow_up: 1,
             ignore: 0
         },
         blocking_count: options.includeFixNowFinding ? 1 : 0,
-        verdict: options.includeFixNowFinding ? 'fix_required' : 'follow_up_required'
+        blocking_ids: options.includeFixNowFinding ? ['F-002'] : [],
+        non_blocking_count: 1,
+        total_count: options.includeFixNowFinding ? 2 : 1,
+        verdict: options.includeFixNowFinding
+            ? 'fail_for_fix_now'
+            : 'pass_with_follow_up_or_ignored_findings'
     };
     const reviewFindingPolicy = {
         schema_version: 1,
-        policy_id: 'test_policy',
+        policy_id: 'custom',
         findings: {
             critical: followUpSeverity === 'critical' ? 'create_follow_up' : 'fix_now',
             high: followUpSeverity === 'high' ? 'create_follow_up' : 'fix_now',
@@ -288,7 +324,7 @@ function seedReviewArtifacts(repoRoot: string, options: {
             accepted: true
         },
         policy: {
-            policy_id: 'test_policy',
+            policy_id: 'custom',
             policy_source: 'preflight_profile_policy_snapshot',
             policy_diagnostics: [],
             review_finding_policy: reviewFindingPolicy,
@@ -339,6 +375,11 @@ function seedReviewArtifacts(repoRoot: string, options: {
     };
     writeJson(dispositionArtifactPath, dispositionArtifact);
     const dispositionArtifactSha256 = fileSha256(dispositionArtifactPath);
+    const dispositionSnapshotPath = getReviewFindingsDispositionArtifactSnapshotPath(
+        dispositionArtifactPath,
+        dispositionArtifactSha256
+    );
+    fs.copyFileSync(dispositionArtifactPath, dispositionSnapshotPath);
 
     const receipt = {
         schema_version: 2,
@@ -346,11 +387,12 @@ function seedReviewArtifacts(repoRoot: string, options: {
         review_type: reviewType,
         preflight_sha256: preflightSha256,
         review_context_sha256: reviewContextSha256,
+        ...reviewExecutionEvidence,
         review_findings_validation: {
             artifact_path: normalizeForArtifact(validationArtifactPath),
             artifact_sha256: validationArtifactSha256,
-            snapshot_path: null,
-            snapshot_sha256: null,
+            snapshot_path: normalizeForArtifact(validationSnapshotPath),
+            snapshot_sha256: validationArtifactSha256,
             status: 'accepted',
             accepted: true,
             validation_result_sha256: validationArtifact.validation_result_sha256,
@@ -359,10 +401,15 @@ function seedReviewArtifacts(repoRoot: string, options: {
         review_findings_disposition_artifact: {
             artifact_path: normalizeForArtifact(dispositionArtifactPath),
             artifact_sha256: dispositionArtifactSha256,
-            snapshot_path: null,
-            snapshot_sha256: null,
+            snapshot_path: normalizeForArtifact(dispositionSnapshotPath),
+            snapshot_sha256: dispositionArtifactSha256,
             disposition_result_sha256: dispositionArtifact.disposition_result_sha256,
+            policy_id: 'custom',
+            policy_source: 'preflight_profile_policy_snapshot',
+            item_count: options.includeFixNowFinding ? 2 : 1,
+            fix_now_count: options.includeFixNowFinding ? 1 : 0,
             follow_up_pending_count: 1,
+            ignored_count: 0,
             blocking_count: options.includeFixNowFinding ? 1 : 0
         },
         review_findings_disposition: dispositionResult,
@@ -373,15 +420,22 @@ function seedReviewArtifacts(repoRoot: string, options: {
             validation_result_sha256: validationArtifact.validation_result_sha256,
             disposition_artifact_sha256: dispositionArtifactSha256,
             disposition_result_sha256: dispositionArtifact.disposition_result_sha256,
-            review_artifact_sha256: fileSha256(reviewArtifactPath)
+            review_artifact_sha256: fileSha256(reviewArtifactPath),
+            ...reviewExecutionEvidence
         }
     };
     writeJson(receiptPath, receipt);
 
     const groupedPolicy = isGroupedFollowUpPolicy(preflightPath);
-    if (groupedPolicy && reviewContextSha256 && options.includeGroupedAttestation !== false) {
+    const includeAuthenticatedSnapshot = Boolean(
+        reviewContextSha256
+        && (groupedPolicy ? options.includeGroupedAttestation !== false : options.includeGroupedAttestation === true)
+    );
+    if (includeAuthenticatedSnapshot) {
         const reviewerIdentity = `agent:${reviewType}-reviewer`;
-        seedCompletedReviewerLaunchAndInvocation(repoRoot, taskId, reviewType, reviewerIdentity);
+        seedCompletedReviewerLaunchAndInvocation(repoRoot, taskId, reviewType, reviewerIdentity, {
+            reviewContextPath
+        });
         const taskEventsPath = path.join(
             repoRoot,
             'garda-agent-orchestrator',
@@ -401,9 +455,11 @@ function seedReviewArtifacts(repoRoot: string, options: {
         const reviewContext = readJson(reviewContextPath);
         const treeState = reviewContext.tree_state as Record<string, unknown>;
         Object.assign(receipt, {
+            review_artifact_sha256: fileSha256(reviewArtifactPath),
             reviewer_execution_mode: 'delegated_subagent',
             reviewer_identity: reviewerIdentity,
             review_tree_state_sha256: treeState.tree_state_sha256,
+            trust_level: 'INDEPENDENT_AUDITED',
             reviewer_provenance: {
                 schema_version: 1,
                 attestation_type: 'reviewer_invocation_attestation',
@@ -423,6 +479,37 @@ function seedReviewArtifacts(repoRoot: string, options: {
         writeJson(receiptPath, receipt);
     }
 
+    const receiptSha256 = fileSha256(receiptPath);
+    if (includeAuthenticatedSnapshot) {
+        const receiptRecord = receipt as Record<string, unknown>;
+        const receiptSnapshotPath = receiptPath.replace(/\.json$/u, `-${receiptSha256}.json`);
+        fs.copyFileSync(receiptPath, receiptSnapshotPath);
+        const reviewArtifactSha256 = fileSha256(reviewArtifactPath);
+        const reviewArtifactSnapshotPath = reviewArtifactPath.replace(
+            /\.md$/u,
+            `-artifact-${reviewArtifactSha256}.md`
+        );
+        fs.copyFileSync(reviewArtifactPath, reviewArtifactSnapshotPath);
+        appendEvent(repoRoot, taskId, 'REVIEW_RECORDED', 'PASS', {
+            task_id: taskId,
+            review_type: reviewType,
+            review_context_sha256: receiptRecord.review_context_sha256,
+            review_tree_state_sha256: receiptRecord.review_tree_state_sha256,
+            review_artifact_sha256: reviewArtifactSha256,
+            reviewer_execution_mode: receiptRecord.reviewer_execution_mode,
+            reviewer_identity: receiptRecord.reviewer_identity,
+            reviewer_provenance: receiptRecord.reviewer_provenance,
+            receipt_path: normalizeForArtifact(receiptPath),
+            receipt_sha256: receiptSha256,
+            receipt_snapshot_path: normalizeForArtifact(receiptSnapshotPath),
+            receipt_snapshot_sha256: receiptSha256,
+            review_artifact_path: normalizeForArtifact(reviewArtifactPath),
+            review_artifact_snapshot_path: normalizeForArtifact(reviewArtifactSnapshotPath),
+            review_artifact_snapshot_sha256: reviewArtifactSha256,
+            review_context_path: normalizeForArtifact(reviewContextPath)
+        });
+    }
+
     return {
         reviewArtifactPath,
         validationArtifactPath,
@@ -432,7 +519,7 @@ function seedReviewArtifacts(repoRoot: string, options: {
         validationResultSha256: validationArtifact.validation_result_sha256,
         dispositionArtifactSha256,
         dispositionResultSha256: dispositionArtifact.disposition_result_sha256,
-        receiptSha256: fileSha256(receiptPath)
+        receiptSha256
     };
 }
 
@@ -466,6 +553,21 @@ function seedGroupedPreflight(
         configured_mode: 'one_level_lighter',
         diagnostics: ["Follow-up task profile lowered from 'strict' to 'balanced'."]
     }, compileTimestamp, artifactTimestamp);
+}
+
+function seedAuthenticatedPerFindingPreflight(repoRoot: string): void {
+    seedGroupedPreflight(repoRoot);
+    const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+    const preflightPath = path.join(reviewsRoot, `${TASK_ID}-preflight.json`);
+    const preflight = readJson(preflightPath);
+    const snapshot = preflight.profile_policy_snapshot as Record<string, unknown>;
+    const policy = snapshot.review_follow_up_policy as Record<string, unknown>;
+    policy.materialization_mode = 'per_finding';
+    writeJson(preflightPath, preflight);
+    const compileGatePath = path.join(reviewsRoot, `${TASK_ID}-compile-gate.json`);
+    const compileGate = readJson(compileGatePath);
+    compileGate.preflight_hash_sha256 = fileSha256(preflightPath);
+    writeJson(compileGatePath, compileGate);
 }
 
 function seedGroupedPreflightForTask(
@@ -886,7 +988,8 @@ describe('review findings follow-up task materialization', () => {
 
     it('creates exactly one hash-bound F task and reruns without duplicates', () => {
         const repoRoot = makeRepo();
-        const artifacts = seedReviewArtifacts(repoRoot);
+        seedAuthenticatedPerFindingPreflight(repoRoot);
+        const artifacts = seedReviewArtifacts(repoRoot, { includeGroupedAttestation: true });
 
         const materialized = materializeReviewFindingsFollowUpTasks({
             repoRoot,
@@ -910,6 +1013,12 @@ describe('review findings follow-up task materialization', () => {
         assert.match(childRow.notes, /src\/gates\/review\/example\.ts:10/u);
         assert.match(childRow.notes, /Remediation:/u);
         assert.match(childRow.notes, new RegExp(artifacts.receiptSha256, 'u'));
+        const perFindingScope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, childRow);
+        assert.equal(perFindingScope.status, 'valid', perFindingScope.diagnostics.join('\n'));
+        assert.deepEqual(perFindingScope.files, [
+            'src/gates/review/example.ts',
+            'tests/node/gates/review/example.test.ts'
+        ]);
 
         const artifact = readJson(materialized.artifact_path);
         assert.equal(artifact.status, 'MATERIALIZED');
@@ -929,6 +1038,320 @@ describe('review findings follow-up task materialization', () => {
         assert.deepEqual(rerun.created_task_ids, []);
         assert.deepEqual(rerun.reused_task_ids, [`${TASK_ID}-F1`]);
         assert.equal(taskRows(repoRoot).filter((row) => row.taskId.startsWith(`${TASK_ID}-F`)).length, 1);
+    });
+
+    it('resolves authenticated per-finding scope from custom bound review artifact paths', () => {
+        const repoRoot = makeRepo();
+        seedAuthenticatedPerFindingPreflight(repoRoot);
+        const artifacts = seedReviewArtifacts(repoRoot, {
+            includeGroupedAttestation: true,
+            artifactStem: 'custom-bound-code-review'
+        });
+        const materialized = materializeReviewFindingsFollowUpTasks({
+            repoRoot,
+            taskId: TASK_ID,
+            reviewType: REVIEW_TYPE,
+            dispositionArtifactPath: artifacts.dispositionArtifactPath
+        });
+        assert.equal(materialized.status, 'MATERIALIZED', materialized.output_lines.join('\n'));
+        const childRow = rowFor(repoRoot, `${TASK_ID}-F1`);
+        assert.ok(childRow);
+        const scope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, childRow);
+        assert.equal(scope.status, 'valid', scope.diagnostics.join('\n'));
+        assert.deepEqual(scope.files, [
+            'src/gates/review/example.ts',
+            'tests/node/gates/review/example.test.ts'
+        ]);
+    });
+
+    it('resolves a custom receipt snapshot outside the standard reviews root', () => {
+        const repoRoot = makeRepo();
+        seedAuthenticatedPerFindingPreflight(repoRoot);
+        const customReceiptPath = path.join(repoRoot, 'custom-review-evidence', 'bound-code-receipt.json');
+        const artifacts = seedReviewArtifacts(repoRoot, {
+            includeGroupedAttestation: true,
+            receiptPath: customReceiptPath
+        });
+        const materialized = materializeReviewFindingsFollowUpTasks({
+            repoRoot,
+            taskId: TASK_ID,
+            reviewType: REVIEW_TYPE,
+            dispositionArtifactPath: artifacts.dispositionArtifactPath,
+            receiptPath: customReceiptPath
+        });
+        assert.equal(materialized.status, 'MATERIALIZED', materialized.output_lines.join('\n'));
+        const childRow = rowFor(repoRoot, `${TASK_ID}-F1`);
+        assert.ok(childRow);
+        const scope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, childRow);
+        assert.equal(scope.status, 'valid', scope.diagnostics.join('\n'));
+        assert.deepEqual(scope.files, [
+            'src/gates/review/example.ts',
+            'tests/node/gates/review/example.test.ts'
+        ]);
+    });
+
+    it('resolves authenticated scope when a code lane does not require full-suite evidence', () => {
+        const repoRoot = makeRepo();
+        seedAuthenticatedPerFindingPreflight(repoRoot);
+        const artifacts = seedReviewArtifacts(repoRoot, {
+            includeGroupedAttestation: true,
+            includeFullSuiteValidation: false
+        });
+        const materialized = materializeReviewFindingsFollowUpTasks({
+            repoRoot,
+            taskId: TASK_ID,
+            reviewType: REVIEW_TYPE,
+            dispositionArtifactPath: artifacts.dispositionArtifactPath
+        });
+        assert.equal(materialized.status, 'MATERIALIZED', materialized.output_lines.join('\n'));
+        const childRow = rowFor(repoRoot, `${TASK_ID}-F1`);
+        assert.ok(childRow);
+        const scope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, childRow);
+        assert.equal(scope.status, 'valid', scope.diagnostics.join('\n'));
+        assert.deepEqual(scope.files, [
+            'src/gates/review/example.ts',
+            'tests/node/gates/review/example.test.ts'
+        ]);
+    });
+
+    it('rejects rerecording a non-reused no-full-suite context after a same-preflight recompile', () => {
+        const repoRoot = makeRepo();
+        seedAuthenticatedPerFindingPreflight(repoRoot);
+        const artifacts = seedReviewArtifacts(repoRoot, {
+            includeGroupedAttestation: true,
+            includeFullSuiteValidation: false
+        });
+        const materialized = materializeReviewFindingsFollowUpTasks({
+            repoRoot,
+            taskId: TASK_ID,
+            reviewType: REVIEW_TYPE,
+            dispositionArtifactPath: artifacts.dispositionArtifactPath
+        });
+        assert.equal(materialized.status, 'MATERIALIZED', materialized.output_lines.join('\n'));
+
+        const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+        const preflightPath = path.join(reviewsRoot, `${TASK_ID}-preflight.json`);
+        const preflightSha256 = fileSha256(preflightPath);
+        const currentCompileTimestamp = '2026-07-17T13:45:00.000Z';
+        const compileGatePath = path.join(reviewsRoot, `${TASK_ID}-compile-gate.json`);
+        const compileGate = readJson(compileGatePath);
+        compileGate.timestamp_utc = currentCompileTimestamp;
+        compileGate.preflight_hash_sha256 = preflightSha256;
+        writeJson(compileGatePath, compileGate);
+        appendEvent(repoRoot, TASK_ID, 'COMPILE_GATE_PASSED', 'PASS', {}, currentCompileTimestamp);
+
+        const taskEventsPath = path.join(
+            repoRoot,
+            'garda-agent-orchestrator',
+            'runtime',
+            'task-events',
+            `${TASK_ID}.jsonl`
+        );
+        const historicalReviewRecorded = fs.readFileSync(taskEventsPath, 'utf8')
+            .split(/\r?\n/u)
+            .filter(Boolean)
+            .map((line) => JSON.parse(line) as Record<string, unknown>)
+            .reverse()
+            .find((event) => event.event_type === 'REVIEW_RECORDED');
+        assert.ok(historicalReviewRecorded);
+        appendEvent(
+            repoRoot,
+            TASK_ID,
+            'REVIEW_RECORDED',
+            'PASS',
+            historicalReviewRecorded.details as Record<string, unknown>,
+            '2026-07-17T13:46:00.000Z'
+        );
+
+        const currentCycleId = sha256JsonPayload({
+            schema_version: 1,
+            preflight_sha256: preflightSha256,
+            compile_gate_timestamp: currentCompileTimestamp
+        });
+        const followUpArtifact = readJson(materialized.artifact_path);
+        const materializationPolicy = followUpArtifact.materialization_policy as Record<string, unknown>;
+        materializationPolicy.cycle_id = currentCycleId;
+        writeJson(materialized.artifact_path, followUpArtifact);
+
+        const childRow = rowFor(repoRoot, `${TASK_ID}-F1`);
+        assert.ok(childRow);
+        const scope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, childRow);
+        assert.equal(scope.status, 'invalid');
+        assert.deepEqual(scope.files, []);
+        assert.ok(scope.diagnostics.some((diagnostic) => /reviewer invocation.*compile cycle/iu.test(diagnostic)));
+    });
+
+    it('rejects a reused receipt rerecorded without strict reuse telemetry after the current compile', () => {
+        const repoRoot = makeRepo();
+        seedGroupedPreflight(repoRoot);
+        const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+        const preflightPath = path.join(reviewsRoot, `${TASK_ID}-preflight.json`);
+        const preflight = readJson(preflightPath);
+        preflight.metrics = {
+            domain_scope_fingerprints: {
+                legacy: {
+                    review_scope_sha256: '6'.repeat(64),
+                    code_scope_sha256: '7'.repeat(64)
+                }
+            }
+        };
+        writeJson(preflightPath, preflight);
+        const compileGatePath = path.join(reviewsRoot, `${TASK_ID}-compile-gate.json`);
+        const compileGate = readJson(compileGatePath);
+        compileGate.preflight_hash_sha256 = fileSha256(preflightPath);
+        writeJson(compileGatePath, compileGate);
+
+        const artifacts = seedReviewArtifacts(repoRoot);
+        markReviewEvidenceAsStrictReuse(repoRoot, TASK_ID, REVIEW_TYPE);
+        const timelinePath = path.join(
+            repoRoot,
+            'garda-agent-orchestrator',
+            'runtime',
+            'task-events',
+            `${TASK_ID}.jsonl`
+        );
+        const reusedRecordedEvent = fs.readFileSync(timelinePath, 'utf8')
+            .split(/\r?\n/u)
+            .filter(Boolean)
+            .map((line) => JSON.parse(line) as Record<string, unknown>)
+            .at(-1);
+        assert.equal(reusedRecordedEvent?.event_type, 'REVIEW_RECORDED');
+        const compileTimestamp = String(compileGate.timestamp_utc);
+        appendEvent(repoRoot, TASK_ID, 'COMPILE_GATE_PASSED', 'PASS', {}, compileTimestamp);
+        const genericRecordedDetails = {
+            ...(reusedRecordedEvent?.details as Record<string, unknown>)
+        };
+        for (const key of [
+            'reused_existing_review',
+            'reused_from_receipt_path',
+            'reused_from_receipt_sha256',
+            'review_context_reuse_sha256',
+            'reused_from_review_context_sha256',
+            'reused_from_review_context_reuse_sha256',
+            'reused_from_review_tree_state_sha256',
+            'reused_from_review_scope_sha256',
+            'reused_from_code_scope_sha256'
+        ]) {
+            delete genericRecordedDetails[key];
+        }
+        appendEvent(repoRoot, TASK_ID, 'REVIEW_RECORDED', 'PASS', genericRecordedDetails);
+        const materialized = materializeReviewFindingsFollowUpTasks({
+            repoRoot,
+            taskId: TASK_ID,
+            reviewType: REVIEW_TYPE,
+            dispositionArtifactPath: artifacts.dispositionArtifactPath
+        });
+        assert.equal(materialized.status, 'MATERIALIZED', materialized.output_lines.join('\n'));
+        const childRow = rowFor(repoRoot, `${TASK_ID}-F1`);
+        assert.ok(childRow);
+        const scope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, childRow);
+        assert.equal(scope.status, 'invalid');
+        assert.deepEqual(scope.files, []);
+        assert.ok(scope.diagnostics.some((diagnostic) => /strict|reuse|reused receipt/iu.test(diagnostic)));
+    });
+
+    it('does not raw-reread compile evidence outside the resolver artifact snapshot', (context) => {
+        const repoRoot = makeRepo();
+        seedGroupedPreflight(repoRoot);
+        const artifacts = seedReviewArtifacts(repoRoot);
+        const materialized = materializeReviewFindingsFollowUpTasks({
+            repoRoot,
+            taskId: TASK_ID,
+            reviewType: REVIEW_TYPE,
+            dispositionArtifactPath: artifacts.dispositionArtifactPath
+        });
+        assert.equal(materialized.status, 'MATERIALIZED', materialized.output_lines.join('\n'));
+        const childRow = rowFor(repoRoot, `${TASK_ID}-F1`);
+        assert.ok(childRow);
+
+        const compileGatePath = path.join(
+            repoRoot,
+            'garda-agent-orchestrator',
+            'runtime',
+            'reviews',
+            `${TASK_ID}-compile-gate.json`
+        );
+        const fsModule = require('node:fs') as typeof fs;
+        const originalReadFileSync = fsModule.readFileSync;
+        let rawCompileReadCount = 0;
+        context.mock.method(fsModule, 'readFileSync', ((targetPath: fs.PathLike, ...args: unknown[]) => {
+            if (path.resolve(String(targetPath)) === path.resolve(compileGatePath)) {
+                rawCompileReadCount += 1;
+                writeJson(compileGatePath, {
+                    task_id: TASK_ID,
+                    status: 'FAILED',
+                    timestamp_utc: '2026-07-17T13:45:00.000Z',
+                    preflight_hash_sha256: '0'.repeat(64)
+                });
+            }
+            return (originalReadFileSync as (...parameters: unknown[]) => unknown)(targetPath, ...args);
+        }) as typeof fs.readFileSync);
+
+        const scope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, childRow);
+        assert.equal(scope.status, 'valid', scope.diagnostics.join('\n'));
+        assert.equal(rawCompileReadCount, 0);
+    });
+
+    it('rejects a historical review chain relabeled with the current materialization cycle', () => {
+        const repoRoot = makeRepo();
+        seedGroupedPreflight(repoRoot);
+        const artifacts = seedReviewArtifacts(repoRoot);
+        const materialized = materializeReviewFindingsFollowUpTasks({
+            repoRoot,
+            taskId: TASK_ID,
+            reviewType: REVIEW_TYPE,
+            dispositionArtifactPath: artifacts.dispositionArtifactPath
+        });
+        assert.equal(materialized.status, 'MATERIALIZED', materialized.output_lines.join('\n'));
+
+        const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+        const preflightPath = path.join(reviewsRoot, `${TASK_ID}-preflight.json`);
+        const preflight = readJson(preflightPath);
+        const profilePolicySnapshot = preflight.profile_policy_snapshot as Record<string, unknown>;
+        const currentSnapshotHash = 'b'.repeat(64);
+        profilePolicySnapshot.snapshot_hash = currentSnapshotHash;
+        writeJson(preflightPath, preflight);
+        const currentPreflightSha256 = fileSha256(preflightPath);
+        const currentCompileTimestamp = '2026-07-17T13:30:00.000Z';
+        const compileGatePath = path.join(reviewsRoot, `${TASK_ID}-compile-gate.json`);
+        const compileGate = readJson(compileGatePath);
+        compileGate.preflight_hash_sha256 = currentPreflightSha256;
+        compileGate.timestamp_utc = currentCompileTimestamp;
+        writeJson(compileGatePath, compileGate);
+        appendEvent(repoRoot, TASK_ID, 'COMPILE_GATE_PASSED', 'PASS', {}, currentCompileTimestamp);
+
+        const currentCycleId = sha256JsonPayload({
+            schema_version: 1,
+            preflight_sha256: currentPreflightSha256,
+            compile_gate_timestamp: currentCompileTimestamp
+        });
+        const currentGroupFingerprint = sha256JsonPayload({
+            schema_version: 1,
+            parent_task_id: TASK_ID,
+            snapshot_hash: currentSnapshotHash,
+            cycle_id: currentCycleId,
+            materialization_mode: 'grouped_by_parent'
+        });
+        const followUpArtifact = readJson(materialized.artifact_path);
+        const materializationPolicy = followUpArtifact.materialization_policy as Record<string, unknown>;
+        materializationPolicy.snapshot_hash = currentSnapshotHash;
+        materializationPolicy.cycle_id = currentCycleId;
+        materializationPolicy.group_fingerprint = currentGroupFingerprint;
+        writeJson(materialized.artifact_path, followUpArtifact);
+
+        const taskPath = path.join(repoRoot, 'TASK.md');
+        const relabeledTaskText = fs.readFileSync(taskPath, 'utf8')
+            .replace(/review_follow_up_group_fingerprint=[0-9a-f]{64}/u, `review_follow_up_group_fingerprint=${currentGroupFingerprint}`)
+            .replace(/review_follow_up_snapshot_sha256=[0-9a-f]{64}/u, `review_follow_up_snapshot_sha256=${currentSnapshotHash}`)
+            .replace(/review_follow_up_cycle=[0-9a-f]{64}/u, `review_follow_up_cycle=${currentCycleId}`);
+        fs.writeFileSync(taskPath, relabeledTaskText, 'utf8');
+
+        const childRow = rowFor(repoRoot, `${TASK_ID}-F1`);
+        assert.ok(childRow);
+        const scope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, childRow);
+        assert.equal(scope.status, 'invalid');
+        assert.deepEqual(scope.files, []);
+        assert.ok(scope.diagnostics.some((diagnostic) => /preflight|compile cycle/u.test(diagnostic)));
     });
 
     it('groups deferred items into one snapshot-bound pending child and reruns idempotently', () => {
@@ -958,6 +1381,111 @@ describe('review findings follow-up task materialization', () => {
             `review_follow_up_lane_artifact=code:\`${normalizeForArtifact(path.relative(repoRoot, materialized.artifact_path))}\`.`
         ));
 
+        const authenticatedScope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, childRow);
+        assert.equal(authenticatedScope.status, 'valid', authenticatedScope.diagnostics.join('\n'));
+        assert.deepEqual(authenticatedScope.files, [
+            'src/gates/review/example.ts',
+            'tests/node/gates/review/example.test.ts'
+        ]);
+        const configRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config');
+        fs.mkdirSync(configRoot, { recursive: true });
+        writeJson(path.join(configRoot, 'paths.json'), {
+            protected_control_plane_roots: ['src/']
+        });
+        const baselineRoute = buildBaselineOnlyPreImplementationRoute({
+            repoRoot,
+            cliPrefix: 'node bin/garda.js',
+            taskEntry: childRow,
+            taskMode: {
+                task_id: `${TASK_ID}-F1`,
+                task_summary: childRow.title,
+                provider: 'Codex',
+                requested_depth: 2,
+                orchestrator_work: false
+            },
+            preflight: {
+                changed_files: [],
+                zero_diff_guard: {
+                    zero_diff_detected: true,
+                    completion_requires_audited_no_op: true
+                }
+            },
+            auditedNoOpPassed: false
+        });
+        assert.equal(baselineRoute?.nextGate, 'enter-task-mode');
+        assert.match(baselineRoute?.reason || '', /protected orchestrator files/u);
+        assert.ok(baselineRoute?.commands[0]?.command.includes('--orchestrator-work'));
+        assert.ok(baselineRoute?.commands[0]?.command.includes('--planned-changed-file "src/gates/review/example.ts"'));
+        assert.ok(baselineRoute?.commands[0]?.command.includes('--operator-confirmed yes'));
+        const partialPlannedRoute = buildBaselineOnlyPreImplementationRoute({
+            repoRoot,
+            cliPrefix: 'node bin/garda.js',
+            taskEntry: childRow,
+            taskMode: {
+                task_id: `${TASK_ID}-F1`,
+                task_summary: childRow.title,
+                provider: 'Codex',
+                requested_depth: 2,
+                orchestrator_work: false,
+                planned_changed_files: ['docs/ordinary.md']
+            },
+            preflight: {
+                changed_files: [],
+                zero_diff_guard: {
+                    zero_diff_detected: true,
+                    completion_requires_audited_no_op: true
+                }
+            },
+            auditedNoOpPassed: false
+        });
+        assert.equal(partialPlannedRoute?.nextGate, 'enter-task-mode');
+        assert.ok(partialPlannedRoute?.commands[0]?.command.includes('--planned-changed-file "docs/ordinary.md"'));
+        assert.ok(partialPlannedRoute?.commands[0]?.command.includes('--planned-changed-file "src/gates/review/example.ts"'));
+        const auditedNoOpRoute = buildBaselineOnlyPreImplementationRoute({
+            repoRoot,
+            cliPrefix: 'node bin/garda.js',
+            taskEntry: childRow,
+            taskMode: {
+                task_id: `${TASK_ID}-F1`,
+                task_summary: childRow.title,
+                provider: 'Codex',
+                requested_depth: 2,
+                orchestrator_work: false
+            },
+            preflight: {
+                changed_files: [],
+                zero_diff_guard: {
+                    zero_diff_detected: true,
+                    completion_requires_audited_no_op: true
+                }
+            },
+            auditedNoOpPassed: true
+        });
+        assert.equal(auditedNoOpRoute?.nextGate, 'enter-task-mode');
+        assert.ok(auditedNoOpRoute?.commands[0]?.command.includes('--orchestrator-work'));
+        const changedPreflightRoute = buildBaselineOnlyPreImplementationRoute({
+            repoRoot,
+            cliPrefix: 'node bin/garda.js',
+            taskEntry: childRow,
+            taskMode: {
+                task_id: `${TASK_ID}-F1`,
+                task_summary: childRow.title,
+                provider: 'Codex',
+                requested_depth: 2,
+                orchestrator_work: false
+            },
+            preflight: {
+                changed_files: ['src/gates/review/example.ts'],
+                zero_diff_guard: {
+                    zero_diff_detected: false,
+                    completion_requires_audited_no_op: false
+                }
+            },
+            auditedNoOpPassed: false
+        });
+        assert.equal(changedPreflightRoute?.nextGate, 'enter-task-mode');
+        assert.ok(changedPreflightRoute?.commands[0]?.command.includes('--orchestrator-work'));
+
         const artifact = readJson(materialized.artifact_path);
         assert.equal((artifact.materialization_policy as Record<string, unknown>).mode, 'grouped_by_parent');
         assert.equal((artifact.materialization_policy as Record<string, unknown>).task_profile, 'balanced');
@@ -978,8 +1506,248 @@ describe('review findings follow-up task materialization', () => {
         });
         assert.equal(matchesCurrentQueue(), true);
 
+        const originalFollowUpArtifact = fs.readFileSync(materialized.artifact_path, 'utf8');
+        const substitutedValidationPath = path.join(
+            path.dirname(artifacts.validationArtifactPath),
+            `${TASK_ID}-${REVIEW_TYPE}-substituted-findings-validation.json`
+        );
+        fs.copyFileSync(artifacts.validationArtifactPath, substitutedValidationPath);
+        const substitutedFollowUpArtifact = readJson(materialized.artifact_path);
+        (substitutedFollowUpArtifact.source_validation as Record<string, unknown>).artifact_path =
+            normalizeForArtifact(substitutedValidationPath);
+        writeJson(materialized.artifact_path, substitutedFollowUpArtifact);
+        assert.equal(matchesCurrentQueue(), true);
+        const substitutedScope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, childRow);
+        assert.equal(substitutedScope.status, 'invalid');
+        assert.deepEqual(substitutedScope.files, []);
+        fs.writeFileSync(materialized.artifact_path, originalFollowUpArtifact, 'utf8');
+
         const taskPath = path.join(repoRoot, 'TASK.md');
         const currentTaskText = fs.readFileSync(taskPath, 'utf8');
+        const originalReceiptArtifact = fs.readFileSync(artifacts.receiptPath, 'utf8');
+        const historicalSnapshotHash = 'b'.repeat(64);
+        const historicalCycleId = 'c'.repeat(64);
+        const historicalGroupFingerprint = sha256JsonPayload({
+            schema_version: 1,
+            parent_task_id: TASK_ID,
+            snapshot_hash: historicalSnapshotHash,
+            cycle_id: historicalCycleId,
+            materialization_mode: 'grouped_by_parent'
+        });
+        const historicalFollowUpArtifact = JSON.parse(originalFollowUpArtifact) as Record<string, unknown>;
+        const historicalMaterializationPolicy = historicalFollowUpArtifact.materialization_policy as Record<string, unknown>;
+        historicalMaterializationPolicy.snapshot_hash = historicalSnapshotHash;
+        historicalMaterializationPolicy.cycle_id = historicalCycleId;
+        historicalMaterializationPolicy.group_fingerprint = historicalGroupFingerprint;
+        writeJson(materialized.artifact_path, historicalFollowUpArtifact);
+        const historicalTaskText = currentTaskText
+            .replace(/review_follow_up_group_fingerprint=[0-9a-f]{64}/u, `review_follow_up_group_fingerprint=${historicalGroupFingerprint}`)
+            .replace(/review_follow_up_snapshot_sha256=[0-9a-f]{64}/u, `review_follow_up_snapshot_sha256=${historicalSnapshotHash}`)
+            .replace(/review_follow_up_cycle=[0-9a-f]{64}/u, `review_follow_up_cycle=${historicalCycleId}`);
+        fs.writeFileSync(taskPath, historicalTaskText, 'utf8');
+        const historicalChildRow = rowFor(repoRoot, `${TASK_ID}-F1`);
+        assert.ok(historicalChildRow);
+        const historicalScope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, historicalChildRow);
+        assert.equal(historicalScope.status, 'invalid');
+        assert.deepEqual(historicalScope.files, []);
+        fs.writeFileSync(materialized.artifact_path, originalFollowUpArtifact, 'utf8');
+        fs.writeFileSync(taskPath, currentTaskText, 'utf8');
+        const staleValidationPath = path.join(
+            path.dirname(artifacts.validationArtifactPath),
+            `${TASK_ID}-${REVIEW_TYPE}-stale-findings-validation.json`
+        );
+        const staleValidation = readJson(artifacts.validationArtifactPath);
+        const staleValidationResult = staleValidation.validation_result as Record<string, unknown>;
+        const staleInventory = staleValidationResult.normalized_inventory as Record<string, unknown>;
+        const staleFindings = staleInventory.findings_by_severity as Record<string, Record<string, unknown>[]>;
+        staleFindings.medium[0].evidence_locations = ['docs/reduced-safe-scope.md:1'];
+        staleValidation.validation_result_sha256 = sha256JsonPayload(staleValidationResult);
+        writeJson(staleValidationPath, staleValidation);
+        const staleValidationArtifactSha256 = fileSha256(staleValidationPath);
+        const staleValidationSnapshotPath = getReviewFindingsValidationArtifactSnapshotPath(
+            staleValidationPath,
+            staleValidationArtifactSha256
+        );
+        fs.copyFileSync(staleValidationPath, staleValidationSnapshotPath);
+
+        const staleDispositionPath = path.join(
+            path.dirname(artifacts.dispositionArtifactPath),
+            `${TASK_ID}-${REVIEW_TYPE}-stale-findings-disposition.json`
+        );
+        const staleDisposition = readJson(artifacts.dispositionArtifactPath);
+        const staleDispositionSourceValidation = staleDisposition.source_validation as Record<string, unknown>;
+        staleDispositionSourceValidation.artifact_path = normalizeForArtifact(staleValidationPath);
+        staleDispositionSourceValidation.artifact_sha256 = staleValidationArtifactSha256;
+        staleDispositionSourceValidation.validation_result_sha256 = staleValidation.validation_result_sha256;
+        writeJson(staleDispositionPath, staleDisposition);
+        const staleDispositionArtifactSha256 = fileSha256(staleDispositionPath);
+        const staleDispositionSnapshotPath = getReviewFindingsDispositionArtifactSnapshotPath(
+            staleDispositionPath,
+            staleDispositionArtifactSha256
+        );
+        fs.copyFileSync(staleDispositionPath, staleDispositionSnapshotPath);
+
+        const substitutedReceipt = JSON.parse(originalReceiptArtifact) as Record<string, unknown>;
+        const substitutedReceiptValidation = substitutedReceipt.review_findings_validation as Record<string, unknown>;
+        substitutedReceiptValidation.artifact_path = normalizeForArtifact(staleValidationPath);
+        substitutedReceiptValidation.artifact_sha256 = staleValidationArtifactSha256;
+        substitutedReceiptValidation.snapshot_path = normalizeForArtifact(staleValidationSnapshotPath);
+        substitutedReceiptValidation.snapshot_sha256 = staleValidationArtifactSha256;
+        substitutedReceiptValidation.validation_result_sha256 = staleValidation.validation_result_sha256;
+        const substitutedReceiptDisposition = substitutedReceipt.review_findings_disposition_artifact as Record<string, unknown>;
+        substitutedReceiptDisposition.artifact_path = normalizeForArtifact(staleDispositionPath);
+        substitutedReceiptDisposition.artifact_sha256 = staleDispositionArtifactSha256;
+        substitutedReceiptDisposition.snapshot_path = normalizeForArtifact(staleDispositionSnapshotPath);
+        substitutedReceiptDisposition.snapshot_sha256 = staleDispositionArtifactSha256;
+        const substitutedReceiptContract = substitutedReceipt.review_output_contract as Record<string, unknown>;
+        substitutedReceiptContract.validation_artifact_sha256 = staleValidationArtifactSha256;
+        substitutedReceiptContract.validation_result_sha256 = staleValidation.validation_result_sha256;
+        substitutedReceiptContract.disposition_artifact_sha256 = staleDispositionArtifactSha256;
+        writeJson(artifacts.receiptPath, substitutedReceipt);
+        const substitutedReceiptSha256 = fileSha256(artifacts.receiptPath);
+
+        const staleFollowUp = JSON.parse(originalFollowUpArtifact) as Record<string, unknown>;
+        const staleFollowUpSourceValidation = staleFollowUp.source_validation as Record<string, unknown>;
+        staleFollowUpSourceValidation.artifact_path = normalizeForArtifact(staleValidationPath);
+        staleFollowUpSourceValidation.artifact_sha256 = staleValidationArtifactSha256;
+        staleFollowUpSourceValidation.validation_result_sha256 = staleValidation.validation_result_sha256;
+        const staleFollowUpSourceDisposition = staleFollowUp.source_disposition as Record<string, unknown>;
+        staleFollowUpSourceDisposition.artifact_path = normalizeForArtifact(staleDispositionPath);
+        staleFollowUpSourceDisposition.artifact_sha256 = staleDispositionArtifactSha256;
+        const staleFollowUpSourceReceipt = staleFollowUp.source_receipt as Record<string, unknown>;
+        staleFollowUpSourceReceipt.receipt_sha256 = substitutedReceiptSha256;
+        const staleDispositionItem = (staleDisposition.items as Record<string, unknown>[])[0];
+        const staleFingerprint = sha256JsonPayload({
+            schema_version: 1,
+            parent_task_id: TASK_ID,
+            review_type: REVIEW_TYPE,
+            item_id: staleDispositionItem.id,
+            item_kind: staleDispositionItem.kind,
+            severity: staleDispositionItem.severity,
+            action: staleDispositionItem.action,
+            source_rule: staleDispositionItem.source_rule,
+            validation_artifact_sha256: staleValidationArtifactSha256,
+            validation_result_sha256: staleValidation.validation_result_sha256,
+            disposition_artifact_sha256: staleDispositionArtifactSha256,
+            disposition_result_sha256: staleDisposition.disposition_result_sha256
+        });
+        ((staleFollowUp.items as Record<string, unknown>[])[0]).fingerprint = staleFingerprint;
+        writeJson(materialized.artifact_path, staleFollowUp);
+        const staleItemFingerprintsSha256 = sha256JsonPayload([staleFingerprint]);
+        const staleSourceBindingSha256 = sha256JsonPayload({
+            schema_version: 1,
+            review_type: REVIEW_TYPE,
+            validation_artifact_sha256: staleValidationArtifactSha256,
+            validation_result_sha256: staleValidation.validation_result_sha256,
+            receipt_sha256: substitutedReceiptSha256,
+            disposition_artifact_sha256: staleDispositionArtifactSha256,
+            disposition_result_sha256: staleDisposition.disposition_result_sha256
+        });
+        const substitutedTaskText = currentTaskText.replace(
+            /review_follow_up_lane_binding=code:1:[0-9a-f]{64}:[0-9a-f]{64}\./u,
+            `review_follow_up_lane_binding=code:1:${staleItemFingerprintsSha256}:${staleSourceBindingSha256}.`
+        );
+        assert.notEqual(substitutedTaskText, currentTaskText);
+        fs.writeFileSync(taskPath, substitutedTaskText, 'utf8');
+        assert.equal(followUpArtifactMatchesCurrentTaskQueue({
+            artifact: staleFollowUp,
+            dispositionArtifact: staleDisposition,
+            dispositionArtifactSha256: staleDispositionArtifactSha256,
+            repoRoot,
+            taskId: TASK_ID,
+            reviewType: REVIEW_TYPE,
+            expectedFollowUpCount: 1,
+            materializationMode: 'grouped_by_parent',
+            followUpArtifactPath: materialized.artifact_path
+        }), true);
+        const substitutedDispositionScope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, childRow);
+        assert.equal(substitutedDispositionScope.status, 'invalid');
+        assert.deepEqual(substitutedDispositionScope.files, []);
+        assert.ok(substitutedDispositionScope.diagnostics.some((diagnostic) => (
+            /receipt|validation source binding|disposition/u.test(diagnostic)
+        )));
+        fs.writeFileSync(materialized.artifact_path, originalFollowUpArtifact, 'utf8');
+        fs.writeFileSync(artifacts.receiptPath, originalReceiptArtifact, 'utf8');
+        fs.writeFileSync(taskPath, currentTaskText, 'utf8');
+
+        const missingLaneTaskText = currentTaskText
+            .replace(/review_follow_up_lane_binding=code:[^|]+?\.\s*/u, '')
+            .replace(/review_follow_up_lane_artifact=code:`[^`]+`\.\s*/u, '');
+        assert.notEqual(missingLaneTaskText, currentTaskText);
+        fs.writeFileSync(taskPath, missingLaneTaskText, 'utf8');
+        const missingLaneRow = rowFor(repoRoot, `${TASK_ID}-F1`);
+        assert.ok(missingLaneRow);
+        const missingLaneScope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, missingLaneRow);
+        assert.equal(missingLaneScope.status, 'invalid');
+        assert.deepEqual(missingLaneScope.files, []);
+        const missingLaneRoute = buildBaselineOnlyPreImplementationRoute({
+            repoRoot,
+            cliPrefix: 'node bin/garda.js',
+            taskEntry: missingLaneRow,
+            taskMode: {
+                task_id: `${TASK_ID}-F1`,
+                task_summary: missingLaneRow.title,
+                provider: 'Codex',
+                requested_depth: 2,
+                orchestrator_work: false
+            },
+            preflight: {
+                changed_files: [],
+                zero_diff_guard: {
+                    zero_diff_detected: true,
+                    completion_requires_audited_no_op: true
+                }
+            },
+            auditedNoOpPassed: false
+        });
+        assert.equal(missingLaneRoute?.nextGate, 'follow-up-scope-evidence');
+        assert.deepEqual(missingLaneRoute?.commands, []);
+        const missingLaneAuditedNoOpRoute = buildBaselineOnlyPreImplementationRoute({
+            repoRoot,
+            cliPrefix: 'node bin/garda.js',
+            taskEntry: missingLaneRow,
+            taskMode: {
+                task_id: `${TASK_ID}-F1`,
+                task_summary: missingLaneRow.title,
+                provider: 'Codex',
+                requested_depth: 2,
+                orchestrator_work: false
+            },
+            preflight: {
+                changed_files: [],
+                zero_diff_guard: {
+                    zero_diff_detected: true,
+                    completion_requires_audited_no_op: true
+                }
+            },
+            auditedNoOpPassed: true
+        });
+        assert.equal(missingLaneAuditedNoOpRoute?.nextGate, 'follow-up-scope-evidence');
+        assert.deepEqual(missingLaneAuditedNoOpRoute?.commands, []);
+        const missingLaneChangedPreflightRoute = buildBaselineOnlyPreImplementationRoute({
+            repoRoot,
+            cliPrefix: 'node bin/garda.js',
+            taskEntry: missingLaneRow,
+            taskMode: {
+                task_id: `${TASK_ID}-F1`,
+                task_summary: missingLaneRow.title,
+                provider: 'Codex',
+                requested_depth: 2,
+                orchestrator_work: false
+            },
+            preflight: {
+                changed_files: ['src/gates/review/example.ts'],
+                zero_diff_guard: {
+                    zero_diff_detected: false,
+                    completion_requires_audited_no_op: false
+                }
+            },
+            auditedNoOpPassed: false
+        });
+        assert.equal(missingLaneChangedPreflightRoute?.nextGate, 'follow-up-scope-evidence');
+        assert.deepEqual(missingLaneChangedPreflightRoute?.commands, []);
+        fs.writeFileSync(taskPath, currentTaskText, 'utf8');
+
         fs.writeFileSync(
             taskPath,
             currentTaskText.replace(
@@ -989,6 +1757,9 @@ describe('review findings follow-up task materialization', () => {
             'utf8'
         );
         assert.equal(matchesCurrentQueue(), false);
+        const tamperedScope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, childRow);
+        assert.equal(tamperedScope.status, 'invalid');
+        assert.deepEqual(tamperedScope.files, []);
         fs.writeFileSync(taskPath, currentTaskText, 'utf8');
 
         const rerun = materializeReviewFindingsFollowUpTasks({
@@ -1026,8 +1797,25 @@ describe('review findings follow-up task materialization', () => {
         assert.ok(updatedChild.notes.includes(
             `review_follow_up_lane_artifact=test:\`${normalizeForArtifact(path.relative(repoRoot, secondLane.artifact_path))}\`.`
         ));
+        const updatedParent = rowFor(repoRoot, TASK_ID);
+        assert.ok(updatedParent);
+        assert.ok(updatedParent.notes.includes(
+            `artifact \`${normalizeForArtifact(secondLane.artifact_path)}\`.`
+        ));
         assert.equal((updatedChild.notes.match(/review_follow_up_lane_artifact=/gu) || []).length, 2);
         assert.equal(taskRows(repoRoot).filter((row) => row.taskId.startsWith(`${TASK_ID}-F`)).length, 1);
+        const twoLaneTaskText = fs.readFileSync(taskPath, 'utf8');
+        const narrowedLaneTaskText = twoLaneTaskText
+            .replace(/review_follow_up_lane_binding=code:[^|]+?\.\s*/u, '')
+            .replace(/review_follow_up_lane_artifact=code:`[^`]+`\.\s*/u, '');
+        assert.notEqual(narrowedLaneTaskText, twoLaneTaskText);
+        fs.writeFileSync(taskPath, narrowedLaneTaskText, 'utf8');
+        const narrowedLaneRow = rowFor(repoRoot, `${TASK_ID}-F1`);
+        assert.ok(narrowedLaneRow);
+        const narrowedLaneScope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, narrowedLaneRow);
+        assert.equal(narrowedLaneScope.status, 'invalid');
+        assert.deepEqual(narrowedLaneScope.files, []);
+        fs.writeFileSync(taskPath, twoLaneTaskText, 'utf8');
 
         seedGroupedPreflight(repoRoot, '2026-07-17T13:30:00.000Z');
         const staleCycle = materializeReviewFindingsFollowUpTasks({

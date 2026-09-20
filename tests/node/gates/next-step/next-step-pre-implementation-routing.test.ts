@@ -23,6 +23,7 @@ describe('next-step baseline-only pre-implementation routing', () => {
     it('routes a complete-provenance implementation task before audited no-op', () => {
         const result = buildBaselineOnlyPreImplementationRoute({
             repoRoot: process.cwd(),
+            cliPrefix: 'node bin/garda.js',
             taskEntry: {
                 taskId: TASK_ID,
                 status: 'IN_PROGRESS',
@@ -49,6 +50,7 @@ describe('next-step baseline-only pre-implementation routing', () => {
             '[security] Close historical retry continuity through the next rejection package and transport selection';
         const result = buildBaselineOnlyPreImplementationRoute({
             repoRoot: process.cwd(),
+            cliPrefix: 'node bin/garda.js',
             taskEntry: {
                 taskId,
                 status: 'IN_PROGRESS',
@@ -75,6 +77,7 @@ describe('next-step baseline-only pre-implementation routing', () => {
             '[security] Isolate current and historical correction artifact-chain integrity validation';
         const result = buildBaselineOnlyPreImplementationRoute({
             repoRoot: process.cwd(),
+            cliPrefix: 'node bin/garda.js',
             taskEntry: {
                 taskId,
                 status: 'IN_PROGRESS',
@@ -95,9 +98,35 @@ describe('next-step baseline-only pre-implementation routing', () => {
         assert.match(result?.reason || '', /task has implementation intent/u);
     });
 
+    it('does not treat an ordinary decomposed F child as a review follow-up', () => {
+        const taskId = 'T-ORDINARY-F1';
+        const taskSummary = 'Implement the first ordinary decomposed work package';
+        const result = buildBaselineOnlyPreImplementationRoute({
+            repoRoot: process.cwd(),
+            cliPrefix: 'node bin/garda.js',
+            taskEntry: {
+                taskId,
+                status: 'IN_PROGRESS',
+                area: 'workflow/decomposition',
+                title: taskSummary,
+                profile: 'balanced',
+                notes: 'Child work package with no review follow-up provenance.'
+            },
+            taskMode: {
+                task_id: taskId,
+                task_summary: taskSummary
+            },
+            preflight: buildBaselineOnlyPreflight(),
+            auditedNoOpPassed: false
+        });
+
+        assert.equal(result?.nextGate, 'implementation');
+    });
+
     it('preserves explicit audit-only metadata as a no-op candidate', () => {
         const result = buildBaselineOnlyPreImplementationRoute({
             repoRoot: process.cwd(),
+            cliPrefix: 'node bin/garda.js',
             taskEntry: {
                 taskId: TASK_ID,
                 status: 'IN_PROGRESS',

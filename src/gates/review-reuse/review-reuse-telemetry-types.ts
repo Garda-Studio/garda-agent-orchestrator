@@ -1,6 +1,7 @@
 // Extracted from review-reuse-telemetry.ts; keep behavior changes covered by facade tests.
 export interface ReviewReuseTelemetryEventLike {
     event_type?: unknown;
+    outcome?: unknown;
     sequence?: unknown;
     details?: unknown;
     integrity?: unknown;

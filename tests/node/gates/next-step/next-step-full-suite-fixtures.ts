@@ -1290,9 +1290,11 @@ export function seedCompletedReviewerLaunchAndInvocation(
     taskId: string,
     reviewType: string,
     reviewerIdentity: string,
-    options: { includeInvocation?: boolean } = {}
+    options: { includeInvocation?: boolean; reviewContextPath?: string } = {}
 ): void {
-    const reviewContextPath = path.join(reviewsRoot(repoRoot), `${taskId}-${reviewType}-review-context.json`);
+    const reviewContextPath = options.reviewContextPath
+        ? path.resolve(options.reviewContextPath)
+        : path.join(reviewsRoot(repoRoot), `${taskId}-${reviewType}-review-context.json`);
     const routeIntegrity = appendEvent(repoRoot, taskId, 'REVIEWER_DELEGATION_ROUTED', 'INFO', {
         review_type: reviewType,
         reviewer_execution_mode: 'delegated_subagent',
@@ -1354,7 +1356,7 @@ export function seedCompletedReviewerLaunchAndInvocation(
         reviewer_session_id: reviewerIdentity,
         reviewer_identity: reviewerIdentity,
         review_context_sha256: fileSha256(reviewContextPath),
-        review_tree_state_sha256: readReviewContextTreeStateSha256(repoRoot, taskId, reviewType),
+        review_tree_state_sha256: readReviewContextTreeStateSha256(repoRoot, taskId, reviewType, reviewContextPath),
         routing_event_sha256: routeIntegrity.event_sha256,
         reviewer_launch_artifact_path: launchArtifactPath,
         reviewer_launch_artifact_sha256: fileSha256(launchArtifactPath),
@@ -1368,8 +1370,15 @@ export function seedCompletedReviewerLaunchAndInvocation(
     });
 }
 
-export function readReviewContextTreeStateSha256(repoRoot: string, taskId: string, reviewType: string): string {
-    const reviewContextPath = path.join(reviewsRoot(repoRoot), `${taskId}-${reviewType}-review-context.json`);
+export function readReviewContextTreeStateSha256(
+    repoRoot: string,
+    taskId: string,
+    reviewType: string,
+    reviewContextPathOverride?: string
+): string {
+    const reviewContextPath = reviewContextPathOverride
+        ? path.resolve(reviewContextPathOverride)
+        : path.join(reviewsRoot(repoRoot), `${taskId}-${reviewType}-review-context.json`);
     const reviewContext = JSON.parse(fs.readFileSync(reviewContextPath, 'utf8')) as Record<string, unknown>;
     const treeState = reviewContext.tree_state && typeof reviewContext.tree_state === 'object' && !Array.isArray(reviewContext.tree_state)
         ? reviewContext.tree_state as Record<string, unknown>

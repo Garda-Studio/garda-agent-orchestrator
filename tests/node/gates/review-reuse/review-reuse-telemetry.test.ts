@@ -7,7 +7,8 @@ import * as path from 'node:path';
 
 import {
     validateStrictReusedReviewEvidence,
-    validateHistoricalReviewRecordedTelemetryEventMatch
+    validateHistoricalReviewRecordedTelemetryEventMatch,
+    type ReviewReuseTelemetryEventLike
 } from '../../../../src/gates/review-reuse/review-reuse-telemetry';
 
 function sha256(content: string): string {
@@ -144,6 +145,7 @@ function buildStrictReuseFixture(reviewType = 'code') {
     };
     const historicalReviewRecordedEvent = {
         event_type: 'REVIEW_RECORDED',
+        outcome: 'PASS',
         sequence: 5,
         integrity: {
             task_sequence: 5,
@@ -162,6 +164,7 @@ function buildStrictReuseFixture(reviewType = 'code') {
     };
     const currentReviewRecordedEvent = {
         event_type: 'REVIEW_RECORDED',
+        outcome: 'PASS',
         sequence: 11,
         integrity: {
             task_sequence: 11,
@@ -178,7 +181,7 @@ function buildStrictReuseFixture(reviewType = 'code') {
             review_artifact_snapshot_sha256: artifactSha
         }
     };
-    const events = [
+    const events: ReviewReuseTelemetryEventLike[] = [
         invocationEvent,
         historicalReviewRecordedEvent,
         currentReviewRecordedEvent
@@ -302,6 +305,41 @@ describe('gates/review-reuse-telemetry', () => {
 
         assert.equal(result.valid, false);
         assert.match((result as { valid: false; reason: string }).reason, /current-cycle REVIEW_RECORDED reuse telemetry.*missing_integrity/);
+    });
+
+    it('rejects a passing generic record combined with failed strict current reuse telemetry', () => {
+        const { input, currentReviewRecordedEvent } = buildStrictReuseFixture();
+        currentReviewRecordedEvent.outcome = 'FAIL';
+        const genericDetails = {
+            ...(currentReviewRecordedEvent.details as Record<string, unknown>)
+        };
+        for (const key of [
+            'reused_existing_review',
+            'reused_from_receipt_path',
+            'reused_from_receipt_sha256',
+            'reused_from_review_context_sha256',
+            'reused_from_review_context_reuse_sha256',
+            'reused_from_review_tree_state_sha256',
+            'reused_from_review_scope_sha256',
+            'reused_from_code_scope_sha256'
+        ]) {
+            delete genericDetails[key];
+        }
+        input.events.push({
+            event_type: 'REVIEW_RECORDED',
+            outcome: 'PASS',
+            sequence: 12,
+            integrity: {
+                task_sequence: 12,
+                event_sha256: 'f'.repeat(64)
+            },
+            details: genericDetails
+        });
+
+        const result = validateStrictReusedReviewEvidence(input);
+
+        assert.equal(result.valid, false);
+        assert.match((result as { valid: false; reason: string }).reason, /current-cycle REVIEW_RECORDED reuse telemetry/);
     });
 
     it('rejects strict reused review evidence when current receipt snapshot path is missing', () => {
@@ -433,6 +471,16 @@ describe('gates/review-reuse-telemetry', () => {
     it('rejects strict reused review evidence when the historical source event is missing', () => {
         const { input, historicalReviewRecordedEvent } = buildStrictReuseFixture();
         input.events = input.events.filter((event) => event !== historicalReviewRecordedEvent);
+
+        const result = validateStrictReusedReviewEvidence(input);
+
+        assert.equal(result.valid, false);
+        assert.match((result as { valid: false; reason: string }).reason, /historical REVIEW_RECORDED telemetry/);
+    });
+
+    it('rejects strict reused review evidence when the historical source outcome failed', () => {
+        const { input, historicalReviewRecordedEvent } = buildStrictReuseFixture();
+        historicalReviewRecordedEvent.outcome = 'FAIL';
 
         const result = validateStrictReusedReviewEvidence(input);
 

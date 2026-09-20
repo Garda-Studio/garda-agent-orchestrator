@@ -28,6 +28,7 @@ interface BaselineOnlyRoute {
     nextGate: string;
     title: string;
     reason: string;
+    commands?: NextStepDecisionRoutePayload['commands'];
 }
 
 interface TestFirstExpectedFailureRoute {
@@ -274,7 +275,7 @@ export function resolveValidationDecisionRoute(options: {
                 nextGate: route.nextGate,
                 title: route.title,
                 reason: route.reason,
-                commands: []
+                commands: route.commands ?? []
             }
             : null;
     };

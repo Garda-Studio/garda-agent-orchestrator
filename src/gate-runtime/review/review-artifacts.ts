@@ -578,7 +578,7 @@ function positiveReviewArtifactSnapshotLimit(value: unknown, fallback: number): 
     return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function withReviewArtifactReadSnapshot<T>(
+export function withReviewArtifactReadSnapshot<T>(
     reviewsDir: string,
     callback: () => T,
     options: ReviewArtifactLockOptions = {}

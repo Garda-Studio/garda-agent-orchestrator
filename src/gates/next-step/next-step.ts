@@ -3993,6 +3993,7 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
             : null,
         resolveBaselineOnlyPreImplementationRoute: () => buildBaselineOnlyPreImplementationRoute({
             repoRoot,
+            cliPrefix,
             taskEntry,
             taskMode,
             preflight,

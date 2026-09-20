@@ -22,6 +22,7 @@ import {
     scanReviewArtifactLocks,
     withReviewArtifactLockAsync,
     withReviewArtifactReadBarrier,
+    withReviewArtifactReadSnapshot,
     writeReviewArtifactJson,
     writeReviewArtifactsWithRollback,
     writeReviewArtifactText
@@ -1026,6 +1027,25 @@ test('review read barrier rejects an artifact replaced after its first snapshot 
                 () => readReviewArtifactTextFile(receiptPath),
                 /Review artifact text snapshot is unavailable/
             );
+        });
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('review read snapshot rejects a replaced custom artifact outside the reviews root', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-custom-review-read-snapshot-race-'));
+    const customEvidenceDir = path.join(tempDir, 'custom-evidence');
+    const receiptPath = path.join(customEvidenceDir, 'bound-receipt.json');
+    fs.mkdirSync(customEvidenceDir, { recursive: true });
+    fs.writeFileSync(receiptPath, '{"version":1}\n', 'utf8');
+    try {
+        withReviewArtifactReadSnapshot(tempDir, () => {
+            const originalSha256 = readReviewArtifactFileSha256(receiptPath);
+            assert.equal(originalSha256, fileSha256(receiptPath));
+            fs.writeFileSync(receiptPath, '{"version":200,"replacement":true}\n', 'utf8');
+            assert.equal(readReviewArtifactJsonSnapshot(receiptPath).valid, false);
+            assert.equal(readReviewArtifactFileSha256(receiptPath), null);
         });
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });

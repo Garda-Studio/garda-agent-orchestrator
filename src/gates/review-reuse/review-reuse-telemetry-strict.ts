@@ -237,6 +237,13 @@ function findStrictCurrentReuseRecordedEvent(input: StrictReusedReviewEvidenceVa
     let lastReason: string | null = null;
     for (let index = input.events.length - 1; index >= 0; index -= 1) {
         const event = input.events[index];
+        if (
+            normalizeEventType(event.event_type) === 'REVIEW_RECORDED'
+            && normalizeLowerString(event.outcome) !== 'pass'
+        ) {
+            lastReason = 'non_pass_outcome';
+            continue;
+        }
         const match = validateReviewReuseRecordedEventMatch({
             event,
             reviewType: input.reviewType,
@@ -310,6 +317,10 @@ function findStrictHistoricalReviewRecordedSourceEvent(
     for (let index = input.events.length - 1; index >= 0; index -= 1) {
         const event = input.events[index];
         if (normalizeEventType(event.event_type) !== 'REVIEW_RECORDED') {
+            continue;
+        }
+        if (normalizeLowerString(event.outcome) !== 'pass') {
+            lastReason = 'non_pass_outcome';
             continue;
         }
         const details = isPlainRecord(event.details) ? event.details : {};
