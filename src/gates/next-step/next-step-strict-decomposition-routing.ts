@@ -400,10 +400,6 @@ export function resolveStrictDecompositionContinuationRoute(params: {
     baseMissingArtifacts: NextStepArtifactState[];
     basePresentArtifacts: NextStepArtifactState[];
 }): NextStepStrictDecompositionRoute | null {
-    if (!params.requirement.required) {
-        return null;
-    }
-
     const evidence = getStrictDecompositionDecisionEvidence(
         params.repoRoot,
         params.taskId,
@@ -412,6 +408,12 @@ export function resolveStrictDecompositionContinuationRoute(params: {
         params.requirement.taskProfile
     );
     const artifactState = buildStrictDecompositionEvidenceArtifactState(params.repoRoot, evidence);
+    if (!params.requirement.required && (
+        evidence.evidence_status !== 'PASS'
+        || evidence.decision !== 'split-required'
+    )) {
+        return null;
+    }
     if (evidence.evidence_status !== 'PASS') {
         return {
             status: 'BLOCKED',
@@ -491,13 +493,16 @@ export function resolveStrictDecompositionContinuationRoute(params: {
         evidence.proposed_child_task_ids
     );
     if (!splitRoutingState.ready) {
+        const riskSignals = params.requirement.riskSignals.length > 0
+            ? formatNextStepInlineList(params.requirement.riskSignals)
+            : 'none (the authenticated split-required decision remains authoritative)';
         return {
             status: 'BLOCKED',
             nextGate: 'strict-decomposition-split-routing',
             title: 'Strict decomposition split decision is active.',
             reason:
                 'A current strict decomposition decision says split-required, so ordinary classify, compile, review, full-suite, completion, and implementation continuation are suppressed. ' +
-                `Risk signals: ${formatNextStepInlineList(params.requirement.riskSignals)}. ` +
+                `Risk signals: ${riskSignals}. ` +
                 `Proposed child tasks: ${formatNextStepInlineList(evidence.proposed_child_task_ids)}. ` +
                 `Root-cause work packages: ${formatNextStepInlineList(evidence.work_package_root_cause_areas)}. ` +
                 `Preserved finding obligations: ${formatNextStepInlineList(evidence.finding_obligation_ids)}. ` +

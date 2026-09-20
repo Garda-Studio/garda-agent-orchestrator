@@ -792,6 +792,61 @@ describe('gates/next-step strict decomposition', () => {
         assert.ok(text.includes('Status: DECOMPOSED'));
     });
 
+    it('rejects stale risk-signal bypass after WIP suspension and a zero-diff preflight refresh', () => {
+        const repoRoot = makeTempRepo();
+        const parentRow =
+            `| ${TASK_ID} | TODO | P1 | service/bounded-change | Implement bounded parent change | gpt-5.4 | 2026-05-20 | strict | Child tasks: \`${TASK_ID}-1\` and \`${TASK_ID}-2\`. |`;
+        fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
+            '# TASK.md',
+            '',
+            '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+            '|---|---|---|---|---|---|---|---|---|',
+            parentRow,
+            ''
+        ].join('\n'), 'utf8');
+        seedStartedTask(repoRoot, TASK_ID);
+        writeStrictDecompositionDecision(repoRoot, TASK_ID, {
+            decision: 'split-required',
+            taskSummary: 'Seeded next-step task',
+            proposedChildTaskIds: [`${TASK_ID}-1`, `${TASK_ID}-2`]
+        });
+        initGitRepo(repoRoot);
+        fs.writeFileSync(path.join(repoRoot, 'src', 'app.ts'), 'export const value = 2;\n', 'utf8');
+        writePreflightScope(repoRoot, TASK_ID, ['src/app.ts', 'src/adapter.ts', 'src/contract.ts']);
+
+        const suspended = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        assert.equal(suspended.status, 'BLOCKED');
+        assert.equal(suspended.next_gate, 'strict-decomposition-split-routing');
+        assert.equal(runGitFixtureCommand(repoRoot, ['status', '--short', '--', 'src/app.ts']).stdout.trim(), '');
+
+        fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
+            '# TASK.md',
+            '',
+            '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+            '|---|---|---|---|---|---|---|---|---|',
+            parentRow,
+            `| ${TASK_ID}-1 | TODO | P1 | service/validation | Validate bounded evidence | gpt-5.4 | 2026-05-20 | strict | Child of ${TASK_ID}. |`,
+            `| ${TASK_ID}-2 | TODO | P1 | service/routing | Route bounded execution | gpt-5.4 | 2026-05-20 | strict | Child of ${TASK_ID}. |`,
+            ''
+        ].join('\n'), 'utf8');
+        writePreflightScope(repoRoot, TASK_ID, []);
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        const text = formatNextStepText(result);
+        const taskMd = fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8');
+        const events = fs.readFileSync(path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`), 'utf8');
+
+        assert.equal(result.status, 'DECOMPOSED', `${result.next_gate}: ${result.reason}`);
+        assert.equal(result.next_gate, 'child-task');
+        assert.ok(result.commands[0].command.includes(`next-step "${TASK_ID}-1"`));
+        assert.ok(taskMd.includes(`| ${TASK_ID} | 🟪 DECOMPOSED |`));
+        assert.ok(events.includes('"event_type":"STRICT_DECOMPOSITION_SPLIT_ROUTED"'));
+        assert.equal(events.includes('"event_type":"SPLIT_REQUIRED_LATCHED"'), false);
+        assert.equal(text.includes('gate classify-change'), false);
+        assert.equal(text.includes('gate compile-gate'), false);
+        assert.equal(text.includes('gate review'), false);
+    });
+
     it('suspends legacy parent WIP before routing an already decomposed strict parent to a child', () => {
         const repoRoot = makeTempRepo();
         fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
