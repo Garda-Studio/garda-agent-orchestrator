@@ -325,6 +325,14 @@ import {
     type NextStepDecisionRoutePayload
 } from './next-step-decision-route-groups';
 import {
+    NEXT_STEP_DECISION_CHECKPOINT_PRECEDENCE,
+    createAuthenticatedNextStepStateProjection,
+    selectNextStepDecision,
+    type NextStepDecisionCandidate,
+    type NextStepDecisionCheckpoint,
+    type NextStepDecisionKind
+} from './next-step-decision-engine';
+import {
     resolveReviewCycleGuardDecisionRoute,
     resolveScopeBudgetGuardDecisionRoute,
     resolveValidationDecisionRoute
@@ -2900,18 +2908,43 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         warnings: [] as string[],
         sourceRuntimeStaleness
     };
-    if (taskRequiredReviewDeclarationError) {
-        return buildResult({
-            ...resultBase,
-            status: 'BLOCKED',
-            nextGate: 'task-metadata-validation',
-            title: 'Correct the TASK.md required-review declaration.',
-            reason:
-                `${taskRequiredReviewDeclarationError} Correct the task notes to the exact form ` +
-                '`Required reviews: lane, lane.` and rerun the navigator before classify-change.',
-            commands: []
-        });
-    }
+    const decisionProjectionBinding = Object.freeze({
+        source: 'authenticated-resolution-context' as const,
+        taskId,
+        taskModePath: toRepoDisplayPath(repoRoot, taskModePath),
+        preflightSha256
+    });
+    const decisionCandidates = new Map<
+        NextStepDecisionCheckpoint,
+        NextStepDecisionCandidate<NextStepDecisionRoutePayload>
+    >();
+    let nextDecisionCheckpointIndex = 0;
+    const selectProjectedDecisionRoute = (
+        checkpoint: NextStepDecisionCheckpoint,
+        kind: NextStepDecisionKind,
+        route: NextStepDecisionRoutePayload | null
+    ): NextStepDecisionRoutePayload | null => {
+        const expectedCheckpoint = NEXT_STEP_DECISION_CHECKPOINT_PRECEDENCE[nextDecisionCheckpointIndex];
+        if (checkpoint !== expectedCheckpoint) {
+            throw new Error(
+                `Next-step decision checkpoint ${checkpoint} was evaluated out of order; expected ${expectedCheckpoint}.`
+            );
+        }
+        decisionCandidates.set(checkpoint, { checkpoint, kind, evaluation: 'evaluated', route });
+        nextDecisionCheckpointIndex += 1;
+        const decision = selectNextStepDecision(createAuthenticatedNextStepStateProjection({
+            binding: decisionProjectionBinding,
+            candidates: NEXT_STEP_DECISION_CHECKPOINT_PRECEDENCE.map((candidateCheckpoint) => (
+                decisionCandidates.get(candidateCheckpoint) ?? {
+                    checkpoint: candidateCheckpoint,
+                    kind: 'normal',
+                    evaluation: 'pending',
+                    route: null
+                }
+            ))
+        }));
+        return decision?.route ?? null;
+    };
     const buildDecisionRouteResult = (
         route: NextStepDecisionRoutePayload,
         overrides: { qualityChecklist?: NextStepQualityChecklistSummary | null } = {}
@@ -2928,6 +2961,25 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         finalReport: route.finalReport ?? null,
         ...overrides
     });
+    const taskMetadataValidationRoute: NextStepDecisionRoutePayload | null = taskRequiredReviewDeclarationError
+        ? {
+            status: 'BLOCKED',
+            nextGate: 'task-metadata-validation',
+            title: 'Correct the TASK.md required-review declaration.',
+            reason:
+                `${taskRequiredReviewDeclarationError} Correct the task notes to the exact form ` +
+                '`Required reviews: lane, lane.` and rerun the navigator before classify-change.',
+            commands: []
+        }
+        : null;
+    const taskMetadataValidationDecision = selectProjectedDecisionRoute(
+        'task-metadata-validation',
+        'normal',
+        taskMetadataValidationRoute
+    );
+    if (taskMetadataValidationDecision) {
+        return buildDecisionRouteResult(taskMetadataValidationDecision);
+    }
     let noPreflightCurrentSnapshot: CurrentGitWorkspaceSnapshot | null | undefined;
     const readNoPreflightCurrentSnapshot = (): CurrentGitWorkspaceSnapshot | null => {
         if (noPreflightCurrentSnapshot === undefined) {
@@ -3034,18 +3086,26 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         cliPrefix,
         presentArtifacts: coreArtifacts.present
     });
-    if (taskIdCaseMismatchRoute) {
-        return buildDecisionRouteResult(taskIdCaseMismatchRoute);
+    const taskIdCaseMismatchDecision = selectProjectedDecisionRoute(
+        'task-id-casing',
+        'normal',
+        taskIdCaseMismatchRoute
+    );
+    if (taskIdCaseMismatchDecision) {
+        return buildDecisionRouteResult(taskIdCaseMismatchDecision);
     }
 
-    const repairChildHandoff = findFullSuiteRepairChildHandoffState(
-        repoRoot,
-        taskId,
-        reviewsRoot,
-        eventsRoot,
-        taskEntries
-    );
-    if (repairChildHandoff) {
+    const fullSuiteRepairChildRoute = (() => {
+        const repairChildHandoff = findFullSuiteRepairChildHandoffState(
+            repoRoot,
+            taskId,
+            reviewsRoot,
+            eventsRoot,
+            taskEntries
+        );
+        if (!repairChildHandoff) {
+            return null;
+        }
         const repairEvidence = repairChildHandoff.decomposition.ready
             ? readFullSuiteRepairTaskMaterializationEvidence({
                 repoRoot,
@@ -3060,7 +3120,7 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
             const reason = !repairChildHandoff.decomposition.ready
                 ? repairChildHandoff.decomposition.violations.join(' ')
                 : repairEvidence?.reason || 'full-suite repair materialization evidence is missing';
-            return buildDecisionRouteResult({
+            return {
                 status: 'BLOCKED',
                 nextGate: 'full-suite-repair-child-handoff',
                 title: 'Complete the multi-child full-suite repair handoff before executing this child.',
@@ -3074,10 +3134,10 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                         `${cliPrefix} next-step "${repairChildHandoff.parent_task_id}" --repo-root "."`
                     )
                 ]
-            });
+            } satisfies NextStepDecisionRoutePayload;
         }
         if (!repairEvidence.scoped_handoff || !repairEvidence.child_scopes) {
-            return buildDecisionRouteResult({
+            return {
                 status: 'BLOCKED',
                 nextGate: 'full-suite-repair-child-scope',
                 title: 'Migrate the repair handoff to immutable child scopes before executing this child.',
@@ -3091,13 +3151,13 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                         `${cliPrefix} next-step "${repairChildHandoff.parent_task_id}" --repo-root "."`
                     )
                 ]
-            });
+            } satisfies NextStepDecisionRoutePayload;
         }
         if (!sameRepairChildScopes(
             repairEvidence.child_scopes,
             repairChildHandoff.decomposition.child_scopes
         )) {
-            return buildDecisionRouteResult({
+            return {
                 status: 'BLOCKED',
                 nextGate: 'full-suite-repair-child-scope',
                 title: 'Restore the immutable child scope declarations used by the materialized handoff.',
@@ -3105,7 +3165,7 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                     `Repair child ${taskId} scope declarations changed after parent `
                     + `${repairChildHandoff.parent_task_id} suspended WIP. The materialized scope binding is immutable.`,
                 commands: []
-            });
+            } satisfies NextStepDecisionRoutePayload;
         }
         const repairScopeViolations = validateRepairChildChangedFiles(
             repairEvidence.child_scopes,
@@ -3113,7 +3173,7 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
             getPreflightChangedFilesForReviewRemediation(preflight)
         );
         if (repairScopeViolations.length > 0) {
-            return buildDecisionRouteResult({
+            return {
                 status: 'BLOCKED',
                 nextGate: 'full-suite-repair-child-scope',
                 title: 'Return the repair child to its immutable isolated file scope.',
@@ -3121,8 +3181,17 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                     `${repairScopeViolations.join(' ')} The suspended parent WIP remains isolated and must not be `
                     + 'absorbed into this repair child.',
                 commands: []
-            });
+            } satisfies NextStepDecisionRoutePayload;
         }
+        return null;
+    })();
+    const fullSuiteRepairChildDecision = selectProjectedDecisionRoute(
+        'full-suite-repair-child',
+        'normal',
+        fullSuiteRepairChildRoute
+    );
+    if (fullSuiteRepairChildDecision) {
+        return buildDecisionRouteResult(fullSuiteRepairChildDecision);
     }
 
     let splitRequiredReviewCycleContinuationAssessment:
@@ -3175,8 +3244,13 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         fullSuiteArtifactPath: readinessArtifacts.paths.fullSuiteValidationPath,
         reviewCycleContinuationAssessment: splitRequiredReviewCycleContinuationAssessment
     });
-    if (taskQueueTerminalRoute) {
-        return buildDecisionRouteResult(taskQueueTerminalRoute);
+    const taskQueueTerminalDecision = selectProjectedDecisionRoute(
+        'task-queue-terminal',
+        isTaskQueueSplitRequiredStatus(taskEntry?.status || null) ? 'split' : 'normal',
+        taskQueueTerminalRoute
+    );
+    if (taskQueueTerminalDecision) {
+        return buildDecisionRouteResult(taskQueueTerminalDecision);
     }
 
     let completedCloseoutDecisionRoute: NextStepDecisionRoutePayload | null = null;
@@ -3208,8 +3282,13 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
             })
         });
     }
-    if (completedCloseoutDecisionRoute) {
-        return buildDecisionRouteResult(completedCloseoutDecisionRoute);
+    const completedCloseoutDecision = selectProjectedDecisionRoute(
+        'completed-closeout',
+        'normal',
+        completedCloseoutDecisionRoute
+    );
+    if (completedCloseoutDecision) {
+        return buildDecisionRouteResult(completedCloseoutDecision);
     }
 
     const docImpactPath = readinessArtifacts.paths.docImpactPath;
@@ -3307,8 +3386,9 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         shellSmokePreflightPassed: isGatePassed(summary, 'shell-smoke-preflight'),
         shellSmokePreflightCommand: `${cliPrefix} gate shell-smoke-preflight --task-id "${taskId}" --repo-root "."`
     });
-    if (startupRoute) {
-        return buildDecisionRouteResult(startupRoute);
+    const startupDecision = selectProjectedDecisionRoute('startup', 'normal', startupRoute);
+    if (startupDecision) {
+        return buildDecisionRouteResult(startupDecision);
     }
 
     const strictDecompositionRequirement = buildStrictDecompositionDecisionRequirement({
@@ -3380,8 +3460,9 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
             });
         }
     });
-    if (classifyDecisionRoute) {
-        return buildDecisionRouteResult(classifyDecisionRoute);
+    const classifyDecision = selectProjectedDecisionRoute('classify', 'normal', classifyDecisionRoute);
+    if (classifyDecision) {
+        return buildDecisionRouteResult(classifyDecision);
     }
 
     const optionalSkillRefreshCommand = buildAuthenticatedScopeClassifyChangeCommand({
@@ -3419,8 +3500,13 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         timelineIntegrityCommand:
             `${cliPrefix} gate task-events-summary --task-id ${quoteCommandValue(taskId)} --as-json --repo-root "."`
     });
-    if (optionalSkillSelectionDecisionRoute) {
-        return buildDecisionRouteResult(optionalSkillSelectionDecisionRoute);
+    const optionalSkillSelectionDecision = selectProjectedDecisionRoute(
+        'optional-skill-selection',
+        'normal',
+        optionalSkillSelectionDecisionRoute
+    );
+    if (optionalSkillSelectionDecision) {
+        return buildDecisionRouteResult(optionalSkillSelectionDecision);
     }
 
     const coherentCycleReadiness = readCoherentCycleReadiness(
@@ -3460,8 +3546,13 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         : [];
     const pendingOptionalSkillActivation = getPendingOptionalSkillActivationCommand(optionalSkillSelectionSummary);
     const currentProtectedScopeRoute = buildCurrentProtectedScopeTaskModeRestartRoute();
-    if (currentProtectedScopeRoute) {
-        return buildDecisionRouteResult(currentProtectedScopeRoute);
+    const currentProtectedScopeDecision = selectProjectedDecisionRoute(
+        'protected-scope',
+        'normal',
+        currentProtectedScopeRoute
+    );
+    if (currentProtectedScopeDecision) {
+        return buildDecisionRouteResult(currentProtectedScopeDecision);
     }
 
     const preGuardWorkspaceReadiness = reviewGateAlreadyPassed
@@ -3594,16 +3685,20 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         },
         optionalSkillActivation: pendingOptionalSkillActivation
     });
-    if (preGuardRoute) {
-        const qualityChecklist = preGuardRoute.nextGate === 'classify-change' && qualityChecklistReadiness
+    const preGuardDecision = selectProjectedDecisionRoute('pre-guard', 'normal', preGuardRoute);
+    if (preGuardDecision) {
+        const qualityChecklist = preGuardDecision.nextGate === 'classify-change' && qualityChecklistReadiness
             ? buildNextStepQualityChecklistSummary(
-                markQualityChecklistReadinessStaleForWorkspace(qualityChecklistReadiness, preGuardRoute.reason)
+                markQualityChecklistReadinessStaleForWorkspace(qualityChecklistReadiness, preGuardDecision.reason)
             )
             : resultBase.qualityChecklist;
-        return buildDecisionRouteResult(preGuardRoute, { qualityChecklist });
+        return buildDecisionRouteResult(preGuardDecision, { qualityChecklist });
     }
 
     let scopeBudgetGuardEvaluation: ScopeBudgetGuardEvaluation | null = null;
+    let scopeBudgetGuardRoute: NextStepDecisionRoutePayload | null = null;
+    let scopeBudgetGuardWarnings: string[] = [];
+    let scopeBudgetGuardKind: NextStepDecisionKind = 'split';
     try {
         scopeBudgetGuardEvaluation = readScopeBudgetGuardEvaluation(
             repoRoot,
@@ -3611,9 +3706,41 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
             profileSummary,
             requiredReviewTypes
         );
+        const scopeBudgetGuardResolution = resolveScopeBudgetGuardDecisionRoute({
+            evaluation: scopeBudgetGuardEvaluation,
+            guardReason: scopeBudgetGuardEvaluation?.should_block
+                ? sanitizeScopeBudgetGuardSummary(scopeBudgetGuardEvaluation)
+                : null,
+            materializeLatch: () => materializeSplitRequiredLatch({
+                repoRoot,
+                eventsRoot,
+                reviewsRoot,
+                taskId,
+                guardKind: 'scope_budget',
+                guardReason: sanitizeScopeBudgetGuardSummary(scopeBudgetGuardEvaluation!),
+                rawGuardSummary: scopeBudgetGuardEvaluation!.summary_line,
+                preflightPath,
+                guardDetails: {
+                    action: scopeBudgetGuardEvaluation!.action,
+                    profile_name: scopeBudgetGuardEvaluation!.profile_name,
+                    violations: scopeBudgetGuardEvaluation!.violations.map((violation) => ({
+                        metric: violation.metric,
+                        actual: violation.actual,
+                        limit: violation.limit,
+                        warning_limit: violation.warning_limit,
+                        blocking_limit: violation.blocking_limit,
+                        severity: violation.severity
+                    }))
+                }
+            }),
+            formatArtifactPath: (artifactPath) => toRepoDisplayPath(repoRoot, artifactPath),
+            presentArtifacts: coreArtifacts.present
+        });
+        scopeBudgetGuardRoute = scopeBudgetGuardResolution.route;
+        scopeBudgetGuardWarnings = scopeBudgetGuardResolution.warnings;
     } catch (error: unknown) {
-        return buildResult({
-            ...resultBase,
+        scopeBudgetGuardKind = 'normal';
+        scopeBudgetGuardRoute = {
             status: 'BLOCKED',
             nextGate: 'workflow-config-validation',
             title: 'Validate workflow configuration before continuing.',
@@ -3624,52 +3751,113 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                     `${cliPrefix} workflow validate --target-root "."`
                 )
             ]
-        });
+        };
     }
-    const scopeBudgetGuardDecision = resolveScopeBudgetGuardDecisionRoute({
-        evaluation: scopeBudgetGuardEvaluation,
-        guardReason: scopeBudgetGuardEvaluation?.should_block
-            ? sanitizeScopeBudgetGuardSummary(scopeBudgetGuardEvaluation)
-            : null,
-        materializeLatch: () => materializeSplitRequiredLatch({
-            repoRoot,
-            eventsRoot,
-            reviewsRoot,
-            taskId,
-            guardKind: 'scope_budget',
-            guardReason: sanitizeScopeBudgetGuardSummary(scopeBudgetGuardEvaluation!),
-            rawGuardSummary: scopeBudgetGuardEvaluation!.summary_line,
-            preflightPath,
-            guardDetails: {
-                action: scopeBudgetGuardEvaluation!.action,
-                profile_name: scopeBudgetGuardEvaluation!.profile_name,
-                violations: scopeBudgetGuardEvaluation!.violations.map((violation) => ({
-                    metric: violation.metric,
-                    actual: violation.actual,
-                    limit: violation.limit,
-                    warning_limit: violation.warning_limit,
-                    blocking_limit: violation.blocking_limit,
-                    severity: violation.severity
-                }))
-            }
-        }),
-        formatArtifactPath: (artifactPath) => toRepoDisplayPath(repoRoot, artifactPath),
-        presentArtifacts: coreArtifacts.present
-    });
-    resultBase.warnings.push(...scopeBudgetGuardDecision.warnings);
-    if (scopeBudgetGuardDecision.route) {
-        return buildDecisionRouteResult(scopeBudgetGuardDecision.route);
+    resultBase.warnings.push(...scopeBudgetGuardWarnings);
+    const scopeBudgetDecision = selectProjectedDecisionRoute(
+        'scope-budget-guard',
+        scopeBudgetGuardKind,
+        scopeBudgetGuardRoute
+    );
+    if (scopeBudgetDecision) {
+        return buildDecisionRouteResult(scopeBudgetDecision);
     }
 
     let reviewCycleGuardEvaluation: ReviewCycleGuardEvaluation | null = null;
     let latestFailedReviewCycleAttempt: NextStepReviewCycleLatestFailedReview | null = null;
+    let reviewCycleGuardRoute: NextStepDecisionRoutePayload | null = null;
+    let reviewCycleGuardWarnings: string[] = [];
+    let reviewCycleGuardKind: NextStepDecisionKind = 'split';
     try {
         const reviewCycleGuardResult = readReviewCycleGuardEvaluation(repoRoot, eventsRoot, taskId);
         reviewCycleGuardEvaluation = reviewCycleGuardResult.evaluation;
         latestFailedReviewCycleAttempt = reviewCycleGuardResult.latestFailedReview;
+        const reviewCycleGuardResolution = resolveReviewCycleGuardDecisionRoute({
+            evaluation: reviewCycleGuardEvaluation,
+            getPendingRequiredReviewTypes: () => requiredReviewTypes.filter((reviewType) => {
+                const state = reviewStates.find((candidate) => candidate.reviewType === reviewType);
+                return !state || !reviewStateHasSatisfiedEvidence(repoRoot, eventsRoot, taskId, state);
+            }),
+            assessContinuation: (pendingReviewTypes) => assessReviewCycleContinuationEvidence({
+                repoRoot,
+                reviewsRoot,
+                eventsRoot,
+                taskId,
+                evaluation: reviewCycleGuardEvaluation!,
+                reviewPhase: {
+                    required_review_types: requiredReviewTypes,
+                    pending_required_review_types: pendingReviewTypes
+                }
+            }),
+            buildOperatorBlock: () => buildReviewCycleOperatorBlock(
+                reviewCycleGuardEvaluation!,
+                latestFailedReviewCycleAttempt
+            ),
+            materializeLatch: () => materializeSplitRequiredLatch({
+                repoRoot,
+                eventsRoot,
+                reviewsRoot,
+                taskId,
+                guardKind: 'review_cycle',
+                guardReason: buildReviewCycleOperatorBlock(
+                    reviewCycleGuardEvaluation!,
+                    latestFailedReviewCycleAttempt
+                ).reason,
+                rawGuardSummary: reviewCycleGuardEvaluation!.summary_line,
+                preflightPath,
+                guardDetails: {
+                    action: reviewCycleGuardEvaluation!.action,
+                    total_non_test_review_count: reviewCycleGuardEvaluation!.total_non_test_review_count,
+                    failed_non_test_review_count: reviewCycleGuardEvaluation!.failed_non_test_review_count,
+                    cumulative_total_non_test_review_count: reviewCycleGuardEvaluation!.attempt_diagnostics.cumulative_total_non_test_review_count,
+                    cumulative_failed_non_test_review_count: reviewCycleGuardEvaluation!.attempt_diagnostics.cumulative_failed_non_test_review_count,
+                    current_scope_total_non_test_review_count: reviewCycleGuardEvaluation!.current_scope_total_non_test_review_count,
+                    current_scope_failed_non_test_review_count: reviewCycleGuardEvaluation!.current_scope_failed_non_test_review_count,
+                    current_scope_counts_by_review_type: reviewCycleGuardEvaluation!.current_scope_counts_by_review_type,
+                    fresh_non_test_review_count: reviewCycleGuardEvaluation!.attempt_diagnostics.fresh_non_test_review_count,
+                    reused_non_test_review_count: reviewCycleGuardEvaluation!.attempt_diagnostics.reused_non_test_review_count,
+                    fresh_reused_by_review_type: reviewCycleGuardEvaluation!.attempt_diagnostics.fresh_reused_by_review_type,
+                    scope_hash_count_by_review_type: reviewCycleGuardEvaluation!.attempt_diagnostics.scope_hash_count_by_review_type,
+                    top_scope_hashes_by_review_type: reviewCycleGuardEvaluation!.attempt_diagnostics.top_scope_hashes_by_review_type,
+                    excluded_review_types: reviewCycleGuardEvaluation!.excluded_review_types,
+                    violations: reviewCycleGuardEvaluation!.violations.map((violation) => ({
+                        metric: violation.metric,
+                        actual: violation.actual,
+                        limit: violation.limit
+                    }))
+                }
+            }),
+            materializeAutoSplitPrompt: (latchResult) => materializeReviewCycleAutoSplitPrompt({
+                repoRoot,
+                reviewsRoot,
+                taskId,
+                evaluation: reviewCycleGuardEvaluation!,
+                latestFailedReview: latestFailedReviewCycleAttempt,
+                latchResult,
+                cliPrefix,
+                fullSuiteCommand: fullSuiteConfig.command
+            }),
+            buildContinuationCommand: () => buildReviewCycleContinuationCommand(
+                cliPrefix,
+                taskId,
+                reviewCycleGuardEvaluation!
+            ),
+            buildSplitDecisionCommand: () => buildReviewCycleSplitDecisionCommand(
+                repoRoot,
+                cliPrefix,
+                taskId,
+                reviewCycleGuardEvaluation!,
+                preflightPath
+            ),
+            formatArtifactPath: (artifactPath) => toRepoDisplayPath(repoRoot, artifactPath),
+            presentArtifacts: coreArtifacts.present,
+            defaultMissingArtifacts: resultBase.missingArtifacts
+        });
+        reviewCycleGuardRoute = reviewCycleGuardResolution.route;
+        reviewCycleGuardWarnings = reviewCycleGuardResolution.warnings;
     } catch (error: unknown) {
-        return buildResult({
-            ...resultBase,
+        reviewCycleGuardKind = 'normal';
+        reviewCycleGuardRoute = {
             status: 'BLOCKED',
             nextGate: 'workflow-config-validation',
             title: 'Validate workflow configuration before continuing.',
@@ -3680,104 +3868,38 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                     `${cliPrefix} workflow validate --target-root "."`
                 )
             ]
-        });
+        };
     }
-    const reviewCycleGuardDecision = resolveReviewCycleGuardDecisionRoute({
-        evaluation: reviewCycleGuardEvaluation,
-        getPendingRequiredReviewTypes: () => requiredReviewTypes.filter((reviewType) => {
-            const state = reviewStates.find((candidate) => candidate.reviewType === reviewType);
-            return !state || !reviewStateHasSatisfiedEvidence(repoRoot, eventsRoot, taskId, state);
-        }),
-        assessContinuation: (pendingReviewTypes) => assessReviewCycleContinuationEvidence({
-            repoRoot,
-            reviewsRoot,
-            eventsRoot,
-            taskId,
-            evaluation: reviewCycleGuardEvaluation!,
-            reviewPhase: {
-                required_review_types: requiredReviewTypes,
-                pending_required_review_types: pendingReviewTypes
-            }
-        }),
-        buildOperatorBlock: () => buildReviewCycleOperatorBlock(
-            reviewCycleGuardEvaluation!,
-            latestFailedReviewCycleAttempt
-        ),
-        materializeLatch: () => materializeSplitRequiredLatch({
-            repoRoot,
-            eventsRoot,
-            reviewsRoot,
-            taskId,
-            guardKind: 'review_cycle',
-            guardReason: buildReviewCycleOperatorBlock(
-                reviewCycleGuardEvaluation!,
-                latestFailedReviewCycleAttempt
-            ).reason,
-            rawGuardSummary: reviewCycleGuardEvaluation!.summary_line,
-            preflightPath,
-            guardDetails: {
-                action: reviewCycleGuardEvaluation!.action,
-                total_non_test_review_count: reviewCycleGuardEvaluation!.total_non_test_review_count,
-                failed_non_test_review_count: reviewCycleGuardEvaluation!.failed_non_test_review_count,
-                cumulative_total_non_test_review_count: reviewCycleGuardEvaluation!.attempt_diagnostics.cumulative_total_non_test_review_count,
-                cumulative_failed_non_test_review_count: reviewCycleGuardEvaluation!.attempt_diagnostics.cumulative_failed_non_test_review_count,
-                current_scope_total_non_test_review_count: reviewCycleGuardEvaluation!.current_scope_total_non_test_review_count,
-                current_scope_failed_non_test_review_count: reviewCycleGuardEvaluation!.current_scope_failed_non_test_review_count,
-                current_scope_counts_by_review_type: reviewCycleGuardEvaluation!.current_scope_counts_by_review_type,
-                fresh_non_test_review_count: reviewCycleGuardEvaluation!.attempt_diagnostics.fresh_non_test_review_count,
-                reused_non_test_review_count: reviewCycleGuardEvaluation!.attempt_diagnostics.reused_non_test_review_count,
-                fresh_reused_by_review_type: reviewCycleGuardEvaluation!.attempt_diagnostics.fresh_reused_by_review_type,
-                scope_hash_count_by_review_type: reviewCycleGuardEvaluation!.attempt_diagnostics.scope_hash_count_by_review_type,
-                top_scope_hashes_by_review_type: reviewCycleGuardEvaluation!.attempt_diagnostics.top_scope_hashes_by_review_type,
-                excluded_review_types: reviewCycleGuardEvaluation!.excluded_review_types,
-                violations: reviewCycleGuardEvaluation!.violations.map((violation) => ({
-                    metric: violation.metric,
-                    actual: violation.actual,
-                    limit: violation.limit
-                }))
-            }
-        }),
-        materializeAutoSplitPrompt: (latchResult) => materializeReviewCycleAutoSplitPrompt({
-            repoRoot,
-            reviewsRoot,
-            taskId,
-            evaluation: reviewCycleGuardEvaluation!,
-            latestFailedReview: latestFailedReviewCycleAttempt,
-            latchResult,
-            cliPrefix,
-            fullSuiteCommand: fullSuiteConfig.command
-        }),
-        buildContinuationCommand: () => buildReviewCycleContinuationCommand(
-            cliPrefix,
-            taskId,
-            reviewCycleGuardEvaluation!
-        ),
-        buildSplitDecisionCommand: () => buildReviewCycleSplitDecisionCommand(
-            repoRoot,
-            cliPrefix,
-            taskId,
-            reviewCycleGuardEvaluation!,
-            preflightPath
-        ),
-        formatArtifactPath: (artifactPath) => toRepoDisplayPath(repoRoot, artifactPath),
-        presentArtifacts: coreArtifacts.present,
-        defaultMissingArtifacts: resultBase.missingArtifacts
-    });
-    resultBase.warnings.push(...reviewCycleGuardDecision.warnings);
-    if (reviewCycleGuardDecision.route) {
-        return buildDecisionRouteResult(reviewCycleGuardDecision.route);
+    resultBase.warnings.push(...reviewCycleGuardWarnings);
+    const reviewCycleDecision = selectProjectedDecisionRoute(
+        'review-cycle-guard',
+        reviewCycleGuardKind,
+        reviewCycleGuardRoute
+    );
+    if (reviewCycleDecision) {
+        return buildDecisionRouteResult(reviewCycleDecision);
     }
 
     const strictDecompositionBlock = buildStrictDecompositionContinuationBlock();
-    if (strictDecompositionBlock) {
-        return buildDecisionRouteResult(strictDecompositionBlock);
+    const strictDecompositionDecision = selectProjectedDecisionRoute(
+        'strict-decomposition',
+        'split',
+        strictDecompositionBlock
+    );
+    if (strictDecompositionDecision) {
+        return buildDecisionRouteResult(strictDecompositionDecision);
     }
 
     const pendingOptionalSkillDecisionRoute = resolvePendingOptionalSkillDecisionRoute(
         pendingOptionalSkillActivation
     );
-    if (pendingOptionalSkillDecisionRoute) {
-        return buildDecisionRouteResult(pendingOptionalSkillDecisionRoute);
+    const pendingOptionalSkillDecision = selectProjectedDecisionRoute(
+        'optional-skill-activation',
+        'normal',
+        pendingOptionalSkillDecisionRoute
+    );
+    if (pendingOptionalSkillDecision) {
+        return buildDecisionRouteResult(pendingOptionalSkillDecision);
     }
 
     const fullSuiteCommand = `${cliPrefix} gate full-suite-validation --task-id "${taskId}" --preflight-path "${preflightCommandPath}" --repo-root "."`;
@@ -3944,8 +4066,13 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         resolveAuditedNoOpState,
         resolveFullSuiteValidationRoute: resolveFullSuiteLifecycleRoute
     });
-    if (validationDecisionRoute) {
-        return buildDecisionRouteResult(validationDecisionRoute);
+    const validationDecision = selectProjectedDecisionRoute(
+        'validation',
+        validationDecisionRoute?.nextGate === 'record-no-op' ? 'audited-no-op' : 'normal',
+        validationDecisionRoute
+    );
+    if (validationDecision) {
+        return buildDecisionRouteResult(validationDecision);
     }
 
     const reviewBoundaryDecisionRoute = resolveFirstActiveTaskLifecycleGate(
@@ -3956,8 +4083,13 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         }),
         { 'full-suite-validation': resolveFullSuiteLifecycleRoute }
     );
-    if (reviewBoundaryDecisionRoute) {
-        return buildDecisionRouteResult(reviewBoundaryDecisionRoute);
+    const reviewBoundaryDecision = selectProjectedDecisionRoute(
+        'review-boundary',
+        'normal',
+        reviewBoundaryDecisionRoute
+    );
+    if (reviewBoundaryDecision) {
+        return buildDecisionRouteResult(reviewBoundaryDecision);
     }
 
     if (reviewLaunchPlan.next_review_type) {
@@ -4777,7 +4909,12 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
             resolveContextPreparationRoute,
             resolveDelegatedReadinessRoute: resolveDelegatedReadinessDecisionRoute
         });
-        if (activeReviewLifecycleDecisionRoute) {
+        const activeReviewDecision = selectProjectedDecisionRoute(
+            'active-review',
+            state?.failed ? 'failed-review' : 'normal',
+            activeReviewLifecycleDecisionRoute
+        );
+        if (activeReviewDecision) {
             const semanticResumePrefix = semanticResumeReusable
                 ? `${semanticCycleResume.reason} Accepted unchanged review lanes: ${
                     semanticCycleResume.accepted_review_types.join(', ') || 'none'
@@ -4785,12 +4922,22 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                 : '';
             return buildResult({
                 ...resultBase,
-                status: activeReviewLifecycleDecisionRoute.status,
-                nextGate: activeReviewLifecycleDecisionRoute.nextGate,
-                title: activeReviewLifecycleDecisionRoute.title,
-                reason: semanticResumePrefix + activeReviewLifecycleDecisionRoute.reason,
-                commands: activeReviewLifecycleDecisionRoute.commands
+                status: activeReviewDecision.status,
+                nextGate: activeReviewDecision.nextGate,
+                title: activeReviewDecision.title,
+                reason: semanticResumePrefix + activeReviewDecision.reason,
+                commands: activeReviewDecision.commands
             });
+        }
+    }
+    if (!reviewLaunchPlan.next_review_type) {
+        const completedReviewPhaseDecision = selectProjectedDecisionRoute(
+            'active-review',
+            'normal',
+            null
+        );
+        if (completedReviewPhaseDecision) {
+            throw new Error('Completed review phase must not produce an active-review route.');
         }
     }
 
@@ -4852,13 +4999,21 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
             completionCommand: buildCompletionGateCommand(repoRoot, cliPrefix, taskId, preflightCommandPath, taskModePath)
         }
     });
+    const postReviewDecision = selectProjectedDecisionRoute(
+        'post-review',
+        'normal',
+        postReviewLifecycleDecisionRoute
+    );
+    if (!postReviewDecision) {
+        throw new Error('Post-review lifecycle decision route is required.');
+    }
     return buildResult({
         ...resultBase,
-        status: postReviewLifecycleDecisionRoute.status,
-        nextGate: postReviewLifecycleDecisionRoute.nextGate,
-        title: postReviewLifecycleDecisionRoute.title,
-        reason: postReviewLifecycleDecisionRoute.reason,
-        commands: postReviewLifecycleDecisionRoute.commands
+        status: postReviewDecision.status,
+        nextGate: postReviewDecision.nextGate,
+        title: postReviewDecision.title,
+        reason: postReviewDecision.reason,
+        commands: postReviewDecision.commands
     });
 }
 
