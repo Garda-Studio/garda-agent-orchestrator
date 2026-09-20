@@ -82,21 +82,44 @@ export class CompactCapture {
             if (!this.ref && !this.failure && (compactPreview(this.buffers.stdout.toString('utf8'), this.settings).omitted || compactPreview(this.buffers.stderr.toString('utf8'), this.settings).omitted)) this.spill();
         } catch (error) { this.failure = error instanceof Error ? error.message : String(error); }
         this.finished = true;
-        for (const fd of Object.values(this.files)) fs.closeSync(fd);
+        for (const fd of Object.values(this.files)) {
+            try { fs.closeSync(fd); }
+            catch (error) { this.failure ||= error instanceof Error ? error.message : String(error); }
+        }
         const complete = !this.failure && !outcome.sinkError && !outcome.timedOut && !outcome.cancelled;
         if (this.ref) {
-            const manifest: CompactManifest = {
-                version: 1, taskId: this.taskId, ref: this.ref, createdAt: new Date().toISOString(), ...outcome,
-                ...(this.failure ? { sinkError: this.failure } : {}), complete,
-                streams: {
-                    stdout: { bytes: this.counts.stdout, sha256: this.hashes.stdout.digest('hex') },
-                    stderr: { bytes: this.counts.stderr, sha256: this.hashes.stderr.digest('hex') }
-                }
-            };
-            const dir = this.store.runPath(this.taskId, this.ref);
             try {
+                const dir = this.store.runPath(this.taskId, this.ref);
+                const streamMetadata = (stream: CompactStream): { bytes: number; sha256: string } => {
+                    if (complete) return { bytes: this.counts[stream], sha256: this.hashes[stream].digest('hex') };
+                    // A disk write may have persisted only part of a chunk before failing.
+                    // Describe those actual bytes, not the pre-write counters.
+                    const fd = openCompactFile(path.join(dir, `${stream}.log`), fs.constants.O_RDONLY);
+                    try {
+                        const bytes = fs.fstatSync(fd).size;
+                        if (bytes > this.settings.runBytes - COMPACT_METADATA_BYTES) throw new Error('Invalid partial capture size.');
+                        const hash = createHash('sha256');
+                        const buffer = Buffer.alloc(65536);
+                        for (let offset = 0; offset < bytes;) {
+                            const count = fs.readSync(fd, buffer, 0, Math.min(buffer.length, bytes - offset), offset);
+                            if (!count) throw new Error('Partial capture changed during publication.');
+                            hash.update(buffer.subarray(0, count));
+                            offset += count;
+                        }
+                        return { bytes, sha256: hash.digest('hex') };
+                    } finally { fs.closeSync(fd); }
+                };
+                const error = this.failure || outcome.sinkError;
+                const manifest: CompactManifest = {
+                    version: 1, taskId: this.taskId, ref: this.ref, createdAt: new Date().toISOString(),
+                    exitCode: outcome.exitCode, timedOut: outcome.timedOut, cancelled: outcome.cancelled,
+                    ...(error ? { sinkError: error.slice(0, 600) } : {}), complete,
+                    streams: { stdout: streamMetadata('stdout'), stderr: streamMetadata('stderr') }
+                };
+                const serialized = JSON.stringify(manifest);
+                if (Buffer.byteLength(serialized) > COMPACT_METADATA_BYTES) throw new Error('Compact manifest exceeds metadata budget.');
                 const fd = openCompactFile(path.join(dir, 'manifest.tmp'), fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL);
-                try { fs.writeFileSync(fd, JSON.stringify(manifest)); } finally { fs.closeSync(fd); }
+                try { fs.writeFileSync(fd, serialized); } finally { fs.closeSync(fd); }
                 fs.renameSync(path.join(dir, 'manifest.tmp'), path.join(dir, 'manifest.json'));
             } catch (error) {
                 this.failure = `Capture publication failed: ${error instanceof Error ? error.message : String(error)}`;

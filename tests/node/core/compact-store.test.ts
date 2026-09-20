@@ -75,3 +75,39 @@ test('small partial captures retain a reference even below the in-memory ceiling
         assert.ok(result.ref);
     });
 });
+
+test('manifest excludes subprocess capture buffers and bounds error metadata', async t => {
+    const root = workspace(t);
+    await withCompactStore(root, async store => {
+        const capture = new CompactCapture(store, 'T-META', { ...DEFAULT_COMPACT_SETTINGS });
+        await capture.write('stdout', Buffer.alloc(16000, 120));
+        const outcome = { exitCode: 1, timedOut: false, cancelled: false, stdout: '\0'.repeat(10000), sinkError: '\0'.repeat(10000) };
+        const result = capture.finish(outcome);
+        const file = path.join(store.runPath('T-META', result.ref!), 'manifest.json');
+        assert.ok(fs.statSync(file).size <= 8192);
+        assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(file, 'utf8')), 'stdout'), false);
+    });
+});
+
+test('partial disk writes publish verifiable stored bytes instead of stale counters', async t => {
+    const root = workspace(t);
+    const ref = await withCompactStore(root, async store => {
+        const capture = new CompactCapture(store, 'T-IO', { ...DEFAULT_COMPACT_SETTINGS });
+        await capture.write('stdout', Buffer.alloc(16000, 120));
+        const fsModule = require('node:fs') as typeof fs;
+        const originalWrite = fsModule.writeSync;
+        let first = true;
+        fsModule.writeSync = ((fd: number, buffer: Buffer, offset: number, length: number) => {
+            if (!first) throw new Error('Injected disk full');
+            first = false;
+            return originalWrite(fd, buffer, offset, Math.min(3, length));
+        }) as typeof fs.writeSync;
+        try { await assert.rejects(capture.write('stdout', Buffer.from('abcdef')), /disk full/); }
+        finally { fsModule.writeSync = originalWrite; }
+        return capture.finish({ exitCode: 1, timedOut: false, cancelled: false }).ref!;
+    });
+    const result = await readCompactOutput(root, { taskId: 'T-IO', ref, stream: 'stdout', tail: true });
+    assert.equal(result.complete, false);
+    assert.equal(result.bytes, 16003);
+    assert.ok(result.text.endsWith('abc'));
+});
