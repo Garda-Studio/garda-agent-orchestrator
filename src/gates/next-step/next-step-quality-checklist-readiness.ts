@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 
 import {
     DEFAULT_OPTIONAL_QUALITY_CHECKS_REVIEW_FAILURE_CADENCE_INTERVAL,
@@ -12,6 +13,7 @@ import {
     assessQualityChecklistAnswersTemplateFile,
     assessQualityChecklistPolicyCompatibility,
     buildQualityChecklistArtifact,
+    buildQualityChecklistAnswersTemplate,
     buildQualityChecklistCadenceSkipArtifact,
     materializeQualityChecklistAnswersTemplate,
     QUALITY_CHECKLIST_ID,
@@ -46,6 +48,11 @@ import {
     TRUST_BOUNDARY_ANALYSIS_RULE_ID
 } from '../../core/trust-boundary-analysis';
 import { readTaskTimelineEventLikes } from './next-step-review-timeline-evidence';
+import {
+    createNextStepEffectPlanner,
+    NextStepEffectPlanStaleError,
+    type NextStepEffectController
+} from './next-step-effects';
 
 export type NextStepQualityChecklistEvidenceStatus = 'disabled' | 'not_required' | 'missing' | 'invalid' | 'stale' | 'current';
 export type NextStepQualityChecklistEffect = 'disabled' | 'not_required' | 'missing' | 'invalid' | 'stale' | 'passed' | 'helped' | 'warned' | 'required_rework' | 'skipped_cadence';
@@ -98,6 +105,114 @@ export interface NextStepQualityChecklistSummary {
 
 function fileExists(filePath: string): boolean {
     return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+}
+
+function currentAnswersTemplatePolicySha256(options: {
+    binding: Record<string, unknown>;
+    template: Record<string, unknown>;
+}): string | null {
+    if (!Array.isArray(options.binding.active_rule_ids)
+        || !Array.isArray(options.template.active_rule_ids)
+        || !isPlainRecord(options.binding.active_rule_fingerprints)
+        || !isPlainRecord(options.template.active_rule_fingerprints)) {
+        return null;
+    }
+    const bindingFingerprints = options.binding.active_rule_fingerprints;
+    const templateFingerprints = options.template.active_rule_fingerprints;
+    const bindingRuleIds = options.binding.active_rule_ids.map((entry) => String(entry || '').trim());
+    const templateRuleIds = options.template.active_rule_ids.map((entry) => String(entry || '').trim());
+    if (
+        bindingRuleIds.some((ruleId) => !ruleId)
+        || JSON.stringify(bindingRuleIds) !== JSON.stringify(templateRuleIds)
+    ) {
+        return null;
+    }
+    const fingerprints = bindingRuleIds.map((ruleId) => {
+        const bindingFingerprint = String(bindingFingerprints[ruleId] || '')
+            .trim()
+            .toLowerCase();
+        const templateFingerprint = String(templateFingerprints[ruleId] || '')
+            .trim()
+            .toLowerCase();
+        return /^[a-f0-9]{64}$/u.test(bindingFingerprint) && bindingFingerprint === templateFingerprint
+            ? [ruleId, bindingFingerprint]
+            : null;
+    });
+    if (fingerprints.some((entry) => entry === null)) {
+        return null;
+    }
+    return createHash('sha256').update(JSON.stringify({
+        schema_version: 1,
+        active_rule_ids: bindingRuleIds,
+        active_rule_fingerprints: fingerprints
+    })).digest('hex');
+}
+
+function qualityChecklistAnswersMaterializationRequired(options: {
+    repoRoot: string;
+    taskId: string;
+    preflightPath: string;
+    refreshIfOlderThanUtc: string | null;
+}): boolean {
+    const answersPath = resolveDefaultQualityChecklistAnswersTemplatePath(options.repoRoot, options.taskId);
+    const assessment = assessQualityChecklistAnswersTemplateFile({
+        repoRoot: options.repoRoot,
+        taskId: options.taskId,
+        preflightPath: options.preflightPath,
+        answersPath
+    });
+    if (assessment.status !== 'current' || !assessment.template) {
+        return true;
+    }
+    const refreshThreshold = Date.parse(String(options.refreshIfOlderThanUtc || ''));
+    const templateTimestamp = Date.parse(String(assessment.template.timestamp_utc || ''));
+    if (Number.isFinite(refreshThreshold) && (!Number.isFinite(templateTimestamp) || templateTimestamp <= refreshThreshold)) {
+        return true;
+    }
+    const bindingPath = `${answersPath}.binding.json`;
+    if (!fileExists(bindingPath)) {
+        return true;
+    }
+    try {
+        const binding = JSON.parse(fs.readFileSync(bindingPath, 'utf8')) as Record<string, unknown>;
+        const template = assessment.template as unknown as Record<string, unknown>;
+        const expectedPolicySha256 = currentAnswersTemplatePolicySha256({ binding, template });
+        const scalarKeys = [
+            'task_id',
+            'checklist_id',
+            'preflight_path',
+            'preflight_sha256',
+            'workflow_config_path',
+            'workflow_config_sha256',
+            'effective_policy_sha256'
+        ];
+        if (
+            binding.schema_version !== 1
+            || binding.event_source !== 'quality-checklist-answers-template-binding'
+            || normalizePath(binding.answers_path) !== normalizePath(answersPath)
+            || scalarKeys.some((key) => binding[key] !== template[key])
+            || JSON.stringify(binding.active_rule_ids) !== JSON.stringify(template.active_rule_ids)
+            || !expectedPolicySha256
+            || binding.answers_template_policy_sha256 !== expectedPolicySha256
+        ) {
+            return true;
+        }
+        const bindingSha256 = fileSha256(bindingPath);
+        const eventsRoot = joinOrchestratorPath(options.repoRoot, path.join('runtime', 'task-events'));
+        return !readTaskTimelineEventLikes(eventsRoot, options.taskId).some((event) => {
+            if (String(event.event_type || '') !== 'QUALITY_CHECKLIST_ANSWERS_TEMPLATE_BINDING_RECORDED') {
+                return false;
+            }
+            const details = isPlainRecord(event.details) ? event.details : {};
+            return normalizePath(details.answers_path) === normalizePath(answersPath)
+                && normalizePath(details.binding_path) === normalizePath(bindingPath)
+                && String(details.binding_sha256 || '').trim().toLowerCase() === bindingSha256
+                && String(details.answers_template_policy_sha256 || '').trim().toLowerCase()
+                    === String(binding.answers_template_policy_sha256).trim().toLowerCase();
+        });
+    } catch {
+        return true;
+    }
 }
 
 function parseOptionalNumberField(value: unknown): number | null {
@@ -199,6 +314,7 @@ function writeActiveQuestionReference(options: {
     repoRoot: string;
     taskId: string;
     rules: readonly { id: string; prompt?: string }[];
+    effects: NextStepEffectController;
 }): string {
     const referencePath = joinOrchestratorPath(
         options.repoRoot,
@@ -212,19 +328,39 @@ function writeActiveQuestionReference(options: {
             `- ${rule.id}: ${String(rule.prompt || '').trim()}`
         ])
     ];
-    fs.mkdirSync(path.dirname(referencePath), { recursive: true });
-    fs.writeFileSync(referencePath, `${lines.join('\n')}\n`, 'utf8');
-    return referencePath;
+    const content = `${lines.join('\n')}\n`;
+    if (fileExists(referencePath) && fs.readFileSync(referencePath, 'utf8') === content) {
+        return referencePath;
+    }
+    return options.effects.run({
+        kind: 'materialize-quality-checklist-question-reference',
+        summary: `Materialize the active quality-checklist question reference for ${options.taskId}`,
+        input: {
+            task_id: options.taskId,
+            reference_path: normalizePath(referencePath),
+            content_sha256: createHash('sha256').update(content).digest('hex')
+        },
+        preview: () => referencePath,
+        execute: () => {
+            fs.mkdirSync(path.dirname(referencePath), { recursive: true });
+            fs.writeFileSync(referencePath, content, 'utf8');
+            return referencePath;
+        }
+    });
 }
 
 function tryWriteActiveQuestionReference(options: {
     repoRoot: string;
     taskId: string;
     rules: readonly { id: string; prompt?: string }[];
+    effects: NextStepEffectController;
 }): { path: string | null; error: string | null } {
     try {
         return { path: writeActiveQuestionReference(options), error: null };
     } catch (error: unknown) {
+        if (error instanceof NextStepEffectPlanStaleError) {
+            throw error;
+        }
         return {
             path: null,
             error: error instanceof Error ? error.message : String(error)
@@ -323,28 +459,49 @@ function writeCadenceSkipEvidence(options: {
     preflightPath: string;
     artifactPath: string;
     failureCount: number;
+    effects: NextStepEffectController;
 }): Record<string, unknown> {
     const artifact: Record<string, unknown> = {
         ...(buildQualityChecklistCadenceSkipArtifact(options) as unknown as Record<string, unknown>),
         review_failure_count: options.failureCount
     };
-    const status = String(artifact.status || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
-    fs.mkdirSync(path.dirname(options.artifactPath), { recursive: true });
-    fs.writeFileSync(options.artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
-    appendMandatoryTaskEvent(options.repoRoot, options.taskId, 'QUALITY_CHECKLIST_RECORDED', status === 'SKIPPED_CADENCE' ? 'INFO' : 'FAIL',
-        status === 'SKIPPED_CADENCE'
-            ? `Quality checklist skipped by review-failure cadence after failure ${options.failureCount}.`
-            : `Quality checklist cadence skip blocked by current configuration errors after failure ${options.failureCount}.`, {
-            artifact_path: options.artifactPath.replace(/\\/g, '/'),
-            artifact_hash: fileSha256(options.artifactPath),
-            status,
-            outcome: artifact.outcome,
-            preflight_path: artifact.preflight_path,
+    return options.effects.run({
+        kind: 'record-quality-checklist-cadence-skip',
+        summary: `Record the quality-checklist cadence decision for ${options.taskId}`,
+        input: {
+            task_id: options.taskId,
+            artifact_path: normalizePath(options.artifactPath),
+            preflight_path: normalizePath(options.preflightPath),
             preflight_sha256: artifact.preflight_sha256,
+            workflow_config_path: artifact.workflow_config_path,
+            workflow_config_sha256: artifact.workflow_config_sha256,
+            effective_policy_sha256: artifact.effective_policy_sha256,
             review_failure_count: options.failureCount,
-            violations: Array.isArray(artifact.violations) ? artifact.violations : []
-        });
-    return artifact;
+            status: artifact.status,
+            outcome: artifact.outcome,
+            violations: artifact.violations
+        },
+        preview: () => artifact,
+        execute: () => {
+            const status = String(artifact.status || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+            fs.mkdirSync(path.dirname(options.artifactPath), { recursive: true });
+            fs.writeFileSync(options.artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
+            appendMandatoryTaskEvent(options.repoRoot, options.taskId, 'QUALITY_CHECKLIST_RECORDED', status === 'SKIPPED_CADENCE' ? 'INFO' : 'FAIL',
+                status === 'SKIPPED_CADENCE'
+                    ? `Quality checklist skipped by review-failure cadence after failure ${options.failureCount}.`
+                    : `Quality checklist cadence skip blocked by current configuration errors after failure ${options.failureCount}.`, {
+                    artifact_path: options.artifactPath.replace(/\\/g, '/'),
+                    artifact_hash: fileSha256(options.artifactPath),
+                    status,
+                    outcome: artifact.outcome,
+                    preflight_path: artifact.preflight_path,
+                    preflight_sha256: artifact.preflight_sha256,
+                    review_failure_count: options.failureCount,
+                    violations: Array.isArray(artifact.violations) ? artifact.violations : []
+                });
+            return artifact;
+        }
+    });
 }
 
 function materializePendingQualityChecklistAnswers(
@@ -352,18 +509,50 @@ function materializePendingQualityChecklistAnswers(
         repoRoot: string;
         taskId: string;
         preflightPath: string;
+        effects: NextStepEffectController;
     },
     refreshIfOlderThanUtc: string | null = null
 ): QualityChecklistTemplateMaterialization {
+    const defaultAnswersPath = resolveDefaultQualityChecklistAnswersTemplatePath(options.repoRoot, options.taskId);
+    if (!qualityChecklistAnswersMaterializationRequired({
+        repoRoot: options.repoRoot,
+        taskId: options.taskId,
+        preflightPath: options.preflightPath,
+        refreshIfOlderThanUtc
+    })) {
+        return { error: null, answersPath: normalizePath(defaultAnswersPath) };
+    }
     try {
-        const result = materializeQualityChecklistAnswersTemplate({
+        const expectedTemplate = buildQualityChecklistAnswersTemplate({
             repoRoot: options.repoRoot,
             taskId: options.taskId,
-            preflightPath: options.preflightPath,
-            refreshIfOlderThanUtc
+            preflightPath: options.preflightPath
         });
-        return buildTemplateMaterializationResult(result);
+        return options.effects.run({
+            kind: 'materialize-quality-checklist-answers',
+            summary: `Materialize the quality-checklist answers template for ${options.taskId}`,
+            input: {
+                task_id: options.taskId,
+                preflight_path: normalizePath(options.preflightPath),
+                preflight_sha256: fileSha256(options.preflightPath),
+                answers_path: normalizePath(defaultAnswersPath),
+                workflow_config_path: expectedTemplate.workflow_config_path,
+                workflow_config_sha256: expectedTemplate.workflow_config_sha256,
+                effective_policy_sha256: expectedTemplate.effective_policy_sha256,
+                refresh_if_older_than_utc: refreshIfOlderThanUtc
+            },
+            preview: () => ({ error: null, answersPath: normalizePath(defaultAnswersPath) }),
+            execute: () => buildTemplateMaterializationResult(materializeQualityChecklistAnswersTemplate({
+                repoRoot: options.repoRoot,
+                taskId: options.taskId,
+                preflightPath: options.preflightPath,
+                refreshIfOlderThanUtc
+            }))
+        });
     } catch (error) {
+        if (error instanceof NextStepEffectPlanStaleError) {
+            throw error;
+        }
         return {
             error: error instanceof Error ? error.message : String(error),
             answersPath: null
@@ -432,7 +621,10 @@ export function readQualityChecklistReadiness(options: {
     preflightPath: string;
     preflightSha256: string | null;
     workflowConfig: Record<string, unknown> | null;
+    effects?: NextStepEffectController;
 }): NextStepQualityChecklistReadiness {
+    const effects = options.effects ?? createNextStepEffectPlanner();
+    const effectOptions = { ...options, effects };
     const hasOptionalQualityChecksConfig = options.workflowConfig?.optional_quality_checks !== undefined;
     const ruleSetDiagnostic = formatOptionalQualityChecksRuleSetDiagnostics(options.workflowConfig?.optional_quality_checks);
     const ruleSetDiagnosticSuffix = ruleSetDiagnostic ? ` ${ruleSetDiagnostic}` : '';
@@ -534,7 +726,7 @@ export function readQualityChecklistReadiness(options: {
     if (cadence.skip && !forceChecklistRun && !trustBoundaryRequired) {
         const answersTemplatePath = resolveDefaultQualityChecklistAnswersTemplatePath(options.repoRoot, options.taskId);
         const templateMaterialization = fileExists(answersTemplatePath)
-            ? materializePendingQualityChecklistAnswers(options)
+            ? materializePendingQualityChecklistAnswers(effectOptions)
             : { error: null, answersPath: null };
         const expectedPreflightSha256 = String(options.preflightSha256 || '').trim().toLowerCase()
             || (fileExists(options.preflightPath) ? fileSha256(options.preflightPath) : '');
@@ -558,7 +750,8 @@ export function readQualityChecklistReadiness(options: {
                 taskId: options.taskId,
                 preflightPath: options.preflightPath,
                 artifactPath,
-                failureCount: cadence.failureCount
+                failureCount: cadence.failureCount,
+                effects
             });
         const artifactStatus = String(artifact.status || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
         if (artifactStatus !== 'SKIPPED_CADENCE') {
@@ -611,13 +804,14 @@ export function readQualityChecklistReadiness(options: {
         activeQuestionReference ??= tryWriteActiveQuestionReference({
             repoRoot: options.repoRoot,
             taskId: options.taskId,
-            rules: activeRules
+            rules: activeRules,
+            effects
         });
         return activeQuestionReference;
     };
     const materializeRequiredChecklistInputs = (): QualityChecklistTemplateMaterialization => {
         const activeQuestionReferenceResult = getActiveQuestionReference();
-        const templateMaterialization = materializePendingQualityChecklistAnswers(options);
+        const templateMaterialization = materializePendingQualityChecklistAnswers(effectOptions);
         return {
             error: combineMaterializationErrors(
                 templateMaterialization.error,
@@ -880,7 +1074,7 @@ export function readQualityChecklistReadiness(options: {
             let templateMaterializationError: string | null = null;
             let answersTemplatePath: string | null = null;
             if (status === 'CONFIG_ERROR') {
-                const templateMaterialization = materializePendingQualityChecklistAnswers(options);
+                const templateMaterialization = materializePendingQualityChecklistAnswers(effectOptions);
                 templateMaterializationError = templateMaterialization.error;
                 answersTemplatePath = templateMaterialization.answersPath;
             }
@@ -945,7 +1139,7 @@ export function readQualityChecklistReadiness(options: {
     }
 
     if (status === 'ACTION_REQUIRED') {
-        const templateMaterialization = materializePendingQualityChecklistAnswers(options);
+        const templateMaterialization = materializePendingQualityChecklistAnswers(effectOptions);
         const answersPath = templateMaterialization.answersPath;
         if (answersPath && !templateMaterialization.error) {
             try {
@@ -1007,7 +1201,7 @@ export function readQualityChecklistReadiness(options: {
         ? formatQualityChecklistActions(artifact.violations)
         : null;
     if (status === 'CONFIG_ERROR') {
-        const templateMaterialization = materializePendingQualityChecklistAnswers(options);
+        const templateMaterialization = materializePendingQualityChecklistAnswers(effectOptions);
         return buildReadiness({
             enabled,
             required,

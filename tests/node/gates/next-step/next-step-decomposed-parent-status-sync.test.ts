@@ -265,11 +265,10 @@ describe('gates/next-step decomposed parent status sync', () => {
         }) as typeof fs.readFileSync;
 
         try {
-            const result = resolveNextStep({ taskId: 'T-800', repoRoot });
+            const result = syncDecomposedParentsToDone(repoRoot, 'T-800', ['T-800']);
 
-            assert.equal(result.status, 'DECOMPOSED');
-            assert.equal(result.next_gate, 'task-status-sync');
-            assert.ok(result.reason.includes('write-time revalidation'));
+            assert.equal(result.outcome, 'write_failed');
+            assert.match(result.error_message || '', /write-time revalidation/u);
             const taskMd = originalReadFileSync(taskPath, 'utf8') as string;
             assert.ok(taskMd.includes('| T-800 | 🟪 DECOMPOSED |'));
             assert.ok(taskMd.includes('| T-801 | TODO |'));
@@ -313,11 +312,10 @@ describe('gates/next-step decomposed parent status sync', () => {
         }) as typeof fs.readFileSync;
 
         try {
-            const result = resolveNextStep({ taskId: 'T-900', repoRoot });
+            const result = syncDecomposedParentsToDone(repoRoot, 'T-900', ['T-900']);
 
-            assert.equal(result.status, 'DECOMPOSED');
-            assert.equal(result.next_gate, 'task-status-sync');
-            assert.ok(result.reason.includes('write-time revalidation'));
+            assert.equal(result.outcome, 'write_failed');
+            assert.match(result.error_message || '', /write-time revalidation/u);
             const taskMd = originalReadFileSync(taskPath, 'utf8') as string;
             assert.ok(taskMd.includes('| T-900 | 🟪 DECOMPOSED |'));
             assert.ok(taskMd.includes('| T-901 | 🟩 DONE |'));

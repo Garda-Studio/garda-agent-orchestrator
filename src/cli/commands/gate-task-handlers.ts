@@ -453,6 +453,8 @@ export async function handleNextStep(gateArgv: string[]): Promise<void> {
         '--target-root': { key: 'repoRoot', type: 'string' },
         '--events-root': { key: 'eventsRoot', type: 'string' },
         '--reviews-root': { key: 'reviewsRoot', type: 'string' },
+        '--execute-effects': { key: 'executeEffects', type: 'boolean' },
+        '--effect-plan-sha256': { key: 'effectPlanSha256', type: 'string' },
         '--as-json': { key: 'asJson', type: 'boolean' }
     };
     return runGateCliHandler(gateArgv, defs, resolveNextStepFromCliOptions, {

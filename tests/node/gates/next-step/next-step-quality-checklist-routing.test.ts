@@ -33,6 +33,10 @@ import {
     readQualityChecklistReadiness
 } from '../../../../src/gates/next-step/next-step-quality-checklist-readiness';
 import {
+    createNextStepEffectExecutor,
+    createNextStepEffectPlanner
+} from '../../../../src/gates/next-step/next-step-effects';
+import {
     initializeGitRepo,
     runGit
 } from '../../cli/commands/gate-test-repo-bootstrap';
@@ -70,11 +74,9 @@ function workflowConfigPath(repoRoot: string): string {
     return path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config', 'workflow-config.json');
 }
 
-function readCurrentQualityChecklistReadiness(
-    repoRoot: string
-): ReturnType<typeof readQualityChecklistReadiness> {
+function currentQualityChecklistReadinessOptions(repoRoot: string) {
     const preflightPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-preflight.json`);
-    return readQualityChecklistReadiness({
+    return {
         repoRoot,
         reviewsRoot: reviewsRoot(repoRoot),
         taskId: TASK_ID,
@@ -84,6 +86,22 @@ function readCurrentQualityChecklistReadiness(
         workflowConfig: JSON.parse(
             fs.readFileSync(workflowConfigPath(repoRoot), 'utf8')
         ) as Record<string, unknown>
+    };
+}
+
+function readCurrentQualityChecklistReadiness(
+    repoRoot: string
+): ReturnType<typeof readQualityChecklistReadiness> {
+    const options = currentQualityChecklistReadinessOptions(repoRoot);
+    const planner = createNextStepEffectPlanner();
+    const preview = readQualityChecklistReadiness({ ...options, effects: planner });
+    const plan = planner.pendingPlan();
+    if (!plan) {
+        return preview;
+    }
+    return readQualityChecklistReadiness({
+        ...options,
+        effects: createNextStepEffectExecutor(plan)
     });
 }
 
@@ -361,6 +379,30 @@ describe('gates/next-step quality checklist routing', () => {
         assert.equal(readiness.ready, false);
         assert.equal(readiness.evidenceStatus, 'missing');
         assert.ok(readiness.activeRuleCount > 0);
+    });
+
+    it('keeps direct quality-checklist readiness inspection side-effect free without an executor', () => {
+        const repoRoot = makeTempRepo();
+        writeWorkflowConfig(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+        const answersPath = qualityChecklistAnswersPath(repoRoot);
+        const questionReferencePath = path.join(
+            repoRoot,
+            'garda-agent-orchestrator',
+            'runtime',
+            'tmp',
+            `${TASK_ID}-quality-checklist-questions.md`
+        );
+
+        const readiness = readQualityChecklistReadiness(
+            currentQualityChecklistReadinessOptions(repoRoot)
+        );
+
+        assert.equal(readiness.evidenceStatus, 'missing');
+        assert.equal(fs.existsSync(answersPath), false);
+        assert.equal(fs.existsSync(`${answersPath}.binding.json`), false);
+        assert.equal(fs.existsSync(questionReferencePath), false);
     });
 
     it('withholds the quality checklist command until the materialized answers are complete', () => {

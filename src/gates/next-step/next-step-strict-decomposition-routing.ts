@@ -29,6 +29,10 @@ import {
 import {
     suspendStrictDecompositionWipIfRequired
 } from './next-step-strict-decomposition-wip';
+import {
+    createNextStepEffectPlanner,
+    type NextStepEffectController
+} from './next-step-effects';
 import type {
     NextStepArtifactState,
     NextStepCommand,
@@ -399,7 +403,9 @@ export function resolveStrictDecompositionContinuationRoute(params: {
     requiredReviewTypes: string[];
     baseMissingArtifacts: NextStepArtifactState[];
     basePresentArtifacts: NextStepArtifactState[];
+    effects?: NextStepEffectController;
 }): NextStepStrictDecompositionRoute | null {
+    const effects = params.effects ?? createNextStepEffectPlanner();
     const evidence = getStrictDecompositionDecisionEvidence(
         params.repoRoot,
         params.taskId,
@@ -452,10 +458,28 @@ export function resolveStrictDecompositionContinuationRoute(params: {
         return null;
     }
 
-    const wipSuspension = suspendStrictDecompositionWipIfRequired({
-        repoRoot: params.repoRoot,
-        taskId: params.taskId,
-        evidence
+    const wipSuspension = effects.run({
+        kind: 'suspend-strict-decomposition-wip',
+        summary: `Capture and suspend ${params.taskId} strict-decomposition parent WIP`,
+        input: {
+            task_id: params.taskId,
+            decision_evidence_hash: evidence.evidence_hash,
+            work_package_contract_sha256: evidence.work_package_contract_sha256,
+            proposed_child_task_ids: evidence.proposed_child_task_ids
+        },
+        preview: () => ({
+            status: 'CAPTURED',
+            manifest_path: '<planned>',
+            manifest_sha256: null,
+            tracked_files: [],
+            untracked_files: [],
+            violations: []
+        } as ReturnType<typeof suspendStrictDecompositionWipIfRequired>),
+        execute: () => suspendStrictDecompositionWipIfRequired({
+            repoRoot: params.repoRoot,
+            taskId: params.taskId,
+            evidence
+        })
     });
     const wipArtifactState = wipSuspension.manifest_path
         ? {
@@ -520,11 +544,24 @@ export function resolveStrictDecompositionContinuationRoute(params: {
         };
     }
 
-    const syncResult = transitionStrictDecompositionParentToDecomposed({
-        repoRoot: params.repoRoot,
-        eventsRoot: params.eventsRoot,
-        taskId: params.taskId,
-        proposedChildTaskIds: evidence.proposed_child_task_ids
+    const syncResult = effects.run({
+        kind: 'transition-strict-decomposition-parent-to-decomposed',
+        summary: `Transition ${params.taskId} to DECOMPOSED after strict WIP suspension`,
+        input: {
+            task_id: params.taskId,
+            decision_evidence_hash: evidence.evidence_hash,
+            proposed_child_task_ids: evidence.proposed_child_task_ids
+        },
+        preview: () => ({
+            outcome: 'updated',
+            error_message: null
+        } as ReturnType<typeof transitionStrictDecompositionParentToDecomposed>),
+        execute: () => transitionStrictDecompositionParentToDecomposed({
+            repoRoot: params.repoRoot,
+            eventsRoot: params.eventsRoot,
+            taskId: params.taskId,
+            proposedChildTaskIds: evidence.proposed_child_task_ids
+        })
     });
     const strictSplitRoute = resolveStrictDecompositionSplitTerminalRoute({
         taskId: params.taskId,

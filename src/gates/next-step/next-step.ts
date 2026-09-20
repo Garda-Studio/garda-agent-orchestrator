@@ -439,6 +439,13 @@ import {
 import {
     renderNextStepOutput
 } from './next-step-output-rendering';
+import {
+    assertNextStepEffectPlanHash,
+    createNextStepEffectExecutor,
+    createNextStepEffectPlanner,
+    type NextStepEffectController,
+    type NextStepEffectPlan
+} from './next-step-effects';
 
 const REVIEW_PREPARATION_ORDER = Object.freeze([
     'code',
@@ -2523,7 +2530,43 @@ export function resolveNextStepGuardDecisionWithWorkflowConfigBoundary<TEvaluati
     };
 }
 
-export function resolveNextStepDecisionRoute(context: NextStepResolutionContext): NextStepResult {
+function buildPendingNextStepEffectRoute(options: {
+    effects: NextStepEffectController;
+    repoRoot: string;
+    eventsRoot: string;
+    reviewsRoot: string;
+    taskId: string;
+    cliPrefix: string;
+}): NextStepDecisionRoutePayload | null {
+    const plan = options.effects.pendingPlan();
+    if (!plan) {
+        return null;
+    }
+    const summaries = plan.effects.map((effect) => effect.summary);
+    const command = [
+        `${options.cliPrefix} gate next-step`,
+        `--task-id ${quoteCommandValue(options.taskId)}`,
+        '--execute-effects',
+        `--effect-plan-sha256 ${quoteCommandValue(plan.plan_sha256)}`,
+        `--events-root ${quoteCommandValue(toRepoDisplayPath(options.repoRoot, options.eventsRoot))}`,
+        `--reviews-root ${quoteCommandValue(toRepoDisplayPath(options.repoRoot, options.reviewsRoot))}`,
+        '--repo-root "."'
+    ].join(' ');
+    return {
+        status: 'BLOCKED',
+        nextGate: 'next-step-effect',
+        title: 'Execute the guarded next-step effect plan.',
+        reason:
+            'Next-step inspection is side-effect free. The authenticated state requires explicit effect execution before routing can continue. ' +
+            `Plan ${plan.plan_sha256} contains ${plan.effects.length} ordered effect(s): ${summaries.join('; ')}.`,
+        commands: [buildCommand('Execute next-step effects', command)]
+    };
+}
+
+export function resolveNextStepDecisionRoute(
+    context: NextStepResolutionContext,
+    effects: NextStepEffectController = createNextStepEffectPlanner()
+): NextStepResult {
     const {
         repoRoot,
         taskId,
@@ -2948,7 +2991,8 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
             preflight,
             preflightPath,
             preflightSha256,
-            workflowConfig: workflowConfigRecord
+            workflowConfig: workflowConfigRecord,
+            effects
         })
         : null;
     const resultBase = {
@@ -2973,6 +3017,24 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         warnings: [] as string[],
         sourceRuntimeStaleness
     };
+    const initialEffectRoute = buildPendingNextStepEffectRoute({
+        effects,
+        repoRoot,
+        eventsRoot,
+        reviewsRoot,
+        taskId,
+        cliPrefix
+    });
+    if (initialEffectRoute) {
+        return buildResult({
+            ...resultBase,
+            status: initialEffectRoute.status,
+            nextGate: initialEffectRoute.nextGate,
+            title: initialEffectRoute.title,
+            reason: initialEffectRoute.reason,
+            commands: initialEffectRoute.commands
+        });
+    }
     const decisionProjectionBinding = Object.freeze({
         source: 'authenticated-resolution-context' as const,
         taskId,
@@ -3277,12 +3339,21 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         filteredMissingArtifacts,
         corePresentArtifacts: coreArtifacts.present,
         fullSuiteArtifactPath: readinessArtifacts.paths.fullSuiteValidationPath,
-        reviewCycleContinuationAssessment: splitRequiredReviewCycleContinuationAssessment
+        reviewCycleContinuationAssessment: splitRequiredReviewCycleContinuationAssessment,
+        effects
+    });
+    const taskQueueTerminalEffectRoute = buildPendingNextStepEffectRoute({
+        effects,
+        repoRoot,
+        eventsRoot,
+        reviewsRoot,
+        taskId,
+        cliPrefix
     });
     const taskQueueTerminalDecision = selectProjectedDecisionRoute(
         'task-queue-terminal',
         isTaskQueueSplitRequiredStatus(taskEntry?.status || null) ? 'split' : 'normal',
-        taskQueueTerminalRoute
+        taskQueueTerminalEffectRoute ?? taskQueueTerminalRoute
     );
     if (taskQueueTerminalDecision) {
         return buildDecisionRouteResult(taskQueueTerminalDecision);
@@ -3444,8 +3515,20 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
             requirement: strictDecompositionRequirement,
             requiredReviewTypes,
             baseMissingArtifacts: resultBase.missingArtifacts,
-            basePresentArtifacts: coreArtifacts.present
+            basePresentArtifacts: coreArtifacts.present,
+            effects
         });
+        const strictDecompositionEffectRoute = buildPendingNextStepEffectRoute({
+            effects,
+            repoRoot,
+            eventsRoot,
+            reviewsRoot,
+            taskId,
+            cliPrefix
+        });
+        if (strictDecompositionEffectRoute) {
+            return strictDecompositionEffectRoute;
+        }
         if (!strictRoute) {
             return null;
         }
@@ -3742,16 +3825,8 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
             guardReason: evaluation?.should_block
                 ? sanitizeScopeBudgetGuardSummary(evaluation)
                 : null,
-            materializeLatch: () => materializeSplitRequiredLatch({
-                repoRoot,
-                eventsRoot,
-                reviewsRoot,
-                taskId,
-                guardKind: 'scope_budget',
-                guardReason: sanitizeScopeBudgetGuardSummary(evaluation!),
-                rawGuardSummary: evaluation!.summary_line,
-                preflightPath,
-                guardDetails: {
+            materializeLatch: () => {
+                const guardDetails = {
                     action: evaluation!.action,
                     profile_name: evaluation!.profile_name,
                     violations: evaluation!.violations.map((violation) => ({
@@ -3762,8 +3837,36 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                         blocking_limit: violation.blocking_limit,
                         severity: violation.severity
                     }))
-                }
-            }),
+                };
+                return effects.run({
+                    kind: 'materialize-scope-budget-split-latch',
+                    summary: `Materialize the scope-budget split latch for ${taskId}`,
+                    input: {
+                        task_id: taskId,
+                        preflight_sha256: preflightSha256,
+                        guard_details: guardDetails
+                    },
+                    preview: () => ({
+                        artifact_path: path.join(reviewsRoot, `${taskId}-split-required.json`),
+                        artifact_sha256: '<planned>',
+                        status_sync: { outcome: 'updated', error_message: null },
+                        status_event_recorded: true,
+                        latch_event_recorded: true,
+                        wip_capture: null
+                    } as ReturnType<typeof materializeSplitRequiredLatch>),
+                    execute: () => materializeSplitRequiredLatch({
+                        repoRoot,
+                        eventsRoot,
+                        reviewsRoot,
+                        taskId,
+                        guardKind: 'scope_budget',
+                        guardReason: sanitizeScopeBudgetGuardSummary(evaluation!),
+                        rawGuardSummary: evaluation!.summary_line,
+                        preflightPath,
+                        guardDetails
+                    })
+                });
+            },
             formatArtifactPath: (artifactPath) => toRepoDisplayPath(repoRoot, artifactPath),
             presentArtifacts: coreArtifacts.present
         }),
@@ -3781,10 +3884,18 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         })
     });
     resultBase.warnings.push(...scopeBudgetGuardResolution.warnings);
+    const scopeBudgetEffectRoute = buildPendingNextStepEffectRoute({
+        effects,
+        repoRoot,
+        eventsRoot,
+        reviewsRoot,
+        taskId,
+        cliPrefix
+    });
     const scopeBudgetDecision = selectProjectedDecisionRoute(
         'scope-budget-guard',
         scopeBudgetGuardResolution.kind,
-        scopeBudgetGuardResolution.route
+        scopeBudgetEffectRoute ?? scopeBudgetGuardResolution.route
     );
     if (scopeBudgetDecision) {
         return buildDecisionRouteResult(scopeBudgetDecision);
@@ -3813,19 +3924,8 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                 evaluation!,
                 latestFailedReview
             ),
-            materializeLatch: () => materializeSplitRequiredLatch({
-                repoRoot,
-                eventsRoot,
-                reviewsRoot,
-                taskId,
-                guardKind: 'review_cycle',
-                guardReason: buildReviewCycleOperatorBlock(
-                    evaluation!,
-                    latestFailedReview
-                ).reason,
-                rawGuardSummary: evaluation!.summary_line,
-                preflightPath,
-                guardDetails: {
+            materializeLatch: () => {
+                const guardDetails = {
                     action: evaluation!.action,
                     total_non_test_review_count: evaluation!.total_non_test_review_count,
                     failed_non_test_review_count: evaluation!.failed_non_test_review_count,
@@ -3845,17 +3945,70 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                         actual: violation.actual,
                         limit: violation.limit
                     }))
-                }
-            }),
-            materializeAutoSplitPrompt: (latchResult) => materializeReviewCycleAutoSplitPrompt({
-                repoRoot,
-                reviewsRoot,
-                taskId,
-                evaluation: evaluation!,
-                latestFailedReview,
-                latchResult,
-                cliPrefix,
-                fullSuiteCommand: fullSuiteConfig.command
+                };
+                return effects.run({
+                    kind: 'materialize-review-cycle-split-latch',
+                    summary: `Materialize the review-cycle split latch for ${taskId}`,
+                    input: {
+                        task_id: taskId,
+                        preflight_sha256: preflightSha256,
+                        guard_details: guardDetails
+                    },
+                    preview: () => ({
+                        artifact_path: path.join(reviewsRoot, `${taskId}-split-required.json`),
+                        artifact_sha256: '<planned>',
+                        status_sync: { outcome: 'updated', error_message: null },
+                        status_event_recorded: true,
+                        latch_event_recorded: true,
+                        wip_capture: null
+                    } as ReturnType<typeof materializeSplitRequiredLatch>),
+                    execute: () => materializeSplitRequiredLatch({
+                        repoRoot,
+                        eventsRoot,
+                        reviewsRoot,
+                        taskId,
+                        guardKind: 'review_cycle',
+                        guardReason: buildReviewCycleOperatorBlock(
+                            evaluation!,
+                            latestFailedReview
+                        ).reason,
+                        rawGuardSummary: evaluation!.summary_line,
+                        preflightPath,
+                        guardDetails
+                    })
+                });
+            },
+            materializeAutoSplitPrompt: (latchResult) => effects.run({
+                kind: 'materialize-review-cycle-auto-split-prompt',
+                summary: `Materialize the review-cycle auto-split prompt for ${taskId}`,
+                input: {
+                    task_id: taskId,
+                    preflight_sha256: preflightSha256,
+                    evaluation_summary: evaluation!.summary_line,
+                    latest_failed_review: latestFailedReview,
+                    cli_prefix: cliPrefix,
+                    full_suite_command: fullSuiteConfig.command
+                },
+                preview: () => ({
+                    kind: 'review_cycle_auto_split_prompt',
+                    artifact_path: normalizePath(path.join(
+                        'garda-agent-orchestrator',
+                        'runtime',
+                        'reviews',
+                        `${taskId}-review-cycle-auto-split-prompt.md`
+                    )),
+                    artifact_sha256: '<planned>'
+                } as ReturnType<typeof materializeReviewCycleAutoSplitPrompt>),
+                execute: () => materializeReviewCycleAutoSplitPrompt({
+                    repoRoot,
+                    reviewsRoot,
+                    taskId,
+                    evaluation: evaluation!,
+                    latestFailedReview,
+                    latchResult,
+                    cliPrefix,
+                    fullSuiteCommand: fullSuiteConfig.command
+                })
             }),
             buildContinuationCommand: () => buildReviewCycleContinuationCommand(
                 cliPrefix,
@@ -3887,10 +4040,18 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         })
     });
     resultBase.warnings.push(...reviewCycleGuardResolution.warnings);
+    const reviewCycleEffectRoute = buildPendingNextStepEffectRoute({
+        effects,
+        repoRoot,
+        eventsRoot,
+        reviewsRoot,
+        taskId,
+        cliPrefix
+    });
     const reviewCycleDecision = selectProjectedDecisionRoute(
         'review-cycle-guard',
         reviewCycleGuardResolution.kind,
-        reviewCycleGuardResolution.route
+        reviewCycleEffectRoute ?? reviewCycleGuardResolution.route
     );
     if (reviewCycleDecision) {
         return buildDecisionRouteResult(reviewCycleDecision);
@@ -5034,7 +5195,10 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
     });
 }
 
-export function resolveNextStep(options: NextStepOptions): NextStepResult {
+function resolveNextStepWithEffectController(
+    options: NextStepOptions,
+    effects: NextStepEffectController
+): NextStepResult {
     const repoRoot = path.resolve(options.repoRoot || '.');
     const taskId = assertValidTaskId(options.taskId);
     const eventsRoot = resolvePathInsideRepo(
@@ -5063,12 +5227,38 @@ export function resolveNextStep(options: NextStepOptions): NextStepResult {
                     eventsRoot,
                     reviewsRoot
                 });
-                return resolveNextStepDecisionRoute(context);
+                return resolveNextStepDecisionRoute(context, effects);
             })
         ))
     ));
 }
 
+function inspectNextStepEffects(options: NextStepOptions): {
+    result: NextStepResult;
+    plan: NextStepEffectPlan | null;
+} {
+    const effects = createNextStepEffectPlanner();
+    const result = resolveNextStepWithEffectController(options, effects);
+    return { result, plan: effects.pendingPlan() };
+}
+
+export function resolveNextStep(options: NextStepOptions): NextStepResult {
+    return inspectNextStepEffects(options).result;
+}
+
+export function executeNextStepEffects(
+    options: NextStepOptions,
+    expectedPlanSha256: string
+): NextStepResult {
+    const inspected = inspectNextStepEffects(options);
+    assertNextStepEffectPlanHash(inspected.plan, expectedPlanSha256);
+    const effects = createNextStepEffectExecutor(inspected.plan);
+    const result = resolveNextStepWithEffectController(options, effects);
+    if (effects.executedCount() === 0) {
+        throw new Error('Next-step effect plan became stale before execution. Rerun next-step inspection.');
+    }
+    return result;
+}
 
 function parseTaskIdFromPreflightPath(preflightPath: string): string | null {
     const basename = path.basename(preflightPath).trim();
@@ -5100,6 +5290,8 @@ export function resolveNextStepFromCliOptions(options: {
     reviewsRoot?: unknown;
     preflightPath?: unknown;
     positionals?: unknown;
+    executeEffects?: unknown;
+    effectPlanSha256?: unknown;
 }): NextStepResult {
     const repoRoot = path.resolve(String(options.repoRoot || '.'));
     const positionals = Array.isArray(options.positionals)
@@ -5138,10 +5330,19 @@ export function resolveNextStepFromCliOptions(options: {
     const eventsRoot = options.eventsRoot
         ? resolvePathInsideRepo(String(options.eventsRoot), repoRoot, { allowMissing: true })
         : null;
-    return resolveNextStep({
+    const nextStepOptions = {
         taskId,
         repoRoot,
         eventsRoot,
         reviewsRoot
-    });
+    };
+    const executeEffects = options.executeEffects === true;
+    const effectPlanSha256 = String(options.effectPlanSha256 || '').trim();
+    if (executeEffects) {
+        return executeNextStepEffects(nextStepOptions, effectPlanSha256);
+    }
+    if (effectPlanSha256) {
+        throw new Error('--effect-plan-sha256 requires --execute-effects.');
+    }
+    return resolveNextStep(nextStepOptions);
 }

@@ -1,7 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { handleNextStep } from '../../../../src/cli/commands/gate-task-handlers';
 import * as fx from './next-step-review-cycle-fixtures';
+import { executeNextStepEffects, inspectNextStep } from './next-step-test-support';
 
 const {
     ALL_REVIEW_FLAGS,
@@ -73,6 +75,21 @@ const {
 } = fx;
 void [ALL_REVIEW_FLAGS, appendEvent, buildReviewContextScopeFixture, eventsRoot, buildTaskModeArtifact, getWorkspaceSnapshot, buildDefaultWorkflowConfig, resolveNextStep, formatNextStepText, EXPECTED_LOOP_LINE, fileSha256, fs, getLoadedRuleFileBasenames, hasCompletedDecomposedParentAfterSplitRequiredClear, hasSplitRequiredClearedEvidence, launchInputEvidenceFixture, makeTempRepo, markReviewEvidenceAsStrictReuse, materializeFinalCloseout, NEXT_STEP_FULL_SUITE_TEST_CONFIG, normalizeForTimeline, os, path, PROVIDER_ENV_KEYS, readReviewContextTreeStateSha256, readSplitRequiredLatchEvidence, requireFromTest, resolveReviewCycleContinuationArtifactPath, resolveSplitRequiredArtifactPath, reviewsRoot, runRecordReviewCycleSplitDecisionCommand, seedCompilePass, seedCompletedReviewerLaunchAndInvocation, seedCompletedTaskWithIndependentCodeReview, seedCompletionPass, seedCustomStartedTask, seedDocImpactPass, seedFullSuiteValidation, seedGitAutoCompilePass, seedHandshake, seedPostPreflightRulePack, seedProjectMemory, seedProjectMemoryImpact, seedReviewGatePass, seedRulePack, seedShellSmoke, seedSourceCheckoutRuntime, seedSplitRequiredLatchEvidence, seedStartedTask, seedTaskModeOnly, sha256Text, TASK_ID, tempRoots, withProviderEnv, writeFreshReviewContextWithoutRouting, writeGitAutoPreflight, writeJson, writeJsonWithSha, writeNoOpEvidence, writePreflight, writeProjectMemoryWorkflowConfig, writeReviewContextOnly, writeReviewCycleContinuation, writeReviewEvidence, writeStrictDecompositionDecision, writeStrictIndependentCodeReviewEvidence];
 
+async function captureNextStepHandler(argv: string[]): Promise<string> {
+    const chunks: string[] = [];
+    const originalWrite = process.stdout.write;
+    process.stdout.write = ((chunk: string | Uint8Array): boolean => {
+        chunks.push(String(chunk));
+        return true;
+    }) as typeof process.stdout.write;
+    try {
+        await handleNextStep(argv);
+        return chunks.join('');
+    } finally {
+        process.stdout.write = originalWrite;
+    }
+}
+
 describe('gates/next-step split-required latch status', () => {
     it('resolves and validates split-required latch helper evidence directly', () => {
         const repoRoot = makeTempRepo();
@@ -134,7 +151,7 @@ describe('gates/next-step split-required latch status', () => {
         }), true);
     });
 
-    it('latches oversized strict-profile scopes as split-required before compile', () => {
+    it('executes guarded effects through the CLI and rejects forged or standalone plan hashes', async () => {
         const repoRoot = makeTempRepo();
         fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
             '# TASK.md',
@@ -144,16 +161,28 @@ describe('gates/next-step split-required latch status', () => {
             `| ${TASK_ID} | TODO | P1 | workflow/scope-budget | Add decomposition guard | gpt-5.4 | 2026-05-03 | strict | Test queue entry. |`,
             ''
         ].join('\n'), 'utf8');
-        const changedFiles = Array.from({ length: 13 }, (_, index) => `src/file-${index}.ts`);
-        for (const filePath of changedFiles) {
-            fs.writeFileSync(path.join(repoRoot, filePath), 'export const value = 1;\n', 'utf8');
-        }
+        fs.writeFileSync(
+            path.join(repoRoot, '.gitignore'),
+            'garda-agent-orchestrator/runtime/\n',
+            'utf8'
+        );
         const workflowConfig = buildDefaultWorkflowConfig();
         workflowConfig.scope_budget_guard.action = 'BLOCK_FOR_SPLIT';
         workflowConfig.scope_budget_guard.max_files = 12;
         workflowConfig.scope_budget_guard.warn_files = 11;
         workflowConfig.scope_budget_guard.block_files = 12;
         writeJson(path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config', 'workflow-config.json'), workflowConfig);
+        execFileSync('git', ['init', '--quiet'], { cwd: repoRoot });
+        execFileSync('git', ['add', '.'], { cwd: repoRoot });
+        execFileSync('git', [
+            '-c', 'user.name=Garda Test',
+            '-c', 'user.email=garda-test@example.invalid',
+            'commit', '--quiet', '-m', 'fixture baseline'
+        ], { cwd: repoRoot });
+        const changedFiles = Array.from({ length: 13 }, (_, index) => `src/file-${index}.ts`);
+        for (const filePath of changedFiles) {
+            fs.writeFileSync(path.join(repoRoot, filePath), 'export const value = 1;\n', 'utf8');
+        }
         seedStartedTask(repoRoot, TASK_ID);
         const snapshot = getWorkspaceSnapshot(repoRoot, 'explicit_changed_files', true, changedFiles);
         const preflightPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-preflight.json`);
@@ -197,7 +226,45 @@ describe('gates/next-step split-required latch status', () => {
             expectedReviewTypes: ['code', 'security', 'refactor', 'test']
         });
 
-        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        const taskPath = path.join(repoRoot, 'TASK.md');
+        const taskBeforeInspection = fs.readFileSync(taskPath, 'utf8');
+        const eventPath = path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`);
+        const eventsBeforeInspection = fs.readFileSync(eventPath, 'utf8');
+        const latchPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-split-required.json`);
+
+        const inspection = inspectNextStep({ taskId: TASK_ID, repoRoot });
+        const effectCommand = inspection.commands[0]?.command || '';
+        const planSha256 = effectCommand.match(/--effect-plan-sha256\s+["']?([a-f0-9]{64})/u)?.[1] || '';
+
+        assert.equal(inspection.next_gate, 'next-step-effect', inspection.reason);
+        assert.equal(fs.readFileSync(taskPath, 'utf8'), taskBeforeInspection);
+        assert.equal(fs.readFileSync(eventPath, 'utf8'), eventsBeforeInspection);
+        assert.equal(fs.existsSync(latchPath), false);
+        assert.ok(changedFiles.every((filePath) => fs.existsSync(path.join(repoRoot, filePath))));
+        assert.match(planSha256, /^[a-f0-9]{64}$/u);
+        assert.throws(
+            () => executeNextStepEffects({ taskId: TASK_ID, repoRoot }, '0'.repeat(64)),
+            /effect plan is stale/iu
+        );
+        await assert.rejects(
+            () => handleNextStep([
+                '--task-id', TASK_ID,
+                '--effect-plan-sha256', planSha256,
+                '--repo-root', repoRoot
+            ]),
+            /--effect-plan-sha256 requires --execute-effects/iu
+        );
+        assert.equal(fs.readFileSync(taskPath, 'utf8'), taskBeforeInspection);
+        assert.equal(fs.existsSync(latchPath), false);
+
+        const cliOutput = await captureNextStepHandler([
+            '--task-id', TASK_ID,
+            '--execute-effects',
+            '--effect-plan-sha256', planSha256,
+            '--as-json',
+            '--repo-root', repoRoot
+        ]);
+        const result = JSON.parse(cliOutput) as ReturnType<typeof executeNextStepEffects>;
         const text = formatNextStepText(result);
 
         assert.equal(result.status, 'SPLIT_REQUIRED', result.reason);
@@ -207,15 +274,17 @@ describe('gates/next-step split-required latch status', () => {
         assert.equal(result.reason.includes('13>12'), false);
         assert.ok(text.includes('Status: SPLIT_REQUIRED'));
         assert.ok(text.includes('NextGate: split-required-latch'));
-        assert.ok(fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8').includes(`| ${TASK_ID} | 🟫 SPLIT_REQUIRED |`));
-        const latchPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-split-required.json`);
+        assert.ok(fs.readFileSync(taskPath, 'utf8').includes(`| ${TASK_ID} | 🟫 SPLIT_REQUIRED |`));
         assert.equal(fs.existsSync(latchPath), true);
         const latch = JSON.parse(fs.readFileSync(latchPath, 'utf8')) as Record<string, unknown>;
         assert.equal(latch.status, 'SPLIT_REQUIRED');
         assert.equal(latch.guard_kind, 'scope_budget');
-        const events = fs.readFileSync(path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`), 'utf8');
+        const events = fs.readFileSync(eventPath, 'utf8');
         assert.ok(events.includes('"event_type":"SPLIT_REQUIRED_LATCHED"'));
         assert.ok(events.includes('"new_status":"SPLIT_REQUIRED"'));
+        const wipCapture = latch.wip_capture as Record<string, unknown> | null;
+        assert.equal(wipCapture?.status, 'CAPTURED');
+        assert.equal(changedFiles.every((filePath) => !fs.existsSync(path.join(repoRoot, filePath))), true);
     });
 
     it('warns but continues when strict-profile scope exceeds warning lines below blocking lines', () => {
@@ -1028,6 +1097,179 @@ describe('gates/next-step split-required latch status', () => {
         });
         const events = fs.readFileSync(path.join(eventsRoot(repoRoot), `${taskId}.jsonl`), 'utf8');
         assert.equal(events.includes('"event_type":"SPLIT_REQUIRED_LATCHED"'), false);
+    });
+
+    it('rejects a stale ordered review-cycle plan when full-suite config changes', () => {
+        const repoRoot = makeTempRepo();
+        const taskId = 'T-648';
+        const workflowConfigPath = path.join(
+            repoRoot,
+            'garda-agent-orchestrator',
+            'live',
+            'config',
+            'workflow-config.json'
+        );
+        const workflowConfig = {
+            full_suite_validation: {
+                enabled: false,
+                command: 'npm test',
+                timeout_ms: 600000,
+                green_summary_max_lines: 5,
+                red_failure_chunk_lines: 50,
+                out_of_scope_failure_policy: 'AUDIT_AND_BLOCK'
+            },
+            review_execution_policy: {
+                mode: 'code_first_optional'
+            },
+            review_cycle_guard: {
+                enabled: true,
+                action: 'BLOCK_FOR_OPERATOR_DECISION',
+                max_failed_non_test_reviews: 1,
+                max_total_non_test_reviews: 15,
+                excluded_review_types: ['test'],
+                auto_split_enabled: true
+            }
+        };
+        writeJson(workflowConfigPath, workflowConfig);
+        fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
+            '# TASK.md',
+            '',
+            '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+            '|---|---|---|---|---|---|---|---|---|',
+            `| ${taskId} | WIP | P1 | workflow | Review-cycle effect plan | gpt-5.4 | 2026-05-03 | balanced | Active task. |`,
+            ''
+        ].join('\n'), 'utf8');
+        seedStartedTask(repoRoot, taskId);
+        writePreflight(repoRoot, taskId, { ...ALL_REVIEW_FLAGS, code: true });
+        for (const index of [0, 1]) {
+            appendEvent(repoRoot, taskId, 'REVIEW_RECORDED', 'FAIL', {
+                review_type: 'code',
+                reviewer_identity: `agent:auto-split-code-${index}`,
+                review_context_sha256: sha256Text(`auto-split-effect-context-${index}`),
+                summary: `code failure ${index + 1}`
+            });
+        }
+        const taskPath = path.join(repoRoot, 'TASK.md');
+        const taskBeforeInspection = fs.readFileSync(taskPath, 'utf8');
+        const latchPath = path.join(reviewsRoot(repoRoot), `${taskId}-split-required.json`);
+        const promptPath = path.join(reviewsRoot(repoRoot), `${taskId}-review-cycle-auto-split-prompt.md`);
+
+        const inspection = inspectNextStep({ taskId, repoRoot });
+        const planSha256 = (inspection.commands[0]?.command || '')
+            .match(/--effect-plan-sha256\s+["']?([a-f0-9]{64})/u)?.[1] || '';
+
+        assert.equal(inspection.next_gate, 'next-step-effect', inspection.reason);
+        assert.match(inspection.reason, /contains 2 ordered effect\(s\)/u);
+        assert.equal(fs.readFileSync(taskPath, 'utf8'), taskBeforeInspection);
+        assert.equal(fs.existsSync(latchPath), false);
+        assert.equal(fs.existsSync(promptPath), false);
+
+        workflowConfig.full_suite_validation.command = 'npm run test:full';
+        writeJson(workflowConfigPath, workflowConfig);
+        execFileSync('git', ['add', '--', workflowConfigPath], { cwd: repoRoot });
+        execFileSync('git', [
+            '-c', 'user.name=Garda Test',
+            '-c', 'user.email=garda-test@example.invalid',
+            'commit', '--quiet', '-m', 'fixture full-suite config change'
+        ], { cwd: repoRoot });
+        assert.throws(
+            () => executeNextStepEffects({ taskId, repoRoot }, planSha256),
+            /effect plan is stale/iu
+        );
+        assert.equal(fs.existsSync(latchPath), false);
+        assert.equal(fs.existsSync(promptPath), false);
+
+        const refreshedInspection = inspectNextStep({ taskId, repoRoot });
+        const refreshedPlanSha256 = (refreshedInspection.commands[0]?.command || '')
+            .match(/--effect-plan-sha256\s+["']?([a-f0-9]{64})/u)?.[1] || '';
+        assert.notEqual(refreshedPlanSha256, planSha256);
+
+        const result = executeNextStepEffects({ taskId, repoRoot }, refreshedPlanSha256);
+
+        assert.equal(result.status, 'SPLIT_REQUIRED', result.reason);
+        assert.equal(result.next_gate, 'split-required-latch');
+        assert.equal(fs.existsSync(latchPath), true);
+        assert.equal(fs.existsSync(promptPath), true);
+        assert.match(fs.readFileSync(promptPath, 'utf8'), /CurrentState:/u);
+        assert.match(fs.readFileSync(promptPath, 'utf8'), /npm run test:full/u);
+    });
+
+    it('rejects a quality-checklist effect plan when workflow config changes before execution', () => {
+        const repoRoot = makeTempRepo();
+        const workflowConfigPath = path.join(
+            repoRoot,
+            'garda-agent-orchestrator',
+            'live',
+            'config',
+            'workflow-config.json'
+        );
+        const workflowConfig = buildDefaultWorkflowConfig();
+        workflowConfig.optional_quality_checks.enabled = true;
+        writeJson(workflowConfigPath, workflowConfig);
+        seedStartedTask(repoRoot, TASK_ID);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+
+        const inspection = inspectNextStep({ taskId: TASK_ID, repoRoot });
+        const planSha256 = (inspection.commands[0]?.command || '')
+            .match(/--effect-plan-sha256\s+["']?([a-f0-9]{64})/u)?.[1] || '';
+        const answersPath = path.join(
+            repoRoot,
+            'garda-agent-orchestrator',
+            'runtime',
+            'tmp',
+            `${TASK_ID}-quality-checklist-answers.json`
+        );
+        const questionReferencePath = path.join(
+            repoRoot,
+            'garda-agent-orchestrator',
+            'runtime',
+            'tmp',
+            `${TASK_ID}-quality-checklist-questions.md`
+        );
+
+        assert.equal(inspection.next_gate, 'next-step-effect', inspection.reason);
+        assert.match(planSha256, /^[a-f0-9]{64}$/u);
+        workflowConfig.optional_quality_checks.review_failure_cadence_interval += 1;
+        writeJson(workflowConfigPath, workflowConfig);
+        execFileSync('git', ['add', '--', workflowConfigPath], { cwd: repoRoot });
+        execFileSync('git', [
+            '-c', 'user.name=Garda Test',
+            '-c', 'user.email=garda-test@example.invalid',
+            'commit', '--quiet', '-m', 'fixture quality config change'
+        ], { cwd: repoRoot });
+
+        assert.throws(
+            () => executeNextStepEffects({ taskId: TASK_ID, repoRoot }, planSha256),
+            /effect plan is stale/iu
+        );
+        assert.equal(fs.existsSync(answersPath), false);
+        assert.equal(fs.existsSync(`${answersPath}.binding.json`), false);
+        assert.equal(fs.existsSync(questionReferencePath), false);
+    });
+
+    it('prevents replay of current quality-checklist input effects after guarded execution', () => {
+        const repoRoot = makeTempRepo();
+        const workflowConfig = buildDefaultWorkflowConfig();
+        workflowConfig.optional_quality_checks.enabled = true;
+        writeJson(
+            path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config', 'workflow-config.json'),
+            workflowConfig
+        );
+        seedStartedTask(repoRoot, TASK_ID);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+
+        const inspection = inspectNextStep({ taskId: TASK_ID, repoRoot });
+        const planSha256 = (inspection.commands[0]?.command || '')
+            .match(/--effect-plan-sha256\s+["']?([a-f0-9]{64})/u)?.[1] || '';
+
+        assert.equal(inspection.next_gate, 'next-step-effect', inspection.reason);
+        assert.match(inspection.reason, /quality-checklist/iu);
+        executeNextStepEffects({ taskId: TASK_ID, repoRoot }, planSha256);
+
+        const rerun = inspectNextStep({ taskId: TASK_ID, repoRoot });
+
+        assert.notEqual(rerun.next_gate, 'next-step-effect', rerun.reason);
+        assert.equal(rerun.next_gate, 'quality-checklist', rerun.reason);
     });
 
 });

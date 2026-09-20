@@ -17,6 +17,10 @@ import {
     type RulePackArtifact
 } from '../../../../src/gates/rule-pack';
 import { appendTaskEvent } from '../../../../src/gate-runtime/task-events';
+import {
+    executeNextStepEffects as executeSourceNextStepEffects,
+    resolveNextStep as inspectSourceNextStep
+} from '../../../../src/gates/next-step';
 import { bindFixtureEffectiveReviewSnapshot } from '../../cli/commands/gate-test-seed-helpers';
 import { initGitRepo, runGitFixtureCommand } from '../git-fixtures';
 
@@ -168,6 +172,25 @@ export function buildRulePackArtifact(options: BuildRulePackArtifactOptions): Ru
 }
 
 export { PROJECT_MEMORY_REQUIRED_FILE_NAMES } from '../../../../src/core/project-memory';
+
+export function resolveNextStep(
+    ...args: Parameters<typeof inspectSourceNextStep>
+): ReturnType<typeof inspectSourceNextStep> {
+    let result = inspectSourceNextStep(...args);
+    for (let effectBatch = 0; effectBatch < 16 && result.next_gate === 'next-step-effect'; effectBatch += 1) {
+        const planSha256 = (result.commands[0]?.command || '')
+            .match(/--effect-plan-sha256\s+["']?([a-f0-9]{64})/u)?.[1] || '';
+        if (!planSha256) {
+            throw new Error('Test next-step compatibility execution did not receive a guarded effect-plan hash.');
+        }
+        result = executeSourceNextStepEffects(args[0], planSha256);
+    }
+    if (result.next_gate === 'next-step-effect') {
+        throw new Error('Test next-step compatibility execution exceeded 16 guarded effect batches.');
+    }
+    return result;
+}
+
 export {
     COPILOT_PROVIDER_ENV_KEYS,
     getProviderRuntimeEnvironmentKeys
@@ -176,8 +199,9 @@ export { buildEventIntegrityHash } from '../../../../src/gate-runtime/task-event
 export { recordFullSuiteValidationDuration, type FullSuiteValidationConfig } from '../../../../src/gates/full-suite/full-suite-validation';
 export {
     buildReviewReuseCandidatesForDiagnostics,
+    executeNextStepEffects,
     formatNextStepText,
-    resolveNextStep,
+    resolveNextStep as inspectNextStep,
     resolveNextStepDecisionRoute
 } from '../../../../src/gates/next-step';
 export {

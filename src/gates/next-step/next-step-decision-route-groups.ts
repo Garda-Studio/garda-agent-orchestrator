@@ -74,6 +74,10 @@ import {
     suspendStrictDecompositionWipIfRequired
 } from './next-step-strict-decomposition-wip';
 import {
+    createNextStepEffectPlanner,
+    type NextStepEffectController
+} from './next-step-effects';
+import {
     resolveCompletedCloseoutRouteFromState
 } from './next-step-closeout-routing';
 import type {
@@ -501,7 +505,9 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
     corePresentArtifacts: NextStepArtifactState[];
     fullSuiteArtifactPath?: string;
     reviewCycleContinuationAssessment?: ReviewCycleContinuationAssessment | null;
+    effects?: NextStepEffectController;
 }): NextStepDecisionRoutePayload | null {
+    const effects = options.effects ?? createNextStepEffectPlanner();
     const taskQueueStatus = options.taskEntry?.status || null;
     const splitRequiredStatusInTaskQueue = isTaskQueueSplitRequiredStatus(taskQueueStatus);
     const permanentSplitRequiredLatchEvidence = splitRequiredStatusInTaskQueue
@@ -559,11 +565,25 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
         && !activeStatusHasClearedReviewCycleLatchEvidence
         && permanentSplitRequiredLatchEvidence?.valid
     ) {
-        const restoreResult = restoreSplitRequiredParentFromPermanentLatch({
-            repoRoot: options.repoRoot,
-            eventsRoot: options.eventsRoot,
-            taskId: options.taskId,
-            latchEvidence: permanentSplitRequiredLatchEvidence
+        const restoreResult = effects.run({
+            kind: 'restore-split-required-parent',
+            summary: `Restore ${options.taskId} to SPLIT_REQUIRED from its authenticated permanent latch`,
+            input: {
+                task_id: options.taskId,
+                current_status: taskQueueStatus,
+                latch_artifact_sha256: permanentSplitRequiredLatchEvidence.artifact_sha256,
+                latch_guard_kind: permanentSplitRequiredLatchEvidence.guard_kind
+            },
+            preview: () => ({
+                outcome: 'updated',
+                error_message: null
+            } as ReturnType<typeof restoreSplitRequiredParentFromPermanentLatch>),
+            execute: () => restoreSplitRequiredParentFromPermanentLatch({
+                repoRoot: options.repoRoot,
+                eventsRoot: options.eventsRoot,
+                taskId: options.taskId,
+                latchEvidence: permanentSplitRequiredLatchEvidence
+            })
         });
 
         const childRoute = resolveNextUnfinishedChildRoute(
@@ -575,12 +595,23 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
         const hasChildren = hasLinkedChildTasks(options.taskEntries, options.taskId);
         let syncResult: ReturnType<typeof transitionSplitRequiredParentAfterWipSuspension> | null = null;
         if (hasChildren && isSuccessfulStatusSync(restoreResult)) {
-            syncResult = transitionSplitRequiredParentAfterWipSuspension({
-                repoRoot: options.repoRoot,
-                reviewsRoot: options.reviewsRoot,
-                eventsRoot: options.eventsRoot,
-                taskId: options.taskId,
-                latchEvidence: permanentSplitRequiredLatchEvidence
+            syncResult = effects.run({
+                kind: 'transition-split-required-parent-to-decomposed',
+                summary: `Suspend ${options.taskId} parent WIP and transition its queue status to DECOMPOSED`,
+                input: {
+                    task_id: options.taskId,
+                    current_status: taskQueueStatus,
+                    latch_artifact_sha256: permanentSplitRequiredLatchEvidence.artifact_sha256,
+                    linked_child_ids: childRoute ? [childRoute.taskId] : []
+                },
+                preview: () => ({ outcome: 'updated', error_message: null }),
+                execute: () => transitionSplitRequiredParentAfterWipSuspension({
+                    repoRoot: options.repoRoot,
+                    reviewsRoot: options.reviewsRoot,
+                    eventsRoot: options.eventsRoot,
+                    taskId: options.taskId,
+                    latchEvidence: permanentSplitRequiredLatchEvidence
+                })
             });
         }
 
@@ -633,13 +664,29 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
                 continuationAssessment: options.reviewCycleContinuationAssessment || null
             });
             if (continuationClearance.valid && continuationClearance.resume_status) {
-                const continuationTransition = transitionSplitRequiredParentToReviewCycleContinuation({
-                    repoRoot: options.repoRoot,
-                    eventsRoot: options.eventsRoot,
-                    taskId: options.taskId,
-                    resumeStatus: continuationClearance.resume_status,
-                    latchEvidence,
-                    continuationAssessment: options.reviewCycleContinuationAssessment!
+                const continuationTransition = effects.run({
+                    kind: 'clear-review-cycle-split-latch',
+                    summary: `Clear ${options.taskId} review-cycle latch through its authenticated continuation`,
+                    input: {
+                        task_id: options.taskId,
+                        current_status: taskQueueStatus,
+                        resume_status: continuationClearance.resume_status,
+                        latch_artifact_sha256: latchEvidence.artifact_sha256,
+                        continuation_artifact_sha256:
+                            options.reviewCycleContinuationAssessment?.artifact_sha256 || null
+                    },
+                    preview: () => ({
+                        outcome: 'updated',
+                        error_message: null
+                    } as ReturnType<typeof transitionSplitRequiredParentToReviewCycleContinuation>),
+                    execute: () => transitionSplitRequiredParentToReviewCycleContinuation({
+                        repoRoot: options.repoRoot,
+                        eventsRoot: options.eventsRoot,
+                        taskId: options.taskId,
+                        resumeStatus: continuationClearance.resume_status!,
+                        latchEvidence,
+                        continuationAssessment: options.reviewCycleContinuationAssessment!
+                    })
                 });
                 if (
                     continuationTransition.outcome === 'updated'
@@ -679,12 +726,23 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
             }
         }
         const syncResult = latchEvidence.valid && hasChildren
-            ? transitionSplitRequiredParentAfterWipSuspension({
-                repoRoot: options.repoRoot,
-                reviewsRoot: options.reviewsRoot,
-                eventsRoot: options.eventsRoot,
-                taskId: options.taskId,
-                latchEvidence
+            ? effects.run({
+                kind: 'transition-split-required-parent-to-decomposed',
+                summary: `Suspend ${options.taskId} parent WIP and transition its queue status to DECOMPOSED`,
+                input: {
+                    task_id: options.taskId,
+                    current_status: taskQueueStatus,
+                    latch_artifact_sha256: latchEvidence.artifact_sha256,
+                    linked_child_ids: childRoute ? [childRoute.taskId] : []
+                },
+                preview: () => ({ outcome: 'updated', error_message: null }),
+                execute: () => transitionSplitRequiredParentAfterWipSuspension({
+                    repoRoot: options.repoRoot,
+                    reviewsRoot: options.reviewsRoot,
+                    eventsRoot: options.eventsRoot,
+                    taskId: options.taskId,
+                    latchEvidence
+                })
             })
             : null;
         const splitRoute = resolveSplitRequiredTaskQueueRoute({
@@ -755,9 +813,25 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
     }
 
     if (!options.completionGatePassed && isDecomposedParentTask(options.taskEntry)) {
-        const strictDecompositionWip = suspendStrictDecompositionWipIfRequired({
-            repoRoot: options.repoRoot,
-            taskId: options.taskId
+        const strictDecompositionWip = effects.run({
+            kind: 'suspend-strict-decomposition-wip',
+            summary: `Capture and suspend ${options.taskId} strict-decomposition parent WIP`,
+            input: {
+                task_id: options.taskId,
+                current_status: taskQueueStatus
+            },
+            preview: () => ({
+                status: 'CAPTURED',
+                manifest_path: '<planned>',
+                manifest_sha256: null,
+                tracked_files: [],
+                untracked_files: [],
+                violations: []
+            } as ReturnType<typeof suspendStrictDecompositionWipIfRequired>),
+            execute: () => suspendStrictDecompositionWipIfRequired({
+                repoRoot: options.repoRoot,
+                taskId: options.taskId
+            })
         });
         if (strictDecompositionWip.status === 'BLOCKED') {
             return {
@@ -815,11 +889,24 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
             }
         }
         const syncResult = tasksToComplete.length > 0
-            ? transitionDecomposedParentsToDone({
-                repoRoot: options.repoRoot,
-                eventsRoot: options.eventsRoot,
-                rootTaskId: options.taskId,
-                taskIds: tasksToComplete
+            ? effects.run({
+                kind: 'complete-decomposed-parents',
+                summary: `Mark completed decomposed task chain for ${options.taskId} as DONE`,
+                input: {
+                    root_task_id: options.taskId,
+                    task_ids: tasksToComplete
+                },
+                preview: () => ({
+                    outcome: 'updated',
+                    error_message: null,
+                    task_ids: tasksToComplete
+                } as ReturnType<typeof transitionDecomposedParentsToDone>),
+                execute: () => transitionDecomposedParentsToDone({
+                    repoRoot: options.repoRoot,
+                    eventsRoot: options.eventsRoot,
+                    rootTaskId: options.taskId,
+                    taskIds: tasksToComplete
+                })
             })
             : null;
         const decomposedRoute = resolveDecomposedParentTerminalRoute({
