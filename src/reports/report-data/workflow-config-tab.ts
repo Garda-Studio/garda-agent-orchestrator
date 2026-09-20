@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { compactCacheUsage } from '../../core/compact/store-paths';
 import { buildDefaultWorkflowConfig, type WorkflowConfigData } from '../../core/workflow-config';
 import { resolveTaskResetAvailability } from '../../core/task-reset-availability';
 import { joinOrchestratorPath, toPosix } from '../../gates/shared/helpers';
@@ -331,6 +332,7 @@ function buildWorkflowSettings(
 }
 
 export function buildWorkflowConfigTab(repoRoot: string): ReportWorkflowConfigTab {
+    const compact_cache = compactCacheUsage(repoRoot);
     const configPath = joinOrchestratorPath(path.resolve(repoRoot), path.join('live', 'config', 'workflow-config.json'));
     const optionalSkillSelectionPolicy = buildOptionalSkillSelectionPolicyReportState(repoRoot);
     const unavailable: ReportDataUnavailableEntry[] = [];
@@ -341,6 +343,7 @@ export function buildWorkflowConfigTab(repoRoot: string): ReportWorkflowConfigTa
             config_exists: false,
             status: 'missing',
             settings: buildWorkflowSettings(repoRoot, config, config, optionalSkillSelectionPolicy),
+            compact_cache,
             optional_quality_checks: config.optional_quality_checks,
             optional_skill_selection_policy: optionalSkillSelectionPolicy,
             unavailable: [
@@ -364,6 +367,7 @@ export function buildWorkflowConfigTab(repoRoot: string): ReportWorkflowConfigTa
             config_exists: true,
             status: 'present',
             settings: buildWorkflowSettings(repoRoot, config, parsed, optionalSkillSelectionPolicy),
+            compact_cache,
             optional_quality_checks: config.optional_quality_checks,
             optional_skill_selection_policy: optionalSkillSelectionPolicy,
             unavailable: [...unavailable, ...optionalSkillSelectionPolicy.unavailable]
@@ -375,6 +379,7 @@ export function buildWorkflowConfigTab(repoRoot: string): ReportWorkflowConfigTa
             config_exists: true,
             status: 'invalid',
             settings: buildWorkflowSettings(repoRoot, config, config, optionalSkillSelectionPolicy),
+            compact_cache,
             optional_quality_checks: config.optional_quality_checks,
             optional_skill_selection_policy: optionalSkillSelectionPolicy,
             unavailable: [{

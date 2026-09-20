@@ -1,4 +1,84 @@
 {
+  "compact-enabled": {
+    "label": "إخراج مختصر",
+    "description": "إعداد compact. تتطلب التغييرات تأكيدًا؛ لا تُحجب الأسرار.",
+    "options": {
+      "true": {
+        "label": "مفعّل",
+        "description": "إعداد compact. تتطلب التغييرات تأكيدًا؛ لا تُحجب الأسرار. مفعّل"
+      },
+      "false": {
+        "label": "معطّل",
+        "description": "إعداد compact. تتطلب التغييرات تأكيدًا؛ لا تُحجب الأسرار. معطّل"
+      }
+    }
+  },
+  "compact-git": {
+    "label": "Git عبر compact",
+    "description": "إعداد compact. تتطلب التغييرات تأكيدًا؛ لا تُحجب الأسرار.",
+    "options": {
+      "true": {
+        "label": "مفعّل",
+        "description": "إعداد compact. تتطلب التغييرات تأكيدًا؛ لا تُحجب الأسرار. مفعّل"
+      },
+      "false": {
+        "label": "معطّل",
+        "description": "إعداد compact. تتطلب التغييرات تأكيدًا؛ لا تُحجب الأسرار. معطّل"
+      }
+    }
+  },
+  "compact-file": {
+    "label": "الملفات عبر compact",
+    "description": "إعداد compact. تتطلب التغييرات تأكيدًا؛ لا تُحجب الأسرار.",
+    "options": {
+      "true": {
+        "label": "مفعّل",
+        "description": "إعداد compact. تتطلب التغييرات تأكيدًا؛ لا تُحجب الأسرار. مفعّل"
+      },
+      "false": {
+        "label": "معطّل",
+        "description": "إعداد compact. تتطلب التغييرات تأكيدًا؛ لا تُحجب الأسرار. معطّل"
+      }
+    }
+  },
+  "compact-rg": {
+    "label": "البحث عبر compact",
+    "description": "إعداد compact. تتطلب التغييرات تأكيدًا؛ لا تُحجب الأسرار.",
+    "options": {
+      "true": {
+        "label": "مفعّل",
+        "description": "إعداد compact. تتطلب التغييرات تأكيدًا؛ لا تُحجب الأسرار. مفعّل"
+      },
+      "false": {
+        "label": "معطّل",
+        "description": "إعداد compact. تتطلب التغييرات تأكيدًا؛ لا تُحجب الأسرار. معطّل"
+      }
+    }
+  },
+  "compact-preview-lines": {
+    "label": "أسطر المعاينة",
+    "description": "إعداد compact. تتطلب التغييرات تأكيدًا؛ لا تُحجب الأسرار."
+  },
+  "compact-preview-chars": {
+    "label": "أحرف المعاينة",
+    "description": "إعداد compact. تتطلب التغييرات تأكيدًا؛ لا تُحجب الأسرار."
+  },
+  "compact-run-bytes": {
+    "label": "حد بايتات الالتقاط",
+    "description": "إعداد compact. تتطلب التغييرات تأكيدًا؛ لا تُحجب الأسرار."
+  },
+  "compact-task-bytes": {
+    "label": "حد بايتات ذاكرة المهمة",
+    "description": "إعداد compact. تتطلب التغييرات تأكيدًا؛ لا تُحجب الأسرار."
+  },
+  "compact-workspace-bytes": {
+    "label": "حد بايتات ذاكرة المشروع",
+    "description": "إعداد compact. تتطلب التغييرات تأكيدًا؛ لا تُحجب الأسرار."
+  },
+  "compact-max-runs": {
+    "label": "حد عدد الالتقاطات",
+    "description": "إعداد compact. تتطلب التغييرات تأكيدًا؛ لا تُحجب الأسرار."
+  },
   "compile-gate-command": {
     "label": "أمر compile-gate",
     "description": "الأمر الذي ينفّذه compile-gate للتحقق من التجميع والبناء وفحص الأنواع. عند عدم ضبطه في workflow-config، يفشل compile-gate بإغلاق آمن حتى يُضبط أمر خاص بالمشروع."

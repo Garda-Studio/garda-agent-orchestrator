@@ -1,4 +1,84 @@
 {
+  "compact-enabled": {
+    "label": "Zwięzłe wyjście",
+    "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane.",
+    "options": {
+      "true": {
+        "label": "Włączone",
+        "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane. Włączone"
+      },
+      "false": {
+        "label": "Wyłączone",
+        "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane. Wyłączone"
+      }
+    }
+  },
+  "compact-git": {
+    "label": "Git przez compact",
+    "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane.",
+    "options": {
+      "true": {
+        "label": "Włączone",
+        "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane. Włączone"
+      },
+      "false": {
+        "label": "Wyłączone",
+        "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane. Wyłączone"
+      }
+    }
+  },
+  "compact-file": {
+    "label": "Pliki przez compact",
+    "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane.",
+    "options": {
+      "true": {
+        "label": "Włączone",
+        "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane. Włączone"
+      },
+      "false": {
+        "label": "Wyłączone",
+        "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane. Wyłączone"
+      }
+    }
+  },
+  "compact-rg": {
+    "label": "Wyszukiwanie przez compact",
+    "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane.",
+    "options": {
+      "true": {
+        "label": "Włączone",
+        "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane. Włączone"
+      },
+      "false": {
+        "label": "Wyłączone",
+        "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane. Wyłączone"
+      }
+    }
+  },
+  "compact-preview-lines": {
+    "label": "Wiersze podglądu",
+    "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane."
+  },
+  "compact-preview-chars": {
+    "label": "Znaki podglądu",
+    "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane."
+  },
+  "compact-run-bytes": {
+    "label": "Limit bajtów przechwycenia",
+    "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane."
+  },
+  "compact-task-bytes": {
+    "label": "Limit bajtów pamięci zadania",
+    "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane."
+  },
+  "compact-workspace-bytes": {
+    "label": "Limit bajtów pamięci projektu",
+    "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane."
+  },
+  "compact-max-runs": {
+    "label": "Limit liczby przechwyceń",
+    "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane."
+  },
   "compile-gate-command": {
     "label": "Polecenie compile-gate",
     "description": "Polecenie uruchamiane przez compile-gate do walidacji kompilacji, buildu i type-check. Gdy nie jest skonfigurowane, compile-gate kończy się fail-closed, dopóki nie zostanie ustawione polecenie specyficzne dla projektu."

@@ -1,4 +1,84 @@
 {
+  "compact-enabled": {
+    "label": "紧凑输出",
+    "description": "compact 设置。更改需要确认；不会掩盖机密信息。",
+    "options": {
+      "true": {
+        "label": "启用",
+        "description": "compact 设置。更改需要确认；不会掩盖机密信息。 启用"
+      },
+      "false": {
+        "label": "禁用",
+        "description": "compact 设置。更改需要确认；不会掩盖机密信息。 禁用"
+      }
+    }
+  },
+  "compact-git": {
+    "label": "通过 compact 使用 Git",
+    "description": "compact 设置。更改需要确认；不会掩盖机密信息。",
+    "options": {
+      "true": {
+        "label": "启用",
+        "description": "compact 设置。更改需要确认；不会掩盖机密信息。 启用"
+      },
+      "false": {
+        "label": "禁用",
+        "description": "compact 设置。更改需要确认；不会掩盖机密信息。 禁用"
+      }
+    }
+  },
+  "compact-file": {
+    "label": "通过 compact 读取文件",
+    "description": "compact 设置。更改需要确认；不会掩盖机密信息。",
+    "options": {
+      "true": {
+        "label": "启用",
+        "description": "compact 设置。更改需要确认；不会掩盖机密信息。 启用"
+      },
+      "false": {
+        "label": "禁用",
+        "description": "compact 设置。更改需要确认；不会掩盖机密信息。 禁用"
+      }
+    }
+  },
+  "compact-rg": {
+    "label": "通过 compact 搜索",
+    "description": "compact 设置。更改需要确认；不会掩盖机密信息。",
+    "options": {
+      "true": {
+        "label": "启用",
+        "description": "compact 设置。更改需要确认；不会掩盖机密信息。 启用"
+      },
+      "false": {
+        "label": "禁用",
+        "description": "compact 设置。更改需要确认；不会掩盖机密信息。 禁用"
+      }
+    }
+  },
+  "compact-preview-lines": {
+    "label": "预览行数",
+    "description": "compact 设置。更改需要确认；不会掩盖机密信息。"
+  },
+  "compact-preview-chars": {
+    "label": "预览字符数",
+    "description": "compact 设置。更改需要确认；不会掩盖机密信息。"
+  },
+  "compact-run-bytes": {
+    "label": "单次捕获字节上限",
+    "description": "compact 设置。更改需要确认；不会掩盖机密信息。"
+  },
+  "compact-task-bytes": {
+    "label": "任务缓存字节上限",
+    "description": "compact 设置。更改需要确认；不会掩盖机密信息。"
+  },
+  "compact-workspace-bytes": {
+    "label": "项目缓存字节上限",
+    "description": "compact 设置。更改需要确认；不会掩盖机密信息。"
+  },
+  "compact-max-runs": {
+    "label": "捕获数量上限",
+    "description": "compact 设置。更改需要确认；不会掩盖机密信息。"
+  },
   "compile-gate-command": {
     "label": "compile-gate 命令",
     "description": "compile-gate 用于编译/构建/类型检查验证时执行的命令。若在 workflow-config 中未配置，则 compile-gate 将以 fail-closed 方式结束，直到配置项目专用命令。"

@@ -63,6 +63,13 @@ export class CompactStore {
     }
 }
 
+export function compactCacheUsage(repoRoot: string): { bytes: number; runs: number; available: boolean } {
+    const relative = `${resolveBundleName()}/runtime/compact`;
+    if (!fs.existsSync(path.join(repoRoot, relative))) return { bytes: 0, runs: 0, available: true };
+    try { return { ...new CompactStore(containedDirectory(repoRoot, relative)).usage(), available: true }; }
+    catch { return { bytes: 0, runs: 0, available: false }; }
+}
+
 export async function withCompactStore<T>(repoRoot: string, operation: (store: CompactStore) => Promise<T> | T): Promise<T> {
     const runtime = containedDirectory(repoRoot, `${resolveBundleName()}/runtime`, true);
     const root = containedDirectory(runtime, 'compact', true);

@@ -34,6 +34,7 @@ export const UI_DASHBOARD_MARKUP = `<header>
 <button type="button" data-tab="workflow-tab" data-setting-group="review" data-i18n="workflowGroupReview">\${text.workflowGroupReview}</button>
 <button type="button" data-tab="workflow-tab" data-setting-group="scope" data-i18n="workflowGroupScope">\${text.workflowGroupScope}</button>
 <button type="button" data-tab="workflow-tab" data-setting-group="safety" data-i18n="workflowGroupSafety">\${text.workflowGroupSafety}</button>
+<button type="button" data-tab="workflow-tab" data-setting-group="compact">Compact</button>
 <button type="button" data-tab="init-settings-tab" data-i18n="initSettingsTab">\${text.initSettingsTab}</button>
 <button type="button" data-tab="project-memory-tab" data-i18n="projectMemoryTab">\${text.projectMemoryTab}</button>
 <button type="button" data-tab="backups-tab" data-i18n="backupsTab">\${text.backupsTab}</button>

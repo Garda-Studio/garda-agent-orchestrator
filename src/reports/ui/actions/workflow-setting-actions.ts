@@ -1,4 +1,5 @@
 import { buildWorkflowConfigTab } from '../../report-data-contract';
+import { compactSettingsFromConfig } from '../../../core/compact/setting-definitions';
 import { getBaselineOptionalQualityCheckRule, isBaselineOptionalQualityCheckRuleId } from '../../../core/workflow-config';
 import { validateCompileGateCommand } from '../../../gates/compile/compile-gate';
 import {
@@ -131,6 +132,12 @@ export function parseUiSettingValue(setting: UiSettingDefinition, value: unknown
             throw new Error(`${setting.label} must be an integer from ${min} to ${max}.`);
         }
         validateScopeBudgetTieredThreshold(setting, parsed);
+        if (setting.key.startsWith('compact.')) {
+            const compact = Object.fromEntries(Object.entries(setting.peer_values ?? {})
+                .filter(([key]) => key.startsWith('compact.')).map(([key, current]) => [key.slice(8), current]));
+            compact[setting.key.slice(8)] = parsed;
+            compactSettingsFromConfig(compact);
+        }
         return {
             command_value: String(parsed),
             proposed_value: parsed

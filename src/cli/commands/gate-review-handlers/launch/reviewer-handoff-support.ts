@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { compactGuidance } from '../../../../core/compact/guidance';
 import { buildExhaustiveReviewContractLines } from '../../../../gates/review-context/review-context-artifacts';
 import {
     buildReviewerFocusedSelfValidationContractLines,
@@ -524,6 +525,7 @@ export function buildCopyPasteReviewerLaunchPrompt(options: ReviewerLaunchPrompt
         `You are the delegated ${options.reviewType} reviewer for this Garda task.`,
         buildReviewerCompletenessCheckNotice(options.executionProvider),
         `Repository: ${options.repoRoot}`,
+        ...[compactGuidance(options.repoRoot, options.taskId || '', true)].filter(Boolean),
         'Reviewer-only boundary: you are not the main orchestrating agent for TASK.md.',
         'Do not run Garda workflow/navigation/validation gates such as next-step, classify-change, compile-gate, full-suite-validation, build-review-context, record-review-routing, prepare-reviewer-launch, record-reviewer-delegation-started, complete-reviewer-launch, record-review-invocation, or record-review-result.',
         'Do not launch another reviewer or subagent, and do not modify reviewer launch/control artifacts, task events, preflight artifacts, review context artifacts, receipts, TASK.md, or project memory.',
@@ -607,6 +609,7 @@ export function buildReviewerLaunchInputHandoffArtifact(
         copy_paste_reviewer_launch_prompt: copyPasteReviewerLaunchPrompt,
         copy_paste_reviewer_launch_prompt_sha256: options.copyPasteReviewerLaunchPromptSha256,
         reviewer_only_instructions: [
+            ...[compactGuidance(options.repoRoot, options.taskId || '', true)].filter(Boolean),
             'Act as the delegated reviewer named by this artifact.',
             'You are not the main orchestrating agent for TASK.md.',
             'Do not launch another reviewer or subagent.',

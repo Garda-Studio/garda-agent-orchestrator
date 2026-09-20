@@ -277,6 +277,30 @@ test('dashboard asset modules are readable template literals, not escaped string
     }
 });
 
+test('Compact tab renders settings and cache usage when switching groups without a report refresh', () => {
+    const settingsEditorNode = { innerHTML: '', querySelectorAll: () => [] };
+    const context = {
+        document: { querySelectorAll: () => [] }, window: { localStorage: null },
+        languageMetadata: LOCAL_UI_LANGUAGES, languagePacks: LOCAL_UI_TEXT, settingTextPacks: LOCAL_UI_SETTING_TEXT,
+        fallbackLanguage: 'en', initialLanguage: 'ru', settingsEditorNode,
+        workflowNode: { innerHTML: '', hidden: false }, workflowPanelTitleNode: { textContent: '' },
+        currentSettingsPayload: null, currentWorkflowSettingGroup: 'validation',
+        currentReport: { workflow_config_tab: { compact_cache: { bytes: 12345, runs: 2, available: true } } }
+    };
+    const payload = { enabled: true, settings: ['compact.enabled', 'compile_gate.command'].map(key => ({
+        id: key === 'compact.enabled' ? 'compact-enabled' : 'compile-gate-command', key,
+        label: key, description: '', current_value: true, value_type: 'boolean', options: [], flag: '--test'
+    })) };
+    vm.runInNewContext(`${UI_DASHBOARD_CLIENT_CORE}\n${UI_DASHBOARD_CLIENT_WORKFLOW}\nrenderSettingsEditor(${JSON.stringify(payload)});`, context);
+    assert.doesNotMatch(settingsEditorNode.innerHTML, /12345 bytes/);
+    vm.runInNewContext("currentWorkflowSettingGroup = 'compact'; renderSettingsEditor(currentSettingsPayload);", context);
+    assert.match(settingsEditorNode.innerHTML, /12345 bytes; 2 runs/);
+    assert.match(settingsEditorNode.innerHTML, /compact\.enabled/);
+    assert.doesNotMatch(settingsEditorNode.innerHTML, /compile_gate\.command/);
+    vm.runInNewContext("currentWorkflowSettingGroup = 'validation'; renderSettingsEditor(currentSettingsPayload);", context);
+    assert.doesNotMatch(settingsEditorNode.innerHTML, /12345 bytes/);
+});
+
 test('workflow settings editor renders unconfigured compile-gate through localized fallback text', () => {
     const settingsEditorNode = {
         innerHTML: '',

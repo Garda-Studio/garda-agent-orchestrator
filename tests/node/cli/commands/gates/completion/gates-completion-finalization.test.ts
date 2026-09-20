@@ -549,12 +549,38 @@ describe('cli/commands/gates', () => {
         );
         assertAggregateTaskProjectionMatchesTimeline(failedAggregateEntries);
 
+        // Mandatory compact deletion participates in the same completion rollback.
+        const compactTaskRoot = path.join(getOrchestratorRoot(repoRoot), 'runtime/compact', taskId);
+        const compactRun = path.join(compactTaskRoot, 'a'.repeat(32));
+        fs.mkdirSync(compactRun, { recursive: true });
+        const compactOutput = path.join(compactRun, 'stdout.log');
+        fs.writeFileSync(compactOutput, 'secret remains unfiltered');
+        const originalUnlinkSync = fsModule.unlinkSync;
+        let injectedCompactFailure = false;
+        fsModule.unlinkSync = ((filePath: fs.PathLike) => {
+            if (String(filePath) === compactOutput) {
+                injectedCompactFailure = true;
+                throw new Error('Injected compact deletion failure');
+            }
+            return originalUnlinkSync(filePath);
+        }) as typeof fsModule.unlinkSync;
+        try {
+            await captureExpectedAsyncError(() => handleCompletionGate([
+                '--preflight-path', preflightPath, '--task-id', taskId, '--repo-root', repoRoot
+            ]));
+        } finally { fsModule.unlinkSync = originalUnlinkSync; }
+        assert.equal(injectedCompactFailure, true);
+        assert.notEqual(readTaskQueueStatusFromTaskFile(repoRoot, taskId), 'DONE');
+        assert.equal(fs.existsSync(compactOutput), true);
+        assert.equal(readTaskTimelineEvents(repoRoot, taskId).filter(event => event.event_type === 'COMPLETION_GATE_PASSED').length, 0);
+
         await handleCompletionGate([
             '--preflight-path', preflightPath,
             '--task-id', taskId,
             '--repo-root', repoRoot
         ]);
         assert.equal(readTaskQueueStatusFromTaskFile(repoRoot, taskId), 'DONE');
+        assert.equal(fs.existsSync(compactTaskRoot), false);
         assert.equal(fs.existsSync(finalCloseoutJsonPath), true);
         assert.equal(fs.existsSync(finalCloseoutMarkdownPath), true);
         assert.equal(fs.existsSync(finalUserReportPath), true);

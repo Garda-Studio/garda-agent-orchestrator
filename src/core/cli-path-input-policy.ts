@@ -59,6 +59,7 @@ export const CLI_PATH_INPUT_POLICIES: Readonly<Record<string, CliPathInputPolicy
     },
     '--cli-path': workspaceContained('Attests the repository-owned CLI entrypoint.'),
     '--command-records-path': workspaceContained('Reads task-owned command evidence.'),
+    '--compact-file': nonFilesystem('Boolean capability setting for compact file inspection, not a path.'),
     '--commands-path': workspaceContained('Reads repository-owned command policy.'),
     '--compile-evidence-path': workspaceContained('Reads task-owned compile evidence.'),
     '--compile-output-path': workspaceContained('Writes task-owned compile output.'),

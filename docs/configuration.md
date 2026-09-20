@@ -2,6 +2,23 @@
 
 All configuration files live in `garda-agent-orchestrator/live/config/`.
 
+## Compact command controls
+
+The **Compact** UI group edits `workflow-config.json` through the existing confirmed, audited settings route. It shows observed cache bytes/runs and provides enable/disable controls for compact itself and the shipped Git, file and ripgrep adapters. Disabling a family prevents its producer from running. Retained output remains readable until task completion.
+
+The optional `compact` section defaults to:
+
+```json
+{
+  "enabled": true, "git": true, "file": true, "rg": true,
+  "preview_lines": 20, "preview_chars": 3000,
+  "run_bytes": 16777216, "task_bytes": 67108864,
+  "workspace_bytes": 268435456, "max_runs": 2048
+}
+```
+
+CLI settings use `workflow set --compact-enabled false`, `--compact-git false`, `--compact-file false`, `--compact-rg false`, `--compact-preview-lines`, `--compact-preview-chars`, `--compact-run-bytes`, `--compact-task-bytes`, `--compact-workspace-bytes` and `--compact-max-runs`, with the normal operator confirmation arguments. Limits can be reduced, not raised above these ceilings; run ≤ task ≤ workspace, at least 9216 bytes, preview at least 3 lines/128 characters. When lowering hierarchical limits in the UI, lower the inner limit first. No secret-redaction option exists. New command adapters are a code extension, not arbitrary UI commands.
+
 The root manifest `garda.config.json` references the managed config files validated by the orchestrator and can be checked with:
 
 ```bash

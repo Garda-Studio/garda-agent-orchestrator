@@ -1,4 +1,84 @@
 {
+  "compact-enabled": {
+    "label": "簡潔な出力",
+    "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。",
+    "options": {
+      "true": {
+        "label": "有効",
+        "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。 有効"
+      },
+      "false": {
+        "label": "無効",
+        "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。 無効"
+      }
+    }
+  },
+  "compact-git": {
+    "label": "compact 経由の Git",
+    "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。",
+    "options": {
+      "true": {
+        "label": "有効",
+        "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。 有効"
+      },
+      "false": {
+        "label": "無効",
+        "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。 無効"
+      }
+    }
+  },
+  "compact-file": {
+    "label": "compact 経由のファイル",
+    "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。",
+    "options": {
+      "true": {
+        "label": "有効",
+        "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。 有効"
+      },
+      "false": {
+        "label": "無効",
+        "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。 無効"
+      }
+    }
+  },
+  "compact-rg": {
+    "label": "compact 経由の検索",
+    "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。",
+    "options": {
+      "true": {
+        "label": "有効",
+        "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。 有効"
+      },
+      "false": {
+        "label": "無効",
+        "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。 無効"
+      }
+    }
+  },
+  "compact-preview-lines": {
+    "label": "プレビュー行数",
+    "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。"
+  },
+  "compact-preview-chars": {
+    "label": "プレビュー文字数",
+    "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。"
+  },
+  "compact-run-bytes": {
+    "label": "取得ごとのバイト上限",
+    "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。"
+  },
+  "compact-task-bytes": {
+    "label": "タスクキャッシュのバイト上限",
+    "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。"
+  },
+  "compact-workspace-bytes": {
+    "label": "プロジェクトキャッシュのバイト上限",
+    "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。"
+  },
+  "compact-max-runs": {
+    "label": "取得数の上限",
+    "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。"
+  },
   "compile-gate-command": {
     "label": "compile-gate コマンド",
     "description": "コンパイル／ビルド／型チェック検証で compile-gate が実行するコマンド。workflow-config で未設定の場合、プロジェクト固有のコマンドが設定されるまで compile-gate は fail-closed で終了します。"

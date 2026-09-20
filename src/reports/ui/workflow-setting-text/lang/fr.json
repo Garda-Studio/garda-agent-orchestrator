@@ -1,4 +1,84 @@
 {
+  "compact-enabled": {
+    "label": "Sortie compacte",
+    "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués.",
+    "options": {
+      "true": {
+        "label": "Activé",
+        "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués. Activé"
+      },
+      "false": {
+        "label": "Désactivé",
+        "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués. Désactivé"
+      }
+    }
+  },
+  "compact-git": {
+    "label": "Git via compact",
+    "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués.",
+    "options": {
+      "true": {
+        "label": "Activé",
+        "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués. Activé"
+      },
+      "false": {
+        "label": "Désactivé",
+        "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués. Désactivé"
+      }
+    }
+  },
+  "compact-file": {
+    "label": "Fichiers via compact",
+    "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués.",
+    "options": {
+      "true": {
+        "label": "Activé",
+        "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués. Activé"
+      },
+      "false": {
+        "label": "Désactivé",
+        "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués. Désactivé"
+      }
+    }
+  },
+  "compact-rg": {
+    "label": "Recherche via compact",
+    "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués.",
+    "options": {
+      "true": {
+        "label": "Activé",
+        "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués. Activé"
+      },
+      "false": {
+        "label": "Désactivé",
+        "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués. Désactivé"
+      }
+    }
+  },
+  "compact-preview-lines": {
+    "label": "Lignes d’aperçu",
+    "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués."
+  },
+  "compact-preview-chars": {
+    "label": "Caractères d’aperçu",
+    "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués."
+  },
+  "compact-run-bytes": {
+    "label": "Limite d’octets par capture",
+    "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués."
+  },
+  "compact-task-bytes": {
+    "label": "Limite d’octets du cache de tâche",
+    "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués."
+  },
+  "compact-workspace-bytes": {
+    "label": "Limite d’octets du cache du projet",
+    "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués."
+  },
+  "compact-max-runs": {
+    "label": "Nombre maximal de captures",
+    "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués."
+  },
   "compile-gate-command": {
     "label": "Commande compile-gate",
     "description": "Commande exécutée par compile-gate pour la validation compile, build et type-check. Si elle n'est pas définie dans workflow-config, compile-gate échoue en mode fail-closed jusqu'à la configuration d'une commande spécifique au projet."

@@ -1,4 +1,6 @@
 import * as path from 'node:path';
+import { cleanupCompactAtTaskBoundary } from '../../core/compact/lifecycle';
+import { compactGuidance } from '../../core/compact/guidance';
 import {
     emitMandatoryCompletionGateEventAsync
 } from '../../gate-runtime/lifecycle-events';
@@ -77,7 +79,14 @@ export async function handleEnterTaskMode(gateArgv: string[]): Promise<void> {
         '--emit-metrics': { key: 'emitMetrics', type: 'boolean' },
         '--repo-root': { key: 'repoRoot', type: 'string' }
     };
-    return runGateCliHandler(gateArgv, defs, runEnterTaskModeCommand, {
+    return runGateCliHandler(gateArgv, defs, async (options: Parameters<typeof runEnterTaskModeCommand>[0]) => {
+        const result = runEnterTaskModeCommand(options);
+        if (result.exitCode === 0) {
+            const notes = await cleanupCompactAtTaskBoundary(path.resolve(String(options.repoRoot || '.')));
+            result.outputLines.push(...notes.filter(note => note.startsWith('Compact housekeeping pending:')));
+        }
+        return result;
+    }, {
         onCommandError: (error, { options }) => recordTaskModeProtectedManifestFailure(options, error)
     });
 }
@@ -460,11 +469,12 @@ export async function handleNextStep(gateArgv: string[]): Promise<void> {
     return runGateCliHandler(gateArgv, defs, resolveNextStepFromCliOptions, {
         parseConfig: { allowPositionals: true, maxPositionals: 1 },
         mapOptions: ({ options, positionals }) => ({ ...options, positionals: [...positionals] }),
-        formatOutput: (result, { options }) => (
-            options.asJson === true
-                ? `${JSON.stringify(result, null, 2)}\n`
-                : formatNextStepText(result)
-        ),
+        formatOutput: (result, { options }) => {
+            const hint = result.status === 'DONE' ? '' : compactGuidance(path.resolve(String(options.repoRoot || '.')), result.task_id);
+            return options.asJson === true
+                ? `${JSON.stringify({ ...result, ...(hint ? { compact_hint: hint } : {}) }, null, 2)}\n`
+                : formatNextStepText(result) + (hint ? `\n${hint}\n` : '');
+        },
         resolveExitCode: () => 0
     });
 }

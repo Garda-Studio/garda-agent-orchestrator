@@ -1,4 +1,84 @@
 {
+  "compact-enabled": {
+    "label": "Compacte uitvoer",
+    "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd.",
+    "options": {
+      "true": {
+        "label": "Aan",
+        "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd. Aan"
+      },
+      "false": {
+        "label": "Uit",
+        "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd. Uit"
+      }
+    }
+  },
+  "compact-git": {
+    "label": "Git via compact",
+    "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd.",
+    "options": {
+      "true": {
+        "label": "Aan",
+        "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd. Aan"
+      },
+      "false": {
+        "label": "Uit",
+        "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd. Uit"
+      }
+    }
+  },
+  "compact-file": {
+    "label": "Bestanden via compact",
+    "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd.",
+    "options": {
+      "true": {
+        "label": "Aan",
+        "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd. Aan"
+      },
+      "false": {
+        "label": "Uit",
+        "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd. Uit"
+      }
+    }
+  },
+  "compact-rg": {
+    "label": "Zoeken via compact",
+    "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd.",
+    "options": {
+      "true": {
+        "label": "Aan",
+        "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd. Aan"
+      },
+      "false": {
+        "label": "Uit",
+        "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd. Uit"
+      }
+    }
+  },
+  "compact-preview-lines": {
+    "label": "Voorbeeldregels",
+    "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd."
+  },
+  "compact-preview-chars": {
+    "label": "Voorbeeldtekens",
+    "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd."
+  },
+  "compact-run-bytes": {
+    "label": "Bytelimiet per opname",
+    "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd."
+  },
+  "compact-task-bytes": {
+    "label": "Bytelimiet taakcache",
+    "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd."
+  },
+  "compact-workspace-bytes": {
+    "label": "Bytelimiet projectcache",
+    "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd."
+  },
+  "compact-max-runs": {
+    "label": "Maximumaantal opnamen",
+    "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd."
+  },
   "compile-gate-command": {
     "label": "Compile-gate-opdracht",
     "description": "Opdracht die compile-gate uitvoert voor compile-, build- en typecheck-validatie. Zonder configuratie faalt compile-gate gesloten totdat een projectspecifieke opdracht is ingesteld."

@@ -2,6 +2,7 @@ import type {
     EffectiveReviewExecutionPolicyMode,
     ReviewExecutionPolicyMode
 } from '../../../core/review-execution-policy';
+import { COMPACT_CLI_OPTIONS } from '../../../core/compact/setting-definitions';
 import type {
     CompileGateConfig,
     ProjectMemoryMaintenanceConfig,
@@ -65,6 +66,7 @@ export interface WorkflowConfigState {
 }
 
 export interface WorkflowCommandResultBase {
+    compact?: unknown;
     scope: 'repo-local';
     target_root: string;
     bundle_root: string;
@@ -136,6 +138,7 @@ export const WORKFLOW_SHARED_DEFINITIONS = {
 };
 
 export const WORKFLOW_SET_DEFINITIONS = {
+    ...COMPACT_CLI_OPTIONS,
     ...WORKFLOW_SHARED_DEFINITIONS,
     '--full-suite': { key: 'fullSuiteAlias', type: 'string' },
     '--compile-gate-command': { key: 'compileGateCommand', type: 'string' },

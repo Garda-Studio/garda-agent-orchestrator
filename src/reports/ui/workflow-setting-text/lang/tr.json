@@ -1,4 +1,84 @@
 {
+  "compact-enabled": {
+    "label": "Kısa çıktı",
+    "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez.",
+    "options": {
+      "true": {
+        "label": "Açık",
+        "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez. Açık"
+      },
+      "false": {
+        "label": "Kapalı",
+        "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez. Kapalı"
+      }
+    }
+  },
+  "compact-git": {
+    "label": "compact ile Git",
+    "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez.",
+    "options": {
+      "true": {
+        "label": "Açık",
+        "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez. Açık"
+      },
+      "false": {
+        "label": "Kapalı",
+        "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez. Kapalı"
+      }
+    }
+  },
+  "compact-file": {
+    "label": "compact ile dosyalar",
+    "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez.",
+    "options": {
+      "true": {
+        "label": "Açık",
+        "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez. Açık"
+      },
+      "false": {
+        "label": "Kapalı",
+        "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez. Kapalı"
+      }
+    }
+  },
+  "compact-rg": {
+    "label": "compact ile arama",
+    "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez.",
+    "options": {
+      "true": {
+        "label": "Açık",
+        "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez. Açık"
+      },
+      "false": {
+        "label": "Kapalı",
+        "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez. Kapalı"
+      }
+    }
+  },
+  "compact-preview-lines": {
+    "label": "Önizleme satırları",
+    "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez."
+  },
+  "compact-preview-chars": {
+    "label": "Önizleme karakterleri",
+    "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez."
+  },
+  "compact-run-bytes": {
+    "label": "Yakalama bayt sınırı",
+    "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez."
+  },
+  "compact-task-bytes": {
+    "label": "Görev önbelleği bayt sınırı",
+    "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez."
+  },
+  "compact-workspace-bytes": {
+    "label": "Proje önbelleği bayt sınırı",
+    "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez."
+  },
+  "compact-max-runs": {
+    "label": "Yakalama sayısı sınırı",
+    "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez."
+  },
   "compile-gate-command": {
     "label": "Compile-gate komutu",
     "description": "Derleme, build ve type-check doğrulaması için compile-gate'in çalıştırdığı komut. workflow-config'de ayarlanmamışsa, proje özel bir komut yapılandırılana kadar compile-gate güvenli şekilde başarısız olur."

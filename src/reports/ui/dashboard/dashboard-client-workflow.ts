@@ -155,6 +155,7 @@ function renderSettingControl(setting, disabled, controlScope) {
 }
 function settingGroupId(setting) {
   const key = String(setting.key || '');
+  if (key.startsWith('compact.')) return 'compact';
   if (key.startsWith('compile_gate.')) return 'validation';
   if (key.startsWith('full_suite_validation.')) return 'validation';
   if (key.startsWith('optional_quality_checks.')) return 'validation';
@@ -165,6 +166,7 @@ function settingGroupId(setting) {
   return 'safety';
 }
 function settingGroupLabel(groupId) {
+  if (groupId === 'compact') return 'Compact';
   if (groupId === 'validation') return t('workflowGroupValidation');
   if (groupId === 'review') return t('workflowGroupReview');
   if (groupId === 'scope') return t('workflowGroupScope');
@@ -268,14 +270,17 @@ function renderSettingsEditor(payload) {
   const disabledNotice = disabled
     ? '<p class="empty">' + safe(t('settingEditsDisabled')) + ' <code>garda ui --actions</code> ' + safe(t('settingEditsDisabledTail')) + '</p>'
     : '';
-  const groupOrder = ['validation', 'review', 'scope', 'safety'];
+  const groupOrder = ['validation', 'review', 'scope', 'compact', 'safety'];
   const availableGroups = groupOrder.filter(groupId => settings.some(setting => settingGroupId(setting) === groupId));
   if (!availableGroups.includes(currentWorkflowSettingGroup)) {
     currentWorkflowSettingGroup = availableGroups[0] || 'validation';
   }
   updateWorkflowPanelTitle();
   const reportForRuntimeInfo = typeof currentReport === 'undefined' ? null : currentReport;
+  const compactCache = reportForRuntimeInfo && reportForRuntimeInfo.workflow_config_tab && reportForRuntimeInfo.workflow_config_tab.compact_cache;
   settingsEditorNode.innerHTML = disabledNotice
+    + (currentWorkflowSettingGroup === 'compact' && compactCache
+      ? '<p class="meta"><code>runtime/compact: ' + (compactCache.available ? safe(compactCache.bytes) + ' bytes; ' + safe(compactCache.runs) + ' runs' : 'unavailable') + '</code></p>' : '')
     + renderValidationForecastLine(reportForRuntimeInfo)
     + (() => {
       const groupSettings = settings.filter(setting => settingGroupId(setting) === currentWorkflowSettingGroup);

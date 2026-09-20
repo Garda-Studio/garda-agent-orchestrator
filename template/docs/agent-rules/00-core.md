@@ -41,6 +41,8 @@ Default response brevity: {{ASSISTANT_RESPONSE_BREVITY}}.
 
 ## Code Quality
 
+For supported inspections, prefer the enabled `garda compact` CLI described in `40-commands.md`; next-step and reviewer handoffs provide the local invocation. This does not replace mandatory evidence reads or gates.
+
 ### Cleanliness and Readability
 - Code must be self-documenting.
 - Use meaningful names (`productRepository` instead of `repo`).

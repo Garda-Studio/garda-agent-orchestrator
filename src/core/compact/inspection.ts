@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { spawnStreamed } from '../process/subprocess';
 import { readTaskQueueEntries } from '../task-queue-read';
+import { isTaskQueueDoneStatus } from '../task-queue/active-task-state';
 import { assertCanonicalTaskId } from '../task-ids';
 import { resolveBundleName } from '../constants';
 import { CompactCapture, withCompactStore } from './store';
@@ -112,7 +113,7 @@ export async function runCompactInspection(root: string, taskId: string, request
     if (!settings.enabled || !settings[request.kind]) throw new Error('Compact inspection is disabled; producer was not executed.');
     if (request.path) inspectPath(root, request.path, request.kind === 'git');
     return withCompactStore(root, async store => {
-        if (readTaskQueueEntries(root).get(taskId)?.status?.includes('DONE')) throw new Error('Task is complete; compact capture is closed.');
+        if (isTaskQueueDoneStatus(readTaskQueueEntries(root).get(taskId)?.status ?? null)) throw new Error('Task is complete; compact capture is closed.');
         const capture = new CompactCapture(store, taskId, settings);
         let outcome: CompactOutcome;
         try {

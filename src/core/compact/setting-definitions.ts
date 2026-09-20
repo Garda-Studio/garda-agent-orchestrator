@@ -14,13 +14,18 @@ const FIELDS = [
     ['maxRuns', 'max_runs', 'Capture count limit', 'Maximum number of retained captures in this workspace.']
 ] as const;
 
+export function compactSettingMinimum(id: string): number {
+    return id === 'compact-preview-lines' ? 3 : id === 'compact-preview-chars' ? 128
+        : ['compact-run-bytes', 'compact-task-bytes', 'compact-workspace-bytes'].includes(id) ? 9216 : 1;
+}
+
 export const COMPACT_SETTING_REGISTRY = createWorkflowSettingRegistry(FIELDS.map(([internal, key, label, description]): WorkflowSettingManifestEntry => {
     const value = DEFAULT_COMPACT_SETTINGS[internal];
     const boolean = typeof value === 'boolean';
     return {
         id: `compact-${key.replace(/_/g, '-')}`, key: `compact.${key}`, owner: { kind: 'workflow', section: 'compact' },
         value_type: boolean ? 'boolean' : 'integer', exposure: 'operator-visible', default_value: value,
-        validate: (candidate): candidate is boolean | number => boolean ? typeof candidate === 'boolean' : Number.isSafeInteger(candidate) && Number(candidate) >= 1 && Number(candidate) <= Number(value),
+        validate: (candidate): candidate is boolean | number => boolean ? typeof candidate === 'boolean' : Number.isSafeInteger(candidate) && Number(candidate) >= compactSettingMinimum(`compact-${key.replace(/_/g, '-')}`) && Number(candidate) <= Number(value),
         cli: { flag: `--compact-${key.replace(/_/g, '-')}` },
         ui: { group: 'compact', label, description, control: boolean ? 'checkbox' : 'number' },
         materialize: candidate => [{ path: `compact.${key}`, value: candidate }]

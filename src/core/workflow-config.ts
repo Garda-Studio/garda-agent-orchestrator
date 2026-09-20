@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { compactSettingsToConfig } from './compact/setting-definitions';
 import {
     UNCONFIGURED_COMPILE_GATE_COMMAND,
     UNCONFIGURED_FULL_SUITE_VALIDATION_COMMAND
@@ -211,6 +212,7 @@ function findOwnCaseInsensitiveKey(record: Record<string, unknown>, expectedKey:
 }
 
 const DEFAULT_WORKFLOW_CONFIG: WorkflowConfigData = Object.freeze({
+    compact: compactSettingsToConfig(),
     compile_gate: Object.freeze({
         command: UNCONFIGURED_COMPILE_GATE_COMMAND
     }),

@@ -199,6 +199,7 @@ export interface ReportWorkflowSetting {
 }
 
 export interface ReportWorkflowConfigTab {
+    compact_cache?: { bytes: number; runs: number; available: boolean };
     config_path: string;
     config_exists: boolean;
     status: 'present' | 'missing' | 'invalid';

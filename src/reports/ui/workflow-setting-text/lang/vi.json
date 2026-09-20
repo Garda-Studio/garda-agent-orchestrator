@@ -1,4 +1,84 @@
 {
+  "compact-enabled": {
+    "label": "Đầu ra rút gọn",
+    "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che.",
+    "options": {
+      "true": {
+        "label": "Bật",
+        "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che. Bật"
+      },
+      "false": {
+        "label": "Tắt",
+        "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che. Tắt"
+      }
+    }
+  },
+  "compact-git": {
+    "label": "Git qua compact",
+    "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che.",
+    "options": {
+      "true": {
+        "label": "Bật",
+        "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che. Bật"
+      },
+      "false": {
+        "label": "Tắt",
+        "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che. Tắt"
+      }
+    }
+  },
+  "compact-file": {
+    "label": "Tệp qua compact",
+    "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che.",
+    "options": {
+      "true": {
+        "label": "Bật",
+        "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che. Bật"
+      },
+      "false": {
+        "label": "Tắt",
+        "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che. Tắt"
+      }
+    }
+  },
+  "compact-rg": {
+    "label": "Tìm kiếm qua compact",
+    "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che.",
+    "options": {
+      "true": {
+        "label": "Bật",
+        "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che. Bật"
+      },
+      "false": {
+        "label": "Tắt",
+        "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che. Tắt"
+      }
+    }
+  },
+  "compact-preview-lines": {
+    "label": "Số dòng xem trước",
+    "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che."
+  },
+  "compact-preview-chars": {
+    "label": "Số ký tự xem trước",
+    "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che."
+  },
+  "compact-run-bytes": {
+    "label": "Giới hạn byte mỗi lần thu",
+    "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che."
+  },
+  "compact-task-bytes": {
+    "label": "Giới hạn byte bộ nhớ đệm tác vụ",
+    "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che."
+  },
+  "compact-workspace-bytes": {
+    "label": "Giới hạn byte bộ nhớ đệm dự án",
+    "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che."
+  },
+  "compact-max-runs": {
+    "label": "Giới hạn số lần thu",
+    "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che."
+  },
   "compile-gate-command": {
     "label": "Lệnh compile-gate",
     "description": "Lệnh mà compile-gate chạy để kiểm tra biên dịch, build và type-check. Khi chưa được cấu hình trong workflow-config, compile-gate sẽ thất bại theo cơ chế đóng an toàn cho đến khi có lệnh riêng của dự án."

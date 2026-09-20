@@ -25,6 +25,7 @@ export function renderWorkflowPanel(tab: ReportWorkflowConfigTab): string {
         '<section class="panel" id="tab-workflow" role="tabpanel">',
         '<div class="card">',
         '<h2>Workflow Config</h2>',
+        tab.compact_cache ? `<p class="meta">Compact cache: ${tab.compact_cache.available ? `${tab.compact_cache.bytes} bytes; ${tab.compact_cache.runs} runs` : 'unavailable'}</p>` : '',
         `<p class="meta">Path: ${escapeHtml(tab.config_path)} | Status: ${escapeHtml(tab.status)}</p>`,
         '<div class="table-wrap" style="margin-top: 12px;">',
         '<table class="settings-table">',

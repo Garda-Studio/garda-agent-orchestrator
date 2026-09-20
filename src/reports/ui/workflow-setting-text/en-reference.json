@@ -1,4 +1,84 @@
 {
+  "compact-enabled": {
+    "label": "Compact output",
+    "description": "Use bounded inspection output with selective retrieval.",
+    "options": {
+      "true": {
+        "label": "On",
+        "description": "Enabled for compact inspections."
+      },
+      "false": {
+        "label": "Off",
+        "description": "Disabled for compact inspections."
+      }
+    }
+  },
+  "compact-git": {
+    "label": "Compact Git",
+    "description": "Allow the shipped Git status and scoped diff adapter.",
+    "options": {
+      "true": {
+        "label": "On",
+        "description": "Enabled for compact inspections."
+      },
+      "false": {
+        "label": "Off",
+        "description": "Disabled for compact inspections."
+      }
+    }
+  },
+  "compact-file": {
+    "label": "Compact files",
+    "description": "Allow the shipped source file inspection adapter.",
+    "options": {
+      "true": {
+        "label": "On",
+        "description": "Enabled for compact inspections."
+      },
+      "false": {
+        "label": "Off",
+        "description": "Disabled for compact inspections."
+      }
+    }
+  },
+  "compact-rg": {
+    "label": "Compact search",
+    "description": "Allow the shipped repository search adapter.",
+    "options": {
+      "true": {
+        "label": "On",
+        "description": "Enabled for compact inspections."
+      },
+      "false": {
+        "label": "Off",
+        "description": "Disabled for compact inspections."
+      }
+    }
+  },
+  "compact-preview-lines": {
+    "label": "Preview lines",
+    "description": "Maximum preview lines per stream."
+  },
+  "compact-preview-chars": {
+    "label": "Preview characters",
+    "description": "Maximum preview characters per stream."
+  },
+  "compact-run-bytes": {
+    "label": "Capture byte limit",
+    "description": "Maximum bytes per capture including metadata."
+  },
+  "compact-task-bytes": {
+    "label": "Task cache byte limit",
+    "description": "Maximum compact cache bytes per task."
+  },
+  "compact-workspace-bytes": {
+    "label": "Workspace cache byte limit",
+    "description": "Maximum compact cache bytes in this workspace."
+  },
+  "compact-max-runs": {
+    "label": "Capture count limit",
+    "description": "Maximum number of retained captures in this workspace."
+  },
   "compile-gate-command-fallback": {
     "description": "Not set in workflow-config; compile-gate fails closed until a project-specific command is configured."
   },

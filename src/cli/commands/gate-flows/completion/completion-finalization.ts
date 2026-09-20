@@ -1,6 +1,7 @@
 import { TASK_QUEUE_FILENAME } from '../../../../core/orchestration-constants';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { cleanupCompactAtTaskBoundary } from '../../../../core/compact/lifecycle';
 
 import { writeFileAtomically } from '../../../../core/filesystem';
 import { isTaskQueueDoneStatus } from '../../../../core/active-task-state';
@@ -54,6 +55,7 @@ interface CompletionEventDetails {
 }
 
 type CompletionFinalizationStep =
+    | 'COMPACT_CLEANUP'
     | 'STATUS_CHANGED'
     | 'COMPLETION_GATE_PASSED'
     | 'FINAL_CLOSEOUT'
@@ -780,6 +782,7 @@ function resolveAllowedRollbackEventSequences(
     if (
         pendingFinalizationStep === 'FINAL_CLOSEOUT'
         || pendingFinalizationStep === 'DECOMPOSED_PARENT_AUTO_CLOSE'
+        || pendingFinalizationStep === 'COMPACT_CLEANUP'
     ) {
         const sequence: RollbackEventSignature[] = [];
         if (statusEventRecorded) {
@@ -1019,6 +1022,10 @@ export async function reconcileSuccessfulCompletionFinalizationAsync(
             eventsRoot: taskEventsRoot,
             reviewsRoot
         });
+        // Ephemeral output is not gate evidence. Delete before parent auto-close,
+        // whose transaction owns its own rollback and must remain the last step.
+        pendingFinalizationStep = 'COMPACT_CLEANUP';
+        await cleanupCompactAtTaskBoundary(repoRoot, taskId);
         pendingFinalizationStep = 'DECOMPOSED_PARENT_AUTO_CLOSE';
         decomposedParentStatusSync = closeEligibleDecomposedParentsLinkedToCompletedTask({
             repoRoot,
@@ -1070,7 +1077,9 @@ export async function reconcileSuccessfulCompletionFinalizationAsync(
                 repoRoot,
                 taskId,
                 options.preflightPath,
-                `${pendingFinalizationStep === 'FINAL_CLOSEOUT'
+                `${pendingFinalizationStep === 'COMPACT_CLEANUP'
+                    ? `mandatory compact cache deletion failed. ${error instanceof Error ? error.message : String(error)}`
+                    : pendingFinalizationStep === 'FINAL_CLOSEOUT'
                     ? `mandatory final closeout materialization failed. ${error instanceof Error ? error.message : String(error)}`
                     : pendingFinalizationStep === 'DECOMPOSED_PARENT_AUTO_CLOSE'
                     ? `mandatory decomposed parent auto-close failed. ${error instanceof Error ? error.message : String(error)}`

@@ -86,6 +86,23 @@ function defaultOptionalQualityCheckRuleIds(): string {
     return DEFAULT_OPTIONAL_QUALITY_CHECK_RULES.map((rule) => rule.id).join(', ');
 }
 
+test('workflow set persists compact settings through the audited transaction', () => {
+    const bundleRoot = createBundleRoot();
+    try {
+        const { result } = captureConsole(() => handleWorkflow([
+            'set', '--bundle-root', bundleRoot, '--compact-enabled', 'false', '--compact-preview-lines', '8',
+            ...buildOperatorConfirmationArgs()
+        ], PACKAGE_JSON));
+        assert.ok(result && result.action === 'set');
+        assert.equal(result.status, 'CHANGED');
+        assert.ok(result.changed_fields?.includes('compact.enabled'));
+        const config = JSON.parse(fs.readFileSync(path.join(bundleRoot, 'live/config/workflow-config.json'), 'utf8'));
+        assert.equal(config.compact.enabled, false);
+        assert.equal(config.compact.preview_lines, 8);
+        assert.ok(result.audit_path);
+    } finally { fs.rmSync(bundleRoot, { recursive: true, force: true }); }
+});
+
 test('workflow show prints repo-local full-suite settings', () => {
     const bundleRoot = createBundleRoot();
 

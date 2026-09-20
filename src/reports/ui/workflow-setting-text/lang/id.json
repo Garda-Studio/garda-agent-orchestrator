@@ -1,4 +1,84 @@
 {
+  "compact-enabled": {
+    "label": "Keluaran ringkas",
+    "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan.",
+    "options": {
+      "true": {
+        "label": "Aktif",
+        "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan. Aktif"
+      },
+      "false": {
+        "label": "Nonaktif",
+        "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan. Nonaktif"
+      }
+    }
+  },
+  "compact-git": {
+    "label": "Git melalui compact",
+    "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan.",
+    "options": {
+      "true": {
+        "label": "Aktif",
+        "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan. Aktif"
+      },
+      "false": {
+        "label": "Nonaktif",
+        "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan. Nonaktif"
+      }
+    }
+  },
+  "compact-file": {
+    "label": "Berkas melalui compact",
+    "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan.",
+    "options": {
+      "true": {
+        "label": "Aktif",
+        "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan. Aktif"
+      },
+      "false": {
+        "label": "Nonaktif",
+        "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan. Nonaktif"
+      }
+    }
+  },
+  "compact-rg": {
+    "label": "Pencarian melalui compact",
+    "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan.",
+    "options": {
+      "true": {
+        "label": "Aktif",
+        "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan. Aktif"
+      },
+      "false": {
+        "label": "Nonaktif",
+        "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan. Nonaktif"
+      }
+    }
+  },
+  "compact-preview-lines": {
+    "label": "Baris pratinjau",
+    "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan."
+  },
+  "compact-preview-chars": {
+    "label": "Karakter pratinjau",
+    "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan."
+  },
+  "compact-run-bytes": {
+    "label": "Batas byte tangkapan",
+    "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan."
+  },
+  "compact-task-bytes": {
+    "label": "Batas byte cache tugas",
+    "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan."
+  },
+  "compact-workspace-bytes": {
+    "label": "Batas byte cache proyek",
+    "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan."
+  },
+  "compact-max-runs": {
+    "label": "Batas jumlah tangkapan",
+    "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan."
+  },
   "compile-gate-command": {
     "label": "Perintah compile-gate",
     "description": "Perintah yang dijalankan compile-gate untuk validasi kompilasi, build, dan type-check. Jika tidak dikonfigurasi di workflow-config, compile-gate gagal tertutup hingga perintah khusus proyek dikonfigurasi."

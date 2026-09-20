@@ -1,4 +1,84 @@
 {
+  "compact-enabled": {
+    "label": "Kompakt utdata",
+    "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte.",
+    "options": {
+      "true": {
+        "label": "På",
+        "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte. På"
+      },
+      "false": {
+        "label": "Av",
+        "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte. Av"
+      }
+    }
+  },
+  "compact-git": {
+    "label": "Git via compact",
+    "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte.",
+    "options": {
+      "true": {
+        "label": "På",
+        "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte. På"
+      },
+      "false": {
+        "label": "Av",
+        "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte. Av"
+      }
+    }
+  },
+  "compact-file": {
+    "label": "Filer via compact",
+    "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte.",
+    "options": {
+      "true": {
+        "label": "På",
+        "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte. På"
+      },
+      "false": {
+        "label": "Av",
+        "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte. Av"
+      }
+    }
+  },
+  "compact-rg": {
+    "label": "Sökning via compact",
+    "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte.",
+    "options": {
+      "true": {
+        "label": "På",
+        "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte. På"
+      },
+      "false": {
+        "label": "Av",
+        "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte. Av"
+      }
+    }
+  },
+  "compact-preview-lines": {
+    "label": "Förhandsvisningsrader",
+    "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte."
+  },
+  "compact-preview-chars": {
+    "label": "Förhandsvisningstecken",
+    "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte."
+  },
+  "compact-run-bytes": {
+    "label": "Bytegräns per insamling",
+    "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte."
+  },
+  "compact-task-bytes": {
+    "label": "Bytegräns för uppgiftscache",
+    "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte."
+  },
+  "compact-workspace-bytes": {
+    "label": "Bytegräns för projektcache",
+    "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte."
+  },
+  "compact-max-runs": {
+    "label": "Högsta antal insamlingar",
+    "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte."
+  },
   "compile-gate-command": {
     "label": "Compile-gate-kommando",
     "description": "Kommando som compile-gate kör för validering av kompilering, build och typkontroll. Utan konfiguration misslyckas compile-gate med stängt läge tills ett projektspecifikt kommando konfigureras."

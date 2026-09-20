@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { applyCompactSettingOptions } from '../../../core/compact/setting-definitions';
 import { withWorkflowConfigTransaction } from './workflow-command-transaction';
 import type { RecoverableFileTransaction } from '../../../core/recoverable-file-transaction';
 
@@ -331,6 +332,11 @@ function handleSetLocked(options: ParsedOptionsRecord, transaction: RecoverableF
     ) as WorkflowConfigData['full_suite_validation'];
     const nextCompileGate = normalizeCompileGateConfig(nextConfig.compile_gate);
     const changedFields: string[] = [];
+    const compactUpdate = applyCompactSettingOptions(nextConfig.compact, options);
+    if (compactUpdate.changed.length) {
+        nextConfig.compact = compactUpdate.config;
+        changedFields.push(...compactUpdate.changed);
+    }
     const optionalSkillSelectionPolicyFields: string[] = [];
     let optionalSkillSelectionPolicyExists = false;
     let optionalSkillSelectionPolicyCurrentSerialized: string | null = null;

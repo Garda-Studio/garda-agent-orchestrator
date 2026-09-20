@@ -2,6 +2,32 @@
 
 Complete command reference for Garda Agent Orchestrator.
 
+## Compact inspection output
+
+`garda compact` is an explicit, read-only inspection command. It does not intercept the shell or replace mandatory build/test/evidence reads. Agents and reviewers choose it when a command may produce noisy output. Short output stays inline; long output shows a bounded beginning/tail and an executable retrieval command.
+
+```text
+garda compact git status --task-id T-123
+garda compact git diff --task-id T-123 --path src/example.ts
+garda compact file --task-id T-123 --path src/example.ts --from 40 --lines 80
+garda compact file --task-id T-123 --path src/example.ts --metadata
+garda compact rg --task-id T-123 --path src --query "search text"
+garda compact read --task-id T-123 --ref <capture-id> --stream stdout --offset 0
+garda compact read --task-id T-123 --ref <capture-id> --stream stderr --tail
+garda compact search --task-id T-123 --ref <capture-id> --query "failure"
+garda compact usage
+```
+
+All operations accept `--repo-root`; inspection paths must be repository-relative. Diff supports `--staged`; repository search is literal unless `--regex` is supplied. Arbitrary shell commands/flags are not accepted. Extending support requires a typed adapter, tests and a capability setting, not a UI shell-string field.
+
+Retained stdout/stderr preserve original bytes without secret filtering. Search scans the retained stream, including omitted preview content; follow `nextOffset` until `end` for complete search coverage. Reads page through bytes (or show the final 1024 bytes); manifest size/hash verification detects corrupt data. A complete capture describes this bounded invocation, not every line of a source file. Timeouts, quota/IO failures and capped output are explicitly partial; missing references fail honestly. Preview text escapes terminal controls and may split UTF-8 boundaries; retained bytes are unchanged.
+
+The file cache is `garda-agent-orchestrator/runtime/compact/<task-id>/<capture-id>/`, outside tracked/published source and normal managed backups. Defaults: 16 MiB per capture including metadata, 64 MiB per task, 256 MiB per workspace and 2048 captures. A full cache rejects new captures; unfinished/blocked task output is never evicted to make room. Small inline results create no capture files.
+
+Successful task completion waits for deletion of its own cache. Accepted task start/resume and completion also attempt bounded cleanup of known DONE tasks, including crash leftovers. There is no periodic collector, UI dependency or sweep on ordinary CLI reads. Unknown/unfinished task directories are preserved conservatively and still count toward limits. Disabling compact stops new inspections but does not break retained reads or boundary cleanup.
+
+Savings depend on the inspection: preview plus selective retrieval can be much smaller than a full noisy dump, but an already narrow native read can be cheaper. Discovery/reviewer guidance and follow-up reads are part of that cost.
+
 ## Public Surface
 
 The runtime is Node-only.

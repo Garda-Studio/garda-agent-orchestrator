@@ -202,6 +202,8 @@ npm publish
 
 ## Compact Command Policy
 
+When available and enabled, prefer `garda compact` for supported Git status/scoped diff, file ranges and repository search. Use the actual local CLI prefix printed by next-step (`node bin/garda.js compact` in source checkouts). Discover syntax once via `compact --help`. Short results remain inline; longer results include one retained-output read hint. Use `compact search` to search all retained bytes, not only the preview. Never treat omissions as absence or completed review coverage. Required rule/handoff/evidence reads remain exact and complete through their prescribed paths. Secrets are not masked. Compact is not a shell wrapper and never replaces mandatory gate commands. If disabled or unsupported, use scoped native reads. Reviewers use it only within their authorized handoff scope.
+
 Compact command usage is mandatory by default. Treat full or verbose output as an escalation step, not a starting point.
 
 ### Required Protocol

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added explicit `garda compact` Git/file/search inspections with bounded previews, byte-preserving task-scoped output, paginated retrieval and full retained-output search. Added Compact UI controls, agent/reviewer discovery, hard cache limits and start/completion-only cleanup; secret content is not filtered.
+
 - Fixed review restarts returning to a superseded pending report correction. Navigator recovery now recognizes authenticated pending-correction events as well as exhausted-correction events, while preserving package hashes, event ordering, lane boundaries, and rejected audit evidence.
 
 - Fixed reviewer report validation rejecting focused Node `--check` syntax checks. Only the exact Node runtime option before the target is accepted; unknown options, preloads, inline code, and other runners remain rejected.

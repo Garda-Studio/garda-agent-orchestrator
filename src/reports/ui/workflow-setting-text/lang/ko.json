@@ -1,4 +1,84 @@
 {
+  "compact-enabled": {
+    "label": "간결한 출력",
+    "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다.",
+    "options": {
+      "true": {
+        "label": "활성화",
+        "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다. 활성화"
+      },
+      "false": {
+        "label": "비활성화",
+        "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다. 비활성화"
+      }
+    }
+  },
+  "compact-git": {
+    "label": "compact를 통한 Git",
+    "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다.",
+    "options": {
+      "true": {
+        "label": "활성화",
+        "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다. 활성화"
+      },
+      "false": {
+        "label": "비활성화",
+        "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다. 비활성화"
+      }
+    }
+  },
+  "compact-file": {
+    "label": "compact를 통한 파일",
+    "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다.",
+    "options": {
+      "true": {
+        "label": "활성화",
+        "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다. 활성화"
+      },
+      "false": {
+        "label": "비활성화",
+        "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다. 비활성화"
+      }
+    }
+  },
+  "compact-rg": {
+    "label": "compact를 통한 검색",
+    "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다.",
+    "options": {
+      "true": {
+        "label": "활성화",
+        "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다. 활성화"
+      },
+      "false": {
+        "label": "비활성화",
+        "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다. 비활성화"
+      }
+    }
+  },
+  "compact-preview-lines": {
+    "label": "미리보기 줄 수",
+    "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다."
+  },
+  "compact-preview-chars": {
+    "label": "미리보기 문자 수",
+    "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다."
+  },
+  "compact-run-bytes": {
+    "label": "캡처별 바이트 한도",
+    "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다."
+  },
+  "compact-task-bytes": {
+    "label": "작업 캐시 바이트 한도",
+    "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다."
+  },
+  "compact-workspace-bytes": {
+    "label": "프로젝트 캐시 바이트 한도",
+    "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다."
+  },
+  "compact-max-runs": {
+    "label": "캡처 개수 한도",
+    "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다."
+  },
   "compile-gate-command": {
     "label": "compile-gate 명령",
     "description": "컴파일/빌드/타입 검사 검증을 위해 compile-gate가 실행하는 명령입니다. workflow-config에 설정되지 않은 경우, 프로젝트별 명령이 구성될 때까지 compile-gate는 fail-closed로 종료됩니다."

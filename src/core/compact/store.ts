@@ -94,12 +94,13 @@ export async function readCompactOutput(repoRoot: string, options: CompactReadOp
     });
 }
 
-function deleteTaskCache(store: CompactStore, taskId: string): void {
+function deleteTaskCache(store: CompactStore, taskId: string, deadline: number): void {
     const dir = store.taskPath(taskId);
-    store.usage(taskId);
     for (const run of fs.readdirSync(dir)) {
+        if (Date.now() > deadline) throw new Error('Compact cleanup budget exhausted; remaining files will be retried.');
         const runDir = store.runPath(taskId, run);
         for (const name of fs.readdirSync(runDir)) {
+            if (Date.now() > deadline) throw new Error('Compact cleanup budget exhausted; remaining files will be retried.');
             if (!['stdout.log', 'stderr.log', 'manifest.json', 'manifest.tmp'].includes(name)) throw new Error('Unexpected compact file; cleanup declined.');
             const file = path.join(containedDirectory(dir, run), name);
             const stat = fs.lstatSync(file);
@@ -114,12 +115,12 @@ function deleteTaskCache(store: CompactStore, taskId: string): void {
 export async function cleanupCompactTasks(repoRoot: string, completed: ReadonlySet<string> | (() => ReadonlySet<string>)): Promise<string[]> {
     return withCompactStore(repoRoot, store => {
         const removed: string[] = [];
-        const deadline = Date.now() + 2000;
+        const deadline = typeof completed === 'function' ? Date.now() + 2000 : Infinity;
         for (const taskId of fs.readdirSync(store.root)) {
             if (Date.now() > deadline) throw new Error('Compact cleanup budget exhausted; remaining files will be retried.');
             const eligible = typeof completed === 'function' ? completed() : completed;
             if (!eligible.has(taskId)) continue;
-            deleteTaskCache(store, taskId);
+            deleteTaskCache(store, taskId, deadline);
             removed.push(taskId);
         }
         return removed;

@@ -242,6 +242,7 @@ export function buildWorkflowShowResult(
         bundle_root: roots.bundleRoot,
         config_path: roots.configPath,
         config_exists: state.exists,
+        compact: state.config.compact ?? buildDefaultWorkflowConfig().compact,
         compile_gate: compileGate,
         full_suite_validation: state.config.full_suite_validation,
         review_execution_policy: reviewExecutionPolicy,

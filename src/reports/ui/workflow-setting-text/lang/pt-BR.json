@@ -1,4 +1,84 @@
 {
+  "compact-enabled": {
+    "label": "Saída compacta",
+    "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados.",
+    "options": {
+      "true": {
+        "label": "Ativado",
+        "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados. Ativado"
+      },
+      "false": {
+        "label": "Desativado",
+        "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados. Desativado"
+      }
+    }
+  },
+  "compact-git": {
+    "label": "Git via compact",
+    "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados.",
+    "options": {
+      "true": {
+        "label": "Ativado",
+        "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados. Ativado"
+      },
+      "false": {
+        "label": "Desativado",
+        "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados. Desativado"
+      }
+    }
+  },
+  "compact-file": {
+    "label": "Arquivos via compact",
+    "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados.",
+    "options": {
+      "true": {
+        "label": "Ativado",
+        "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados. Ativado"
+      },
+      "false": {
+        "label": "Desativado",
+        "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados. Desativado"
+      }
+    }
+  },
+  "compact-rg": {
+    "label": "Pesquisa via compact",
+    "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados.",
+    "options": {
+      "true": {
+        "label": "Ativado",
+        "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados. Ativado"
+      },
+      "false": {
+        "label": "Desativado",
+        "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados. Desativado"
+      }
+    }
+  },
+  "compact-preview-lines": {
+    "label": "Linhas de prévia",
+    "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados."
+  },
+  "compact-preview-chars": {
+    "label": "Caracteres de prévia",
+    "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados."
+  },
+  "compact-run-bytes": {
+    "label": "Limite de bytes por captura",
+    "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados."
+  },
+  "compact-task-bytes": {
+    "label": "Limite de bytes do cache da tarefa",
+    "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados."
+  },
+  "compact-workspace-bytes": {
+    "label": "Limite de bytes do cache do projeto",
+    "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados."
+  },
+  "compact-max-runs": {
+    "label": "Limite de capturas",
+    "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados."
+  },
   "compile-gate-command": {
     "label": "Comando compile-gate",
     "description": "Comando executado pelo compile-gate para validação de compilação, build e type-check. Sem configuração, o compile-gate falha de forma fechada até ser definido um comando específico do projeto."

@@ -1,4 +1,84 @@
 {
+  "compact-enabled": {
+    "label": "Kompakte Ausgabe",
+    "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert.",
+    "options": {
+      "true": {
+        "label": "Ein",
+        "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert. Ein"
+      },
+      "false": {
+        "label": "Aus",
+        "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert. Aus"
+      }
+    }
+  },
+  "compact-git": {
+    "label": "Git über compact",
+    "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert.",
+    "options": {
+      "true": {
+        "label": "Ein",
+        "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert. Ein"
+      },
+      "false": {
+        "label": "Aus",
+        "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert. Aus"
+      }
+    }
+  },
+  "compact-file": {
+    "label": "Dateien über compact",
+    "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert.",
+    "options": {
+      "true": {
+        "label": "Ein",
+        "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert. Ein"
+      },
+      "false": {
+        "label": "Aus",
+        "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert. Aus"
+      }
+    }
+  },
+  "compact-rg": {
+    "label": "Suche über compact",
+    "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert.",
+    "options": {
+      "true": {
+        "label": "Ein",
+        "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert. Ein"
+      },
+      "false": {
+        "label": "Aus",
+        "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert. Aus"
+      }
+    }
+  },
+  "compact-preview-lines": {
+    "label": "Vorschauzeilen",
+    "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert."
+  },
+  "compact-preview-chars": {
+    "label": "Vorschauzeichen",
+    "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert."
+  },
+  "compact-run-bytes": {
+    "label": "Byte-Limit je Erfassung",
+    "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert."
+  },
+  "compact-task-bytes": {
+    "label": "Byte-Limit des Aufgabencaches",
+    "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert."
+  },
+  "compact-workspace-bytes": {
+    "label": "Byte-Limit des Projektcaches",
+    "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert."
+  },
+  "compact-max-runs": {
+    "label": "Maximale Erfassungsanzahl",
+    "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert."
+  },
   "compile-gate-command": {
     "label": "Compile-gate-Befehl",
     "description": "Befehl, den compile-gate für Compile-, Build- und Type-Check-Validierung ausführt. Wenn in workflow-config nicht gesetzt, schlägt compile-gate fehl (fail-closed), bis ein projektspezifischer Befehl konfiguriert ist."

@@ -1,4 +1,84 @@
 {
+  "compact-enabled": {
+    "label": "Output compatto",
+    "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati.",
+    "options": {
+      "true": {
+        "label": "Attivo",
+        "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati. Attivo"
+      },
+      "false": {
+        "label": "Disattivo",
+        "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati. Disattivo"
+      }
+    }
+  },
+  "compact-git": {
+    "label": "Git tramite compact",
+    "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati.",
+    "options": {
+      "true": {
+        "label": "Attivo",
+        "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati. Attivo"
+      },
+      "false": {
+        "label": "Disattivo",
+        "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati. Disattivo"
+      }
+    }
+  },
+  "compact-file": {
+    "label": "File tramite compact",
+    "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati.",
+    "options": {
+      "true": {
+        "label": "Attivo",
+        "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati. Attivo"
+      },
+      "false": {
+        "label": "Disattivo",
+        "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati. Disattivo"
+      }
+    }
+  },
+  "compact-rg": {
+    "label": "Ricerca tramite compact",
+    "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati.",
+    "options": {
+      "true": {
+        "label": "Attivo",
+        "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati. Attivo"
+      },
+      "false": {
+        "label": "Disattivo",
+        "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati. Disattivo"
+      }
+    }
+  },
+  "compact-preview-lines": {
+    "label": "Righe di anteprima",
+    "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati."
+  },
+  "compact-preview-chars": {
+    "label": "Caratteri di anteprima",
+    "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati."
+  },
+  "compact-run-bytes": {
+    "label": "Limite byte per acquisizione",
+    "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati."
+  },
+  "compact-task-bytes": {
+    "label": "Limite byte cache attività",
+    "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati."
+  },
+  "compact-workspace-bytes": {
+    "label": "Limite byte cache progetto",
+    "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati."
+  },
+  "compact-max-runs": {
+    "label": "Numero massimo di acquisizioni",
+    "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati."
+  },
   "compile-gate-command": {
     "label": "Comando compile-gate",
     "description": "Comando eseguito da compile-gate per la validazione di compilazione, build e type-check. Se non è impostato in workflow-config, compile-gate fallisce in modalità fail-closed finché non viene configurato un comando specifico del progetto."
