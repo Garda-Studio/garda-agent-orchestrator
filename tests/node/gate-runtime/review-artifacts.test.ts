@@ -130,7 +130,8 @@ function startReviewPublicationWorker(
     reviewsDir: string,
     artifactPath: string,
     startSignalPath: string,
-    resultPath: string
+    resultPath: string,
+    options: { lowNoiseRuntimeWrites?: boolean } = {}
 ): Promise<{ code: number | null; stderr: string }> {
     const workerScript = [
         "const fs = require('node:fs');",
@@ -139,10 +140,15 @@ function startReviewPublicationWorker(
         'const artifactPath = process.argv[3];',
         'const startSignalPath = process.argv[4];',
         'const resultPath = process.argv[5];',
+        "const lowNoiseRuntimeWrites = process.argv[6] === 'true';",
         'const sleeper = new Int32Array(new SharedArrayBuffer(4));',
         'while (!fs.existsSync(startSignalPath)) { Atomics.wait(sleeper, 0, 0, 2); }',
         'try {',
-        "  writeReviewArtifactText(artifactPath, 'published\\n', { lockTimeoutMs: 300, lockRetryMs: 5 });",
+        "  writeReviewArtifactText(artifactPath, 'published\\n', {",
+        '    lockTimeoutMs: 300,',
+        '    lockRetryMs: 5,',
+        '    lowNoiseRuntimeWrites',
+        '  });',
         "  fs.writeFileSync(resultPath, JSON.stringify({ status: 'ok' }), 'utf8');",
         '} catch (error) {',
         "  fs.writeFileSync(resultPath, JSON.stringify({ status: 'error', message: String(error && error.message || error) }), 'utf8');",
@@ -158,7 +164,8 @@ function startReviewPublicationWorker(
         reviewsDir,
         artifactPath,
         startSignalPath,
-        resultPath
+        resultPath,
+        String(options.lowNoiseRuntimeWrites === true)
     ], {
         stdio: ['ignore', 'ignore', 'pipe']
     });
@@ -892,6 +899,505 @@ test('slow review reads release the transaction lock before concurrent publicati
     }
 });
 
+test('review read barrier accepts a transaction-owned publication after revalidating its generation', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-self-publication-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const existingPath = path.join(reviewsDir, 'T-022-code.md');
+    const publicationPath = path.join(reviewsDir, 'T-022-test.md');
+    try {
+        writeReviewArtifactText(existingPath, 'existing\n');
+
+        const result = withReviewArtifactReadBarrier(reviewsDir, () => {
+            assert.equal(readReviewArtifactTextFile(existingPath), 'existing\n');
+            writeReviewArtifactText(publicationPath, 'published\n');
+            return 'publication-complete';
+        });
+
+        assert.equal(result, 'publication-complete');
+        assert.equal(fs.readFileSync(publicationPath, 'utf8'), 'published\n');
+        assert.equal(
+            loadIndex(reviewsDir).index.entries.some((entry) => entry.fileName === path.basename(publicationPath)),
+            true
+        );
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('review read barrier rejects an external publication before a transaction-owned write starts', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-external-before-self-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const existingPath = path.join(reviewsDir, 'T-022-code.md');
+    const externalPublicationPath = path.join(reviewsDir, 'T-022-test.md');
+    const ownPublicationPath = path.join(reviewsDir, 'T-022-security.md');
+    const startSignalPath = path.join(tempDir, 'publish.start');
+    const resultPath = path.join(tempDir, 'publish.result.json');
+    try {
+        writeReviewArtifactText(existingPath, 'existing\n');
+        const publication = startReviewPublicationWorker(
+            reviewsDir,
+            externalPublicationPath,
+            startSignalPath,
+            resultPath
+        );
+
+        assert.throws(
+            () => withReviewArtifactReadBarrier(reviewsDir, () => {
+                assert.equal(readReviewArtifactTextFile(existingPath), 'existing\n');
+                fs.writeFileSync(startSignalPath, 'go\n', 'utf8');
+                waitForFileSync(resultPath, 2_000);
+                writeReviewArtifactText(ownPublicationPath, 'must not be written\n');
+            }, {
+                lockTimeoutMs: 1_000,
+                lockRetryMs: 5
+            }),
+            /invalidated by a concurrent review publication/
+        );
+        const workerResult = await publication;
+        assert.equal(workerResult.code, 0, workerResult.stderr);
+        assert.equal(fs.existsSync(ownPublicationPath), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('review read barrier rejects a low-noise physical-root publication before an alias-root write', async (t) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-alias-publication-'));
+    const reviewsDir = createReviewsDir(path.join(tempDir, 'physical'));
+    const aliasReviewsDir = path.join(tempDir, 'reviews-alias');
+    const existingPath = path.join(aliasReviewsDir, 'T-022-code.md');
+    const externalPublicationPath = path.join(reviewsDir, 'T-022-test.md');
+    const ownPublicationPath = path.join(aliasReviewsDir, 'T-022-security.md');
+    const startSignalPath = path.join(tempDir, 'publish.start');
+    const resultPath = path.join(tempDir, 'publish.result.json');
+    try {
+        try {
+            fs.symlinkSync(reviewsDir, aliasReviewsDir, process.platform === 'win32' ? 'junction' : 'dir');
+        } catch {
+            t.skip('Directory symlink or junction creation is unavailable in this environment.');
+            return;
+        }
+        writeReviewArtifactText(existingPath, 'existing\n');
+        const publication = startReviewPublicationWorker(
+            reviewsDir,
+            externalPublicationPath,
+            startSignalPath,
+            resultPath,
+            { lowNoiseRuntimeWrites: true }
+        );
+
+        assert.throws(
+            () => withReviewArtifactReadBarrier(aliasReviewsDir, () => {
+                assert.equal(readReviewArtifactTextFile(existingPath), 'existing\n');
+                fs.writeFileSync(startSignalPath, 'go\n', 'utf8');
+                waitForFileSync(resultPath, 2_000);
+                writeReviewArtifactText(ownPublicationPath, 'must not be written\n');
+            }, {
+                lockTimeoutMs: 1_000,
+                lockRetryMs: 5
+            }),
+            /invalidated by a concurrent review publication/
+        );
+        const workerResult = await publication;
+        assert.equal(workerResult.code, 0, workerResult.stderr);
+        assert.equal(fs.existsSync(externalPublicationPath), true);
+        assert.equal(fs.existsSync(ownPublicationPath), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('nested alias-root barriers preserve external-before-own publication protection', async (t) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-nested-alias-'));
+    const reviewsDir = createReviewsDir(path.join(tempDir, 'physical'));
+    const aliasReviewsDir = path.join(tempDir, 'reviews-alias');
+    const existingPath = path.join(aliasReviewsDir, 'T-022-code.md');
+    const externalPublicationPath = path.join(reviewsDir, 'T-022-test.md');
+    const ownPublicationPath = path.join(aliasReviewsDir, 'T-022-security.md');
+    const startSignalPath = path.join(tempDir, 'publish.start');
+    const resultPath = path.join(tempDir, 'publish.result.json');
+    try {
+        try {
+            fs.symlinkSync(reviewsDir, aliasReviewsDir, process.platform === 'win32' ? 'junction' : 'dir');
+        } catch {
+            t.skip('Directory symlink or junction creation is unavailable in this environment.');
+            return;
+        }
+        writeReviewArtifactText(existingPath, 'existing\n');
+        const publication = startReviewPublicationWorker(
+            reviewsDir,
+            externalPublicationPath,
+            startSignalPath,
+            resultPath,
+            { lowNoiseRuntimeWrites: true }
+        );
+
+        assert.throws(
+            () => withReviewArtifactReadBarrier(aliasReviewsDir, () => {
+                withReviewArtifactReadBarrier(aliasReviewsDir, () => {
+                    assert.equal(readReviewArtifactTextFile(existingPath), 'existing\n');
+                });
+                fs.writeFileSync(startSignalPath, 'go\n', 'utf8');
+                waitForFileSync(resultPath, 2_000);
+                writeReviewArtifactText(ownPublicationPath, 'must not be written\n');
+            }, {
+                lockTimeoutMs: 1_000,
+                lockRetryMs: 5
+            }),
+            /invalidated by a concurrent review publication/
+        );
+        const workerResult = await publication;
+        assert.equal(workerResult.code, 0, workerResult.stderr);
+        assert.equal(fs.existsSync(externalPublicationPath), true);
+        assert.equal(fs.existsSync(ownPublicationPath), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('review read barrier rejects an external publication after a transaction-owned write', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-self-before-external-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const ownPublicationPath = path.join(reviewsDir, 'T-022-code.md');
+    const externalPublicationPath = path.join(reviewsDir, 'T-022-test.md');
+    const startSignalPath = path.join(tempDir, 'publish.start');
+    const resultPath = path.join(tempDir, 'publish.result.json');
+    try {
+        const publication = startReviewPublicationWorker(
+            reviewsDir,
+            externalPublicationPath,
+            startSignalPath,
+            resultPath,
+            { lowNoiseRuntimeWrites: true }
+        );
+
+        assert.throws(
+            () => withReviewArtifactReadBarrier(reviewsDir, () => {
+                writeReviewArtifactText(ownPublicationPath, 'owned\n');
+                fs.writeFileSync(startSignalPath, 'go\n', 'utf8');
+                waitForFileSync(resultPath, 2_000);
+            }, {
+                lockTimeoutMs: 1_000,
+                lockRetryMs: 5
+            }),
+            /invalidated by a concurrent review publication/
+        );
+        const workerResult = await publication;
+        assert.equal(workerResult.code, 0, workerResult.stderr);
+        assert.equal(fs.readFileSync(ownPublicationPath, 'utf8'), 'owned\n');
+        assert.equal(fs.readFileSync(externalPublicationPath, 'utf8'), 'published\n');
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('review read barrier accepts a transaction-owned publication when the reviews root is missing', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-missing-root-'));
+    const reviewsDir = path.join(tempDir, 'runtime', 'reviews');
+    const publicationPath = path.join(reviewsDir, 'T-022-code.md');
+    try {
+        assert.equal(fs.existsSync(reviewsDir), false);
+
+        const result = withReviewArtifactReadBarrier(reviewsDir, () => {
+            writeReviewArtifactText(publicationPath, 'published\n');
+            return 'publication-complete';
+        });
+
+        assert.equal(result, 'publication-complete');
+        assert.equal(fs.readFileSync(publicationPath, 'utf8'), 'published\n');
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('missing alias-root barrier rejects external publication before a second transaction-owned write', async (t) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-missing-alias-'));
+    const physicalRuntimeDir = path.join(tempDir, 'physical-runtime');
+    const aliasRuntimeDir = path.join(tempDir, 'runtime-alias');
+    const reviewsDir = path.join(physicalRuntimeDir, 'reviews');
+    const aliasReviewsDir = path.join(aliasRuntimeDir, 'reviews');
+    const firstOwnPublicationPath = path.join(aliasReviewsDir, 'T-022-code.md');
+    const externalPublicationPath = path.join(reviewsDir, 'T-022-test.md');
+    const secondOwnPublicationPath = path.join(aliasReviewsDir, 'T-022-security.md');
+    const startSignalPath = path.join(tempDir, 'publish.start');
+    const resultPath = path.join(tempDir, 'publish.result.json');
+    try {
+        fs.mkdirSync(physicalRuntimeDir, { recursive: true });
+        try {
+            fs.symlinkSync(physicalRuntimeDir, aliasRuntimeDir, process.platform === 'win32' ? 'junction' : 'dir');
+        } catch {
+            t.skip('Directory symlink or junction creation is unavailable in this environment.');
+            return;
+        }
+        assert.equal(fs.existsSync(reviewsDir), false);
+        const publication = startReviewPublicationWorker(
+            reviewsDir,
+            externalPublicationPath,
+            startSignalPath,
+            resultPath,
+            { lowNoiseRuntimeWrites: true }
+        );
+
+        assert.throws(
+            () => withReviewArtifactReadBarrier(aliasReviewsDir, () => {
+                writeReviewArtifactText(firstOwnPublicationPath, 'owned first\n');
+                fs.writeFileSync(startSignalPath, 'go\n', 'utf8');
+                waitForFileSync(resultPath, 2_000);
+                writeReviewArtifactText(secondOwnPublicationPath, 'must not be written\n');
+            }, {
+                lockTimeoutMs: 1_000,
+                lockRetryMs: 5
+            }),
+            /invalidated by a concurrent review publication/
+        );
+        const workerResult = await publication;
+        assert.equal(workerResult.code, 0, workerResult.stderr);
+        assert.equal(fs.readFileSync(firstOwnPublicationPath, 'utf8'), 'owned first\n');
+        assert.equal(fs.readFileSync(externalPublicationPath, 'utf8'), 'published\n');
+        assert.equal(fs.existsSync(secondOwnPublicationPath), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('review read barrier rejects external publication before an async transaction-owned write', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-async-external-first-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const externalPublicationPath = path.join(reviewsDir, 'T-022-test.md');
+    const ownPublicationPath = path.join(reviewsDir, 'T-022-code.md');
+    const startSignalPath = path.join(tempDir, 'publish.start');
+    const resultPath = path.join(tempDir, 'publish.result.json');
+    try {
+        const publication = startReviewPublicationWorker(
+            reviewsDir,
+            externalPublicationPath,
+            startSignalPath,
+            resultPath,
+            { lowNoiseRuntimeWrites: true }
+        );
+
+        await assert.rejects(
+            withReviewArtifactReadBarrier(reviewsDir, async () => {
+                fs.writeFileSync(startSignalPath, 'go\n', 'utf8');
+                const workerResult = await publication;
+                assert.equal(workerResult.code, 0, workerResult.stderr);
+                return await writeReviewArtifactsWithRollback([
+                    {
+                        artifactPath: ownPublicationPath,
+                        contentType: 'text',
+                        content: 'must not be written\n'
+                    }
+                ], async () => 'publication-complete');
+            }, {
+                lockTimeoutMs: 1_000,
+                lockRetryMs: 5
+            }),
+            /invalidated by a concurrent review publication/
+        );
+        assert.equal(fs.existsSync(externalPublicationPath), true);
+        assert.equal(fs.existsSync(ownPublicationPath), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('review read barrier accepts an async transaction-owned publication', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-async-self-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const publicationPath = path.join(reviewsDir, 'T-022-code.md');
+    try {
+        const result = await withReviewArtifactReadBarrier(reviewsDir, async () => (
+            await writeReviewArtifactsWithRollback([
+                {
+                    artifactPath: publicationPath,
+                    contentType: 'text',
+                    content: 'published\n'
+                }
+            ], async () => 'publication-complete')
+        ));
+
+        assert.equal(result, 'publication-complete');
+        assert.equal(fs.readFileSync(publicationPath, 'utf8'), 'published\n');
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('retargeted alias-root barrier rejects external publication before an own write', async (t) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-retargeted-alias-'));
+    const firstReviewsDir = createReviewsDir(path.join(tempDir, 'first'));
+    const secondReviewsDir = createReviewsDir(path.join(tempDir, 'second'));
+    const aliasReviewsDir = path.join(tempDir, 'reviews-alias');
+    const existingPath = path.join(aliasReviewsDir, 'T-022-code.md');
+    const externalPublicationPath = path.join(secondReviewsDir, 'T-022-test.md');
+    const ownPublicationPath = path.join(aliasReviewsDir, 'T-022-security.md');
+    const startSignalPath = path.join(tempDir, 'publish.start');
+    const resultPath = path.join(tempDir, 'publish.result.json');
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+    try {
+        try {
+            fs.symlinkSync(firstReviewsDir, aliasReviewsDir, linkType);
+            fs.unlinkSync(aliasReviewsDir);
+            fs.symlinkSync(secondReviewsDir, aliasReviewsDir, linkType);
+            fs.unlinkSync(aliasReviewsDir);
+            fs.symlinkSync(firstReviewsDir, aliasReviewsDir, linkType);
+        } catch {
+            t.skip('Directory symlink or junction retargeting is unavailable in this environment.');
+            return;
+        }
+        writeReviewArtifactText(existingPath, 'existing\n');
+        const publication = startReviewPublicationWorker(
+            secondReviewsDir,
+            externalPublicationPath,
+            startSignalPath,
+            resultPath,
+            { lowNoiseRuntimeWrites: true }
+        );
+
+        assert.throws(
+            () => withReviewArtifactReadBarrier(aliasReviewsDir, () => {
+                assert.equal(readReviewArtifactTextFile(existingPath), 'existing\n');
+                fs.unlinkSync(aliasReviewsDir);
+                fs.symlinkSync(secondReviewsDir, aliasReviewsDir, linkType);
+                fs.writeFileSync(startSignalPath, 'go\n', 'utf8');
+                waitForFileSync(resultPath, 2_000);
+                writeReviewArtifactText(ownPublicationPath, 'must not be written\n');
+            }, {
+                lockTimeoutMs: 1_000,
+                lockRetryMs: 5
+            }),
+            /invalidated by a concurrent review publication/
+        );
+        const workerResult = await publication;
+        assert.equal(workerResult.code, 0, workerResult.stderr);
+        assert.equal(fs.existsSync(externalPublicationPath), true);
+        assert.equal(fs.existsSync(ownPublicationPath), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('overlapping alias and physical-root async barriers both reject a concurrent publication', async (t) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-overlap-'));
+    const reviewsDir = createReviewsDir(path.join(tempDir, 'physical'));
+    const aliasReviewsDir = path.join(tempDir, 'reviews-alias');
+    const existingPath = path.join(reviewsDir, 'T-022-code.md');
+    const externalPublicationPath = path.join(reviewsDir, 'T-022-test.md');
+    const startSignalPath = path.join(tempDir, 'publish.start');
+    const resultPath = path.join(tempDir, 'publish.result.json');
+    try {
+        try {
+            fs.symlinkSync(reviewsDir, aliasReviewsDir, process.platform === 'win32' ? 'junction' : 'dir');
+        } catch {
+            t.skip('Directory symlink or junction creation is unavailable in this environment.');
+            return;
+        }
+        writeReviewArtifactText(existingPath, 'initial\n');
+        let releaseFirstBarrier!: () => void;
+        const firstBarrierHold = new Promise<void>((resolve) => {
+            releaseFirstBarrier = resolve;
+        });
+        const firstBarrier = withReviewArtifactReadBarrier(aliasReviewsDir, async () => {
+            assert.equal(readReviewArtifactTextFile(path.join(aliasReviewsDir, 'T-022-code.md')), 'initial\n');
+            await firstBarrierHold;
+            return 'first-complete';
+        });
+        const publication = startReviewPublicationWorker(
+            reviewsDir,
+            externalPublicationPath,
+            startSignalPath,
+            resultPath,
+            { lowNoiseRuntimeWrites: true }
+        );
+        const secondBarrier = withReviewArtifactReadBarrier(reviewsDir, async () => {
+            assert.equal(readReviewArtifactTextFile(existingPath), 'initial\n');
+            fs.writeFileSync(startSignalPath, 'go\n', 'utf8');
+            const workerResult = await publication;
+            assert.equal(workerResult.code, 0, workerResult.stderr);
+            return 'second-complete';
+        });
+
+        await assert.rejects(secondBarrier, /invalidated by a concurrent review publication/);
+        releaseFirstBarrier();
+        await assert.rejects(firstBarrier, /invalidated by a concurrent review publication/);
+        assert.equal(fs.existsSync(externalPublicationPath), true);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('failing sync participant preserves protection for an overlapping async participant', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-mixed-overlap-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const externalPublicationPath = path.join(reviewsDir, 'T-022-test.md');
+    const ownPublicationPath = path.join(reviewsDir, 'T-022-code.md');
+    const startSignalPath = path.join(tempDir, 'publish.start');
+    const resultPath = path.join(tempDir, 'publish.result.json');
+    try {
+        let releaseAsyncBarrier!: () => void;
+        const asyncBarrierHold = new Promise<void>((resolve) => {
+            releaseAsyncBarrier = resolve;
+        });
+        const asyncBarrier = withReviewArtifactReadBarrier(reviewsDir, async () => {
+            await asyncBarrierHold;
+            writeReviewArtifactText(ownPublicationPath, 'must not be written\n');
+            return 'async-complete';
+        });
+        const publication = startReviewPublicationWorker(
+            reviewsDir,
+            externalPublicationPath,
+            startSignalPath,
+            resultPath,
+            { lowNoiseRuntimeWrites: true }
+        );
+
+        assert.throws(
+            () => withReviewArtifactReadBarrier(reviewsDir, () => {
+                fs.writeFileSync(startSignalPath, 'go\n', 'utf8');
+                waitForFileSync(resultPath, 2_000);
+            }),
+            /invalidated by a concurrent review publication/
+        );
+        const workerResult = await publication;
+        assert.equal(workerResult.code, 0, workerResult.stderr);
+        releaseAsyncBarrier();
+        await assert.rejects(asyncBarrier, /invalidated by a concurrent review publication/);
+        assert.equal(fs.existsSync(externalPublicationPath), true);
+        assert.equal(fs.existsSync(ownPublicationPath), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('throwing second then probe releases barrier state before a later invocation', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-then-probe-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    let thenAccesses = 0;
+    const statefulThenable = Object.defineProperty({}, 'then', {
+        get() {
+            thenAccesses += 1;
+            if (thenAccesses === 1) {
+                return undefined;
+            }
+            throw new Error('then-getter-failure');
+        }
+    });
+    try {
+        assert.throws(
+            () => withReviewArtifactReadBarrier(reviewsDir, () => statefulThenable),
+            /then-getter-failure/
+        );
+        fs.writeFileSync(path.join(reviewsDir, 'external-publication.tmp'), 'external\n', 'utf8');
+
+        assert.equal(
+            withReviewArtifactReadBarrier(reviewsDir, () => 'clean-barrier'),
+            'clean-barrier'
+        );
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
 test('large receipt histories stop at the aggregate snapshot artifact budget', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-count-budget-'));
     const reviewsDir = createReviewsDir(tempDir);
@@ -1132,6 +1638,188 @@ test('same-process read barrier sees complete staged artifact set during transac
         assert.equal(committedIndex.entries.some((entry) => entry.fileName === 'T-021-code.md'), true);
         assert.equal(committedIndex.entries.some((entry) => entry.fileName === 'T-021-code-receipt.json'), true);
     } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('outer async barrier composes with a nested staged transaction barrier', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-outer-transaction-read-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const reviewPath = path.join(reviewsDir, 'T-021-code.md');
+    const receiptPath = path.join(reviewsDir, 'T-021-code-receipt.json');
+
+    try {
+        writeReviewArtifactText(reviewPath, 'old review\n');
+
+        const result = await withReviewArtifactReadBarrier(reviewsDir, async () => (
+            await writeReviewArtifactsWithRollback([
+                {
+                    artifactPath: reviewPath,
+                    contentType: 'text',
+                    content: 'new review\n'
+                },
+                {
+                    artifactPath: receiptPath,
+                    contentType: 'json',
+                    payload: {
+                        task_id: 'T-021',
+                        review_type: 'code'
+                    }
+                }
+            ], async () => withReviewArtifactReadBarrier(reviewsDir, () => ({
+                review: readReviewArtifactTextFile(reviewPath),
+                receipt: readReviewArtifactJsonFile(receiptPath)
+            }), {
+                lockTimeoutMs: 50,
+                lockRetryMs: 5
+            }))
+        ), {
+            lockTimeoutMs: 1_000,
+            lockRetryMs: 5
+        });
+
+        assert.equal(result.review, 'new review\n');
+        assert.deepEqual(result.receipt, {
+            task_id: 'T-021',
+            review_type: 'code'
+        });
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('nested staged barrier that outlives commit rejects a later external publication', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-transaction-outliving-commit-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const reviewPath = path.join(reviewsDir, 'T-021-code.md');
+    const externalPath = path.join(reviewsDir, 'external-publication.tmp');
+    let releaseNestedBarrier!: () => void;
+    const nestedBarrierHold = new Promise<void>((resolve) => {
+        releaseNestedBarrier = resolve;
+    });
+    let resolveNestedBarrier!: (value: { promise: Promise<string> }) => void;
+    const nestedBarrierReady = new Promise<{ promise: Promise<string> }>((resolve) => {
+        resolveNestedBarrier = resolve;
+    });
+
+    try {
+        writeReviewArtifactText(reviewPath, 'old review\n');
+        const outerBarrier = withReviewArtifactReadBarrier(reviewsDir, async () => (
+            await writeReviewArtifactsWithRollback([
+                {
+                    artifactPath: reviewPath,
+                    contentType: 'text',
+                    content: 'new review\n'
+                }
+            ], async () => {
+                const promise = withReviewArtifactReadBarrier(reviewsDir, async () => {
+                    const stagedValue = readReviewArtifactTextFile(reviewPath);
+                    await nestedBarrierHold;
+                    return stagedValue;
+                });
+                resolveNestedBarrier({ promise });
+                return 'transaction-complete';
+            })
+        ));
+        const nestedBarrier = (await nestedBarrierReady).promise;
+
+        assert.equal(await outerBarrier, 'transaction-complete');
+        fs.writeFileSync(externalPath, 'external\n', 'utf8');
+        releaseNestedBarrier();
+        await assert.rejects(nestedBarrier, /invalidated by a concurrent review publication/);
+        assert.equal(fs.readFileSync(reviewPath, 'utf8'), 'new review\n');
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('nested staged barrier that outlives rollback rejects the rolled-back snapshot', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-transaction-outliving-rollback-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const reviewPath = path.join(reviewsDir, 'T-021-code.md');
+    let releaseNestedBarrier!: () => void;
+    const nestedBarrierHold = new Promise<void>((resolve) => {
+        releaseNestedBarrier = resolve;
+    });
+    let resolveNestedBarrier!: (value: { promise: Promise<string> }) => void;
+    const nestedBarrierReady = new Promise<{ promise: Promise<string> }>((resolve) => {
+        resolveNestedBarrier = resolve;
+    });
+
+    try {
+        writeReviewArtifactText(reviewPath, 'old review\n');
+        const outerBarrier = withReviewArtifactReadBarrier(reviewsDir, async () => (
+            await writeReviewArtifactsWithRollback([
+                {
+                    artifactPath: reviewPath,
+                    contentType: 'text',
+                    content: 'new review\n'
+                }
+            ], async () => {
+                const promise = withReviewArtifactReadBarrier(reviewsDir, async () => {
+                    const stagedValue = readReviewArtifactTextFile(reviewPath);
+                    await nestedBarrierHold;
+                    return stagedValue;
+                });
+                resolveNestedBarrier({ promise });
+                throw new Error('forced transaction rollback');
+            })
+        ));
+        const nestedBarrier = (await nestedBarrierReady).promise;
+
+        await assert.rejects(outerBarrier, /forced transaction rollback/);
+        releaseNestedBarrier();
+        await assert.rejects(nestedBarrier, /invalidated by a concurrent review publication/);
+        assert.equal(fs.readFileSync(reviewPath, 'utf8'), 'old review\n');
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('independent same-process barrier cannot read a paused transaction staged value', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-independent-staged-read-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const reviewPath = path.join(reviewsDir, 'T-021-code.md');
+    let releaseTransaction!: () => void;
+    const transactionHold = new Promise<void>((resolve) => {
+        releaseTransaction = resolve;
+    });
+    let markTransactionPaused!: () => void;
+    const transactionPaused = new Promise<void>((resolve) => {
+        markTransactionPaused = resolve;
+    });
+
+    try {
+        writeReviewArtifactText(reviewPath, 'old review\n');
+        const outerBarrier = withReviewArtifactReadBarrier(reviewsDir, async () => (
+            await writeReviewArtifactsWithRollback([
+                {
+                    artifactPath: reviewPath,
+                    contentType: 'text',
+                    content: 'staged review\n'
+                }
+            ], async () => {
+                markTransactionPaused();
+                await transactionHold;
+                throw new Error('forced transaction rollback');
+            })
+        ));
+        await transactionPaused;
+        let callbackExecuted = false;
+
+        assert.throws(
+            () => withReviewArtifactReadBarrier(reviewsDir, () => {
+                callbackExecuted = true;
+                return readReviewArtifactTextFile(reviewPath);
+            }),
+            /invalidated by a concurrent review publication/
+        );
+        assert.equal(callbackExecuted, false);
+        releaseTransaction();
+        await assert.rejects(outerBarrier, /forced transaction rollback/);
+        assert.equal(fs.readFileSync(reviewPath, 'utf8'), 'old review\n');
+    } finally {
+        releaseTransaction();
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
 });

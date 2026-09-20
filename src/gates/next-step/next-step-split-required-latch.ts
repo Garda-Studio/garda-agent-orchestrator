@@ -2,6 +2,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
+import { redactSecretText } from '../../core/redaction';
+import { writeReviewArtifactText } from '../../gate-runtime/review-artifacts';
 import {
     appendMandatoryTaskEvent
 } from '../../gate-runtime/task-events';
@@ -90,10 +92,9 @@ export function isSuccessfulSplitRequiredStatusSync(result: TaskQueueStatusSyncR
 }
 
 function writeStableJsonIfChanged(filePath: string, payload: Record<string, unknown>): string {
-    const content = `${JSON.stringify(payload, null, 2)}\n`;
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const content = redactSecretText(`${JSON.stringify(payload, null, 2)}\n`);
     if (!fs.existsSync(filePath) || fs.readFileSync(filePath, 'utf8') !== content) {
-        fs.writeFileSync(filePath, content, 'utf8');
+        writeReviewArtifactText(filePath, content);
     }
     return createHash('sha256').update(content).digest('hex');
 }

@@ -925,12 +925,31 @@ export function resolveIndexPath(reviewsDir: string): string {
     return path.join(reviewsDir, INDEX_FILE_NAME);
 }
 
+export function resolveCanonicalReviewsDirectoryPath(reviewsDir: string): string {
+    const resolved = path.resolve(reviewsDir);
+    const missingSegments: string[] = [];
+    let candidate = resolved;
+    while (true) {
+        try {
+            return path.join(fs.realpathSync.native(candidate), ...missingSegments);
+        } catch (error: unknown) {
+            const code = (error as NodeJS.ErrnoException)?.code;
+            const parent = path.dirname(candidate);
+            if ((code !== 'ENOENT' && code !== 'ENOTDIR') || parent === candidate) {
+                return resolved;
+            }
+            missingSegments.unshift(path.basename(candidate));
+            candidate = parent;
+        }
+    }
+}
+
 export function resolveIndexLockPath(reviewsDir: string): string {
-    return path.join(path.dirname(reviewsDir), '.reviews-index.lock');
+    return path.join(path.dirname(resolveCanonicalReviewsDirectoryPath(reviewsDir)), '.reviews-index.lock');
 }
 
 export function resolveReviewTransactionLockPath(reviewsDir: string): string {
-    return path.join(path.dirname(reviewsDir), '.reviews-transaction.lock');
+    return path.join(path.dirname(resolveCanonicalReviewsDirectoryPath(reviewsDir)), '.reviews-transaction.lock');
 }
 
 export function beginInProcessReviewTransactionSnapshot(reviewsDir: string): () => void {

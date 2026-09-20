@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -20,6 +21,7 @@ import {
     currentProcessOwnsReviewTransactionLock,
     parseReviewArtifactFileName,
     rebuildAndPersistIndex,
+    resolveCanonicalReviewsDirectoryPath,
     resolveIndexPath,
     resolveReviewTransactionLockPath,
     type ReviewsIndexMutationStatus,
@@ -54,6 +56,27 @@ interface ReviewArtifactReadSnapshotState {
 }
 
 const inProcessReviewArtifactReadSnapshots = new Map<string, ReviewArtifactReadSnapshotState>();
+
+interface ReviewArtifactGenerationCapture {
+    reviewsDirectoryIdentity: fs.Stats | null;
+    indexIdentity: fs.Stats | null;
+}
+
+interface ReviewArtifactReadBarrierState {
+    expectedGeneration: ReviewArtifactGenerationCapture;
+    registeredKeys: Set<string>;
+    activeParticipants: number;
+}
+
+const inProcessReviewArtifactReadBarriers = new Map<string, ReviewArtifactReadBarrierState>();
+
+interface InProcessReviewArtifactTransactionContext {
+    lockKey: string;
+    settled: boolean;
+    succeeded: boolean;
+}
+
+const reviewArtifactTransactionContext = new AsyncLocalStorage<InProcessReviewArtifactTransactionContext>();
 
 interface CachedReviewArtifactRead {
     content: Buffer | null;
@@ -533,14 +556,24 @@ function withReviewArtifactTransactionLock<T>(
         allowForeignHostStaleRecovery: options.allowForeignHostStaleRecovery,
         ownerLabel: 'review-artifact-transaction'
     });
+    let activeReadBarrier: ReviewArtifactReadBarrierState | null = null;
+    let mutationStarted = false;
     try {
+        activeReadBarrier = prepareActiveReviewArtifactReadBarrierMutation(reviewsDir);
+        mutationStarted = true;
         return {
             result: callback(),
             lock_path: lockPath,
             telemetry
         };
     } finally {
-        releaseFilesystemLock(handle);
+        try {
+            if (mutationStarted && activeReadBarrier) {
+                activeReadBarrier.expectedGeneration = captureReviewArtifactGeneration(reviewsDir);
+            }
+        } finally {
+            releaseFilesystemLock(handle);
+        }
     }
 }
 
@@ -589,9 +622,12 @@ export function withReviewArtifactReadSnapshot<T>(
     if (existing) {
         existing.depth += 1;
         try {
-            return callback();
-        } finally {
+            return settleReviewArtifactReadSnapshot(callback(), existing, () => {
+                existing.depth -= 1;
+            });
+        } catch (error: unknown) {
             existing.depth -= 1;
+            throw error;
         }
     }
 
@@ -619,16 +655,47 @@ export function withReviewArtifactReadSnapshot<T>(
     };
     inProcessReviewArtifactReadSnapshots.set(snapshotKey, snapshot);
     try {
-        const result = callback();
+        return settleReviewArtifactReadSnapshot(callback(), snapshot, () => {
+            snapshot.depth -= 1;
+            if (snapshot.depth <= 0) {
+                inProcessReviewArtifactReadSnapshots.delete(snapshotKey);
+            }
+        });
+    } catch (error: unknown) {
+        snapshot.depth -= 1;
+        if (snapshot.depth <= 0) {
+            inProcessReviewArtifactReadSnapshots.delete(snapshotKey);
+        }
+        throw error;
+    }
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+    return (typeof value === 'object' && value !== null) || typeof value === 'function'
+        ? typeof (value as { then?: unknown }).then === 'function'
+        : false;
+}
+
+function settleReviewArtifactReadSnapshot<T>(
+    result: T,
+    snapshot: ReviewArtifactReadSnapshotState,
+    release: () => void
+): T {
+    if (isPromiseLike(result)) {
+        return Promise.resolve(result).then((value) => {
+            if (snapshot.budgetError) {
+                throw snapshot.budgetError;
+            }
+            return value;
+        }).finally(release) as T;
+    }
+    try {
         if (snapshot.budgetError) {
             throw snapshot.budgetError;
         }
         return result;
     } finally {
-        snapshot.depth -= 1;
-        if (snapshot.depth <= 0) {
-            inProcessReviewArtifactReadSnapshots.delete(snapshotKey);
-        }
+        release();
     }
 }
 
@@ -644,6 +711,15 @@ function findReviewArtifactReadSnapshot(filePath: string): ReviewArtifactReadSna
         }
     }
     return bestMatch;
+}
+
+function hasReviewArtifactReadSnapshotForRoot(snapshotKey: string): boolean {
+    for (const snapshot of inProcessReviewArtifactReadSnapshots.values()) {
+        if (normalizeReviewArtifactReadSnapshotKey(snapshot.realRootPath) === snapshotKey) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function invalidReviewArtifactRead(active: boolean): ReviewArtifactFileReadSnapshot {
@@ -872,17 +948,172 @@ export function readReviewArtifactJsonFile(filePath: string): unknown {
     return JSON.parse(fs.readFileSync(filePath, 'utf8')) as unknown;
 }
 
-interface ReviewArtifactGenerationCapture {
-    reviewsDirectoryIdentity: fs.Stats | null;
-    indexIdentity: fs.Stats | null;
-}
-
 function captureOptionalReviewArtifactIdentity(targetPath: string): fs.Stats | null {
     try {
         return fs.lstatSync(targetPath);
     } catch {
         return null;
     }
+}
+
+function captureReviewArtifactGeneration(reviewsDir: string): ReviewArtifactGenerationCapture {
+    const canonicalReviewsDir = resolveCanonicalReviewsDirectoryPath(reviewsDir);
+    return {
+        reviewsDirectoryIdentity: captureOptionalReviewArtifactIdentity(canonicalReviewsDir),
+        indexIdentity: captureOptionalReviewArtifactIdentity(resolveIndexPath(canonicalReviewsDir))
+    };
+}
+
+function reviewArtifactGenerationMatches(
+    capture: ReviewArtifactGenerationCapture,
+    current: ReviewArtifactGenerationCapture
+): boolean {
+    const directoryUnchanged = capture.reviewsDirectoryIdentity === null
+        ? current.reviewsDirectoryIdentity === null
+        : current.reviewsDirectoryIdentity !== null
+            && sameReviewArtifactFileIdentity(capture.reviewsDirectoryIdentity, current.reviewsDirectoryIdentity);
+    const indexUnchanged = capture.indexIdentity === null
+        ? current.indexIdentity === null
+        : current.indexIdentity !== null
+            && sameReviewArtifactFileIdentity(capture.indexIdentity, current.indexIdentity);
+    return directoryUnchanged && indexUnchanged;
+}
+
+function prepareActiveReviewArtifactReadBarrierMutation(
+    reviewsDir: string
+): ReviewArtifactReadBarrierState | null {
+    const barrier = findReviewArtifactReadBarrier(reviewsDir);
+    if (
+        barrier
+        && !reviewArtifactGenerationMatches(barrier.expectedGeneration, captureReviewArtifactGeneration(reviewsDir))
+    ) {
+        throw new Error('Review artifact read snapshot was invalidated by a concurrent review publication.');
+    }
+    if (barrier) {
+        registerReviewArtifactReadBarrierKeys(barrier, reviewsDir);
+    }
+    return barrier;
+}
+
+function reviewArtifactReadBarrierKeys(reviewsDir: string): string[] {
+    return [...new Set([
+        normalizeReviewArtifactReadSnapshotKey(path.resolve(reviewsDir)),
+        normalizeReviewArtifactReadSnapshotKey(resolveCanonicalReviewsDirectoryPath(reviewsDir))
+    ])];
+}
+
+function findReviewArtifactReadBarrier(reviewsDir: string): ReviewArtifactReadBarrierState | null {
+    for (const key of reviewArtifactReadBarrierKeys(reviewsDir)) {
+        const barrier = inProcessReviewArtifactReadBarriers.get(key);
+        if (barrier) {
+            return barrier;
+        }
+    }
+    return null;
+}
+
+function registerReviewArtifactReadBarrierKeys(
+    barrier: ReviewArtifactReadBarrierState,
+    reviewsDir: string
+): void {
+    const keys = reviewArtifactReadBarrierKeys(reviewsDir);
+    for (const key of keys) {
+        const existing = inProcessReviewArtifactReadBarriers.get(key);
+        if (existing && existing !== barrier) {
+            throw new Error('Review artifact read snapshot was invalidated by a concurrent review publication.');
+        }
+    }
+    for (const key of keys) {
+        inProcessReviewArtifactReadBarriers.set(key, barrier);
+        barrier.registeredKeys.add(key);
+    }
+}
+
+function unregisterReviewArtifactReadBarrier(barrier: ReviewArtifactReadBarrierState): void {
+    for (const key of barrier.registeredKeys) {
+        if (inProcessReviewArtifactReadBarriers.get(key) === barrier) {
+            inProcessReviewArtifactReadBarriers.delete(key);
+        }
+    }
+}
+
+function releaseReviewArtifactReadBarrierParticipant(barrier: ReviewArtifactReadBarrierState): void {
+    barrier.activeParticipants -= 1;
+    if (barrier.activeParticipants <= 0) {
+        unregisterReviewArtifactReadBarrier(barrier);
+    }
+}
+
+function runReviewArtifactReadBarrierParticipant<T>(
+    reviewsDir: string,
+    callback: () => T,
+    barrier: ReviewArtifactReadBarrierState,
+    options: ReviewArtifactLockOptions
+): T {
+    barrier.activeParticipants += 1;
+    const transactionContext = getCurrentReviewArtifactTransactionContext(reviewsDir);
+    let result: T;
+    try {
+        result = withReviewArtifactReadSnapshot(reviewsDir, callback, options);
+    } catch (error: unknown) {
+        releaseReviewArtifactReadBarrierParticipant(barrier);
+        throw error;
+    }
+    let promiseLike: boolean;
+    try {
+        promiseLike = isPromiseLike(result);
+    } catch (error: unknown) {
+        releaseReviewArtifactReadBarrierParticipant(barrier);
+        throw error;
+    }
+    if (promiseLike) {
+        return Promise.resolve(result).then((value) => {
+            assertReviewArtifactReadBarrierParticipantGeneration(
+                reviewsDir,
+                barrier,
+                transactionContext,
+                options
+            );
+            return value;
+        }).finally(() => releaseReviewArtifactReadBarrierParticipant(barrier)) as T;
+    }
+    try {
+        assertReviewArtifactReadBarrierParticipantGeneration(
+            reviewsDir,
+            barrier,
+            transactionContext,
+            options
+        );
+        return result;
+    } finally {
+        releaseReviewArtifactReadBarrierParticipant(barrier);
+    }
+}
+
+function getCurrentReviewArtifactTransactionContext(
+    reviewsDir: string
+): InProcessReviewArtifactTransactionContext | null {
+    const context = reviewArtifactTransactionContext.getStore() ?? null;
+    const lockKey = normalizeReviewArtifactReadSnapshotKey(resolveReviewTransactionLockPath(reviewsDir));
+    return context?.lockKey === lockKey ? context : null;
+}
+
+function assertReviewArtifactReadBarrierParticipantGeneration(
+    reviewsDir: string,
+    barrier: ReviewArtifactReadBarrierState,
+    transactionContext: InProcessReviewArtifactTransactionContext | null,
+    options: ReviewArtifactLockOptions
+): void {
+    if (currentProcessOwnsReviewTransactionLock(reviewsDir)) {
+        if (transactionContext) {
+            return;
+        }
+        throw new Error('Review artifact read snapshot was invalidated by a concurrent review publication.');
+    }
+    if (transactionContext && (!transactionContext.settled || !transactionContext.succeeded)) {
+        throw new Error('Review artifact read snapshot was invalidated by a concurrent review publication.');
+    }
+    assertReviewArtifactGenerationUnchanged(reviewsDir, barrier.expectedGeneration, options);
 }
 
 function captureReviewArtifactGenerationUnderLock(
@@ -899,10 +1130,7 @@ function captureReviewArtifactGenerationUnderLock(
         ownerLabel: 'review-artifact-read-generation'
     });
     try {
-        return {
-            reviewsDirectoryIdentity: captureOptionalReviewArtifactIdentity(reviewsDir),
-            indexIdentity: captureOptionalReviewArtifactIdentity(resolveIndexPath(reviewsDir))
-        };
+        return captureReviewArtifactGeneration(reviewsDir);
     } finally {
         releaseFilesystemLock(handle);
     }
@@ -914,15 +1142,7 @@ function assertReviewArtifactGenerationUnchanged(
     options: ReviewArtifactLockOptions
 ): void {
     const current = captureReviewArtifactGenerationUnderLock(reviewsDir, options);
-    const directoryUnchanged = capture.reviewsDirectoryIdentity === null
-        ? current.reviewsDirectoryIdentity === null
-        : current.reviewsDirectoryIdentity !== null
-            && sameReviewArtifactFileIdentity(capture.reviewsDirectoryIdentity, current.reviewsDirectoryIdentity);
-    const indexUnchanged = capture.indexIdentity === null
-        ? current.indexIdentity === null
-        : current.indexIdentity !== null
-            && sameReviewArtifactFileIdentity(capture.indexIdentity, current.indexIdentity);
-    if (!directoryUnchanged || !indexUnchanged) {
+    if (!reviewArtifactGenerationMatches(capture, current)) {
         throw new Error('Review artifact read snapshot was invalidated by a concurrent review publication.');
     }
 }
@@ -932,17 +1152,32 @@ export function withReviewArtifactReadBarrier<T>(
     callback: () => T,
     options: ReviewArtifactLockOptions = {}
 ): T {
-    const snapshotKey = normalizeReviewArtifactReadSnapshotKey(path.resolve(reviewsDir));
-    if (inProcessReviewArtifactReadSnapshots.has(snapshotKey)) {
+    const snapshotKey = normalizeReviewArtifactReadSnapshotKey(
+        resolveCanonicalReviewsDirectoryPath(reviewsDir)
+    );
+    const ownsTransactionLock = currentProcessOwnsReviewTransactionLock(reviewsDir);
+    const transactionContext = getCurrentReviewArtifactTransactionContext(reviewsDir);
+    if (ownsTransactionLock && !transactionContext) {
+        throw new Error('Review artifact read snapshot was invalidated by a concurrent review publication.');
+    }
+    const activeBarrier = findReviewArtifactReadBarrier(reviewsDir);
+    if (activeBarrier) {
+        return runReviewArtifactReadBarrierParticipant(reviewsDir, callback, activeBarrier, options);
+    }
+    if (ownsTransactionLock) {
         return withReviewArtifactReadSnapshot(reviewsDir, callback, options);
     }
-    if (currentProcessOwnsReviewTransactionLock(reviewsDir)) {
+    if (hasReviewArtifactReadSnapshotForRoot(snapshotKey)) {
         return withReviewArtifactReadSnapshot(reviewsDir, callback, options);
     }
     const generationCapture = captureReviewArtifactGenerationUnderLock(reviewsDir, options);
-    const result = withReviewArtifactReadSnapshot(reviewsDir, callback, options);
-    assertReviewArtifactGenerationUnchanged(reviewsDir, generationCapture, options);
-    return result;
+    const barrierState: ReviewArtifactReadBarrierState = {
+        expectedGeneration: generationCapture,
+        registeredKeys: new Set<string>(),
+        activeParticipants: 0
+    };
+    registerReviewArtifactReadBarrierKeys(barrierState, reviewsDir);
+    return runReviewArtifactReadBarrierParticipant(reviewsDir, callback, barrierState, options);
 }
 
 async function withInProcessReviewLockQueue<T>(lockPath: string, callback: () => Promise<T>): Promise<T> {
@@ -974,18 +1209,40 @@ async function withReviewArtifactTransactionLockAsync<T>(
             allowForeignHostStaleRecovery: options.allowForeignHostStaleRecovery,
             ownerLabel: 'review-artifact-transaction'
         });
-        const releaseTransactionSnapshot = beginInProcessReviewTransactionSnapshot(reviewsDir);
+        let activeReadBarrier: ReviewArtifactReadBarrierState | null = null;
+        let mutationStarted = false;
+        let releaseTransactionSnapshot: (() => void) | null = null;
+        let transactionSucceeded = false;
+        const transactionKey = normalizeReviewArtifactReadSnapshotKey(lockPath);
+        const transactionContext: InProcessReviewArtifactTransactionContext = {
+            lockKey: transactionKey,
+            settled: false,
+            succeeded: false
+        };
         try {
-            return {
-                result: await callback(),
+            activeReadBarrier = prepareActiveReviewArtifactReadBarrierMutation(reviewsDir);
+            mutationStarted = true;
+            releaseTransactionSnapshot = beginInProcessReviewTransactionSnapshot(reviewsDir);
+            const result = {
+                result: await reviewArtifactTransactionContext.run(transactionContext, callback),
                 lock_path: lockPath,
                 telemetry
             };
+            transactionSucceeded = true;
+            return result;
         } finally {
             try {
-                releaseTransactionSnapshot();
+                if (mutationStarted && activeReadBarrier) {
+                    activeReadBarrier.expectedGeneration = captureReviewArtifactGeneration(reviewsDir);
+                }
             } finally {
-                releaseFilesystemLock(handle);
+                try {
+                    transactionContext.succeeded = transactionSucceeded;
+                    transactionContext.settled = true;
+                    releaseTransactionSnapshot?.();
+                } finally {
+                    releaseFilesystemLock(handle);
+                }
             }
         }
     });

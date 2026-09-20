@@ -2,6 +2,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
+import { redactSecretText } from '../../core/redaction';
+import { writeReviewArtifactText } from '../../gate-runtime/review-artifacts';
 import {
     resolveBundleNameForTarget
 } from '../../core/constants';
@@ -267,17 +269,16 @@ export function materializeReviewCycleAutoSplitPrompt(params: {
 }): NextStepReviewCycleAutoSplitPrompt {
     const state = buildReviewCycleAutoSplitStateProjection(params);
     const artifactPath = path.join(params.reviewsRoot, `${params.taskId}-review-cycle-auto-split-prompt.md`);
-    const content = buildReviewCycleAutoSplitPromptContent(
+    const content = redactSecretText(buildReviewCycleAutoSplitPromptContent(
         params.repoRoot,
         params.taskId,
         params.evaluation,
         params.latestFailedReview,
         params.latchResult,
         state
-    );
-    fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
+    ));
     if (!fs.existsSync(artifactPath) || fs.readFileSync(artifactPath, 'utf8') !== content) {
-        fs.writeFileSync(artifactPath, content, 'utf8');
+        writeReviewArtifactText(artifactPath, content);
     }
     return {
         kind: 'review_cycle_auto_split_prompt',
