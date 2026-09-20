@@ -141,6 +141,7 @@ export interface CompileGateEvidenceResult {
     evidence_source: string | null;
     evidence_scope_detection_source: string | null;
     evidence_scope_include_untracked: boolean | null;
+    evidence_scope_authorized_files: string[];
     evidence_scope_changed_files: string[];
     evidence_scope_changed_files_count: number;
     evidence_scope_changed_lines_total: number;
@@ -448,6 +449,7 @@ export function getCompileGateEvidence(
         evidence_source: null,
         evidence_scope_detection_source: null,
         evidence_scope_include_untracked: null,
+        evidence_scope_authorized_files: [],
         evidence_scope_changed_files: [],
         evidence_scope_changed_files_count: 0,
         evidence_scope_changed_lines_total: 0,
@@ -499,6 +501,10 @@ export function getCompileGateEvidence(
     result.evidence_scope_detection_source = String(evidenceObject.scope_detection_source || '');
     result.evidence_scope_include_untracked = evidenceObject.scope_include_untracked == null ? true : !!evidenceObject.scope_include_untracked;
     result.evidence_scope_changed_files = expandValueList(evidenceObject.scope_changed_files || [], { splitDelimiters: false });
+    result.evidence_scope_authorized_files = expandValueList(
+        evidenceObject.scope_authorized_files ?? result.evidence_scope_changed_files,
+        { splitDelimiters: false }
+    );
     result.evidence_scope_changed_files_count = Number.parseInt(String(evidenceObject.scope_changed_files_count || 0), 10) || 0;
     result.evidence_scope_changed_lines_total = Number.parseInt(String(evidenceObject.scope_changed_lines_total || 0), 10) || 0;
     result.evidence_scope_changed_files_sha256 = String(evidenceObject.scope_changed_files_sha256 || '');
@@ -566,7 +572,7 @@ export function testCompileScopeDrift(
         repoRoot,
         compileEvidence.evidence_scope_detection_source,
         !!compileEvidence.evidence_scope_include_untracked,
-        compileEvidence.evidence_scope_changed_files,
+        compileEvidence.evidence_scope_authorized_files,
         { noCache: true }
     );
     result.status = 'PASS';

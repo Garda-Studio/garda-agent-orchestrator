@@ -18,6 +18,10 @@ import { writeProtectedControlPlaneManifest } from '../../../../../../src/gates/
 import { writeOptionalSkillSelectionArtifact } from '../../../../../../src/runtime/optional-skill-selection';
 import { buildDefaultWorkflowConfig } from '../../../../../../src/core/workflow-config';
 import { UNCONFIGURED_COMPILE_GATE_COMMAND } from '../../../../../../src/core/constants';
+import {
+    getCompileGateEvidence,
+    testCompileScopeDrift
+} from '../../../../../../src/cli/commands/gate-flows/review/review-flow-support';
 
 import {
     createTempRepo,
@@ -175,6 +179,15 @@ describe('cli/commands/gates compile and post-preflight', () => {
         assert.equal(evidence.scope_authorized_files_count, 2);
         assert.match(evidence.scope_authorized_files_sha256, /^[a-f0-9]{64}$/);
         assert.deepEqual(evidence.scope_changed_files, ['src/app.ts']);
+        const reviewCompileEvidence = getCompileGateEvidence(
+            repoRoot,
+            taskId,
+            preflightPath,
+            createHash('sha256').update(fs.readFileSync(preflightPath)).digest('hex'),
+            evidencePath
+        );
+        assert.equal(reviewCompileEvidence.status, 'PASS');
+        assert.equal(testCompileScopeDrift(repoRoot, reviewCompileEvidence).status, 'PASS');
         const compileOutputPath = path.join(getReviewsRoot(repoRoot), `${taskId}-compile-output.log`);
         assert.equal(fs.existsSync(compileOutputPath), false);
         assert.equal(evidence.compile_output_path, null);
