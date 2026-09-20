@@ -117,6 +117,7 @@ function validationAuthority(options: {
     reviewType?: string;
     preflightSha256?: string;
     fullReviewScope?: readonly string[];
+    acceptedCurrentPassReplacement?: boolean;
 }) {
     const decision = options.decision ?? null;
     const classification = options.classification
@@ -140,7 +141,8 @@ function validationAuthority(options: {
         authoritativeDecisionSha256: decision?.decision_sha256 ?? null,
         authoritativeClassificationSha256: decision?.classification_sha256 ?? null,
         authoritativeDecision: decision,
-        authoritativeClassification: classification
+        authoritativeClassification: classification,
+        acceptedCurrentPassReplacement: options.acceptedCurrentPassReplacement
     };
 }
 
@@ -1020,6 +1022,64 @@ describe('review remediation FULL/DELTA execution contract', () => {
 
             assert.ok(violations.some((entry) => entry.includes('classification baseline identity')));
             assert.ok(!violations.some((entry) => entry.includes('base lineage is invalid')));
+        } finally {
+            fs.rmSync(fixture.root, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects forged lineage while accepting a current PASS after its mutable DELTA baseline is superseded', () => {
+        const fixture = createAuthenticatedDeltaFixture();
+        try {
+            const decision = decisionBinding({
+                mode: 'DELTA',
+                classificationSha256: fixture.delta.classification_sha256
+            });
+            const classification: ReviewRemediationDecisionClassification = {
+                source: 'delta',
+                delta: fixture.delta,
+                profilePolicySnapshot: null,
+                baselineProfilePolicySnapshotSha256: '8'.repeat(64)
+            };
+            const contract = buildReviewRemediationReviewContract({
+                taskId: TASK_ID,
+                reviewType: REVIEW_TYPE,
+                preflightSha256: PREFLIGHT_SHA256,
+                fullReviewScope: ['src/app.ts', 'tests/app.test.ts'],
+                authoritativeDecision: decision,
+                classification
+            });
+            fs.writeFileSync(fixture.delta.baseline.artifact_path, '{"superseded":true}\n', 'utf8');
+
+            const ordinaryViolations = getReviewRemediationReviewContractViolations(
+                contract,
+                validationAuthority({ mode: 'DELTA', decision, classification })
+            );
+            assert.ok(ordinaryViolations.some((entry) => entry.includes('DELTA baseline is invalid')));
+            assert.deepEqual(getReviewRemediationReviewContractViolations(
+                contract,
+                validationAuthority({
+                    mode: 'DELTA',
+                    decision,
+                    classification,
+                    acceptedCurrentPassReplacement: true
+                })
+            ), []);
+
+            const forged = rehash({
+                ...contract,
+                delta: contract.delta
+                    ? { ...contract.delta, current_snapshot_sha256: 'f'.repeat(64) }
+                    : null
+            });
+            assert.ok(getReviewRemediationReviewContractViolations(
+                forged,
+                validationAuthority({
+                    mode: 'DELTA',
+                    decision,
+                    classification,
+                    acceptedCurrentPassReplacement: true
+                })
+            ).some((entry) => entry.includes('do not match the authenticated classification')));
         } finally {
             fs.rmSync(fixture.root, { recursive: true, force: true });
         }

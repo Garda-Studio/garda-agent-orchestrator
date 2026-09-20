@@ -63,11 +63,21 @@ export interface CurrentPassReviewEvidenceResult {
     reviewContextPath: string;
     ruleContextArtifactPath: string | null;
     tokenEconomyActive: boolean | null;
+    preflightSha256: string | null;
+    reviewContextSha256: string | null;
     receiptPath: string | null;
+    receiptSha256: string | null;
+    reviewArtifactPath: string | null;
+    reviewArtifactSha256: string | null;
+    findingsValidationArtifactPath: string | null;
+    findingsValidationArtifactSha256: string | null;
+    findingsDispositionArtifactPath: string | null;
+    findingsDispositionArtifactSha256: string | null;
     reviewerExecutionMode: string | null;
     reviewerIdentity: string | null;
     reusedExistingReview: boolean;
     reviewRecordedSequence: number | null;
+    reviewRecordedEventSha256: string | null;
     remediationMode: string | null;
     remediationAuthoritativeDecisionSha256: string | null;
     remediationClassificationSha256: string | null;
@@ -272,11 +282,21 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
         reviewContextPath: gateHelpers.normalizePath(options.reviewContextPath),
         ruleContextArtifactPath: null,
         tokenEconomyActive: null,
+        preflightSha256: null,
+        reviewContextSha256: null,
         receiptPath: null,
+        receiptSha256: null,
+        reviewArtifactPath: null,
+        reviewArtifactSha256: null,
+        findingsValidationArtifactPath: null,
+        findingsValidationArtifactSha256: null,
+        findingsDispositionArtifactPath: null,
+        findingsDispositionArtifactSha256: null,
         reviewerExecutionMode: null,
         reviewerIdentity: null,
         reusedExistingReview: false,
         reviewRecordedSequence: null,
+        reviewRecordedEventSha256: null,
         remediationMode: null,
         remediationAuthoritativeDecisionSha256: null,
         remediationClassificationSha256: null
@@ -383,6 +403,10 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
     const expectedCodeScopeSha256 = isNonTestReviewScope(options.reviewType)
         ? normalizeOptionalSha256(codeScopeFingerprint.code_scope_sha256)
         : null;
+    let findingsValidationArtifactPath: string | null = null;
+    let findingsValidationArtifactSha256: string | null = null;
+    let findingsDispositionArtifactPath: string | null = null;
+    let findingsDispositionArtifactSha256: string | null = null;
     if (receiptRequiresFindingsValidation(receipt, reviewContext)) {
         const findingsValidation = validateReviewFindingsValidationArtifactForReceipt({
             receipt: receipt as unknown as Record<string, unknown>,
@@ -422,6 +446,12 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
         if (!findingsValidation.artifact || !findingsValidation.reference || !findingsValidation.artifact_sha256) {
             return reject('review findings validation artifact is missing complete authenticated evidence for current PASS reuse');
         }
+        findingsValidationArtifactPath = gateHelpers.normalizePath(
+            receipt.reused_existing_review === true && findingsValidation.reference.snapshot_path
+                ? findingsValidation.reference.snapshot_path
+                : findingsValidation.reference.artifact_path
+        );
+        findingsValidationArtifactSha256 = findingsValidation.artifact_sha256;
         const policyResolution = receipt.reused_existing_review === true
             ? resolveLockedReviewFindingPolicyFromReceiptDispositionEvidence(
                 receipt as unknown as Record<string, unknown>
@@ -452,6 +482,21 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
                 dispositionEvidence.violations.join(' ')
             );
         }
+        const dispositionReference = isRecord(
+            (receipt as unknown as Record<string, unknown>).review_findings_disposition_artifact
+        )
+            ? (receipt as unknown as Record<string, unknown>).review_findings_disposition_artifact
+            : null;
+        const dispositionPath = isRecord(dispositionReference)
+            ? receipt.reused_existing_review === true && typeof dispositionReference.snapshot_path === 'string'
+                ? dispositionReference.snapshot_path
+                : dispositionReference.artifact_path
+            : null;
+        if (!dispositionEvidence.artifact_sha256 || typeof dispositionPath !== 'string' || !dispositionPath.trim()) {
+            return reject('review findings disposition artifact is missing complete authenticated evidence for current PASS reuse');
+        }
+        findingsDispositionArtifactPath = gateHelpers.normalizePath(dispositionPath);
+        findingsDispositionArtifactSha256 = dispositionEvidence.artifact_sha256;
         if (reviewFindingsValidationArtifactHasBlockingFindings(
             findingsValidation.artifact,
             policyResolution
@@ -485,6 +530,7 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
     }
     const reviewerProvenance = normalizeReviewReceiptReviewerProvenance(receipt.reviewer_provenance);
     let reviewRecordedSequence: number | null = null;
+    let reviewRecordedEventSha256: string | null = null;
     if (receipt.reused_existing_review === true) {
         const strictReuseValidation = validateStrictReusedReviewEvidence({
             repoRoot: options.repoRoot,
@@ -587,6 +633,10 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
             return reject('trusted current-cycle REVIEW_RECORDED telemetry must occur after reviewer invocation attestation');
         }
         reviewRecordedSequence = currentReviewRecorded.sequence;
+        reviewRecordedEventSha256 = normalizeOptionalSha256(currentReviewRecorded.integrity?.event_sha256);
+        if (!reviewRecordedEventSha256) {
+            return reject('trusted current-cycle REVIEW_RECORDED telemetry is missing an authenticated event hash');
+        }
     }
 
     return {
@@ -595,11 +645,21 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
         reviewContextPath: gateHelpers.normalizePath(options.reviewContextPath),
         ruleContextArtifactPath: gateHelpers.normalizePath(promptBinding.promptPath),
         tokenEconomyActive: getTokenEconomyActiveFromContext(reviewContext),
+        preflightSha256: currentPreflightHash,
+        reviewContextSha256,
         receiptPath: gateHelpers.normalizePath(receiptPath),
+        receiptSha256,
+        reviewArtifactPath: gateHelpers.normalizePath(artifactPath),
+        reviewArtifactSha256: artifactSha256,
+        findingsValidationArtifactPath,
+        findingsValidationArtifactSha256,
+        findingsDispositionArtifactPath,
+        findingsDispositionArtifactSha256,
         reviewerExecutionMode,
         reviewerIdentity,
         reusedExistingReview: receipt.reused_existing_review === true,
         reviewRecordedSequence,
+        reviewRecordedEventSha256,
         remediationMode: String(reviewExecution?.mode || '').trim().toUpperCase() || null,
         remediationAuthoritativeDecisionSha256: normalizeOptionalSha256(
             reviewExecution?.authoritative_decision_sha256

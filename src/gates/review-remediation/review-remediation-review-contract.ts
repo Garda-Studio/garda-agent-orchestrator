@@ -82,6 +82,7 @@ export interface ReviewRemediationReviewContractValidationAuthority {
     authoritativeClassificationSha256: string | null;
     authoritativeDecision: ReviewRemediationAuthoritativeDecisionBinding | null;
     authoritativeClassification: ReviewRemediationDecisionClassification | null;
+    acceptedCurrentPassReplacement?: boolean;
 }
 
 export interface ReviewerRemediationCoverageDeclaration {
@@ -354,7 +355,8 @@ export function getRemediationContractDecisionBindingViolation(
 export function getRemediationContractClassificationBindingViolations(
     contract: ReviewRemediationReviewContract,
     decision: AuthoritativeReviewRemediationDecision,
-    classification: unknown
+    classification: unknown,
+    options: { allowSupersededBaseline?: boolean } = {}
 ): string[] {
     if (!isPlainRecord(classification)) {
         return ['persisted remediation review execution classification is missing.'];
@@ -412,18 +414,24 @@ export function getRemediationContractClassificationBindingViolations(
             if (baselineBindingViolation) {
                 violations.push(baselineBindingViolation);
             }
-            let findingScope;
-            try {
-                findingScope = buildReviewRemediationFindingScope(
-                    readAuthenticatedBaseline(delta), deltaScope.required_delta_targets, deltaScope.full_review_scope
-                );
-            } catch (error: unknown) {
-                violations.push(error instanceof Error ? error.message : String(error));
-                return violations;
+            let expectedTargets = normalizeCanonicalPaths(deltaScope.required_delta_targets);
+            let expectedContextFiles = normalizeCanonicalPaths(deltaScope.optional_context_files);
+            if (options.allowSupersededBaseline !== true) {
+                let findingScope;
+                try {
+                    findingScope = buildReviewRemediationFindingScope(
+                        readAuthenticatedBaseline(delta),
+                        deltaScope.required_delta_targets,
+                        deltaScope.full_review_scope
+                    );
+                } catch (error: unknown) {
+                    violations.push(error instanceof Error ? error.message : String(error));
+                    return violations;
+                }
+                violations.push(...findingScope.fullReviewReasons);
+                expectedTargets = normalizeCanonicalPaths(findingScope.requiredTargets);
+                expectedContextFiles = normalizeCanonicalPaths(findingScope.contextFiles);
             }
-            violations.push(...findingScope.fullReviewReasons);
-            const expectedTargets = normalizeCanonicalPaths(findingScope.requiredTargets);
-            const expectedContextFiles = normalizeCanonicalPaths(findingScope.contextFiles);
             const expectedDelta = {
                 origin_review_type: delta.review_type,
                 classification_sha256: delta.classification_sha256,
@@ -676,6 +684,8 @@ export function getReviewRemediationReviewContractViolations(
     const violations: string[] = [];
     let authenticatedBaseline: ReviewRemediationBaselineArtifact | null = null;
     const contract = value as unknown as ReviewRemediationReviewContract;
+    const acceptsSupersededDeltaBaseline = expected.acceptedCurrentPassReplacement === true
+        && contract.mode === 'DELTA';
     if (!hasExactKeys(value, REVIEW_CONTRACT_KEYS)) {
         violations.push('review_execution contract must contain exactly the canonical top-level fields.');
     }
@@ -789,7 +799,8 @@ export function getReviewRemediationReviewContractViolations(
         ? getRemediationContractClassificationBindingViolations(
             contract,
             authorityDecision,
-            expected.authoritativeClassification
+            expected.authoritativeClassification,
+            { allowSupersededBaseline: acceptsSupersededDeltaBaseline }
         )
         : [];
     violations.push(...classificationBindingViolations);
@@ -877,7 +888,11 @@ export function getReviewRemediationReviewContractViolations(
                     violations.push(`DELTA review_execution ${label} is invalid.`);
                 }
             }
-            if (authorityDecisionViolations.length === 0 && classificationBindingViolations.length === 0) {
+            if (
+                !acceptsSupersededDeltaBaseline
+                && authorityDecisionViolations.length === 0
+                && classificationBindingViolations.length === 0
+            ) {
                 const baselineValidation = validateReviewRemediationBaselineArtifact({
                     artifactPath: contract.base.baseline_artifact_path,
                     expectedArtifactSha256: contract.base.baseline_artifact_sha256,
@@ -950,13 +965,15 @@ export function getReviewRemediationReviewContractViolations(
         if (contract.mode === 'DELTA' && protectedFixNowIds.length > 0) {
             violations.push('DELTA review_execution cannot close protected fix-now findings outside covered targets.');
         }
-        violations.push(...getReviewRemediationFindingReconciliationViolations(
-            reconciliation,
-            contract.mode === 'DELTA' ? authenticatedBaseline : null,
-            contract.mode === 'DELTA' && contract.delta
-                ? normalizeCanonicalPaths(stringList(contract.delta.required_delta_targets))
-                : []
-        ));
+        if (!acceptsSupersededDeltaBaseline) {
+            violations.push(...getReviewRemediationFindingReconciliationViolations(
+                reconciliation,
+                contract.mode === 'DELTA' ? authenticatedBaseline : null,
+                contract.mode === 'DELTA' && contract.delta
+                    ? normalizeCanonicalPaths(stringList(contract.delta.required_delta_targets))
+                    : []
+            ));
+        }
     }
     if (contract.complete_scope_lineage_sha256 !== buildCompleteScopeLineageSha256(contract)) {
         violations.push('review_execution complete-scope lineage hash is invalid.');

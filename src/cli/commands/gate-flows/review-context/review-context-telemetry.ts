@@ -84,9 +84,23 @@ export async function emitCurrentPassReviewContextReuseAccepted(options: {
     ruleContextArtifactPath: string | null;
     currentPassReviewEvidence: {
         reusedExistingReview: boolean;
+        preflightSha256: string | null;
+        reviewContextSha256: string | null;
         receiptPath: string | null;
+        receiptSha256: string | null;
+        reviewArtifactPath: string | null;
+        reviewArtifactSha256: string | null;
+        findingsValidationArtifactPath: string | null;
+        findingsValidationArtifactSha256: string | null;
+        findingsDispositionArtifactPath: string | null;
+        findingsDispositionArtifactSha256: string | null;
         reviewerExecutionMode: string | null;
         reviewerIdentity: string | null;
+        reviewRecordedSequence: number | null;
+        reviewRecordedEventSha256: string | null;
+        remediationMode: string | null;
+        remediationAuthoritativeDecisionSha256: string | null;
+        remediationClassificationSha256: string | null;
     };
     telemetryLockTimeoutMs?: unknown;
     telemetryLockRetryMs?: unknown;
@@ -97,9 +111,32 @@ export async function emitCurrentPassReviewContextReuseAccepted(options: {
     const receiptSha256 = options.currentPassReviewEvidence.receiptPath
         ? gateHelpers.fileSha256(options.currentPassReviewEvidence.receiptPath)
         : null;
-    if (!preflightSha256 || !reviewContextSha256 || !receiptSha256) {
+    const reviewArtifactSha256 = options.currentPassReviewEvidence.reviewArtifactPath
+        ? gateHelpers.fileSha256(options.currentPassReviewEvidence.reviewArtifactPath)
+        : null;
+    const findingsValidationArtifactSha256 = options.currentPassReviewEvidence.findingsValidationArtifactPath
+        ? gateHelpers.fileSha256(options.currentPassReviewEvidence.findingsValidationArtifactPath)
+        : null;
+    const findingsDispositionArtifactSha256 = options.currentPassReviewEvidence.findingsDispositionArtifactPath
+        ? gateHelpers.fileSha256(options.currentPassReviewEvidence.findingsDispositionArtifactPath)
+        : null;
+    if (!preflightSha256 || !reviewContextSha256 || !receiptSha256 || !reviewArtifactSha256) {
         throw new Error(
-            'Current PASS review context reuse telemetry requires readable preflight, context, and receipt hashes.'
+            'Current PASS review context reuse telemetry requires readable preflight, context, receipt, and review artifact hashes.'
+        );
+    }
+    if (
+        preflightSha256 !== options.currentPassReviewEvidence.preflightSha256
+        || reviewContextSha256 !== options.currentPassReviewEvidence.reviewContextSha256
+        || receiptSha256 !== options.currentPassReviewEvidence.receiptSha256
+        || reviewArtifactSha256 !== options.currentPassReviewEvidence.reviewArtifactSha256
+        || findingsValidationArtifactSha256
+            !== options.currentPassReviewEvidence.findingsValidationArtifactSha256
+        || findingsDispositionArtifactSha256
+            !== options.currentPassReviewEvidence.findingsDispositionArtifactSha256
+    ) {
+        throw new Error(
+            'Current PASS review context reuse telemetry requires unchanged authenticated evidence hashes.'
         );
     }
     const telemetryAppendOptions = buildTelemetryAppendOptions(options);
@@ -127,8 +164,27 @@ export async function emitCurrentPassReviewContextReuseAccepted(options: {
                     reused_existing_review: options.currentPassReviewEvidence.reusedExistingReview,
                     receipt_path: gateHelpers.normalizePath(options.currentPassReviewEvidence.receiptPath),
                     receipt_sha256: receiptSha256,
+                    review_artifact_path: gateHelpers.normalizePath(
+                        options.currentPassReviewEvidence.reviewArtifactPath
+                    ),
+                    review_artifact_sha256: reviewArtifactSha256,
+                    findings_validation_artifact_path: gateHelpers.normalizePath(
+                        options.currentPassReviewEvidence.findingsValidationArtifactPath
+                    ),
+                    findings_validation_artifact_sha256: findingsValidationArtifactSha256,
+                    findings_disposition_artifact_path: gateHelpers.normalizePath(
+                        options.currentPassReviewEvidence.findingsDispositionArtifactPath
+                    ),
+                    findings_disposition_artifact_sha256: findingsDispositionArtifactSha256,
                     reviewer_execution_mode: options.currentPassReviewEvidence.reviewerExecutionMode,
-                    reviewer_identity: options.currentPassReviewEvidence.reviewerIdentity
+                    reviewer_identity: options.currentPassReviewEvidence.reviewerIdentity,
+                    review_recorded_sequence: options.currentPassReviewEvidence.reviewRecordedSequence,
+                    review_recorded_event_sha256: options.currentPassReviewEvidence.reviewRecordedEventSha256,
+                    remediation_mode: options.currentPassReviewEvidence.remediationMode,
+                    remediation_authoritative_decision_sha256:
+                        options.currentPassReviewEvidence.remediationAuthoritativeDecisionSha256,
+                    remediation_classification_sha256:
+                        options.currentPassReviewEvidence.remediationClassificationSha256
                 },
                 telemetryAppendOptions
             ),
