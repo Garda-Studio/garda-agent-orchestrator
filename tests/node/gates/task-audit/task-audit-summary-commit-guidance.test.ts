@@ -76,6 +76,116 @@ describe('gates/task-audit-summary', () => {
             ]);
         });
 
+        it('uses a materialized grouped review follow-up title instead of repeating the parent area subject', () => {
+            const now = new Date().toISOString();
+            const fingerprint = 'a'.repeat(64);
+            fs.writeFileSync(path.join(tmpDir, 'TASK.md'), [
+                '# TASK.md',
+                '',
+                '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+                '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+                `| T-AUDIT-1 | 🟩 DONE | P2 | architecture/next-step-transition-table | Address grouped deferred review findings and residual risks | codex | 2026-09-20 | balanced | Child of \`T-028\`. review_follow_up_group_fingerprint=${fingerprint}. |`
+            ].join('\n'), 'utf8');
+            writeEvent(eventsDir, TASK_ID, {
+                timestamp_utc: now,
+                task_id: TASK_ID,
+                event_type: 'COMPLETION_GATE_PASSED',
+                outcome: 'PASS',
+                actor: 'gate',
+                message: 'Completion gate passed.'
+            });
+            writePreflight(reviewsDir, TASK_ID, {
+                changed_files: ['src/gates/next-step/next-step.ts'],
+                metrics: { changed_lines_total: 12 },
+                required_reviews: {}
+            });
+
+            const result = buildTaskAuditSummary({
+                taskId: TASK_ID,
+                repoRoot: tmpDir,
+                eventsRoot: eventsDir,
+                reviewsRoot: reviewsDir
+            });
+
+            assert.equal(
+                result.final_report_contract.commit_command_suggestion,
+                'git commit -m "fix(orchestration): address grouped deferred review findings and residual risks"'
+            );
+        });
+
+        it('uses a materialized per-finding review follow-up title instead of repeating the parent area subject', () => {
+            const now = new Date().toISOString();
+            const fingerprint = 'b'.repeat(64);
+            fs.writeFileSync(path.join(tmpDir, 'TASK.md'), [
+                '# TASK.md',
+                '',
+                '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+                '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+                `| T-AUDIT-1 | 🟩 DONE | P2 | architecture/next-step-transition-table | Address deferred review finding F-001 | codex | 2026-09-20 | balanced | Child of \`T-028\`. review_follow_up_fingerprint=${fingerprint}. |`
+            ].join('\n'), 'utf8');
+            writeEvent(eventsDir, TASK_ID, {
+                timestamp_utc: now,
+                task_id: TASK_ID,
+                event_type: 'COMPLETION_GATE_PASSED',
+                outcome: 'PASS',
+                actor: 'gate',
+                message: 'Completion gate passed.'
+            });
+            writePreflight(reviewsDir, TASK_ID, {
+                changed_files: ['src/gates/next-step/next-step.ts'],
+                metrics: { changed_lines_total: 12 },
+                required_reviews: {}
+            });
+
+            const result = buildTaskAuditSummary({
+                taskId: TASK_ID,
+                repoRoot: tmpDir,
+                eventsRoot: eventsDir,
+                reviewsRoot: reviewsDir
+            });
+
+            assert.equal(
+                result.final_report_contract.commit_command_suggestion,
+                'git commit -m "fix(orchestration): address deferred review finding F 001"'
+            );
+        });
+
+        it('preserves area-first commit guidance for a malformed review follow-up marker', () => {
+            const now = new Date().toISOString();
+            fs.writeFileSync(path.join(tmpDir, 'TASK.md'), [
+                '# TASK.md',
+                '',
+                '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+                '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+                '| T-AUDIT-1 | 🟩 DONE | P2 | architecture/next-step-transition-table | Ordinary task title | codex | 2026-09-20 | balanced | review_follow_up_group_fingerprint=abc123. |'
+            ].join('\n'), 'utf8');
+            writeEvent(eventsDir, TASK_ID, {
+                timestamp_utc: now,
+                task_id: TASK_ID,
+                event_type: 'COMPLETION_GATE_PASSED',
+                outcome: 'PASS',
+                actor: 'gate',
+                message: 'Completion gate passed.'
+            });
+            writePreflight(reviewsDir, TASK_ID, {
+                changed_files: ['src/gates/next-step/next-step.ts'],
+                metrics: { changed_lines_total: 12 },
+                required_reviews: {}
+            });
+
+            const result = buildTaskAuditSummary({
+                taskId: TASK_ID,
+                repoRoot: tmpDir,
+                eventsRoot: eventsDir,
+                reviewsRoot: reviewsDir
+            });
+
+            assert.equal(
+                result.final_report_contract.commit_command_suggestion,
+                'git commit -m "fix(orchestration): next step transition table"'
+            );
+        });
+
         it('initializes git fixtures without inheriting global commit signing or hooks', () => {
             const hooksDir = path.join(tmpDir, 'global-hooks');
             fs.mkdirSync(hooksDir, { recursive: true });

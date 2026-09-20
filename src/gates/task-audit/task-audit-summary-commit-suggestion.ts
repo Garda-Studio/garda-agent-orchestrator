@@ -2,6 +2,9 @@ import { getNodeGateCommandPrefix } from '../../materialization/command-constant
 import { toPosix } from '../shared/helpers';
 import type { TaskQueueMetadata } from './task-audit-summary-collectors';
 
+const MATERIALIZED_REVIEW_FOLLOW_UP_PROVENANCE_PATTERN =
+    /(?:^|\s)review_follow_up_(?:group_)?fingerprint=[a-f0-9]{64}\.(?=$|\s)/u;
+
 function normalizeCommitToken(value: string): string {
     return String(value || '')
         .trim()
@@ -103,13 +106,16 @@ function inferCommitSubject(taskMetadata: TaskQueueMetadata | null, scope: strin
     const rawArea = String(taskMetadata?.area || '').trim();
     const areaSuffix = rawArea.includes('/') ? rawArea.split('/').pop() || '' : rawArea;
     const normalizedAreaSubject = normalizeCommitSubject(areaSuffix);
-    if (!isLowQualityCommitSubject(normalizedAreaSubject, scope)) {
-        return normalizedAreaSubject;
-    }
-
     const normalizedTitleSubject = normalizeCommitSubject(String(taskMetadata?.title || ''));
-    if (!isLowQualityCommitSubject(normalizedTitleSubject, scope)) {
-        return normalizedTitleSubject;
+    const isMaterializedReviewFollowUp = MATERIALIZED_REVIEW_FOLLOW_UP_PROVENANCE_PATTERN
+        .test(String(taskMetadata?.notes || ''));
+    const candidates = isMaterializedReviewFollowUp
+        ? [normalizedTitleSubject, normalizedAreaSubject]
+        : [normalizedAreaSubject, normalizedTitleSubject];
+    for (const candidate of candidates) {
+        if (!isLowQualityCommitSubject(candidate, scope)) {
+            return candidate;
+        }
     }
 
     return '<summary>';
