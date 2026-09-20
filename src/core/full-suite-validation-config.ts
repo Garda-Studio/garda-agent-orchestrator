@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { assertWorkflowTransactionReadable } from './workflow-transaction-state';
 
 import { normalizeBooleanLike, normalizeInteger } from '../schemas/shared';
 import { UNCONFIGURED_FULL_SUITE_VALIDATION_COMMAND } from './constants';
@@ -47,6 +48,7 @@ export function resolveWorkflowConfigPath(repoRoot: string): string {
 
 export function loadFullSuiteValidationConfig(repoRoot: string): FullSuiteValidationConfig {
     const configPath = resolveWorkflowConfigPath(repoRoot);
+    assertWorkflowTransactionReadable(path.dirname(path.dirname(path.dirname(configPath))));
     if (!fs.existsSync(configPath) || !fs.statSync(configPath).isFile()) {
         return { ...DEFAULT_FULL_SUITE_VALIDATION_CONFIG };
     }

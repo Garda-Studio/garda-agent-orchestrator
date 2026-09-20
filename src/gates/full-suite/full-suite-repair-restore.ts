@@ -1,4 +1,5 @@
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
+import { writeTaskQueueFile } from '../../core/task-queue/task-queue-repository';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -176,7 +177,7 @@ function resumeParentTaskAfterWipRestore(
                 };
             }
             lines[row.lineIndex] = updatedLine;
-            fs.writeFileSync(taskPath, formatActiveTaskQueueTable(lines.join(newline)), 'utf8');
+            writeTaskQueueFile(taskPath, formatActiveTaskQueueTable(lines.join(newline)));
             return {
                 outcome: 'updated',
                 task_path: normalizePath(taskPath),
@@ -229,7 +230,7 @@ function rollbackParentTaskStatusAfterWipRestore(
                     return ['failed to roll back parent task status: TASK.md status cell replacement failed.'];
                 }
                 lines[row.lineIndex] = restoredLine;
-                fs.writeFileSync(taskPath, formatActiveTaskQueueTable(lines.join(newline)), 'utf8');
+                writeTaskQueueFile(taskPath, formatActiveTaskQueueTable(lines.join(newline)));
                 return [];
             }
         );

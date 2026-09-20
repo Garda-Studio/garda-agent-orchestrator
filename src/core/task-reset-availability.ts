@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { assertWorkflowTransactionReadable } from './workflow-transaction-state';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
@@ -236,6 +237,7 @@ function buildRemediationCommand(): string {
 
 export function resolveTaskResetAvailability(repoRoot: string): TaskResetAvailability {
     const configPath = joinOrchestratorPath(repoRoot, path.join('live', 'config', 'workflow-config.json'));
+    assertWorkflowTransactionReadable(path.dirname(path.dirname(path.dirname(configPath))));
     const remediationCommand = buildRemediationCommand();
     if (!fileExists(configPath)) {
         return {

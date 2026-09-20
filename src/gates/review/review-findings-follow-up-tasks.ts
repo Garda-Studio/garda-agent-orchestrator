@@ -1,4 +1,5 @@
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
+import { writeTaskQueueFile } from '../../core/task-queue/task-queue-repository';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -1664,7 +1665,7 @@ function materializeTaskQueueRows(params: {
                     lines[parentRow.lineIndex] = updatedParentLine;
                     const nextContent = formatActiveTaskQueueTable(lines.join(newline));
                     if (nextContent !== original) {
-                        fs.writeFileSync(taskPath, nextContent, 'utf8');
+                        writeTaskQueueFile(taskPath, nextContent);
                     }
                     return {
                         outcome: nextContent === original ? 'already_materialized' : 'updated',
@@ -1728,7 +1729,7 @@ function materializeTaskQueueRows(params: {
                 lines[parentRow.lineIndex] = updatedParentLine;
                 lines.splice(findInsertionLineIndex(parentRow, parsed.rows) + 1, 0, groupedTaskLine);
                 const nextContent = formatActiveTaskQueueTable(lines.join(newline));
-                fs.writeFileSync(taskPath, nextContent, 'utf8');
+                writeTaskQueueFile(taskPath, nextContent);
                 return {
                     outcome: 'updated',
                     task_path: normalizePath(taskPath),
@@ -1832,7 +1833,7 @@ function materializeTaskQueueRows(params: {
 
             const nextContent = formatActiveTaskQueueTable(lines.join(newline));
             if (nextContent !== original) {
-                fs.writeFileSync(taskPath, nextContent, 'utf8');
+                writeTaskQueueFile(taskPath, nextContent);
             }
 
             return {
@@ -1856,7 +1857,7 @@ function rollbackTaskQueueRows(taskPath: string, rollbackContent: string | null)
         taskPath,
         (message) => `TASK.md rollback failed after follow-up artifact write failure: ${message}.`,
         () => {
-            fs.writeFileSync(taskPath, rollbackContent, 'utf8');
+            writeTaskQueueFile(taskPath, rollbackContent);
             return null;
         }
     );

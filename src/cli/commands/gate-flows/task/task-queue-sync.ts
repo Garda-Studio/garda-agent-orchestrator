@@ -1,4 +1,5 @@
 import { TASK_QUEUE_FILENAME } from '../../../../core/orchestration-constants';
+import { withTaskQueueTransaction, writeTaskQueueFile } from '../../../../core/task-queue/task-queue-repository';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { formatTaskQueueStatusCell, normalizeTaskQueueStatusCell, readTaskQueueStatusToken } from '../../../../core/active-task-state';
@@ -110,26 +111,7 @@ export function withTaskQueueStatusSyncLock<T>(
     onLockFailure: (message: string) => T,
     operation: () => T
 ): T {
-    const lockPath = `${taskPath}.garda-status-sync.lock`;
-    let lockFd: number | null = null;
-    try {
-        lockFd = fs.openSync(lockPath, 'wx');
-    } catch (error: unknown) {
-        return onLockFailure(`Could not acquire TASK.md status-sync lock: ${getErrorMessage(error)}`);
-    }
-
-    try {
-        return operation();
-    } finally {
-        if (lockFd !== null) {
-            fs.closeSync(lockFd);
-        }
-        try {
-            fs.unlinkSync(lockPath);
-        } catch {
-            // Best-effort cleanup only; a failed unlink keeps later sync attempts fail-closed.
-        }
-    }
+    return withTaskQueueTransaction(taskPath, onLockFailure, operation);
 }
 
 export function syncTaskQueueStatusDetailed(repoRoot: string, taskId: string, nextStatus: string): TaskQueueStatusSyncResult {
@@ -215,7 +197,7 @@ export function syncTaskQueueStatusDetailed(repoRoot: string, taskId: string, ne
             }
 
             try {
-                fs.writeFileSync(taskPath, nextContent, 'utf8');
+                writeTaskQueueFile(taskPath, nextContent);
             } catch (error: unknown) {
                 return {
                     outcome: 'write_failed',

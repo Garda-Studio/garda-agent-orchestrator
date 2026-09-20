@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { assertWorkflowTransactionReadable } from '../../../core/workflow-transaction-state';
 
 import { resolveBundleName } from '../../../core/constants';
 import {
@@ -105,6 +106,7 @@ export function normalizeWorkflowFileConfig(config: WorkflowFileConfigData): Wor
 }
 
 export function readWorkflowConfigState(configPath: string, bundleRoot: string): WorkflowConfigState {
+    assertWorkflowTransactionReadable(bundleRoot);
     if (!fs.existsSync(configPath) || !fs.statSync(configPath).isFile()) {
         const defaultConfig = buildDefaultWorkflowConfig() as WorkflowConfigData;
         return {

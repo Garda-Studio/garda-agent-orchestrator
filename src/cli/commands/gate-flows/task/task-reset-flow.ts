@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { writeFileAtomically } from '../../../../core/filesystem';
+import { writeTaskQueueFile } from '../../../../core/task-queue/task-queue-repository';
 import { readTaskQueueStatusToken } from '../../../../core/active-task-state';
 import {
     formatActiveTaskQueueTable,
@@ -225,7 +226,7 @@ function rollbackPendingReviewFollowUpRows(
             for (const row of [...removableRows].sort((left, right) => right.lineIndex - left.lineIndex)) {
                 lines.splice(row.lineIndex, 1);
             }
-            writeFileAtomically(taskPath, formatActiveTaskQueueTable(lines.join(newline)), { encoding: 'utf8' });
+            writeTaskQueueFile(taskPath, formatActiveTaskQueueTable(lines.join(newline)));
             return [...removedTaskIds].sort((left, right) => left.localeCompare(right));
         }
     );

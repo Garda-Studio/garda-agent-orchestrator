@@ -1,4 +1,5 @@
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
+import { writeTaskQueueFile } from '../../core/task-queue/task-queue-repository';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -182,7 +183,7 @@ function syncTaskQueueStatusToDecomposed(repoRoot: string, taskId: string, optio
             }
 
             try {
-                fs.writeFileSync(taskPath, lines.join(newline), 'utf8');
+                writeTaskQueueFile(taskPath, lines.join(newline));
                 return {
                     outcome: 'updated',
                     task_path: normalizePath(taskPath),
@@ -304,7 +305,7 @@ export function rollbackDecomposedParentStatusSync(
                 return `Could not find TASK.md row(s): ${[...pendingTaskIds].join(', ')}.`;
             }
             try {
-                fs.writeFileSync(taskPath, formatActiveTaskQueueTable(lines.join(newline)), 'utf8');
+                writeTaskQueueFile(taskPath, formatActiveTaskQueueTable(lines.join(newline)));
                 return null;
             } catch (error: unknown) {
                 return error instanceof Error ? error.message : String(error);
@@ -491,7 +492,7 @@ export function syncDecomposedParentsToDone(
                             'TASK.md changed during decomposed parent status sync; rerun next-step so write-time revalidation can use the latest task queue snapshot.'
                     });
                 }
-                fs.writeFileSync(taskPath, formatActiveTaskQueueTable(lines.join(newline)), 'utf8');
+                writeTaskQueueFile(taskPath, formatActiveTaskQueueTable(lines.join(newline)));
                 return buildDecomposedParentBatchStatusSyncResult({
                     taskPath,
                     rootTaskId,

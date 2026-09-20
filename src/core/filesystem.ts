@@ -118,7 +118,7 @@ function replaceFileWithTransientContentionRetry(tempPath: string, filePath: str
     }
 }
 
-function fsyncDirectoryBestEffort(directoryPath: string): void {
+export function fsyncDirectoryBestEffort(directoryPath: string): void {
     if (process.platform === 'win32') {
         return;
     }

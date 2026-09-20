@@ -1,4 +1,5 @@
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
+import { writeTaskQueueFile } from '../../core/task-queue/task-queue-repository';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -454,7 +455,7 @@ function materializeTaskQueueRows(params: {
 
             const nextContent = formatActiveTaskQueueTable(lines.join(newline));
             if (nextContent !== original) {
-                fs.writeFileSync(taskPath, nextContent, 'utf8');
+                writeTaskQueueFile(taskPath, nextContent);
             }
             return {
                 outcome: parentLinked ? 'updated' : 'already_synced',
@@ -529,6 +530,10 @@ function restoreOptionalControlPlaneFile(
         }
         if (!snapshot.content) {
             return [`${label} snapshot content is missing.`];
+        }
+        if (path.basename(snapshot.path) === TASK_QUEUE_FILENAME) {
+            writeTaskQueueFile(snapshot.path, snapshot.content);
+            return [];
         }
         ensureContainedDirectoryPath(repoRoot, path.dirname(snapshot.path), `${label} parent`);
         if (fs.existsSync(snapshot.path)) {

@@ -4,6 +4,7 @@ import { resolveBundleName } from './constants';
 import { cloneJsonValue, isPlainObject } from './config-merge';
 import { pathExists } from './filesystem';
 import { readJsonFile } from './json';
+import { assertWorkflowTransactionReadable } from './workflow-transaction-state';
 
 export const GARDA_NO_DELEGATE_ENV = 'GARDA_NO_DELEGATE';
 
@@ -71,6 +72,7 @@ type WorkflowConfigReadResult =
     | { status: 'invalid'; reason: string };
 
 function readWorkflowConfigObject(configPath: string): WorkflowConfigReadResult {
+    assertWorkflowTransactionReadable(path.dirname(path.dirname(path.dirname(configPath))));
     if (!pathExists(configPath)) {
         return { status: 'missing' };
     }

@@ -153,6 +153,13 @@ export function tryRemoveStaleLock(lockPath: string, staleMs: number, options: L
     if (!inspection.exists || !inspection.staleReason) {
         return { removed: false, inspection };
     }
+    if (options.requireKnownDeadOwner === true && (
+        inspection.metadata.metadata_status !== 'ok' || !inspection.metadata.lock_id
+        || inspection.metadata.pid === null || inspection.ownerHostMatchesCurrent !== true
+        || inspection.ownerAlive !== false
+    )) {
+        return { removed: false, inspection };
+    }
     if (requiresExplicitAgeRecovery(inspection) && !allowForeignHostStaleRecovery(options)) {
         return { removed: false, inspection };
     }

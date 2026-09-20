@@ -14,6 +14,7 @@ export const TRANSIENT_LOCK_ACQUIRE_ERROR_CODES = new Set(['EEXIST', 'ENOENT', '
 export const TRANSIENT_LOCK_RELEASE_ERROR_CODES = new Set(['EPERM', 'EBUSY', 'ENOTEMPTY', 'EACCES']);
 
 export interface LockOptions {
+    requireKnownDeadOwner?: boolean;
     timeoutMs?: unknown;
     retryMs?: unknown;
     staleMs?: unknown;

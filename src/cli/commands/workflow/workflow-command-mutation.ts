@@ -2,7 +2,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
-import { writeProtectedControlPlaneManifest } from '../../../gates/protected-control-plane/protected-control-plane';
+import { buildProtectedControlPlaneManifest, resolveProtectedControlPlaneManifestPath, writeProtectedControlPlaneManifest } from '../../../gates/protected-control-plane/protected-control-plane';
+import type { RecoverableFileTransaction } from '../../../core/recoverable-file-transaction';
+import { writeFileAtomically } from '../../../core/filesystem';
 import { validateWorkflowConfig } from '../../../schemas/config-artifacts';
 import { resolveActiveTaskIds } from '../../../core/task-queue/active-task-state';
 import type {
@@ -11,6 +13,7 @@ import type {
 } from './workflow-command-types';
 
 export interface WorkflowConfigAuditWriteOptions {
+    transaction?: RecoverableFileTransaction;
     mutationSource?: WorkflowConfigMutationSource | null;
     targetRoot?: string | null;
 }
@@ -43,10 +46,12 @@ export function resolveActualChangedFields(
     ));
 }
 
-export function writeWorkflowConfig(configPath: string, config: WorkflowFileConfigData): void {
+export function writeWorkflowConfig(configPath: string, config: WorkflowFileConfigData, transaction?: RecoverableFileTransaction): void {
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     const validated = validateWorkflowConfig(config) as WorkflowFileConfigData;
-    fs.writeFileSync(configPath, JSON.stringify(validated, null, 2) + '\n', 'utf8');
+    const content = JSON.stringify(validated, null, 2) + '\n';
+    if (transaction) transaction.write(configPath, content);
+    else writeFileAtomically(configPath, content);
 }
 
 export function sha256Text(text: string): string {
@@ -115,13 +120,15 @@ export function writeWorkflowConfigAuditRecord(
         after_sha256: sha256Text(afterText)
     };
     const serializedRecord = JSON.stringify(record);
-    fs.appendFileSync(auditPath, serializedRecord + '\n', 'utf8');
+    if (options.transaction) options.transaction.append(auditPath, serializedRecord + '\n');
+    else fs.appendFileSync(auditPath, serializedRecord + '\n', 'utf8');
     if (changedFields.includes('task_reset.enabled')) {
         writeTaskResetEnablementReceipt(
             configPath,
             changedFields,
             record.after_sha256,
-            sha256Text(serializedRecord)
+            sha256Text(serializedRecord),
+            options.transaction
         );
     }
     return auditPath;
@@ -149,7 +156,8 @@ function writeTaskResetEnablementReceipt(
     configPath: string,
     changedFields: string[],
     afterSha256: string,
-    auditRecordSha256: string
+    auditRecordSha256: string,
+    transaction?: RecoverableFileTransaction
 ): void {
     const receiptPath = path.join(path.dirname(configPath), 'task-reset-enablement-receipt.json');
     fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
@@ -166,9 +174,16 @@ function writeTaskResetEnablementReceipt(
         receipt_sha256: ''
     };
     receipt.receipt_sha256 = sha256Text(JSON.stringify(buildTaskResetReceiptHashPayload(receipt)));
-    fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + '\n', 'utf8');
+    const content = JSON.stringify(receipt, null, 2) + '\n';
+    if (transaction) transaction.write(receiptPath, content);
+    else writeFileAtomically(receiptPath, content);
 }
 
-export function refreshWorkflowProtectedManifest(targetRoot: string): string {
+export function refreshWorkflowProtectedManifest(targetRoot: string, transaction?: RecoverableFileTransaction): string {
+    if (transaction) {
+        const manifestPath = resolveProtectedControlPlaneManifestPath(targetRoot);
+        transaction.write(manifestPath, JSON.stringify(buildProtectedControlPlaneManifest(targetRoot), null, 2));
+        return manifestPath;
+    }
     return writeProtectedControlPlaneManifest(targetRoot);
 }

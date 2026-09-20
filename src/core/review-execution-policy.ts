@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import { resolveBundleName } from './constants';
 import { pathExists } from './filesystem';
 import { readJsonFile } from './json';
+import { assertWorkflowTransactionReadable } from './workflow-transaction-state';
 import { isPlainRecord } from './records';
 import type { CompiledReviewDependencyGraph } from './review-dependency-graph';
 
@@ -430,6 +431,7 @@ export function resolveReviewExecutionPolicyModeFromPreflight(
 
 export function loadReviewExecutionPolicyConfig(repoRoot: string): ResolvedReviewExecutionPolicyConfig {
     const configPath = path.join(repoRoot, resolveBundleName(), 'live', 'config', 'workflow-config.json');
+    assertWorkflowTransactionReadable(path.dirname(path.dirname(path.dirname(configPath))));
     if (!pathExists(configPath)) {
         return {
             mode: LEGACY_REVIEW_EXECUTION_POLICY_MODE,

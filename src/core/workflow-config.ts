@@ -5,6 +5,7 @@ import {
 } from './constants';
 import { pathExists } from './filesystem';
 import { readJsonFile, writeJsonFile } from './json';
+import { assertWorkflowTransactionReadable } from './workflow-transaction-state';
 import { cloneJsonValue, isPlainObject, mergeConfig } from './config-merge';
 import {
     buildDefaultReviewExecutionPolicyConfig,
@@ -361,6 +362,7 @@ export function shouldEmitOptionalQualityChecksEnabledNotice(options: {
 }
 
 export function readOrchestratorWorkPolicyModeForBundle(bundleRoot: string): OrchestratorWorkPolicyMode {
+    assertWorkflowTransactionReadable(bundleRoot);
     const workflowConfigPath = getWorkflowConfigPath(bundleRoot);
     if (!pathExists(workflowConfigPath)) {
         return DEFAULT_WORKFLOW_CONFIG.orchestrator_work_policy.mode;
@@ -712,6 +714,7 @@ export function mergeWorkflowConfigWithTemplate(
 }
 
 export function readWorkflowConfigForMerge(workflowConfigPath: string): WorkflowConfigReadResult {
+    assertWorkflowTransactionReadable(path.dirname(path.dirname(path.dirname(workflowConfigPath))));
     if (!pathExists(workflowConfigPath)) {
         return { status: 'missing', config: null };
     }

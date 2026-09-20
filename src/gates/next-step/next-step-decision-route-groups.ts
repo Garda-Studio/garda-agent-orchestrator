@@ -8,6 +8,7 @@ import {
     isTaskQueueSplitRequiredStatus
 } from '../../core/active-task-state';
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
+import { withTaskQueueTransaction } from '../../core/task-queue/task-queue-repository';
 import {
     describeDecomposedTaskProvenance,
     extractExplicitLinkedChildTaskIds,
@@ -404,11 +405,13 @@ function transitionSplitRequiredParentAfterWipSuspension(options: {
     taskId: string;
     latchEvidence: SplitRequiredLatchEvidence;
 }): { outcome: string; error_message: string | null } {
-    const statusLockPath = `${path.join(options.repoRoot, TASK_QUEUE_FILENAME)}.garda-status-sync.lock`;
-    if (fs.existsSync(statusLockPath)) {
+    const lockFailure = withTaskQueueTransaction<string | null>(
+        path.join(options.repoRoot, TASK_QUEUE_FILENAME), (message) => message, () => null
+    );
+    if (lockFailure) {
         return {
             outcome: 'write_failed',
-            error_message: `Could not acquire TASK.md status-sync lock: lock already exists at ${statusLockPath}`
+            error_message: lockFailure
         };
     }
     const wipSuspension = suspendSplitRequiredWipBeforeDecomposition(options);

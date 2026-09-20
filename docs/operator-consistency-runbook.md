@@ -46,6 +46,53 @@ Use `doctor` for workspace-wide health, `status why-blocked` for task-facing blo
 
 ## Recovery Playbooks
 
+### Task queue and workflow-setting transactions
+
+All runtime TASK.md mutations use the task-queue repository, including status
+changes, follow-up rows, reset, repair rollback, UI closure-policy edits and task
+template installation. The existing `TASK.md.garda-status-sync.lock` name now
+holds a directory with owner identity, PID, host and lease freshness metadata.
+Writers acquire the lock before reading, compare the current bytes before
+publication, and publish through a temporary file, file fsync and atomic rename.
+Live owners and foreign-host locks are not reclaimed on age alone. A subsequent
+writer can recover a confirmed dead local owner. Legacy lock files fail closed;
+verify the owner is gone before operator recovery instead of deleting a live lock.
+Reentrant synchronous writes fail immediately rather than deadlocking the owner.
+
+`workflow set` (including guarded UI settings) holds one workspace-local lock
+through read, validation, config/policy publication, audit, task-reset receipt and
+protected-manifest refresh. Its write-ahead journal is
+`runtime/workflow-config-transaction.json`; its lock is
+`runtime/workflow-config-transaction.lock`. A failed operation restores the prior
+generation. If the process is killed, the next `workflow set` first restores an
+unfinished generation, or finishes journal cleanup for an already committed one.
+Retry the intended confirmed command, or request an existing non-task-reset value
+unchanged for recovery only. A no-op does not require new setting authorization;
+any actual setting change retains the usual operator-confirmation requirements.
+
+Do not delete the journal to bypass pending recovery. Recovery validates its
+schema, participant allowlist, root, preimage hashes and current file hashes
+before restoring anything. A foreign edit, corrupt journal, linked path or unknown
+state stops recovery without overwriting the conflicting files. Preserve the
+journal and participants for operator inspection. These are local recovery
+records, not proof against a malicious actor who can rewrite the entire local
+control plane. Critical configuration readers and workflow commands report pending
+transactions rather than treating partially published settings as ready. Read-only
+commands do not silently repair an interrupted write.
+
+The transaction supports at most 16 MiB per participant (including the audit file)
+and 64 MiB for the recovery journal. Exceeding a limit fails closed, without
+silently truncating audit history. TASK.md repository reads also have a 16 MiB
+bound. Keep authoritative audit history when addressing a size limit; do not
+truncate it merely to unblock a write. Filesystem parent-directory fsync remains
+best-effort and is not available through this helper on Windows; atomic rename
+and file fsync do not promise hardware-independent power-loss durability.
+
+These transactions do not make several independent files atomically visible to
+arbitrary external filesystem readers. Do not run installation/update or manually
+edit protected files concurrently with workflow setting mutations. Those writers
+retain their separate lifecycle coordination.
+
 ### 1. Stale task-event or review-artifact locks
 
 Symptoms:

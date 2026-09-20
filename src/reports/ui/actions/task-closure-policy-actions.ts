@@ -14,6 +14,7 @@ import {
     replaceTaskMdTableCell
 } from '../../../core/task-md-table';
 import { withTaskQueueStatusSyncLock } from '../../../cli/commands/gate-flows/task/task-queue-sync';
+import { writeTaskQueueFile } from '../../../core/task-queue/task-queue-repository';
 import { appendUiActionAudit } from './action-common';
 import type { UiActionAuditRecord, UiActionMode } from './types';
 
@@ -272,7 +273,7 @@ function persistPolicy(
             }
             const lines = snapshot.content.split(/\r?\n/u);
             lines[snapshot.taskLineIndex] = nextLine;
-            fs.writeFileSync(snapshot.taskPath, lines.join(snapshot.newline), 'utf8');
+            writeTaskQueueFile(snapshot.taskPath, lines.join(snapshot.newline));
             try {
                 const persistedSnapshot = readCanonicalTaskSnapshot(repoRoot, taskId);
                 if (
@@ -299,7 +300,7 @@ function persistPolicy(
                 };
             } catch (error: unknown) {
                 try {
-                    fs.writeFileSync(snapshot.taskPath, snapshot.content, 'utf8');
+                    writeTaskQueueFile(snapshot.taskPath, snapshot.content);
                     if (fs.readFileSync(snapshot.taskPath, 'utf8') !== snapshot.content) {
                         throw new Error('TASK.md rollback failed read-after-write validation.');
                     }

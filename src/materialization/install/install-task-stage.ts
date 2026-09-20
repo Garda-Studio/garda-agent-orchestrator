@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
+import { withTaskQueueTransaction, writeTaskQueueFile } from '../../core/task-queue/task-queue-repository';
 import { ensureDirectory, pathExists, readTextFile } from '../../core/filesystem';
 import {
     buildTaskContentWithExistingQueue,
@@ -56,6 +57,26 @@ function buildTaskContentPreservingExplicitEmptyQueue(
 }
 
 export function runInstallTaskStage(options: RunInstallTaskStageOptions): void {
+    if (options.dryRun) return runInstallTaskStageLocked(options);
+    ensureDirectory(options.targetRoot);
+    const taskPath = path.join(options.targetRoot, TASK_QUEUE_FILENAME);
+    return withTaskQueueTransaction(taskPath, (message) => { throw new Error(message); }, () => (
+        runInstallTaskStageLocked({
+            ...options,
+            filesystem: {
+                ...options.filesystem,
+                writeTextFile: (filePath, content) => {
+                    if (path.resolve(filePath) !== path.resolve(taskPath)) {
+                        throw new Error('Task installation attempted to write a non-queue path.');
+                    }
+                    writeTaskQueueFile(filePath, content);
+                }
+            }
+        })
+    ));
+}
+
+function runInstallTaskStageLocked(options: RunInstallTaskStageOptions): void {
     const {
         sourceRoot,
         targetRoot,

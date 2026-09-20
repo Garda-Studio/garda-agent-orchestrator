@@ -1,5 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { withWorkflowConfigTransaction } from './workflow-command-transaction';
+import type { RecoverableFileTransaction } from '../../../core/recoverable-file-transaction';
 
 import { isRecognizedBundleName } from '../../../core/constants';
 import {
@@ -278,11 +280,6 @@ function buildNextOptionalSkillSelectionPolicyConfig(
     return validateManagedConfigByName('optional-skill-selection-policy', baseConfig) as Record<string, unknown>;
 }
 
-function writeOptionalSkillSelectionPolicyConfig(policyPath: string, config: Record<string, unknown>): void {
-    fs.mkdirSync(path.dirname(policyPath), { recursive: true });
-    fs.writeFileSync(policyPath, serializeManagedConfig(config), 'utf8');
-}
-
 function applyLegacyScopeBudgetLimit(
     guard: ReturnType<typeof normalizeScopeBudgetGuardConfig>,
     metric: {
@@ -307,6 +304,16 @@ function applyLegacyScopeBudgetLimit(
 }
 
 export function handleSet(options: ParsedOptionsRecord): WorkflowSetResult {
+    const roots = resolveWorkflowRoots(options);
+    const result = withWorkflowConfigTransaction(roots, resolveProtectedManifestRefreshRoot(roots), (transaction) => (
+        handleSetLocked(options, transaction)
+    ));
+    console.log(formatWorkflowShowOutput(result, options.json === true));
+    if (options.json !== true) console.log(formatWorkflowSetSummaryOutput(result));
+    return result;
+}
+
+function handleSetLocked(options: ParsedOptionsRecord, transaction: RecoverableFileTransaction): WorkflowSetResult {
     const roots = resolveWorkflowRoots(options);
     const state = readWorkflowConfigState(roots.configPath, roots.bundleRoot);
     const preserveLegacyMissingReviewExecutionPolicy = !state.exists
@@ -827,6 +834,7 @@ export function handleSet(options: ParsedOptionsRecord): WorkflowSetResult {
     let auditPath: string | null = null;
     let protectedManifestPath: string | null = null;
     const auditWriteOptions = {
+        transaction,
         mutationSource: normalizeWorkflowConfigMutationSource(options.mutationSource),
         targetRoot: roots.targetRoot
     };
@@ -838,7 +846,7 @@ export function handleSet(options: ParsedOptionsRecord): WorkflowSetResult {
             requireWorkflowSetOperatorConfirmation(options);
         }
         if (workflowConfigChanged) {
-            writeWorkflowConfig(roots.configPath, nextValidated);
+            writeWorkflowConfig(roots.configPath, nextValidated, transaction);
             auditPath = writeWorkflowConfigAuditRecord(
                 roots.bundleRoot,
                 roots.configPath,
@@ -849,7 +857,7 @@ export function handleSet(options: ParsedOptionsRecord): WorkflowSetResult {
             );
         }
         if (optionalSkillSelectionPolicyChanged && optionalSkillSelectionPolicyNextConfig && optionalSkillSelectionPolicyNextSerialized) {
-            writeOptionalSkillSelectionPolicyConfig(roots.optionalSkillSelectionPolicyPath, optionalSkillSelectionPolicyNextConfig);
+            transaction.write(roots.optionalSkillSelectionPolicyPath, serializeManagedConfig(optionalSkillSelectionPolicyNextConfig));
             auditPath = writeWorkflowConfigAuditRecord(
                 roots.bundleRoot,
                 roots.optionalSkillSelectionPolicyPath,
@@ -859,7 +867,7 @@ export function handleSet(options: ParsedOptionsRecord): WorkflowSetResult {
                 auditWriteOptions
             );
         }
-        protectedManifestPath = refreshWorkflowProtectedManifest(resolveProtectedManifestRefreshRoot(roots));
+        protectedManifestPath = refreshWorkflowProtectedManifest(resolveProtectedManifestRefreshRoot(roots), transaction);
     } else if (taskResetAuditRepairRequested) {
         requireWorkflowSetOperatorConfirmation(options);
         const currentFileText = fs.readFileSync(roots.configPath, 'utf8');
@@ -871,7 +879,7 @@ export function handleSet(options: ParsedOptionsRecord): WorkflowSetResult {
             currentFileText,
             auditWriteOptions
         );
-        protectedManifestPath = refreshWorkflowProtectedManifest(resolveProtectedManifestRefreshRoot(roots));
+        protectedManifestPath = refreshWorkflowProtectedManifest(resolveProtectedManifestRefreshRoot(roots), transaction);
     }
 
     const result: WorkflowSetResult = {
@@ -890,9 +898,5 @@ export function handleSet(options: ParsedOptionsRecord): WorkflowSetResult {
         audit_path: auditPath ? normalizeOutputPath(auditPath) : null,
         protected_manifest_path: protectedManifestPath ? normalizeOutputPath(protectedManifestPath) : null
     };
-    console.log(formatWorkflowShowOutput(result, options.json === true));
-    if (options.json !== true) {
-        console.log(formatWorkflowSetSummaryOutput(result));
-    }
     return result;
 }

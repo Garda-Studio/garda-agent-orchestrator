@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { assertWorkflowTransactionReadable } from '../../core/workflow-transaction-state';
 import * as path from 'node:path';
 
 import {
@@ -1224,6 +1225,7 @@ function parseOptionalNumberField(value: unknown): number | null {
 
 function readWorkflowConfigRecordForNextStep(repoRoot: string): Record<string, unknown> | null {
     const workflowConfigPath = resolveWorkflowConfigPath(repoRoot);
+    assertWorkflowTransactionReadable(path.dirname(path.dirname(path.dirname(workflowConfigPath))));
     if (!fileExists(workflowConfigPath)) {
         return null;
     }
