@@ -183,7 +183,7 @@ describe('gates/next-step', () => {
 
     });
 
-    it('parses the closeout task timeline once per next-step resolution', () => {
+    it('reuses the outer task timeline snapshot for closeout readiness', () => {
         const repoRoot = makeTempRepo();
         writeProjectMemoryWorkflowConfig(repoRoot, { enabled: true, mode: 'check' });
         seedProjectMemory(repoRoot);
@@ -203,15 +203,29 @@ describe('gates/next-step', () => {
             `${TASK_ID}.jsonl`
         );
         const mutableFs = nodeRequire('node:fs') as typeof fs;
+        const originalOpenSync = mutableFs.openSync;
         const originalReadFileSync = mutableFs.readFileSync;
-        let closeoutTimelineReads = 0;
+        let closeoutTimelinePhysicalReads = 0;
+        mutableFs.openSync = ((
+            file: fs.PathLike,
+            flags: fs.OpenMode,
+            mode?: fs.Mode
+        ) => {
+            if (
+                path.resolve(String(file)) === timelinePath
+                && String(new Error().stack || '').includes('next-step-doc-closeout-readiness')
+            ) {
+                closeoutTimelinePhysicalReads += 1;
+            }
+            return originalOpenSync(file, flags, mode);
+        }) as typeof fs.openSync;
         mutableFs.readFileSync = ((file: Parameters<typeof fs.readFileSync>[0], ...args: unknown[]) => {
             if (
                 typeof file === 'string'
                 && path.resolve(file) === timelinePath
                 && String(new Error().stack || '').includes('next-step-doc-closeout-readiness')
             ) {
-                closeoutTimelineReads += 1;
+                closeoutTimelinePhysicalReads += 1;
             }
             return originalReadFileSync(file as never, ...(args as never[]));
         }) as typeof fs.readFileSync;
@@ -220,10 +234,11 @@ describe('gates/next-step', () => {
 
             assert.equal(result.next_gate, 'completion-gate', result.reason);
         } finally {
+            mutableFs.openSync = originalOpenSync;
             mutableFs.readFileSync = originalReadFileSync;
         }
 
-        assert.equal(closeoutTimelineReads, 1);
+        assert.equal(closeoutTimelinePhysicalReads, 0);
     });
 
     it('recovers a stale project-memory order-only completion failure without refreshing unchanged preflight or review evidence', () => {
