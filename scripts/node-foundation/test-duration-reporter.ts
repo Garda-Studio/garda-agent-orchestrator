@@ -7,6 +7,8 @@ interface TestEvent {
 }
 
 async function* durationReporter(source: AsyncIterable<TestEvent>): AsyncGenerator<string> {
+    // Node reporters are async generators; this reporter is intentionally a sink and emits no output.
+    yield* [] as string[];
     const destination = process.env[SHARD_DURATION_OUTPUT_ENV];
     let writable = Boolean(destination);
     for await (const event of source) {
