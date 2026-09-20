@@ -67,6 +67,10 @@ export interface CurrentPassReviewEvidenceResult {
     reviewerExecutionMode: string | null;
     reviewerIdentity: string | null;
     reusedExistingReview: boolean;
+    reviewRecordedSequence: number | null;
+    remediationMode: string | null;
+    remediationAuthoritativeDecisionSha256: string | null;
+    remediationClassificationSha256: string | null;
 }
 
 export interface CompileEvidenceSummary {
@@ -271,7 +275,11 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
         receiptPath: null,
         reviewerExecutionMode: null,
         reviewerIdentity: null,
-        reusedExistingReview: false
+        reusedExistingReview: false,
+        reviewRecordedSequence: null,
+        remediationMode: null,
+        remediationAuthoritativeDecisionSha256: null,
+        remediationClassificationSha256: null
     });
     const currentPreflightHash = normalizeOptionalSha256(gateHelpers.fileSha256(options.preflightPath));
     const normalizedPreflightPath = gateHelpers.normalizePath(options.preflightPath);
@@ -310,6 +318,9 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
     const reviewContextSha256 = normalizeOptionalSha256(gateHelpers.fileSha256(options.reviewContextPath));
     const reviewTreeStateSha256 = getReviewTreeStateSha256FromContext(reviewContext);
     const ruleContextArtifactPath = getRuleContextArtifactPathFromContext(reviewContext);
+    const reviewExecution = isRecord(reviewContext.review_execution)
+        ? reviewContext.review_execution
+        : null;
     if (
         String(reviewContext.task_id || '').trim() !== options.taskId
         || normalizeLowerText(reviewContext.review_type) !== normalizeLowerText(options.reviewType)
@@ -473,6 +484,7 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
         return reject('review receipt is missing a trusted reviewer execution mode or identity');
     }
     const reviewerProvenance = normalizeReviewReceiptReviewerProvenance(receipt.reviewer_provenance);
+    let reviewRecordedSequence: number | null = null;
     if (receipt.reused_existing_review === true) {
         const strictReuseValidation = validateStrictReusedReviewEvidence({
             repoRoot: options.repoRoot,
@@ -574,6 +586,7 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
         ) {
             return reject('trusted current-cycle REVIEW_RECORDED telemetry must occur after reviewer invocation attestation');
         }
+        reviewRecordedSequence = currentReviewRecorded.sequence;
     }
 
     return {
@@ -585,6 +598,12 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
         receiptPath: gateHelpers.normalizePath(receiptPath),
         reviewerExecutionMode,
         reviewerIdentity,
-        reusedExistingReview: receipt.reused_existing_review === true
+        reusedExistingReview: receipt.reused_existing_review === true,
+        reviewRecordedSequence,
+        remediationMode: String(reviewExecution?.mode || '').trim().toUpperCase() || null,
+        remediationAuthoritativeDecisionSha256: normalizeOptionalSha256(
+            reviewExecution?.authoritative_decision_sha256
+        ),
+        remediationClassificationSha256: normalizeOptionalSha256(reviewExecution?.classification_sha256)
     };
 }

@@ -58,29 +58,29 @@ function taskEventSequence(event: Record<string, unknown>): number {
         : 0;
 }
 
-function hasFreshPassingReviewAfterBoundary(options: {
-    events: Record<string, unknown>[];
+export interface AuthenticatedFreshPassReviewEvidence {
+    reviewRecordedSequence: number;
+    remediationMode: string | null;
+    authoritativeDecisionSha256: string | null;
+    classificationSha256: string | null;
+}
+
+function hasAuthenticatedFreshPassAfterBoundary(options: {
+    evidence: AuthenticatedFreshPassReviewEvidence | null;
     boundarySequence: number;
-    taskId: string;
-    reviewType: string;
-    preflightSha256: string;
+    authoritativeDecision?: AuthoritativeReviewRemediationDecision | null;
+    laneMode?: unknown;
 }): boolean {
-    return options.events.some((event) => {
-        const details = isPlainRecord(event.details) ? event.details : {};
-        const disposition = isPlainRecord(details.review_findings_disposition)
-            ? details.review_findings_disposition
-            : {};
-        return taskEventSequence(event) > options.boundarySequence
-            && String(event.event_type || '').trim() === 'REVIEW_RECORDED'
-            && String(details.task_id || '').trim() === options.taskId
-            && String(details.review_type || '').trim().toLowerCase() === options.reviewType
-            && String(details.preflight_sha256 || '').trim().toLowerCase() === options.preflightSha256
-            && details.reused_existing_review === false
-            && (
-                String(disposition.verdict || '').trim() === 'pass_no_findings'
-                || String(disposition.verdict || '').trim() === 'pass_with_follow_up_or_ignored_findings'
-            );
-    });
+    const evidence = options.evidence;
+    if (!evidence || evidence.reviewRecordedSequence <= options.boundarySequence) {
+        return false;
+    }
+    if (!options.authoritativeDecision) {
+        return true;
+    }
+    return evidence.remediationMode === String(options.laneMode || '').trim().toUpperCase()
+        && evidence.authoritativeDecisionSha256 === options.authoritativeDecision.decision_sha256
+        && evidence.classificationSha256 === options.authoritativeDecision.classification_sha256;
 }
 
 export interface PersistedRemediationReusePolicy {
@@ -181,6 +181,7 @@ export function resolvePersistedRemediationReusePolicy(options: {
     preflightPath: string;
     timelinePath: string;
     preflightPayload?: Record<string, unknown> | null;
+    authenticatedFreshPassReviewEvidence?: AuthenticatedFreshPassReviewEvidence | null;
 }): PersistedRemediationReusePolicy {
     const resolvedPreflightSha256 = fileSha256(options.preflightPath);
     if (!resolvedPreflightSha256) {
@@ -256,6 +257,34 @@ export function resolvePersistedRemediationReusePolicy(options: {
                         failClosed: true
                     });
                 }
+            }
+            const laneDecision = Array.isArray(authoritativeDecision.lane_decisions)
+                ? authoritativeDecision.lane_decisions.find((entry) => (
+                    isPlainRecord(entry)
+                    && String(entry.review_type || '').trim().toLowerCase() === options.reviewType
+                ))
+                : undefined;
+            if (!isPlainRecord(laneDecision)) {
+                return emptyPersistedRemediationReusePolicy({
+                    blockedReason:
+                        `review reuse blocked because the persisted authoritative remediation decision `
+                        + `does not contain required lane '${options.reviewType}'`,
+                    failClosed: true
+                });
+            }
+            if (
+                laneDecision.reuse_eligible !== true
+                && hasAuthenticatedFreshPassAfterBoundary({
+                    evidence: options.authenticatedFreshPassReviewEvidence || null,
+                    boundarySequence: taskEventSequence(event),
+                    authoritativeDecision:
+                        authoritativeDecision as unknown as AuthoritativeReviewRemediationDecision,
+                    laneMode: laneDecision.mode
+                })
+            ) {
+                return emptyPersistedRemediationReusePolicy();
+            }
+            if (authoritativeClassification !== undefined) {
                 const typedDecision = authoritativeDecision as unknown as AuthoritativeReviewRemediationDecision;
                 const typedClassification = authoritativeClassification as unknown as ReviewRemediationDecisionClassification;
                 const authorityLane = typedDecision.lane_decisions.find((entry) => (
@@ -287,30 +316,7 @@ export function resolvePersistedRemediationReusePolicy(options: {
                     });
                 }
             }
-            const laneDecision = Array.isArray(authoritativeDecision.lane_decisions)
-                ? authoritativeDecision.lane_decisions.find((entry) => (
-                    isPlainRecord(entry)
-                    && String(entry.review_type || '').trim().toLowerCase() === options.reviewType
-                ))
-                : undefined;
-            if (!isPlainRecord(laneDecision)) {
-                return emptyPersistedRemediationReusePolicy({
-                    blockedReason:
-                        `review reuse blocked because the persisted authoritative remediation decision `
-                        + `does not contain required lane '${options.reviewType}'`,
-                    failClosed: true
-                });
-            }
             if (laneDecision.reuse_eligible !== true) {
-                if (hasFreshPassingReviewAfterBoundary({
-                    events: options.events,
-                    boundarySequence: taskEventSequence(event),
-                    taskId: options.taskId,
-                    reviewType: options.reviewType,
-                    preflightSha256
-                })) {
-                    return emptyPersistedRemediationReusePolicy();
-                }
                 let execution = {
                     contract: null as ReviewRemediationReviewContract | null,
                     validationAuthority: null as ReviewRemediationReviewContractValidationAuthority | null
@@ -396,12 +402,9 @@ export function resolvePersistedRemediationReusePolicy(options: {
                 : []
         );
         if (invalidatedReviewTypes.has(options.reviewType)) {
-            if (hasFreshPassingReviewAfterBoundary({
-                events: options.events,
+            if (hasAuthenticatedFreshPassAfterBoundary({
+                evidence: options.authenticatedFreshPassReviewEvidence || null,
                 boundarySequence: taskEventSequence(event),
-                taskId: options.taskId,
-                reviewType: options.reviewType,
-                preflightSha256
             })) {
                     return emptyPersistedRemediationReusePolicy();
                 }
@@ -489,6 +492,7 @@ export async function runBuildReviewContextCommand(
     const explicitLaneDecision = reviewExecutionValidationAuthority?.authoritativeDecision?.lane_decisions
         .find((entry) => entry.review_type === reviewType) || null;
     let persistedRemediationReusePolicy = emptyPersistedRemediationReusePolicy();
+    let currentPassReviewEvidence = null as ReturnType<typeof tryAcceptCurrentPassReviewEvidence> | null;
     if (taskId) {
         assertReviewLifecycleGuardFromEntries(
             String(timelinePath),
@@ -497,16 +501,6 @@ export async function runBuildReviewContextCommand(
             'build-review-context',
             'review_phase'
         );
-        if (timelineSummary) {
-            persistedRemediationReusePolicy = resolvePersistedRemediationReusePolicy({
-                events: timelineSummary.events as unknown as Record<string, unknown>[],
-                taskId,
-                reviewType,
-                preflightPath,
-                timelinePath: String(timelinePath),
-                preflightPayload
-            });
-        }
         assertRequiredUpstreamReviewDependencies({
             taskId,
             preflightPath,
@@ -516,6 +510,37 @@ export async function runBuildReviewContextCommand(
             taskModePath,
             runtimeReviewerIdentity
         });
+        currentPassReviewEvidence = tryAcceptCurrentPassReviewEvidence({
+            repoRoot,
+            taskId,
+            reviewType,
+            preflightPath,
+            preflightPayload,
+            reviewContextPath: outputPath,
+            timelineEventsSummary: timelineSummary
+        });
+        if (timelineSummary) {
+            const authenticatedFreshPassReviewEvidence = currentPassReviewEvidence.accepted
+                && currentPassReviewEvidence.reusedExistingReview === false
+                && currentPassReviewEvidence.reviewRecordedSequence !== null
+                ? {
+                    reviewRecordedSequence: currentPassReviewEvidence.reviewRecordedSequence,
+                    remediationMode: currentPassReviewEvidence.remediationMode,
+                    authoritativeDecisionSha256:
+                        currentPassReviewEvidence.remediationAuthoritativeDecisionSha256,
+                    classificationSha256: currentPassReviewEvidence.remediationClassificationSha256
+                }
+                : null;
+            persistedRemediationReusePolicy = resolvePersistedRemediationReusePolicy({
+                events: timelineSummary.events as unknown as Record<string, unknown>[],
+                taskId,
+                reviewType,
+                preflightPath,
+                timelinePath: String(timelinePath),
+                preflightPayload,
+                authenticatedFreshPassReviewEvidence
+            });
+        }
     }
     const effectiveReviewExecutionContract = reviewExecutionContract
         || persistedRemediationReusePolicy.reviewExecutionContract;
@@ -546,17 +571,6 @@ export async function runBuildReviewContextCommand(
             previousReviewContextReuseSha256 = null;
         }
     }
-    const currentPassReviewEvidence = taskId
-        ? tryAcceptCurrentPassReviewEvidence({
-            repoRoot,
-            taskId,
-            reviewType,
-            preflightPath,
-            preflightPayload,
-            reviewContextPath: outputPath,
-            timelineEventsSummary: timelineSummary
-        })
-        : null;
     const currentPassReviewEvidenceAccepted = shouldAcceptCurrentPassReviewEvidence(
         currentPassReviewEvidence,
         effectiveReviewReuseBlockedReason

@@ -1158,9 +1158,9 @@ describe('cli/commands/gates – review-cycle remediation reuse basics', {
             preflightPath,
             outputPath: path.join(getReviewsRoot(repoRoot), `${taskId}-code-review-context.json`)
         });
-        assert.doesNotMatch(
+        assert.match(
             freshFollowUpPassResult.outputLines.join('\n'),
-            /review reuse blocked by persisted remediation classification/
+            /invalidated 'code'.*FULL review is required/su
         );
         writeReceiptBackedReviewArtifact(repoRoot, taskId, 'code', 'REVIEW PASSED');
 

@@ -20,6 +20,7 @@ import {
     type AuthoritativeReviewRemediationDecision,
     type BuildReviewRemediationRecoveryRouteOptions,
     type ResolveAuthoritativeReviewRemediationDecisionOptions,
+    type ReviewRemediationDecisionClassification,
     type ReviewRemediationCompletedReceipt,
     type ReviewRemediationModePolicyValidationInputs,
     type ReviewRemediationReusableReceipt
@@ -75,7 +76,8 @@ function makePersistedReusePolicyFixture(): PersistedReusePolicyFixture {
 
 function appendRestartDecision(
     fixture: PersistedReusePolicyFixture,
-    decision: AuthoritativeReviewRemediationDecision
+    decision: AuthoritativeReviewRemediationDecision,
+    classification?: ReviewRemediationDecisionClassification
 ): void {
     appendTaskEvent(
         fixture.bundleRoot,
@@ -88,7 +90,10 @@ function appendRestartDecision(
             event_type: 'REVIEW_CYCLE_RESTARTED',
             status: 'PASSED',
             preflight_sha256: fixture.preflightSha256,
-            authoritative_review_decision: decision
+            authoritative_review_decision: decision,
+            ...(classification === undefined
+                ? {}
+                : { authoritative_review_classification: classification })
         }
     );
 }
@@ -124,15 +129,32 @@ function readPersistedPolicyEvents(fixture: PersistedReusePolicyFixture): Record
 
 function resolvePersistedPolicy(
     fixture: PersistedReusePolicyFixture,
-    reviewType: string
+    reviewType: string,
+    authenticatedFreshPassReviewEvidence?: {
+        reviewRecordedSequence: number;
+        remediationMode: string | null;
+        authoritativeDecisionSha256: string | null;
+        classificationSha256: string | null;
+    }
 ): { blockedReason: string; preservedScopeMismatchReason: string } {
     return resolvePersistedRemediationReusePolicy({
         events: readPersistedPolicyEvents(fixture),
         taskId: TASK_ID,
         reviewType,
         preflightPath: fixture.preflightPath,
-        timelinePath: fixture.timelinePath
+        timelinePath: fixture.timelinePath,
+        authenticatedFreshPassReviewEvidence
     });
+}
+
+function latestReviewRecordedSequence(fixture: PersistedReusePolicyFixture): number {
+    const events = readPersistedPolicyEvents(fixture);
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+        if (events[index].event_type === 'REVIEW_RECORDED') {
+            return Number((events[index].integrity as Record<string, unknown> | undefined)?.task_sequence) || 0;
+        }
+    }
+    return 0;
 }
 
 function makeSnapshot(): Record<string, unknown> {
@@ -528,7 +550,7 @@ describe('review remediation selective recovery routing', () => {
         }
     });
 
-    it('rejects a tampered persisted authoritative decision', () => {
+    it('rejects a forged or tampered persisted authoritative decision', () => {
         const fixture = makePersistedReusePolicyFixture();
         try {
             const profilePolicySnapshot = makeSnapshot();
@@ -547,11 +569,61 @@ describe('review remediation selective recovery routing', () => {
             });
             decision.lane_decisions[0].reason = 'tampered persisted reason';
             appendRestartDecision(fixture, decision);
+            appendRecordedReview(fixture, false);
 
             assert.match(
-                resolvePersistedPolicy(fixture, 'code').blockedReason,
+                resolvePersistedPolicy(fixture, 'code', {
+                    reviewRecordedSequence: latestReviewRecordedSequence(fixture),
+                    remediationMode: 'FULL',
+                    authoritativeDecisionSha256: decision.decision_sha256,
+                    classificationSha256: decision.classification_sha256
+                }).blockedReason,
                 /persisted authoritative remediation decision failed validation/iu
             );
+        } finally {
+            fs.rmSync(fixture.root, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects stale reused evidence before accepting a fresh pass with superseded baseline bindings', () => {
+        const fixture = makePersistedReusePolicyFixture();
+        try {
+            const profilePolicySnapshot = makeSnapshot();
+            const classification = {
+                source: 'delta' as const,
+                delta: makeDelta('leaf_test'),
+                profilePolicySnapshot,
+                baselineProfilePolicySnapshotSha256: sha256RedactedJsonPayload(profilePolicySnapshot)
+            };
+            const decision = resolveFixtureAuthoritativeDecision({
+                taskId: TASK_ID,
+                currentReviewType: 'test',
+                classification,
+                requiredReviews: { code: true, test: true },
+                reviewExecutionPolicyMode: 'strict_sequential',
+                reusableReceipts: [acceptedReceipt('code'), acceptedReceipt('test')]
+            });
+            appendRestartDecision(fixture, decision, classification);
+            appendRecordedReview(fixture, true);
+            assert.match(
+                resolvePersistedPolicy(fixture, 'test').blockedReason,
+                /persisted remediation authority failed authentication/iu
+            );
+
+            appendRecordedReview(fixture, false);
+            assert.match(
+                resolvePersistedPolicy(fixture, 'test').blockedReason,
+                /persisted remediation authority failed authentication/iu
+            );
+            assert.deepEqual(resolvePersistedPolicy(fixture, 'test', {
+                reviewRecordedSequence: latestReviewRecordedSequence(fixture),
+                remediationMode: 'DELTA',
+                authoritativeDecisionSha256: decision.decision_sha256,
+                classificationSha256: decision.classification_sha256
+            }), {
+                blockedReason: '',
+                preservedScopeMismatchReason: ''
+            });
         } finally {
             fs.rmSync(fixture.root, { recursive: true, force: true });
         }
@@ -561,7 +633,7 @@ describe('review remediation selective recovery routing', () => {
         const fixture = makePersistedReusePolicyFixture();
         try {
             const profilePolicySnapshot = makeSnapshot();
-            appendRestartDecision(fixture, resolveFixtureAuthoritativeDecision({
+            const decision = resolveFixtureAuthoritativeDecision({
                 taskId: TASK_ID,
                 currentReviewType: 'test',
                 classification: {
@@ -573,12 +645,19 @@ describe('review remediation selective recovery routing', () => {
                 requiredReviews: { code: true, test: true },
                 reviewExecutionPolicyMode: 'strict_sequential',
                 reusableReceipts: [acceptedReceipt('code'), acceptedReceipt('test')]
-            }));
+            });
+            appendRestartDecision(fixture, decision);
             appendRecordedReview(fixture, true);
             assert.match(resolvePersistedPolicy(fixture, 'test').blockedReason, /bounded DELTA review is required/iu);
 
             appendRecordedReview(fixture, false);
-            assert.deepEqual(resolvePersistedPolicy(fixture, 'test'), {
+            assert.match(resolvePersistedPolicy(fixture, 'test').blockedReason, /bounded DELTA review is required/iu);
+            assert.deepEqual(resolvePersistedPolicy(fixture, 'test', {
+                reviewRecordedSequence: latestReviewRecordedSequence(fixture),
+                remediationMode: 'DELTA',
+                authoritativeDecisionSha256: decision.decision_sha256,
+                classificationSha256: decision.classification_sha256
+            }), {
                 blockedReason: '',
                 preservedScopeMismatchReason: ''
             });
