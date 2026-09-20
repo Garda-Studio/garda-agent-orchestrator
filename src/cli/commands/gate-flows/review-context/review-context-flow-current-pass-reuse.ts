@@ -29,6 +29,9 @@ import {
     validateReviewFindingsValidationArtifactForReceipt
 } from '../../../../gates/review/review-findings-validation-artifact';
 import {
+    reviewEvidenceRequiresFindingsValidation
+} from '../../../../gates/review-remediation/review-remediation-review-contract';
+import {
     resolveLockedReviewFindingPolicyFromPreflight,
     resolveLockedReviewFindingPolicyFromReceiptDispositionEvidence,
     reviewFindingsValidationArtifactHasBlockingFindings
@@ -73,6 +76,7 @@ export interface CurrentPassReviewEvidenceResult {
     findingsValidationArtifactSha256: string | null;
     findingsDispositionArtifactPath: string | null;
     findingsDispositionArtifactSha256: string | null;
+    findingsValidationRequired: boolean;
     reviewerExecutionMode: string | null;
     reviewerIdentity: string | null;
     reusedExistingReview: boolean;
@@ -81,6 +85,7 @@ export interface CurrentPassReviewEvidenceResult {
     remediationMode: string | null;
     remediationAuthoritativeDecisionSha256: string | null;
     remediationClassificationSha256: string | null;
+    remediationAuthorityEligible: boolean;
 }
 
 export interface CompileEvidenceSummary {
@@ -162,17 +167,6 @@ function getReceiptOutputContractString(receipt: ReviewReceipt, key: string): st
     }
     const value = (contract as Record<string, unknown>)[key];
     return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-function receiptRequiresFindingsValidation(receipt: ReviewReceipt, reviewContext: Record<string, unknown>): boolean {
-    const format = String(
-        getReceiptRecordString(receipt, 'review_output_format')
-        || getReceiptOutputContractString(receipt, 'format')
-        || ''
-    ).trim().toLowerCase();
-    return Number(reviewContext.schema_version) >= 3
-        || format === 'findings_json'
-        || Boolean((receipt as unknown as Record<string, unknown>).review_findings_validation);
 }
 
 function findLatestCurrentCycleReviewRecordedEvent(options: {
@@ -292,6 +286,7 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
         findingsValidationArtifactSha256: null,
         findingsDispositionArtifactPath: null,
         findingsDispositionArtifactSha256: null,
+        findingsValidationRequired: false,
         reviewerExecutionMode: null,
         reviewerIdentity: null,
         reusedExistingReview: false,
@@ -299,7 +294,8 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
         reviewRecordedEventSha256: null,
         remediationMode: null,
         remediationAuthoritativeDecisionSha256: null,
-        remediationClassificationSha256: null
+        remediationClassificationSha256: null,
+        remediationAuthorityEligible: false
     });
     const currentPreflightHash = normalizeOptionalSha256(gateHelpers.fileSha256(options.preflightPath));
     const normalizedPreflightPath = gateHelpers.normalizePath(options.preflightPath);
@@ -407,7 +403,11 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
     let findingsValidationArtifactSha256: string | null = null;
     let findingsDispositionArtifactPath: string | null = null;
     let findingsDispositionArtifactSha256: string | null = null;
-    if (receiptRequiresFindingsValidation(receipt, reviewContext)) {
+    const findingsValidationRequired = reviewEvidenceRequiresFindingsValidation(
+        receipt as unknown as Record<string, unknown>,
+        reviewContext
+    );
+    if (findingsValidationRequired) {
         const findingsValidation = validateReviewFindingsValidationArtifactForReceipt({
             receipt: receipt as unknown as Record<string, unknown>,
             reviewArtifactPath: artifactPath,
@@ -655,6 +655,7 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
         findingsValidationArtifactSha256,
         findingsDispositionArtifactPath,
         findingsDispositionArtifactSha256,
+        findingsValidationRequired,
         reviewerExecutionMode,
         reviewerIdentity,
         reusedExistingReview: receipt.reused_existing_review === true,
@@ -664,6 +665,9 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
         remediationAuthoritativeDecisionSha256: normalizeOptionalSha256(
             reviewExecution?.authoritative_decision_sha256
         ),
-        remediationClassificationSha256: normalizeOptionalSha256(reviewExecution?.classification_sha256)
+        remediationClassificationSha256: normalizeOptionalSha256(reviewExecution?.classification_sha256),
+        remediationAuthorityEligible: Boolean(
+            reviewExecution && String(reviewExecution.source || '').trim() !== 'initial_full'
+        )
     };
 }

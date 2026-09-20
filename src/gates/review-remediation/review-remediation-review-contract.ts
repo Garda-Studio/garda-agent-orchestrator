@@ -97,6 +97,49 @@ export interface ReviewRemediationAuthoritativeDecisionBinding
     preflight_sha256: string;
 }
 
+export function reviewEvidenceRequiresFindingsValidation(
+    receipt: Readonly<Record<string, unknown>>,
+    reviewContext: Readonly<Record<string, unknown>>
+): boolean {
+    const hasOwn = (record: Readonly<Record<string, unknown>>, key: string): boolean => (
+        Object.prototype.hasOwnProperty.call(record, key)
+    );
+    const hasMalformedOutputContract = hasOwn(receipt, 'review_output_contract')
+        && !isPlainRecord(receipt.review_output_contract);
+    const outputContract = isPlainRecord(receipt.review_output_contract)
+        ? receipt.review_output_contract
+        : null;
+    const rawFormats = [
+        ...(hasOwn(receipt, 'review_output_format') ? [receipt.review_output_format] : []),
+        ...(outputContract && hasOwn(outputContract, 'format') ? [outputContract.format] : [])
+    ];
+    const hasMissingOutputContractFormat = outputContract !== null && !hasOwn(outputContract, 'format');
+    const formats = rawFormats
+        .filter((value): value is string => typeof value === 'string')
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean);
+    const hasBlankFormat = rawFormats.some((value) => typeof value === 'string' && !value.trim());
+    const hasMalformedFormat = rawFormats.some((value) => typeof value !== 'string');
+    const hasUnknownFormat = formats.some((format) => !['findings_json', 'verdict_token'].includes(format));
+    const hasFindingsValidationMarker = hasOwn(receipt, 'review_findings_validation');
+    const hasSchemaVersion = hasOwn(reviewContext, 'schema_version');
+    const schemaVersion = Number(reviewContext.schema_version);
+    const hasMalformedSchemaVersion = hasSchemaVersion && (
+        !['number', 'string'].includes(typeof reviewContext.schema_version)
+        || !Number.isInteger(schemaVersion)
+        || schemaVersion < 1
+    );
+    return schemaVersion >= 3
+        || hasMalformedOutputContract
+        || hasMissingOutputContractFormat
+        || hasBlankFormat
+        || hasMalformedFormat
+        || hasUnknownFormat
+        || hasMalformedSchemaVersion
+        || formats.includes('findings_json')
+        || hasFindingsValidationMarker;
+}
+
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const REVIEW_CONTRACT_KEYS = [
     'authoritative_decision_sha256',

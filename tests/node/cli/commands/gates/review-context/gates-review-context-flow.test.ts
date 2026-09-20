@@ -38,7 +38,14 @@ import {
 import { seedRemediationRepoBase } from '../review-cycle/gates-review-cycle-fixtures';
 
 describe('gate build-review-context CLI flow binding', () => {
-    for (const mutatedArtifact of ['preflight', 'review-context', 'receipt'] as const) {
+    for (const mutatedArtifact of [
+        'preflight',
+        'review-context',
+        'receipt',
+        'review-artifact',
+        'findings-validation',
+        'findings-disposition'
+    ] as const) {
         it(`rejects ${mutatedArtifact} mutation between current-PASS validation and telemetry emission`, async () => {
             const repoRoot = createTempRepo();
             const taskId = `T-current-pass-telemetry-${mutatedArtifact}`;
@@ -48,16 +55,29 @@ describe('gate build-review-context CLI flow binding', () => {
                 const reviewContextPath = path.join(reviewsRoot, `${taskId}-code-review-context.json`);
                 const receiptPath = path.join(reviewsRoot, `${taskId}-code-receipt.json`);
                 const reviewArtifactPath = path.join(reviewsRoot, `${taskId}-code.md`);
+                const findingsValidationArtifactPath = path.join(
+                    reviewsRoot,
+                    `${taskId}-code-findings-validation.json`
+                );
+                const findingsDispositionArtifactPath = path.join(
+                    reviewsRoot,
+                    `${taskId}-code-findings-disposition.json`
+                );
                 const artifactPaths = {
                     preflight: preflightPath,
                     'review-context': reviewContextPath,
-                    receipt: receiptPath
+                    receipt: receiptPath,
+                    'review-artifact': reviewArtifactPath,
+                    'findings-validation': findingsValidationArtifactPath,
+                    'findings-disposition': findingsDispositionArtifactPath
                 };
                 fs.mkdirSync(reviewsRoot, { recursive: true });
                 fs.writeFileSync(preflightPath, '{"preflight":true}\n', 'utf8');
-                fs.writeFileSync(reviewContextPath, '{"context":true}\n', 'utf8');
-                fs.writeFileSync(receiptPath, '{"receipt":true}\n', 'utf8');
+                fs.writeFileSync(reviewContextPath, '{"schema_version":2,"context":true}\n', 'utf8');
+                fs.writeFileSync(receiptPath, '{"review_output_format":"findings_json"}\n', 'utf8');
                 fs.writeFileSync(reviewArtifactPath, 'REVIEW PASSED\n', 'utf8');
+                fs.writeFileSync(findingsValidationArtifactPath, '{"accepted":true}\n', 'utf8');
+                fs.writeFileSync(findingsDispositionArtifactPath, '{"blocking":0}\n', 'utf8');
                 const currentPassReviewEvidence = {
                     reusedExistingReview: false,
                     preflightSha256: fileSha256(preflightPath),
@@ -66,17 +86,19 @@ describe('gate build-review-context CLI flow binding', () => {
                     receiptSha256: fileSha256(receiptPath),
                     reviewArtifactPath,
                     reviewArtifactSha256: fileSha256(reviewArtifactPath),
-                    findingsValidationArtifactPath: null,
-                    findingsValidationArtifactSha256: null,
-                    findingsDispositionArtifactPath: null,
-                    findingsDispositionArtifactSha256: null,
+                    findingsValidationArtifactPath,
+                    findingsValidationArtifactSha256: fileSha256(findingsValidationArtifactPath),
+                    findingsDispositionArtifactPath,
+                    findingsDispositionArtifactSha256: fileSha256(findingsDispositionArtifactPath),
+                    findingsValidationRequired: true,
                     reviewerExecutionMode: 'delegated_subagent',
                     reviewerIdentity: 'agent:reviewer',
                     reviewRecordedSequence: 1,
                     reviewRecordedEventSha256: 'a'.repeat(64),
                     remediationMode: 'DELTA',
                     remediationAuthoritativeDecisionSha256: 'b'.repeat(64),
-                    remediationClassificationSha256: 'c'.repeat(64)
+                    remediationClassificationSha256: 'c'.repeat(64),
+                    remediationAuthorityEligible: true
                 };
                 fs.writeFileSync(artifactPaths[mutatedArtifact], `{"mutated":"${mutatedArtifact}"}\n`, 'utf8');
 
@@ -98,6 +120,65 @@ describe('gate build-review-context CLI flow binding', () => {
             }
         });
     }
+
+    it('rejects partial findings evidence for verdict-token current PASS telemetry', async () => {
+        const repoRoot = createTempRepo();
+        const taskId = 'T-current-pass-telemetry-partial-findings';
+        try {
+            const reviewsRoot = getReviewsRoot(repoRoot);
+            const preflightPath = path.join(reviewsRoot, `${taskId}-preflight.json`);
+            const reviewContextPath = path.join(reviewsRoot, `${taskId}-code-review-context.json`);
+            const receiptPath = path.join(reviewsRoot, `${taskId}-code-receipt.json`);
+            const reviewArtifactPath = path.join(reviewsRoot, `${taskId}-code.md`);
+            const findingsValidationArtifactPath = path.join(
+                reviewsRoot,
+                `${taskId}-code-findings-validation.json`
+            );
+            fs.mkdirSync(reviewsRoot, { recursive: true });
+            fs.writeFileSync(preflightPath, '{"preflight":true}\n', 'utf8');
+            fs.writeFileSync(reviewContextPath, '{"schema_version":2,"context":true}\n', 'utf8');
+            fs.writeFileSync(receiptPath, '{"review_output_format":"verdict_token"}\n', 'utf8');
+            fs.writeFileSync(reviewArtifactPath, 'REVIEW PASSED\n', 'utf8');
+            fs.writeFileSync(findingsValidationArtifactPath, '{"accepted":true}\n', 'utf8');
+
+            await assert.rejects(
+                emitCurrentPassReviewContextReuseAccepted({
+                    repoRoot,
+                    taskId,
+                    reviewType: 'code',
+                    depth: 2,
+                    preflightPath,
+                    reviewContextPath,
+                    ruleContextArtifactPath: null,
+                    currentPassReviewEvidence: {
+                        reusedExistingReview: false,
+                        preflightSha256: fileSha256(preflightPath),
+                        reviewContextSha256: fileSha256(reviewContextPath),
+                        receiptPath,
+                        receiptSha256: fileSha256(receiptPath),
+                        reviewArtifactPath,
+                        reviewArtifactSha256: fileSha256(reviewArtifactPath),
+                        findingsValidationArtifactPath,
+                        findingsValidationArtifactSha256: fileSha256(findingsValidationArtifactPath),
+                        findingsDispositionArtifactPath: null,
+                        findingsDispositionArtifactSha256: null,
+                        findingsValidationRequired: false,
+                        reviewerExecutionMode: 'delegated_subagent',
+                        reviewerIdentity: 'agent:reviewer',
+                        reviewRecordedSequence: 1,
+                        reviewRecordedEventSha256: 'a'.repeat(64),
+                        remediationMode: 'DELTA',
+                        remediationAuthoritativeDecisionSha256: 'b'.repeat(64),
+                        remediationClassificationSha256: 'c'.repeat(64),
+                        remediationAuthorityEligible: true
+                    }
+                }),
+                /findings evidence does not match the bound review output format/i
+            );
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
 
     for (const scenario of ['preserved', 'invalidated', 'reuse-rejected', 'tampered-receipt', 'stale-tree', 'forged-decision'] as const) {
         it(`validates current PASS evidence before applying a remediation fallback contract: ${scenario}`, async () => {
@@ -192,6 +273,8 @@ describe('gate build-review-context CLI flow binding', () => {
                     );
                     assert.equal(acceptedDetails.review_reuse_evidence, 'FRESH');
                     assert.equal(acceptedDetails.reused_existing_review, false);
+                    assert.equal(acceptedDetails.findings_validation_required, true);
+                    assert.equal(acceptedDetails.remediation_authority_eligible, false);
                     assert.equal(typeof acceptedDetails.review_recorded_sequence, 'number');
                     assert.match(String(acceptedDetails.review_recorded_event_sha256), /^[0-9a-f]{64}$/u);
                 } else {

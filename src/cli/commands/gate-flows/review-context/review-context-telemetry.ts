@@ -1,4 +1,6 @@
 import * as fs from 'node:fs';
+import { readJsonFile } from '../../../../core/json';
+import { isPlainRecord } from '../../../../core/records';
 import {
     appendMandatoryTaskEventAsync,
     taskEventAppendHasBlockingFailure,
@@ -10,6 +12,7 @@ import {
 } from '../../../../runtime/skill-telemetry';
 import * as gateHelpers from '../../../../gates/shared/helpers';
 import type { ReviewSkillBinding } from '../../../../gates/review-context/review-context-artifacts';
+import { reviewEvidenceRequiresFindingsValidation } from '../../../../gates/review-remediation/review-remediation-review-contract';
 
 const REVIEW_CONTEXT_TELEMETRY_LOCK_TIMEOUT_MS = 30000;
 const REVIEW_CONTEXT_TELEMETRY_LOCK_RETRY_MS = 10;
@@ -94,6 +97,7 @@ export async function emitCurrentPassReviewContextReuseAccepted(options: {
         findingsValidationArtifactSha256: string | null;
         findingsDispositionArtifactPath: string | null;
         findingsDispositionArtifactSha256: string | null;
+        findingsValidationRequired: boolean;
         reviewerExecutionMode: string | null;
         reviewerIdentity: string | null;
         reviewRecordedSequence: number | null;
@@ -101,6 +105,7 @@ export async function emitCurrentPassReviewContextReuseAccepted(options: {
         remediationMode: string | null;
         remediationAuthoritativeDecisionSha256: string | null;
         remediationClassificationSha256: string | null;
+        remediationAuthorityEligible: boolean;
     };
     telemetryLockTimeoutMs?: unknown;
     telemetryLockRetryMs?: unknown;
@@ -137,6 +142,72 @@ export async function emitCurrentPassReviewContextReuseAccepted(options: {
     ) {
         throw new Error(
             'Current PASS review context reuse telemetry requires unchanged authenticated evidence hashes.'
+        );
+    }
+    const evidence = options.currentPassReviewEvidence;
+    let receipt: unknown;
+    let reviewContext: unknown;
+    try {
+        receipt = readJsonFile(evidence.receiptPath || '');
+        reviewContext = readJsonFile(options.reviewContextPath);
+    } catch {
+        throw new Error(
+            'Current PASS review context reuse telemetry requires readable receipt and review context JSON.'
+        );
+    }
+    if (!isPlainRecord(receipt) || !isPlainRecord(reviewContext)) {
+        throw new Error(
+            'Current PASS review context reuse telemetry requires receipt and review context JSON objects.'
+        );
+    }
+    const boundFindingsValidationRequired = reviewEvidenceRequiresFindingsValidation(receipt, reviewContext);
+    if (evidence.findingsValidationRequired !== boundFindingsValidationRequired) {
+        throw new Error(
+            'Current PASS review context reuse telemetry findings requirement does not match the bound review output format.'
+        );
+    }
+    const hasCompleteFindingsEvidence = Boolean(
+        evidence.findingsValidationArtifactPath
+        && findingsValidationArtifactSha256
+        && evidence.findingsDispositionArtifactPath
+        && findingsDispositionArtifactSha256
+    );
+    const hasAnyFindingsEvidence = Boolean(
+        evidence.findingsValidationArtifactPath
+        || findingsValidationArtifactSha256
+        || evidence.findingsDispositionArtifactPath
+        || findingsDispositionArtifactSha256
+    );
+    if (
+        (evidence.findingsValidationRequired && !hasCompleteFindingsEvidence)
+        || (!evidence.findingsValidationRequired && hasAnyFindingsEvidence)
+    ) {
+        throw new Error(
+            'Current PASS review context reuse telemetry findings evidence does not match the bound review output format.'
+        );
+    }
+    if (
+        !evidence.reusedExistingReview
+        && (
+            !Number.isInteger(evidence.reviewRecordedSequence)
+            || Number(evidence.reviewRecordedSequence) <= 0
+            || !/^[0-9a-f]{64}$/u.test(String(evidence.reviewRecordedEventSha256 || ''))
+        )
+    ) {
+        throw new Error(
+            'Fresh current PASS review context reuse telemetry requires complete REVIEW_RECORDED authority bindings.'
+        );
+    }
+    if (
+        evidence.remediationAuthorityEligible
+        && (
+            !['FULL', 'DELTA'].includes(String(evidence.remediationMode || ''))
+            || !/^[0-9a-f]{64}$/u.test(String(evidence.remediationAuthoritativeDecisionSha256 || ''))
+            || !/^[0-9a-f]{64}$/u.test(String(evidence.remediationClassificationSha256 || ''))
+        )
+    ) {
+        throw new Error(
+            'Current PASS review context reuse telemetry requires complete remediation authority bindings.'
         );
     }
     const telemetryAppendOptions = buildTelemetryAppendOptions(options);
@@ -176,6 +247,7 @@ export async function emitCurrentPassReviewContextReuseAccepted(options: {
                         options.currentPassReviewEvidence.findingsDispositionArtifactPath
                     ),
                     findings_disposition_artifact_sha256: findingsDispositionArtifactSha256,
+                    findings_validation_required: evidence.findingsValidationRequired,
                     reviewer_execution_mode: options.currentPassReviewEvidence.reviewerExecutionMode,
                     reviewer_identity: options.currentPassReviewEvidence.reviewerIdentity,
                     review_recorded_sequence: options.currentPassReviewEvidence.reviewRecordedSequence,
@@ -184,7 +256,8 @@ export async function emitCurrentPassReviewContextReuseAccepted(options: {
                     remediation_authoritative_decision_sha256:
                         options.currentPassReviewEvidence.remediationAuthoritativeDecisionSha256,
                     remediation_classification_sha256:
-                        options.currentPassReviewEvidence.remediationClassificationSha256
+                        options.currentPassReviewEvidence.remediationClassificationSha256,
+                    remediation_authority_eligible: evidence.remediationAuthorityEligible
                 },
                 telemetryAppendOptions
             ),

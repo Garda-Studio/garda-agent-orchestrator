@@ -11,8 +11,59 @@ import {
     resolvePersistedRemediationReviewExecutionAuthority
 } from '../../../../src/gates/review-remediation/review-remediation-execution-authority';
 import {
+    reviewEvidenceRequiresFindingsValidation
+} from '../../../../src/gates/review-remediation/review-remediation-review-contract';
+import {
     resolveAuthoritativeReviewRemediationDecision
 } from '../../../../src/gates/review-remediation/review-remediation-recovery-routing';
+
+test('fails closed for malformed findings-evidence receipt fields', () => {
+    const reviewContext = { schema_version: 2 };
+    for (const reviewOutputFormat of ['   ', 7]) {
+        assert.equal(reviewEvidenceRequiresFindingsValidation({
+            review_output_format: reviewOutputFormat,
+            review_output_contract: { format: 'findings_json' }
+        }, reviewContext), true);
+    }
+    assert.equal(reviewEvidenceRequiresFindingsValidation({
+        review_output_format: 'verdict_token',
+        review_output_contract: { format: 'findings_json' }
+    }, reviewContext), true);
+    assert.equal(reviewEvidenceRequiresFindingsValidation({
+        review_output_format: 'unknown_format'
+    }, reviewContext), true);
+    assert.equal(reviewEvidenceRequiresFindingsValidation({
+        review_output_contract: 'malformed-contract'
+    }, reviewContext), true);
+    assert.equal(reviewEvidenceRequiresFindingsValidation({
+        review_output_contract: {}
+    }, reviewContext), true);
+    assert.equal(reviewEvidenceRequiresFindingsValidation({
+        review_output_format: null
+    }, reviewContext), true);
+    assert.equal(reviewEvidenceRequiresFindingsValidation({
+        review_output_format: '   '
+    }, reviewContext), true);
+    assert.equal(reviewEvidenceRequiresFindingsValidation({
+        review_output_contract: { format: '' }
+    }, reviewContext), true);
+    assert.equal(reviewEvidenceRequiresFindingsValidation({
+        review_output_format: 'verdict_token',
+        review_findings_validation: 'malformed-but-present'
+    }, reviewContext), true);
+    for (const malformedValidationMarker of [false, 0, '', null]) {
+        assert.equal(reviewEvidenceRequiresFindingsValidation({
+            review_output_format: 'verdict_token',
+            review_findings_validation: malformedValidationMarker
+        }, reviewContext), true);
+    }
+    assert.equal(reviewEvidenceRequiresFindingsValidation({
+        review_output_format: 'verdict_token'
+    }, { schema_version: 'invalid' }), true);
+    assert.equal(reviewEvidenceRequiresFindingsValidation({
+        review_output_format: 'verdict_token'
+    }, reviewContext), false);
+});
 
 test('reconstructs remediation review execution authority only from an integrity-valid restart event', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-next-step-remediation-authority-'));
@@ -106,10 +157,12 @@ test('reconstructs remediation review execution authority only from an integrity
     });
     const reviewContextPath = path.join(reviewsRoot, 'custom', `${taskId}-code-review-context.json`);
     const receiptPath = path.join(reviewsRoot, `${taskId}-code-receipt.json`);
+    const reviewArtifactPath = path.join(reviewsRoot, `${taskId}-code.md`);
     const preflightPath = path.join(reviewsRoot, `${taskId}-preflight.json`);
     fs.mkdirSync(path.dirname(reviewContextPath), { recursive: true });
-    fs.writeFileSync(reviewContextPath, '{"context":true}\n', 'utf8');
-    fs.writeFileSync(receiptPath, '{"receipt":true}\n', 'utf8');
+    fs.writeFileSync(reviewContextPath, '{"schema_version":2,"context":true}\n', 'utf8');
+    fs.writeFileSync(receiptPath, '{"review_output_format":"verdict_token"}\n', 'utf8');
+    fs.writeFileSync(reviewArtifactPath, 'REVIEW PASSED\n', 'utf8');
     const preservedOptions = {
         reviewsRoot,
         taskId,
@@ -122,7 +175,7 @@ test('reconstructs remediation review execution authority only from an integrity
         receiptPath
     };
     assert.equal(resolvePersistedRemediationReviewExecutionAuthority(preservedOptions), null);
-    appendTaskEvent(bundleRoot, taskId, 'REVIEW_CONTEXT_REUSE_ACCEPTED', 'PASS', 'Current PASS accepted.', {
+    appendTaskEvent(bundleRoot, taskId, 'REVIEW_CONTEXT_REUSE_ACCEPTED', 'PASS', 'Incomplete PASS accepted.', {
         review_type: 'code',
         current_pass_review_evidence: true,
         preflight_path: preflightPath,
@@ -131,6 +184,51 @@ test('reconstructs remediation review execution authority only from an integrity
         review_context_sha256: createHash('sha256').update(fs.readFileSync(reviewContextPath)).digest('hex'),
         receipt_path: receiptPath,
         receipt_sha256: createHash('sha256').update(fs.readFileSync(receiptPath)).digest('hex')
+    });
+    assert.equal(
+        resolvePersistedRemediationReviewExecutionAuthority(preservedOptions),
+        null,
+        'preserved pending authority must reject incomplete current PASS telemetry'
+    );
+    appendTaskEvent(bundleRoot, taskId, 'REVIEW_RECORDED', 'PASS', 'Fresh preserved review recorded.', {
+        task_id: taskId,
+        review_type: 'code',
+        preflight_sha256: preflightSha256,
+        review_context_path: reviewContextPath,
+        review_context_sha256: createHash('sha256').update(fs.readFileSync(reviewContextPath)).digest('hex'),
+        receipt_path: receiptPath,
+        receipt_sha256: createHash('sha256').update(fs.readFileSync(receiptPath)).digest('hex'),
+        review_artifact_path: reviewArtifactPath,
+        review_artifact_sha256: createHash('sha256').update(fs.readFileSync(reviewArtifactPath)).digest('hex')
+    });
+    const preservedRecordedEvent = JSON.parse(
+        fs.readFileSync(path.join(bundleRoot, 'runtime', 'task-events', `${taskId}.jsonl`), 'utf8')
+            .trim().split('\n').at(-1)!
+    ) as { integrity: { task_sequence: number; event_sha256: string } };
+    appendTaskEvent(bundleRoot, taskId, 'REVIEW_CONTEXT_REUSE_ACCEPTED', 'PASS', 'Current PASS accepted.', {
+        review_type: 'code',
+        current_pass_review_evidence: true,
+        review_reuse_evidence: 'FRESH',
+        reused_existing_review: false,
+        preflight_path: preflightPath,
+        preflight_sha256: preflightSha256,
+        review_context_path: reviewContextPath,
+        review_context_sha256: createHash('sha256').update(fs.readFileSync(reviewContextPath)).digest('hex'),
+        receipt_path: receiptPath,
+        receipt_sha256: createHash('sha256').update(fs.readFileSync(receiptPath)).digest('hex'),
+        review_artifact_path: reviewArtifactPath,
+        review_artifact_sha256: createHash('sha256').update(fs.readFileSync(reviewArtifactPath)).digest('hex'),
+        findings_validation_artifact_path: null,
+        findings_validation_artifact_sha256: null,
+        findings_disposition_artifact_path: null,
+        findings_disposition_artifact_sha256: null,
+        findings_validation_required: false,
+        review_recorded_sequence: preservedRecordedEvent.integrity.task_sequence,
+        review_recorded_event_sha256: preservedRecordedEvent.integrity.event_sha256,
+        remediation_mode: 'FULL',
+        remediation_authoritative_decision_sha256: boundDecision.decision_sha256,
+        remediation_classification_sha256: boundDecision.classification_sha256,
+        remediation_authority_eligible: true
     });
     const preservedAuthority = resolvePersistedRemediationReviewExecutionAuthority(preservedOptions);
     assert.equal(preservedAuthority?.authoritativeDecisionSha256, boundDecision.decision_sha256);
@@ -163,9 +261,9 @@ test('reconstructs remediation review execution authority only from an integrity
         }), null);
     }
 
-    fs.writeFileSync(receiptPath, '{"receipt":"changed"}\n', 'utf8');
+    fs.writeFileSync(receiptPath, '{"review_output_format":"changed"}\n', 'utf8');
     assert.equal(resolvePersistedRemediationReviewExecutionAuthority(preservedOptions), null);
-    fs.writeFileSync(receiptPath, '{"receipt":true}\n', 'utf8');
+    fs.writeFileSync(receiptPath, '{"review_output_format":"verdict_token"}\n', 'utf8');
 
     const invalidatedClassification = {
         source: 'runtime_fix' as const,
@@ -213,7 +311,7 @@ test('reconstructs remediation review execution authority only from an integrity
     }), null);
 });
 
-test('rejects tampered fresh current PASS evidence before granting downstream replacement authority', () => {
+test('rejects replaced or missing fresh current PASS artifacts before granting downstream replacement authority', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-next-step-current-pass-authority-'));
     const bundleRoot = path.join(root, 'garda-agent-orchestrator');
     const reviewsRoot = path.join(bundleRoot, 'runtime', 'reviews');
@@ -227,8 +325,8 @@ test('rejects tampered fresh current PASS evidence before granting downstream re
     const findingsDispositionArtifactPath = path.join(reviewsRoot, `${taskId}-code-findings-disposition.json`);
     for (const [filePath, content] of [
         [preflightPath, '{"preflight":true}\n'],
-        [reviewContextPath, '{"context":true}\n'],
-        [receiptPath, '{"receipt":true}\n'],
+        [reviewContextPath, '{"schema_version":2,"context":true}\n'],
+        [receiptPath, '{"review_output_format":"findings_json"}\n'],
         [reviewArtifactPath, '{"findings":[]}\n'],
         [findingsValidationArtifactPath, '{"accepted":true}\n'],
         [findingsDispositionArtifactPath, '{"blocking":0}\n']
@@ -307,11 +405,13 @@ test('rejects tampered fresh current PASS evidence before granting downstream re
         findings_disposition_artifact_path: findingsDispositionArtifactPath,
         findings_disposition_artifact_sha256: createHash('sha256')
             .update(fs.readFileSync(findingsDispositionArtifactPath)).digest('hex'),
+        findings_validation_required: true,
         review_recorded_sequence: recordedEvent.integrity.task_sequence,
         review_recorded_event_sha256: recordedEvent.integrity.event_sha256,
         remediation_mode: 'FULL',
         remediation_authoritative_decision_sha256: boundDecision.decision_sha256,
-        remediation_classification_sha256: boundDecision.classification_sha256
+        remediation_classification_sha256: boundDecision.classification_sha256,
+        remediation_authority_eligible: true
     });
     const reviewExecution = {
         source: 'remediation_full',
@@ -335,6 +435,20 @@ test('rejects tampered fresh current PASS evidence before granting downstream re
         resolvePersistedRemediationReviewExecutionAuthority(authorityOptions)?.acceptedCurrentPassReplacement,
         true
     );
+    for (const artifactPath of [
+        reviewArtifactPath,
+        findingsValidationArtifactPath,
+        findingsDispositionArtifactPath
+    ]) {
+        const original = fs.readFileSync(artifactPath);
+        fs.writeFileSync(artifactPath, Buffer.concat([original, Buffer.from('tampered\n')]));
+        assert.equal(
+            resolvePersistedRemediationReviewExecutionAuthority(authorityOptions)?.acceptedCurrentPassReplacement,
+            false,
+            `tampering ${path.basename(artifactPath)} must revoke current PASS replacement authority`
+        );
+        fs.writeFileSync(artifactPath, original);
+    }
     fs.rmSync(findingsValidationArtifactPath);
     fs.rmSync(findingsDispositionArtifactPath);
     appendTaskEvent(bundleRoot, taskId, 'REVIEW_CONTEXT_REUSE_ACCEPTED', 'PASS', 'Verdict-token PASS accepted.', {
@@ -354,11 +468,57 @@ test('rejects tampered fresh current PASS evidence before granting downstream re
         findings_validation_artifact_sha256: null,
         findings_disposition_artifact_path: null,
         findings_disposition_artifact_sha256: null,
+        findings_validation_required: false,
         review_recorded_sequence: recordedEvent.integrity.task_sequence,
         review_recorded_event_sha256: recordedEvent.integrity.event_sha256,
         remediation_mode: 'FULL',
         remediation_authoritative_decision_sha256: boundDecision.decision_sha256,
-        remediation_classification_sha256: boundDecision.classification_sha256
+        remediation_classification_sha256: boundDecision.classification_sha256,
+        remediation_authority_eligible: true
+    });
+    assert.equal(
+        resolvePersistedRemediationReviewExecutionAuthority(authorityOptions)?.acceptedCurrentPassReplacement,
+        false
+    );
+    fs.writeFileSync(receiptPath, '{"review_output_format":"verdict_token"}\n', 'utf8');
+    appendTaskEvent(bundleRoot, taskId, 'REVIEW_RECORDED', 'PASS', 'Fresh verdict-token review recorded.', {
+        task_id: taskId,
+        review_type: 'code',
+        preflight_sha256: preflightSha256,
+        review_context_path: reviewContextPath,
+        review_context_sha256: createHash('sha256').update(fs.readFileSync(reviewContextPath)).digest('hex'),
+        receipt_path: receiptPath,
+        receipt_sha256: createHash('sha256').update(fs.readFileSync(receiptPath)).digest('hex'),
+        review_artifact_path: reviewArtifactPath,
+        review_artifact_sha256: createHash('sha256').update(fs.readFileSync(reviewArtifactPath)).digest('hex')
+    });
+    const verdictRecordedEvent = JSON.parse(fs.readFileSync(timelinePath, 'utf8').trim().split('\n').at(-1)!) as {
+        integrity: { task_sequence: number; event_sha256: string };
+    };
+    appendTaskEvent(bundleRoot, taskId, 'REVIEW_CONTEXT_REUSE_ACCEPTED', 'PASS', 'Verdict-token PASS accepted.', {
+        review_type: 'code',
+        current_pass_review_evidence: true,
+        review_reuse_evidence: 'FRESH',
+        reused_existing_review: false,
+        preflight_path: preflightPath,
+        preflight_sha256: preflightSha256,
+        review_context_path: reviewContextPath,
+        review_context_sha256: createHash('sha256').update(fs.readFileSync(reviewContextPath)).digest('hex'),
+        receipt_path: receiptPath,
+        receipt_sha256: createHash('sha256').update(fs.readFileSync(receiptPath)).digest('hex'),
+        review_artifact_path: reviewArtifactPath,
+        review_artifact_sha256: createHash('sha256').update(fs.readFileSync(reviewArtifactPath)).digest('hex'),
+        findings_validation_artifact_path: null,
+        findings_validation_artifact_sha256: null,
+        findings_disposition_artifact_path: null,
+        findings_disposition_artifact_sha256: null,
+        findings_validation_required: false,
+        review_recorded_sequence: verdictRecordedEvent.integrity.task_sequence,
+        review_recorded_event_sha256: verdictRecordedEvent.integrity.event_sha256,
+        remediation_mode: 'FULL',
+        remediation_authoritative_decision_sha256: boundDecision.decision_sha256,
+        remediation_classification_sha256: boundDecision.classification_sha256,
+        remediation_authority_eligible: true
     });
     assert.equal(
         resolvePersistedRemediationReviewExecutionAuthority(authorityOptions)?.acceptedCurrentPassReplacement,

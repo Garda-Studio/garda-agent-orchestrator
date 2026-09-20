@@ -1,11 +1,13 @@
 import * as path from 'node:path';
 
+import { readJsonFile } from '../../core/json';
 import { isPlainRecord } from '../../core/records';
 import { inspectTaskEventFile } from '../../gate-runtime/task-events';
 import type {
     ReviewRemediationReviewContract,
     ReviewRemediationReviewContractValidationAuthority
 } from './review-remediation-review-contract';
+import { reviewEvidenceRequiresFindingsValidation } from './review-remediation-review-contract';
 import type { ReviewRemediationDecisionClassification } from './review-remediation-recovery-routing';
 import { pathsEqual } from '../review-reuse/review-reuse-telemetry-normalization';
 import { fileSha256 } from '../shared/helpers';
@@ -33,6 +35,15 @@ function taskEventSequence(event: Readonly<Record<string, unknown>>): number {
     return Number.isInteger(sequence) && sequence > 0 ? sequence : 0;
 }
 
+function readJsonRecord(filePath: string): Readonly<Record<string, unknown>> | null {
+    try {
+        const value = readJsonFile(filePath);
+        return isPlainRecord(value) ? value : null;
+    } catch {
+        return null;
+    }
+}
+
 function hasAuthenticatedFreshCurrentPassReplacement(options: {
     events: readonly Readonly<Record<string, unknown>>[];
     restartIndex: number;
@@ -49,12 +60,32 @@ function hasAuthenticatedFreshCurrentPassReplacement(options: {
     const reviewArtifactPath = receiptPath.replace(/-receipt\.json$/u, '.md');
     const findingsValidationArtifactPath = reviewArtifactPath.replace(/\.md$/u, '-findings-validation.json');
     const findingsDispositionArtifactPath = reviewArtifactPath.replace(/\.md$/u, '-findings-disposition.json');
+    const receipt = readJsonRecord(receiptPath);
+    const reviewContext = readJsonRecord(reviewContextPath);
+    if (!receipt || !reviewContext) {
+        return false;
+    }
+    const findingsValidationRequired = reviewEvidenceRequiresFindingsValidation(receipt, reviewContext);
     const currentHashes = {
         reviewContext: fileSha256(reviewContextPath),
         receipt: fileSha256(receiptPath),
-        reviewArtifact: fileSha256(reviewArtifactPath)
+        reviewArtifact: fileSha256(reviewArtifactPath),
+        findingsValidation: findingsValidationRequired
+            ? fileSha256(findingsValidationArtifactPath)
+            : null,
+        findingsDisposition: findingsValidationRequired
+            ? fileSha256(findingsDispositionArtifactPath)
+            : null
     };
-    if (Object.values(currentHashes).some((value) => !normalizeSha256(value))) {
+    if (
+        !normalizeSha256(currentHashes.reviewContext)
+        || !normalizeSha256(currentHashes.receipt)
+        || !normalizeSha256(currentHashes.reviewArtifact)
+        || (findingsValidationRequired && (
+            !normalizeSha256(currentHashes.findingsValidation)
+            || !normalizeSha256(currentHashes.findingsDisposition)
+        ))
+    ) {
         return false;
     }
     const normalizedPreflightSha256 = normalizeSha256(authorityOptions.preflightSha256);
@@ -64,9 +95,15 @@ function hasAuthenticatedFreshCurrentPassReplacement(options: {
     const normalizedClassificationSha256 = normalizeSha256(
         authorityOptions.reviewExecution.classification_sha256
     );
-    return options.events.slice(options.restartIndex + 1).some((event) => {
+    const reviewRecordedEventsBySequence = new Map<number, Readonly<Record<string, unknown>>>();
+    for (let eventIndex = options.restartIndex + 1; eventIndex < options.events.length; eventIndex += 1) {
+        const event = options.events[eventIndex];
         const details = isPlainRecord(event.details) ? event.details : null;
         const acceptedSequence = taskEventSequence(event);
+        if (event.event_type === 'REVIEW_RECORDED' && acceptedSequence > options.restartSequence) {
+            reviewRecordedEventsBySequence.set(acceptedSequence, event);
+            continue;
+        }
         const reviewRecordedSequence = Number(details?.review_recorded_sequence);
         const reviewRecordedEventSha256 = normalizeSha256(details?.review_recorded_event_sha256);
         const recordedFindingsValidationPath = String(details?.findings_validation_artifact_path || '');
@@ -77,19 +114,13 @@ function hasAuthenticatedFreshCurrentPassReplacement(options: {
         const recordedFindingsDispositionSha256 = normalizeSha256(
             details?.findings_disposition_artifact_sha256
         );
-        const hasFindingsArtifacts = Boolean(
-            recordedFindingsValidationPath
-            || recordedFindingsValidationSha256
-            || recordedFindingsDispositionPath
-            || recordedFindingsDispositionSha256
-        );
-        const findingsArtifactsMatch = hasFindingsArtifacts
+        const findingsArtifactsMatch = findingsValidationRequired
             ? pathsEqual(recordedFindingsValidationPath, findingsValidationArtifactPath)
                 && recordedFindingsValidationSha256
-                    === normalizeSha256(fileSha256(findingsValidationArtifactPath))
+                    === normalizeSha256(currentHashes.findingsValidation)
                 && pathsEqual(recordedFindingsDispositionPath, findingsDispositionArtifactPath)
                 && recordedFindingsDispositionSha256
-                    === normalizeSha256(fileSha256(findingsDispositionArtifactPath))
+                    === normalizeSha256(currentHashes.findingsDisposition)
             : !recordedFindingsValidationPath
                 && !recordedFindingsValidationSha256
                 && !recordedFindingsDispositionPath
@@ -105,8 +136,10 @@ function hasAuthenticatedFreshCurrentPassReplacement(options: {
             || reviewRecordedSequence >= acceptedSequence
             || !reviewRecordedEventSha256
             || details.current_pass_review_evidence !== true
+            || details.findings_validation_required !== findingsValidationRequired
             || details.review_reuse_evidence !== 'FRESH'
             || details.reused_existing_review !== false
+            || details.remediation_authority_eligible !== true
             || details.review_type !== authorityOptions.reviewType
             || details.remediation_mode !== authorityOptions.reviewExecution.mode
             || normalizeSha256(details.remediation_authoritative_decision_sha256) !== normalizedDecisionSha256
@@ -121,18 +154,16 @@ function hasAuthenticatedFreshCurrentPassReplacement(options: {
             || normalizeSha256(details.review_artifact_sha256) !== currentHashes.reviewArtifact
             || !findingsArtifactsMatch
         ) {
-            return false;
+            continue;
         }
-        const reviewRecordedEvent = options.events.find((candidate) => (
-            taskEventSequence(candidate) === reviewRecordedSequence
-        ));
+        const reviewRecordedEvent = reviewRecordedEventsBySequence.get(reviewRecordedSequence);
         const reviewRecordedDetails = isPlainRecord(reviewRecordedEvent?.details)
             ? reviewRecordedEvent.details
             : null;
         const reviewRecordedIntegrity = isPlainRecord(reviewRecordedEvent?.integrity)
             ? reviewRecordedEvent.integrity
             : null;
-        return reviewRecordedEvent?.event_type === 'REVIEW_RECORDED'
+        if (reviewRecordedEvent?.event_type === 'REVIEW_RECORDED'
             && reviewRecordedEvent.actor === 'gate'
             && reviewRecordedEvent.outcome === 'PASS'
             && normalizeSha256(reviewRecordedIntegrity?.event_sha256) === reviewRecordedEventSha256
@@ -146,8 +177,11 @@ function hasAuthenticatedFreshCurrentPassReplacement(options: {
             && normalizeSha256(
                 reviewRecordedDetails.review_artifact_sha256
                 || reviewRecordedDetails.review_artifact_snapshot_sha256
-            ) === currentHashes.reviewArtifact;
-    });
+            ) === currentHashes.reviewArtifact) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function buildAuthority(
@@ -241,27 +275,12 @@ export function resolvePersistedRemediationReviewExecutionAuthority(
             && lane.invalidated === false
             && lane.satisfied === false
             && lane.reason_code === 'authoritative_reuse_pending';
-        const reviewContextSha256 = options.reviewContextPath ? fileSha256(options.reviewContextPath) : null;
-        const receiptSha256 = options.receiptPath ? fileSha256(options.receiptPath) : null;
-        const acceptedAfterRestart = preservedPending && reviewContextSha256 && receiptSha256
-            ? events.slice(index + 1).some((candidate) => {
-                const accepted = isPlainRecord(candidate.details) ? candidate.details : null;
-                return candidate.event_type === 'REVIEW_CONTEXT_REUSE_ACCEPTED'
-                    && candidate.actor === 'gate'
-                    && candidate.outcome === 'PASS'
-                    && accepted?.current_pass_review_evidence === true
-                    && accepted.review_type === options.reviewType
-                    && pathsEqual(String(accepted.preflight_path || ''), options.preflightPath || '')
-                    && normalizeSha256(accepted.preflight_sha256) === normalizedPreflightSha256
-                    && pathsEqual(
-                        String(accepted.review_context_path || accepted.output_path || ''),
-                        options.reviewContextPath || ''
-                    )
-                    && normalizeSha256(accepted.review_context_sha256) === reviewContextSha256
-                    && pathsEqual(String(accepted.receipt_path || ''), options.receiptPath || '')
-                    && normalizeSha256(accepted.receipt_sha256) === receiptSha256;
-            })
-            : false;
+        const acceptedAfterRestart = preservedPending && hasAuthenticatedFreshCurrentPassReplacement({
+            events,
+            restartIndex: index,
+            restartSequence: taskEventSequence(event),
+            authorityOptions: options
+        });
         if (!acceptedAfterRestart) {
             return null;
         }
