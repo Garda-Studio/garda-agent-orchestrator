@@ -29,6 +29,7 @@ export function readDependencyTimelineEvents(timelinePath: string): ReviewDepend
                     : String(prevEventSha256Raw).trim().toLowerCase() || null;
                 return [{
                     event_type: String(parsed.event_type || '').trim().toUpperCase(),
+                    outcome: String(parsed.outcome || '').trim().toUpperCase(),
                     sequence,
                     details,
                     integrity: rawIntegrity

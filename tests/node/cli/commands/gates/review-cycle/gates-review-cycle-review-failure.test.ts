@@ -38,6 +38,7 @@ import {
     writeSimpleCompileCommandsFile
 } from './gates-review-cycle-fixtures';
 import { assertRequiredUpstreamReviewDependencies } from '../../../../../../src/gates/review/review-dependencies';
+import { readDependencyTimelineEvents } from '../../../../../../src/cli/commands/gate-review-handlers/result/review-dependency-timeline';
 
 describe('cli/commands/gates – review-cycle review failure suite', () => {
     it('runBuildReviewContextCommand reuses supplied task-mode evidence and runtime identity without rereading the artifact', { concurrency: false }, async (t) => {
@@ -327,6 +328,21 @@ describe('cli/commands/gates – review-cycle review failure suite', () => {
             preflightPayload: JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>,
             reviewType: 'test',
             timelineEvents: refreshedTimelineSummary.events,
+            taskModePath: String(taskModeEvidence.evidence_path || ''),
+            runtimeReviewerIdentity
+        }));
+        const routingTimelineEvents = readDependencyTimelineEvents(timelinePath);
+        const routingCodeReview = [...routingTimelineEvents].reverse().find(
+            (event) => event.event_type === 'REVIEW_RECORDED'
+                && event.details?.review_type === 'code'
+        );
+        assert.equal(routingCodeReview?.outcome, 'PASS');
+        assert.doesNotThrow(() => assertRequiredUpstreamReviewDependencies({
+            taskId,
+            preflightPath,
+            preflightPayload: JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>,
+            reviewType: 'test',
+            timelineEvents: routingTimelineEvents,
             taskModePath: String(taskModeEvidence.evidence_path || ''),
             runtimeReviewerIdentity
         }));
