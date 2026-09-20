@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+    createNextStepDecisionRouteCoordinator,
+    resolveNextStepGuardDecisionWithWorkflowConfigBoundary
+} from '../../../../src/gates/next-step';
+import {
     NEXT_STEP_DECISION_CHECKPOINT_PRECEDENCE,
     createAuthenticatedNextStepStateProjection,
     selectNextStepDecision,
@@ -14,6 +18,26 @@ import {
 interface TestRoute {
     nextGate: string;
     commands: readonly string[];
+}
+
+function coordinatorRoute(nextGate: string) {
+    return {
+        status: 'BLOCKED' as const,
+        nextGate,
+        title: `Route ${nextGate}`,
+        reason: `Reason ${nextGate}`,
+        commands: [{ label: `Run ${nextGate}`, command: nextGate }]
+    };
+}
+
+function advanceCoordinatorThrough(
+    selectRoute: ReturnType<typeof createNextStepDecisionRouteCoordinator>,
+    finalCheckpoint: NextStepDecisionCheckpoint
+): void {
+    const finalIndex = NEXT_STEP_DECISION_CHECKPOINT_PRECEDENCE.indexOf(finalCheckpoint);
+    for (const checkpoint of NEXT_STEP_DECISION_CHECKPOINT_PRECEDENCE.slice(0, finalIndex)) {
+        assert.equal(selectRoute(checkpoint, 'normal', null), null);
+    }
 }
 
 const binding = Object.freeze({
@@ -191,5 +215,63 @@ describe('next-step pure decision engine', () => {
 
     it('fails closed when every evaluated route is absent', () => {
         assert.equal(selectNextStepDecision(projectionThrough('post-review')), null);
+    });
+});
+
+describe('next-step decision coordinator integration', () => {
+    it('rejects out-of-order checkpoints and preserves a replaced route payload snapshot', () => {
+        const selectRoute = createNextStepDecisionRouteCoordinator(binding);
+        advanceCoordinatorThrough(selectRoute, 'startup');
+        const route = coordinatorRoute('handshake-diagnostics');
+
+        const selected = selectRoute('startup', 'normal', route);
+        route.nextGate = 'tampered';
+        route.commands.push({ label: 'Tampered', command: 'tampered' });
+
+        assert.notStrictEqual(selected, route);
+        assert.equal(selected?.nextGate, 'handshake-diagnostics');
+        assert.deepEqual(selected?.commands, [
+            { label: 'Run handshake-diagnostics', command: 'handshake-diagnostics' }
+        ]);
+        assert.throws(
+            () => createNextStepDecisionRouteCoordinator(binding)('startup', 'normal', null),
+            /evaluated out of order; expected task-metadata-validation/
+        );
+    });
+
+    it('maps only guard configuration reads to workflow validation', () => {
+        const configErrorRoute = coordinatorRoute('workflow-config-validation');
+        let routeResolverCalled = false;
+        const guard = resolveNextStepGuardDecisionWithWorkflowConfigBoundary({
+            readEvaluation: () => {
+                throw new Error('invalid workflow config');
+            },
+            resolveDecisionRoute: () => {
+                routeResolverCalled = true;
+                return { route: coordinatorRoute('split-required-latch'), warnings: [] };
+            },
+            buildWorkflowConfigValidationRoute: () => configErrorRoute
+        });
+        const selectRoute = createNextStepDecisionRouteCoordinator(binding);
+        advanceCoordinatorThrough(selectRoute, 'scope-budget-guard');
+
+        const selected = selectRoute('scope-budget-guard', guard.kind, guard.route);
+
+        assert.equal(routeResolverCalled, false);
+        assert.equal(guard.kind, 'normal');
+        assert.equal(selected?.nextGate, 'workflow-config-validation');
+    });
+
+    it('propagates a missing split-latch materialization failure without relabeling it', () => {
+        assert.throws(
+            () => resolveNextStepGuardDecisionWithWorkflowConfigBoundary({
+                readEvaluation: () => ({ shouldBlock: true }),
+                resolveDecisionRoute: () => {
+                    throw new Error('split-latch materialization failed');
+                },
+                buildWorkflowConfigValidationRoute: () => coordinatorRoute('workflow-config-validation')
+            }),
+            /split-latch materialization failed/
+        );
     });
 });

@@ -328,6 +328,7 @@ import {
     NEXT_STEP_DECISION_CHECKPOINT_PRECEDENCE,
     createAuthenticatedNextStepStateProjection,
     selectNextStepDecision,
+    type AuthenticatedNextStepDecisionBinding,
     type NextStepDecisionCandidate,
     type NextStepDecisionCheckpoint,
     type NextStepDecisionKind
@@ -335,7 +336,8 @@ import {
 import {
     resolveReviewCycleGuardDecisionRoute,
     resolveScopeBudgetGuardDecisionRoute,
-    resolveValidationDecisionRoute
+    resolveValidationDecisionRoute,
+    type NextStepGuardDecision
 } from './next-step-validation-routes';
 import {
     resolveActiveReviewLifecycleDecisionRoute,
@@ -351,9 +353,7 @@ import {
     buildReviewCycleSplitDecisionCommand,
     materializeReviewCycleAutoSplitPrompt,
     readReviewCycleGuardEvaluation,
-    type NextStepReviewCycleBlock,
-    type NextStepReviewCycleLatestFailedReview,
-    type ReviewCycleGuardEvaluation
+    type NextStepReviewCycleBlock
 } from './next-step-review-cycle-guard';
 import {
     buildCommand,
@@ -2458,6 +2458,71 @@ function resolveRulePackStage(rulePack: Record<string, unknown> | null): string 
     return typeof rulePack?.stage === 'string' ? rulePack.stage.trim() || null : null;
 }
 
+export function createNextStepDecisionRouteCoordinator(
+    binding: AuthenticatedNextStepDecisionBinding
+): (
+    checkpoint: NextStepDecisionCheckpoint,
+    kind: NextStepDecisionKind,
+    route: NextStepDecisionRoutePayload | null
+) => NextStepDecisionRoutePayload | null {
+    const decisionCandidates = new Map<
+        NextStepDecisionCheckpoint,
+        NextStepDecisionCandidate<NextStepDecisionRoutePayload>
+    >();
+    let nextDecisionCheckpointIndex = 0;
+
+    return (checkpoint, kind, route) => {
+        const expectedCheckpoint = NEXT_STEP_DECISION_CHECKPOINT_PRECEDENCE[nextDecisionCheckpointIndex];
+        if (checkpoint !== expectedCheckpoint) {
+            throw new Error(
+                `Next-step decision checkpoint ${checkpoint} was evaluated out of order; expected ${expectedCheckpoint}.`
+            );
+        }
+        decisionCandidates.set(checkpoint, { checkpoint, kind, evaluation: 'evaluated', route });
+        nextDecisionCheckpointIndex += 1;
+        const decision = selectNextStepDecision(createAuthenticatedNextStepStateProjection({
+            binding,
+            candidates: NEXT_STEP_DECISION_CHECKPOINT_PRECEDENCE.map((candidateCheckpoint) => (
+                decisionCandidates.get(candidateCheckpoint) ?? {
+                    checkpoint: candidateCheckpoint,
+                    kind: 'normal',
+                    evaluation: 'pending',
+                    route: null
+                }
+            ))
+        }));
+        return decision?.route ?? null;
+    };
+}
+
+export function resolveNextStepGuardDecisionWithWorkflowConfigBoundary<TEvaluation>(options: {
+    readEvaluation: () => TEvaluation;
+    resolveDecisionRoute: (evaluation: TEvaluation) => NextStepGuardDecision;
+    buildWorkflowConfigValidationRoute: (error: unknown) => NextStepDecisionRoutePayload;
+}): {
+    kind: NextStepDecisionKind;
+    route: NextStepDecisionRoutePayload | null;
+    warnings: string[];
+} {
+    let evaluation: TEvaluation;
+    try {
+        evaluation = options.readEvaluation();
+    } catch (error: unknown) {
+        return {
+            kind: 'normal',
+            route: options.buildWorkflowConfigValidationRoute(error),
+            warnings: []
+        };
+    }
+
+    const resolution = options.resolveDecisionRoute(evaluation);
+    return {
+        kind: 'split',
+        route: resolution.route,
+        warnings: resolution.warnings
+    };
+}
+
 export function resolveNextStepDecisionRoute(context: NextStepResolutionContext): NextStepResult {
     const {
         repoRoot,
@@ -2914,37 +2979,7 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         taskModePath: toRepoDisplayPath(repoRoot, taskModePath),
         preflightSha256
     });
-    const decisionCandidates = new Map<
-        NextStepDecisionCheckpoint,
-        NextStepDecisionCandidate<NextStepDecisionRoutePayload>
-    >();
-    let nextDecisionCheckpointIndex = 0;
-    const selectProjectedDecisionRoute = (
-        checkpoint: NextStepDecisionCheckpoint,
-        kind: NextStepDecisionKind,
-        route: NextStepDecisionRoutePayload | null
-    ): NextStepDecisionRoutePayload | null => {
-        const expectedCheckpoint = NEXT_STEP_DECISION_CHECKPOINT_PRECEDENCE[nextDecisionCheckpointIndex];
-        if (checkpoint !== expectedCheckpoint) {
-            throw new Error(
-                `Next-step decision checkpoint ${checkpoint} was evaluated out of order; expected ${expectedCheckpoint}.`
-            );
-        }
-        decisionCandidates.set(checkpoint, { checkpoint, kind, evaluation: 'evaluated', route });
-        nextDecisionCheckpointIndex += 1;
-        const decision = selectNextStepDecision(createAuthenticatedNextStepStateProjection({
-            binding: decisionProjectionBinding,
-            candidates: NEXT_STEP_DECISION_CHECKPOINT_PRECEDENCE.map((candidateCheckpoint) => (
-                decisionCandidates.get(candidateCheckpoint) ?? {
-                    checkpoint: candidateCheckpoint,
-                    kind: 'normal',
-                    evaluation: 'pending',
-                    route: null
-                }
-            ))
-        }));
-        return decision?.route ?? null;
-    };
+    const selectProjectedDecisionRoute = createNextStepDecisionRouteCoordinator(decisionProjectionBinding);
     const buildDecisionRouteResult = (
         route: NextStepDecisionRoutePayload,
         overrides: { qualityChecklist?: NextStepQualityChecklistSummary | null } = {}
@@ -3695,21 +3730,17 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
         return buildDecisionRouteResult(preGuardDecision, { qualityChecklist });
     }
 
-    let scopeBudgetGuardEvaluation: ScopeBudgetGuardEvaluation | null = null;
-    let scopeBudgetGuardRoute: NextStepDecisionRoutePayload | null = null;
-    let scopeBudgetGuardWarnings: string[] = [];
-    let scopeBudgetGuardKind: NextStepDecisionKind = 'split';
-    try {
-        scopeBudgetGuardEvaluation = readScopeBudgetGuardEvaluation(
+    const scopeBudgetGuardResolution = resolveNextStepGuardDecisionWithWorkflowConfigBoundary({
+        readEvaluation: () => readScopeBudgetGuardEvaluation(
             repoRoot,
             preflight,
             profileSummary,
             requiredReviewTypes
-        );
-        const scopeBudgetGuardResolution = resolveScopeBudgetGuardDecisionRoute({
-            evaluation: scopeBudgetGuardEvaluation,
-            guardReason: scopeBudgetGuardEvaluation?.should_block
-                ? sanitizeScopeBudgetGuardSummary(scopeBudgetGuardEvaluation)
+        ),
+        resolveDecisionRoute: (evaluation) => resolveScopeBudgetGuardDecisionRoute({
+            evaluation,
+            guardReason: evaluation?.should_block
+                ? sanitizeScopeBudgetGuardSummary(evaluation)
                 : null,
             materializeLatch: () => materializeSplitRequiredLatch({
                 repoRoot,
@@ -3717,13 +3748,13 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                 reviewsRoot,
                 taskId,
                 guardKind: 'scope_budget',
-                guardReason: sanitizeScopeBudgetGuardSummary(scopeBudgetGuardEvaluation!),
-                rawGuardSummary: scopeBudgetGuardEvaluation!.summary_line,
+                guardReason: sanitizeScopeBudgetGuardSummary(evaluation!),
+                rawGuardSummary: evaluation!.summary_line,
                 preflightPath,
                 guardDetails: {
-                    action: scopeBudgetGuardEvaluation!.action,
-                    profile_name: scopeBudgetGuardEvaluation!.profile_name,
-                    violations: scopeBudgetGuardEvaluation!.violations.map((violation) => ({
+                    action: evaluation!.action,
+                    profile_name: evaluation!.profile_name,
+                    violations: evaluation!.violations.map((violation) => ({
                         metric: violation.metric,
                         actual: violation.actual,
                         limit: violation.limit,
@@ -3735,12 +3766,8 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
             }),
             formatArtifactPath: (artifactPath) => toRepoDisplayPath(repoRoot, artifactPath),
             presentArtifacts: coreArtifacts.present
-        });
-        scopeBudgetGuardRoute = scopeBudgetGuardResolution.route;
-        scopeBudgetGuardWarnings = scopeBudgetGuardResolution.warnings;
-    } catch (error: unknown) {
-        scopeBudgetGuardKind = 'normal';
-        scopeBudgetGuardRoute = {
+        }),
+        buildWorkflowConfigValidationRoute: (error) => ({
             status: 'BLOCKED',
             nextGate: 'workflow-config-validation',
             title: 'Validate workflow configuration before continuing.',
@@ -3751,29 +3778,22 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                     `${cliPrefix} workflow validate --target-root "."`
                 )
             ]
-        };
-    }
-    resultBase.warnings.push(...scopeBudgetGuardWarnings);
+        })
+    });
+    resultBase.warnings.push(...scopeBudgetGuardResolution.warnings);
     const scopeBudgetDecision = selectProjectedDecisionRoute(
         'scope-budget-guard',
-        scopeBudgetGuardKind,
-        scopeBudgetGuardRoute
+        scopeBudgetGuardResolution.kind,
+        scopeBudgetGuardResolution.route
     );
     if (scopeBudgetDecision) {
         return buildDecisionRouteResult(scopeBudgetDecision);
     }
 
-    let reviewCycleGuardEvaluation: ReviewCycleGuardEvaluation | null = null;
-    let latestFailedReviewCycleAttempt: NextStepReviewCycleLatestFailedReview | null = null;
-    let reviewCycleGuardRoute: NextStepDecisionRoutePayload | null = null;
-    let reviewCycleGuardWarnings: string[] = [];
-    let reviewCycleGuardKind: NextStepDecisionKind = 'split';
-    try {
-        const reviewCycleGuardResult = readReviewCycleGuardEvaluation(repoRoot, eventsRoot, taskId);
-        reviewCycleGuardEvaluation = reviewCycleGuardResult.evaluation;
-        latestFailedReviewCycleAttempt = reviewCycleGuardResult.latestFailedReview;
-        const reviewCycleGuardResolution = resolveReviewCycleGuardDecisionRoute({
-            evaluation: reviewCycleGuardEvaluation,
+    const reviewCycleGuardResolution = resolveNextStepGuardDecisionWithWorkflowConfigBoundary({
+        readEvaluation: () => readReviewCycleGuardEvaluation(repoRoot, eventsRoot, taskId),
+        resolveDecisionRoute: ({ evaluation, latestFailedReview }) => resolveReviewCycleGuardDecisionRoute({
+            evaluation,
             getPendingRequiredReviewTypes: () => requiredReviewTypes.filter((reviewType) => {
                 const state = reviewStates.find((candidate) => candidate.reviewType === reviewType);
                 return !state || !reviewStateHasSatisfiedEvidence(repoRoot, eventsRoot, taskId, state);
@@ -3783,15 +3803,15 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                 reviewsRoot,
                 eventsRoot,
                 taskId,
-                evaluation: reviewCycleGuardEvaluation!,
+                evaluation: evaluation!,
                 reviewPhase: {
                     required_review_types: requiredReviewTypes,
                     pending_required_review_types: pendingReviewTypes
                 }
             }),
             buildOperatorBlock: () => buildReviewCycleOperatorBlock(
-                reviewCycleGuardEvaluation!,
-                latestFailedReviewCycleAttempt
+                evaluation!,
+                latestFailedReview
             ),
             materializeLatch: () => materializeSplitRequiredLatch({
                 repoRoot,
@@ -3800,27 +3820,27 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                 taskId,
                 guardKind: 'review_cycle',
                 guardReason: buildReviewCycleOperatorBlock(
-                    reviewCycleGuardEvaluation!,
-                    latestFailedReviewCycleAttempt
+                    evaluation!,
+                    latestFailedReview
                 ).reason,
-                rawGuardSummary: reviewCycleGuardEvaluation!.summary_line,
+                rawGuardSummary: evaluation!.summary_line,
                 preflightPath,
                 guardDetails: {
-                    action: reviewCycleGuardEvaluation!.action,
-                    total_non_test_review_count: reviewCycleGuardEvaluation!.total_non_test_review_count,
-                    failed_non_test_review_count: reviewCycleGuardEvaluation!.failed_non_test_review_count,
-                    cumulative_total_non_test_review_count: reviewCycleGuardEvaluation!.attempt_diagnostics.cumulative_total_non_test_review_count,
-                    cumulative_failed_non_test_review_count: reviewCycleGuardEvaluation!.attempt_diagnostics.cumulative_failed_non_test_review_count,
-                    current_scope_total_non_test_review_count: reviewCycleGuardEvaluation!.current_scope_total_non_test_review_count,
-                    current_scope_failed_non_test_review_count: reviewCycleGuardEvaluation!.current_scope_failed_non_test_review_count,
-                    current_scope_counts_by_review_type: reviewCycleGuardEvaluation!.current_scope_counts_by_review_type,
-                    fresh_non_test_review_count: reviewCycleGuardEvaluation!.attempt_diagnostics.fresh_non_test_review_count,
-                    reused_non_test_review_count: reviewCycleGuardEvaluation!.attempt_diagnostics.reused_non_test_review_count,
-                    fresh_reused_by_review_type: reviewCycleGuardEvaluation!.attempt_diagnostics.fresh_reused_by_review_type,
-                    scope_hash_count_by_review_type: reviewCycleGuardEvaluation!.attempt_diagnostics.scope_hash_count_by_review_type,
-                    top_scope_hashes_by_review_type: reviewCycleGuardEvaluation!.attempt_diagnostics.top_scope_hashes_by_review_type,
-                    excluded_review_types: reviewCycleGuardEvaluation!.excluded_review_types,
-                    violations: reviewCycleGuardEvaluation!.violations.map((violation) => ({
+                    action: evaluation!.action,
+                    total_non_test_review_count: evaluation!.total_non_test_review_count,
+                    failed_non_test_review_count: evaluation!.failed_non_test_review_count,
+                    cumulative_total_non_test_review_count: evaluation!.attempt_diagnostics.cumulative_total_non_test_review_count,
+                    cumulative_failed_non_test_review_count: evaluation!.attempt_diagnostics.cumulative_failed_non_test_review_count,
+                    current_scope_total_non_test_review_count: evaluation!.current_scope_total_non_test_review_count,
+                    current_scope_failed_non_test_review_count: evaluation!.current_scope_failed_non_test_review_count,
+                    current_scope_counts_by_review_type: evaluation!.current_scope_counts_by_review_type,
+                    fresh_non_test_review_count: evaluation!.attempt_diagnostics.fresh_non_test_review_count,
+                    reused_non_test_review_count: evaluation!.attempt_diagnostics.reused_non_test_review_count,
+                    fresh_reused_by_review_type: evaluation!.attempt_diagnostics.fresh_reused_by_review_type,
+                    scope_hash_count_by_review_type: evaluation!.attempt_diagnostics.scope_hash_count_by_review_type,
+                    top_scope_hashes_by_review_type: evaluation!.attempt_diagnostics.top_scope_hashes_by_review_type,
+                    excluded_review_types: evaluation!.excluded_review_types,
+                    violations: evaluation!.violations.map((violation) => ({
                         metric: violation.metric,
                         actual: violation.actual,
                         limit: violation.limit
@@ -3831,8 +3851,8 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                 repoRoot,
                 reviewsRoot,
                 taskId,
-                evaluation: reviewCycleGuardEvaluation!,
-                latestFailedReview: latestFailedReviewCycleAttempt,
+                evaluation: evaluation!,
+                latestFailedReview,
                 latchResult,
                 cliPrefix,
                 fullSuiteCommand: fullSuiteConfig.command
@@ -3840,24 +3860,20 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
             buildContinuationCommand: () => buildReviewCycleContinuationCommand(
                 cliPrefix,
                 taskId,
-                reviewCycleGuardEvaluation!
+                evaluation!
             ),
             buildSplitDecisionCommand: () => buildReviewCycleSplitDecisionCommand(
                 repoRoot,
                 cliPrefix,
                 taskId,
-                reviewCycleGuardEvaluation!,
+                evaluation!,
                 preflightPath
             ),
             formatArtifactPath: (artifactPath) => toRepoDisplayPath(repoRoot, artifactPath),
             presentArtifacts: coreArtifacts.present,
             defaultMissingArtifacts: resultBase.missingArtifacts
-        });
-        reviewCycleGuardRoute = reviewCycleGuardResolution.route;
-        reviewCycleGuardWarnings = reviewCycleGuardResolution.warnings;
-    } catch (error: unknown) {
-        reviewCycleGuardKind = 'normal';
-        reviewCycleGuardRoute = {
+        }),
+        buildWorkflowConfigValidationRoute: (error) => ({
             status: 'BLOCKED',
             nextGate: 'workflow-config-validation',
             title: 'Validate workflow configuration before continuing.',
@@ -3868,13 +3884,13 @@ export function resolveNextStepDecisionRoute(context: NextStepResolutionContext)
                     `${cliPrefix} workflow validate --target-root "."`
                 )
             ]
-        };
-    }
-    resultBase.warnings.push(...reviewCycleGuardWarnings);
+        })
+    });
+    resultBase.warnings.push(...reviewCycleGuardResolution.warnings);
     const reviewCycleDecision = selectProjectedDecisionRoute(
         'review-cycle-guard',
-        reviewCycleGuardKind,
-        reviewCycleGuardRoute
+        reviewCycleGuardResolution.kind,
+        reviewCycleGuardResolution.route
     );
     if (reviewCycleDecision) {
         return buildDecisionRouteResult(reviewCycleDecision);
