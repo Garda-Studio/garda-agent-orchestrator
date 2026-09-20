@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import type { PathLike, PathOrFileDescriptor } from 'node:fs';
+import type { Mode, OpenMode, PathLike } from 'node:fs';
 import * as fx from './next-step-review-cycle-fixtures';
 import {
     normalizeReviewCycleGuardConfig
@@ -769,24 +769,28 @@ describe('gates/next-step review cycle guard attempts', () => {
 
         const fsModule = requireFromTest('node:fs') as typeof fs;
         const originalReaddirSync = fsModule.readdirSync;
-        const originalReadFileSync = fsModule.readFileSync;
+        const originalOpenSync = fsModule.openSync;
         let reviewDirectoryReads = 0;
-        let immutableSnapshotReads = 0;
+        const artifactSnapshotKey = path.resolve(artifactSnapshotPath);
+        const receiptSnapshotKey = path.resolve(receiptSnapshotPath);
+        const immutableSnapshotReads = new Map<string, number>([
+            [artifactSnapshotKey, 0],
+            [receiptSnapshotKey, 0]
+        ]);
         fsModule.readdirSync = ((targetPath: PathLike, options?: unknown) => {
             if (path.resolve(String(targetPath)) === path.resolve(runtimeReviewsRoot)) {
                 reviewDirectoryReads += 1;
             }
             return originalReaddirSync(targetPath, options as never);
         }) as typeof fsModule.readdirSync;
-        fsModule.readFileSync = ((targetPath: PathOrFileDescriptor, options?: unknown) => {
-            if (
-                typeof targetPath !== 'number'
-                && [artifactSnapshotPath, receiptSnapshotPath].includes(path.resolve(String(targetPath)))
-            ) {
-                immutableSnapshotReads += 1;
+        fsModule.openSync = ((targetPath: PathLike, flags: OpenMode, mode?: Mode) => {
+            const snapshotKey = path.resolve(String(targetPath));
+            const priorReads = immutableSnapshotReads.get(snapshotKey);
+            if (priorReads !== undefined) {
+                immutableSnapshotReads.set(snapshotKey, priorReads + 1);
             }
-            return originalReadFileSync(targetPath, options as never);
-        }) as typeof fsModule.readFileSync;
+            return originalOpenSync(targetPath, flags, mode);
+        }) as typeof fsModule.openSync;
 
         try {
             const result = readReviewCycleGuardAttempts(
@@ -807,10 +811,11 @@ describe('gates/next-step review cycle guard attempts', () => {
             assert.equal(result.timelineValid, true);
             assert.equal(result.attempts.length, 2);
             assert.equal(reviewDirectoryReads, 1);
-            assert.equal(immutableSnapshotReads, 2);
+            assert.equal(immutableSnapshotReads.get(artifactSnapshotKey), 1);
+            assert.equal(immutableSnapshotReads.get(receiptSnapshotKey), 1);
         } finally {
             fsModule.readdirSync = originalReaddirSync;
-            fsModule.readFileSync = originalReadFileSync;
+            fsModule.openSync = originalOpenSync;
         }
     });
 
