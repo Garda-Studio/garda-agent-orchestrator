@@ -32,6 +32,7 @@ import { resolveRuntimeReviewerIdentity, type RuntimeReviewerIdentity } from './
 
 export interface ReviewDependencyTimelineEvent {
     event_type: string;
+    outcome?: string;
     sequence: number;
     details: Record<string, unknown> | null;
     integrity?: TaskEventIntegrity | null;

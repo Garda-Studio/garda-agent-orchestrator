@@ -64,6 +64,7 @@ export function readTimelineEventsSummary(timelinePath: string): TimelineEventsS
                 : String(prevEventSha256Raw).trim().toLowerCase() || null;
             events.push({
                 event_type: String(parsed.event_type || '').trim().toUpperCase(),
+                outcome: String(parsed.outcome || '').trim().toUpperCase(),
                 sequence: index,
                 details,
                 integrity: rawIntegrity
