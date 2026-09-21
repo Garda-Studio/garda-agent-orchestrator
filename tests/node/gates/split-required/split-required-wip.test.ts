@@ -32,6 +32,7 @@ import {
     acquireFilesystemLock,
     releaseFilesystemLock
 } from '../../../../src/gate-runtime/task-events-locking';
+import { appendMandatoryTaskEvent } from '../../../../src/gate-runtime/task-events';
 import {
     runCliWithCapturedOutput
 } from '../../cli/commands/gate-test-cli-capture';
@@ -144,6 +145,51 @@ describe('split-required WIP capture and restore', () => {
         assert.equal(wipCapture.status, 'CAPTURED');
         assert.ok((splitArtifact.next_actions as string[]).includes('preview_or_restore_selected_wip_in_child_task'));
         assert.ok(fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8').includes(`| ${TASK_ID} | 🟫 SPLIT_REQUIRED |`));
+    });
+
+    it('preserves legitimate IN_REVIEW provenance in an updated latch', () => {
+        const repoRoot = makeRepo();
+        const taskPath = path.join(repoRoot, 'TASK.md');
+        fs.writeFileSync(
+            taskPath,
+            fs.readFileSync(taskPath, 'utf8').replace('| IN_PROGRESS |', '| IN_REVIEW |'),
+            'utf8'
+        );
+        runGit(repoRoot, ['add', 'TASK.md']);
+        runGit(repoRoot, ['commit', '-m', 'set task in review']);
+        writeFile(repoRoot, 'src/a.ts', 'export const a = 2;\n');
+        const preflightPath = writePreflight(repoRoot, ['src/a.ts']);
+        const eventsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events');
+        const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+
+        let injected = false;
+        const latch = materializeSplitRequiredLatch({
+            repoRoot,
+            eventsRoot,
+            reviewsRoot,
+            taskId: TASK_ID,
+            guardKind: 'scope_budget',
+            guardReason: 'scope was too large',
+            rawGuardSummary: 'scope budget guard',
+            preflightPath,
+            guardDetails: {},
+            faultInjection: (candidate) => {
+                if (!injected && candidate === 'after_status_sync') {
+                    injected = true;
+                    throw new Error('injected after_status_sync');
+                }
+            }
+        });
+        const statusEvent = fs.readFileSync(path.join(eventsRoot, `${TASK_ID}.jsonl`), 'utf8').trim().split('\n')
+            .map((line) => JSON.parse(line) as { event_type: string; details?: Record<string, unknown> })
+            .find((event) => event.event_type === 'STATUS_CHANGED');
+
+        assert.equal(injected, true);
+        assert.equal(latch.status_sync.outcome, 'updated');
+        assert.equal(latch.status_sync.previous_status, 'IN_REVIEW');
+        assert.equal(statusEvent?.details?.previous_status, 'IN_REVIEW');
+        assert.equal(statusEvent?.details?.artifact_sha256, latch.artifact_sha256);
+        assert.equal(readSplitRequiredLatchEvidence({ reviewsRoot, eventsRoot, taskId: TASK_ID }).valid, true);
     });
 
     it('recovers one coherent suspended latch after every injected transaction boundary failure', () => {
@@ -509,6 +555,9 @@ describe('split-required WIP capture and restore', () => {
             .filter((line) => !line.includes('"event_type":"STATUS_CHANGED"'))
             .join('\n');
         fs.writeFileSync(eventPath, withoutStatusEvent, 'utf8');
+        const incompleteEvidence = readSplitRequiredLatchEvidence({ reviewsRoot, eventsRoot, taskId: TASK_ID });
+        assert.equal(incompleteEvidence.valid, false);
+        assert.match(incompleteEvidence.reason, /status transition event is missing/u);
 
         const recovered = materializeSplitRequiredLatch(params);
         const artifact = JSON.parse(fs.readFileSync(recovered.artifact_path, 'utf8')) as {
@@ -531,7 +580,71 @@ describe('split-required WIP capture and restore', () => {
         assert.equal(readSplitRequiredLatchEvidence({ reviewsRoot, eventsRoot, taskId: TASK_ID }).valid, true);
     });
 
-    it('rebinds mandatory events when a fresh materialization changes the latch artifact hash', () => {
+    it('repairs a stale status event whose previous status mismatches the latch artifact', () => {
+        const repoRoot = makeRepo();
+        writeFile(repoRoot, 'src/a.ts', 'export const a = 2;\n');
+        const preflightPath = writePreflight(repoRoot, ['src/a.ts']);
+        const eventsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events');
+        const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+        const params = {
+            repoRoot,
+            eventsRoot,
+            reviewsRoot,
+            taskId: TASK_ID,
+            guardKind: 'scope_budget' as const,
+            guardReason: 'scope was too large',
+            rawGuardSummary: 'scope budget guard',
+            preflightPath,
+            guardDetails: {}
+        };
+
+        const initial = materializeSplitRequiredLatch(params);
+        const eventPath = path.join(eventsRoot, `${TASK_ID}.jsonl`);
+        const eventEntries = fs.readFileSync(eventPath, 'utf8').trim().split('\n')
+            .map((line) => ({
+                line,
+                event: JSON.parse(line) as { event_type: string; details?: Record<string, unknown> }
+            }));
+        const originalStatusEvent = eventEntries.find((entry) => entry.event.event_type === 'STATUS_CHANGED');
+        assert.ok(originalStatusEvent?.event.details);
+        fs.writeFileSync(
+            eventPath,
+            `${eventEntries
+                .filter((entry) => entry.event.event_type !== 'STATUS_CHANGED')
+                .map((entry) => entry.line)
+                .join('\n')}\n`,
+            'utf8'
+        );
+        appendMandatoryTaskEvent(
+            path.join(repoRoot, 'garda-agent-orchestrator'),
+            TASK_ID,
+            'STATUS_CHANGED',
+            'INFO',
+            'Task status changed: IN_REVIEW -> SPLIT_REQUIRED.',
+            { ...originalStatusEvent.event.details, previous_status: 'IN_REVIEW' },
+            { actor: 'orchestrator' }
+        );
+        const incompleteEvidence = readSplitRequiredLatchEvidence({ reviewsRoot, eventsRoot, taskId: TASK_ID });
+        assert.equal(incompleteEvidence.valid, false);
+        assert.match(incompleteEvidence.reason, /status transition event is missing/u);
+
+        const recovered = materializeSplitRequiredLatch(params);
+        const events = fs.readFileSync(eventPath, 'utf8').trim().split('\n')
+            .map((line) => JSON.parse(line) as { event_type: string; details?: Record<string, unknown> });
+        const statusEvents = events.filter((event) => event.event_type === 'STATUS_CHANGED');
+        const repairedStatusEvents = statusEvents.filter((event) => event.details?.previous_status === 'IN_PROGRESS');
+        const latchEvents = events.filter((event) => event.event_type === 'SPLIT_REQUIRED_LATCHED');
+
+        assert.equal(recovered.artifact_sha256, initial.artifact_sha256);
+        assert.equal(recovered.status_sync.outcome, 'updated');
+        assert.equal(recovered.status_sync.previous_status, 'IN_PROGRESS');
+        assert.equal(statusEvents.length, 2);
+        assert.equal(repairedStatusEvents.length, 1);
+        assert.equal(latchEvents.length, 1);
+        assert.equal(readSplitRequiredLatchEvidence({ reviewsRoot, eventsRoot, taskId: TASK_ID }).valid, true);
+    });
+
+    it('rebinds stale mandatory events when preflight identity changes the latch artifact hash', () => {
         const repoRoot = makeRepo();
         writeFile(repoRoot, 'src/a.ts', 'export const a = 2;\n');
         const preflightPath = writePreflight(repoRoot, ['src/a.ts']);
@@ -543,20 +656,21 @@ describe('split-required WIP capture and restore', () => {
             reviewsRoot,
             taskId: TASK_ID,
             guardKind: 'scope_budget' as const,
+            guardReason: 'scope was too large',
             rawGuardSummary: 'scope budget guard',
-            preflightPath
+            preflightPath,
+            guardDetails: {}
         };
 
-        const initial = materializeSplitRequiredLatch({
-            ...baseParams,
-            guardReason: 'initial scope reason',
-            guardDetails: { changed: false }
-        });
-        const recovered = materializeSplitRequiredLatch({
-            ...baseParams,
-            guardReason: 'updated scope reason',
-            guardDetails: { changed: true }
-        });
+        const initial = materializeSplitRequiredLatch(baseParams);
+        const initialArtifact = JSON.parse(fs.readFileSync(initial.artifact_path, 'utf8')) as {
+            preflight_sha256?: string;
+        };
+        writePreflight(repoRoot, ['src/a.ts', 'src/b.ts']);
+        const recovered = materializeSplitRequiredLatch(baseParams);
+        const recoveredArtifact = JSON.parse(fs.readFileSync(recovered.artifact_path, 'utf8')) as {
+            preflight_sha256?: string;
+        };
         const events = fs.readFileSync(path.join(eventsRoot, `${TASK_ID}.jsonl`), 'utf8').trim().split('\n')
             .map((line) => JSON.parse(line) as { event_type: string; details?: Record<string, unknown> });
         const currentStatusEvents = events.filter((event) => (
@@ -569,10 +683,82 @@ describe('split-required WIP capture and restore', () => {
         ));
 
         assert.notEqual(recovered.artifact_sha256, initial.artifact_sha256);
+        assert.notEqual(recoveredArtifact.preflight_sha256, initialArtifact.preflight_sha256);
         assert.equal(recovered.status_sync.outcome, 'updated');
         assert.equal(recovered.status_sync.previous_status, 'IN_PROGRESS');
         assert.equal(currentStatusEvents.length, 1);
         assert.equal(currentLatchEvents.length, 1);
+        assert.equal(readSplitRequiredLatchEvidence({ reviewsRoot, eventsRoot, taskId: TASK_ID }).valid, true);
+    });
+
+    it('rejects a forged terminal previous status from a mutable checkpoint', () => {
+        const repoRoot = makeRepo();
+        writeFile(repoRoot, 'src/a.ts', 'export const a = 2;\n');
+        const preflightPath = writePreflight(repoRoot, ['src/a.ts']);
+        const eventsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events');
+        const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+        const params = {
+            repoRoot,
+            eventsRoot,
+            reviewsRoot,
+            taskId: TASK_ID,
+            guardKind: 'scope_budget' as const,
+            guardReason: 'scope was too large',
+            rawGuardSummary: 'scope budget guard',
+            preflightPath,
+            guardDetails: {}
+        };
+
+        const initial = materializeSplitRequiredLatch(params);
+        const artifact = JSON.parse(fs.readFileSync(initial.artifact_path, 'utf8')) as Record<string, unknown>;
+        artifact.status_sync = {
+            outcome: 'updated',
+            previous_status: 'DONE',
+            next_status: 'SPLIT_REQUIRED',
+            error_message: null
+        };
+        fs.writeFileSync(initial.artifact_path, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
+        const forgedCompleteEvidence = readSplitRequiredLatchEvidence({ reviewsRoot, eventsRoot, taskId: TASK_ID });
+        assert.equal(forgedCompleteEvidence.valid, false);
+        assert.match(forgedCompleteEvidence.reason, /previous_status is not an active task status/u);
+
+        artifact.materialization_phase = 'pending_status_sync';
+        artifact.status_sync = {
+            outcome: 'pending',
+            previous_status: 'DONE',
+            next_status: 'SPLIT_REQUIRED',
+            error_message: null
+        };
+        artifact.wip_capture = null;
+        fs.writeFileSync(initial.artifact_path, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
+        const eventPath = path.join(eventsRoot, `${TASK_ID}.jsonl`);
+        const captureOnlyEvents = fs.readFileSync(eventPath, 'utf8').split('\n')
+            .filter((line) => (
+                !line.includes('"event_type":"SPLIT_REQUIRED_LATCHED"')
+                && !line.includes('"event_type":"STATUS_CHANGED"')
+            ))
+            .join('\n');
+        fs.writeFileSync(eventPath, captureOnlyEvents, 'utf8');
+
+        const recovered = materializeSplitRequiredLatch(params);
+        const recoveredArtifact = JSON.parse(fs.readFileSync(recovered.artifact_path, 'utf8')) as {
+            status_sync?: { outcome?: string; previous_status?: string };
+        };
+        const recoveredStatusEvents = fs.readFileSync(eventPath, 'utf8').trim().split('\n')
+            .filter(Boolean)
+            .map((line) => JSON.parse(line) as { event_type: string; details?: Record<string, unknown> })
+            .filter((event) => event.event_type === 'STATUS_CHANGED');
+
+        assert.equal(recovered.status_sync.outcome, 'already_synced');
+        assert.equal(recovered.status_sync.previous_status, 'SPLIT_REQUIRED');
+        assert.equal(recoveredArtifact.status_sync?.outcome, 'already_synced');
+        assert.equal(recoveredArtifact.status_sync?.previous_status, 'SPLIT_REQUIRED');
+        assert.ok(
+            fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8')
+                .includes(`| ${TASK_ID} | 🟫 SPLIT_REQUIRED |`)
+        );
+        assert.equal(recoveredStatusEvents.length, 0);
+        assert.equal(recoveredStatusEvents.some((event) => event.details?.previous_status === 'DONE'), false);
         assert.equal(readSplitRequiredLatchEvidence({ reviewsRoot, eventsRoot, taskId: TASK_ID }).valid, true);
     });
 

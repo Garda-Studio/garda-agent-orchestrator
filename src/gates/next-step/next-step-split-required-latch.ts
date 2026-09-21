@@ -191,19 +191,19 @@ function readPersistedSuccessfulStatusSync(
     const phase = String(artifact.materialization_phase || '').trim();
     const persisted = isPlainRecord(artifact.status_sync) ? artifact.status_sync : null;
     const outcome = String(persisted?.outcome || '').trim();
-    const previousStatus = persisted?.previous_status == null
-        ? null
-        : String(persisted.previous_status).trim() || null;
+    const previousStatus = readTaskQueueStatusToken(
+        persisted?.previous_status == null ? null : String(persisted.previous_status)
+    );
+    const hasRecoverablePreviousStatus = previousStatus === 'IN_PROGRESS'
+        || previousStatus === 'IN_REVIEW';
     const hasRecoverablePendingTransition = phase === 'pending_status_sync'
         && outcome === 'pending'
         && currentStatusSync.outcome === 'already_synced'
-        && previousStatus !== null
-        && previousStatus !== SPLIT_REQUIRED_STATUS;
+        && hasRecoverablePreviousStatus;
     const hasRecoverableFailedRollback = phase === 'status_sync_failed'
         && outcome === 'write_failed'
         && currentStatusSync.outcome === 'already_synced'
-        && previousStatus !== null
-        && previousStatus !== SPLIT_REQUIRED_STATUS;
+        && hasRecoverablePreviousStatus;
     if (
         !hasRecoverablePendingTransition
         && !hasRecoverableFailedRollback
@@ -215,6 +215,9 @@ function readPersistedSuccessfulStatusSync(
         return null;
     }
     if (String(persisted?.next_status || '').trim() !== SPLIT_REQUIRED_STATUS) {
+        return null;
+    }
+    if (!hasRecoverablePreviousStatus) {
         return null;
     }
     const errorMessage = persisted?.error_message == null
@@ -309,6 +312,7 @@ function readPersistedSplitRequiredEventState(params: {
     guardKind: SplitRequiredGuardKind;
     artifactPath: string;
     artifactSha256: string;
+    previousStatus: string | null;
 }): { latchEventRecorded: boolean; statusEventRecorded: boolean } {
     if (!params.artifactSha256) {
         return { latchEventRecorded: false, statusEventRecorded: false };
@@ -335,6 +339,7 @@ function readPersistedSplitRequiredEventState(params: {
         )),
         statusEventRecorded: timeline.some((event) => (
             event.event_type === 'STATUS_CHANGED'
+            && String(event.details?.previous_status || '') === params.previousStatus
             && String(event.details?.new_status || '') === SPLIT_REQUIRED_STATUS
             && String(event.details?.reason || '') === 'auto_split_guard_latched'
             && matchesArtifact(event.details || {})
@@ -464,6 +469,22 @@ export function readSplitRequiredLatchEvidence(params: {
             guard_kind: guardKind
         };
     }
+    const previousStatus = readTaskQueueStatusToken(
+        statusSync?.previous_status == null ? null : String(statusSync.previous_status)
+    );
+    if (
+        statusSyncOutcome === 'updated'
+        && previousStatus !== 'IN_PROGRESS'
+        && previousStatus !== 'IN_REVIEW'
+    ) {
+        return {
+            valid: false,
+            reason: 'split-required latch artifact status_sync.previous_status is not an active task status',
+            artifact_path: normalizePath(artifactPath),
+            artifact_sha256: artifactSha256,
+            guard_kind: guardKind
+        };
+    }
 
     const timelineErrors: string[] = [];
     const timeline = collectOrderedTimelineEvents(path.join(params.eventsRoot, `${params.taskId}.jsonl`), timelineErrors);
@@ -487,10 +508,31 @@ export function readSplitRequiredLatchEvidence(params: {
             guard_kind: guardKind
         };
     }
+    const hasStatusEvent = statusSyncOutcome !== 'updated' || timeline.some((event) => {
+        const details = event.details || {};
+        return event.event_type === 'STATUS_CHANGED'
+            && String(details.previous_status || '') === previousStatus
+            && String(details.new_status || '') === SPLIT_REQUIRED_STATUS
+            && String(details.reason || '') === 'auto_split_guard_latched'
+            && String(details.guard_kind || '') === guardKind
+            && String(details.artifact_sha256 || '').toLowerCase() === artifactSha256
+            && normalizePath(String(details.artifact_path || '')) === normalizedArtifactPath;
+    });
+    if (!hasStatusEvent) {
+        return {
+            valid: false,
+            reason: timelineErrors.length > 0
+                ? `split-required status transition event is missing or unreadable (${timelineErrors.join('; ')})`
+                : 'split-required status transition event is missing for the artifact',
+            artifact_path: normalizedArtifactPath,
+            artifact_sha256: artifactSha256,
+            guard_kind: guardKind
+        };
+    }
 
     return {
         valid: true,
-        reason: 'split-required latch artifact and event are valid',
+        reason: 'split-required latch artifact and mandatory events are valid',
         artifact_path: normalizedArtifactPath,
         artifact_sha256: artifactSha256,
         guard_kind: guardKind
@@ -855,6 +897,7 @@ function materializeSplitRequiredLatchTransaction(
         };
     }, () => {
         const existing = safeReadJson(artifactPath);
+        const existingArtifactSha256 = fileSha256(artifactPath) || '';
         const taskStatusBeforeSync = readTaskQueueStatusToken(
             readTaskQueueEntries(params.repoRoot).get(params.taskId)?.status || null
         );
@@ -863,6 +906,26 @@ function materializeSplitRequiredLatchTransaction(
             && existing?.status === SPLIT_REQUIRED_STATUS
             && existing?.guard_kind === params.guardKind
             && existing?.preflight_sha256 === preflightSha256;
+        const existingEventState = readPersistedSplitRequiredEventState({
+            eventsRoot: params.eventsRoot,
+            taskId: params.taskId,
+            guardKind: params.guardKind,
+            artifactPath,
+            artifactSha256: existingArtifactSha256,
+            previousStatus: isPlainRecord(existing?.status_sync)
+                && existing.status_sync.previous_status != null
+                ? readTaskQueueStatusToken(String(existing.status_sync.previous_status))
+                : null
+        });
+        const existingTransitionBound = Boolean(
+            existingArtifactSha256
+            && existing?.task_id === params.taskId
+            && existing?.status === SPLIT_REQUIRED_STATUS
+            && existing?.guard_kind === params.guardKind
+            && existing?.materialization_phase === 'complete'
+            && existingEventState.latchEventRecorded
+            && existingEventState.statusEventRecorded
+        );
         const timestampUtc = existingCurrent
             && taskStatusBeforeSync === SPLIT_REQUIRED_STATUS
             && typeof existing?.timestamp_utc === 'string'
@@ -917,7 +980,8 @@ function materializeSplitRequiredLatchTransaction(
                 wip_capture: null
             };
         }
-        const persistedStatusSync = currentStatusSync.outcome === 'already_synced' && existingCurrent
+        const persistedStatusSync = currentStatusSync.outcome === 'already_synced'
+            && (existingCurrent || existingTransitionBound)
             ? readPersistedSuccessfulStatusSync(existing, currentStatusSync)
             : null;
         const statusSync = persistedStatusSync || currentStatusSync;
@@ -932,15 +996,17 @@ function materializeSplitRequiredLatchTransaction(
             })
             : null;
         const persistedArtifactSha256 = persistedStatusSync
+            && existingCurrent
             && String(existing?.materialization_phase || '') === 'complete'
-            ? fileSha256(artifactPath) || ''
+            ? existingArtifactSha256
             : '';
         const persistedEventState = readPersistedSplitRequiredEventState({
             eventsRoot: params.eventsRoot,
             taskId: params.taskId,
             guardKind: params.guardKind,
             artifactPath,
-            artifactSha256: persistedArtifactSha256
+            artifactSha256: persistedArtifactSha256,
+            previousStatus: statusSync.previous_status
         });
         const completeLatchAfterStatusSync = (
             initialState: {
@@ -1037,17 +1103,13 @@ function materializeSplitRequiredLatchTransaction(
                     taskId: params.taskId,
                     guardKind: params.guardKind,
                     artifactPath,
-                    artifactSha256
+                    artifactSha256,
+                    previousStatus: statusSync.previous_status
                 });
                 latchEventRecorded = currentEventState.latchEventRecorded;
                 statusEventRecorded = currentEventState.statusEventRecorded;
                 injectFault('after_latch_artifact');
-                const latchEvidenceAfterArtifact = readSplitRequiredLatchEvidence({
-                    reviewsRoot: params.reviewsRoot,
-                    eventsRoot: params.eventsRoot,
-                    taskId: params.taskId
-                });
-                if (!latchEvidenceAfterArtifact.valid) {
+                if (!latchEventRecorded) {
                     appendMandatoryTaskEvent(
                         orchestratorRoot,
                         params.taskId,
