@@ -6,12 +6,15 @@ import * as path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import {
     resolveTaskQueueTransactionLockPath,
+    withTaskQueueTransaction,
     writeTaskQueueFile
 } from '../../../src/core/task-queue/task-queue-repository';
 import { acquireFilesystemLock } from '../../../src/gate-runtime/task-events-locking';
 import { syncTaskQueueStatusDetailed, withTaskQueueStatusSyncLock } from '../../../src/cli/commands/gate-flows/task/task-queue-sync';
 
 const queueModule = require.resolve('../../../src/cli/commands/gate-flows/task/task-queue-sync');
+const repositoryModule = require.resolve('../../../src/core/task-queue/task-queue-repository');
+const lockingModule = require.resolve('../../../src/gate-runtime/task-events-locking');
 const content = '| ID | Status |\n| --- | --- |\n| T-001 | TODO |\n| T-002 | TODO |\n';
 
 function fixture(): string {
@@ -151,6 +154,50 @@ test('queue releases the legacy lock when the runtime lock namespace is obstruct
     }
 });
 
+test('queue rejects a runtime lock path redirected at every descendant segment', () => {
+    const segments = ['garda-agent-orchestrator', 'runtime', 'task-queue-locks', 'TASK.md.lock'];
+    for (let index = 0; index < segments.length; index += 1) {
+        const root = fixture();
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-queue-lock-outside-'));
+        const target = path.join(root, 'TASK.md');
+        const redirectedPath = path.join(root, ...segments.slice(0, index + 1));
+        try {
+            fs.mkdirSync(path.dirname(redirectedPath), { recursive: true });
+            fs.symlinkSync(outside, redirectedPath, process.platform === 'win32' ? 'junction' : 'dir');
+
+            const result = syncTaskQueueStatusDetailed(root, 'T-001', 'IN_PROGRESS');
+
+            assert.equal(result.outcome, 'write_failed', segments[index]);
+            assert.match(String(result.error_message), /symlink or junction/u, segments[index]);
+            assert.equal(fs.readFileSync(target, 'utf8'), content, segments[index]);
+            assert.deepEqual(fs.readdirSync(outside), [], segments[index]);
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+            fs.rmSync(outside, { recursive: true, force: true });
+        }
+    }
+});
+
+test('queue transaction canonicalizes its queue path once', () => {
+    const root = fixture();
+    const target = path.join(root, 'TASK.md');
+    const realFs = require('node:fs') as typeof fs;
+    const original = realFs.realpathSync;
+    let calls = 0;
+    try {
+        realFs.realpathSync = ((...args: Parameters<typeof fs.realpathSync>) => {
+            calls += 1;
+            return original(...args);
+        }) as typeof fs.realpathSync;
+
+        withTaskQueueTransaction(target, (message) => { throw new Error(message); }, () => undefined);
+        assert.equal(calls, 1);
+    } finally {
+        realFs.realpathSync = original;
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
 test('nested status sync preserves compare-before-write protection', () => {
     const root = fixture();
     const target = path.join(root, 'TASK.md');
@@ -208,6 +255,83 @@ test('independent queue writers serialize without losing either update', async (
         });
         await Promise.all([run('T-001'), run('T-002')]);
         const updated = fs.readFileSync(path.join(root, 'TASK.md'), 'utf8');
+        assert.match(updated, /T-001\s*\|[^|\n]*IN_PROGRESS/);
+        assert.match(updated, /T-002\s*\|[^|\n]*IN_PROGRESS/);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('runtime and legacy queue writers serialize without losing either update', async () => {
+    const root = fixture();
+    const target = path.join(root, 'TASK.md');
+    const readyPath = path.join(root, 'runtime-writer-ready');
+    const legacyOwnerPath = path.join(`${target}.garda-status-sync.lock`, 'owner.json');
+    const overlapObservedPath = path.join(root, 'writer-overlap-observed');
+    const boundedWaitSource = `
+        const waitForPath = (candidate, label) => {
+            const deadline = Date.now() + 5_000;
+            while (!fs.existsSync(candidate)) {
+                if (Date.now() >= deadline) throw new Error('Timed out waiting for ' + label);
+                Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+            }
+        };
+    `;
+    const run = (label: string, source: string) => new Promise<void>((resolve, reject) => {
+        const child = spawn(process.execPath, ['-e', source], { stdio: ['ignore', 'ignore', 'pipe'] });
+        let error = '';
+        let timedOut = false;
+        const timeout = setTimeout(() => {
+            timedOut = true;
+            child.kill();
+        }, 15_000);
+        child.stderr.on('data', (chunk) => { error += String(chunk); });
+        child.once('error', (failure) => {
+            clearTimeout(timeout);
+            reject(failure);
+        });
+        child.once('exit', (code) => {
+            clearTimeout(timeout);
+            if (timedOut) reject(new Error(`${label} timed out`));
+            else if (code === 0) resolve();
+            else reject(new Error(error || `${label} exited with code ${String(code)}`));
+        });
+    });
+    try {
+        const runtimeWriter = run('runtime writer', `
+            const fs = require('node:fs');
+            const repository = require(${JSON.stringify(repositoryModule)});
+            const locking = require(${JSON.stringify(lockingModule)});
+            const target = ${JSON.stringify(target)};
+            ${boundedWaitSource}
+            const { handle } = locking.acquireFilesystemLock(
+                repository.resolveTaskQueueTransactionLockPath(target),
+                { ownerLabel: 'runtime-queue-writer', requireKnownDeadOwner: true, allowForeignHostStaleRecovery: false }
+            );
+            try {
+                const stale = fs.readFileSync(target, 'utf8');
+                fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');
+                waitForPath(${JSON.stringify(legacyOwnerPath)}, 'legacy lock ownership');
+                fs.writeFileSync(${JSON.stringify(overlapObservedPath)}, 'observed');
+                fs.writeFileSync(target, stale.replace('| T-001 | TODO |', '| T-001 | IN_PROGRESS |'));
+            } finally {
+                locking.releaseFilesystemLock(handle);
+            }
+        `);
+        const legacyWriter = run('legacy writer', `
+            const fs = require('node:fs');
+            const api = require(${JSON.stringify(queueModule)});
+            ${boundedWaitSource}
+            waitForPath(${JSON.stringify(readyPath)}, 'runtime writer readiness');
+            const result = api.syncTaskQueueStatusDetailed(${JSON.stringify(root)}, 'T-002', 'IN_PROGRESS');
+            if (result.outcome !== 'updated') throw new Error(JSON.stringify(result));
+        `);
+
+        const results = await Promise.allSettled([runtimeWriter, legacyWriter]);
+        const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+        if (failure) throw failure.reason;
+        const updated = fs.readFileSync(target, 'utf8');
+        assert.equal(fs.readFileSync(overlapObservedPath, 'utf8'), 'observed');
         assert.match(updated, /T-001\s*\|[^|\n]*IN_PROGRESS/);
         assert.match(updated, /T-002\s*\|[^|\n]*IN_PROGRESS/);
     } finally {

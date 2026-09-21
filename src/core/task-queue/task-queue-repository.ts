@@ -16,24 +16,42 @@ interface QueueTransaction {
 
 const transactions = new Map<string, QueueTransaction>();
 
+const RUNTIME_LOCK_PATH_SEGMENTS = [
+    'garda-agent-orchestrator',
+    'runtime',
+    'task-queue-locks',
+    'TASK.md.lock'
+] as const;
+
 function canonicalQueuePath(taskPath: string): string {
     if (path.basename(taskPath) !== 'TASK.md') throw new Error('Task queue must be named TASK.md.');
     return path.join(fs.realpathSync(path.dirname(path.resolve(taskPath))), 'TASK.md');
 }
 
-export function resolveTaskQueueTransactionLockPath(taskPath: string): string {
-    const canonicalPath = canonicalQueuePath(taskPath);
-    return path.join(
-        path.dirname(canonicalPath),
-        'garda-agent-orchestrator',
-        'runtime',
-        'task-queue-locks',
-        'TASK.md.lock'
-    );
+function resolveRuntimeLockPath(canonicalPath: string): string {
+    const queueRoot = path.dirname(canonicalPath);
+    let currentPath = queueRoot;
+    for (const segment of RUNTIME_LOCK_PATH_SEGMENTS) {
+        currentPath = path.join(currentPath, segment);
+        try {
+            if (fs.lstatSync(currentPath).isSymbolicLink()) {
+                throw new Error('TASK.md runtime lock path contains a symlink or junction.');
+            }
+        } catch (error) {
+            const code = String((error as NodeJS.ErrnoException)?.code || '');
+            if (code === 'ENOENT' || code === 'ENOTDIR') break;
+            throw error;
+        }
+    }
+    return path.join(queueRoot, ...RUNTIME_LOCK_PATH_SEGMENTS);
 }
 
-function resolveLegacyTaskQueueTransactionLockPath(taskPath: string): string {
-    return `${canonicalQueuePath(taskPath)}.garda-status-sync.lock`;
+export function resolveTaskQueueTransactionLockPath(taskPath: string): string {
+    return resolveRuntimeLockPath(canonicalQueuePath(taskPath));
+}
+
+function resolveLegacyTaskQueueTransactionLockPath(canonicalPath: string): string {
+    return `${canonicalPath}.garda-status-sync.lock`;
 }
 
 function assertTransactionLockOwnership(transaction: QueueTransaction, message: string): void {
@@ -70,7 +88,7 @@ export function withTaskQueueTransaction<T>(
         } else {
             const lockPaths = [
                 resolveLegacyTaskQueueTransactionLockPath(canonicalPath),
-                resolveTaskQueueTransactionLockPath(canonicalPath)
+                resolveRuntimeLockPath(canonicalPath)
             ];
             const handles: LockHandle[] = [];
             try {
