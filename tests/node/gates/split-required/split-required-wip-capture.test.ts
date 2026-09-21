@@ -98,6 +98,99 @@ function checkoutState(result: ReturnType<typeof capture>): CaptureCheckoutState
     }).checkout_state;
 }
 
+function restoreCapturedWip(repoRoot: string, captured: ReturnType<typeof capture>): void {
+    assert.ok(captured.manifest_path);
+    const restored = restoreSplitRequiredWip({
+        repoRoot,
+        taskId: TASK_ID,
+        manifestPath: captured.manifest_path
+    });
+    assert.equal(restored.status, 'RESTORED', restored.violations.join('\n'));
+}
+
+function assertRetainedCaptureBlocked(
+    first: ReturnType<typeof capture>,
+    second: ReturnType<typeof capture>,
+    violationFragment: string
+): void {
+    assert.equal(second.status, 'BLOCKED');
+    assert.equal(checkoutState(second), 'indeterminate');
+    assert.equal(second.manifest_path, first.manifest_path);
+    assert.ok(second.violations.some((violation) => violation.includes(violationFragment)));
+}
+
+function captureWithClosingHeadMismatch(repoRoot: string, changedFiles: string[]): {
+    result: ReturnType<typeof capture>;
+    headReads: number;
+    inspectionEvents: string[];
+} {
+    const childProcessModule = require('node:child_process') as typeof import('node:child_process');
+    const fsModule = require('node:fs') as typeof import('node:fs');
+    const originalExecFileSync = childProcessModule.execFileSync;
+    const originalReadFileSync = fsModule.readFileSync;
+    let headReads = 0;
+    const inspectionEvents: string[] = [];
+    childProcessModule.execFileSync = ((
+        file: string,
+        args?: readonly string[],
+        options?: childProcess.ExecFileSyncOptions
+    ) => {
+        const commandArgs = Array.isArray(args) ? args.map(String) : [];
+        if (file === 'git' && commandArgs.includes('rev-parse') && commandArgs.includes('HEAD')) {
+            headReads += 1;
+            inspectionEvents.push(`head:${headReads}`);
+            if (headReads === 2) {
+                return `${'f'.repeat(40)}\n`;
+            }
+        } else if (file === 'git' && headReads === 1) {
+            inspectionEvents.push(`git:${commandArgs.join(' ')}`);
+        }
+        return Reflect.apply(originalExecFileSync, childProcessModule, [file, args, options]);
+    }) as typeof childProcessModule.execFileSync;
+    fsModule.readFileSync = ((...args: unknown[]) => {
+        if (headReads === 1) {
+            inspectionEvents.push('fs:readFileSync');
+        }
+        return Reflect.apply(originalReadFileSync, fsModule, args);
+    }) as typeof fsModule.readFileSync;
+    let result: ReturnType<typeof capture> | null = null;
+    try {
+        result = capture(repoRoot, changedFiles);
+    } finally {
+        childProcessModule.execFileSync = originalExecFileSync;
+        fsModule.readFileSync = originalReadFileSync;
+    }
+    assert.ok(result);
+    return { result, headReads, inspectionEvents };
+}
+
+function assertClosingHeadRecheckAfterWorkspaceInspection(
+    inspectionEvents: string[],
+    options: { expectContentRead: boolean }
+): void {
+    assert.equal(inspectionEvents[0], 'head:1');
+    assert.equal(inspectionEvents.at(-1), 'head:2');
+    const closingHeadIndex = inspectionEvents.indexOf('head:2');
+    assert.ok(closingHeadIndex > 0);
+    const beforeClosingHead = inspectionEvents.slice(0, closingHeadIndex);
+    assert.ok(beforeClosingHead.some((event) => (
+        event.startsWith('git:')
+        && event.includes(' diff ')
+        && event.includes('--cached')
+        && event.includes('--name-only')
+    )));
+    assert.ok(beforeClosingHead.some((event) => (
+        event.startsWith('git:')
+        && event.includes(' diff ')
+        && !event.includes('--cached')
+        && event.includes('--name-only')
+    )));
+    assert.ok(beforeClosingHead.some((event) => (
+        event.startsWith('git:') && event.includes(' ls-files ') && event.includes('--others')
+    )));
+    assert.equal(beforeClosingHead.includes('fs:readFileSync'), options.expectContentRead);
+}
+
 function captureDirectories(repoRoot: string): string[] {
     const captureRoot = path.join(
         repoRoot,
@@ -269,7 +362,36 @@ describe('split-required WIP capture boundary', () => {
         assert.equal(fs.readFileSync(path.join(repoRoot, 'src/app.ts'), 'utf8'), 'export const value = 3;\n');
     });
 
-    it('excludes the active legacy task-queue lock directory from visible implementation WIP', (context) => {
+    it('blocks a stale HEAD identity during retained-state inspection', (context) => {
+        const repoRoot = makeRepo();
+        context.after(() => removeTempRoot(repoRoot));
+        writeFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
+        const first = capture(repoRoot, ['src/app.ts']);
+        assert.equal(first.status, 'CAPTURED', first.violations.join('\n'));
+
+        const second = captureWithClosingHeadMismatch(repoRoot, ['src/app.ts']);
+
+        assert.equal(second.headReads, 2);
+        assertClosingHeadRecheckAfterWorkspaceInspection(second.inspectionEvents, { expectContentRead: false });
+        assertRetainedCaptureBlocked(first, second.result, 'identity changed during inspection');
+    });
+
+    it('blocks a stale HEAD identity during restored-state inspection', (context) => {
+        const repoRoot = makeRepo();
+        context.after(() => removeTempRoot(repoRoot));
+        writeFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
+        const first = capture(repoRoot, ['src/app.ts']);
+        assert.equal(first.status, 'CAPTURED', first.violations.join('\n'));
+        restoreCapturedWip(repoRoot, first);
+
+        const second = captureWithClosingHeadMismatch(repoRoot, ['src/app.ts']);
+
+        assert.equal(second.headReads, 2);
+        assertClosingHeadRecheckAfterWorkspaceInspection(second.inspectionEvents, { expectContentRead: true });
+        assertRetainedCaptureBlocked(first, second.result, 'identity changed during inspection');
+    });
+
+    it('excludes only the canonical legacy task-queue lock owner artifact', (context) => {
         const repoRoot = makeRepo();
         context.after(() => removeTempRoot(repoRoot));
         const lockOwnerPath = path.join(repoRoot, 'TASK.md.garda-status-sync.lock', 'owner.json');
@@ -282,6 +404,81 @@ describe('split-required WIP capture boundary', () => {
         assert.equal(checkoutState(captured), 'suspended');
         assert.deepEqual(captured.untracked_files, []);
         assert.equal(fs.readFileSync(lockOwnerPath, 'utf8'), '{"pid":123}\n');
+    });
+
+    it('blocks foreign files under the legacy task-queue lock directory as visible WIP', (context) => {
+        const repoRoot = makeRepo();
+        context.after(() => removeTempRoot(repoRoot));
+        writeFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
+        const first = capture(repoRoot, ['src/app.ts']);
+        assert.equal(first.status, 'CAPTURED', first.violations.join('\n'));
+        writeFile(repoRoot, 'TASK.md.garda-status-sync.lock/payload.txt', 'unowned\n');
+
+        const second = capture(repoRoot, ['src/app.ts']);
+
+        assertRetainedCaptureBlocked(first, second, 'visible untracked WIP path set');
+        assert.equal(
+            fs.readFileSync(path.join(repoRoot, 'TASK.md.garda-status-sync.lock', 'payload.txt'), 'utf8'),
+            'unowned\n'
+        );
+    });
+
+    it('rejects restored WIP with the captured content in a different staging mode', (context) => {
+        const repoRoot = makeRepo();
+        context.after(() => removeTempRoot(repoRoot));
+        writeFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
+        runGit(repoRoot, ['add', 'src/app.ts']);
+        const first = capture(repoRoot, ['src/app.ts']);
+        assert.equal(first.status, 'CAPTURED', first.violations.join('\n'));
+        restoreCapturedWip(repoRoot, first);
+        runGit(repoRoot, ['reset', 'HEAD', '--', 'src/app.ts']);
+
+        const second = capture(repoRoot, ['src/app.ts']);
+
+        assertRetainedCaptureBlocked(first, second, 'staged WIP path set');
+    });
+
+    it('rejects restored WIP with a mismatched tracked path set', (context) => {
+        const repoRoot = makeRepo();
+        context.after(() => removeTempRoot(repoRoot));
+        writeFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
+        const changedFiles = ['README.md', 'src/app.ts'];
+        const first = capture(repoRoot, changedFiles);
+        assert.equal(first.status, 'CAPTURED', first.violations.join('\n'));
+        restoreCapturedWip(repoRoot, first);
+        writeFile(repoRoot, 'README.md', '# Unexpected tracked WIP\n');
+
+        const second = capture(repoRoot, changedFiles);
+
+        assertRetainedCaptureBlocked(first, second, 'tracked WIP path set');
+    });
+
+    it('rejects a retained suspended checkout with an unexpected untracked path', (context) => {
+        const repoRoot = makeRepo();
+        context.after(() => removeTempRoot(repoRoot));
+        writeFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
+        const changedFiles = ['src/app.ts', 'src/unexpected.ts'];
+        const first = capture(repoRoot, changedFiles);
+        assert.equal(first.status, 'CAPTURED', first.violations.join('\n'));
+        writeFile(repoRoot, 'src/unexpected.ts', 'export const unexpected = true;\n');
+
+        const second = capture(repoRoot, changedFiles);
+
+        assertRetainedCaptureBlocked(first, second, 'visible untracked WIP path set');
+    });
+
+    it('rejects restored WIP with changed untracked content', (context) => {
+        const repoRoot = makeRepo();
+        context.after(() => removeTempRoot(repoRoot));
+        writeFile(repoRoot, 'src/new.ts', 'export const added = true;\n');
+        const first = capture(repoRoot, ['src/new.ts']);
+        assert.equal(first.status, 'CAPTURED', first.violations.join('\n'));
+        restoreCapturedWip(repoRoot, first);
+        writeFile(repoRoot, 'src/new.ts', 'export const added = false;\n');
+
+        const second = capture(repoRoot, ['src/new.ts']);
+
+        assertRetainedCaptureBlocked(first, second, 'restored untracked WIP content changed');
     });
 
     it('reports restored checkout state when rollback succeeds but capture cleanup fails', (context) => {
@@ -589,7 +786,7 @@ describe('split-required WIP capture boundary', () => {
         assert.equal(fs.existsSync(path.join(repoRoot, 'src/new.ts')), false);
     });
 
-    it('does not reuse a capture when a dangling symlink occupies an untracked path', (context) => {
+    it('does not reuse a capture when a dangling symlink is reported at an untracked path', (context) => {
         const repoRoot = makeRepo();
         context.after(() => removeTempRoot(repoRoot));
         writeFile(repoRoot, 'src/new.ts', 'export const added = true;\n');
@@ -597,23 +794,34 @@ describe('split-required WIP capture boundary', () => {
         assert.equal(first.status, 'CAPTURED', first.violations.join('\n'));
         assert.ok(first.manifest_path);
 
-        const targetPath = path.join(repoRoot, 'missing-target.ts');
         const linkPath = path.join(repoRoot, 'src', 'new.ts');
-        try {
-            fs.symlinkSync(targetPath, linkPath, 'file');
-        } catch (error: unknown) {
-            const code = (error as NodeJS.ErrnoException).code;
-            if (process.platform === 'win32' && ['EACCES', 'EPERM', 'UNKNOWN'].includes(String(code))) {
-                context.skip(`Symlink creation unavailable: ${String(code)}`);
-                return;
+        writeFile(repoRoot, 'src/new.ts', 'dangling symlink placeholder\n');
+        const fsModule = require('node:fs') as typeof import('node:fs');
+        const mutableFsModule = fsModule as { lstatSync: typeof fs.lstatSync };
+        const originalLstatSync = fsModule.lstatSync;
+        mutableFsModule.lstatSync = ((targetPath: fs.PathLike) => {
+            const stats = Reflect.apply(originalLstatSync, fsModule, [targetPath]) as fs.Stats;
+            if (path.resolve(String(targetPath)) !== linkPath) {
+                return stats;
             }
-            throw error;
+            return new Proxy(stats, {
+                get(target, property, receiver) {
+                    if (property === 'isSymbolicLink') {
+                        return () => true;
+                    }
+                    return Reflect.get(target, property, receiver);
+                }
+            });
+        }) as typeof fsModule.lstatSync;
+        let second: ReturnType<typeof capture> | null = null;
+        try {
+            second = capture(repoRoot, ['src/new.ts']);
+        } finally {
+            mutableFsModule.lstatSync = originalLstatSync;
         }
 
-        const second = capture(repoRoot, ['src/new.ts']);
-
-        assert.equal(second.status, 'BLOCKED');
-        assert.notEqual(second.manifest_path, first.manifest_path);
+        assert.ok(second);
+        assertRetainedCaptureBlocked(first, second, 'checkout state inspection failed');
     });
 
     it('blocks a preflight without task identity before workspace mutation', (context) => {

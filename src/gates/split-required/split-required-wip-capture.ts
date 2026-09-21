@@ -42,6 +42,8 @@ import type {
     SplitRequiredWipUntrackedFileEvidence
 } from './split-required-wip-contracts';
 
+const LEGACY_TASK_QUEUE_LOCK_OWNER_PATH = `${TASK_QUEUE_FILENAME}.garda-status-sync.lock/owner.json`;
+
 interface TrackedChangeFiles {
     staged: Set<string>;
     unstaged: Set<string>;
@@ -132,7 +134,7 @@ function excludeGateOwnedQueueFiles(changes: TrackedChangeFiles): TrackedChangeF
 function collectVisibleUntrackedFiles(repoRoot: string): string[] {
     return splitNulList(runGitBinary(repoRoot, ['ls-files', '--others', '--exclude-standard', '-z']))
         .map(normalizeGitPath)
-        .filter((relativePath) => !relativePath.startsWith(`${TASK_QUEUE_FILENAME}.garda-status-sync.lock/`))
+        .filter((relativePath) => relativePath !== LEGACY_TASK_QUEUE_LOCK_OWNER_PATH)
         .sort();
 }
 
@@ -879,7 +881,8 @@ function inspectCapturedWorkspaceSuspension(
                 ]
             };
         }
-        const trackedChanges = excludeGateOwnedQueueFiles(collectTrackedChangeFiles(repoRoot)).all;
+        const currentTracked = excludeGateOwnedQueueFiles(collectTrackedChangeFiles(repoRoot));
+        const trackedChanges = currentTracked.all;
         const visibleUntrackedFiles = collectVisibleUntrackedFiles(repoRoot);
         const capturedUntrackedAbsent = manifest.untracked_files.every((entry) => (
             isRepoPathAbsent(repoRoot, entry.path)
@@ -887,6 +890,15 @@ function inspectCapturedWorkspaceSuspension(
         if (trackedChanges.length === 0
             && visibleUntrackedFiles.length === 0
             && capturedUntrackedAbsent) {
+            const finalHead = getHeadCommit(repoRoot);
+            if (finalHead !== currentHead) {
+                return {
+                    checkoutState: 'indeterminate',
+                    violations: [
+                        `split-required WIP checkout state identity changed during inspection: expected HEAD ${currentHead}; found ${finalHead}`
+                    ]
+                };
+            }
             return {
                 checkoutState: 'suspended',
                 violations: []
@@ -904,7 +916,6 @@ function inspectCapturedWorkspaceSuspension(
         const expectedUnstaged = new Set(
             manifest.tracked_files.filter((entry) => entry.unstaged).map((entry) => entry.path)
         );
-        const currentTracked = excludeGateOwnedQueueFiles(collectTrackedChangeFiles(repoRoot));
         if (JSON.stringify([...currentTracked.staged].sort()) !== JSON.stringify([...expectedStaged].sort())) {
             restoredViolations.push('staged WIP path set does not match the retained capture.');
         }
@@ -943,6 +954,12 @@ function inspectCapturedWorkspaceSuspension(
                 || sha256Buffer(currentSource.content) !== entry.sha256) {
                 restoredViolations.push(`restored untracked WIP content changed: ${entry.path}`);
             }
+        }
+        const finalHead = getHeadCommit(repoRoot);
+        if (finalHead !== currentHead) {
+            restoredViolations.push(
+                `split-required WIP checkout state identity changed during inspection: expected HEAD ${currentHead}; found ${finalHead}`
+            );
         }
         return restoredViolations.length === 0
             ? { checkoutState: 'restored', violations: [] }
