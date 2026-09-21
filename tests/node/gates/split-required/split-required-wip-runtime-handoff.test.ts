@@ -354,6 +354,56 @@ describe('split-required WIP restored-runtime handoff', () => {
         }
     });
 
+    it('anchors self-hosted restore after legitimate task events that follow WIP capture', async (context) => {
+        const repoRoot = makeSourceRepo();
+        const manifestPath = capture(repoRoot);
+        const captureAnchor = captureHealthyTaskTimelineAnchor(repoRoot, TASK_ID);
+        appendMandatoryTaskEvent(
+            path.join(repoRoot, 'garda-agent-orchestrator'),
+            TASK_ID,
+            'STATUS_CHANGED',
+            'PASS',
+            'Parent task decomposed after WIP capture.',
+            { from_status: 'SPLIT_REQUIRED', to_status: 'DECOMPOSED' },
+            { actor: 'orchestrator', expectedPreviousState: captureAnchor }
+        );
+        try {
+            const currentAnchor = captureHealthyTaskTimelineAnchor(repoRoot, TASK_ID);
+            let finalizedHandoffPath = '';
+            mockRuntimeProcesses(context, async (command) => {
+                if (command !== process.execPath) return runtimeResult();
+                const identity = resolveSplitRequiredWipRestoreHandoffIdentity({
+                    repoRoot,
+                    taskId: TASK_ID,
+                    manifestPath
+                });
+                assert.deepEqual(identity.timelineAnchor, currentAnchor);
+                assert.notDeepEqual(identity.timelineAnchor, captureAnchor);
+                finalizedHandoffPath = identity.handoffPath;
+                const finalized = finalizeSplitRequiredWipRestoreHandoff(identity, fakeRuntimeGeneration);
+                assert.equal(finalized.status, 'RESTORED', finalized.violations.join('\n'));
+                return runtimeResult({ stdout: finalized.output_lines.join('\n') });
+            });
+
+            const result = await restoreSplitRequiredWipThroughRuntimeHandoff({
+                repoRoot,
+                taskId: TASK_ID,
+                manifestPath
+            });
+            const replayIdentity = resolveSplitRequiredWipRestoreHandoffIdentity({
+                repoRoot,
+                taskId: TASK_ID,
+                manifestPath
+            });
+
+            assert.equal(result.status, 'RESTORED', result.violations.join('\n'));
+            assert.equal(replayIdentity.handoffPath, finalizedHandoffPath);
+            assert.equal(restoredEvents(repoRoot).length, 1);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+
     it('does not honor the removed public event-defer flag', () => {
         const repoRoot = makeRepo();
         const manifestPath = capture(repoRoot);

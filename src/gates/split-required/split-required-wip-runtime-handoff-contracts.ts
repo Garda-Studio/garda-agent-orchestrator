@@ -7,6 +7,7 @@ import { isPlainRecord } from '../../core/records';
 import { assertCanonicalTaskId } from '../../core/task-ids';
 import {
     inspectTaskEventFile,
+    readTaskEventAppendState,
     withTaskTimelineReadSnapshot
 } from '../../gate-runtime/task-events';
 import type { TaskEventAppendState, TaskEventIntegrity } from '../../gate-runtime/task-events';
@@ -164,24 +165,21 @@ function sameTimelineAnchor(value: unknown, expected: TaskEventAppendState): boo
         && value.last_event_sha256 === expected.last_event_sha256;
 }
 
-function resolveManifestCaptureTimelineAnchor(
+function resolveRestoreTimelineAnchor(
     repoRoot: string,
     taskId: string,
     manifestPath: string,
-    manifestSha256: string
+    manifestSha256: string,
+    selectedPaths: readonly string[]
 ): TaskEventAppendState {
     const eventsRoot = path.join(joinOrchestratorPath(repoRoot, ''), 'runtime', 'task-events');
     const eventFile = path.join(eventsRoot, `${taskId}.jsonl`);
     return withTaskTimelineReadSnapshot(eventsRoot, taskId, () => {
         let anchor: TaskEventAppendState | null = null;
+        let restoredAnchor: TaskEventAppendState | null = null;
         const inspection = inspectTaskEventFile(eventFile, taskId, {
             onIntegrityEvent: (record) => {
-                if (record.task_id !== taskId
-                    || record.event_type !== 'SPLIT_REQUIRED_WIP_CAPTURED'
-                    || !isPlainRecord(record.details)
-                    || typeof record.details.manifest_path !== 'string'
-                    || !samePath(record.details.manifest_path, manifestPath)
-                    || record.details.manifest_sha256 !== manifestSha256) {
+                if (record.task_id !== taskId || !isPlainRecord(record.details)) {
                     return;
                 }
                 if (!isPlainRecord(record.integrity)
@@ -191,14 +189,42 @@ function resolveManifestCaptureTimelineAnchor(
                     || !/^[0-9a-f]{64}$/u.test(record.integrity.event_sha256)) {
                     throw new Error('manifest capture event contains malformed integrity evidence.');
                 }
-                if (anchor) {
-                    throw new Error('manifest is bound to multiple canonical capture events.');
+                if (record.event_type === 'SPLIT_REQUIRED_WIP_CAPTURED'
+                    && typeof record.details.manifest_path === 'string'
+                    && samePath(record.details.manifest_path, manifestPath)
+                    && record.details.manifest_sha256 === manifestSha256) {
+                    if (anchor) {
+                        throw new Error('manifest is bound to multiple canonical capture events.');
+                    }
+                    anchor = {
+                        matching_events: Number(record.integrity.task_sequence),
+                        parse_errors: 0,
+                        last_integrity_sequence: Number(record.integrity.task_sequence),
+                        last_event_sha256: record.integrity.event_sha256
+                    };
                 }
-                anchor = {
-                    matching_events: Number(record.integrity.task_sequence),
+                if (record.event_type !== 'SPLIT_REQUIRED_WIP_RESTORED'
+                    || typeof record.details.manifest_path !== 'string'
+                    || !samePath(record.details.manifest_path, manifestPath)
+                    || record.details.manifest_sha256 !== manifestSha256
+                    || !Array.isArray(record.details.selected_paths)
+                    || !sameStrings(record.details.selected_paths, selectedPaths)) {
+                    return;
+                }
+                if (restoredAnchor) {
+                    throw new Error('manifest selection is bound to multiple canonical restore events.');
+                }
+                const taskSequence = Number(record.integrity.task_sequence);
+                const previousHash = record.integrity.prev_event_sha256;
+                if (previousHash !== null
+                    && (typeof previousHash !== 'string' || !/^[0-9a-f]{64}$/u.test(previousHash))) {
+                    throw new Error('manifest restore event contains malformed predecessor integrity evidence.');
+                }
+                restoredAnchor = {
+                    matching_events: taskSequence - 1,
                     parse_errors: 0,
-                    last_integrity_sequence: Number(record.integrity.task_sequence),
-                    last_event_sha256: record.integrity.event_sha256
+                    last_integrity_sequence: previousHash === null ? null : taskSequence - 1,
+                    last_event_sha256: previousHash === null ? null : String(previousHash)
                 };
             }
         });
@@ -215,7 +241,7 @@ function resolveManifestCaptureTimelineAnchor(
         if (!anchor) {
             throw new Error('WIP manifest is not bound to a canonical split-required capture event.');
         }
-        return anchor;
+        return restoredAnchor || readTaskEventAppendState(eventFile, taskId);
     });
 }
 
@@ -367,11 +393,12 @@ export function resolveSplitRequiredWipRestoreHandoffIdentity(params: {
         }
     }
     const manifestSha256 = manifestSnapshot.sha256;
-    const timelineAnchor = resolveManifestCaptureTimelineAnchor(
+    const timelineAnchor = resolveRestoreTimelineAnchor(
         repoRoot,
         taskId,
         manifestPath,
-        manifestSha256
+        manifestSha256,
+        selectedPaths
     );
     const identityPayload = JSON.stringify({
         schema_version: HANDOFF_SCHEMA_VERSION,
