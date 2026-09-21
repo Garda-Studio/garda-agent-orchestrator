@@ -5,7 +5,11 @@ import { writeFileAtomically } from '../../core/filesystem';
 import { joinOrchestratorPath, resolvePathInsideRepo } from '../../core/orchestrator-paths';
 import { isCanonicalTaskId } from '../../core/task-ids';
 import { fileSha256, stringSha256 } from '../../gate-runtime/hash';
-import { withReviewArtifactLock } from '../../gate-runtime/review-artifacts';
+import {
+    isReviewArtifactReadBarrierParticipant,
+    readReviewArtifactFileSnapshot,
+    withReviewArtifactLock
+} from '../../gate-runtime/review-artifacts';
 import {
     appendTaskEvent,
     inspectTaskEventFile,
@@ -945,6 +949,40 @@ function parseManifestFile(
     }
 }
 
+function parseManifestReadSnapshot(
+    artifactPath: string
+): SemanticCycleRebindManifestValidationResult | null {
+    if (!isReviewArtifactReadBarrierParticipant(artifactPath)) {
+        return null;
+    }
+    const pendingSnapshot = readReviewArtifactFileSnapshot(pendingMarkerPath(artifactPath));
+    if (!pendingSnapshot.active) {
+        return null;
+    }
+    if (pendingSnapshot.exists) {
+        return {
+            status: 'INVALID',
+            manifest: null,
+            violations: ['Semantic-cycle rebind manifest has an incomplete transaction marker.']
+        };
+    }
+    const manifestSnapshot = readReviewArtifactFileSnapshot(artifactPath);
+    if (!manifestSnapshot.valid || !manifestSnapshot.content) {
+        return { status: 'INVALID', manifest: null, violations: ['Semantic-cycle rebind manifest is missing.'] };
+    }
+    try {
+        return validateSemanticCycleRebindManifest(JSON.parse(manifestSnapshot.content.toString('utf8')));
+    } catch (error: unknown) {
+        return {
+            status: 'INVALID',
+            manifest: null,
+            violations: [`Semantic-cycle rebind manifest is not valid JSON: ${
+                error instanceof Error ? error.message : String(error)
+            }`]
+        };
+    }
+}
+
 export function readSemanticCycleRebindManifest(
     repoRoot: string,
     artifactPath: string
@@ -952,6 +990,10 @@ export function readSemanticCycleRebindManifest(
     const resolved = resolvePathInsideRepo(artifactPath, repoRoot, { allowMissing: true, enforceInside: true });
     if (!resolved) {
         return { status: 'INVALID', manifest: null, violations: ['Semantic-cycle rebind path is missing.'] };
+    }
+    const snapshotResult = parseManifestReadSnapshot(resolved);
+    if (snapshotResult) {
+        return snapshotResult;
     }
     return withReviewArtifactLock(resolved, () => parseManifestFile(resolved)).result;
 }

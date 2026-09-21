@@ -5,6 +5,13 @@ import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { fileSha256, stringSha256 } from '../../../../src/gate-runtime/hash';
+import {
+    isReviewArtifactReadBarrierParticipant,
+    readReviewArtifactFileSnapshot,
+    withReviewArtifactReadBarrier,
+    withReviewArtifactReadSnapshot,
+    writeReviewArtifactText
+} from '../../../../src/gate-runtime/review-artifacts';
 import { buildEventIntegrityHash } from '../../../../src/gate-runtime/task-events';
 import {
     SEMANTIC_CYCLE_BASE_BINDING_KEYS,
@@ -244,6 +251,394 @@ describe('semantic cycle rebind transaction', () => {
             for (const artifact of fixture.artifacts) {
                 assert.equal(fileSha256(path.resolve(fixture.repoRoot, artifact.source_path)), artifact.source_sha256);
             }
+        } finally {
+            fixture.cleanup();
+        }
+    });
+
+    it('reads a committed manifest inside the review barrier without lock-file generation drift', () => {
+        const fixture = createFixture();
+        try {
+            const result = executeSemanticCycleRebindTransaction(fixture.options);
+            assert.equal(result.status, 'COMMITTED');
+
+            const persisted = withReviewArtifactReadBarrier(
+                path.dirname(fixture.outputPath),
+                () => readSemanticCycleRebindManifest(fixture.repoRoot, fixture.outputPath)
+            );
+
+            assert.equal(persisted.status, 'VALID');
+            assert.equal(persisted.manifest?.transaction_sha256, result.manifest?.transaction_sha256);
+        } finally {
+            fixture.cleanup();
+        }
+    });
+
+    it('shares barrier authority and fail-closed cache across alias and canonical review paths', (context) => {
+        const fixture = createFixture();
+        const physicalReviewsDir = path.dirname(fixture.outputPath);
+        const aliasReviewsDir = path.join(fixture.repoRoot, 'runtime', 'reviews-alias');
+        const aliasOutputPath = path.join(aliasReviewsDir, path.basename(fixture.outputPath));
+        const aliasPendingPath = `${aliasOutputPath}.pending`;
+        try {
+            const result = executeSemanticCycleRebindTransaction(fixture.options);
+            assert.equal(result.status, 'COMMITTED');
+            try {
+                fs.symlinkSync(
+                    physicalReviewsDir,
+                    aliasReviewsDir,
+                    process.platform === 'win32' ? 'junction' : 'dir'
+                );
+            } catch {
+                context.skip('Directory symlink or junction creation is unavailable in this environment.');
+                return;
+            }
+
+            const physicalFromAliasBarrier = withReviewArtifactReadBarrier(
+                aliasReviewsDir,
+                () => readSemanticCycleRebindManifest(fixture.repoRoot, fixture.outputPath)
+            );
+            assert.equal(physicalFromAliasBarrier.status, 'VALID');
+
+            const aliasFromPhysicalBarrier = withReviewArtifactReadBarrier(
+                physicalReviewsDir,
+                () => readSemanticCycleRebindManifest(fixture.repoRoot, aliasOutputPath)
+            );
+            assert.equal(aliasFromPhysicalBarrier.status, 'VALID');
+
+            const sharedCache = withReviewArtifactReadBarrier(aliasReviewsDir, () => {
+                const first = readSemanticCycleRebindManifest(fixture.repoRoot, fixture.outputPath);
+                writeReviewArtifactText(aliasPendingPath, 'transaction pending\n', {
+                    lowNoiseRuntimeWrites: true
+                });
+                const second = readSemanticCycleRebindManifest(fixture.repoRoot, aliasOutputPath);
+                return { first, second };
+            });
+            assert.equal(sharedCache.first.status, 'VALID');
+            assert.equal(sharedCache.second.status, 'INVALID');
+            assert.match(sharedCache.second.violations.join(' '), /incomplete transaction marker/u);
+        } finally {
+            fixture.cleanup();
+        }
+    });
+
+    it('binds a first-read alias route and fails closed after a temporary retarget', (context) => {
+        const fixture = createFixture();
+        const physicalReviewsDir = path.dirname(fixture.outputPath);
+        const alternateReviewsDir = path.join(fixture.repoRoot, 'runtime', 'reviews-alternate');
+        const aliasReviewsDir = path.join(fixture.repoRoot, 'runtime', 'reviews-alias-retarget');
+        const artifactName = path.basename(fixture.outputPath);
+        const aliasOutputPath = path.join(aliasReviewsDir, artifactName);
+        const fsModule = require('node:fs') as { mkdirSync: typeof fs.mkdirSync };
+        const originalMkdirSync = fsModule.mkdirSync;
+        let manifestLockAttempts = 0;
+        try {
+            const result = executeSemanticCycleRebindTransaction(fixture.options);
+            assert.equal(result.status, 'COMMITTED');
+            fs.mkdirSync(alternateReviewsDir);
+            fs.copyFileSync(fixture.outputPath, path.join(alternateReviewsDir, artifactName));
+            try {
+                fs.symlinkSync(
+                    physicalReviewsDir,
+                    aliasReviewsDir,
+                    process.platform === 'win32' ? 'junction' : 'dir'
+                );
+            } catch {
+                context.skip('Directory symlink or junction creation is unavailable in this environment.');
+                return;
+            }
+            fsModule.mkdirSync = ((directoryPath: fs.PathLike, options?: fs.MakeDirectoryOptions) => {
+                if (path.resolve(String(directoryPath)) === path.resolve(`${aliasOutputPath}.lock`)) {
+                    manifestLockAttempts += 1;
+                }
+                return originalMkdirSync(directoryPath, options);
+            }) as typeof fsModule.mkdirSync;
+
+            const reads = withReviewArtifactReadBarrier(physicalReviewsDir, () => {
+                const first = readSemanticCycleRebindManifest(fixture.repoRoot, aliasOutputPath);
+                fs.rmSync(aliasReviewsDir, { recursive: true, force: true });
+                fs.symlinkSync(
+                    alternateReviewsDir,
+                    aliasReviewsDir,
+                    process.platform === 'win32' ? 'junction' : 'dir'
+                );
+                const retargeted = readSemanticCycleRebindManifest(fixture.repoRoot, aliasOutputPath);
+                fs.rmSync(aliasReviewsDir, { recursive: true, force: true });
+                fs.symlinkSync(
+                    physicalReviewsDir,
+                    aliasReviewsDir,
+                    process.platform === 'win32' ? 'junction' : 'dir'
+                );
+                const restored = readSemanticCycleRebindManifest(fixture.repoRoot, aliasOutputPath);
+                return { first, restored, retargeted };
+            });
+
+            assert.equal(reads.first.status, 'VALID');
+            assert.equal(reads.retargeted.status, 'INVALID');
+            assert.equal(reads.restored.status, 'INVALID');
+            assert.equal(manifestLockAttempts, 0);
+        } finally {
+            fsModule.mkdirSync = originalMkdirSync;
+            fixture.cleanup();
+        }
+    });
+
+    it('uses one canonical snapshot when an alias review root is still missing', (context) => {
+        const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-semantic-missing-alias-'));
+        const physicalRuntimeDir = path.join(repoRoot, 'physical-runtime');
+        const aliasRuntimeDir = path.join(repoRoot, 'alias-runtime');
+        const physicalReviewsDir = path.join(physicalRuntimeDir, 'reviews');
+        const aliasReviewsDir = path.join(aliasRuntimeDir, 'reviews');
+        const physicalManifestPath = path.join(physicalReviewsDir, 'T-1015-2-semantic-cycle-rebind.json');
+        fs.mkdirSync(physicalRuntimeDir, { recursive: true });
+        try {
+            try {
+                fs.symlinkSync(
+                    physicalRuntimeDir,
+                    aliasRuntimeDir,
+                    process.platform === 'win32' ? 'junction' : 'dir'
+                );
+            } catch {
+                context.skip('Directory symlink or junction creation is unavailable in this environment.');
+                return;
+            }
+
+            const persisted = withReviewArtifactReadBarrier(
+                aliasReviewsDir,
+                () => readSemanticCycleRebindManifest(repoRoot, physicalManifestPath)
+            );
+
+            assert.equal(persisted.status, 'INVALID');
+            assert.match(persisted.violations.join(' '), /manifest is missing/u);
+            assert.equal(fs.existsSync(physicalReviewsDir), false);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('keeps nested manifests on the lock path after reading through an inner alias', (context) => {
+        const fixture = createFixture();
+        const reviewsDir = path.dirname(fixture.outputPath);
+        const nestedDir = path.join(reviewsDir, 'nested');
+        const aliasTargetDir = path.join(reviewsDir, 'alias-target');
+        const nestedAliasDir = path.join(nestedDir, 'alias');
+        const aliasProbePath = path.join(nestedAliasDir, 'probe.json');
+        const nestedOutputPath = path.join(nestedDir, path.basename(fixture.outputPath));
+        const fsModule = require('node:fs') as { mkdirSync: typeof fs.mkdirSync };
+        const originalMkdirSync = fsModule.mkdirSync;
+        let manifestLockAttempts = 0;
+        try {
+            const result = executeSemanticCycleRebindTransaction(fixture.options);
+            assert.equal(result.status, 'COMMITTED');
+            fs.mkdirSync(nestedDir);
+            fs.mkdirSync(aliasTargetDir);
+            fs.writeFileSync(path.join(aliasTargetDir, 'probe.json'), '{"probe":true}\n', 'utf8');
+            try {
+                fs.symlinkSync(
+                    aliasTargetDir,
+                    nestedAliasDir,
+                    process.platform === 'win32' ? 'junction' : 'dir'
+                );
+            } catch {
+                context.skip('Directory symlink or junction creation is unavailable in this environment.');
+                return;
+            }
+            fs.copyFileSync(fixture.outputPath, nestedOutputPath);
+            fs.writeFileSync(`${nestedOutputPath}.pending`, 'transaction pending\n', 'utf8');
+            fsModule.mkdirSync = ((directoryPath: fs.PathLike, options?: fs.MakeDirectoryOptions) => {
+                if (path.resolve(String(directoryPath)) === path.resolve(`${nestedOutputPath}.lock`)) {
+                    manifestLockAttempts += 1;
+                }
+                return originalMkdirSync(directoryPath, options);
+            }) as typeof fsModule.mkdirSync;
+
+            const persisted = withReviewArtifactReadBarrier(
+                reviewsDir,
+                () => {
+                    const probe = readReviewArtifactFileSnapshot(aliasProbePath);
+                    assert.equal(probe.valid, true);
+                    assert.equal(isReviewArtifactReadBarrierParticipant(nestedOutputPath), false);
+                    return readSemanticCycleRebindManifest(fixture.repoRoot, nestedOutputPath);
+                }
+            );
+
+            assert.equal(persisted.status, 'INVALID');
+            assert.match(persisted.violations.join(' '), /incomplete transaction marker/u);
+            assert.ok(manifestLockAttempts > 0);
+        } finally {
+            fsModule.mkdirSync = originalMkdirSync;
+            fixture.cleanup();
+        }
+    });
+
+    it('revokes detached barrier authority and keeps the lock during an unrelated snapshot', async () => {
+        const fixture = createFixture();
+        const fsModule = require('node:fs') as { mkdirSync: typeof fs.mkdirSync };
+        const originalMkdirSync = fsModule.mkdirSync;
+        let manifestLockAttempts = 0;
+        let releaseDetachedRead!: () => void;
+        const detachedReadHold = new Promise<void>((resolve) => {
+            releaseDetachedRead = resolve;
+        });
+        let detachedRead!: Promise<ReturnType<typeof readSemanticCycleRebindManifest>>;
+        let releaseSnapshot!: () => void;
+        const snapshotHold = new Promise<void>((resolve) => {
+            releaseSnapshot = resolve;
+        });
+        let markSnapshotReady!: () => void;
+        const snapshotReady = new Promise<void>((resolve) => {
+            markSnapshotReady = resolve;
+        });
+        try {
+            const result = executeSemanticCycleRebindTransaction(fixture.options);
+            assert.equal(result.status, 'COMMITTED');
+            fsModule.mkdirSync = ((directoryPath: fs.PathLike, options?: fs.MakeDirectoryOptions) => {
+                if (path.resolve(String(directoryPath)) === path.resolve(`${fixture.outputPath}.lock`)) {
+                    manifestLockAttempts += 1;
+                }
+                return originalMkdirSync(directoryPath, options);
+            }) as typeof fsModule.mkdirSync;
+
+            withReviewArtifactReadBarrier(path.dirname(fixture.outputPath), () => {
+                detachedRead = (async () => {
+                    await detachedReadHold;
+                    return readSemanticCycleRebindManifest(fixture.repoRoot, fixture.outputPath);
+                })();
+            });
+
+            const unrelatedSnapshot = withReviewArtifactReadSnapshot(
+                path.dirname(fixture.outputPath),
+                async () => {
+                    markSnapshotReady();
+                    await snapshotHold;
+                }
+            );
+            await snapshotReady;
+            releaseDetachedRead();
+            const persisted = await detachedRead;
+            assert.equal(persisted.status, 'VALID');
+            assert.ok(manifestLockAttempts > 0);
+            releaseSnapshot();
+            await unrelatedSnapshot;
+        } finally {
+            fsModule.mkdirSync = originalMkdirSync;
+            releaseDetachedRead();
+            releaseSnapshot();
+            fixture.cleanup();
+        }
+    });
+
+    it('fails closed on pending marker entries inside the review barrier', () => {
+        const fixture = createFixture();
+        const pendingPath = `${fixture.outputPath}.pending`;
+        try {
+            const result = executeSemanticCycleRebindTransaction(fixture.options);
+            assert.equal(result.status, 'COMMITTED');
+
+            const assertPendingMarkerRejected = (): void => {
+                const persisted = withReviewArtifactReadBarrier(
+                    path.dirname(fixture.outputPath),
+                    () => readSemanticCycleRebindManifest(fixture.repoRoot, fixture.outputPath)
+                );
+                assert.equal(persisted.status, 'INVALID');
+                assert.match(persisted.violations.join(' '), /incomplete transaction marker/u);
+            };
+
+            fs.writeFileSync(pendingPath, '{"schema_version":1}\n', 'utf8');
+            assertPendingMarkerRejected();
+            fs.rmSync(pendingPath, { force: true });
+            fs.mkdirSync(pendingPath);
+            assertPendingMarkerRejected();
+        } finally {
+            fixture.cleanup();
+        }
+    });
+
+    it('invalidates cached pending-marker absence after an owned publication', () => {
+        const fixture = createFixture();
+        const pendingPath = `${fixture.outputPath}.pending`;
+        try {
+            const result = executeSemanticCycleRebindTransaction(fixture.options);
+            assert.equal(result.status, 'COMMITTED');
+
+            const statuses = withReviewArtifactReadBarrier(
+                path.dirname(fixture.outputPath),
+                () => {
+                    const first = readSemanticCycleRebindManifest(fixture.repoRoot, fixture.outputPath);
+                    writeReviewArtifactText(pendingPath, 'transaction pending\n', {
+                        lowNoiseRuntimeWrites: true
+                    });
+                    const second = readSemanticCycleRebindManifest(fixture.repoRoot, fixture.outputPath);
+                    return { first, second };
+                }
+            );
+
+            assert.equal(statuses.first.status, 'VALID');
+            assert.equal(statuses.second.status, 'INVALID');
+            assert.match(statuses.second.violations.join(' '), /incomplete transaction marker/u);
+            assert.equal(fs.existsSync(pendingPath), true);
+        } finally {
+            fixture.cleanup();
+        }
+    });
+
+    it('keeps an observed pending marker invalid after its lookup becomes missing', () => {
+        const fixture = createFixture();
+        const pendingPath = `${fixture.outputPath}.pending`;
+        const fsModule = require('node:fs') as { lstatSync: typeof fs.lstatSync };
+        const originalLstatSync = fsModule.lstatSync;
+        let pendingLookupIsMissing = false;
+        try {
+            const result = executeSemanticCycleRebindTransaction(fixture.options);
+            assert.equal(result.status, 'COMMITTED');
+            fs.writeFileSync(pendingPath, 'transaction pending\n', 'utf8');
+            fsModule.lstatSync = ((candidate: fs.PathLike, options?: unknown) => {
+                if (pendingLookupIsMissing && path.resolve(String(candidate)) === path.resolve(pendingPath)) {
+                    const error = new Error('simulated pending-marker deletion') as NodeJS.ErrnoException;
+                    error.code = 'ENOENT';
+                    throw error;
+                }
+                return originalLstatSync(candidate, options as never);
+            }) as typeof fsModule.lstatSync;
+
+            const statuses = withReviewArtifactReadBarrier(
+                path.dirname(fixture.outputPath),
+                () => {
+                    const first = readSemanticCycleRebindManifest(fixture.repoRoot, fixture.outputPath);
+                    pendingLookupIsMissing = true;
+                    const second = readSemanticCycleRebindManifest(fixture.repoRoot, fixture.outputPath);
+                    const third = readSemanticCycleRebindManifest(fixture.repoRoot, fixture.outputPath);
+                    return { first, second, third };
+                }
+            );
+
+            for (const persisted of [statuses.first, statuses.second, statuses.third]) {
+                assert.equal(persisted.status, 'INVALID');
+                assert.match(persisted.violations.join(' '), /incomplete transaction marker/u);
+            }
+            assert.equal(fs.existsSync(pendingPath), true);
+        } finally {
+            fsModule.lstatSync = originalLstatSync;
+            fixture.cleanup();
+        }
+    });
+
+    it('fails closed on missing and invalid manifests inside the review barrier', () => {
+        const fixture = createFixture();
+        const readInsideBarrier = () => withReviewArtifactReadBarrier(
+            path.dirname(fixture.outputPath),
+            () => readSemanticCycleRebindManifest(fixture.repoRoot, fixture.outputPath)
+        );
+        try {
+            const missing = readInsideBarrier();
+            assert.equal(missing.status, 'INVALID');
+            assert.match(missing.violations.join(' '), /manifest is missing/u);
+
+            fs.mkdirSync(path.dirname(fixture.outputPath), { recursive: true });
+            fs.writeFileSync(fixture.outputPath, '{not-json}\n', 'utf8');
+            const invalid = readInsideBarrier();
+            assert.equal(invalid.status, 'INVALID');
+            assert.match(invalid.violations.join(' '), /not valid JSON/u);
         } finally {
             fixture.cleanup();
         }

@@ -48,11 +48,19 @@ interface ReviewArtifactReadSnapshotState {
     depth: number;
     rootPath: string;
     realRootPath: string;
+    routes: Map<string, ReviewArtifactReadSnapshotRoute>;
     reads: Map<string, CachedReviewArtifactRead>;
     retainedBytes: number;
     maxArtifacts: number;
     maxBytes: number;
     budgetError: ReviewArtifactReadBudgetError | null;
+}
+
+interface ReviewArtifactReadSnapshotRoute {
+    canonicalRootKey: string;
+    canonicalRootPath: string;
+    invalid: boolean;
+    lexicalRootPath: string;
 }
 
 const inProcessReviewArtifactReadSnapshots = new Map<string, ReviewArtifactReadSnapshotState>();
@@ -70,6 +78,16 @@ interface ReviewArtifactReadBarrierState {
 
 const inProcessReviewArtifactReadBarriers = new Map<string, ReviewArtifactReadBarrierState>();
 
+interface ReviewArtifactReadBarrierParticipantAuthority {
+    active: boolean;
+    barrier: ReviewArtifactReadBarrierState;
+    roots: ReadonlySet<string>;
+}
+
+const reviewArtifactReadBarrierParticipantAuthorities = new AsyncLocalStorage<
+    ReadonlySet<ReviewArtifactReadBarrierParticipantAuthority>
+>();
+
 interface InProcessReviewArtifactTransactionContext {
     lockKey: string;
     settled: boolean;
@@ -80,6 +98,7 @@ const reviewArtifactTransactionContext = new AsyncLocalStorage<InProcessReviewAr
 
 interface CachedReviewArtifactRead {
     content: Buffer | null;
+    exists: boolean;
     identity?: fs.Stats;
     sha256: string | null;
     valid: boolean;
@@ -88,6 +107,7 @@ interface CachedReviewArtifactRead {
 export interface ReviewArtifactFileReadSnapshot {
     active: boolean;
     content: Buffer | null;
+    exists: boolean;
     sha256: string | null;
     valid: boolean;
 }
@@ -588,6 +608,35 @@ function normalizeReviewArtifactReadSnapshotKey(value: string): string {
     return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
+function reviewArtifactPathLookupIsMissing(error: unknown): boolean {
+    if (!error || typeof error !== 'object' || !('code' in error)) {
+        return false;
+    }
+    const code = String((error as { code?: unknown }).code || '');
+    return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+function resolveReviewArtifactCanonicalCandidatePath(filePath: string): string {
+    const resolvedPath = path.resolve(filePath);
+    const missingSegments: string[] = [];
+    let existingAncestor = resolvedPath;
+    while (true) {
+        try {
+            return path.resolve(fs.realpathSync.native(existingAncestor), ...missingSegments);
+        } catch (error: unknown) {
+            if (!reviewArtifactPathLookupIsMissing(error)) {
+                return resolvedPath;
+            }
+            const parentPath = path.dirname(existingAncestor);
+            if (parentPath === existingAncestor) {
+                return resolvedPath;
+            }
+            missingSegments.unshift(path.basename(existingAncestor));
+            existingAncestor = parentPath;
+        }
+    }
+}
+
 function isPathInsideReviewArtifactSnapshot(candidatePath: string, rootPath: string): boolean {
     const relative = path.relative(rootPath, candidatePath);
     return !relative || (!relative.startsWith('..') && !path.isAbsolute(relative));
@@ -617,36 +666,82 @@ function positiveReviewArtifactSnapshotLimit(value: unknown, fallback: number): 
     return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function createReviewArtifactReadSnapshotRelease(
+    snapshotKey: string,
+    snapshot: ReviewArtifactReadSnapshotState
+): () => void {
+    let released = false;
+    return () => {
+        if (released) {
+            return;
+        }
+        released = true;
+        snapshot.depth -= 1;
+        if (snapshot.depth <= 0 && inProcessReviewArtifactReadSnapshots.get(snapshotKey) === snapshot) {
+            inProcessReviewArtifactReadSnapshots.delete(snapshotKey);
+        }
+    };
+}
+
+function registerReviewArtifactReadSnapshotRoute(
+    snapshot: ReviewArtifactReadSnapshotState,
+    lexicalRootPath: string,
+    canonicalRootPath: string
+): void {
+    const lexicalRootKey = normalizeReviewArtifactReadSnapshotKey(lexicalRootPath);
+    const canonicalRootKey = normalizeReviewArtifactReadSnapshotKey(canonicalRootPath);
+    let invalid = false;
+    for (const activeSnapshot of inProcessReviewArtifactReadSnapshots.values()) {
+        const activeRoute = activeSnapshot.routes.get(lexicalRootKey);
+        if (!activeRoute) {
+            continue;
+        }
+        if (activeRoute.invalid || activeRoute.canonicalRootKey !== canonicalRootKey) {
+            activeRoute.invalid = true;
+            invalid = true;
+        }
+    }
+    const existingRoute = snapshot.routes.get(lexicalRootKey);
+    if (existingRoute) {
+        existingRoute.invalid = existingRoute.invalid
+            || invalid
+            || existingRoute.canonicalRootKey !== canonicalRootKey;
+        return;
+    }
+    snapshot.routes.set(lexicalRootKey, {
+        canonicalRootKey,
+        canonicalRootPath,
+        invalid,
+        lexicalRootPath: path.resolve(lexicalRootPath)
+    });
+}
+
 export function withReviewArtifactReadSnapshot<T>(
     reviewsDir: string,
     callback: () => T,
     options: ReviewArtifactLockOptions = {}
 ): T {
     const rootPath = path.resolve(reviewsDir);
-    const snapshotKey = normalizeReviewArtifactReadSnapshotKey(rootPath);
+    const realRootPath = resolveReviewArtifactCanonicalCandidatePath(rootPath);
+    const snapshotKey = normalizeReviewArtifactReadSnapshotKey(realRootPath);
     const existing = inProcessReviewArtifactReadSnapshots.get(snapshotKey);
     if (existing) {
         existing.depth += 1;
+        registerReviewArtifactReadSnapshotRoute(existing, rootPath, realRootPath);
+        const release = createReviewArtifactReadSnapshotRelease(snapshotKey, existing);
         try {
-            return settleReviewArtifactReadSnapshot(callback(), existing, () => {
-                existing.depth -= 1;
-            });
+            return settleReviewArtifactReadSnapshot(callback(), existing, release);
         } catch (error: unknown) {
-            existing.depth -= 1;
+            release();
             throw error;
         }
     }
 
-    let realRootPath = rootPath;
-    try {
-        realRootPath = fs.realpathSync.native(rootPath);
-    } catch {
-        // Missing roots remain bounded by their resolved lexical path.
-    }
     const snapshot = {
         depth: 1,
         rootPath,
         realRootPath,
+        routes: new Map<string, ReviewArtifactReadSnapshotRoute>(),
         reads: new Map<string, CachedReviewArtifactRead>(),
         retainedBytes: 0,
         maxArtifacts: positiveReviewArtifactSnapshotLimit(
@@ -660,18 +755,12 @@ export function withReviewArtifactReadSnapshot<T>(
         budgetError: null
     };
     inProcessReviewArtifactReadSnapshots.set(snapshotKey, snapshot);
+    registerReviewArtifactReadSnapshotRoute(snapshot, rootPath, realRootPath);
+    const release = createReviewArtifactReadSnapshotRelease(snapshotKey, snapshot);
     try {
-        return settleReviewArtifactReadSnapshot(callback(), snapshot, () => {
-            snapshot.depth -= 1;
-            if (snapshot.depth <= 0) {
-                inProcessReviewArtifactReadSnapshots.delete(snapshotKey);
-            }
-        });
+        return settleReviewArtifactReadSnapshot(callback(), snapshot, release);
     } catch (error: unknown) {
-        snapshot.depth -= 1;
-        if (snapshot.depth <= 0) {
-            inProcessReviewArtifactReadSnapshots.delete(snapshotKey);
-        }
+        release();
         throw error;
     }
 }
@@ -705,18 +794,118 @@ function settleReviewArtifactReadSnapshot<T>(
     }
 }
 
-function findReviewArtifactReadSnapshot(filePath: string): ReviewArtifactReadSnapshotState | null {
-    const resolvedPath = path.resolve(filePath);
-    let bestMatch: ReviewArtifactReadSnapshotState | null = null;
+interface ReviewArtifactReadSnapshotMatch {
+    cacheKey: string;
+    routeInvalid: boolean;
+    snapshot: ReviewArtifactReadSnapshotState;
+}
+
+function reviewArtifactPathDepth(filePath: string): number {
+    return path.resolve(filePath).split(path.sep).filter(Boolean).length;
+}
+
+function resolveLexicalRootForCanonicalMatch(
+    lexicalCandidatePath: string
+): string {
+    return path.dirname(path.resolve(lexicalCandidatePath));
+}
+
+function invalidateReviewArtifactReadSnapshotRoute(lexicalRootKey: string): void {
     for (const snapshot of inProcessReviewArtifactReadSnapshots.values()) {
-        if (
-            isPathInsideReviewArtifactSnapshot(resolvedPath, snapshot.rootPath)
-            && (!bestMatch || snapshot.rootPath.length > bestMatch.rootPath.length)
-        ) {
-            bestMatch = snapshot;
+        const route = snapshot.routes.get(lexicalRootKey);
+        if (route) {
+            route.invalid = true;
         }
     }
-    return bestMatch;
+}
+
+function refreshReviewArtifactReadSnapshotRoute(
+    lexicalRootKey: string,
+    route: ReviewArtifactReadSnapshotRoute
+): void {
+    if (route.invalid) {
+        return;
+    }
+    const currentCanonicalRootKey = normalizeReviewArtifactReadSnapshotKey(
+        resolveReviewArtifactCanonicalCandidatePath(route.lexicalRootPath)
+    );
+    if (currentCanonicalRootKey !== route.canonicalRootKey) {
+        invalidateReviewArtifactReadSnapshotRoute(lexicalRootKey);
+    }
+}
+
+function findReviewArtifactReadSnapshot(filePath: string): ReviewArtifactReadSnapshotMatch | null {
+    const resolvedPath = path.resolve(filePath);
+    const canonicalPath = resolveReviewArtifactCanonicalCandidatePath(resolvedPath);
+    const lexicalCandidatePath = normalizeReviewArtifactReadSnapshotKey(resolvedPath);
+    const canonicalCandidatePath = normalizeReviewArtifactReadSnapshotKey(canonicalPath);
+    let bestCanonicalMatch: ReviewArtifactReadSnapshotState | null = null;
+    let bestCanonicalRootPath: string | null = null;
+    let bestCanonicalDepth = -1;
+    let bestLexicalMatch: ReviewArtifactReadSnapshotMatch | null = null;
+    let bestLexicalDepth = -1;
+    let bestInvalidRouteMatch: ReviewArtifactReadSnapshotMatch | null = null;
+    let bestInvalidRouteDepth = -1;
+    for (const snapshot of inProcessReviewArtifactReadSnapshots.values()) {
+        for (const [lexicalRootKey, route] of snapshot.routes) {
+            if (!isPathInsideReviewArtifactSnapshot(lexicalCandidatePath, lexicalRootKey)) {
+                continue;
+            }
+            refreshReviewArtifactReadSnapshotRoute(lexicalRootKey, route);
+            const relativePath = path.relative(route.lexicalRootPath, resolvedPath);
+            const routeCacheKey = normalizeReviewArtifactReadSnapshotKey(
+                path.resolve(route.canonicalRootPath, relativePath)
+            );
+            const routeDepth = reviewArtifactPathDepth(lexicalRootKey);
+            if (route.invalid) {
+                if (routeDepth > bestInvalidRouteDepth) {
+                    bestInvalidRouteMatch = {
+                        cacheKey: routeCacheKey,
+                        routeInvalid: true,
+                        snapshot
+                    };
+                    bestInvalidRouteDepth = routeDepth;
+                }
+            } else if (routeDepth > bestLexicalDepth) {
+                bestLexicalMatch = {
+                    cacheKey: routeCacheKey,
+                    routeInvalid: false,
+                    snapshot
+                };
+                bestLexicalDepth = routeDepth;
+            }
+        }
+        const canonicalRootPath = normalizeReviewArtifactReadSnapshotKey(snapshot.realRootPath);
+        if (isPathInsideReviewArtifactSnapshot(canonicalCandidatePath, canonicalRootPath)) {
+            const canonicalDepth = reviewArtifactPathDepth(canonicalRootPath);
+            if (canonicalDepth > bestCanonicalDepth) {
+                bestCanonicalMatch = snapshot;
+                bestCanonicalRootPath = snapshot.realRootPath;
+                bestCanonicalDepth = canonicalDepth;
+            }
+        }
+    }
+    if (bestInvalidRouteMatch) {
+        return bestInvalidRouteMatch;
+    }
+    if (!bestCanonicalMatch || !bestCanonicalRootPath) {
+        return bestLexicalMatch;
+    }
+    const lexicalRootPath = resolveLexicalRootForCanonicalMatch(resolvedPath);
+    const canonicalLexicalRootPath = resolveReviewArtifactCanonicalCandidatePath(lexicalRootPath);
+    registerReviewArtifactReadSnapshotRoute(
+        bestCanonicalMatch,
+        lexicalRootPath,
+        canonicalLexicalRootPath
+    );
+    const registeredRoute = bestCanonicalMatch.routes.get(
+        normalizeReviewArtifactReadSnapshotKey(lexicalRootPath)
+    );
+    return {
+        cacheKey: normalizeReviewArtifactReadSnapshotKey(canonicalPath),
+        routeInvalid: registeredRoute?.invalid === true,
+        snapshot: bestCanonicalMatch
+    };
 }
 
 function hasReviewArtifactReadSnapshotForRoot(snapshotKey: string): boolean {
@@ -728,17 +917,19 @@ function hasReviewArtifactReadSnapshotForRoot(snapshotKey: string): boolean {
     return false;
 }
 
-function invalidReviewArtifactRead(active: boolean): ReviewArtifactFileReadSnapshot {
-    return { active, content: null, sha256: null, valid: false };
+function invalidReviewArtifactRead(active: boolean, exists = false): ReviewArtifactFileReadSnapshot {
+    return { active, content: null, exists, sha256: null, valid: false };
 }
 
 function cacheInvalidReviewArtifactRead(
     snapshot: ReviewArtifactReadSnapshotState,
-    cacheKey: string
+    cacheKey: string,
+    exists: boolean
 ): ReviewArtifactFileReadSnapshot {
-    const invalid = invalidReviewArtifactRead(true);
+    const invalid = invalidReviewArtifactRead(true, exists);
     snapshot.reads.set(cacheKey, {
         content: null,
+        exists,
         sha256: null,
         valid: false
     });
@@ -747,14 +938,20 @@ function cacheInvalidReviewArtifactRead(
 
 function invalidateCachedReviewArtifactRead(
     snapshot: ReviewArtifactReadSnapshotState,
-    cached: CachedReviewArtifactRead
+    cached: CachedReviewArtifactRead,
+    exists: boolean
 ): void {
     if (cached.content) {
         snapshot.retainedBytes -= cached.content.length;
     }
     cached.content = null;
+    cached.exists = cached.exists || exists;
     cached.sha256 = null;
     cached.valid = false;
+}
+
+function reviewArtifactReadPathExists(error: unknown): boolean {
+    return !reviewArtifactPathLookupIsMissing(error);
 }
 
 function failReviewArtifactReadBudget(
@@ -816,26 +1013,39 @@ function readReviewArtifactBytesBounded(filePath: string, identity: fs.Stats): B
 
 function readReviewArtifactCanonicalSnapshot(filePath: string): ReviewArtifactFileReadSnapshot {
     const resolvedPath = path.resolve(filePath);
-    const snapshot = findReviewArtifactReadSnapshot(resolvedPath);
-    if (!snapshot) {
+    const match = findReviewArtifactReadSnapshot(resolvedPath);
+    if (!match) {
         return invalidReviewArtifactRead(false);
     }
-    const cacheKey = normalizeReviewArtifactReadSnapshotKey(resolvedPath);
+    const { cacheKey, routeInvalid, snapshot } = match;
+    if (routeInvalid) {
+        return invalidReviewArtifactRead(true, true);
+    }
     const cached = snapshot.reads.get(cacheKey);
     if (cached) {
         if (cached.valid) {
             try {
                 const currentIdentity = fs.lstatSync(resolvedPath);
                 if (!cached.identity || !sameReviewArtifactFileIdentity(cached.identity, currentIdentity)) {
-                    invalidateCachedReviewArtifactRead(snapshot, cached);
+                    invalidateCachedReviewArtifactRead(snapshot, cached, true);
                 }
-            } catch {
-                invalidateCachedReviewArtifactRead(snapshot, cached);
+            } catch (error: unknown) {
+                invalidateCachedReviewArtifactRead(snapshot, cached, reviewArtifactReadPathExists(error));
+            }
+        } else if (!cached.exists) {
+            try {
+                fs.lstatSync(resolvedPath);
+                cached.exists = true;
+            } catch (error: unknown) {
+                if (reviewArtifactReadPathExists(error)) {
+                    cached.exists = true;
+                }
             }
         }
         return {
             active: true,
             content: cached.content,
+            exists: cached.exists,
             sha256: cached.sha256,
             valid: cached.valid
         };
@@ -845,35 +1055,36 @@ function readReviewArtifactCanonicalSnapshot(filePath: string): ReviewArtifactFi
     try {
         const beforeRead = fs.lstatSync(resolvedPath);
         if (!beforeRead.isFile() || beforeRead.isSymbolicLink()) {
-            return cacheInvalidReviewArtifactRead(snapshot, cacheKey);
+            return cacheInvalidReviewArtifactRead(snapshot, cacheKey, true);
         }
         const realPath = fs.realpathSync.native(resolvedPath);
         if (!isPathInsideReviewArtifactSnapshot(realPath, snapshot.realRootPath)) {
-            return cacheInvalidReviewArtifactRead(snapshot, cacheKey);
+            return cacheInvalidReviewArtifactRead(snapshot, cacheKey, true);
         }
         assertReviewArtifactByteBudget(snapshot, beforeRead.size);
         const content = readReviewArtifactBytesBounded(resolvedPath, beforeRead);
         if (!content) {
-            return cacheInvalidReviewArtifactRead(snapshot, cacheKey);
+            return cacheInvalidReviewArtifactRead(snapshot, cacheKey, true);
         }
         const afterRead = fs.lstatSync(resolvedPath);
         if (!sameReviewArtifactFileIdentity(beforeRead, afterRead)) {
-            return cacheInvalidReviewArtifactRead(snapshot, cacheKey);
+            return cacheInvalidReviewArtifactRead(snapshot, cacheKey, true);
         }
         const sha256 = createHash('sha256').update(content).digest('hex').toLowerCase();
         snapshot.reads.set(cacheKey, {
             content,
+            exists: true,
             identity: afterRead,
             sha256,
             valid: true
         });
         snapshot.retainedBytes += content.length;
-        return { active: true, content, sha256, valid: true };
+        return { active: true, content, exists: true, sha256, valid: true };
     } catch (error: unknown) {
         if (error instanceof ReviewArtifactReadBudgetError) {
             throw error;
         }
-        return cacheInvalidReviewArtifactRead(snapshot, cacheKey);
+        return cacheInvalidReviewArtifactRead(snapshot, cacheKey, reviewArtifactReadPathExists(error));
     }
 }
 
@@ -1008,6 +1219,39 @@ function reviewArtifactReadBarrierKeys(reviewsDir: string): string[] {
     ])];
 }
 
+export function isReviewArtifactReadBarrierParticipant(filePath: string): boolean {
+    const authorities = reviewArtifactReadBarrierParticipantAuthorities.getStore();
+    if (!authorities) {
+        return false;
+    }
+    const candidateParentPaths = [...new Set([
+        normalizeReviewArtifactReadSnapshotKey(path.dirname(path.resolve(filePath))),
+        normalizeReviewArtifactReadSnapshotKey(path.dirname(resolveReviewArtifactCanonicalCandidatePath(filePath)))
+    ])];
+    const lexicalParentPath = normalizeReviewArtifactReadSnapshotKey(path.dirname(path.resolve(filePath)));
+    for (const authority of authorities) {
+        if (authority.active && authority.barrier.activeParticipants > 0) {
+            for (const rootPath of authority.roots) {
+                if (candidateParentPaths.includes(rootPath)) {
+                    return true;
+                }
+            }
+            for (const snapshot of inProcessReviewArtifactReadSnapshots.values()) {
+                const snapshotRootKey = normalizeReviewArtifactReadSnapshotKey(snapshot.realRootPath);
+                const route = snapshot.routes.get(lexicalParentPath);
+                if (
+                    authority.roots.has(snapshotRootKey)
+                    && route
+                    && authority.roots.has(route.canonicalRootKey)
+                ) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 function findReviewArtifactReadBarrier(reviewsDir: string): ReviewArtifactReadBarrierState | null {
     for (const key of reviewArtifactReadBarrierKeys(reviewsDir)) {
         const barrier = inProcessReviewArtifactReadBarriers.get(key);
@@ -1057,19 +1301,36 @@ function runReviewArtifactReadBarrierParticipant<T>(
     options: ReviewArtifactLockOptions
 ): T {
     barrier.activeParticipants += 1;
+    const authority: ReviewArtifactReadBarrierParticipantAuthority = {
+        active: true,
+        barrier,
+        roots: new Set(reviewArtifactReadBarrierKeys(reviewsDir))
+    };
+    const releaseParticipant = (): void => {
+        if (!authority.active) {
+            return;
+        }
+        authority.active = false;
+        releaseReviewArtifactReadBarrierParticipant(barrier);
+    };
     const transactionContext = getCurrentReviewArtifactTransactionContext(reviewsDir);
     let result: T;
     try {
-        result = withReviewArtifactReadSnapshot(reviewsDir, callback, options);
+        const authorities = new Set(reviewArtifactReadBarrierParticipantAuthorities.getStore() || []);
+        authorities.add(authority);
+        result = reviewArtifactReadBarrierParticipantAuthorities.run(
+            authorities,
+            () => withReviewArtifactReadSnapshot(reviewsDir, callback, options)
+        );
     } catch (error: unknown) {
-        releaseReviewArtifactReadBarrierParticipant(barrier);
+        releaseParticipant();
         throw error;
     }
     let promiseLike: boolean;
     try {
         promiseLike = isPromiseLike(result);
     } catch (error: unknown) {
-        releaseReviewArtifactReadBarrierParticipant(barrier);
+        releaseParticipant();
         throw error;
     }
     if (promiseLike) {
@@ -1081,7 +1342,7 @@ function runReviewArtifactReadBarrierParticipant<T>(
                 options
             );
             return value;
-        }).finally(() => releaseReviewArtifactReadBarrierParticipant(barrier)) as T;
+        }).finally(releaseParticipant) as T;
     }
     try {
         assertReviewArtifactReadBarrierParticipantGeneration(
@@ -1092,7 +1353,7 @@ function runReviewArtifactReadBarrierParticipant<T>(
         );
         return result;
     } finally {
-        releaseReviewArtifactReadBarrierParticipant(barrier);
+        releaseParticipant();
     }
 }
 

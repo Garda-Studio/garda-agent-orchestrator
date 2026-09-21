@@ -12,6 +12,7 @@ import {
     cleanupStaleReviewArtifactLocks,
     getReviewArtifactLockPath,
     getReviewArtifactTransactionLockPath,
+    isReviewArtifactReadBarrierParticipant,
     readReviewArtifactFileSha256,
     readReviewArtifactFileSnapshot,
     readReviewArtifactJsonFile,
@@ -1516,6 +1517,467 @@ test('review read barrier reuses one immutable byte read without retaining parse
     assert.equal(receiptReadCount, 2);
 });
 
+test('file snapshots distinguish missing paths from unsafe existing entries', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-existence-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const missingPath = path.join(reviewsDir, 'missing.json');
+    const directoryPath = path.join(reviewsDir, 'directory.json');
+    try {
+        withReviewArtifactReadSnapshot(reviewsDir, () => {
+            const missingSnapshot = readReviewArtifactFileSnapshot(missingPath);
+            const missingDirectorySnapshot = readReviewArtifactFileSnapshot(directoryPath);
+            assert.equal(missingSnapshot.active, true);
+            assert.equal(missingSnapshot.exists, false);
+            assert.equal(missingSnapshot.valid, false);
+            assert.equal(missingDirectorySnapshot.exists, false);
+            fs.mkdirSync(directoryPath);
+            const directorySnapshot = readReviewArtifactFileSnapshot(directoryPath);
+            assert.equal(directorySnapshot.active, true);
+            assert.equal(directorySnapshot.exists, true);
+            assert.equal(directorySnapshot.valid, false);
+        });
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('file snapshots treat a symlink as an existing invalid entry', (context) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-symlink-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const targetPath = path.join(reviewsDir, 'target.json');
+    const symlinkPath = path.join(reviewsDir, 'symlink.json');
+    fs.writeFileSync(targetPath, '{"version":1}\n', 'utf8');
+    try {
+        withReviewArtifactReadSnapshot(reviewsDir, () => {
+            const missingSnapshot = readReviewArtifactFileSnapshot(symlinkPath);
+            assert.equal(missingSnapshot.exists, false);
+            try {
+                fs.symlinkSync(targetPath, symlinkPath, 'file');
+            } catch (error: unknown) {
+                if (['EACCES', 'EPERM'].includes(String((error as NodeJS.ErrnoException).code || ''))) {
+                    context.skip('File symlink creation is not permitted on this platform.');
+                    return;
+                }
+                throw error;
+            }
+            const snapshot = readReviewArtifactFileSnapshot(symlinkPath);
+            assert.equal(snapshot.exists, true);
+            assert.equal(snapshot.valid, false);
+        });
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('file snapshots classify lookup failures and retain observed existence after cached deletion', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-errors-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const parentFilePath = path.join(reviewsDir, 'parent-file');
+    const cachedPath = path.join(reviewsDir, 'cached.json');
+    const fsModule = require('node:fs') as { lstatSync: typeof fs.lstatSync };
+    const originalLstatSync = fsModule.lstatSync;
+    fs.writeFileSync(parentFilePath, 'not a directory\n', 'utf8');
+    fs.writeFileSync(cachedPath, '{"version":1}\n', 'utf8');
+    try {
+        withReviewArtifactReadSnapshot(reviewsDir, () => {
+            const enotdir = readReviewArtifactFileSnapshot(path.join(parentFilePath, 'child.json'));
+            assert.equal(enotdir.exists, false);
+            assert.equal(enotdir.valid, false);
+
+            const cached = readReviewArtifactFileSnapshot(cachedPath);
+            assert.equal(cached.exists, true);
+            assert.equal(cached.valid, true);
+            fs.rmSync(cachedPath);
+            const deleted = readReviewArtifactFileSnapshot(cachedPath);
+            assert.equal(deleted.exists, true);
+            assert.equal(deleted.valid, false);
+        });
+
+        const errorCodes: Array<string | null> = ['EACCES', 'EPERM', null];
+        for (const [index, code] of errorCodes.entries()) {
+            const targetPath = path.join(reviewsDir, `lookup-error-${index}.json`);
+            withReviewArtifactReadSnapshot(reviewsDir, () => {
+                const missing = readReviewArtifactFileSnapshot(targetPath);
+                assert.equal(missing.exists, false, code || 'unknown');
+                fsModule.lstatSync = ((candidate: fs.PathLike, options?: unknown) => {
+                    if (path.resolve(String(candidate)) === path.resolve(targetPath)) {
+                        const error = new Error('simulated lookup failure') as NodeJS.ErrnoException;
+                        if (code) error.code = code;
+                        throw error;
+                    }
+                    return originalLstatSync(candidate, options as never);
+                }) as typeof fsModule.lstatSync;
+                const snapshot = readReviewArtifactFileSnapshot(targetPath);
+                assert.equal(snapshot.exists, true, code || 'unknown');
+                assert.equal(snapshot.valid, false, code || 'unknown');
+            });
+            fsModule.lstatSync = originalLstatSync;
+        }
+    } finally {
+        fsModule.lstatSync = originalLstatSync;
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('only the current read-barrier participant receives barrier authority', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-barrier-context-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const artifactPath = path.join(reviewsDir, 'artifact.json');
+    let releaseSnapshot!: () => void;
+    const snapshotHold = new Promise<void>((resolve) => {
+        releaseSnapshot = resolve;
+    });
+    let markSnapshotReady!: () => void;
+    const snapshotReady = new Promise<void>((resolve) => {
+        markSnapshotReady = resolve;
+    });
+    try {
+        const standaloneSnapshot = withReviewArtifactReadSnapshot(reviewsDir, async () => {
+            assert.equal(isReviewArtifactReadBarrierParticipant(artifactPath), false);
+            markSnapshotReady();
+            await snapshotHold;
+        });
+        await snapshotReady;
+        assert.equal(isReviewArtifactReadBarrierParticipant(artifactPath), false);
+        assert.equal(
+            withReviewArtifactReadBarrier(
+                reviewsDir,
+                () => isReviewArtifactReadBarrierParticipant(artifactPath)
+            ),
+            false
+        );
+        releaseSnapshot();
+        await standaloneSnapshot;
+        assert.equal(
+            withReviewArtifactReadBarrier(
+                reviewsDir,
+                () => isReviewArtifactReadBarrierParticipant(artifactPath)
+            ),
+            true
+        );
+    } finally {
+        releaseSnapshot();
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('read-barrier authority is revoked from detached work after success and failure', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-barrier-revocation-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const artifactPath = path.join(reviewsDir, 'artifact.json');
+
+    const createDetachedAuthorityProbe = (): {
+        probe: Promise<boolean>;
+        release: () => void;
+    } => {
+        let release!: () => void;
+        const hold = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        return {
+            probe: (async () => {
+                await hold;
+                return isReviewArtifactReadBarrierParticipant(artifactPath);
+            })(),
+            release
+        };
+    };
+
+    try {
+        let successfulProbe!: ReturnType<typeof createDetachedAuthorityProbe>;
+        withReviewArtifactReadBarrier(reviewsDir, () => {
+            successfulProbe = createDetachedAuthorityProbe();
+            assert.equal(isReviewArtifactReadBarrierParticipant(artifactPath), true);
+        });
+        successfulProbe.release();
+        assert.equal(await successfulProbe.probe, false);
+
+        let throwingProbe!: ReturnType<typeof createDetachedAuthorityProbe>;
+        assert.throws(
+            () => withReviewArtifactReadBarrier(reviewsDir, () => {
+                throwingProbe = createDetachedAuthorityProbe();
+                throw new Error('forced sync barrier failure');
+            }),
+            /forced sync barrier failure/
+        );
+        throwingProbe.release();
+        assert.equal(await throwingProbe.probe, false);
+
+        let rejectingProbe!: ReturnType<typeof createDetachedAuthorityProbe>;
+        await assert.rejects(
+            withReviewArtifactReadBarrier(reviewsDir, async () => {
+                rejectingProbe = createDetachedAuthorityProbe();
+                throw new Error('forced async barrier failure');
+            }),
+            /forced async barrier failure/
+        );
+        rejectingProbe.release();
+        assert.equal(await rejectingProbe.probe, false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('nested alias-root barriers revoke detached authority after release', async (context) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-alias-revocation-'));
+    const reviewsDir = createReviewsDir(path.join(tempDir, 'physical'));
+    const aliasReviewsDir = path.join(tempDir, 'reviews-alias');
+    const physicalArtifactPath = path.join(reviewsDir, 'artifact.json');
+    const aliasArtifactPath = path.join(aliasReviewsDir, 'artifact.json');
+    let releaseProbe!: () => void;
+    const probeHold = new Promise<void>((resolve) => {
+        releaseProbe = resolve;
+    });
+    let detachedProbe!: Promise<[boolean, boolean]>;
+    try {
+        try {
+            fs.symlinkSync(reviewsDir, aliasReviewsDir, process.platform === 'win32' ? 'junction' : 'dir');
+        } catch {
+            context.skip('Directory symlink or junction creation is unavailable in this environment.');
+            return;
+        }
+        withReviewArtifactReadBarrier(reviewsDir, () => {
+            withReviewArtifactReadBarrier(aliasReviewsDir, () => {
+                assert.equal(isReviewArtifactReadBarrierParticipant(physicalArtifactPath), true);
+                assert.equal(isReviewArtifactReadBarrierParticipant(aliasArtifactPath), true);
+                detachedProbe = (async () => {
+                    await probeHold;
+                    return [
+                        isReviewArtifactReadBarrierParticipant(physicalArtifactPath),
+                        isReviewArtifactReadBarrierParticipant(aliasArtifactPath)
+                    ];
+                })();
+            });
+        });
+        releaseProbe();
+        assert.deepEqual(await detachedProbe, [false, false]);
+    } finally {
+        releaseProbe();
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('overlapping alias and physical participants share irreversible snapshot state', async (context) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-alias-shared-snapshot-'));
+    const reviewsDir = createReviewsDir(path.join(tempDir, 'physical'));
+    const aliasReviewsDir = path.join(tempDir, 'reviews-alias');
+    const physicalArtifactPath = path.join(reviewsDir, 'created-during-overlap.json');
+    const aliasArtifactPath = path.join(aliasReviewsDir, 'created-during-overlap.json');
+    let releaseAliasParticipant!: () => void;
+    const aliasParticipantHold = new Promise<void>((resolve) => {
+        releaseAliasParticipant = resolve;
+    });
+    let markAliasParticipantReady!: () => void;
+    const aliasParticipantReady = new Promise<void>((resolve) => {
+        markAliasParticipantReady = resolve;
+    });
+    try {
+        try {
+            fs.symlinkSync(reviewsDir, aliasReviewsDir, process.platform === 'win32' ? 'junction' : 'dir');
+        } catch {
+            context.skip('Directory symlink or junction creation is unavailable in this environment.');
+            return;
+        }
+
+        const aliasParticipant = withReviewArtifactReadBarrier(aliasReviewsDir, async () => {
+            const missing = readReviewArtifactFileSnapshot(aliasArtifactPath);
+            assert.equal(missing.exists, false);
+            assert.equal(missing.valid, false);
+            markAliasParticipantReady();
+            await aliasParticipantHold;
+        });
+        await aliasParticipantReady;
+
+        const physicalRead = await withReviewArtifactReadBarrier(reviewsDir, async () => {
+            releaseAliasParticipant();
+            await aliasParticipant;
+            writeReviewArtifactText(physicalArtifactPath, '{"created":true}\n', {
+                lowNoiseRuntimeWrites: true
+            });
+            return readReviewArtifactFileSnapshot(physicalArtifactPath);
+        });
+
+        assert.equal(physicalRead.exists, true);
+        assert.equal(physicalRead.valid, false);
+        assert.equal(
+            withReviewArtifactReadBarrier(
+                reviewsDir,
+                () => isReviewArtifactReadBarrierParticipant(physicalArtifactPath)
+            ),
+            true
+        );
+    } finally {
+        releaseAliasParticipant();
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('canonical snapshot cleanup handles a joined participant exiting first', async (context) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-alias-cleanup-order-'));
+    const reviewsDir = createReviewsDir(path.join(tempDir, 'physical'));
+    const aliasReviewsDir = path.join(tempDir, 'reviews-alias');
+    const artifactPath = path.join(reviewsDir, 'artifact.json');
+    let releaseCreator!: () => void;
+    const creatorHold = new Promise<void>((resolve) => {
+        releaseCreator = resolve;
+    });
+    let markCreatorReady!: () => void;
+    const creatorReady = new Promise<void>((resolve) => {
+        markCreatorReady = resolve;
+    });
+    try {
+        try {
+            fs.symlinkSync(reviewsDir, aliasReviewsDir, process.platform === 'win32' ? 'junction' : 'dir');
+        } catch {
+            context.skip('Directory symlink or junction creation is unavailable in this environment.');
+            return;
+        }
+        const creator = withReviewArtifactReadBarrier(aliasReviewsDir, async () => {
+            markCreatorReady();
+            await creatorHold;
+        });
+        await creatorReady;
+        assert.equal(
+            withReviewArtifactReadBarrier(
+                reviewsDir,
+                () => isReviewArtifactReadBarrierParticipant(artifactPath)
+            ),
+            true
+        );
+        releaseCreator();
+        await creator;
+        assert.equal(
+            withReviewArtifactReadBarrier(
+                reviewsDir,
+                () => isReviewArtifactReadBarrierParticipant(artifactPath)
+            ),
+            true
+        );
+    } finally {
+        releaseCreator();
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('caught snapshot budget failure releases the canonical registry entry exactly once', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-budget-cleanup-'));
+    const reviewsDir = createReviewsDir(tempDir);
+    const firstPath = path.join(reviewsDir, 'first.json');
+    const secondPath = path.join(reviewsDir, 'second.json');
+    try {
+        assert.throws(
+            () => withReviewArtifactReadSnapshot(reviewsDir, () => {
+                assert.equal(readReviewArtifactFileSnapshot(firstPath).valid, false);
+                try {
+                    readReviewArtifactFileSnapshot(secondPath);
+                } catch (error: unknown) {
+                    assert.ok(error instanceof ReviewArtifactReadBudgetError);
+                }
+            }, { snapshotMaxArtifacts: 1 }),
+            (error: unknown) => (
+                error instanceof ReviewArtifactReadBudgetError
+                && error.code === 'ARTIFACT_COUNT_EXCEEDED'
+            )
+        );
+        assert.equal(
+            withReviewArtifactReadBarrier(
+                reviewsDir,
+                () => isReviewArtifactReadBarrierParticipant(firstPath)
+            ),
+            true
+        );
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('deepest canonical snapshot wins over a longer outer alias', async (context) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-canonical-depth-'));
+    const physicalRoot = path.join(tempDir, 'p');
+    const nestedRoot = path.join(physicalRoot, 'nested');
+    const aliasRoot = path.join(tempDir, 'a-very-long-lexical-alias-for-the-outer-root');
+    const artifactPath = path.join(nestedRoot, 'artifact.json');
+    fs.mkdirSync(nestedRoot, { recursive: true });
+    fs.writeFileSync(artifactPath, 'v1\n', 'utf8');
+    let releaseOuter!: () => void;
+    const outerHold = new Promise<void>((resolve) => {
+        releaseOuter = resolve;
+    });
+    let markOuterReady!: () => void;
+    const outerReady = new Promise<void>((resolve) => {
+        markOuterReady = resolve;
+    });
+    try {
+        try {
+            fs.symlinkSync(physicalRoot, aliasRoot, process.platform === 'win32' ? 'junction' : 'dir');
+        } catch {
+            context.skip('Directory symlink or junction creation is unavailable in this environment.');
+            return;
+        }
+        const outer = withReviewArtifactReadSnapshot(aliasRoot, async () => {
+            markOuterReady();
+            await outerHold;
+        });
+        await outerReady;
+
+        const nestedResult = await withReviewArtifactReadSnapshot(nestedRoot, async () => {
+            const first = readReviewArtifactFileSnapshot(artifactPath);
+            assert.equal(first.valid, true);
+            assert.equal(first.content?.toString('utf8'), 'v1\n');
+            releaseOuter();
+            await outer;
+            fs.writeFileSync(artifactPath, 'v2\n', 'utf8');
+            return readReviewArtifactFileSnapshot(artifactPath);
+        });
+
+        assert.equal(nestedResult.exists, true);
+        assert.equal(nestedResult.valid, false);
+    } finally {
+        releaseOuter();
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('retargeted lexical snapshot route stays invalid after the alias is restored', (context) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-route-retarget-'));
+    const physicalA = path.join(tempDir, 'physical-a');
+    const physicalB = path.join(tempDir, 'physical-b');
+    const aliasRoot = path.join(tempDir, 'reviews-alias');
+    const artifactName = 'artifact.json';
+    fs.mkdirSync(physicalA, { recursive: true });
+    fs.mkdirSync(physicalB, { recursive: true });
+    fs.writeFileSync(path.join(physicalA, artifactName), 'A\n', 'utf8');
+    fs.writeFileSync(path.join(physicalB, artifactName), 'B\n', 'utf8');
+    try {
+        try {
+            fs.symlinkSync(physicalA, aliasRoot, process.platform === 'win32' ? 'junction' : 'dir');
+        } catch {
+            context.skip('Directory symlink or junction creation is unavailable in this environment.');
+            return;
+        }
+        withReviewArtifactReadSnapshot(aliasRoot, () => {
+            const aliasArtifactPath = path.join(aliasRoot, artifactName);
+            const first = readReviewArtifactFileSnapshot(aliasArtifactPath);
+            assert.equal(first.valid, true);
+            assert.equal(first.content?.toString('utf8'), 'A\n');
+
+            fs.rmSync(aliasRoot, { recursive: true, force: true });
+            fs.symlinkSync(physicalB, aliasRoot, process.platform === 'win32' ? 'junction' : 'dir');
+            const retargeted = readReviewArtifactFileSnapshot(aliasArtifactPath);
+            assert.equal(retargeted.active, true);
+            assert.equal(retargeted.valid, false);
+
+            fs.rmSync(aliasRoot, { recursive: true, force: true });
+            fs.symlinkSync(physicalA, aliasRoot, process.platform === 'win32' ? 'junction' : 'dir');
+            const restored = readReviewArtifactFileSnapshot(aliasArtifactPath);
+            assert.equal(restored.active, true);
+            assert.equal(restored.valid, false);
+        });
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
 test('review read barrier rejects an artifact replaced after its first snapshot read', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-snapshot-race-'));
     const reviewsDir = createReviewsDir(tempDir);
@@ -1528,6 +1990,7 @@ test('review read barrier rejects an artifact replaced after its first snapshot 
             assert.equal(originalSnapshot.sha256, fileSha256(receiptPath));
             fs.writeFileSync(receiptPath, '{"version":200,"replacement":true}\n', 'utf8');
             assert.equal(readReviewArtifactJsonSnapshot(receiptPath).valid, false);
+            assert.equal(readReviewArtifactFileSnapshot(receiptPath).exists, true);
             assert.equal(readReviewArtifactFileSha256(receiptPath), null);
             assert.throws(
                 () => readReviewArtifactTextFile(receiptPath),
