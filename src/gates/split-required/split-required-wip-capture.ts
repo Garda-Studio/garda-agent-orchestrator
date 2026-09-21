@@ -132,6 +132,7 @@ function excludeGateOwnedQueueFiles(changes: TrackedChangeFiles): TrackedChangeF
 function collectVisibleUntrackedFiles(repoRoot: string): string[] {
     return splitNulList(runGitBinary(repoRoot, ['ls-files', '--others', '--exclude-standard', '-z']))
         .map(normalizeGitPath)
+        .filter((relativePath) => !relativePath.startsWith(`${TASK_QUEUE_FILENAME}.garda-status-sync.lock/`))
         .sort();
 }
 
@@ -791,7 +792,12 @@ function rollbackSuspension(
         violations.push(...restoreUntrackedSnapshot(repoRoot, snapshot));
     }
     if (violations.length === 0) {
-        violations.push(...validateWorkspaceMatchesPreparedCapture(repoRoot, prepared, false));
+        try {
+            violations.push(...validateWorkspaceMatchesPreparedCapture(repoRoot, prepared, false));
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            violations.push(`failed to verify restored WIP after suspension failure: ${message}`);
+        }
     }
     return violations;
 }
@@ -840,29 +846,120 @@ function blockedCaptureResult(params: {
     untrackedFiles: string[];
     violations: string[];
     retainCapture?: boolean;
+    checkoutState?: SplitRequiredWipCheckoutState;
 }): SplitRequiredWipCaptureResult {
     const retainCapture = Boolean(params.retainCapture && params.prepared);
     return {
         status: 'BLOCKED',
+        checkout_state: params.checkoutState || 'restored',
         manifest_path: retainCapture ? normalizePath(params.prepared!.manifestPath) : null,
         manifest_sha256: retainCapture ? params.prepared!.manifestSha256 : null,
         tracked_files: params.trackedFiles,
         untracked_files: params.untrackedFiles,
         violations: params.violations
-    };
+    } as SplitRequiredWipCaptureResult;
 }
 
-function isCapturedWorkspaceStillSuspended(
+type SplitRequiredWipCheckoutState = 'suspended' | 'restored' | 'indeterminate';
+
+function inspectCapturedWorkspaceSuspension(
     repoRoot: string,
     manifest: SplitRequiredWipManifest
-): boolean {
-    const trackedChanges = excludeGateOwnedQueueFiles(collectTrackedChangeFiles(repoRoot)).all;
-    if (trackedChanges.length > 0 || collectVisibleUntrackedFiles(repoRoot).length > 0) {
-        return false;
+): {
+    checkoutState: SplitRequiredWipCheckoutState;
+    violations: string[];
+} {
+    try {
+        const currentHead = getHeadCommit(repoRoot);
+        if (currentHead !== manifest.base_commit) {
+            return {
+                checkoutState: 'indeterminate',
+                violations: [
+                    `split-required WIP checkout state identity mismatch: expected HEAD ${manifest.base_commit}; found ${currentHead}`
+                ]
+            };
+        }
+        const trackedChanges = excludeGateOwnedQueueFiles(collectTrackedChangeFiles(repoRoot)).all;
+        const visibleUntrackedFiles = collectVisibleUntrackedFiles(repoRoot);
+        const capturedUntrackedAbsent = manifest.untracked_files.every((entry) => (
+            isRepoPathAbsent(repoRoot, entry.path)
+        ));
+        if (trackedChanges.length === 0
+            && visibleUntrackedFiles.length === 0
+            && capturedUntrackedAbsent) {
+            return {
+                checkoutState: 'suspended',
+                violations: []
+            };
+        }
+
+        const restoredViolations: string[] = [];
+        const expectedTrackedPaths = manifest.tracked_files.map((entry) => entry.path).sort();
+        if (JSON.stringify(trackedChanges) !== JSON.stringify(expectedTrackedPaths)) {
+            restoredViolations.push('tracked WIP path set does not match the retained capture.');
+        }
+        const expectedStaged = new Set(
+            manifest.tracked_files.filter((entry) => entry.staged).map((entry) => entry.path)
+        );
+        const expectedUnstaged = new Set(
+            manifest.tracked_files.filter((entry) => entry.unstaged).map((entry) => entry.path)
+        );
+        const currentTracked = excludeGateOwnedQueueFiles(collectTrackedChangeFiles(repoRoot));
+        if (JSON.stringify([...currentTracked.staged].sort()) !== JSON.stringify([...expectedStaged].sort())) {
+            restoredViolations.push('staged WIP path set does not match the retained capture.');
+        }
+        if (JSON.stringify([...currentTracked.unstaged].sort()) !== JSON.stringify([...expectedUnstaged].sort())) {
+            restoredViolations.push('unstaged WIP path set does not match the retained capture.');
+        }
+        const stagedPatch = buildCurrentPatch(repoRoot, ['diff', '--binary', '--cached'], expectedStaged);
+        const unstagedPatch = buildCurrentPatch(repoRoot, ['diff', '--binary'], expectedUnstaged);
+        if (sha256Buffer(stagedPatch) !== manifest.patches.staged.sha256
+            || stagedPatch.byteLength !== manifest.patches.staged.bytes) {
+            restoredViolations.push('staged WIP content does not match the retained capture.');
+        }
+        if (sha256Buffer(unstagedPatch) !== manifest.patches.unstaged.sha256
+            || unstagedPatch.byteLength !== manifest.patches.unstaged.bytes) {
+            restoredViolations.push('unstaged WIP content does not match the retained capture.');
+        }
+        for (const entry of manifest.tracked_files) {
+            if (entry.worktree_sha256 === null) {
+                if (!isRepoPathAbsent(repoRoot, entry.path)) {
+                    restoredViolations.push(`restored tracked WIP path should be absent: ${entry.path}`);
+                }
+                continue;
+            }
+            const currentSource = readStableRepoFile(repoRoot, entry.path, 'restored tracked WIP source');
+            if (sha256Buffer(currentSource.content) !== entry.worktree_sha256) {
+                restoredViolations.push(`restored tracked WIP content changed: ${entry.path}`);
+            }
+        }
+        const expectedUntrackedPaths = new Set(manifest.untracked_files.map((entry) => entry.path));
+        if (visibleUntrackedFiles.some((relativePath) => !expectedUntrackedPaths.has(relativePath))) {
+            restoredViolations.push('visible untracked WIP path set does not match the retained capture.');
+        }
+        for (const entry of manifest.untracked_files) {
+            const currentSource = readStableRepoFile(repoRoot, entry.path, 'restored untracked WIP source');
+            if (currentSource.content.byteLength !== entry.bytes
+                || sha256Buffer(currentSource.content) !== entry.sha256) {
+                restoredViolations.push(`restored untracked WIP content changed: ${entry.path}`);
+            }
+        }
+        return restoredViolations.length === 0
+            ? { checkoutState: 'restored', violations: [] }
+            : {
+                checkoutState: 'indeterminate',
+                violations: [
+                    'retained split-required WIP checkout is neither verified suspended nor restored.',
+                    ...restoredViolations
+                ]
+            };
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+            checkoutState: 'indeterminate',
+            violations: [`split-required WIP checkout state inspection failed: ${message}`]
+        };
     }
-    return manifest.untracked_files.every((entry) => (
-        isRepoPathAbsent(repoRoot, entry.path)
-    ));
 }
 
 function isRepoPathAbsent(repoRoot: string, relativePath: string): boolean {
@@ -897,15 +994,30 @@ export function captureAndSuspendSplitRequiredWip(params: {
         preflightPath,
         guardKind: params.guardKind
     });
-    if (current && isCapturedWorkspaceStillSuspended(repoRoot, current.manifest)) {
-        return {
-            status: 'ALREADY_CAPTURED',
-            manifest_path: normalizePath(current.path),
-            manifest_sha256: sha256Buffer(fs.readFileSync(current.path)),
-            tracked_files: current.manifest.tracked_files.map((entry) => entry.path).sort(),
-            untracked_files: current.manifest.untracked_files.map((entry) => entry.path).sort(),
-            violations: []
-        };
+    if (current) {
+        const inspection = inspectCapturedWorkspaceSuspension(repoRoot, current.manifest);
+        if (inspection.checkoutState === 'suspended') {
+            return {
+                status: 'ALREADY_CAPTURED',
+                checkout_state: 'suspended',
+                manifest_path: normalizePath(current.path),
+                manifest_sha256: sha256Buffer(fs.readFileSync(current.path)),
+                tracked_files: current.manifest.tracked_files.map((entry) => entry.path).sort(),
+                untracked_files: current.manifest.untracked_files.map((entry) => entry.path).sort(),
+                violations: []
+            } as SplitRequiredWipCaptureResult;
+        }
+        if (inspection.checkoutState === 'indeterminate') {
+            return {
+                status: 'BLOCKED',
+                checkout_state: 'indeterminate',
+                manifest_path: normalizePath(current.path),
+                manifest_sha256: sha256Buffer(fs.readFileSync(current.path)),
+                tracked_files: current.manifest.tracked_files.map((entry) => entry.path).sort(),
+                untracked_files: current.manifest.untracked_files.map((entry) => entry.path).sort(),
+                violations: inspection.violations
+            } as SplitRequiredWipCaptureResult;
+        }
     }
 
     const preflightScope = readPreflightChangedFileScope(repoRoot, preflightPath, taskId);
@@ -1035,12 +1147,13 @@ export function captureAndSuspendSplitRequiredWip(params: {
 
         return {
             status: 'CAPTURED',
+            checkout_state: 'suspended',
             manifest_path: normalizePath(prepared.manifestPath),
             manifest_sha256: prepared.manifestSha256,
             tracked_files: prepared.manifest.tracked_files.map((entry) => entry.path).sort(),
             untracked_files: prepared.manifest.untracked_files.map((entry) => entry.path).sort(),
             violations: []
-        };
+        } as SplitRequiredWipCaptureResult;
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         const rollbackViolations = suspensionStarted
@@ -1054,17 +1167,25 @@ export function captureAndSuspendSplitRequiredWip(params: {
                 prepared.captureRootIdentity
             )
             : [];
+        const suspensionInspection = rollbackViolations.length > 0
+            ? inspectCapturedWorkspaceSuspension(repoRoot, prepared.manifest)
+            : null;
         const violations = [
             `split-required WIP capture transaction failed: ${message}`,
             ...rollbackViolations,
-            ...cleanupViolations
+            ...cleanupViolations,
+            ...(suspensionInspection?.violations || [])
         ];
+        const checkoutState: SplitRequiredWipCheckoutState = rollbackViolations.length === 0
+            ? 'restored'
+            : suspensionInspection!.checkoutState;
         return blockedCaptureResult({
             prepared,
             trackedFiles: trackedChanges.all,
             untrackedFiles: capturedUntrackedFiles,
             violations,
-            retainCapture: rollbackViolations.length > 0 || cleanupViolations.length > 0
+            retainCapture: rollbackViolations.length > 0 || cleanupViolations.length > 0,
+            checkoutState
         });
     }
 }

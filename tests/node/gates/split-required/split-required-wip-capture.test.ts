@@ -90,6 +90,14 @@ function capture(repoRoot: string, changedFiles: string[]) {
     });
 }
 
+type CaptureCheckoutState = 'suspended' | 'restored' | 'indeterminate';
+
+function checkoutState(result: ReturnType<typeof capture>): CaptureCheckoutState | undefined {
+    return (result as ReturnType<typeof capture> & {
+        checkout_state?: CaptureCheckoutState;
+    }).checkout_state;
+}
+
 function captureDirectories(repoRoot: string): string[] {
     const captureRoot = path.join(
         repoRoot,
@@ -224,6 +232,333 @@ describe('split-required WIP capture boundary', () => {
             runGit(repoRoot, ['diff', '--', 'src/app.ts']),
             /[-]export const value = 2;[\s\S]*[+]export const value = 3;/u
         );
+    });
+
+    it('reports suspended checkout state for captured and idempotently recaptured WIP', (context) => {
+        const repoRoot = makeRepo();
+        context.after(() => removeTempRoot(repoRoot));
+        writeFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
+
+        const first = capture(repoRoot, ['src/app.ts']);
+        const second = capture(repoRoot, ['src/app.ts']);
+
+        assert.equal(first.status, 'CAPTURED', first.violations.join('\n'));
+        assert.equal(checkoutState(first), 'suspended');
+        assert.equal(second.status, 'ALREADY_CAPTURED', second.violations.join('\n'));
+        assert.equal(checkoutState(second), 'suspended');
+        assert.equal(second.manifest_path, first.manifest_path);
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'src/app.ts'), 'utf8'), 'export const value = 1;\n');
+    });
+
+    it('blocks recapture when a retained manifest has indeterminate checkout state', (context) => {
+        const repoRoot = makeRepo();
+        context.after(() => removeTempRoot(repoRoot));
+        writeFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
+
+        const first = capture(repoRoot, ['src/app.ts']);
+        assert.equal(first.status, 'CAPTURED', first.violations.join('\n'));
+        assert.ok(first.manifest_path);
+        writeFile(repoRoot, 'src/app.ts', 'export const value = 3;\n');
+
+        const second = capture(repoRoot, ['src/app.ts']);
+
+        assert.equal(second.status, 'BLOCKED');
+        assert.equal(checkoutState(second), 'indeterminate');
+        assert.equal(second.manifest_path, first.manifest_path);
+        assert.ok(second.violations.some((violation) => violation.includes('neither verified suspended nor restored')));
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'src/app.ts'), 'utf8'), 'export const value = 3;\n');
+    });
+
+    it('excludes the active legacy task-queue lock directory from visible implementation WIP', (context) => {
+        const repoRoot = makeRepo();
+        context.after(() => removeTempRoot(repoRoot));
+        const lockOwnerPath = path.join(repoRoot, 'TASK.md.garda-status-sync.lock', 'owner.json');
+        writeFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
+        writeFile(repoRoot, 'TASK.md.garda-status-sync.lock/owner.json', '{"pid":123}\n');
+
+        const captured = capture(repoRoot, ['src/app.ts']);
+
+        assert.equal(captured.status, 'CAPTURED', captured.violations.join('\n'));
+        assert.equal(checkoutState(captured), 'suspended');
+        assert.deepEqual(captured.untracked_files, []);
+        assert.equal(fs.readFileSync(lockOwnerPath, 'utf8'), '{"pid":123}\n');
+    });
+
+    it('reports restored checkout state when rollback succeeds but capture cleanup fails', (context) => {
+        const repoRoot = makeRepo();
+        context.after(() => removeTempRoot(repoRoot));
+        writeFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
+        writeFile(repoRoot, 'src/new.ts', 'export const added = true;\n');
+
+        const fsModule = require('node:fs') as typeof import('node:fs');
+        const originalRenameSync = fsModule.renameSync;
+        const originalRmSync = fsModule.rmSync;
+        const untrackedPath = path.join(repoRoot, 'src', 'new.ts');
+        let suspensionFailureInjected = false;
+        let cleanupFailureInjected = false;
+        fsModule.renameSync = ((oldPath: fs.PathLike, newPath: fs.PathLike) => {
+            if (path.resolve(String(oldPath)) === untrackedPath) {
+                suspensionFailureInjected = true;
+                throw new Error('injected untracked suspension failure');
+            }
+            return Reflect.apply(originalRenameSync, fsModule, [oldPath, newPath]);
+        }) as typeof fsModule.renameSync;
+        fsModule.rmSync = ((targetPath: fs.PathLike, options?: fs.RmDirOptions) => {
+            const normalizedPath = path.resolve(String(targetPath));
+            if (normalizedPath.includes(`${path.sep}runtime${path.sep}wip${path.sep}${TASK_ID}${path.sep}split-required${path.sep}`)) {
+                cleanupFailureInjected = true;
+                throw new Error('injected capture cleanup failure');
+            }
+            return Reflect.apply(originalRmSync, fsModule, [targetPath, options]);
+        }) as typeof fsModule.rmSync;
+        let captured: ReturnType<typeof capture> | null = null;
+        try {
+            captured = capture(repoRoot, ['src/app.ts', 'src/new.ts']);
+        } finally {
+            fsModule.renameSync = originalRenameSync;
+            fsModule.rmSync = originalRmSync;
+        }
+
+        assert.equal(suspensionFailureInjected, true);
+        assert.equal(cleanupFailureInjected, true);
+        assert.equal(captured?.status, 'BLOCKED');
+        assert.equal(captured ? checkoutState(captured) : undefined, 'restored');
+        assert.ok(captured?.manifest_path);
+        assert.equal(fs.existsSync(captured!.manifest_path!), true);
+        assert.ok(captured?.violations.some((violation) => violation.includes('capture cleanup failed')));
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'src/app.ts'), 'utf8'), 'export const value = 2;\n');
+        assert.equal(fs.readFileSync(untrackedPath, 'utf8'), 'export const added = true;\n');
+    });
+
+    it('reports indeterminate checkout state when rollback failure leaves partial WIP', (context) => {
+        const repoRoot = makeRepo();
+        context.after(() => removeTempRoot(repoRoot));
+        writeFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
+        writeFile(repoRoot, 'src/new.ts', 'export const added = true;\n');
+
+        const fsModule = require('node:fs') as typeof import('node:fs');
+        const originalUnlinkSync = fsModule.unlinkSync;
+        const originalWriteFileSync = fsModule.writeFileSync;
+        const untrackedPath = path.join(repoRoot, 'src', 'new.ts');
+        let suspensionFailureInjected = false;
+        let rollbackFailureInjected = false;
+        fsModule.unlinkSync = ((targetPath: fs.PathLike) => {
+            const normalizedPath = path.resolve(String(targetPath));
+            if (normalizedPath.includes(`${path.sep}suspended-untracked${path.sep}`)) {
+                suspensionFailureInjected = true;
+                throw new Error('injected suspended snapshot cleanup failure');
+            }
+            return Reflect.apply(originalUnlinkSync, fsModule, [targetPath]);
+        }) as typeof fsModule.unlinkSync;
+        fsModule.writeFileSync = ((filePath: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: fs.WriteFileOptions) => {
+            if (typeof filePath !== 'number' && path.resolve(String(filePath)) === untrackedPath) {
+                rollbackFailureInjected = true;
+                throw new Error('injected untracked rollback failure');
+            }
+            return Reflect.apply(originalWriteFileSync, fsModule, [filePath, data, options]);
+        }) as typeof fsModule.writeFileSync;
+        let captured: ReturnType<typeof capture> | null = null;
+        try {
+            captured = capture(repoRoot, ['src/app.ts', 'src/new.ts']);
+        } finally {
+            fsModule.unlinkSync = originalUnlinkSync;
+            fsModule.writeFileSync = originalWriteFileSync;
+        }
+
+        assert.equal(suspensionFailureInjected, true);
+        assert.equal(rollbackFailureInjected, true);
+        assert.equal(captured?.status, 'BLOCKED');
+        assert.equal(captured ? checkoutState(captured) : undefined, 'indeterminate');
+        assert.ok(captured?.manifest_path);
+        assert.ok(captured?.violations.some((violation) => violation.includes('failed to restore untracked WIP')));
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'src/app.ts'), 'utf8'), 'export const value = 2;\n');
+        assert.equal(fs.existsSync(untrackedPath), false);
+    });
+
+    it('reports suspended checkout state when rollback failure leaves the captured checkout suspended', (context) => {
+        const repoRoot = makeRepo();
+        context.after(() => removeTempRoot(repoRoot));
+        writeFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
+
+        const fsModule = require('node:fs') as typeof import('node:fs');
+        const childProcessModule = require('node:child_process') as typeof import('node:child_process');
+        const originalMkdirSync = fsModule.mkdirSync;
+        const originalExecFileSync = childProcessModule.execFileSync;
+        let transactionFailureInjected = false;
+        let rollbackFailureInjected = false;
+        fsModule.mkdirSync = ((directoryPath: fs.PathLike, options?: fs.MakeDirectoryOptions) => {
+            const normalizedPath = path.resolve(String(directoryPath));
+            if (normalizedPath.endsWith(`${path.sep}garda-agent-orchestrator${path.sep}runtime${path.sep}task-events`)) {
+                transactionFailureInjected = true;
+                throw new Error('injected captured-event append failure');
+            }
+            return Reflect.apply(originalMkdirSync, fsModule, [directoryPath, options]);
+        }) as typeof fsModule.mkdirSync;
+        childProcessModule.execFileSync = ((
+            file: string,
+            args?: readonly string[],
+            options?: childProcess.ExecFileSyncOptions
+        ) => {
+            const commandArgs = Array.isArray(args) ? args.map(String) : [];
+            if (transactionFailureInjected && file === 'git' && commandArgs.includes('apply')) {
+                rollbackFailureInjected = true;
+                throw new Error('injected tracked rollback failure');
+            }
+            return Reflect.apply(originalExecFileSync, childProcessModule, [file, args, options]);
+        }) as typeof childProcessModule.execFileSync;
+        let captured: ReturnType<typeof capture> | null = null;
+        try {
+            captured = capture(repoRoot, ['src/app.ts']);
+        } finally {
+            fsModule.mkdirSync = originalMkdirSync;
+            childProcessModule.execFileSync = originalExecFileSync;
+        }
+
+        assert.equal(transactionFailureInjected, true);
+        assert.equal(rollbackFailureInjected, true);
+        assert.equal(captured?.status, 'BLOCKED');
+        assert.equal(captured ? checkoutState(captured) : undefined, 'suspended');
+        assert.ok(captured?.manifest_path);
+        assert.ok(captured?.violations.some((violation) => violation.includes('failed to restore tracked WIP')));
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'src/app.ts'), 'utf8'), 'export const value = 1;\n');
+    });
+
+    it('reports indeterminate checkout state when concurrent HEAD change causes rollback failure', (context) => {
+        const repoRoot = makeRepo();
+        context.after(() => removeTempRoot(repoRoot));
+        writeFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
+
+        const fsModule = require('node:fs') as typeof import('node:fs');
+        const originalMkdirSync = fsModule.mkdirSync;
+        let headChangeInjected = false;
+        fsModule.mkdirSync = ((directoryPath: fs.PathLike, options?: fs.MakeDirectoryOptions) => {
+            const normalizedPath = path.resolve(String(directoryPath));
+            if (normalizedPath.endsWith(`${path.sep}garda-agent-orchestrator${path.sep}runtime${path.sep}task-events`)) {
+                runGit(repoRoot, ['commit', '--allow-empty', '--no-verify', '-m', 'concurrent head move after suspension']);
+                headChangeInjected = true;
+                throw new Error('injected captured-event append failure');
+            }
+            return Reflect.apply(originalMkdirSync, fsModule, [directoryPath, options]);
+        }) as typeof fsModule.mkdirSync;
+        let captured: ReturnType<typeof capture> | null = null;
+        try {
+            captured = capture(repoRoot, ['src/app.ts']);
+        } finally {
+            fsModule.mkdirSync = originalMkdirSync;
+        }
+
+        assert.equal(headChangeInjected, true);
+        assert.equal(captured?.status, 'BLOCKED');
+        assert.equal(captured ? checkoutState(captured) : undefined, 'indeterminate');
+        assert.ok(captured?.manifest_path);
+        assert.ok(captured?.violations.some((violation) => violation.includes('checkout state identity mismatch')));
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'src/app.ts'), 'utf8'), 'export const value = 1;\n');
+    });
+
+    it('returns indeterminate checkout state when rollback-state inspection fails', (context) => {
+        const repoRoot = makeRepo();
+        context.after(() => removeTempRoot(repoRoot));
+        writeFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
+
+        const fsModule = require('node:fs') as typeof import('node:fs');
+        const childProcessModule = require('node:child_process') as typeof import('node:child_process');
+        const originalMkdirSync = fsModule.mkdirSync;
+        const originalExecFileSync = childProcessModule.execFileSync;
+        let transactionFailureInjected = false;
+        let rollbackFailureInjected = false;
+        let inspectionFailureInjected = false;
+        fsModule.mkdirSync = ((directoryPath: fs.PathLike, options?: fs.MakeDirectoryOptions) => {
+            const normalizedPath = path.resolve(String(directoryPath));
+            if (normalizedPath.endsWith(`${path.sep}garda-agent-orchestrator${path.sep}runtime${path.sep}task-events`)) {
+                transactionFailureInjected = true;
+                throw new Error('injected captured-event append failure');
+            }
+            return Reflect.apply(originalMkdirSync, fsModule, [directoryPath, options]);
+        }) as typeof fsModule.mkdirSync;
+        childProcessModule.execFileSync = ((
+            file: string,
+            args?: readonly string[],
+            options?: childProcess.ExecFileSyncOptions
+        ) => {
+            const commandArgs = Array.isArray(args) ? args.map(String) : [];
+            if (rollbackFailureInjected && file === 'git' && commandArgs.includes('rev-parse')) {
+                inspectionFailureInjected = true;
+                throw new Error('injected checkout-state inspection failure');
+            }
+            if (transactionFailureInjected && file === 'git' && commandArgs.includes('apply')) {
+                rollbackFailureInjected = true;
+                throw new Error('injected tracked rollback failure');
+            }
+            return Reflect.apply(originalExecFileSync, childProcessModule, [file, args, options]);
+        }) as typeof childProcessModule.execFileSync;
+        let captured: ReturnType<typeof capture> | null = null;
+        try {
+            captured = capture(repoRoot, ['src/app.ts']);
+        } finally {
+            fsModule.mkdirSync = originalMkdirSync;
+            childProcessModule.execFileSync = originalExecFileSync;
+        }
+
+        assert.equal(transactionFailureInjected, true);
+        assert.equal(rollbackFailureInjected, true);
+        assert.equal(inspectionFailureInjected, true);
+        assert.equal(captured?.status, 'BLOCKED');
+        assert.equal(captured ? checkoutState(captured) : undefined, 'indeterminate');
+        assert.ok(captured?.manifest_path);
+        assert.ok(captured?.violations.some((violation) => violation.includes('checkout state inspection failed')));
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'src/app.ts'), 'utf8'), 'export const value = 1;\n');
+    });
+
+    it('contains post-rollback verification failure and reports indeterminate checkout state', (context) => {
+        const repoRoot = makeRepo();
+        context.after(() => removeTempRoot(repoRoot));
+        writeFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
+
+        const fsModule = require('node:fs') as typeof import('node:fs');
+        const childProcessModule = require('node:child_process') as typeof import('node:child_process');
+        const originalMkdirSync = fsModule.mkdirSync;
+        const originalExecFileSync = childProcessModule.execFileSync;
+        let transactionFailureInjected = false;
+        let verificationFailureInjected = false;
+        fsModule.mkdirSync = ((directoryPath: fs.PathLike, options?: fs.MakeDirectoryOptions) => {
+            const normalizedPath = path.resolve(String(directoryPath));
+            if (normalizedPath.endsWith(`${path.sep}garda-agent-orchestrator${path.sep}runtime${path.sep}task-events`)) {
+                transactionFailureInjected = true;
+                throw new Error('injected captured-event append failure');
+            }
+            return Reflect.apply(originalMkdirSync, fsModule, [directoryPath, options]);
+        }) as typeof fsModule.mkdirSync;
+        childProcessModule.execFileSync = ((
+            file: string,
+            args?: readonly string[],
+            options?: childProcess.ExecFileSyncOptions
+        ) => {
+            const commandArgs = Array.isArray(args) ? args.map(String) : [];
+            if (transactionFailureInjected
+                && file === 'git'
+                && commandArgs.includes('diff')
+                && commandArgs.includes('--name-only')) {
+                verificationFailureInjected = true;
+                throw new Error('injected post-rollback verification failure');
+            }
+            return Reflect.apply(originalExecFileSync, childProcessModule, [file, args, options]);
+        }) as typeof childProcessModule.execFileSync;
+        let captured: ReturnType<typeof capture> | null = null;
+        try {
+            captured = capture(repoRoot, ['src/app.ts']);
+        } finally {
+            fsModule.mkdirSync = originalMkdirSync;
+            childProcessModule.execFileSync = originalExecFileSync;
+        }
+
+        assert.equal(transactionFailureInjected, true);
+        assert.equal(verificationFailureInjected, true);
+        assert.equal(captured?.status, 'BLOCKED');
+        assert.equal(captured ? checkoutState(captured) : undefined, 'indeterminate');
+        assert.ok(captured?.manifest_path);
+        assert.ok(captured?.violations.some((violation) => violation.includes('failed to verify restored WIP')));
+        assert.ok(captured?.violations.some((violation) => violation.includes('checkout state inspection failed')));
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'src/app.ts'), 'utf8'), 'export const value = 2;\n');
     });
 
     it('recaptures restored WIP instead of reusing a manifest whose files are present', (context) => {
