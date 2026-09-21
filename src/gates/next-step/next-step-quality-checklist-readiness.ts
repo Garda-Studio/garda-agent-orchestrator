@@ -1138,7 +1138,7 @@ export function readQualityChecklistReadiness(options: {
         });
     }
 
-    if (status === 'ACTION_REQUIRED') {
+    if (status === 'ACTION_REQUIRED' || status === 'CONFIG_ERROR') {
         const templateMaterialization = materializePendingQualityChecklistAnswers(effectOptions);
         const answersPath = templateMaterialization.answersPath;
         if (answersPath && !templateMaterialization.error) {
@@ -1166,7 +1166,7 @@ export function readQualityChecklistReadiness(options: {
                         evidenceStatus: 'stale',
                         effect: 'stale',
                         reason:
-                            'Quality checklist answers were updated after ACTION_REQUIRED remediation and now produce a non-blocking candidate. ' +
+                            `Quality checklist answers were updated after ${status} remediation and now produce a non-blocking candidate. ` +
                             'Rerun the quality checklist to replace the blocking artifact before compile, review, full-suite, or completion gates.',
                         artifactPath,
                         artifact,

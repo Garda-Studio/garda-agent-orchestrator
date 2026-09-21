@@ -911,6 +911,43 @@ describe('gates/next-step quality checklist routing', () => {
         assert.equal(result.commands.length, 0);
     });
 
+    it('prints the checklist rerun command after CONFIG_ERROR answers are repaired', () => {
+        const repoRoot = makeTempRepo();
+        writeWorkflowConfig(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+
+        resolveNextStep({ taskId: TASK_ID, repoRoot });
+        const answersPath = qualityChecklistAnswersPath(repoRoot);
+        completeChecklistAnswersWithInvalidFirstStatus(repoRoot);
+        const checklistResult = runQualityChecklistCommand({
+            repoRoot,
+            taskId: TASK_ID,
+            preflightPath: path.join(reviewsRoot(repoRoot), `${TASK_ID}-preflight.json`),
+            answersPath,
+            emitMetrics: false
+        });
+        assert.equal(checklistResult.exitCode, 3);
+
+        const answersTemplate = JSON.parse(fs.readFileSync(answersPath, 'utf8')) as {
+            answers: Array<Record<string, unknown>>;
+        };
+        answersTemplate.answers[0] = {
+            ...answersTemplate.answers[0],
+            status: 'PASS',
+            answer: 'The corrected answer now satisfies checklist validation.'
+        };
+        fs.writeFileSync(answersPath, JSON.stringify(answersTemplate, null, 2) + '\n', 'utf8');
+
+        const rerun = resolveNextStep({ taskId: TASK_ID, repoRoot });
+
+        assert.equal(rerun.next_gate, 'quality-checklist', rerun.reason);
+        assert.equal(rerun.commands.length, 1);
+        assert.match(rerun.commands[0].command, /gate quality-checklist/u);
+        assert.match(rerun.commands[0].command, /quality-checklist-answers\.json/u);
+        assert.match(rerun.reason, /updated after CONFIG_ERROR remediation/u);
+    });
+
     it('returns a repair route without an answers path when template materialization fails', () => {
         const repoRoot = makeTempRepo();
         writeWorkflowConfig(repoRoot, {
