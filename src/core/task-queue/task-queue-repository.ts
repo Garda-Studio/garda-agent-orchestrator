@@ -10,7 +10,7 @@ import {
 } from '../../gate-runtime/task-events-locking';
 
 interface QueueTransaction {
-    handle: LockHandle;
+    handles: LockHandle[];
     expectedContent: Buffer | null;
 }
 
@@ -19,6 +19,30 @@ const transactions = new Map<string, QueueTransaction>();
 function canonicalQueuePath(taskPath: string): string {
     if (path.basename(taskPath) !== 'TASK.md') throw new Error('Task queue must be named TASK.md.');
     return path.join(fs.realpathSync(path.dirname(path.resolve(taskPath))), 'TASK.md');
+}
+
+export function resolveTaskQueueTransactionLockPath(taskPath: string): string {
+    const canonicalPath = canonicalQueuePath(taskPath);
+    return path.join(
+        path.dirname(canonicalPath),
+        'garda-agent-orchestrator',
+        'runtime',
+        'task-queue-locks',
+        'TASK.md.lock'
+    );
+}
+
+function resolveLegacyTaskQueueTransactionLockPath(taskPath: string): string {
+    return `${canonicalQueuePath(taskPath)}.garda-status-sync.lock`;
+}
+
+function assertTransactionLockOwnership(transaction: QueueTransaction, message: string): void {
+    for (const handle of transaction.handles) {
+        const inspection = inspectFilesystemLock(handle.lockPath);
+        if (inspection.metadata.lock_id !== handle.lockId || inspection.metadata.pid !== process.pid) {
+            throw new Error(message);
+        }
+    }
 }
 
 function readQueueBytes(taskPath: string): Buffer | null {
@@ -32,32 +56,57 @@ export function withTaskQueueTransaction<T>(
 ): T {
     let canonicalPath: string;
     let transaction: QueueTransaction;
+    let nested = false;
     try {
         canonicalPath = canonicalQueuePath(taskPath);
-        const lockPath = `${canonicalPath}.garda-status-sync.lock`;
-        if (fs.existsSync(lockPath) && !fs.lstatSync(lockPath).isDirectory()) {
-            throw new Error('Legacy or invalid TASK.md lock requires explicit operator recovery.');
-        }
-        const { handle } = acquireFilesystemLock(lockPath, {
-            ownerLabel: 'task-queue-transaction',
-            requireKnownDeadOwner: true,
-            allowForeignHostStaleRecovery: false
-        });
-        try {
-            transaction = { handle, expectedContent: readQueueBytes(canonicalPath) };
-        } catch (error) {
-            releaseFilesystemLock(handle);
-            throw error;
+        const activeTransaction = transactions.get(canonicalPath);
+        if (activeTransaction) {
+            assertTransactionLockOwnership(
+                activeTransaction,
+                'TASK.md transaction lock ownership changed before nested operation.'
+            );
+            transaction = activeTransaction;
+            nested = true;
+        } else {
+            const lockPaths = [
+                resolveLegacyTaskQueueTransactionLockPath(canonicalPath),
+                resolveTaskQueueTransactionLockPath(canonicalPath)
+            ];
+            const handles: LockHandle[] = [];
+            try {
+                for (const lockPath of lockPaths) {
+                    if (fs.existsSync(lockPath) && !fs.lstatSync(lockPath).isDirectory()) {
+                        throw new Error('Legacy or invalid TASK.md lock requires explicit operator recovery.');
+                    }
+                    const { handle } = acquireFilesystemLock(lockPath, {
+                        ownerLabel: 'task-queue-transaction',
+                        requireKnownDeadOwner: true,
+                        allowForeignHostStaleRecovery: false
+                    });
+                    handles.push(handle);
+                }
+                transaction = { handles, expectedContent: readQueueBytes(canonicalPath) };
+            } catch (error) {
+                for (const handle of handles.reverse()) {
+                    releaseFilesystemLock(handle);
+                }
+                throw error;
+            }
         }
     } catch (error) {
         return onLockFailure(`Could not acquire TASK.md status-sync lock: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (nested) {
+        return operation();
     }
     transactions.set(canonicalPath, transaction);
     try {
         return operation();
     } finally {
         transactions.delete(canonicalPath);
-        releaseFilesystemLock(transaction.handle);
+        for (const handle of [...transaction.handles].reverse()) {
+            releaseFilesystemLock(handle);
+        }
     }
 }
 
@@ -65,10 +114,10 @@ export function writeTaskQueueFile(taskPath: string, content: string | Buffer): 
     const canonicalPath = canonicalQueuePath(taskPath);
     const transaction = transactions.get(canonicalPath);
     if (!transaction) throw new Error('TASK.md write requires a task-queue transaction.');
-    const inspection = inspectFilesystemLock(transaction.handle.lockPath);
-    if (inspection.metadata.lock_id !== transaction.handle.lockId || inspection.metadata.pid !== process.pid) {
-        throw new Error('TASK.md transaction lock ownership changed before publication.');
-    }
+    assertTransactionLockOwnership(
+        transaction,
+        'TASK.md transaction lock ownership changed before publication.'
+    );
     const current = readQueueBytes(canonicalPath);
     if (current === null ? transaction.expectedContent !== null : !transaction.expectedContent?.equals(current)) {
         throw new Error('TASK.md changed outside the transaction; refusing to overwrite it.');

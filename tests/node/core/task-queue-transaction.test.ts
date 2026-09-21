@@ -4,7 +4,10 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { writeTaskQueueFile } from '../../../src/core/task-queue/task-queue-repository';
+import {
+    resolveTaskQueueTransactionLockPath,
+    writeTaskQueueFile
+} from '../../../src/core/task-queue/task-queue-repository';
 import { acquireFilesystemLock } from '../../../src/gate-runtime/task-events-locking';
 import { syncTaskQueueStatusDetailed, withTaskQueueStatusSyncLock } from '../../../src/cli/commands/gate-flows/task/task-queue-sync';
 
@@ -97,19 +100,69 @@ test('queue replacement preserves the original bytes when publication fails', ()
     }
 });
 
-test('queue lock has owner identity and never reclaims the live same-process owner', () => {
+test('queue transaction owns both lock namespaces and reuses them for nested status sync', () => {
     const root = fixture();
     const target = path.join(root, 'TASK.md');
+    const legacyLock = `${target}.garda-status-sync.lock`;
+    const runtimeLock = resolveTaskQueueTransactionLockPath(target);
     try {
         withTaskQueueStatusSyncLock(target, (message) => { throw new Error(message); }, () => {
-            const owner = JSON.parse(fs.readFileSync(`${target}.garda-status-sync.lock/owner.json`, 'utf8'));
-            assert.equal(owner.pid, process.pid);
-            assert.ok(owner.lock_id);
-            assert.ok(owner.heartbeat_at_utc);
-            assert.equal(syncTaskQueueStatusDetailed(root, 'T-001', 'IN_PROGRESS').outcome, 'write_failed');
-            assert.equal(fs.readFileSync(target, 'utf8'), content);
+            const owners = [legacyLock, runtimeLock].map((lockPath) => (
+                JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8'))
+            ));
+            for (const owner of owners) {
+                assert.equal(owner.pid, process.pid);
+                assert.ok(owner.lock_id);
+                assert.ok(owner.heartbeat_at_utc);
+            }
+
+            assert.equal(syncTaskQueueStatusDetailed(root, 'T-001', 'IN_PROGRESS').outcome, 'updated');
+            const nestedOwners = [legacyLock, runtimeLock].map((lockPath) => (
+                JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8'))
+            ));
+            assert.deepEqual(nestedOwners.map((owner) => owner.lock_id), owners.map((owner) => owner.lock_id));
+            assert.match(fs.readFileSync(target, 'utf8'), /T-001\s*\|[^|\n]*IN_PROGRESS/);
         });
-        assert.equal(fs.existsSync(`${target}.garda-status-sync.lock`), false);
+        assert.equal(fs.existsSync(legacyLock), false);
+        assert.equal(fs.existsSync(runtimeLock), false);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('queue releases the legacy lock when the runtime lock namespace is obstructed', () => {
+    const root = fixture();
+    const target = path.join(root, 'TASK.md');
+    const legacyLock = `${target}.garda-status-sync.lock`;
+    const runtimeLock = resolveTaskQueueTransactionLockPath(target);
+    try {
+        fs.mkdirSync(path.dirname(runtimeLock), { recursive: true });
+        fs.writeFileSync(runtimeLock, 'foreign runtime lock');
+
+        const result = syncTaskQueueStatusDetailed(root, 'T-001', 'IN_PROGRESS');
+
+        assert.equal(result.outcome, 'write_failed');
+        assert.match(String(result.error_message), /invalid TASK\.md lock/u);
+        assert.equal(fs.existsSync(legacyLock), false);
+        assert.equal(fs.readFileSync(runtimeLock, 'utf8'), 'foreign runtime lock');
+        assert.equal(fs.readFileSync(target, 'utf8'), content);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('nested status sync preserves compare-before-write protection', () => {
+    const root = fixture();
+    const target = path.join(root, 'TASK.md');
+    const foreignContent = content.replace('| T-002 | TODO |', '| T-002 | DONE |');
+    try {
+        withTaskQueueStatusSyncLock(target, (message) => { throw new Error(message); }, () => {
+            fs.writeFileSync(target, foreignContent);
+            const result = syncTaskQueueStatusDetailed(root, 'T-001', 'IN_PROGRESS');
+            assert.equal(result.outcome, 'write_failed');
+            assert.match(String(result.error_message), /changed outside the transaction/u);
+        });
+        assert.equal(fs.readFileSync(target, 'utf8'), foreignContent);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
