@@ -63,6 +63,18 @@
     "label": "Caractères d’aperçu",
     "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués."
   },
+  "compact-exact-bytes": {
+    "label": "Octets de la plage sélectionnée",
+    "description": "Octets de la plage sélectionnée. Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués."
+  },
+  "compact-read-bytes": {
+    "label": "Octets par page de lecture",
+    "description": "Octets par page de lecture. Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués."
+  },
+  "compact-search-context": {
+    "label": "Lignes de contexte de recherche",
+    "description": "Lignes de contexte de recherche. Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués."
+  },
   "compact-run-bytes": {
     "label": "Limite d’octets par capture",
     "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués."

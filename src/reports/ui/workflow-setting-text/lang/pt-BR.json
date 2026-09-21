@@ -63,6 +63,18 @@
     "label": "Caracteres de prévia",
     "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados."
   },
+  "compact-exact-bytes": {
+    "label": "Bytes do intervalo selecionado",
+    "description": "Bytes do intervalo selecionado. Configuração de compact. Alterações exigem confirmação; segredos não são ocultados."
+  },
+  "compact-read-bytes": {
+    "label": "Bytes por página de leitura",
+    "description": "Bytes por página de leitura. Configuração de compact. Alterações exigem confirmação; segredos não são ocultados."
+  },
+  "compact-search-context": {
+    "label": "Linhas de contexto da pesquisa",
+    "description": "Linhas de contexto da pesquisa. Configuração de compact. Alterações exigem confirmação; segredos não são ocultados."
+  },
   "compact-run-bytes": {
     "label": "Limite de bytes por captura",
     "description": "Configuração de compact. Alterações exigem confirmação; segredos não são ocultados."

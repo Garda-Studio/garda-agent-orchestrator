@@ -63,6 +63,18 @@
     "label": "Förhandsvisningstecken",
     "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte."
   },
+  "compact-exact-bytes": {
+    "label": "Byte i valt intervall",
+    "description": "Byte i valt intervall. Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte."
+  },
+  "compact-read-bytes": {
+    "label": "Byte per lässida",
+    "description": "Byte per lässida. Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte."
+  },
+  "compact-search-context": {
+    "label": "Sökningens kontextrader",
+    "description": "Sökningens kontextrader. Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte."
+  },
   "compact-run-bytes": {
     "label": "Bytegräns per insamling",
     "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte."

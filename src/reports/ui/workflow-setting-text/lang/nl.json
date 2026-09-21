@@ -63,6 +63,18 @@
     "label": "Voorbeeldtekens",
     "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd."
   },
+  "compact-exact-bytes": {
+    "label": "Bytes van geselecteerd bereik",
+    "description": "Bytes van geselecteerd bereik. Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd."
+  },
+  "compact-read-bytes": {
+    "label": "Bytes per leespagina",
+    "description": "Bytes per leespagina. Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd."
+  },
+  "compact-search-context": {
+    "label": "Zoekcontextregels",
+    "description": "Zoekcontextregels. Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd."
+  },
   "compact-run-bytes": {
     "label": "Bytelimiet per opname",
     "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd."

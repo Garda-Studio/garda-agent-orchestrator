@@ -5,7 +5,7 @@ import {
     PROJECT_MEMORY_MAINTENANCE_MODES,
     PROJECT_MEMORY_READ_STRATEGIES
 } from '../core/workflow-config';
-import { COMPACT_SETTING_REGISTRY, compactSettingMinimum } from '../core/compact/setting-definitions';
+import { COMPACT_SETTING_REGISTRY, compactSettingMinimum, compactSettingMaximum } from '../core/compact/setting-definitions';
 import { REVIEW_EXECUTION_POLICY_MODES, describeReviewExecutionPolicy } from '../core/review-execution-policy';
 import { SCOPE_BUDGET_GUARD_ACTIONS } from '../core/scope-budget-guard';
 import { REVIEW_CYCLE_GUARD_ACTIONS } from '../core/review-cycle-guard';
@@ -230,7 +230,7 @@ export const WORKFLOW_SETTING_DEFINITIONS: readonly WorkflowSettingDefinition[] 
         id: entry.id, key: entry.key, label: entry.ui.label, description: entry.ui.description, flag: entry.cli.flag,
         value_type: entry.value_type === 'boolean' ? 'boolean' : 'integer',
         options: entry.value_type === 'boolean' ? booleanOptions('Enabled for compact inspections.', 'Disabled for compact inspections.') : [],
-        ...(entry.value_type === 'integer' ? { min: compactSettingMinimum(entry.id), max: Number(entry.default_value) } : {})
+        ...(entry.value_type === 'integer' ? { min: compactSettingMinimum(entry.id), max: compactSettingMaximum(entry.id) } : {})
     })),
     {
         id: 'full-suite-enabled',

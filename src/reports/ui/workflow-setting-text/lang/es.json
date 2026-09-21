@@ -63,6 +63,18 @@
     "label": "Caracteres de vista previa",
     "description": "Ajuste de compact. Los cambios requieren confirmación; los secretos no se ocultan."
   },
+  "compact-exact-bytes": {
+    "label": "Bytes del rango seleccionado",
+    "description": "Bytes del rango seleccionado. Ajuste de compact. Los cambios requieren confirmación; los secretos no se ocultan."
+  },
+  "compact-read-bytes": {
+    "label": "Bytes por página de lectura",
+    "description": "Bytes por página de lectura. Ajuste de compact. Los cambios requieren confirmación; los secretos no se ocultan."
+  },
+  "compact-search-context": {
+    "label": "Líneas de contexto de búsqueda",
+    "description": "Líneas de contexto de búsqueda. Ajuste de compact. Los cambios requieren confirmación; los secretos no se ocultan."
+  },
   "compact-run-bytes": {
     "label": "Límite de bytes por captura",
     "description": "Ajuste de compact. Los cambios requieren confirmación; los secretos no se ocultan."

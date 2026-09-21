@@ -13,7 +13,7 @@ import { buildUiSettingDefinitions, parseUiSettingValue } from '../../../src/rep
 import { getUpdateRollbackItems } from '../../../src/lifecycle/update/update';
 
 test('compact settings share typed CLI and UI metadata with cross-limit validation', () => {
-    assert.equal(COMPACT_SETTING_REGISTRY.entries.length, 10);
+    assert.equal(COMPACT_SETTING_REGISTRY.entries.length, 13);
     const result = applyCompactSettingOptions({}, { 'compact-enabled': 'false', 'compact-preview-lines': '8' });
     assert.equal(compactSettingsFromConfig(result.config).enabled, false);
     assert.equal(result.config.preview_lines, 8);

@@ -1,5 +1,5 @@
 import { createWorkflowSettingRegistry, type WorkflowSettingManifestEntry } from '../workflow-setting-manifest';
-import { DEFAULT_COMPACT_SETTINGS, validateCompactSettings, type CompactSettings } from './contract';
+import { DEFAULT_COMPACT_SETTINGS, MAX_COMPACT_SETTINGS, validateCompactSettings, type CompactSettings } from './contract';
 
 const FIELDS = [
     ['enabled', 'enabled', 'Compact output', 'Use bounded inspection output with selective retrieval.'],
@@ -8,6 +8,9 @@ const FIELDS = [
     ['rg', 'rg', 'Compact search', 'Allow the shipped repository search adapter.'],
     ['previewLines', 'preview_lines', 'Preview lines', 'Maximum preview lines per stream.'],
     ['previewChars', 'preview_chars', 'Preview characters', 'Maximum preview characters per stream.'],
+    ['exactBytes', 'exact_bytes', 'Selected range bytes', 'Byte budget for an explicitly selected file range.'],
+    ['readBytes', 'read_bytes', 'Read page bytes', 'Default retained-output page size in bytes.'],
+    ['searchContext', 'search_context', 'Search context lines', 'Context lines around retained-output matches.'],
     ['runBytes', 'run_bytes', 'Capture byte limit', 'Maximum bytes per capture including metadata.'],
     ['taskBytes', 'task_bytes', 'Task cache byte limit', 'Maximum compact cache bytes per task.'],
     ['workspaceBytes', 'workspace_bytes', 'Workspace cache byte limit', 'Maximum compact cache bytes in this workspace.'],
@@ -15,8 +18,16 @@ const FIELDS = [
 ] as const;
 
 export function compactSettingMinimum(id: string): number {
+    if (id === 'compact-search-context') return 0;
+    if (['compact-exact-bytes', 'compact-read-bytes'].includes(id)) return 256;
     return id === 'compact-preview-lines' ? 3 : id === 'compact-preview-chars' ? 128
         : ['compact-run-bytes', 'compact-task-bytes', 'compact-workspace-bytes'].includes(id) ? 9216 : 1;
+}
+
+export function compactSettingMaximum(id: string): number {
+    const field = FIELDS.find(([, key]) => `compact-${key.replace(/_/g, '-')}` === id);
+    if (!field) throw new Error(`Unknown compact setting: ${id}`);
+    return Number(MAX_COMPACT_SETTINGS[field[0]]);
 }
 
 export const COMPACT_SETTING_REGISTRY = createWorkflowSettingRegistry(FIELDS.map(([internal, key, label, description]): WorkflowSettingManifestEntry => {
@@ -25,7 +36,7 @@ export const COMPACT_SETTING_REGISTRY = createWorkflowSettingRegistry(FIELDS.map
     return {
         id: `compact-${key.replace(/_/g, '-')}`, key: `compact.${key}`, owner: { kind: 'workflow', section: 'compact' },
         value_type: boolean ? 'boolean' : 'integer', exposure: 'operator-visible', default_value: value,
-        validate: (candidate): candidate is boolean | number => boolean ? typeof candidate === 'boolean' : Number.isSafeInteger(candidate) && Number(candidate) >= compactSettingMinimum(`compact-${key.replace(/_/g, '-')}`) && Number(candidate) <= Number(value),
+        validate: (candidate): candidate is boolean | number => boolean ? typeof candidate === 'boolean' : Number.isSafeInteger(candidate) && Number(candidate) >= compactSettingMinimum(`compact-${key.replace(/_/g, '-')}`) && Number(candidate) <= compactSettingMaximum(`compact-${key.replace(/_/g, '-')}`),
         cli: { flag: `--compact-${key.replace(/_/g, '-')}` },
         ui: { group: 'compact', label, description, control: boolean ? 'checkbox' : 'number' },
         materialize: candidate => [{ path: `compact.${key}`, value: candidate }]

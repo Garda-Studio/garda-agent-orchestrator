@@ -63,6 +63,18 @@
     "label": "Preview characters",
     "description": "Maximum preview characters per stream."
   },
+  "compact-exact-bytes": {
+    "label": "Selected range bytes",
+    "description": "Byte budget for an explicitly selected file range."
+  },
+  "compact-read-bytes": {
+    "label": "Read page bytes",
+    "description": "Default retained-output page size in bytes."
+  },
+  "compact-search-context": {
+    "label": "Search context lines",
+    "description": "Context lines around retained-output matches."
+  },
   "compact-run-bytes": {
     "label": "Capture byte limit",
     "description": "Maximum bytes per capture including metadata."

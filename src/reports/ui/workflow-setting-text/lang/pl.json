@@ -63,6 +63,18 @@
     "label": "Znaki podglądu",
     "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane."
   },
+  "compact-exact-bytes": {
+    "label": "Bajty wybranego zakresu",
+    "description": "Bajty wybranego zakresu. Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane."
+  },
+  "compact-read-bytes": {
+    "label": "Bajty strony odczytu",
+    "description": "Bajty strony odczytu. Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane."
+  },
+  "compact-search-context": {
+    "label": "Wiersze kontekstu wyszukiwania",
+    "description": "Wiersze kontekstu wyszukiwania. Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane."
+  },
   "compact-run-bytes": {
     "label": "Limit bajtów przechwycenia",
     "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane."

@@ -63,6 +63,18 @@
     "label": "プレビュー文字数",
     "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。"
   },
+  "compact-exact-bytes": {
+    "label": "選択範囲のバイト数",
+    "description": "選択範囲のバイト数. compact の設定。変更には確認が必要です。秘密情報はマスクされません。"
+  },
+  "compact-read-bytes": {
+    "label": "読み取りページのバイト数",
+    "description": "読み取りページのバイト数. compact の設定。変更には確認が必要です。秘密情報はマスクされません。"
+  },
+  "compact-search-context": {
+    "label": "検索コンテキスト行数",
+    "description": "検索コンテキスト行数. compact の設定。変更には確認が必要です。秘密情報はマスクされません。"
+  },
   "compact-run-bytes": {
     "label": "取得ごとのバイト上限",
     "description": "compact の設定。変更には確認が必要です。秘密情報はマスクされません。"

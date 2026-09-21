@@ -63,6 +63,18 @@
     "label": "미리보기 문자 수",
     "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다."
   },
+  "compact-exact-bytes": {
+    "label": "선택 범위 바이트",
+    "description": "선택 범위 바이트. compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다."
+  },
+  "compact-read-bytes": {
+    "label": "읽기 페이지 바이트",
+    "description": "읽기 페이지 바이트. compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다."
+  },
+  "compact-search-context": {
+    "label": "검색 문맥 줄 수",
+    "description": "검색 문맥 줄 수. compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다."
+  },
   "compact-run-bytes": {
     "label": "캡처별 바이트 한도",
     "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다."

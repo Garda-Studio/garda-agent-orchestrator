@@ -63,6 +63,18 @@
     "label": "Vorschauzeichen",
     "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert."
   },
+  "compact-exact-bytes": {
+    "label": "Bytes des ausgewählten Bereichs",
+    "description": "Bytes des ausgewählten Bereichs. Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert."
+  },
+  "compact-read-bytes": {
+    "label": "Bytes pro Leseseite",
+    "description": "Bytes pro Leseseite. Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert."
+  },
+  "compact-search-context": {
+    "label": "Suchkontextzeilen",
+    "description": "Suchkontextzeilen. Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert."
+  },
   "compact-run-bytes": {
     "label": "Byte-Limit je Erfassung",
     "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert."

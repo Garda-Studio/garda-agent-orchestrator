@@ -17,7 +17,7 @@ export type CompactInspection =
     | { kind: 'file'; path: string; from: number; lines: number; metadata?: boolean };
 
 export function inspectPath(repoRoot: string, relative: string, allowMissing = false): string {
-    if (!relative || relative.includes('\0') || path.isAbsolute(relative)) throw new Error('Use a repository-relative inspection path.');
+    if (!relative || relative.length > 2048 || relative.includes('\0') || path.isAbsolute(relative)) throw new Error('Use a repository-relative inspection path of at most 2048 characters.');
     const root = fs.realpathSync(repoRoot);
     const target = path.resolve(root, relative);
     const rel = path.relative(root, target);
@@ -100,9 +100,10 @@ async function inspectFile(root: string, request: Extract<CompactInspection, { k
             }
             if (pending.length > 65536) throw new Error('File line exceeds 64 KiB; range is incomplete.');
         }
-        if (line < request.from + request.lines && pending) await emit(pending + decoder.end());
+        if (line < request.from + request.lines && pending) { await emit(pending + decoder.end()); pending = ''; }
         const after = fs.fstatSync(fd);
         if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) throw new Error('Source file changed during inspection.');
+        capture.source = { path: request.path, from: request.from, to: Math.max(request.from - 1, line - 1), eof: offset >= stat.size && !pending };
         return { exitCode: 0, timedOut: false, cancelled: false };
     } finally { fs.closeSync(fd); }
 }
@@ -114,7 +115,7 @@ export async function runCompactInspection(root: string, taskId: string, request
     if (request.path) inspectPath(root, request.path, request.kind === 'git');
     return withCompactStore(root, async store => {
         if (isTaskQueueDoneStatus(readTaskQueueEntries(root).get(taskId)?.status ?? null)) throw new Error('Task is complete; compact capture is closed.');
-        const capture = new CompactCapture(store, taskId, settings);
+        const capture = new CompactCapture(store, taskId, settings, request.kind === 'file' && !request.metadata);
         let outcome: CompactOutcome;
         try {
             if (request.kind === 'file') outcome = await inspectFile(root, request, capture);

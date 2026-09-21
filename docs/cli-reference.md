@@ -14,13 +14,22 @@ garda compact file --task-id T-123 --path src/example.ts --metadata
 garda compact rg --task-id T-123 --path src --query "search text"
 garda compact read --task-id T-123 --ref <capture-id> --stream stdout --offset 0
 garda compact read --task-id T-123 --ref <capture-id> --stream stderr --tail
-garda compact search --task-id T-123 --ref <capture-id> --query "failure"
+garda compact read --task-id T-123 --ref <capture-id> --max-bytes 8192
+garda compact read --task-id T-123 --ref <capture-id> --from-line 40 --lines 80
+garda compact search --task-id T-123 --ref <capture-id> --query "failure" --query "error" --context 2
+garda compact file --help
 garda compact usage
 ```
 
 All operations accept `--repo-root`; inspection paths must be repository-relative. Diff supports `--staged`; repository search is literal unless `--regex` is supplied. Arbitrary shell commands/flags are not accepted. Extending support requires a typed adapter, tests and a capability setting, not a UI shell-string field.
 
-Retained stdout/stderr preserve original bytes without secret filtering. Search scans the retained stream, including omitted preview content; follow `nextOffset` until `end` for complete search coverage. Reads page through bytes (or show the final 1024 bytes); manifest size/hash verification detects corrupt data. A complete capture describes this bounded invocation, not every line of a source file. Timeouts, quota/IO failures and capped output are explicitly partial; missing references fail honestly. Preview text escapes terminal controls and may split UTF-8 boundaries; retained bytes are unchanged.
+Small results stay inline regardless of line count when they fit the character budget. Explicit file ranges use a separate 8192-byte budget instead of a second head/tail preview. Larger ranges show a sequential first page with an exact continuation offset. File output identifies selected source lines and whether source EOF was reached; a saved reference contains only that selection.
+
+Retained stdout/stderr preserve original bytes without secret filtering. Reads default to 4096 bytes, accept `--max-bytes 256..8192`, and support retained-stream line selection through `--from-line` and `--lines`. Line numbers refer to the captured stream, not necessarily source-file line numbers. Byte pages preserve valid UTF-8 boundaries and independently bound escaped display text. An arbitrary offset inside a character may rewind by up to three bytes. `--tail` uses the selected byte budget. Manifest size/hash verification still runs on every retrieval.
+
+Search accepts up to eight repeated literal `--query` values with OR semantics and `--context 0..8` (default 2). It shows readable line context, retained line numbers and read offsets, merging overlapping displayed ranges. Long contexts are explicitly clipped. Search scans at most 1 MiB and 20 matching positions per call; follow `nextOffset` until `end` for complete search coverage. A complete capture describes this bounded invocation, not every line of a source file. Timeouts, quota/IO failures and capped output are explicitly partial; missing references fail honestly. Overview previews may split UTF-8 boundaries; retained bytes are unchanged.
+
+UI and audited workflow settings expose separate preview, selected-range byte, read-page byte and search-context budgets. Preview defaults are 20 lines / 3000 characters, with maxima of 100 lines / 6000 characters; the line limit applies when the character budget requires an overview. Read budgets have an 8192-byte ceiling. These display settings do not raise disk-cache quotas. Existing configurations inherit defaults for missing fields.
 
 The file cache is `garda-agent-orchestrator/runtime/compact/<task-id>/<capture-id>/`, outside tracked/published source and normal managed backups. Defaults: 16 MiB per capture including metadata, 64 MiB per task, 256 MiB per workspace and 2048 captures. A full cache rejects new captures; unfinished/blocked task output is never evicted to make room. Small inline results create no capture files.
 

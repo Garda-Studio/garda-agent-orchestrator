@@ -63,6 +63,18 @@
     "label": "预览字符数",
     "description": "compact 设置。更改需要确认；不会掩盖机密信息。"
   },
+  "compact-exact-bytes": {
+    "label": "选定范围字节数",
+    "description": "选定范围字节数. compact 设置。更改需要确认；不会掩盖机密信息。"
+  },
+  "compact-read-bytes": {
+    "label": "读取页字节数",
+    "description": "读取页字节数. compact 设置。更改需要确认；不会掩盖机密信息。"
+  },
+  "compact-search-context": {
+    "label": "搜索上下文行数",
+    "description": "搜索上下文行数. compact 设置。更改需要确认；不会掩盖机密信息。"
+  },
   "compact-run-bytes": {
     "label": "单次捕获字节上限",
     "description": "compact 设置。更改需要确认；不会掩盖机密信息。"

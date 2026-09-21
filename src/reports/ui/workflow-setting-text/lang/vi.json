@@ -63,6 +63,18 @@
     "label": "Số ký tự xem trước",
     "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che."
   },
+  "compact-exact-bytes": {
+    "label": "Byte của phạm vi đã chọn",
+    "description": "Byte của phạm vi đã chọn. Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che."
+  },
+  "compact-read-bytes": {
+    "label": "Byte mỗi trang đọc",
+    "description": "Byte mỗi trang đọc. Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che."
+  },
+  "compact-search-context": {
+    "label": "Dòng ngữ cảnh tìm kiếm",
+    "description": "Dòng ngữ cảnh tìm kiếm. Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che."
+  },
   "compact-run-bytes": {
     "label": "Giới hạn byte mỗi lần thu",
     "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che."

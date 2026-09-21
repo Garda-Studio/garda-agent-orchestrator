@@ -63,6 +63,18 @@
     "label": "Önizleme karakterleri",
     "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez."
   },
+  "compact-exact-bytes": {
+    "label": "Seçilen aralığın baytları",
+    "description": "Seçilen aralığın baytları. compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez."
+  },
+  "compact-read-bytes": {
+    "label": "Okuma sayfası baytları",
+    "description": "Okuma sayfası baytları. compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez."
+  },
+  "compact-search-context": {
+    "label": "Arama bağlamı satırları",
+    "description": "Arama bağlamı satırları. compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez."
+  },
   "compact-run-bytes": {
     "label": "Yakalama bayt sınırı",
     "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez."

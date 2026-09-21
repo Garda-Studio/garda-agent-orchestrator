@@ -2,15 +2,17 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { CompactStore, openCompactFile } from './store-paths';
-import { COMPACT_METADATA_BYTES, compactPreview, type CompactSettings } from './contract';
+import { COMPACT_METADATA_BYTES, compactPreview, compactTextPage, type CompactSettings } from './contract';
 
 export type CompactStream = 'stdout' | 'stderr';
 export interface CompactOutcome { exitCode: number; timedOut: boolean; cancelled: boolean; sinkError?: string }
 export interface CompactManifest extends CompactOutcome {
     version: 1; taskId: string; ref: string; createdAt: string; complete: boolean;
     streams: Record<CompactStream, { bytes: number; sha256: string }>;
+    source?: CompactSource;
 }
-export interface CompactResult extends CompactOutcome { stdout: string; stderr: string; ref?: string; complete: boolean }
+export interface CompactSource { path: string; from: number; to: number; eof: boolean }
+export interface CompactResult extends CompactOutcome { stdout: string; stderr: string; ref?: string; complete: boolean; source?: CompactSource }
 
 const MEMORY_BYTES = 12000;
 
@@ -24,7 +26,8 @@ export class CompactCapture {
     private failure?: string;
     private finished = false;
 
-    constructor(private readonly store: CompactStore, private readonly taskId: string, private readonly settings: CompactSettings) {}
+    constructor(private readonly store: CompactStore, private readonly taskId: string, private readonly settings: CompactSettings, private readonly exact = false) {}
+    source?: CompactSource;
 
     private spill(): void {
         const total = this.store.usage();
@@ -63,7 +66,7 @@ export class CompactCapture {
             this.counts[stream] += bytes.length;
             this.hashes[stream].update(bytes);
             const previous = this.samples[stream];
-            this.samples[stream] = previous.length + bytes.length <= MEMORY_BYTES
+            this.samples[stream] = this.exact ? Buffer.concat([previous, bytes.subarray(0, MEMORY_BYTES)]).subarray(0, MEMORY_BYTES) : previous.length + bytes.length <= MEMORY_BYTES
                 ? Buffer.concat([previous, bytes])
                 : Buffer.concat([
                     Buffer.concat([previous, bytes.subarray(0, MEMORY_BYTES / 2)]).subarray(0, MEMORY_BYTES / 2),
@@ -79,7 +82,10 @@ export class CompactCapture {
     finish(outcome: CompactOutcome): CompactResult {
         if (this.finished) throw new Error('Compact capture is already finalized.');
         try {
-            if (!this.ref && !this.failure && (compactPreview(this.buffers.stdout.toString('utf8'), this.settings).omitted || compactPreview(this.buffers.stderr.toString('utf8'), this.settings).omitted)) this.spill();
+            const omitted = (buffer: Buffer): boolean => this.exact
+                ? compactTextPage(buffer, this.settings.exactBytes).consumed < buffer.length
+                : compactPreview(buffer.toString('utf8'), this.settings).omitted;
+            if (!this.ref && !this.failure && (omitted(this.buffers.stdout) || omitted(this.buffers.stderr))) this.spill();
         } catch (error) { this.failure = error instanceof Error ? error.message : String(error); }
         this.finished = true;
         for (const fd of Object.values(this.files)) {
@@ -116,6 +122,7 @@ export class CompactCapture {
                     ...(error ? { sinkError: error.slice(0, 600) } : {}), complete,
                     streams: { stdout: streamMetadata('stdout'), stderr: streamMetadata('stderr') }
                 };
+                if (this.source) manifest.source = this.source;
                 const serialized = JSON.stringify(manifest);
                 if (Buffer.byteLength(serialized) > COMPACT_METADATA_BYTES) throw new Error('Compact manifest exceeds metadata budget.');
                 const fd = openCompactFile(path.join(dir, 'manifest.tmp'), fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL);
@@ -127,6 +134,6 @@ export class CompactCapture {
             }
         }
         return { ...outcome, ...(this.failure ? { sinkError: this.failure } : {}), complete: complete && !this.failure,
-            stdout: this.samples.stdout.toString('utf8'), stderr: this.samples.stderr.toString('utf8'), ...(this.ref ? { ref: this.ref } : {}) };
+            stdout: this.samples.stdout.toString('utf8'), stderr: this.samples.stderr.toString('utf8'), ...(this.source ? { source: this.source } : {}), ...(this.ref ? { ref: this.ref } : {}) };
     }
 }

@@ -63,6 +63,18 @@
     "label": "Caracteres de pré-visualização",
     "description": "Definição de compact. As alterações exigem confirmação; os segredos não são ocultados."
   },
+  "compact-exact-bytes": {
+    "label": "Bytes do intervalo selecionado",
+    "description": "Bytes do intervalo selecionado. Definição de compact. As alterações exigem confirmação; os segredos não são ocultados."
+  },
+  "compact-read-bytes": {
+    "label": "Bytes por página de leitura",
+    "description": "Bytes por página de leitura. Definição de compact. As alterações exigem confirmação; os segredos não são ocultados."
+  },
+  "compact-search-context": {
+    "label": "Linhas de contexto da pesquisa",
+    "description": "Linhas de contexto da pesquisa. Definição de compact. As alterações exigem confirmação; os segredos não são ocultados."
+  },
   "compact-run-bytes": {
     "label": "Limite de bytes por captura",
     "description": "Definição de compact. As alterações exigem confirmação; os segredos não são ocultados."

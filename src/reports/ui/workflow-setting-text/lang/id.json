@@ -63,6 +63,18 @@
     "label": "Karakter pratinjau",
     "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan."
   },
+  "compact-exact-bytes": {
+    "label": "Byte rentang terpilih",
+    "description": "Byte rentang terpilih. Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan."
+  },
+  "compact-read-bytes": {
+    "label": "Byte halaman baca",
+    "description": "Byte halaman baca. Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan."
+  },
+  "compact-search-context": {
+    "label": "Baris konteks pencarian",
+    "description": "Baris konteks pencarian. Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan."
+  },
   "compact-run-bytes": {
     "label": "Batas byte tangkapan",
     "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan."
