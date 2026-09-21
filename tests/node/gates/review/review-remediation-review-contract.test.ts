@@ -1805,6 +1805,11 @@ describe('review remediation FULL/DELTA execution contract', () => {
             assert.ok(getReviewRemediationReviewContractViolations(forged,
                 validationAuthority({ mode: 'DELTA', decision, classification }))
                 .some((entry) => entry.includes('do not match the authenticated classification')));
+            fs.writeFileSync(fixture.delta.baseline.artifact_path, '{"superseded":true}\n', 'utf8');
+            assert.deepEqual(getReviewRemediationReviewContractViolations(contract,
+                validationAuthority({
+                    mode: 'DELTA', decision, classification, acceptedCurrentPassReplacement: true
+                })), []);
         } finally {
             fs.rmSync(fixture.root, { recursive: true, force: true });
         }

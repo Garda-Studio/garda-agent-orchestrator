@@ -459,7 +459,10 @@ export function getRemediationContractClassificationBindingViolations(
             }
             let expectedTargets = normalizeCanonicalPaths(deltaScope.required_delta_targets);
             let expectedContextFiles = normalizeCanonicalPaths(deltaScope.optional_context_files);
-            if (options.allowSupersededBaseline !== true) {
+            if (options.allowSupersededBaseline === true && contract.delta) {
+                expectedTargets = normalizeCanonicalPaths(contract.delta.required_delta_targets);
+                expectedContextFiles = normalizeCanonicalPaths(contract.delta.context_files);
+            } else {
                 let findingScope;
                 try {
                     findingScope = buildReviewRemediationFindingScope(
