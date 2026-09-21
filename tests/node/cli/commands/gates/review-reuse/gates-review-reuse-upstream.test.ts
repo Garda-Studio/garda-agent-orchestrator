@@ -992,6 +992,11 @@ describe('cli/commands/gates - review reuse upstream reuse', () => {
             );
         }).length;
         assert.equal(currentCycleCodeReviewPhaseCount, 1);
+        const reviewRecordedEvent = [...eventsBefore].reverse().find((event) => (
+            event.event_type === 'REVIEW_RECORDED'
+        ));
+        const reviewRecordedIntegrity = reviewRecordedEvent?.integrity as Record<string, unknown> | undefined;
+        assert.equal(typeof reviewRecordedIntegrity?.task_sequence, 'number');
 
         const result = await runBuildReviewContextCommand({
             reviewType: 'code',
@@ -1016,6 +1021,11 @@ describe('cli/commands/gates - review reuse upstream reuse', () => {
         assert.equal(reuseAcceptedDetails.review_type, 'code');
         assert.equal(reuseAcceptedDetails.current_pass_review_evidence, true);
         assert.equal(reuseAcceptedDetails.output_path, reviewContextPath.replace(/\\/g, '/'));
+        assert.equal(
+            reuseAcceptedDetails.review_recorded_sequence,
+            reviewRecordedIntegrity?.task_sequence,
+            'reuse telemetry must reference the authenticated task sequence, not the zero-based event index'
+        );
 
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });

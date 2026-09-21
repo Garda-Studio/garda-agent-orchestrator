@@ -632,7 +632,7 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
         ) {
             return reject('trusted current-cycle REVIEW_RECORDED telemetry must occur after reviewer invocation attestation');
         }
-        reviewRecordedSequence = currentReviewRecorded.sequence;
+        reviewRecordedSequence = currentReviewRecorded.integrity.task_sequence;
         reviewRecordedEventSha256 = normalizeOptionalSha256(currentReviewRecorded.integrity?.event_sha256);
         if (!reviewRecordedEventSha256) {
             return reject('trusted current-cycle REVIEW_RECORDED telemetry is missing an authenticated event hash');
