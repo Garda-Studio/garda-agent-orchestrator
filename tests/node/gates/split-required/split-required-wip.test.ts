@@ -17,11 +17,21 @@ import {
     retireSplitRequiredWip as retireSplitRequiredWipOperation
 } from '../../../../src/gates/split-required/split-required-wip-operations';
 import {
-    materializeSplitRequiredLatch
+    materializeSplitRequiredLatch,
+    readSplitRequiredLatchEvidence,
+    type SplitRequiredLatchFaultBoundary
 } from '../../../../src/gates/next-step/next-step-split-required-latch';
 import {
     resolveSplitRequiredTaskQueueRoute
 } from '../../../../src/gates/next-step/next-step-terminal-status-routing';
+import {
+    resolveTaskQueueTransactionLockPath,
+    withTaskQueueTransaction
+} from '../../../../src/core/task-queue/task-queue-repository';
+import {
+    acquireFilesystemLock,
+    releaseFilesystemLock
+} from '../../../../src/gate-runtime/task-events-locking';
 import {
     runCliWithCapturedOutput
 } from '../../cli/commands/gate-test-cli-capture';
@@ -134,6 +144,540 @@ describe('split-required WIP capture and restore', () => {
         assert.equal(wipCapture.status, 'CAPTURED');
         assert.ok((splitArtifact.next_actions as string[]).includes('preview_or_restore_selected_wip_in_child_task'));
         assert.ok(fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8').includes(`| ${TASK_ID} | 🟫 SPLIT_REQUIRED |`));
+    });
+
+    it('recovers one coherent suspended latch after every injected transaction boundary failure', () => {
+        const boundaries: SplitRequiredLatchFaultBoundary[] = [
+            'after_status_sync',
+            'after_wip_capture',
+            'after_latch_artifact',
+            'after_latch_event',
+            'after_status_event'
+        ];
+        const recoveredBoundaries: SplitRequiredLatchFaultBoundary[] = [];
+
+        for (const boundary of boundaries) {
+            const repoRoot = makeRepo();
+            writeFile(repoRoot, 'src/a.ts', `export const a = '${boundary}';\n`);
+            const preflightPath = writePreflight(repoRoot, ['src/a.ts']);
+            let injected = false;
+
+            const latch = materializeSplitRequiredLatch({
+                repoRoot,
+                eventsRoot: path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events'),
+                reviewsRoot: path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews'),
+                taskId: TASK_ID,
+                guardKind: 'scope_budget',
+                guardReason: 'scope was too large',
+                rawGuardSummary: 'scope budget guard',
+                preflightPath,
+                guardDetails: {},
+                faultInjection: (candidate) => {
+                    if (!injected && candidate === boundary) {
+                        injected = true;
+                        throw new Error(`injected ${boundary}`);
+                    }
+                }
+            });
+
+            assert.equal(injected, true, boundary);
+            assert.ok(
+                latch.status_sync.outcome === 'updated' || latch.status_sync.outcome === 'already_synced',
+                `${boundary}: ${latch.status_sync.error_message || latch.status_sync.outcome}`
+            );
+            assert.ok(latch.wip_capture?.manifest_path, boundary);
+            assert.equal(readFile(repoRoot, 'src/a.ts'), 'export const a = 1;\n', boundary);
+            assert.ok(
+                fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8')
+                    .includes(`| ${TASK_ID} | 🟫 SPLIT_REQUIRED |`),
+                boundary
+            );
+
+            const evidence = readSplitRequiredLatchEvidence({
+                reviewsRoot: path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews'),
+                eventsRoot: path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events'),
+                taskId: TASK_ID
+            });
+            assert.equal(evidence.valid, true, `${boundary}: ${evidence.reason}`);
+            const artifact = JSON.parse(fs.readFileSync(latch.artifact_path, 'utf8')) as {
+                status_sync?: { previous_status?: string };
+            };
+            assert.equal(artifact.status_sync?.previous_status, 'IN_PROGRESS', boundary);
+            const events = fs.readFileSync(
+                path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events', `${TASK_ID}.jsonl`),
+                'utf8'
+            );
+            assert.ok(events.includes('"event_type":"SPLIT_REQUIRED_WIP_CAPTURED"'), boundary);
+            assert.ok(events.includes('"event_type":"SPLIT_REQUIRED_LATCHED"'), boundary);
+            assert.ok(events.includes('"event_type":"STATUS_CHANGED"'), boundary);
+            const statusEvents = events.trim().split('\n')
+                .map((line) => JSON.parse(line) as { event_type: string; details?: Record<string, unknown> })
+                .filter((event) => event.event_type === 'STATUS_CHANGED');
+            assert.equal(statusEvents.length, 1, boundary);
+            assert.equal(statusEvents.at(-1)?.details?.artifact_sha256, latch.artifact_sha256, boundary);
+            recoveredBoundaries.push(boundary);
+        }
+        assert.deepEqual(recoveredBoundaries, boundaries);
+    });
+
+    it('restores the prior status when cleanup retains a manifest after successful capture rollback', () => {
+        const repoRoot = makeRepo();
+        writeFile(repoRoot, 'src/a.ts', 'export const a = 2;\n');
+        runGit(repoRoot, ['add', 'src/a.ts']);
+        writeFile(repoRoot, 'src/a.ts', 'export const a = 3;\n');
+        const preflightPath = writePreflight(repoRoot, ['src/a.ts']);
+        const childProcessModule = require('node:child_process') as typeof import('node:child_process');
+        const originalExecFileSync = childProcessModule.execFileSync;
+        const fsModule = require('node:fs') as typeof import('node:fs');
+        const originalRmSync = fsModule.rmSync;
+        let rejectedCheckouts = 0;
+        let cleanupRejected = false;
+        childProcessModule.execFileSync = ((
+            file: string,
+            args?: readonly string[],
+            options?: childProcess.ExecFileSyncOptions
+        ) => {
+            const commandArgs = Array.isArray(args) ? args.map(String) : [];
+            if (rejectedCheckouts === 0
+                && file === 'git'
+                && commandArgs.includes('checkout')
+                && commandArgs.includes('src/a.ts')) {
+                rejectedCheckouts += 1;
+                throw new Error('injected split capture checkout failure');
+            }
+            return Reflect.apply(originalExecFileSync, childProcessModule, [file, args, options]);
+        }) as typeof childProcessModule.execFileSync;
+        fsModule.rmSync = ((targetPath: fs.PathLike, options?: fs.RmDirOptions) => {
+            const normalizedPath = path.resolve(String(targetPath));
+            if (!cleanupRejected
+                && normalizedPath.includes(`${path.sep}runtime${path.sep}wip${path.sep}${TASK_ID}${path.sep}`)
+                && path.basename(path.dirname(normalizedPath)) === 'split-required') {
+                cleanupRejected = true;
+                throw new Error('injected retained capture cleanup failure');
+            }
+            return Reflect.apply(originalRmSync, fsModule, [targetPath, options]);
+        }) as typeof fsModule.rmSync;
+
+        let latch: ReturnType<typeof materializeSplitRequiredLatch>;
+        try {
+            latch = materializeSplitRequiredLatch({
+                repoRoot,
+                eventsRoot: path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events'),
+                reviewsRoot: path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews'),
+                taskId: TASK_ID,
+                guardKind: 'scope_budget',
+                guardReason: 'scope was too large',
+                rawGuardSummary: 'scope budget guard',
+                preflightPath,
+                guardDetails: {}
+            });
+        } finally {
+            childProcessModule.execFileSync = originalExecFileSync;
+            fsModule.rmSync = originalRmSync;
+        }
+
+        assert.equal(rejectedCheckouts, 1);
+        assert.equal(cleanupRejected, true);
+        assert.equal(latch.wip_capture?.status, 'BLOCKED');
+        assert.equal((latch.wip_capture as { checkout_state?: string } | null)?.checkout_state, 'restored');
+        assert.ok(latch.wip_capture?.manifest_path);
+        assert.ok(latch.wip_capture?.violations.some(
+            (violation) => violation.includes('retained capture cleanup failure')
+        ));
+        assert.ok(
+            fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8')
+                .includes(`| ${TASK_ID} | 🟨 IN_PROGRESS |`)
+        );
+        assert.equal(latch.status_sync.outcome, 'write_failed');
+        assert.equal(readFile(repoRoot, 'src/a.ts'), 'export const a = 3;\n');
+    });
+
+    it('keeps a failed suspended capture recoverable until a fresh retry completes the latch', () => {
+        const repoRoot = makeRepo();
+        writeFile(repoRoot, 'src/a.ts', 'export const a = 2;\n');
+        const preflightPath = writePreflight(repoRoot, ['src/a.ts']);
+        const eventsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events');
+        const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+        const params = {
+            repoRoot,
+            eventsRoot,
+            reviewsRoot,
+            taskId: TASK_ID,
+            guardKind: 'scope_budget' as const,
+            guardReason: 'scope was too large',
+            rawGuardSummary: 'scope budget guard',
+            preflightPath,
+            guardDetails: {}
+        };
+        const fsModule = require('node:fs') as typeof import('node:fs');
+        const childProcessModule = require('node:child_process') as typeof import('node:child_process');
+        const originalMkdirSync = fsModule.mkdirSync;
+        const originalExecFileSync = childProcessModule.execFileSync;
+        let captureEventFailureInjected = false;
+        let rollbackFailureInjected = false;
+        fsModule.mkdirSync = ((directoryPath: fs.PathLike, options?: fs.MakeDirectoryOptions) => {
+            const normalizedPath = path.resolve(String(directoryPath));
+            if (
+                !captureEventFailureInjected
+                && normalizedPath === path.resolve(eventsRoot)
+            ) {
+                captureEventFailureInjected = true;
+                throw new Error('injected captured-event append failure');
+            }
+            return Reflect.apply(originalMkdirSync, fsModule, [directoryPath, options]);
+        }) as typeof fsModule.mkdirSync;
+        childProcessModule.execFileSync = ((
+            file: string,
+            args?: readonly string[],
+            options?: childProcess.ExecFileSyncOptions
+        ) => {
+            const commandArgs = Array.isArray(args) ? args.map(String) : [];
+            if (
+                captureEventFailureInjected
+                && !rollbackFailureInjected
+                && file === 'git'
+                && commandArgs.includes('apply')
+            ) {
+                rollbackFailureInjected = true;
+                throw new Error('injected tracked rollback failure');
+            }
+            return Reflect.apply(originalExecFileSync, childProcessModule, [file, args, options]);
+        }) as typeof childProcessModule.execFileSync;
+
+        let failed: ReturnType<typeof materializeSplitRequiredLatch>;
+        try {
+            failed = materializeSplitRequiredLatch(params);
+        } finally {
+            fsModule.mkdirSync = originalMkdirSync;
+            childProcessModule.execFileSync = originalExecFileSync;
+        }
+
+        assert.equal(captureEventFailureInjected, true);
+        assert.equal(rollbackFailureInjected, true);
+        assert.equal(failed.status_sync.outcome, 'write_failed');
+        assert.equal(failed.status_sync.previous_status, 'IN_PROGRESS');
+        assert.equal(failed.wip_capture?.status, 'BLOCKED');
+        assert.equal((failed.wip_capture as { checkout_state?: string } | null)?.checkout_state, 'suspended');
+        assert.ok(failed.wip_capture?.manifest_path);
+        assert.equal(readFile(repoRoot, 'src/a.ts'), 'export const a = 1;\n');
+        const failedArtifact = JSON.parse(fs.readFileSync(failed.artifact_path, 'utf8')) as {
+            materialization_phase?: string;
+            status_sync?: { previous_status?: string };
+            wip_capture?: { status?: string; checkout_state?: string; manifest_path?: string };
+        };
+        assert.equal(failedArtifact.materialization_phase, 'status_sync_failed');
+        assert.equal(failedArtifact.status_sync?.previous_status, 'IN_PROGRESS');
+        assert.equal(failedArtifact.wip_capture?.status, 'BLOCKED');
+        assert.equal(failedArtifact.wip_capture?.checkout_state, 'suspended');
+        assert.equal(failedArtifact.wip_capture?.manifest_path, failed.wip_capture?.manifest_path);
+        assert.ok(
+            fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8')
+                .includes(`| ${TASK_ID} | 🟫 SPLIT_REQUIRED |`)
+        );
+
+        const recovered = materializeSplitRequiredLatch(params);
+        const recoveredArtifact = JSON.parse(fs.readFileSync(recovered.artifact_path, 'utf8')) as {
+            materialization_phase?: string;
+            status_sync?: { previous_status?: string };
+            wip_capture?: { status?: string; manifest_path?: string };
+        };
+
+        assert.equal(recovered.status_sync.outcome, 'updated');
+        assert.equal(recovered.status_sync.previous_status, 'IN_PROGRESS');
+        assert.equal(recovered.wip_capture?.status, 'ALREADY_CAPTURED');
+        assert.equal(recovered.wip_capture?.manifest_path, failed.wip_capture?.manifest_path);
+        assert.equal(recoveredArtifact.materialization_phase, 'complete');
+        assert.equal(recoveredArtifact.status_sync?.previous_status, 'IN_PROGRESS');
+        assert.equal(recoveredArtifact.wip_capture?.status, 'ALREADY_CAPTURED');
+        assert.equal(recoveredArtifact.wip_capture?.manifest_path, failed.wip_capture?.manifest_path);
+        assert.equal(readSplitRequiredLatchEvidence({ reviewsRoot, eventsRoot, taskId: TASK_ID }).valid, true);
+    });
+
+    it('recovers original transition provenance after a failed compensating status rollback', () => {
+        const repoRoot = makeRepo();
+        writeFile(repoRoot, 'src/a.ts', 'export const a = 2;\n');
+        writeFile(repoRoot, 'scratch.txt', 'force capture refusal\n');
+        const preflightPath = writePreflight(repoRoot, ['src/a.ts']);
+        const eventsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events');
+        const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+        const params = {
+            repoRoot,
+            eventsRoot,
+            reviewsRoot,
+            taskId: TASK_ID,
+            guardKind: 'scope_budget' as const,
+            guardReason: 'scope was too large',
+            rawGuardSummary: 'scope budget guard',
+            preflightPath,
+            guardDetails: {}
+        };
+        const childProcessModule = require('node:child_process') as typeof import('node:child_process');
+        const originalExecFileSync = childProcessModule.execFileSync;
+        let queueChangedOutsideTransaction = false;
+        childProcessModule.execFileSync = ((
+            file: string,
+            args?: readonly string[],
+            options?: childProcess.ExecFileSyncOptions
+        ) => {
+            const commandArgs = Array.isArray(args) ? args.map(String) : [];
+            if (!queueChangedOutsideTransaction && file === 'git' && commandArgs.includes('rev-parse')) {
+                fs.appendFileSync(path.join(repoRoot, 'TASK.md'), '\n', 'utf8');
+                queueChangedOutsideTransaction = true;
+            }
+            return Reflect.apply(originalExecFileSync, childProcessModule, [file, args, options]);
+        }) as typeof childProcessModule.execFileSync;
+
+        let failed: ReturnType<typeof materializeSplitRequiredLatch>;
+        try {
+            failed = materializeSplitRequiredLatch(params);
+        } finally {
+            childProcessModule.execFileSync = originalExecFileSync;
+        }
+
+        assert.equal(queueChangedOutsideTransaction, true);
+        assert.equal(failed.status_sync.outcome, 'write_failed');
+        assert.equal(failed.status_sync.previous_status, 'IN_PROGRESS');
+        assert.ok(failed.status_sync.error_message?.includes('TASK.md changed outside the transaction'));
+        const failedArtifact = JSON.parse(fs.readFileSync(failed.artifact_path, 'utf8')) as {
+            materialization_phase?: string;
+        };
+        assert.equal(failedArtifact.materialization_phase, 'status_sync_failed');
+        assert.ok(
+            fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8')
+                .includes(`| ${TASK_ID} | 🟫 SPLIT_REQUIRED |`)
+        );
+
+        fs.unlinkSync(path.join(repoRoot, 'scratch.txt'));
+        const recovered = materializeSplitRequiredLatch(params);
+        const statusEvents = fs.readFileSync(path.join(eventsRoot, `${TASK_ID}.jsonl`), 'utf8').trim().split('\n')
+            .map((line) => JSON.parse(line) as { event_type: string; details?: Record<string, unknown> })
+            .filter((event) => event.event_type === 'STATUS_CHANGED');
+
+        assert.equal(recovered.status_sync.outcome, 'updated');
+        assert.equal(recovered.status_sync.previous_status, 'IN_PROGRESS');
+        assert.equal(statusEvents.length, 1);
+        assert.equal(statusEvents[0]?.details?.previous_status, 'IN_PROGRESS');
+        assert.equal(statusEvents[0]?.details?.artifact_sha256, recovered.artifact_sha256);
+        assert.equal(readSplitRequiredLatchEvidence({ reviewsRoot, eventsRoot, taskId: TASK_ID }).valid, true);
+    });
+
+    it('blocks a new queue transaction while the legacy status lock is held', () => {
+        const repoRoot = makeRepo();
+        const taskPath = path.join(repoRoot, 'TASK.md');
+        const { handle } = acquireFilesystemLock(`${taskPath}.garda-status-sync.lock`, {
+            ownerLabel: 'legacy-task-queue-writer'
+        });
+        let operationCalled = false;
+        try {
+            const result = withTaskQueueTransaction(
+                taskPath,
+                (message) => message,
+                () => {
+                    operationCalled = true;
+                    return 'unexpected';
+                }
+            );
+            assert.match(result, /Could not acquire TASK\.md status-sync lock/u);
+        } finally {
+            releaseFilesystemLock(handle);
+        }
+        assert.equal(operationCalled, false);
+    });
+
+    it('repairs a missing status event on a fresh materialization without changing transition provenance', () => {
+        const repoRoot = makeRepo();
+        writeFile(repoRoot, 'src/a.ts', 'export const a = 2;\n');
+        const preflightPath = writePreflight(repoRoot, ['src/a.ts']);
+        const eventsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events');
+        const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+        const params = {
+            repoRoot,
+            eventsRoot,
+            reviewsRoot,
+            taskId: TASK_ID,
+            guardKind: 'scope_budget' as const,
+            guardReason: 'scope was too large',
+            rawGuardSummary: 'scope budget guard',
+            preflightPath,
+            guardDetails: {}
+        };
+
+        const initial = materializeSplitRequiredLatch(params);
+        const eventPath = path.join(eventsRoot, `${TASK_ID}.jsonl`);
+        const withoutStatusEvent = fs.readFileSync(eventPath, 'utf8')
+            .split('\n')
+            .filter((line) => !line.includes('"event_type":"STATUS_CHANGED"'))
+            .join('\n');
+        fs.writeFileSync(eventPath, withoutStatusEvent, 'utf8');
+
+        const recovered = materializeSplitRequiredLatch(params);
+        const artifact = JSON.parse(fs.readFileSync(recovered.artifact_path, 'utf8')) as {
+            status_sync?: { outcome?: string; previous_status?: string };
+            wip_capture?: { manifest_path?: string };
+        };
+        const statusEvents = fs.readFileSync(eventPath, 'utf8').trim().split('\n')
+            .map((line) => JSON.parse(line) as { event_type: string; details?: Record<string, unknown> })
+            .filter((event) => event.event_type === 'STATUS_CHANGED');
+
+        assert.equal(recovered.artifact_sha256, initial.artifact_sha256);
+        assert.equal(recovered.status_sync.outcome, 'updated');
+        assert.equal(recovered.status_sync.previous_status, 'IN_PROGRESS');
+        assert.equal(recovered.wip_capture?.manifest_path, initial.wip_capture?.manifest_path);
+        assert.equal(artifact.status_sync?.outcome, 'updated');
+        assert.equal(artifact.status_sync?.previous_status, 'IN_PROGRESS');
+        assert.equal(artifact.wip_capture?.manifest_path, initial.wip_capture?.manifest_path);
+        assert.equal(statusEvents.length, 1);
+        assert.equal(statusEvents[0]?.details?.artifact_sha256, recovered.artifact_sha256);
+        assert.equal(readSplitRequiredLatchEvidence({ reviewsRoot, eventsRoot, taskId: TASK_ID }).valid, true);
+    });
+
+    it('rebinds mandatory events when a fresh materialization changes the latch artifact hash', () => {
+        const repoRoot = makeRepo();
+        writeFile(repoRoot, 'src/a.ts', 'export const a = 2;\n');
+        const preflightPath = writePreflight(repoRoot, ['src/a.ts']);
+        const eventsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events');
+        const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+        const baseParams = {
+            repoRoot,
+            eventsRoot,
+            reviewsRoot,
+            taskId: TASK_ID,
+            guardKind: 'scope_budget' as const,
+            rawGuardSummary: 'scope budget guard',
+            preflightPath
+        };
+
+        const initial = materializeSplitRequiredLatch({
+            ...baseParams,
+            guardReason: 'initial scope reason',
+            guardDetails: { changed: false }
+        });
+        const recovered = materializeSplitRequiredLatch({
+            ...baseParams,
+            guardReason: 'updated scope reason',
+            guardDetails: { changed: true }
+        });
+        const events = fs.readFileSync(path.join(eventsRoot, `${TASK_ID}.jsonl`), 'utf8').trim().split('\n')
+            .map((line) => JSON.parse(line) as { event_type: string; details?: Record<string, unknown> });
+        const currentStatusEvents = events.filter((event) => (
+            event.event_type === 'STATUS_CHANGED'
+            && event.details?.artifact_sha256 === recovered.artifact_sha256
+        ));
+        const currentLatchEvents = events.filter((event) => (
+            event.event_type === 'SPLIT_REQUIRED_LATCHED'
+            && event.details?.artifact_sha256 === recovered.artifact_sha256
+        ));
+
+        assert.notEqual(recovered.artifact_sha256, initial.artifact_sha256);
+        assert.equal(recovered.status_sync.outcome, 'updated');
+        assert.equal(recovered.status_sync.previous_status, 'IN_PROGRESS');
+        assert.equal(currentStatusEvents.length, 1);
+        assert.equal(currentLatchEvents.length, 1);
+        assert.equal(readSplitRequiredLatchEvidence({ reviewsRoot, eventsRoot, taskId: TASK_ID }).valid, true);
+    });
+
+    it('recovers transition provenance from a pre-transition intent after a fresh restart', () => {
+        const repoRoot = makeRepo();
+        writeFile(repoRoot, 'src/a.ts', 'export const a = 2;\n');
+        const preflightPath = writePreflight(repoRoot, ['src/a.ts']);
+        const eventsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events');
+        const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+        const params = {
+            repoRoot,
+            eventsRoot,
+            reviewsRoot,
+            taskId: TASK_ID,
+            guardKind: 'scope_budget' as const,
+            guardReason: 'scope was too large',
+            rawGuardSummary: 'scope budget guard',
+            preflightPath,
+            guardDetails: {}
+        };
+
+        const initial = materializeSplitRequiredLatch(params);
+        const artifact = JSON.parse(fs.readFileSync(initial.artifact_path, 'utf8')) as Record<string, unknown>;
+        artifact.materialization_phase = 'pending_status_sync';
+        artifact.status_sync = {
+            outcome: 'pending',
+            previous_status: 'IN_PROGRESS',
+            next_status: 'SPLIT_REQUIRED',
+            error_message: null
+        };
+        artifact.wip_capture = null;
+        fs.writeFileSync(initial.artifact_path, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
+        const eventPath = path.join(eventsRoot, `${TASK_ID}.jsonl`);
+        const captureOnlyEvents = fs.readFileSync(eventPath, 'utf8').split('\n')
+            .filter((line) => (
+                !line.includes('"event_type":"SPLIT_REQUIRED_LATCHED"')
+                && !line.includes('"event_type":"STATUS_CHANGED"')
+            ))
+            .join('\n');
+        fs.writeFileSync(eventPath, captureOnlyEvents, 'utf8');
+
+        const recovered = materializeSplitRequiredLatch(params);
+        const recoveredArtifact = JSON.parse(fs.readFileSync(recovered.artifact_path, 'utf8')) as {
+            status_sync?: { outcome?: string; previous_status?: string };
+        };
+        const events = fs.readFileSync(eventPath, 'utf8');
+
+        assert.equal(recovered.status_sync.outcome, 'updated');
+        assert.equal(recovered.status_sync.previous_status, 'IN_PROGRESS');
+        assert.equal(recoveredArtifact.status_sync?.outcome, 'updated');
+        assert.equal(recoveredArtifact.status_sync?.previous_status, 'IN_PROGRESS');
+        assert.ok(events.includes('"event_type":"SPLIT_REQUIRED_LATCHED"'));
+        assert.ok(events.includes('"event_type":"STATUS_CHANGED"'));
+        assert.equal(readSplitRequiredLatchEvidence({ reviewsRoot, eventsRoot, taskId: TASK_ID }).valid, true);
+    });
+
+    it('does not mutate the latch artifact when the task queue lock is unavailable', () => {
+        const repoRoot = makeRepo();
+        const preflightPath = writePreflight(repoRoot, ['src/a.ts']);
+        const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+        const artifactPath = path.join(reviewsRoot, `${TASK_ID}-split-required.json`);
+        const sentinel = '{"sentinel":true}\n';
+        writeFile(repoRoot, path.relative(repoRoot, artifactPath), sentinel);
+        const { handle } = acquireFilesystemLock(
+            resolveTaskQueueTransactionLockPath(path.join(repoRoot, 'TASK.md')),
+            {
+                ownerLabel: 'split-required-test-lock',
+                requireKnownDeadOwner: true,
+                allowForeignHostStaleRecovery: false
+            }
+        );
+
+        try {
+            const latch = materializeSplitRequiredLatch({
+                repoRoot,
+                eventsRoot: path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events'),
+                reviewsRoot,
+                taskId: TASK_ID,
+                guardKind: 'scope_budget',
+                guardReason: 'scope was too large',
+                rawGuardSummary: 'scope budget guard',
+                preflightPath,
+                guardDetails: {}
+            });
+
+            assert.equal(latch.status_sync.outcome, 'write_failed');
+            assert.equal(fs.readFileSync(artifactPath, 'utf8'), sentinel);
+        } finally {
+            releaseFilesystemLock(handle);
+        }
+    });
+
+    it('propagates nested task queue operation failures without invoking the lock fallback', () => {
+        const repoRoot = makeRepo();
+        const taskPath = path.join(repoRoot, 'TASK.md');
+        let nestedLockFailureCalls = 0;
+
+        assert.throws(() => withTaskQueueTransaction<void>(taskPath, () => undefined, () => {
+            withTaskQueueTransaction<void>(taskPath, () => {
+                nestedLockFailureCalls += 1;
+            }, () => {
+                throw new Error('nested operation failed');
+            });
+        }), /nested operation failed/u);
+        assert.equal(nestedLockFailureCalls, 0);
     });
 
     it('captures tracked and task-owned untracked files, suspends the worktree, and restores all files explicitly', () => {

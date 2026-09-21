@@ -3,6 +3,8 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
 import { redactSecretText } from '../../core/redaction';
+import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
+import { buildTaskQueueStatusContract } from '../../core/task-queue-status-contract';
 import { writeReviewArtifactText } from '../../gate-runtime/review-artifacts';
 import {
     appendMandatoryTaskEvent
@@ -13,6 +15,8 @@ import type {
 import type {
     ReviewCycleGuardEvaluation
 } from '../../core/review-cycle-guard';
+import { readTaskQueueEntries } from '../../core/task-queue-read';
+import { withTaskQueueTransaction } from '../../core/task-queue/task-queue-repository';
 import { readTaskQueueStatusToken } from '../../core/task-queue/task-queue-status';
 import {
     syncTaskQueueStatusDetailed,
@@ -27,6 +31,7 @@ import {
     captureAndSuspendSplitRequiredWip,
     type SplitRequiredWipCaptureResult
 } from '../split-required/split-required-wip';
+import { resolveWipRoot } from '../split-required/split-required-wip-contracts';
 import {
     collectOrderedTimelineEvents
 } from '../completion/completion-evidence';
@@ -42,6 +47,13 @@ import {
 import { isPlainRecord } from '../../core/records';
 
 export type SplitRequiredGuardKind = 'scope_budget' | 'review_cycle' | 'full_suite_repair';
+
+export type SplitRequiredLatchFaultBoundary =
+    | 'after_status_sync'
+    | 'after_wip_capture'
+    | 'after_latch_artifact'
+    | 'after_latch_event'
+    | 'after_status_event';
 
 export interface SplitRequiredLatchResult {
     artifact_path: string;
@@ -107,7 +119,7 @@ function buildSplitRequiredArtifact(params: {
     rawGuardSummary: string;
     preflightPath: string;
     preflightSha256: string;
-    materializationPhase: 'pending_status_sync' | 'complete' | 'status_sync_failed';
+    materializationPhase: 'pending_status_sync' | 'status_synced' | 'complete' | 'status_sync_failed';
     statusSync: Record<string, unknown>;
     wipCapture: SplitRequiredWipCaptureResult | null;
     guardDetails: Record<string, unknown>;
@@ -140,6 +152,7 @@ function buildSplitRequiredArtifact(params: {
         wip_capture: params.wipCapture
             ? {
                 status: params.wipCapture.status,
+                checkout_state: readWipCaptureCheckoutState(params.wipCapture),
                 manifest_path: params.wipCapture.manifest_path,
                 manifest_sha256: params.wipCapture.manifest_sha256,
                 tracked_files: params.wipCapture.tracked_files,
@@ -148,6 +161,184 @@ function buildSplitRequiredArtifact(params: {
             }
             : null,
         guard_details: params.guardDetails
+    };
+}
+
+type SplitRequiredWipCheckoutState = 'suspended' | 'restored' | 'indeterminate';
+
+function readWipCaptureCheckoutState(
+    capture: SplitRequiredWipCaptureResult | null
+): SplitRequiredWipCheckoutState | null {
+    if (!capture) return null;
+    const value = (capture as SplitRequiredWipCaptureResult & {
+        checkout_state?: SplitRequiredWipCheckoutState;
+    }).checkout_state;
+    if (value === 'suspended' || value === 'restored' || value === 'indeterminate') {
+        return value;
+    }
+    return capture.status === 'CAPTURED' || capture.status === 'ALREADY_CAPTURED'
+        ? 'suspended'
+        : null;
+}
+
+function readPersistedSuccessfulStatusSync(
+    artifact: Record<string, unknown> | null,
+    currentStatusSync: TaskQueueStatusSyncResult
+): TaskQueueStatusSyncResult | null {
+    if (!artifact) {
+        return null;
+    }
+    const phase = String(artifact.materialization_phase || '').trim();
+    const persisted = isPlainRecord(artifact.status_sync) ? artifact.status_sync : null;
+    const outcome = String(persisted?.outcome || '').trim();
+    const previousStatus = persisted?.previous_status == null
+        ? null
+        : String(persisted.previous_status).trim() || null;
+    const hasRecoverablePendingTransition = phase === 'pending_status_sync'
+        && outcome === 'pending'
+        && currentStatusSync.outcome === 'already_synced'
+        && previousStatus !== null
+        && previousStatus !== SPLIT_REQUIRED_STATUS;
+    const hasRecoverableFailedRollback = phase === 'status_sync_failed'
+        && outcome === 'write_failed'
+        && currentStatusSync.outcome === 'already_synced'
+        && previousStatus !== null
+        && previousStatus !== SPLIT_REQUIRED_STATUS;
+    if (
+        !hasRecoverablePendingTransition
+        && !hasRecoverableFailedRollback
+        && (
+            (phase !== 'status_synced' && phase !== 'complete')
+            || (outcome !== 'updated' && outcome !== 'already_synced')
+        )
+    ) {
+        return null;
+    }
+    if (String(persisted?.next_status || '').trim() !== SPLIT_REQUIRED_STATUS) {
+        return null;
+    }
+    const errorMessage = persisted?.error_message == null
+        ? null
+        : String(persisted.error_message);
+    const recoveredOutcome: 'updated' | 'already_synced' = hasRecoverablePendingTransition
+        || hasRecoverableFailedRollback
+        || outcome === 'updated'
+        ? 'updated'
+        : 'already_synced';
+    return {
+        ...currentStatusSync,
+        outcome: recoveredOutcome,
+        previous_status: previousStatus,
+        next_status: SPLIT_REQUIRED_STATUS,
+        error_message: errorMessage
+    };
+}
+
+function readPersistedWipCapture(params: {
+    artifact: Record<string, unknown> | null;
+    repoRoot: string;
+    taskId: string;
+    guardKind: SplitRequiredGuardKind;
+    preflightSha256: string;
+}): SplitRequiredWipCaptureResult | null {
+    if (!params.artifact || String(params.artifact.materialization_phase || '') !== 'complete') {
+        return null;
+    }
+    const persisted = isPlainRecord(params.artifact.wip_capture) ? params.artifact.wip_capture : null;
+    const status = String(persisted?.status || '').trim();
+    const manifestPathValue = typeof persisted?.manifest_path === 'string'
+        ? persisted.manifest_path.trim()
+        : '';
+    const manifestSha256 = typeof persisted?.manifest_sha256 === 'string'
+        ? persisted.manifest_sha256.trim().toLowerCase()
+        : '';
+    if (
+        (status !== 'CAPTURED' && status !== 'ALREADY_CAPTURED')
+        || !manifestPathValue
+        || !manifestSha256
+    ) {
+        return null;
+    }
+    const manifestPath = path.resolve(manifestPathValue);
+    let canonicalManifestPath: string;
+    let canonicalWipRoot: string;
+    try {
+        canonicalManifestPath = fs.realpathSync.native(manifestPath);
+        canonicalWipRoot = fs.realpathSync.native(resolveWipRoot(params.repoRoot, params.taskId));
+    } catch {
+        return null;
+    }
+    if (
+        !fs.lstatSync(manifestPath).isFile()
+        || (
+            canonicalManifestPath !== canonicalWipRoot
+            && !canonicalManifestPath.startsWith(`${canonicalWipRoot}${path.sep}`)
+        )
+        || fileSha256(canonicalManifestPath) !== manifestSha256
+    ) {
+        return null;
+    }
+    const manifest = safeReadJson(canonicalManifestPath);
+    if (
+        !isPlainRecord(manifest)
+        || manifest.kind !== 'split_required_wip'
+        || manifest.status !== 'suspended'
+        || manifest.task_id !== params.taskId
+        || manifest.guard_kind !== params.guardKind
+        || manifest.preflight_sha256 !== params.preflightSha256
+    ) {
+        return null;
+    }
+    const toStringList = (value: unknown): string[] => Array.isArray(value)
+        ? value.filter((entry): entry is string => typeof entry === 'string')
+        : [];
+    return {
+        status,
+        checkout_state: 'suspended',
+        manifest_path: normalizePath(canonicalManifestPath),
+        manifest_sha256: manifestSha256,
+        tracked_files: toStringList(persisted?.tracked_files),
+        untracked_files: toStringList(persisted?.untracked_files),
+        violations: toStringList(persisted?.violations)
+    } as SplitRequiredWipCaptureResult;
+}
+
+function readPersistedSplitRequiredEventState(params: {
+    eventsRoot: string;
+    taskId: string;
+    guardKind: SplitRequiredGuardKind;
+    artifactPath: string;
+    artifactSha256: string;
+}): { latchEventRecorded: boolean; statusEventRecorded: boolean } {
+    if (!params.artifactSha256) {
+        return { latchEventRecorded: false, statusEventRecorded: false };
+    }
+    const timelineErrors: string[] = [];
+    const timeline = collectOrderedTimelineEvents(
+        path.join(params.eventsRoot, `${params.taskId}.jsonl`),
+        timelineErrors
+    );
+    if (timelineErrors.length > 0) {
+        return { latchEventRecorded: false, statusEventRecorded: false };
+    }
+    const artifactPath = normalizePath(params.artifactPath);
+    const matchesArtifact = (details: Record<string, unknown>): boolean => (
+        normalizePath(String(details.artifact_path || '')) === artifactPath
+        && String(details.artifact_sha256 || '').toLowerCase() === params.artifactSha256
+        && String(details.guard_kind || '') === params.guardKind
+    );
+    return {
+        latchEventRecorded: timeline.some((event) => (
+            event.event_type === 'SPLIT_REQUIRED_LATCHED'
+            && String(event.details?.status || '') === SPLIT_REQUIRED_STATUS
+            && matchesArtifact(event.details || {})
+        )),
+        statusEventRecorded: timeline.some((event) => (
+            event.event_type === 'STATUS_CHANGED'
+            && String(event.details?.new_status || '') === SPLIT_REQUIRED_STATUS
+            && String(event.details?.reason || '') === 'auto_split_guard_latched'
+            && matchesArtifact(event.details || {})
+        ))
     };
 }
 
@@ -618,7 +809,7 @@ export function sanitizeReviewCycleAutoSplitSummary(evaluation: ReviewCycleGuard
     return `Review cycle guard: ${evaluation.action} (configured review-cycle limit exceeded: ${metrics})`;
 }
 
-export function materializeSplitRequiredLatch(params: {
+export interface MaterializeSplitRequiredLatchParams {
     repoRoot: string;
     eventsRoot: string;
     reviewsRoot: string;
@@ -628,168 +819,57 @@ export function materializeSplitRequiredLatch(params: {
     rawGuardSummary: string;
     preflightPath: string;
     guardDetails: Record<string, unknown>;
-}): SplitRequiredLatchResult {
+    faultInjection?: (boundary: SplitRequiredLatchFaultBoundary) => void;
+}
+
+export function materializeSplitRequiredLatch(
+    params: MaterializeSplitRequiredLatchParams
+): SplitRequiredLatchResult {
+    return materializeSplitRequiredLatchTransaction(params);
+}
+
+function materializeSplitRequiredLatchTransaction(
+    params: MaterializeSplitRequiredLatchParams
+): SplitRequiredLatchResult {
     const artifactPath = resolveSplitRequiredArtifactPath(params.reviewsRoot, params.taskId);
-    const existing = safeReadJson(artifactPath);
     const preflightSha256 = fileSha256(params.preflightPath) || '';
     const orchestratorRoot = getOrchestratorRootFromEventsRoot(params.eventsRoot);
-    const existingCurrent =
-        existing?.task_id === params.taskId
-        && existing?.status === SPLIT_REQUIRED_STATUS
-        && existing?.guard_kind === params.guardKind
-        && existing?.preflight_sha256 === preflightSha256;
-    const timestampUtc = existingCurrent && typeof existing?.timestamp_utc === 'string'
-        ? existing.timestamp_utc
-        : new Date().toISOString();
-    if (!existingCurrent) {
-        writeStableJsonIfChanged(artifactPath, buildSplitRequiredArtifact({
-            taskId: params.taskId,
-            timestampUtc,
-            guardKind: params.guardKind,
-            guardReason: params.guardReason,
-            rawGuardSummary: params.rawGuardSummary,
-            preflightPath: params.preflightPath,
-            preflightSha256,
-            materializationPhase: 'pending_status_sync',
-            statusSync: {
-                outcome: 'pending',
-                previous_status: null,
-                next_status: SPLIT_REQUIRED_STATUS,
-                error_message: null
-            },
-            wipCapture: null,
-            guardDetails: params.guardDetails
-        }));
-    }
-    const statusSync = syncTaskQueueStatusDetailed(params.repoRoot, params.taskId, SPLIT_REQUIRED_STATUS);
-    let statusEventRecorded = false;
-    let latchEventRecorded = false;
-    if (!isSuccessfulSplitRequiredStatusSync(statusSync)) {
-        const failedArtifactSha256 = writeStableJsonIfChanged(artifactPath, buildSplitRequiredArtifact({
-            taskId: params.taskId,
-            timestampUtc,
-            guardKind: params.guardKind,
-            guardReason: params.guardReason,
-            rawGuardSummary: params.rawGuardSummary,
-            preflightPath: params.preflightPath,
-            preflightSha256,
-            materializationPhase: 'status_sync_failed',
-            statusSync: {
-                outcome: statusSync.outcome,
-                previous_status: statusSync.previous_status,
-                next_status: statusSync.next_status,
-                error_message: statusSync.error_message
-            },
-            wipCapture: null,
-            guardDetails: params.guardDetails
-        }));
+    const taskPath = path.join(params.repoRoot, TASK_QUEUE_FILENAME);
+    return withTaskQueueTransaction(taskPath, (message) => {
+        const statusSync: TaskQueueStatusSyncResult = {
+            outcome: 'write_failed',
+            task_path: normalizePath(taskPath),
+            task_id: params.taskId,
+            previous_status: null,
+            next_status: SPLIT_REQUIRED_STATUS,
+            error_message: message,
+            status_contract: buildTaskQueueStatusContract(params.taskId)
+        };
         return {
             artifact_path: normalizePath(artifactPath),
-            artifact_sha256: failedArtifactSha256,
+            artifact_sha256: fileSha256(artifactPath) || '',
             status_sync: statusSync,
             status_event_recorded: false,
             latch_event_recorded: false,
             wip_capture: null
         };
-    }
-
-    let artifactSha256 = '';
-    let wipCapture: SplitRequiredWipCaptureResult | null = null;
-    try {
-        if (shouldCaptureGenericSplitRequiredWip(params.guardKind) && canCaptureSplitRequiredWip(params.repoRoot)) {
-            wipCapture = captureAndSuspendSplitRequiredWip({
-                repoRoot: params.repoRoot,
-                taskId: params.taskId,
-                preflightPath: params.preflightPath,
-                guardKind: params.guardKind,
-                guardReason: params.guardReason
-            });
-            if (wipCapture.status === 'BLOCKED') {
-                throw new Error(`split-required WIP capture failed: ${wipCapture.violations.join('; ') || 'unknown violation'}`);
-            }
-        }
-        const artifact = buildSplitRequiredArtifact({
-            taskId: params.taskId,
-            timestampUtc,
-            guardKind: params.guardKind,
-            guardReason: params.guardReason,
-            rawGuardSummary: params.rawGuardSummary,
-            preflightPath: params.preflightPath,
-            preflightSha256,
-            materializationPhase: 'complete',
-            statusSync: {
-                outcome: statusSync.outcome,
-                previous_status: statusSync.previous_status,
-                next_status: statusSync.next_status,
-                error_message: statusSync.error_message
-            },
-            wipCapture,
-            guardDetails: params.guardDetails
-        });
-        artifactSha256 = writeStableJsonIfChanged(artifactPath, artifact);
-        const latchEvidenceAfterArtifact = readSplitRequiredLatchEvidence({
-            reviewsRoot: params.reviewsRoot,
-            eventsRoot: params.eventsRoot,
-            taskId: params.taskId
-        });
-        if (!latchEvidenceAfterArtifact.valid) {
-            appendMandatoryTaskEvent(
-                orchestratorRoot,
-                params.taskId,
-                'SPLIT_REQUIRED_LATCHED',
-                'BLOCKED',
-                'Auto-split guard latched the parent task.',
-                {
-                    status: SPLIT_REQUIRED_STATUS,
-                    guard_kind: params.guardKind,
-                    guard_reason: params.guardReason,
-                    artifact_path: normalizePath(artifactPath),
-                    artifact_sha256: artifactSha256,
-                    preflight_path: normalizePath(params.preflightPath),
-                    preflight_sha256: preflightSha256,
-                    status_sync_outcome: statusSync.outcome,
-                    wip_manifest_path: wipCapture?.manifest_path || null,
-                    wip_manifest_sha256: wipCapture?.manifest_sha256 || null,
-                    wip_capture_status: wipCapture?.status || null
-                },
-                { actor: 'orchestrator' }
-            );
-            latchEventRecorded = true;
-        }
-
-        if (statusSync.outcome === 'updated') {
-            appendMandatoryTaskEvent(
-                orchestratorRoot,
-                params.taskId,
-                'STATUS_CHANGED',
-                'INFO',
-                `Task status changed: ${statusSync.previous_status || 'UNKNOWN'} -> ${SPLIT_REQUIRED_STATUS}.`,
-                {
-                    previous_status: statusSync.previous_status || 'UNKNOWN',
-                    new_status: SPLIT_REQUIRED_STATUS,
-                    reason: 'auto_split_guard_latched',
-                    guard_kind: params.guardKind,
-                    artifact_path: normalizePath(artifactPath),
-                    artifact_sha256: artifactSha256
-                },
-                { actor: 'orchestrator' }
-            );
-            statusEventRecorded = true;
-        }
-    } catch (error: unknown) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        let rollbackMessage: string | null = null;
-        if (statusSync.outcome === 'updated' && statusSync.previous_status) {
-            const rollback = syncTaskQueueStatusDetailed(params.repoRoot, params.taskId, statusSync.previous_status);
-            rollbackMessage = `rollback=${rollback.outcome}${rollback.error_message ? ` (${rollback.error_message})` : ''}`;
-        }
-        const failureStatusSync: TaskQueueStatusSyncResult = {
-            ...statusSync,
-            outcome: 'write_failed',
-            error_message: rollbackMessage ? `${errorMessage}; ${rollbackMessage}` : errorMessage
-        };
-        try {
-            artifactSha256 = writeStableJsonIfChanged(artifactPath, buildSplitRequiredArtifact({
+    }, () => {
+        const existing = safeReadJson(artifactPath);
+        const taskStatusBeforeSync = readTaskQueueStatusToken(
+            readTaskQueueEntries(params.repoRoot).get(params.taskId)?.status || null
+        );
+        const existingCurrent =
+            existing?.task_id === params.taskId
+            && existing?.status === SPLIT_REQUIRED_STATUS
+            && existing?.guard_kind === params.guardKind
+            && existing?.preflight_sha256 === preflightSha256;
+        const timestampUtc = existingCurrent
+            && taskStatusBeforeSync === SPLIT_REQUIRED_STATUS
+            && typeof existing?.timestamp_utc === 'string'
+            ? existing.timestamp_utc
+            : new Date().toISOString();
+        if (!existingCurrent || taskStatusBeforeSync !== SPLIT_REQUIRED_STATUS) {
+            writeStableJsonIfChanged(artifactPath, buildSplitRequiredArtifact({
                 taskId: params.taskId,
                 timestampUtc,
                 guardKind: params.guardKind,
@@ -797,35 +877,315 @@ export function materializeSplitRequiredLatch(params: {
                 rawGuardSummary: params.rawGuardSummary,
                 preflightPath: params.preflightPath,
                 preflightSha256,
-            materializationPhase: 'status_sync_failed',
-            statusSync: {
-                outcome: failureStatusSync.outcome,
-                previous_status: failureStatusSync.previous_status,
-                next_status: failureStatusSync.next_status,
-                error_message: failureStatusSync.error_message
-            },
-            wipCapture,
-            guardDetails: params.guardDetails
-        }));
-        } catch {
-            artifactSha256 = artifactSha256 || '';
+                materializationPhase: 'pending_status_sync',
+                statusSync: {
+                    outcome: 'pending',
+                    previous_status: taskStatusBeforeSync,
+                    next_status: SPLIT_REQUIRED_STATUS,
+                    error_message: null
+                },
+                wipCapture: null,
+                guardDetails: params.guardDetails
+            }));
         }
-        return {
-            artifact_path: normalizePath(artifactPath),
-            artifact_sha256: artifactSha256,
-            status_sync: failureStatusSync,
-            status_event_recorded: statusEventRecorded,
-            latch_event_recorded: latchEventRecorded,
-            wip_capture: wipCapture
-        };
-    }
+        const currentStatusSync = syncTaskQueueStatusDetailed(params.repoRoot, params.taskId, SPLIT_REQUIRED_STATUS);
+        if (!isSuccessfulSplitRequiredStatusSync(currentStatusSync)) {
+            const failedArtifactSha256 = writeStableJsonIfChanged(artifactPath, buildSplitRequiredArtifact({
+                taskId: params.taskId,
+                timestampUtc,
+                guardKind: params.guardKind,
+                guardReason: params.guardReason,
+                rawGuardSummary: params.rawGuardSummary,
+                preflightPath: params.preflightPath,
+                preflightSha256,
+                materializationPhase: 'status_sync_failed',
+                statusSync: {
+                    outcome: currentStatusSync.outcome,
+                    previous_status: currentStatusSync.previous_status,
+                    next_status: currentStatusSync.next_status,
+                    error_message: currentStatusSync.error_message
+                },
+                wipCapture: null,
+                guardDetails: params.guardDetails
+            }));
+            return {
+                artifact_path: normalizePath(artifactPath),
+                artifact_sha256: failedArtifactSha256,
+                status_sync: currentStatusSync,
+                status_event_recorded: false,
+                latch_event_recorded: false,
+                wip_capture: null
+            };
+        }
+        const persistedStatusSync = currentStatusSync.outcome === 'already_synced' && existingCurrent
+            ? readPersistedSuccessfulStatusSync(existing, currentStatusSync)
+            : null;
+        const statusSync = persistedStatusSync || currentStatusSync;
+        let statusCheckpointPending = !persistedStatusSync;
+        const persistedWipCapture = persistedStatusSync
+            ? readPersistedWipCapture({
+                artifact: existing,
+                repoRoot: params.repoRoot,
+                taskId: params.taskId,
+                guardKind: params.guardKind,
+                preflightSha256
+            })
+            : null;
+        const persistedArtifactSha256 = persistedStatusSync
+            && String(existing?.materialization_phase || '') === 'complete'
+            ? fileSha256(artifactPath) || ''
+            : '';
+        const persistedEventState = readPersistedSplitRequiredEventState({
+            eventsRoot: params.eventsRoot,
+            taskId: params.taskId,
+            guardKind: params.guardKind,
+            artifactPath,
+            artifactSha256: persistedArtifactSha256
+        });
+        const completeLatchAfterStatusSync = (
+            initialState: {
+                artifactSha256: string;
+                statusEventRecorded: boolean;
+                latchEventRecorded: boolean;
+                wipCapture: SplitRequiredWipCaptureResult | null;
+            },
+            recoveryAttempted: boolean,
+            faultInjection: MaterializeSplitRequiredLatchParams['faultInjection'],
+            priorErrorMessage: string | null = null
+        ): SplitRequiredLatchResult => {
+            let {
+                artifactSha256,
+                statusEventRecorded,
+                latchEventRecorded,
+                wipCapture
+            } = initialState;
+            let injectedFaultBoundary: SplitRequiredLatchFaultBoundary | null = null;
+            const injectFault = (boundary: SplitRequiredLatchFaultBoundary): void => {
+                if (!faultInjection) {
+                    return;
+                }
+                try {
+                    faultInjection(boundary);
+                } catch (error: unknown) {
+                    injectedFaultBoundary = boundary;
+                    throw error;
+                }
+            };
+            try {
+                if (statusCheckpointPending) {
+                    writeStableJsonIfChanged(artifactPath, buildSplitRequiredArtifact({
+                        taskId: params.taskId,
+                        timestampUtc,
+                        guardKind: params.guardKind,
+                        guardReason: params.guardReason,
+                        rawGuardSummary: params.rawGuardSummary,
+                        preflightPath: params.preflightPath,
+                        preflightSha256,
+                        materializationPhase: 'status_synced',
+                        statusSync: {
+                            outcome: statusSync.outcome,
+                            previous_status: statusSync.previous_status,
+                            next_status: statusSync.next_status,
+                            error_message: statusSync.error_message
+                        },
+                        wipCapture: null,
+                        guardDetails: params.guardDetails
+                    }));
+                    statusCheckpointPending = false;
+                }
+                injectFault('after_status_sync');
+                if (
+                    !wipCapture
+                    && shouldCaptureGenericSplitRequiredWip(params.guardKind)
+                    && canCaptureSplitRequiredWip(params.repoRoot)
+                ) {
+                    wipCapture = captureAndSuspendSplitRequiredWip({
+                        repoRoot: params.repoRoot,
+                        taskId: params.taskId,
+                        preflightPath: params.preflightPath,
+                        guardKind: params.guardKind,
+                        guardReason: params.guardReason
+                    });
+                    if (wipCapture.status === 'BLOCKED') {
+                        throw new Error(
+                            `split-required WIP capture failed: ${wipCapture.violations.join('; ') || 'unknown violation'}`
+                        );
+                    }
+                }
+                injectFault('after_wip_capture');
+                const artifact = buildSplitRequiredArtifact({
+                    taskId: params.taskId,
+                    timestampUtc,
+                    guardKind: params.guardKind,
+                    guardReason: params.guardReason,
+                    rawGuardSummary: params.rawGuardSummary,
+                    preflightPath: params.preflightPath,
+                    preflightSha256,
+                    materializationPhase: 'complete',
+                    statusSync: {
+                        outcome: statusSync.outcome,
+                        previous_status: statusSync.previous_status,
+                        next_status: statusSync.next_status,
+                        error_message: statusSync.error_message
+                    },
+                    wipCapture,
+                    guardDetails: params.guardDetails
+                });
+                artifactSha256 = writeStableJsonIfChanged(artifactPath, artifact);
+                const currentEventState = readPersistedSplitRequiredEventState({
+                    eventsRoot: params.eventsRoot,
+                    taskId: params.taskId,
+                    guardKind: params.guardKind,
+                    artifactPath,
+                    artifactSha256
+                });
+                latchEventRecorded = currentEventState.latchEventRecorded;
+                statusEventRecorded = currentEventState.statusEventRecorded;
+                injectFault('after_latch_artifact');
+                const latchEvidenceAfterArtifact = readSplitRequiredLatchEvidence({
+                    reviewsRoot: params.reviewsRoot,
+                    eventsRoot: params.eventsRoot,
+                    taskId: params.taskId
+                });
+                if (!latchEvidenceAfterArtifact.valid) {
+                    appendMandatoryTaskEvent(
+                        orchestratorRoot,
+                        params.taskId,
+                        'SPLIT_REQUIRED_LATCHED',
+                        'BLOCKED',
+                        'Auto-split guard latched the parent task.',
+                        {
+                            status: SPLIT_REQUIRED_STATUS,
+                            guard_kind: params.guardKind,
+                            guard_reason: params.guardReason,
+                            artifact_path: normalizePath(artifactPath),
+                            artifact_sha256: artifactSha256,
+                            preflight_path: normalizePath(params.preflightPath),
+                            preflight_sha256: preflightSha256,
+                            status_sync_outcome: statusSync.outcome,
+                            wip_manifest_path: wipCapture?.manifest_path || null,
+                            wip_manifest_sha256: wipCapture?.manifest_sha256 || null,
+                            wip_capture_status: wipCapture?.status || null
+                        },
+                        { actor: 'orchestrator' }
+                    );
+                    latchEventRecorded = true;
+                }
+                injectFault('after_latch_event');
 
-    return {
-        artifact_path: normalizePath(artifactPath),
-        artifact_sha256: artifactSha256,
-        status_sync: statusSync,
-        status_event_recorded: statusEventRecorded,
-        latch_event_recorded: latchEventRecorded,
-        wip_capture: wipCapture
-    };
+                if (statusSync.outcome === 'updated' && !statusEventRecorded) {
+                    appendMandatoryTaskEvent(
+                        orchestratorRoot,
+                        params.taskId,
+                        'STATUS_CHANGED',
+                        'INFO',
+                        `Task status changed: ${statusSync.previous_status || 'UNKNOWN'} -> ${SPLIT_REQUIRED_STATUS}.`,
+                        {
+                            previous_status: statusSync.previous_status || 'UNKNOWN',
+                            new_status: SPLIT_REQUIRED_STATUS,
+                            reason: 'auto_split_guard_latched',
+                            guard_kind: params.guardKind,
+                            artifact_path: normalizePath(artifactPath),
+                            artifact_sha256: artifactSha256
+                        },
+                        { actor: 'orchestrator' }
+                    );
+                    statusEventRecorded = true;
+                }
+                injectFault('after_status_event');
+            } catch (error: unknown) {
+                const currentErrorMessage = error instanceof Error ? error.message : String(error);
+                const errorMessage = priorErrorMessage
+                    ? `${priorErrorMessage}; forward recovery failed: ${currentErrorMessage}`
+                    : currentErrorMessage;
+                const checkoutOwnedByCapture = Boolean(
+                    wipCapture?.manifest_path
+                    && readWipCaptureCheckoutState(wipCapture) === 'suspended'
+                );
+                const reusableWipCapture = wipCapture?.status === 'CAPTURED'
+                    || wipCapture?.status === 'ALREADY_CAPTURED';
+                if (injectedFaultBoundary === 'after_status_event') {
+                    return {
+                        artifact_path: normalizePath(artifactPath),
+                        artifact_sha256: artifactSha256,
+                        status_sync: statusSync,
+                        status_event_recorded: statusEventRecorded,
+                        latch_event_recorded: latchEventRecorded,
+                        wip_capture: wipCapture
+                    };
+                }
+                if (
+                    !recoveryAttempted
+                    && (injectedFaultBoundary || (checkoutOwnedByCapture && reusableWipCapture))
+                ) {
+                    return completeLatchAfterStatusSync({
+                        artifactSha256,
+                        statusEventRecorded,
+                        latchEventRecorded,
+                        wipCapture
+                    }, true, undefined, errorMessage);
+                }
+                let rollbackMessage: string | null = null;
+                if (!checkoutOwnedByCapture && statusSync.outcome === 'updated' && statusSync.previous_status) {
+                    const rollback = syncTaskQueueStatusDetailed(params.repoRoot, params.taskId, statusSync.previous_status);
+                    rollbackMessage = `rollback=${rollback.outcome}${rollback.error_message ? ` (${rollback.error_message})` : ''}`;
+                }
+                const recoverableErrorMessage = checkoutOwnedByCapture
+                    ? `${errorMessage}; preserved SPLIT_REQUIRED status and task-owned suspended WIP for recoverable retry`
+                    : errorMessage;
+                const failureStatusSync: TaskQueueStatusSyncResult = {
+                    ...statusSync,
+                    outcome: 'write_failed',
+                    error_message: rollbackMessage
+                        ? `${recoverableErrorMessage}; ${rollbackMessage}`
+                        : recoverableErrorMessage
+                };
+                try {
+                    artifactSha256 = writeStableJsonIfChanged(artifactPath, buildSplitRequiredArtifact({
+                        taskId: params.taskId,
+                        timestampUtc,
+                        guardKind: params.guardKind,
+                        guardReason: params.guardReason,
+                        rawGuardSummary: params.rawGuardSummary,
+                        preflightPath: params.preflightPath,
+                        preflightSha256,
+                        materializationPhase: 'status_sync_failed',
+                        statusSync: {
+                            outcome: failureStatusSync.outcome,
+                            previous_status: failureStatusSync.previous_status,
+                            next_status: failureStatusSync.next_status,
+                            error_message: failureStatusSync.error_message
+                        },
+                        wipCapture,
+                        guardDetails: params.guardDetails
+                    }));
+                } catch {
+                    artifactSha256 = artifactSha256 || '';
+                }
+                return {
+                    artifact_path: normalizePath(artifactPath),
+                    artifact_sha256: artifactSha256,
+                    status_sync: failureStatusSync,
+                    status_event_recorded: statusEventRecorded,
+                    latch_event_recorded: latchEventRecorded,
+                    wip_capture: wipCapture
+                };
+            }
+
+            return {
+                artifact_path: normalizePath(artifactPath),
+                artifact_sha256: artifactSha256,
+                status_sync: statusSync,
+                status_event_recorded: statusEventRecorded,
+                latch_event_recorded: latchEventRecorded,
+                wip_capture: wipCapture
+            };
+        };
+        return completeLatchAfterStatusSync({
+            artifactSha256: persistedArtifactSha256,
+            statusEventRecorded: persistedEventState.statusEventRecorded,
+            latchEventRecorded: persistedEventState.latchEventRecorded,
+            wipCapture: persistedWipCapture
+        }, false, params.faultInjection);
+    });
 }

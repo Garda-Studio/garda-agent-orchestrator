@@ -2,25 +2,49 @@
 
 ## Unreleased
 
+### Compact Command Output
+
+- Added explicit `garda compact` inspections for Git status and diffs, file metadata and line ranges, and scoped text search.
+- Added bounded output previews with paginated reads and search across the full retained output. Original stdout and stderr bytes are preserved without secret filtering; incomplete captures are explicitly marked.
 - Improved compact usability with subcommand help, sequential selected-file ranges, configurable 4 KiB read pages, UTF-8-safe retained reads, multi-query search with line context, source-range coverage metadata, and separate UI reading budgets.
+- Added Compact UI settings for enabling or disabling the feature, selecting supported command families, configuring preview and cache limits, and inspecting cache usage.
+- Added compact guidance to shared agent instructions, `next-step`, and reviewer handoffs.
+- Added bounded task-scoped output storage, cleanup on successful task completion, and recovery cleanup at task start/resume and completion. Cleanup preserves unfinished tasks and requires no background timer.
 
-- Added explicit `garda compact` Git/file/search inspections with bounded previews, byte-preserving task-scoped output, paginated retrieval and full retained-output search. Added Compact UI controls, agent/reviewer discovery, hard cache limits and start/completion-only cleanup; secret content is not filtered.
+### Task Workflow and Recovery
 
-- Fixed review restarts returning to a superseded pending report correction. Navigator recovery now recognizes authenticated pending-correction events as well as exhausted-correction events, while preserving package hashes, event ordering, lane boundaries, and rejected audit evidence.
+- Separated read-only `next-step` inspection from guarded effect execution and introduced a typed decision engine with rejection of stale or incomplete execution results.
+- Improved preservation of task intent during preflight refresh, strict decomposition routing after suspended work is restored, and audited closeout for tasks with no implementation changes.
+- Added guarded migration of eligible legacy task-event suffixes with preview, content-bound confirmation, verified backups, and integrity validation.
+- Improved restored-runtime handoff and bounded re-execution, including concurrent build/finalizer coordination and authenticated disk-backed backups for split work in progress.
+- Corrected source-parity recovery guidance to rebuild and run `setup --no-prompt`; clarified the rematerialization-only behavior of `init` and `reinit`.
 
-- Fixed reviewer report validation rejecting focused Node `--check` syntax checks. Only the exact Node runtime option before the target is accepted; unknown options, preloads, inline code, and other runners remain rejected.
+### Review Integrity and Remediation
 
-- Fixed untracked binary review fixtures being decoded as text. Binary and invalid UTF-8 files remain in dirty scope but contribute no text-line budget, and scoped diffs retain their paths with an explicit binary-content marker.
+- Unified review, lifecycle, completion, audit, and diagnostic consumers around authenticated snapshots bound to a single artifact generation.
+- Fixed review reuse when the original review falls outside the recent timeline window and strengthened current-pass authority across remediation and routing.
+- Fixed DELTA review coverage after test-only remediation of source-linked findings, preserving required reinspection targets and falling back to FULL when mappings cannot be trusted.
+- Fixed correction restarts selecting superseded reviewer output and improved bounded retry and completed-launch recovery.
+- Strengthened follow-up scope authentication, grouped finding associations, dependency handling, and duplicate-report prevention.
+- Allowed narrowly validated Node `--check` commands in reviewer reports. Binary and invalid UTF-8 files now remain visible in review scope without being decoded or counted as text.
 
-- Corrected source-parity recovery guidance to use `setup --no-prompt` after a build. `init` and `reinit` warnings now accurately describe rematerializing the existing bundle without synchronizing updated source artifacts.
+### Reliability and Performance
 
-- Fixed bounded DELTA remediation after test-only fixes to source-linked review findings. Baselines now preserve the authenticated originating coverage contract, required reinspection includes the prior finding targets, and unresolved legacy mappings choose FULL before rerun setup. Actual changed-file classification and dependency-based lane preservation remain unchanged.
+- Added crash-recoverable transactions for task-queue mutations and coordinated workflow configuration, audit, policy, and protected-manifest updates.
+- Improved lock ordering, synchronous/asynchronous transaction coordination, stale-lock recovery, and cleanup diagnostics.
+- Hardened authenticated artifact replacement and cleanup while preserving recovery artifacts and original failure diagnostics.
+- Bound persisted workspace-cache reuse to authenticated invocation generations and streamed dirty/untracked file hashing to reduce memory pressure.
+- Reduced repeated timeline and workspace reads, bounded snapshot lock duration and memory usage, and added lazy CLI command loading.
+- Centralized child-process signal cleanup, preserved signal exit codes, and improved Windows descendant-process termination.
 
-- Hardened authenticated replacement cleanup so an artifact-removal failure still releases the remaining descriptors and retains the original operation error. Failed removal quarantines and substituted artifacts remain preserved for recovery.
+### Testing and Documentation
 
-- Fixed review rerouting after terminal cleanup removes a completed launch control file whose result has already been recorded. Active, unconsumed, mismatched, and malformed launch evidence still blocks replacement.
-
-- Fixed a `next-step` review-reuse loop when the original review falls outside the recent timeline window. Reuse now checks the complete authenticated history within existing snapshot limits and continues to reject malformed history and invalid receipt snapshots.
+- Isolated nested bundle fixtures, Windows process snapshots, and inherited test-runner state.
+- Made package-acquisition fixtures offline by default, with a separate explicit network test command.
+- Added test-runner output backpressure, calibrated shard timing, and explicit handling of incomplete timing forecasts.
+- Added regression coverage for authenticated timeline performance, bounded filesystem reads, lock contention, future timestamps, transaction recovery, and compact output.
+- Added enforced coverage floors and CI LCOV artifacts.
+- Expanded contributor documentation, provider-native instruction and skill compatibility guidance, and operator recovery runbooks.
 
 ## 1.4.3
 
