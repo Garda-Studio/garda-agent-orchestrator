@@ -18,6 +18,10 @@ import {
     getReviewContextFullSuiteValidationViolations
 } from '../../../../gates/review-context/review-context-validation-evidence';
 import {
+    buildReviewContextPreflightDiffExpectations,
+    getReviewContextContractViolations
+} from '../../../../gates/review-context/review-context-contract';
+import {
     resolveReviewerPromptArtifactBinding
 } from '../../../../gates/review/review-prompt-artifact';
 import {
@@ -29,8 +33,12 @@ import {
     validateReviewFindingsValidationArtifactForReceipt
 } from '../../../../gates/review/review-findings-validation-artifact';
 import {
-    reviewEvidenceRequiresFindingsValidation
+    reviewEvidenceRequiresFindingsValidation,
+    type ReviewRemediationReviewContract
 } from '../../../../gates/review-remediation/review-remediation-review-contract';
+import {
+    resolvePersistedRemediationReviewExecutionAuthority
+} from '../../../../gates/review-remediation/review-remediation-execution-authority';
 import {
     resolveLockedReviewFindingPolicyFromPreflight,
     resolveLockedReviewFindingPolicyFromReceiptDispositionEvidence,
@@ -320,6 +328,9 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
     if (!reviewContext) {
         return reject(`existing review context is missing or corrupt at ${gateHelpers.normalizePath(options.reviewContextPath)}`);
     }
+    const reviewsRoot = path.dirname(options.preflightPath);
+    const artifactPath = path.join(reviewsRoot, `${options.taskId}-${options.reviewType}.md`);
+    const receiptPath = artifactPath.replace(/\.md$/, '-receipt.json');
     const fullSuiteViolations = getReviewContextFullSuiteValidationViolations({
         repoRoot: options.repoRoot,
         taskId: options.taskId,
@@ -351,6 +362,42 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
     if (!ruleContextArtifactPath) {
         return reject('existing review context is missing the rule-context artifact path');
     }
+    const preflightDiffExpectations = buildReviewContextPreflightDiffExpectations(
+        options.preflightPayload,
+        options.reviewType
+    );
+    const reviewExecutionValidationAuthority = reviewExecution && currentPreflightHash
+        ? resolvePersistedRemediationReviewExecutionAuthority({
+            reviewsRoot,
+            taskId: options.taskId,
+            reviewType: options.reviewType,
+            preflightSha256: currentPreflightHash,
+            preflightPath: options.preflightPath,
+            fullReviewScope: preflightDiffExpectations.expectedChangedFiles,
+            reviewExecution: reviewExecution as unknown as ReviewRemediationReviewContract,
+            reviewContextPath: options.reviewContextPath,
+            receiptPath
+        })
+        : null;
+    const reviewContextContractViolations = getReviewContextContractViolations({
+        contextPath: options.reviewContextPath,
+        reviewContext,
+        expectedTaskId: options.taskId,
+        expectedReviewType: options.reviewType,
+        expectedPreflightPath: options.preflightPath,
+        expectedPreflightSha256: currentPreflightHash,
+        requireReviewType: true,
+        requireTaskId: true,
+        requirePreflightPath: true,
+        requirePreflightSha256: true,
+        expectedPreflightPayload: options.preflightPayload,
+        repoRoot: options.repoRoot,
+        expectedReviewExecutionValidationAuthority: reviewExecutionValidationAuthority ?? undefined,
+        ...preflightDiffExpectations
+    });
+    if (reviewContextContractViolations.length > 0) {
+        return reject(`existing review context contract is stale: ${reviewContextContractViolations.join(' ')}`);
+    }
     try {
         assertReviewTreeStateFresh({
             repoRoot: options.repoRoot,
@@ -372,10 +419,6 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
     } catch (exc: unknown) {
         return reject(exc instanceof Error ? exc.message : String(exc));
     }
-
-    const reviewsRoot = path.dirname(options.preflightPath);
-    const artifactPath = path.join(reviewsRoot, `${options.taskId}-${options.reviewType}.md`);
-    const receiptPath = artifactPath.replace(/\.md$/, '-receipt.json');
     const receipt = readJsonRecord(receiptPath) as ReviewReceipt | null;
     if (!receipt) {
         return reject(`review receipt is missing or corrupt at ${gateHelpers.normalizePath(receiptPath)}`);

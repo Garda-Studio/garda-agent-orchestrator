@@ -2154,6 +2154,59 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
         );
         assert.deepEqual(resumedReuse.launchRequiredReviewTypes, []);
 
+        const codeReviewContextPath = path.join(
+            getReviewsRoot(repoRoot),
+            `${taskId}-code-review-context.json`
+        );
+        const codeContextBeforeEvidenceRestartSha256 = fileSha256(codeReviewContextPath);
+        const evidenceRestart = await runRestartReviewCycleCommand({
+            repoRoot,
+            taskId,
+            preflightPath,
+            commandsPath,
+            outputFiltersPath,
+            reviewEvidenceOnly: true,
+            reviewType: 'test',
+            emitMetrics: false
+        });
+        assert.equal(evidenceRestart.exitCode, 0, evidenceRestart.outputLines.join('\n'));
+        assert.match(evidenceRestart.outputLines.join('\n'), /DetectionSource: review_evidence_only/u);
+
+        prepareScopedDiffFixture(repoRoot, preflightPath, 'code');
+        const codeRebuildAfterEvidenceRestart = await runBuildReviewContextCommand({
+            repoRoot,
+            reviewType: 'code',
+            depth: 3,
+            preflightPath,
+            outputPath: codeReviewContextPath
+        });
+        const codeRebuildOutput = codeRebuildAfterEvidenceRestart.outputLines.join('\n');
+        assert.equal(codeRebuildAfterEvidenceRestart.reusedReviewEvidence, true, codeRebuildOutput);
+        assert.ok(
+            codeRebuildAfterEvidenceRestart.outputLines.includes('CurrentPassReviewEvidence: rejected'),
+            codeRebuildOutput
+        );
+        assert.ok(
+            codeRebuildAfterEvidenceRestart.outputLines.some((line) => (
+                line.includes('review_execution validation authority is required')
+            )),
+            codeRebuildOutput
+        );
+        assert.ok(
+            codeRebuildAfterEvidenceRestart.outputLines.includes('ReviewReuseDecision: accepted'),
+            codeRebuildOutput
+        );
+        assert.equal(
+            codeRebuildAfterEvidenceRestart.outputLines.some((line) => line.includes('review context rebuild skipped')),
+            false,
+            codeRebuildOutput
+        );
+        assert.notEqual(
+            fileSha256(codeReviewContextPath),
+            codeContextBeforeEvidenceRestartSha256,
+            'a newer review-evidence-only restart must rematerialize the preserved code-review context'
+        );
+
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });
 
