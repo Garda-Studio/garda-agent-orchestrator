@@ -400,6 +400,9 @@ function seedTrustBoundaryChecklistIfRequired(repoRoot: string, taskId: string):
         throw new Error(`Trust-boundary fixture preflight is unreadable: ${preflightPath}`);
     }
     const artifactPath = resolveDefaultQualityChecklistArtifactPath(repoRoot, taskId);
+    const workflowConfigSha256 = fileSha256(path.join(
+        getOrchestratorRoot(repoRoot), 'live', 'config', 'workflow-config.json'
+    ));
     const existingArtifact = fs.existsSync(artifactPath)
         ? JSON.parse(fs.readFileSync(artifactPath, 'utf8')) as Record<string, unknown>
         : null;
@@ -410,6 +413,7 @@ function seedTrustBoundaryChecklistIfRequired(repoRoot: string, taskId: string):
         `${taskId}.jsonl`
     );
     const hasCurrentBinding = existingArtifact?.preflight_sha256 === preflightSha256
+        && existingArtifact?.workflow_config_sha256 === workflowConfigSha256
         && fs.existsSync(timelinePath)
         && fs.readFileSync(timelinePath, 'utf8').includes('"event_type":"QUALITY_CHECKLIST_RECORDED"');
     if (hasCurrentBinding) {
@@ -419,6 +423,7 @@ function seedTrustBoundaryChecklistIfRequired(repoRoot: string, taskId: string):
         task_id: taskId,
         checklist_id: QUALITY_CHECKLIST_ID,
         preflight_sha256: preflightSha256,
+        workflow_config_sha256: workflowConfigSha256,
         status: 'PASS',
         rules: [{
             id: TRUST_BOUNDARY_ANALYSIS_RULE_ID,

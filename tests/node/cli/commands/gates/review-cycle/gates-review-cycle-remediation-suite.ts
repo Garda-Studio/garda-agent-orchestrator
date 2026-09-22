@@ -33,6 +33,7 @@ import {
     writeProtectedControlPlaneManifest,
     writeCompilePassEvidence,
     writeProfilesConfig,
+    writeWorkflowConfig,
     writeReviewCapabilitiesConfig,
     writeReceiptBackedReviewArtifact,
     writeSimpleCompileCommandsFile
@@ -56,7 +57,8 @@ import type {
     ReviewFindingsValidationArtifact
 } from '../../../../../../src/gates/review/review-findings-validation-artifact';
 import {
-    buildReviewRemediationBaselineArtifact
+    buildReviewRemediationBaselineArtifact,
+    validateReviewRemediationBaselineArtifact
 } from '../../../../../../src/gates/review-remediation/review-remediation-baseline';
 import {
     classifyReviewRemediationDelta,
@@ -589,6 +591,141 @@ describe('cli/commands/gates – authenticated remediation execution persistence
             });
             assert.equal(forged.failClosed, true);
             assert.match(forged.blockedReason, /persisted authoritative remediation decision failed validation/iu);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('routes next-step after a successful DELTA review replaces canonical baseline artifacts', { concurrency: false }, async () => {
+        const repoRoot = createTempRepo();
+        const bundleRoot = path.join(repoRoot, 'garda-agent-orchestrator');
+        const reviewsRoot = getReviewsRoot(repoRoot);
+        const taskId = 'T-992-delta-closeout';
+        const reviewType = 'test';
+        const changedFile = 'tests/node/delta-closeout.test.ts';
+        try {
+            seedRemediationRepoBase(repoRoot);
+            writeReviewCapabilitiesConfig(repoRoot);
+            const profilesPath = writeProfilesConfig(repoRoot);
+            const profiles = JSON.parse(fs.readFileSync(profilesPath, 'utf8'));
+            profiles.built_in_profiles.balanced.review_policy = { code: false, security: false, test: true };
+            profiles.built_in_profiles.balanced.review_remediation_mode_policy = buildDefaultReviewRemediationModePolicy();
+            fs.writeFileSync(profilesPath, `${JSON.stringify(profiles, null, 2)}\n`, 'utf8');
+            const workflowConfigPath = writeWorkflowConfig(repoRoot, 'strict_sequential');
+            const workflowConfig = JSON.parse(fs.readFileSync(workflowConfigPath, 'utf8'));
+            workflowConfig.optional_quality_checks = { enabled: false };
+            fs.writeFileSync(workflowConfigPath, `${JSON.stringify(workflowConfig, null, 2)}\n`, 'utf8');
+            writeRepoFile(repoRoot, changedFile, 'assert.equal(actual, 0);\n');
+            initializeGitRepo(repoRoot);
+            writeRepoFile(repoRoot, changedFile, 'assert.equal(actual, expected);\n');
+            seedTaskQueue(repoRoot, taskId, 'TODO', 'balanced');
+            seedInitAnswers(repoRoot, 'Codex');
+            runEnterTaskMode({
+                repoRoot,
+                taskId,
+                taskSummary: 'Close a successful DELTA review after canonical artifact replacement',
+                plannedChangedFiles: [changedFile]
+            });
+            loadTaskEntryRulePack(repoRoot, taskId);
+            runHandshakeForTask(repoRoot, taskId);
+            runShellSmokeForTask(repoRoot, taskId);
+            let preflightPath = runExplicitPreflight(repoRoot, taskId, 'Close DELTA review', [changedFile]);
+            loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
+            writeCompilePassEvidence(repoRoot, taskId, preflightPath);
+            const taskMode = JSON.parse(fs.readFileSync(
+                path.join(reviewsRoot, `${taskId}-task-mode.json`), 'utf8'
+            )) as Record<string, unknown>;
+            const profilePolicySnapshot = taskMode.profile_policy_snapshot as { snapshot_hash: string };
+            assert.ok(profilePolicySnapshot.snapshot_hash);
+            const modePolicy = buildDefaultReviewRemediationModePolicy();
+            const initialPreflightSha256 = fileSha256(preflightPath);
+            assert.ok(initialPreflightSha256);
+            const delta = buildLeafTestDeltaClassification({
+                repoRoot,
+                taskId,
+                reviewType,
+                changedFile,
+                preflightPath,
+                preflightSha256: initialPreflightSha256,
+                profilePolicySnapshot,
+                modePolicy
+            });
+            assert.equal(delta.full_review_required, false);
+            const baselinePath = path.join(reviewsRoot, `${taskId}-${reviewType}-remediation-baseline.json`);
+            const baselineSha256 = fileSha256(baselinePath);
+            assert.ok(baselineSha256);
+
+            preflightPath = runExplicitPreflight(repoRoot, taskId, 'Close DELTA review', [changedFile]);
+            loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
+            writeCompilePassEvidence(repoRoot, taskId, preflightPath);
+            const classification = {
+                source: 'delta' as const,
+                delta,
+                profilePolicySnapshot,
+                baselineProfilePolicySnapshotSha256: profilePolicySnapshot.snapshot_hash
+            };
+            const currentPreflightSha256 = fileSha256(preflightPath);
+            assert.ok(currentPreflightSha256);
+            const decision = bindAuthoritativeRemediationDecisionToPreflight(
+                resolveAuthoritativeReviewRemediationDecision({
+                    taskId,
+                    currentReviewType: reviewType,
+                    classification,
+                    modePolicyValidationInputs: {
+                        consecutiveDeltaReviews: 0,
+                        protectedBoundarySignals: [],
+                        taskCriteriaChanged: false,
+                        policyChanged: false,
+                        uncertainCrossFileImpact: false
+                    },
+                    requiredReviews: { test: true },
+                    reviewExecutionPolicyMode: 'strict_sequential'
+                }),
+                currentPreflightSha256
+            );
+            assert.equal(decision.lane_decisions.find((entry) => entry.review_type === reviewType)?.mode,
+                'DELTA', JSON.stringify(decision.lane_decisions));
+            appendTaskEvent(bundleRoot, taskId, 'REVIEW_CYCLE_RESTARTED', 'PASS', 'DELTA review cycle restarted.', {
+                task_id: taskId,
+                event_type: 'REVIEW_CYCLE_RESTARTED',
+                status: 'PASSED',
+                preflight_sha256: fileSha256(preflightPath),
+                authoritative_review_decision: decision,
+                authoritative_review_classification: classification
+            });
+            seedQualityChecklistIfRequired(repoRoot, taskId);
+            prepareScopedDiffFixture(repoRoot, preflightPath, reviewType);
+            const contextResult = await runBuildReviewContextCommand({
+                repoRoot,
+                reviewType,
+                depth: 2,
+                preflightPath,
+                outputPath: path.join(reviewsRoot, `${taskId}-${reviewType}-review-context.json`)
+            });
+            const reviewContext = JSON.parse(fs.readFileSync(contextResult.outputPath, 'utf8')) as {
+                review_execution?: { mode?: string };
+            };
+            assert.equal(reviewContext.review_execution?.mode, 'DELTA');
+            writeReceiptBackedReviewArtifact(repoRoot, taskId, reviewType, 'TEST REVIEW PASSED', undefined, {
+                preserveExistingReviewContext: true
+            });
+            assert.equal(validateReviewRemediationBaselineArtifact({
+                artifactPath: baselinePath,
+                expectedArtifactSha256: baselineSha256,
+                expectedTaskId: taskId,
+                expectedReviewType: reviewType
+            }).valid, true);
+            const acceptedReview = await runBuildReviewContextCommand({
+                repoRoot,
+                reviewType,
+                depth: 2,
+                preflightPath,
+                outputPath: contextResult.outputPath
+            });
+            assert.equal(acceptedReview.acceptedReviewEvidenceKind, 'FRESH');
+            const nextStep = resolveNextStepAfterEffects(taskId, repoRoot);
+            assert.equal(nextStep.next_gate, 'record-review-routing', nextStep.reason);
+            assert.ok(nextStep.commands[0].command.includes('gate record-review-routing'));
         } finally {
             fs.rmSync(repoRoot, { recursive: true, force: true });
         }
