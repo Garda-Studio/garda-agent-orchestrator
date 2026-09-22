@@ -14,7 +14,7 @@ import { PROJECT_MEMORY_REQUIRED_FILE_NAMES } from '../../../src/core/project-me
 import { handleSetup } from '../../../src/cli/commands/setup';
 import { handleGate } from '../../../src/cli/commands/gate-command';
 import { runAgentInit } from '../../../src/lifecycle/agent-init';
-import { resolveNextStep } from '../../../src/gates/next-step';
+import { executeNextStepEffects, resolveNextStep } from '../../../src/gates/next-step';
 import {
     runClassifyChangeCommand,
     runCompileGateCommand,
@@ -268,7 +268,13 @@ function applyTinyFixtureDiff(workspaceRoot: string): void {
 }
 
 function assertNextGate(repoRoot: string, expectedGate: string): void {
-    const nextStep = resolveNextStep({ taskId: TASK_ID, repoRoot });
+    let nextStep = resolveNextStep({ taskId: TASK_ID, repoRoot });
+    for (let effectBatch = 0; effectBatch < 16 && nextStep.next_gate === 'next-step-effect'; effectBatch += 1) {
+        const planSha256 = (nextStep.commands[0]?.command || '')
+            .match(/--effect-plan-sha256\s+["']?([a-f0-9]{64})/u)?.[1] || '';
+        assert.match(planSha256, /^[a-f0-9]{64}$/u, nextStep.reason);
+        nextStep = executeNextStepEffects({ taskId: TASK_ID, repoRoot }, planSha256);
+    }
     assert.equal(nextStep.next_gate, expectedGate, nextStep.reason);
 }
 

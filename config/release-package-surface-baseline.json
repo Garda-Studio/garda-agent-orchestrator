@@ -5,19 +5,19 @@
     "version": "1.4.3"
   },
   "metrics": {
-    "fileCount": 1377,
-    "unpackedSizeBytes": 16471563,
+    "fileCount": 1405,
+    "unpackedSizeBytes": 17259773,
     "lifecycleScripts": {
       "postpack": "node scripts/package-legacy-entrypoint-compat.cjs remove",
       "prepack": "npm run validate:clean-worktree && npm run build:publish-runtime && npm run validate:clean-worktree && node scripts/package-legacy-entrypoint-compat.cjs create"
     },
     "riskSignals": {
-      "child_process": 22,
+      "child_process": 23,
       "exec": 142,
       "fetch": 39,
-      "fs": 3020,
-      "readFile": 419,
-      "writeFile": 117
+      "fs": 3260,
+      "readFile": 384,
+      "writeFile": 104
     }
   },
   "allowedGrowth": {
@@ -32,5 +32,5 @@
       "writeFile": 0
     }
   },
-  "rationale": "Release 1.4.3 fixes compiled-only deployment verification. The 1.4.2 size and risk-signal budgets remain unchanged; no production dependencies or consumer install-time scripts are added."
+  "rationale": "Reviewed Release 1.4.3 growth: 25 compiled runtime modules for compact inspection, crash-safe transactions, next-step effects, review recovery, semantic timeline snapshots, and split-WIP handoff, plus three README-linked public documents; no production dependency or lifecycle-script changes."
 }

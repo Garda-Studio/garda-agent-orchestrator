@@ -435,19 +435,18 @@ describe('full-suite repair task materialization', () => {
         markRepairChildDone(repoRoot);
 
         const fsModule = require('node:fs') as typeof import('node:fs');
-        const originalOpenSync = fsModule.openSync;
+        const originalMkdirSync = fsModule.mkdirSync;
         let injected = false;
-        fsModule.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+        fsModule.mkdirSync = ((filePath: fs.PathLike, options?: fs.MakeDirectoryOptions) => {
             if (!injected
-                && path.resolve(String(filePath)) === statusLockPath
-                && flags === 'wx') {
+                && path.resolve(String(filePath)) === statusLockPath) {
                 injected = true;
                 const driftedTaskQueue = fs.readFileSync(taskPath, 'utf8')
                     .replace(`, \`${SECOND_CHILD_TASK_ID}\``, '');
                 fs.writeFileSync(taskPath, driftedTaskQueue, 'utf8');
             }
-            return originalOpenSync(filePath, flags, mode);
-        }) as typeof fsModule.openSync;
+            return Reflect.apply(originalMkdirSync, fsModule, [filePath, options]);
+        }) as typeof fsModule.mkdirSync;
         let restored: ReturnType<typeof restoreMaterializedWip> | null = null;
         try {
             restored = restoreMaterializedWip({
@@ -456,7 +455,7 @@ describe('full-suite repair task materialization', () => {
                 manifestPath: materialized.wip_manifest_path || ''
             });
         } finally {
-            fsModule.openSync = originalOpenSync;
+            fsModule.mkdirSync = originalMkdirSync;
         }
 
         assert.equal(injected, true);
@@ -487,19 +486,18 @@ describe('full-suite repair task materialization', () => {
         markRepairChildDone(repoRoot);
 
         const fsModule = require('node:fs') as typeof import('node:fs');
-        const originalOpenSync = fsModule.openSync;
+        const originalMkdirSync = fsModule.mkdirSync;
         let injected = false;
-        fsModule.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+        fsModule.mkdirSync = ((filePath: fs.PathLike, options?: fs.MakeDirectoryOptions) => {
             if (!injected
-                && path.resolve(String(filePath)) === statusLockPath
-                && flags === 'wx') {
+                && path.resolve(String(filePath)) === statusLockPath) {
                 injected = true;
                 const artifact = readJson(materialized.artifact_path);
                 artifact.status = 'BLOCKED';
                 fs.writeFileSync(materialized.artifact_path, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
             }
-            return originalOpenSync(filePath, flags, mode);
-        }) as typeof fsModule.openSync;
+            return Reflect.apply(originalMkdirSync, fsModule, [filePath, options]);
+        }) as typeof fsModule.mkdirSync;
         let restored: ReturnType<typeof restoreMaterializedWip> | null = null;
         try {
             restored = restoreMaterializedWip({
@@ -508,7 +506,7 @@ describe('full-suite repair task materialization', () => {
                 manifestPath: materialized.wip_manifest_path || ''
             });
         } finally {
-            fsModule.openSync = originalOpenSync;
+            fsModule.mkdirSync = originalMkdirSync;
         }
 
         assert.equal(injected, true);
@@ -1169,27 +1167,24 @@ describe('full-suite repair task materialization', () => {
         runGit(repoRoot, ['add', 'src/app.ts']);
 
         const fsModule = require('node:fs') as typeof import('node:fs');
-        const originalWriteFileSync = fsModule.writeFileSync;
+        const originalRenameSync = fsModule.renameSync;
         let injected = false;
-        fsModule.writeFileSync = ((filePath: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: fs.WriteFileOptions) => {
-            const content = typeof data === 'string'
-                ? data
-                : Buffer.isBuffer(data)
-                    ? data.toString('utf8')
-                    : '';
+        fsModule.renameSync = ((oldPath: fs.PathLike, newPath: fs.PathLike) => {
+            const content = path.resolve(String(newPath)) === taskPath
+                ? fs.readFileSync(oldPath, 'utf8')
+                : '';
             if (!injected
-                && typeof filePath !== 'number'
-                && path.resolve(String(filePath)) === taskPath
+                && path.resolve(String(newPath)) === taskPath
                 && content.includes(`| ${TASK_ID} | 🟫 SPLIT_REQUIRED |`)) {
                 injected = true;
-                return originalWriteFileSync(
-                    filePath,
+                fs.writeFileSync(
+                    oldPath,
                     content.replace(`, \`${SECOND_CHILD_TASK_ID}\``, ''),
-                    options
+                    'utf8'
                 );
             }
-            return originalWriteFileSync(filePath, data, options);
-        }) as typeof fsModule.writeFileSync;
+            return originalRenameSync(oldPath, newPath);
+        }) as typeof fsModule.renameSync;
         let materialized: ReturnType<typeof materializeFullSuiteRepairTask> | null = null;
         try {
             materialized = materializeFullSuiteRepairTask({
@@ -1199,7 +1194,7 @@ describe('full-suite repair task materialization', () => {
                 fullSuiteArtifactPath: fullSuitePath
             });
         } finally {
-            fsModule.writeFileSync = originalWriteFileSync;
+            fsModule.renameSync = originalRenameSync;
         }
 
         assert.equal(injected, true);
@@ -1229,17 +1224,16 @@ describe('full-suite repair task materialization', () => {
         );
 
         const fsModule = require('node:fs') as typeof import('node:fs');
-        const originalWriteFileSync = fsModule.writeFileSync;
+        const originalRenameSync = fsModule.renameSync;
         let injected = false;
-        fsModule.writeFileSync = ((filePath: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: fs.WriteFileOptions) => {
+        fsModule.renameSync = ((oldPath: fs.PathLike, newPath: fs.PathLike) => {
             if (!injected
-                && typeof filePath !== 'number'
-                && path.resolve(String(filePath)) === splitArtifactPath) {
+                && path.resolve(String(newPath)) === splitArtifactPath) {
                 injected = true;
                 throw new Error('injected split artifact creation failure');
             }
-            return originalWriteFileSync(filePath, data, options);
-        }) as typeof fsModule.writeFileSync;
+            return originalRenameSync(oldPath, newPath);
+        }) as typeof fsModule.renameSync;
         let materialized: ReturnType<typeof materializeFullSuiteRepairTask> | null = null;
         try {
             materialized = materializeFullSuiteRepairTask({
@@ -1249,7 +1243,7 @@ describe('full-suite repair task materialization', () => {
                 fullSuiteArtifactPath: fullSuitePath
             });
         } finally {
-            fsModule.writeFileSync = originalWriteFileSync;
+            fsModule.renameSync = originalRenameSync;
         }
 
         assert.equal(injected, true);
@@ -1269,23 +1263,20 @@ describe('full-suite repair task materialization', () => {
         runGit(repoRoot, ['add', 'src/app.ts']);
 
         const fsModule = require('node:fs') as typeof import('node:fs');
-        const originalWriteFileSync = fsModule.writeFileSync;
+        const originalRenameSync = fsModule.renameSync;
         let injected = false;
-        fsModule.writeFileSync = ((filePath: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: fs.WriteFileOptions) => {
-            const content = typeof data === 'string'
-                ? data
-                : Buffer.isBuffer(data)
-                    ? data.toString('utf8')
-                    : '';
+        fsModule.renameSync = ((oldPath: fs.PathLike, newPath: fs.PathLike) => {
+            const content = path.resolve(String(newPath)) === taskPath
+                ? fs.readFileSync(oldPath, 'utf8')
+                : '';
             if (!injected
-                && typeof filePath !== 'number'
-                && path.resolve(String(filePath)) === taskPath
+                && path.resolve(String(newPath)) === taskPath
                 && content.includes('SPLIT_REQUIRED')) {
                 injected = true;
                 throw new Error('injected latch status write failure');
             }
-            return originalWriteFileSync(filePath, data, options);
-        }) as typeof fsModule.writeFileSync;
+            return originalRenameSync(oldPath, newPath);
+        }) as typeof fsModule.renameSync;
         let materialized: ReturnType<typeof materializeFullSuiteRepairTask> | null = null;
         try {
             materialized = materializeFullSuiteRepairTask({
@@ -1295,7 +1286,7 @@ describe('full-suite repair task materialization', () => {
                 fullSuiteArtifactPath: fullSuitePath
             });
         } finally {
-            fsModule.writeFileSync = originalWriteFileSync;
+            fsModule.renameSync = originalRenameSync;
         }
 
         assert.equal(injected, true);
@@ -1483,17 +1474,16 @@ describe('full-suite repair task materialization', () => {
         fs.writeFileSync(repairArtifactPath, previousArtifactBytes);
 
         const fsModule = require('node:fs') as typeof import('node:fs');
-        const originalWriteFileSync = fsModule.writeFileSync;
+        const originalRenameSync = fsModule.renameSync;
         let injected = false;
-        fsModule.writeFileSync = ((filePath: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: fs.WriteFileOptions) => {
+        fsModule.renameSync = ((oldPath: fs.PathLike, newPath: fs.PathLike) => {
             if (!injected
-                && typeof filePath !== 'number'
-                && path.resolve(String(filePath)) === splitArtifactPath) {
+                && path.resolve(String(newPath)) === splitArtifactPath) {
                 injected = true;
                 throw new Error('injected split artifact failure with prior evidence');
             }
-            return originalWriteFileSync(filePath, data, options);
-        }) as typeof fsModule.writeFileSync;
+            return originalRenameSync(oldPath, newPath);
+        }) as typeof fsModule.renameSync;
         let materialized: ReturnType<typeof materializeFullSuiteRepairTask> | null = null;
         try {
             materialized = materializeFullSuiteRepairTask({
@@ -1503,7 +1493,7 @@ describe('full-suite repair task materialization', () => {
                 fullSuiteArtifactPath: fullSuitePath
             });
         } finally {
-            fsModule.writeFileSync = originalWriteFileSync;
+            fsModule.renameSync = originalRenameSync;
         }
 
         assert.equal(injected, true);
@@ -1920,14 +1910,14 @@ describe('full-suite repair task materialization', () => {
         markRepairChildDone(repoRoot);
 
         const fsModule = require('node:fs') as typeof import('node:fs');
-        const originalWriteFileSync = fsModule.writeFileSync;
+        const originalRenameSync = fsModule.renameSync;
         const taskPath = path.resolve(repoRoot, 'TASK.md');
-        fsModule.writeFileSync = ((filePath: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: fs.WriteFileOptions) => {
-            if (path.resolve(String(filePath)) === taskPath) {
+        fsModule.renameSync = ((oldPath: fs.PathLike, newPath: fs.PathLike) => {
+            if (path.resolve(String(newPath)) === taskPath) {
                 throw new Error('injected parent status write failure');
             }
-            return originalWriteFileSync(filePath, data, options);
-        }) as typeof fsModule.writeFileSync;
+            return originalRenameSync(oldPath, newPath);
+        }) as typeof fsModule.renameSync;
         let restored: ReturnType<typeof restoreMaterializedWip> | null = null;
         try {
             restored = restoreMaterializedWip({
@@ -1936,7 +1926,7 @@ describe('full-suite repair task materialization', () => {
                 manifestPath: materialized.wip_manifest_path || ''
             });
         } finally {
-            fsModule.writeFileSync = originalWriteFileSync;
+            fsModule.renameSync = originalRenameSync;
         }
 
         assert.equal(restored?.status, 'BLOCKED');
@@ -1970,19 +1960,19 @@ describe('full-suite repair task materialization', () => {
         tempRoots.push(externalRoot);
         const externalHelperPath = path.join(externalRoot, 'helper.ts');
         const fsModule = require('node:fs') as typeof import('node:fs');
-        const originalWriteFileSync = fsModule.writeFileSync;
+        const originalRenameSync = fsModule.renameSync;
         const taskPath = path.resolve(repoRoot, 'TASK.md');
         let hardLinkInjected = false;
-        fsModule.writeFileSync = ((filePath: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: fs.WriteFileOptions) => {
-            if (path.resolve(String(filePath)) === taskPath) {
+        fsModule.renameSync = ((oldPath: fs.PathLike, newPath: fs.PathLike) => {
+            if (path.resolve(String(newPath)) === taskPath) {
                 if (!hardLinkInjected) {
                     fs.linkSync(helperPath, externalHelperPath);
                     hardLinkInjected = true;
                 }
                 throw new Error('injected parent status write failure after hard link');
             }
-            return originalWriteFileSync(filePath, data, options);
-        }) as typeof fsModule.writeFileSync;
+            return originalRenameSync(oldPath, newPath);
+        }) as typeof fsModule.renameSync;
         let restored: ReturnType<typeof restoreMaterializedWip> | null = null;
         try {
             restored = restoreMaterializedWip({
@@ -1991,7 +1981,7 @@ describe('full-suite repair task materialization', () => {
                 manifestPath: materialized.wip_manifest_path || ''
             });
         } finally {
-            fsModule.writeFileSync = originalWriteFileSync;
+            fsModule.renameSync = originalRenameSync;
         }
 
         assert.equal(hardLinkInjected, true);

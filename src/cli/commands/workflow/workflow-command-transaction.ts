@@ -10,14 +10,14 @@ export function withWorkflowConfigTransaction<T>(
     operation: (transaction: RecoverableFileTransaction) => T
 ): T {
     return withRecoverableFileTransaction({
-        root: roots.bundleRoot,
+        root: manifestRoot,
         ...workflowTransactionPaths(roots.bundleRoot),
         files: {
             config: roots.configPath,
             policy: roots.optionalSkillSelectionPolicyPath,
             receipt: path.join(roots.bundleRoot, 'live/config/task-reset-enablement-receipt.json'),
             audit: path.join(roots.bundleRoot, 'runtime/workflow-config-audit.jsonl'),
-            manifest: resolveProtectedControlPlaneManifestPath(manifestRoot)
+            manifest: resolveProtectedControlPlaneManifestPath(roots.bundleRoot)
         }
     }, operation);
 }

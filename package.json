@@ -79,6 +79,7 @@
     "template",
     "AGENT_INIT_PROMPT.md",
     "CHANGELOG.md",
+    "CONTRIBUTING.md",
     "HOW_TO.md",
     "LICENSE",
     "NOTICE",
@@ -102,8 +103,10 @@
     "docs/orchestrator-work-and-isolation.md",
     "docs/providers.md",
     "docs/release-readiness.md",
+    "docs/run-methods.md",
     "docs/sbom.md",
     "docs/secret-scanning.md",
+    "docs/task-plan-workflow.md",
     "docs/threat-model.md",
     "docs/work-example.md",
     "VERSION"

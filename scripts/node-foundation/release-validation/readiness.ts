@@ -32,6 +32,34 @@ import {
 } from './release-metadata';
 
 const TRUSTED_RELEASE_TAG_HISTORY_STEP_SHA256 = 'dd86883aee9e6eef46c76a284d9a90431073efaecdd74adcce97f4e53223b470';
+const TRUSTED_GITLEAKS_JOB_CONTRACT = [
+    'gitleaks:',
+    '  name: Gitleaks',
+    '  runs-on: ubuntu-latest',
+    '  steps:',
+    '    - uses: actions/checkout@v7.0.0',
+    '      with:',
+    '        fetch-depth: 0',
+    '    - name: Install Gitleaks CLI',
+    '      shell: bash',
+    '      env:',
+    "        GITLEAKS_VERSION: '8.30.1'",
+    "        GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'",
+    '      run: |',
+    '        set -euo pipefail',
+    '        install_dir="$(mktemp -d "${RUNNER_TEMP}/gitleaks.XXXXXX")"',
+    '        archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"',
+    '        curl --fail --silent --show-error --location --retry 3 \\',
+    '          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" \\',
+    '          --output "${install_dir}/${archive}"',
+    "        printf '%s  %s\\n' \"$GITLEAKS_SHA256\" \"${install_dir}/${archive}\" | sha256sum --check --strict",
+    '        tar -xzf "${install_dir}/${archive}" -C "$install_dir" gitleaks',
+    '        chmod +x "${install_dir}/gitleaks"',
+    '        echo "$install_dir" >> "$GITHUB_PATH"',
+    '    - name: Scan for secrets',
+    '      shell: bash',
+    '      run: gitleaks git --config .gitleaks.toml --redact --exit-code 1 .'
+].join('\n');
 
 function extractReleaseChecklistItems(checklistMarkdown: string, version: string): {
     releaseChecklistItems: string[];
@@ -109,7 +137,7 @@ function validateReleaseChecklist(repoRoot: string, version: string | null): {
 
 function getWorkflowJobBlock(workflowText: string, jobId: string): string | null {
     const lines = workflowText.split(/\r?\n/u);
-    const jobPattern = new RegExp(`^(\\s*)${jobId}:\\s*$`, 'u');
+    const jobPattern = new RegExp(`^(\\s*)${escapeRegExp(jobId)}:\\s*$`, 'u');
     const jobStart = lines.findIndex((line) => jobPattern.test(line));
     if (jobStart === -1) {
         return null;
@@ -118,6 +146,54 @@ function getWorkflowJobBlock(workflowText: string, jobId: string): string | null
     const nextJobPattern = new RegExp(`^\\s{${jobIndent}}[A-Za-z0-9_-]+:\\s*$`, 'u');
     const nextJob = lines.findIndex((line, index) => index > jobStart && nextJobPattern.test(line));
     return lines.slice(jobStart, nextJob === -1 ? undefined : nextJob).join('\n');
+}
+
+function getWorkflowJobBlockUnderJobs(workflowText: string, jobId: string): string | null {
+    const lines = workflowText.split(/\r?\n/u);
+    const jobsStart = lines.findIndex((line) => /^jobs:\s*$/u.test(line));
+    if (jobsStart === -1) {
+        return null;
+    }
+
+    let jobsEnd = lines.length;
+    for (let index = jobsStart + 1; index < lines.length; index += 1) {
+        const line = lines[index];
+        if (!line.trim() || /^\s*#/u.test(line)) {
+            continue;
+        }
+        if (line.match(/^\s*/u)![0].length === 0) {
+            jobsEnd = index;
+            break;
+        }
+    }
+
+    const directJobPattern = /^\s+([A-Za-z0-9_-]+):\s*$/u;
+    const directJobLines = lines
+        .slice(jobsStart + 1, jobsEnd)
+        .map((line, relativeIndex) => ({ line, index: jobsStart + 1 + relativeIndex }))
+        .filter(({ line }) => directJobPattern.test(line));
+    if (directJobLines.length === 0) {
+        return null;
+    }
+    const jobIndent = Math.min(...directJobLines.map(({ line }) => line.match(/^\s*/u)![0].length));
+    const jobPattern = new RegExp(`^\\s{${jobIndent}}${escapeRegExp(jobId)}:\\s*$`, 'u');
+    const jobStart = directJobLines.find(({ line }) => jobPattern.test(line))?.index ?? -1;
+    if (jobStart === -1) {
+        return null;
+    }
+
+    let jobEnd = jobsEnd;
+    for (let index = jobStart + 1; index < jobsEnd; index += 1) {
+        const line = lines[index];
+        if (!line.trim() || /^\s*#/u.test(line)) {
+            continue;
+        }
+        if (line.match(/^\s*/u)![0].length <= jobIndent) {
+            jobEnd = index;
+            break;
+        }
+    }
+    return lines.slice(jobStart, jobEnd).join('\n');
 }
 
 function getWorkflowNamedStepBlock(workflowText: string, stepName: string): string | null {
@@ -146,13 +222,26 @@ function getWorkflowNamedStepBlock(workflowText: string, stepName: string): stri
     return lines.slice(stepStart, stepEnd).join('\n');
 }
 
-function workflowStepContractSha256(stepBlock: string | null): string | null {
-    if (stepBlock === null) {
+function workflowBlockContractSha256(block: string | null): string | null {
+    if (block === null) {
         return null;
     }
-    const normalized = stepBlock.split(/\r?\n/u)
+    const normalized = block.split(/\r?\n/u)
         .map((line) => line.trim())
         .filter((line) => line !== '' && !line.startsWith('#'))
+        .join('\n');
+    return crypto.createHash('sha256').update(normalized).digest('hex');
+}
+
+function workflowStructuralBlockContractSha256(block: string | null): string | null {
+    if (block === null) {
+        return null;
+    }
+    const contractLines = block.split(/\r?\n/u)
+        .filter((line) => line.trim() !== '' && !line.trimStart().startsWith('#'));
+    const baseIndent = contractLines[0]?.match(/^\s*/u)?.[0].length ?? 0;
+    const normalized = contractLines
+        .map((line) => line.slice(baseIndent).trimEnd())
         .join('\n');
     return crypto.createHash('sha256').update(normalized).digest('hex');
 }
@@ -502,9 +591,9 @@ function validateSecurityCiBaselineContract(repoRoot: string): { passed: boolean
         'google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.0'
     )
         && blockHasNonCommentLine(osvScanArgsBlock, '--lockfile=package-lock.json');
-    const gitleaksStep = getWorkflowUseStepBlock(secretScanningWorkflow, 'gitleaks/gitleaks-action@v3.0.0');
-    const gitleaksBlocking = gitleaksStep !== null
-        && blockHasNonCommentLine(getYamlKeyBlock(gitleaksStep, 'env'), 'GITLEAKS_CONFIG: .gitleaks.toml');
+    const gitleaksJob = getWorkflowJobBlockUnderJobs(secretScanningWorkflow, 'gitleaks');
+    const gitleaksBlocking = workflowStructuralBlockContractSha256(gitleaksJob)
+        === workflowStructuralBlockContractSha256(TRUSTED_GITLEAKS_JOB_CONTRACT);
     const uploadArtifactStep = getWorkflowUseStepBlock(sbomWorkflow, 'actions/upload-artifact@v7.0.1');
     const sbomInformational = extractWorkflowRunScripts(sbomWorkflow)
         .some((script) => scriptHasExecutableCommand(script, 'npx --yes @cyclonedx/cyclonedx-npm'))
@@ -626,7 +715,7 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
         validateJob || '',
         'Reject previously used release tags'
     );
-    const validateRejectsHistoricalTagReuse = workflowStepContractSha256(historicalTagReuseStep)
+    const validateRejectsHistoricalTagReuse = workflowBlockContractSha256(historicalTagReuseStep)
         === TRUSTED_RELEASE_TAG_HISTORY_STEP_SHA256;
     const fullTagHistoryAvailable = blockHasNonCommentLine(validateCheckoutWith, 'fetch-depth: 0')
         && blockHasNonCommentLine(publishCheckoutWith, 'fetch-depth: 0');

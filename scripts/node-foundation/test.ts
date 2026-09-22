@@ -1,5 +1,6 @@
 import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -39,13 +40,15 @@ const DEFAULT_NODE_FOUNDATION_TEST_SHARD_HEARTBEAT_MS = 60 * 1000;
 const NODE_FOUNDATION_TEST_SHARD_CLEANUP_GRACE_MS = 1_000;
 const NODE_FOUNDATION_TEST_GREEN_EXIT_ISOLATION_MAX_FILES = 12;
 const NODE_FOUNDATION_TEST_GREEN_EXIT_ISOLATION_TIMEOUT_MS = 30_000;
-const DEFAULT_SHARDED_NODE_TEST_CONCURRENCY: number | null = null;
+const DEFAULT_NODE_FOUNDATION_TEST_SHARD_CONCURRENCY = 2;
+const DEFAULT_SHARDED_NODE_TEST_CONCURRENCY_MAX = 4;
+const NODE_FOUNDATION_AUTO_SHARD_MAX_FILES = 32;
 const GARDA_SHARDS_OPTION = '--garda-shards';
 const GARDA_SHARD_CONCURRENCY_OPTION = '--garda-shard-concurrency';
 const GARDA_SHARD_LOG_DIR_OPTION = '--garda-shard-log-dir';
 const GARDA_DURATION_FILE_OPTION = '--garda-duration-file';
 const NODE_FOUNDATION_BASELINE_SINGLE_FILE_SHARD_MIN_DURATION_MS = 60_000;
-const NODE_FOUNDATION_SINGLE_FILE_SHARD_MIN_DURATION_MS = 5 * 60_000;
+const NODE_FOUNDATION_SINGLE_FILE_SHARD_MIN_DURATION_MS = 4 * 60_000;
 const NODE_FOUNDATION_ISOLATED_TEST_PATHS = new Set<string>([
     'tests/node/cli/commands/gates/completion/gates-completion-rollback.test.ts',
     'tests/node/cli/commands/gates/review-cycle/gates-review-cycle-restart.test.ts',
@@ -59,6 +62,7 @@ const NODE_FOUNDATION_ISOLATED_TEST_PATHS = new Set<string>([
 ]);
 const NODE_FOUNDATION_SERIAL_TEST_PATHS = new Set<string>([
     'tests/node/bin/garda-delegation.test.ts',
+    'tests/node/core/subprocess.test.ts',
     'tests/node/cli/commands/gates/diagnostics/gates-command-timeout.test.ts',
     'tests/node/cli/commands/gates/preflight/gates-dirty-workspace.test.ts',
     'tests/node/cli/commands/gates/review-launch/gates-command-review-launch-prepared-1.test.ts',
@@ -70,6 +74,7 @@ const NODE_FOUNDATION_SERIAL_TEST_PATHS = new Set<string>([
     'tests/node/cli/commands/profile.test.ts',
     'tests/node/gate-runtime/review-artifacts.test.ts',
     'tests/node/gate-runtime/task-events-locks.test.ts',
+    'tests/node/gates/next-step/next-step-review-failure-routing.test.ts',
     'tests/node/reports/local-ui-server-network.test.ts'
 ]);
 
@@ -477,7 +482,11 @@ function assertNodeTestArgCharsWithinLimit(
     );
 }
 
-function resolveAutoShardCount(repoRoot: string, selectedTestFiles: string[], optionArgs: string[]): number {
+function resolveCommandLineSafeShardCount(
+    repoRoot: string,
+    selectedTestFiles: string[],
+    optionArgs: string[]
+): number {
     if (selectedTestFiles.length <= 1) {
         return 1;
     }
@@ -489,6 +498,17 @@ function resolveAutoShardCount(repoRoot: string, selectedTestFiles: string[], op
         selectedTestFiles.length,
         Math.ceil(estimatedArgChars / NODE_FOUNDATION_AUTO_SHARD_ARG_CHAR_LIMIT)
     ));
+}
+
+function resolveAutoShardCount(repoRoot: string, selectedTestFiles: string[], optionArgs: string[]): number {
+    const fileCountShardCount = Math.ceil(selectedTestFiles.length / NODE_FOUNDATION_AUTO_SHARD_MAX_FILES);
+    return Math.min(
+        selectedTestFiles.length,
+        Math.max(
+            fileCountShardCount,
+            resolveCommandLineSafeShardCount(repoRoot, selectedTestFiles, optionArgs)
+        )
+    );
 }
 
 function resolveNodeFoundationShardCount(
@@ -556,7 +576,6 @@ interface NodeTestShardRuntimeConfig {
     timeoutMs: number;
     heartbeatMs: number;
     concurrency: number;
-    concurrencyConfigured: boolean;
     defaultNodeTestConcurrency: number | null;
 }
 
@@ -579,18 +598,16 @@ interface NodeFoundationTestShardScheduleSummary {
 }
 
 function resolveNodeTestShardRuntimeConfig(
-    requestedShardConcurrency: number | null = null,
-    defaultNodeTestConcurrency: number | null = null
+    requestedShardConcurrency: number | null = null
 ): NodeTestShardRuntimeConfig {
     const configuredTimeout = String(process.env[NODE_FOUNDATION_TEST_SHARD_TIMEOUT_MS_ENV] || '').trim();
     const configuredHeartbeat = String(process.env[NODE_FOUNDATION_TEST_SHARD_HEARTBEAT_MS_ENV] || '').trim();
     const configuredConcurrency = String(process.env[NODE_FOUNDATION_TEST_SHARD_CONCURRENCY_ENV] || '').trim();
-    const concurrencyConfigured = requestedShardConcurrency !== null || Boolean(configuredConcurrency);
     const concurrency = requestedShardConcurrency !== null
         ? requestedShardConcurrency
         : configuredConcurrency
             ? parsePositiveInteger(configuredConcurrency, NODE_FOUNDATION_TEST_SHARD_CONCURRENCY_ENV)
-            : Number.POSITIVE_INFINITY;
+            : DEFAULT_NODE_FOUNDATION_TEST_SHARD_CONCURRENCY;
     return {
         timeoutMs: configuredTimeout
             ? parseNonNegativeInteger(configuredTimeout, NODE_FOUNDATION_TEST_SHARD_TIMEOUT_MS_ENV)
@@ -599,9 +616,18 @@ function resolveNodeTestShardRuntimeConfig(
             ? parseNonNegativeInteger(configuredHeartbeat, NODE_FOUNDATION_TEST_SHARD_HEARTBEAT_MS_ENV)
             : DEFAULT_NODE_FOUNDATION_TEST_SHARD_HEARTBEAT_MS,
         concurrency,
-        concurrencyConfigured,
-        defaultNodeTestConcurrency
+        defaultNodeTestConcurrency: null
     };
+}
+
+function resolveDefaultShardedNodeTestConcurrency(
+    runtimeConfig: NodeTestShardRuntimeConfig
+): number {
+    const maxWorkerProcesses = Math.max(1, runtimeConfig.concurrency);
+    return Math.max(1, Math.min(
+        DEFAULT_SHARDED_NODE_TEST_CONCURRENCY_MAX,
+        Math.floor(os.availableParallelism() / maxWorkerProcesses)
+    ));
 }
 
 function hasExplicitNodeTestOption(optionArgs: string[], optionName: string): boolean {
@@ -832,7 +858,7 @@ function assignCommandLineSafeNodeFoundationTestShards(
         selectedTestFiles.length,
         Math.max(
             requestedShardCount,
-            resolveAutoShardCount(buildResult.repoRoot, selectedTestFiles, optionArgs)
+            resolveCommandLineSafeShardCount(buildResult.repoRoot, selectedTestFiles, optionArgs)
         )
     );
     while (true) {
@@ -1648,10 +1674,11 @@ async function runShardedNodeTestProcesses(
     telemetry: TestDurationTelemetry,
     updateDurationTelemetry: boolean
 ): Promise<number> {
-    const runtimeConfig = resolveNodeTestShardRuntimeConfig(
-        requestedShardConcurrency,
-        DEFAULT_SHARDED_NODE_TEST_CONCURRENCY
-    );
+    const baseRuntimeConfig = resolveNodeTestShardRuntimeConfig(requestedShardConcurrency);
+    const runtimeConfig: NodeTestShardRuntimeConfig = {
+        ...baseRuntimeConfig,
+        defaultNodeTestConcurrency: resolveDefaultShardedNodeTestConcurrency(baseRuntimeConfig)
+    };
     const baseShardOptionArgs = buildNodeTestShardOptionArgs(optionArgs, runtimeConfig);
     const shardOptionArgs = updateDurationTelemetry
         ? addDurationReporterOptions(baseShardOptionArgs, DURATION_REPORTER_URL)
@@ -1680,9 +1707,7 @@ async function runShardedNodeTestProcesses(
     const shardLogDir = resolveShardLogDir(repoRoot, buildRoot, requestedShardLogDir);
     console.log(formatNodeFoundationTestMarker(NODE_FOUNDATION_TEST_MARKERS.SHARD_LOG_DIR, shardLogDir));
     console.log(formatNodeFoundationTestMarker(NODE_FOUNDATION_TEST_MARKERS.DURATION_TELEMETRY, telemetryPath));
-    const requestedConcurrency = runtimeConfig.concurrencyConfigured
-        ? runtimeConfig.concurrency
-        : shardCount;
+    const requestedConcurrency = runtimeConfig.concurrency;
     const shardConcurrency = Math.max(1, Math.min(scheduledShards.length, requestedConcurrency));
     const totalShardCount = scheduledShards.length + executionPlan.serialFiles.length;
     console.log(formatNodeFoundationTestMarker(
@@ -1690,7 +1715,8 @@ async function runShardedNodeTestProcesses(
         `timeout_ms=${runtimeConfig.timeoutMs} heartbeat_ms=${runtimeConfig.heartbeatMs} `
         + `concurrency=${scheduledShards.length === 0 ? 1 : shardConcurrency} `
         + `node_test_concurrency=${describeNodeTestConcurrency(optionArgs, runtimeConfig)} `
-        + `grouped_shards=${parallelShards.length} max_shard_arg_chars=${NODE_FOUNDATION_AUTO_SHARD_ARG_CHAR_LIMIT} `
+        + `grouped_shards=${parallelShards.length} max_auto_shard_files=${NODE_FOUNDATION_AUTO_SHARD_MAX_FILES} `
+        + `max_shard_arg_chars=${NODE_FOUNDATION_AUTO_SHARD_ARG_CHAR_LIMIT} `
         + `isolated_files=${executionPlan.isolatedFiles.length} serial_files=${executionPlan.serialFiles.length}`
     ));
     const preRunSchedule = summarizeNodeFoundationShardSchedule(

@@ -685,6 +685,7 @@ export function buildHelpText(packageJson: PackageJsonLike): string {
             '  agent-init    Finalize mandatory agent onboarding after AGENT_INIT_PROMPT work is complete.',
             '  preprompt     Read-only task bootstrap context and exact next commands.',
             '  next-step     Show the deterministic next command for a task.',
+            '  compact       Run bounded Git, file, and search inspection with retained-output retrieval.',
             '  status        Show current project status without changing files.',
             '  doctor        Run verify + manifest validation using existing init answers.',
             '  debug env     Show environment and runtime triage snapshot for bug reports.',

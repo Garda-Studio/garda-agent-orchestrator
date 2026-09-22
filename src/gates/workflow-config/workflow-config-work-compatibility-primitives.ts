@@ -12,6 +12,7 @@ export const SAFE_FULL_SUITE_COMPATIBILITY_COMMANDS = new Set([
     'npm test'
 ]);
 export const COMPATIBILITY_TOP_LEVEL_KEYS = [
+    'compact',
     'compile_gate',
     'full_suite_validation',
     'orchestrator_work_policy',
@@ -25,6 +26,7 @@ export const COMPATIBILITY_TOP_LEVEL_KEYS = [
     'task_reset'
 ];
 const COMPATIBILITY_OPTIONAL_TOP_LEVEL_KEYS = [
+    'compact',
     'compile_gate',
     'auto_backup',
     'optional_quality_checks',

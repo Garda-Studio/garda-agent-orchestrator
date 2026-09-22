@@ -296,6 +296,12 @@ describe('gates/next-step review cycle guard split', () => {
         workflowConfig.review_cycle_guard.auto_split_enabled = false;
         writeJson(path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config', 'workflow-config.json'), workflowConfig);
         seedStartedTask(repoRoot, TASK_ID);
+        const taskPath = path.join(repoRoot, 'TASK.md');
+        fs.writeFileSync(
+            taskPath,
+            fs.readFileSync(taskPath, 'utf8').replace(`| ${TASK_ID} | TODO |`, `| ${TASK_ID} | IN_PROGRESS |`),
+            'utf8'
+        );
         const preflightPath = writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
         for (let index = 0; index < 3; index += 1) {
             appendEvent(repoRoot, TASK_ID, 'REVIEW_RECORDED', 'PASS', {
@@ -326,7 +332,7 @@ describe('gates/next-step review cycle guard split', () => {
         const events = fs.readFileSync(path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`), 'utf8');
 
         assert.equal(commandResult.exitCode, 0);
-        assert.equal(result.status, 'SPLIT_REQUIRED');
+        assert.equal(result.status, 'SPLIT_REQUIRED', result.reason);
         assert.equal(result.next_gate, 'split-required-latch');
         assert.equal(result.commands.length, 0);
         assert.ok(result.reason.includes(`TASK.md marks "${TASK_ID}" as SPLIT_REQUIRED`));

@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { UNCONFIGURED_COMPILE_GATE_COMMAND } from '../../core/constants';
+import { compactSettingsFromConfig } from '../../core/compact/setting-definitions';
 import {
     isExactLegacyProjectMemoryGeneratedDefault,
     normalizeFullSuiteValidationPlacement
@@ -95,6 +96,14 @@ function isSafeIgnoredWorkflowConfigCompatibilityBaseline(config: Record<string,
         || !COMPATIBILITY_ALLOWED_TOP_LEVEL_KEY_SETS.some((keySet) => hasExactOwnKeys(config, keySet))
     ) {
         return false;
+    }
+
+    if (hasOwnKey(config, 'compact')) {
+        try {
+            compactSettingsFromConfig(config.compact);
+        } catch {
+            return false;
+        }
     }
 
     const fullSuiteValidation = toPlainRecord(config.full_suite_validation);

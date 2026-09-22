@@ -739,22 +739,21 @@ describe('cli/commands/gates', () => {
         const taskPath = path.join(repoRoot, 'TASK.md');
         const baselineTaskContent = fs.readFileSync(taskPath, 'utf8');
         const fsModule = require('node:fs') as {
-            writeFileSync: typeof fs.writeFileSync;
+            renameSync: typeof fs.renameSync;
         };
-        const originalWriteFileSync = fsModule.writeFileSync;
+        const originalRenameSync = fsModule.renameSync;
         let injectedWriteFailureConsumed = false;
-        fsModule.writeFileSync = ((filePath: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: fs.WriteFileOptions) => {
+        fsModule.renameSync = ((oldPath: fs.PathLike, newPath: fs.PathLike) => {
             if (
                 !injectedWriteFailureConsumed
-                && typeof filePath === 'string'
-                && path.resolve(filePath) === path.resolve(taskPath)
+                && path.resolve(String(newPath)) === path.resolve(taskPath)
             ) {
                 injectedWriteFailureConsumed = true;
-                originalWriteFileSync(filePath, '| corrupted |\n', options);
+                originalRenameSync(oldPath, newPath);
                 throw new Error('Injected TASK.md write failure');
             }
-            return originalWriteFileSync(filePath, data as never, options);
-        }) as typeof fs.writeFileSync;
+            return originalRenameSync(oldPath, newPath);
+        }) as typeof fsModule.renameSync;
 
         try {
             const error = await captureExpectedAsyncError(async () => {
@@ -766,7 +765,7 @@ describe('cli/commands/gates', () => {
             });
             assert.match(error.message, /TASK\.md queue state could not be reconciled to DONE/i);
         } finally {
-            fsModule.writeFileSync = originalWriteFileSync;
+            fsModule.renameSync = originalRenameSync;
         }
 
         assert.equal(

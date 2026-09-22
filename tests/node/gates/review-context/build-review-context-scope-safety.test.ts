@@ -496,6 +496,9 @@ describe('gates/build-review-context scope safety and diff bounds', () => {
             fs.mkdirSync(path.join(orchestratorRoot, 'live', 'config'), { recursive: true });
             fs.mkdirSync(path.join(repoRoot, 'src'), { recursive: true });
             runGit(repoRoot, ['init']);
+            runGit(repoRoot, ['config', 'user.name', 'Garda Tests']);
+            runGit(repoRoot, ['config', 'user.email', 'garda-tests@example.com']);
+            runGit(repoRoot, ['commit', '--allow-empty', '-m', 'baseline']);
             for (const ruleFile of getRulePack('code').full) {
                 fs.writeFileSync(path.join(rulesRoot, ruleFile), `# ${ruleFile}\n`, 'utf8');
             }

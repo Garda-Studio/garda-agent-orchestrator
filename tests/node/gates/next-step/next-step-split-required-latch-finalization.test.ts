@@ -258,7 +258,8 @@ describe('gates/next-step split-required latch finalization', () => {
         assert.equal(result.status, 'SPLIT_REQUIRED');
         assert.equal(result.next_gate, 'split-required-latch');
         assert.match(result.reason, /Parent WIP could not be captured and suspended before child routing/iu);
-        assert.match(result.reason, /tracked changes outside current preflight scope: src\/outside\.ts/iu);
+        assert.match(result.reason, /retained split-required WIP checkout is neither verified suspended nor restored/iu);
+        assert.match(result.reason, /tracked WIP path set does not match the retained capture/iu);
         assert.ok(taskMd.includes(`| ${taskId} | 🟫 SPLIT_REQUIRED |`));
         assert.ok(events.includes('SPLIT_REQUIRED_RESTORED'));
         assert.ok(!events.includes('SPLIT_REQUIRED_CLEARED'));
@@ -437,7 +438,8 @@ describe('gates/next-step split-required latch finalization', () => {
         assert.equal(result.status, 'SPLIT_REQUIRED');
         assert.equal(result.next_gate, 'split-required-latch');
         assert.match(result.reason, /Parent WIP could not be captured and suspended before child routing/iu);
-        assert.match(result.reason, /tracked changes outside current preflight scope: src\/outside\.ts/iu);
+        assert.match(result.reason, /retained split-required WIP checkout is neither verified suspended nor restored/iu);
+        assert.match(result.reason, /tracked WIP path set does not match the retained capture/iu);
         assert.ok(taskMd.includes(`| ${taskId} | SPLIT_REQUIRED |`));
         assert.ok(!events.includes('SPLIT_REQUIRED_CLEARED'));
     });

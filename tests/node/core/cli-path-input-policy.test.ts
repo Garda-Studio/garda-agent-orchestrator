@@ -14,6 +14,7 @@ import {
 import { resolvePathInsideRepo } from '../../../src/core/orchestrator-paths';
 import { parseOptions } from '../../../src/cli/commands/cli-parsing';
 import { resolveOutputPath } from '../../../src/gates/preflight/build-scoped-diff';
+import { COMPACT_CLI_OPTIONS } from '../../../src/core/compact/setting-definitions';
 
 const OPTION_PATTERN = /['"](--[a-z0-9-]*(?:path|file|dir|root)[a-z0-9-]*|--chdir)['"]/gu;
 
@@ -40,6 +41,11 @@ function collectPathShapedCliFlags(repoRoot: string): string[] {
                     flags.add(match[1]);
                 }
             }
+        }
+    }
+    for (const flagName of Object.keys(COMPACT_CLI_OPTIONS)) {
+        if (isPathShapedCliFlag(flagName)) {
+            flags.add(flagName);
         }
     }
     return [...flags].sort();

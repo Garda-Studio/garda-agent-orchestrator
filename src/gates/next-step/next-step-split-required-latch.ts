@@ -412,6 +412,11 @@ export function readSplitRequiredLatchEvidence(params: {
 
     const artifactSha256 = fileSha256(artifactPath);
     const guardKind = typeof artifact.guard_kind === 'string' ? artifact.guard_kind.trim() : '';
+    const guardDetails = isPlainRecord(artifact.guard_details) ? artifact.guard_details : null;
+    const expectedStatusChangeReason = guardKind === 'review_cycle'
+        && String(guardDetails?.event_source || '') === 'record-review-cycle-split-decision'
+        ? 'manual_review_cycle_split_decision'
+        : 'auto_split_guard_latched';
     const statusSync = isPlainRecord(artifact.status_sync) ? artifact.status_sync : null;
     const statusSyncOutcome = String(statusSync?.outcome || '').trim();
     const materializationPhase = String(artifact.materialization_phase || '').trim();
@@ -513,7 +518,7 @@ export function readSplitRequiredLatchEvidence(params: {
         return event.event_type === 'STATUS_CHANGED'
             && String(details.previous_status || '') === previousStatus
             && String(details.new_status || '') === SPLIT_REQUIRED_STATUS
-            && String(details.reason || '') === 'auto_split_guard_latched'
+            && String(details.reason || '') === expectedStatusChangeReason
             && String(details.guard_kind || '') === guardKind
             && String(details.artifact_sha256 || '').toLowerCase() === artifactSha256
             && normalizePath(String(details.artifact_path || '')) === normalizedArtifactPath;

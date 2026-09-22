@@ -30,7 +30,7 @@ in the GitHub repository.
 | **Require branches to be up to date before merging** | ✅ Enabled | Ensures the PR branch includes the latest target commits. |
 | **Status checks that are required** | Individual job checks listed below | `CI` is a workflow name; there is no aggregate check named `ci`. |
 
-The job names below come from [ci.yml](../.github/workflows/ci.yml). Select each expanded check reported by a recent pull-request run; `{node}` and `{os}` below describe matrix values and are not literal check names.
+The job names below come from [ci.yml](https://github.com/Shubchynskyi/garda-agent-orchestrator/blob/main/.github/workflows/ci.yml). Select each expanded check reported by a recent pull-request run; `{node}` and `{os}` below describe matrix values and are not literal check names.
 
 | Job check pattern | Required matrix values |
 |---|---|
@@ -54,7 +54,7 @@ protection and release-readiness diagnostics stay explicit.
 
 | Check | Label | Branch-protection guidance | Rationale |
 |---|---|---|---|
-| Individual `CI` job checks above | `blocking` | Required | Proves build, test shards, package smoke, release readiness, and lifecycle smoke. |
+| `CI` / release validation matrix | `blocking` | Required | Proves build, test shards, package smoke, release readiness, and lifecycle smoke. |
 | `Security / npm audit` | `blocking` | Required | Fails on high or critical dependency advisories, including devDependencies; the workflow does not omit dev dependencies. |
 | `Secret Scanning / Gitleaks` | `blocking` | Required | Prevents committed secrets from reaching protected branches. |
 | `Security / OSV Vulnerability Scan` | `informational` | Optional required check | Keeps SARIF-backed vulnerability visibility; make it required only when the team accepts upstream advisory noise as merge-blocking. |
@@ -62,14 +62,15 @@ protection and release-readiness diagnostics stay explicit.
 
 ### GitHub Action pinning decision
 
-The CI and security workflows remain version-tag pinned
+The GitHub Actions used by the CI and security workflows remain version-tag pinned
 (`actions/checkout@v7.0.0`, `actions/setup-node@v6`,
-`actions/upload-artifact@v7.0.1`, `gitleaks/gitleaks-action@v3.0.0`, and
+`actions/upload-artifact@v7.0.1`, and
 `google/osv-scanner-action/...@v2.3.0`) and are intentionally not SHA-pinned at
-this time. This is an operator-maintainability tradeoff,
-not a provenance guarantee. Release-sensitive operators should review
-action update diffs before broadening branch protection, and this
-decision does not replace future provenance or release-signing work.
+this time. Gitleaks is installed as CLI v8.30.1 from its release archive and the
+archive is verified against a pinned SHA-256 digest. These choices are an
+operator-maintainability tradeoff, not a provenance guarantee.
+Release-sensitive operators should review action and CLI update diffs before
+broadening branch protection, and this decision does not replace future provenance or release-signing work.
 
 ### Update-source policy reporting
 

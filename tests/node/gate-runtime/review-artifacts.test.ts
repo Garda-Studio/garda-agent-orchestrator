@@ -1926,7 +1926,7 @@ test('deepest canonical snapshot wins over a longer outer alias', async (context
             assert.equal(first.content?.toString('utf8'), 'v1\n');
             releaseOuter();
             await outer;
-            fs.writeFileSync(artifactPath, 'v2\n', 'utf8');
+            fs.writeFileSync(artifactPath, 'v2-expanded\n', 'utf8');
             return readReviewArtifactFileSnapshot(artifactPath);
         });
 

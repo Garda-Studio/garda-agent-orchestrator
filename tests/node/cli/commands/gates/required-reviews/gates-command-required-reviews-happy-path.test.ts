@@ -493,18 +493,16 @@ describe('gates command required reviews', () => {
         ]);
         const reviewReadSites = new Map<string, string[]>();
         const fsModule = require('node:fs') as typeof fs;
-        const originalReadFileSync = fsModule.readFileSync;
-        fsModule.readFileSync = ((targetPath: fs.PathOrFileDescriptor, options?: unknown) => {
-            if (typeof targetPath !== 'number') {
-                const resolvedPath = path.resolve(String(targetPath));
-                if (reviewArtifactPaths.has(resolvedPath)) {
-                    const sites = reviewReadSites.get(resolvedPath) || [];
-                    sites.push(new Error().stack || 'missing stack');
-                    reviewReadSites.set(resolvedPath, sites);
-                }
+        const originalOpenSync = fsModule.openSync;
+        fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+            const resolvedPath = path.resolve(String(targetPath));
+            if (reviewArtifactPaths.has(resolvedPath)) {
+                const sites = reviewReadSites.get(resolvedPath) || [];
+                sites.push(new Error().stack || 'missing stack');
+                reviewReadSites.set(resolvedPath, sites);
             }
-            return originalReadFileSync(targetPath, options as never);
-        }) as typeof fsModule.readFileSync;
+            return originalOpenSync(targetPath, flags, mode);
+        }) as typeof fsModule.openSync;
 
         let result: ReturnType<typeof runRequiredReviewsCheckCommand> | null = null;
         try {
@@ -518,7 +516,7 @@ describe('gates command required reviews', () => {
                 emitMetrics: false
             });
         } finally {
-            fsModule.readFileSync = originalReadFileSync;
+            fsModule.openSync = originalOpenSync;
         }
 
         const evidencePath = path.join(reviewsRoot, `${taskId}-review-gate.json`);
@@ -541,7 +539,7 @@ describe('gates command required reviews', () => {
         for (const reviewArtifactPath of reviewArtifactPaths) {
             const sites = reviewReadSites.get(reviewArtifactPath) || [];
             assert.equal(sites.length, 1, `${reviewArtifactPath}\n${sites.join('\n\n')}`);
-            assert.match(sites[0], /readReviewArtifactFileSnapshot/u, sites[0]);
+            assert.match(sites[0], /readReviewArtifactBytesBounded/u, sites[0]);
         }
 
         fs.rmSync(repoRoot, { recursive: true, force: true });

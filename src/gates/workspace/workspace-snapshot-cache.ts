@@ -108,6 +108,27 @@ function normalizeExplicitChangedFiles(explicitChangedFiles: string[]): string[]
     )].sort();
 }
 
+function normalizeExplicitRequestFiles(repoRoot: string, explicitChangedFiles: string[]): string[] {
+    return [...new Set(
+        (explicitChangedFiles || [])
+            .map((filePath) => normalizePath(filePath))
+            .map((filePath) => filePath ? path.posix.normalize(filePath) : '')
+            .filter((filePath) => (
+                !!filePath
+                && filePath !== '.'
+                && !isInternalSnapshotCachePath(repoRoot, filePath)
+            ))
+    )].sort();
+}
+
+function normalizeIgnoredGeneratedRuntimeFiles(filePaths: string[]): string[] {
+    return [...new Set(
+        (filePaths || [])
+            .map((filePath) => normalizePath(filePath))
+            .filter(Boolean)
+    )].sort();
+}
+
 function canonicalJson(value: unknown): string {
     if (value === null) return 'null';
     if (typeof value === 'string' || typeof value === 'boolean') {
@@ -222,7 +243,7 @@ function normalizeCacheParams(
     explicitChangedFiles: string[]
 ): NormalizedWorkspaceSnapshotCacheParams {
     const normalizedSource = String(detectionSource || 'git_auto').trim().toLowerCase() || 'git_auto';
-    const normalizedExplicit = normalizeExplicitChangedFiles(explicitChangedFiles);
+    const normalizedExplicit = normalizeExplicitRequestFiles(repoRoot, explicitChangedFiles);
     return {
         repo_root: normalizeRepoCacheKey(repoRoot),
         detection_source: normalizedSource,
@@ -347,6 +368,7 @@ function hasValidCacheEntryAuthentication(
 }
 
 function normalizeSnapshotRequestKey(
+    repoRoot: string,
     detectionSource: string,
     includeUntracked: boolean,
     explicitChangedFiles: string[]
@@ -356,7 +378,7 @@ function normalizeSnapshotRequestKey(
     return JSON.stringify([
         normalizedSource,
         effectiveIncludeUntracked,
-        normalizeExplicitChangedFiles(explicitChangedFiles)
+        normalizeExplicitRequestFiles(repoRoot, explicitChangedFiles)
     ]);
 }
 
@@ -370,7 +392,9 @@ function authenticateWorkspaceSnapshot(
 ): void {
     const changedFiles = normalizeExplicitChangedFiles(snapshot.changed_files);
     const authorizedFiles = normalizeExplicitChangedFiles(snapshot.authorized_files);
-    const ignoredGeneratedRuntimeFiles = normalizeExplicitChangedFiles(snapshot.ignored_generated_runtime_files);
+    const ignoredGeneratedRuntimeFiles = normalizeIgnoredGeneratedRuntimeFiles(
+        snapshot.ignored_generated_runtime_files
+    );
     if (
         !sameStringList(changedFiles, snapshot.changed_files)
         || snapshot.changed_files_count !== changedFiles.length
@@ -454,13 +478,16 @@ function authenticateWorkspaceSnapshot(
         throw new Error('Workspace snapshot authentication failed: scope binding is inconsistent.');
     }
     if (!params) return;
-    const expectedAuthorizedFilesHash = params.detection_source === 'explicit_changed_files'
-        ? params.explicit_changed_files_hash
-        : snapshot.changed_files_sha256;
+    const requestParameterBindingMatches = params.detection_source === 'explicit_changed_files'
+        ? params.explicit_changed_files_hash === stringSha256(normalizeExplicitRequestFiles(params.repo_root, [
+            ...snapshot.authorized_files,
+            ...snapshot.ignored_generated_runtime_files
+        ]).join('\n'))
+        : snapshot.authorized_files_sha256 === snapshot.changed_files_sha256;
     if (
         normalizedSource !== params.detection_source
         || snapshot.include_untracked !== params.include_untracked
-        || snapshot.authorized_files_sha256 !== expectedAuthorizedFilesHash
+        || !requestParameterBindingMatches
     ) {
         throw new Error('Workspace snapshot authentication failed: request parameter binding is inconsistent.');
     }
@@ -493,7 +520,12 @@ export function createWorkspaceSnapshotRequest(repoRoot: string): WorkspaceSnaps
             includeUntracked: boolean,
             explicitChangedFiles: string[]
         ): ResolvedWorkspaceSnapshot {
-            const key = normalizeSnapshotRequestKey(detectionSource, includeUntracked, explicitChangedFiles);
+            const key = normalizeSnapshotRequestKey(
+                resolvedRepoRoot,
+                detectionSource,
+                includeUntracked,
+                explicitChangedFiles
+            );
             const existing = entries.get(key);
             if (existing) {
                 if (existing.snapshot) return existing.snapshot;

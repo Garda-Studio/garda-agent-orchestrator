@@ -109,6 +109,24 @@ describe('gates/workspace-snapshot-cache', () => {
         cleanupTestRepo(tempDir);
     });
 
+    it('fails closed when authenticated numstat collection fails', () => {
+        fs.writeFileSync(path.join(repoRoot, 'file.ts'), 'export const a = 2;\n', 'utf8');
+        const generation = createWorkspaceSnapshotGitGeneration(repoRoot);
+        generation.readClassification([]);
+        fs.renameSync(path.join(repoRoot, '.git'), path.join(repoRoot, '.git-unavailable'));
+
+        assert.throws(
+            () => getWorkspaceSnapshot(
+                repoRoot,
+                'explicit_changed_files',
+                false,
+                ['file.ts'],
+                generation
+            ),
+            /Failed to collect changed files snapshot/u
+        );
+    });
+
     describe('readHeadSha', () => {
         it('returns HEAD sha for a valid repo', () => {
             const sha = readHeadSha(repoRoot);
@@ -622,6 +640,36 @@ describe('gates/workspace-snapshot-cache', () => {
                 childProcessModule.spawnSync = originalSpawnSync;
                 childProcessModule.execFileSync = originalExecFileSync;
             }
+        });
+
+        it('keeps distinct request-local snapshots for explicit ignored generated runtime files', () => {
+            const generatedRelativePath = 'runtime/.reviews-index.lock/owner.json';
+            const generatedPath = path.join(repoRoot, ...generatedRelativePath.split('/'));
+            fs.mkdirSync(path.dirname(generatedPath), { recursive: true });
+            fs.writeFileSync(generatedPath, '{"generated":true}\n', 'utf8');
+            fs.writeFileSync(path.join(repoRoot, 'file.ts'), 'export const a = 2;\n', 'utf8');
+
+            const request = createWorkspaceSnapshotRequest(repoRoot);
+            const withoutGenerated = request.read('explicit_changed_files', false, ['file.ts']);
+            const withGenerated = request.read(
+                'explicit_changed_files',
+                false,
+                ['file.ts', generatedRelativePath]
+            );
+
+            assert.notStrictEqual(withGenerated, withoutGenerated);
+            assert.deepEqual(withoutGenerated.changed_files, ['file.ts']);
+            assert.deepEqual(withoutGenerated.ignored_generated_runtime_files, []);
+            assert.deepEqual(withGenerated.changed_files, ['file.ts']);
+            assert.deepEqual(withGenerated.ignored_generated_runtime_files, [generatedRelativePath]);
+            assert.strictEqual(
+                request.read('explicit_changed_files', false, ['file.ts']),
+                withoutGenerated
+            );
+            assert.strictEqual(
+                request.read('explicit_changed_files', false, ['file.ts', generatedRelativePath]),
+                withGenerated
+            );
         });
 
         it('rejects foreign and forged workspace snapshot requests', () => {

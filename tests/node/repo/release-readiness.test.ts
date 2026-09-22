@@ -292,16 +292,38 @@ function buildSecurityWorkflow(): string {
     ].join('\n');
 }
 
-function buildSecretScanningWorkflow(): string {
-    return [
+function buildSecretScanningWorkflow(
+    transformJob: (job: string) => string = (job) => job
+): string {
+    const job = transformJob([
         'gitleaks:',
+        '  name: Gitleaks',
+        '  runs-on: ubuntu-latest',
         '  steps:',
         '    - uses: actions/checkout@v7.0.0',
-        '    - name: Run gitleaks',
-        '      uses: gitleaks/gitleaks-action@v3.0.0',
+        '      with:',
+        '        fetch-depth: 0',
+        '    - name: Install Gitleaks CLI',
+        '      shell: bash',
         '      env:',
-        '        GITLEAKS_CONFIG: .gitleaks.toml'
-    ].join('\n');
+        "        GITLEAKS_VERSION: '8.30.1'",
+        "        GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'",
+        '      run: |',
+        '        set -euo pipefail',
+        '        install_dir="$(mktemp -d "${RUNNER_TEMP}/gitleaks.XXXXXX")"',
+        '        archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"',
+        '        curl --fail --silent --show-error --location --retry 3 \\',
+        '          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" \\',
+        '          --output "${install_dir}/${archive}"',
+        "        printf '%s  %s\\n' \"$GITLEAKS_SHA256\" \"${install_dir}/${archive}\" | sha256sum --check --strict",
+        '        tar -xzf "${install_dir}/${archive}" -C "$install_dir" gitleaks',
+        '        chmod +x "${install_dir}/gitleaks"',
+        '        echo "$install_dir" >> "$GITHUB_PATH"',
+        '    - name: Scan for secrets',
+        '      shell: bash',
+        '      run: gitleaks git --config .gitleaks.toml --redact --exit-code 1 .'
+    ].join('\n'));
+    return ['jobs:', ...job.split('\n').map((line) => `  ${line}`)].join('\n');
 }
 
 function buildSbomWorkflow(): string {
@@ -1557,19 +1579,222 @@ test('release readiness rejects commented release-security workflow commands', (
     }
 });
 
-test('release readiness rejects commented release-security action uses', () => {
+test('release readiness rejects a commented pinned Gitleaks CLI version', () => {
     const repoRoot = createReadinessFixture();
     try {
         writeFile(
             path.join(repoRoot, '.github', 'workflows', 'secret-scanning.yml'),
-            [
-                'gitleaks:',
-                '  steps:',
-                '    - name: Run gitleaks',
-                '      # uses: gitleaks/gitleaks-action@v3.0.0',
-                '      env:',
-                '        GITLEAKS_CONFIG: .gitleaks.toml'
-            ].join('\n')
+            buildSecretScanningWorkflow((job) => job.replace(
+                "        GITLEAKS_VERSION: '8.30.1'",
+                "        # GITLEAKS_VERSION: '8.30.1'"
+            ))
+        );
+
+        const result = validateReleaseReadiness(repoRoot);
+        const output = formatReleaseReadinessResult(result);
+
+        assert.equal(result.passed, false);
+        assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
+        assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects trusted Gitleaks job text outside the jobs mapping', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        writeFile(
+            path.join(repoRoot, '.github', 'workflows', 'secret-scanning.yml'),
+            buildSecretScanningWorkflow().replace('jobs:\n', 'notes: |\n')
+        );
+
+        const result = validateReleaseReadiness(repoRoot);
+        const output = formatReleaseReadinessResult(result);
+
+        assert.equal(result.passed, false);
+        assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
+        assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects a Gitleaks mapping nested below another job', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        const nestedWorkflow = buildSecretScanningWorkflow()
+            .replace(/^  /gmu, '    ')
+            .replace('jobs:\n', 'jobs:\n  wrapper:\n');
+        writeFile(
+            path.join(repoRoot, '.github', 'workflows', 'secret-scanning.yml'),
+            nestedWorkflow
+        );
+
+        const result = validateReleaseReadiness(repoRoot);
+        const output = formatReleaseReadinessResult(result);
+
+        assert.equal(result.passed, false);
+        assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
+        assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects trusted Gitleaks text with changed step indentation', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        writeFile(
+            path.join(repoRoot, '.github', 'workflows', 'secret-scanning.yml'),
+            buildSecretScanningWorkflow().replace(
+                '        run: gitleaks git --config .gitleaks.toml --redact --exit-code 1 .',
+                '      run: gitleaks git --config .gitleaks.toml --redact --exit-code 1 .'
+            )
+        );
+
+        const result = validateReleaseReadiness(repoRoot);
+        const output = formatReleaseReadinessResult(result);
+
+        assert.equal(result.passed, false);
+        assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
+        assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects a disconnected Gitleaks download and checksum pipeline', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        const workflow = buildSecretScanningWorkflow((job) => job
+            .replace(
+                [
+                    '        curl --fail --silent --show-error --location --retry 3 \\',
+                    '          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" \\',
+                    '          --output "${install_dir}/${archive}"'
+                ].join('\n'),
+                [
+                    '        curl --fail --silent --show-error --location --retry 3 "https://example.invalid/untrusted.tar.gz" --output "${install_dir}/${archive}"',
+                    '        test -n "gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"'
+                ].join('\n')
+            )
+            .replace(
+                "        printf '%s  %s\\n' \"$GITLEAKS_SHA256\" \"${install_dir}/${archive}\" | sha256sum --check --strict",
+                "        test -n 'sha256sum --check --strict'"
+            ));
+        writeFile(path.join(repoRoot, '.github', 'workflows', 'secret-scanning.yml'), workflow);
+
+        const result = validateReleaseReadiness(repoRoot);
+        const output = formatReleaseReadinessResult(result);
+
+        assert.equal(result.passed, false);
+        assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
+        assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects a success-forcing Gitleaks scan suffix', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        writeFile(
+            path.join(repoRoot, '.github', 'workflows', 'secret-scanning.yml'),
+            buildSecretScanningWorkflow((job) => job.replace(
+                '      run: gitleaks git --config .gitleaks.toml --redact --exit-code 1 .',
+                '      run: gitleaks git --config .gitleaks.toml --redact --exit-code 1 . || true'
+            ))
+        );
+
+        const result = validateReleaseReadiness(repoRoot);
+        const output = formatReleaseReadinessResult(result);
+
+        assert.equal(result.passed, false);
+        assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
+        assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects a Gitleaks scan step that disables failure propagation', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        writeFile(
+            path.join(repoRoot, '.github', 'workflows', 'secret-scanning.yml'),
+            buildSecretScanningWorkflow((job) => job.replace(
+                '      run: gitleaks git --config .gitleaks.toml --redact --exit-code 1 .',
+                [
+                    '      run: |',
+                    '        set +e',
+                    '        gitleaks git --config .gitleaks.toml --redact --exit-code 1 .',
+                    '        true'
+                ].join('\n')
+            ))
+        );
+
+        const result = validateReleaseReadiness(repoRoot);
+        const output = formatReleaseReadinessResult(result);
+
+        assert.equal(result.passed, false);
+        assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
+        assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects a Gitleaks install step that does not publish its binary path', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        writeFile(
+            path.join(repoRoot, '.github', 'workflows', 'secret-scanning.yml'),
+            buildSecretScanningWorkflow((job) => job.replace(
+                '        echo "$install_dir" >> "$GITHUB_PATH"',
+                '        test -x "${install_dir}/gitleaks"'
+            ))
+        );
+
+        const result = validateReleaseReadiness(repoRoot);
+        const output = formatReleaseReadinessResult(result);
+
+        assert.equal(result.passed, false);
+        assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
+        assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects Gitleaks jobs that continue after failure', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        writeFile(
+            path.join(repoRoot, '.github', 'workflows', 'secret-scanning.yml'),
+            buildSecretScanningWorkflow((job) => job.replace(
+                '  runs-on: ubuntu-latest',
+                '  runs-on: ubuntu-latest\n  continue-on-error: true'
+            ))
+        );
+
+        const result = validateReleaseReadiness(repoRoot);
+        const output = formatReleaseReadinessResult(result);
+
+        assert.equal(result.passed, false);
+        assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
+        assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects shallow checkout for Gitleaks history scanning', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        writeFile(
+            path.join(repoRoot, '.github', 'workflows', 'secret-scanning.yml'),
+            buildSecretScanningWorkflow((job) => job.replace('        fetch-depth: 0', '        fetch-depth: 1'))
         );
 
         const result = validateReleaseReadiness(repoRoot);
@@ -1618,15 +1843,10 @@ test('release readiness rejects commented gitleaks config', () => {
     try {
         writeFile(
             path.join(repoRoot, '.github', 'workflows', 'secret-scanning.yml'),
-            [
-                'gitleaks:',
-                '  steps:',
-                '    - uses: actions/checkout@v7.0.0',
-                '    - name: Run gitleaks',
-                '      uses: gitleaks/gitleaks-action@v3.0.0',
-                '      env:',
-                '        # GITLEAKS_CONFIG: .gitleaks.toml'
-            ].join('\n')
+            buildSecretScanningWorkflow((job) => job.replace(
+                '      run: gitleaks git --config .gitleaks.toml --redact --exit-code 1 .',
+                '      # run: gitleaks git --config .gitleaks.toml --redact --exit-code 1 .'
+            ))
         );
 
         const result = validateReleaseReadiness(repoRoot);
@@ -1708,15 +1928,14 @@ test('release readiness rejects misplaced gitleaks config outside gitleaks step'
         writeFile(
             path.join(repoRoot, '.github', 'workflows', 'secret-scanning.yml'),
             [
-                'gitleaks:',
+                buildSecretScanningWorkflow((job) => job.replace(
+                    '      run: gitleaks git --config .gitleaks.toml --redact --exit-code 1 .',
+                    '      run: echo scan omitted'
+                )),
+                'unrelated:',
                 '  steps:',
-                '    - uses: actions/checkout@v7.0.0',
-                '    - name: Run gitleaks',
-                '      uses: gitleaks/gitleaks-action@v3.0.0',
-                '    - name: Unrelated env',
-                '      env:',
-                '        GITLEAKS_CONFIG: .gitleaks.toml',
-                '      run: echo unrelated'
+                '    - name: Unrelated scan',
+                '      run: gitleaks git --config .gitleaks.toml --redact --exit-code 1 .'
             ].join('\n')
         );
 

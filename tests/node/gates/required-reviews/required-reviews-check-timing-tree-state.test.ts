@@ -4,6 +4,7 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 import {
     validateReviewArtifactGateEligibility,
@@ -35,6 +36,14 @@ function buildRequiredReviewsReusedTimingFixture(mode: ReusedTimingMode) {
     const reviewType = 'code';
     const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
     fs.mkdirSync(reviewsRoot, { recursive: true });
+    const sourcePath = path.join(repoRoot, 'src', 'reused.ts');
+    writeText(sourcePath, 'export const reused = 1;\n');
+    execFileSync('git', ['init'], { cwd: repoRoot, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'tests@example.invalid'], { cwd: repoRoot, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'Garda Tests'], { cwd: repoRoot, stdio: 'ignore' });
+    execFileSync('git', ['add', '.'], { cwd: repoRoot, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'fixture baseline'], { cwd: repoRoot, stdio: 'ignore' });
+    writeText(sourcePath, 'export const reused = 2;\n');
 
     const preflightPath = path.join(reviewsRoot, `${taskId}-preflight.json`);
     const preflightPayload = {
@@ -51,7 +60,7 @@ function buildRequiredReviewsReusedTimingFixture(mode: ReusedTimingMode) {
     const artifactText = [
         '# Code Review',
         '',
-        'Validated reused review timing trust with strict historical evidence, source receipt snapshots, and non-trivial gate fixture coverage.',
+        'Validated `src/reused.ts` and its reuse timing trust with strict historical evidence, source receipt snapshots, and concrete gate fixture coverage. The review checked the changed export, the current tree binding, the source receipt chain, the launch timestamps, and the reused artifact identity before recording a pass.',
         '',
         '## Findings by Severity',
         'none',
@@ -67,6 +76,11 @@ function buildRequiredReviewsReusedTimingFixture(mode: ReusedTimingMode) {
     const artifactSha = writeText(artifactPath, artifactText);
     const artifactSnapshotPath = path.join(reviewsRoot, `${taskId}-${reviewType}-artifact-${artifactSha}.md`);
     writeText(artifactSnapshotPath, artifactText);
+    const reviewerPromptPath = path.join(reviewsRoot, `${taskId}-${reviewType}-reviewer-prompt.md`);
+    const reviewerPromptSha = writeText(
+        reviewerPromptPath,
+        'Review the authenticated reused timing fixture and report findings for src/reused.ts.\n'
+    );
 
     const currentTreeStateSha = '1'.repeat(64);
     const currentContextReuseSha = '2'.repeat(64);
@@ -92,7 +106,13 @@ function buildRequiredReviewsReusedTimingFixture(mode: ReusedTimingMode) {
         preflight_path: toPosixPath(preflightPath),
         preflight_sha256: preflightSha,
         tree_state: {
-            tree_state_sha256: currentTreeStateSha
+            tree_state_sha256: currentTreeStateSha,
+            changed_files: ['src/reused.ts']
+        },
+        rule_context: {
+            preferred_prompt_artifact: toPosixPath(reviewerPromptPath),
+            artifact_path: toPosixPath(reviewerPromptPath),
+            artifact_sha256: reviewerPromptSha
         },
         reviewer_routing: {
             source_of_truth: 'Codex',
@@ -149,6 +169,8 @@ function buildRequiredReviewsReusedTimingFixture(mode: ReusedTimingMode) {
         reviewer_fallback_reason: null,
         reviewer_provenance: reviewerProvenance,
         trust_level: 'INDEPENDENT_AUDITED',
+        outcome: 'PASS',
+        verdict: 'pass',
         reused_existing_review: false,
         recorded_at_utc: mode === 'missing' || mode === 'forged-later'
             ? null
@@ -241,6 +263,7 @@ function buildRequiredReviewsReusedTimingFixture(mode: ReusedTimingMode) {
     };
     const historicalReviewRecordedEvent = {
         event_type: 'REVIEW_RECORDED',
+        outcome: 'PASS',
         sequence: 2,
         details: {
             ...sourceReceipt,
@@ -262,6 +285,7 @@ function buildRequiredReviewsReusedTimingFixture(mode: ReusedTimingMode) {
     };
     const currentReviewRecordedEvent = {
         event_type: 'REVIEW_RECORDED',
+        outcome: 'PASS',
         sequence: mode === 'forged-later' ? 5 : 4,
         details: {
             ...currentReceipt,
@@ -283,6 +307,7 @@ function buildRequiredReviewsReusedTimingFixture(mode: ReusedTimingMode) {
     };
     const forgedReviewRecordedEvent = {
         event_type: 'REVIEW_RECORDED',
+        outcome: 'PASS',
         sequence: 4,
         details: {
             ...sourceReceipt,

@@ -37,6 +37,32 @@ const TASK_ID = 'T-2000-1';
 const SECOND_TASK_ID = 'T-2000-2';
 const SQLITE_CATALOG_CAPABILITY = probeSqliteCatalogCapability();
 const sqliteCatalogTest = SQLITE_CATALOG_CAPABILITY.available ? test : test.skip;
+const childProcessModule = require('node:child_process') as typeof import('node:child_process');
+const originalSpawnSync = childProcessModule.spawnSync;
+
+test.before(() => {
+    if (process.platform !== 'win32') return;
+    childProcessModule.spawnSync = ((command: string, args: string[], options: unknown) => {
+        if (command.toLowerCase() !== 'icacls.exe') {
+            return originalSpawnSync(command, args, options as never);
+        }
+        const inspectedPath = String(args[0] || 'fixture');
+        const stdout = `${inspectedPath} BUILTIN\\Users:(I)(RX)\r\n`;
+        return {
+            pid: 0,
+            output: [null, stdout, ''],
+            stdout,
+            stderr: '',
+            status: 0,
+            signal: null,
+            error: undefined
+        };
+    }) as typeof originalSpawnSync;
+});
+
+test.after(() => {
+    childProcessModule.spawnSync = originalSpawnSync;
+});
 
 function createWorkspace(prefix: string): string {
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));

@@ -27,9 +27,10 @@ gitleaks automatically on:
 - a weekly schedule (Monday 04:00 UTC);
 - manual `workflow_dispatch`.
 
-The workflow uses the official
-[gitleaks-action](https://github.com/gitleaks/gitleaks-action) v3 with
-`fetch-depth: 0` so the full commit history is scanned.
+The workflow checks out the full commit history with `fetch-depth: 0`, downloads
+Gitleaks CLI v8.30.1, verifies the release archive against its pinned SHA-256
+digest, and runs `gitleaks git` with `.gitleaks.toml`. The scan uses redacted
+output and exits with status 1 when a leak is found.
 
 ## Local Usage
 
@@ -150,4 +151,4 @@ pre-commit install
 | False positive on a test fixture | Add the path to `[allowlist].paths` in `.gitleaks.toml`. |
 | False positive on a placeholder | Add the regex to `[allowlist].regexes` in `.gitleaks.toml`. |
 | `gitleaks` not found | Install gitleaks (see above) or run via Docker: `docker run --rm -v "$(pwd):/repo" zricethezav/gitleaks detect --source /repo --config /repo/.gitleaks.toml`. |
-| CI job fails unexpectedly | Check the workflow run logs; ensure `GITLEAKS_CONFIG` env var points to `.gitleaks.toml`. |
+| CI job fails unexpectedly | Check the install checksum and scan logs; confirm the pinned version/SHA pair and `.gitleaks.toml` path match the workflow. |

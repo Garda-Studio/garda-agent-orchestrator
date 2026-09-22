@@ -2,7 +2,7 @@
 
 Complete command reference for Garda Agent Orchestrator.
 
-## Compact inspection output
+### `garda compact`
 
 `garda compact` is an explicit, read-only inspection command. It does not intercept the shell or replace mandatory build/test/evidence reads. Agents and reviewers choose it when a command may produce noisy output. Short output stays inline; long output shows a bounded beginning/tail and an executable retrieval command.
 

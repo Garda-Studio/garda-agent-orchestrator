@@ -98,6 +98,7 @@ Kept inside bundle:
 - .gitattributes
 - README.md
 - CHANGELOG.md
+- CONTRIBUTING.md
 - HOW_TO.md
 - LICENSE
 - NOTICE
@@ -119,8 +120,10 @@ Kept inside bundle:
 - docs/orchestrator-work-and-isolation.md
 - docs/providers.md
 - docs/release-readiness.md
+- docs/run-methods.md
 - docs/sbom.md
 - docs/secret-scanning.md
+- docs/task-plan-workflow.md
 - docs/threat-model.md
 - docs/work-example.md
 - AGENT_INIT_PROMPT.md

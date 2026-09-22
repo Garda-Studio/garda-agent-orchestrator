@@ -16,7 +16,7 @@ node bin/garda.js --help
 
 ## Work on a Change
 
-Read the checkout's `AGENTS.md` and `TASK.md`, then follow [the shared start-task router](.agents/workflows/start-task.md). The selected profile and current task evidence determine the required checks and reviews; `next-step` supplies the next command:
+Read the checkout's `AGENTS.md` and `TASK.md`, then follow [the shared start-task router](https://github.com/Shubchynskyi/garda-agent-orchestrator/blob/main/.agents/workflows/start-task.md). The selected profile and current task evidence determine the required checks and reviews; `next-step` supplies the next command:
 
 ```shell
 node bin/garda.js next-step T-001 --repo-root .

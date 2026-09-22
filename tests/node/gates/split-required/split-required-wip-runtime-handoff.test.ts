@@ -196,15 +196,20 @@ function makeSourceRepo(buildCommand = 'fixture'): string {
 function makeRealRuntimeSourceRepo(): string {
     const projectRoot = findProjectRoot();
     const compiledBuildRoot = path.join(projectRoot, '.node-build');
+    const projectVersion = String((JSON.parse(fs.readFileSync(
+        path.join(projectRoot, 'package.json'),
+        'utf8'
+    )) as { version?: unknown }).version || '').trim();
+    assert.match(projectVersion, /^\d+\.\d+\.\d+$/u);
     const repoRoot = makeRepo();
     writeFile(repoRoot, 'src/index.ts', 'export {};\n');
     writeFile(repoRoot, 'package.json', JSON.stringify({
         name: 'garda-agent-orchestrator',
-        version: '1.4.0',
+        version: projectVersion,
         type: 'commonjs',
         scripts: { build: 'node build-runtime.cjs' }
     }));
-    writeFile(repoRoot, 'VERSION', '1.4.0\n');
+    writeFile(repoRoot, 'VERSION', `${projectVersion}\n`);
     fs.cpSync(path.join(projectRoot, 'bin'), path.join(repoRoot, 'bin'), { recursive: true });
     fs.cpSync(
         path.join(projectRoot, 'garda-agent-orchestrator', 'live'),

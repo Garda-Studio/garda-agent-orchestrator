@@ -27,7 +27,7 @@ const REPO_ROOT = findRepoRoot();
 const DOCUMENTED_RUNTIME_EXCLUSIONS = new Map<string, string>([
     ['clean', 'documented through the public gc alias']
 ]);
-const NON_LIFECYCLE_PUBLIC_COMMANDS = new Set<string>(['gate', 'review-catalog']);
+const NON_LIFECYCLE_PUBLIC_COMMANDS = new Set<string>(['compact', 'gate', 'review-catalog']);
 
 function readRepoText(relativePath: string): string {
     return fs.readFileSync(path.join(REPO_ROOT, relativePath), 'utf8');

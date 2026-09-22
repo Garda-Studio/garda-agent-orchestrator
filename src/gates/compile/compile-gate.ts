@@ -674,32 +674,30 @@ export function getWorkspaceSnapshot(
 
         let additionsTotal = 0, deletionsTotal = 0;
         if (normalizedExplicit.length > 0) {
-            try {
-                const numstatLines = authenticatedGitGeneration
-                    ? authenticatedGitGeneration.readNumstat(false)
-                    : runWorkspaceSnapshotGitLines(
-                        repoRoot,
-                        ['diff', '--numstat', '--diff-filter=ACDMRTUXB', 'HEAD', '--', ...normalizedExplicit],
-                        'Failed numstat'
-                    );
-                for (const line of numstatLines) {
-                    const parts = line.split('\t');
-                    if (parts.length >= 3) {
-                        const changedPath = normalizePath(extractNewPathFromNumstat(parts.slice(2).join('\t')));
-                        if (!changedPath || isIgnoredWorkspaceSnapshotPath(changedPath)) continue;
-                        if (!normalizedChangedSet.has(changedPath)) continue;
-                        const additions = /^\d+$/.test(parts[0]) ? parseInt(parts[0], 10) : 0;
-                        const deletions = /^\d+$/.test(parts[1]) ? parseInt(parts[1], 10) : 0;
-                        additionsTotal += additions;
-                        deletionsTotal += deletions;
-                        changedFileStats[changedPath] = {
-                            additions,
-                            deletions,
-                            changed_lines: additions + deletions
-                        };
-                    }
+            const numstatLines = authenticatedGitGeneration
+                ? authenticatedGitGeneration.readNumstat(false)
+                : runWorkspaceSnapshotGitLines(
+                    repoRoot,
+                    ['diff', '--numstat', '--diff-filter=ACDMRTUXB', 'HEAD', '--', ...normalizedExplicit],
+                    'Failed numstat'
+                );
+            for (const line of numstatLines) {
+                const parts = line.split('\t');
+                if (parts.length >= 3) {
+                    const changedPath = normalizePath(extractNewPathFromNumstat(parts.slice(2).join('\t')));
+                    if (!changedPath || isIgnoredWorkspaceSnapshotPath(changedPath)) continue;
+                    if (!normalizedChangedSet.has(changedPath)) continue;
+                    const additions = /^\d+$/.test(parts[0]) ? parseInt(parts[0], 10) : 0;
+                    const deletions = /^\d+$/.test(parts[1]) ? parseInt(parts[1], 10) : 0;
+                    additionsTotal += additions;
+                    deletionsTotal += deletions;
+                    changedFileStats[changedPath] = {
+                        additions,
+                        deletions,
+                        changed_lines: additions + deletions
+                    };
                 }
-            } catch { /* best effort */ }
+            }
         }
 
         if (includeUntracked) {
@@ -712,6 +710,9 @@ export function getWorkspaceSnapshot(
                     changed_lines: additions
                 };
             }
+        }
+        for (const item of normalizedChanged) {
+            changedFileStats[item] ??= { additions: 0, deletions: 0, changed_lines: 0 };
         }
 
         const changedLinesTotal = additionsTotal + deletionsTotal;
@@ -805,6 +806,9 @@ export function getWorkspaceSnapshot(
                 changed_lines: additions
             };
         }
+    }
+    for (const item of normalizedChanged) {
+        diffFileStats[item] ??= { additions: 0, deletions: 0, changed_lines: 0 };
     }
 
     const changedLinesTotal = additionsTotal + deletionsTotal;

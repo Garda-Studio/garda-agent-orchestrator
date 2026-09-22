@@ -149,6 +149,22 @@ describe('workflow config work module boundaries', () => {
             false
         );
 
+        fs.writeFileSync(
+            configPath,
+            `${JSON.stringify({
+                ...SAFE_WORKFLOW_CONFIG_COMPATIBILITY_BASELINE,
+                compact: {
+                    ...(SAFE_WORKFLOW_CONFIG_COMPATIBILITY_BASELINE.compact as Record<string, unknown>),
+                    run_bytes: Number.MAX_SAFE_INTEGER
+                }
+            }, null, 2)}\n`,
+            'utf8'
+        );
+        assert.equal(
+            hasUnsafeIgnoredWorkflowConfigCompatibilityBaseline(repoRoot, LIVE_CONFIG_PATH),
+            true
+        );
+
         fs.writeFileSync(configPath, '{}\n', 'utf8');
         assert.equal(
             hasUnsafeIgnoredWorkflowConfigCompatibilityBaseline(repoRoot, LIVE_CONFIG_PATH),

@@ -37,7 +37,7 @@ import {
     writeReceiptBackedReviewArtifact,
     writeSimpleCompileCommandsFile
 } from './gates-review-cycle-fixtures';
-import { resolveNextStep } from '../../../../../../src/gates/next-step/next-step';
+import { executeNextStepEffects, resolveNextStep } from '../../../../../../src/gates/next-step';
 import { classifyReviewRemediationFix } from '../../../../../../src/cli/commands/gate-flows/recovery/recovery-flow-remediation';
 import {
     buildReviewEvidenceOnlyRestartPlan,
@@ -78,6 +78,17 @@ import { compileReviewDependencyGraph } from '../../../../../../src/core/review-
 
 const IGNORED_CHANGELOG_PATH = 'garda-agent-orchestrator/live/docs/changes/CHANGELOG.md';
 const ROOT_IGNORED_CHANGELOG_PATH = 'CHANGELOG.md';
+
+function resolveNextStepAfterEffects(taskId: string, repoRoot: string): ReturnType<typeof resolveNextStep> {
+    let nextStep = resolveNextStep({ taskId, repoRoot });
+    for (let effectBatch = 0; effectBatch < 16 && nextStep.next_gate === 'next-step-effect'; effectBatch += 1) {
+        const planSha256 = (nextStep.commands[0]?.command || '')
+            .match(/--effect-plan-sha256\s+["']?([a-f0-9]{64})/u)?.[1] || '';
+        assert.match(planSha256, /^[a-f0-9]{64}$/u, nextStep.reason);
+        nextStep = executeNextStepEffects({ taskId, repoRoot }, planSha256);
+    }
+    return nextStep;
+}
 const REMEDIATION_PART_ENV = 'GARDA_REVIEW_CYCLE_REMEDIATION_PART';
 const SHARED_IGNORED_CHANGELOG_TASK_ID = 'T-940-ignored-changelog-shared';
 
@@ -4212,7 +4223,7 @@ describe('cli/commands/gates – ignored changelog remediation guards', {
         writeFailedIgnoredChangelogPathFirstReviewRequest(repoRoot, taskId);
         writeRepoFile(repoRoot, 'tests/remediation-only.test.ts', 'it("covers remediation", () => {});\n');
 
-        const nextStep = resolveNextStep({ taskId, repoRoot });
+        const nextStep = resolveNextStepAfterEffects(taskId, repoRoot);
         const commandText = nextStep.commands.map((command) => command.command).join('\n');
         assert.match(commandText, /restart-review-cycle/, JSON.stringify(nextStep, null, 2));
         assert.match(commandText, new RegExp(`--changed-file "${IGNORED_CHANGELOG_PATH.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`));
@@ -4235,7 +4246,7 @@ describe('cli/commands/gates – ignored changelog remediation guards', {
         writeFailedIgnoredChangelogExampleOnlyReviewRequest(repoRoot, taskId);
         writeRepoFile(repoRoot, 'tests/remediation-only.test.ts', 'it("covers remediation", () => {});\n');
 
-        const nextStep = resolveNextStep({ taskId, repoRoot });
+        const nextStep = resolveNextStepAfterEffects(taskId, repoRoot);
         const commandText = nextStep.commands.map((command) => command.command).join('\n');
         assert.match(commandText, /restart-review-cycle/, JSON.stringify(nextStep, null, 2));
         assert.doesNotMatch(
