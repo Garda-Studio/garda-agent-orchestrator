@@ -48,6 +48,13 @@ interface HashableState {
 }
 
 const REVIEW_TEXT_MAX_BYTES = 128 * 1024;
+const GIT_IGNORE_BATCH_MAX_PATHS = 256;
+const GIT_IGNORE_BATCH_MAX_BYTES = 64 * 1024;
+
+interface GitIgnoreResult {
+    ignored: boolean;
+    error: string | null;
+}
 const PATH_TOKEN_PATTERN =
     /(?:\.{1,2}\/)?(?:[A-Za-z0-9_.@()+~-]+\/)+[A-Za-z0-9_.@()+~-]+\.[A-Za-z0-9][A-Za-z0-9_.-]*/gu;
 const ROOT_CHANGE_ARTIFACT_TOKEN_PATTERN =
@@ -297,30 +304,58 @@ function collectReviewArtifactPaths(repoRoot: string, taskId: string): string[] 
     }
 }
 
-function isGitIgnored(repoRoot: string, relativePath: string): { ignored: boolean; error: string | null } {
+function readGitIgnoredBatch(repoRoot: string, paths: string[]): Map<string, GitIgnoreResult> {
     const result = spawnSyncWithTimeout('git', [
         '-C',
         String(repoRoot),
         'check-ignore',
-        '--quiet',
-        '--',
-        relativePath
+        '--stdin',
+        '-z'
     ], {
+        input: `${paths.join('\0')}\0`,
         encoding: 'utf8',
         stdio: ['pipe', 'pipe', 'pipe'],
         timeoutMs: DEFAULT_GIT_TIMEOUT_MS,
         maxBuffer: 1024 * 1024
     });
-    if (result.status === 0) {
-        return { ignored: true, error: null };
-    }
-    if (result.status === 1) {
-        return { ignored: false, error: null };
-    }
-    const reason = result.timedOut
+    const output = String(result.stdout || '');
+    const matches = output.endsWith('\0') ? output.slice(0, -1).split('\0') : [];
+    const requested = new Set(paths);
+    const validOutput = result.status === 1
+        ? output === ''
+        : result.status === 0 && matches.length > 0
+            && new Set(matches).size === matches.length && matches.every((entry) => requested.has(entry));
+    const error = result.timedOut
         ? `git check-ignore timed out after ${DEFAULT_GIT_TIMEOUT_MS}ms`
-        : String(result.stderr || result.error || 'git check-ignore failed').trim();
-    return { ignored: false, error: reason };
+        : result.error || !validOutput
+            ? String(result.stderr || result.error || 'git check-ignore failed or returned invalid output').trim()
+            : null;
+    const ignored = new Set(matches);
+    return new Map(paths.map((entry) => [entry, { ignored: !error && ignored.has(entry), error }]));
+}
+
+function readGitIgnoredCandidates(repoRoot: string, paths: string[]): Map<string, GitIgnoreResult> {
+    const results = new Map<string, GitIgnoreResult>();
+    let batch: string[] = [];
+    let bytes = 0;
+    const flush = (): void => {
+        if (!batch.length) return;
+        for (const [entry, result] of readGitIgnoredBatch(repoRoot, batch)) results.set(entry, result);
+        batch = [];
+        bytes = 0;
+    };
+    for (const entry of new Set(paths)) {
+        const size = Buffer.byteLength(entry, 'utf8') + 1;
+        if (entry.includes('\0') || size > GIT_IGNORE_BATCH_MAX_BYTES) {
+            results.set(entry, { ignored: false, error: 'git check-ignore candidate exceeds the batch path limit or contains NUL' });
+            continue;
+        }
+        if (batch.length >= GIT_IGNORE_BATCH_MAX_PATHS || bytes + size > GIT_IGNORE_BATCH_MAX_BYTES) flush();
+        batch.push(entry);
+        bytes += size;
+    }
+    flush();
+    return results;
 }
 
 function getHashableState(repoRoot: string, relativePath: string): HashableState | null {
@@ -429,10 +464,11 @@ export function resolveIgnoredRemediationCommandChangedFiles(params: {
         addCandidate(candidates, params.repoRoot, plannedPath, 'task_plan');
     }
 
+    const ignoredCandidates = readGitIgnoredCandidates(params.repoRoot, [...candidates.keys()]);
     return [...candidates.values()]
         .filter((candidate) => {
-            const ignored = isGitIgnored(params.repoRoot, candidate.path);
-            return ignored.ignored && !!getHashableState(params.repoRoot, candidate.path);
+            const ignored = ignoredCandidates.get(candidate.path);
+            return ignored?.ignored && !!getHashableState(params.repoRoot, candidate.path);
         })
         .map((candidate) => candidate.path)
         .sort();
@@ -487,6 +523,9 @@ export function assessExplicitIgnoredRemediationTargets(params: {
 
     const targets: IgnoredRemediationTargetEvidence[] = [];
     const violations: string[] = [];
+    const ignoredCandidates = readGitIgnoredCandidates(repoRoot, [...candidates.keys()].filter((entry) => (
+        !isTaskManualValidationPath(params.taskId, entry) && isPathInsideRoot(path.resolve(repoRoot, entry), repoRoot)
+    )));
     for (const candidate of [...candidates.values()].sort((left, right) => left.path.localeCompare(right.path))) {
         if (isTaskManualValidationPath(params.taskId, candidate.path)) {
             continue;
@@ -502,7 +541,8 @@ export function assessExplicitIgnoredRemediationTargets(params: {
             violations.push(`ignored remediation target must stay inside repo root: ${candidate.path}`);
             continue;
         }
-        const ignored = isGitIgnored(repoRoot, candidate.path);
+        const ignored = ignoredCandidates.get(candidate.path);
+        if (!ignored) throw new Error(`Missing git ignore assessment for '${candidate.path}'.`);
         if (ignored.error) {
             violations.push(`ignored remediation target '${candidate.path}' could not be checked: ${ignored.error}`);
             continue;

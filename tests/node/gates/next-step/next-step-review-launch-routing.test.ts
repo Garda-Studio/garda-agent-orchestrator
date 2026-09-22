@@ -63,6 +63,25 @@ function assertNoDefaultReviewerReservationGuidance(text: string): void {
 
 let tempRoots: string[] = [];
 
+const LATENCY_PLANNED_FILES = Array.from({ length: 34 }, (_, index) => `src/planned-${index}.ts`);
+
+function resolveLaunchWithoutUnusedIgnoreReads(repoRoot: string): ReturnType<typeof resolveNextStep> {
+    const childProcess = require('node:child_process') as typeof import('node:child_process');
+    const original = childProcess.spawnSync;
+    let perFileIgnoreCalls = 0;
+    childProcess.spawnSync = ((file: string, args: string[], options: unknown) => {
+        if (file === 'git' && args.includes('check-ignore') && args.includes('--quiet')) perFileIgnoreCalls++;
+        return original(file, args, options as never);
+    }) as typeof original;
+    try {
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        assert.equal(perFileIgnoreCalls, 0, 'launch recovery excludes changed-file scope');
+        return result;
+    } finally {
+        childProcess.spawnSync = original;
+    }
+}
+
 
 function makeTempRepo(): string {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-next-step-'));
@@ -273,7 +292,8 @@ function appendRestartBoundary(
 function seedStartedTask(
     repoRoot: string,
     taskId: string,
-    reviewPolicyMode: EffectiveReviewExecutionPolicyMode = 'code_first_optional'
+    reviewPolicyMode: EffectiveReviewExecutionPolicyMode = 'code_first_optional',
+    plannedChangedFiles: string[] = []
 ): void {
     const taskModePath = path.join(reviewsRoot(repoRoot), `${taskId}-task-mode.json`);
     const profilePolicySnapshot = buildTaskProfilePolicySnapshot(
@@ -293,6 +313,7 @@ function seedStartedTask(
         requestedDepth: 2,
         effectiveDepth: 2,
         taskSummary: 'Seeded next-step task',
+        plannedChangedFiles,
         startBanner: 'Garda captures my mind',
         provider: 'Codex',
         canonicalSourceOfTruth: 'Codex',
@@ -1722,8 +1743,10 @@ describe('gates/next-step', () => {
     it('routes provider-failed delegation-started launch to failed launch recovery', () => {
         const repoRoot = makeTempRepo();
         const reviewerIdentity = 'agent:019dc191-3d81-7091-aca0-9f44b440328b';
-        seedStartedTask(repoRoot, TASK_ID);
-        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+        seedStartedTask(repoRoot, TASK_ID, 'code_first_optional', LATENCY_PLANNED_FILES);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true }, {
+            changedFiles: ['src/app.ts', ...LATENCY_PLANNED_FILES]
+        });
         seedCompilePass(repoRoot, TASK_ID);
         writeReviewContextOnly(repoRoot, TASK_ID, 'code', reviewerIdentity);
         const reviewContextPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-code-review-context.json`);
@@ -1812,7 +1835,7 @@ describe('gates/next-step', () => {
             fork_context: false
         });
 
-        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        const result = resolveLaunchWithoutUnusedIgnoreReads(repoRoot);
 
         assert.equal(result.next_gate, 'restart-review-cycle', result.reason);
         assert.equal(result.commands[0].label, 'Restart/supersede failed delegated reviewer launch');
@@ -1837,8 +1860,10 @@ describe('gates/next-step', () => {
     it('routes resumed delegation-started launch with missing review output to orphaned launch recovery', () => {
         const repoRoot = makeTempRepo();
         const reviewerIdentity = 'agent:019dc191-3d81-7091-aca0-9f44b440328b';
-        seedStartedTask(repoRoot, TASK_ID);
-        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+        seedStartedTask(repoRoot, TASK_ID, 'code_first_optional', LATENCY_PLANNED_FILES);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true }, {
+            changedFiles: ['src/app.ts', ...LATENCY_PLANNED_FILES]
+        });
         seedCompilePass(repoRoot, TASK_ID);
         writeReviewContextOnly(repoRoot, TASK_ID, 'code', reviewerIdentity);
         const reviewContextPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-code-review-context.json`);
@@ -1924,7 +1949,7 @@ describe('gates/next-step', () => {
             fork_context: false
         });
 
-        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        const result = resolveLaunchWithoutUnusedIgnoreReads(repoRoot);
 
         assert.equal(result.next_gate, 'restart-review-cycle', result.reason);
         assert.equal(result.commands[0].label, 'Restart/supersede orphaned delegated reviewer launch');
@@ -2372,8 +2397,10 @@ describe('gates/next-step', () => {
         const repoRoot = makeTempRepo();
         const reviewType = 'refactor';
         const reviewerIdentity = 'agent:019dc191-3d81-7091-aca0-refactor';
-        seedStartedTask(repoRoot, TASK_ID);
-        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, refactor: true });
+        seedStartedTask(repoRoot, TASK_ID, 'code_first_optional', LATENCY_PLANNED_FILES);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, refactor: true }, {
+            changedFiles: ['src/app.ts', ...LATENCY_PLANNED_FILES]
+        });
         seedCompilePass(repoRoot, TASK_ID);
         writeReviewContextOnly(repoRoot, TASK_ID, reviewType, reviewerIdentity);
         const reviewContextPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-${reviewType}-review-context.json`);
@@ -2472,7 +2499,7 @@ describe('gates/next-step', () => {
             fork_context: false
         });
 
-        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        const result = resolveLaunchWithoutUnusedIgnoreReads(repoRoot);
 
         assert.equal(result.next_gate, 'complete-reviewer-launch', result.reason);
         assert.equal(result.review.next_review_type, reviewType);

@@ -1,4 +1,5 @@
 import * as childProcess from 'node:child_process';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { isPlainRecord } from '../../core/records';
@@ -131,7 +132,37 @@ function readGitPathLines(repoRoot: string, args: string[]): string[] | null {
     }
 }
 
+interface CommandWorkspaceReadSnapshot {
+    active: boolean;
+    repositories: Map<string, { changedFiles: string[]; reliable: boolean }>;
+}
+
+const commandWorkspaceReadSnapshots = new AsyncLocalStorage<CommandWorkspaceReadSnapshot>();
+
+export function withNextStepCommandWorkspaceReadSnapshot<T>(callback: () => T): T {
+    const snapshot: CommandWorkspaceReadSnapshot = { active: true, repositories: new Map() };
+    return commandWorkspaceReadSnapshots.run(snapshot, () => {
+        try {
+            return callback();
+        } finally {
+            snapshot.active = false;
+            snapshot.repositories.clear();
+        }
+    });
+}
+
 function readCurrentWorkspaceChangedFiles(repoRoot: string): { changedFiles: string[]; reliable: boolean } {
+    const snapshot = commandWorkspaceReadSnapshots.getStore();
+    const resolvedRoot = path.resolve(repoRoot);
+    const key = process.platform === 'win32' ? resolvedRoot.toLowerCase() : resolvedRoot;
+    const cached = snapshot?.active ? snapshot.repositories.get(key) : null;
+    if (cached) return { changedFiles: [...cached.changedFiles], reliable: cached.reliable };
+    const result = captureCurrentWorkspaceChangedFiles(repoRoot);
+    if (snapshot?.active) snapshot.repositories.set(key, result);
+    return { changedFiles: [...result.changedFiles], reliable: result.reliable };
+}
+
+function captureCurrentWorkspaceChangedFiles(repoRoot: string): { changedFiles: string[]; reliable: boolean } {
     const trackedChangedFiles = readGitPathLines(repoRoot, ['diff', '--name-only', '--diff-filter=ACDMRTUXB', 'HEAD', '--']);
     const untrackedChangedFiles = readGitPathLines(repoRoot, ['ls-files', '--others', '--exclude-standard']);
     if (trackedChangedFiles === null || untrackedChangedFiles === null) {

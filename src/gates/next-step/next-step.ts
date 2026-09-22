@@ -401,6 +401,7 @@ import {
 } from '../workspace/workspace-snapshot-cache';
 import {
     buildClassifyChangeCommand,
+    withNextStepCommandWorkspaceReadSnapshot,
     buildCompileGateCommand,
     buildCompletionGateCommand,
     buildEnterTaskModeCommand,
@@ -5014,12 +5015,7 @@ export function resolveNextStepDecisionRoute(
                         reviewCycleTaskIntent,
                         preflightCommandPath,
                         taskModePath,
-                        resolveIgnoredRemediationCommandChangedFiles({
-                            repoRoot,
-                            taskId,
-                            reviewArtifactPaths: [state.artifactPath],
-                            taskMode
-                        }),
+                        [],
                         {
                             includeChangedFileScope: false,
                             reviewType,
@@ -5036,12 +5032,7 @@ export function resolveNextStepDecisionRoute(
                         reviewCycleTaskIntent,
                         preflightCommandPath,
                         taskModePath,
-                        resolveIgnoredRemediationCommandChangedFiles({
-                            repoRoot,
-                            taskId,
-                            reviewArtifactPaths: [state.artifactPath],
-                            taskMode
-                        }),
+                        [],
                         {
                             includeChangedFileScope: false,
                             reviewType,
@@ -5220,7 +5211,7 @@ function resolveNextStepWithEffectController(
     if (!reviewsRoot) {
         throw new Error('ReviewsRoot must resolve inside repo root without symlink or junction escape.');
     }
-    return withTaskTimelineReadSnapshot(eventsRoot, taskId, () => (
+    return withNextStepCommandWorkspaceReadSnapshot(() => withTaskTimelineReadSnapshot(eventsRoot, taskId, () => (
         withReviewArtifactReadBarrier(reviewsRoot, () => (
             withTaskIndexReadSnapshot(reviewsRoot, taskId, () => {
                 const context = createNextStepResolutionContext({
@@ -5233,7 +5224,7 @@ function resolveNextStepWithEffectController(
                 return resolveNextStepDecisionRoute(context, effects);
             })
         ))
-    ));
+    )));
 }
 
 function inspectNextStepEffects(options: NextStepOptions): {
