@@ -29,6 +29,7 @@ import {
     attestReviewerInvocationForTest,
     seedPromptBoundReviewFixture
 } from './gates-command-review-result-fixtures';
+import { createHash } from 'node:crypto';
 
 describe('gates command review result - review output', () => {
 
@@ -208,6 +209,7 @@ describe('gates command review result - review output', () => {
             'REVIEW PASSED'
         ].join('\n'), 'utf8');
         const expectedReviewOutputSourceMtimeUtc = fs.statSync(reviewOutputPath).mtime.toISOString();
+        const expectedRawOutput = fs.readFileSync(reviewOutputPath, 'utf8');
         appendTaskEvent(getOrchestratorRoot(repoRoot), taskId, 'REVIEWER_DELEGATION_ROUTED', 'INFO', 'Delegated review routed by controller.', {
             review_type: 'code',
             reviewer_execution_mode: 'delegated_subagent',
@@ -260,6 +262,7 @@ describe('gates command review result - review output', () => {
         assert.equal(fs.existsSync(reviewOutputPath), false);
         const artifactContent = fs.readFileSync(artifactPath, 'utf8');
         const rawReviewContent = fs.readFileSync(rawReviewOutputPath, 'utf8');
+        assert.equal(rawReviewContent, expectedRawOutput);
         assert.ok(artifactContent.includes('## Verdict\nREVIEW PASSED'));
         assert.ok(rawReviewContent.includes('## Verdict\nREVIEW PASSED'));
         assert.equal(artifactContent.trimEnd(), rawReviewContent.trimEnd());
@@ -283,6 +286,8 @@ describe('gates command review result - review output', () => {
         assert.equal(Number.isNaN(Date.parse(receipt.review_result_recorded_at_utc)), false);
         assert.equal(receipt.review_output_path, rawReviewOutputPath.replace(/\\/g, '/'));
         assert.equal(receipt.review_materialization_fidelity, 'exact');
+        assert.equal(receipt.review_output_sha256, createHash('sha256').update(expectedRawOutput).digest('hex'));
+        assert.equal(receipt.review_artifact_sha256, createHash('sha256').update(artifactContent).digest('hex'));
         assert.equal(typeof receipt.review_output_sha256, 'string');
         assert.ok(receipt.review_output_sha256.length > 0);
         assert.equal(typeof receipt.review_output_source_mtime_utc, 'string');

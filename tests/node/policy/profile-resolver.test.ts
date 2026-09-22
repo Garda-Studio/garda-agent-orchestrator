@@ -39,6 +39,89 @@ import {
     validateTaskProfilePolicySnapshot
 } from '../../../src/policy/task-profile-policy-snapshot';
 import { buildDefaultReviewRemediationModePolicy } from '../../../src/policy/review-remediation-mode-policy';
+import { normalizeTaskProfileValue, resolveTaskProfileSelection } from '../../../src/policy/task-profile-selection';
+
+test('task profile normalization preserves the default sentinel and normalizes explicit names', () => {
+    for (const value of [undefined, null, '', '   ']) {
+        assert.equal(normalizeTaskProfileValue(value), null);
+    }
+    assert.equal(normalizeTaskProfileValue(' DEFAULT '), 'default');
+    assert.equal(normalizeTaskProfileValue(' STRICT '), 'strict');
+});
+
+test('task profile selection inherits the workspace for blank and default values without writing config', (t) => {
+    const bundleRoot = makeTempBundle({});
+    t.after(() => fs.rmSync(bundleRoot, { recursive: true, force: true }));
+    const profilesPath = path.join(bundleRoot, 'live/config/profiles.json');
+    const before = fs.readFileSync(profilesPath, 'utf8');
+    for (const value of [undefined, null, '', ' DEFAULT ']) {
+        const result = resolveTaskProfileSelection(bundleRoot, value, 'docs-only');
+        assert.deepEqual(result.selection, {
+            task_profile: value === ' DEFAULT ' ? 'default' : null,
+            profile_selection_source: 'workspace_active',
+            effective_profile: 'balanced',
+            effective_profile_source: 'built_in',
+            runtime_active_profile: 'balanced',
+            runtime_profile_source: 'built_in'
+        });
+        assert.equal(result.effective_policy.profile_name, 'balanced');
+    }
+    assert.equal(fs.readFileSync(profilesPath, 'utf8'), before);
+});
+
+test('explicit task profile overrides the workspace and preserves both profile identities', (t) => {
+    const bundleRoot = makeTempBundle({});
+    t.after(() => fs.rmSync(bundleRoot, { recursive: true, force: true }));
+    const result = resolveTaskProfileSelection(bundleRoot, ' STRICT ', 'test-only');
+    assert.deepEqual(result.selection, {
+        task_profile: 'strict',
+        profile_selection_source: 'task_queue',
+        effective_profile: 'strict',
+        effective_profile_source: 'built_in',
+        runtime_active_profile: 'balanced',
+        runtime_profile_source: 'built_in'
+    });
+    assert.equal(result.effective_policy.depth, 3);
+    assert.equal(result.effective_policy.scope_category, 'test-only');
+});
+
+test('task profile selection resolves user profiles and rejects unknown explicit profiles', (t) => {
+    const bundleRoot = makeTempBundle({});
+    t.after(() => fs.rmSync(bundleRoot, { recursive: true, force: true }));
+    const profilesPath = path.join(bundleRoot, 'live/config/profiles.json');
+    const profiles = loadProfilesData(profilesPath);
+    profiles.user_profiles['team-review'] = structuredClone(profiles.built_in_profiles.strict);
+    profiles.active_profile = 'team-review';
+    fs.writeFileSync(profilesPath, JSON.stringify(profiles), 'utf8');
+    const inherited = resolveTaskProfileSelection(bundleRoot, 'default', 'docs-only');
+    assert.equal(inherited.selection.effective_profile, 'team-review');
+    assert.equal(inherited.selection.effective_profile_source, 'user');
+    assert.equal(inherited.selection.runtime_profile_source, 'user');
+    const explicit = resolveTaskProfileSelection(bundleRoot, ' TEAM-REVIEW ', 'docs-only');
+    assert.equal(explicit.selection.profile_selection_source, 'task_queue');
+    assert.equal(explicit.effective_policy.depth, 3);
+    assert.throws(() => resolveTaskProfileSelection(bundleRoot, 'missing'), /Profile 'missing' not found/u);
+});
+
+test('task profile selection forwards review guardrails and zero-diff scope evidence', (t) => {
+    const bundleRoot = makeTempBundle({});
+    t.after(() => fs.rmSync(bundleRoot, { recursive: true, force: true }));
+    const ordinary = resolveTaskProfileSelection(bundleRoot, 'docs-only', 'docs-only');
+    assert.equal(ordinary.effective_policy.review_policy.code, false);
+    const forced = resolveTaskProfileSelection(bundleRoot, 'docs-only', 'docs-only', { forceCodeReview: true });
+    assert.equal(forced.effective_policy.review_policy.code, true);
+    const zeroDiff = resolveTaskProfileSelection(bundleRoot, 'strict', 'empty', {
+        zeroDiffBaselineOnly: true, domainSurface: {}
+    });
+    assert.equal(zeroDiff.effective_policy.guardrail_diagnostics?.zero_diff_no_reviewable_scope, true);
+    assert.equal(zeroDiff.effective_policy.review_policy.code, false);
+    const protectedScope = resolveTaskProfileSelection(bundleRoot, 'fast', 'code', {
+        domainSurface: { db: false, security: true }, protectedControlPlaneChanged: true
+    });
+    assert.equal(protectedScope.effective_policy.review_policy.code, true);
+    assert.equal(protectedScope.effective_policy.review_policy.security, true);
+    assert.equal(protectedScope.effective_policy.review_policy.db, false);
+});
 
 test('profile task decomposition enables strict and balanced defaults and disables other legacy profiles', () => {
     const strict = resolveProfileTaskDecompositionPolicy(undefined, 'strict');

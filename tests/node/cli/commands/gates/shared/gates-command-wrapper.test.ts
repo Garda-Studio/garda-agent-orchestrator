@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 
 import { EXIT_GATE_FAILURE } from '../../../../../../src/cli/exit-codes';
 import {
@@ -60,6 +61,101 @@ function seedExpectedRedPreflight(repoRoot: string, taskId: string): string {
 }
 
 describe('cli/commands/gates intermediate command wrapper', () => {
+    it('preserves a nonzero exit and the full redacted log while showing only the last 50 lines', async (t) => {
+        const repoRoot = createTempRepo();
+        t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+        const taskId = 'T-INTERMEDIATE-FAILURE';
+        seedTaskQueue(repoRoot, taskId);
+        seedInitAnswers(repoRoot);
+        seedNodeFoundationFocusedWrapperFixture(repoRoot);
+        fs.writeFileSync(path.join(repoRoot, 'scripts/node-foundation/build-scripts.cjs'), [
+            "for (let index = 0; index < 75; index++) console.log(`failure-line-${index}`);",
+            "console.log('ACCESS_TOKEN=secret-value');",
+            'process.exitCode = 7;'
+        ].join('\n'), 'utf8');
+        const result = await runIntermediateCommandCommand({
+            repoRoot, taskId, commandSource: 'targeted-test',
+            command: 'node scripts/node-foundation/build-scripts.cjs test.js tests/node/gates/focused-command.test.ts',
+            timeoutMs: 60_000
+        });
+        assert.equal(result.exitCode, 7);
+        assert.equal(result.outputLines[0], 'INTERMEDIATE_COMMAND_FAILED');
+        const event = readTaskTimelineEvents(repoRoot, taskId).find((entry) => entry.event_type === 'INTERMEDIATE_COMMAND_RUN');
+        assert.ok(event);
+        assert.equal(event.outcome, 'FAILED');
+        const details = event.details as Record<string, unknown>;
+        assert.equal(details.exit_code, 7);
+        const outputPath = String(details.output_artifact_path);
+        const raw = fs.readFileSync(outputPath, 'utf8');
+        const rawLines = raw.trimEnd().split('\n');
+        assert.equal(rawLines.length, 76);
+        assert.equal(rawLines[0], 'failure-line-0');
+        assert.equal(rawLines[74], 'failure-line-74');
+        assert.ok(!raw.includes('secret-value'));
+        assert.deepEqual(result.outputLines.slice(7, 57), rawLines.slice(-50));
+        assert.ok(!result.outputLines.includes('failure-line-0'));
+        assert.ok(!result.outputLines.join('\n').includes('secret-value'));
+        assert.equal(details.output_artifact_sha256, createHash('sha256').update(raw).digest('hex'));
+        assert.equal(details.output_artifact_size_bytes, Buffer.byteLength(raw));
+        const record = JSON.parse(fs.readFileSync(String(details.artifact_path), 'utf8'));
+        assert.equal(record.status, 'FAILED');
+        assert.equal(record.exit_code, 7);
+        assert.equal(record.output_telemetry.parser_strategy, 'bounded_failure_tail');
+    });
+
+    it('records an ordinary command timeout as failure instead of a successful or expected-red run', async (t) => {
+        const repoRoot = createTempRepo();
+        t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+        const taskId = 'T-INTERMEDIATE-TIMEOUT';
+        seedTaskQueue(repoRoot, taskId);
+        seedInitAnswers(repoRoot);
+        seedNodeFoundationFocusedWrapperFixture(repoRoot);
+        fs.writeFileSync(path.join(repoRoot, 'scripts/node-foundation/build-scripts.cjs'), 'setInterval(() => {}, 1000);\n', 'utf8');
+        const result = await runIntermediateCommandCommand({
+            repoRoot, taskId, commandSource: 'targeted-test',
+            command: 'node scripts/node-foundation/build-scripts.cjs test.js tests/node/gates/focused-command.test.ts',
+            timeoutMs: 200
+        });
+        assert.notEqual(result.exitCode, 0);
+        assert.equal(result.outputLines[0], 'INTERMEDIATE_COMMAND_FAILED');
+        assert.match(result.outputLines.join('\n'), /timed out|timeout/iu);
+        const events = readTaskTimelineEvents(repoRoot, taskId);
+        const event = events.find((entry) => entry.event_type === 'INTERMEDIATE_COMMAND_RUN');
+        assert.ok(event);
+        assert.equal(event.outcome, 'FAILED');
+        assert.equal(events.some((entry) => entry.event_type === 'TEST_FIRST_EXPECTED_FAILURE_RECORDED'), false);
+        const details = event.details as Record<string, unknown>;
+        const record = JSON.parse(fs.readFileSync(String(details.artifact_path), 'utf8'));
+        assert.equal(record.status, 'FAILED');
+        assert.equal(record.exit_code, result.exitCode);
+        assert.equal(record.expected_failure, undefined);
+        assert.match(fs.readFileSync(String(details.output_artifact_path), 'utf8'), /timed out|timeout/iu);
+    });
+
+    it('propagates a failed focused command through the real CLI with persisted failure evidence', (t) => {
+        const repoRoot = createTempRepo();
+        t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+        const taskId = 'T-INTERMEDIATE-CLI-FAIL';
+        seedTaskQueue(repoRoot, taskId);
+        seedInitAnswers(repoRoot);
+        seedNodeFoundationFocusedWrapperFixture(repoRoot);
+        fs.writeFileSync(path.join(repoRoot, 'scripts/node-foundation/build-scripts.cjs'), "console.error('focused failure'); process.exitCode = 7;\n", 'utf8');
+        const result = childProcess.spawnSync(process.execPath, [
+            path.join(process.cwd(), 'bin/garda.js'), 'gate', 'run-intermediate-command',
+            '--task-id', taskId, '--command-source', 'targeted-test',
+            '--command', 'node scripts/node-foundation/build-scripts.cjs test.js tests/node/gates/focused-command.test.ts',
+            '--timeout-ms', '60000', '--repo-root', repoRoot
+        ], { cwd: repoRoot, encoding: 'utf8', timeout: 60_000 });
+        assert.equal(result.error, undefined);
+        assert.equal(result.status, 7, result.stderr || result.stdout);
+        assert.match(result.stdout, /INTERMEDIATE_COMMAND_FAILED/u);
+        assert.match(result.stdout, /focused failure/u);
+        const event = readTaskTimelineEvents(repoRoot, taskId).find((entry) => entry.event_type === 'INTERMEDIATE_COMMAND_RUN');
+        assert.ok(event);
+        assert.equal(event.outcome, 'FAILED');
+        assert.equal((event.details as Record<string, unknown>).exit_code, 7);
+    });
+
     it('runs intermediate commands with compact audited output telemetry', async () => {
         const repoRoot = createTempRepo();
         const taskId = 'T-INTERMEDIATE';

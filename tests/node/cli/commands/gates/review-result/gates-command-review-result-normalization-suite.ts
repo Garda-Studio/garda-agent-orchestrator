@@ -1333,8 +1333,14 @@ describe('gates command review result - normalization', () => {
         assert.ok(!artifactContent.includes('- [follow-up] Based on code inspection'));
         assert.ok(!artifactContent.includes('- [follow-up] Time-based tests rely on wall-clock'));
         assert.ok(!artifactContent.includes('- [follow-up] Reviewed `src/gates/next-step.ts`'));
+        const preservedQuote = artifactContent.split('## Preserved Raw Reviewer Output\n\n')[1]?.split('\n\n')[0];
+        assert.ok(preservedQuote, 'Normalized PASS must include the preserved reviewer output block.');
+        const preservedOutput = preservedQuote.split('\n').map((line) => line.replace(/^> ?/u, '')).join('\n');
+        assert.equal(preservedOutput, reviewOutputContent, 'Markdown quoting must preserve all original residual-risk text.');
         const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
         assert.equal(receipt.review_materialization_fidelity, 'normalized_lossless');
+        assert.equal(receipt.review_output_sha256, createHash('sha256').update(reviewOutputContent).digest('hex'));
+        assert.equal(receipt.review_artifact_sha256, createHash('sha256').update(artifactContent).digest('hex'));
         assert.equal(receipt.review_output_path, rawReviewOutputPath.replace(/\\/g, '/'));
         assert.notEqual(receipt.review_artifact_sha256, receipt.review_output_sha256);
         assert.ok(capturedLogs.some((line) => line.includes('ReviewMaterializationFidelity: normalized_lossless')));

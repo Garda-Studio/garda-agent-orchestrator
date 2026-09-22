@@ -4,6 +4,112 @@ This tracked checklist is the release-cut source of truth for static readiness.
 Local `TASK.md` and `TASK_DONE.md` files are intentionally gitignored operator
 queues and must not be treated as publish blockers by release validation.
 
+## Public artifact integrity and provenance policy
+
+The npm package is the supported install surface. Its registry integrity and
+verified npm provenance are the baseline; a second custom signing system is not
+required. A checksum identifies bytes but does not authenticate their author.
+Provenance links a package to its source/build identity and does not establish
+that the code is safe. Operators must record the exact version, commit, artifact
+digest and verification result rather than assuming all releases are attested.
+See npm's [provenance verification guide](https://docs.npmjs.com/viewing-package-provenance/).
+
+| Surface | Verification and current limitation |
+| --- | --- |
+| Published npm tarball | Check `dist.integrity` against the downloaded tarball and verify registry signatures/provenance. Inspect the attestation's repository, commit and publishing workflow against the release handoff. |
+| Local `npm pack` candidate | Record SHA-256 of the exact `.tgz` produced after release preflight. A local pack has no npm attestation and is not proof that those bytes were published. |
+| Clean source archive | Run `npm run archive:source` from a clean checkout of the intended commit, then record its SHA-256 and that commit. The archiver reads working-tree bytes of tracked paths, not a Git commit object. This is a source snapshot, not an installable npm package or an automatically signed artifact. |
+| Evidence archive | Use `npm run archive:evidence`; record its SHA-256 and inspect `ARCHIVE-MANIFEST.json`. The embedded per-entry digests describe selected content, not an external signature or an atomic snapshot of a changing workspace. |
+| Git release tag | Resolve `v<version>` to the expected commit with `git rev-parse "v<version>^{commit}"`. `git verify-tag` authenticates only a signed annotated tag with a separately trusted key; unsigned/lightweight tags must be reported as unsigned. |
+| Additional release assets | If distributed, list each exact filename, byte size and SHA-256 in the release handoff or an accompanying `SHA256SUMS` file. State whether that list is authenticated. GitHub-generated archives and project-generated archives may contain different bytes. |
+
+### Verify the public npm package
+
+Use an exact released version, not a moving dist-tag. In a scratch directory,
+download the public tarball and compare its SHA-512 SRI to registry metadata:
+
+```powershell
+$releaseVersion = '1.4.3' # Replace with the release being inspected.
+$packageSpec = "garda-agent-orchestrator@$releaseVersion"
+$metadataJson = npm view $packageSpec dist --json --registry=https://registry.npmjs.org
+if ($LASTEXITCODE -ne 0) { throw 'Cannot read public package metadata.' }
+$metadata = $metadataJson | ConvertFrom-Json
+if (-not $metadata.integrity -or -not $metadata.tarball) { throw 'Missing integrity or tarball metadata.' }
+$tarballPath = Join-Path (Get-Location) "garda-agent-orchestrator-$releaseVersion.tgz"
+Invoke-WebRequest -Uri $metadata.tarball -OutFile $tarballPath -ErrorAction Stop
+$sha512 = [System.Security.Cryptography.SHA512]::Create()
+$stream = [System.IO.File]::OpenRead($tarballPath)
+try {
+    $actualIntegrity = 'sha512-' + [Convert]::ToBase64String($sha512.ComputeHash($stream))
+} finally {
+    $stream.Dispose()
+    $sha512.Dispose()
+}
+if ($actualIntegrity -cne $metadata.integrity) { throw 'Published tarball integrity mismatch.' }
+Get-FileHash -LiteralPath $tarballPath -Algorithm SHA256
+```
+
+Registry metadata and a matching digest alone do not prove publisher identity.
+In a fresh scratch npm project, install the exact registry version with scripts
+disabled, then verify the installed package's signatures and attestations:
+
+```powershell
+npm init --yes
+if ($LASTEXITCODE -ne 0) { throw 'Cannot initialize verification project.' }
+npm install --ignore-scripts --no-audit --save-exact $packageSpec --registry=https://registry.npmjs.org
+if ($LASTEXITCODE -ne 0) { throw 'Cannot install the exact public package for verification.' }
+npm audit signatures --registry=https://registry.npmjs.org
+if ($LASTEXITCODE -ne 0) { throw 'Registry signature or attestation verification failed.' }
+```
+
+Inspect the version's npm provenance view as well: record the attested source
+commit and workflow and compare them with the intended release. A successful
+signature check is not evidence that a missing provenance attestation exists.
+If attestation evidence is absent or unavailable, report that limitation and do
+not label the release provenance-verified. npm documents automatic provenance
+for supported [Trusted Publishing](https://docs.npmjs.com/trusted-publishers/)
+flows; the observed public artifact remains the evidence for a specific release.
+
+### Record archive and release handoff evidence
+
+For a source archive, first verify that `git rev-parse HEAD` is the intended
+release commit and `git status --porcelain` has no output. Keep the checkout
+unchanged during archiving. A dirty source snapshot must be identified as such
+and cannot be claimed to contain exactly the recorded commit's bytes.
+
+Evidence archives also contain local runtime evidence, so a commit alone does
+not identify all their contents. Stop writers while collecting them and record
+the manifest and archive digest separately. Use the existing archive commands
+and their printed `ArchivePath` values. Hash exact files without rebuilding them:
+
+```powershell
+Get-FileHash -LiteralPath '<ArchivePath or packed .tgz path>' -Algorithm SHA256
+```
+
+On Linux, `sha256sum <artifact>` computes the same digest; on macOS use
+`shasum -a 256 <artifact>`. Compare with the expected digest from the chosen
+trusted handoff. A checksum downloaded alongside an unsigned asset detects
+accidental corruption but supplies no independent publisher authentication.
+The archive manifest can be inspected with
+`tar -xOf <archive.tar> ARCHIVE-MANIFEST.json`; its regular-file hashes use
+SHA-256 and symlink hashes cover `symlink:<link-target>`.
+
+Before calling a release verified, record:
+
+- Exact version, repository, commit and tag identity, including tag signing status.
+- Exact filenames, byte sizes and digests of the candidate and distributed artifacts.
+- npm integrity comparison and signature/provenance results for the public version.
+- Attested commit/workflow comparison, or an explicit missing/unavailable result.
+- Any archive or release-asset signing limitations.
+
+This policy adds documentation and manual release checks only. It does not add
+an online dependency to local/offline development, alter update trusted-source
+rules, or replace `npm pack`, `archive:source`, `archive:evidence` or
+`release:preflight`. The current publish workflow rebuilds before staging;
+candidate-to-published byte equality must be checked, not inferred. It does not
+currently generate detached signatures or a public `SHA256SUMS` asset. Automated
+pack-once publishing and candidate-bound evidence remain separate release work.
+
 ## 1.4.3
 
 - [x] Package metadata is aligned to `1.4.3` in `package.json`, `package-lock.json`, `VERSION`, and the tracked package-surface baseline.

@@ -1,3 +1,4 @@
+import { WORKFLOW_SET_CONFIRMATION_EXAMPLE } from '../../../core/workflow-command-guidance';
 import {
     UNCONFIGURED_COMPILE_GATE_COMMAND
 } from '../../../core/constants';
@@ -93,7 +94,7 @@ export function buildCompileGateCommandSource(command: unknown): string {
 export function buildCompileGateRemediationLine(command: unknown): string {
     return isConfiguredCompileGateCommand(command)
         ? 'CompileGateRemediation: none'
-        : 'CompileGateRemediation: Set workflow-config compile_gate.command with workflow set --compile-gate-command "<compile/build/type-check command>" --operator-confirmed yes --operator-confirmed-at-utc <ISO-8601 timestamp>';
+        : `CompileGateRemediation: Set workflow-config compile_gate.command with workflow set --compile-gate-command "<compile/build/type-check command>" ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}`;
 }
 
 export function buildReviewExecutionPolicyView(state: WorkflowConfigState): WorkflowReviewExecutionPolicyView {
@@ -437,20 +438,20 @@ export function formatWorkflowShowOutput(result: WorkflowCommandResultBase & { a
     lines.push('');
     lines.push('Hints');
     lines.push('Tip: compile-gate executes workflow-config compile_gate.command only; unconfigured workspaces fail closed and do not fall back to 40-commands.md.');
-    lines.push('Tip: run "workflow set --compile-gate-command \"<compile/build/type-check command>\" --operator-confirmed yes --operator-confirmed-at-utc <ISO-8601 timestamp>" after operator approval to set the compile gate command.');
-    lines.push('Tip: run "workflow set --full-suite on|off --operator-confirmed yes --operator-confirmed-at-utc <ISO-8601 timestamp>" to change the repo-local mode after operator approval.');
-    lines.push('Tip: run "workflow set --full-suite-timeout-blocker true|false --full-suite-timeout-retry-count 1 --operator-confirmed yes --operator-confirmed-at-utc <ISO-8601 timestamp>" to change timeout blocker behavior after operator approval.');
-    lines.push(`Tip: run "workflow set --review-execution-policy <${REVIEW_EXECUTION_POLICY_MODES.join('|')}> --operator-confirmed yes --operator-confirmed-at-utc <ISO-8601 timestamp>" to change review launch ordering after operator approval.`);
-    lines.push('Tip: run "workflow set --no-delegate true|false --operator-confirmed yes --operator-confirmed-at-utc <ISO-8601 timestamp>" to toggle fail-closed delegated reviewer launch availability after operator approval.');
-    lines.push('Tip: run "workflow set --scope-budget on|off --scope-budget-warn-changed-lines 2000 --scope-budget-block-changed-lines 5000 --operator-confirmed yes --operator-confirmed-at-utc <ISO-8601 timestamp>" to change the tiered scope budget guard after operator approval.');
-    lines.push('Tip: run "workflow set --review-cycle on|off --operator-confirmed yes --operator-confirmed-at-utc <ISO-8601 timestamp>" to change the review cycle guard after operator approval.');
-    lines.push('Tip: run "workflow set --project-memory on|off --operator-confirmed yes --operator-confirmed-at-utc <ISO-8601 timestamp>" to change project memory maintenance checks after operator approval.');
-    lines.push('Tip: run "workflow set --task-reset on|off --operator-confirmed yes --operator-confirmed-at-utc <ISO-8601 timestamp>" to change confirmed task-reset availability after operator approval.');
-    lines.push('Tip: run "workflow set --auto-backup on|off --auto-backup-interval-days 1 --auto-backup-keep-latest 10 --operator-confirmed yes --operator-confirmed-at-utc <ISO-8601 timestamp>" to change scheduled backup maintenance after operator approval.');
-    lines.push('Tip: run "workflow set --optional-checks on|off --operator-confirmed yes --operator-confirmed-at-utc <ISO-8601 timestamp>" to change optional quality-check availability after operator approval.');
-    lines.push('Tip: run "workflow set --optional-checks-review-failure-cadence-interval 3 --operator-confirmed yes --operator-confirmed-at-utc <ISO-8601 timestamp>" to change how many review FAIL attempts occur between required quality-checklist answer runs after operator approval.');
-    lines.push('Tip: run "workflow set --optional-check-rule-id <id> --optional-check-rule-title <title> --optional-check-rule-prompt <prompt> --optional-check-rule-enabled true|false --optional-check-rule-exclude-test-only true|false --operator-confirmed yes --operator-confirmed-at-utc <ISO-8601 timestamp>" to add or update an optional quality-check rule.');
-    lines.push('Tip: run "workflow set --optional-skill-selection-mode off|optional|mandatory --operator-confirmed yes --operator-confirmed-at-utc <ISO-8601 timestamp>" to change task-start specialist-skill selection after operator approval.');
+    lines.push(`Tip: run "workflow set --compile-gate-command \"<compile/build/type-check command>\" ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}" after operator approval to set the compile gate command.`);
+    lines.push(`Tip: run "workflow set --full-suite on|off ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}" to change the repo-local mode after operator approval.`);
+    lines.push(`Tip: run "workflow set --full-suite-timeout-blocker true|false --full-suite-timeout-retry-count 1 ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}" to change timeout blocker behavior after operator approval.`);
+    lines.push(`Tip: run "workflow set --review-execution-policy <${REVIEW_EXECUTION_POLICY_MODES.join('|')}> ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}" to change review launch ordering after operator approval.`);
+    lines.push(`Tip: run "workflow set --no-delegate true|false ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}" to toggle fail-closed delegated reviewer launch availability after operator approval.`);
+    lines.push(`Tip: run "workflow set --scope-budget on|off --scope-budget-warn-changed-lines 2000 --scope-budget-block-changed-lines 5000 ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}" to change the tiered scope budget guard after operator approval.`);
+    lines.push(`Tip: run "workflow set --review-cycle on|off ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}" to change the review cycle guard after operator approval.`);
+    lines.push(`Tip: run "workflow set --project-memory on|off ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}" to change project memory maintenance checks after operator approval.`);
+    lines.push(`Tip: run "workflow set --task-reset on|off ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}" to change confirmed task-reset availability after operator approval.`);
+    lines.push(`Tip: run "workflow set --auto-backup on|off --auto-backup-interval-days 1 --auto-backup-keep-latest 10 ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}" to change scheduled backup maintenance after operator approval.`);
+    lines.push(`Tip: run "workflow set --optional-checks on|off ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}" to change optional quality-check availability after operator approval.`);
+    lines.push(`Tip: run "workflow set --optional-checks-review-failure-cadence-interval 3 ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}" to change how many review FAIL attempts occur between required quality-checklist answer runs after operator approval.`);
+    lines.push(`Tip: run "workflow set --optional-check-rule-id <id> --optional-check-rule-title <title> --optional-check-rule-prompt <prompt> --optional-check-rule-enabled true|false --optional-check-rule-exclude-test-only true|false ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}" to add or update an optional quality-check rule.`);
+    lines.push(`Tip: run "workflow set --optional-skill-selection-mode off|optional|mandatory ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}" to change task-start specialist-skill selection after operator approval.`);
     lines.push('Tip: run "workflow set --garda-self-guard on|off" to control agent self-entry into protected orchestrator work; off requires explicit operator approval.');
     return colorizeWorkflowHumanOutput(lines.join('\n'));
 }

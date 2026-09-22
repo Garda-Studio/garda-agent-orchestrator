@@ -1,3 +1,4 @@
+import { WORKFLOW_SET_CONFIRMATION_EXAMPLE } from '../../core/workflow-command-guidance';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { compactCacheUsage } from '../../core/compact/store-paths';
@@ -249,8 +250,7 @@ function buildWorkflowCommand(
         flag,
         valueHint,
         '--target-root "."',
-        '--operator-confirmed yes',
-        '--operator-confirmed-at-utc "<ISO-8601 timestamp>"'
+        WORKFLOW_SET_CONFIRMATION_EXAMPLE
     ].join(' ');
 }
 

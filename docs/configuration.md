@@ -2,6 +2,20 @@
 
 All configuration files live in `garda-agent-orchestrator/live/config/`.
 
+## Workflow setting confirmation
+
+After explicit operator approval, mutating `garda workflow set` examples use
+`--operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>"`.
+Replace the timestamp placeholder with the actual approval time in UTC; copying
+the example does not supply approval. A standalone `--garda-self-guard on` and
+true no-op have the existing exceptions described by `garda workflow explain`;
+repairing task-reset audit evidence still requires confirmation.
+
+CLI help, workflow diagnostics and dashboard setting hints share the example
+defined in `src/core/workflow-command-guidance.ts`. This is display guidance;
+argument parsing, confirmation freshness checks and audited mutations retain
+their existing owners. Keep documentation examples aligned with that guidance.
+
 ## Compact command controls
 
 The **Compact** UI group edits `workflow-config.json` through the existing confirmed, audited settings route. It shows observed cache bytes/runs and provides enable/disable controls for compact itself and the shipped Git, file and ripgrep adapters. Disabling a family prevents its producer from running. Retained output remains readable until task completion.

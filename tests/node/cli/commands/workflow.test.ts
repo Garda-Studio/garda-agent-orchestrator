@@ -117,6 +117,11 @@ test('workflow show prints repo-local full-suite settings', () => {
         assert.ok(output.includes('CompileGateCommandSource: unconfigured-fail-closed'));
         assert.ok(output.includes('CompileGateFallback: disabled'));
         assert.ok(output.includes('CompileGateRemediation: Set workflow-config compile_gate.command with workflow set --compile-gate-command "<compile/build/type-check command>"'));
+        const mutationHints = output.split('\n').filter((line) => line.startsWith('Tip: run "workflow set') && !line.includes('--garda-self-guard'));
+        assert.ok(mutationHints.length > 0);
+        for (const hint of mutationHints) {
+            assert.ok(hint.includes('--operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>"'), hint);
+        }
         assert.ok(output.includes('Mandatory full-suite: false'));
         assert.ok(output.includes('Review execution policy: code_first_optional'));
         assert.ok(output.includes('FullSuiteCommand: npm test'));
