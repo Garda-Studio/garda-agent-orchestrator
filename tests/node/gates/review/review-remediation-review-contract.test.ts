@@ -766,6 +766,16 @@ describe('review remediation FULL/DELTA execution contract', () => {
         try {
             assert.equal(fixture.delta.full_review_required, false);
             assert.deepEqual(fixture.delta.scope.required_delta_targets, ['src/app.ts']);
+            const baseline = JSON.parse(fs.readFileSync(fixture.delta.baseline.artifact_path, 'utf8')) as
+                ReviewRemediationBaselineArtifact;
+            for (const binding of [
+                baseline.bindings.receipt,
+                baseline.bindings.review_artifact,
+                baseline.bindings.findings_validation,
+                baseline.bindings.findings_disposition
+            ]) {
+                fs.writeFileSync(binding.artifact_path, 'later-review-artifact\n', 'utf8');
+            }
             const decision = decisionBinding({
                 mode: 'DELTA',
                 classificationSha256: fixture.delta.classification_sha256

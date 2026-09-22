@@ -558,7 +558,6 @@ function validateSnapshotBinding(
     if (artifactSha256 !== snapshotSha256) {
         violations.push(`${subject} artifact and snapshot hashes differ.`);
     }
-    validateBoundFileHash(artifactPath, artifactSha256, `${subject} artifact`, violations);
     validateBoundFileHash(snapshotPath, snapshotSha256, `${subject} snapshot`, violations);
     return true;
 }

@@ -328,6 +328,32 @@ describe('review remediation baseline', () => {
         ]);
     });
 
+    it('keeps an immutable baseline valid after a later review replaces canonical lane artifacts', () => {
+        const fixture = buildFixture(createTempRoot());
+        for (const binding of [
+            fixture.baseline.bindings.receipt,
+            fixture.baseline.bindings.review_artifact,
+            fixture.baseline.bindings.findings_validation,
+            fixture.baseline.bindings.findings_disposition
+        ]) {
+            fs.writeFileSync(binding.artifact_path, 'later-review-artifact\n', 'utf8');
+        }
+
+        const result = validateReviewRemediationBaselineArtifact({
+            artifactPath: fixture.baselinePath,
+            expectedArtifactSha256: fixture.baselineSha256,
+            expectedTaskId: fixture.taskId,
+            expectedReviewType: fixture.reviewType,
+            expectedReceiptSha256: fixture.receiptSha256,
+            expectedReviewContextSha256: fixture.contextSha256,
+            expectedReviewTreeStateSha256: fixture.treeSha256,
+            expectedScopeSha256: fixture.scopeSha256,
+            expectedProfilePolicySnapshotSha256: fixture.profilePolicySnapshotSha256
+        });
+
+        assert.equal(result.valid, true, result.violations.join('\n'));
+    });
+
     it('rejects a substituted origin FILE mapping even when its own contract hash is valid', () => {
         const fixture = buildFixture(createTempRoot());
         const forgedCoverage = buildReviewCoverageContract({
