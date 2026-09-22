@@ -67,18 +67,35 @@ const LATENCY_PLANNED_FILES = Array.from({ length: 34 }, (_, index) => `src/plan
 
 function resolveLaunchWithoutUnusedIgnoreReads(repoRoot: string): ReturnType<typeof resolveNextStep> {
     const childProcess = require('node:child_process') as typeof import('node:child_process');
-    const original = childProcess.spawnSync;
-    let perFileIgnoreCalls = 0;
+    const originalSpawnSync = childProcess.spawnSync;
+    const originalExecFileSync = childProcess.execFileSync;
+    let ignoreCalls = 0;
+    let trackedWorkspaceReadCalls = 0;
+    let untrackedWorkspaceReadCalls = 0;
     childProcess.spawnSync = ((file: string, args: string[], options: unknown) => {
-        if (file === 'git' && args.includes('check-ignore') && args.includes('--quiet')) perFileIgnoreCalls++;
-        return original(file, args, options as never);
-    }) as typeof original;
+        if (file === 'git' && args.includes('check-ignore')) ignoreCalls++;
+        return originalSpawnSync(file, args, options as never);
+    }) as typeof originalSpawnSync;
+    childProcess.execFileSync = ((file: string, args: string[], options: unknown) => {
+        if (file === 'git' && args.includes('--name-only')) {
+            trackedWorkspaceReadCalls++;
+            return `${['src/app.ts', ...LATENCY_PLANNED_FILES].join('\n')}\n`;
+        }
+        if (file === 'git' && args.includes('--others')) {
+            untrackedWorkspaceReadCalls++;
+            return '';
+        }
+        return originalExecFileSync(file, args, options as never);
+    }) as typeof originalExecFileSync;
     try {
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
-        assert.equal(perFileIgnoreCalls, 0, 'launch recovery excludes changed-file scope');
+        assert.equal(ignoreCalls, 2, 'full route retains only the two required ignored-file queries');
+        assert.equal(trackedWorkspaceReadCalls, 1, 'resolveNextStep shares one successful tracked workspace read');
+        assert.equal(untrackedWorkspaceReadCalls, 1, 'resolveNextStep shares one successful untracked workspace read');
         return result;
     } finally {
-        childProcess.spawnSync = original;
+        childProcess.spawnSync = originalSpawnSync;
+        childProcess.execFileSync = originalExecFileSync;
     }
 }
 
