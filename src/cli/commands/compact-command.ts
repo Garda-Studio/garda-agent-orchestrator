@@ -10,7 +10,7 @@ export const COMPACT_HELP = `garda compact <git status|git diff|file|rg|read|sea
   git diff --path <path>      Scoped diff; optional --staged
   git status                 Short changed-path listing; optional --path
   file --path <path>          Source lines; --from 1 --lines 80 or --metadata
-  rg --path <path> --query <text>   Literal search; optional --regex
+  rg --path <path> --query <text>   Literal search; optional --regex; runtime paths must name an exact file
   read --ref <id>             Retained bytes; --stream stdout|stderr --offset 0 or --tail
                              --max-bytes 4096 (256..8192); or --from-line 1 --lines 80
   search --ref <id> --query <text>  Repeat --query up to 8 times (literal OR)
