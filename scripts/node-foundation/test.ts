@@ -621,12 +621,16 @@ function resolveNodeTestShardRuntimeConfig(
 }
 
 function resolveDefaultShardedNodeTestConcurrency(
-    activeWorkerCount: number
+    activeWorkerCount: number,
+    workerIndex = 0,
+    availableHostSlots = os.availableParallelism()
 ): number {
-    return Math.max(1, Math.min(
-        DEFAULT_SHARDED_NODE_TEST_CONCURRENCY_MAX,
-        Math.floor(os.availableParallelism() / Math.max(1, activeWorkerCount))
-    ));
+    const workers = Math.max(1, activeWorkerCount);
+    const totalSlots = Math.min(
+        Math.max(workers, availableHostSlots),
+        workers * DEFAULT_SHARDED_NODE_TEST_CONCURRENCY_MAX
+    );
+    return Math.floor(totalSlots / workers) + (workerIndex < totalSlots % workers ? 1 : 0);
 }
 
 function hasExplicitNodeTestOption(optionArgs: string[], optionName: string): boolean {
@@ -643,13 +647,20 @@ function buildNodeTestShardOptionArgs(optionArgs: string[], runtimeConfig: NodeT
     return [`--test-concurrency=${runtimeConfig.defaultNodeTestConcurrency}`, ...optionArgs];
 }
 
-function describeNodeTestConcurrency(optionArgs: string[], runtimeConfig: NodeTestShardRuntimeConfig): string {
+function describeNodeTestConcurrency(
+    optionArgs: string[],
+    runtimeConfig: NodeTestShardRuntimeConfig,
+    minimumDefault = runtimeConfig.defaultNodeTestConcurrency
+): string {
     if (hasExplicitNodeTestOption(optionArgs, '--test-concurrency')) {
         return 'explicit';
     }
-    return runtimeConfig.defaultNodeTestConcurrency === null
-        ? 'inherit'
-        : String(runtimeConfig.defaultNodeTestConcurrency);
+    if (runtimeConfig.defaultNodeTestConcurrency === null) {
+        return 'inherit';
+    }
+    return minimumDefault === runtimeConfig.defaultNodeTestConcurrency
+        ? String(runtimeConfig.defaultNodeTestConcurrency)
+        : `${minimumDefault}-${runtimeConfig.defaultNodeTestConcurrency}`;
 }
 
 function resolveNodeFoundationRuntimeDir(repoRoot: string): string {
@@ -1714,14 +1725,17 @@ async function runShardedNodeTestProcesses(
         [...parallelShards, ...isolatedShards],
         telemetry
     );
-    const shardConcurrency = Math.max(1, Math.min(scheduledShards.length, baseRuntimeConfig.concurrency));
+    const availableHostSlots = Math.max(1, os.availableParallelism());
+    const shardConcurrency = Math.max(1, Math.min(
+        scheduledShards.length, baseRuntimeConfig.concurrency, availableHostSlots
+    ));
     const runtimeConfig: NodeTestShardRuntimeConfig = {
         ...baseRuntimeConfig,
-        defaultNodeTestConcurrency: resolveDefaultShardedNodeTestConcurrency(shardConcurrency)
+        defaultNodeTestConcurrency: resolveDefaultShardedNodeTestConcurrency(shardConcurrency, 0, availableHostSlots)
     };
     const serialRuntimeConfig: NodeTestShardRuntimeConfig = {
         ...baseRuntimeConfig,
-        defaultNodeTestConcurrency: resolveDefaultShardedNodeTestConcurrency(1)
+        defaultNodeTestConcurrency: resolveDefaultShardedNodeTestConcurrency(1, 0, availableHostSlots)
     };
     const effectiveShardOptionArgs = updateDurationTelemetry
         ? addDurationReporterOptions(buildNodeTestShardOptionArgs(optionArgs, runtimeConfig), DURATION_REPORTER_URL)
@@ -1733,13 +1747,16 @@ async function runShardedNodeTestProcesses(
     const shardLogDir = resolveShardLogDir(repoRoot, buildRoot, requestedShardLogDir);
     console.log(formatNodeFoundationTestMarker(NODE_FOUNDATION_TEST_MARKERS.SHARD_LOG_DIR, shardLogDir));
     console.log(formatNodeFoundationTestMarker(NODE_FOUNDATION_TEST_MARKERS.DURATION_TELEMETRY, telemetryPath));
-    const requestedConcurrency = runtimeConfig.concurrency;
+    const requestedConcurrency = Math.min(runtimeConfig.concurrency, availableHostSlots);
     const totalShardCount = scheduledShards.length + executionPlan.serialFiles.length;
     console.log(formatNodeFoundationTestMarker(
         NODE_FOUNDATION_TEST_MARKERS.SHARD_RUNTIME,
         `timeout_ms=${runtimeConfig.timeoutMs} heartbeat_ms=${runtimeConfig.heartbeatMs} `
         + `concurrency=${scheduledShards.length === 0 ? 1 : shardConcurrency} `
-        + `node_test_concurrency=${describeNodeTestConcurrency(optionArgs, runtimeConfig)} `
+        + `node_test_concurrency=${describeNodeTestConcurrency(
+            optionArgs, runtimeConfig,
+            resolveDefaultShardedNodeTestConcurrency(shardConcurrency, shardConcurrency - 1, availableHostSlots)
+        )} `
         + `grouped_shards=${parallelShards.length} max_auto_shard_files=${NODE_FOUNDATION_AUTO_SHARD_MAX_FILES} `
         + `max_shard_arg_chars=${NODE_FOUNDATION_AUTO_SHARD_ARG_CHAR_LIMIT} `
         + `isolated_files=${executionPlan.isolatedFiles.length} serial_files=${executionPlan.serialFiles.length}`
@@ -1770,7 +1787,11 @@ async function runShardedNodeTestProcesses(
     const scheduledResults: NodeTestShardResult[] = new Array(scheduledShards.length);
     let nextShardIndex = 0;
     const workerCount = scheduledShards.length === 0 ? 0 : shardConcurrency;
-    await Promise.all(Array.from({ length: workerCount }, async () => {
+    await Promise.all(Array.from({ length: workerCount }, async (_, workerIndex) => {
+        const workerRuntimeConfig: NodeTestShardRuntimeConfig = {
+            ...runtimeConfig,
+            defaultNodeTestConcurrency: resolveDefaultShardedNodeTestConcurrency(workerCount, workerIndex, availableHostSlots)
+        };
         while (true) {
             const shardIndex = nextShardIndex;
             nextShardIndex += 1;
@@ -1778,7 +1799,7 @@ async function runShardedNodeTestProcesses(
                 return;
             }
             const shardFiles = scheduledShards[shardIndex];
-            const result = await runNodeTestShard(repoRoot, optionArgs, shardFiles, shardIndex, totalShardCount, shardLogDir, runtimeConfig, updateDurationTelemetry);
+            const result = await runNodeTestShard(repoRoot, optionArgs, shardFiles, shardIndex, totalShardCount, shardLogDir, workerRuntimeConfig, updateDurationTelemetry);
             scheduledResults[shardIndex] = result;
             diagnoseGreenSummaryShardFailure(repoRoot, buildResult, optionArgs, result);
             diagnoseFailedShardSummary(result);
