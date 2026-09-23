@@ -18,6 +18,106 @@ function sha256(value) {
     return crypto.createHash('sha256').update(value).digest('hex');
 }
 
+function installedTreeRoot(dependencyRoot) {
+    const checkoutRoot = fs.realpathSync(dependencyRoot);
+    const expected = path.join(checkoutRoot, 'node_modules');
+    const actual = fs.realpathSync(path.join(dependencyRoot, 'node_modules'));
+    if (process.platform === 'win32'
+        ? actual.toLowerCase() !== expected.toLowerCase()
+        : actual !== expected) {
+        throw new Error('Installed node_modules root resolves outside the quality checkout.');
+    }
+    return actual;
+}
+
+function dependencySha256(checkout, dependencyRoot) {
+    installedTreeRoot(dependencyRoot);
+    const hash = crypto.createHash('sha256');
+    for (const [label, file] of [
+        ['package-lock.json', path.join(checkout, 'package-lock.json')],
+        ['node_modules/.package-lock.json', path.join(dependencyRoot, 'node_modules', '.package-lock.json')]
+    ]) {
+        hash.update(`${label}\0`);
+        hash.update(fs.readFileSync(file));
+        hash.update('\0');
+    }
+    return hash.digest('hex');
+}
+
+function installedTreeEvidence(dependencyRoot) {
+    const hash = crypto.createHash('sha256');
+    const treeRoot = installedTreeRoot(dependencyRoot);
+    let fileCount = 0;
+    let latestMtimeMs = 0;
+    function hashEntry(kind, relative, contents, mode) {
+        const name = Buffer.from(relative, 'utf8');
+        const length = Buffer.alloc(8);
+        hash.update(kind);
+        length.writeBigUInt64BE(BigInt(name.length));
+        hash.update(length).update(name);
+        length.writeBigUInt64BE(BigInt(mode));
+        hash.update(length);
+        length.writeBigUInt64BE(BigInt(contents.length));
+        hash.update(length).update(contents);
+    }
+    function visit(directory, relativeDirectory) {
+        const directoryStat = fs.statSync(directory);
+        hashEntry('D', relativeDirectory, Buffer.alloc(0), directoryStat.mode);
+        latestMtimeMs = Math.max(latestMtimeMs, directoryStat.mtimeMs, directoryStat.ctimeMs);
+        for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
+            const relative = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+            const fullPath = path.join(directory, entry.name);
+            if (entry.isSymbolicLink()) {
+                const target = fs.realpathSync(fullPath);
+                const targetRelative = path.relative(treeRoot, target);
+                if (targetRelative.startsWith(`..${path.sep}`) || targetRelative === '..' || path.isAbsolute(targetRelative)) {
+                    throw new Error(`Installed dependency tree contains a link outside its root: ${relative}`);
+                }
+                const stat = fs.lstatSync(fullPath);
+                hashEntry('L', relative, Buffer.from(fs.readlinkSync(fullPath), 'utf8'), stat.mode);
+                latestMtimeMs = Math.max(latestMtimeMs, stat.mtimeMs, stat.ctimeMs);
+                fileCount += 1;
+            }
+            if (entry.isDirectory()) {
+                visit(fullPath, relative);
+            } else if (entry.isFile()) {
+                const stat = fs.statSync(fullPath);
+                hashEntry('F', relative, fs.readFileSync(fullPath), stat.mode);
+                latestMtimeMs = Math.max(latestMtimeMs, stat.mtimeMs, stat.ctimeMs);
+                fileCount += 1;
+            }
+        }
+    }
+    visit(treeRoot, '');
+    if (fileCount === 0) throw new Error('Installed dependency tree is empty.');
+    return { sha256: hash.digest('hex'), fileCount, latestMtimeMs };
+}
+
+function requireCheckoutDependencyRoot(checkout, dependencyRoot) {
+    const normalizedCheckout = path.resolve(checkout);
+    const normalizedDependencyRoot = path.resolve(dependencyRoot);
+    if (process.platform === 'win32'
+        ? normalizedCheckout.toLowerCase() !== normalizedDependencyRoot.toLowerCase()
+        : normalizedCheckout !== normalizedDependencyRoot) {
+        throw new Error('Candidate dependency root must be the quality checkout.');
+    }
+    if (fs.realpathSync(checkout) !== fs.realpathSync(dependencyRoot)) {
+        throw new Error('Candidate dependency root must be the quality checkout.');
+    }
+}
+
+function candidateCheckoutFromLog(log, minimumFileCount, minimumKnownFileCount) {
+    const shardRoot = parseObservedRun(log, minimumFileCount, minimumKnownFileCount).shardLogRoot;
+    if (!path.isAbsolute(shardRoot)) {
+        throw new Error('Candidate shard run directory must be an absolute path.');
+    }
+    if (path.basename(shardRoot) !== 'test-shard-logs'
+        || path.basename(path.dirname(shardRoot)) !== '.node-build') {
+        throw new Error('Candidate shard run directory must be under checkout .node-build/test-shard-logs.');
+    }
+    return path.dirname(path.dirname(shardRoot));
+}
+
 function readPositiveInteger(value, label) {
     if (!Number.isSafeInteger(value) || value <= 0) {
         throw new Error(`${label} must be a positive safe integer.`);
@@ -84,7 +184,7 @@ function parseQualityEnvironment(log) {
     const busyPercent = Number(fields.cpu_busy_percent);
     const startMs = Date.parse(fields.start_utc);
     const endMs = Date.parse(fields.end_utc);
-    if (!['1', '2'].includes(fields.schema)
+    if (!['1', '2', '3'].includes(fields.schema)
         || !/^[a-f0-9]{64}$/u.test(fields.fingerprint || '')
         || fields.exit_code !== '0'
         || fields.signal !== 'none'
@@ -98,34 +198,24 @@ function parseQualityEnvironment(log) {
     if (fields.schema === '2' && !/^[a-f0-9]{64}$/u.test(fields.source_sha256 || '')) {
         throw new Error('Quality candidate source SHA-256 is malformed or missing.');
     }
-    return { fingerprint: fields.fingerprint, busyPercent, startMs, endMs, sourceSha256: fields.source_sha256 || null };
+    if (fields.schema === '3' && (!/^[a-f0-9]{64}$/u.test(fields.source_sha256 || '')
+        || !/^[a-f0-9]{64}$/u.test(fields.dependency_sha256 || ''))) {
+        throw new Error('Quality candidate source or dependency SHA-256 is malformed or missing.');
+    }
+    return { schema: fields.schema, fingerprint: fields.fingerprint, busyPercent, startMs, endMs,
+        sourceSha256: fields.source_sha256 || null, dependencySha256: fields.dependency_sha256 || null };
 }
 
-function evaluateWallTimeBaseline(baseline, baselineLog, candidateLogs) {
+function assertRetainedLogIntegrity(baseline, baselineLog, candidateLogs) {
     if (baseline.schema_version !== 2 || baseline.source_command !== 'npm run quality') {
         throw new Error('Unsupported wall-time baseline contract.');
     }
-    const baselineMs = readPositiveInteger(baseline.observed_wall_ms, 'Baseline wall time');
     if (!/^[a-f0-9]{64}$/u.test(baseline.source_log_sha256 || '')) {
         throw new Error('Baseline source log SHA-256 must be a lowercase hex digest.');
     }
     const sourceLogSha256 = sha256(baselineLog);
     if (sourceLogSha256 !== baseline.source_log_sha256) {
         throw new Error('Baseline source log SHA-256 does not match the retained log.');
-    }
-    const maxWallTimeRatio = baseline.max_wall_time_ratio;
-    if (typeof maxWallTimeRatio !== 'number' || !Number.isFinite(maxWallTimeRatio) || maxWallTimeRatio <= 0 || maxWallTimeRatio >= 1) {
-        throw new Error('Maximum wall-time ratio must be a finite number between 0 and 1.');
-    }
-    const minimumFileCount = readPositiveInteger(baseline.selected_file_count, 'Baseline file count');
-    const minimumKnownFileCount = readPositiveInteger(baseline.minimum_known_file_count, 'Baseline known file count');
-    const recordedBaseline = parseObservedRun(baselineLog, minimumFileCount, minimumKnownFileCount);
-    const baselineEnvironment = parseQualityEnvironment(baselineLog);
-    if (recordedBaseline.files !== minimumFileCount || recordedBaseline.wallMs !== baselineMs) {
-        throw new Error('Baseline measurements do not match the retained source log.');
-    }
-    if (baselineEnvironment.fingerprint !== baseline.environment_fingerprint_sha256) {
-        throw new Error('Baseline execution environment does not match the tracked fingerprint.');
     }
     if (!Array.isArray(candidateLogs) || candidateLogs.length !== 2) {
         throw new Error('Exactly two independently retained candidate quality logs are required.');
@@ -142,11 +232,36 @@ function evaluateWallTimeBaseline(baseline, baselineLog, candidateLogs) {
     if (!/^[a-f0-9]{64}$/u.test(baseline.candidate_source_sha256 || '')) {
         throw new Error('Tracked candidate source SHA-256 is required.');
     }
+    if (!/^[a-f0-9]{64}$/u.test(baseline.candidate_dependency_sha256 || '')) {
+        throw new Error('Tracked candidate dependency SHA-256 is required.');
+    }
     if (candidateDigests.some((digest, index) => digest !== baseline.candidate_log_sha256[index])) {
         throw new Error('Candidate quality log SHA-256 does not match the tracked digest.');
     }
+}
+
+function evaluateWallTimeBaseline(baseline, baselineLog, candidateLogs, installedEvidence) {
+    assertRetainedLogIntegrity(baseline, baselineLog, candidateLogs);
+    const baselineMs = readPositiveInteger(baseline.observed_wall_ms, 'Baseline wall time');
+    const maxWallTimeRatio = baseline.max_wall_time_ratio;
+    if (typeof maxWallTimeRatio !== 'number' || !Number.isFinite(maxWallTimeRatio) || maxWallTimeRatio <= 0 || maxWallTimeRatio >= 1) {
+        throw new Error('Maximum wall-time ratio must be a finite number between 0 and 1.');
+    }
+    const minimumFileCount = readPositiveInteger(baseline.selected_file_count, 'Baseline file count');
+    const minimumKnownFileCount = readPositiveInteger(baseline.minimum_known_file_count, 'Baseline known file count');
+    const recordedBaseline = parseObservedRun(baselineLog, minimumFileCount, minimumKnownFileCount);
+    const baselineEnvironment = parseQualityEnvironment(baselineLog);
+    if (recordedBaseline.files !== minimumFileCount || recordedBaseline.wallMs !== baselineMs) {
+        throw new Error('Baseline measurements do not match the retained source log.');
+    }
+    if (baselineEnvironment.fingerprint !== baseline.environment_fingerprint_sha256) {
+        throw new Error('Baseline execution environment does not match the tracked fingerprint.');
+    }
     const candidates = candidateLogs.map((log) => parseObservedRun(log, minimumFileCount, minimumKnownFileCount));
     const candidateEnvironments = candidateLogs.map(parseQualityEnvironment);
+    if (candidateEnvironments.some((environment) => environment.schema !== '3')) {
+        throw new Error('Candidate quality environment must use dependency-bound schema 3.');
+    }
     if (candidates[0].shardLogRoot !== candidates[1].shardLogRoot) {
         throw new Error('Candidate shard logs must come from the same checkout root.');
     }
@@ -158,6 +273,23 @@ function evaluateWallTimeBaseline(baseline, baselineLog, candidateLogs) {
     }
     if (candidateEnvironments.some((environment) => environment.sourceSha256 !== baseline.candidate_source_sha256)) {
         throw new Error('Candidate source SHA-256 does not match the tracked implementation.');
+    }
+    if (candidateEnvironments.some((environment) => environment.dependencySha256 !== baseline.candidate_dependency_sha256)) {
+        throw new Error('Candidate dependency SHA-256 does not match the tracked installation.');
+    }
+    if (!/^[a-f0-9]{64}$/u.test(baseline.candidate_dependency_tree_postrun_sha256 || '')
+        || !Number.isSafeInteger(baseline.candidate_dependency_tree_file_count)
+        || baseline.candidate_dependency_tree_file_count <= 0) {
+        throw new Error('Tracked post-run dependency content attestation is incomplete.');
+    }
+    if (!installedEvidence
+        || installedEvidence.sha256 !== baseline.candidate_dependency_tree_postrun_sha256
+        || installedEvidence.fileCount !== baseline.candidate_dependency_tree_file_count) {
+        throw new Error('Installed dependency content does not match the tracked post-run attestation.');
+    }
+    if (!Number.isFinite(installedEvidence.latestMtimeMs)
+        || installedEvidence.latestMtimeMs >= candidateEnvironments[0].startMs) {
+        throw new Error('Installed dependency content was modified after the candidate runs began.');
     }
     if (candidateEnvironments.some((environment) => environment.busyPercent < baselineEnvironment.busyPercent - MAX_QUIETER_CANDIDATE_CPU_BUSY_DELTA)) {
         throw new Error('Candidate host CPU load is materially quieter than the baseline.');
@@ -186,8 +318,10 @@ async function captureQualityRun(args) {
         throw new Error('Usage: node scripts/node-foundation/check-test-wall-time-baseline.cjs capture <checkout> <output.log> <dependency-root>');
     }
     const [checkout, logPath, dependencyRoot] = args;
+    requireCheckoutDependencyRoot(checkout, dependencyRoot);
     const sourcePath = path.join(checkout, CANDIDATE_SOURCE_PATH);
     const sourceSha256 = sha256(fs.readFileSync(sourcePath));
+    const installedDependencySha256 = dependencySha256(checkout, dependencyRoot);
     const cpus = os.cpus();
     const staticEnvironment = {
         platform: process.platform,
@@ -226,6 +360,9 @@ async function captureQualityRun(args) {
     if (sha256(fs.readFileSync(sourcePath)) !== sourceSha256) {
         throw new Error(`Candidate source changed during quality capture; retained log: ${logPath}`);
     }
+    if (dependencySha256(checkout, dependencyRoot) !== installedDependencySha256) {
+        throw new Error(`Candidate dependency installation changed during quality capture; retained log: ${logPath}`);
+    }
     const endCpus = os.cpus();
     let elapsed = 0;
     let idle = 0;
@@ -237,14 +374,18 @@ async function captureQualityRun(args) {
     }
     const busyPercent = elapsed > 0 ? ((1 - idle / elapsed) * 100).toFixed(1) : 'unavailable';
     const exitCode = result.code === null ? 1 : result.code;
-    fs.appendFileSync(logPath, `\nNODE_FOUNDATION_QUALITY_ENVIRONMENT schema=2 fingerprint=${fingerprint} source_sha256=${sourceSha256} platform=${process.platform} arch=${process.arch} node=${process.version} cpu_count=${staticEnvironment.cpuCount} available_parallelism=${staticEnvironment.availableParallelism} total_memory_bytes=${staticEnvironment.totalMemory} cpu_busy_percent=${busyPercent} start_utc=${startUtc} end_utc=${new Date().toISOString()} exit_code=${exitCode} signal=${result.signal || 'none'}\n`);
+    fs.appendFileSync(logPath, `\nNODE_FOUNDATION_QUALITY_ENVIRONMENT schema=3 fingerprint=${fingerprint} source_sha256=${sourceSha256} dependency_sha256=${installedDependencySha256} platform=${process.platform} arch=${process.arch} node=${process.version} cpu_count=${staticEnvironment.cpuCount} available_parallelism=${staticEnvironment.availableParallelism} total_memory_bytes=${staticEnvironment.totalMemory} cpu_busy_percent=${busyPercent} start_utc=${startUtc} end_utc=${new Date().toISOString()} exit_code=${exitCode} signal=${result.signal || 'none'}\n`);
     if (exitCode !== 0) {
         throw new Error(`Quality capture failed with exit code ${exitCode}; retained log: ${logPath}`);
     }
     if (busyPercent === 'unavailable') {
         throw new Error(`Quality capture produced unavailable CPU telemetry; retained log: ${logPath}`);
     }
-    process.stdout.write(`QUALITY_CAPTURE_COMPLETED log=${logPath} exit_code=0\n`);
+    if (!Number.isFinite(Number(busyPercent)) || Number(busyPercent) < 0 || Number(busyPercent) > 100) {
+        throw new Error(`Quality capture produced invalid CPU telemetry; retained log: ${logPath}`);
+    }
+    const dependencyTree = installedTreeEvidence(dependencyRoot);
+    process.stdout.write(`QUALITY_CAPTURE_COMPLETED log=${logPath} exit_code=0 candidate_dependency_tree_postrun_sha256=${dependencyTree.sha256} candidate_dependency_tree_file_count=${dependencyTree.fileCount}\n`);
 }
 
 function main(args) {
@@ -261,7 +402,15 @@ function main(args) {
     const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
     const baselineLog = fs.readFileSync(sourcePath, 'utf8');
     const candidateLogs = candidatePaths.map((file) => fs.readFileSync(file, 'utf8'));
-    const result = evaluateWallTimeBaseline(baseline, baselineLog, candidateLogs);
+    assertRetainedLogIntegrity(baseline, baselineLog, candidateLogs);
+    const dependencyRoot = path.resolve(path.dirname(baselinePath), baseline.candidate_dependency_root || '.');
+    for (const log of candidateLogs) {
+        requireCheckoutDependencyRoot(candidateCheckoutFromLog(log, baseline.selected_file_count, baseline.minimum_known_file_count), dependencyRoot);
+    }
+    if (dependencySha256(dependencyRoot, dependencyRoot) !== baseline.candidate_dependency_sha256) {
+        throw new Error('Current checkout dependency lock snapshot does not match the candidate logs.');
+    }
+    const result = evaluateWallTimeBaseline(baseline, baselineLog, candidateLogs, installedTreeEvidence(dependencyRoot));
     process.stdout.write(`WALL_TIME_BASELINE_PASSED baseline_ms=${result.baselineMs} candidate_ms=${result.candidateMs} candidate_samples=${result.candidateSamples} delta_ms=${result.deltaMs} ratio=${result.ratio} selected_files=${result.selectedFiles}\n`);
 }
 
@@ -272,4 +421,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { evaluateWallTimeBaseline };
+module.exports = { evaluateWallTimeBaseline, installedTreeEvidence };

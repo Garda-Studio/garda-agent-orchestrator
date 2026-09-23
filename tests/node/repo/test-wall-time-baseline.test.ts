@@ -6,8 +6,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-const { evaluateWallTimeBaseline } = require(path.join(process.cwd(), 'scripts/node-foundation/check-test-wall-time-baseline.cjs')) as {
-    evaluateWallTimeBaseline: (baseline: object, baselineLog: string, candidateLogs: string[]) => {
+const { evaluateWallTimeBaseline, installedTreeEvidence } = require(path.join(process.cwd(), 'scripts/node-foundation/check-test-wall-time-baseline.cjs')) as {
+    evaluateWallTimeBaseline: (baseline: object, baselineLog: string, candidateLogs: string[], installedEvidence?: object) => {
         baselineMs: number;
         candidateMs: number;
         candidateSamples: number;
@@ -16,15 +16,18 @@ const { evaluateWallTimeBaseline } = require(path.join(process.cwd(), 'scripts/n
         deltaMs: number;
         ratio: number;
     };
+    installedTreeEvidence: (root: string) => { sha256: string; fileCount: number; latestMtimeMs: number };
 };
 
 const environmentFingerprint = 'a'.repeat(64);
 const candidateSourceSha256 = 'b'.repeat(64);
+const candidateDependencySha256 = 'c'.repeat(64);
+const dependencyTreeEvidence = { sha256: 'd'.repeat(64), fileCount: 2, latestMtimeMs: Date.UTC(2026, 8, 22) };
 
 function candidateLog(wallMs: number, files = 532, run = 1, sample = run): string {
-    const startUtc = new Date(Date.UTC(2026, 8, 23, 0, sample * 2)).toISOString();
-    const endUtc = new Date(Date.UTC(2026, 8, 23, 0, sample * 2 + 1)).toISOString();
-    return `> garda-agent-orchestrator@1.4.3 quality\n> garda-agent-orchestrator@1.4.3 test\nNODE_FOUNDATION_TEST_SHARD_LOG_DIR C:\\test-shards\\run-${run}\nNODE_FOUNDATION_TEST_SHARD_COMPARISON source=observed_run telemetry_known=500/${files} observed_wall_ms=${wallMs}\nNODE_FOUNDATION_TEST_OK\nNODE_FOUNDATION_QUALITY_ENVIRONMENT schema=2 fingerprint=${environmentFingerprint} source_sha256=${candidateSourceSha256} platform=win32 arch=x64 node=v24.11.1 cpu_count=24 available_parallelism=24 total_memory_bytes=102455558144 cpu_busy_percent=20.0 start_utc=${startUtc} end_utc=${endUtc} exit_code=0 signal=none\n`;
+    const startUtc = new Date(Date.UTC(2100, 0, 1, 0, sample * 2)).toISOString();
+    const endUtc = new Date(Date.UTC(2100, 0, 1, 0, sample * 2 + 1)).toISOString();
+    return `> garda-agent-orchestrator@1.4.3 quality\n> garda-agent-orchestrator@1.4.3 test\nNODE_FOUNDATION_TEST_SHARD_LOG_DIR C:\\test-shards\\run-${run}\nNODE_FOUNDATION_TEST_SHARD_COMPARISON source=observed_run telemetry_known=500/${files} observed_wall_ms=${wallMs}\nNODE_FOUNDATION_TEST_OK\nNODE_FOUNDATION_QUALITY_ENVIRONMENT schema=3 fingerprint=${environmentFingerprint} source_sha256=${candidateSourceSha256} dependency_sha256=${candidateDependencySha256} platform=win32 arch=x64 node=v24.11.1 cpu_count=24 available_parallelism=24 total_memory_bytes=102455558144 cpu_busy_percent=20.0 start_utc=${startUtc} end_utc=${endUtc} exit_code=0 signal=none\n`;
 }
 
 const baselineLog = candidateLog(1000, 531, 100, 0);
@@ -43,8 +46,11 @@ function compare(candidate: string, secondCandidate = candidateLog(900, 532, 2),
     return evaluateWallTimeBaseline({
         candidate_log_sha256: [candidate, secondCandidate].map((log) => crypto.createHash('sha256').update(log).digest('hex')),
         candidate_source_sha256: candidateSourceSha256,
+        candidate_dependency_sha256: candidateDependencySha256,
+        candidate_dependency_tree_postrun_sha256: dependencyTreeEvidence.sha256,
+        candidate_dependency_tree_file_count: dependencyTreeEvidence.fileCount,
         ...sourceBaseline
-    }, sourceLog, [candidate, secondCandidate]);
+    }, sourceLog, [candidate, secondCandidate], dependencyTreeEvidence);
 }
 
 test('wall-time baseline records a complete before-and-after comparison', () => {
@@ -106,14 +112,166 @@ test('wall-time baseline verifies retained source log provenance and measurement
     assert.throws(() => compare(candidateLog(900), candidateLog(900, 532, 2), { ...baseline, observed_wall_ms: 1001 }), /Baseline measurements/u);
     assert.throws(() => compare(candidateLog(900), candidateLog(900, 532, 2), { ...baseline, candidate_log_sha256: ['c'.repeat(64), 'd'.repeat(64)] }), /Candidate quality log SHA-256/u);
     assert.throws(() => compare(candidateLog(900), candidateLog(900, 532, 2), { ...baseline, candidate_source_sha256: 'c'.repeat(64) }), /Candidate source SHA-256/u);
+    assert.throws(() => compare(candidateLog(900), candidateLog(900, 532, 2), { ...baseline, candidate_dependency_sha256: 'd'.repeat(64) }), /Candidate dependency SHA-256/u);
+    assert.throws(() => compare(candidateLog(900), candidateLog(900, 532, 2), { ...baseline, candidate_dependency_tree_postrun_sha256: 'e'.repeat(64) }), /Installed dependency content/u);
 });
 
 test('wall-time baseline binds repeated samples to comparable machine conditions', () => {
     assert.throws(() => compare(candidateLog(900).replace(environmentFingerprint, 'b'.repeat(64))), /environment differs/u);
     assert.throws(() => compare(candidateLog(900).replace('cpu_busy_percent=20.0', 'cpu_busy_percent=9.9')), /materially quieter/u);
     assert.throws(() => compare(candidateLog(900).replace('exit_code=0', 'exit_code=1')), /malformed or incomplete/u);
-    assert.throws(() => compare(candidateLog(900).replace('start_utc=2026-09-23T00:02:00.000Z', 'start_utc=2026-09-23T00:00:00.000Z')), /separate sequential/u);
+    assert.throws(() => compare(candidateLog(900).replace('start_utc=2100-01-01T00:02:00.000Z', 'start_utc=2100-01-01T00:00:00.000Z')), /separate sequential/u);
     assert.throws(() => compare(candidateLog(900), candidateLog(900, 532, 2), { ...baseline, environment_fingerprint_sha256: 'b'.repeat(64) }), /tracked fingerprint/u);
+    assert.throws(() => compare(candidateLog(900).replace(`dependency_sha256=${candidateDependencySha256}`, `dependency_sha256=${'d'.repeat(64)}`)), /Candidate dependency SHA-256/u);
+    assert.throws(() => compare(candidateLog(900).replace('schema=3', 'schema=2')), /dependency-bound schema 3/u);
+    assert.throws(() => compare(candidateLog(900).replace('schema=3', 'schema=1')), /dependency-bound schema 3/u);
+});
+
+test('comparator CLI reads tracked config shape and retained log files', (context) => {
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-wall-time-cli-'));
+    context.after(() => {
+        assert.ok(fs.realpathSync(fixtureRoot).startsWith(`${fs.realpathSync(os.tmpdir())}${path.sep}`));
+        fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    });
+    const tracked = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'config/node-foundation-test-wall-time-baseline.json'), 'utf8'));
+    assert.match(tracked.candidate_dependency_sha256, /^[a-f0-9]{64}$/u);
+    fs.mkdirSync(path.join(fixtureRoot, 'node_modules', '.bin'), { recursive: true });
+    const packageLock = path.join(fixtureRoot, 'package-lock.json');
+    const installedLock = path.join(fixtureRoot, 'node_modules', '.package-lock.json');
+    fs.writeFileSync(packageLock, 'checkout lock\n');
+    fs.writeFileSync(installedLock, 'installed lock\n');
+    const fixtureDependencySha256 = crypto.createHash('sha256')
+        .update('package-lock.json\0').update(fs.readFileSync(packageLock)).update('\0')
+        .update('node_modules/.package-lock.json\0').update(fs.readFileSync(installedLock)).update('\0')
+        .digest('hex');
+    const logs = [baselineLog, candidateLog(900), candidateLog(899, 532, 2)]
+        .map((log) => log.replaceAll('C:\\test-shards', path.join(fixtureRoot, '.node-build', 'test-shard-logs'))
+            .replace(`dependency_sha256=${candidateDependencySha256}`, `dependency_sha256=${fixtureDependencySha256}`));
+    const paths = logs.map((log, index) => {
+        const file = path.join(fixtureRoot, `quality-${index}.log`);
+        fs.writeFileSync(file, log);
+        return file;
+    });
+    const configPath = path.join(fixtureRoot, 'baseline.json');
+    const executablePath = path.join(fixtureRoot, 'node_modules', '.bin', 'sample.cmd');
+    fs.writeFileSync(executablePath, 'original executable\n');
+    const beforeRun = new Date(Date.UTC(2026, 8, 22));
+    fs.utimesSync(executablePath, beforeRun, beforeRun);
+    fs.utimesSync(path.dirname(executablePath), beforeRun, beforeRun);
+    fs.utimesSync(path.join(fixtureRoot, 'node_modules'), beforeRun, beforeRun);
+    const treeEvidence = installedTreeEvidence(fixtureRoot);
+    fs.writeFileSync(configPath, JSON.stringify({ ...tracked, ...baseline,
+        source_log_sha256: crypto.createHash('sha256').update(logs[0]).digest('hex'),
+        candidate_log_sha256: logs.slice(1).map((log) => crypto.createHash('sha256').update(log).digest('hex')),
+        candidate_source_sha256: candidateSourceSha256,
+        candidate_dependency_sha256: fixtureDependencySha256,
+        candidate_dependency_root: '.',
+        candidate_dependency_tree_postrun_sha256: treeEvidence.sha256,
+        candidate_dependency_tree_file_count: treeEvidence.fileCount
+    }));
+    const command = path.join(process.cwd(), 'scripts/node-foundation/check-test-wall-time-baseline.cjs');
+    const success = spawnSync(process.execPath, [command, configPath, ...paths], { encoding: 'utf8', timeout: 30000 });
+    assert.equal(success.status, 0, success.stderr);
+    assert.match(success.stdout, /WALL_TIME_BASELINE_PASSED baseline_ms=1000 candidate_ms=900 candidate_samples=2/u);
+    fs.appendFileSync(packageLock, 'changed\n');
+    const changedLock = spawnSync(process.execPath, [command, configPath, ...paths], { encoding: 'utf8', timeout: 30000 });
+    assert.notEqual(changedLock.status, 0);
+    assert.match(changedLock.stderr, /Current checkout dependency lock snapshot/u);
+    fs.writeFileSync(packageLock, 'checkout lock\n');
+    const untrustedLog = path.join(fixtureRoot, 'untrusted.log');
+    fs.writeFileSync(untrustedLog, logs[1].replace(fixtureRoot, path.join(fixtureRoot, 'untrusted-checkout')));
+    const untrusted = spawnSync(process.execPath, [command, configPath, paths[0], untrustedLog, paths[2]], { encoding: 'utf8', timeout: 30000 });
+    assert.notEqual(untrusted.status, 0);
+    assert.match(untrusted.stderr, /Candidate quality log SHA-256 does not match the tracked digest/u);
+    const wrongCheckout = path.join(fixtureRoot, 'other-checkout');
+    fs.mkdirSync(wrongCheckout);
+    const wrongCheckoutLog = path.join(fixtureRoot, 'wrong-checkout.log');
+    fs.writeFileSync(wrongCheckoutLog, logs[1].replace(fixtureRoot, wrongCheckout));
+    const wrongCheckoutConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    wrongCheckoutConfig.candidate_log_sha256[0] = crypto.createHash('sha256').update(fs.readFileSync(wrongCheckoutLog)).digest('hex');
+    fs.writeFileSync(configPath, JSON.stringify(wrongCheckoutConfig));
+    const mismatchedCheckout = spawnSync(process.execPath, [command, configPath, paths[0], wrongCheckoutLog, paths[2]], { encoding: 'utf8', timeout: 30000 });
+    assert.notEqual(mismatchedCheckout.status, 0);
+    assert.match(mismatchedCheckout.stderr, /Candidate dependency root must be the quality checkout/u);
+    wrongCheckoutConfig.candidate_log_sha256[0] = crypto.createHash('sha256').update(logs[1]).digest('hex');
+    fs.writeFileSync(configPath, JSON.stringify(wrongCheckoutConfig));
+    const decoyLog = path.join(fixtureRoot, 'decoy-marker.log');
+    const decoy = logs[1]
+        .replace('> garda-agent-orchestrator@1.4.3 test\n',
+            `NODE_FOUNDATION_TEST_SHARD_LOG_DIR ${path.join(fixtureRoot, '.node-build', 'test-shard-logs', 'run-900')}\n> garda-agent-orchestrator@1.4.3 test\n`)
+        .replace(`NODE_FOUNDATION_TEST_SHARD_LOG_DIR ${path.join(fixtureRoot, '.node-build', 'test-shard-logs', 'run-1')}`,
+            `NODE_FOUNDATION_TEST_SHARD_LOG_DIR ${path.join(wrongCheckout, '.node-build', 'test-shard-logs', 'run-1')}`);
+    fs.writeFileSync(decoyLog, decoy);
+    wrongCheckoutConfig.candidate_log_sha256[0] = crypto.createHash('sha256').update(decoy).digest('hex');
+    fs.writeFileSync(configPath, JSON.stringify(wrongCheckoutConfig));
+    const decoyCheckout = spawnSync(process.execPath, [command, configPath, paths[0], decoyLog, paths[2]], { encoding: 'utf8', timeout: 30000 });
+    assert.notEqual(decoyCheckout.status, 0);
+    assert.match(decoyCheckout.stderr, /Candidate dependency root must be the quality checkout/u);
+    wrongCheckoutConfig.candidate_log_sha256[0] = crypto.createHash('sha256').update(logs[1]).digest('hex');
+    fs.writeFileSync(configPath, JSON.stringify(wrongCheckoutConfig));
+    const missingArg = spawnSync(process.execPath, [command, configPath, paths[0]], { encoding: 'utf8', timeout: 30000 });
+    assert.notEqual(missingArg.status, 0);
+    assert.match(missingArg.stderr, /Usage:/u);
+    const oversized = path.join(fixtureRoot, 'oversized.log');
+    const fd = fs.openSync(oversized, 'w');
+    try { fs.ftruncateSync(fd, 64 * 1024 * 1024 + 1); } finally { fs.closeSync(fd); }
+    const tooLarge = spawnSync(process.execPath, [command, configPath, paths[0], oversized, paths[2]], { encoding: 'utf8', timeout: 30000 });
+    assert.notEqual(tooLarge.status, 0);
+    assert.match(tooLarge.stderr, /64 MiB inspection limit/u);
+    fs.writeFileSync(executablePath, 'modified executable\n');
+    const changedContent = spawnSync(process.execPath, [command, configPath, ...paths], { encoding: 'utf8', timeout: 30000 });
+    assert.notEqual(changedContent.status, 0);
+    assert.match(changedContent.stderr, /Installed dependency content/u);
+    fs.writeFileSync(executablePath, 'original executable\n');
+    const afterRun = new Date(Date.UTC(2100, 0, 2));
+    fs.utimesSync(executablePath, afterRun, afterRun);
+    const changedAfterRun = spawnSync(process.execPath, [command, configPath, ...paths], { encoding: 'utf8', timeout: 30000 });
+    assert.notEqual(changedAfterRun.status, 0);
+    assert.match(changedAfterRun.stderr, /modified after the candidate runs began/u);
+});
+
+test('installed dependency digest frames file entries and accepts internal POSIX links', (context) => {
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-wall-time-tree-'));
+    context.after(() => {
+        assert.ok(fs.realpathSync(fixtureRoot).startsWith(`${fs.realpathSync(os.tmpdir())}${path.sep}`));
+        fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    });
+    const firstRoot = path.join(fixtureRoot, 'first');
+    const secondRoot = path.join(fixtureRoot, 'second');
+    fs.mkdirSync(path.join(firstRoot, 'node_modules'), { recursive: true });
+    fs.mkdirSync(path.join(secondRoot, 'node_modules'), { recursive: true });
+    fs.writeFileSync(path.join(firstRoot, 'node_modules', 'a'), Buffer.from('x\0b'));
+    fs.writeFileSync(path.join(firstRoot, 'node_modules', 'c'), 'y');
+    fs.writeFileSync(path.join(secondRoot, 'node_modules', 'a'), 'x');
+    fs.writeFileSync(path.join(secondRoot, 'node_modules', 'b'), Buffer.from('c\0y'));
+    const first = installedTreeEvidence(firstRoot);
+    const second = installedTreeEvidence(secondRoot);
+    assert.equal(first.fileCount, 2);
+    assert.equal(second.fileCount, 2);
+    assert.notEqual(first.sha256, second.sha256);
+    const linkedRoot = path.join(fixtureRoot, 'linked');
+    fs.mkdirSync(linkedRoot);
+    fs.symlinkSync(path.join(firstRoot, 'node_modules'), path.join(linkedRoot, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    assert.throws(() => installedTreeEvidence(linkedRoot), /node_modules root resolves outside the quality checkout/u);
+    const nestedDependencyDirectory = path.join(firstRoot, 'node_modules', 'nested');
+    fs.mkdirSync(nestedDependencyDirectory);
+    const externalLink = path.join(nestedDependencyDirectory, 'external-link');
+    fs.symlinkSync(path.join(secondRoot, 'node_modules'), externalLink, process.platform === 'win32' ? 'junction' : 'dir');
+    assert.throws(() => installedTreeEvidence(firstRoot), /link outside its root: nested\/external-link/u);
+    fs.unlinkSync(externalLink);
+    if (process.platform !== 'win32') {
+        fs.chmodSync(path.join(firstRoot, 'node_modules', 'a'), 0o700);
+        assert.notEqual(installedTreeEvidence(firstRoot).sha256, first.sha256);
+    }
+    if (process.platform !== 'win32') {
+        fs.mkdirSync(path.join(firstRoot, 'node_modules', '.bin'));
+        fs.symlinkSync('../a', path.join(firstRoot, 'node_modules', '.bin', 'a'));
+        assert.equal(installedTreeEvidence(firstRoot).fileCount, 3);
+    }
+    const old = new Date(Date.UTC(2026, 8, 22));
+    fs.utimesSync(path.join(firstRoot, 'node_modules'), old, old);
+    fs.unlinkSync(path.join(firstRoot, 'node_modules', 'c'));
+    assert.ok(installedTreeEvidence(firstRoot).latestMtimeMs > old.getTime());
 });
 
 test('quality capture records its environment and protects retained evidence', (context) => {
@@ -131,24 +289,41 @@ test('quality capture records its environment and protects retained evidence', (
     }));
     fs.mkdirSync(path.join(fixtureRoot, 'scripts', 'node-foundation'), { recursive: true });
     fs.writeFileSync(path.join(fixtureRoot, 'scripts', 'node-foundation', 'test.ts'), 'candidate source fixture\n');
+    fs.writeFileSync(path.join(fixtureRoot, 'package-lock.json'), '{"name":"quality-capture-fixture","lockfileVersion":3}\n');
+    fs.mkdirSync(path.join(fixtureRoot, 'node_modules'));
+    fs.writeFileSync(path.join(fixtureRoot, 'node_modules', '.package-lock.json'), '{"name":"quality-capture-fixture","lockfileVersion":3,"packages":{}}\n');
     const logPath = path.join(fixtureRoot, 'quality.log');
     const args = [
         path.join(process.cwd(), 'scripts/node-foundation/check-test-wall-time-baseline.cjs'),
-        'capture', fixtureRoot, logPath, process.cwd()
+        'capture', fixtureRoot, logPath, fixtureRoot
     ];
     const first = spawnSync(process.execPath, args, { encoding: 'utf8', timeout: 30000 });
     assert.equal(first.status, 0, first.stderr);
+    const capturedTree = installedTreeEvidence(fixtureRoot);
+    assert.match(first.stdout, new RegExp(`candidate_dependency_tree_postrun_sha256=${capturedTree.sha256} candidate_dependency_tree_file_count=${capturedTree.fileCount}`, 'u'));
     const log = fs.readFileSync(logPath, 'utf8');
     assert.match(log, /capture-smoke/u);
-    assert.match(log, /NODE_FOUNDATION_QUALITY_ENVIRONMENT schema=2 fingerprint=[a-f0-9]{64} source_sha256=[a-f0-9]{64} .*exit_code=0 signal=none/u);
+    const sourceBytes = fs.readFileSync(path.join(fixtureRoot, 'scripts', 'node-foundation', 'test.ts'));
+    const expectedSourceSha256 = crypto.createHash('sha256').update(sourceBytes).digest('hex');
+    const expectedDependencySha256 = crypto.createHash('sha256')
+        .update('package-lock.json\0').update(fs.readFileSync(path.join(fixtureRoot, 'package-lock.json'))).update('\0')
+        .update('node_modules/.package-lock.json\0').update(fs.readFileSync(path.join(fixtureRoot, 'node_modules', '.package-lock.json'))).update('\0')
+        .digest('hex');
+    assert.match(log, new RegExp(`NODE_FOUNDATION_QUALITY_ENVIRONMENT schema=3 fingerprint=[a-f0-9]{64} source_sha256=${expectedSourceSha256} dependency_sha256=${expectedDependencySha256} .*exit_code=0 signal=none`, 'u'));
     const second = spawnSync(process.execPath, args, { encoding: 'utf8', timeout: 30000 });
     assert.notEqual(second.status, 0);
     assert.equal(fs.readFileSync(logPath, 'utf8'), log);
 
+    const otherDependencies = path.join(fixtureRoot, 'other-dependencies');
+    fs.mkdirSync(otherDependencies);
+    const mismatchedRoot = spawnSync(process.execPath, [args[0], 'capture', fixtureRoot, path.join(fixtureRoot, 'wrong-root.log'), otherDependencies], { encoding: 'utf8', timeout: 30000 });
+    assert.notEqual(mismatchedRoot.status, 0);
+    assert.match(mismatchedRoot.stderr, /Candidate dependency root must be the quality checkout/u);
+
     const unavailablePreload = path.join(fixtureRoot, 'unavailable-cpu.cjs');
     fs.writeFileSync(unavailablePreload, "require('node:os').cpus = () => [{ model: 'capture-fixture', speed: 1000, times: { user: 1, nice: 0, sys: 0, idle: 1, irq: 0 } }];\n");
     const unavailableLogPath = path.join(fixtureRoot, 'unavailable-quality.log');
-    const unavailable = spawnSync(process.execPath, [args[0], 'capture', fixtureRoot, unavailableLogPath, process.cwd()], {
+    const unavailable = spawnSync(process.execPath, [args[0], 'capture', fixtureRoot, unavailableLogPath, fixtureRoot], {
         encoding: 'utf8',
         timeout: 30000,
         env: { ...process.env, NODE_OPTIONS: `--require="${unavailablePreload.replaceAll(path.sep, '/')}"` }
@@ -157,4 +332,33 @@ test('quality capture records its environment and protects retained evidence', (
     assert.match(unavailable.stderr, /Quality capture produced unavailable CPU telemetry/u);
     assert.doesNotMatch(unavailable.stdout, /QUALITY_CAPTURE_COMPLETED/u);
     assert.match(fs.readFileSync(unavailableLogPath, 'utf8'), /cpu_busy_percent=unavailable/u);
+
+    const mutablePackage = (script: string) => fs.writeFileSync(path.join(fixtureRoot, 'package.json'), JSON.stringify({
+        name: 'quality-capture-fixture', version: '1.0.0', scripts: { quality: script }
+    }));
+    mutablePackage('node -e "require(\'node:fs\').appendFileSync(\'scripts/node-foundation/test.ts\', \'changed\')"');
+    const changedSourcePath = path.join(fixtureRoot, 'changed-source.log');
+    const changedSource = spawnSync(process.execPath, [args[0], 'capture', fixtureRoot, changedSourcePath, fixtureRoot], { encoding: 'utf8', timeout: 30000 });
+    assert.notEqual(changedSource.status, 0);
+    assert.match(changedSource.stderr, /Candidate source changed during quality capture/u);
+    assert.doesNotMatch(changedSource.stdout, /QUALITY_CAPTURE_COMPLETED/u);
+
+    mutablePackage('node -e "require(\'node:fs\').appendFileSync(\'node_modules/.package-lock.json\', \'changed\')"');
+    const changedDependencyPath = path.join(fixtureRoot, 'changed-dependency.log');
+    const changedDependency = spawnSync(process.execPath, [args[0], 'capture', fixtureRoot, changedDependencyPath, fixtureRoot], { encoding: 'utf8', timeout: 30000 });
+    assert.notEqual(changedDependency.status, 0);
+    assert.match(changedDependency.stderr, /Candidate dependency installation changed during quality capture/u);
+
+    mutablePackage('node -e "console.log(\'capture-smoke\')"');
+    const invalidPreload = path.join(fixtureRoot, 'invalid-cpu.cjs');
+    fs.writeFileSync(invalidPreload, "let calls = 0; require('node:os').cpus = () => [{ model: 'capture-fixture', speed: 1000, times: ++calls === 1 ? { user: 100, nice: 0, sys: 0, idle: 100, irq: 0 } : { user: 200, nice: 0, sys: 0, idle: 90, irq: 0 } }];\n");
+    const invalidLogPath = path.join(fixtureRoot, 'invalid-cpu.log');
+    const invalid = spawnSync(process.execPath, [args[0], 'capture', fixtureRoot, invalidLogPath, fixtureRoot], {
+        encoding: 'utf8', timeout: 30000,
+        env: { ...process.env, NODE_OPTIONS: `--require="${invalidPreload.replaceAll(path.sep, '/')}"` }
+    });
+    assert.notEqual(invalid.status, 0);
+    assert.match(invalid.stderr, /Quality capture produced invalid CPU telemetry/u);
+    assert.doesNotMatch(invalid.stdout, /QUALITY_CAPTURE_COMPLETED/u);
+    assert.match(fs.readFileSync(invalidLogPath, 'utf8'), /cpu_busy_percent=111\.1/u);
 });

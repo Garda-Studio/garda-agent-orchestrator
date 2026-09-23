@@ -3,10 +3,14 @@
   "source_command": "npm run quality",
   "source_log_sha256": "fe64f2a0c4198fc77c3d058fbdd40b511d41e42d80920bf80cb4f7288cf7cca3",
   "candidate_log_sha256": [
-    "1d829fd2daeb28d2ed043ef43e292fa72b4f5282e84cd680d089d9844a3aec85",
-    "a516bed9f54f92399bdca5b5e9a15c7e46bb07545ae8aa5da00bb768bcddac41"
+    "0964ed3eb14afd1b9c23d89e385b2b62f0780224640f667232214f0f617a88cd",
+    "8b1873a7ae5149ec879f4457bd3ae18287b2dbf9b0b62743e5c047348887911a"
   ],
   "candidate_source_sha256": "101739077e36142492197a18c1f993ab254a141fdcd55d25334d6afdc7886451",
+  "candidate_dependency_sha256": "42bee13449ead2fcefb468ba2f7a9beb92094e471ee2e40c039f8bfd27c34394",
+  "candidate_dependency_root": "..",
+  "candidate_dependency_tree_postrun_sha256": "02f8eed864b3a79fc5d046c4affe3baf9696431cc46b2f28e2044badf3690c56",
+  "candidate_dependency_tree_file_count": 3203,
   "environment_fingerprint_sha256": "8ea2ea743b238874b12631fd115cbf35499a00d8b87a5ce262cc230b431039c3",
   "observed_wall_ms": 2074790,
   "max_wall_time_ratio": 0.95,
