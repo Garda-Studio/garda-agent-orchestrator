@@ -6,22 +6,34 @@ import { appendTaskEvent } from '../../../../src/gate-runtime/task-events';
 import { acquireFilesystemLock, releaseFilesystemLock } from '../../../../src/gate-runtime/task-events-locking';
 import { buildNoOpArtifact } from '../../../../src/gates/task-mode/no-op';
 import { fileSha256 } from '../../../../src/gates/shared/helpers';
+import { runCompileGateCommand } from '../../../../src/cli/commands/gates';
+import { EXIT_GATE_FAILURE } from '../../../../src/cli/exit-codes';
 
 import {
     assertSingleActiveImplementationOwner,
     findOtherActiveImplementationOwners
 } from '../../../../src/gates/workspace/active-implementation-ownership';
-import { createTempRepo } from '../../cli/commands/gate-test-repo-bootstrap';
-import { runEnterTaskMode, seedInitAnswers } from '../../cli/commands/gate-test-seed-helpers';
+import { createTempRepo, initializeGitRepo } from '../../cli/commands/gate-test-repo-bootstrap';
+import {
+    loadPostPreflightRulePack,
+    loadTaskEntryRulePack,
+    runEnterTaskMode,
+    runHandshakeForTask,
+    runShellSmokeForTask,
+    seedInitAnswers,
+    seedTaskQueue,
+    writeBudgetOutputFilters,
+    writePreflight
+} from '../../cli/commands/gate-test-seed-helpers';
 
-function writeQueue(repoRoot: string, ownerStatus: string): void {
+function writeQueue(repoRoot: string, ownerStatus: string, targetStatus = 'TODO'): void {
     fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
         '## Active Queue',
         '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
         '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
         `| T-101 | ${ownerStatus} | P2 | runtime | Implement owner | agent | 2026-09-23 | default | |`,
         '| T-102 | IN_PROGRESS | P2 | runtime | Waiting parent | agent | 2026-09-23 | default | |',
-        '| T-103 | TODO | P2 | runtime | Second implementation | agent | 2026-09-23 | default | |',
+        `| T-103 | ${targetStatus} | P2 | runtime | Second implementation | agent | 2026-09-23 | default | |`,
         ''
     ].join('\n'), 'utf8');
 }
@@ -97,4 +109,50 @@ test('task-mode entry rejects a concurrent start while the ownership lock is hel
     } finally {
         releaseFilesystemLock(handle);
     }
+});
+
+test('compile gate rejects another active implementation owner before executing its command', async (t) => {
+    const repoRoot = createTempRepo(t);
+    seedInitAnswers(repoRoot);
+    const workflowConfigPath = path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config', 'workflow-config.json');
+    const workflowConfig = JSON.parse(fs.readFileSync(workflowConfigPath, 'utf8')) as {
+        compile_gate: { command: string };
+    };
+    workflowConfig.compile_gate.command = 'node -e "require(\'node:fs\').writeFileSync(\'compile-ran.txt\', \'ran\')"';
+    fs.writeFileSync(workflowConfigPath, JSON.stringify(workflowConfig, null, 2) + '\n', 'utf8');
+    const outputFiltersPath = writeBudgetOutputFilters(repoRoot);
+    seedTaskQueue(repoRoot, 'T-103');
+    initializeGitRepo(repoRoot);
+
+    assert.equal(runEnterTaskMode({
+        repoRoot,
+        taskId: 'T-103',
+        taskSummary: 'Task attempting compile'
+    }).exitCode, 0);
+    seedTaskQueue(repoRoot, 'T-101');
+    assert.equal(runEnterTaskMode({
+        repoRoot,
+        taskId: 'T-101',
+        taskSummary: 'Other implementation owner'
+    }).exitCode, 0);
+    writeQueue(repoRoot, 'IN_PROGRESS', 'IN_PROGRESS');
+    fs.writeFileSync(path.join(repoRoot, 'src', 'app.ts'), 'console.log(2);\n', 'utf8');
+    const preflightPath = writePreflight(repoRoot, 'T-103', {
+        metrics: { changed_lines_total: 4 }
+    });
+    assert.equal(loadTaskEntryRulePack(repoRoot, 'T-103').exitCode, 0);
+    runHandshakeForTask(repoRoot, 'T-103');
+    runShellSmokeForTask(repoRoot, 'T-103');
+    assert.equal(loadPostPreflightRulePack(repoRoot, 'T-103', preflightPath).exitCode, 0);
+
+    const result = await runCompileGateCommand({
+        repoRoot,
+        taskId: 'T-103',
+        preflightPath,
+        outputFiltersPath,
+        emitMetrics: false
+    });
+    assert.equal(result.exitCode, EXIT_GATE_FAILURE, result.outputLines.join('\n'));
+    assert.match(result.outputLines.join('\n'), /compile gate refused for T-103.*T-101/u);
+    assert.equal(fs.existsSync(path.join(repoRoot, 'compile-ran.txt')), false);
 });
