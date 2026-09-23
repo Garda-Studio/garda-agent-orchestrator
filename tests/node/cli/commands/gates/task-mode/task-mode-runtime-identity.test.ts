@@ -74,6 +74,29 @@ test('dependent preflight gates reject unavailable reviewer launch and retain re
     ), /Suggested command:/u);
 });
 
+test('dependent preflight gates reject missing or contradictory identity with both recovery commands', () => {
+    const taskModePath = 'runtime/task-mode.json';
+    for (const [decision, diagnostic] of [
+        [routingDecision({ canonicalSourceOfTruth: null }), /Canonical SourceOfTruth is missing/u],
+        [routingDecision({ identityStatus: 'contradictory', violations: ['Provider route mismatch.'], reviewerSubagentLaunchRoute: 'untrusted-route' }), /Provider route mismatch/u]
+    ] as const) {
+        assert.throws(() => assertResolvedRuntimeIdentityForDependentPreflightGate(
+            REPO_ROOT,
+            TASK_ID,
+            'compile-gate',
+            decision,
+            taskModePath
+        ), (error: unknown) => {
+            if (!(error instanceof Error)) return false;
+            assert.match(error.message, diagnostic);
+            assert.match(error.message, /Suggested commands: .*gate enter-task-mode.* ; .*gate compile-gate/u);
+            assert.match(error.message, /--task-mode-path 'runtime\/task-mode\.json'/u);
+            assert.doesNotMatch(error.message, /--routed-to untrusted-route/u);
+            return true;
+        });
+    }
+});
+
 test('contradictory identity does not copy an untrusted route into the suggested command', () => {
     const command = buildTaskModeIdentitySuggestionCommand(
         REPO_ROOT,
