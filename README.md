@@ -12,6 +12,14 @@ Garda supports multiple AI coding agent provider surfaces through one canonical 
 
 **[Website](https://garda-workflow.netlify.app/)** · **[Quick Start](#quick-start)** · **[User Guide](HOW_TO.md)** · **[Providers](docs/providers.md)** · **[Architecture](docs/architecture.md)** · **[Work Example](docs/work-example.md)** · **[CLI Reference](docs/cli-reference.md)** · **[Configuration](docs/configuration.md)** · **[Changelog](CHANGELOG.md)**
 
+## Watch the 2-minute demo
+
+[![Watch the Garda Agent Orchestrator demo on YouTube](https://i.ytimg.com/vi/1J74BDu1sEI/hqdefault.jpg)](https://www.youtube.com/watch?v=1J74BDu1sEI)
+
+See how scoped reviews, focused fixes, tests, and completion evidence fit together. The video illustrates an Orders API workflow and includes evidence from an earlier recorded demo task.
+
+[Watch on YouTube (English captions)](https://www.youtube.com/watch?v=1J74BDu1sEI) · [Garda Studio product page](https://garda-studio.com/products/cli)
+
 ## Without Garda / With Garda
 
 | Without Garda | With Garda |
@@ -46,12 +54,16 @@ Garda adds a governance layer:
 
 ## Quick Start
 
+Install [Node.js](https://nodejs.org/) 24 LTS (recommended) or 22.13+ on the Node 22 line, and [Git](https://git-scm.com/). Open a terminal in the local Git repository you want Garda to manage; run `git init` first if it is a new project.
+
 ```shell
 npm install -g garda-agent-orchestrator
 garda setup
 ```
 
-Then give [AGENT_INIT_PROMPT.md](AGENT_INIT_PROMPT.md) to your coding agent. The agent reuses existing init answers, confirms active agent files, initializes or refreshes project memory from repository evidence, offers optional skill packs, and finishes with `garda agent-init`.
+Then give your coding agent the local `garda-agent-orchestrator/AGENT_INIT_PROMPT.md` file created in your project ([preview the prompt](AGENT_INIT_PROMPT.md)). The agent reuses existing init answers, confirms active agent files, initializes or refreshes project memory from repository evidence, offers optional skill packs, and finishes with `garda agent-init`.
+
+`Setup: PASSED` with `Verify: PENDING_AGENT_CONTEXT` means installation is complete but agent initialization is still required; the workspace is not ready for task execution yet.
 
 After `garda agent-init` passes, pick a task from `TASK.md` and tell the agent:
 
