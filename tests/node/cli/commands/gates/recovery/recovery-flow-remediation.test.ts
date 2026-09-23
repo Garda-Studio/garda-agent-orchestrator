@@ -39,6 +39,50 @@ function buildImpactAnalysis(summary: string): ReviewRemediationImpactAnalysis {
 }
 
 describe('cli/commands/gate-flows/recovery remediation units', () => {
+    it('blocks reuse when remediation expands non-test scope beyond the failed review', () => {
+        const scopeBoundary: ReviewRemediationScopeBoundary = {
+            status: 'BLOCKED',
+            previousChangedFiles: [TEST_FILE],
+            currentChangedFiles: [TEST_FILE, 'src/outside.ts'],
+            expandedFiles: ['src/outside.ts'],
+            expandedNonTestFiles: ['src/outside.ts'],
+            allowedTestOnlyExpansionFiles: []
+        };
+
+        const classification = classifyReviewRemediationFix(scopeBoundary, ['code', 'test']);
+
+        assert.equal(classification.scope_category, 'expanded_non_test_blocked');
+        assert.equal(classification.blocked_before_reuse, true);
+        assert.deepEqual(classification.invalidated_review_types, ['code', 'test']);
+        assert.deepEqual(classification.preserved_review_types, []);
+    });
+
+    it('invalidates all required lanes when evidence-only remediation names an unknown lane', () => {
+        const scopeBoundary: ReviewRemediationScopeBoundary = {
+            status: 'OK',
+            previousChangedFiles: [TEST_FILE],
+            currentChangedFiles: [],
+            expandedFiles: [],
+            expandedNonTestFiles: [],
+            allowedTestOnlyExpansionFiles: []
+        };
+
+        const classification = classifyReviewRemediationFix(
+            scopeBoundary,
+            ['code', 'test'],
+            undefined,
+            [],
+            undefined,
+            { reviewEvidenceOnly: true, remediationReviewType: 'db' }
+        );
+
+        assert.equal(classification.category, 'review_evidence_only');
+        assert.match(classification.rationale, /review type is missing or not required/u);
+        assert.equal(classification.non_test_review_reuse_candidate, false);
+        assert.deepEqual(classification.invalidated_review_types, ['code', 'test']);
+        assert.deepEqual(classification.preserved_review_types, []);
+    });
+
     it('normalizes and validates inline remediation impact analysis', () => {
         const summary = [
             `Reviewer finding: the failed test review identified missing recovery coverage in ${TEST_FILE}.`,
