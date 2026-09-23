@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import {
     assertValidTaskId,
     inspectTaskEventFile,
+    readTaskTimelineJsonlEntries,
     withTaskTimelineReadSnapshot
 } from '../../gate-runtime/task-events';
 import { withReviewArtifactReadBarrier } from '../../gate-runtime/review-artifacts';
@@ -74,6 +75,7 @@ import {
 } from '../workspace/workspace-snapshot-cache';
 import { getTaskOwnedPreflightScopeFromPreflight } from '../workspace/dirty-worktree-protection';
 import { getNoOpEvidence } from '../task-mode';
+import { getCurrentNoOpEventSha256 } from '../task-mode/no-op';
 import {
     collectEvidenceArtifacts,
     collectRequiredReviewBlockers
@@ -315,33 +317,73 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): Ta
     const taskEventFile = path.join(eventsRoot, `${safeTaskId}.jsonl`);
     const orderedEvents = readOrderedTaskEvents(taskEventFile);
     const events = orderedEvents.events;
-    const currentCycle = resolveTaskCycleBindingSnapshot(safeTaskId, events, repoRoot, reviewsRoot);
+    const fileOrderedEvents = readTaskTimelineJsonlEntries(taskEventFile)
+        .map((entry) => entry.record)
+        .filter((entry): entry is Readonly<Record<string, unknown>> => entry !== null)
+        .map((entry) => ({ ...entry }));
+    const resolvedCompileCycle = resolveTaskCycleBindingSnapshot(safeTaskId, events, repoRoot, reviewsRoot);
+    const preflightForLifecycle = safeReadJson(path.join(reviewsRoot, `${safeTaskId}-preflight.json`));
+    const noOpEvidenceForLifecycle = getNoOpEvidence(
+        repoRoot,
+        safeTaskId,
+        path.join(reviewsRoot, `${safeTaskId}-no-op.json`),
+        path.join(reviewsRoot, `${safeTaskId}-preflight.json`)
+    );
+    const auditedNoOpLifecycle = isFullSuiteNotRequiredForZeroDiffNoReviewableScope(preflightForLifecycle || {})
+        && noOpEvidenceForLifecycle.evidence_status === 'PASS';
+    const currentCycle = auditedNoOpLifecycle ? null : resolvedCompileCycle;
+    const noOpEventSha256 = auditedNoOpLifecycle
+        ? getCurrentNoOpEventSha256(repoRoot, safeTaskId, noOpEvidenceForLifecycle, eventsRoot)
+        : null;
+    const noOpEvent = noOpEventSha256
+        ? fileOrderedEvents.find((event) => {
+            const integrity = event.integrity && typeof event.integrity === 'object'
+                ? event.integrity as Record<string, unknown>
+                : null;
+            return integrity?.event_sha256 === noOpEventSha256;
+        })
+        : null;
+    let latestTaskEntryIndex = -1;
+    for (let index = fileOrderedEvents.length - 1; index >= 0; index -= 1) {
+        if (fileOrderedEvents[index].event_type === 'TASK_MODE_ENTERED') {
+            latestTaskEntryIndex = index;
+            break;
+        }
+    }
+    const cycleEvents = auditedNoOpLifecycle && latestTaskEntryIndex >= 0
+        ? fileOrderedEvents.slice(latestTaskEntryIndex)
+        : events;
+    const noOpAnchorIndex = noOpEvent ? cycleEvents.indexOf(noOpEvent) : -1;
+    const preNoOpLifecycleTypes = new Set([
+        'TASK_MODE_ENTERED',
+        'RULE_PACK_LOADED',
+        'RULE_PACK_LOAD_FAILED',
+        'HANDSHAKE_DIAGNOSTICS_RECORDED',
+        'SHELL_SMOKE_PREFLIGHT_RECORDED',
+        'PREFLIGHT_CLASSIFIED',
+        'PREFLIGHT_FAILED'
+    ]);
+    const lifecycleEvents = auditedNoOpLifecycle && noOpAnchorIndex >= 0
+        ? cycleEvents.filter((event, index) => (
+            index > noOpAnchorIndex || preNoOpLifecycleTypes.has(String(event.event_type || '').trim().toUpperCase())
+        ))
+        : cycleEvents;
     const fullSuiteValidationEnabled = resolveFullSuiteValidationRequirementForCurrentCycle(
         events,
         currentCycle,
         repoRoot,
         liveFullSuiteValidationEnabled
     );
-    const preflightForLifecycle = safeReadJson(path.join(reviewsRoot, `${safeTaskId}-preflight.json`));
     const fullSuiteValidationRequiredForLifecycle = fullSuiteValidationEnabled
         && !isFullSuiteNotRequiredForZeroDiffNoReviewableScope(preflightForLifecycle || {});
-    const noOpEvidenceForLifecycle = getNoOpEvidence(
-        repoRoot,
-        safeTaskId,
-        '',
-        path.join(reviewsRoot, `${safeTaskId}-preflight.json`)
-    );
-    const compileGateRequiredForLifecycle = !(
-        isFullSuiteNotRequiredForZeroDiffNoReviewableScope(preflightForLifecycle || {})
-        && noOpEvidenceForLifecycle.evidence_status === 'PASS'
-    );
+    const compileGateRequiredForLifecycle = !auditedNoOpLifecycle;
     const projectMemoryImpactEvidence = getProjectMemoryImpactLifecycleEvidence({
         repoRoot,
         taskId: safeTaskId,
         preflightPath: path.join(reviewsRoot, `${safeTaskId}-preflight.json`)
     });
-    const hasCurrentProjectMemoryImpactEvent = hasCurrentCycleProjectMemoryImpactEvent(events, currentCycle, repoRoot);
-    const hasCompletionPassEvent = events.some((event) => String(event.event_type || '').trim().toUpperCase() === 'COMPLETION_GATE_PASSED');
+    const hasCurrentProjectMemoryImpactEvent = hasCurrentCycleProjectMemoryImpactEvent(lifecycleEvents, currentCycle, repoRoot);
+    const hasCompletionPassEvent = lifecycleEvents.some((event) => String(event.event_type || '').trim().toUpperCase() === 'COMPLETION_GATE_PASSED');
     const projectMemoryImpactRequired = projectMemoryImpactEvidence.required
         && (!hasCompletionPassEvent || hasCurrentProjectMemoryImpactEvent);
     const workspaceStatusSnapshot = getTaskCycleStatusSnapshot(
@@ -368,12 +410,18 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): Ta
     }
     const lifecycleStatus = buildLifecycleGateOutcomes(
         lifecycleGates,
-        events,
+        lifecycleEvents,
         currentCycle,
         repoRoot
     );
     const gates = [...lifecycleStatus.gates];
     const blockers = [...lifecycleStatus.blockers];
+    if (auditedNoOpLifecycle && !noOpEventSha256) {
+        blockers.push({
+            gate: 'record-no-op',
+            reason: 'Current audited no-op evidence has no matching NO_OP_RECORDED event in the active completed task cycle.'
+        });
+    }
     const orchestratorDefectCapture = buildOrchestratorDefectCaptureSummary({
         repoRoot,
         taskId: safeTaskId,
@@ -591,7 +639,7 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): Ta
     }
     const completionReviewOrderBlocker = buildCompletionReviewOrderBlocker(
         requiredReviews,
-        events,
+        lifecycleEvents,
         currentCycle,
         repoRoot,
         reviewDependencyGraph
@@ -802,6 +850,7 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): Ta
     };
     const finalCloseout = buildFinalCloseoutArtifact({
         repoRoot,
+        eventsRoot,
         taskId: safeTaskId,
         auditStatus: status,
         finalReportContract,

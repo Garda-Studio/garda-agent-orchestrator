@@ -45,7 +45,10 @@ export interface FinalCloseoutArtifact {
     status: 'READY' | 'NOT_READY';
     blocker: string | null;
     artifact_state: 'PENDING' | 'MATERIALIZED' | 'REMOVED' | 'NOT_READY';
-    cycle_binding?: TaskCycleBindingSnapshot | null;
+    cycle_binding?: (TaskCycleBindingSnapshot & {
+        no_op_sha256?: string | null;
+        no_op_event_sha256?: string | null;
+    }) | null;
     artifact_paths: FinalCloseoutArtifactPaths;
     implementation_summary: FinalCloseoutImplementationSummary;
     review_trust?: FinalCloseoutReviewTrustSummary | null;

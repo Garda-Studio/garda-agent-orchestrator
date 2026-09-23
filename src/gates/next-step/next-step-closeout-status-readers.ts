@@ -13,7 +13,10 @@ import {
 import {
     safeReadJson
 } from '../task-audit/task-audit-summary-collectors';
+import { getCurrentNoOpEventSha256, getNoOpEvidence } from '../task-mode/no-op';
+import { isFullSuiteNotRequiredForZeroDiffNoReviewableScope } from '../full-suite/full-suite-validation-results';
 import {
+    joinOrchestratorPath,
     normalizePath
 } from '../shared/helpers';
 import {
@@ -116,10 +119,46 @@ export function buildFinalReportOrder(summary: TaskAuditSummaryResult): string[]
 function finalCloseoutMatchesCurrentCycle(
     expected: TaskAuditSummaryResult['final_closeout']['cycle_binding'] | null | undefined,
     actualPayload: Record<string, unknown>,
-    repoRoot: string
+    repoRoot: string,
+    reviewsRoot: string,
+    taskId: string,
+    eventsRoot: string
 ): boolean {
     const expectedBinding = expected || null;
     const actualBinding = getCycleBindingSnapshotFromPayload(actualPayload, repoRoot);
+    if (expectedBinding?.no_op_sha256 || (actualBinding && !actualBinding.compile_gate_timestamp)) {
+        const preflightPath = path.join(reviewsRoot, `${taskId}-preflight.json`);
+        const preflight = safeReadJson(preflightPath);
+        const noOpEvidence = getNoOpEvidence(
+            repoRoot,
+            taskId,
+            path.join(reviewsRoot, `${taskId}-no-op.json`),
+            preflightPath
+        );
+        const currentNoOpEventSha256 = getCurrentNoOpEventSha256(repoRoot, taskId, noOpEvidence, eventsRoot);
+        const actualNoOpSha256 = isPlainRecord(actualPayload.cycle_binding)
+            ? normalizeSha256(actualPayload.cycle_binding.no_op_sha256)
+            : null;
+        const actualNoOpEventSha256 = isPlainRecord(actualPayload.cycle_binding)
+            ? normalizeSha256(actualPayload.cycle_binding.no_op_event_sha256)
+            : null;
+        return !!preflight
+            && isFullSuiteNotRequiredForZeroDiffNoReviewableScope(preflight)
+            && Array.isArray(preflight.changed_files)
+            && preflight.changed_files.length === 0
+            && noOpEvidence.evidence_status === 'PASS'
+            && expectedBinding?.compile_gate_timestamp == null
+            && actualBinding?.compile_gate_timestamp == null
+            && !!expectedBinding?.no_op_sha256
+            && expectedBinding.no_op_sha256 === actualNoOpSha256
+            && actualNoOpSha256 === noOpEvidence.evidence_hash
+            && !!currentNoOpEventSha256
+            && expectedBinding.no_op_event_sha256 === actualNoOpEventSha256
+            && actualNoOpEventSha256 === currentNoOpEventSha256
+            && expectedBinding.preflight_path === actualBinding?.preflight_path
+            && expectedBinding.preflight_sha256 === actualBinding?.preflight_sha256
+            && expectedBinding.preflight_sha256 === noOpEvidence.preflight_sha256;
+    }
     if (!expectedBinding?.compile_gate_timestamp || !actualBinding?.compile_gate_timestamp) {
         return false;
     }
@@ -183,7 +222,8 @@ export function readReadyFinalReportSummary(
     repoRoot: string,
     reviewsRoot: string,
     taskId: string,
-    summary: TaskAuditSummaryResult
+    summary: TaskAuditSummaryResult,
+    eventsRoot = joinOrchestratorPath(repoRoot, path.join('runtime', 'task-events'))
 ): NextStepFinalReportSummary | null {
     const closeoutJsonPath = path.join(reviewsRoot, `${taskId}-final-closeout.json`);
     const closeoutMarkdownPath = path.join(reviewsRoot, `${taskId}-final-closeout.md`);
@@ -202,7 +242,7 @@ export function readReadyFinalReportSummary(
     if (String(closeout.status || '').trim().toUpperCase() !== 'READY') {
         return null;
     }
-    if (!finalCloseoutMatchesCurrentCycle(summary.final_closeout.cycle_binding, closeout, repoRoot)) {
+    if (!finalCloseoutMatchesCurrentCycle(summary.final_closeout.cycle_binding, closeout, repoRoot, reviewsRoot, taskId, eventsRoot)) {
         return null;
     }
     const generatedUtc = typeof closeout.generated_utc === 'string' ? closeout.generated_utc : '';

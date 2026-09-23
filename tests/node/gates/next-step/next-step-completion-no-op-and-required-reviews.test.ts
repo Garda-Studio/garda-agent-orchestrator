@@ -32,6 +32,19 @@ import {
     seedSourceCheckoutRuntime
 } from './next-step-completion-fixtures';
 
+function seedHashBoundNoOpEvent(repoRoot: string, preflightPath: string): void {
+    const noOpPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-no-op.json`);
+    const noOp = JSON.parse(fs.readFileSync(noOpPath, 'utf8')) as Record<string, unknown>;
+    appendEvent(repoRoot, TASK_ID, 'NO_OP_RECORDED', 'INFO', {
+        artifact_path: noOpPath.replace(/\\/gu, '/'),
+        artifact_sha256: fileSha256(noOpPath),
+        classification: noOp.classification,
+        reason: noOp.reason,
+        preflight_path: preflightPath.replace(/\\/gu, '/'),
+        preflight_sha256: noOp.preflight_sha256
+    });
+}
+
 describe('gates/next-step', () => {
     const expectedSourceRuntimeRebuildCommand = buildForcedSourceCheckoutRuntimeBuildCommand();
 
@@ -349,6 +362,7 @@ describe('gates/next-step', () => {
         writeJson(preflightPath, preflight);
         seedPostPreflightRulePack(repoRoot, TASK_ID, preflightPath);
         writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+        seedHashBoundNoOpEvent(repoRoot, preflightPath);
 
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
 
@@ -379,6 +393,7 @@ describe('gates/next-step', () => {
         writeJson(preflightPath, preflight);
         seedPostPreflightRulePack(repoRoot, TASK_ID, preflightPath);
         writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+        seedHashBoundNoOpEvent(repoRoot, preflightPath);
 
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
 
@@ -452,6 +467,16 @@ describe('gates/next-step', () => {
         seedPostPreflightRulePack(repoRoot, TASK_ID, preflightPath);
         seedGitAutoCompilePass(repoRoot, TASK_ID);
         writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+        const noOpPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-no-op.json`);
+        const noOp = JSON.parse(fs.readFileSync(noOpPath, 'utf8')) as Record<string, unknown>;
+        appendEvent(repoRoot, TASK_ID, 'NO_OP_RECORDED', 'INFO', {
+            artifact_path: noOpPath.replace(/\\/gu, '/'),
+            artifact_sha256: fileSha256(noOpPath),
+            classification: noOp.classification,
+            reason: noOp.reason,
+            preflight_path: preflightPath.replace(/\\/gu, '/'),
+            preflight_sha256: noOp.preflight_sha256
+        });
         seedReviewGatePass(repoRoot, TASK_ID);
         seedDocImpactPass(repoRoot, TASK_ID);
         seedCompletionPass(repoRoot, TASK_ID);

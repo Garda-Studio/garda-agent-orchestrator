@@ -366,6 +366,7 @@ export function runRecordNoOpCommand(options: RecordNoOpCommandOptions): { outpu
         'Audited no-op recorded.',
         {
             artifact_path: gateHelpers.normalizePath(artifactPath),
+            artifact_sha256: gateHelpers.fileSha256(artifactPath),
             classification: artifact.classification,
             reason: artifact.reason,
             preflight_path: artifact.preflight_path,

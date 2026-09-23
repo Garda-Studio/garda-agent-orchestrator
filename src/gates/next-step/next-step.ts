@@ -47,7 +47,7 @@ import {
     withReviewArtifactReadBarrier
 } from '../../gate-runtime/review-artifacts';
 import { withTaskIndexReadSnapshot } from '../../gate-runtime/reviews-index';
-import { assertValidTaskId, withTaskTimelineReadSnapshot } from '../../gate-runtime/task-events';
+import { assertValidTaskId, readTaskTimelineJsonlEntries, withTaskTimelineReadSnapshot } from '../../gate-runtime/task-events';
 import {
     buildTaskAuditSummary,
     type TaskAuditSummaryResult
@@ -126,7 +126,7 @@ import {
 import {
     getProjectMemoryImpactLifecycleEvidence
 } from '../project-memory-impact/project-memory-impact';
-import { getNoOpEvidence } from '../task-mode/no-op';
+import { getCurrentNoOpEventSha256, getNoOpEvidence } from '../task-mode/no-op';
 import {
     readOptionalMarkdownWorkingPlan,
     type TaskModeMarkdownWorkingPlanMetadata
@@ -691,6 +691,32 @@ function readLatestTaskEventSequence(eventsRoot: string, taskId: string, eventTy
         return Number.isInteger(sequence) ? sequence : index;
     }
     return null;
+}
+
+function hasPassedCompletionBeforeNoOpEvent(eventsRoot: string, taskId: string, noOpEventSha256: string): boolean {
+    const events = readTaskTimelineJsonlEntries(path.join(eventsRoot, `${taskId}.jsonl`))
+        .map((entry) => entry.record)
+        .filter((record): record is Readonly<Record<string, unknown>> => record !== null);
+    const noOpIndex = events.findIndex((event) => event.event_type === 'NO_OP_RECORDED'
+        && isPlainRecord(event.integrity)
+        && event.integrity.event_sha256 === noOpEventSha256);
+    if (noOpIndex < 0) {
+        return false;
+    }
+    let taskEntryIndex = -1;
+    for (let index = 0; index < noOpIndex; index += 1) {
+        if (events[index].event_type === 'TASK_MODE_ENTERED') {
+            taskEntryIndex = index;
+        }
+    }
+    let latestCompletion: string | null = null;
+    for (let index = taskEntryIndex + 1; index < noOpIndex; index += 1) {
+        const eventType = String(events[index].event_type || '');
+        if (eventType === 'COMPLETION_GATE_PASSED' || eventType === 'COMPLETION_GATE_FAILED') {
+            latestCompletion = eventType;
+        }
+    }
+    return taskEntryIndex >= 0 && latestCompletion === 'COMPLETION_GATE_PASSED';
 }
 
 function fileExists(filePath: string): boolean {
@@ -3327,6 +3353,14 @@ export function resolveNextStepDecisionRoute(
         }
     }
 
+    const currentNoOpEvidence = preflight && preflightRequiresAuditedNoOp(preflight)
+        ? getNoOpEvidence(repoRoot, taskId, '', preflightCommandPath)
+        : null;
+    const currentNoOpEventSha256 = currentNoOpEvidence?.evidence_status === 'PASS'
+        ? getCurrentNoOpEventSha256(repoRoot, taskId, currentNoOpEvidence, eventsRoot)
+        : null;
+    const allowAuditedNoOpRecovery = !!currentNoOpEventSha256
+        && hasPassedCompletionBeforeNoOpEvent(eventsRoot, taskId, currentNoOpEventSha256);
     const taskQueueTerminalRoute = resolveTaskQueueTerminalDecisionRoute({
         repoRoot,
         reviewsRoot,
@@ -3337,6 +3371,7 @@ export function resolveNextStepDecisionRoute(
         taskEntry,
         completionGatePassed: isGatePassed(summary, 'completion-gate'),
         latestCompletionCurrent: isLatestCompletionCurrent(eventsRoot, taskId),
+        allowAuditedNoOpRecovery,
         finalReportContractReady: summary.final_report_contract.status === 'READY',
         finalReportContractBlocker: summary.final_report_contract.blocker || null,
         summaryBlockers: summary.blockers.map((blocker) => `${blocker.gate}: ${blocker.reason}`),
@@ -3364,7 +3399,24 @@ export function resolveNextStepDecisionRoute(
     }
 
     let completedCloseoutDecisionRoute: NextStepDecisionRoutePayload | null = null;
-    if (isGatePassed(summary, 'completion-gate') && isLatestCompletionCurrent(eventsRoot, taskId)) {
+    if (currentNoOpEvidence?.evidence_status === 'PASS') {
+        if (!currentNoOpEventSha256) {
+            completedCloseoutDecisionRoute = {
+                status: 'BLOCKED',
+                nextGate: 'record-no-op',
+                title: 'Record current audited no-op event.',
+                reason: 'The no-op artifact has no current integrity-bound NO_OP_RECORDED event. Record it again, then rerun the downstream gates through next-step.',
+                commands: [buildCommand(
+                    'Record current audited no-op event',
+                    `${cliPrefix} gate record-no-op --task-id "${taskId}" --classification "AUDIT_ONLY" --reason "<operator-approved no-op rationale>" --preflight-path "${preflightCommandPath}" --repo-root "."`
+                )]
+            };
+        }
+    }
+
+    if (!completedCloseoutDecisionRoute
+        && isGatePassed(summary, 'completion-gate')
+        && isLatestCompletionCurrent(eventsRoot, taskId)) {
         const hasFinalCloseoutArtifact = fs.existsSync(readinessArtifacts.paths.finalCloseoutJsonPath)
             || fs.existsSync(readinessArtifacts.paths.finalCloseoutMarkdownPath);
         const postDoneDrift = hasFinalCloseoutArtifact
@@ -3376,7 +3428,7 @@ export function resolveNextStepDecisionRoute(
                 workspaceSnapshotRequest
             )
             : { blocked: false, reason: 'No materialized final closeout artifact exists yet.' };
-        const finalReport = readReadyFinalReportSummary(repoRoot, reviewsRoot, taskId, summary);
+        const finalReport = readReadyFinalReportSummary(repoRoot, reviewsRoot, taskId, summary, eventsRoot);
         completedCloseoutDecisionRoute = resolveCompletedCloseoutDecisionRoute({
             completionGatePassed: true,
             latestCompletionCurrent: true,
@@ -3394,7 +3446,7 @@ export function resolveNextStepDecisionRoute(
     }
     const completedCloseoutDecision = selectProjectedDecisionRoute(
         'completed-closeout',
-        'normal',
+        completedCloseoutDecisionRoute?.nextGate === 'record-no-op' ? 'audited-no-op' : 'normal',
         completedCloseoutDecisionRoute
     );
     if (completedCloseoutDecision) {
@@ -4098,7 +4150,8 @@ export function resolveNextStepDecisionRoute(
                 : null;
             auditedNoOpState = {
                 required,
-                passed: evidence?.evidence_status === 'PASS',
+                passed: evidence?.evidence_status === 'PASS'
+                    && !!getCurrentNoOpEventSha256(repoRoot, taskId, evidence, eventsRoot),
                 evidenceStatus: evidence?.evidence_status || 'EVIDENCE_FILE_MISSING',
                 command:
                     `${cliPrefix} gate record-no-op --task-id "${taskId}" --classification "AUDIT_ONLY" --reason "<operator-approved no-op rationale>" --preflight-path "${preflightCommandPath}" --repo-root "."`

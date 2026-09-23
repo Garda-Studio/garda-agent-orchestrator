@@ -162,7 +162,9 @@ function findLatestEventForTypes(
         return null;
     }
     const wantedTypes = new Set(eventTypes);
-    for (let index = events.length - 1; index >= 0; index -= 1) {
+    let latestSequenced: { event: TaskAuditEvent; eventType: string; sequence: number } | null = null;
+    let latestUnsequenced: { event: TaskAuditEvent; eventType: string } | null = null;
+    for (let index = 0; index < events.length; index += 1) {
         const event = events[index];
         const eventType = String(event.event_type || '');
         if (!wantedTypes.has(eventType)) {
@@ -171,9 +173,14 @@ function findLatestEventForTypes(
         if (predicate && !predicate(eventType, event)) {
             continue;
         }
-        return { event, eventType };
+        const sequence = readTaskEventSequence(event);
+        if (sequence == null) {
+            latestUnsequenced = { event, eventType };
+        } else if (!latestSequenced || sequence >= latestSequenced.sequence) {
+            latestSequenced = { event, eventType, sequence };
+        }
     }
-    return null;
+    return latestSequenced || latestUnsequenced;
 }
 
 const CURRENT_CYCLE_DOWNSTREAM_GATES = new Set([
@@ -453,9 +460,7 @@ function resolveLifecycleGateStatus(
     const latestFail = findLatestEventForTypes(gateSpec.fail_events, events, lifecyclePredicate);
 
     if (latestPass && latestFail) {
-        const passTime = parseTimestamp(latestPass.event.timestamp_utc).getTime();
-        const failTime = parseTimestamp(latestFail.event.timestamp_utc).getTime();
-        if (failTime > passTime) {
+        if (taskEventOccursAfter(latestFail.event, latestPass.event, currentCycle)) {
             return {
                 gateOutcome: {
                     gate: gateSpec.gate,

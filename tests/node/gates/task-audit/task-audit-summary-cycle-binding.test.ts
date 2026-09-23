@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { getUnexpectedPostDoneWorkspaceFiles } from '../../../../src/gates/task-audit/task-audit-summary-drift';
-import { hasCurrentCycleReviewProgress } from '../../../../src/gates/task-audit/task-audit-summary-lifecycle';
+import { buildLifecycleGateOutcomes, hasCurrentCycleReviewProgress } from '../../../../src/gates/task-audit/task-audit-summary-lifecycle';
 
 import {
     fs,
@@ -93,6 +93,36 @@ function lifecycleEvent(eventType: string, taskSequence?: number): Record<string
 
 
 describe('gates/task-audit-summary', () => {
+    it('selects the latest gate failure by task sequence despite skewed timestamps', () => {
+        const events = [
+            { ...lifecycleEvent('COMPILE_GATE_PASSED', 1), timestamp_utc: '2026-01-01T00:00:01.000Z' },
+            { ...lifecycleEvent('COMPILE_GATE_PASSED', 3), timestamp_utc: '2026-01-01T00:00:02.000Z' },
+            { ...lifecycleEvent('COMPILE_GATE_FAILED', 4), timestamp_utc: '2026-01-01T00:00:03.000Z' },
+            { ...lifecycleEvent('COMPILE_GATE_FAILED', 2), timestamp_utc: '2026-01-01T00:00:04.000Z' }
+        ];
+        const result = buildLifecycleGateOutcomes([
+            { gate: 'compile-gate', pass_event: 'COMPILE_GATE_PASSED', fail_events: ['COMPILE_GATE_FAILED'] }
+        ], events, null, '');
+
+        assert.equal(result.gates[0].status, 'FAIL');
+        assert.equal(result.gates[0].timestamp_utc, '2026-01-01T00:00:03.000Z');
+    });
+
+    it('retains the highest sequenced failure across unsequenced legacy events', () => {
+        const events = [
+            { ...lifecycleEvent('COMPILE_GATE_PASSED', 3), timestamp_utc: '2026-01-01T00:00:01.000Z' },
+            { ...lifecycleEvent('COMPILE_GATE_FAILED', 4), timestamp_utc: '2026-01-01T00:00:02.000Z' },
+            { ...lifecycleEvent('COMPILE_GATE_FAILED'), timestamp_utc: '2026-01-01T00:00:03.000Z' },
+            { ...lifecycleEvent('COMPILE_GATE_FAILED', 2), timestamp_utc: '2026-01-01T00:00:04.000Z' }
+        ];
+        const result = buildLifecycleGateOutcomes([
+            { gate: 'compile-gate', pass_event: 'COMPILE_GATE_PASSED', fail_events: ['COMPILE_GATE_FAILED'] }
+        ], events, null, '');
+
+        assert.equal(result.gates[0].status, 'FAIL');
+        assert.equal(result.gates[0].timestamp_utc, '2026-01-01T00:00:02.000Z');
+    });
+
     describe('hasCurrentCycleReviewProgress', () => {
         it('prefers task sequence over array or timestamp order', () => {
             assert.equal(hasCurrentCycleReviewProgress([

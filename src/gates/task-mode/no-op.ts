@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { assertValidTaskId } from '../../gate-runtime/task-events';
+import { assertValidTaskId, readTaskTimelineJsonlEntries } from '../../gate-runtime/task-events';
 import { fileSha256, joinOrchestratorPath, normalizePath, resolvePathInsideRepo } from '../shared/helpers';
 
 export const NO_OP_CLASSIFICATIONS = Object.freeze([
@@ -230,4 +230,66 @@ export function getNoOpEvidence(
 
     result.evidence_status = 'EVIDENCE_NOT_PASS';
     return result;
+}
+
+export function getCurrentNoOpEventSha256(
+    repoRoot: string,
+    taskId: string,
+    evidence: NoOpEvidenceResult,
+    eventsRoot = joinOrchestratorPath(repoRoot, path.join('runtime', 'task-events'))
+): string | null {
+    if (evidence.evidence_status !== 'PASS') {
+        return null;
+    }
+    const timelinePath = path.join(eventsRoot, `${assertValidTaskId(taskId)}.jsonl`);
+    const events = readTaskTimelineJsonlEntries(timelinePath)
+        .map((entry) => entry.record)
+        .filter((entry): entry is Readonly<Record<string, unknown>> => entry !== null);
+    const lastIndexOfEvent = (eventType: string): number => {
+        for (let index = events.length - 1; index >= 0; index -= 1) {
+            if (events[index].event_type === eventType) {
+                return index;
+            }
+        }
+        return -1;
+    };
+    const taskEntryIndex = lastIndexOfEvent('TASK_MODE_ENTERED');
+    const noOpIndex = lastIndexOfEvent('NO_OP_RECORDED');
+    const preflightPassIndex = lastIndexOfEvent('PREFLIGHT_CLASSIFIED');
+    const preflightFailIndex = lastIndexOfEvent('PREFLIGHT_FAILED');
+    const compilePassIndex = lastIndexOfEvent('COMPILE_GATE_PASSED');
+    const compileFailIndex = lastIndexOfEvent('COMPILE_GATE_FAILED');
+    if (
+        taskEntryIndex < 0
+        || preflightPassIndex <= taskEntryIndex
+        || preflightFailIndex > preflightPassIndex
+        || noOpIndex <= preflightPassIndex
+        || noOpIndex <= taskEntryIndex
+        || compilePassIndex > noOpIndex
+        || compileFailIndex > noOpIndex
+    ) {
+        return null;
+    }
+    const event = events[noOpIndex];
+    const details = event.details && typeof event.details === 'object' && !Array.isArray(event.details)
+        ? event.details as Record<string, unknown>
+        : null;
+    const integrity = event.integrity && typeof event.integrity === 'object' && !Array.isArray(event.integrity)
+        ? event.integrity as Record<string, unknown>
+        : null;
+    const eventSha256 = String(integrity?.event_sha256 || '').trim().toLowerCase();
+    if (
+        event.task_id !== taskId
+        || !/^[0-9a-f]{64}$/u.test(eventSha256)
+        || !Number.isFinite(Date.parse(String(event.timestamp_utc || '')))
+        || normalizePath(String(details?.artifact_path || '')).toLowerCase() !== String(evidence.evidence_path || '').toLowerCase()
+        || String(details?.artifact_sha256 || '').toLowerCase() !== String(evidence.evidence_hash || '').toLowerCase()
+        || String(details?.classification || '') !== evidence.classification
+        || String(details?.reason || '') !== evidence.reason
+        || normalizePath(String(details?.preflight_path || '')).toLowerCase() !== String(evidence.preflight_path || '').toLowerCase()
+        || String(details?.preflight_sha256 || '').toLowerCase() !== String(evidence.preflight_sha256 || '').toLowerCase()
+    ) {
+        return null;
+    }
+    return eventSha256;
 }

@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import type { TaskCycleStatusSnapshot } from '../../validators/status';
 import type { EffectiveReviewExecutionPolicyMode } from '../../core/review-execution-policy';
 import { buildReviewExecutionPolicySummaryLine } from '../../core/review-execution-policy';
@@ -5,6 +6,8 @@ import {
     buildTaskQueueStatusContract
 } from '../../core/task-queue-status-contract';
 import type { TaskCycleBindingSnapshot } from '../task-events-summary/task-events-summary';
+import { getCurrentNoOpEventSha256, getNoOpEvidence } from '../task-mode/no-op';
+import { isFullSuiteNotRequiredForZeroDiffNoReviewableScope } from '../full-suite/full-suite-validation-results';
 import { buildDomainScopeFingerprints } from '../scope/domain-scope-fingerprints';
 import {
     getWorkspaceSnapshotCached,
@@ -47,6 +50,7 @@ import {
 
 export interface BuildFinalCloseoutArtifactInput {
     repoRoot: string;
+    eventsRoot: string;
     taskId: string;
     auditStatus: 'PASS' | 'BLOCKED' | 'INCOMPLETE';
     finalReportContract: FinalReportContract;
@@ -444,6 +448,32 @@ export function buildFinalCloseoutArtifact(input: BuildFinalCloseoutArtifactInpu
     });
     const fullSuiteTimeoutSummary = buildFullSuiteTimeoutSummary(input.fullSuiteValidation);
     const workflowConfigAuditSummary = buildWorkflowConfigAuditSummary(input);
+    const noOpEvidence = !input.currentCycle
+        && input.preflight
+        && isFullSuiteNotRequiredForZeroDiffNoReviewableScope(input.preflight)
+        ? getNoOpEvidence(
+            input.repoRoot,
+            input.taskId,
+            path.join(path.dirname(input.finalCloseoutJsonPath), `${input.taskId}-no-op.json`),
+            path.join(path.dirname(input.finalCloseoutJsonPath), `${input.taskId}-preflight.json`)
+        )
+        : null;
+    const noOpEventSha256 = noOpEvidence
+        ? getCurrentNoOpEventSha256(input.repoRoot, input.taskId, noOpEvidence, input.eventsRoot)
+        : null;
+    const noOpBinding = noOpEvidence?.evidence_status === 'PASS'
+        && noOpEvidence.evidence_hash
+        && noOpEvidence.preflight_path
+        && noOpEvidence.preflight_sha256
+        && noOpEventSha256
+        ? {
+            preflight_path: noOpEvidence.preflight_path,
+            preflight_sha256: noOpEvidence.preflight_sha256,
+            compile_gate_timestamp: null,
+            no_op_sha256: noOpEvidence.evidence_hash,
+            no_op_event_sha256: noOpEventSha256
+        }
+        : null;
 
     return {
         schema_version: 1,
@@ -460,7 +490,7 @@ export function buildFinalCloseoutArtifact(input: BuildFinalCloseoutArtifactInpu
                 preflight_sha256: input.currentCycle.preflight_sha256,
                 compile_gate_timestamp: input.currentCycle.compile_gate_timestamp
             }
-            : null,
+            : noOpBinding,
         artifact_paths: {
             json: toPosix(input.finalCloseoutJsonPath),
             markdown: toPosix(input.finalCloseoutMarkdownPath),

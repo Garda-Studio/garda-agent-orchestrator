@@ -13,6 +13,7 @@ import {
 import {
     buildForcedSourceCheckoutRuntimeBuildCommand
 } from '../../../../src/validators/workspace-layout';
+import { getCurrentNoOpEventSha256, getNoOpEvidence } from '../../../../src/gates/task-mode/no-op';
 import {
     TASK_ID,
     ALL_REVIEW_FLAGS,
@@ -20,11 +21,13 @@ import {
     reviewsRoot,
     writeJson,
     sha256Text,
+    fileSha256,
     appendEvent,
     seedStartedTask,
     writePreflight,
     seedCompilePass,
     writeGitAutoPreflight,
+    writeNoOpEvidence,
     seedGitAutoCompilePass,
     writeStagedPreflight,
     seedStagedCompilePass,
@@ -53,6 +56,19 @@ function bindProtectedDirtyBaseline(
         }
     };
     writeJson(preflightPath, preflight);
+}
+
+function seedNoOpRecordedEvent(repoRoot: string, taskId: string, preflightPath: string): void {
+    const artifactPath = path.join(reviewsRoot(repoRoot), `${taskId}-no-op.json`);
+    const artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8')) as Record<string, unknown>;
+    appendEvent(repoRoot, taskId, 'NO_OP_RECORDED', 'INFO', {
+        artifact_path: artifactPath.replace(/\\/gu, '/'),
+        artifact_sha256: fileSha256(artifactPath),
+        classification: artifact.classification,
+        reason: artifact.reason,
+        preflight_path: preflightPath.replace(/\\/gu, '/'),
+        preflight_sha256: artifact.preflight_sha256
+    });
 }
 
 function captureGitCommands<T>(callback: () => T): { result: T; gitCommands: string[][] } {
@@ -511,6 +527,461 @@ describe('gates/next-step', () => {
 
         assert.ok(!text.includes('Do you want me to commit now? (yes/no)'));
 
+    });
+
+    it('accepts a materialized audited no-op closeout without a compile cycle', () => {
+        const repoRoot = makeTempRepo();
+        initGitRepo(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        const preflightPath = writeGitAutoPreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+        preflight.scope_category = 'empty';
+        preflight.zero_diff_guard = {
+            zero_diff_detected: true,
+            status: 'BASELINE_ONLY',
+            completion_requires_audited_no_op: true
+        };
+        preflight.profile_guardrails = { zero_diff_no_reviewable_scope: true };
+        writeJson(preflightPath, preflight);
+        writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+        seedNoOpRecordedEvent(repoRoot, TASK_ID, preflightPath);
+        const noOpEvidence = getNoOpEvidence(repoRoot, TASK_ID, '', preflightPath);
+        assert.match(String(noOpEvidence.evidence_hash), /^[0-9a-f]{64}$/u);
+        seedReviewGatePass(repoRoot, TASK_ID);
+        seedDocImpactPass(repoRoot, TASK_ID);
+        seedCompletionPass(repoRoot, TASK_ID);
+        materializeFinalCloseout(repoRoot, TASK_ID);
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        assert.equal(result.status, 'DONE', result.reason);
+        assert.equal(result.next_gate, null);
+        assert.ok(result.final_report?.final_user_report_body.includes('Status: DONE'));
+
+        fs.rmSync(path.join(reviewsRoot(repoRoot), `${TASK_ID}-no-op.json`));
+        const missingNoOpSummary = buildTaskAuditSummary({ taskId: TASK_ID, repoRoot });
+        assert.equal(readReadyFinalReportSummary(
+            repoRoot,
+            reviewsRoot(repoRoot),
+            TASK_ID,
+            missingNoOpSummary
+        ), null);
+    });
+
+    it('rejects a prior no-op closeout and ledger after a later no-op cycle', () => {
+        const repoRoot = makeTempRepo();
+        initGitRepo(repoRoot);
+        const closeoutRoot = reviewsRoot(repoRoot);
+        const closeoutPath = path.join(closeoutRoot, `${TASK_ID}-final-closeout.json`);
+        const closeoutMarkdownPath = path.join(closeoutRoot, `${TASK_ID}-final-closeout.md`);
+        const reportPath = path.join(closeoutRoot, `${TASK_ID}-final-user-report.md`);
+        const ledgerPath = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-ledger', `${TASK_ID}.json`);
+        const completeNoOpCycle = (reason: string): void => {
+            seedStartedTask(repoRoot, TASK_ID);
+            const preflightPath = writeGitAutoPreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+            const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+            preflight.scope_category = 'empty';
+            preflight.zero_diff_guard = {
+                zero_diff_detected: true,
+                status: 'BASELINE_ONLY',
+                completion_requires_audited_no_op: true
+            };
+            preflight.profile_guardrails = { zero_diff_no_reviewable_scope: true };
+            writeJson(preflightPath, preflight);
+            writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+            const noOpPath = path.join(closeoutRoot, `${TASK_ID}-no-op.json`);
+            const noOp = JSON.parse(fs.readFileSync(noOpPath, 'utf8')) as Record<string, unknown>;
+            noOp.reason = reason;
+            writeJson(noOpPath, noOp);
+            seedNoOpRecordedEvent(repoRoot, TASK_ID, preflightPath);
+            seedReviewGatePass(repoRoot, TASK_ID);
+            seedDocImpactPass(repoRoot, TASK_ID);
+            seedCompletionPass(repoRoot, TASK_ID);
+            materializeFinalCloseout(repoRoot, TASK_ID);
+        };
+
+        completeNoOpCycle('First audited no-op cycle with no source change.');
+        const priorPaths = [
+            closeoutPath,
+            closeoutMarkdownPath,
+            reportPath,
+            ledgerPath,
+            path.join(closeoutRoot, `${TASK_ID}-no-op.json`),
+            path.join(closeoutRoot, `${TASK_ID}-preflight.json`)
+        ];
+        const prior = priorPaths
+            .map((filePath) => fs.readFileSync(filePath));
+        completeNoOpCycle('Second audited no-op cycle with no source change.');
+        const currentSummary = buildTaskAuditSummary({ taskId: TASK_ID, repoRoot });
+        assert.ok(readReadyFinalReportSummary(repoRoot, closeoutRoot, TASK_ID, currentSummary));
+
+        priorPaths.forEach((filePath, index) => fs.writeFileSync(filePath, prior[index]));
+        assert.equal(readReadyFinalReportSummary(
+            repoRoot,
+            closeoutRoot,
+            TASK_ID,
+            buildTaskAuditSummary({ taskId: TASK_ID, repoRoot })
+        ), null);
+    });
+
+    it('binds a no-op cycle after an earlier compile to the current no-op event', () => {
+        const repoRoot = makeTempRepo();
+        initGitRepo(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        seedCompilePass(repoRoot, TASK_ID);
+        seedReviewGatePass(repoRoot, TASK_ID);
+        seedDocImpactPass(repoRoot, TASK_ID);
+        seedCompletionPass(repoRoot, TASK_ID);
+        materializeFinalCloseout(repoRoot, TASK_ID);
+
+        const closeoutRoot = reviewsRoot(repoRoot);
+        const priorPaths = [
+            path.join(closeoutRoot, `${TASK_ID}-final-closeout.json`),
+            path.join(closeoutRoot, `${TASK_ID}-final-closeout.md`),
+            path.join(closeoutRoot, `${TASK_ID}-final-user-report.md`),
+            path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-ledger', `${TASK_ID}.json`)
+        ];
+        const prior = priorPaths.map((filePath) => fs.readFileSync(filePath));
+
+        seedStartedTask(repoRoot, TASK_ID);
+        const preflightPath = writeGitAutoPreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+        preflight.scope_category = 'empty';
+        preflight.zero_diff_guard = {
+            zero_diff_detected: true,
+            status: 'BASELINE_ONLY',
+            completion_requires_audited_no_op: true
+        };
+        preflight.profile_guardrails = { zero_diff_no_reviewable_scope: true };
+        writeJson(preflightPath, preflight);
+        writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+        seedNoOpRecordedEvent(repoRoot, TASK_ID, preflightPath);
+        seedReviewGatePass(repoRoot, TASK_ID);
+        seedDocImpactPass(repoRoot, TASK_ID);
+        seedCompletionPass(repoRoot, TASK_ID);
+        materializeFinalCloseout(repoRoot, TASK_ID);
+
+        const currentCloseout = JSON.parse(fs.readFileSync(priorPaths[0], 'utf8')) as Record<string, unknown>;
+        const binding = currentCloseout.cycle_binding as Record<string, unknown>;
+        assert.equal(binding.compile_gate_timestamp, null);
+        assert.match(String(binding.no_op_event_sha256), /^[0-9a-f]{64}$/u);
+        assert.equal(resolveNextStep({ taskId: TASK_ID, repoRoot }).status, 'DONE');
+
+        priorPaths.forEach((filePath, index) => fs.writeFileSync(filePath, prior[index]));
+        assert.equal(readReadyFinalReportSummary(
+            repoRoot,
+            closeoutRoot,
+            TASK_ID,
+            buildTaskAuditSummary({ taskId: TASK_ID, repoRoot })
+        ), null);
+    });
+
+    it('blocks an audited no-op closeout without a matching current no-op event', () => {
+        const repoRoot = makeTempRepo();
+        initGitRepo(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        const preflightPath = writeGitAutoPreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+        preflight.scope_category = 'empty';
+        preflight.zero_diff_guard = {
+            zero_diff_detected: true,
+            status: 'BASELINE_ONLY',
+            completion_requires_audited_no_op: true
+        };
+        preflight.profile_guardrails = { zero_diff_no_reviewable_scope: true };
+        writeJson(preflightPath, preflight);
+        writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+        seedReviewGatePass(repoRoot, TASK_ID);
+        seedDocImpactPass(repoRoot, TASK_ID);
+        seedCompletionPass(repoRoot, TASK_ID);
+
+        const summary = buildTaskAuditSummary({ taskId: TASK_ID, repoRoot });
+        assert.equal(summary.final_closeout.status, 'NOT_READY');
+        assert.match(String(summary.final_closeout.blocker), /NO_OP_RECORDED/u);
+    });
+
+    it('recovers a legacy no-op event by recording a hash-bound event and rerunning closeout gates', () => {
+        const repoRoot = makeTempRepo();
+        const taskQueuePath = path.join(repoRoot, 'TASK.md');
+        const taskQueue = fs.readFileSync(taskQueuePath, 'utf8');
+        assert.ok(taskQueue.includes(`| ${TASK_ID} | TODO |`));
+        fs.writeFileSync(taskQueuePath, taskQueue.replace(`| ${TASK_ID} | TODO |`, `| ${TASK_ID} | 🟩 DONE |`), 'utf8');
+        initGitRepo(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        const preflightPath = writeGitAutoPreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+        preflight.scope_category = 'empty';
+        preflight.zero_diff_guard = {
+            zero_diff_detected: true,
+            status: 'BASELINE_ONLY',
+            completion_requires_audited_no_op: true
+        };
+        preflight.profile_guardrails = { zero_diff_no_reviewable_scope: true };
+        writeJson(preflightPath, preflight);
+        writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+        const artifactPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-no-op.json`);
+        const artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8')) as Record<string, unknown>;
+        appendEvent(repoRoot, TASK_ID, 'NO_OP_RECORDED', 'INFO', {
+            artifact_path: artifactPath.replace(/\\/gu, '/'),
+            classification: artifact.classification,
+            reason: artifact.reason,
+            preflight_path: preflightPath.replace(/\\/gu, '/'),
+            preflight_sha256: artifact.preflight_sha256
+        });
+        seedReviewGatePass(repoRoot, TASK_ID);
+        seedDocImpactPass(repoRoot, TASK_ID);
+        seedCompletionPass(repoRoot, TASK_ID);
+
+        const evidence = getNoOpEvidence(repoRoot, TASK_ID, '', preflightPath);
+        assert.equal(evidence.evidence_status, 'PASS');
+        assert.equal(getCurrentNoOpEventSha256(repoRoot, TASK_ID, evidence), null);
+        assert.equal(buildTaskAuditSummary({ taskId: TASK_ID, repoRoot }).final_closeout.status, 'NOT_READY');
+        assert.equal(resolveNextStep({ taskId: TASK_ID, repoRoot }).next_gate, 'record-no-op');
+
+        seedNoOpRecordedEvent(repoRoot, TASK_ID, preflightPath);
+        assert.match(String(getCurrentNoOpEventSha256(repoRoot, TASK_ID, evidence)), /^[0-9a-f]{64}$/u);
+        const recoveryStep = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        assert.notEqual(recoveryStep.next_gate, 'task-audit-summary');
+        assert.notEqual(recoveryStep.next_gate, 'task-reset');
+        assert.notEqual(recoveryStep.status, 'DONE');
+        seedReviewGatePass(repoRoot, TASK_ID);
+        seedDocImpactPass(repoRoot, TASK_ID);
+        seedCompletionPass(repoRoot, TASK_ID);
+        materializeFinalCloseout(repoRoot, TASK_ID);
+        assert.equal(resolveNextStep({ taskId: TASK_ID, repoRoot }).status, 'DONE');
+    });
+
+    it('accepts a hash-bound no-op after an earlier compile in the same task entry', () => {
+        const repoRoot = makeTempRepo();
+        initGitRepo(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        const preflightPath = writeGitAutoPreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+        preflight.scope_category = 'empty';
+        preflight.zero_diff_guard = {
+            zero_diff_detected: true,
+            status: 'BASELINE_ONLY',
+            completion_requires_audited_no_op: true
+        };
+        preflight.profile_guardrails = { zero_diff_no_reviewable_scope: true };
+        writeJson(preflightPath, preflight);
+        seedGitAutoCompilePass(repoRoot, TASK_ID);
+        writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+        seedNoOpRecordedEvent(repoRoot, TASK_ID, preflightPath);
+        seedReviewGatePass(repoRoot, TASK_ID);
+        seedDocImpactPass(repoRoot, TASK_ID);
+        seedCompletionPass(repoRoot, TASK_ID);
+
+        materializeFinalCloseout(repoRoot, TASK_ID);
+        assert.equal(resolveNextStep({ taskId: TASK_ID, repoRoot }).status, 'DONE');
+    });
+
+    it('rejects a compile event after the hash-bound no-op anchor', () => {
+        const repoRoot = makeTempRepo();
+        initGitRepo(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        const preflightPath = writeGitAutoPreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+        preflight.scope_category = 'empty';
+        preflight.zero_diff_guard = {
+            zero_diff_detected: true,
+            status: 'BASELINE_ONLY',
+            completion_requires_audited_no_op: true
+        };
+        preflight.profile_guardrails = { zero_diff_no_reviewable_scope: true };
+        writeJson(preflightPath, preflight);
+        writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+        seedNoOpRecordedEvent(repoRoot, TASK_ID, preflightPath);
+        seedGitAutoCompilePass(repoRoot, TASK_ID);
+        seedReviewGatePass(repoRoot, TASK_ID);
+        seedDocImpactPass(repoRoot, TASK_ID);
+        seedCompletionPass(repoRoot, TASK_ID);
+
+        const evidence = getNoOpEvidence(repoRoot, TASK_ID, '', preflightPath);
+        assert.equal(getCurrentNoOpEventSha256(repoRoot, TASK_ID, evidence), null);
+        assert.equal(buildTaskAuditSummary({ taskId: TASK_ID, repoRoot }).final_closeout.status, 'NOT_READY');
+    });
+
+    it('does not reuse review and doc events before the current no-op event', () => {
+        const repoRoot = makeTempRepo();
+        initGitRepo(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        seedCompilePass(repoRoot, TASK_ID);
+        seedReviewGatePass(repoRoot, TASK_ID);
+        seedDocImpactPass(repoRoot, TASK_ID);
+
+        seedStartedTask(repoRoot, TASK_ID);
+        const preflightPath = writeGitAutoPreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+        preflight.scope_category = 'empty';
+        preflight.zero_diff_guard = {
+            zero_diff_detected: true,
+            status: 'BASELINE_ONLY',
+            completion_requires_audited_no_op: true
+        };
+        preflight.profile_guardrails = { zero_diff_no_reviewable_scope: true };
+        writeJson(preflightPath, preflight);
+        writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+        seedNoOpRecordedEvent(repoRoot, TASK_ID, preflightPath);
+        seedCompletionPass(repoRoot, TASK_ID);
+
+        const summary = buildTaskAuditSummary({ taskId: TASK_ID, repoRoot });
+        assert.equal(summary.final_closeout.status, 'NOT_READY');
+        assert.ok(summary.gates.some((gate) => gate.gate === 'required-reviews-check' && gate.status === 'MISSING'));
+        assert.ok(summary.gates.some((gate) => gate.gate === 'doc-impact-gate' && gate.status === 'MISSING'));
+    });
+
+    it('reads audited no-op evidence from explicit review and event roots', () => {
+        const repoRoot = makeTempRepo();
+        initGitRepo(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        const preflightPath = writeGitAutoPreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+        preflight.scope_category = 'empty';
+        preflight.zero_diff_guard = {
+            zero_diff_detected: true,
+            status: 'BASELINE_ONLY',
+            completion_requires_audited_no_op: true
+        };
+        preflight.profile_guardrails = { zero_diff_no_reviewable_scope: true };
+        writeJson(preflightPath, preflight);
+        writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+        seedNoOpRecordedEvent(repoRoot, TASK_ID, preflightPath);
+        seedReviewGatePass(repoRoot, TASK_ID);
+        seedDocImpactPass(repoRoot, TASK_ID);
+        seedCompletionPass(repoRoot, TASK_ID);
+
+        const alternateEventsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'alternate-events');
+        fs.mkdirSync(alternateEventsRoot, { recursive: true });
+        const defaultEventPath = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events', `${TASK_ID}.jsonl`);
+        fs.copyFileSync(defaultEventPath, path.join(alternateEventsRoot, `${TASK_ID}.jsonl`));
+        fs.rmSync(defaultEventPath);
+        const evidence = getNoOpEvidence(repoRoot, TASK_ID, '', preflightPath);
+        assert.equal(evidence.evidence_status, 'PASS');
+        assert.match(String(getCurrentNoOpEventSha256(repoRoot, TASK_ID, evidence, alternateEventsRoot)), /^[0-9a-f]{64}$/u);
+        assert.equal(getCurrentNoOpEventSha256(repoRoot, TASK_ID, evidence), null);
+
+        const alternateReviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'alternate-reviews');
+        fs.mkdirSync(alternateReviewsRoot, { recursive: true });
+        const alternatePreflightPath = path.join(alternateReviewsRoot, `${TASK_ID}-preflight.json`);
+        const alternateNoOpPath = path.join(alternateReviewsRoot, `${TASK_ID}-no-op.json`);
+        fs.copyFileSync(preflightPath, alternatePreflightPath);
+        const noOp = JSON.parse(fs.readFileSync(path.join(reviewsRoot(repoRoot), `${TASK_ID}-no-op.json`), 'utf8')) as Record<string, unknown>;
+        noOp.preflight_path = alternatePreflightPath.replace(/\\/gu, '/');
+        writeJson(alternateNoOpPath, noOp);
+        assert.equal(getNoOpEvidence(repoRoot, TASK_ID, alternateNoOpPath, alternatePreflightPath).evidence_status, 'PASS');
+    });
+
+    it('does not reuse future-dated review and doc events recorded before no-op', () => {
+        const repoRoot = makeTempRepo();
+        initGitRepo(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        const preflightPath = writeGitAutoPreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+        preflight.scope_category = 'empty';
+        preflight.zero_diff_guard = {
+            zero_diff_detected: true,
+            status: 'BASELINE_ONLY',
+            completion_requires_audited_no_op: true
+        };
+        preflight.profile_guardrails = { zero_diff_no_reviewable_scope: true };
+        writeJson(preflightPath, preflight);
+        const futureUtc = new Date(Date.now() + 60_000).toISOString();
+        appendEvent(repoRoot, TASK_ID, 'REVIEW_GATE_PASSED', 'PASS', {}, futureUtc);
+        appendEvent(repoRoot, TASK_ID, 'DOC_IMPACT_ASSESSED', 'PASS', {}, futureUtc);
+        writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+        seedNoOpRecordedEvent(repoRoot, TASK_ID, preflightPath);
+        seedCompletionPass(repoRoot, TASK_ID);
+
+        const summary = buildTaskAuditSummary({ taskId: TASK_ID, repoRoot });
+        assert.ok(summary.gates.some((gate) => gate.gate === 'required-reviews-check' && gate.status === 'MISSING'));
+        assert.ok(summary.gates.some((gate) => gate.gate === 'doc-impact-gate' && gate.status === 'MISSING'));
+    });
+
+    it('preserves a rule-pack failure recorded before no-op', () => {
+        const repoRoot = makeTempRepo();
+        initGitRepo(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        const preflightPath = writeGitAutoPreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+        preflight.scope_category = 'empty';
+        preflight.zero_diff_guard = {
+            zero_diff_detected: true,
+            status: 'BASELINE_ONLY',
+            completion_requires_audited_no_op: true
+        };
+        preflight.profile_guardrails = { zero_diff_no_reviewable_scope: true };
+        writeJson(preflightPath, preflight);
+        appendEvent(repoRoot, TASK_ID, 'RULE_PACK_LOAD_FAILED', 'FAIL');
+        writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+        seedNoOpRecordedEvent(repoRoot, TASK_ID, preflightPath);
+        seedReviewGatePass(repoRoot, TASK_ID);
+        seedDocImpactPass(repoRoot, TASK_ID);
+        seedCompletionPass(repoRoot, TASK_ID);
+
+        const summary = buildTaskAuditSummary({ taskId: TASK_ID, repoRoot });
+        assert.ok(summary.gates.some((gate) => gate.gate === 'load-rule-pack' && gate.status === 'FAIL'));
+        assert.equal(summary.final_closeout.status, 'NOT_READY');
+    });
+
+    it('rejects a no-op artifact changed after its recorded event', () => {
+        const repoRoot = makeTempRepo();
+        initGitRepo(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        const preflightPath = writeGitAutoPreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+        preflight.scope_category = 'empty';
+        preflight.zero_diff_guard = {
+            zero_diff_detected: true,
+            status: 'BASELINE_ONLY',
+            completion_requires_audited_no_op: true
+        };
+        preflight.profile_guardrails = { zero_diff_no_reviewable_scope: true };
+        writeJson(preflightPath, preflight);
+        writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+        seedNoOpRecordedEvent(repoRoot, TASK_ID, preflightPath);
+        const noOpPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-no-op.json`);
+        const noOp = JSON.parse(fs.readFileSync(noOpPath, 'utf8')) as Record<string, unknown>;
+        noOp.actor = 'replacement-actor';
+        writeJson(noOpPath, noOp);
+        seedReviewGatePass(repoRoot, TASK_ID);
+        seedDocImpactPass(repoRoot, TASK_ID);
+        seedCompletionPass(repoRoot, TASK_ID);
+
+        const evidence = getNoOpEvidence(repoRoot, TASK_ID, '', preflightPath);
+        assert.equal(evidence.evidence_status, 'PASS');
+        assert.equal(getCurrentNoOpEventSha256(repoRoot, TASK_ID, evidence), null);
+        assert.equal(buildTaskAuditSummary({ taskId: TASK_ID, repoRoot }).final_closeout.status, 'NOT_READY');
+    });
+
+    it('rejects no-op evidence recorded before the latest preflight classification', () => {
+        const repoRoot = makeTempRepo();
+        initGitRepo(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        const preflightPath = writeGitAutoPreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+        preflight.scope_category = 'empty';
+        preflight.zero_diff_guard = {
+            zero_diff_detected: true,
+            status: 'BASELINE_ONLY',
+            completion_requires_audited_no_op: true
+        };
+        preflight.profile_guardrails = { zero_diff_no_reviewable_scope: true };
+        writeJson(preflightPath, preflight);
+        writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+        seedNoOpRecordedEvent(repoRoot, TASK_ID, preflightPath);
+        appendEvent(repoRoot, TASK_ID, 'PREFLIGHT_CLASSIFIED', 'INFO', {
+            output_path: preflightPath.replace(/\\/gu, '/')
+        });
+        seedReviewGatePass(repoRoot, TASK_ID);
+        seedDocImpactPass(repoRoot, TASK_ID);
+        seedCompletionPass(repoRoot, TASK_ID);
+
+        const evidence = getNoOpEvidence(repoRoot, TASK_ID, '', preflightPath);
+        assert.equal(evidence.evidence_status, 'PASS');
+        assert.equal(getCurrentNoOpEventSha256(repoRoot, TASK_ID, evidence), null);
+        assert.equal(buildTaskAuditSummary({ taskId: TASK_ID, repoRoot }).final_closeout.status, 'NOT_READY');
     });
 
 

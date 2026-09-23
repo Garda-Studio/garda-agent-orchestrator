@@ -501,6 +501,7 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
     taskEntry: TaskQueueEntry | null;
     completionGatePassed: boolean;
     latestCompletionCurrent: boolean;
+    allowAuditedNoOpRecovery?: boolean;
     finalReportContractReady: boolean;
     finalReportContractBlocker: string | null;
     summaryBlockers: readonly string[];
@@ -779,6 +780,10 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
         && options.completionGatePassed
         && options.latestCompletionCurrent
     ) {
+        return null;
+    }
+
+    if (isTaskQueueDoneStatus(taskQueueStatus) && options.allowAuditedNoOpRecovery === true) {
         return null;
     }
 
