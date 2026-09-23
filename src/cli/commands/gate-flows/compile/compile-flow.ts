@@ -31,6 +31,7 @@ import {
     detectProtectedDirtyWorkspaceDrift,
     getProtectedDirtyWorkspaceScopeFromPreflight
 } from '../../../../gates/workspace/dirty-worktree-protection';
+import { assertSingleActiveImplementationOwner } from '../../../../gates/workspace/active-implementation-ownership';
 import {
     captureCompileGeneratedProtectedArtifactHashes,
     type CompileGeneratedProtectedArtifactEvidence
@@ -395,6 +396,7 @@ export async function runCompileGateCommand(options: CompileGateCommandOptions):
         }
 
         if (!exceptionMessage) {
+            assertSingleActiveImplementationOwner(repoRoot, resolvedTaskId, 'compile gate');
             await emitMandatoryImplementationStartedEventAsync(orchestratorRoot, resolvedTaskId, {
                 preflight_path: gateHelpers.normalizePath(resolvedPreflightPath),
                 commands_path: normalizeOptionalPath(resolvedCommandsPath),

@@ -50,6 +50,10 @@ import { loadFullSuiteValidationConfig } from '../../../../core/full-suite-valid
 import { resolveReviewFollowUpTaskClosurePolicy } from '../../../../core/review-follow-up-task-closure-policy';
 import { readTaskQueueEntries } from '../../../../core/task-queue-read';
 import {
+    assertSingleActiveImplementationOwner,
+    withImplementationOwnershipLock
+} from '../../../../gates/workspace/active-implementation-ownership';
+import {
     normalizeOptionalPath,
     removeArtifactIfExists,
     resolveDefaultMetricsPath,
@@ -300,6 +304,14 @@ function resolveTaskModeScopeUpgrade(input: {
 
 export function runEnterTaskModeCommand(options: EnterTaskModeCommandOptions): { outputLines: string[]; exitCode: number } {
     const repoRoot = path.resolve(String(options.repoRoot || '.'));
+    return withImplementationOwnershipLock(
+        repoRoot,
+        () => runEnterTaskModeWithOwnershipLock(options)
+    );
+}
+
+function runEnterTaskModeWithOwnershipLock(options: EnterTaskModeCommandOptions): { outputLines: string[]; exitCode: number } {
+    const repoRoot = path.resolve(String(options.repoRoot || '.'));
     const orchestratorRoot = resolveOrchestratorRoot(repoRoot);
     const taskId = assertValidTaskId(String(options.taskId || '').trim());
     const artifactPath = resolveTaskModeArtifactPath(repoRoot, taskId, String(options.artifactPath || ''));
@@ -362,6 +374,8 @@ export function runEnterTaskModeCommand(options: EnterTaskModeCommandOptions): {
     const taskQueueEntries = readTaskQueueEntries(repoRoot);
     const taskQueueEntry = taskQueueEntries.get(taskId);
     const taskQueueMetadata = readTaskQueueMetadata(repoRoot, taskId, taskQueueEntries);
+
+    assertSingleActiveImplementationOwner(repoRoot, taskId, 'task-mode entry', taskQueueEntries);
 
     assertTaskModeProtectedEntryAllowed({
         repoRoot,
