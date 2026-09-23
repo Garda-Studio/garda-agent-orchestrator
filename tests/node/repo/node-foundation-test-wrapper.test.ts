@@ -351,6 +351,53 @@ test('runNodeFoundationTests bounds inner concurrency when isolation expands req
     }
 });
 
+test('runNodeFoundationTests allocates inner concurrency from active shard workers', async (context) => {
+    const { buildResult, cleanup } = createBuildResultFixture();
+    context.after(cleanup);
+    const originalArgv = process.argv;
+    context.after(() => { process.argv = originalArgv; });
+    process.argv = ['node', 'scripts/node-foundation/test.js', '--garda-shards', '2', '--garda-shard-concurrency', '4'];
+    context.mock.method(mutableBuildModule, 'buildPublishRuntime', () => buildResult);
+    context.mock.method(mutableBuildModule, 'buildNodeFoundation', () => buildResult);
+    context.mock.method(mutableOs, 'availableParallelism', () => 8);
+    const observedShardArgs: string[][] = [];
+    context.mock.method(mutableChildProcess, 'spawn', (_: string, args: readonly string[] = []) => {
+        observedShardArgs.push(Array.from(args));
+        return createCompletingNodeTestChild();
+    });
+
+    assert.equal(await testModule.runNodeFoundationTests(), 0);
+    assert.equal(observedShardArgs.length, 2);
+    assert.ok(observedShardArgs.every((args) => args.includes('--test-concurrency=4')));
+});
+
+test('runNodeFoundationTests caps default outer workers on a single-core host', async (context) => {
+    const { buildResult, cleanup } = createBuildResultFixture(2);
+    context.after(cleanup);
+    const originalArgv = process.argv;
+    context.after(() => { process.argv = originalArgv; });
+    process.argv = ['node', 'scripts/node-foundation/test.js', '--garda-shards', '4'];
+    context.mock.method(mutableBuildModule, 'buildPublishRuntime', () => buildResult);
+    context.mock.method(mutableBuildModule, 'buildNodeFoundation', () => buildResult);
+    context.mock.method(mutableOs, 'availableParallelism', () => 1);
+    let activeShards = 0;
+    let maxActiveShards = 0;
+    const observedShardArgs: string[][] = [];
+    context.mock.method(mutableChildProcess, 'spawn', (_: string, args: readonly string[] = []) => {
+        observedShardArgs.push(Array.from(args));
+        activeShards += 1;
+        maxActiveShards = Math.max(maxActiveShards, activeShards);
+        const child = createCompletingNodeTestChild();
+        child.once('close', () => { activeShards -= 1; });
+        return child;
+    });
+
+    assert.equal(await testModule.runNodeFoundationTests(), 0);
+    assert.equal(observedShardArgs.length, 4);
+    assert.equal(maxActiveShards, 1);
+    assert.ok(observedShardArgs.every((args) => args.includes('--test-concurrency=1')));
+});
+
 test('runNodeFoundationTests limits shard process concurrency from CLI option', async () => {
     const { buildResult, cleanup } = createBuildResultFixture(2);
     const originalArgv = process.argv;
@@ -468,6 +515,7 @@ test('runNodeFoundationTests runs contention-sensitive tests after parallel shar
     const originalBuildNodeFoundation = mutableBuildModule.buildNodeFoundation;
     const originalBuildPublishRuntime = mutableBuildModule.buildPublishRuntime;
     const originalSpawn = mutableChildProcess.spawn;
+    const originalAvailableParallelism = mutableOs.availableParallelism;
     const serialTestArgs = [
         'tests/node/core/subprocess.test.js',
         'tests/node/cli/commands/gates/review-launch/gates-command-review-launch-prepared-1.test.js',
@@ -488,6 +536,7 @@ test('runNodeFoundationTests runs contention-sensitive tests after parallel shar
     let maxActiveShards = 0;
 
     try {
+        mutableOs.availableParallelism = () => 6;
         process.argv = [
             'node',
             'scripts/node-foundation/test.js',
@@ -527,15 +576,17 @@ test('runNodeFoundationTests runs contention-sensitive tests after parallel shar
         assert.ok(observedShardArgs.slice(0, 2).every((args) => (
             serialTestArgs.every((testArg) => !args.includes(testArg))
         )));
+        assert.ok(observedShardArgs.slice(0, 2).every((args) => args.includes('--test-concurrency=3')));
         assert.deepEqual(
             observedShardArgs.slice(2),
-            serialTestArgs.map((testArg) => [...DEFAULT_SHARDED_NODE_TEST_ARGS, testArg])
+            serialTestArgs.map((testArg) => ['--test', '--test-concurrency=4', testArg])
         );
     } finally {
         process.argv = originalArgv;
         mutableBuildModule.buildNodeFoundation = originalBuildNodeFoundation;
         mutableBuildModule.buildPublishRuntime = originalBuildPublishRuntime;
         mutableChildProcess.spawn = originalSpawn;
+        mutableOs.availableParallelism = originalAvailableParallelism;
         cleanup();
     }
 });
@@ -546,6 +597,7 @@ test('runNodeFoundationTests isolates mutation-sensitive suites from grouped sha
     const originalBuildNodeFoundation = mutableBuildModule.buildNodeFoundation;
     const originalBuildPublishRuntime = mutableBuildModule.buildPublishRuntime;
     const originalSpawn = mutableChildProcess.spawn;
+    const originalAvailableParallelism = mutableOs.availableParallelism;
     const isolatedTestArgs = [
         'tests/node/cli/commands/gates/completion/gates-completion-rollback.test.js',
         'tests/node/cli/commands/gates/review-cycle/gates-review-cycle-restart.test.js',
@@ -560,6 +612,7 @@ test('runNodeFoundationTests isolates mutation-sensitive suites from grouped sha
     const observedShardArgs: string[][] = [];
 
     try {
+        mutableOs.availableParallelism = () => 8;
         process.argv = [
             'node',
             'scripts/node-foundation/test.js',
@@ -580,13 +633,14 @@ test('runNodeFoundationTests isolates mutation-sensitive suites from grouped sha
         for (const isolatedTestArg of isolatedTestArgs) {
             const isolatedShardArgs = observedShardArgs.filter((args) => args.includes(isolatedTestArg));
             assert.equal(isolatedShardArgs.length, 1);
-            assert.deepEqual(isolatedShardArgs[0], [...DEFAULT_SHARDED_NODE_TEST_ARGS, isolatedTestArg]);
+            assert.deepEqual(isolatedShardArgs[0], ['--test', '--test-concurrency=2', isolatedTestArg]);
         }
     } finally {
         process.argv = originalArgv;
         mutableBuildModule.buildNodeFoundation = originalBuildNodeFoundation;
         mutableBuildModule.buildPublishRuntime = originalBuildPublishRuntime;
         mutableChildProcess.spawn = originalSpawn;
+        mutableOs.availableParallelism = originalAvailableParallelism;
         cleanup();
     }
 });
@@ -597,6 +651,7 @@ test('runNodeFoundationTests groups 60s tests and isolates tests at the 4m thres
     const originalBuildNodeFoundation = mutableBuildModule.buildNodeFoundation;
     const originalBuildPublishRuntime = mutableBuildModule.buildPublishRuntime;
     const originalSpawn = mutableChildProcess.spawn;
+    const originalAvailableParallelism = mutableOs.availableParallelism;
     const originalConsoleLog = console.log;
     const durationFile = path.join(buildResult.repoRoot, 'duration-telemetry.json');
     const groupedTestPath = addCompiledTestFile(
@@ -639,6 +694,7 @@ test('runNodeFoundationTests groups 60s tests and isolates tests at the 4m thres
     }, null, 2)}\n`, 'utf8');
 
     try {
+        mutableOs.availableParallelism = () => 8;
         process.argv = [
             'node',
             'scripts/node-foundation/test.js',
@@ -675,7 +731,7 @@ test('runNodeFoundationTests groups 60s tests and isolates tests at the 4m thres
 
         assert.equal(exitCode, 0);
         assert.equal(observedShardArgs.length, 3);
-        assert.equal(maxActiveShards, 2);
+        assert.equal(maxActiveShards, 3);
         const groupedShardArgs = observedShardArgs.filter((args) => args.includes(groupedTestArg));
         assert.equal(groupedShardArgs.length, 1);
         assert.ok(
@@ -683,7 +739,7 @@ test('runNodeFoundationTests groups 60s tests and isolates tests at the 4m thres
             'known 60s test should retain a grouped shard peer'
         );
         const isolatedShardArgs = observedShardArgs.filter((args) => args.includes(isolatedTestArg));
-        assert.deepEqual(isolatedShardArgs, [[...DEFAULT_SHARDED_NODE_TEST_ARGS, isolatedTestArg]]);
+        assert.deepEqual(isolatedShardArgs, [['--test', '--test-concurrency=2', isolatedTestArg]]);
         const comparisonLine = observedLogs.find((line) => line.startsWith('NODE_FOUNDATION_TEST_SHARD_COMPARISON '));
         assert.match(comparisonLine || '', /current_threshold_ms=240000/);
         assert.match(comparisonLine || '', /baseline_threshold_ms=60000/);
@@ -691,13 +747,14 @@ test('runNodeFoundationTests groups 60s tests and isolates tests at the 4m thres
         assert.match(comparisonLine || '', /baseline_isolated_files=2/);
         assert.match(comparisonLine || '', /current_scheduled_shards=3/);
         assert.match(comparisonLine || '', /baseline_scheduled_shards=4/);
-        assert.match(comparisonLine || '', /max_worker_processes=2/);
+        assert.match(comparisonLine || '', /max_worker_processes=3/);
     } finally {
         process.argv = originalArgv;
         mutableBuildModule.buildNodeFoundation = originalBuildNodeFoundation;
         mutableBuildModule.buildPublishRuntime = originalBuildPublishRuntime;
         mutableChildProcess.spawn = originalSpawn;
         console.log = originalConsoleLog;
+        mutableOs.availableParallelism = originalAvailableParallelism;
         cleanup();
     }
 });
@@ -2044,6 +2101,43 @@ test('runNodeFoundationTests keeps full-sized requested shards command-line safe
     }
 });
 
+test('runNodeFoundationTests keeps skewed automatic shards within the file ceiling', async (context) => {
+    const { buildResult, cleanup } = createBuildResultFixture(100);
+    context.after(cleanup);
+    const originalArgv = process.argv;
+    context.after(() => { process.argv = originalArgv; });
+    process.argv = ['node', 'scripts/node-foundation/test.js'];
+    const durationFile = path.join(buildResult.repoRoot, 'duration-telemetry.json');
+    const entries = Object.fromEntries(buildResult.copiedFiles.map((relativePath, index) => {
+        const file = relativePath.replace(/\.js$/i, '.ts');
+        return [file, {
+            file,
+            duration_ms: index < 3 ? 239_000 : 1,
+            samples: 1,
+            updated_at_utc: new Date(0).toISOString()
+        }];
+    }));
+    fs.writeFileSync(durationFile, JSON.stringify({
+        schema_version: 1,
+        updated_at_utc: new Date(0).toISOString(),
+        entries
+    }));
+    process.argv.push('--garda-duration-file', durationFile);
+    context.mock.method(mutableBuildModule, 'buildPublishRuntime', () => buildResult);
+    context.mock.method(mutableBuildModule, 'buildNodeFoundation', () => buildResult);
+    const observedShardArgs: string[][] = [];
+    context.mock.method(mutableChildProcess, 'spawn', (_: string, args: readonly string[] = []) => {
+        observedShardArgs.push(Array.from(args));
+        return createCompletingNodeTestChild();
+    });
+
+    assert.equal(await testModule.runNodeFoundationTests(), 0);
+    const shardFileCounts = observedShardArgs.map((args) => args.filter((arg) => !arg.startsWith('--')).length);
+    assert.ok(shardFileCounts.length >= Math.ceil(buildResult.copiedFiles.length / EXPECTED_AUTO_SHARD_MAX_FILES));
+    assert.ok(shardFileCounts.every((count) => count <= EXPECTED_AUTO_SHARD_MAX_FILES));
+    assert.equal(shardFileCounts.reduce((sum, count) => sum + count, 0), buildResult.copiedFiles.length);
+});
+
 test('runNodeFoundationTests auto-shards when repo-relative test args still exceed the Windows limit', async () => {
     const { buildResult, cleanup } = createBuildResultFixture(600);
     const originalArgv = process.argv;
@@ -2051,11 +2145,13 @@ test('runNodeFoundationTests auto-shards when repo-relative test args still exce
     const originalBuildNodeFoundation = mutableBuildModule.buildNodeFoundation;
     const originalBuildPublishRuntime = mutableBuildModule.buildPublishRuntime;
     const originalSpawn = mutableChildProcess.spawn;
+    const originalAvailableParallelism = mutableOs.availableParallelism;
     const observedShardArgs: string[][] = [];
     let activeShards = 0;
     let maxActiveShards = 0;
 
     try {
+        mutableOs.availableParallelism = () => 8;
         process.argv = ['node', 'scripts/node-foundation/test.js'];
         delete process.env.GARDA_NODE_FOUNDATION_TEST_SHARDS;
         mutableBuildModule.buildPublishRuntime = () => buildResult;
@@ -2085,7 +2181,7 @@ test('runNodeFoundationTests auto-shards when repo-relative test args still exce
             observedShardArgs.length > 2,
             `Expected oversized repo-relative argv to auto-shard, got ${observedShardArgs.length} shard(s).`
         );
-        assert.equal(maxActiveShards, 2);
+        assert.equal(maxActiveShards, 4);
         assert.ok(observedShardArgs.every((args) => args[0] === '--test'));
         assert.ok(
             observedShardArgs.every((args) => (
@@ -2110,6 +2206,7 @@ test('runNodeFoundationTests auto-shards when repo-relative test args still exce
         mutableBuildModule.buildNodeFoundation = originalBuildNodeFoundation;
         mutableBuildModule.buildPublishRuntime = originalBuildPublishRuntime;
         mutableChildProcess.spawn = originalSpawn;
+        mutableOs.availableParallelism = originalAvailableParallelism;
         cleanup();
     }
 });

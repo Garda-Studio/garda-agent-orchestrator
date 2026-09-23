@@ -40,7 +40,7 @@ const DEFAULT_NODE_FOUNDATION_TEST_SHARD_HEARTBEAT_MS = 60 * 1000;
 const NODE_FOUNDATION_TEST_SHARD_CLEANUP_GRACE_MS = 1_000;
 const NODE_FOUNDATION_TEST_GREEN_EXIT_ISOLATION_MAX_FILES = 12;
 const NODE_FOUNDATION_TEST_GREEN_EXIT_ISOLATION_TIMEOUT_MS = 30_000;
-const DEFAULT_NODE_FOUNDATION_TEST_SHARD_CONCURRENCY = 2;
+const DEFAULT_NODE_FOUNDATION_TEST_SHARD_CONCURRENCY = 4;
 const DEFAULT_SHARDED_NODE_TEST_CONCURRENCY_MAX = 4;
 const NODE_FOUNDATION_AUTO_SHARD_MAX_FILES = 32;
 const GARDA_SHARDS_OPTION = '--garda-shards';
@@ -615,18 +615,17 @@ function resolveNodeTestShardRuntimeConfig(
         heartbeatMs: configuredHeartbeat
             ? parseNonNegativeInteger(configuredHeartbeat, NODE_FOUNDATION_TEST_SHARD_HEARTBEAT_MS_ENV)
             : DEFAULT_NODE_FOUNDATION_TEST_SHARD_HEARTBEAT_MS,
-        concurrency,
+        concurrency: Math.min(concurrency, Math.max(1, os.availableParallelism())),
         defaultNodeTestConcurrency: null
     };
 }
 
 function resolveDefaultShardedNodeTestConcurrency(
-    runtimeConfig: NodeTestShardRuntimeConfig
+    activeWorkerCount: number
 ): number {
-    const maxWorkerProcesses = Math.max(1, runtimeConfig.concurrency);
     return Math.max(1, Math.min(
         DEFAULT_SHARDED_NODE_TEST_CONCURRENCY_MAX,
-        Math.floor(os.availableParallelism() / maxWorkerProcesses)
+        Math.floor(os.availableParallelism() / Math.max(1, activeWorkerCount))
     ));
 }
 
@@ -851,18 +850,20 @@ function assignCommandLineSafeNodeFoundationTestShards(
     selectedTestFiles: string[],
     optionArgs: string[],
     requestedShardCount: number,
-    telemetry: TestDurationTelemetry
+    telemetry: TestDurationTelemetry,
+    maxFilesPerShard: number | null = null
 ): Array<{ files: string[]; totalWeight: number; }> {
     const fileWeights = buildTestFileWeights(buildResult, selectedTestFiles, telemetry);
     let shardCount = Math.min(
         selectedTestFiles.length,
         Math.max(
             requestedShardCount,
-            resolveCommandLineSafeShardCount(buildResult.repoRoot, selectedTestFiles, optionArgs)
+            resolveCommandLineSafeShardCount(buildResult.repoRoot, selectedTestFiles, optionArgs),
+            maxFilesPerShard === null ? 1 : Math.ceil(selectedTestFiles.length / maxFilesPerShard)
         )
     );
     while (true) {
-        const shards = assignNodeFoundationTestShardWeights(fileWeights, shardCount);
+        const shards = assignNodeFoundationTestShardWeights(fileWeights, shardCount, maxFilesPerShard);
         if (
             shardCount >= selectedTestFiles.length
             || shards.every((shard) => (
@@ -886,7 +887,11 @@ function assertNodeFoundationShardCommandsWithinLimit(
     }
 }
 
-function assignNodeFoundationTestShardWeights(fileWeights: TestFileWeight[], shardCount: number): Array<{
+function assignNodeFoundationTestShardWeights(
+    fileWeights: TestFileWeight[],
+    shardCount: number,
+    maxFilesPerShard: number | null
+): Array<{
     files: string[];
     totalWeight: number;
 }> {
@@ -898,8 +903,11 @@ function assignNodeFoundationTestShardWeights(fileWeights: TestFileWeight[], sha
 
     for (const item of sortedFileWeights) {
         let minShardIndex = 0;
-        let minWeight = shards[0].totalWeight;
-        for (let i = 1; i < shardCount; i++) {
+        let minWeight = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < shardCount; i++) {
+            if (maxFilesPerShard !== null && shards[i].files.length >= maxFilesPerShard) {
+                continue;
+            }
             if (shards[i].totalWeight < minWeight) {
                 minWeight = shards[i].totalWeight;
                 minShardIndex = i;
@@ -1001,7 +1009,8 @@ function buildNodeFoundationTestShards(
     selectedTestFiles: string[],
     shardCount: number,
     telemetry: TestDurationTelemetry,
-    optionArgs: string[]
+    optionArgs: string[],
+    maxFilesPerShard: number | null
 ): string[][] {
     const fileWeights = buildTestFileWeights(buildResult, selectedTestFiles, telemetry);
     const knownDurationCount = fileWeights.filter((item) => item.durationMs !== null).length;
@@ -1010,7 +1019,8 @@ function buildNodeFoundationTestShards(
         selectedTestFiles,
         optionArgs,
         shardCount,
-        telemetry
+        telemetry,
+        maxFilesPerShard
     );
 
     const source = knownDurationCount === 0
@@ -1086,7 +1096,8 @@ function summarizeNodeFoundationShardSchedule(
     shardCount: number,
     requestedConcurrency: number,
     telemetry: TestDurationTelemetry,
-    thresholdMs: number
+    thresholdMs: number,
+    maxFilesPerShard: number | null
 ): NodeFoundationTestShardScheduleSummary {
     const executionPlan = splitNodeFoundationTestExecutionPlan(
         buildResult,
@@ -1102,7 +1113,8 @@ function summarizeNodeFoundationShardSchedule(
             executionPlan.parallelFiles,
             shardOptionArgs,
             shardCount,
-            telemetry
+            telemetry,
+            maxFilesPerShard
         ).map((shard) => shard.files);
     const isolatedShards = sortFilesByKnownDuration(buildResult, executionPlan.isolatedFiles, telemetry)
         .map((file) => [file]);
@@ -1672,14 +1684,15 @@ async function runShardedNodeTestProcesses(
     requestedShardLogDir: string | null,
     telemetryPath: string,
     telemetry: TestDurationTelemetry,
-    updateDurationTelemetry: boolean
+    updateDurationTelemetry: boolean,
+    maxFilesPerShard: number | null
 ): Promise<number> {
     const baseRuntimeConfig = resolveNodeTestShardRuntimeConfig(requestedShardConcurrency);
-    const runtimeConfig: NodeTestShardRuntimeConfig = {
+    const planningRuntimeConfig: NodeTestShardRuntimeConfig = {
         ...baseRuntimeConfig,
-        defaultNodeTestConcurrency: resolveDefaultShardedNodeTestConcurrency(baseRuntimeConfig)
+        defaultNodeTestConcurrency: 1
     };
-    const baseShardOptionArgs = buildNodeTestShardOptionArgs(optionArgs, runtimeConfig);
+    const baseShardOptionArgs = buildNodeTestShardOptionArgs(optionArgs, planningRuntimeConfig);
     const shardOptionArgs = updateDurationTelemetry
         ? addDurationReporterOptions(baseShardOptionArgs, DURATION_REPORTER_URL)
         : baseShardOptionArgs;
@@ -1691,7 +1704,8 @@ async function runShardedNodeTestProcesses(
             executionPlan.parallelFiles,
             shardCount,
             telemetry,
-            shardOptionArgs
+            shardOptionArgs,
+            maxFilesPerShard
         );
     const isolatedShards = sortFilesByKnownDuration(buildResult, executionPlan.isolatedFiles, telemetry)
         .map((file) => [file]);
@@ -1700,7 +1714,19 @@ async function runShardedNodeTestProcesses(
         [...parallelShards, ...isolatedShards],
         telemetry
     );
-    assertNodeFoundationShardCommandsWithinLimit(buildResult.repoRoot, shardOptionArgs, [
+    const shardConcurrency = Math.max(1, Math.min(scheduledShards.length, baseRuntimeConfig.concurrency));
+    const runtimeConfig: NodeTestShardRuntimeConfig = {
+        ...baseRuntimeConfig,
+        defaultNodeTestConcurrency: resolveDefaultShardedNodeTestConcurrency(shardConcurrency)
+    };
+    const serialRuntimeConfig: NodeTestShardRuntimeConfig = {
+        ...baseRuntimeConfig,
+        defaultNodeTestConcurrency: resolveDefaultShardedNodeTestConcurrency(1)
+    };
+    const effectiveShardOptionArgs = updateDurationTelemetry
+        ? addDurationReporterOptions(buildNodeTestShardOptionArgs(optionArgs, runtimeConfig), DURATION_REPORTER_URL)
+        : buildNodeTestShardOptionArgs(optionArgs, runtimeConfig);
+    assertNodeFoundationShardCommandsWithinLimit(buildResult.repoRoot, effectiveShardOptionArgs, [
         ...scheduledShards,
         ...executionPlan.serialFiles.map((file) => [file])
     ]);
@@ -1708,7 +1734,6 @@ async function runShardedNodeTestProcesses(
     console.log(formatNodeFoundationTestMarker(NODE_FOUNDATION_TEST_MARKERS.SHARD_LOG_DIR, shardLogDir));
     console.log(formatNodeFoundationTestMarker(NODE_FOUNDATION_TEST_MARKERS.DURATION_TELEMETRY, telemetryPath));
     const requestedConcurrency = runtimeConfig.concurrency;
-    const shardConcurrency = Math.max(1, Math.min(scheduledShards.length, requestedConcurrency));
     const totalShardCount = scheduledShards.length + executionPlan.serialFiles.length;
     console.log(formatNodeFoundationTestMarker(
         NODE_FOUNDATION_TEST_MARKERS.SHARD_RUNTIME,
@@ -1722,20 +1747,22 @@ async function runShardedNodeTestProcesses(
     const preRunSchedule = summarizeNodeFoundationShardSchedule(
         buildResult,
         selectedTestFiles,
-        shardOptionArgs,
+        effectiveShardOptionArgs,
         shardCount,
         requestedConcurrency,
         telemetry,
-        NODE_FOUNDATION_SINGLE_FILE_SHARD_MIN_DURATION_MS
+        NODE_FOUNDATION_SINGLE_FILE_SHARD_MIN_DURATION_MS,
+        maxFilesPerShard
     );
     const preRunBaseline = summarizeNodeFoundationShardSchedule(
         buildResult,
         selectedTestFiles,
-        shardOptionArgs,
+        effectiveShardOptionArgs,
         shardCount,
         requestedConcurrency,
         telemetry,
-        NODE_FOUNDATION_BASELINE_SINGLE_FILE_SHARD_MIN_DURATION_MS
+        NODE_FOUNDATION_BASELINE_SINGLE_FILE_SHARD_MIN_DURATION_MS,
+        maxFilesPerShard
     );
     printShardScheduleComparison(preRunSchedule, preRunBaseline, 'pre_run_telemetry');
     const executionStartedAt = Date.now();
@@ -1770,7 +1797,7 @@ async function runShardedNodeTestProcesses(
             scheduledShards.length + index,
             totalShardCount,
             shardLogDir,
-            runtimeConfig,
+            serialRuntimeConfig,
             updateDurationTelemetry
         );
         results.push(result);
@@ -1786,20 +1813,22 @@ async function runShardedNodeTestProcesses(
             summarizeNodeFoundationShardSchedule(
                 buildResult,
                 selectedTestFiles,
-                shardOptionArgs,
+                effectiveShardOptionArgs,
                 shardCount,
                 requestedConcurrency,
                 updatedTelemetry,
-                NODE_FOUNDATION_SINGLE_FILE_SHARD_MIN_DURATION_MS
+                NODE_FOUNDATION_SINGLE_FILE_SHARD_MIN_DURATION_MS,
+                maxFilesPerShard
             ),
             summarizeNodeFoundationShardSchedule(
                 buildResult,
                 selectedTestFiles,
-                shardOptionArgs,
+                effectiveShardOptionArgs,
                 shardCount,
                 requestedConcurrency,
                 updatedTelemetry,
-                NODE_FOUNDATION_BASELINE_SINGLE_FILE_SHARD_MIN_DURATION_MS
+                NODE_FOUNDATION_BASELINE_SINGLE_FILE_SHARD_MIN_DURATION_MS,
+                maxFilesPerShard
             ),
             'post_run_telemetry'
         );
@@ -1846,6 +1875,11 @@ export async function runNodeFoundationTests(): Promise<number> {
         fileTargets,
         requestedShardCount
     );
+    const maxFilesPerShard = requestedShardCount === null
+        && !String(process.env[NODE_FOUNDATION_TEST_SHARDS_ENV] || '').trim()
+        && !hasExplicitTestShardOption(optionArgs)
+        ? NODE_FOUNDATION_AUTO_SHARD_MAX_FILES
+        : null;
     const exitCode = shardCount === 1
         ? await runSingleNodeTestProcess(
             repoRoot,
@@ -1869,7 +1903,8 @@ export async function runNodeFoundationTests(): Promise<number> {
             requestedShardLogDir,
             telemetryPath,
             telemetry,
-            updateDurationTelemetry
+            updateDurationTelemetry,
+            maxFilesPerShard
         );
 
     if (exitCode !== 0) {
