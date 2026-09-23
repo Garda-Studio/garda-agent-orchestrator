@@ -87,6 +87,17 @@ function resolveReviewExecutionTelemetry(
     };
 }
 
+export function resolveAuditedReviewCoverageScope(options: {
+    fullChangedFiles: readonly string[];
+    reviewExecution: ReviewRemediationReviewContract | null;
+    executionAuthorityValid: boolean;
+}): string[] {
+    if (options.executionAuthorityValid && options.reviewExecution?.mode === 'DELTA') {
+        return [...(options.reviewExecution.delta?.required_delta_targets ?? [])];
+    }
+    return [...options.fullChangedFiles];
+}
+
 export function buildReviewCoverageAuditSummary(options: {
     reviewsRoot: string;
     taskId: string;
@@ -148,26 +159,8 @@ export function buildReviewCoverageAuditSummary(options: {
             ? buildAuthoritativeReviewCoverageContract({ reviewType, preflight, repoRoot })
             : null;
         const authoritativeCoverageChangedFiles = authoritativeCoverage?.changedFiles || [];
-        const authoritativeContract = authoritativeCoverage?.contract || buildReviewCoverageContract({
-            reviewType,
-            changedFiles: []
-        });
-        const coverage = receipt?.review_coverage && typeof receipt.review_coverage === 'object' && !Array.isArray(receipt.review_coverage)
-            ? receipt.review_coverage as Record<string, unknown>
-            : null;
-        const receiptHash = String(coverage?.contract_sha256 || '').trim().toLowerCase();
-        const obligationCount = authoritativeContract.obligation_count;
-        const contractObligationIds = authoritativeContract.obligations.map((entry) => entry.id);
-        const completedObligationCount = Number(coverage?.completed_obligation_count || 0);
-        const reportedOmittedObligationIds = stringArray(coverage?.omitted_obligation_ids);
-        const omissionAccountingValid = !authoritativeContract.required
-            || completedObligationCount + reportedOmittedObligationIds.length === obligationCount;
-        const omittedObligationIds = coverage && omissionAccountingValid
-            ? reportedOmittedObligationIds
-            : [...new Set([...reportedOmittedObligationIds, ...contractObligationIds])].sort();
-        const duplicateObligationIds = stringArray(coverage?.duplicate_obligation_ids);
-        const unknownObligationIds = stringArray(coverage?.unknown_obligation_ids);
         const violations: string[] = [];
+        let authenticatedReviewExecution: ReviewRemediationReviewContract | null = null;
         if (context && preflight && preflightSha256 && contextSchemaVersion >= 4) {
             const reviewExecution = context.review_execution
                 && typeof context.review_execution === 'object'
@@ -208,11 +201,40 @@ export function buildReviewCoverageAuditSummary(options: {
                 if (!authority) {
                     violations.push('review context remediation review_execution authority is unavailable');
                 } else {
-                    violations.push(...getReviewRemediationReviewContractViolations(reviewExecution, authority)
+                    const executionViolations = getReviewRemediationReviewContractViolations(reviewExecution, authority);
+                    violations.push(...executionViolations
                         .map((violation) => `review context execution authority: ${violation}`));
+                    if (executionViolations.length === 0) {
+                        authenticatedReviewExecution = reviewExecution;
+                    }
                 }
             }
         }
+        const coverageChangedFiles = resolveAuditedReviewCoverageScope({
+            fullChangedFiles: authoritativeCoverageChangedFiles,
+            reviewExecution: authenticatedReviewExecution,
+            executionAuthorityValid: authenticatedReviewExecution !== null
+        });
+        const authoritativeContract = buildReviewCoverageContract({
+            reviewType,
+            changedFiles: coverageChangedFiles,
+            categoryIds: authoritativeCoverage?.categoryIds
+        });
+        const coverage = receipt?.review_coverage && typeof receipt.review_coverage === 'object' && !Array.isArray(receipt.review_coverage)
+            ? receipt.review_coverage as Record<string, unknown>
+            : null;
+        const receiptHash = String(coverage?.contract_sha256 || '').trim().toLowerCase();
+        const obligationCount = authoritativeContract.obligation_count;
+        const contractObligationIds = authoritativeContract.obligations.map((entry) => entry.id);
+        const completedObligationCount = Number(coverage?.completed_obligation_count || 0);
+        const reportedOmittedObligationIds = stringArray(coverage?.omitted_obligation_ids);
+        const omissionAccountingValid = !authoritativeContract.required
+            || completedObligationCount + reportedOmittedObligationIds.length === obligationCount;
+        const omittedObligationIds = coverage && omissionAccountingValid
+            ? reportedOmittedObligationIds
+            : [...new Set([...reportedOmittedObligationIds, ...contractObligationIds])].sort();
+        const duplicateObligationIds = stringArray(coverage?.duplicate_obligation_ids);
+        const unknownObligationIds = stringArray(coverage?.unknown_obligation_ids);
         violations.push(...getReviewReceiptExecutionEvidenceContractViolations({
             reviewContext: context,
             receipt
@@ -253,7 +275,7 @@ export function buildReviewCoverageAuditSummary(options: {
         } else {
             violations.push(...getReviewCoverageContractViolations(contract, {
                 reviewType,
-                changedFiles: authoritativeCoverageChangedFiles,
+                changedFiles: coverageChangedFiles,
                 categoryIds: authoritativeCoverage?.categoryIds
             }));
         }

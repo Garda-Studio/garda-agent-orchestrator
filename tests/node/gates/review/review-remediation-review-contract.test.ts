@@ -6,11 +6,20 @@ import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { sha256RedactedJsonPayload } from '../../../../src/core/redaction';
+import { appendTaskEvent } from '../../../../src/gate-runtime/task-events';
+import { buildReviewReceipt } from '../../../../src/gate-runtime/review-context';
 import {
     buildDefaultReviewRemediationRerunPolicy,
     resolveReviewRemediationRerunLanes
 } from '../../../../src/policy/review-remediation-rerun-policy';
 import { buildReviewCoverageContract } from '../../../../src/gates/review/review-coverage-ledger';
+import { buildReviewCoverageAuditSummary } from '../../../../src/gates/task-audit/task-audit-summary-review-coverage';
+import { validateReviewFindingsContract } from '../../../../src/gates/review/review-findings-artifact-verdict';
+import {
+    buildReviewFindingsValidationArtifact,
+    getReviewFindingsValidationArtifactPath
+} from '../../../../src/gates/review/review-findings-validation-artifact';
+import { resolveReviewContextExecutionEvidenceBindings } from '../../../../src/gates/review/review-evidence-contract';
 import type { ReviewFindingsDispositionArtifact } from '../../../../src/gates/review/review-findings-disposition-artifact';
 import type { ReviewFindingsValidationArtifact } from '../../../../src/gates/review/review-findings-validation-artifact';
 import {
@@ -811,6 +820,196 @@ describe('review remediation FULL/DELTA execution contract', () => {
                     }
                 })
             ), []);
+        } finally {
+            fs.rmSync(fixture.root, { recursive: true, force: true });
+        }
+    });
+
+    it('task audit accepts authenticated DELTA coverage and rejects stale authority', () => {
+        const fixture = createAuthenticatedDeltaFixture();
+        try {
+            const bundleRoot = path.join(fixture.root, 'garda-agent-orchestrator');
+            const reviewsRoot = path.join(bundleRoot, 'runtime', 'reviews');
+            fs.mkdirSync(reviewsRoot, { recursive: true });
+            const preflightPath = path.join(reviewsRoot, `${TASK_ID}-preflight.json`);
+            const contextPath = path.join(reviewsRoot, `${TASK_ID}-${REVIEW_TYPE}-review-context.json`);
+            const reviewArtifactPath = path.join(reviewsRoot, `${TASK_ID}-${REVIEW_TYPE}.md`);
+            const receiptPath = path.join(reviewsRoot, `${TASK_ID}-${REVIEW_TYPE}-receipt.json`);
+            const fullReviewScope = ['src/app.ts', 'tests/app.test.ts'];
+            const preflightSha256 = writeJson(preflightPath, { changed_files: fullReviewScope });
+            const classification: ReviewRemediationDecisionClassification = {
+                source: 'delta',
+                delta: fixture.delta,
+                profilePolicySnapshot: null,
+                baselineProfilePolicySnapshotSha256: '8'.repeat(64)
+            };
+            const decision = decisionBinding({
+                mode: 'DELTA',
+                preflightSha256,
+                classificationSha256: fixture.delta.classification_sha256
+            });
+            appendTaskEvent(bundleRoot, TASK_ID, 'REVIEW_CYCLE_RESTARTED', 'PASS', 'Review cycle restarted.', {
+                task_id: TASK_ID,
+                event_type: 'REVIEW_CYCLE_RESTARTED',
+                status: 'PASSED',
+                preflight_sha256: preflightSha256,
+                authoritative_review_decision: decision,
+                authoritative_review_classification: classification
+            });
+            const reviewExecution = buildReviewRemediationReviewContract({
+                taskId: TASK_ID,
+                reviewType: REVIEW_TYPE,
+                preflightSha256,
+                fullReviewScope,
+                authoritativeDecision: decision,
+                classification
+            });
+            assert.equal(reviewExecution.mode, 'DELTA');
+            const deltaTargets = reviewExecution.delta?.required_delta_targets ?? [];
+            assert.deepEqual(deltaTargets, ['src/app.ts']);
+            const coverageContract = buildReviewCoverageContract({
+                reviewType: REVIEW_TYPE,
+                changedFiles: deltaTargets
+            });
+            const treeStateSha256 = sha256Text('current-tree');
+            const context = {
+                schema_version: 4,
+                task_id: TASK_ID,
+                review_type: REVIEW_TYPE,
+                preflight_path: preflightPath,
+                preflight_sha256: preflightSha256,
+                tree_state: { tree_state_sha256: treeStateSha256 },
+                coverage_contract: coverageContract,
+                review_execution: reviewExecution
+            };
+            const contextSha256 = writeJson(contextPath, context);
+            const report = {
+                schema_version: 2,
+                task_id: TASK_ID,
+                review_type: REVIEW_TYPE,
+                review_context_sha256: contextSha256,
+                tree_state_sha256: treeStateSha256,
+                validation_notes: [{
+                    id: 'N-001',
+                    topic: 'delta audit',
+                    note: 'Inspected the changed source and reconciled the prior finding.',
+                    evidence: [{ location: 'src/app.ts:1', observation: 'The changed value is now 2.' }]
+                }],
+                coverage_ledger: {
+                    coverage_contract_sha256: coverageContract.contract_sha256,
+                    entries: coverageContract.obligations.map((obligation) => ({
+                        obligation_id: obligation.id,
+                        evidence: [{
+                            location: 'src/app.ts:1',
+                            observation: `The changed value and prior finding were checked for ${obligation.id}.`
+                        }],
+                        finding_ids: []
+                    }))
+                },
+                review_execution: {
+                    mode: 'DELTA',
+                    contract_sha256: reviewExecution.contract_sha256,
+                    covered_delta_targets: deltaTargets,
+                    inspected_prior_finding_ids: ['F-001']
+                },
+                findings: { critical: [], high: [], medium: [], low: [] },
+                residual_risks: [],
+                reviewer_notes: []
+            };
+            const reviewArtifactSha256 = writeJson(reviewArtifactPath, report);
+            const validation = validateReviewFindingsContract({
+                content: fs.readFileSync(reviewArtifactPath, 'utf8'),
+                expectedTaskId: TASK_ID,
+                expectedReviewType: REVIEW_TYPE,
+                expectedReviewContextSha256: contextSha256,
+                expectedTreeStateSha256: treeStateSha256,
+                coverageContract,
+                expectedReviewExecutionContract: reviewExecution
+            });
+            assert.equal(validation.valid, true, validation.violations.join(' '));
+            const validationArtifactPath = getReviewFindingsValidationArtifactPath(reviewArtifactPath);
+            const validationArtifact = buildReviewFindingsValidationArtifact({
+                taskId: TASK_ID,
+                reviewType: REVIEW_TYPE,
+                validation,
+                reviewOutputSha256: reviewArtifactSha256,
+                reviewArtifactPath,
+                reviewArtifactSha256,
+                reviewContextPath: contextPath,
+                reviewContextSha256: contextSha256,
+                preflightPath,
+                preflightSha256,
+                scopeSha256: sha256Text('scope'),
+                reviewScopeSha256: sha256Text('review-scope'),
+                codeScopeSha256: sha256Text('code-scope'),
+                reviewTreeStateSha256: treeStateSha256,
+                coverageContract
+            });
+            const validationArtifactSha256 = writeJson(validationArtifactPath, validationArtifact);
+            const executionBindings = resolveReviewContextExecutionEvidenceBindings(context).bindings!;
+            const receipt = buildReviewReceipt({
+                taskId: TASK_ID,
+                reviewType: REVIEW_TYPE,
+                preflightSha256,
+                scopeSha256: sha256Text('scope'),
+                reviewScopeSha256: sha256Text('review-scope'),
+                codeScopeSha256: sha256Text('code-scope'),
+                reviewContextSha256: contextSha256,
+                reviewTreeStateSha256: treeStateSha256,
+                reviewExecutionMode: executionBindings.review_execution_mode,
+                reviewExecutionContractSha256: executionBindings.review_execution_contract_sha256,
+                reviewExecutionFullScopeSha256: executionBindings.review_execution_full_scope_sha256,
+                reviewExecutionCompleteScopeLineageSha256: executionBindings.review_execution_complete_scope_lineage_sha256,
+                reviewExecutionFindingReconciliationSha256: executionBindings.review_execution_finding_reconciliation_sha256,
+                reviewArtifactSha256,
+                reviewerExecutionMode: 'delegated_subagent',
+                reviewerIdentity: 'agent:delta-audit-fixture',
+                trustLevel: 'INDEPENDENT_AUDITED'
+            }) as unknown as Record<string, unknown>;
+            receipt.review_output_sha256 = reviewArtifactSha256;
+            receipt.review_coverage = validation.coverage_validation;
+            receipt.review_findings_validation = {
+                artifact_path: validationArtifactPath.replace(/\\/gu, '/'),
+                artifact_sha256: validationArtifactSha256,
+                snapshot_path: null,
+                snapshot_sha256: null,
+                status: validationArtifact.validation_result.status,
+                accepted: validationArtifact.validation_result.accepted,
+                validation_result_sha256: validationArtifact.validation_result_sha256,
+                violation_count: validationArtifact.validation_result.violations.length
+            };
+            receipt.review_output_contract = {
+                coverage_contract_sha256: coverageContract.contract_sha256,
+                validation_artifact_sha256: validationArtifactSha256,
+                validation_result_sha256: validationArtifact.validation_result_sha256,
+                ...executionBindings
+            };
+            writeJson(receiptPath, receipt);
+
+            const accepted = buildReviewCoverageAuditSummary({ reviewsRoot, taskId: TASK_ID, requiredReviews: { test: true } });
+            assert.equal(accepted.status, 'COMPLETE', JSON.stringify(accepted.entries[0]?.violations));
+            assert.equal(accepted.entries[0]?.obligation_count, coverageContract.obligation_count);
+
+            writeJson(contextPath, {
+                ...context,
+                review_execution: {
+                    ...reviewExecution,
+                    delta: { ...reviewExecution.delta, required_delta_targets: [] }
+                }
+            });
+            const forged = buildReviewCoverageAuditSummary({ reviewsRoot, taskId: TASK_ID, requiredReviews: { test: true } });
+            assert.equal(forged.status, 'INCOMPLETE');
+            assert.equal(forged.entries[0]?.obligation_count,
+                buildReviewCoverageContract({ reviewType: REVIEW_TYPE, changedFiles: fullReviewScope }).obligation_count);
+            assert.ok(forged.entries[0]?.violations.some((entry) => entry.includes('review context execution authority')));
+            writeJson(contextPath, context);
+
+            fs.writeFileSync(path.join(bundleRoot, 'runtime', 'task-events', `${TASK_ID}.jsonl`), '', 'utf8');
+            const stale = buildReviewCoverageAuditSummary({ reviewsRoot, taskId: TASK_ID, requiredReviews: { test: true } });
+            assert.equal(stale.status, 'INCOMPLETE');
+            assert.equal(stale.entries[0]?.obligation_count,
+                buildReviewCoverageContract({ reviewType: REVIEW_TYPE, changedFiles: fullReviewScope }).obligation_count);
+            assert.ok(stale.entries[0]?.violations.includes('review context remediation review_execution authority is unavailable'));
         } finally {
             fs.rmSync(fixture.root, { recursive: true, force: true });
         }

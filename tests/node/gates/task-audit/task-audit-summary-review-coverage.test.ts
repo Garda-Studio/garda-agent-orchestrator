@@ -10,7 +10,10 @@ import {
     buildAuthenticatedRemediationReviewExecution
 } from '../../../../src/cli/commands/gate-flows/review-context/review-context-flow';
 import { appendTaskEvent } from '../../../../src/gate-runtime/task-events';
-import { buildReviewCoverageAuditSummary } from '../../../../src/gates/task-audit/task-audit-summary-review-coverage';
+import {
+    buildReviewCoverageAuditSummary,
+    resolveAuditedReviewCoverageScope
+} from '../../../../src/gates/task-audit/task-audit-summary-review-coverage';
 import { buildReviewCoverageContract } from '../../../../src/gates/review/review-coverage-ledger';
 import { buildReviewReceipt } from '../../../../src/gate-runtime/review-context';
 import {
@@ -30,6 +33,34 @@ function writeJson(filePath: string, value: unknown): void {
 function fileSha256(filePath: string): string {
     return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
+
+test('review coverage audit uses authenticated DELTA targets and rejects unauthenticated narrowing', () => {
+    const fullChangedFiles = ['src/example.ts', 'tests/example.test.ts'];
+    const deltaExecution = {
+        mode: 'DELTA',
+        delta: { required_delta_targets: ['tests/example.test.ts'] }
+    } as ReturnType<typeof buildReviewRemediationReviewContract>;
+    const deltaScope = resolveAuditedReviewCoverageScope({
+        fullChangedFiles,
+        reviewExecution: deltaExecution,
+        executionAuthorityValid: true
+    });
+    assert.deepEqual(deltaScope, ['tests/example.test.ts']);
+    assert.notEqual(
+        buildReviewCoverageContract({ reviewType: 'test', changedFiles: deltaScope }).contract_sha256,
+        buildReviewCoverageContract({ reviewType: 'test', changedFiles: fullChangedFiles }).contract_sha256
+    );
+    assert.deepEqual(resolveAuditedReviewCoverageScope({
+        fullChangedFiles,
+        reviewExecution: deltaExecution,
+        executionAuthorityValid: false
+    }), fullChangedFiles);
+    assert.deepEqual(resolveAuditedReviewCoverageScope({
+        fullChangedFiles,
+        reviewExecution: { ...deltaExecution, mode: 'FULL' },
+        executionAuthorityValid: true
+    }), fullChangedFiles);
+});
 
 test('review coverage audit exposes complete and omitted obligation diagnostics', () => {
     const reviewsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-coverage-audit-'));
