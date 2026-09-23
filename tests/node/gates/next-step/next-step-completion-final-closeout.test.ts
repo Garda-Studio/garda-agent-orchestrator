@@ -14,6 +14,7 @@ import {
     buildForcedSourceCheckoutRuntimeBuildCommand
 } from '../../../../src/validators/workspace-layout';
 import { getCurrentNoOpEventSha256, getNoOpEvidence } from '../../../../src/gates/task-mode/no-op';
+import { getReviewLifecycleGuard } from '../../../../src/gates/review/review-lifecycle-guard';
 import {
     TASK_ID,
     ALL_REVIEW_FLAGS,
@@ -737,8 +738,15 @@ describe('gates/next-step', () => {
         assert.equal(getCurrentNoOpEventSha256(repoRoot, TASK_ID, evidence), null);
         assert.equal(buildTaskAuditSummary({ taskId: TASK_ID, repoRoot }).final_closeout.status, 'NOT_READY');
         assert.equal(resolveNextStep({ taskId: TASK_ID, repoRoot }).next_gate, 'record-no-op');
+        assert.equal(getReviewLifecycleGuard(repoRoot, TASK_ID, 'required-reviews-check', 'review_gate').status, 'BLOCK');
 
         seedNoOpRecordedEvent(repoRoot, TASK_ID, preflightPath);
+        appendEvent(repoRoot, TASK_ID, 'REVIEW_GATE_FAILED', 'FAIL');
+        assert.equal(getReviewLifecycleGuard(repoRoot, TASK_ID, 'required-reviews-check', 'review_gate').status, 'ALLOW');
+        const originalNoOpText = fs.readFileSync(artifactPath, 'utf8');
+        writeJson(artifactPath, { ...artifact, reason: 'Altered after the recorded event.' });
+        assert.equal(getReviewLifecycleGuard(repoRoot, TASK_ID, 'required-reviews-check', 'review_gate').status, 'BLOCK');
+        fs.writeFileSync(artifactPath, originalNoOpText, 'utf8');
         assert.match(String(getCurrentNoOpEventSha256(repoRoot, TASK_ID, evidence)), /^[0-9a-f]{64}$/u);
         const recoveryStep = resolveNextStep({ taskId: TASK_ID, repoRoot });
         assert.notEqual(recoveryStep.next_gate, 'task-audit-summary');

@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { readTaskTimelineJsonlEntries } from '../../gate-runtime/task-events';
 import {
@@ -6,6 +7,8 @@ import {
 } from '../../gate-runtime/timeline/task-timeline-read-snapshot';
 
 import { joinOrchestratorPath, normalizePath } from '../shared/helpers';
+import { getCurrentNoOpEventSha256, getNoOpEvidence } from '../task-mode/no-op';
+import { isFullSuiteNotRequiredForZeroDiffNoReviewableScope } from '../full-suite/full-suite-validation-results';
 
 export type ReviewLifecycleActionType = 'review_phase' | 'review_gate';
 
@@ -183,13 +186,42 @@ export function getReviewLifecycleGuard(
 
         const timelineErrors: string[] = [];
         const timelineEntries = collectTimelineEntries(timelinePath, timelineErrors);
-        return getReviewLifecycleGuardFromEntries(
+        const result = getReviewLifecycleGuardFromEntries(
             timelinePath,
             timelineEntries,
             timelineErrors.length > 0,
             actionLabel,
             actionType
         );
+        if (result.status !== 'BLOCK' || actionType !== 'review_gate' || timelineErrors.length > 0) {
+            return result;
+        }
+        const latestBlockingEntry = getLatestBlockingEntry(timelineEntries);
+        const latestNoOpEntry = [...timelineEntries].reverse().find((entry) => entry.event_type === 'NO_OP_RECORDED');
+        if (!latestBlockingEntry || !latestNoOpEntry || latestNoOpEntry.sequence <= latestBlockingEntry.sequence) {
+            return result;
+        }
+        const preflightPath = joinOrchestratorPath(repoRoot, path.join('runtime', 'reviews', `${taskId}-preflight.json`));
+        try {
+            const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+            if (!isFullSuiteNotRequiredForZeroDiffNoReviewableScope(preflight)
+                || !Array.isArray(preflight.changed_files)
+                || preflight.changed_files.length !== 0) {
+                return result;
+            }
+            const evidence = getNoOpEvidence(repoRoot, taskId, '', preflightPath);
+            if (!getCurrentNoOpEventSha256(repoRoot, taskId, evidence)) {
+                return result;
+            }
+            return {
+                status: 'ALLOW',
+                timeline_path: normalizePath(timelinePath),
+                blocking_event: null,
+                violations: []
+            };
+        } catch {
+            return result;
+        }
     });
 }
 
