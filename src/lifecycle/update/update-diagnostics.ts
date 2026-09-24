@@ -17,10 +17,8 @@ const DIAGNOSTIC_HINTS = Object.freeze({
     NPM_METADATA_UNAVAILABLE: 'Retry the update after ensuring npm can inspect installed package metadata successfully.',
     NPM_METADATA_EMPTY: 'Ensure npm returned dependency metadata for the installed update package.',
     NPM_METADATA_INVALID: 'Ensure npm returned valid JSON metadata for the installed update package.',
-    UPDATE_SOURCE_DEP_INSTALL_TIMEOUT: 'Ensure the git update source can install dependencies non-interactively, then retry the update.',
-    UPDATE_SOURCE_DEP_INSTALL_FAILED: 'Ensure the git update source has a valid package.json/package-lock and that npm install can complete successfully.',
-    UPDATE_SOURCE_BUILD_TIMEOUT: 'Ensure the git update source can complete its build non-interactively within the allowed timeout, then retry the update.',
-    UPDATE_SOURCE_BUILD_FAILED: 'Ensure the git update source can build a runnable bundle (including dist/src/index.js) before using it for git-based update.',
+    UPDATE_SOURCE_UNVERIFIED: 'Use an HTTPS or explicit local Git source with a clean, regular-file tree at the requested ref; inspect the source before retrying.',
+    UPDATE_SOURCE_PREBUILT_REQUIRED: 'Use a Git ref containing a committed prebuilt bin and dist bundle, or use the trusted npm update path with registry integrity.',
     UPDATE_SOURCE_VERSION_MISSING: 'Ensure the selected update source points to a valid orchestrator bundle containing a VERSION file.',
     UPDATE_SOURCE_VERSION_EMPTY: 'Ensure the selected update source has a non-empty VERSION file.'
 } as const);

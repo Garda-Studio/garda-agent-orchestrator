@@ -440,7 +440,7 @@ garda update git
 ```
 
 Notes:
-- `update git` uses `git clone --depth 1` into a temp directory, then runs the same update lifecycle as npm-based `update`.
+- `update git` clones an HTTPS repository or explicit local path into a temp directory, verifies the selected source and ref, then runs the same update lifecycle as npm-based `update`. Local paths use Git's local clone mode; `file://` URLs and URLs with credentials or parameters are rejected before clone. Applying requires `VERSION`, `package.json`, `bin/garda.js`, and `dist/src/index.js` in the selected Git commit, with a clean regular-file bundle tree. Garda does not install dependencies or run repository build scripts from the clone. A source-only ref can still be used with `--check-only`; for apply, use a ref with a committed prebuilt bundle or the trusted npm update path.
 - `--check-only` compares the git source without applying it.
 - If Garda is off, applying `update git` fails before cloning the update source. Run `garda on` first; `--check-only` remains available.
 - Trusted git sources stay in enforced mode; if you bypass git-source trust with `--trust-override --no-prompt`, that override is recorded in CLI output and the update report.

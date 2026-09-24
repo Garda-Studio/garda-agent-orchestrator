@@ -5,6 +5,7 @@
 ### Update Lifecycle
 
 - Run an applied update's lifecycle in a fresh process through one contained bundle entry, reject missing or linked runtime code, and require a new host process after update or rollback instead of invalidating the module cache.
+- Git update apply now verifies the selected commit and a committed prebuilt runtime before lifecycle execution; it no longer installs dependencies or runs build scripts from the cloned source. Git update rejects `file://` and credential-bearing URLs before clone and uses local clone mode for explicit local paths.
 
 ### Compact Command Output
 

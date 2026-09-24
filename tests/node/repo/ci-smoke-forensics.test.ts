@@ -111,7 +111,7 @@ test('scheduled smoke workflow covers supported Node runtime lines', () => {
     assertSupportedNodeMatrix(raw, 'smoke', 'Scheduled smoke job');
 });
 
-test('lifecycle smoke updates from the exact checked-out commit in detached checkouts', () => {
+test('lifecycle smoke commits the prebuilt bundle atop the checked-out commit', () => {
     const workflows = [
         ['CI', getWorkflowJobBlock(getRawContent(loadCiWorkflow()), 'smoke')],
         ['Scheduled smoke', getWorkflowJobBlock(getRawContent(loadScheduledSmokeWorkflow()), 'smoke')]
@@ -127,6 +127,12 @@ test('lifecycle smoke updates from the exact checked-out commit in detached chec
             /git -C "\$GITHUB_WORKSPACE" branch --force "\$SMOKE_BRANCH" "\$GITHUB_SHA"/u,
             `${label} must anchor the smoke branch to the exact checked-out commit`
         );
+        assert.match(smokeJob, /git -C "\$GITHUB_WORKSPACE" add -f -- dist bin\/garda\.js/u,
+            `${label} must stage the prebuilt runtime`);
+        assert.match(smokeJob, /git -C "\$GITHUB_WORKSPACE" branch --force "\$SMOKE_BRANCH" HEAD/u,
+            `${label} must update from the commit containing the prebuilt runtime`);
+        assert.match(smokeJob, /GIT_URL="\$GITHUB_WORKSPACE"/u,
+            `${label} must clone from an explicit local path`);
         assert.match(
             smokeJob,
             /update git .* --branch "\$SMOKE_BRANCH"/u,

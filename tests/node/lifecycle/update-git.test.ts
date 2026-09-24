@@ -6,6 +6,7 @@ import * as os from 'node:os';
 import * as childProcess from 'node:child_process';
 
 import { runUpdateFromGit, buildGitCloneArgs } from '../../../src/lifecycle/update-git';
+import { assertGitUpdateTransport, createIsolatedGitEnvironment } from '../../../src/lifecycle/update/update-git-source-verification';
 import { removePathRecursive } from '../../../src/lifecycle/common';
 
 function git(args: string[], cwd: string) {
@@ -36,7 +37,7 @@ function gitText(args: string[], cwd: string): string {
     return String(result.stdout || '').trim();
 }
 
-function createGitUpdateRepo(version: string) {
+function createGitUpdateRepo(version: string, includePrebuilt = true) {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-update-git-repo-'));
     fs.mkdirSync(path.join(repoRoot, 'scripts'), { recursive: true });
     fs.writeFileSync(path.join(repoRoot, 'scripts', 'build.js'), [
@@ -57,6 +58,12 @@ function createGitUpdateRepo(version: string) {
         }
     }, null, 2));
     fs.writeFileSync(path.join(repoRoot, 'README.md'), '# Updated bundle\n', 'utf8');
+    if (includePrebuilt) {
+        fs.mkdirSync(path.join(repoRoot, 'bin'), { recursive: true });
+        fs.mkdirSync(path.join(repoRoot, 'dist', 'src'), { recursive: true });
+        fs.writeFileSync(path.join(repoRoot, 'bin', 'garda.js'), '#!/usr/bin/env node\n', 'utf8');
+        fs.writeFileSync(path.join(repoRoot, 'dist', 'src', 'index.js'), 'module.exports = {};\n', 'utf8');
+    }
 
     git(['init'], repoRoot);
     git(['config', 'user.email', 'tests@example.com'], repoRoot);
@@ -95,6 +102,58 @@ describe('buildGitCloneArgs', () => {
             buildGitCloneArgs('https://example.com/repo.git', 'main', 'C:/tmp/clone'),
             ['clone', '--depth', '1', '--branch', 'main', '--single-branch', 'https://example.com/repo.git', 'C:/tmp/clone']
         );
+    });
+
+    it('forces local clone mode for an explicit path', () => {
+        const localRepo = path.resolve('local-repo');
+        assert.deepEqual(
+            buildGitCloneArgs(localRepo, null, 'C:/tmp/clone'),
+            ['clone', '--depth', '1', '--local', localRepo, 'C:/tmp/clone']
+        );
+    });
+});
+
+describe('Git update source boundary', () => {
+    it('rejects executable Git transports before cloning', () => {
+        assert.throws(() => assertGitUpdateTransport('ssh://example.com/repo', 'ssh source'),
+            /UPDATE_SOURCE_UNVERIFIED/);
+        assert.throws(() => assertGitUpdateTransport('ext::command', 'external helper'),
+            /UPDATE_SOURCE_UNVERIFIED/);
+        assert.throws(() => assertGitUpdateTransport('file:///tmp/repo', 'file source'),
+            /UPDATE_SOURCE_UNVERIFIED/);
+    });
+
+    it('rejects credential-bearing URLs without exposing their contents', async () => {
+        for (const repoUrl of [
+            'https://user:secret-token@example.com/repo.git',
+            'https://example.com/repo.git?token=secret-token',
+            'https://example.com/repo.git#secret-token'
+        ]) {
+            await assert.rejects(
+                runUpdateFromGit({ targetRoot: '.', bundleRoot: '.', repoUrl, trustOverride: true }),
+                (error: unknown) => {
+                    assert.doesNotMatch(JSON.stringify(error), /secret-token/u);
+                    assert.match(String(error), /UPDATE_SOURCE_UNVERIFIED/u);
+                    return true;
+                }
+            );
+        }
+    });
+
+    it('removes inherited Git configuration from the clone environment', () => {
+        const previous = process.env.GIT_CONFIG_COUNT;
+        process.env.GIT_CONFIG_COUNT = '1';
+        const templateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-git-template-test-'));
+        try {
+            const env = createIsolatedGitEnvironment(templateRoot);
+            assert.equal(env.GIT_CONFIG_COUNT, undefined);
+            assert.equal(env.GIT_CONFIG_GLOBAL, path.join(templateRoot, 'empty.gitconfig'));
+            assert.equal(fs.readFileSync(String(env.GIT_CONFIG_GLOBAL), 'utf8'), '');
+        } finally {
+            if (previous === undefined) delete process.env.GIT_CONFIG_COUNT;
+            else process.env.GIT_CONFIG_COUNT = previous;
+            removePathRecursive(templateRoot);
+        }
     });
 });
 
@@ -169,12 +228,14 @@ describe('runUpdateFromGit', () => {
         }
     });
 
-    it('fails apply when the raw git source cannot be built into a runnable bundle', async () => {
-        const repoRoot = createGitUpdateRepo('2.1.0');
+    it('rejects a source-only ref before executing its build script', async () => {
+        const repoRoot = createGitUpdateRepo('2.1.0', false);
         const { targetRoot, bundleRoot } = createDeployedWorkspace('2.0.0');
-        fs.writeFileSync(path.join(repoRoot, 'scripts', 'build.js'), 'process.exit(2);\n', 'utf8');
+        const markerPath = path.join(targetRoot, 'unsafe-build-ran');
+        fs.writeFileSync(path.join(repoRoot, 'scripts', 'build.js'),
+            `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'ran');\n`, 'utf8');
         git(['add', '.'], repoRoot);
-        git(['commit', '-m', 'break build'], repoRoot);
+        git(['commit', '-m', 'source only'], repoRoot);
 
         try {
             await assert.rejects(
@@ -186,11 +247,51 @@ describe('runUpdateFromGit', () => {
                     trustOverride: true
                 }),
                 (error) => {
-                    assert.match((error as Error).message, /UPDATE_SOURCE_BUILD_FAILED/);
-                    assert.match((error as Error).message, /runnable bundle/i);
+                    assert.match((error as Error).message, /UPDATE_SOURCE_PREBUILT_REQUIRED/);
+                    assert.match((error as Error).message, /prebuilt bundle/i);
                     return true;
                 }
             );
+            assert.equal(fs.existsSync(markerPath), false);
+        } finally {
+            removePathRecursive(repoRoot);
+            removePathRecursive(targetRoot);
+        }
+    });
+
+    it('does not accept an uncommitted prebuilt bundle even with trust override', async () => {
+        const repoRoot = createGitUpdateRepo('2.1.0', false);
+        const { targetRoot, bundleRoot } = createDeployedWorkspace('2.0.0');
+        fs.mkdirSync(path.join(repoRoot, 'dist', 'src'), { recursive: true });
+        fs.mkdirSync(path.join(repoRoot, 'bin'), { recursive: true });
+        fs.writeFileSync(path.join(repoRoot, 'dist', 'src', 'index.js'), 'module.exports = {};\n');
+        fs.writeFileSync(path.join(repoRoot, 'bin', 'garda.js'), '#!/usr/bin/env node\n');
+        try {
+            await assert.rejects(runUpdateFromGit({
+                targetRoot, bundleRoot, repoUrl: repoRoot, trustOverride: true, noPrompt: true
+            }), /UPDATE_SOURCE_PREBUILT_REQUIRED/);
+        } finally {
+            removePathRecursive(repoRoot);
+            removePathRecursive(targetRoot);
+        }
+    });
+
+    it('rejects a committed link in the update tree before the lifecycle callback', async () => {
+        const repoRoot = createGitUpdateRepo('2.1.0');
+        const { targetRoot, bundleRoot } = createDeployedWorkspace('2.0.0');
+        const blob = childProcess.spawnSync('git', ['hash-object', '-w', '--stdin'], {
+            cwd: repoRoot, input: '../outside.js', encoding: 'utf8'
+        });
+        assert.equal(blob.status, 0);
+        git(['update-index', '--add', '--cacheinfo', `120000,${String(blob.stdout).trim()},dist/src/escape.js`], repoRoot);
+        git(['commit', '-m', 'linked runtime'], repoRoot);
+        let updateRunnerCalled = false;
+        try {
+            await assert.rejects(runUpdateFromGit({
+                targetRoot, bundleRoot, repoUrl: repoRoot, trustOverride: true, noPrompt: true,
+                updateRunner: () => { updateRunnerCalled = true; }
+            }), /UPDATE_SOURCE_UNVERIFIED/);
+            assert.equal(updateRunnerCalled, false);
         } finally {
             removePathRecursive(repoRoot);
             removePathRecursive(targetRoot);
