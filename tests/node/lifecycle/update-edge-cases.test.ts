@@ -332,7 +332,7 @@ describe('Update locked-file edge cases', () => {
 describe('Rollback locked-file edge cases', () => {
     const repoRoot = findRepoRoot();
 
-    it('rollback snapshot restore fails clearly when target is EBUSY-locked', async () => {
+    it('rejects altered rollback records before attempting snapshot restore', async () => {
         const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
         try {
             // Do a successful update first to create a rollback snapshot
@@ -344,8 +344,7 @@ describe('Rollback locked-file edge cases', () => {
                 skipManifestValidation: true
             });
 
-            // Sabotage restoreRollbackSnapshot by making the snapshot records
-            // point at a file that will cause rollback to fail
+            // Altering serialized records must fail integrity preflight.
             const snapshotDir = path.join(bundleRoot, 'runtime', 'update-rollbacks');
             assert.ok(fs.existsSync(snapshotDir), 'Snapshot directory must exist');
 
@@ -368,6 +367,10 @@ describe('Rollback locked-file edge cases', () => {
                 'utf8'
             );
 
+            const targetVersionPath = path.join(bundleRoot, 'VERSION');
+            const targetVersion = '99.99.99\n';
+            fs.writeFileSync(targetVersionPath, targetVersion, 'utf8');
+
             await assert.rejects(
                 runRollback({
                     targetRoot: projectRoot,
@@ -375,6 +378,9 @@ describe('Rollback locked-file edge cases', () => {
                 }),
                 /Rollback snapshot integrity mismatch/
             );
+            assert.equal(fs.readFileSync(targetVersionPath, 'utf8'), targetVersion);
+            assert.deepEqual(fs.readdirSync(snapshotDir).sort(), snapshots,
+                'Integrity preflight must not create a safety snapshot');
         } finally {
             removePathRecursive(projectRoot);
         }

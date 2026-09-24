@@ -391,6 +391,55 @@ describe('createRollbackSnapshot and restoreRollbackSnapshot', () => {
         }
     });
 
+    it('rejects duplicate rollback paths and inconsistent record types', () => {
+        const dir = mkTmpDir();
+        try {
+            const snapshotRoot = path.join(dir, '_snapshot');
+            fs.mkdirSync(snapshotRoot);
+            const recordsPath = getRollbackRecordsPath(snapshotRoot);
+            fs.writeFileSync(recordsPath, JSON.stringify([
+                { relativePath: 'File.txt', existed: false, pathType: 'missing' },
+                { relativePath: 'file.txt', existed: false, pathType: 'missing' }
+            ]));
+            assert.throws(() => readRollbackRecords(snapshotRoot), /Duplicate rollback record/);
+            for (const record of [
+                { relativePath: 'file.txt', existed: 'false', pathType: 'missing' },
+                { relativePath: 'file.txt', existed: false, pathType: 'file' },
+                { relativePath: 'file.txt', existed: true, pathType: 'missing' }
+            ]) {
+                fs.writeFileSync(recordsPath, JSON.stringify([record]));
+                assert.throws(() => readRollbackRecords(snapshotRoot), /invalid existence or pathType/);
+            }
+        } finally {
+            removePathRecursive(dir);
+        }
+    });
+
+    it('rejects malformed snapshot integrity schema and identity', () => {
+        const dir = mkTmpDir();
+        try {
+            const snapshotRoot = path.join(dir, '_snapshot');
+            fs.mkdirSync(snapshotRoot);
+            writeRollbackRecords(snapshotRoot, [
+                { relativePath: 'missing.txt', existed: false, pathType: 'missing' }
+            ]);
+            const integrityPath = path.join(snapshotRoot, 'rollback-integrity.json');
+            const valid = JSON.parse(fs.readFileSync(integrityPath, 'utf8'));
+            for (const change of [
+                { schemaVersion: 2 },
+                { snapshotName: 'another-snapshot' },
+                { recordsSha256: 'not-a-digest' },
+                { version: '1.0.0' },
+                { entries: [] }
+            ]) {
+                fs.writeFileSync(integrityPath, JSON.stringify({ ...valid, ...change }));
+                assert.throws(() => readRollbackRecords(snapshotRoot), /Rollback snapshot integrity mismatch/);
+            }
+        } finally {
+            removePathRecursive(dir);
+        }
+    });
+
     it('rejects invalid rollback records JSON', () => {
         const dir = mkTmpDir();
         try {

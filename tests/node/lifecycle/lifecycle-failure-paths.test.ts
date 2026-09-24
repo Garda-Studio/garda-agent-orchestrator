@@ -533,43 +533,39 @@ describe('Rollback safety snapshot and failure paths', () => {
 
             assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8').trim(), '9.9.9');
 
-            // Now corrupt the rollback snapshot to make restore fail
+            // Keep the selected snapshot authenticated, then inject a one-shot
+            // filesystem failure during its restore so safety recovery runs.
             const rollbacksRoot = path.join(bundleRoot, 'runtime', 'update-rollbacks');
             const snapshots = fs.readdirSync(rollbacksRoot)
                 .filter((d) => d.startsWith('update-'))
                 .sort((a, b) => b.localeCompare(a)); // descending = latest first
             assert.ok(snapshots.length > 0, 'Should have at least one rollback snapshot');
 
-            // Corrupt the LATEST snapshot records (the one runSnapshotRollback will pick)
-            const snapshotDir = path.join(rollbacksRoot, snapshots[0]);
-            const records = JSON.parse(
-                fs.readFileSync(path.join(snapshotDir, 'rollback-records.json'), 'utf8')
-            );
-            // Inject a fake record that requires restoring a non-existent snapshot file
-            records.push({
-                relativePath: 'NONEXISTENT_REQUIRED_FILE.txt',
-                existed: true,
-                pathType: 'file'
-            });
-            fs.writeFileSync(
-                path.join(snapshotDir, 'rollback-records.json'),
-                JSON.stringify(records, null, 2),
-                'utf8'
-            );
-
-            // Save pre-rollback state
+            readRollbackRecords(path.join(rollbacksRoot, snapshots[0]));
             const versionBeforeRollback = fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8').trim();
+            const mutableFs = require('node:fs') as typeof fs;
+            const originalRmSync = mutableFs.rmSync;
+            const versionPath = path.join(bundleRoot, 'VERSION');
+            let injected = false;
+            mutableFs.rmSync = ((targetPath: fs.PathLike, options?: fs.RmOptions) => {
+                if (!injected && path.resolve(String(targetPath)) === path.resolve(versionPath)) {
+                    injected = true;
+                    throw Object.assign(new Error('EBUSY during selected snapshot restore'), { code: 'EBUSY' });
+                }
+                return originalRmSync(targetPath, options);
+            }) as typeof fs.rmSync;
+            try {
+                assert.throws(() => runSnapshotRollback({ targetRoot: projectRoot, bundleRoot }),
+                    /safety rollback completed successfully.*EBUSY/);
+            } finally {
+                mutableFs.rmSync = originalRmSync;
+            }
+            assert.equal(injected, true, 'The selected restore must reach the injected filesystem failure');
 
-            // Authenticated records reject a corrupt snapshot before any restore mutation.
-            assert.throws(
-                () => runSnapshotRollback({
-                    targetRoot: projectRoot,
-                    bundleRoot
-                }),
-                /Rollback snapshot integrity mismatch/
-            );
-
-            // Safety rollback should restore to pre-rollback state (version 9.9.9)
+            const safetyNames = fs.readdirSync(rollbacksRoot).filter((name) => name.startsWith('rollback-'));
+            assert.equal(safetyNames.length, 1, 'Safety snapshot must be created after selected snapshot authentication');
+            const safetySnapshot = path.join(rollbacksRoot, safetyNames[0]);
+            verifyRestoredRollbackSnapshot(projectRoot, safetySnapshot, readRollbackRecords(safetySnapshot));
             assert.equal(
                 fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8').trim(),
                 versionBeforeRollback,
