@@ -1,6 +1,6 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathExists, readTextFile } from '../../core/filesystem';
+import { bindContainedDestination, writeContainedFile } from '../../core/contained-filesystem';
 import {
     PROJECT_MEMORY_REFRESH_HANDOFF_PROMPT
 } from '../../core/project-memory-rollout';
@@ -342,6 +342,7 @@ export function runInitReportingStage(
     let gitignoreEntriesAdded = 0;
     let agentignoreUpdated = false;
 
+    bindContainedDestination(options.normalizedTarget, gitignorePath);
     const existingGitignoreContent = pathExists(gitignorePath)
         ? readTextFile(gitignorePath)
         : '';
@@ -352,9 +353,10 @@ export function runInitReportingStage(
     );
     gitignoreEntriesAdded = gitignoreSync.addedEntries;
     if (!options.dryRun && gitignoreSync.changed) {
-        fs.writeFileSync(gitignorePath, gitignoreSync.content, 'utf8');
+        writeContainedFile(options.normalizedTarget, gitignorePath, gitignoreSync.content);
     }
 
+    bindContainedDestination(options.normalizedTarget, agentignorePath);
     const existingAgentignoreContent = pathExists(agentignorePath)
         ? readTextFile(agentignorePath)
         : '';
@@ -364,7 +366,7 @@ export function runInitReportingStage(
     );
     agentignoreUpdated = agentignoreSync.changed;
     if (!options.dryRun && agentignoreSync.changed) {
-        fs.writeFileSync(agentignorePath, agentignoreSync.content, 'utf8');
+        writeContainedFile(options.normalizedTarget, agentignorePath, agentignoreSync.content);
     }
 
     if (!options.dryRun) {
@@ -372,7 +374,7 @@ export function runInitReportingStage(
             sourceInventory,
             options.timestampIso
         );
-        fs.writeFileSync(sourceInventoryPath, inventoryLines.join('\r\n'), 'utf8');
+        writeContainedFile(options.normalizedTarget, sourceInventoryPath, inventoryLines.join('\r\n'));
 
         const initReportLines = buildInitReportLines({
             timestampIso: options.timestampIso,
@@ -397,13 +399,13 @@ export function runInitReportingStage(
             legacyStyleGuidanceActive: options.legacyStyleGuidanceActive
         });
         initReportLines.push(...buildMigrationReportLines(options.migrationResult));
-        fs.writeFileSync(initReportPath, initReportLines.join('\r\n'), 'utf8');
+        writeContainedFile(options.normalizedTarget, initReportPath, initReportLines.join('\r\n'));
 
         const discoveryLines = buildProjectDiscoveryLines(
             options.discovery,
             options.timestampIso
         );
-        fs.writeFileSync(projectDiscoveryPath, discoveryLines.join('\r\n'), 'utf8');
+        writeContainedFile(options.normalizedTarget, projectDiscoveryPath, discoveryLines.join('\r\n'));
 
         if (!pathExists(usagePath)) {
             const usageLines = buildUsageLines({
@@ -415,7 +417,7 @@ export function runInitReportingStage(
                     getFullSuiteEnabledDiagnostic(options.materializedWorkflowConfig) === 'true'
                 )
             });
-            fs.writeFileSync(usagePath, usageLines.join('\r\n'), 'utf8');
+            writeContainedFile(options.normalizedTarget, usagePath, usageLines.join('\r\n'));
         }
 
         writeSkillsIndex(options.bundleRoot);

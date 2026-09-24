@@ -1,4 +1,3 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
     PROJECT_MEMORY_DIRECTORY_RELATIVE_PATH,
@@ -13,8 +12,9 @@ import {
     sha256Hex,
     toProjectMemoryPosixPath
 } from '../../core/project-memory';
-import { ensureDirectory, pathExists, readTextFile } from '../../core/filesystem';
-import { writeJsonFile } from '../../core/json';
+import { pathExists, readTextFile } from '../../core/filesystem';
+import { bindContainedDestination, copyContainedFile, ensureContainedDirectory, writeContainedFile } from '../../core/contained-filesystem';
+import { formatJson } from '../../core/json';
 import {
     validateProjectMemoryBootstrap,
     type ProjectMemoryValidationOptions,
@@ -113,12 +113,14 @@ export function seedProjectMemoryFromTemplate(options: ProjectMemorySeedOptions)
     const templateUpdateNotices: ProjectMemoryTemplateUpdateNotice[] = [];
 
     if (!dryRun) {
-        ensureDirectory(liveDir);
+        ensureContainedDirectory(liveRoot, liveDir);
     }
 
     for (const fileName of PROJECT_MEMORY_REQUIRED_FILE_NAMES) {
         const templatePath = path.join(templateDir, fileName);
         const destinationPath = path.join(liveDir, fileName);
+        bindContainedDestination(templateRoot, templatePath);
+        bindContainedDestination(liveRoot, destinationPath);
         if (pathExists(destinationPath)) {
             preservedFiles.push(fileName);
             if (pathExists(templatePath)) {
@@ -142,8 +144,7 @@ export function seedProjectMemoryFromTemplate(options: ProjectMemorySeedOptions)
         }
         copiedFiles.push(fileName);
         if (!dryRun) {
-            ensureDirectory(path.dirname(destinationPath));
-            fs.copyFileSync(templatePath, destinationPath);
+            copyContainedFile(liveRoot, templatePath, destinationPath);
         }
     }
 
@@ -234,9 +235,10 @@ export function writeProjectMemoryBootstrapReport(
     options: ProjectMemoryBootstrapReportOptions & { dryRun?: boolean }
 ): { path: string; report: ProjectMemoryBootstrapReport } {
     const reportPath = resolveProjectMemoryBootstrapReportPath(options.bundleRoot);
+    bindContainedDestination(options.bundleRoot, reportPath);
     const report = buildProjectMemoryBootstrapReport(options);
     if (!options.dryRun) {
-        writeJsonFile(reportPath, report);
+        writeContainedFile(options.bundleRoot, reportPath, formatJson(report));
     }
     return { path: reportPath, report };
 }

@@ -7,10 +7,149 @@ import * as path from 'node:path';
 import {
     applyMaterializationStage,
     createCopyFileStage,
+    createRemoveFileStage,
     createWriteTextFileStage
 } from '../../../src/materialization/staged-side-effects';
 
 describe('materialization staged side effects', () => {
+    it('rejects a destination outside the declared root before writing', () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-stage-outside-'));
+        try {
+            const root = path.join(tempDir, 'root');
+            fs.mkdirSync(root);
+            const outside = path.join(tempDir, 'outside.txt');
+            fs.writeFileSync(outside, 'untouched');
+            assert.throws(() => createWriteTextFileStage(outside, 'changed', root), /outside permitted root/);
+            assert.equal(fs.readFileSync(outside, 'utf8'), 'untouched');
+        } finally {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects a hard-linked destination without changing the outside file', () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-stage-hardlink-'));
+        try {
+            const root = path.join(tempDir, 'root');
+            fs.mkdirSync(root);
+            const outside = path.join(tempDir, 'outside.txt');
+            fs.writeFileSync(outside, 'untouched');
+            fs.linkSync(outside, path.join(root, 'target.txt'));
+            assert.throws(() => createWriteTextFileStage(path.join(root, 'target.txt'), 'changed', root),
+                /hard-linked/);
+            assert.equal(fs.readFileSync(outside, 'utf8'), 'untouched');
+        } finally {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects a replaced ordinary parent between stage creation and write', () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-stage-replaced-'));
+        try {
+            const root = path.join(tempDir, 'root');
+            const parent = path.join(root, 'parent');
+            fs.mkdirSync(parent, { recursive: true });
+            const stage = createWriteTextFileStage(path.join(parent, 'target.txt'), 'changed', root);
+            fs.renameSync(parent, path.join(root, 'old-parent'));
+            fs.mkdirSync(parent);
+            assert.throws(() => stage.apply(), /identity changed/);
+            assert.equal(fs.existsSync(path.join(parent, 'target.txt')), false);
+        } finally {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+    });
+
+    it('does not roll back over a replaced file when stage apply rejects before mutation', () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-stage-replaced-file-'));
+        try {
+            const targetPath = path.join(tempDir, 'target.txt');
+            const sourcePath = path.join(tempDir, 'source.txt');
+            fs.writeFileSync(targetPath, 'original');
+            fs.writeFileSync(sourcePath, 'source');
+            for (const stage of [
+                createWriteTextFileStage(targetPath, 'updated'),
+                createCopyFileStage(sourcePath, targetPath),
+                createRemoveFileStage(targetPath)
+            ]) {
+                fs.renameSync(targetPath, path.join(tempDir, 'previous.txt'));
+                fs.writeFileSync(targetPath, 'replacement');
+                assert.throws(() => applyMaterializationStage(stage), /identity changed/);
+                assert.equal(fs.readFileSync(targetPath, 'utf8'), 'replacement');
+                fs.rmSync(path.join(tempDir, 'previous.txt'));
+            }
+        } finally {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects a file that appears after an absent destination is staged', () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-stage-appeared-file-'));
+        try {
+            const targetPath = path.join(tempDir, 'target.txt');
+            const sourcePath = path.join(tempDir, 'source.txt');
+            fs.writeFileSync(sourcePath, 'source');
+            for (const stage of [
+                createWriteTextFileStage(targetPath, 'updated'),
+                createCopyFileStage(sourcePath, targetPath),
+                createRemoveFileStage(targetPath)
+            ]) {
+                fs.writeFileSync(targetPath, 'late owner content');
+                assert.throws(() => applyMaterializationStage(stage), /identity changed/);
+                assert.equal(fs.readFileSync(targetPath, 'utf8'), 'late owner content');
+                fs.rmSync(targetPath);
+            }
+        } finally {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects a dangling file link before mutation', (t) => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-stage-link-'));
+        try {
+            const root = path.join(tempDir, 'root');
+            fs.mkdirSync(root);
+            const dangling = path.join(root, 'dangling.txt');
+            try {
+                fs.symlinkSync(path.join(tempDir, 'missing.txt'), dangling, 'file');
+            } catch (error: unknown) {
+                const code = (error as NodeJS.ErrnoException).code;
+                if (code === 'EPERM' || code === 'EACCES' || code === 'ENOTSUP') {
+                    t.skip(`Link creation is unavailable: ${code}`);
+                    return;
+                }
+                throw error;
+            }
+            assert.throws(() => createWriteTextFileStage(dangling, 'changed', root), /symlink or junction/);
+        } finally {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects a junction or linked parent directory before mutation', (t) => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-stage-junction-'));
+        try {
+            const root = path.join(tempDir, 'root');
+            const outside = path.join(tempDir, 'outside');
+            fs.mkdirSync(root);
+            fs.mkdirSync(outside);
+            const linkedParent = path.join(root, 'linked-parent');
+            try {
+                fs.symlinkSync(outside, linkedParent, process.platform === 'win32' ? 'junction' : 'dir');
+            } catch (error: unknown) {
+                const code = (error as NodeJS.ErrnoException).code;
+                if (code === 'EPERM' || code === 'EACCES' || code === 'ENOTSUP') {
+                    t.skip(`Link creation is unavailable: ${code}`);
+                    return;
+                }
+                throw error;
+            }
+            assert.throws(() => createWriteTextFileStage(path.join(linkedParent, 'target.txt'), 'changed', root),
+                /symlink or junction/);
+            assert.equal(fs.existsSync(path.join(outside, 'target.txt')), false);
+        } finally {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+    });
+
     it('does not apply stages during dry-run', () => {
         const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-stage-dry-'));
         try {

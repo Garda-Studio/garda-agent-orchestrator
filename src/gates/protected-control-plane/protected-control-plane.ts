@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { writeFileAtomically } from '../../core/filesystem';
+import { bindContainedDestination, writeContainedFile } from '../../core/contained-filesystem';
 import {
     computeProtectedSnapshotDigest,
     resolveProtectedControlPlaneManifestPath,
@@ -178,8 +178,9 @@ export function buildProtectedControlPlaneManifest(repoRoot: string): ProtectedC
  */
 export function writeProtectedControlPlaneManifest(repoRoot: string): string {
     const manifestPath = resolveProtectedControlPlaneManifestPath(repoRoot);
+    bindContainedDestination(repoRoot, manifestPath);
     const manifest = buildProtectedControlPlaneManifest(repoRoot);
-    writeFileAtomically(manifestPath, JSON.stringify(manifest, null, 2), { encoding: 'utf8' });
+    writeContainedFile(repoRoot, manifestPath, JSON.stringify(manifest, null, 2));
     return manifestPath;
 }
 

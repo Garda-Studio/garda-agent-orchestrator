@@ -1,8 +1,14 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
-import { ensureDirectory, pathExists, readTextFile } from '../../core/filesystem';
-import { writeJsonFile } from '../../core/json';
+import { pathExists, readTextFile } from '../../core/filesystem';
+import { formatJson } from '../../core/json';
+import {
+    bindContainedDestination,
+    ensureContainedDirectory,
+    removeContainedPath,
+    writeContainedFile
+} from '../../core/contained-filesystem';
 import {
     INSTALL_BACKUP_CANDIDATE_PATHS,
     MANAGED_END,
@@ -60,15 +66,15 @@ export function createInstallFilesystemStage(
     }
 
     function writeTextFile(filePath: string, content: string): void {
-        applyStage(createWriteTextFileStage(filePath, content));
+        applyStage(createWriteTextFileStage(filePath, content, targetRoot));
     }
 
     function copyFile(sourcePath: string, destinationPath: string): void {
-        applyStage(createCopyFileStage(sourcePath, destinationPath));
+        applyStage(createCopyFileStage(sourcePath, destinationPath, targetRoot));
     }
 
     function removeFile(filePath: string): void {
-        applyStage(createRemoveFileStage(filePath));
+        applyStage(createRemoveFileStage(filePath, targetRoot));
     }
 
     function writeBackupManifest(timestamp: string): void {
@@ -83,12 +89,11 @@ export function createInstallFilesystemStage(
             manifestPath,
             'lifecycle-install-backup-manifest-write',
             () => {
-                ensureDirectory(path.dirname(manifestPath));
-                writeJsonFile(manifestPath, {
+                writeContainedFile(targetRoot, manifestPath, formatJson({
                     Version: 1,
                     CreatedAt: timestamp,
                     PreExistingFiles: preExistingPaths
-                });
+                }));
             }
         );
     }
@@ -147,6 +152,7 @@ export function createInstallFilesystemStage(
             if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
                 return;
             }
+            bindContainedDestination(targetRoot, current);
             if (
                 !pathExists(current)
                 || !fs.statSync(current).isDirectory()
@@ -154,7 +160,7 @@ export function createInstallFilesystemStage(
             ) {
                 return;
             }
-            fs.rmdirSync(current);
+            removeContainedPath(targetRoot, current);
             current = path.dirname(current);
         }
     }
@@ -190,7 +196,7 @@ export function createInstallFilesystemStage(
         const destPath = path.join(targetRoot, relativePath);
         if (!pathExists(destPath)) {
             if (!dryRun) {
-                ensureDirectory(path.dirname(destPath));
+                ensureContainedDirectory(targetRoot, path.dirname(destPath));
                 writeTextFile(destPath, `${managedBlock}\r\n`);
             }
             metrics.deployed++;

@@ -1,6 +1,6 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { ensureDirectory, pathExists, readTextFile } from '../../core/filesystem';
+import { pathExists, readTextFile } from '../../core/filesystem';
+import { ensureContainedDirectory, writeContainedFile } from '../../core/contained-filesystem';
 import {
     applyAssistantDefaults,
     applyCompileGateCommandDefaults,
@@ -122,7 +122,7 @@ function materializeRuleFiles(
 
         const destPath = path.join(liveRuleRoot, ruleFile);
         if (!dryRun) {
-            fs.writeFileSync(destPath, content, 'utf8');
+            writeContainedFile(targetRoot, destPath, content);
         }
 
         ruleSourceMap.push({
@@ -145,10 +145,10 @@ function scaffoldLegacyStyleGuidance(
     }
     const styleTemplatePath = path.join(options.templateRuleRoot, '30-code-style.md');
     if (pathExists(styleTemplatePath)) {
-        fs.writeFileSync(
+        writeContainedFile(
+            options.targetRoot,
             path.join(options.liveRuleRoot, '30-code-style.template.md'),
-            readTextFile(styleTemplatePath),
-            'utf8'
+            readTextFile(styleTemplatePath)
         );
     }
 
@@ -160,21 +160,21 @@ function scaffoldLegacyStyleGuidance(
         return;
     }
     const projectMemoryDir = path.join(options.liveRoot, 'docs/project-memory');
-    ensureDirectory(projectMemoryDir);
+    ensureContainedDirectory(options.targetRoot, projectMemoryDir);
     const conventionsScaffoldPath = path.join(projectMemoryDir, 'conventions.template.md');
     if (!pathExists(conventionsScaffoldPath)) {
-        fs.writeFileSync(
+        writeContainedFile(
+            options.targetRoot,
             conventionsScaffoldPath,
-            readTextFile(conventionsTemplatePath),
-            'utf8'
+            readTextFile(conventionsTemplatePath)
         );
     }
     const markerPath = path.join(projectMemoryDir, '.legacy-style-contract');
     if (!pathExists(markerPath)) {
-        fs.writeFileSync(
+        writeContainedFile(
+            options.targetRoot,
             markerPath,
-            'This workspace retains legacy code-style conventions. Review conventions.template.md to adopt the updated contract.',
-            'utf8'
+            'This workspace retains legacy code-style conventions. Review conventions.template.md to adopt the updated contract.'
         );
     }
 }
@@ -201,18 +201,19 @@ function copySupportDirectories(options: RunInitRuleStageOptions): number {
 
         const destDir = path.join(options.liveRoot, relDir);
         if (!options.dryRun) {
-            ensureDirectory(destDir);
+            ensureContainedDirectory(options.targetRoot, destDir);
             copyDirectoryRecursive(
                 srcDir,
                 destDir,
-                relDir === 'config'
-                    ? {
-                        shouldCopyFile: (_srcPath, destPath) => !(
+                {
+                    destinationRoot: options.targetRoot,
+                    shouldCopyFile: relDir === 'config'
+                        ? (_srcPath, destPath) => !(
                             managedConfigFileNames.has(path.basename(destPath).toLowerCase())
                             && pathExists(destPath)
                         )
-                    }
-                    : undefined
+                        : undefined
+                }
             );
         }
         copiedSupportDirs++;
@@ -261,7 +262,7 @@ export function runInitRuleStage(
         '15-project-memory.md'
     );
     if (!options.dryRun) {
-        fs.writeFileSync(projectMemorySummaryDest, projectMemorySummary, 'utf8');
+        writeContainedFile(options.targetRoot, projectMemorySummaryDest, projectMemorySummary);
     }
     materializedRules.ruleSourceMap.push({
         ruleFile: '15-project-memory.md',

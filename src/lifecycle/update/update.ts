@@ -2,10 +2,12 @@ import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { bindContainedDestination, ensureContainedDirectory, removeContainedPath } from '../../core/contained-filesystem';
 import { ALL_AGENT_ENTRYPOINT_FILES, resolveBundleName } from '../../core/constants';
 import { getProviderBridgeDirectoryPaths } from '../../core/provider-registry';
 import {
     BUNDLE_SYNC_ITEMS,
+    assertCopySourceTree,
     copyPathRecursive,
     createRollbackSnapshot,
     ensureWithinRoot,
@@ -15,7 +17,6 @@ import {
     getRollbackRecordsPath,
     readSyncBackupMetadata,
     readUpdateSentinel,
-    removePathRecursive,
     withLifecycleOperationLock,
     validateTargetRoot,
     writeRollbackRecords
@@ -104,15 +105,16 @@ function bindPreSyncBundleToSnapshot(targetRoot: string, bundleRoot: string, sna
             const backupEntry = path.join(backupRoot, item);
             assertNoLinkedPathComponents(backupRoot, backupEntry);
             if (!fs.existsSync(backupEntry)) throw new Error(`Update sync backup entry is missing: ${item}`);
-            removePathRecursive(snapshotEntry);
-            fs.mkdirSync(path.dirname(snapshotEntry), { recursive: true });
-            copyPathRecursive(backupEntry, snapshotEntry);
+            assertCopySourceTree(backupEntry);
+            removeContainedPath(targetRoot, snapshotEntry, true);
+            ensureContainedDirectory(targetRoot, path.dirname(snapshotEntry));
+            copyPathRecursive(backupEntry, snapshotEntry, targetRoot);
             if (!nestedLiveVersion) {
                 record.existed = true;
                 record.pathType = fs.lstatSync(snapshotEntry).isDirectory() ? 'directory' : 'file';
             }
         } else {
-            removePathRecursive(snapshotEntry);
+            removeContainedPath(targetRoot, snapshotEntry, true);
             if (!nestedLiveVersion) {
                 record.existed = false;
                 record.pathType = 'missing';
@@ -278,10 +280,11 @@ function runValidatedUpdate(
 
     if (!dryRun) {
         assertNoRuntimeLocksBeforeUpdateApply(bundleRoot);
+        bindContainedDestination(normalizedTarget, updateReportPath);
     }
 
     if (!dryRun) {
-        fs.mkdirSync(path.dirname(rollbackSnapshotPath), { recursive: true });
+        ensureContainedDirectory(normalizedTarget, path.dirname(rollbackSnapshotPath));
         const rollbackItems = getUpdateRollbackItems(normalizedTarget, sources.initAnswersResolvedPath);
         rollbackRecords = createRollbackSnapshot(normalizedTarget, rollbackSnapshotPath, rollbackItems) as RollbackRecord[];
         bindPreSyncBundleToSnapshot(normalizedTarget, bundleRoot, rollbackSnapshotPath, rollbackRecords);

@@ -1,9 +1,9 @@
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 
-import { ensureDirectory, pathExists } from '../core/filesystem';
+import { pathExists } from '../core/filesystem';
+import { bindContainedDestination, writeContainedFile } from '../core/contained-filesystem';
 import { asObjectRecord } from './skill-manifest';
-import { readJsonFile, writeJsonFile } from '../core/json';
+import { formatJson, readJsonFile } from '../core/json';
 import { computePayloadSha256, computeSha256FromText } from './skill-headlines-hashing';
 import {
     buildSkillsHeadlinesPayload
@@ -22,8 +22,8 @@ export function buildSkillsHeadlines(
 
 export function writeSkillsHeadlines(bundleRoot: string): string {
     const headlinesPath = getSkillsHeadlinesConfigPath(bundleRoot);
-    ensureDirectory(path.dirname(headlinesPath));
-    writeJsonFile(headlinesPath, buildSkillsHeadlines(bundleRoot));
+    bindContainedDestination(bundleRoot, headlinesPath);
+    writeContainedFile(bundleRoot, headlinesPath, formatJson(buildSkillsHeadlines(bundleRoot)));
     return headlinesPath;
 }
 
@@ -34,8 +34,7 @@ export function ensureSkillsHeadlinesCurrent(bundleRoot: string): SkillsHeadline
     const expectedSha256 = computePayloadSha256(expected);
 
     if (!pathExists(headlinesPath)) {
-        ensureDirectory(path.dirname(headlinesPath));
-        writeJsonFile(headlinesPath, expected);
+        writeContainedFile(bundleRoot, headlinesPath, formatJson(expected));
         return {
             headlinesPath,
             sha256: expectedSha256,
@@ -56,8 +55,7 @@ export function ensureSkillsHeadlinesCurrent(bundleRoot: string): SkillsHeadline
         // Refresh malformed artifacts from the current live skill surface.
     }
 
-    ensureDirectory(path.dirname(headlinesPath));
-    writeJsonFile(headlinesPath, expected);
+    writeContainedFile(bundleRoot, headlinesPath, formatJson(expected));
     return {
         headlinesPath,
         sha256: expectedSha256,

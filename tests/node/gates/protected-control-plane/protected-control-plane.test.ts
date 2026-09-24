@@ -43,3 +43,23 @@ test('writeProtectedControlPlaneManifest preserves the previous manifest when fi
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
 });
+
+test('writeProtectedControlPlaneManifest rejects a linked runtime directory', () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'protected-control-plane-'));
+    try {
+        const outside = path.join(repoRoot, 'outside');
+        fs.mkdirSync(outside);
+        const manifestPath = resolveProtectedControlPlaneManifestPath(repoRoot);
+        fs.mkdirSync(path.dirname(path.dirname(manifestPath)), { recursive: true });
+        try {
+            fs.symlinkSync(outside, path.dirname(manifestPath), 'junction');
+        } catch (error: unknown) {
+            if (['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code || '')) return;
+            throw error;
+        }
+        assert.throws(() => writeProtectedControlPlaneManifest(repoRoot), /symlink|junction/);
+        assert.deepEqual(fs.readdirSync(outside), []);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});

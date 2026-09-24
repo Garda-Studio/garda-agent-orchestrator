@@ -1,7 +1,7 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { cloneJsonValue, isPlainObject, mergeConfig } from '../../core/config-merge';
-import { ensureDirectory, pathExists } from '../../core/filesystem';
+import { pathExists } from '../../core/filesystem';
+import { writeContainedFile } from '../../core/contained-filesystem';
 import { readJsonFile } from '../../core/json';
 import {
     buildDefaultWorkflowConfig,
@@ -307,6 +307,7 @@ export function runInitConfigStage(
     for (const configName of MANAGED_CONFIG_NAMES) {
         const templateConfigPath = path.join(templateRoot, `config/${configName}.json`);
         const destConfigPath = path.join(liveRoot, `config/${configName}.json`);
+        let pendingWrite: string | null = null;
 
         if (!pathExists(templateConfigPath)) {
             configMergeStatuses[configName] = 'template_missing_preservation_skipped';
@@ -386,9 +387,7 @@ export function runInitConfigStage(
             }
 
             if (!dryRun) {
-                const json = JSON.stringify(materializedConfig, null, 2);
-                ensureDirectory(path.dirname(destConfigPath));
-                fs.writeFileSync(destConfigPath, json, 'utf8');
+                pendingWrite = JSON.stringify(materializedConfig, null, 2);
             }
 
             configMergeStatuses[configName] = configName === 'workflow-config'
@@ -408,6 +407,9 @@ export function runInitConfigStage(
                         : 'no_existing_live_config_template_applied');
         } catch {
             configMergeStatuses[configName] = 'merge_failed_template_applied';
+        }
+        if (pendingWrite !== null) {
+            writeContainedFile(targetRoot, destConfigPath, pendingWrite);
         }
     }
 

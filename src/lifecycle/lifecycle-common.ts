@@ -1,16 +1,24 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
+    bindContainedDestination,
+    copyContainedFile,
+    ensureContainedDirectory,
+    removeContainedPath,
+    writeContainedFile
+} from '../core/contained-filesystem';
+import {
+    assertCopySourceTree,
     copyPathRecursive,
     ensureRelativeSafe,
     ensureWithinRoot,
     readdirRecursiveDirs,
-    readdirRecursiveFiles,
-    removePathRecursive
+    readdirRecursiveFiles
 } from './generic-utils';
 import { withLifecycleRuntimeMutationGenerationForPath } from './runtime-mutation-generation';
 import {
     assertNoLinkedPathComponents,
+    getRollbackSnapshotIntegrityPath,
     verifyRollbackSnapshotIntegrity,
     writeRollbackSnapshotIntegrity
 } from './rollback/rollback-snapshot-integrity';
@@ -80,6 +88,17 @@ function createRollbackSnapshotUnjournaled(
 ): RollbackRecord[] {
     const unique = [...new Set(relativePaths)].sort();
     const records: RollbackRecord[] = [];
+    bindContainedDestination(rootPath, snapshotRoot);
+
+    for (const rel of unique) {
+        if (!rel || rel === '.') continue;
+        ensureRelativeSafe(rel, 'Rollback relativePath');
+        const targetPath = path.join(rootPath, rel);
+        ensureWithinRoot(rootPath, targetPath, 'Rollback target');
+        bindContainedDestination(rootPath, targetPath);
+        bindContainedDestination(rootPath, path.join(snapshotRoot, rel));
+        if (fs.existsSync(targetPath)) assertCopySourceTree(targetPath);
+    }
 
     for (const rel of unique) {
         if (!rel || rel === '.') continue;
@@ -87,6 +106,7 @@ function createRollbackSnapshotUnjournaled(
 
         const targetPath = path.join(rootPath, rel);
         ensureWithinRoot(rootPath, targetPath, 'Rollback target');
+        bindContainedDestination(rootPath, targetPath);
 
         const exists = fs.existsSync(targetPath);
         let pathType = 'missing';
@@ -94,8 +114,8 @@ function createRollbackSnapshotUnjournaled(
             const stats = fs.lstatSync(targetPath);
             pathType = stats.isDirectory() ? 'directory' : 'file';
             const snapshotPath = path.join(snapshotRoot, rel);
-            fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
-            copyPathRecursive(targetPath, snapshotPath);
+            ensureContainedDirectory(rootPath, path.dirname(snapshotPath));
+            copyPathRecursive(targetPath, snapshotPath, rootPath);
         }
         records.push({ relativePath: rel, existed: exists, pathType });
     }
@@ -125,10 +145,13 @@ export function writeRollbackRecords(snapshotRoot: string, records: readonly Rol
         'lifecycle-rollback-records-write',
         () => {
             const recordsPath = getRollbackRecordsPath(snapshotRoot);
-            fs.mkdirSync(snapshotRoot, { recursive: true });
+            ensureContainedDirectory(path.parse(path.resolve(snapshotRoot)).root, snapshotRoot);
+            bindContainedDestination(path.parse(path.resolve(snapshotRoot)).root, recordsPath);
+            bindContainedDestination(path.parse(path.resolve(snapshotRoot)).root,
+                getRollbackSnapshotIntegrityPath(snapshotRoot));
             assertNoLinkedPathComponents(snapshotRoot, recordsPath);
             const recordsBytes = Buffer.from(JSON.stringify(records, null, 2), 'utf8');
-            fs.writeFileSync(recordsPath, recordsBytes);
+            writeContainedFile(path.parse(path.resolve(snapshotRoot)).root, recordsPath, recordsBytes);
             writeRollbackSnapshotIntegrity(snapshotRoot, records, recordsBytes);
             return recordsPath;
         }
@@ -194,8 +217,8 @@ export function writeSyncBackupMetadata(backupRoot: string, metadata: SyncBackup
         'lifecycle-bundle-backup-metadata-write',
         () => {
             const metadataPath = getSyncBackupMetadataPath(backupRoot);
-            fs.mkdirSync(backupRoot, { recursive: true });
-            fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
+            writeContainedFile(path.parse(path.resolve(backupRoot)).root,
+                metadataPath, JSON.stringify(metadata, null, 2));
             return metadataPath;
         }
     );
@@ -242,6 +265,15 @@ export function restoreRollbackSnapshot(
         const targetPath = path.join(rootPath, record.relativePath);
         ensureWithinRoot(rootPath, targetPath, 'Rollback restore target');
         assertNoLinkedPathComponents(rootPath, targetPath);
+        bindContainedDestination(rootPath, targetPath);
+        if (record.existed) {
+            const snapshotPath = path.join(snapshotRoot, record.relativePath);
+            assertNoLinkedPathComponents(snapshotRoot, snapshotPath);
+            if (!fs.existsSync(snapshotPath)) {
+                throw new Error(`Rollback snapshot entry missing for '${record.relativePath}': ${snapshotPath}`);
+            }
+            assertCopySourceTree(snapshotPath);
+        }
     }
     for (const record of records) {
         const rel = record.relativePath;
@@ -259,13 +291,13 @@ export function restoreRollbackSnapshot(
             if (!fs.existsSync(snapshotPath)) {
                 throw new Error(`Rollback snapshot entry missing for '${rel}': ${snapshotPath}`);
             }
-            removePathRecursive(targetPath);
-            fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-            copyPathRecursive(snapshotPath, targetPath);
+            removeContainedPath(rootPath, targetPath, true);
+            ensureContainedDirectory(rootPath, path.dirname(targetPath));
+            copyPathRecursive(snapshotPath, targetPath, rootPath);
             continue;
         }
 
-        removePathRecursive(targetPath);
+        removeContainedPath(rootPath, targetPath, true);
     }
 }
 
@@ -274,21 +306,26 @@ export function copyDirectoryContentMerge(
     destinationDirectory: string,
     skipDestinationFiles?: readonly string[] | null
 ): void {
-    if (!fs.existsSync(destinationDirectory)) {
-        fs.mkdirSync(destinationDirectory, { recursive: true });
+    const sourceRoot = path.resolve(sourceDirectory);
+    assertCopySourceTree(sourceRoot);
+    if (!fs.lstatSync(sourceRoot).isDirectory()) {
+        throw new Error(`Merge source must be a directory: ${sourceRoot}`);
     }
+    const containmentRoot = path.parse(path.resolve(destinationDirectory)).root;
+    bindContainedDestination(containmentRoot, destinationDirectory);
 
     const skipSet = new Set(
         (skipDestinationFiles ?? []).map((filePath) => path.resolve(filePath).toLowerCase())
     );
 
-    const sourceRoot = path.resolve(sourceDirectory);
     const destRoot = path.resolve(destinationDirectory);
     const expectedDestFiles = new Set<string>();
+    const plannedCopies: Array<{ source: string; destination: string }> = [];
 
     for (const sourceFile of readdirRecursiveFiles(sourceDirectory)) {
-        if (fs.lstatSync(sourceFile).isSymbolicLink()) {
-            throw new Error(`Refusing to copy symlink or junction source: ${sourceFile}`);
+        const sourceStat = fs.lstatSync(sourceFile);
+        if (sourceStat.isSymbolicLink() || !sourceStat.isFile() || sourceStat.nlink !== 1) {
+            throw new Error(`Refusing to copy symlink or junction source or hard-linked file: ${sourceFile}`);
         }
         const rel = path.relative(sourceRoot, sourceFile);
         if (!rel || rel === '.') continue;
@@ -297,25 +334,31 @@ export function copyDirectoryContentMerge(
         }
 
         const destFile = path.resolve(path.join(destinationDirectory, rel));
-        if (fs.existsSync(destFile) && fs.lstatSync(destFile).isSymbolicLink()) {
-            throw new Error(`Refusing to overwrite symlink or junction destination: ${destFile}`);
-        }
+        bindContainedDestination(containmentRoot, destFile);
         ensureWithinRoot(destRoot, destFile, 'Destination file');
         expectedDestFiles.add(destFile.toLowerCase());
 
         if (skipSet.has(destFile.toLowerCase())) continue;
-
-        fs.mkdirSync(path.dirname(destFile), { recursive: true });
-        fs.copyFileSync(sourceFile, destFile);
+        plannedCopies.push({ source: sourceFile, destination: destFile });
     }
 
+    const staleFiles: string[] = [];
     for (const destFile of readdirRecursiveFiles(destinationDirectory)) {
         const destFull = path.resolve(destFile).toLowerCase();
         if (skipSet.has(destFull)) continue;
         if (!expectedDestFiles.has(destFull)) {
+            bindContainedDestination(containmentRoot, destFile);
             ensureWithinRoot(destRoot, destFile, 'Removal target');
-            fs.rmSync(destFile, { force: true });
+            staleFiles.push(destFile);
         }
+    }
+
+    ensureContainedDirectory(containmentRoot, destinationDirectory);
+    for (const copy of plannedCopies) {
+        copyContainedFile(containmentRoot, copy.source, copy.destination);
+    }
+    for (const destFile of staleFiles) {
+        removeContainedPath(containmentRoot, destFile);
     }
 
     const dirs = readdirRecursiveDirs(destinationDirectory).sort((a, b) => b.length - a.length);
@@ -324,8 +367,9 @@ export function copyDirectoryContentMerge(
         if (skipSet.has(dirFull)) continue;
         try {
             ensureWithinRoot(destRoot, dir, 'Directory to prune');
+            bindContainedDestination(containmentRoot, dir);
             const entries = fs.readdirSync(dir);
-            if (entries.length === 0) fs.rmdirSync(dir);
+            if (entries.length === 0) removeContainedPath(containmentRoot, dir);
         } catch {
             // Best-effort empty-directory cleanup.
         }
@@ -339,6 +383,18 @@ export function restoreSyncedItemsFromBackup(
     runningScriptPath: string | null
 ): void {
     const resolvedTargetRoot = path.resolve(targetBundleRoot);
+    for (const item of Object.keys(preexistingMap)) {
+        if (!item) continue;
+        ensureRelativeSafe(item, 'Synced item key');
+        bindContainedDestination(resolvedTargetRoot, path.join(targetBundleRoot, item));
+        if (preexistingMap[item]) {
+            const backupPath = path.join(backupRoot, item);
+            if (!fs.existsSync(backupPath)) {
+                throw new Error(`Missing backup entry for '${item}': ${backupPath}`);
+            }
+            assertCopySourceTree(backupPath);
+        }
+    }
     for (const item of Object.keys(preexistingMap)) {
         if (!item) continue;
         ensureRelativeSafe(item, 'Synced item key');
@@ -356,21 +412,21 @@ export function restoreSyncedItemsFromBackup(
             const isNodeRuntimeDir = item.toLowerCase() === 'src';
             if (isNodeRuntimeDir && fs.existsSync(backupPath) && fs.lstatSync(backupPath).isDirectory()) {
                 if (!fs.existsSync(destinationPath) || !fs.lstatSync(destinationPath).isDirectory()) {
-                    removePathRecursive(destinationPath);
-                    fs.mkdirSync(destinationPath, { recursive: true });
+                    removeContainedPath(resolvedTargetRoot, destinationPath, true);
+                    ensureContainedDirectory(resolvedTargetRoot, destinationPath);
                 }
                 const skipPaths = runningScriptPath ? [path.resolve(runningScriptPath)] : [];
                 copyDirectoryContentMerge(backupPath, destinationPath, skipPaths);
                 continue;
             }
 
-            removePathRecursive(destinationPath);
-            fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
-            copyPathRecursive(backupPath, destinationPath);
+            removeContainedPath(resolvedTargetRoot, destinationPath, true);
+            ensureContainedDirectory(resolvedTargetRoot, path.dirname(destinationPath));
+            copyPathRecursive(backupPath, destinationPath, resolvedTargetRoot);
             continue;
         }
 
-        removePathRecursive(destinationPath);
+        removeContainedPath(resolvedTargetRoot, destinationPath, true);
     }
 }
 
@@ -381,17 +437,25 @@ export function syncWorkingTreeBundleItems(
 ): void {
     const unique = [...new Set(relativeItems)].sort();
     const resolvedTargetRoot = path.resolve(targetBundleRoot);
+    const selected: string[] = [];
     for (const item of unique) {
         if (!item) continue;
         ensureRelativeSafe(item, 'Sync item');
         const sourcePath = path.join(sourceBundleRoot, item);
-        if (!fs.existsSync(sourcePath)) continue;
+        if (bindContainedDestination(sourceBundleRoot, sourcePath).missingAt) continue;
+        bindContainedDestination(resolvedTargetRoot, path.join(targetBundleRoot, item));
+        assertCopySourceTree(sourcePath);
+        selected.push(item);
+    }
+    for (const item of selected) {
+        const sourcePath = path.join(sourceBundleRoot, item);
+        assertCopySourceTree(sourcePath);
 
         const destinationPath = path.join(targetBundleRoot, item);
         ensureWithinRoot(resolvedTargetRoot, destinationPath, 'Sync destination');
-        removePathRecursive(destinationPath);
-        fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
-        copyPathRecursive(sourcePath, destinationPath);
+        removeContainedPath(resolvedTargetRoot, destinationPath, true);
+        ensureContainedDirectory(resolvedTargetRoot, path.dirname(destinationPath));
+        copyPathRecursive(sourcePath, destinationPath, resolvedTargetRoot);
     }
 }
 
@@ -401,16 +465,13 @@ export function getUpdateSentinelPath(bundleRoot: string): string {
 
 export function writeUpdateSentinel(bundleRoot: string, metadata: UpdateSentinelMetadata): string {
     const sentinelPath = getUpdateSentinelPath(bundleRoot);
-    fs.mkdirSync(path.dirname(sentinelPath), { recursive: true });
-    fs.writeFileSync(sentinelPath, JSON.stringify(metadata, null, 2), 'utf8');
+    writeContainedFile(bundleRoot, sentinelPath, JSON.stringify(metadata, null, 2));
     return sentinelPath;
 }
 
 export function removeUpdateSentinel(bundleRoot: string): void {
     const sentinelPath = getUpdateSentinelPath(bundleRoot);
-    if (fs.existsSync(sentinelPath)) {
-        fs.rmSync(sentinelPath, { force: true });
-    }
+    removeContainedPath(bundleRoot, sentinelPath);
 }
 
 export function readUpdateSentinel(bundleRoot: string): UpdateSentinelMetadata | null {
@@ -433,12 +494,13 @@ export function getUninstallSentinelPath(targetRoot: string): string {
 
 export function writeUninstallSentinel(targetRoot: string, metadata: UninstallSentinelMetadata): string {
     const sentinelPath = getUninstallSentinelPath(targetRoot);
-    fs.writeFileSync(sentinelPath, JSON.stringify(metadata, null, 2), 'utf8');
+    writeContainedFile(targetRoot, sentinelPath, JSON.stringify(metadata, null, 2));
     return sentinelPath;
 }
 
 export function readUninstallSentinel(targetRoot: string): UninstallSentinelMetadata | null {
     const sentinelPath = getUninstallSentinelPath(targetRoot);
+    bindContainedDestination(targetRoot, sentinelPath);
     if (!fs.existsSync(sentinelPath)) return null;
     try {
         return JSON.parse(fs.readFileSync(sentinelPath, 'utf8')) as UninstallSentinelMetadata;
@@ -449,9 +511,7 @@ export function readUninstallSentinel(targetRoot: string): UninstallSentinelMeta
 
 export function removeUninstallSentinel(targetRoot: string): void {
     const sentinelPath = getUninstallSentinelPath(targetRoot);
-    if (fs.existsSync(sentinelPath)) {
-        fs.rmSync(sentinelPath, { force: true });
-    }
+    removeContainedPath(targetRoot, sentinelPath);
 }
 
 export function validateTargetRoot(targetRoot: string, bundleRoot: string): string {

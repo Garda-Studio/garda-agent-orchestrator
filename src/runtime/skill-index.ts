@@ -1,6 +1,7 @@
 import * as path from 'node:path';
-import { ensureDirectory, pathExists } from '../core/filesystem';
-import { readJsonFile, writeJsonFile } from '../core/json';
+import { pathExists } from '../core/filesystem';
+import { bindContainedDestination, writeContainedFile } from '../core/contained-filesystem';
+import { formatJson, readJsonFile } from '../core/json';
 import { asObjectRecord, listBuiltinSkillPacks } from './skill-manifest';
 import { writeSkillsHeadlines } from './skill-headlines';
 
@@ -100,8 +101,8 @@ export function buildSkillsIndex(bundleRoot: string): SkillsIndexPayload {
 
 export function writeSkillsIndex(bundleRoot: string): string {
     const indexPath = getSkillsIndexConfigPath(bundleRoot);
-    ensureDirectory(path.dirname(indexPath));
-    writeJsonFile(indexPath, buildSkillsIndex(bundleRoot));
+    bindContainedDestination(bundleRoot, indexPath);
+    writeContainedFile(bundleRoot, indexPath, formatJson(buildSkillsIndex(bundleRoot)));
     writeSkillsHeadlines(bundleRoot);
     return indexPath;
 }

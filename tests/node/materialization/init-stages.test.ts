@@ -19,7 +19,9 @@ import {
 import {
     runInitRuleStage
 } from '../../../src/materialization/init/init-rule-stage';
+import { copyDirectoryRecursive as copyInitDirectory } from '../../../src/materialization/init/init-filesystem';
 import { RULE_FILES } from '../../../src/materialization/rule-materialization';
+import { syncOptionalRuleSupportFiles } from '../../../src/materialization/rule-support-files';
 import { buildDefaultReviewRemediationModePolicy } from '../../../src/policy/review-remediation-mode-policy';
 
 function findRepoRoot(): string {
@@ -48,6 +50,57 @@ function copyDirectoryRecursive(source: string, destination: string): void {
         }
     }
 }
+
+describe('init destination containment', () => {
+    it('rejects a hard-linked destination before copying any support file', () => {
+        const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-init-contained-'));
+        try {
+            const src = path.join(base, 'src');
+            const root = path.join(base, 'root');
+            const dst = path.join(root, 'live');
+            fs.mkdirSync(src);
+            fs.mkdirSync(dst, { recursive: true });
+            fs.writeFileSync(path.join(src, 'safe.txt'), 'new-safe');
+            fs.writeFileSync(path.join(src, 'linked.txt'), 'new-linked');
+            const outside = path.join(base, 'outside.txt');
+            fs.writeFileSync(outside, 'outside');
+            fs.linkSync(outside, path.join(dst, 'linked.txt'));
+            assert.throws(() => copyInitDirectory(src, dst, { destinationRoot: root }), /hard-linked/);
+            assert.equal(fs.existsSync(path.join(dst, 'safe.txt')), false);
+            assert.equal(fs.readFileSync(outside, 'utf8'), 'outside');
+        } finally {
+            fs.rmSync(base, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects a linked support directory before copying into it', (t) => {
+        const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-init-junction-'));
+        try {
+            const src = path.join(base, 'src');
+            const root = path.join(base, 'root');
+            const outside = path.join(base, 'outside');
+            fs.mkdirSync(src);
+            fs.mkdirSync(root);
+            fs.mkdirSync(outside);
+            fs.writeFileSync(path.join(src, 'rule.md'), 'new-rule');
+            const dst = path.join(root, 'live');
+            try {
+                fs.symlinkSync(outside, dst, process.platform === 'win32' ? 'junction' : 'dir');
+            } catch (error: unknown) {
+                const code = (error as NodeJS.ErrnoException).code;
+                if (code === 'EPERM' || code === 'EACCES' || code === 'ENOTSUP') {
+                    t.skip(`Link creation is unavailable: ${code}`);
+                    return;
+                }
+                throw error;
+            }
+            assert.throws(() => copyInitDirectory(src, dst, { destinationRoot: root }), /symlink or junction/);
+            assert.equal(fs.existsSync(path.join(outside, 'rule.md')), false);
+        } finally {
+            fs.rmSync(base, { recursive: true, force: true });
+        }
+    });
+});
 
 describe('profile config materialization migration', () => {
     it('preserves legacy remediation policy omission while applying explicit policy to fresh profiles', () => {
@@ -175,6 +228,27 @@ function createStageWorkspace(repoRoot: string): {
 }
 
 describe('init materialization stages', () => {
+    it('rejects a linked optional-rule destination directory', () => {
+        const workspace = createStageWorkspace(repoRoot);
+        try {
+            const outside = path.join(workspace.projectRoot, 'outside-rules');
+            fs.mkdirSync(outside);
+            const liveDocs = path.join(workspace.liveRoot, 'docs');
+            fs.mkdirSync(liveDocs, { recursive: true });
+            fs.rmdirSync(path.join(liveDocs, 'agent-rules'));
+            try {
+                fs.symlinkSync(outside, path.join(liveDocs, 'agent-rules'), 'junction');
+            } catch (error: unknown) {
+                if (['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code || '')) return;
+                throw error;
+            }
+            assert.throws(() => syncOptionalRuleSupportFiles({ bundleRoot: workspace.bundleRoot }), /symlink|junction/);
+            assert.deepEqual(fs.readdirSync(outside), []);
+        } finally {
+            fs.rmSync(workspace.projectRoot, { recursive: true, force: true });
+        }
+    });
+
     const repoRoot = findRepoRoot();
 
     it('collects deterministic source-inventory entries through the filesystem contract', () => {
@@ -320,6 +394,32 @@ describe('init materialization stages', () => {
                 result.configMergeStatuses['workflow-config'],
                 /^existing_values_preserved_and_missing_keys_filled /
             );
+        } finally {
+            fs.rmSync(workspace.projectRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects a hard-linked live config without changing its outside alias', () => {
+        const workspace = createStageWorkspace(repoRoot);
+        try {
+            const liveConfigRoot = path.join(workspace.liveRoot, 'config');
+            fs.mkdirSync(liveConfigRoot, { recursive: true });
+            const outside = path.join(workspace.projectRoot, 'outside-config.json');
+            const original = fs.readFileSync(path.join(workspace.templateRoot, 'config', 'workflow-config.json'));
+            fs.writeFileSync(outside, original);
+            fs.linkSync(outside, path.join(liveConfigRoot, 'workflow-config.json'));
+            assert.throws(() => runInitConfigStage({
+                targetRoot: workspace.projectRoot,
+                templateRoot: workspace.templateRoot,
+                liveRoot: workspace.liveRoot,
+                workflowConfigExistedBeforeRun: true,
+                preserveLegacyWorkflowConfigOmission: false,
+                discovery: getProjectDiscovery(workspace.projectRoot),
+                preservedCompileGateCommand: null,
+                tokenEconomyEnabled: false,
+                dryRun: false
+            }), /hard-linked/);
+            assert.deepEqual(fs.readFileSync(outside), original);
         } finally {
             fs.rmSync(workspace.projectRoot, { recursive: true, force: true });
         }

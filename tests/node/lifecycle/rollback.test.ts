@@ -102,6 +102,184 @@ function injectBundleUpdate(bundleRoot: string, updateMarker: string, nextVersio
 describe('runRollback (snapshot mode)', () => {
     const repoRoot = findRepoRoot();
 
+    it('rejects a linked update report directory before snapshotting or updating', (t) => {
+        const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
+        try {
+            const reportDir = path.join(bundleRoot, 'runtime', 'update-reports');
+            const outsideDir = path.join(projectRoot, 'outside-reports');
+            fs.mkdirSync(outsideDir);
+            try {
+                fs.symlinkSync(outsideDir, reportDir, 'junction');
+            } catch (error: unknown) {
+                t.skip(`Junctions unavailable: ${String(error)}`);
+                return;
+            }
+            const originalVersion = fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8');
+
+            assert.throws(() => runUpdate({ targetRoot: projectRoot, bundleRoot,
+                initAnswersPath: answersPath, skipVerify: true, skipManifestValidation: true }),
+            /symlink|junction/);
+            assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8'), originalVersion);
+            assert.equal(fs.existsSync(path.join(bundleRoot, 'runtime', 'update-rollbacks')), false);
+            assert.deepEqual(fs.readdirSync(outsideDir), []);
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('rejects a hard-linked deployed VERSION before creating a safety snapshot', async () => {
+        const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
+        try {
+            runUpdate({ targetRoot: projectRoot, bundleRoot, initAnswersPath: answersPath,
+                skipVerify: true, skipManifestValidation: true });
+            const snapshotsRoot = path.join(bundleRoot, 'runtime', 'update-rollbacks');
+            const snapshotsBefore = fs.readdirSync(snapshotsRoot).sort();
+            const versionPath = path.join(bundleRoot, 'VERSION');
+            const outside = path.join(projectRoot, 'outside-version.txt');
+            fs.writeFileSync(outside, fs.readFileSync(versionPath));
+            fs.rmSync(versionPath);
+            fs.linkSync(outside, versionPath);
+
+            await assert.rejects(runRollback({ targetRoot: projectRoot, bundleRoot }), /hard-linked/);
+            assert.deepEqual(fs.readdirSync(snapshotsRoot).sort(), snapshotsBefore);
+            assert.equal(fs.readFileSync(outside, 'utf8'), fs.readFileSync(versionPath, 'utf8'));
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('rejects a linked rollback report directory before creating a safety snapshot', async (t) => {
+        const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
+        try {
+            runUpdate({ targetRoot: projectRoot, bundleRoot, initAnswersPath: answersPath,
+                skipVerify: true, skipManifestValidation: true });
+            const reportDir = path.join(bundleRoot, 'runtime', 'update-reports');
+            const outsideDir = path.join(projectRoot, 'outside-reports');
+            fs.rmSync(reportDir, { recursive: true });
+            fs.mkdirSync(outsideDir);
+            try {
+                fs.symlinkSync(outsideDir, reportDir, 'junction');
+            } catch (error: unknown) {
+                t.skip(`Junctions unavailable: ${String(error)}`);
+                return;
+            }
+            const snapshotsRoot = path.join(bundleRoot, 'runtime', 'update-rollbacks');
+            const snapshotsBefore = fs.readdirSync(snapshotsRoot).sort();
+            const originalVersion = fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8');
+
+            await assert.rejects(runRollback({ targetRoot: projectRoot, bundleRoot }), /symlink|junction/);
+            assert.deepEqual(fs.readdirSync(snapshotsRoot).sort(), snapshotsBefore);
+            assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8'), originalVersion);
+            assert.deepEqual(fs.readdirSync(outsideDir), []);
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('rejects a linked version rollback report directory before changing the bundle', async (t) => {
+        const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
+        try {
+            const reportDir = path.join(bundleRoot, 'runtime', 'update-reports');
+            const outsideDir = path.join(projectRoot, 'outside-reports');
+            fs.mkdirSync(outsideDir);
+            try {
+                fs.symlinkSync(outsideDir, reportDir, 'junction');
+            } catch (error: unknown) {
+                t.skip(`Junctions unavailable: ${String(error)}`);
+                return;
+            }
+            const originalVersion = fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8');
+
+            await assert.rejects(runRollbackToVersion({ targetRoot: projectRoot, bundleRoot,
+                targetVersion: '1.0.0', initAnswersPath: answersPath }), /symlink|junction/);
+            assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8'), originalVersion);
+            assert.equal(fs.existsSync(path.join(bundleRoot, 'runtime', 'update-rollbacks')), false);
+            assert.deepEqual(fs.readdirSync(outsideDir), []);
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('restores the safety snapshot when sentinel cleanup rejects a new hard link', async () => {
+        const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
+        try {
+            const olderSource = path.join(projectRoot, 'older-source');
+            copyDirRecursive(bundleRoot, olderSource);
+            fs.writeFileSync(path.join(olderSource, 'VERSION'), '1.0.0\n');
+            const originalVersion = fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8');
+            const sentinelPath = path.join(bundleRoot, 'runtime', '.update-in-progress');
+            const outsideAlias = path.join(projectRoot, 'sentinel-alias.json');
+
+            await assert.rejects(runRollbackToVersion({
+                targetRoot: projectRoot, bundleRoot, targetVersion: '1.0.0',
+                sourcePath: olderSource, trustOverride: true, initAnswersPath: answersPath,
+                installRunner: () => {
+                    fs.linkSync(sentinelPath, outsideAlias);
+                    throw new Error('INJECTED_INSTALL_FAILURE');
+                }
+            }), /safety rollback completed successfully.*INJECTED_INSTALL_FAILURE.*Sentinel cleanup failed/);
+            assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8'), originalVersion);
+            assert.equal(fs.readFileSync(sentinelPath, 'utf8'), fs.readFileSync(outsideAlias, 'utf8'));
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('rejects a hard-linked later rollback source before creating a safety snapshot', async () => {
+        const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
+        try {
+            const olderSource = path.join(projectRoot, 'older-source');
+            copyDirRecursive(bundleRoot, olderSource);
+            fs.writeFileSync(path.join(olderSource, 'VERSION'), '1.0.0\n');
+            const outsideAlias = path.join(projectRoot, 'outside-readme.md');
+            fs.writeFileSync(outsideAlias, 'outside-original');
+            fs.linkSync(outsideAlias, path.join(olderSource, 'README.md'));
+            const originalVersion = fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8');
+
+            await assert.rejects(runRollbackToVersion({
+                targetRoot: projectRoot, bundleRoot, targetVersion: '1.0.0',
+                sourcePath: olderSource, trustOverride: true, initAnswersPath: answersPath
+            }), /hard-linked/);
+            assert.equal(fs.existsSync(path.join(bundleRoot, 'runtime', 'update-rollbacks')), false);
+            assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8'), originalVersion);
+            assert.equal(fs.readFileSync(outsideAlias, 'utf8'), 'outside-original');
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('rejects a dangling live version introduced during rollback and restores the bundle', async (t) => {
+        const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
+        try {
+            const probe = path.join(projectRoot, 'symlink-probe');
+            try {
+                fs.symlinkSync(path.join(projectRoot, 'missing'), probe, 'junction');
+                fs.rmSync(probe);
+            } catch (error: unknown) {
+                t.skip(`Junctions unavailable: ${String(error)}`);
+                return;
+            }
+            const olderSource = path.join(projectRoot, 'older-source');
+            copyDirRecursive(bundleRoot, olderSource);
+            fs.writeFileSync(path.join(olderSource, 'VERSION'), '1.0.0\n');
+            const originalVersion = fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8');
+            const liveVersionPath = path.join(bundleRoot, 'live', 'version.json');
+
+            await assert.rejects(runRollbackToVersion({
+                targetRoot: projectRoot, bundleRoot, targetVersion: '1.0.0',
+                sourcePath: olderSource, trustOverride: true, initAnswersPath: answersPath,
+                installRunner: () => {},
+                materializationRunner: () => {
+                    fs.symlinkSync(path.join(bundleRoot, 'live', 'missing'), liveVersionPath, 'junction');
+                }
+            }), /safety rollback completed successfully.*(?:symlink|junction)/);
+            assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8'), originalVersion);
+            assert.equal(fs.existsSync(liveVersionPath), false);
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
     it('rejects a stale sync backup from an earlier update with the same VERSION', () => {
         const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
         try {

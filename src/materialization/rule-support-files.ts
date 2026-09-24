@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { writeContainedFile } from '../core/contained-filesystem';
 
 export const OPTIONAL_RULE_SUPPORT_FILES = Object.freeze([
     '40-command-reference.md'
@@ -36,8 +37,7 @@ export function syncOptionalRuleSupportFiles(
         }
 
         if (!options.dryRun) {
-            fs.mkdirSync(liveRuleRoot, { recursive: true });
-            fs.writeFileSync(path.join(liveRuleRoot, supportFile), content, 'utf8');
+            writeContainedFile(options.bundleRoot, path.join(liveRuleRoot, supportFile), content);
         }
     }
 }

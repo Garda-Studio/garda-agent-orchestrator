@@ -1,13 +1,21 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import {
+    bindContainedDestination,
+    copyContainedFile,
+    ensureContainedDirectory,
+    removeContainedPath,
+    writeContainedFile
+} from '../../core/contained-filesystem';
 import { pathExists, readTextFile } from '../../core/filesystem';
 import {
     BUNDLE_SYNC_ITEMS,
+    assertCopySourceTree,
     compareVersionStrings,
     copyDirectoryContentMerge,
     copyPathRecursive,
     getUpdateSentinelPath,
-    removePathRecursive,
+    getSyncBackupMetadataPath,
     removeUpdateSentinel,
     readdirRecursiveFiles,
     restoreSyncedItemsFromBackup,
@@ -64,19 +72,22 @@ interface ApplyAvailableUpdateOptions {
 
 function syncDeferredLiveVersionPayload(bundleRoot: string, version: string): void {
     const liveVersionPath = path.join(bundleRoot, 'live', 'version.json');
-    if (!pathExists(liveVersionPath)) {
+    if (bindContainedDestination(bundleRoot, liveVersionPath).missingAt) {
         return;
     }
 
+    let parsed: Record<string, unknown>;
     try {
-        const parsed = toObjectRecord(JSON.parse(readTextFile(liveVersionPath))) || {};
-        parsed.Version = version;
-        parsed.UpdatedAt = new Date().toISOString();
-        fs.writeFileSync(liveVersionPath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
-    } catch (_error) {
+        parsed = toObjectRecord(JSON.parse(readTextFile(liveVersionPath))) || {};
+    } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
         // Keep update success path stable when historical live/version.json is malformed.
         // Verification will still surface the malformed payload if it remains unreadable.
+        return;
     }
+    parsed.Version = version;
+    parsed.UpdatedAt = new Date().toISOString();
+    writeContainedFile(bundleRoot, liveVersionPath, JSON.stringify(parsed, null, 2) + '\n');
 }
 
 function listRelativeFiles(directoryPath: string): string[] {
@@ -260,14 +271,13 @@ function writeSyncRollbackEvidence(
     evidence: Record<string, unknown>
 ): void {
     try {
-        fs.mkdirSync(syncBackupRoot, { recursive: true });
-        fs.writeFileSync(
+        writeContainedFile(
+            path.parse(path.resolve(syncBackupRoot)).root,
             path.join(syncBackupRoot, SYNC_ROLLBACK_EVIDENCE_FILE_NAME),
             JSON.stringify({
                 writtenAt: new Date().toISOString(),
                 ...evidence
-            }, null, 2) + '\n',
-            'utf8'
+            }, null, 2) + '\n'
         );
     } catch (_error) {
         // The sync backup metadata is the primary recovery evidence.
@@ -282,19 +292,19 @@ function removeUpdateSentinelAfterVerifiedRollback(deployedBundleRoot: string): 
     }
 }
 
-function syncDeferredVersionFile(versionSourcePath: string, versionDestPath: string): void {
+function syncDeferredVersionFile(
+    versionSourcePath: string, versionDestPath: string, targetRoot: string
+): void {
+    bindContainedDestination(targetRoot, versionDestPath);
     const previousVersionContent = fs.existsSync(versionDestPath)
         ? fs.readFileSync(versionDestPath)
         : null;
     try {
-        removePathRecursive(versionDestPath);
-        fs.mkdirSync(path.dirname(versionDestPath), { recursive: true });
-        fs.copyFileSync(versionSourcePath, versionDestPath);
+        copyContainedFile(targetRoot, versionSourcePath, versionDestPath);
     } catch (versionSyncError) {
         if (previousVersionContent !== null) {
             try {
-                fs.mkdirSync(path.dirname(versionDestPath), { recursive: true });
-                fs.writeFileSync(versionDestPath, previousVersionContent);
+                writeContainedFile(targetRoot, versionDestPath, previousVersionContent);
             } catch (_restoreErr) {
                 // Best-effort restore; the outer apply catch handles rollback.
             }
@@ -304,7 +314,42 @@ function syncDeferredVersionFile(versionSourcePath: string, versionDestPath: str
 }
 
 function collectExistingSourceSyncItems(sourceRoot: string): string[] {
-    return BUNDLE_SYNC_ITEMS.filter((item) => fs.existsSync(path.join(sourceRoot, item)));
+    return BUNDLE_SYNC_ITEMS.filter((item) => {
+        try {
+            fs.lstatSync(path.join(sourceRoot, item));
+            return true;
+        } catch (error: unknown) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+            throw error;
+        }
+    });
+}
+
+function preflightBundleSyncPlan(
+    targetRoot: string, deployedBundleRoot: string, sourceRoot: string,
+    syncBackupRoot: string, plannedSyncItems: PlannedBundleSyncItem[], rollbackSyncItems: string[]
+): void {
+    bindContainedDestination(targetRoot, syncBackupRoot);
+    bindContainedDestination(targetRoot, getSyncBackupMetadataPath(syncBackupRoot));
+    bindContainedDestination(deployedBundleRoot, getUpdateSentinelPath(deployedBundleRoot));
+    bindContainedDestination(deployedBundleRoot, path.join(deployedBundleRoot, 'live', 'version.json'));
+    const versionSourcePath = path.join(sourceRoot, DEFERRED_VERSION_ITEM);
+    bindContainedDestination(sourceRoot, versionSourcePath);
+    if (fs.existsSync(versionSourcePath)) assertCopySourceTree(versionSourcePath);
+
+    for (const plan of plannedSyncItems) {
+        assertCopySourceTree(plan.sourcePath);
+        bindContainedDestination(targetRoot, plan.destinationPath);
+        if (fs.existsSync(plan.destinationPath)) assertCopySourceTree(plan.destinationPath);
+    }
+    for (const item of rollbackSyncItems) {
+        const destinationPath = path.join(deployedBundleRoot, item);
+        const backupPath = path.join(syncBackupRoot, item);
+        bindContainedDestination(targetRoot, destinationPath);
+        bindContainedDestination(targetRoot, backupPath);
+        if (fs.existsSync(destinationPath)) assertCopySourceTree(destinationPath);
+        if (fs.existsSync(backupPath)) assertCopySourceTree(backupPath);
+    }
 }
 
 function collectRollbackSyncItems(sourceSyncItems: string[], deployedBundleRoot: string): string[] {
@@ -408,25 +453,26 @@ function writeUpdateSentinelPhase(
     );
 }
 
-function syncPlannedBundleItem(plan: PlannedBundleSyncItem, runningScriptPath: string | null): void {
+function syncPlannedBundleItem(
+    plan: PlannedBundleSyncItem, runningScriptPath: string | null, targetRoot: string
+): void {
+    assertCopySourceTree(plan.sourcePath);
     if (plan.sourceIsDirectory) {
         if (plan.isNodeRuntimeDir) {
             if (!fs.existsSync(plan.destinationPath) || !fs.lstatSync(plan.destinationPath).isDirectory()) {
-                removePathRecursive(plan.destinationPath);
-                fs.mkdirSync(plan.destinationPath, { recursive: true });
+                removeContainedPath(targetRoot, plan.destinationPath, true);
+                ensureContainedDirectory(targetRoot, plan.destinationPath);
             }
             const skipPaths = runningScriptPath ? [path.resolve(runningScriptPath)] : [];
             copyDirectoryContentMerge(plan.sourcePath, plan.destinationPath, skipPaths);
         } else {
-            removePathRecursive(plan.destinationPath);
-            copyPathRecursive(plan.sourcePath, plan.destinationPath);
+            removeContainedPath(targetRoot, plan.destinationPath, true);
+            copyPathRecursive(plan.sourcePath, plan.destinationPath, targetRoot);
         }
         return;
     }
 
-    removePathRecursive(plan.destinationPath);
-    fs.mkdirSync(path.dirname(plan.destinationPath), { recursive: true });
-    fs.copyFileSync(plan.sourcePath, plan.destinationPath);
+    copyContainedFile(targetRoot, plan.sourcePath, plan.destinationPath);
 }
 
 function detectSyncSurfaceDrift(sourceRoot: string, deployedBundleRoot: string): string[] {
@@ -571,6 +617,10 @@ async function applyAvailableUpdateUnjournaled(options: ApplyAvailableUpdateOpti
         const syncPreexistingMap = Object.fromEntries(
             rollbackSyncItemNames.map((item) => [item, fs.existsSync(path.join(deployedBundleRoot, item))])
         ) as Record<string, boolean>;
+        if (!dryRun) {
+            preflightBundleSyncPlan(normalizedTarget, deployedBundleRoot, source.sourceRoot,
+                syncBackupRoot, plannedSyncItems, rollbackSyncItemNames);
+        }
         let syncPreparationCompleted = false;
         let destructiveSyncStarted = false;
 
@@ -587,8 +637,8 @@ async function applyAvailableUpdateUnjournaled(options: ApplyAvailableUpdateOpti
                     }
                     const destinationPath = path.join(deployedBundleRoot, item);
                     const backupPath = path.join(syncBackupRoot, item);
-                    fs.mkdirSync(path.dirname(backupPath), { recursive: true });
-                    copyPathRecursive(destinationPath, backupPath);
+                    ensureContainedDirectory(normalizedTarget, path.dirname(backupPath));
+                    copyPathRecursive(destinationPath, backupPath, normalizedTarget);
                     result.syncItemsBackedUp++;
                     result.syncBackupRoot = syncBackupRoot;
                 }
@@ -630,7 +680,7 @@ async function applyAvailableUpdateUnjournaled(options: ApplyAvailableUpdateOpti
                 for (let index = 0; index < plannedSyncItems.length; index++) {
                     const plan = plannedSyncItems[index];
                     testHooks?.beforeSyncItemFaultInjector?.(plan.item, index);
-                    syncPlannedBundleItem(plan, runningScriptPath);
+                    syncPlannedBundleItem(plan, runningScriptPath, normalizedTarget);
                     result.syncItemsUpdated++;
                     result.syncedItems.push(plan.item);
                     testHooks?.syncItemFaultInjector?.(plan.item, index);
@@ -678,7 +728,7 @@ async function applyAvailableUpdateUnjournaled(options: ApplyAvailableUpdateOpti
                 if (fs.existsSync(versionSourcePath)) {
                     const versionDestPath = path.join(deployedBundleRoot, DEFERRED_VERSION_ITEM);
                     destructiveSyncStarted = true;
-                    syncDeferredVersionFile(versionSourcePath, versionDestPath);
+                    syncDeferredVersionFile(versionSourcePath, versionDestPath, normalizedTarget);
                     result.syncItemsUpdated++;
                     result.syncedItems.push(DEFERRED_VERSION_ITEM);
                     syncDeferredLiveVersionPayload(deployedBundleRoot, readTextFile(versionDestPath).trim());

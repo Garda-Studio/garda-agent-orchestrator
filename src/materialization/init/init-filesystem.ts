@@ -1,7 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
-import { ensureDirectory, pathExists } from '../../core/filesystem';
+import { pathExists } from '../../core/filesystem';
+import { bindContainedDestination, copyContainedFile, ensureContainedDirectory } from '../../core/contained-filesystem';
 import {
     ALL_AGENT_ENTRYPOINT_FILES
 } from '../../core/constants';
@@ -15,6 +16,7 @@ import type { SourceInventory } from './init-contracts';
 
 export interface CopyDirectoryOptions {
     shouldCopyFile?: (srcPath: string, destPath: string) => boolean;
+    destinationRoot?: string;
 }
 
 export function copyDirectoryRecursive(
@@ -22,20 +24,42 @@ export function copyDirectoryRecursive(
     destDir: string,
     options?: CopyDirectoryOptions
 ): void {
-    ensureDirectory(destDir);
-    const entries = fs.readdirSync(srcDir, { withFileTypes: true });
-    for (const entry of entries) {
-        const srcPath = path.join(srcDir, entry.name);
-        const destPath = path.join(destDir, entry.name);
-        if (entry.isDirectory()) {
-            copyDirectoryRecursive(srcPath, destPath, options);
-        } else {
-            if (options?.shouldCopyFile && !options.shouldCopyFile(srcPath, destPath)) {
+    const destinationRoot = options?.destinationRoot ?? path.parse(path.resolve(destDir)).root;
+    const sourceRoot = path.parse(path.resolve(srcDir)).root;
+    const directories: string[] = [];
+    const files: Array<{ source: string; destination: string }> = [];
+    const stack = [{ source: srcDir, destination: destDir }];
+    while (stack.length > 0) {
+        const current = stack.pop()!;
+        bindContainedDestination(sourceRoot, current.source);
+        bindContainedDestination(destinationRoot, current.destination);
+        const sourceStat = fs.lstatSync(current.source);
+        if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) {
+            throw new Error(`Copy source is not an ordinary directory: ${current.source}`);
+        }
+        directories.push(current.destination);
+        for (const entry of fs.readdirSync(current.source, { withFileTypes: true })) {
+            const source = path.join(current.source, entry.name);
+            const destination = path.join(current.destination, entry.name);
+            if (entry.isDirectory()) {
+                stack.push({ source, destination });
                 continue;
             }
-            fs.copyFileSync(srcPath, destPath);
+            bindContainedDestination(sourceRoot, source);
+            bindContainedDestination(destinationRoot, destination);
+            const stat = fs.lstatSync(source);
+            if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
+                throw new Error(`Copy source is linked or not an ordinary file: ${source}`);
+            }
+            if (!options?.shouldCopyFile || options.shouldCopyFile(source, destination)) {
+                files.push({ source, destination });
+            }
         }
     }
+    for (const directory of directories.sort((left, right) => left.length - right.length)) {
+        ensureContainedDirectory(destinationRoot, directory);
+    }
+    for (const file of files) copyContainedFile(destinationRoot, file.source, file.destination);
 }
 
 function collectMarkdownFiles(rootPath: string, targetRoot: string): string[] {

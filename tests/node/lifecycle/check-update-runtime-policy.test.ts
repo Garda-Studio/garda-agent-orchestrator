@@ -1145,6 +1145,83 @@ describe('runCheckUpdate', () => {
         }
     });
 
+    it('rejects a hard-linked live version payload before creating sync backups', async () => {
+        const sourceRoot = createMinimalSourcePathFixture(repoRoot);
+        const { projectRoot, bundleRoot } = setupCheckUpdateWorkspace(repoRoot, '0.0.1');
+        try {
+            const outside = path.join(projectRoot, 'outside-version.json');
+            const content = JSON.stringify({ Version: '0.0.1' });
+            fs.writeFileSync(outside, content);
+            fs.linkSync(outside, path.join(bundleRoot, 'live', 'version.json'));
+
+            await assert.rejects(runCheckUpdate({
+                targetRoot: projectRoot,
+                bundleRoot,
+                sourcePath: sourceRoot,
+                noPrompt: true,
+                apply: true,
+                trustOverride: true,
+                updateRunner: () => {}
+            }), /hard-linked/);
+            assert.equal(fs.readFileSync(outside, 'utf8'), content);
+            assert.equal(fs.existsSync(path.join(bundleRoot, 'runtime', 'bundle-backups')), false);
+        } finally {
+            removePathRecursive(sourceRoot);
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('fails when lifecycle introduces a hard-linked live version payload after preflight', async () => {
+        const sourceRoot = createMinimalSourcePathFixture(repoRoot);
+        const { projectRoot, bundleRoot } = setupCheckUpdateWorkspace(repoRoot, '0.0.1');
+        try {
+            const outside = path.join(projectRoot, 'outside-version.json');
+            const content = JSON.stringify({ Version: 'outside' });
+            fs.writeFileSync(outside, content);
+
+            await assert.rejects(runCheckUpdate({
+                targetRoot: projectRoot,
+                bundleRoot,
+                sourcePath: sourceRoot,
+                noPrompt: true,
+                apply: true,
+                trustOverride: true,
+                updateRunner: () => {
+                    fs.linkSync(outside, path.join(bundleRoot, 'live', 'version.json'));
+                }
+            }), /hard-linked/);
+            assert.equal(fs.readFileSync(outside, 'utf8'), content);
+        } finally {
+            removePathRecursive(sourceRoot);
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('rejects a hard-linked later source item before backup or earlier sync', async () => {
+        const sourceRoot = createMinimalSourcePathFixture(repoRoot);
+        const { projectRoot, bundleRoot } = setupCheckUpdateWorkspace(repoRoot, '0.0.1');
+        try {
+            const outside = path.join(projectRoot, 'outside-readme.md');
+            fs.writeFileSync(outside, '# Outside\n');
+            fs.linkSync(outside, path.join(sourceRoot, 'README.md'));
+
+            await assert.rejects(runCheckUpdate({
+                targetRoot: projectRoot,
+                bundleRoot,
+                sourcePath: sourceRoot,
+                noPrompt: true,
+                apply: true,
+                trustOverride: true,
+                updateRunner: () => {}
+            }), /hard-linked/);
+            assert.equal(fs.existsSync(path.join(bundleRoot, 'package.json')), false);
+            assert.equal(fs.existsSync(path.join(bundleRoot, 'runtime', 'bundle-backups')), false);
+        } finally {
+            removePathRecursive(sourceRoot);
+            removePathRecursive(projectRoot);
+        }
+    });
+
     it('does not update VERSION when lifecycle fails', async () => {
         const { projectRoot, bundleRoot } = setupCheckUpdateWorkspace(repoRoot, '0.0.1');
         try {

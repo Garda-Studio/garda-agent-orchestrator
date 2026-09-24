@@ -16,6 +16,7 @@ import {
     restoreSyncedItemsFromBackup,
     syncWorkingTreeBundleItems,
     validateTargetRoot,
+    writeUninstallSentinel,
     writeRollbackRecords,
     writeSyncBackupMetadata
 } from '../../../src/lifecycle/common';
@@ -46,6 +47,21 @@ function canCreateSymlinks(): boolean {
 const symlinkSupported = canCreateSymlinks();
 
 describe('lifecycle control file links', () => {
+    it('rejects a hard-linked uninstall sentinel without changing its outside alias', () => {
+        const root = mkTmpDir();
+        try {
+            const outside = path.join(root, 'outside');
+            const target = path.join(root, 'target');
+            fs.mkdirSync(target);
+            fs.writeFileSync(outside, 'outside');
+            fs.linkSync(outside, path.join(target, '.uninstall-in-progress'));
+            assert.throws(() => writeUninstallSentinel(target, { operation: 'uninstall' }), /hard-linked/);
+            assert.equal(fs.readFileSync(outside, 'utf8'), 'outside');
+        } finally {
+            removePathRecursive(root);
+        }
+    });
+
     it('rejects linked sync backup metadata directory before reading JSON', { skip: !symlinkSupported && 'Symlinks/junctions not supported' }, () => {
         const root = mkTmpDir();
         try {
@@ -254,6 +270,26 @@ describe('copyPathRecursive and removePathRecursive', () => {
         }
     });
 
+    it('rejects a nested hard-linked source before changing an existing destination', () => {
+        const dir = mkTmpDir();
+        try {
+            const src = path.join(dir, 'src');
+            const dst = path.join(dir, 'dst');
+            fs.mkdirSync(src);
+            fs.mkdirSync(dst);
+            fs.writeFileSync(path.join(src, 'first.txt'), 'new');
+            fs.writeFileSync(path.join(dst, 'first.txt'), 'old');
+            const outside = path.join(dir, 'outside.txt');
+            fs.writeFileSync(outside, 'outside');
+            fs.linkSync(outside, path.join(src, 'linked.txt'));
+            assert.throws(() => copyPathRecursive(src, dst), /hard-linked/);
+            assert.equal(fs.readFileSync(path.join(dst, 'first.txt'), 'utf8'), 'old');
+            assert.equal(fs.readFileSync(outside, 'utf8'), 'outside');
+        } finally {
+            removePathRecursive(dir);
+        }
+    });
+
     it('removePathRecursive removes directories', () => {
         const dir = mkTmpDir();
         const target = path.join(dir, 'target');
@@ -266,6 +302,61 @@ describe('copyPathRecursive and removePathRecursive', () => {
 });
 
 describe('createRollbackSnapshot and restoreRollbackSnapshot', () => {
+    it('rejects a hard-linked integrity destination before writing rollback records', () => {
+        const dir = mkTmpDir();
+        try {
+            const snapshotRoot = path.join(dir, 'snapshot');
+            fs.mkdirSync(snapshotRoot);
+            const outside = path.join(dir, 'outside.json');
+            fs.writeFileSync(outside, 'outside');
+            fs.linkSync(outside, path.join(snapshotRoot, 'rollback-integrity.json'));
+            assert.throws(() => writeRollbackRecords(snapshotRoot, []), /hard-linked/);
+            assert.equal(fs.existsSync(getRollbackRecordsPath(snapshotRoot)), false);
+            assert.equal(fs.readFileSync(outside, 'utf8'), 'outside');
+        } finally {
+            removePathRecursive(dir);
+        }
+    });
+
+    it('rejects an external snapshot destination before creating backup bytes', () => {
+        const base = mkTmpDir();
+        try {
+            const targetRoot = path.join(base, 'target');
+            const outsideSnapshot = path.join(base, 'outside-snapshot');
+            fs.mkdirSync(targetRoot);
+            fs.writeFileSync(path.join(targetRoot, 'VERSION'), '1.0.0');
+            assert.throws(() => createRollbackSnapshot(targetRoot, outsideSnapshot, ['VERSION']),
+                /outside permitted root/);
+            assert.equal(fs.existsSync(outsideSnapshot), false);
+        } finally {
+            removePathRecursive(base);
+        }
+    });
+
+    it('rejects a hard-linked restore target before any record is restored', () => {
+        const base = mkTmpDir();
+        try {
+            const targetRoot = path.join(base, 'target');
+            const snapshotRoot = path.join(base, 'snapshot');
+            fs.mkdirSync(targetRoot);
+            fs.mkdirSync(snapshotRoot);
+            fs.writeFileSync(path.join(targetRoot, 'safe.txt'), 'original');
+            fs.writeFileSync(path.join(snapshotRoot, 'safe.txt'), 'restored');
+            const outside = path.join(base, 'outside.txt');
+            fs.writeFileSync(outside, 'outside');
+            fs.linkSync(outside, path.join(targetRoot, 'linked.txt'));
+            fs.writeFileSync(path.join(snapshotRoot, 'linked.txt'), 'restored');
+            assert.throws(() => restoreRollbackSnapshot(targetRoot, snapshotRoot, [
+                { relativePath: 'safe.txt', existed: true, pathType: 'file' },
+                { relativePath: 'linked.txt', existed: true, pathType: 'file' }
+            ]), /hard-linked/);
+            assert.equal(fs.readFileSync(path.join(targetRoot, 'safe.txt'), 'utf8'), 'original');
+            assert.equal(fs.readFileSync(outside, 'utf8'), 'outside');
+        } finally {
+            removePathRecursive(base);
+        }
+    });
+
     it('creates snapshot and restores it', () => {
         const dir = mkTmpDir();
         try {
@@ -329,6 +420,26 @@ describe('createRollbackSnapshot and restoreRollbackSnapshot', () => {
             ]);
             fs.writeFileSync(path.join(snapshotRoot, 'file.txt'), 'altered');
             assert.throws(() => readRollbackRecords(snapshotRoot), /Rollback snapshot integrity mismatch/);
+        } finally {
+            removePathRecursive(dir);
+        }
+    });
+
+    it('checks every required snapshot entry before changing any restore target', () => {
+        const dir = mkTmpDir();
+        try {
+            const snapshotRoot = path.join(dir, '_snapshot');
+            fs.mkdirSync(snapshotRoot);
+            fs.writeFileSync(path.join(snapshotRoot, 'first.txt'), 'snapshot-first');
+            fs.writeFileSync(path.join(dir, 'first.txt'), 'current-first');
+            const records = [
+                { relativePath: 'first.txt', existed: true, pathType: 'file' },
+                { relativePath: 'missing.txt', existed: true, pathType: 'file' }
+            ];
+
+            assert.throws(() => restoreRollbackSnapshot(dir, snapshotRoot, records),
+                /Rollback snapshot entry missing/);
+            assert.equal(fs.readFileSync(path.join(dir, 'first.txt'), 'utf8'), 'current-first');
         } finally {
             removePathRecursive(dir);
         }
@@ -497,6 +608,62 @@ describe('createRollbackSnapshot and restoreRollbackSnapshot', () => {
 });
 
 describe('copyDirectoryContentMerge', () => {
+    it('rejects a missing source root before pruning destination files', () => {
+        const dir = mkTmpDir();
+        try {
+            const dst = path.join(dir, 'dst');
+            fs.mkdirSync(dst);
+            fs.writeFileSync(path.join(dst, 'keep.txt'), 'original');
+
+            assert.throws(() => copyDirectoryContentMerge(path.join(dir, 'missing'), dst), /ENOENT/);
+            assert.equal(fs.readFileSync(path.join(dst, 'keep.txt'), 'utf8'), 'original');
+        } finally {
+            removePathRecursive(dir);
+        }
+    });
+
+    it('rejects a dangling junction source root before pruning destination files', (t) => {
+        const dir = mkTmpDir();
+        try {
+            const src = path.join(dir, 'src');
+            const dst = path.join(dir, 'dst');
+            fs.mkdirSync(dst);
+            fs.writeFileSync(path.join(dst, 'keep.txt'), 'original');
+            try {
+                fs.symlinkSync(path.join(dir, 'missing'), src, 'junction');
+            } catch (error: unknown) {
+                t.skip(`Junctions unavailable: ${String(error)}`);
+                return;
+            }
+
+            assert.throws(() => copyDirectoryContentMerge(src, dst), /symlink|junction/);
+            assert.equal(fs.readFileSync(path.join(dst, 'keep.txt'), 'utf8'), 'original');
+        } finally {
+            removePathRecursive(dir);
+        }
+    });
+
+    it('rejects a hard-linked destination before any merge write', () => {
+        const dir = mkTmpDir();
+        try {
+            const src = path.join(dir, 'src');
+            const dst = path.join(dir, 'dst');
+            fs.mkdirSync(src);
+            fs.mkdirSync(dst);
+            fs.writeFileSync(path.join(src, 'safe.txt'), 'new-safe');
+            fs.writeFileSync(path.join(dst, 'safe.txt'), 'old-safe');
+            fs.writeFileSync(path.join(src, 'linked.txt'), 'new-linked');
+            const outside = path.join(dir, 'outside.txt');
+            fs.writeFileSync(outside, 'outside');
+            fs.linkSync(outside, path.join(dst, 'linked.txt'));
+            assert.throws(() => copyDirectoryContentMerge(src, dst, []), /hard-linked/);
+            assert.equal(fs.readFileSync(path.join(dst, 'safe.txt'), 'utf8'), 'old-safe');
+            assert.equal(fs.readFileSync(outside, 'utf8'), 'outside');
+        } finally {
+            removePathRecursive(dir);
+        }
+    });
+
     it('merges source into destination and removes orphan files', () => {
         const dir = mkTmpDir();
         try {
@@ -589,6 +756,51 @@ describe('copyDirectoryContentMerge', () => {
 });
 
 describe('syncWorkingTreeBundleItems', () => {
+    it('rejects a dangling later source before replacing an earlier item', (t) => {
+        const dir = mkTmpDir();
+        try {
+            const src = path.join(dir, 'src');
+            const dst = path.join(dir, 'dst');
+            fs.mkdirSync(src);
+            fs.mkdirSync(dst);
+            fs.writeFileSync(path.join(src, 'a.txt'), 'new-a');
+            fs.writeFileSync(path.join(dst, 'a.txt'), 'old-a');
+            try {
+                fs.symlinkSync(path.join(src, 'missing'), path.join(src, 'b.txt'), 'junction');
+            } catch (error: unknown) {
+                t.skip(`Junctions unavailable: ${String(error)}`);
+                return;
+            }
+
+            assert.throws(() => syncWorkingTreeBundleItems(src, dst, ['a.txt', 'b.txt']),
+                /symlink|junction/);
+            assert.equal(fs.readFileSync(path.join(dst, 'a.txt'), 'utf8'), 'old-a');
+        } finally {
+            removePathRecursive(dir);
+        }
+    });
+
+    it('rejects a hard-linked destination before replacing earlier items', () => {
+        const dir = mkTmpDir();
+        try {
+            const src = path.join(dir, 'src');
+            const dst = path.join(dir, 'dst');
+            fs.mkdirSync(src);
+            fs.mkdirSync(dst);
+            fs.writeFileSync(path.join(src, 'a.txt'), 'new-a');
+            fs.writeFileSync(path.join(src, 'b.txt'), 'new-b');
+            fs.writeFileSync(path.join(dst, 'a.txt'), 'old-a');
+            const outside = path.join(dir, 'outside.txt');
+            fs.writeFileSync(outside, 'outside');
+            fs.linkSync(outside, path.join(dst, 'b.txt'));
+            assert.throws(() => syncWorkingTreeBundleItems(src, dst, ['a.txt', 'b.txt']), /hard-linked/);
+            assert.equal(fs.readFileSync(path.join(dst, 'a.txt'), 'utf8'), 'old-a');
+            assert.equal(fs.readFileSync(outside, 'utf8'), 'outside');
+        } finally {
+            removePathRecursive(dir);
+        }
+    });
+
     it('copies items from source to target', () => {
         const dir = mkTmpDir();
         try {
@@ -612,6 +824,44 @@ describe('syncWorkingTreeBundleItems', () => {
 });
 
 describe('restoreSyncedItemsFromBackup', () => {
+    it('rejects a missing backup before removing an earlier destination', () => {
+        const dir = mkTmpDir();
+        try {
+            const bundleRoot = path.join(dir, 'bundle');
+            const backupRoot = path.join(dir, 'backup');
+            fs.mkdirSync(bundleRoot);
+            fs.mkdirSync(backupRoot);
+            fs.writeFileSync(path.join(bundleRoot, 'a.txt'), 'keep');
+            assert.throws(() => restoreSyncedItemsFromBackup(bundleRoot, backupRoot,
+                { 'a.txt': false, 'b.txt': true }, null), /Missing backup entry/);
+            assert.equal(fs.readFileSync(path.join(bundleRoot, 'a.txt'), 'utf8'), 'keep');
+        } finally {
+            removePathRecursive(dir);
+        }
+    });
+
+    it('rejects a hard-linked restore target before replacing earlier items', () => {
+        const dir = mkTmpDir();
+        try {
+            const bundleRoot = path.join(dir, 'bundle');
+            const backupRoot = path.join(dir, 'backup');
+            fs.mkdirSync(bundleRoot);
+            fs.mkdirSync(backupRoot);
+            fs.writeFileSync(path.join(bundleRoot, 'a.txt'), 'old-a');
+            fs.writeFileSync(path.join(backupRoot, 'a.txt'), 'new-a');
+            fs.writeFileSync(path.join(backupRoot, 'b.txt'), 'new-b');
+            const outside = path.join(dir, 'outside.txt');
+            fs.writeFileSync(outside, 'outside');
+            fs.linkSync(outside, path.join(bundleRoot, 'b.txt'));
+            assert.throws(() => restoreSyncedItemsFromBackup(bundleRoot, backupRoot,
+                { 'a.txt': true, 'b.txt': true }, null), /hard-linked/);
+            assert.equal(fs.readFileSync(path.join(bundleRoot, 'a.txt'), 'utf8'), 'old-a');
+            assert.equal(fs.readFileSync(outside, 'utf8'), 'outside');
+        } finally {
+            removePathRecursive(dir);
+        }
+    });
+
     it('writes and reads sync backup metadata', () => {
         const dir = mkTmpDir();
         try {

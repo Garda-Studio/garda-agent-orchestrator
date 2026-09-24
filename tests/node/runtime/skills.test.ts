@@ -26,6 +26,8 @@ import {
     textMatchesFuzzyVariant,
     validateSkillPacks,
     writeSkillsIndex,
+    writeSkillsHeadlines,
+    writeInstalledSkillPacks,
     SignalMatches,
     SkillSuggestion,
     SKILL_TELEMETRY_EVENT_TYPES,
@@ -39,6 +41,7 @@ import {
     emitSkillReferenceLoadedEvent,
     emitSkillReferenceLoadedEventAsync
 } from '../../../src/runtime/skills';
+import { getBuiltinSkillPackDefinition } from '../../../src/runtime/skill-manifest';
 import {
     buildSkillsHeadlines,
     computeCurrentSkillsHeadlinesSourceState,
@@ -207,6 +210,101 @@ test('syncReviewCapabilities ignores bare matching directories without a skill e
         const persistedCapabilities = JSON.parse(fs.readFileSync(getReviewCapabilitiesConfigPath(bundleRoot), 'utf8'));
         assert.equal(persistedCapabilities.performance, false);
         assert.equal(persistedCapabilities.test, true);
+    } finally {
+        fs.rmSync(bundleRoot, { recursive: true, force: true });
+    }
+});
+
+test('syncReviewCapabilities rejects a linked live config directory', () => {
+    const bundleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-skills-'));
+    try {
+        const outside = path.join(bundleRoot, 'outside');
+        fs.mkdirSync(outside);
+        fs.mkdirSync(path.join(bundleRoot, 'live'));
+        try {
+            fs.symlinkSync(outside, path.join(bundleRoot, 'live', 'config'), 'junction');
+        } catch (error: unknown) {
+            if (['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code || '')) return;
+            throw error;
+        }
+        assert.throws(() => syncReviewCapabilities(bundleRoot), /symlink|junction/);
+        assert.deepEqual(fs.readdirSync(outside), []);
+    } finally {
+        fs.rmSync(bundleRoot, { recursive: true, force: true });
+    }
+});
+
+test('skill indexes reject a linked live config directory', () => {
+    const bundleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-skills-'));
+    try {
+        const outside = path.join(bundleRoot, 'outside');
+        fs.mkdirSync(outside);
+        fs.mkdirSync(path.join(bundleRoot, 'live'));
+        try {
+            fs.symlinkSync(outside, path.join(bundleRoot, 'live', 'config'), 'junction');
+        } catch (error: unknown) {
+            if (['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code || '')) return;
+            throw error;
+        }
+        assert.throws(() => writeSkillsIndex(bundleRoot), /symlink|junction/);
+        assert.throws(() => writeSkillsHeadlines(bundleRoot), /symlink|junction/);
+        assert.deepEqual(fs.readdirSync(outside), []);
+    } finally {
+        fs.rmSync(bundleRoot, { recursive: true, force: true });
+    }
+});
+
+test('skill-pack add and remove reject a linked live skills directory', () => {
+    const repoRoot = findRepoRoot();
+    const bundleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-skills-'));
+    try {
+        fs.cpSync(path.join(repoRoot, 'template', 'skill-packs'),
+            path.join(bundleRoot, 'template', 'skill-packs'), { recursive: true });
+        fs.mkdirSync(path.join(bundleRoot, 'live', 'config'), { recursive: true });
+        const outside = path.join(bundleRoot, 'outside');
+        fs.mkdirSync(outside);
+        try {
+            fs.symlinkSync(outside, path.join(bundleRoot, 'live', 'skills'), 'junction');
+        } catch (error: unknown) {
+            if (['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code || '')) return;
+            throw error;
+        }
+
+        assert.throws(() => addSkillPack(bundleRoot, 'quality-architecture'), /symlink|junction/);
+        assert.deepEqual(fs.readdirSync(outside), []);
+
+        writeInstalledSkillPacks(bundleRoot, ['quality-architecture']);
+        const pack = getBuiltinSkillPackDefinition(bundleRoot, 'quality-architecture');
+        assert.ok(pack);
+        const outsideSkill = path.join(outside, pack.skillDirectories[0]);
+        fs.mkdirSync(outsideSkill);
+        fs.writeFileSync(path.join(outsideSkill, 'keep.txt'), 'outside');
+        assert.throws(() => removeSkillPack(bundleRoot, 'quality-architecture'), /symlink|junction/);
+        assert.equal(fs.readFileSync(path.join(outsideSkill, 'keep.txt'), 'utf8'), 'outside');
+    } finally {
+        fs.rmSync(bundleRoot, { recursive: true, force: true });
+    }
+});
+
+test('skill-pack add rejects a hard-linked template asset before copying', () => {
+    const repoRoot = findRepoRoot();
+    const bundleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-skills-'));
+    try {
+        fs.cpSync(path.join(repoRoot, 'template', 'skill-packs'),
+            path.join(bundleRoot, 'template', 'skill-packs'), { recursive: true });
+        fs.mkdirSync(path.join(bundleRoot, 'live', 'skills'), { recursive: true });
+        const pack = getBuiltinSkillPackDefinition(bundleRoot, 'quality-architecture');
+        assert.ok(pack);
+        const sourceSkill = path.join(bundleRoot, 'template', 'skill-packs',
+            'quality-architecture', 'skills', pack.skillDirectories[0], 'SKILL.md');
+        const outside = path.join(bundleRoot, 'outside.md');
+        fs.writeFileSync(outside, 'outside');
+        fs.unlinkSync(sourceSkill);
+        fs.linkSync(outside, sourceSkill);
+
+        assert.throws(() => addSkillPack(bundleRoot, 'quality-architecture'), /hard-linked/);
+        assert.deepEqual(fs.readdirSync(path.join(bundleRoot, 'live', 'skills')), []);
+        assert.equal(fs.readFileSync(outside, 'utf8'), 'outside');
     } finally {
         fs.rmSync(bundleRoot, { recursive: true, force: true });
     }

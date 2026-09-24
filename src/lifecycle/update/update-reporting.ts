@@ -1,5 +1,4 @@
-import * as fs from 'node:fs';
-import * as path from 'node:path';
+import { writeContainedFile } from '../../core/contained-filesystem';
 import { withLifecycleRuntimeMutationGenerationForPath } from '../runtime-mutation-generation';
 import type { UpdatePipelineStageResult } from './update-execution';
 import type { ResolvedUpdateSources } from './update-source';
@@ -147,9 +146,8 @@ export function writeUpdateReport(updateReportPath: string, data: UpdateReportDa
         updateReportPath,
         'lifecycle-update-report-write',
         () => {
-            fs.mkdirSync(path.dirname(updateReportPath), { recursive: true });
             const reportLines = buildUpdateReportLines(data);
-            fs.writeFileSync(updateReportPath, reportLines.join('\r\n'), 'utf8');
+            writeContainedFile(data.normalizedTarget, updateReportPath, reportLines.join('\r\n'));
         }
     );
 }

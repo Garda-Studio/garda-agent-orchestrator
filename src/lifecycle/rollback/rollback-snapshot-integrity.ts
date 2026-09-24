@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { writeContainedFile } from '../../core/contained-filesystem';
 import { createHash } from 'node:crypto';
 import { resolveBundleName } from '../../core/constants';
 import { ensureRelativeSafe, ensureWithinRoot } from '../generic-utils';
@@ -7,6 +8,10 @@ import type { RollbackRecord } from '../lifecycle-common';
 
 const INTEGRITY_FILE = 'rollback-integrity.json';
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
+
+export function getRollbackSnapshotIntegrityPath(snapshotRoot: string): string {
+    return path.join(snapshotRoot, INTEGRITY_FILE);
+}
 
 interface EntryDigest {
     relativePath: string;
@@ -99,13 +104,14 @@ function buildIntegrity(snapshotRoot: string, records: readonly RollbackRecord[]
 
 export function writeRollbackSnapshotIntegrity(snapshotRoot: string, records: readonly RollbackRecord[], recordsBytes: Buffer): void {
     const integrity = buildIntegrity(snapshotRoot, records, recordsBytes);
-    const integrityPath = path.join(snapshotRoot, INTEGRITY_FILE);
+    const integrityPath = getRollbackSnapshotIntegrityPath(snapshotRoot);
     assertNoLinkedPathComponents(snapshotRoot, integrityPath);
-    fs.writeFileSync(integrityPath, JSON.stringify(integrity, null, 2), 'utf8');
+    writeContainedFile(path.parse(path.resolve(snapshotRoot)).root,
+        integrityPath, JSON.stringify(integrity, null, 2));
 }
 
 export function verifyRollbackSnapshotIntegrity(snapshotRoot: string, records: readonly RollbackRecord[], recordsBytes: Buffer): SnapshotIntegrity {
-    const integrityPath = path.join(snapshotRoot, INTEGRITY_FILE);
+    const integrityPath = getRollbackSnapshotIntegrityPath(snapshotRoot);
     assertNoLinkedPathComponents(snapshotRoot, integrityPath);
     if (!fs.existsSync(integrityPath) || fs.lstatSync(integrityPath).isSymbolicLink()) {
         throw new Error(`Rollback snapshot integrity metadata is missing or unsafe: ${integrityPath}`);

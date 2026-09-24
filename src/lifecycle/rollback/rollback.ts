@@ -1,5 +1,11 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import {
+    bindContainedDestination,
+    ensureContainedDirectory,
+    removeContainedPath,
+    writeContainedFile
+} from '../../core/contained-filesystem';
 import { resolveBundleName } from '../../core/constants';
 import { pathExists, readTextFile } from '../../core/filesystem';
 import { validateInitAnswers } from '../../schemas/init-answers';
@@ -7,14 +13,16 @@ import { runInstall } from '../../materialization/install';
 import { runInit } from '../../materialization/init';
 import {
     BUNDLE_SYNC_ITEMS,
+    assertCopySourceTree,
     compareVersionStrings,
     copyPathRecursive,
     createRollbackSnapshot,
     ensureWithinRoot,
     getRollbackRecordsPath,
+    getSyncBackupMetadataPath,
     getTimestamp,
+    getUpdateSentinelPath,
     readRollbackRecords,
-    removePathRecursive,
     removeUpdateSentinel,
     restoreRollbackSnapshot,
     validateTargetRoot,
@@ -83,15 +91,46 @@ function readVersionOrFallback(versionPath: string, fallbackValue: string = 'unk
 
 function syncRestoredLiveVersion(bundleRoot: string, version: string): void {
     const liveVersionPath = path.join(bundleRoot, 'live', 'version.json');
-    if (!pathExists(liveVersionPath)) return;
-    assertNoLinkedPathComponents(bundleRoot, liveVersionPath);
+    if (bindContainedDestination(bundleRoot, liveVersionPath).missingAt) return;
     const parsed = JSON.parse(readTextFile(liveVersionPath)) as Record<string, unknown>;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
         throw new Error(`Restored live/version.json is invalid: ${liveVersionPath}`);
     }
     parsed.Version = version;
     parsed.UpdatedAt = new Date().toISOString();
-    fs.writeFileSync(liveVersionPath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
+    writeContainedFile(bundleRoot, liveVersionPath, JSON.stringify(parsed, null, 2) + '\n');
+}
+
+function preflightVersionRollbackPlan(
+    targetRoot: string, deployedBundleRoot: string, sourceRoot: string, bundleSyncBackupPath: string
+): string[] {
+    bindContainedDestination(targetRoot, bundleSyncBackupPath);
+    bindContainedDestination(targetRoot, getSyncBackupMetadataPath(bundleSyncBackupPath));
+    bindContainedDestination(deployedBundleRoot, getUpdateSentinelPath(deployedBundleRoot));
+    bindContainedDestination(deployedBundleRoot, path.join(deployedBundleRoot, 'live', 'version.json'));
+
+    const versionSourcePath = path.join(sourceRoot, 'VERSION');
+    bindContainedDestination(sourceRoot, versionSourcePath);
+    assertCopySourceTree(versionSourcePath);
+    const versionDestinationPath = path.join(deployedBundleRoot, 'VERSION');
+    const versionDestination = bindContainedDestination(targetRoot, versionDestinationPath);
+    if (!versionDestination.missingAt) assertCopySourceTree(versionDestinationPath);
+
+    const selected: string[] = [];
+    for (const item of BUNDLE_SYNC_ITEMS) {
+        if (item === 'VERSION') continue;
+        const sourcePath = path.join(sourceRoot, item);
+        if (bindContainedDestination(sourceRoot, sourcePath).missingAt) continue;
+        assertCopySourceTree(sourcePath);
+        const destinationPath = path.join(deployedBundleRoot, item);
+        const destination = bindContainedDestination(targetRoot, destinationPath);
+        if (!destination.missingAt) assertCopySourceTree(destinationPath);
+        const backupPath = path.join(bundleSyncBackupPath, item);
+        const backup = bindContainedDestination(targetRoot, backupPath);
+        if (!backup.missingAt) assertCopySourceTree(backupPath);
+        selected.push(item);
+    }
+    return selected;
 }
 
 export function getRollbackSnapshotsRoot(targetRoot: string): string {
@@ -219,6 +258,7 @@ async function runRollbackToVersionUnjournaled(options: RunRollbackToVersionOpti
     const safetySnapshotRecordsRelativePath = `${safetySnapshotRelativePath}/${path.basename(getRollbackRecordsPath(safetySnapshotPath))}`;
     const bundleSyncBackupRelativePath = `${resolveBundleName()}/runtime/bundle-backups/${timestamp}`;
     const bundleSyncBackupPath = path.join(normalizedTarget, bundleSyncBackupRelativePath);
+    if (!dryRun) bindContainedDestination(normalizedTarget, rollbackReportPath);
 
     let safetySnapshotCreated = false;
     let safetySnapshotRecordCount = 0;
@@ -304,8 +344,11 @@ async function runRollbackToVersionUnjournaled(options: RunRollbackToVersionOpti
     const previewAffectedItems: string[] = [];
 
     try {
+        const selectedSyncItems = !dryRun
+            ? preflightVersionRollbackPlan(normalizedTarget, deployedBundleRoot, sourceRoot, bundleSyncBackupPath)
+            : [];
         if (!dryRun) {
-            fs.mkdirSync(path.dirname(safetySnapshotPath), { recursive: true });
+            ensureContainedDirectory(normalizedTarget, path.dirname(safetySnapshotPath));
             const rollbackItems = getUpdateRollbackItems(normalizedTarget, initAnswersResolvedPath);
             const safetyRecords = createRollbackSnapshot(
                 normalizedTarget, safetySnapshotPath, rollbackItems
@@ -322,28 +365,26 @@ async function runRollbackToVersionUnjournaled(options: RunRollbackToVersionOpti
 
         if (!dryRun) {
             const syncPreexistingMap: Record<string, boolean> = {};
-            for (const item of BUNDLE_SYNC_ITEMS) {
-                if (item === DEFERRED_VERSION_ITEM) continue;
-
+            for (const item of selectedSyncItems) {
                 const sourceItemPath = path.join(sourceRoot, item);
-                if (!fs.existsSync(sourceItemPath)) continue;
-
                 const destinationPath = path.join(deployedBundleRoot, item);
-                const destinationExists = fs.existsSync(destinationPath);
+                const destinationExists = !bindContainedDestination(normalizedTarget, destinationPath).missingAt;
 
                 if (!(item in syncPreexistingMap)) {
                     syncPreexistingMap[item] = destinationExists;
                 }
 
+                assertCopySourceTree(sourceItemPath);
                 if (destinationExists) {
                     const backupPath = path.join(bundleSyncBackupPath, item);
-                    fs.mkdirSync(path.dirname(backupPath), { recursive: true });
-                    copyPathRecursive(destinationPath, backupPath);
+                    ensureContainedDirectory(normalizedTarget, path.dirname(backupPath));
+                    copyPathRecursive(destinationPath, backupPath, normalizedTarget);
                 }
 
-                removePathRecursive(destinationPath);
-                fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
-                copyPathRecursive(sourceItemPath, destinationPath);
+                assertCopySourceTree(sourceItemPath);
+                removeContainedPath(normalizedTarget, destinationPath, true);
+                ensureContainedDirectory(normalizedTarget, path.dirname(destinationPath));
+                copyPathRecursive(sourceItemPath, destinationPath, normalizedTarget);
             }
 
             if (Object.keys(syncPreexistingMap).length > 0) {
@@ -434,12 +475,10 @@ async function runRollbackToVersionUnjournaled(options: RunRollbackToVersionOpti
 
             // Deferred VERSION sync — only after lifecycle completes
             const versionSourcePath = path.join(sourceRoot, DEFERRED_VERSION_ITEM);
-            if (fs.existsSync(versionSourcePath)) {
-                const versionDestPath = path.join(deployedBundleRoot, DEFERRED_VERSION_ITEM);
-                removePathRecursive(versionDestPath);
-                fs.mkdirSync(path.dirname(versionDestPath), { recursive: true });
-                fs.copyFileSync(versionSourcePath, versionDestPath);
-            }
+            const versionDestPath = path.join(deployedBundleRoot, DEFERRED_VERSION_ITEM);
+            assertCopySourceTree(versionSourcePath);
+            removeContainedPath(normalizedTarget, versionDestPath);
+            copyPathRecursive(versionSourcePath, versionDestPath, normalizedTarget);
             syncRestoredLiveVersion(deployedBundleRoot, sourceVersion);
 
             if (matchingSnapshot) {
@@ -473,16 +512,24 @@ async function runRollbackToVersionUnjournaled(options: RunRollbackToVersionOpti
         }
     } catch (error: unknown) {
         const errorMessage = getErrorMessage(error);
-        removeUpdateSentinel(deployedBundleRoot);
+        let sentinelCleanupError: string | null = null;
+        try {
+            removeUpdateSentinel(deployedBundleRoot);
+        } catch (cleanupError: unknown) {
+            sentinelCleanupError = getErrorMessage(cleanupError);
+        }
+        const failureMessage = sentinelCleanupError
+            ? `${errorMessage}. Sentinel cleanup failed: ${sentinelCleanupError}`
+            : errorMessage;
 
-        if (syncStatus !== 'SUCCESS') syncStatus = `FAILED: ${errorMessage}`;
+        if (syncStatus !== 'SUCCESS') syncStatus = `FAILED: ${failureMessage}`;
         if (installStatus === 'NOT_RUN') installStatus = 'FAILED';
         if (materializationStatus === 'NOT_RUN') materializationStatus = 'FAILED';
-        restoreStatus = `FAILED: ${errorMessage}`;
+        restoreStatus = `FAILED: ${failureMessage}`;
 
         if (dryRun || !safetySnapshotCreated) {
             sourceCleanup();
-            throw new Error(`Rollback to version '${targetVersion}' failed. Error: ${errorMessage}`);
+            throw new Error(`Rollback to version '${targetVersion}' failed. Error: ${failureMessage}`);
         }
 
         try {
@@ -495,7 +542,7 @@ async function runRollbackToVersionUnjournaled(options: RunRollbackToVersionOpti
             safetyRollbackStatus = `FAILED: ${safetyRollbackMessage}`;
             sourceCleanup();
             throw new Error(
-                `Rollback to version '${targetVersion}' failed. Original error: ${errorMessage}. ` +
+                `Rollback to version '${targetVersion}' failed. Original error: ${failureMessage}. ` +
                 `Safety rollback failed: ${safetyRollbackMessage}`
             );
         }
@@ -503,7 +550,7 @@ async function runRollbackToVersionUnjournaled(options: RunRollbackToVersionOpti
         sourceCleanup();
         throw new Error(
             `Rollback to version '${targetVersion}' failed and safety rollback completed successfully. ` +
-            `Original error: ${errorMessage}`
+            `Original error: ${failureMessage}`
         );
     }
 
@@ -511,7 +558,6 @@ async function runRollbackToVersionUnjournaled(options: RunRollbackToVersionOpti
     const updatedVersion = readVersionOrFallback(path.join(deployedBundleRoot, 'VERSION'));
 
     if (!dryRun) {
-        fs.mkdirSync(path.dirname(rollbackReportPath), { recursive: true });
         const reportLines = [
             '# Rollback-to-Version Report',
             '',
@@ -537,7 +583,7 @@ async function runRollbackToVersionUnjournaled(options: RunRollbackToVersionOpti
             `RollbackVersion: ${sourceVersion}`,
             `UpdatedVersion: ${updatedVersion}`
         ];
-        fs.writeFileSync(rollbackReportPath, reportLines.join('\r\n'), 'utf8');
+        writeContainedFile(normalizedTarget, rollbackReportPath, reportLines.join('\r\n'));
     }
 
     return {
@@ -603,6 +649,7 @@ function runSnapshotRollbackUnjournaled(options: RunSnapshotRollbackOptions) {
     const timestamp = getTimestamp();
     const rollbackReportRelativePath = `${resolveBundleName()}/runtime/update-reports/rollback-${timestamp}.md`;
     const rollbackReportPath = path.join(normalizedTarget, rollbackReportRelativePath);
+    if (!dryRun) bindContainedDestination(normalizedTarget, rollbackReportPath);
     const safetySnapshotRelativePath = `${resolveBundleName()}/runtime/update-rollbacks/rollback-${timestamp}`;
     const safetySnapshotPath = path.join(normalizedTarget, safetySnapshotRelativePath);
     const safetySnapshotRecordsRelativePath = `${safetySnapshotRelativePath}/${path.basename(getRollbackRecordsPath(safetySnapshotPath))}`;
@@ -614,7 +661,7 @@ function runSnapshotRollbackUnjournaled(options: RunSnapshotRollbackOptions) {
     let safetyRollbackStatus = 'NOT_NEEDED';
 
     if (!dryRun) {
-        fs.mkdirSync(path.dirname(safetySnapshotPath), { recursive: true });
+        ensureContainedDirectory(normalizedTarget, path.dirname(safetySnapshotPath));
         const safetyRecords = createRollbackSnapshot(
             normalizedTarget,
             safetySnapshotPath,
@@ -668,7 +715,6 @@ function runSnapshotRollbackUnjournaled(options: RunSnapshotRollbackOptions) {
     const updatedVersion = readVersionOrFallback(path.join(deployedBundleRoot, 'VERSION'));
 
     if (!dryRun) {
-        fs.mkdirSync(path.dirname(rollbackReportPath), { recursive: true });
         const reportLines = [
             '# Rollback Report',
             '',
@@ -692,7 +738,7 @@ function runSnapshotRollbackUnjournaled(options: RunSnapshotRollbackOptions) {
             `RollbackVersion: ${snapshotVersion}`,
             `UpdatedVersion: ${updatedVersion}`
         ];
-        fs.writeFileSync(rollbackReportPath, reportLines.join('\r\n'), 'utf8');
+        writeContainedFile(normalizedTarget, rollbackReportPath, reportLines.join('\r\n'));
     }
 
     return {

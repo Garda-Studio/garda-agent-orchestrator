@@ -49,6 +49,29 @@ function setupBundleSkeleton() {
 }
 
 describe('project-memory builder', () => {
+    it('rejects a linked project-memory directory before seeding outside files', () => {
+        const ws = setupBundleSkeleton();
+        try {
+            const outside = path.join(ws.bundleRoot, 'outside');
+            fs.mkdirSync(outside);
+            const docs = path.join(ws.liveRoot, 'docs');
+            fs.mkdirSync(docs);
+            try {
+                fs.symlinkSync(outside, path.join(docs, 'project-memory'), 'junction');
+            } catch (error: unknown) {
+                if (['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code || '')) return;
+                throw error;
+            }
+            assert.throws(() => seedProjectMemoryFromTemplate({
+                templateRoot: ws.templateRoot,
+                liveRoot: ws.liveRoot
+            }), /symlink|junction/);
+            assert.deepEqual(fs.readdirSync(outside), []);
+        } finally {
+            fs.rmSync(ws.bundleRoot, { recursive: true, force: true });
+        }
+    });
+
     it('seeds all required project-memory files into a fresh live directory', () => {
         const ws = setupBundleSkeleton();
         try {

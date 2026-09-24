@@ -1,7 +1,14 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { ensureDirectory, pathExists } from '../core/filesystem';
-import { readJsonFile, writeJsonFile } from '../core/json';
+import { pathExists } from '../core/filesystem';
+import {
+    bindContainedDestination,
+    copyContainedFile,
+    ensureContainedDirectory,
+    removeContainedPath,
+    writeContainedFile
+} from '../core/contained-filesystem';
+import { formatJson, readJsonFile } from '../core/json';
 
 import {
     BASELINE_SKILL_DIRECTORIES,
@@ -110,6 +117,7 @@ function readTemplateReviewCapabilities(bundleRoot: string): ReviewCapabilities 
 
 function listLiveSkillDirectories(bundleRoot: string): string[] {
     const liveSkillsRoot = getLiveSkillsRoot(bundleRoot);
+    bindContainedDestination(bundleRoot, liveSkillsRoot);
     if (!pathExists(liveSkillsRoot)) {
         return [];
     }
@@ -122,6 +130,7 @@ function listLiveSkillDirectories(bundleRoot: string): string[] {
 
 export function syncReviewCapabilities(bundleRoot: string): { configPath: string; capabilities: ReviewCapabilities } {
     const configPath = getReviewCapabilitiesConfigPath(bundleRoot);
+    bindContainedDestination(bundleRoot, configPath);
     const capabilities = readTemplateReviewCapabilities(bundleRoot);
     const readyLiveSkillDirectorySet = new Set(
         listLiveSkillDirectories(bundleRoot).filter((skillDir) => {
@@ -134,8 +143,7 @@ export function syncReviewCapabilities(bundleRoot: string): { configPath: string
         capabilities[capabilityKey] = candidateDirectories.some((candidate: string) => readyLiveSkillDirectorySet.has(candidate));
     }
 
-    ensureDirectory(path.dirname(configPath));
-    writeJsonFile(configPath, capabilities);
+    writeContainedFile(bundleRoot, configPath, formatJson(capabilities));
 
     return {
         configPath,
@@ -162,6 +170,7 @@ function validateInstalledPackIds(value: unknown): string[] {
 
 export function readInstalledSkillPacks(bundleRoot: string): ReadInstalledSkillPacksResult {
     const configPath = getSkillPacksConfigPath(bundleRoot);
+    bindContainedDestination(bundleRoot, configPath);
     if (!pathExists(configPath)) {
         return {
             configPath,
@@ -178,10 +187,10 @@ export function readInstalledSkillPacks(bundleRoot: string): ReadInstalledSkillP
 
 export function writeInstalledSkillPacks(bundleRoot: string, installedPackIds: unknown): string {
     const configPath = getSkillPacksConfigPath(bundleRoot);
-    writeJsonFile(configPath, {
+    writeContainedFile(bundleRoot, configPath, formatJson({
         ...DEFAULT_INSTALLED_PACKS_PAYLOAD,
         installed_packs: validateInstalledPackIds(installedPackIds)
-    });
+    }));
     return configPath;
 }
 
@@ -238,17 +247,40 @@ export function listSkillPacks(bundleRoot: string, options: ListSkillPacksOption
     };
 }
 
-function copyDirectoryRecursive(sourcePath: string, destinationPath: string): void {
-    ensureDirectory(destinationPath);
+function assertSkillTree(root: string, entryPath: string): void {
+    bindContainedDestination(root, entryPath);
+    const stat = fs.lstatSync(entryPath);
+    if (stat.isFile()) return;
+    if (!stat.isDirectory()) throw new Error(`Unsupported skill asset: ${entryPath}`);
+    for (const entry of fs.readdirSync(entryPath)) {
+        assertSkillTree(root, path.join(entryPath, entry));
+    }
+}
+
+function copyDirectoryRecursive(bundleRoot: string, templateRoot: string, sourcePath: string, destinationPath: string): void {
+    bindContainedDestination(templateRoot, sourcePath);
+    ensureContainedDirectory(bundleRoot, destinationPath);
     for (const entry of fs.readdirSync(sourcePath, { withFileTypes: true })) {
         const sourceEntryPath = path.join(sourcePath, entry.name);
         const destinationEntryPath = path.join(destinationPath, entry.name);
+        bindContainedDestination(templateRoot, sourceEntryPath);
         if (entry.isDirectory()) {
-            copyDirectoryRecursive(sourceEntryPath, destinationEntryPath);
+            copyDirectoryRecursive(bundleRoot, templateRoot, sourceEntryPath, destinationEntryPath);
+        } else if (entry.isFile()) {
+            copyContainedFile(bundleRoot, sourceEntryPath, destinationEntryPath);
         } else {
-            ensureDirectory(path.dirname(destinationEntryPath));
-            fs.copyFileSync(sourceEntryPath, destinationEntryPath);
+            throw new Error(`Unsupported skill asset: ${sourceEntryPath}`);
         }
+    }
+}
+
+function assertSkillPackOutputPaths(bundleRoot: string): void {
+    for (const destination of [
+        getSkillPacksConfigPath(bundleRoot),
+        getReviewCapabilitiesConfigPath(bundleRoot),
+        getSkillsHeadlinesConfigPath(bundleRoot)
+    ]) {
+        bindContainedDestination(bundleRoot, destination);
     }
 }
 
@@ -276,18 +308,23 @@ export function addSkillPack(bundleRoot: string, packId: string) {
     }
 
     const liveSkillsRoot = getLiveSkillsRoot(bundleRoot);
-    ensureDirectory(liveSkillsRoot);
-
+    bindContainedDestination(bundleRoot, liveSkillsRoot);
+    assertSkillPackOutputPaths(bundleRoot);
     for (const skillDir of pack.skillDirectories) {
         const sourceSkillDir = path.join(templateRoot, 'skills', skillDir);
         const destinationSkillDir = path.join(liveSkillsRoot, skillDir);
         if (!pathExists(sourceSkillDir)) {
             throw new Error(`Skill pack asset is missing: ${sourceSkillDir}`);
         }
-        if (pathExists(destinationSkillDir)) {
+        assertSkillTree(templateRoot, sourceSkillDir);
+        if (!bindContainedDestination(bundleRoot, destinationSkillDir).missingAt) {
             throw new Error(`Cannot install skill pack '${packId}' because '${destinationSkillDir}' already exists.`);
         }
-        copyDirectoryRecursive(sourceSkillDir, destinationSkillDir);
+    }
+
+    for (const skillDir of pack.skillDirectories) {
+        copyDirectoryRecursive(bundleRoot, templateRoot,
+            path.join(templateRoot, 'skills', skillDir), path.join(liveSkillsRoot, skillDir));
     }
 
     const updatedPackIds = [...current.installedPackIds, packId].sort();
@@ -326,11 +363,19 @@ export function removeSkillPack(bundleRoot: string, packId: string) {
     }
 
     const liveSkillsRoot = getLiveSkillsRoot(bundleRoot);
+    bindContainedDestination(bundleRoot, liveSkillsRoot);
+    assertSkillPackOutputPaths(bundleRoot);
     const removedSkillDirectories: string[] = [];
     for (const skillDir of pack.skillDirectories) {
         const destinationSkillDir = path.join(liveSkillsRoot, skillDir);
-        if (pathExists(destinationSkillDir)) {
-            fs.rmSync(destinationSkillDir, { recursive: true, force: true });
+        if (!bindContainedDestination(bundleRoot, destinationSkillDir).missingAt) {
+            assertSkillTree(bundleRoot, destinationSkillDir);
+        }
+    }
+    for (const skillDir of pack.skillDirectories) {
+        const destinationSkillDir = path.join(liveSkillsRoot, skillDir);
+        if (!bindContainedDestination(bundleRoot, destinationSkillDir).missingAt) {
+            removeContainedPath(bundleRoot, destinationSkillDir, true);
             removedSkillDirectories.push(skillDir);
         }
     }

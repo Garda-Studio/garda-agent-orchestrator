@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { bindContainedDestination, copyContainedFile, ensureContainedDirectory } from '../core/contained-filesystem';
 
 function normalizePath(p: string): string {
     return path.resolve(p);
@@ -197,46 +198,55 @@ export function getTimestamp(): string {
     );
 }
 
-export function copyPathRecursive(sourcePath: string, destinationPath: string): void {
-    const stats = fs.lstatSync(sourcePath);
-    if (stats.isSymbolicLink()) {
-        throw new Error(`Refusing to copy symlink or junction source: ${sourcePath}`);
+export function assertCopySourceTree(sourcePath: string): void {
+    const sourceContainmentRoot = path.parse(path.resolve(sourcePath)).root;
+    const sourceStack = [sourcePath];
+    while (sourceStack.length > 0) {
+        const sourceEntry = sourceStack.pop()!;
+        const sourceStat = fs.lstatSync(sourceEntry);
+        if (sourceStat.isSymbolicLink() || (sourceStat.isFile() && sourceStat.nlink !== 1)) {
+            throw new Error(`Refusing to copy symlink or junction source or hard-linked file: ${sourceEntry}`);
+        }
+        bindContainedDestination(sourceContainmentRoot, sourceEntry);
+        if (sourceStat.isDirectory()) {
+            for (const child of fs.readdirSync(sourceEntry)) sourceStack.push(path.join(sourceEntry, child));
+        } else if (!sourceStat.isFile()) {
+            throw new Error(`Refusing to copy unsupported source: ${sourceEntry}`);
+        }
     }
-    const parentDir = path.dirname(destinationPath);
-    if (parentDir) fs.mkdirSync(parentDir, { recursive: true });
-    if (fs.existsSync(destinationPath) && fs.lstatSync(destinationPath).isSymbolicLink()) {
-        throw new Error(`Refusing to overwrite symlink or junction destination: ${destinationPath}`);
-    }
+}
 
-    if (!stats.isDirectory()) {
-        fs.copyFileSync(sourcePath, destinationPath);
-        return;
-    }
-
+export function copyPathRecursive(
+    sourcePath: string, destinationPath: string,
+    destinationRoot = path.parse(path.resolve(destinationPath)).root
+): void {
+    assertCopySourceTree(sourcePath);
+    const sourceRoot = path.parse(path.resolve(sourcePath)).root;
+    const directories: string[] = [];
+    const files: Array<{ source: string; destination: string }> = [];
     const stack: Array<{ src: string; dst: string }> = [{ src: sourcePath, dst: destinationPath }];
     while (stack.length > 0) {
         const { src, dst } = stack.pop()!;
-        if (fs.existsSync(dst) && fs.lstatSync(dst).isSymbolicLink()) {
-            throw new Error(`Refusing to overwrite symlink or junction destination: ${dst}`);
+        bindContainedDestination(sourceRoot, src);
+        bindContainedDestination(destinationRoot, dst);
+        const sourceStats = fs.lstatSync(src);
+        const destinationStats = fs.existsSync(dst) ? fs.lstatSync(dst) : null;
+        if (destinationStats && sourceStats.isDirectory() !== destinationStats.isDirectory()) {
+            throw new Error(`Copy destination has a different path type: ${dst}`);
         }
-        fs.mkdirSync(dst, { recursive: true });
-        for (const entry of fs.readdirSync(src)) {
-            const srcChild = path.join(src, entry);
-            const dstChild = path.join(dst, entry);
-            const childStats = fs.lstatSync(srcChild);
-            if (childStats.isSymbolicLink()) {
-                throw new Error(`Refusing to copy symlink or junction source: ${srcChild}`);
+        if (sourceStats.isDirectory()) {
+            directories.push(dst);
+            for (const entry of fs.readdirSync(src)) {
+                stack.push({ src: path.join(src, entry), dst: path.join(dst, entry) });
             }
-            if (fs.existsSync(dstChild) && fs.lstatSync(dstChild).isSymbolicLink()) {
-                throw new Error(`Refusing to overwrite symlink or junction destination: ${dstChild}`);
-            }
-            if (childStats.isDirectory()) {
-                stack.push({ src: srcChild, dst: dstChild });
-            } else {
-                fs.copyFileSync(srcChild, dstChild);
-            }
+        } else {
+            files.push({ source: src, destination: dst });
         }
     }
+    for (const directory of directories.sort((left, right) => left.length - right.length)) {
+        ensureContainedDirectory(destinationRoot, directory);
+    }
+    for (const file of files) copyContainedFile(destinationRoot, file.source, file.destination);
 }
 
 export function removePathRecursive(targetPath: string): void {
