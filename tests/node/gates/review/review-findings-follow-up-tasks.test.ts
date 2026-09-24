@@ -16,6 +16,9 @@ import {
     buildBaselineOnlyPreImplementationRoute
 } from '../../../../src/gates/next-step/next-step-pre-implementation-routing';
 import {
+    readTaskTimelineEventWindow
+} from '../../../../src/gates/next-step/next-step-review-timeline-evidence';
+import {
     getReviewFindingsDispositionArtifactSnapshotPath
 } from '../../../../src/gates/review/review-findings-disposition-artifact';
 import {
@@ -1352,6 +1355,49 @@ describe('review findings follow-up task materialization', () => {
         assert.equal(scope.status, 'invalid');
         assert.deepEqual(scope.files, []);
         assert.ok(scope.diagnostics.some((diagnostic) => /preflight|compile cycle/u.test(diagnostic)));
+    });
+
+    it('keeps grouped scope when the bounded parent timeline retains the latest compile', () => {
+        const repoRoot = makeRepo();
+        fs.mkdirSync(
+            path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events'),
+            { recursive: true }
+        );
+        appendEvent(repoRoot, TASK_ID, 'HISTORICAL_PADDING', 'PASS', {
+            payload: 'x'.repeat(2 * 1024 * 1024)
+        });
+        seedGroupedPreflight(repoRoot);
+        const artifacts = seedReviewArtifacts(repoRoot);
+        const materialized = materializeReviewFindingsFollowUpTasks({
+            repoRoot,
+            taskId: TASK_ID,
+            reviewType: REVIEW_TYPE,
+            dispositionArtifactPath: artifacts.dispositionArtifactPath
+        });
+        assert.equal(materialized.status, 'MATERIALIZED', materialized.output_lines.join('\n'));
+
+        const window = readTaskTimelineEventWindow(
+            path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events'), TASK_ID
+        );
+        assert.equal(window.truncated, true);
+        assert.equal(window.invalidJson, false);
+        assert.ok(window.events.some((event) => event.event_type === 'COMPILE_GATE_PASSED'));
+
+        const childRow = rowFor(repoRoot, `${TASK_ID}-F1`);
+        assert.ok(childRow);
+        const scope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, childRow);
+        assert.equal(scope.status, 'valid', scope.diagnostics.join('\n'));
+        assert.deepEqual(scope.files, [
+            'src/gates/review/example.ts',
+            'tests/node/gates/review/example.test.ts'
+        ]);
+
+        appendEvent(repoRoot, TASK_ID, 'RECENT_PADDING', 'PASS', {
+            payload: 'y'.repeat(2 * 1024 * 1024)
+        });
+        const missingCompileScope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, childRow);
+        assert.equal(missingCompileScope.status, 'invalid');
+        assert.deepEqual(missingCompileScope.files, []);
     });
 
     it('groups deferred items into one snapshot-bound pending child and reruns idempotently', () => {

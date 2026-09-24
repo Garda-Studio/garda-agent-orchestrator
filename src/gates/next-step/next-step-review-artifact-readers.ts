@@ -356,7 +356,9 @@ function resolveCurrentReviewFollowUpMaterializationBinding(
         : null;
     const eventsRoot = joinOrchestratorPath(repoRoot, path.join('runtime', 'task-events'));
     const timelineWindow = readTaskTimelineEventWindow(eventsRoot, parentTaskId);
-    const latestCompileEvent = timelineWindow.invalidJson || timelineWindow.truncated
+    // A bounded tail can still prove the latest compile when that event is retained.
+    // Missing compile evidence remains fail-closed below.
+    const latestCompileEvent = timelineWindow.invalidJson
         ? null
         : [...timelineWindow.events].reverse().find((event) => (
             String(event.event_type || '').trim().toUpperCase() === 'COMPILE_GATE_PASSED'
@@ -583,7 +585,9 @@ function resolveAuthenticatedReviewReceiptSnapshot(options: {
             };
         }
         const window = readTaskTimelineEventWindow(eventsRoot, options.taskId);
-        if (window.invalidJson || window.truncated) {
+        // Historical events may be outside the bounded tail. The receipt and
+        // its compile boundary must both be present below to accept the scope.
+        if (window.invalidJson) {
             return {
                 evidence: null,
                 diagnostics: [
