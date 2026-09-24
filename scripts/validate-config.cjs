@@ -58,11 +58,12 @@ async function main() {
         }
     }
 
-    const { execSync } = require('node:child_process');
+    const { execFileSync } = require('node:child_process');
     try {
-        const output = execSync(
-            `node ${JSON.stringify(cliPath)} gate validate-config --bundle-root ${JSON.stringify(bundleRoot)} --compact`,
-            { cwd: executionCwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
+        const output = execFileSync(
+            process.execPath,
+            [cliPath, 'gate', 'validate-config', '--bundle-root', bundleRoot, '--compact'],
+            { cwd: executionCwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], shell: false }
         );
         process.stdout.write(output);
         return 0;
