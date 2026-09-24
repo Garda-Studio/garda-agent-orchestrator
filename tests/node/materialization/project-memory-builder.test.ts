@@ -49,7 +49,7 @@ function setupBundleSkeleton() {
 }
 
 describe('project-memory builder', () => {
-    it('rejects a linked project-memory directory before seeding outside files', () => {
+    it('rejects a linked project-memory directory before seeding outside files', (t) => {
         const ws = setupBundleSkeleton();
         try {
             const outside = path.join(ws.bundleRoot, 'outside');
@@ -59,7 +59,11 @@ describe('project-memory builder', () => {
             try {
                 fs.symlinkSync(outside, path.join(docs, 'project-memory'), 'junction');
             } catch (error: unknown) {
-                if (['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code || '')) return;
+                const code = (error as NodeJS.ErrnoException).code;
+                if (['EPERM', 'EACCES', 'ENOTSUP'].includes(code || '')) {
+                    t.skip(`Junctions unavailable: ${code}`);
+                    return;
+                }
                 throw error;
             }
             assert.throws(() => seedProjectMemoryFromTemplate({

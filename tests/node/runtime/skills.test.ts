@@ -215,7 +215,7 @@ test('syncReviewCapabilities ignores bare matching directories without a skill e
     }
 });
 
-test('syncReviewCapabilities rejects a linked live config directory', () => {
+test('syncReviewCapabilities rejects a linked live config directory', (t) => {
     const bundleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-skills-'));
     try {
         const outside = path.join(bundleRoot, 'outside');
@@ -224,7 +224,11 @@ test('syncReviewCapabilities rejects a linked live config directory', () => {
         try {
             fs.symlinkSync(outside, path.join(bundleRoot, 'live', 'config'), 'junction');
         } catch (error: unknown) {
-            if (['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code || '')) return;
+            const code = (error as NodeJS.ErrnoException).code;
+            if (['EPERM', 'EACCES', 'ENOTSUP'].includes(code || '')) {
+                t.skip(`Junctions unavailable: ${code}`);
+                return;
+            }
             throw error;
         }
         assert.throws(() => syncReviewCapabilities(bundleRoot), /symlink|junction/);
@@ -234,7 +238,7 @@ test('syncReviewCapabilities rejects a linked live config directory', () => {
     }
 });
 
-test('skill indexes reject a linked live config directory', () => {
+test('skill indexes reject a linked live config directory', (t) => {
     const bundleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-skills-'));
     try {
         const outside = path.join(bundleRoot, 'outside');
@@ -243,7 +247,11 @@ test('skill indexes reject a linked live config directory', () => {
         try {
             fs.symlinkSync(outside, path.join(bundleRoot, 'live', 'config'), 'junction');
         } catch (error: unknown) {
-            if (['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code || '')) return;
+            const code = (error as NodeJS.ErrnoException).code;
+            if (['EPERM', 'EACCES', 'ENOTSUP'].includes(code || '')) {
+                t.skip(`Junctions unavailable: ${code}`);
+                return;
+            }
             throw error;
         }
         assert.throws(() => writeSkillsIndex(bundleRoot), /symlink|junction/);
@@ -254,7 +262,30 @@ test('skill indexes reject a linked live config directory', () => {
     }
 });
 
-test('skill-pack add and remove reject a linked live skills directory', () => {
+test('writeSkillsIndex preserves the previous index when headlines destination is hard-linked', () => {
+    const repoRoot = findRepoRoot();
+    const bundleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-skills-'));
+    try {
+        fs.mkdirSync(path.join(bundleRoot, 'live', 'skills'), { recursive: true });
+        fs.mkdirSync(path.join(bundleRoot, 'live', 'config'), { recursive: true });
+        seedBaselineSkills(repoRoot, bundleRoot);
+        fs.cpSync(path.join(repoRoot, 'template', 'skill-packs'),
+            path.join(bundleRoot, 'template', 'skill-packs'), { recursive: true });
+        const indexPath = getSkillsIndexConfigPath(bundleRoot);
+        const headlinesPath = getSkillsHeadlinesConfigPath(bundleRoot);
+        const outside = path.join(bundleRoot, 'outside-headlines.json');
+        fs.writeFileSync(indexPath, 'previous-index\n');
+        fs.writeFileSync(outside, 'outside-original\n');
+        fs.linkSync(outside, headlinesPath);
+        assert.throws(() => writeSkillsIndex(bundleRoot), /hard-linked/);
+        assert.equal(fs.readFileSync(indexPath, 'utf8'), 'previous-index\n');
+        assert.equal(fs.readFileSync(outside, 'utf8'), 'outside-original\n');
+    } finally {
+        fs.rmSync(bundleRoot, { recursive: true, force: true });
+    }
+});
+
+test('skill-pack add and remove reject a linked live skills directory', (t) => {
     const repoRoot = findRepoRoot();
     const bundleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-skills-'));
     try {
@@ -266,7 +297,11 @@ test('skill-pack add and remove reject a linked live skills directory', () => {
         try {
             fs.symlinkSync(outside, path.join(bundleRoot, 'live', 'skills'), 'junction');
         } catch (error: unknown) {
-            if (['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code || '')) return;
+            const code = (error as NodeJS.ErrnoException).code;
+            if (['EPERM', 'EACCES', 'ENOTSUP'].includes(code || '')) {
+                t.skip(`Junctions unavailable: ${code}`);
+                return;
+            }
             throw error;
         }
 

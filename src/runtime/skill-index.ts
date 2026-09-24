@@ -3,7 +3,7 @@ import { pathExists } from '../core/filesystem';
 import { bindContainedDestination, writeContainedFile } from '../core/contained-filesystem';
 import { formatJson, readJsonFile } from '../core/json';
 import { asObjectRecord, listBuiltinSkillPacks } from './skill-manifest';
-import { writeSkillsHeadlines } from './skill-headlines';
+import { buildSkillsHeadlines, getSkillsHeadlinesConfigPath } from './skill-headlines';
 
 export interface SkillsIndexPackEntry {
     id: string;
@@ -101,9 +101,13 @@ export function buildSkillsIndex(bundleRoot: string): SkillsIndexPayload {
 
 export function writeSkillsIndex(bundleRoot: string): string {
     const indexPath = getSkillsIndexConfigPath(bundleRoot);
+    const headlinesPath = getSkillsHeadlinesConfigPath(bundleRoot);
+    const indexContent = formatJson(buildSkillsIndex(bundleRoot));
+    const headlinesContent = formatJson(buildSkillsHeadlines(bundleRoot));
     bindContainedDestination(bundleRoot, indexPath);
-    writeContainedFile(bundleRoot, indexPath, formatJson(buildSkillsIndex(bundleRoot)));
-    writeSkillsHeadlines(bundleRoot);
+    bindContainedDestination(bundleRoot, headlinesPath);
+    writeContainedFile(bundleRoot, indexPath, indexContent);
+    writeContainedFile(bundleRoot, headlinesPath, headlinesContent);
     return indexPath;
 }
 

@@ -44,7 +44,7 @@ test('writeProtectedControlPlaneManifest preserves the previous manifest when fi
     }
 });
 
-test('writeProtectedControlPlaneManifest rejects a linked runtime directory', () => {
+test('writeProtectedControlPlaneManifest rejects a linked runtime directory', (t) => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'protected-control-plane-'));
     try {
         const outside = path.join(repoRoot, 'outside');
@@ -54,7 +54,11 @@ test('writeProtectedControlPlaneManifest rejects a linked runtime directory', ()
         try {
             fs.symlinkSync(outside, path.dirname(manifestPath), 'junction');
         } catch (error: unknown) {
-            if (['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code || '')) return;
+            const code = (error as NodeJS.ErrnoException).code;
+            if (['EPERM', 'EACCES', 'ENOTSUP'].includes(code || '')) {
+                t.skip(`Junctions unavailable: ${code}`);
+                return;
+            }
             throw error;
         }
         assert.throws(() => writeProtectedControlPlaneManifest(repoRoot), /symlink|junction/);

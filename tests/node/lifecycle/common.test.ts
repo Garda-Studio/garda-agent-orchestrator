@@ -632,8 +632,12 @@ describe('copyDirectoryContentMerge', () => {
             try {
                 fs.symlinkSync(path.join(dir, 'missing'), src, 'junction');
             } catch (error: unknown) {
-                t.skip(`Junctions unavailable: ${String(error)}`);
-                return;
+                const code = (error as NodeJS.ErrnoException).code;
+                if (['EPERM', 'EACCES', 'ENOTSUP'].includes(code || '')) {
+                    t.skip(`Junctions unavailable: ${code}`);
+                    return;
+                }
+                throw error;
             }
 
             assert.throws(() => copyDirectoryContentMerge(src, dst), /symlink|junction/);
@@ -768,8 +772,12 @@ describe('syncWorkingTreeBundleItems', () => {
             try {
                 fs.symlinkSync(path.join(src, 'missing'), path.join(src, 'b.txt'), 'junction');
             } catch (error: unknown) {
-                t.skip(`Junctions unavailable: ${String(error)}`);
-                return;
+                const code = (error as NodeJS.ErrnoException).code;
+                if (['EPERM', 'EACCES', 'ENOTSUP'].includes(code || '')) {
+                    t.skip(`Junctions unavailable: ${code}`);
+                    return;
+                }
+                throw error;
             }
 
             assert.throws(() => syncWorkingTreeBundleItems(src, dst, ['a.txt', 'b.txt']),

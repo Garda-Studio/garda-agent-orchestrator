@@ -111,8 +111,12 @@ describe('runRollback (snapshot mode)', () => {
             try {
                 fs.symlinkSync(outsideDir, reportDir, 'junction');
             } catch (error: unknown) {
-                t.skip(`Junctions unavailable: ${String(error)}`);
-                return;
+                const code = (error as NodeJS.ErrnoException).code;
+                if (['EPERM', 'EACCES', 'ENOTSUP'].includes(code || '')) {
+                    t.skip(`Junctions unavailable: ${code}`);
+                    return;
+                }
+                throw error;
             }
             const originalVersion = fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8');
 
@@ -160,8 +164,12 @@ describe('runRollback (snapshot mode)', () => {
             try {
                 fs.symlinkSync(outsideDir, reportDir, 'junction');
             } catch (error: unknown) {
-                t.skip(`Junctions unavailable: ${String(error)}`);
-                return;
+                const code = (error as NodeJS.ErrnoException).code;
+                if (['EPERM', 'EACCES', 'ENOTSUP'].includes(code || '')) {
+                    t.skip(`Junctions unavailable: ${code}`);
+                    return;
+                }
+                throw error;
             }
             const snapshotsRoot = path.join(bundleRoot, 'runtime', 'update-rollbacks');
             const snapshotsBefore = fs.readdirSync(snapshotsRoot).sort();
@@ -185,8 +193,12 @@ describe('runRollback (snapshot mode)', () => {
             try {
                 fs.symlinkSync(outsideDir, reportDir, 'junction');
             } catch (error: unknown) {
-                t.skip(`Junctions unavailable: ${String(error)}`);
-                return;
+                const code = (error as NodeJS.ErrnoException).code;
+                if (['EPERM', 'EACCES', 'ENOTSUP'].includes(code || '')) {
+                    t.skip(`Junctions unavailable: ${code}`);
+                    return;
+                }
+                throw error;
             }
             const originalVersion = fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8');
 
@@ -256,8 +268,12 @@ describe('runRollback (snapshot mode)', () => {
                 fs.symlinkSync(path.join(projectRoot, 'missing'), probe, 'junction');
                 fs.rmSync(probe);
             } catch (error: unknown) {
-                t.skip(`Junctions unavailable: ${String(error)}`);
-                return;
+                const code = (error as NodeJS.ErrnoException).code;
+                if (['EPERM', 'EACCES', 'ENOTSUP'].includes(code || '')) {
+                    t.skip(`Junctions unavailable: ${code}`);
+                    return;
+                }
+                throw error;
             }
             const olderSource = path.join(projectRoot, 'older-source');
             copyDirRecursive(bundleRoot, olderSource);
@@ -1015,9 +1031,13 @@ describe('findSnapshotByVersion', () => {
             removePathRecursive(bundleDir);
             try {
                 fs.symlinkSync(outsideDir, bundleDir, 'junction');
-            } catch {
-                t.skip('Directory symlinks or junctions are unavailable');
-                return;
+            } catch (error: unknown) {
+                const code = (error as NodeJS.ErrnoException).code;
+                if (['EPERM', 'EACCES', 'ENOTSUP'].includes(code || '')) {
+                    t.skip(`Junctions unavailable: ${code}`);
+                    return;
+                }
+                throw error;
             }
             assert.throws(() => findSnapshotByVersion(workspaceRoot, '1.0.0'), /symlink|junction/);
         } finally {

@@ -228,7 +228,7 @@ function createStageWorkspace(repoRoot: string): {
 }
 
 describe('init materialization stages', () => {
-    it('rejects a linked optional-rule destination directory', () => {
+    it('rejects a linked optional-rule destination directory', (t) => {
         const workspace = createStageWorkspace(repoRoot);
         try {
             const outside = path.join(workspace.projectRoot, 'outside-rules');
@@ -239,7 +239,11 @@ describe('init materialization stages', () => {
             try {
                 fs.symlinkSync(outside, path.join(liveDocs, 'agent-rules'), 'junction');
             } catch (error: unknown) {
-                if (['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code || '')) return;
+                const code = (error as NodeJS.ErrnoException).code;
+                if (['EPERM', 'EACCES', 'ENOTSUP'].includes(code || '')) {
+                    t.skip(`Junctions unavailable: ${code}`);
+                    return;
+                }
                 throw error;
             }
             assert.throws(() => syncOptionalRuleSupportFiles({ bundleRoot: workspace.bundleRoot }), /symlink|junction/);
