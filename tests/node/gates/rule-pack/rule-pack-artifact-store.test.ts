@@ -4,13 +4,24 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { resolveRulePackArtifactPath } from '../../../../src/gates/rule-pack/rule-pack-artifact-store';
+import { readExistingRulePackArtifact, resolveRulePackArtifactPath } from '../../../../src/gates/rule-pack/rule-pack-artifact-store';
 
 function createTempDirectory(prefix: string): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
 describe('resolveRulePackArtifactPath', () => {
+    it('uses the task-owned default path', () => {
+        const repoRoot = createTempDirectory('garda-rule-pack-repo-');
+        try {
+            fs.mkdirSync(path.join(repoRoot, 'garda-agent-orchestrator'));
+            assert.equal(resolveRulePackArtifactPath(repoRoot, 'T-924-2', ''),
+                path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews', 'T-924-2-rule-pack.json'));
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+
     it('resolves a missing relative artifact path inside the repository', () => {
         const repoRoot = createTempDirectory('garda-rule-pack-repo-');
         try {
@@ -75,6 +86,24 @@ describe('resolveRulePackArtifactPath', () => {
         } finally {
             fs.rmSync(repoRoot, { recursive: true, force: true });
             fs.rmSync(outsideRoot, { recursive: true, force: true });
+        }
+    });
+});
+
+describe('readExistingRulePackArtifact', () => {
+    it('accepts a stage-bearing artifact and rejects missing or malformed storage', () => {
+        const repoRoot = createTempDirectory('garda-rule-pack-store-');
+        const artifactPath = path.join(repoRoot, 'rule-pack.json');
+        try {
+            assert.equal(readExistingRulePackArtifact(artifactPath), null);
+            fs.writeFileSync(artifactPath, '{', 'utf8');
+            assert.equal(readExistingRulePackArtifact(artifactPath), null);
+            fs.writeFileSync(artifactPath, JSON.stringify({ task_id: 'T-924-2' }), 'utf8');
+            assert.equal(readExistingRulePackArtifact(artifactPath), null);
+            fs.writeFileSync(artifactPath, JSON.stringify({ task_id: 'T-924-2', stages: {} }), 'utf8');
+            assert.equal(readExistingRulePackArtifact(artifactPath)?.task_id, 'T-924-2');
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
         }
     });
 });
