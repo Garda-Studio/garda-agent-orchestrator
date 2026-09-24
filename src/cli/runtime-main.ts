@@ -5,6 +5,7 @@ import {
     readPackageJson
 } from './commands/cli-helpers';
 import {
+    assertRuntimeRestartNotRequired,
     getCommandName,
     getPackageRoot,
     ValidationFailureError
@@ -50,6 +51,7 @@ export async function runCliRuntimeMain(
     argv: string[] = process.argv.slice(2),
     packageRoot = getPackageRoot()
 ): Promise<void> {
+    assertRuntimeRestartNotRequired();
     installSignalHandlers();
 
     const globalFlags = extractGlobalFlags(argv);

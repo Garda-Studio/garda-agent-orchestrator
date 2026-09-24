@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Update Lifecycle
+
+- Run an applied update's lifecycle in a fresh process through one contained bundle entry, reject missing or linked runtime code, and require a new host process after update or rollback instead of invalidating the module cache.
+
 ### Compact Command Output
 
 - Added explicit `garda compact` inspections for Git status and diffs, file metadata and line ranges, and scoped text search.

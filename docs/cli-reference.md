@@ -401,7 +401,7 @@ Notes:
 - Ordinary CLI/runtime flows ignore `GARDA_UPDATE_TRUST_OVERRIDE`; that environment variable is reserved for test-only harness paths, not for production or CI.
 - If Garda is off, `--apply` fails before source acquisition, bundle sync, rollback, verify, or manifest validation. Run `garda on` first. Read-only `check-update` and `--dry-run` checks remain available in off mode.
 - `--apply` runs the full update lifecycle after bundle sync, re-materializes `live/`, applies built-in live-rule contract migrations for existing workspaces, runs verify plus manifest validation, enforces a hard atomic consistency invariant for the deployed bundle, defers `VERSION` until lifecycle success, and creates rollback artifacts for the last applied update.
-- Successful apply runs also invalidate cached bundle runtime modules so long-lived host processes reload the freshly synced bundle on later commands.
+- After an apply, long-lived hosts reject later commands until Garda starts in a new process.
 - Human update output stays operator-focused and omits internal workflow-config merge and project-memory handoff text. Structured JSON output and update reports still include those fields for automation and diagnostics.
 
 ### `garda update`
@@ -423,7 +423,7 @@ Notes:
 - Use `--trust-override --no-prompt` only when you intentionally bypass the trusted-source allowlist for a local or non-standard source; the update report records that override.
 - Successful applies sync bundle files, run install, re-materialize `live/`, apply built-in live-rule contract migrations for existing workspaces, run verify plus manifest validation, and only then write the final `VERSION` marker.
 - Successful applies create rollback artifacts under `garda-agent-orchestrator/runtime/update-rollbacks/` and `garda-agent-orchestrator/runtime/bundle-backups/`.
-- Successful applies also invalidate cached bundle runtime modules so long-lived host processes do not keep stale command or validator code resident after the bundle changes.
+- Successful applies run the updated bundle lifecycle through a fixed entry in a fresh Node process. The handoff rejects a missing or linked entry and confines CommonJS and native ESM module resolution to the deployed `dist` runtime. Long-lived hosts must start a new Garda process before issuing another command after an apply.
 - Update reports now reflect actual execution status; steps with no configured runner are reported as skipped rather than pass.
 - Human output omits internal workflow-config merge and project-memory handoff text; use `--json` or the generated update report for those diagnostic details.
 - Use `garda check-update --apply` when you want a compare-first flow with optional apply.
@@ -446,7 +446,7 @@ Notes:
 - Trusted git sources stay in enforced mode; if you bypass git-source trust with `--trust-override --no-prompt`, that override is recorded in CLI output and the update report.
 - Git updates record a trusted-source/no-release-signature provenance status. For release-sensitive git updates, run `garda update git --check-only` or `garda update git --dry-run` first, or prefer the npm update path with registry integrity.
 - With no extra flags, `garda update git` targets the current directory and uses the default GitHub repository URL.
-- Successful applies invalidate cached bundle runtime modules just like npm-based `update`, so long-lived host processes reload the new bundle on later commands.
+- Successful applies use the same fresh-process lifecycle handoff as npm-based `update`; long-lived hosts must start a new Garda process before another command.
 - Same-version content-drift syncs keep human output focused on operator-visible status and drift fields; internal workflow-config and project-memory handoff details remain available in JSON/report output.
 
 ### `garda rollback`
@@ -468,7 +468,7 @@ Notes:
 - `--init-answers-path` is required for version-based rollback because the workspace is re-materialized for the requested version.
 - `--snapshot-path` applies to snapshot-mode rollback; with no `--snapshot-path`, `rollback` uses the latest saved rollback snapshot automatically.
 - Older updates created before rollback metadata persistence may require manual recovery.
-- Successful non-dry-run rollback also invalidates cached bundle runtime modules so later commands in the same host process reload the restored bundle instead of stale in-memory code.
+- After a successful non-dry-run rollback, start a new Garda process before another command so the restored bundle is loaded from disk.
 
 ### `garda backup`
 

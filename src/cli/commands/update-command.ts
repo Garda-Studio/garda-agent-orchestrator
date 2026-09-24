@@ -22,7 +22,7 @@ import {
     finalizeAppliedUpdateOutput,
     formatKeyValueOutput,
     getDefaultInitAnswersPath,
-    invalidateBundleRuntimeModuleCache,
+    markRuntimeRestartRequired,
     mergeUpdateLifecycleOutput,
     printUpdateAnnouncementSections,
     ParsedOptionsRecord,
@@ -31,6 +31,17 @@ import {
 } from './shared-command-utils';
 
 type UpdateStatusTone = 'success' | 'attention' | 'failure';
+
+async function runWithRestartOnFailure<T>(operation: () => Promise<T>, mutationPossible: boolean): Promise<T> {
+    try {
+        return await operation();
+    } catch (error) {
+        if (mutationPossible) {
+            markRuntimeRestartRequired();
+        }
+        throw error;
+    }
+}
 
 function resolveUpdateStatusBanner(result: Record<string, unknown>): {
     title: string;
@@ -272,7 +283,7 @@ export async function handleUpdate(commandArgv: string[], packageJson: PackageJs
     });
 
     let lifecycleResult: UpdateLifecycleResult | null = null;
-    const updateResult = await runCheckUpdate({
+    const updateResult = await runWithRestartOnFailure(() => runCheckUpdate({
         targetRoot,
         bundleRoot: bundlePath,
         initAnswersPath: typeof options.initAnswersPath === 'string'
@@ -289,16 +300,13 @@ export async function handleUpdate(commandArgv: string[], packageJson: PackageJs
         updateRunner(runnerOptions) {
             lifecycleResult = buildUpdateLifecycleRunner(bundlePath, options.dryRun === true)(runnerOptions);
         }
-    });
+    }), options.dryRun !== true);
+    if (updateResult.updateApplied) {
+        markRuntimeRestartRequired();
+    }
     const mergedUpdateResultBase = mergeUpdateLifecycleOutput(toKeyValueRecord(updateResult), lifecycleResult);
     const mergedUpdateResult = updateResult.updateApplied
-        ? finalizeAppliedUpdateOutput(
-            (() => {
-                invalidateBundleRuntimeModuleCache(bundlePath);
-                return mergedUpdateResultBase;
-            })(),
-            bundlePath
-        )
+        ? finalizeAppliedUpdateOutput(mergedUpdateResultBase, bundlePath)
         : mergedUpdateResultBase;
     if (options.json === true) {
         console.log(JSON.stringify(mergedUpdateResult, null, 2));
@@ -345,7 +353,7 @@ export async function handleUpdateGit(commandArgv: string[], packageJson: Packag
     });
 
     let lifecycleResult: UpdateLifecycleResult | null = null;
-    const updateResult = await runUpdateFromGit({
+    const updateResult = await runWithRestartOnFailure(() => runUpdateFromGit({
         targetRoot,
         bundleRoot: bundlePath,
         initAnswersPath: typeof options.initAnswersPath === 'string'
@@ -362,16 +370,13 @@ export async function handleUpdateGit(commandArgv: string[], packageJson: Packag
         updateRunner(runnerOptions) {
             lifecycleResult = buildUpdateLifecycleRunner(bundlePath, options.dryRun === true)(runnerOptions);
         }
-    }) as Record<string, unknown>;
+    }), options.checkOnly !== true && options.dryRun !== true) as Record<string, unknown>;
+    if (updateResult.updateApplied === true) {
+        markRuntimeRestartRequired();
+    }
     const mergedUpdateGitResultBase = mergeUpdateLifecycleOutput(updateResult, lifecycleResult);
     const mergedUpdateGitResult = updateResult.updateApplied === true
-        ? finalizeAppliedUpdateOutput(
-            (() => {
-                invalidateBundleRuntimeModuleCache(bundlePath);
-                return mergedUpdateGitResultBase;
-            })(),
-            bundlePath
-        )
+        ? finalizeAppliedUpdateOutput(mergedUpdateGitResultBase, bundlePath)
         : mergedUpdateGitResultBase;
     if (options.json === true) {
         console.log(JSON.stringify(mergedUpdateGitResult, null, 2));
@@ -418,7 +423,7 @@ export async function handleCheckUpdate(commandArgv: string[], packageJson: Pack
     });
 
     let lifecycleResult: UpdateLifecycleResult | null = null;
-    const checkResult = await runCheckUpdate({
+    const checkResult = await runWithRestartOnFailure(() => runCheckUpdate({
         targetRoot,
         bundleRoot: bundlePath,
         initAnswersPath: typeof options.initAnswersPath === 'string'
@@ -435,16 +440,13 @@ export async function handleCheckUpdate(commandArgv: string[], packageJson: Pack
         updateRunner(runnerOptions) {
             lifecycleResult = buildUpdateLifecycleRunner(bundlePath, options.dryRun === true)(runnerOptions);
         }
-    });
+    }), options.apply === true && options.dryRun !== true);
+    if (checkResult.updateApplied) {
+        markRuntimeRestartRequired();
+    }
     const mergedCheckResultBase = mergeUpdateLifecycleOutput(toKeyValueRecord(checkResult), lifecycleResult);
     const mergedCheckResult = checkResult.updateApplied
-        ? finalizeAppliedUpdateOutput(
-            (() => {
-                invalidateBundleRuntimeModuleCache(bundlePath);
-                return mergedCheckResultBase;
-            })(),
-            bundlePath
-        )
+        ? finalizeAppliedUpdateOutput(mergedCheckResultBase, bundlePath)
         : mergedCheckResultBase;
     if (options.json === true) {
         console.log(JSON.stringify(mergedCheckResult, null, 2));
@@ -483,7 +485,7 @@ export async function handleRollback(commandArgv: string[], packageJson: Package
     ensureDirectoryExists(targetRoot, 'Target root');
     const bundlePath = ensureBundleExists(targetRoot, 'rollback');
 
-    const rollbackResult = await runRollback({
+    const rollbackResult = await runWithRestartOnFailure(() => runRollback({
         targetRoot,
         bundleRoot: bundlePath,
         snapshotPath: typeof options.snapshotPath === 'string' ? options.snapshotPath : undefined,
@@ -494,7 +496,10 @@ export async function handleRollback(commandArgv: string[], packageJson: Package
             ? options.initAnswersPath
             : getDefaultInitAnswersPath(targetRoot, bundlePath),
         dryRun: options.dryRun === true
-    }) as Record<string, unknown>;
+    }), options.dryRun !== true) as Record<string, unknown>;
+    if (options.dryRun !== true) {
+        markRuntimeRestartRequired();
+    }
 
     if (options.json === true) {
         console.log(JSON.stringify(rollbackResult, null, 2));
@@ -517,7 +522,4 @@ export async function handleRollback(commandArgv: string[], packageJson: Package
         ]);
     }
 
-    if (options.dryRun !== true) {
-        invalidateBundleRuntimeModuleCache(bundlePath);
-    }
 }

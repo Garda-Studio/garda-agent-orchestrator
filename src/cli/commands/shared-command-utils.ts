@@ -1,15 +1,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
-    LIFECYCLE_COMMANDS,
-    resolveBundleName
+    LIFECYCLE_COMMANDS
 } from '../../core/constants';
-import { formatManifestResult, formatVerifyResult, runVerify, validateManifest } from '../../validators';
-import { runContractMigrations } from '../../lifecycle/contract-migrations';
 import { collectUpdateAnnouncements } from '../../lifecycle/update-announcements';
 import { compareVersionStrings } from '../../lifecycle/generic-utils';
-import { runUpdate } from '../../lifecycle/update';
 import { type CheckUpdateRunnerOptions } from '../../lifecycle/check-update';
+import { isPathInsideRoot } from '../../core/paths';
 import { cyan, getBundlePath, green, yellow } from './cli-helpers';
 
 export type ParsedOptionValue = string | boolean | string[] | undefined;
@@ -36,6 +34,18 @@ export interface UpdateLifecycleResult extends Record<string, unknown> {
     updateMessages?: unknown;
     releaseNotes?: unknown;
     updateAnnouncementWarnings?: unknown;
+}
+
+let runtimeRestartRequired = false;
+
+export function markRuntimeRestartRequired(): void {
+    runtimeRestartRequired = true;
+}
+
+export function assertRuntimeRestartNotRequired(): void {
+    if (runtimeRestartRequired) {
+        throw new Error('The bundle changed in this process. Start a new Garda process before running another command.');
+    }
 }
 
 export class ValidationFailureError extends Error {
@@ -255,178 +265,77 @@ export function getDefaultInitAnswersPath(targetRoot: string, bundlePath?: strin
     return path.join(path.basename(effectiveBundlePath), 'runtime', 'init-answers.json');
 }
 
-interface CachedRuntimeModule {
-    id: string;
-    children: CachedRuntimeModule[];
-}
-
-function normalizeModuleCachePath(filePath: string): string {
-    const resolvedPath = path.resolve(filePath);
-    return process.platform === 'win32'
-        ? resolvedPath.toLowerCase()
-        : resolvedPath;
-}
-
-function getBundleRuntimeRoot(bundlePath: string): string {
-    return path.join(path.resolve(bundlePath), 'dist', 'src');
-}
-
-function isBundleRuntimeModulePath(filePath: string, runtimeRoot: string): boolean {
-    const normalizedFilePath = normalizeModuleCachePath(filePath);
-    const normalizedRuntimeRoot = normalizeModuleCachePath(runtimeRoot);
-    return normalizedFilePath === normalizedRuntimeRoot
-        || normalizedFilePath.startsWith(`${normalizedRuntimeRoot}${path.sep}`);
-}
-
-function collectReachableCachedRuntimeModules(
-    entryModulePaths: string[],
-    runtimeRoot: string
-): string[] {
-    const visited = new Set<string>();
-    const toInvalidate = new Set<string>();
-    const queue: CachedRuntimeModule[] = [];
-
-    for (const entryModulePath of entryModulePaths) {
-        try {
-            const resolvedEntryPath = require.resolve(entryModulePath);
-            const cachedModule = require.cache[resolvedEntryPath] as CachedRuntimeModule | undefined;
-            if (cachedModule) {
-                queue.push(cachedModule);
-            }
-        } catch {
-            // ignore cache miss
+function resolveUpdateHandoffEntry(bundlePath: string): string {
+    const bundleRoot = path.resolve(bundlePath);
+    if (fs.lstatSync(bundleRoot).isSymbolicLink()) {
+        throw new Error('Updated bundle root must not be a filesystem link.');
+    }
+    const entryPath = path.join(bundleRoot, 'dist', 'src', 'cli', 'commands', 'update-runtime-handoff.js');
+    const pending = [path.join(bundleRoot, 'dist')];
+    while (pending.length > 0) {
+        const current = pending.pop() as string;
+        const stats = fs.lstatSync(current);
+        if (stats.isSymbolicLink()) {
+            throw new Error('Updated bundle runtime contains a filesystem link.');
+        }
+        if (stats.isDirectory()) {
+            pending.push(...fs.readdirSync(current).map((name) => path.join(current, name)));
         }
     }
-
-    while (queue.length > 0) {
-        const currentModule = queue.pop();
-        if (!currentModule) {
-            continue;
-        }
-        if (visited.has(currentModule.id)) {
-            continue;
-        }
-        visited.add(currentModule.id);
-
-        if (!isBundleRuntimeModulePath(currentModule.id, runtimeRoot)) {
-            continue;
-        }
-
-        toInvalidate.add(path.resolve(currentModule.id));
-        for (const childModule of currentModule.children) {
-            if (!visited.has(childModule.id)) {
-                queue.push(childModule);
-            }
-        }
+    const realBundleRoot = fs.realpathSync.native(bundleRoot);
+    const realEntryPath = fs.realpathSync.native(entryPath);
+    if (!isPathInsideRoot(realBundleRoot, realEntryPath)
+        || !fs.lstatSync(entryPath).isFile()
+        || !fs.statSync(realEntryPath).isFile()) {
+        throw new Error('Updated bundle handoff entry must be a contained regular file.');
     }
-
-    return Array.from(toInvalidate).sort();
+    return realEntryPath;
 }
 
-export function invalidateBundleRuntimeModuleCache(bundlePath: string, entryModulePaths?: string[]): string[] {
-    const runtimeRoot = getBundleRuntimeRoot(bundlePath);
-    if (!fs.existsSync(runtimeRoot)) {
-        return [];
-    }
-
-    const invalidatedPaths = entryModulePaths && entryModulePaths.length > 0
-        ? collectReachableCachedRuntimeModules(entryModulePaths, runtimeRoot)
-        : Object.keys(require.cache)
-            .filter((cachedPath) => isBundleRuntimeModulePath(cachedPath, runtimeRoot))
-            .map((cachedPath) => path.resolve(cachedPath))
-            .sort();
-
-    for (const invalidatedPath of invalidatedPaths) {
-        delete require.cache[invalidatedPath];
-    }
-
-    return invalidatedPaths;
+function getHandoffEnvironment(): NodeJS.ProcessEnv {
+    return Object.fromEntries(Object.entries(process.env).filter(([key]) => (
+        !['NODE_OPTIONS', 'NODE_PATH', 'NODE_REPL_EXTERNAL_MODULE', 'GARDA_UPDATE_HANDOFF_INTERNAL_LOADER'].includes(key.toUpperCase())
+    )));
 }
 
 export function buildUpdateLifecycleRunner(bundlePath: string, fallbackDryRun: boolean | undefined) {
     return function runLifecycleFromCli(runnerOptions: CheckUpdateRunnerOptions): UpdateLifecycleResult {
-        const bundleResolved = path.resolve(bundlePath);
-        const targetUpdateModulePath = path.join(bundleResolved, 'dist', 'src', 'lifecycle', 'update.js');
-        const targetMigrationModulePath = path.join(bundleResolved, 'dist', 'src', 'lifecycle', 'contract-migrations.js');
-        const targetVerifyModulePath = path.join(bundleResolved, 'dist', 'src', 'validators', 'verify.js');
-        const targetManifestModulePath = path.join(bundleResolved, 'dist', 'src', 'validators', 'validate-manifest.js');
-
-        let effectiveRunUpdate = runUpdate;
-        let effectiveRunContractMigrations = runContractMigrations;
-        let effectiveRunVerify = runVerify;
-        let effectiveValidateManifest = validateManifest;
-
-        if (fs.existsSync(targetUpdateModulePath)) {
-            try {
-                invalidateBundleRuntimeModuleCache(bundlePath);
-
-                const newUpdateModule = require(targetUpdateModulePath);
-                if (typeof newUpdateModule.runUpdate === 'function') {
-                    effectiveRunUpdate = newUpdateModule.runUpdate;
-                }
-                const newMigrationModule = fs.existsSync(targetMigrationModulePath) ? require(targetMigrationModulePath) : null;
-                if (newMigrationModule && typeof newMigrationModule.runContractMigrations === 'function') {
-                    effectiveRunContractMigrations = newMigrationModule.runContractMigrations;
-                }
-                const newVerifyModule = fs.existsSync(targetVerifyModulePath) ? require(targetVerifyModulePath) : null;
-                if (newVerifyModule && typeof newVerifyModule.runVerify === 'function') {
-                    effectiveRunVerify = newVerifyModule.runVerify;
-                }
-                const newManifestModule = fs.existsSync(targetManifestModulePath) ? require(targetManifestModulePath) : null;
-                if (newManifestModule && typeof newManifestModule.validateManifest === 'function') {
-                    effectiveValidateManifest = newManifestModule.validateManifest;
-                }
-            } catch {
-                // Fallback to current code
-            }
+        // The caller has already synced bundle files before invoking this runner.
+        markRuntimeRestartRequired();
+        if (!['enforced', 'overridden'].includes(runnerOptions.trustPolicy)) {
+            throw new Error('Updated bundle handoff requires a validated update source.');
         }
-
-        return effectiveRunUpdate({
-            targetRoot: runnerOptions.targetRoot,
-            bundleRoot: bundlePath,
-            initAnswersPath: runnerOptions.initAnswersPath,
-            dryRun: fallbackDryRun,
-            skipVerify: runnerOptions.skipVerify,
-            skipManifestValidation: runnerOptions.skipManifestValidation,
-            trustContext: {
-                policy: runnerOptions.trustPolicy,
-                overrideUsed: runnerOptions.trustOverrideUsed,
-                overrideSource: runnerOptions.trustOverrideSource,
-                sourceType: runnerOptions.sourceType,
-                sourceReference: runnerOptions.sourceReference,
-                gitCommitSha: runnerOptions.gitCommitSha || null,
-                requestedPackageSpec: runnerOptions.requestedPackageSpec || null,
-                exactPackageSpec: runnerOptions.exactPackageSpec || null,
-                resolvedPackageVersion: runnerOptions.resolvedPackageVersion || null,
-                resolvedPackageIntegrity: runnerOptions.resolvedPackageIntegrity || null,
-                releaseProvenanceStatus: runnerOptions.releaseProvenanceStatus || null,
-                releaseProvenanceSummary: runnerOptions.releaseProvenanceSummary || null,
-                releaseProvenanceRecommendation: runnerOptions.releaseProvenanceRecommendation || null
-            },
-            lifecycleLockAlreadyHeld: runnerOptions.lifecycleLockAlreadyHeld === true,
-            contractMigrationRunner(options) {
-                return effectiveRunContractMigrations(options);
-            },
-            verifyRunner(options) {
-                const result = effectiveRunVerify({
-                    targetRoot: options.targetRoot,
-                    initAnswersPath: options.initAnswersPath,
-                    sourceOfTruth: options.sourceOfTruth
-                });
-                if (!result.passed) {
-                    throw new Error(formatVerifyResult(result));
-                }
-                return result;
-            },
-            manifestRunner(options) {
-                const manifestPath = path.join(options.targetRoot, resolveBundleName(), 'MANIFEST.md');
-                const result = effectiveValidateManifest(manifestPath, options.targetRoot);
-                if (!result.passed) {
-                    throw new Error(formatManifestResult(result));
-                }
-                return result;
-            }
-        }) as UpdateLifecycleResult;
+        let entryPath: string;
+        try {
+            entryPath = resolveUpdateHandoffEntry(bundlePath);
+        } catch (error) {
+            throw new Error('Updated bundle handoff entry is missing or escapes the contained bundle.', { cause: error });
+        }
+        const child = spawnSync(process.execPath, [
+            '--require', path.join(__dirname, 'update-runtime-loader-guard.js'), entryPath
+        ], {
+            input: JSON.stringify({
+                bundleRoot: path.resolve(bundlePath),
+                runnerOptions: { ...runnerOptions, lifecycleLockAlreadyHeld: true },
+                fallbackDryRun
+            }),
+            encoding: 'utf8',
+            stdio: ['pipe', 'inherit', 'inherit', 'pipe'],
+            env: { ...getHandoffEnvironment(), GARDA_UPDATE_HANDOFF_DIST: path.join(path.resolve(bundlePath), 'dist') },
+            windowsHide: true,
+            maxBuffer: 16 * 1024 * 1024
+        });
+        const responseText = child.output?.[3];
+        let response: { result?: UpdateLifecycleResult; error?: string } | null = null;
+        try {
+            response = typeof responseText === 'string' ? JSON.parse(responseText) : null;
+        } catch {
+            // A missing or invalid frame is a failed handoff, never a reason to run stale code.
+        }
+        if (child.error || child.status !== 0 || !response?.result) {
+            throw new Error(response?.error || child.error?.message || 'Updated bundle lifecycle handoff failed.');
+        }
+        return response.result;
     };
 }
 

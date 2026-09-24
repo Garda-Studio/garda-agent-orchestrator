@@ -86,6 +86,14 @@ function makeTempBundleFixture(): { workspaceRoot: string; bundleUpdateModulePat
         ].join('\n'),
         'utf8'
     );
+    const handoffPath = path.join(bundleRoot, 'dist', 'src', 'cli', 'commands', 'update-runtime-handoff.js');
+    fs.mkdirSync(path.dirname(handoffPath), { recursive: true });
+    fs.writeFileSync(handoffPath, [
+        "const fs = require('node:fs');",
+        "const update = require('../../lifecycle/update.js');",
+        "fs.readFileSync(0, 'utf8');",
+        'fs.writeSync(3, JSON.stringify({ result: update.runUpdate() }));'
+    ].join('\n'));
     fs.writeFileSync(
         path.join(bundleRoot, 'live', 'config', 'update-messages.json'),
         JSON.stringify({
@@ -257,7 +265,7 @@ test('handleUpdate surfaces update messages and release notes in plain text and 
                             initAnswersPath: 'garda-agent-orchestrator/runtime/init-answers.json',
                             skipVerify: false,
                             skipManifestValidation: false,
-                            trustPolicy: 'explicit',
+                            trustPolicy: 'overridden',
                             trustOverrideUsed: true,
                             trustOverrideSource: 'cli',
                             sourceType: 'path',
@@ -281,7 +289,7 @@ test('handleUpdate surfaces update messages and release notes in plain text and 
                         updateAvailable: true,
                         updateApplied: true,
                         checkUpdateResult: 'UPDATED',
-                        trustPolicy: 'explicit',
+                        trustPolicy: 'overridden',
                         trustOverrideUsed: true,
                         trustOverrideSource: 'cli'
                     };
@@ -326,7 +334,7 @@ test('handleUpdate surfaces update messages and release notes in plain text and 
             assertColoredLine(plainTextLines, '    - Re-check new workflow affordances.', /^\u001b\[32m    - Re-check new workflow affordances\.\u001b\[0m$/);
             assertColoredLine(plainTextLines, 'ReleaseNotes:', /^\u001b\[36mReleaseNotes:\u001b\[0m$/);
             assertColoredLine(plainTextLines, '    - added versioned notes', /^\u001b\[32m    - added versioned notes\u001b\[0m$/);
-            assert.equal(require.cache[fixture.bundleUpdateModulePath], undefined);
+            assert.notEqual(require.cache[fixture.bundleUpdateModulePath], undefined);
 
             const noColorLines = await captureConsoleLogsWithNoColor(async () => {
                 await reloaded.module.handleUpdate([
@@ -410,7 +418,7 @@ test('handleCheckUpdate --apply includes UpdateApplied in plain text and enriche
                             initAnswersPath: 'garda-agent-orchestrator/runtime/init-answers.json',
                             skipVerify: false,
                             skipManifestValidation: false,
-                            trustPolicy: 'explicit',
+                            trustPolicy: 'overridden',
                             trustOverrideUsed: true,
                             trustOverrideSource: 'cli',
                             sourceType: 'path',
@@ -434,7 +442,7 @@ test('handleCheckUpdate --apply includes UpdateApplied in plain text and enriche
                         updateAvailable: true,
                         updateApplied: true,
                         checkUpdateResult: 'UPDATED',
-                        trustPolicy: 'explicit',
+                        trustPolicy: 'overridden',
                         trustOverrideUsed: true,
                         trustOverrideSource: 'cli'
                     };
@@ -470,7 +478,7 @@ test('handleCheckUpdate --apply includes UpdateApplied in plain text and enriche
             assertColoredLine(plainTextLines, 'UpdateMessages:', /^\u001b\[36mUpdateMessages:\u001b\[0m$/);
             assertColoredLine(plainTextLines, '  1.1.0 - Major registry note', /^\u001b\[32m  1\.1\.0 - Major registry note\u001b\[0m$/);
             assertColoredLine(plainTextLines, 'ReleaseNotes:', /^\u001b\[36mReleaseNotes:\u001b\[0m$/);
-            assert.equal(require.cache[fixture.bundleUpdateModulePath], undefined);
+            assert.notEqual(require.cache[fixture.bundleUpdateModulePath], undefined);
 
             const jsonLines = await captureConsoleLogs(async () => {
                 await reloaded.module.handleCheckUpdate([
@@ -608,7 +616,7 @@ test('handleCheckUpdate --apply corrects stale lifecycle UpdatedVersion after de
                             initAnswersPath: 'garda-agent-orchestrator/runtime/init-answers.json',
                             skipVerify: false,
                             skipManifestValidation: false,
-                            trustPolicy: 'explicit',
+                            trustPolicy: 'overridden',
                             trustOverrideUsed: true,
                             trustOverrideSource: 'cli',
                             sourceType: 'path',
@@ -638,7 +646,7 @@ test('handleCheckUpdate --apply corrects stale lifecycle UpdatedVersion after de
                         updateAvailable: true,
                         updateApplied: true,
                         checkUpdateResult: 'UPDATED',
-                        trustPolicy: 'explicit',
+                        trustPolicy: 'overridden',
                         trustOverrideUsed: true,
                         trustOverrideSource: 'cli'
                     };
@@ -699,7 +707,7 @@ test('handleCheckUpdate surfaces a green up-to-date banner in plain text without
                         updateAvailable: false,
                         updateApplied: false,
                         checkUpdateResult: 'UP_TO_DATE',
-                        trustPolicy: 'explicit',
+                        trustPolicy: 'overridden',
                         trustOverrideUsed: true,
                         trustOverrideSource: 'cli'
                     };
@@ -761,7 +769,7 @@ test('handleCheckUpdate surfaces a yellow update-available banner in color mode 
                         updateAvailable: true,
                         updateApplied: false,
                         checkUpdateResult: 'UPDATE_AVAILABLE',
-                        trustPolicy: 'explicit',
+                        trustPolicy: 'overridden',
                         trustOverrideUsed: true,
                         trustOverrideSource: 'cli'
                     };
@@ -835,7 +843,7 @@ test('handleCheckUpdate surfaces a yellow dry-run banner without changing json o
                         updateAvailable: true,
                         updateApplied: false,
                         checkUpdateResult: 'DRY_RUN_UPDATE_AVAILABLE',
-                        trustPolicy: 'explicit',
+                        trustPolicy: 'overridden',
                         trustOverrideUsed: true,
                         trustOverrideSource: 'cli'
                     };
@@ -922,7 +930,7 @@ test('handleUpdateGit surfaces the shared status banner in plain text without ch
                             initAnswersPath: 'garda-agent-orchestrator/runtime/init-answers.json',
                             skipVerify: false,
                             skipManifestValidation: false,
-                            trustPolicy: 'explicit',
+                            trustPolicy: 'overridden',
                             trustOverrideUsed: true,
                             trustOverrideSource: 'cli',
                             sourceType: 'git',
@@ -945,7 +953,7 @@ test('handleUpdateGit surfaces the shared status banner in plain text without ch
                         updateAvailable: true,
                         updateApplied: true,
                         checkUpdateResult: 'UPDATED',
-                        trustPolicy: 'explicit',
+                        trustPolicy: 'overridden',
                         trustOverrideUsed: true,
                         trustOverrideSource: 'cli'
                     };
@@ -1038,7 +1046,7 @@ test('handleUpdateGit keeps same-version content drift sync output operator-focu
                             initAnswersPath: 'garda-agent-orchestrator/runtime/init-answers.json',
                             skipVerify: false,
                             skipManifestValidation: false,
-                            trustPolicy: 'explicit',
+                            trustPolicy: 'overridden',
                             trustOverrideUsed: true,
                             trustOverrideSource: 'cli',
                             sourceType: 'git',
@@ -1059,7 +1067,7 @@ test('handleUpdateGit keeps same-version content drift sync output operator-focu
                         driftedSyncItems: ['dist', 'live'],
                         updateApplied: true,
                         checkUpdateResult: 'UPDATED',
-                        trustPolicy: 'explicit',
+                        trustPolicy: 'overridden',
                         trustOverrideUsed: true,
                         trustOverrideSource: 'cli'
                     };
