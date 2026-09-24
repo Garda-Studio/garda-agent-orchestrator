@@ -890,6 +890,16 @@ describe('gates/next-step preflight routing', () => {
         const preflightPath = writeBaselineOnlyPreflight(repoRoot, TASK_ID);
         seedGitAutoCompilePass(repoRoot, TASK_ID);
         writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+        const noOpPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-no-op.json`);
+        const noOp = JSON.parse(fs.readFileSync(noOpPath, 'utf8')) as Record<string, unknown>;
+        appendEvent(repoRoot, TASK_ID, 'NO_OP_RECORDED', 'INFO', {
+            artifact_path: normalizeForTimeline(noOpPath),
+            artifact_sha256: fileSha256(noOpPath),
+            classification: noOp.classification,
+            reason: noOp.reason,
+            preflight_path: normalizeForTimeline(preflightPath),
+            preflight_sha256: noOp.preflight_sha256
+        });
 
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
         assert.notEqual(result.next_gate, 'implementation', result.reason);
@@ -2764,14 +2774,18 @@ describe('gates/next-step preflight routing', () => {
         assert.ok(!command.includes(`--changed-file "${absoluteDirectory}"`));
     });
 
-    it('rejects symlink directory placeholders that resolve outside the repo root', { skip: process.platform === 'win32' }, () => {
+    it('rejects linked directory placeholders that resolve outside the repo root', () => {
         const repoRoot = makeTempRepo();
         initGitRepo(repoRoot);
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS }, { changedFiles: [] });
         const outsideDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-next-step-outside-'));
         tempRoots.push(outsideDirectory);
         fs.writeFileSync(path.join(outsideDirectory, 'hidden.ts'), 'export const hidden = true;\n', 'utf8');
-        fs.symlinkSync(outsideDirectory, path.join(repoRoot, 'src', 'linked-generated'), 'dir');
+        fs.symlinkSync(
+            outsideDirectory,
+            path.join(repoRoot, 'src', 'linked-generated'),
+            process.platform === 'win32' ? 'junction' : 'dir'
+        );
         const dirtyWorkspaceBaseline = {
             detection_source: 'git_auto',
             include_untracked: true,
