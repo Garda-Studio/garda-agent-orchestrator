@@ -6,6 +6,8 @@ import {
     getRulePackRequiredEntryFiles,
     getRulePackRequiredFilesFromPreflight,
     getRulePackStageKey,
+    getLegacyPostPreflightRulePackFiles,
+    getLegacyTaskEntryRulePackFiles,
     isCompatiblePostPreflightRuleFileSet,
     isCompatibleTaskEntryRuleFileSet,
     normalizeLoadedRuleFiles,
@@ -33,6 +35,12 @@ test('rule-pack selection distinguishes depth-one task entry from full entry and
     assert.equal(isCompatiblePostPreflightRuleFileSet(repoRoot, post, { test: true }, 1), true);
     assert.equal(isCompatibleTaskEntryRuleFileSet(repoRoot, entry.slice(1), 1), false);
     assert.equal(isCompatiblePostPreflightRuleFileSet(repoRoot, post.slice(1), { test: true }, 1), false);
+    const legacyEntry = getLegacyTaskEntryRulePackFiles(repoRoot);
+    const legacyPost = getLegacyPostPreflightRulePackFiles(repoRoot, { test: true }, 1);
+    assert.equal(isCompatibleTaskEntryRuleFileSet(repoRoot, legacyEntry, 1), true);
+    assert.equal(isCompatiblePostPreflightRuleFileSet(repoRoot, legacyPost, { test: true }, 1), true);
+    assert.equal(isCompatibleTaskEntryRuleFileSet(repoRoot, entry.map((file) => file.toUpperCase()), 1), true);
+    assert.equal(isCompatiblePostPreflightRuleFileSet(repoRoot, post.map((file) => file.toUpperCase()), { test: true }, 1), true);
 });
 
 test('rule-pack selection normalizes duplicates and rejects missing or outside rule files', (t) => {
