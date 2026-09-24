@@ -1,6 +1,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { PRIMARY_PACKAGE_NAME } from '../../core/constants';
+import {
+    assertContainedDestination,
+    bindContainedDestination,
+    ensureContainedDirectory,
+    removeBoundContainedPath,
+    type ContainedDestination
+} from '../../core/contained-filesystem';
 import { pathExists, readTextFile } from '../../core/filesystem';
 import {
     DEFAULT_NPM_TIMEOUT_MS,
@@ -9,7 +16,7 @@ import {
     type SpawnStreamedOptions,
     type SpawnSyncWithTimeoutOptions
 } from '../../core/subprocess';
-import { compareVersionStrings, removePathRecursive } from '../common';
+import { compareVersionStrings } from '../common';
 import { classifyNpmDiagnostic, createLifecycleDiagnosticError } from '../update/update-diagnostics';
 import {
     buildReleaseUpdateProvenance,
@@ -29,6 +36,7 @@ import { getErrorMessage, toObjectRecord } from './check-update-utils';
 
 export const DEFAULT_PACKAGE_NAME = PRIMARY_PACKAGE_NAME;
 export const DEFAULT_UPDATE_TEMP_TTL_MS = 24 * 60 * 60 * 1000;
+const ownedUpdateTempRoots = new Map<string, ContainedDestination>();
 
 interface NpmInvocation {
     command: string;
@@ -406,23 +414,35 @@ export function cleanupOldUpdateTempRoots(
     nowMs: number = Date.now()
 ): string[] {
     const updateTempRoot = getUpdateTempRoot(runtimeRoot);
-    if (!fs.existsSync(updateTempRoot)) {
-        return [];
-    }
+    const ownerRoot = path.dirname(path.resolve(runtimeRoot));
+    const updateTempBinding = bindContainedDestination(ownerRoot, updateTempRoot);
+    if (updateTempBinding.missingAt) return [];
+    assertContainedDestination(updateTempBinding);
 
     const removed: string[] = [];
     for (const entry of fs.readdirSync(updateTempRoot, { withFileTypes: true })) {
-        if (!entry.isDirectory() || !entry.name.startsWith('npm-')) {
-            continue;
-        }
+        assertContainedDestination(updateTempBinding);
+        if (!entry.name.startsWith('npm-')) continue;
 
         const candidatePath = path.join(updateTempRoot, entry.name);
-        const stats = fs.statSync(candidatePath);
+        assertContainedDestination(updateTempBinding);
+        if (!entry.isDirectory()) continue;
+        const candidate = ownedUpdateTempRoots.get(candidatePath);
+        if (candidate) assertContainedDestination(candidate);
+        const stats = fs.lstatSync(candidatePath);
+        if (!stats.isDirectory()) {
+            throw new Error(`Update temporary cleanup owner changed before inspection: ${candidatePath}`);
+        }
         if (nowMs - stats.mtimeMs <= ttlMs) {
             continue;
         }
+        if (!candidate) {
+            process.stderr.write(`Preserving ambiguous update temporary root ${candidatePath}: no creator-owned binding; inspect before manual removal.\n`);
+            continue;
+        }
 
-        removePathRecursive(candidatePath);
+        removeBoundContainedPath(candidate, true);
+        ownedUpdateTempRoots.delete(candidatePath);
         removed.push(candidatePath);
     }
 
@@ -521,8 +541,17 @@ export async function acquireUpdateSource(options: AcquireUpdateSourceOptions): 
     const runtimeRoot = path.join(deployedBundleRoot, 'runtime');
     cleanupOldUpdateTempRoots(runtimeRoot);
     const updateTempRoot = getUpdateTempRoot(runtimeRoot);
-    fs.mkdirSync(updateTempRoot, { recursive: true });
+    ensureContainedDirectory(deployedBundleRoot, updateTempRoot);
+    const updateTempBinding = bindContainedDestination(deployedBundleRoot, updateTempRoot);
+    assertContainedDestination(updateTempBinding);
     const tempInstallRoot = fs.mkdtempSync(path.join(updateTempRoot, 'npm-'));
+    assertContainedDestination(updateTempBinding);
+    const tempInstallBinding = bindContainedDestination(deployedBundleRoot, tempInstallRoot);
+    ownedUpdateTempRoots.set(tempInstallRoot, tempInstallBinding);
+    const cleanupTempInstall = () => {
+        removeBoundContainedPath(tempInstallBinding, true);
+        ownedUpdateTempRoots.delete(tempInstallRoot);
+    };
 
     let acquiredSource: AcquiredUpdateSource | null = null;
     try {
@@ -586,13 +615,13 @@ export async function acquireUpdateSource(options: AcquireUpdateSourceOptions): 
             trustOverrideSource: trustResult.overrideSource || 'none',
             diagnosticTool: diagnosticTool || 'npm',
             cleanup() {
-                removePathRecursive(tempInstallRoot);
+                cleanupTempInstall();
             }
         };
         return acquiredSource;
     } finally {
         if (!acquiredSource) {
-            removePathRecursive(tempInstallRoot);
+            cleanupTempInstall();
         }
     }
 }

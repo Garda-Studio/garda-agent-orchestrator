@@ -139,7 +139,7 @@ describe('npm update source resolution', () => {
         );
     });
 
-    it('janitor removes only old Garda-owned npm update temp roots', () => {
+    it('janitor preserves old roots without a creator-owned binding', () => {
         const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-update-temp-'));
         try {
             const updateTempRoot = getUpdateTempRoot(runtimeRoot);
@@ -157,8 +157,8 @@ describe('npm update source resolution', () => {
 
             const removed = cleanupOldUpdateTempRoots(runtimeRoot, 5_000, now);
 
-            assert.deepEqual(removed, [oldNpmRoot]);
-            assert.equal(fs.existsSync(oldNpmRoot), false);
+            assert.deepEqual(removed, []);
+            assert.equal(fs.existsSync(oldNpmRoot), true);
             assert.equal(fs.existsSync(freshNpmRoot), true);
             assert.equal(fs.existsSync(foreignRoot), true);
         } finally {

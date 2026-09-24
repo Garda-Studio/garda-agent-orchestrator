@@ -3,12 +3,16 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { resolveBundleName } from '../../core/constants';
 import {
+    bindContainedDestination,
+    removeBoundContainedPath,
+    type ContainedDestination
+} from '../../core/contained-filesystem';
+import {
     DEFAULT_GIT_CLONE_TIMEOUT_MS,
     DEFAULT_GIT_TIMEOUT_MS,
     spawnStreamed,
     spawnSyncWithTimeout
 } from '../../core/subprocess';
-import { removePathRecursive } from '../common';
 import { type CheckUpdateRunnerOptions, runCheckUpdate } from '../check-update';
 import { validateGitSourceTrust } from './update-trust';
 import {
@@ -81,23 +85,37 @@ export async function cloneGitUpdateSource(repoUrl: string, branch: string | nul
     ensureGitAvailable();
 
     const tempClonePath = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-update-git-'));
+    const cloneBinding = bindContainedDestination(path.dirname(tempClonePath), tempClonePath);
     let templateRoot: string | null = null;
+    let templateBinding: ContainedDestination | null = null;
     let disposeCloneCleanup: (() => void) | null = null;
     let disposeTemplateCleanup: (() => void) | null = null;
+    let cloneRemoved = false;
+    let templateRemoved = false;
     const cleanup = () => {
         disposeCloneCleanup?.();
         disposeTemplateCleanup?.();
         try {
-            removePathRecursive(tempClonePath);
+            if (!cloneRemoved) {
+                removeBoundContainedPath(cloneBinding, true);
+                cloneRemoved = true;
+            }
         } finally {
-            if (templateRoot) removePathRecursive(templateRoot);
+            if (templateRoot && !templateBinding) {
+                throw new Error(`Cannot authenticate isolated Git template cleanup owner: ${templateRoot}`);
+            }
+            if (templateBinding && !templateRemoved) {
+                removeBoundContainedPath(templateBinding, true);
+                templateRemoved = true;
+            }
         }
     };
     let env: NodeJS.ProcessEnv;
     try {
-        disposeCloneCleanup = registerTempRoot(tempClonePath);
+        disposeCloneCleanup = registerTempRoot(tempClonePath, cloneBinding);
         templateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-update-template-'));
-        disposeTemplateCleanup = registerTempRoot(templateRoot);
+        templateBinding = bindContainedDestination(path.dirname(templateRoot), templateRoot);
+        disposeTemplateCleanup = registerTempRoot(templateRoot, templateBinding);
         env = createIsolatedGitEnvironment(templateRoot);
     } catch (error) {
         cleanup();

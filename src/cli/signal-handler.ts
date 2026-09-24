@@ -1,6 +1,12 @@
-import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 import { EXIT_SIGNAL_INTERRUPT } from './exit-codes';
+import {
+    assertContainedDestination,
+    bindContainedDestination,
+    ContainedDestination,
+    removeBoundContainedPath
+} from '../core/contained-filesystem';
 import {
     computeTerminationSignalExitCode,
     registerSubprocessSignalHandler,
@@ -104,11 +110,23 @@ export function computeSignalExitCode(sig: NodeJS.Signals | null): number {
     return sig ? computeTerminationSignalExitCode(sig) : EXIT_SIGNAL_INTERRUPT;
 }
 
-export function registerTempRoot(dirPath: string): () => void {
+export function registerTempRoot(dirPath: string, ownerBinding?: ContainedDestination): () => void {
+    const resolvedPath = path.resolve(dirPath);
+    if (ownerBinding && ownerBinding.path !== resolvedPath) {
+        throw new Error(`Temporary cleanup binding does not match root: ${resolvedPath}`);
+    }
+    const binding = ownerBinding ?? bindContainedDestination(path.dirname(resolvedPath), resolvedPath);
+    if (binding.missingAt) {
+        throw new Error(`Temporary cleanup root does not exist: ${resolvedPath}`);
+    }
+    assertContainedDestination(binding);
     const fn = function () {
         try {
-            fs.rmSync(dirPath, { recursive: true, force: true });
-        } catch (_e) { /* best effort */ }
+            removeBoundContainedPath(binding, true);
+        } catch (error: unknown) {
+            const reason = error instanceof Error ? error.message : String(error);
+            process.stderr.write(`Temporary cleanup preserved ambiguous root ${resolvedPath}: ${reason}\n`);
+        }
     };
     return registerCleanup(fn);
 }

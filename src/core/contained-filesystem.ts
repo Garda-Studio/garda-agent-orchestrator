@@ -86,18 +86,22 @@ export function assertContainedDestination(binding: ContainedDestination): void 
     }
 }
 
-export function ensureContainedDirectory(root: string, directoryPath: string): void {
+export function ensureContainedDirectory(
+    root: string, directoryPath: string, onCreated?: (binding: ContainedDestination) => void
+): void {
     const binding = bindContainedDestination(root, directoryPath);
     const relative = path.relative(binding.root, binding.path);
     let current = binding.root;
     for (const component of relative ? relative.split(path.sep) : []) {
         current = path.join(current, component);
         assertExistingPathIdentity(binding);
-        if (!lstatIfPresent(current)) fs.mkdirSync(current);
+        const created = !lstatIfPresent(current);
+        if (created) fs.mkdirSync(current);
         const stat = fs.lstatSync(current);
         if (!stat.isDirectory() || stat.isSymbolicLink()) {
             throw new Error(`Destination parent is not a directory: ${current}`);
         }
+        if (created) onCreated?.(bindContainedDestination(root, current));
     }
     assertExistingPathIdentity(binding);
 }
@@ -170,16 +174,99 @@ export function copyContainedFile(
     }, false, onReplaced);
 }
 
+interface RemovalEntry {
+    readonly binding: ContainedDestination;
+    readonly directory: boolean;
+}
+
+const ambiguousRemovalPaths = new Set<string>();
+const completedRemovals = new WeakSet<ContainedDestination>();
+
+function removalKey(candidate: string): string {
+    const resolved = path.resolve(candidate);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function isAtOrInside(candidate: string, parent: string): boolean {
+    const relative = path.relative(parent, candidate);
+    return relative === '' || relative !== '..' && !relative.startsWith(`..${path.sep}`)
+        && !path.isAbsolute(relative);
+}
+
+function assertRemovalNotAmbiguous(candidate: string): void {
+    const requested = removalKey(candidate);
+    for (const blocked of ambiguousRemovalPaths) {
+        if (isAtOrInside(requested, blocked) || isAtOrInside(blocked, requested)) {
+            throw new Error(`Refusing cleanup of ambiguous previously rejected path: ${candidate}`);
+        }
+    }
+}
+
+function collectRemovalEntries(rootBinding: ContainedDestination): RemovalEntry[] {
+    const pending = [rootBinding];
+    const entries: RemovalEntry[] = [];
+    while (pending.length > 0) {
+        const binding = pending.pop()!;
+        const currentPath = binding.path;
+        assertContainedDestination(binding);
+        const stat = lstatIfPresent(currentPath);
+        if (!stat) throw new Error(`Cleanup destination disappeared during inspection: ${currentPath}`);
+        entries.push({ binding, directory: stat.isDirectory() });
+        if (stat.isDirectory()) {
+            const before = fs.lstatSync(currentPath, { bigint: true });
+            const children = fs.readdirSync(currentPath).sort().map((name) =>
+                bindContainedDestination(rootBinding.root, path.join(currentPath, name)));
+            const after = fs.lstatSync(currentPath, { bigint: true });
+            if (before.dev !== after.dev || before.ino !== after.ino || before.mode !== after.mode
+                || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) {
+                throw new Error(`Cleanup directory changed during enumeration: ${currentPath}`);
+            }
+            assertContainedDestination(binding);
+            pending.push(...children);
+        }
+    }
+    return entries;
+}
+
+export function removeBoundContainedPath(
+    binding: ContainedDestination, recursive = false, onRemoved?: () => void
+): void {
+    if (path.relative(binding.root, binding.path) === '') {
+        throw new Error(`Refusing to remove containment root: ${binding.path}`);
+    }
+    if (completedRemovals.has(binding)) return;
+    assertRemovalNotAmbiguous(binding.path);
+    try {
+        assertContainedDestination(binding);
+        const stat = lstatIfPresent(binding.path);
+        if (!stat) {
+            completedRemovals.add(binding);
+            onRemoved?.();
+            return;
+        }
+        const entries = recursive ? collectRemovalEntries(binding) : [{ binding, directory: stat.isDirectory() }];
+        for (const entry of entries.reverse()) {
+            assertContainedDestination(entry.binding);
+            if (entry.directory) fs.rmdirSync(entry.binding.path);
+            else fs.unlinkSync(entry.binding.path);
+        }
+        completedRemovals.add(binding);
+        onRemoved?.();
+    } catch (error: unknown) {
+        ambiguousRemovalPaths.add(removalKey(binding.path));
+        throw error;
+    }
+}
+
 export function removeContainedPath(
     root: string, destinationPath: string, recursive = false, onRemoved?: () => void
 ): void {
-    const binding = bindContainedDestination(root, destinationPath);
-    assertContainedDestination(binding);
-    if (!recursive && lstatIfPresent(binding.path)?.isDirectory()) {
-        fs.rmdirSync(binding.path);
-        onRemoved?.();
-        return;
+    let binding: ContainedDestination;
+    try {
+        binding = bindContainedDestination(root, destinationPath);
+    } catch (error: unknown) {
+        ambiguousRemovalPaths.add(removalKey(destinationPath));
+        throw error;
     }
-    fs.rmSync(binding.path, { recursive, force: true });
-    onRemoved?.();
+    removeBoundContainedPath(binding, recursive, onRemoved);
 }

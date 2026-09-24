@@ -260,7 +260,7 @@ describe('runRollback (snapshot mode)', () => {
         }
     });
 
-    it('rejects a dangling live version introduced during rollback and restores the bundle', async (t) => {
+    it('preserves a dangling live version when safety rollback cannot claim it', async (t) => {
         const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
         try {
             const probe = path.join(projectRoot, 'symlink-probe');
@@ -288,9 +288,9 @@ describe('runRollback (snapshot mode)', () => {
                 materializationRunner: () => {
                     fs.symlinkSync(path.join(bundleRoot, 'live', 'missing'), liveVersionPath, 'junction');
                 }
-            }), /safety rollback completed successfully.*(?:symlink|junction)/);
+            }), /Safety rollback failed:.*(?:symlink|junction)/);
             assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8'), originalVersion);
-            assert.equal(fs.existsSync(liveVersionPath), false);
+            assert.equal(fs.lstatSync(liveVersionPath).isSymbolicLink(), true);
         } finally {
             removePathRecursive(projectRoot);
         }

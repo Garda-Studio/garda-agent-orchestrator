@@ -7,7 +7,8 @@ import {
     assertExistingPathIdentity,
     bindContainedDestination,
     copyContainedFile,
-    removeContainedPath,
+    ensureContainedDirectory,
+    removeBoundContainedPath,
     writeContainedFile
 } from '../core/contained-filesystem';
 
@@ -56,13 +57,16 @@ export function createWriteTextFileStage(filePath: string, content: string, root
     const parent = bindContainedDestination(root, path.dirname(filePath));
     let replacementOccurred = false;
     let replacement: ReturnType<typeof bindContainedDestination> | null = null;
+    const createdParents: ReturnType<typeof bindContainedDestination>[] = [];
     const existedBefore = pathExists(filePath);
     const previousContent = existedBefore ? fs.readFileSync(filePath, 'utf8') : null;
-    const existingParentBoundary = findExistingParent(path.dirname(filePath));
     return {
         label: `write:${normalizeStagePath(filePath)}`,
         apply: () => {
             assertContainedDestination(destination);
+            ensureContainedDirectory(root, path.dirname(filePath), (binding) => {
+                createdParents.unshift(binding);
+            });
             writeContainedFile(root, filePath, content, () => {
                 replacementOccurred = true;
                 replacement = bindContainedDestination(root, filePath);
@@ -76,8 +80,8 @@ export function createWriteTextFileStage(filePath: string, content: string, root
             if (existedBefore) {
                 writeContainedFile(root, filePath, previousContent ?? '');
             } else {
-                removeContainedPath(root, filePath);
-                removeEmptyParents(root, path.dirname(filePath), existingParentBoundary);
+                removeBoundContainedPath(replacement);
+                removeEmptyParents(createdParents);
             }
         }
     };
@@ -90,13 +94,16 @@ export function createCopyFileStage(
     const parent = bindContainedDestination(root, path.dirname(destinationPath));
     let replacementOccurred = false;
     let replacement: ReturnType<typeof bindContainedDestination> | null = null;
+    const createdParents: ReturnType<typeof bindContainedDestination>[] = [];
     const existedBefore = pathExists(destinationPath);
     const previousContent = existedBefore ? fs.readFileSync(destinationPath) : null;
-    const existingParentBoundary = findExistingParent(path.dirname(destinationPath));
     return {
         label: `copy:${normalizeStagePath(sourcePath)}->${normalizeStagePath(destinationPath)}`,
         apply: () => {
             assertContainedDestination(destination);
+            ensureContainedDirectory(root, path.dirname(destinationPath), (binding) => {
+                createdParents.unshift(binding);
+            });
             copyContainedFile(root, sourcePath, destinationPath, () => {
                 replacementOccurred = true;
                 replacement = bindContainedDestination(root, destinationPath);
@@ -110,8 +117,8 @@ export function createCopyFileStage(
             if (existedBefore && previousContent) {
                 writeContainedFile(root, destinationPath, previousContent);
             } else {
-                removeContainedPath(root, destinationPath);
-                removeEmptyParents(root, path.dirname(destinationPath), existingParentBoundary);
+                removeBoundContainedPath(replacement);
+                removeEmptyParents(createdParents);
             }
         }
     };
@@ -129,7 +136,7 @@ export function createRemoveFileStage(filePath: string, root = path.parse(filePa
         label: `remove:${normalizeStagePath(filePath)}`,
         apply: () => {
             assertContainedDestination(destination);
-            removeContainedPath(root, filePath, false, () => { removed = true; });
+            removeBoundContainedPath(destination, false, () => { removed = true; });
         },
         rollback: () => {
             if (!removed) return;
@@ -156,34 +163,10 @@ function normalizeStagePath(filePath: string): string {
     return path.resolve(filePath).replace(/\\/g, '/');
 }
 
-function findExistingParent(startDir: string): string {
-    let current = path.resolve(startDir);
-    while (!pathExists(current)) {
-        const next = path.dirname(current);
-        if (next === current) {
-            return current;
-        }
-        current = next;
-    }
-    return current;
-}
-
-function removeEmptyParents(root: string, startDir: string, boundaryDir: string): void {
-    let current = path.resolve(startDir);
-    const boundary = path.resolve(boundaryDir);
-    while (true) {
-        bindContainedDestination(root, current);
-        if (!pathExists(current) || !fs.statSync(current).isDirectory() || fs.readdirSync(current).length !== 0) {
-            return;
-        }
-        if (current === boundary) {
-            return;
-        }
-        const next = path.dirname(current);
-        if (next === current) {
-            return;
-        }
-        removeContainedPath(root, current);
-        current = next;
+function removeEmptyParents(parents: readonly ReturnType<typeof bindContainedDestination>[]): void {
+    for (const binding of parents) {
+        assertContainedDestination(binding);
+        if (fs.readdirSync(binding.path).length !== 0) return;
+        removeBoundContainedPath(binding);
     }
 }
