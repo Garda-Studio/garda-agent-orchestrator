@@ -15,7 +15,11 @@ import {
 import { installSignalHandlers, registerTempRoot, uninstallSignalHandlers } from '../../../src/cli/signal-handler';
 import { acquireUpdateSource, cleanupOldUpdateTempRoots, getUpdateTempRoot } from '../../../src/lifecycle/check-update';
 import { cloneGitUpdateSource } from '../../../src/lifecycle/update-git';
-import { createWriteTextFileStage } from '../../../src/materialization/staged-side-effects';
+import {
+    createCopyFileStage,
+    createRemoveFileStage,
+    createWriteTextFileStage
+} from '../../../src/materialization/staged-side-effects';
 
 describe('contained lifecycle cleanup', () => {
     it('preserves a substituted final directory when removal was bound to the original', () => {
@@ -62,6 +66,135 @@ describe('contained lifecycle cleanup', () => {
             assert.equal(fs.readFileSync(path.join(target, 'safe.txt'), 'utf8'), 'safe');
             assert.equal(fs.readFileSync(outside, 'utf8'), 'outside');
         } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects an inode replay with a different creation identity', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-remove-inode-replay-'));
+        const originalLstat = fsNative.lstatSync;
+        try {
+            const target = path.join(root, 'owned');
+            fs.mkdirSync(target);
+            fs.writeFileSync(path.join(target, 'keep.txt'), 'owned');
+            const binding = bindContainedDestination(root, target);
+            const replay = mock.method(fsNative, 'lstatSync', ((filePath: fs.PathLike, options?: unknown) => {
+                const stat = originalLstat(filePath, options as never);
+                if (String(filePath) === target && (options as { bigint?: boolean } | undefined)?.bigint) {
+                    return new Proxy(stat, {
+                        get(observed, key, receiver) {
+                            if (key === 'birthtimeNs') return (observed as unknown as fs.BigIntStats).birthtimeNs + 1n;
+                            return Reflect.get(observed, key, receiver);
+                        }
+                    });
+                }
+                return stat;
+            }) as typeof fs.lstatSync);
+            try {
+                assert.throws(() => removeBoundContainedPath(binding, true), /identity changed/);
+            } finally {
+                replay.mock.restore();
+            }
+            assert.equal(fs.readFileSync(path.join(target, 'keep.txt'), 'utf8'), 'owned');
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects a cleanup binding when creation identity is unavailable', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-remove-no-birthtime-'));
+        const originalLstat = fsNative.lstatSync;
+        try {
+            const target = path.join(root, 'owned');
+            fs.mkdirSync(target);
+            fs.writeFileSync(path.join(target, 'keep.txt'), 'owned');
+            const unavailable = mock.method(fsNative, 'lstatSync', ((filePath: fs.PathLike, options?: unknown) => {
+                const stat = originalLstat(filePath, options as never);
+                if (String(filePath) === target && (options as { bigint?: boolean } | undefined)?.bigint) {
+                    return new Proxy(stat, {
+                        get(observed, key, receiver) {
+                            if (key === 'birthtimeNs') return 0n;
+                            return Reflect.get(observed, key, receiver);
+                        }
+                    });
+                }
+                return stat;
+            }) as typeof fs.lstatSync);
+            try {
+                assert.throws(() => bindContainedDestination(root, target), /creation identity is unavailable/);
+            } finally {
+                unavailable.mock.restore();
+            }
+            assert.equal(fs.readFileSync(path.join(target, 'keep.txt'), 'utf8'), 'owned');
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects a different-device descendant before deleting siblings', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-remove-mount-'));
+        const originalLstat = fsNative.lstatSync;
+        try {
+            const target = path.join(root, 'owned');
+            const mounted = path.join(target, 'mounted');
+            fs.mkdirSync(mounted, { recursive: true });
+            fs.writeFileSync(path.join(target, 'keep.txt'), 'owned');
+            fs.writeFileSync(path.join(mounted, 'other.txt'), 'other');
+            const spoof = mock.method(fsNative, 'lstatSync', ((filePath: fs.PathLike, options?: unknown) => {
+                const stat = originalLstat(filePath, options as never);
+                if (String(filePath) === mounted && (options as { bigint?: boolean } | undefined)?.bigint) {
+                    return new Proxy(stat, {
+                        get(observed, key, receiver) {
+                            if (key === 'dev') return (observed as unknown as fs.BigIntStats).dev + 1n;
+                            return Reflect.get(observed, key, receiver);
+                        }
+                    });
+                }
+                return stat;
+            }) as typeof fs.lstatSync);
+            try {
+                assert.throws(() => removeContainedPath(root, target, true), /mounted directory boundary/);
+            } finally {
+                spoof.mock.restore();
+            }
+            assert.equal(fs.readFileSync(path.join(target, 'keep.txt'), 'utf8'), 'owned');
+            assert.equal(fs.readFileSync(path.join(mounted, 'other.txt'), 'utf8'), 'other');
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects a same-device mount point listed by Linux before deleting siblings', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-remove-bind-mount-'));
+        const originalRead = fsNative.readFileSync;
+        const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+        try {
+            const target = path.join(root, 'owned');
+            const mounted = path.join(target, 'mounted space');
+            fs.mkdirSync(mounted, { recursive: true });
+            fs.writeFileSync(path.join(target, 'keep.txt'), 'owned');
+            fs.writeFileSync(path.join(mounted, 'other.txt'), 'other');
+            Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+            let mountInfoReads = 0;
+            const mountInfo = mock.method(fsNative, 'readFileSync', ((filePath: fs.PathOrFileDescriptor,
+                options?: unknown) => {
+                if (String(filePath) === '/proc/self/mountinfo') {
+                    mountInfoReads += 1;
+                    const escaped = mounted.replace(/ /gu, '\\040');
+                    return mountInfoReads === 1 ? '' : `1 2 0:1 / ${escaped} rw - ext4 fixture rw\n`;
+                }
+                return originalRead(filePath, options as never);
+            }) as typeof fs.readFileSync);
+            try {
+                assert.throws(() => removeContainedPath(root, target, true), /mounted directory boundary/);
+            } finally {
+                mountInfo.mock.restore();
+            }
+            assert.equal(mountInfoReads, 2);
+            assert.equal(fs.readFileSync(path.join(target, 'keep.txt'), 'utf8'), 'owned');
+            assert.equal(fs.readFileSync(path.join(mounted, 'other.txt'), 'utf8'), 'other');
+        } finally {
+            Object.defineProperty(process, 'platform', platform);
             fs.rmSync(root, { recursive: true, force: true });
         }
     });
@@ -133,6 +266,7 @@ describe('contained lifecycle cleanup', () => {
                 if (String(filePath) === target) {
                     fs.renameSync(child, path.join(root, 'original.txt'));
                     fs.writeFileSync(child, 'foreign');
+                    fs.utimesSync(target, new Date(0), new Date(0));
                 }
                 return entries;
             }) as typeof fs.readdirSync);
@@ -181,6 +315,48 @@ describe('contained lifecycle cleanup', () => {
 });
 
 describe('update temporary cleanup', () => {
+    it('cleans a creator-owned npm root after success and installation failure', async () => {
+        const deployedBundleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-npm-cleanup-'));
+        const sourceOptions = {
+            deployedBundleRoot,
+            packageSpec: 'garda-agent-orchestrator@1.0.0',
+            npmViewRunner() {
+                return { status: 0, stdout: JSON.stringify({
+                    version: '1.0.0', 'dist.integrity': 'sha512-test'
+                }) };
+            },
+            installedPackageRootResolver(installRoot: string) {
+                return { packageName: 'garda-agent-orchestrator', packageRoot: installRoot };
+            }
+        };
+        try {
+            const success = await acquireUpdateSource({
+                ...sourceOptions,
+                async npmInstallRunner() {
+                    return { cancelled: false, timedOut: false, exitCode: 0, stdout: '', stderr: '' };
+                }
+            });
+            const installedRoot = success.sourceRoot;
+            assert.equal(fs.existsSync(installedRoot), true);
+            success.cleanup();
+            success.cleanup();
+            assert.equal(fs.existsSync(installedRoot), false);
+
+            let failedRoot = '';
+            await assert.rejects(acquireUpdateSource({
+                ...sourceOptions,
+                async npmInstallRunner(args) {
+                    failedRoot = args[args.indexOf('--prefix') + 1];
+                    return { cancelled: false, timedOut: false, exitCode: 1, stdout: '', stderr: 'fixture failure' };
+                }
+            }), /Failed to install update package/);
+            assert.ok(failedRoot);
+            assert.equal(fs.existsSync(failedRoot), false);
+        } finally {
+            fs.rmSync(deployedBundleRoot, { recursive: true, force: true });
+        }
+    });
+
     it('preserves a replacement of a creator-owned npm candidate after enumeration', async () => {
         const deployedBundleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-npm-owned-'));
         const originalReaddir = fsNative.readdirSync;
@@ -277,6 +453,8 @@ describe('update temporary cleanup', () => {
         const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-signal-owned-'));
         const moved = `${tempRoot}-original`;
         const originalExit = process.exit;
+        const originalWrite = process.stderr.write;
+        const diagnostics: string[] = [];
         let exitCode: number | null = null;
         const priorListeners = process.listeners('SIGTERM');
         try {
@@ -284,6 +462,10 @@ describe('update temporary cleanup', () => {
                 exitCode = code ?? null;
                 return undefined as never;
             }) as typeof process.exit;
+            process.stderr.write = ((chunk: string) => {
+                diagnostics.push(String(chunk));
+                return true;
+            }) as typeof process.stderr.write;
             installSignalHandlers();
             registerTempRoot(tempRoot);
             fs.renameSync(tempRoot, moved);
@@ -298,8 +480,10 @@ describe('update temporary cleanup', () => {
             assert.equal(exitCode, 143);
             assert.equal(fs.readFileSync(path.join(tempRoot, 'foreign.txt'), 'utf8'), 'foreign');
             assert.equal(fs.existsSync(moved), true);
+            assert.match(diagnostics.join(''), /Temporary cleanup preserved ambiguous root.*identity changed/);
         } finally {
             process.exit = originalExit;
+            process.stderr.write = originalWrite;
             uninstallSignalHandlers();
             fs.rmSync(tempRoot, { recursive: true, force: true });
             fs.rmSync(moved, { recursive: true, force: true });
@@ -308,6 +492,8 @@ describe('update temporary cleanup', () => {
 
     it('preserves an unowned old npm root containing a hard-linked file', () => {
         const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-old-npm-'));
+        const diagnostics: string[] = [];
+        const originalWrite = process.stderr.write;
         try {
             const candidate = path.join(getUpdateTempRoot(runtimeRoot), 'npm-old');
             fs.mkdirSync(candidate, { recursive: true });
@@ -317,11 +503,38 @@ describe('update temporary cleanup', () => {
             const now = Date.now();
             fs.utimesSync(candidate, new Date(now - 10_000), new Date(now - 10_000));
 
+            process.stderr.write = ((chunk: string) => {
+                diagnostics.push(String(chunk));
+                return true;
+            }) as typeof process.stderr.write;
             assert.deepEqual(cleanupOldUpdateTempRoots(runtimeRoot, 5_000, now), []);
+            assert.match(diagnostics.join(''), /Preserving ambiguous update temporary root.*inspect before manual removal/);
             assert.equal(fs.existsSync(candidate), true);
             assert.equal(fs.readFileSync(outside, 'utf8'), 'outside');
         } finally {
+            process.stderr.write = originalWrite;
             fs.rmSync(runtimeRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('cleans a Git clone and isolated template after a valid update', async () => {
+        const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-cleanup-git-valid-'));
+        try {
+            fs.writeFileSync(path.join(repoRoot, 'README.md'), 'fixture');
+            childProcess.execFileSync('git', ['init', '-q'], { cwd: repoRoot });
+            childProcess.execFileSync('git', ['add', 'README.md'], { cwd: repoRoot });
+            childProcess.execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com',
+                'commit', '-qm', 'fixture'], { cwd: repoRoot });
+            const clone = await cloneGitUpdateSource(repoRoot, null);
+            const templateRoot = String(clone.env.GIT_TEMPLATE_DIR);
+            assert.equal(fs.existsSync(clone.clonePath), true);
+            assert.equal(fs.existsSync(templateRoot), true);
+            clone.cleanup();
+            clone.cleanup();
+            assert.equal(fs.existsSync(clone.clonePath), false);
+            assert.equal(fs.existsSync(templateRoot), false);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
         }
     });
 
@@ -346,6 +559,7 @@ describe('update temporary cleanup', () => {
             assert.throws(() => clone.cleanup(), /identity changed/);
             assert.equal(fs.readFileSync(path.join(clonePath, 'foreign.txt'), 'utf8'), 'foreign');
             assert.equal(fs.existsSync(moved), true);
+            assert.equal(fs.existsSync(templateRoot), false);
             fs.rmSync(moved, { recursive: true, force: true });
         } finally {
             if (clonePath) fs.rmSync(clonePath, { recursive: true, force: true });
@@ -356,6 +570,51 @@ describe('update temporary cleanup', () => {
 });
 
 describe('materialization rollback cleanup', () => {
+    it('rolls back a valid copy and remove stage', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-stage-copy-remove-'));
+        try {
+            const source = path.join(root, 'source.txt');
+            const destination = path.join(root, 'destination.txt');
+            fs.writeFileSync(source, 'source');
+            const copy = createCopyFileStage(source, destination, root);
+            copy.apply();
+            assert.equal(fs.readFileSync(destination, 'utf8'), 'source');
+            copy.rollback?.();
+            assert.equal(fs.existsSync(destination), false);
+
+            const remove = createRemoveFileStage(source, root);
+            remove.apply();
+            assert.equal(fs.existsSync(source), false);
+            remove.rollback?.();
+            assert.equal(fs.readFileSync(source, 'utf8'), 'source');
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it('preserves a substituted copy destination and a replaced remove target on rollback', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-stage-copy-remove-race-'));
+        try {
+            const source = path.join(root, 'source.txt');
+            const destination = path.join(root, 'destination.txt');
+            fs.writeFileSync(source, 'source');
+            const copy = createCopyFileStage(source, destination, root);
+            copy.apply();
+            fs.renameSync(destination, path.join(root, 'original-copy.txt'));
+            fs.writeFileSync(destination, 'foreign-copy');
+            assert.throws(() => copy.rollback?.(), /identity changed/);
+            assert.equal(fs.readFileSync(destination, 'utf8'), 'foreign-copy');
+
+            const remove = createRemoveFileStage(source, root);
+            remove.apply();
+            fs.writeFileSync(source, 'foreign-remove');
+            assert.throws(() => remove.rollback?.(), /Destination was replaced/);
+            assert.equal(fs.readFileSync(source, 'utf8'), 'foreign-remove');
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
     it('preserves a parent supplied after stage creation', () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-stage-foreign-parent-'));
         const originalLstat = fsNative.lstatSync;
@@ -364,9 +623,9 @@ describe('materialization rollback cleanup', () => {
             const target = path.join(parent, 'file.txt');
             const stage = createWriteTextFileStage(target, 'generated', root);
             let parentInspections = 0;
-            const lstatMock = mock.method(fsNative, 'lstatSync', (filePath: fs.PathLike) => {
+            const lstatMock = mock.method(fsNative, 'lstatSync', (filePath: fs.PathLike, options?: unknown) => {
                 if (String(filePath) === parent && ++parentInspections === 3) fs.mkdirSync(parent);
-                return originalLstat(filePath);
+                return originalLstat(filePath, options as never);
             });
             try {
                 stage.apply();

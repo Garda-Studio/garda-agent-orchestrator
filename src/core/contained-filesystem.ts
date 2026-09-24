@@ -4,9 +4,10 @@ import * as crypto from 'node:crypto';
 
 interface PathIdentity {
     readonly path: string;
-    readonly dev: number;
-    readonly ino: number;
-    readonly mode: number;
+    readonly dev: bigint;
+    readonly ino: bigint;
+    readonly mode: bigint;
+    readonly birthtimeNs: bigint;
 }
 
 export interface ContainedDestination {
@@ -19,6 +20,15 @@ export interface ContainedDestination {
 function lstatIfPresent(filePath: string): fs.Stats | null {
     try {
         return fs.lstatSync(filePath);
+    } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw error;
+    }
+}
+
+function lstatIdentityIfPresent(filePath: string): fs.BigIntStats | null {
+    try {
+        return fs.lstatSync(filePath, { bigint: true });
     } catch (error: unknown) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
         throw error;
@@ -39,7 +49,7 @@ function inspectContainedPath(
     let current = root;
     for (let index = -1; index < components.length; index += 1) {
         if (index >= 0) current = path.join(current, components[index]);
-        const stat = lstatIfPresent(current);
+        const stat = lstatIdentityIfPresent(current);
         if (!stat) {
             missingAt = current;
             break;
@@ -50,13 +60,17 @@ function inspectContainedPath(
         if ((index === -1 || index < components.length - 1) && !stat.isDirectory()) {
             throw new Error(`Destination parent is not a directory: ${current}`);
         }
-        if (stat.isFile() && stat.nlink !== 1) {
+        if (stat.isFile() && stat.nlink !== 1n) {
             throw new Error(`Destination crosses a hard-linked file: ${current}`);
         }
         if (!stat.isDirectory() && !stat.isFile()) {
             throw new Error(`Destination has an unsupported path type: ${current}`);
         }
-        existing.push({ path: current, dev: stat.dev, ino: stat.ino, mode: stat.mode });
+        if (stat.birthtimeNs <= 0n) {
+            throw new Error(`Destination creation identity is unavailable: ${current}`);
+        }
+        existing.push({ path: current, dev: stat.dev, ino: stat.ino, mode: stat.mode,
+            birthtimeNs: stat.birthtimeNs });
     }
     if (existing.length === 0) throw new Error(`Destination root does not exist: ${root}`);
     return { existing, missingAt };
@@ -73,7 +87,7 @@ export function assertExistingPathIdentity(binding: ContainedDestination): void 
     for (const original of binding.existing) {
         const observed = current.find((entry) => entry.path === original.path);
         if (!observed || observed.dev !== original.dev || observed.ino !== original.ino
-            || observed.mode !== original.mode) {
+            || observed.mode !== original.mode || observed.birthtimeNs !== original.birthtimeNs) {
             throw new Error(`Destination identity changed before mutation: ${original.path}`);
         }
     }
@@ -202,13 +216,42 @@ function assertRemovalNotAmbiguous(candidate: string): void {
     }
 }
 
+function mountedDirectoryPaths(): Set<string> {
+    if (process.platform !== 'linux') return new Set();
+    const entries = fs.readFileSync('/proc/self/mountinfo', 'utf8').split('\n');
+    const mountPoints = new Set<string>();
+    for (const entry of entries) {
+        const mountPoint = entry.split(' ')[4];
+        if (!mountPoint) continue;
+        const decoded = mountPoint.replace(/\\([0-7]{3})/gu, (_, octal: string) =>
+            String.fromCharCode(Number.parseInt(octal, 8)));
+        mountPoints.add(removalKey(decoded));
+    }
+    return mountPoints;
+}
+
+function assertRemovalMountBoundary(
+    candidate: string, rootDevice: bigint, mountPoints: ReadonlySet<string>
+): void {
+    const stat = lstatIdentityIfPresent(candidate);
+    if (!stat) throw new Error(`Cleanup destination disappeared during mount inspection: ${candidate}`);
+    if (stat.dev !== rootDevice || mountPoints.has(removalKey(candidate))) {
+        throw new Error(`Refusing cleanup across mounted directory boundary: ${candidate}`);
+    }
+}
+
 function collectRemovalEntries(rootBinding: ContainedDestination): RemovalEntry[] {
     const pending = [rootBinding];
     const entries: RemovalEntry[] = [];
+    const rootStat = lstatIdentityIfPresent(rootBinding.path);
+    if (!rootStat) throw new Error(`Cleanup destination disappeared before inspection: ${rootBinding.path}`);
+    const rootDevice = rootStat.dev;
+    const mountPoints = mountedDirectoryPaths();
     while (pending.length > 0) {
         const binding = pending.pop()!;
         const currentPath = binding.path;
         assertContainedDestination(binding);
+        assertRemovalMountBoundary(currentPath, rootDevice, mountPoints);
         const stat = lstatIfPresent(currentPath);
         if (!stat) throw new Error(`Cleanup destination disappeared during inspection: ${currentPath}`);
         entries.push({ binding, directory: stat.isDirectory() });
@@ -224,6 +267,11 @@ function collectRemovalEntries(rootBinding: ContainedDestination): RemovalEntry[
             assertContainedDestination(binding);
             pending.push(...children);
         }
+    }
+    const currentMountPoints = mountedDirectoryPaths();
+    for (const entry of entries) {
+        assertContainedDestination(entry.binding);
+        assertRemovalMountBoundary(entry.binding.path, rootDevice, currentMountPoints);
     }
     return entries;
 }
