@@ -26,7 +26,8 @@ export function createIsolatedGitEnvironment(templateRoot: string): NodeJS.Proce
 export function isExplicitLocalGitPath(repoUrl: string): boolean {
     const source = String(repoUrl).trim();
     return path.isAbsolute(source) || source === '.' || source === '..'
-        || source.startsWith('./') || source.startsWith('../');
+        || source.startsWith('./') || source.startsWith('../')
+        || (path.sep === '\\' && (source.startsWith('.\\') || source.startsWith('..\\')));
 }
 
 export function assertGitUpdateTransport(repoUrl: string, _sourceReference: string): void {
@@ -74,7 +75,7 @@ function rejectUnverified(sourceReference: string, detail: string): never {
 }
 
 function sameSource(left: string, right: string): boolean {
-    if (path.isAbsolute(left) && path.isAbsolute(right)) {
+    if (isExplicitLocalGitPath(left) && isExplicitLocalGitPath(right)) {
         return path.resolve(left) === path.resolve(right);
     }
     return left.replace(/\/+$/u, '').replace(/\.git$/iu, '').toLowerCase()

@@ -48,8 +48,9 @@ interface RunUpdateFromGitOptions {
 }
 
 export function buildGitCloneArgs(repoUrl: string, branch: string | null | undefined, destinationPath: string): string[] {
-    const args = ['clone', '--depth', '1'];
-    if (isExplicitLocalGitPath(repoUrl)) args.push('--local');
+    const args = isExplicitLocalGitPath(repoUrl)
+        ? ['clone', '--local', '--no-hardlinks']
+        : ['clone', '--depth', '1'];
     if (branch) {
         args.push('--branch', String(branch).trim(), '--single-branch');
     }
@@ -80,14 +81,28 @@ export async function cloneGitUpdateSource(repoUrl: string, branch: string | nul
     ensureGitAvailable();
 
     const tempClonePath = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-update-git-'));
-    const templateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-update-template-'));
-    const env = createIsolatedGitEnvironment(templateRoot);
-    const disposeSignalCleanup = registerTempRoot(tempClonePath);
+    let templateRoot: string | null = null;
+    let disposeCloneCleanup: (() => void) | null = null;
+    let disposeTemplateCleanup: (() => void) | null = null;
     const cleanup = () => {
-        disposeSignalCleanup();
-        removePathRecursive(tempClonePath);
-        removePathRecursive(templateRoot);
+        disposeCloneCleanup?.();
+        disposeTemplateCleanup?.();
+        try {
+            removePathRecursive(tempClonePath);
+        } finally {
+            if (templateRoot) removePathRecursive(templateRoot);
+        }
     };
+    let env: NodeJS.ProcessEnv;
+    try {
+        disposeCloneCleanup = registerTempRoot(tempClonePath);
+        templateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-update-template-'));
+        disposeTemplateCleanup = registerTempRoot(templateRoot);
+        env = createIsolatedGitEnvironment(templateRoot);
+    } catch (error) {
+        cleanup();
+        throw error;
+    }
     const diagnosticSource = branch ? `${repoUrl}#${branch}` : repoUrl;
     const cloneResult = await spawnStreamed('git', buildGitCloneArgs(repoUrl, branch, tempClonePath), {
         timeoutMs: DEFAULT_GIT_CLONE_TIMEOUT_MS,
@@ -152,6 +167,9 @@ export async function runUpdateFromGit(options: RunUpdateFromGitOptions) {
     const diagnosticSource = normalizedBranch ? `${normalizedRepoUrl}#${normalizedBranch}` : normalizedRepoUrl;
 
     assertGitUpdateTransport(normalizedRepoUrl, diagnosticSource);
+    const cloneRepoUrl = isExplicitLocalGitPath(normalizedRepoUrl)
+        ? path.resolve(normalizedRepoUrl)
+        : normalizedRepoUrl;
     const trustResult = validateGitSourceTrust(normalizedRepoUrl, { trustOverride });
     assertUpdateApplyAllowedInSwitchMode({
         targetRoot,
@@ -161,12 +179,12 @@ export async function runUpdateFromGit(options: RunUpdateFromGitOptions) {
         commandName: 'update git'
     });
 
-    const gitSource = await cloneGitUpdateSource(normalizedRepoUrl, normalizedBranch);
+    const gitSource = await cloneGitUpdateSource(cloneRepoUrl, normalizedBranch);
 
     try {
         const gitCommitSha = verifyGitUpdateSource({
             sourceRoot: gitSource.clonePath,
-            repoUrl: normalizedRepoUrl,
+            repoUrl: cloneRepoUrl,
             branch: normalizedBranch,
             sourceReference: diagnosticSource,
             env: gitSource.env,

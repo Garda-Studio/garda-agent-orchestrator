@@ -1,17 +1,23 @@
-import { describe, it } from 'node:test';
+import { after, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
+import fsNative from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as childProcess from 'node:child_process';
 
-import { runUpdateFromGit, buildGitCloneArgs } from '../../../src/lifecycle/update-git';
-import { assertGitUpdateTransport, createIsolatedGitEnvironment } from '../../../src/lifecycle/update/update-git-source-verification';
+import { runUpdateFromGit, buildGitCloneArgs, cloneGitUpdateSource } from '../../../src/lifecycle/update-git';
+import { assertGitUpdateTransport, createIsolatedGitEnvironment, verifyGitUpdateSource } from '../../../src/lifecycle/update/update-git-source-verification';
 import { removePathRecursive } from '../../../src/lifecycle/common';
+
+const gitFixtureEnvRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-git-fixture-env-'));
+const gitFixtureEnv = createIsolatedGitEnvironment(gitFixtureEnvRoot);
+after(() => removePathRecursive(gitFixtureEnvRoot));
 
 function git(args: string[], cwd: string) {
     const result = childProcess.spawnSync('git', args, {
         cwd,
+        env: gitFixtureEnv,
         stdio: 'pipe',
         encoding: 'utf8'
     });
@@ -25,6 +31,7 @@ function git(args: string[], cwd: string) {
 function gitText(args: string[], cwd: string): string {
     const result = childProcess.spawnSync('git', args, {
         cwd,
+        env: gitFixtureEnv,
         stdio: 'pipe',
         encoding: 'utf8'
     });
@@ -37,8 +44,9 @@ function gitText(args: string[], cwd: string): string {
     return String(result.stdout || '').trim();
 }
 
-function createGitUpdateRepo(version: string, includePrebuilt = true) {
-    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-update-git-repo-'));
+function createGitUpdateRepo(version: string, includePrebuilt = true, parentRoot = os.tmpdir()) {
+    fs.mkdirSync(parentRoot, { recursive: true });
+    const repoRoot = fs.mkdtempSync(path.join(parentRoot, 'gao-update-git-repo-'));
     fs.mkdirSync(path.join(repoRoot, 'scripts'), { recursive: true });
     fs.writeFileSync(path.join(repoRoot, 'scripts', 'build.js'), [
         "const fs = require('node:fs');",
@@ -108,12 +116,34 @@ describe('buildGitCloneArgs', () => {
         const localRepo = path.resolve('local-repo');
         assert.deepEqual(
             buildGitCloneArgs(localRepo, null, 'C:/tmp/clone'),
-            ['clone', '--depth', '1', '--local', localRepo, 'C:/tmp/clone']
+            ['clone', '--local', '--no-hardlinks', localRepo, 'C:/tmp/clone']
         );
     });
 });
 
 describe('Git update source boundary', () => {
+    it('isolates fixture Git commands from inherited commit signing', () => {
+        const previous = {
+            GIT_CONFIG_COUNT: process.env.GIT_CONFIG_COUNT,
+            GIT_CONFIG_KEY_0: process.env.GIT_CONFIG_KEY_0,
+            GIT_CONFIG_VALUE_0: process.env.GIT_CONFIG_VALUE_0
+        };
+        process.env.GIT_CONFIG_COUNT = '1';
+        process.env.GIT_CONFIG_KEY_0 = 'commit.gpgsign';
+        process.env.GIT_CONFIG_VALUE_0 = 'true';
+        const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-git-hostile-env-'));
+        try {
+            const repoRoot = createGitUpdateRepo('2.1.0', true, fixtureRoot);
+            assert.match(gitText(['log', '-1', '--format=%s'], repoRoot), /init/u);
+        } finally {
+            for (const [name, value] of Object.entries(previous)) {
+                if (value === undefined) delete process.env[name];
+                else process.env[name] = value;
+            }
+            removePathRecursive(fixtureRoot);
+        }
+    });
+
     it('rejects executable Git transports before cloning', () => {
         assert.throws(() => assertGitUpdateTransport('ssh://example.com/repo', 'ssh source'),
             /UPDATE_SOURCE_UNVERIFIED/);
@@ -140,6 +170,18 @@ describe('Git update source boundary', () => {
         }
     });
 
+    it('rejects a file URL through update orchestration before cloning', async () => {
+        await assert.rejects(
+            runUpdateFromGit({
+                targetRoot: '.', bundleRoot: '.', repoUrl: 'file:///missing-garda-update-repo', trustOverride: true
+            }),
+            (error: unknown) => {
+                assert.equal((error as { diagnosticCode?: string }).diagnosticCode, 'UPDATE_SOURCE_UNVERIFIED');
+                return true;
+            }
+        );
+    });
+
     it('removes inherited Git configuration from the clone environment', () => {
         const previous = process.env.GIT_CONFIG_COUNT;
         process.env.GIT_CONFIG_COUNT = '1';
@@ -157,7 +199,165 @@ describe('Git update source boundary', () => {
     });
 });
 
+describe('verified Git clone resources', () => {
+    it('removes both clone and isolated template roots after use', async () => {
+        const repoRoot = createGitUpdateRepo('2.1.0');
+        try {
+            const clone = await cloneGitUpdateSource(repoRoot, null);
+            const templateRoot = String(clone.env.GIT_TEMPLATE_DIR);
+            assert.ok(fs.existsSync(clone.clonePath));
+            assert.ok(fs.existsSync(templateRoot));
+            clone.cleanup();
+            assert.equal(fs.existsSync(clone.clonePath), false);
+            assert.equal(fs.existsSync(templateRoot), false);
+        } finally {
+            removePathRecursive(repoRoot);
+        }
+    });
+
+    it('removes both temporary roots when Git clone fails', async () => {
+        const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-git-clone-failure-'));
+        const previous = {
+            TMPDIR: process.env.TMPDIR,
+            TMP: process.env.TMP,
+            TEMP: process.env.TEMP
+        };
+        process.env.TMPDIR = tempRoot;
+        process.env.TMP = tempRoot;
+        process.env.TEMP = tempRoot;
+        try {
+            assert.equal(os.tmpdir(), tempRoot);
+            await assert.rejects(cloneGitUpdateSource(path.join(tempRoot, 'missing-repository'), null),
+                /Failed to clone git update source/u);
+            assert.deepEqual(fs.readdirSync(tempRoot), []);
+        } finally {
+            for (const [name, value] of Object.entries(previous)) {
+                if (value === undefined) delete process.env[name];
+                else process.env[name] = value;
+            }
+            removePathRecursive(tempRoot);
+        }
+    });
+
+    it('removes partial temporary roots when isolated Git setup fails', async () => {
+        const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-git-setup-failure-'));
+        const previous = {
+            TMPDIR: process.env.TMPDIR,
+            TMP: process.env.TMP,
+            TEMP: process.env.TEMP
+        };
+        process.env.TMPDIR = tempRoot;
+        process.env.TMP = tempRoot;
+        process.env.TEMP = tempRoot;
+        const originalWriteFileSync = fsNative.writeFileSync;
+        const writeMock = mock.method(fsNative, 'writeFileSync', (...args: unknown[]) => {
+            if (String(args[0]).endsWith('empty.gitconfig')) {
+                throw new Error('injected Git environment setup failure');
+            }
+            return Reflect.apply(originalWriteFileSync, fsNative, args);
+        });
+        try {
+            assert.equal(os.tmpdir(), tempRoot);
+            await assert.rejects(cloneGitUpdateSource(path.join(tempRoot, 'unused-repository'), null),
+                /injected Git environment setup failure/u);
+            assert.ok(writeMock.mock.callCount() > 0);
+            assert.deepEqual(fs.readdirSync(tempRoot), []);
+        } finally {
+            writeMock.mock.restore();
+            for (const [name, value] of Object.entries(previous)) {
+                if (value === undefined) delete process.env[name];
+                else process.env[name] = value;
+            }
+            removePathRecursive(tempRoot);
+        }
+    });
+
+    it('rejects source, ref, worktree, and package mismatches with a real Git repository', () => {
+        const repoRoot = createGitUpdateRepo('2.1.0');
+        const templateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-git-verifier-test-'));
+        try {
+            const env = createIsolatedGitEnvironment(templateRoot);
+            const verify = (branch: string | null = null) => verifyGitUpdateSource({
+                sourceRoot: repoRoot, repoUrl: repoRoot, branch, sourceReference: repoRoot, env, requireBundle: true
+            });
+            git(['remote', 'add', 'origin', path.join(repoRoot, 'other')], repoRoot);
+            assert.throws(verify, /UPDATE_SOURCE_UNVERIFIED/u);
+            git(['remote', 'set-url', 'origin', repoRoot], repoRoot);
+            assert.throws(() => verify('missing-branch'), /UPDATE_SOURCE_UNVERIFIED/u);
+
+            fs.writeFileSync(path.join(repoRoot, 'README.md'), '# Dirty bundle\n', 'utf8');
+            assert.throws(verify, /UPDATE_SOURCE_UNVERIFIED/u);
+            git(['checkout', '--', 'README.md'], repoRoot);
+
+            fs.writeFileSync(path.join(repoRoot, 'package.json'), '{ invalid json', 'utf8');
+            git(['add', 'package.json'], repoRoot);
+            git(['commit', '-m', 'invalid package'], repoRoot);
+            assert.throws(verify, /UPDATE_SOURCE_UNVERIFIED/u);
+
+            fs.writeFileSync(path.join(repoRoot, 'package.json'), JSON.stringify({ version: '3.0.0' }), 'utf8');
+            git(['add', 'package.json'], repoRoot);
+            git(['commit', '-m', 'mismatched version'], repoRoot);
+            assert.throws(verify, /UPDATE_SOURCE_UNVERIFIED/u);
+        } finally {
+            removePathRecursive(repoRoot);
+            removePathRecursive(templateRoot);
+        }
+    });
+});
+
 describe('runUpdateFromGit', () => {
+    it('accepts an explicit relative local repository path', async () => {
+        const repoParent = path.join(process.cwd(), 'garda-agent-orchestrator', 'runtime', 'tmp');
+        const repoRoot = createGitUpdateRepo('2.1.0', true, repoParent);
+        const repoUrl = `./${path.relative(process.cwd(), repoRoot).replaceAll('\\', '/')}`;
+        const { targetRoot, bundleRoot } = createDeployedWorkspace('2.0.0');
+        try {
+            const result = await runUpdateFromGit({
+                targetRoot, bundleRoot, repoUrl, checkOnly: true, trustOverride: true
+            });
+            assert.equal(result.repoUrl, repoUrl);
+            assert.equal(result.updateAvailable, true);
+        } finally {
+            removePathRecursive(repoRoot);
+            removePathRecursive(targetRoot);
+        }
+    });
+
+    it('keeps a relative source bound to the invocation directory during cloning', async () => {
+        const invocationRoot = process.cwd();
+        const repoParent = path.join(invocationRoot, 'garda-agent-orchestrator', 'runtime', 'tmp');
+        const repoRoot = createGitUpdateRepo('2.1.0', true, repoParent);
+        const repoUrl = `./${path.relative(invocationRoot, repoRoot).replaceAll('\\', '/')}`;
+        const { targetRoot, bundleRoot } = createDeployedWorkspace('2.0.0');
+        try {
+            const update = runUpdateFromGit({ targetRoot, bundleRoot, repoUrl, checkOnly: true, trustOverride: true });
+            process.chdir(repoParent);
+            const result = await update;
+            assert.equal(result.repoUrl, repoUrl);
+            assert.equal(result.updateAvailable, true);
+        } finally {
+            process.chdir(invocationRoot);
+            removePathRecursive(repoRoot);
+            removePathRecursive(targetRoot);
+        }
+    });
+
+    it('accepts a Windows-native relative local repository path', { skip: process.platform !== 'win32' }, async () => {
+        const invocationRoot = process.cwd();
+        const repoParent = path.join(invocationRoot, 'garda-agent-orchestrator', 'runtime', 'tmp');
+        const repoRoot = createGitUpdateRepo('2.1.0', true, repoParent);
+        const repoUrl = `.\\${path.relative(invocationRoot, repoRoot)}`;
+        const { targetRoot, bundleRoot } = createDeployedWorkspace('2.0.0');
+        try {
+            const result = await runUpdateFromGit({ targetRoot, bundleRoot, repoUrl, checkOnly: true, trustOverride: true });
+            assert.equal(result.repoUrl, repoUrl);
+            assert.equal(result.updateAvailable, true);
+        } finally {
+            removePathRecursive(repoRoot);
+            removePathRecursive(targetRoot);
+        }
+    });
+
     it('detects update availability from a local git repository in check-only mode', async () => {
         const repoRoot = createGitUpdateRepo('2.1.0');
         const { targetRoot, bundleRoot } = createDeployedWorkspace('2.0.0');
