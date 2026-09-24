@@ -9,6 +9,11 @@ import {
     removePathRecursive
 } from './generic-utils';
 import { withLifecycleRuntimeMutationGenerationForPath } from './runtime-mutation-generation';
+import {
+    assertNoLinkedPathComponents,
+    verifyRollbackSnapshotIntegrity,
+    writeRollbackSnapshotIntegrity
+} from './rollback/rollback-snapshot-integrity';
 
 type JsonObject = Record<string, unknown>;
 
@@ -121,7 +126,10 @@ export function writeRollbackRecords(snapshotRoot: string, records: readonly Rol
         () => {
             const recordsPath = getRollbackRecordsPath(snapshotRoot);
             fs.mkdirSync(snapshotRoot, { recursive: true });
-            fs.writeFileSync(recordsPath, JSON.stringify(records, null, 2), 'utf8');
+            assertNoLinkedPathComponents(snapshotRoot, recordsPath);
+            const recordsBytes = Buffer.from(JSON.stringify(records, null, 2), 'utf8');
+            fs.writeFileSync(recordsPath, recordsBytes);
+            writeRollbackSnapshotIntegrity(snapshotRoot, records, recordsBytes);
             return recordsPath;
         }
     );
@@ -129,13 +137,15 @@ export function writeRollbackRecords(snapshotRoot: string, records: readonly Rol
 
 export function readRollbackRecords(snapshotRoot: string): RollbackRecord[] {
     const recordsPath = getRollbackRecordsPath(snapshotRoot);
+    assertNoLinkedPathComponents(snapshotRoot, recordsPath);
     if (!fs.existsSync(recordsPath)) {
         throw new Error(`Rollback records file not found: ${recordsPath}`);
     }
 
+    const recordsBytes = fs.readFileSync(recordsPath);
     let parsed: unknown;
     try {
-        parsed = JSON.parse(fs.readFileSync(recordsPath, 'utf8'));
+        parsed = JSON.parse(recordsBytes.toString('utf8'));
     } catch (_error) {
         throw new Error(`Rollback records file is not valid JSON: ${recordsPath}`);
     }
@@ -144,7 +154,8 @@ export function readRollbackRecords(snapshotRoot: string): RollbackRecord[] {
         throw new Error(`Rollback records file must contain an array: ${recordsPath}`);
     }
 
-    return parsed.map((record: unknown, index: number): RollbackRecord => {
+    const seen = new Set<string>();
+    const records = parsed.map((record: unknown, index: number): RollbackRecord => {
         const recordObject = isJsonObject(record) ? record : null;
         const relativePath = typeof recordObject?.relativePath === 'string'
             ? recordObject.relativePath.trim()
@@ -153,15 +164,24 @@ export function readRollbackRecords(snapshotRoot: string): RollbackRecord[] {
             throw new Error(`Rollback record at index ${index} is missing relativePath.`);
         }
         ensureRelativeSafe(relativePath, `Rollback record at index ${index} relativePath`);
+        const normalizedPath = relativePath.replace(/\\/g, '/').toLowerCase();
+        if (seen.has(normalizedPath)) throw new Error(`Duplicate rollback record: ${relativePath}`);
+        seen.add(normalizedPath);
+        if (typeof recordObject?.existed !== 'boolean'
+            || !['file', 'directory', 'missing'].includes(String(recordObject.pathType))
+            || (recordObject.existed && recordObject.pathType === 'missing')
+            || (!recordObject.existed && recordObject.pathType !== 'missing')) {
+            throw new Error(`Rollback record at index ${index} has invalid existence or pathType.`);
+        }
 
         return {
             relativePath,
-            existed: Boolean(recordObject?.existed),
-            pathType: typeof recordObject?.pathType === 'string' && recordObject.pathType
-                ? recordObject.pathType
-                : 'missing'
+            existed: recordObject.existed,
+            pathType: recordObject.pathType as string
         };
     });
+    verifyRollbackSnapshotIntegrity(snapshotRoot, records, recordsBytes);
+    return records;
 }
 
 export function getSyncBackupMetadataPath(backupRoot: string): string {
@@ -183,6 +203,7 @@ export function writeSyncBackupMetadata(backupRoot: string, metadata: SyncBackup
 
 export function readSyncBackupMetadata(backupRoot: string): SyncBackupMetadata {
     const metadataPath = getSyncBackupMetadataPath(backupRoot);
+    assertNoLinkedPathComponents(backupRoot, metadataPath);
     if (!fs.existsSync(metadataPath)) {
         throw new Error(`Sync backup metadata file not found: ${metadataPath}`);
     }
@@ -217,13 +238,21 @@ export function restoreRollbackSnapshot(
     records: readonly RollbackRecord[]
 ): void {
     for (const record of records) {
+        ensureRelativeSafe(record.relativePath, 'Rollback record.relativePath');
+        const targetPath = path.join(rootPath, record.relativePath);
+        ensureWithinRoot(rootPath, targetPath, 'Rollback restore target');
+        assertNoLinkedPathComponents(rootPath, targetPath);
+    }
+    for (const record of records) {
         const rel = record.relativePath;
         if (!rel) continue;
         ensureRelativeSafe(rel, 'Rollback record.relativePath');
 
         const targetPath = path.join(rootPath, rel);
         ensureWithinRoot(rootPath, targetPath, 'Rollback restore target');
+        assertNoLinkedPathComponents(rootPath, targetPath);
         const snapshotPath = path.join(snapshotRoot, rel);
+        assertNoLinkedPathComponents(snapshotRoot, snapshotPath);
         const shouldExist = record.existed;
 
         if (shouldExist) {
@@ -386,6 +415,7 @@ export function removeUpdateSentinel(bundleRoot: string): void {
 
 export function readUpdateSentinel(bundleRoot: string): UpdateSentinelMetadata | null {
     const sentinelPath = getUpdateSentinelPath(bundleRoot);
+    assertNoLinkedPathComponents(bundleRoot, sentinelPath);
     if (!fs.existsSync(sentinelPath)) {
         return null;
     }

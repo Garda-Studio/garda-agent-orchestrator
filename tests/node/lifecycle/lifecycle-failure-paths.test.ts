@@ -20,8 +20,10 @@ import { runUninstall } from '../../../src/lifecycle/uninstall';
 import {
     removePathRecursive,
     getUpdateSentinelPath,
-    readSyncBackupMetadata
+    readSyncBackupMetadata,
+    readRollbackRecords
 } from '../../../src/lifecycle/common';
+import { verifyRestoredRollbackSnapshot } from '../../../src/lifecycle/rollback/rollback-snapshot-integrity';
 import { MANAGED_START, MANAGED_END, COMMIT_GUARD_START, COMMIT_GUARD_END } from '../../../src/materialization/content-builders';
 
 
@@ -558,13 +560,13 @@ describe('Rollback safety snapshot and failure paths', () => {
             // Save pre-rollback state
             const versionBeforeRollback = fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8').trim();
 
-            // Snapshot rollback should fail but safety rollback should fire
+            // Authenticated records reject a corrupt snapshot before any restore mutation.
             assert.throws(
                 () => runSnapshotRollback({
                     targetRoot: projectRoot,
                     bundleRoot
                 }),
-                /safety rollback completed|Rollback failed/
+                /Rollback snapshot integrity mismatch/
             );
 
             // Safety rollback should restore to pre-rollback state (version 9.9.9)
@@ -621,6 +623,7 @@ describe('Rollback safety snapshot and failure paths', () => {
                     bundleRoot,
                     targetVersion: '1.0.0',
                     sourcePath: olderSource,
+                    trustOverride: true,
                     initAnswersPath: answersPath,
                     installRunner: () => {
                         // Destroy safety snapshots to make safety rollback also fail
@@ -698,6 +701,7 @@ describe('Rollback safety snapshot and failure paths', () => {
                     bundleRoot,
                     targetVersion: '1.0.0',
                     sourcePath: olderSource,
+                    trustOverride: true,
                     initAnswersPath: answersPath,
                     materializationRunner: () => {
                         throw new Error('MATERIALIZATION_ROLLBACK_FAIL');
@@ -712,6 +716,10 @@ describe('Rollback safety snapshot and failure paths', () => {
                 preRollbackVersion,
                 'Safety rollback must restore VERSION to pre-rollback value'
             );
+            const safetyRoot = path.join(bundleRoot, 'runtime', 'update-rollbacks');
+            const safetyName = fs.readdirSync(safetyRoot).filter((name) => name.startsWith('rollback-')).sort().at(-1)!;
+            const safetySnapshot = path.join(safetyRoot, safetyName);
+            verifyRestoredRollbackSnapshot(projectRoot, safetySnapshot, readRollbackRecords(safetySnapshot));
             // Sentinel must be cleaned
             assert.ok(
                 !fs.existsSync(getUpdateSentinelPath(bundleRoot)),

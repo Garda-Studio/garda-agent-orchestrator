@@ -45,6 +45,23 @@ function canCreateSymlinks(): boolean {
 
 const symlinkSupported = canCreateSymlinks();
 
+describe('lifecycle control file links', () => {
+    it('rejects linked sync backup metadata directory before reading JSON', { skip: !symlinkSupported && 'Symlinks/junctions not supported' }, () => {
+        const root = mkTmpDir();
+        try {
+            const outside = path.join(root, 'outside');
+            const backup = path.join(root, 'backup');
+            fs.mkdirSync(outside);
+            fs.writeFileSync(path.join(outside, 'sync-backup-metadata.json'),
+                JSON.stringify({ preexistingMap: { VERSION: true } }));
+            fs.symlinkSync(outside, backup, 'junction');
+            assert.throws(() => readSyncBackupMetadata(backup), /symlink|junction/);
+        } finally {
+            removePathRecursive(root);
+        }
+    });
+});
+
 describe('compareVersionStrings', () => {
     it('returns 0 for equal versions', () => {
         assert.equal(compareVersionStrings('1.0.8', '1.0.8'), 0);
@@ -289,11 +306,86 @@ describe('createRollbackSnapshot and restoreRollbackSnapshot', () => {
                 { relativePath: 'missing.txt', existed: false, pathType: 'missing' }
             ];
 
+            fs.mkdirSync(snapshotRoot, { recursive: true });
+            fs.writeFileSync(path.join(snapshotRoot, 'file1.txt'), 'original');
             const recordsPath = writeRollbackRecords(snapshotRoot, records);
             assert.equal(recordsPath, getRollbackRecordsPath(snapshotRoot));
 
             const loaded = readRollbackRecords(snapshotRoot);
             assert.deepEqual(loaded, records);
+        } finally {
+            removePathRecursive(dir);
+        }
+    });
+
+    it('rejects changed snapshot bytes before trusting rollback records', () => {
+        const dir = mkTmpDir();
+        try {
+            const snapshotRoot = path.join(dir, '_snapshot');
+            fs.mkdirSync(snapshotRoot);
+            fs.writeFileSync(path.join(snapshotRoot, 'file.txt'), 'original');
+            writeRollbackRecords(snapshotRoot, [
+                { relativePath: 'file.txt', existed: true, pathType: 'file' }
+            ]);
+            fs.writeFileSync(path.join(snapshotRoot, 'file.txt'), 'altered');
+            assert.throws(() => readRollbackRecords(snapshotRoot), /Rollback snapshot integrity mismatch/);
+        } finally {
+            removePathRecursive(dir);
+        }
+    });
+
+    it('rejects a snapshot record beneath a symlinked directory', { skip: !symlinkSupported && 'Symlinks/junctions not supported' }, () => {
+        const dir = mkTmpDir();
+        try {
+            const snapshotRoot = path.join(dir, '_snapshot');
+            const linkedDir = path.join(snapshotRoot, 'linked');
+            const outside = path.join(dir, 'outside');
+            fs.mkdirSync(linkedDir, { recursive: true });
+            fs.mkdirSync(outside);
+            fs.writeFileSync(path.join(linkedDir, 'file.txt'), 'original');
+            fs.writeFileSync(path.join(outside, 'file.txt'), 'outside');
+            writeRollbackRecords(snapshotRoot, [
+                { relativePath: 'linked/file.txt', existed: true, pathType: 'file' }
+            ]);
+            fs.rmSync(linkedDir, { recursive: true });
+            fs.symlinkSync(outside, linkedDir, 'junction');
+            assert.throws(() => readRollbackRecords(snapshotRoot), /symlink|junction|outside permitted root/);
+        } finally {
+            removePathRecursive(dir);
+        }
+    });
+
+    it('rejects a linked restore destination before touching outside files', { skip: !symlinkSupported && 'Symlinks/junctions not supported' }, () => {
+        const dir = mkTmpDir();
+        try {
+            const snapshotRoot = path.join(dir, '_snapshot');
+            const outside = path.join(dir, 'outside');
+            fs.mkdirSync(path.join(snapshotRoot, 'linked'), { recursive: true });
+            fs.mkdirSync(outside);
+            fs.writeFileSync(path.join(snapshotRoot, 'linked', 'file.txt'), 'snapshot');
+            fs.writeFileSync(path.join(outside, 'file.txt'), 'outside-original');
+            const records = [{ relativePath: 'linked/file.txt', existed: true, pathType: 'file' }];
+            writeRollbackRecords(snapshotRoot, records);
+            fs.symlinkSync(outside, path.join(dir, 'linked'), 'junction');
+            assert.throws(() => restoreRollbackSnapshot(dir, snapshotRoot, records), /symlink|junction/);
+            assert.equal(fs.readFileSync(path.join(outside, 'file.txt'), 'utf8'), 'outside-original');
+        } finally {
+            removePathRecursive(dir);
+        }
+    });
+
+    it('rejects changed rollback records and missing integrity metadata', () => {
+        const dir = mkTmpDir();
+        try {
+            const snapshotRoot = path.join(dir, '_snapshot');
+            fs.mkdirSync(snapshotRoot);
+            writeRollbackRecords(snapshotRoot, [
+                { relativePath: 'missing.txt', existed: false, pathType: 'missing' }
+            ]);
+            fs.writeFileSync(getRollbackRecordsPath(snapshotRoot), '[]');
+            assert.throws(() => readRollbackRecords(snapshotRoot), /Rollback snapshot integrity mismatch/);
+            fs.rmSync(path.join(snapshotRoot, 'rollback-integrity.json'));
+            assert.throws(() => readRollbackRecords(snapshotRoot), /integrity metadata is missing/);
         } finally {
             removePathRecursive(dir);
         }

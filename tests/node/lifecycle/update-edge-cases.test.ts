@@ -30,6 +30,26 @@ import {
     withLifecycleOperationLock
 } from '../../../src/lifecycle/common';
 
+it('rejects an update sentinel under a linked runtime directory', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-linked-sentinel-'));
+    try {
+        const bundleRoot = path.join(root, 'bundle');
+        const outside = path.join(root, 'outside');
+        fs.mkdirSync(bundleRoot);
+        fs.mkdirSync(outside);
+        fs.writeFileSync(path.join(outside, '.update-in-progress'), JSON.stringify({ phase: 'lifecycle' }));
+        try {
+            fs.symlinkSync(outside, path.join(bundleRoot, 'runtime'), 'junction');
+        } catch {
+            t.skip('Directory symlinks or junctions are unavailable');
+            return;
+        }
+        assert.throws(() => readUpdateSentinel(bundleRoot), /symlink|junction/);
+    } finally {
+        removePathRecursive(root);
+    }
+});
+
 
 function findRepoRoot() {
     let dir = __dirname;
@@ -342,14 +362,18 @@ describe('Rollback locked-file edge cases', () => {
                 ...records,
                 { relativePath: 'PHANTOM_LOCKED_FILE.md', existed: true, pathType: 'file' }
             ];
-            writeRollbackRecords(latestSnapshot, corruptedRecords);
+            fs.writeFileSync(
+                path.join(latestSnapshot, 'rollback-records.json'),
+                JSON.stringify(corruptedRecords, null, 2),
+                'utf8'
+            );
 
             await assert.rejects(
                 runRollback({
                     targetRoot: projectRoot,
                     bundleRoot
                 }),
-                /Rollback snapshot entry missing|PHANTOM_LOCKED_FILE/
+                /Rollback snapshot integrity mismatch/
             );
         } finally {
             removePathRecursive(projectRoot);
@@ -653,6 +677,8 @@ describe('Partial rollback snapshot edge cases', () => {
                 { relativePath: 'missing-c.txt', existed: false, pathType: 'missing' }
             ];
 
+            fs.writeFileSync(path.join(tmpDir, 'file-a.txt'), 'data');
+            fs.mkdirSync(path.join(tmpDir, 'dir-b'));
             writeRollbackRecords(tmpDir, records);
             const read = readRollbackRecords(tmpDir);
 

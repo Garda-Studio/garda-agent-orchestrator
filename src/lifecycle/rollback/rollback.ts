@@ -12,14 +12,11 @@ import {
     createRollbackSnapshot,
     ensureWithinRoot,
     getRollbackRecordsPath,
-    getSyncBackupMetadataPath,
     getTimestamp,
     readRollbackRecords,
-    readSyncBackupMetadata,
     removePathRecursive,
     removeUpdateSentinel,
     restoreRollbackSnapshot,
-    restoreSyncedItemsFromBackup,
     validateTargetRoot,
     withLifecycleOperationLockAsync,
     writeRollbackRecords,
@@ -28,6 +25,10 @@ import {
 } from '../common';
 import { getUpdateRollbackItems } from '../update/update';
 import { acquireUpdateSource, DEFAULT_PACKAGE_NAME } from '../check-update';
+import { validatePathSourceTrust } from '../update/update-trust';
+import { formatManifestResult, validateManifest } from '../../validators/validate-manifest';
+import { formatVerifyResult, runVerify } from '../../validators/verify';
+import { assertNoLinkedPathComponents, verifyRestoredRollbackSnapshot } from './rollback-snapshot-integrity';
 import {
     withLifecycleRuntimeMutationGeneration,
     withLifecycleRuntimeMutationGenerationAsync
@@ -78,6 +79,19 @@ function readVersionOrFallback(versionPath: string, fallbackValue: string = 'unk
 
     const value = readTextFile(versionPath).trim();
     return value || fallbackValue;
+}
+
+function syncRestoredLiveVersion(bundleRoot: string, version: string): void {
+    const liveVersionPath = path.join(bundleRoot, 'live', 'version.json');
+    if (!pathExists(liveVersionPath)) return;
+    assertNoLinkedPathComponents(bundleRoot, liveVersionPath);
+    const parsed = JSON.parse(readTextFile(liveVersionPath)) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error(`Restored live/version.json is invalid: ${liveVersionPath}`);
+    }
+    parsed.Version = version;
+    parsed.UpdatedAt = new Date().toISOString();
+    fs.writeFileSync(liveVersionPath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
 }
 
 export function getRollbackSnapshotsRoot(targetRoot: string): string {
@@ -140,13 +154,15 @@ function getRelativeRollbackPath(targetRoot: string, absolutePath: string): stri
 export function findSnapshotByVersion(targetRoot: string, targetVersion: string): string | null {
     const snapshots = listRollbackSnapshotPaths(targetRoot);
     for (const snapshotPath of snapshots) {
+        assertNoLinkedPathComponents(targetRoot, snapshotPath);
+        if (!pathExists(getRollbackRecordsPath(snapshotPath))) continue;
+        readRollbackRecords(snapshotPath);
         const versionPath = path.join(snapshotPath, resolveBundleName(), 'VERSION');
+        assertNoLinkedPathComponents(snapshotPath, versionPath);
         if (!pathExists(versionPath)) continue;
         const version = readTextFile(versionPath).trim();
         if (version && compareVersionStrings(version, targetVersion) === 0) {
-            if (pathExists(getRollbackRecordsPath(snapshotPath))) {
-                return snapshotPath;
-            }
+            return snapshotPath;
         }
     }
     return null;
@@ -162,8 +178,8 @@ async function runRollbackToVersionUnjournaled(options: RunRollbackToVersionOpti
         trustOverride = false,
         initAnswersPath = path.join(resolveBundleName(), 'runtime', 'init-answers.json'),
         dryRun = false,
-        skipVerify: _skipVerify = false,
-        skipManifestValidation: _skipManifestValidation = false,
+        skipVerify = false,
+        skipManifestValidation = false,
         installRunner = null,
         materializationRunner = null
     } = options;
@@ -212,7 +228,7 @@ async function runRollbackToVersionUnjournaled(options: RunRollbackToVersionOpti
     let materializationStatus = 'NOT_RUN';
     let restoreStatus = 'NOT_RUN';
 
-    const matchingSnapshot = findSnapshotByVersion(normalizedTarget, targetVersion);
+    const matchingSnapshot = sourcePath ? null : findSnapshotByVersion(normalizedTarget, targetVersion);
     let resolvedSourceType = 'unknown';
     let resolvedSourceReference = '';
     let sourceRoot: string | null = null;
@@ -221,8 +237,12 @@ async function runRollbackToVersionUnjournaled(options: RunRollbackToVersionOpti
 
     if (sourcePath) {
         const resolvedSourcePath = path.resolve(String(sourcePath).trim());
+        validatePathSourceTrust(resolvedSourcePath, { trustOverride });
         if (!pathExists(resolvedSourcePath)) {
             throw new Error(`Rollback source path not found: ${resolvedSourcePath}`);
+        }
+        if (!fs.lstatSync(resolvedSourcePath).isDirectory()) {
+            throw new Error(`Rollback source path is not a directory: ${resolvedSourcePath}`);
         }
         resolvedSourceType = 'path';
         resolvedSourceReference = resolvedSourcePath;
@@ -420,6 +440,27 @@ async function runRollbackToVersionUnjournaled(options: RunRollbackToVersionOpti
                 fs.mkdirSync(path.dirname(versionDestPath), { recursive: true });
                 fs.copyFileSync(versionSourcePath, versionDestPath);
             }
+            syncRestoredLiveVersion(deployedBundleRoot, sourceVersion);
+
+            if (matchingSnapshot) {
+                readRollbackRecords(matchingSnapshot);
+            }
+            const updatedVersion = readVersionOrFallback(path.join(deployedBundleRoot, 'VERSION'));
+            if (updatedVersion !== sourceVersion) {
+                throw new Error(`Rollback post-restore VERSION '${updatedVersion}' differs from source '${sourceVersion}'.`);
+            }
+            if (!skipVerify) {
+                const verifyResult = runVerify({
+                    targetRoot: normalizedTarget,
+                    initAnswersPath: initAnswersResolvedPath,
+                    sourceOfTruth: validated.SourceOfTruth
+                });
+                if (!verifyResult.passed) throw new Error(formatVerifyResult(verifyResult));
+            }
+            if (!skipManifestValidation) {
+                const manifestResult = validateManifest(path.join(deployedBundleRoot, 'MANIFEST.md'), normalizedTarget);
+                if (!manifestResult.passed) throw new Error(formatManifestResult(manifestResult));
+            }
 
             removeUpdateSentinel(deployedBundleRoot);
             restoreStatus = 'SUCCESS';
@@ -447,6 +488,7 @@ async function runRollbackToVersionUnjournaled(options: RunRollbackToVersionOpti
         try {
             const safetyRecords = readRollbackRecords(safetySnapshotPath);
             restoreRollbackSnapshot(normalizedTarget, safetySnapshotPath, safetyRecords);
+            verifyRestoredRollbackSnapshot(normalizedTarget, safetySnapshotPath, safetyRecords);
             safetyRollbackStatus = 'SUCCESS';
         } catch (safetyRollbackError: unknown) {
             const safetyRollbackMessage = getErrorMessage(safetyRollbackError);
@@ -536,6 +578,7 @@ function runSnapshotRollbackUnjournaled(options: RunSnapshotRollbackOptions) {
     const normalizedTarget = validateTargetRoot(targetRoot, bundleRoot);
     const deployedBundleRoot = path.join(normalizedTarget, resolveBundleName());
     const normalizedSnapshotPath = resolveRollbackSnapshotPath(normalizedTarget, snapshotPath);
+    assertNoLinkedPathComponents(normalizedTarget, normalizedSnapshotPath);
 
     if (!pathExists(normalizedSnapshotPath)) {
         throw new Error(`Rollback snapshot not found: ${normalizedSnapshotPath}`);
@@ -550,6 +593,11 @@ function runSnapshotRollbackUnjournaled(options: RunSnapshotRollbackOptions) {
     }
 
     const rollbackRecords = readRollbackRecords(normalizedSnapshotPath);
+    const versionRelativePath = `${resolveBundleName()}/VERSION`;
+    if (!rollbackRecords.some((record) => record.relativePath.replace(/\\/g, '/') === versionRelativePath
+        && record.existed && record.pathType === 'file')) {
+        throw new Error(`Rollback snapshot does not contain an authenticated ${versionRelativePath}.`);
+    }
     const currentVersion = readVersionOrFallback(path.join(deployedBundleRoot, 'VERSION'));
     const snapshotVersion = readVersionOrFallback(path.join(normalizedSnapshotPath, resolveBundleName(), 'VERSION'));
     const timestamp = getTimestamp();
@@ -562,21 +610,8 @@ function runSnapshotRollbackUnjournaled(options: RunSnapshotRollbackOptions) {
     let safetySnapshotCreated = false;
     let safetySnapshotRecordCount = 0;
     let restoreStatus = 'NOT_RUN';
-    let bundleRestoreStatus = 'NOT_NEEDED';
+    let bundleRestoreStatus = 'FROM_SELECTED_SNAPSHOT';
     let safetyRollbackStatus = 'NOT_NEEDED';
-    let bundleBackupPath = null;
-    let bundleBackupMetadataPath = null;
-    let bundleBackupVersion = 'unknown';
-
-    const bundleBackupCandidates = listBundleBackupPaths(normalizedTarget);
-    if (bundleBackupCandidates.length > 0) {
-        bundleBackupPath = bundleBackupCandidates[0];
-        const candidateMetadataPath = getSyncBackupMetadataPath(bundleBackupPath);
-        if (pathExists(candidateMetadataPath)) {
-            bundleBackupMetadataPath = candidateMetadataPath;
-        }
-        bundleBackupVersion = readVersionOrFallback(path.join(bundleBackupPath, 'VERSION'));
-    }
 
     if (!dryRun) {
         fs.mkdirSync(path.dirname(safetySnapshotPath), { recursive: true });
@@ -592,26 +627,14 @@ function runSnapshotRollbackUnjournaled(options: RunSnapshotRollbackOptions) {
 
     try {
         if (!dryRun) {
+            readRollbackRecords(normalizedSnapshotPath);
             restoreRollbackSnapshot(normalizedTarget, normalizedSnapshotPath, rollbackRecords);
+            verifyRestoredRollbackSnapshot(normalizedTarget, normalizedSnapshotPath, rollbackRecords);
             restoreStatus = 'SUCCESS';
-            if (bundleBackupPath && bundleBackupMetadataPath) {
-                const syncBackupMetadata = readSyncBackupMetadata(bundleBackupPath);
-                restoreSyncedItemsFromBackup(
-                    deployedBundleRoot,
-                    bundleBackupPath,
-                    syncBackupMetadata.preexistingMap,
-                    null
-                );
-                bundleRestoreStatus = 'SUCCESS';
-            } else if (bundleBackupPath) {
-                bundleRestoreStatus = 'SKIPPED_MISSING_METADATA';
-            } else {
-                bundleRestoreStatus = 'SKIPPED_NO_BUNDLE_BACKUP';
-            }
             safetyRollbackStatus = 'NOT_TRIGGERED';
         } else {
             restoreStatus = 'SKIPPED_DRY_RUN';
-            bundleRestoreStatus = bundleBackupPath ? 'SKIPPED_DRY_RUN' : 'SKIPPED_NO_BUNDLE_BACKUP';
+            bundleRestoreStatus = 'SKIPPED_DRY_RUN';
             safetyRollbackStatus = 'SKIPPED_DRY_RUN';
         }
     } catch (error: unknown) {
@@ -628,6 +651,7 @@ function runSnapshotRollbackUnjournaled(options: RunSnapshotRollbackOptions) {
         try {
             const safetyRecords = readRollbackRecords(safetySnapshotPath);
             restoreRollbackSnapshot(normalizedTarget, safetySnapshotPath, safetyRecords);
+            verifyRestoredRollbackSnapshot(normalizedTarget, safetySnapshotPath, safetyRecords);
             safetyRollbackStatus = 'SUCCESS';
         } catch (safetyRollbackError: unknown) {
             const safetyRollbackMessage = getErrorMessage(safetyRollbackError);
@@ -653,8 +677,8 @@ function runSnapshotRollbackUnjournaled(options: RunSnapshotRollbackOptions) {
             `RollbackMode: snapshot`,
             `RollbackSnapshotPath: ${getRelativeRollbackPath(normalizedTarget, normalizedSnapshotPath)}`,
             `RollbackSnapshotRecordCount: ${rollbackRecords.length}`,
-            `BundleBackupPath: ${bundleBackupPath ? getRelativeRollbackPath(normalizedTarget, bundleBackupPath) : 'not-found'}`,
-            `BundleBackupMetadataPath: ${bundleBackupMetadataPath ? getRelativeRollbackPath(normalizedTarget, bundleBackupMetadataPath) : 'not-found'}`,
+            'BundleBackupPath: not-used',
+            'BundleBackupMetadataPath: not-used',
             `SafetySnapshotPath: ${safetySnapshotRelativePath}`,
             `SafetySnapshotRecordsPath: ${safetySnapshotRecordsRelativePath}`,
             `SafetySnapshotRecordCount: ${safetySnapshotRecordCount}`,
@@ -665,7 +689,7 @@ function runSnapshotRollbackUnjournaled(options: RunSnapshotRollbackOptions) {
             '## Version',
             `CurrentVersionBeforeRollback: ${currentVersion}`,
             `SnapshotVersion: ${snapshotVersion}`,
-            `RollbackVersion: ${bundleBackupVersion !== 'unknown' ? bundleBackupVersion : snapshotVersion}`,
+            `RollbackVersion: ${snapshotVersion}`,
             `UpdatedVersion: ${updatedVersion}`
         ];
         fs.writeFileSync(rollbackReportPath, reportLines.join('\r\n'), 'utf8');
@@ -679,13 +703,13 @@ function runSnapshotRollbackUnjournaled(options: RunSnapshotRollbackOptions) {
         rollbackRecordCount: rollbackRecords.length,
         currentVersion,
         snapshotVersion,
-        rollbackVersion: bundleBackupVersion !== 'unknown' ? bundleBackupVersion : snapshotVersion,
-        bundleBackupVersion,
+        rollbackVersion: snapshotVersion,
+        bundleBackupVersion: 'not-used',
         updatedVersion,
         dryRun,
         restoreStatus,
-        bundleBackupPath: bundleBackupPath ? getRelativeRollbackPath(normalizedTarget, bundleBackupPath) : 'not-found',
-        bundleBackupMetadataPath: bundleBackupMetadataPath ? getRelativeRollbackPath(normalizedTarget, bundleBackupMetadataPath) : 'not-found',
+        bundleBackupPath: 'not-used',
+        bundleBackupMetadataPath: 'not-used',
         bundleRestoreStatus,
         safetySnapshotPath: dryRun ? 'not-created-in-dry-run' : safetySnapshotRelativePath,
         safetySnapshotRecordsPath: dryRun ? 'not-created-in-dry-run' : safetySnapshotRecordsRelativePath,

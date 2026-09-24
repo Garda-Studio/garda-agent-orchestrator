@@ -458,16 +458,17 @@ garda rollback --target-root "."
 garda rollback --target-root "." --dry-run
 garda rollback --target-root "." --snapshot-path "garda-agent-orchestrator/runtime/update-rollbacks/update-20260325-114000"
 garda rollback --target-root "." --to-version "<target-version>" --init-answers-path "garda-agent-orchestrator/runtime/init-answers.json"
-garda rollback --target-root "." --to-version "<target-version>" --init-answers-path "garda-agent-orchestrator/runtime/init-answers.json" --source-path "."
+garda rollback --target-root "." --to-version "<target-version>" --init-answers-path "garda-agent-orchestrator/runtime/init-answers.json" --source-path "." --trust-override --no-prompt
 garda rollback --target-root "." --to-version "<target-version>" --init-answers-path "garda-agent-orchestrator/runtime/init-answers.json" --package-spec "garda-agent-orchestrator@<target-version>"
 ```
 
 Notes:
-- Without `--to-version`, `rollback` restores the latest saved pre-update workspace snapshot and, when available, the latest bundle backup created by `update` or `check-update --apply`.
-- With `--to-version`, `rollback` acquires that orchestrator version, syncs the bundle, re-runs install/materialization, and updates `VERSION` only after success.
+- Without `--to-version`, `rollback` restores only the selected pre-update workspace snapshot, including its recorded bundle and `VERSION`. It verifies the snapshot records and file hashes before restoration and checks the restored files afterward. Unrelated bundle backups are not overlaid.
+- With `--to-version`, `rollback` acquires that orchestrator version, syncs the bundle, re-runs install/materialization, updates `VERSION` only after success, then verifies the restored workspace and manifest unless their explicit skip flags are set.
+- `--source-path` requires `--trust-override --no-prompt`, as with a local update source. Its result receives the same post-restore verification as other version sources.
 - `--init-answers-path` is required for version-based rollback because the workspace is re-materialized for the requested version.
 - `--snapshot-path` applies to snapshot-mode rollback; with no `--snapshot-path`, `rollback` uses the latest saved rollback snapshot automatically.
-- Older updates created before rollback metadata persistence may require manual recovery.
+- Older snapshots without integrity metadata require manual recovery; Garda will not restore unauthenticated records automatically. The local hashes detect changes to a snapshot after capture but do not establish publisher identity or protect against a local actor who can rewrite the snapshot and its metadata together.
 - After a successful non-dry-run rollback, start a new Garda process before another command so the restored bundle is loaded from disk.
 
 ### `garda backup`

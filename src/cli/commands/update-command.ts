@@ -466,6 +466,10 @@ export async function handleRollback(commandArgv: string[], packageJson: Package
         '--init-answers-path': { key: 'initAnswersPath', type: 'string' },
         '--source-path': { key: 'sourcePath', type: 'string' },
         '--package-spec': { key: 'packageSpec', type: 'string' },
+        '--trust-override': { key: 'trustOverride', type: 'boolean' },
+        '--no-prompt': { key: 'noPrompt', type: 'boolean' },
+        '--skip-verify': { key: 'skipVerify', type: 'boolean' },
+        '--skip-manifest-validation': { key: 'skipManifestValidation', type: 'boolean' },
         '--dry-run': { key: 'dryRun', type: 'boolean' },
         '--json': { key: 'json', type: 'boolean' }
     };
@@ -484,6 +488,10 @@ export async function handleRollback(commandArgv: string[], packageJson: Package
     const targetRoot = normalizePathValue(options.targetRoot || '.');
     ensureDirectoryExists(targetRoot, 'Target root');
     const bundlePath = ensureBundleExists(targetRoot, 'rollback');
+    assertExplicitCliTrustOverride('rollback', {
+        trustOverride: options.trustOverride === true,
+        noPrompt: options.noPrompt === true
+    });
 
     const rollbackResult = await runWithRestartOnFailure(() => runRollback({
         targetRoot,
@@ -492,6 +500,9 @@ export async function handleRollback(commandArgv: string[], packageJson: Package
         targetVersion: typeof options.toVersion === 'string' ? options.toVersion : undefined,
         sourcePath: typeof options.sourcePath === 'string' ? options.sourcePath : undefined,
         packageSpec: typeof options.packageSpec === 'string' ? options.packageSpec : undefined,
+        trustOverride: options.trustOverride === true,
+        skipVerify: options.skipVerify === true,
+        skipManifestValidation: options.skipManifestValidation === true,
         initAnswersPath: typeof options.initAnswersPath === 'string'
             ? options.initAnswersPath
             : getDefaultInitAnswersPath(targetRoot, bundlePath),

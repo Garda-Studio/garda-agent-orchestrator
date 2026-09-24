@@ -7,6 +7,25 @@ import * as path from 'node:path';
 import { assertRuntimeRestartNotRequired } from '../../../../src/cli/commands/shared-command-utils';
 import { runCliRuntimeMain } from '../../../../src/cli/runtime-main';
 
+it('rejects rollback source trust override without non-interactive acknowledgement', async () => {
+    const targetRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-rollback-trust-'));
+    fs.mkdirSync(path.join(targetRoot, 'garda-agent-orchestrator'));
+    try {
+        const { handleRollback } = await import('../../../../src/cli/commands/update-command');
+        await assert.rejects(
+            () => handleRollback([
+                '--target-root', targetRoot,
+                '--to-version', '1.0.0',
+                '--source-path', targetRoot,
+                '--trust-override'
+            ], { name: 'garda-agent-orchestrator', version: '1.0.0' }),
+            /requires explicit non-interactive acknowledgement/
+        );
+    } finally {
+        fs.rmSync(targetRoot, { recursive: true, force: true });
+    }
+});
+
 it('rejects another host command after a successful non-dry-run rollback', async (context) => {
     const targetRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-rollback-restart-'));
     fs.mkdirSync(path.join(targetRoot, 'garda-agent-orchestrator'));

@@ -11,7 +11,7 @@ import {
     runRollback,
     runRollbackToVersion
 } from '../../../src/lifecycle/rollback';
-import { removePathRecursive } from '../../../src/lifecycle/common';
+import { removePathRecursive, writeRollbackRecords } from '../../../src/lifecycle/common';
 
 const MANAGED_END = '<!-- garda-agent-orchestrator:managed-end -->';
 
@@ -102,7 +102,40 @@ function injectBundleUpdate(bundleRoot: string, updateMarker: string, nextVersio
 describe('runRollback (snapshot mode)', () => {
     const repoRoot = findRepoRoot();
 
-    it('restores the previous deployed version from the latest rollback snapshot', async () => {
+    it('rejects a stale sync backup from an earlier update with the same VERSION', () => {
+        const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
+        try {
+            const backupRoot = path.join(bundleRoot, 'runtime', 'bundle-backups', '20260101-000000');
+            copyDirRecursive(path.join(bundleRoot, 'template'), path.join(backupRoot, 'template'));
+            fs.copyFileSync(path.join(bundleRoot, 'VERSION'), path.join(backupRoot, 'VERSION'));
+            const metadataPath = path.join(backupRoot, 'sync-backup-metadata.json');
+            fs.writeFileSync(metadataPath, JSON.stringify({
+                createdAt: '2026-01-01T00:00:00.000Z',
+                plannedSyncItems: ['template'],
+                preexistingMap: { template: true, VERSION: true }
+            }));
+            const sentinelPath = path.join(bundleRoot, 'runtime', '.update-in-progress');
+            fs.writeFileSync(sentinelPath, JSON.stringify({
+                phase: 'lifecycle',
+                startedAt: '2026-01-01T00:00:01.000Z',
+                fromVersion: fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8').trim(),
+                plannedSyncItems: ['template'],
+                syncBackupRoot: backupRoot,
+                syncBackupMetadataPath: metadataPath
+            }));
+            const templatePath = path.join(bundleRoot, 'template', 'entrypoints', 'canonical-rule-index.md');
+            fs.appendFileSync(templatePath, '\nCURRENT_GENERATION_MARKER\n');
+
+            assert.throws(() => runUpdate({ targetRoot: projectRoot, bundleRoot,
+                initAnswersPath: answersPath, skipVerify: true, skipManifestValidation: true }),
+            /different lifecycle operation/);
+            assert.match(fs.readFileSync(templatePath, 'utf8'), /CURRENT_GENERATION_MARKER/);
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('rejects unrelated latest bundle backup during snapshot rollback', async () => {
         const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
         try {
             runUpdate({
@@ -142,6 +175,12 @@ describe('runRollback (snapshot mode)', () => {
             assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8').trim(), '9.9.9');
             assert.match(fs.readFileSync(canonicalRuleIndexPath, 'utf8'), /ROLLBACK_TEST_MARKER/);
 
+            const unrelatedBackup = path.join(bundleRoot, 'runtime', 'bundle-backups', '99991231-235959');
+            fs.mkdirSync(unrelatedBackup, { recursive: true });
+            fs.writeFileSync(path.join(unrelatedBackup, 'VERSION'), '99.0.0\n');
+            fs.writeFileSync(path.join(unrelatedBackup, 'sync-backup-metadata.json'),
+                JSON.stringify({ preexistingMap: { VERSION: true } }));
+
             const rollbackResult = await runRollback({
                 targetRoot: projectRoot,
                 bundleRoot
@@ -150,10 +189,76 @@ describe('runRollback (snapshot mode)', () => {
             assert.equal(rollbackResult.rollbackMode, 'snapshot');
             assert.equal(rollbackResult.restoreStatus, 'SUCCESS');
             assert.equal(rollbackResult.rollbackVersion, baselineVersion);
+            assert.equal((rollbackResult as Record<string, unknown>).bundleBackupPath, 'not-used');
             assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8').trim(), baselineVersion);
             assert.equal(fs.readFileSync(canonicalRuleIndexPath, 'utf8'), baselineCanonicalRuleIndex);
             assert.equal(rollbackResult.restoreStatus, 'SUCCESS');
             assert.ok(fs.existsSync(path.join(projectRoot, rollbackResult.rollbackReportPath)));
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('rejects incomplete sync backup metadata before authenticating snapshot', async () => {
+        const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
+        try {
+            runUpdate({ targetRoot: projectRoot, bundleRoot, initAnswersPath: answersPath,
+                skipVerify: true, skipManifestValidation: true });
+            const beforeVersion = fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8');
+            const sourceRoot = path.join(projectRoot, 'update-source');
+            copyDirRecursive(bundleRoot, sourceRoot);
+            injectBundleUpdate(sourceRoot, 'INCOMPLETE_BACKUP_MARKER', '9.9.9');
+            await assert.rejects(
+                runCheckUpdate({
+                    targetRoot: projectRoot, bundleRoot, sourcePath: sourceRoot,
+                    apply: true, noPrompt: true, trustOverride: true,
+                    updateRunner: (runnerOptions) => {
+                        const backupsRoot = path.join(bundleRoot, 'runtime', 'bundle-backups');
+                        const backupName = fs.readdirSync(backupsRoot).sort().at(-1)!;
+                        const metadataPath = path.join(backupsRoot, backupName, 'sync-backup-metadata.json');
+                        const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+                        delete metadata.preexistingMap.template;
+                        fs.writeFileSync(metadataPath, JSON.stringify(metadata));
+                        runUpdate({ targetRoot: runnerOptions.targetRoot, bundleRoot,
+                            initAnswersPath: runnerOptions.initAnswersPath,
+                            skipVerify: true, skipManifestValidation: true });
+                    }
+                }),
+                /sync backup metadata does not cover the current sync plan/
+            );
+            assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8'), beforeVersion);
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('rejects extra backup items absent from the current sync plan', async () => {
+        const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
+        try {
+            runUpdate({ targetRoot: projectRoot, bundleRoot, initAnswersPath: answersPath,
+                skipVerify: true, skipManifestValidation: true });
+            const sourceRoot = path.join(projectRoot, 'update-source');
+            copyDirRecursive(bundleRoot, sourceRoot);
+            injectBundleUpdate(sourceRoot, 'EXTRA_BACKUP_MARKER', '9.9.9');
+            await assert.rejects(runCheckUpdate({
+                targetRoot: projectRoot, bundleRoot, sourcePath: sourceRoot,
+                apply: true, noPrompt: true, trustOverride: true,
+                updateRunner: (runnerOptions) => {
+                    const backupsRoot = path.join(bundleRoot, 'runtime', 'bundle-backups');
+                    const backupName = fs.readdirSync(backupsRoot).sort().at(-1)!;
+                    const backupRoot = path.join(backupsRoot, backupName);
+                    const metadataPath = path.join(backupRoot, 'sync-backup-metadata.json');
+                    const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+                    assert.ok(!metadata.plannedSyncItems.includes('README.md'));
+                    metadata.preexistingMap['README.md'] = true;
+                    fs.writeFileSync(path.join(backupRoot, 'README.md'), 'FOREIGN_BACKUP_BYTES');
+                    fs.writeFileSync(metadataPath, JSON.stringify(metadata));
+                    runUpdate({ targetRoot: runnerOptions.targetRoot, bundleRoot,
+                        initAnswersPath: runnerOptions.initAnswersPath,
+                        skipVerify: true, skipManifestValidation: true });
+                }
+            }), /sync backup metadata does not cover the current sync plan/);
+            assert.ok(!fs.existsSync(path.join(bundleRoot, 'README.md')));
         } finally {
             removePathRecursive(projectRoot);
         }
@@ -297,6 +402,7 @@ describe('runRollback (version mode)', () => {
                 bundleRoot,
                 targetVersion: '1.0.0',
                 sourcePath: olderSource,
+                trustOverride: true,
                 initAnswersPath: answersPath,
                 skipVerify: true,
                 skipManifestValidation: true
@@ -321,6 +427,119 @@ describe('runRollback (version mode)', () => {
             );
             assert.match(reportContent, /RollbackMode: version/);
             assert.match(reportContent, /RequestedVersion: 1\.0\.0/);
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('rejects a local rollback source without a trust override before mutation', async () => {
+        const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
+        try {
+            const sourceRoot = path.join(projectRoot, 'local-source');
+            fs.mkdirSync(sourceRoot);
+            fs.writeFileSync(path.join(sourceRoot, 'VERSION'), '1.0.0\n');
+            const beforeVersion = fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8');
+            await assert.rejects(
+                runRollbackToVersion({
+                    targetRoot: projectRoot,
+                    bundleRoot,
+                    targetVersion: '1.0.0',
+                    sourcePath: sourceRoot,
+                    initAnswersPath: answersPath
+                }),
+                /trust policy rejected local source path/
+            );
+            assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8'), beforeVersion);
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('rejects local source VERSION change and restores safety snapshot', async () => {
+        const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
+        try {
+            const sourceRoot = path.join(projectRoot, 'local-source');
+            copyDirRecursive(bundleRoot, sourceRoot);
+            fs.writeFileSync(path.join(sourceRoot, 'VERSION'), '1.0.0\n');
+            const beforeVersion = fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8');
+            await assert.rejects(
+                runRollbackToVersion({
+                    targetRoot: projectRoot,
+                    bundleRoot,
+                    targetVersion: '1.0.0',
+                    sourcePath: sourceRoot,
+                    trustOverride: true,
+                    initAnswersPath: answersPath,
+                    installRunner: () => { fs.writeFileSync(path.join(sourceRoot, 'VERSION'), '3.0.0\n'); },
+                    materializationRunner: () => {}
+                }),
+                /post-restore VERSION.*differs from source/
+            );
+            assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8'), beforeVersion);
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('runs default workspace and manifest verification after version rollback', async () => {
+        const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
+        try {
+            for (const file of ['.gitattributes', 'AGENT_INIT_PROMPT.md', 'HOW_TO.md', 'MANIFEST.md']) {
+                fs.copyFileSync(path.join(repoRoot, file), path.join(bundleRoot, file));
+            }
+            copyDirRecursive(path.join(repoRoot, 'dist'), path.join(bundleRoot, 'dist'));
+            runUpdate({ targetRoot: projectRoot, bundleRoot, initAnswersPath: answersPath,
+                skipVerify: true, skipManifestValidation: true });
+            const sourceRoot = path.join(projectRoot, 'older-source');
+            copyDirRecursive(bundleRoot, sourceRoot);
+            fs.writeFileSync(path.join(sourceRoot, 'VERSION'), '1.0.0\n');
+            const result = await runRollbackToVersion({
+                targetRoot: projectRoot, bundleRoot, targetVersion: '1.0.0',
+                sourcePath: sourceRoot, trustOverride: true, initAnswersPath: answersPath
+            });
+            assert.equal(result.restoreStatus, 'SUCCESS');
+            assert.equal(result.updatedVersion, '1.0.0');
+            const liveVersion = JSON.parse(fs.readFileSync(path.join(bundleRoot, 'live', 'version.json'), 'utf8'));
+            assert.equal(liveVersion.Version, '1.0.0');
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('rejects failed workspace verification and restores safety snapshot', async () => {
+        const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
+        try {
+            const sourceRoot = path.join(projectRoot, 'older-source');
+            copyDirRecursive(bundleRoot, sourceRoot);
+            fs.writeFileSync(path.join(sourceRoot, 'VERSION'), '1.0.0\n');
+            const beforeVersion = fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8');
+            await assert.rejects(runRollbackToVersion({
+                targetRoot: projectRoot, bundleRoot, targetVersion: '1.0.0',
+                sourcePath: sourceRoot, trustOverride: true, initAnswersPath: answersPath,
+                installRunner: () => {}, materializationRunner: () => {},
+                skipManifestValidation: true
+            }), /Verification failed/);
+            assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8'), beforeVersion);
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('rejects failed manifest validation and restores safety snapshot', async () => {
+        const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
+        try {
+            const sourceRoot = path.join(projectRoot, 'older-source');
+            copyDirRecursive(bundleRoot, sourceRoot);
+            fs.writeFileSync(path.join(sourceRoot, 'VERSION'), '1.0.0\n');
+            const beforeVersion = fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8');
+            await assert.rejects(runRollbackToVersion({
+                targetRoot: projectRoot, bundleRoot, targetVersion: '1.0.0',
+                sourcePath: sourceRoot, trustOverride: true, initAnswersPath: answersPath,
+                installRunner: () => {},
+                materializationRunner: () => { fs.writeFileSync(path.join(bundleRoot, 'MANIFEST.md'), 'invalid'); },
+                skipVerify: true
+            }), /manifest/i);
+            assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8'), beforeVersion);
         } finally {
             removePathRecursive(projectRoot);
         }
@@ -410,6 +629,7 @@ describe('runRollback (version mode)', () => {
                     bundleRoot,
                     targetVersion: currentVersion,
                     sourcePath: sameVersionSource,
+                    trustOverride: true,
                     initAnswersPath: answersPath
                 }),
                 /already at the requested target version/
@@ -441,6 +661,7 @@ describe('runRollback (version mode)', () => {
                     bundleRoot,
                     targetVersion: '2.0.0',
                     sourcePath: mismatchSource,
+                    trustOverride: true,
                     initAnswersPath: answersPath
                 }),
                 /does not match requested target version/
@@ -494,6 +715,7 @@ describe('runRollback (version mode)', () => {
                 bundleRoot,
                 targetVersion: '1.0.0',
                 sourcePath: olderSource,
+                trustOverride: true,
                 initAnswersPath: answersPath,
                 dryRun: true
             });
@@ -557,6 +779,7 @@ describe('runRollback (version mode)', () => {
                     bundleRoot,
                     targetVersion: '1.0.0',
                     sourcePath: olderSource,
+                    trustOverride: true,
                     initAnswersPath: answersPath,
                     installRunner: () => { throw new Error('INJECTED_INSTALL_FAILURE'); }
                 }),
@@ -597,6 +820,32 @@ describe('runRollback (version mode)', () => {
 
 
 describe('findSnapshotByVersion', () => {
+    it('rejects a linked VERSION directory before comparing candidate versions', (t) => {
+        const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-find-snap-'));
+        try {
+            const snapshotDir = path.join(workspaceRoot, 'garda-agent-orchestrator', 'runtime',
+                'update-rollbacks', 'update-20260401-120000');
+            const bundleDir = path.join(snapshotDir, 'garda-agent-orchestrator');
+            const outsideDir = path.join(workspaceRoot, 'outside');
+            fs.mkdirSync(bundleDir, { recursive: true });
+            fs.mkdirSync(outsideDir);
+            fs.writeFileSync(path.join(bundleDir, 'VERSION'), '2.0.0\n');
+            fs.writeFileSync(path.join(outsideDir, 'VERSION'), '2.0.0\n');
+            writeRollbackRecords(snapshotDir, [
+                { relativePath: 'garda-agent-orchestrator/VERSION', existed: true, pathType: 'file' }
+            ]);
+            removePathRecursive(bundleDir);
+            try {
+                fs.symlinkSync(outsideDir, bundleDir, 'junction');
+            } catch {
+                t.skip('Directory symlinks or junctions are unavailable');
+                return;
+            }
+            assert.throws(() => findSnapshotByVersion(workspaceRoot, '1.0.0'), /symlink|junction/);
+        } finally {
+            removePathRecursive(workspaceRoot);
+        }
+    });
     it('returns null when no snapshots exist', () => {
         const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-find-snap-'));
         try {
@@ -616,11 +865,9 @@ describe('findSnapshotByVersion', () => {
         const bundleInSnapshot = path.join(snapshotDir, 'garda-agent-orchestrator');
         fs.mkdirSync(bundleInSnapshot, { recursive: true });
         fs.writeFileSync(path.join(bundleInSnapshot, 'VERSION'), '2.0.0\n', 'utf8');
-        fs.writeFileSync(
-            path.join(snapshotDir, 'rollback-records.json'),
-            JSON.stringify([{ relativePath: 'test.txt', existed: true, pathType: 'file' }]),
-            'utf8'
-        );
+        writeRollbackRecords(snapshotDir, [
+            { relativePath: 'garda-agent-orchestrator/VERSION', existed: true, pathType: 'file' }
+        ]);
         try {
             const result = findSnapshotByVersion(workspaceRoot, '1.0.0');
             assert.equal(result, null);
@@ -638,11 +885,9 @@ describe('findSnapshotByVersion', () => {
         const bundleInSnapshot = path.join(snapshotDir, 'garda-agent-orchestrator');
         fs.mkdirSync(bundleInSnapshot, { recursive: true });
         fs.writeFileSync(path.join(bundleInSnapshot, 'VERSION'), '1.5.0\n', 'utf8');
-        fs.writeFileSync(
-            path.join(snapshotDir, 'rollback-records.json'),
-            JSON.stringify([{ relativePath: 'test.txt', existed: true, pathType: 'file' }]),
-            'utf8'
-        );
+        writeRollbackRecords(snapshotDir, [
+            { relativePath: 'garda-agent-orchestrator/VERSION', existed: true, pathType: 'file' }
+        ]);
         try {
             const result = findSnapshotByVersion(workspaceRoot, '1.5.0');
             assert.ok(result);
@@ -778,6 +1023,7 @@ describe('rollback dry-run preview', () => {
                 bundleRoot,
                 targetVersion: '1.0.0',
                 sourcePath: olderSource,
+                trustOverride: true,
                 initAnswersPath: answersPath,
                 dryRun: true
             });
@@ -912,6 +1158,7 @@ describe('rollback materialization plumbing', () => {
                 bundleRoot,
                 targetVersion: '0.9.0',
                 sourcePath: olderSource,
+                trustOverride: true,
                 initAnswersPath: answersPath,
                 skipVerify: true,
                 skipManifestValidation: true,
