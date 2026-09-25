@@ -169,8 +169,13 @@ export function comparePackageSurface(
     if (removedFiles.length > 0) {
         violations.push(`packed files removed (${removedFiles.length}): ${removedFiles.slice(0, 20).join(', ')}`);
     }
-    const identicalFileHashes = changedFiles.length === 0 && removedFiles.length === 0
-        && Object.keys(current.packedFileSha256).length === Object.keys(reference.packedFileSha256).length;
+    const addedFiles = Object.keys(current.packedFileSha256).filter((file) =>
+        !Object.hasOwn(reference.packedFileSha256, file)
+    ).sort(compareText);
+    if (addedFiles.length > 0) {
+        violations.push(`packed files added (${addedFiles.length}): ${addedFiles.slice(0, 20).join(', ')}`);
+    }
+    const identicalFileHashes = changedFiles.length === 0 && removedFiles.length === 0 && addedFiles.length === 0;
     if (identicalFileHashes && current.packedFileManifestSha256 !== reference.packedFileManifestSha256) {
         violations.push('packed file manifest SHA-256 changed despite identical file hashes.');
     }

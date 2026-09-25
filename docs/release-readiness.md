@@ -272,7 +272,8 @@ The tracked reference is
 - Each packed file and the exact generated tarball has a SHA-256 digest in the
   current artifact and tracked baseline. A changed existing file or removed
   file fails comparison; a tarball byte change with identical packed files also
-  fails. New files remain subject to the file and byte budgets. The sorted
+  fails. Every new packed path fails comparison even within the file and byte
+  growth allowances, until it is reviewed into the baseline. The sorted
   packed path, size, and SHA-256 manifest is bound by a separate SHA-256 digest.
   npm's file report must match the tarball byte
   for byte on path and size before any metric is accepted. The archive is

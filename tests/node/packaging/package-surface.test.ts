@@ -8,6 +8,7 @@ import * as zlib from 'node:zlib';
 
 import {
     buildPackageSurfaceArtifact,
+    collectCurrentPackageSurface,
     comparePackageSurface,
     createPackageSurfaceBaseline,
     formatPackageSurfaceComparison,
@@ -257,6 +258,31 @@ test('same-size packed file changes and archive-only changes fail SHA-256 compar
     }
 });
 
+test('new packed paths fail even within file and byte growth allowances', () => {
+    const original = fixture();
+    const changed = fixture({ entries: [
+        ...fixtureEntries(),
+        { path: 'package/bin/fixture', content: Buffer.from('#!/usr/bin/env node\n'), mode: 0o755 },
+        { path: 'package/config/key.txt', content: Buffer.from('-----BEGIN PRIVATE KEY-----\nfixture\n') }
+    ] });
+    try {
+        const baseline = createPackageSurfaceBaseline(artifact(original), {
+            rationale: 'Reviewed fixture.',
+            allowedGrowth: { ...ZERO_GROWTH, fileCount: 10, unpackedSizeBytes: 256 * 1024 }
+        });
+        const result = comparePackageSurface(artifact(changed), baseline, 'baseline.json');
+        const output = formatPackageSurfaceComparison(result);
+        assert.equal(result.passed, false);
+        assert.match(output, /packed files added \(2\): bin\/fixture, config\/key.txt/u);
+        assert.match(output, /unexpectedExecutablePaths added: bin\/fixture/u);
+        assert.doesNotMatch(output, /fileCount current=.*growth=/u);
+        assert.doesNotMatch(output, /unpackedSizeBytes current=.*growth=/u);
+    } finally {
+        original.cleanup();
+        changed.cleanup();
+    }
+});
+
 test('prepare-adjacent lifecycle scripts and optional or peer dependencies are measured from packed metadata', () => {
     const sample = fixture({ entries: fixtureEntries({
         scripts: { preprepare: 'node before.cjs', prepare: 'node build.cjs', postprepare: 'node after.cjs' },
@@ -292,17 +318,19 @@ test('installed-byte measurement covers dependency siblings and generated bin sh
 test('URL and minification checks include shell, SVG, and ordinary CSS files', () => {
     const original = fixture();
     const changed = fixture({ entries: [
-        ...fixtureEntries(),
+        ...fixtureEntries({ repository: { url: 'GIT+HTTPS://github.com/example/fixture' } }),
         { path: 'package/docs/logo.svg', content: Buffer.from('<svg><!-- https://svg.example.invalid --></svg>') },
-        { path: 'package/scripts/check.sh', content: Buffer.from('curl https://shell.example.invalid\n') },
+        { path: 'package/scripts/check.sh', content: Buffer.from('curl HTTPS://upper.example.invalid\n') },
         { path: 'package/styles/style.css', content: Buffer.from('a'.repeat(10_001)) }
     ] });
     try {
         const baseline = createPackageSurfaceBaseline(artifact(original), { rationale: 'Reviewed fixture.', allowedGrowth: ZERO_GROWTH });
-        const output = formatPackageSurfaceComparison(comparePackageSurface(artifact(changed), baseline, 'baseline.json'));
+        const changedArtifact = artifact(changed);
+        assert.equal(changedArtifact.metrics.metadata.repository, 'GIT+HTTPS://github.com/example/fixture');
+        const output = formatPackageSurfaceComparison(comparePackageSurface(changedArtifact, baseline, 'baseline.json'));
         assert.match(output, /minifiedArtifactPaths added: styles\/style.css/u);
         assert.match(output, /svg.example.invalid/u);
-        assert.match(output, /shell.example.invalid/u);
+        assert.match(output, /urlHosts added: .*upper.example.invalid/u);
     } finally {
         original.cleanup();
         changed.cleanup();
@@ -331,6 +359,70 @@ test('installed byte growth, lifecycle changes, and missing metadata fail with a
     } finally {
         sample.cleanup();
         missing.cleanup();
+    }
+});
+
+test('unpacked-byte and lexical-risk budgets reject excess growth but accept their boundaries', () => {
+    const sample = fixture();
+    try {
+        const measured = artifact(sample);
+        const baseline = createPackageSurfaceBaseline(measured, {
+            rationale: 'Reviewed fixture.',
+            allowedGrowth: {
+                ...ZERO_GROWTH,
+                unpackedSizeBytes: 2,
+                riskSignals: { ...ZERO_GROWTH.riskSignals, fetch: 1 }
+            }
+        });
+        const atBoundary: PackageSurfaceArtifact = {
+            ...measured,
+            metrics: {
+                ...measured.metrics,
+                unpackedSizeBytes: measured.metrics.unpackedSizeBytes + 2,
+                riskSignals: { ...measured.metrics.riskSignals, fetch: measured.metrics.riskSignals.fetch + 1 }
+            }
+        };
+        assert.equal(comparePackageSurface(atBoundary, baseline, 'baseline.json').passed, true);
+        const exceeded: PackageSurfaceArtifact = {
+            ...atBoundary,
+            metrics: {
+                ...atBoundary.metrics,
+                unpackedSizeBytes: atBoundary.metrics.unpackedSizeBytes + 1,
+                riskSignals: { ...atBoundary.metrics.riskSignals, fetch: atBoundary.metrics.riskSignals.fetch + 1 }
+            }
+        };
+        const output = formatPackageSurfaceComparison(comparePackageSurface(exceeded, baseline, 'baseline.json'));
+        assert.match(output, /unpackedSizeBytes current=.*growth=3 allowed=2/u);
+        assert.match(output, /riskSignals.fetch current=.*growth=2 allowed=1/u);
+    } finally {
+        sample.cleanup();
+    }
+});
+
+test('failed package preparation removes its partial compatibility file', () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-surface-prepare-failure-'));
+    const buildScript = path.join(repoRoot, '.scripts-build', 'scripts', 'node-foundation', 'build.js');
+    const compatibilityScript = path.join(repoRoot, 'scripts', 'package-legacy-entrypoint-compat.cjs');
+    const compatibilityPath = path.join(repoRoot, 'template', 'CLAUDE.md');
+    try {
+        fs.mkdirSync(path.dirname(buildScript), { recursive: true });
+        fs.mkdirSync(path.dirname(compatibilityScript), { recursive: true });
+        fs.writeFileSync(buildScript, 'process.exit(0);\n');
+        fs.writeFileSync(compatibilityScript, [
+            "const fs = require('node:fs');",
+            "const path = require('node:path');",
+            "const output = path.join(process.cwd(), 'template', 'CLAUDE.md');",
+            "if (process.argv[2] === 'create') {",
+            '  fs.mkdirSync(path.dirname(output), { recursive: true });',
+            "  fs.writeFileSync(output, 'partial');",
+            "  process.exit(1);",
+            '}',
+            "if (process.argv[2] === 'remove') fs.rmSync(output, { force: true });"
+        ].join('\n'));
+        assert.throws(() => collectCurrentPackageSurface(repoRoot), /legacy package compatibility materialization failed/u);
+        assert.equal(fs.existsSync(compatibilityPath), false);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
     }
 });
 

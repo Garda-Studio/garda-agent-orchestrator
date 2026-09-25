@@ -261,7 +261,7 @@ function requireStringMap(value: unknown, label: string): Record<string, string>
 
 function requireUrlField(value: unknown, label: string): string {
     const url = typeof value === 'string' ? value : isRecord(value) ? value.url : undefined;
-    if (typeof url !== 'string' || !/^https?:\/\//u.test(url.replace(/^git\+/u, ''))) {
+    if (typeof url !== 'string' || !/^https?:\/\//iu.test(url.replace(/^git\+/iu, ''))) {
         throw new Error(`Packed package.json ${label} must be an HTTP(S) URL.`);
     }
     return url;
@@ -273,7 +273,7 @@ function collectUrlHosts(files: PackedFile[]): string[] {
         if (file.content.includes(0)) {
             continue;
         }
-        for (const match of file.content.toString('utf8').matchAll(/https?:\/\/[^\s"'<>`\\]+/gu)) {
+        for (const match of file.content.toString('utf8').matchAll(/https?:\/\/[^\s"'<>`\\]+/giu)) {
             try {
                 const host = new URL(match[0]).hostname.toLowerCase();
                 if (/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(host)) {
@@ -443,11 +443,11 @@ export function installedPackageBytes(directory: string): number {
 
 function runNpmPack(repoRoot: string): PackageSurfaceArtifact {
     const npmInvocation = resolveNpmInvocation();
-    preparePackageSurface(repoRoot);
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-package-surface-'));
     let artifact: PackageSurfaceArtifact | null = null;
     let packError: unknown = null;
     try {
+        preparePackageSurface(repoRoot);
         const stdout = runRequiredProcess(
             repoRoot,
             'npm pack',

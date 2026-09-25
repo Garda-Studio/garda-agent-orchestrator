@@ -4,8 +4,8 @@
     "name": "garda-agent-orchestrator",
     "version": "1.4.3"
   },
-  "packedFileManifestSha256": "5c0fc859c2829ff4587d02a0cc834ed7eeb994f7f18fa23ba8bc005d30f1f0ed",
-  "tarballSha256": "b0f8f235594854588af25fce666fc158857a9f2919171a571e79328bacb1c350",
+  "packedFileManifestSha256": "8afad0b3897a805aaea8cf5be68f2423a37e34be5191d6f2a1c2e2aea42b4992",
+  "tarballSha256": "5622dddc80c18cdef21e46088c948cabdd0745d928dd2faa6b65f123872f708c",
   "packedFileSha256": {
     ".gitattributes": "099d1a09ca2f02b2d7d071bcc19fdd2cda5c66f01f133abe9ff9d63294a1055c",
     "AGENT_INIT_PROMPT.md": "0402c3f2d256f08e0897f4f4616cbe0ce6718fb029692d9c4aad567bd003077c",
@@ -25,7 +25,7 @@
     "bin/garda/process-delegation.js": "8de46ad82a42256e30cfa4fe3e073a634afc48f22c19026d471744d0a39bc61f",
     "bin/garda/root-discovery.js": "a2c381d229ea87e4959ff95573b837da557ad71adfb1a21a5e3ee30ec5ea8e07",
     "bin/garda/runtime-loading.js": "28e2333d62e1338ace5fdc7988082ea5b79c905639d51556fe2de1e328658aaa",
-    "dist/publish-runtime-manifest.json": "16ac7228c83a2211f322e0104e4260d86a42507a7860a782ee489605ba21b52d",
+    "dist/publish-runtime-manifest.json": "c28560c95afc055f66d01e443c6f859ff346ee1e269598f3860ed2e3fb54a8d0",
     "dist/src/bin/garda.js": "ad9eb267227c0d0b1150a5427167764e9de4bc2a7850b897e7096a29eb50605d",
     "dist/src/bin/garda/delegation-policy.js": "742e3ebebee0b0edebead5c9286e9d82b178be34f12c8dfc296923b57b845fc8",
     "dist/src/bin/garda/launcher-constants.js": "864326fb551a84b1e9f0542be628b817db72432cb6808085c198756ff45e00db",
@@ -1205,7 +1205,7 @@
     "docs/operator-consistency-runbook.md": "fd48f3de1a70cae653464e24afe50143826956792838944a4ffda9122491add0",
     "docs/orchestrator-work-and-isolation.md": "4632ebc674438dbef4932b5be2379f50d423f490a3b38461dd2bc8f8164ec677",
     "docs/providers.md": "b2e0eaf19885c81aba82e3a38de664053909625763793eaae4ee12b3a0d1ae77",
-    "docs/release-readiness.md": "ebad7b37c86bd33cbde521b18a0b2aec9c523efc8a85801a2574846bfff46a17",
+    "docs/release-readiness.md": "12555dcc797dd498dae90420124bd9094c9002414234468968ce6f3a94031126",
     "docs/run-methods.md": "a094666e21e6d85d7cf6a9021674aea0813f1157cc7f029ac28e88d7636616f8",
     "docs/sbom.md": "ec0c4630ddabedbc5ecfaa1d1f1ee744eed2c62446c646db866cd85b8e2947af",
     "docs/secret-scanning.md": "5b10f0d20e917336601b0f55195d2761141b94ede182da46e3242f9797923373",
@@ -1423,8 +1423,8 @@
   },
   "metrics": {
     "fileCount": 1413,
-    "unpackedSizeBytes": 17365796,
-    "installedSizeBytes": 17371390,
+    "unpackedSizeBytes": 17365871,
+    "installedSizeBytes": 17371465,
     "productionDependencyCount": 0,
     "lifecycleScripts": {
       "postpack": "node scripts/package-legacy-entrypoint-compat.cjs remove",
@@ -1489,5 +1489,5 @@
       "writeFile": 0
     }
   },
-  "rationale": "T-053 reviewed exact npm archive digests for 1413 packed files, offline installed bytes, direct/optional/peer dependencies, lifecycle hooks, executable/minified paths and URL hosts."
+  "rationale": "T-053-F1 review remediation: accept uppercase GIT+HTTP(S) metadata, reject every new packed path, guarantee partial preparation cleanup, and cover budget boundaries."
 }
