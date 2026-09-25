@@ -178,6 +178,15 @@ both jobs also reject `github.run_attempt` values above `1`. A rerun or a new
 run after deleting and recreating a consumed release tag therefore fails
 closed. Prepare a new version and tag instead.
 
+The validate job also requires a successful branch-push CI run for the exact
+release commit. After `release:preflight`, it creates one candidate tarball,
+runs the full packaging smoke against that exact file via
+`GARDA_RELEASE_CANDIDATE_PATH`, rechecks its SHA-256, and uploads the
+candidate with its manifest. The dependent `publish` job downloads the artifact
+from the same workflow run, verifies the tarball against the validate job
+outputs, and passes that file path to `npm stage publish`. It does not repack
+or rerun the release proof. Both jobs pin npm CLI `11.15.0`.
+
 After the GitHub Actions publish job completes, inspect the staged package on npm and approve it with maintainer 2FA. Do not claim the package is public until npm staged approval completes.
 
 After npm staged approval completes, verify:

@@ -32,6 +32,7 @@ import {
 } from './release-metadata';
 
 const TRUSTED_RELEASE_TAG_HISTORY_STEP_SHA256 = 'dd86883aee9e6eef46c76a284d9a90431073efaecdd74adcce97f4e53223b470';
+const TRUSTED_RELEASE_CANDIDATE_PUBLISH_STEPS_SHA256 = '26b8e7c2f66cd01ae719d68cc3836566164362e429d62181dad7e4039fa8590f';
 // Hash the source workflow before action-reference normalization so the immutable pins remain bound.
 const TRUSTED_SBOM_WORKFLOW_CONTRACT_SHA256 = '2d88c5db2ead8b460476af6b9539a7a8544c25f16bb4376083e82ff2687db05c';
 const REVIEWED_WORKFLOW_ACTION_PINS: Readonly<Record<string, { version: string; readinessReference: string }>> = {
@@ -407,8 +408,32 @@ function workflowRunScriptsIncludeExecutableMarkers(
 ): boolean {
     return runScripts.some((script) => {
         const executableLines = extractExecutableScriptLines(script);
-        return requiredMarkers.every((marker) => executableLines.some((line) => line.includes(marker)));
+        return scriptPreservesFailureExit(executableLines)
+            && requiredMarkers.every((marker) => executableLines.some((line) => executableLineContainsMarker(line, marker)));
     });
+}
+
+function workflowRunScriptsIncludeExecutableMarkersInOrder(
+    runScripts: readonly string[],
+    requiredMarkers: readonly string[]
+): boolean {
+    return runScripts.some((script) => {
+        const executableLines = extractExecutableScriptLines(script);
+        if (!scriptPreservesFailureExit(executableLines)) return false;
+        let nextLine = 0;
+        return requiredMarkers.every((marker) => {
+            const index = executableLines.findIndex((line, lineIndex) =>
+                lineIndex >= nextLine && executableLineContainsMarker(line, marker));
+            if (index < 0) return false;
+            nextLine = index + 1;
+            return true;
+        });
+    });
+}
+
+function scriptPreservesFailureExit(lines: readonly string[]): boolean {
+    return lines[0] === 'set -euo pipefail'
+        && lines.every((line) => !/(?:\|\||;|\bset\s+\+e\b|\bset\s+\+o\s+errexit\b)/u.test(line));
 }
 
 function executableLineContainsMarker(line: string, marker: string): boolean {
@@ -794,9 +819,7 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
         '${TAG_VERSION}" != "${LOCK_ROOT_VERSION}',
         '${TAG_VERSION}" != "${VERSION_FILE}',
         'NPM_VERSION="$(npm --version)"',
-        'npm CLI 11.15.0+',
-        'major < 11',
-        'minor < 15'
+        'test "${NPM_VERSION}" = "11.15.0"'
     ]);
     const validateDropsEphemeralTagRef = workflowRunScriptsIncludeAll(validateRunScripts, [
         'git update-ref -d "refs/tags/${GITHUB_REF_NAME}"'
@@ -825,11 +848,51 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
         && blockHasNonCommentLine(publishCheckoutWith, 'fetch-depth: 0');
     const tagDrivenOnly = tagTriggers.includes('v*') && !publishWorkflow.includes('workflow_dispatch:');
     const nodeVersionPinned = yamlBlockHasScalarValue(workflowEnv, 'NODE_VERSION', ['24', '24.x']);
-    const packDryRunArtifactOutsideCheckout = workflowRunScriptsIncludeExecutableMarkers(validateRunScripts, [
+    const ciCommitBound = workflowRunScriptsIncludeExecutableMarkers(validateRunScripts, [
+        'test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"',
+        'actions/workflows/ci.yml/runs',
+        'release-candidate.cjs verify-ci'
+    ]);
+    const releaseNpmPinned = workflowJobHasRunStep(validateJob || '', 'npm install -g npm@11.15.0')
+        && workflowJobHasRunStep(publishJob || '', 'npm install -g npm@11.15.0')
+        && workflowRunScriptsIncludeExecutableMarkers(validateRunScripts, ['test "$(npm --version)" = "11.15.0"'])
+        && workflowRunScriptsIncludeExecutableMarkers(publishRunScripts, ['test "$(npm --version)" = "11.15.0"']);
+    const candidatePackAndUpload = workflowRunScriptsIncludeExecutableMarkersInOrder(validateRunScripts, [
         'set -euo pipefail',
-        'npm pack --dry-run',
-        '$RUNNER_TEMP/npm-pack-dry-run.txt'
-    ]) && blockHasNonCommentLine(validateUploadWith, 'path: ${{ runner.temp }}/npm-pack-dry-run.txt');
+        'CANDIDATE_DIR="${RUNNER_TEMP}/release-candidate"',
+        'npm pack --json --pack-destination "${CANDIDATE_DIR}"',
+        'release-candidate.cjs create',
+        'GARDA_RELEASE_CANDIDATE_PATH="${CANDIDATE_DIR}/${TARBALL_NAME}" npm run test:packaging',
+        'release-candidate.cjs verify'
+    ]) && workflowRunScriptsIncludeExecutableMarkers(validateRunScripts, ['${GITHUB_OUTPUT}']) && blockHasNonCommentLine(validateUploadWith, 'name: release-candidate-${{ github.sha }}')
+        && blockHasNonCommentLine(validateUploadWith, 'path: ${{ runner.temp }}/release-candidate/')
+        && blockHasNonCommentLine(validateUploadWith, 'if-no-files-found: error')
+        && blockHasNonCommentLine(validateJob, 'tarball_sha256: ${{ steps.pack.outputs.tarball_sha256 }}')
+        && blockHasNonCommentLine(validateJob, 'tarball_name: ${{ steps.pack.outputs.tarball_name }}');
+    const candidatePublishStepNames = [
+        'Download validated release candidate',
+        'Verify downloaded candidate',
+        'Stage the validated tarball with npm Trusted Publishing'
+    ];
+    const candidatePublishSteps = candidatePublishStepNames
+        .map((name) => getWorkflowNamedStepBlock(publishJob || '', name));
+    const candidateStepPositions = candidatePublishSteps
+        .map((block) => block === null ? -1 : (publishJob || '').indexOf(block));
+    const candidateStepsAdjacent = candidatePublishSteps.every((block) => block !== null)
+        && candidateStepPositions.every((position) => position >= 0)
+        && candidateStepPositions.slice(0, -1).every((position, index) =>
+            (publishJob || '').slice(position + candidatePublishSteps[index]!.length, candidateStepPositions[index + 1]).trim() === '')
+        && (publishJob || '').slice(
+            candidateStepPositions[2] + candidatePublishSteps[2]!.length
+        ).trim() === '';
+    const candidatePublishStepsHash = workflowBlockContractSha256(candidatePublishSteps.every((block) => block !== null)
+        ? candidatePublishSteps.join('\n') : null);
+    const publishUsesValidatedCandidate = blockHasNonCommentLine(publishPermissions, 'actions: read')
+        && candidateStepsAdjacent
+        && candidatePublishStepsHash === TRUSTED_RELEASE_CANDIDATE_PUBLISH_STEPS_SHA256
+        && publishRunScripts.every((script) => extractExecutableScriptLines(script)
+            .every((line) => !/\bnpm\s+publish\b/u.test(line)))
+        && !workflowJobHasRunStep(publishJob, 'npm run release:preflight');
     const validateJobContract = validateJob !== null
         && blockHasNonCommentLine(validateJob, 'runs-on: ubuntu-latest')
         && workflowHasUseStep(validateJob, 'actions/checkout@v7.0.0')
@@ -845,10 +908,10 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
         && validateDropsEphemeralTagRef
         && workflowJobHasRunStep(validateJob, 'npm ci --no-fund --no-audit')
         && workflowJobHasRunStep(validateJob, 'npm run release:preflight')
-        && packDryRunArtifactOutsideCheckout
-        && validateUploadArtifact !== null
-        && validateJob.includes('npm-pack-dry-run.txt')
-        && blockHasNonCommentLine(validateUploadWith, 'if-no-files-found: error');
+        && ciCommitBound
+        && releaseNpmPinned
+        && candidatePackAndUpload
+        && validateUploadArtifact !== null;
     const publishJobContract = publishJob !== null
         && blockHasNonCommentLine(publishJob, 'runs-on: ubuntu-latest')
         && blockHasNonCommentLine(publishJob, 'needs: validate')
@@ -862,13 +925,11 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
         && blockHasNonCommentLine(publishSetupWith, "node-version: ${{ env.NODE_VERSION }}")
         && blockHasNonCommentLine(publishSetupWith, 'registry-url: https://registry.npmjs.org')
         && blockHasNonCommentLine(publishSetupWith, 'package-manager-cache: false')
-        && workflowJobHasRunStep(publishJob, 'npm ci --no-fund --no-audit')
-        && workflowJobHasRunStep(publishJob, 'npm install -g npm@^11.15.0')
+        && releaseNpmPinned
         && publishRejectsWorkflowReruns
         && publishSanityGuard
         && publishDropsEphemeralTagRef
-        && workflowJobHasRunStep(publishJob, 'npm run release:preflight')
-        && workflowJobHasExactRunLine(publishJob, 'npm stage publish')
+        && publishUsesValidatedCandidate
         && !workflowJobHasExactRunLine(publishJob, 'npm publish');
     const tokenlessOidc = !publishWorkflow.includes('NODE_AUTH_TOKEN')
         && !publishWorkflow.includes('NPM_TOKEN')
@@ -885,12 +946,15 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
         { passed: validateRejectsWorkflowReruns, detail: 'validate job rejects repeated workflow attempts' },
         { passed: validateRejectsHistoricalTagReuse, detail: 'validate job rejects release tags with a prior workflow run' },
         { passed: validateDropsEphemeralTagRef, detail: 'validate job removes its ephemeral local tag ref before release uniqueness proof' },
-        { passed: packDryRunArtifactOutsideCheckout, detail: 'validate job records npm pack dry-run output outside the checkout' },
-        { passed: validateJobContract, detail: 'validate job checks tag/version metadata, release proof, and npm pack dry-run' },
+        { passed: ciCommitBound, detail: 'validate job requires successful CI for the exact release commit' },
+        { passed: releaseNpmPinned, detail: 'release jobs pin npm CLI 11.15.0' },
+        { passed: candidatePackAndUpload, detail: 'validate job packs, smokes, and uploads the digest-bound release candidate' },
+        { passed: validateJobContract, detail: 'validate job checks tag/version, CI, release proof, and candidate tarball' },
         { passed: publishSanityGuard, detail: 'publish job has fail-closed package and npm CLI sanity guard' },
         { passed: publishRejectsWorkflowReruns, detail: 'publish job rejects repeated workflow attempts' },
         { passed: publishDropsEphemeralTagRef, detail: 'publish job removes its ephemeral local tag ref before release uniqueness proof' },
-        { passed: publishJobContract, detail: 'publish job is npm-release environment bound and uses id-token OIDC npm stage publish' },
+        { passed: publishUsesValidatedCandidate, detail: 'publish job verifies and stages the exact validated tarball without rebuilding' },
+        { passed: publishJobContract, detail: 'publish job is npm-release environment bound and uses id-token OIDC staged publishing' },
         { passed: tokenlessOidc, detail: 'publish workflow avoids npm tokens, --provenance override, and self-hosted runners' }
     ];
 

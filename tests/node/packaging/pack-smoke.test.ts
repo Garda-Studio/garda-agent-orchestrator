@@ -399,13 +399,16 @@ test('npm pack -> install -> CLI invoke smoke test', () => {
     try {
         assertNoConsumerInstallLifecycleScripts(packageJson);
         assertCompiledOnlyPackageSurface(packageJson);
-        copyPackFixture(repoRoot, fixtureRoot);
-        initializeCleanPackFixture(fixtureRoot);
+        const releaseCandidateTarball = process.env.GARDA_RELEASE_CANDIDATE_PATH;
+        if (!releaseCandidateTarball) {
+            copyPackFixture(repoRoot, fixtureRoot);
+            initializeCleanPackFixture(fixtureRoot);
+        }
 
-        const tarballFilename = npmPack(fixtureRoot);
-        const tarballPath = path.join(fixtureRoot, tarballFilename);
-
+        const tarballPath = releaseCandidateTarball || path.join(fixtureRoot, npmPack(fixtureRoot));
+        assert.ok(path.isAbsolute(tarballPath), 'release candidate path must be absolute');
         assert.ok(fs.existsSync(tarballPath), `Tarball not found at ${tarballPath}`);
+        assert.ok(fs.statSync(tarballPath).isFile(), 'release candidate must be a regular file');
 
         const installDurationMs = npmInstallTarball(tarballPath, installRoot);
         assert.ok(

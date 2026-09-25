@@ -23,6 +23,9 @@ jobs:
   validate:
     name: Validate release package
     runs-on: ubuntu-latest
+    outputs:
+      tarball_sha256: ${{ steps.pack.outputs.tarball_sha256 }}
+      tarball_name: ${{ steps.pack.outputs.tarball_name }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -91,23 +94,54 @@ jobs:
           ' "${RUN_HISTORY_PATH}"
           git update-ref -d "refs/tags/${GITHUB_REF_NAME}"
 
+      - name: Require successful CI for this release commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          CI_RUNS_PATH="${RUNNER_TEMP}/release-ci-runs.json"
+          GH_TOKEN="${{ github.token }}" gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+            -f head_sha="${GITHUB_SHA}" -f event=push -f status=completed -f per_page=100 > "${CI_RUNS_PATH}"
+          node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"
+
       - name: Install dependencies
         run: npm ci --no-fund --no-audit
+
+      - name: Pin release npm CLI
+        run: |
+          set -euo pipefail
+          npm install -g npm@11.15.0
+          test "$(npm --version)" = "11.15.0"
 
       - name: Run local release proof
         run: npm run release:preflight
 
-      - name: Record package dry run
+      - name: Pack and attest release candidate
+        id: pack
         shell: bash
         run: |
           set -euo pipefail
-          npm pack --dry-run | tee "$RUNNER_TEMP/npm-pack-dry-run.txt"
+          CANDIDATE_DIR="${RUNNER_TEMP}/release-candidate"
+          mkdir -p "${CANDIDATE_DIR}"
+          npm pack --json --pack-destination "${CANDIDATE_DIR}" > "${CANDIDATE_DIR}/pack-report.json"
+          PACKAGE_NAME="$(node -p "require('./package.json').name")"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          node scripts/release-candidate.cjs create \
+            "${CANDIDATE_DIR}/pack-report.json" "${CANDIDATE_DIR}" \
+            "${GITHUB_SHA}" "${GITHUB_REF_NAME}" "${PACKAGE_NAME}" "${PACKAGE_VERSION}" "${GITHUB_OUTPUT}"
+
+          TARBALL_NAME="$(node -p "require(process.argv[1]).tarball_name" "${CANDIDATE_DIR}/candidate-manifest.json")"
+          TARBALL_SHA256="$(node -p "require(process.argv[1]).tarball_sha256" "${CANDIDATE_DIR}/candidate-manifest.json")"
+          GARDA_RELEASE_CANDIDATE_PATH="${CANDIDATE_DIR}/${TARBALL_NAME}" npm run test:packaging
+          node scripts/release-candidate.cjs verify "${CANDIDATE_DIR}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" "${TARBALL_SHA256}" "${TARBALL_NAME}"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: npm-pack-dry-run-${{ github.ref_name }}
-          path: ${{ runner.temp }}/npm-pack-dry-run.txt
+          name: release-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/release-candidate/
           if-no-files-found: error
+          retention-days: 7
 
   publish:
     name: Stage package on npm
@@ -115,6 +149,7 @@ jobs:
     needs: validate
     environment: npm-release
     permissions:
+      actions: read
       contents: read
       id-token: write
     steps:
@@ -128,11 +163,11 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
-      - name: Install dependencies
-        run: npm ci --no-fund --no-audit
-
-      - name: Ensure npm supports staged publishing
-        run: npm install -g npm@^11.15.0
+      - name: Pin release npm CLI
+        run: |
+          set -euo pipefail
+          npm install -g npm@11.15.0
+          test "$(npm --version)" = "11.15.0"
 
       - name: Final publish sanity checks
         shell: bash
@@ -166,11 +201,32 @@ jobs:
           node --version
           NPM_VERSION="$(npm --version)"
           echo "npm ${NPM_VERSION}"
-          node -e "const version = process.argv[1]; const [major, minor] = version.split('.').map(Number); if (!Number.isFinite(major) || !Number.isFinite(minor) || major < 11 || (major === 11 && minor < 15)) { throw new Error('npm CLI 11.15.0+ is required for npm staged publishing.'); }" "${NPM_VERSION}"
+          test "${NPM_VERSION}" = "11.15.0"
           git update-ref -d "refs/tags/${GITHUB_REF_NAME}"
 
-      - name: Re-run release proof before staging
-        run: npm run release:preflight
+      - name: Download validated release candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download "${GITHUB_RUN_ID}" --name "release-candidate-${GITHUB_SHA}" --dir "${RUNNER_TEMP}/release-candidate"
 
-      - name: Stage package with npm Trusted Publishing
-        run: npm stage publish
+      - name: Verify downloaded candidate
+        shell: bash
+        env:
+          EXPECTED_SHA256: ${{ needs.validate.outputs.tarball_sha256 }}
+          EXPECTED_NAME: ${{ needs.validate.outputs.tarball_name }}
+        run: |
+          set -euo pipefail
+          node scripts/release-candidate.cjs verify \
+            "${RUNNER_TEMP}/release-candidate" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" \
+            "${EXPECTED_SHA256}" "${EXPECTED_NAME}"
+
+      - name: Stage the validated tarball with npm Trusted Publishing
+        shell: bash
+        env:
+          EXPECTED_NAME: ${{ needs.validate.outputs.tarball_name }}
+        run: |
+          set -euo pipefail
+          npm stage publish "${RUNNER_TEMP}/release-candidate/${EXPECTED_NAME}"

@@ -179,39 +179,12 @@ function buildReleaseChecklist(openItem?: string): string {
 }
 
 function buildPackageSurfaceBaseline(): string {
-    return JSON.stringify({
-        schemaVersion: 1,
-        package: { name: 'garda-agent-orchestrator', version: '1.1.0' },
-        metrics: {
-            fileCount: 100,
-            unpackedSizeBytes: 100000,
-            lifecycleScripts: {
-                postpack: 'node scripts/package-legacy-entrypoint-compat.cjs remove',
-                prepack: 'npm run validate:clean-worktree && npm run build:publish-runtime && npm run validate:clean-worktree && node scripts/package-legacy-entrypoint-compat.cjs create'
-            },
-            riskSignals: {
-                child_process: 1,
-                exec: 1,
-                fetch: 1,
-                fs: 1,
-                readFile: 1,
-                writeFile: 1
-            }
-        },
-        allowedGrowth: {
-            fileCount: 10,
-            unpackedSizeBytes: 262144,
-            riskSignals: {
-                child_process: 0,
-                exec: 0,
-                fetch: 0,
-                fs: 0,
-                readFile: 0,
-                writeFile: 0
-            }
-        },
-        rationale: 'Fixture compiled-only package baseline.'
-    }, null, 2);
+    const baseline = JSON.parse(fs.readFileSync(
+        path.join(process.cwd(), 'config', 'release-package-surface-baseline.json'),
+        'utf8'
+    )) as { package: { version: string } };
+    baseline.package.version = '1.1.0';
+    return JSON.stringify(baseline, null, 2);
 }
 
 interface BuildCiWorkflowOptions {
@@ -349,6 +322,9 @@ function buildPublishWorkflow(): string {
         'jobs:',
         '  validate:',
         '    runs-on: ubuntu-latest',
+        '    outputs:',
+        '      tarball_sha256: ${{ steps.pack.outputs.tarball_sha256 }}',
+        '      tarball_name: ${{ steps.pack.outputs.tarball_name }}',
         '    steps:',
         '      - uses: actions/checkout@v7.0.0',
         '        with:',
@@ -402,20 +378,35 @@ function buildPublishWorkflow(): string {
         '            }',
         '          \' "${RUN_HISTORY_PATH}"',
         '          git update-ref -d "refs/tags/${GITHUB_REF_NAME}"',
+        '      - run: |',
+        '          set -euo pipefail',
+        '          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"',
+        '          gh api repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs',
+        '          node scripts/release-candidate.cjs verify-ci "$CI_RUNS_PATH" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
         '      - run: npm ci --no-fund --no-audit',
+        '      - run: |',
+        '          set -euo pipefail',
+        '          npm install -g npm@11.15.0',
+        '          test "$(npm --version)" = "11.15.0"',
         '      - run: npm run release:preflight',
         '      - run: |',
         '          set -euo pipefail',
-        '          npm pack --dry-run | tee "$RUNNER_TEMP/npm-pack-dry-run.txt"',
+        '          CANDIDATE_DIR="${RUNNER_TEMP}/release-candidate"',
+        '          npm pack --json --pack-destination "${CANDIDATE_DIR}"',
+        '          node scripts/release-candidate.cjs create "$REPORT" "$DIR" "$SHA" "$TAG" "$NAME" "$VERSION" "${GITHUB_OUTPUT}"',
+        '          GARDA_RELEASE_CANDIDATE_PATH="${CANDIDATE_DIR}/${TARBALL_NAME}" npm run test:packaging',
+        '          node scripts/release-candidate.cjs verify "${CANDIDATE_DIR}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" "${TARBALL_SHA256}" "${TARBALL_NAME}"',
         '      - uses: actions/upload-artifact@v7.0.1',
         '        with:',
-        '          path: ${{ runner.temp }}/npm-pack-dry-run.txt',
+        '          name: release-candidate-${{ github.sha }}',
+        '          path: ${{ runner.temp }}/release-candidate/',
         '          if-no-files-found: error',
         '  publish:',
         '    needs: validate',
         '    runs-on: ubuntu-latest',
         '    environment: npm-release',
         '    permissions:',
+        '      actions: read',
         '      contents: read',
         '      id-token: write',
         '    steps:',
@@ -427,8 +418,10 @@ function buildPublishWorkflow(): string {
         '          node-version: ${{ env.NODE_VERSION }}',
         '          registry-url: https://registry.npmjs.org',
         '          package-manager-cache: false',
-        '      - run: npm ci --no-fund --no-audit',
-        '      - run: npm install -g npm@^11.15.0',
+        '      - run: |',
+        '          set -euo pipefail',
+        '          npm install -g npm@11.15.0',
+        '          test "$(npm --version)" = "11.15.0"',
         '      - run: |',
         '          set -euo pipefail',
         '          if [[ "${{ github.run_attempt }}" != "1" ]]; then',
@@ -450,10 +443,32 @@ function buildPublishWorkflow(): string {
         '            exit 1',
         '          fi',
         '          NPM_VERSION="$(npm --version)"',
-        '          node -e "const version = process.argv[1]; const [major, minor] = version.split(\'.\').map(Number); if (!Number.isFinite(major) || !Number.isFinite(minor) || major < 11 || (major === 11 && minor < 15)) { throw new Error(\'npm CLI 11.15.0+ is required for npm staged publishing.\'); }" "${NPM_VERSION}"',
+        '          test "${NPM_VERSION}" = "11.15.0"',
         '          git update-ref -d "refs/tags/${GITHUB_REF_NAME}"',
-        '      - run: npm run release:preflight',
-        '      - run: npm stage publish'
+        '      - name: Download validated release candidate',
+        '        shell: bash',
+        '        env:',
+        '          GH_TOKEN: ${{ github.token }}',
+        '        run: |',
+        '          set -euo pipefail',
+        '          gh run download "${GITHUB_RUN_ID}" --name "release-candidate-${GITHUB_SHA}" --dir "${RUNNER_TEMP}/release-candidate"',
+        '      - name: Verify downloaded candidate',
+        '        shell: bash',
+        '        env:',
+        '          EXPECTED_SHA256: ${{ needs.validate.outputs.tarball_sha256 }}',
+        '          EXPECTED_NAME: ${{ needs.validate.outputs.tarball_name }}',
+        '        run: |',
+        '          set -euo pipefail',
+        '          node scripts/release-candidate.cjs verify \\',
+        '            "${RUNNER_TEMP}/release-candidate" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" \\',
+        '            "${EXPECTED_SHA256}" "${EXPECTED_NAME}"',
+        '      - name: Stage the validated tarball with npm Trusted Publishing',
+        '        shell: bash',
+        '        env:',
+        '          EXPECTED_NAME: ${{ needs.validate.outputs.tarball_name }}',
+        '        run: |',
+        '          set -euo pipefail',
+        '          npm stage publish "${RUNNER_TEMP}/release-candidate/${EXPECTED_NAME}"'
     ].join('\n');
 }
 
@@ -1025,7 +1040,7 @@ test('release readiness fails closed when the package-surface baseline is malfor
         const output = formatReleaseReadinessResult(result);
 
         assert.equal(result.passed, false);
-        assert.match(output, /release-package-surface-baseline\.json\.allowedGrowth must be an object/u);
+        assert.match(output, /release-package-surface-baseline\.json\.schemaVersion must be 2/u);
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
@@ -1224,24 +1239,12 @@ test('release readiness fails when trusted publish workflow falls back to npm to
     const repoRoot = createReadinessFixture();
     try {
         const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
-        writeFile(
-            workflowPath,
-            fs.readFileSync(workflowPath, 'utf8').replace(
-                '- run: npm stage publish',
-                [
-                    '- run: npm stage publish',
-                    '        env:',
-                    '          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}'
-                ].join('\n')
-            )
-        );
-
+        writeFile(workflowPath, fs.readFileSync(workflowPath, 'utf8')
+            .replace('          npm stage publish "', '          NODE_AUTH_TOKEN=fixture npm stage publish "'));
         const result = validateReleaseReadiness(repoRoot);
         const output = formatReleaseReadinessResult(result);
-
         assert.equal(result.passed, false);
         assert.match(output, /publish workflow avoids npm tokens, --provenance override, and self-hosted runners=false/);
-        assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
@@ -1402,50 +1405,90 @@ test('release readiness fails when trusted publish validate guard markers are on
     }
 });
 
-test('release readiness fails when trusted publish dry-run artifact is written inside checkout', () => {
+test('release readiness rejects CI proof markers printed without running the checks', () => {
     const repoRoot = createReadinessFixture();
     try {
         const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
-        writeFile(
-            workflowPath,
-            fs.readFileSync(workflowPath, 'utf8')
-                .replace('npm pack --dry-run | tee "$RUNNER_TEMP/npm-pack-dry-run.txt"', 'npm pack --dry-run | tee npm-pack-dry-run.txt')
-                .replace('path: ${{ runner.temp }}/npm-pack-dry-run.txt', 'path: npm-pack-dry-run.txt')
-        );
-
-        const result = validateReleaseReadiness(repoRoot);
-        const output = formatReleaseReadinessResult(result);
-
-        assert.equal(result.passed, false);
-        assert.match(output, /validate job records npm pack dry-run output outside the checkout=false/);
-        assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
+        const workflow = fs.readFileSync(workflowPath, 'utf8')
+            .replace('          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"',
+                '          echo test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"')
+            .replace('          gh api repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs',
+                '          printf "gh api repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs\\n"')
+            .replace('          node scripts/release-candidate.cjs verify-ci "$CI_RUNS_PATH" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
+                '          echo node scripts/release-candidate.cjs verify-ci "$CI_RUNS_PATH" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"');
+        writeFile(workflowPath, workflow);
+        const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
+        assert.match(output, /validate job requires successful CI for the exact release commit=false/);
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
 });
 
-test('release readiness fails when trusted publish dry-run pipeline omits pipefail', () => {
+test('release readiness rejects a candidate packed inside the checkout', () => {
     const repoRoot = createReadinessFixture();
     try {
         const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
-        writeFile(
-            workflowPath,
-            fs.readFileSync(workflowPath, 'utf8').replace(
-                '      - run: |\n          set -euo pipefail\n          npm pack --dry-run | tee "$RUNNER_TEMP/npm-pack-dry-run.txt"',
-                '      - run: npm pack --dry-run | tee "$RUNNER_TEMP/npm-pack-dry-run.txt"'
-            )
-        );
-
-        const result = validateReleaseReadiness(repoRoot);
-        const output = formatReleaseReadinessResult(result);
-
-        assert.equal(result.passed, false);
-        assert.match(output, /validate job records npm pack dry-run output outside the checkout=false/);
-        assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
+        writeFile(workflowPath, fs.readFileSync(workflowPath, 'utf8')
+            .replace('CANDIDATE_DIR="${RUNNER_TEMP}/release-candidate"', 'CANDIDATE_DIR="release-candidate"'));
+        const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
+        assert.match(output, /validate job packs, smokes, and uploads the digest-bound release candidate=false/);
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
 });
+
+test('release readiness rejects candidate packing without strict shell checks', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
+        writeFile(workflowPath, fs.readFileSync(workflowPath, 'utf8')
+            .replace('          set -euo pipefail\n          CANDIDATE_DIR=', '          set -eu\n          CANDIDATE_DIR='));
+        const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
+        assert.match(output, /validate job packs, smokes, and uploads the digest-bound release candidate=false/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects a candidate upload without exact-tarball smoke', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
+        writeFile(workflowPath, fs.readFileSync(workflowPath, 'utf8')
+            .replace('          GARDA_RELEASE_CANDIDATE_PATH="${CANDIDATE_DIR}/${TARBALL_NAME}" npm run test:packaging',
+                '          echo "packaging smoke skipped"'));
+        const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
+        assert.match(output, /validate job packs, smokes, and uploads the digest-bound release candidate=false/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+for (const [name, before, after] of [
+    ['a masked CI proof', '          node scripts/release-candidate.cjs verify-ci "$CI_RUNS_PATH" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
+        '          node scripts/release-candidate.cjs verify-ci "$CI_RUNS_PATH" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}" || true'],
+    ['a masked candidate verification', '          node scripts/release-candidate.cjs verify "${CANDIDATE_DIR}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" "${TARBALL_SHA256}" "${TARBALL_NAME}"',
+        '          node scripts/release-candidate.cjs verify "${CANDIDATE_DIR}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" "${TARBALL_SHA256}" "${TARBALL_NAME}" || true'],
+    ['disabled strict shell error handling', '          CANDIDATE_DIR="${RUNNER_TEMP}/release-candidate"',
+        '          set +e\\n          CANDIDATE_DIR="${RUNNER_TEMP}/release-candidate"'],
+    ['smoking a newly packed fixture instead of the candidate', '          GARDA_RELEASE_CANDIDATE_PATH="${CANDIDATE_DIR}/${TARBALL_NAME}" npm run test:packaging',
+        '          npm run test:packaging']
+] as const) {
+    test(`release readiness rejects ${name}`, () => {
+        const repoRoot = createReadinessFixture();
+        try {
+            const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
+            const workflow = fs.readFileSync(workflowPath, 'utf8');
+            assert.ok(workflow.includes(before));
+            writeFile(workflowPath, workflow.replace(before, after));
+            const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
+            assert.match(output, /trusted-publish-workflow|validate job (requires successful CI|packs, smokes, and uploads)/);
+            assert.equal(validateReleaseReadiness(repoRoot).passed, false);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+}
 
 test('release readiness fails when trusted publish environment binding is missing', () => {
     const repoRoot = createReadinessFixture();
@@ -1460,7 +1503,7 @@ test('release readiness fails when trusted publish environment binding is missin
         const output = formatReleaseReadinessResult(result);
 
         assert.equal(result.passed, false);
-        assert.match(output, /publish job is npm-release environment bound and uses id-token OIDC npm stage publish=false/);
+        assert.match(output, /publish job is npm-release environment bound and uses id-token OIDC staged publishing=false/);
         assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
@@ -1480,87 +1523,88 @@ test('release readiness fails when trusted publish OIDC permission is missing', 
         const output = formatReleaseReadinessResult(result);
 
         assert.equal(result.passed, false);
-        assert.match(output, /publish job is npm-release environment bound and uses id-token OIDC npm stage publish=false/);
+        assert.match(output, /publish job is npm-release environment bound and uses id-token OIDC staged publishing=false/);
         assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
 });
 
-test('release readiness fails when trusted publish sanity checks only echo markers', () => {
+test('release readiness rejects an echoed npm version in publish sanity checks', () => {
     const repoRoot = createReadinessFixture();
     try {
         const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
-        writeFile(
-            workflowPath,
-            fs.readFileSync(workflowPath, 'utf8').replace(
-                /[ ]{6}- run: npm ci --no-fund --no-audit\n[ ]{6}- run: npm install -g npm@\^11\.15\.0\n[ ]{6}- run: \|\n(?:[ ]{10}.+\n)+?[ ]{6}- run: npm run release:preflight/u,
-                [
-                    '      - run: npm ci --no-fund --no-audit',
-                    '      - run: npm install -g npm@^11.15.0',
-                    '      - run: |',
-                    '          echo "${GITHUB_REF_NAME}"',
-                    '          echo "garda-agent-orchestrator"',
-                    '          echo "npm CLI 11.15.0+"',
-                    '      - run: npm run release:preflight'
-                ].join('\n')
-            )
-        );
-
-        const result = validateReleaseReadiness(repoRoot);
-        const output = formatReleaseReadinessResult(result);
-
-        assert.equal(result.passed, false);
+        writeFile(workflowPath, fs.readFileSync(workflowPath, 'utf8')
+            .replace('test "${NPM_VERSION}" = "11.15.0"', 'echo "${NPM_VERSION}" = "11.15.0"'));
+        const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
         assert.match(output, /publish job has fail-closed package and npm CLI sanity guard=false/);
-        assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
 });
 
-test('release readiness fails when trusted publish sanity guard markers are inside heredoc text', () => {
+test('release readiness rejects an npm guard present only in heredoc text', () => {
     const repoRoot = createReadinessFixture();
     try {
         const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
-        writeFile(
-            workflowPath,
-            fs.readFileSync(workflowPath, 'utf8').replace(
-                /[ ]{6}- run: npm ci --no-fund --no-audit\n[ ]{6}- run: npm install -g npm@\^11\.15\.0\n[ ]{6}- run: \|\n(?:[ ]{10}.+\n)+?[ ]{6}- run: npm run release:preflight/u,
-                [
-                    '      - run: npm ci --no-fund --no-audit',
-                    '      - run: npm install -g npm@^11.15.0',
-                    '      - run: |',
-                    "          cat <<'EOF'",
-                    '          set -euo pipefail',
-                    '          GITHUB_REF_TYPE',
-                    '          GITHUB_REF_NAME',
-                    '          TAG_VERSION="${GITHUB_REF_NAME#v}"',
-                    '          PACKAGE_NAME="$(node -p "require(\'./package.json\').name")"',
-                    '          PACKAGE_VERSION="$(node -p "require(\'./package.json\').version")"',
-                    '          LOCK_VERSION="$(node -p "require(\'./package-lock.json\').version")"',
-                    '          LOCK_ROOT_VERSION="$(node -p "require(\'./package-lock.json\').packages[\'\'].version")"',
-                    '          VERSION_FILE="$(node -e "process.stdout.write(require(\'node:fs\').readFileSync(\'VERSION\', \'utf8\').trim())")"',
-                    '          ${PACKAGE_NAME}" != "garda-agent-orchestrator"',
-                    '          ${TAG_VERSION}" != "${PACKAGE_VERSION}',
-                    '          ${TAG_VERSION}" != "${LOCK_VERSION}',
-                    '          ${TAG_VERSION}" != "${LOCK_ROOT_VERSION}',
-                    '          ${TAG_VERSION}" != "${VERSION_FILE}',
-                    '          NPM_VERSION="$(npm --version)"',
-                    '          npm CLI 11.15.0+',
-                    '          major < 11',
-                    '          minor < 15',
-                    '          EOF',
-                    '      - run: npm run release:preflight'
-                ].join('\n')
-            )
-        );
-
-        const result = validateReleaseReadiness(repoRoot);
-        const output = formatReleaseReadinessResult(result);
-
-        assert.equal(result.passed, false);
+        writeFile(workflowPath, fs.readFileSync(workflowPath, 'utf8')
+            .replace('          test "${NPM_VERSION}" = "11.15.0"',
+                '          cat <<EOF\n          test "${NPM_VERSION}" = "11.15.0"\n          EOF'));
+        const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
         assert.match(output, /publish job has fail-closed package and npm CLI sanity guard=false/);
-        assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects publishing before candidate verification', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
+        const workflow = fs.readFileSync(workflowPath, 'utf8');
+        const verifyStart = workflow.indexOf('      - name: Verify downloaded candidate');
+        const stageStart = workflow.indexOf('      - name: Stage the validated tarball with npm Trusted Publishing');
+        assert.ok(verifyStart > 0 && stageStart > verifyStart);
+        writeFile(workflowPath, workflow.slice(0, verifyStart)
+            + workflow.slice(stageStart) + workflow.slice(verifyStart, stageStart));
+        const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
+        assert.match(output, /publish job verifies and stages the exact validated tarball without rebuilding=false/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+for (const [name, before, after] of [
+    ['a download from another workflow run', 'gh run download "${GITHUB_RUN_ID}"', 'gh run download "${GITHUB_SHA}"'],
+    ['verification whose failure is ignored', '"${EXPECTED_SHA256}" "${EXPECTED_NAME}"', '"${EXPECTED_SHA256}" "${EXPECTED_NAME}" || true'],
+    ['staging a different tarball', 'npm stage publish "${RUNNER_TEMP}/release-candidate/${EXPECTED_NAME}"', 'npm stage publish "${RUNNER_TEMP}/other.tgz"'],
+    ['a command between verification and staging', '      - name: Stage the validated tarball with npm Trusted Publishing', '      - run: rm -f "${RUNNER_TEMP}/release-candidate/${EXPECTED_NAME}"\n      - name: Stage the validated tarball with npm Trusted Publishing']
+] as const) {
+    test(`release readiness rejects ${name}`, () => {
+        const repoRoot = createReadinessFixture();
+        try {
+            const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
+            const workflow = fs.readFileSync(workflowPath, 'utf8');
+            assert.ok(workflow.includes(before));
+            writeFile(workflowPath, workflow.replace(before, after));
+            const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
+            assert.match(output, /publish job verifies and stages the exact validated tarball without rebuilding=false/);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+}
+
+test('release readiness rejects an additional direct npm publish before candidate staging', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
+        const workflow = fs.readFileSync(workflowPath, 'utf8');
+        const downloadMarker = '      - name: Download validated release candidate';
+        writeFile(workflowPath, workflow.replace(downloadMarker,
+            '      - run: npm publish ./other.tgz\n' + downloadMarker));
+        const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
+        assert.match(output, /publish job verifies and stages the exact validated tarball without rebuilding=false/);
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
@@ -1570,17 +1614,10 @@ test('release readiness fails when trusted publish workflow uses direct npm publ
     const repoRoot = createReadinessFixture();
     try {
         const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
-        writeFile(
-            workflowPath,
-            fs.readFileSync(workflowPath, 'utf8').replace('      - run: npm stage publish', '      - run: npm publish')
-        );
-
-        const result = validateReleaseReadiness(repoRoot);
-        const output = formatReleaseReadinessResult(result);
-
-        assert.equal(result.passed, false);
-        assert.match(output, /publish job is npm-release environment bound and uses id-token OIDC npm stage publish=false/);
-        assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
+        writeFile(workflowPath, fs.readFileSync(workflowPath, 'utf8')
+            .replace('          npm stage publish "', '          npm publish "'));
+        const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
+        assert.match(output, /publish job verifies and stages the exact validated tarball without rebuilding=false/);
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
@@ -1590,25 +1627,11 @@ test('release readiness fails when trusted publish command is only heredoc text'
     const repoRoot = createReadinessFixture();
     try {
         const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
-        writeFile(
-            workflowPath,
-            fs.readFileSync(workflowPath, 'utf8').replace(
-                '      - run: npm stage publish',
-                [
-                    '      - run: |',
-                    "          cat <<'EOF'",
-                    '          npm stage publish',
-                    '          EOF'
-                ].join('\n')
-            )
-        );
-
-        const result = validateReleaseReadiness(repoRoot);
-        const output = formatReleaseReadinessResult(result);
-
-        assert.equal(result.passed, false);
-        assert.match(output, /publish job is npm-release environment bound and uses id-token OIDC npm stage publish=false/);
-        assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
+        writeFile(workflowPath, fs.readFileSync(workflowPath, 'utf8')
+            .replace('          npm stage publish "${RUNNER_TEMP}/release-candidate/${EXPECTED_NAME}"',
+                '          cat <<EOF\n          npm stage publish "${RUNNER_TEMP}/release-candidate/${EXPECTED_NAME}"\n          EOF'));
+        const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
+        assert.match(output, /publish job verifies and stages the exact validated tarball without rebuilding=false/);
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
