@@ -35,15 +35,18 @@ jobs:
           - '22.13.0'
           - '24'
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
 
       - name: Install dependencies
         run: npm ci --no-fund --no-audit
+
+      - name: Validate workflow references
+        run: node scripts/validate-workflow-references.cjs
 
       - name: Run typecheck
         run: npm run typecheck
@@ -63,9 +66,9 @@ jobs:
           - '22.13.0'
           - '24'
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -83,7 +86,7 @@ jobs:
 
       - name: Upload node foundation shard logs
         if: failure()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: node-foundation-shard-logs-test-unit-node-${{ matrix.node-version }}
           path: .node-build/test-shard-logs/**
@@ -103,9 +106,9 @@ jobs:
           - '22.13.0'
           - '24'
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -124,7 +127,7 @@ jobs:
 
       - name: Upload node foundation shard logs
         if: failure()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: node-foundation-shard-logs-test-gates-node-${{ matrix.node-version }}
           path: .node-build/test-shard-logs/**
@@ -144,9 +147,9 @@ jobs:
           - '22.13.0'
           - '24'
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -165,7 +168,7 @@ jobs:
 
       - name: Upload node foundation shard logs
         if: failure()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: node-foundation-shard-logs-test-cli-node-${{ matrix.node-version }}
           path: .node-build/test-shard-logs/**
@@ -185,9 +188,9 @@ jobs:
           - '22.13.0'
           - '24'
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -205,7 +208,7 @@ jobs:
 
       - name: Upload node foundation shard logs
         if: failure()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: node-foundation-shard-logs-test-lifecycle-node-${{ matrix.node-version }}
           path: .node-build/test-shard-logs/**
@@ -225,9 +228,9 @@ jobs:
           - '22.13.0'
           - '24'
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -245,7 +248,7 @@ jobs:
 
       - name: Upload node foundation shard logs
         if: failure()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: node-foundation-shard-logs-test-bin-node-${{ matrix.node-version }}
           path: .node-build/test-shard-logs/**
@@ -268,9 +271,9 @@ jobs:
           - '22.13.0'
           - '24'
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -283,7 +286,7 @@ jobs:
 
       - name: Upload lcov coverage
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-lcov-${{ matrix.os }}-node-${{ matrix.node-version }}
           path: coverage/lcov.info
@@ -307,9 +310,9 @@ jobs:
           - '22.13.0'
           - '24'
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -421,7 +424,7 @@ jobs:
 
       - name: Upload smoke failure evidence
         if: failure()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: smoke-failure-evidence-${{ matrix.os }}-node${{ matrix.node-version }}
           path: smoke-failure-evidence/
