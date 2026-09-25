@@ -33,6 +33,11 @@ import {
 
 const TRUSTED_RELEASE_TAG_HISTORY_STEP_SHA256 = 'dd86883aee9e6eef46c76a284d9a90431073efaecdd74adcce97f4e53223b470';
 const TRUSTED_RELEASE_CANDIDATE_PUBLISH_STEPS_SHA256 = '26b8e7c2f66cd01ae719d68cc3836566164362e429d62181dad7e4039fa8590f';
+const TRUSTED_RELEASE_CI_PROOF_STEP_SHA256 = '6babce8ec31d4a33df128186cbf02f604e2b7777c8d7801a296c4216a6d7b10f';
+const TRUSTED_RELEASE_CANDIDATE_PACK_STEP_SHA256 = 'f62df6d8ca1b684eb8bfaede8763254ae4da5488464b053095d0b6891b27de39';
+const TRUSTED_RELEASE_PUBLISH_JOB_SHA256 = 'f9258da3a0dfa441cddcfc7f0be1c37338e6096900012accdf0d107b91646c2b';
+// Bind all release jobs, workflow permissions, and immutable action pins.
+const TRUSTED_RELEASE_WORKFLOW_SHA256 = 'e2d391fffc786c0cd9c61ce2b8e1770fa302d5a1772c7c6069da475bb184a188';
 // Hash the source workflow before action-reference normalization so the immutable pins remain bound.
 const TRUSTED_SBOM_WORKFLOW_CONTRACT_SHA256 = '2d88c5db2ead8b460476af6b9539a7a8544c25f16bb4376083e82ff2687db05c';
 const REVIEWED_WORKFLOW_ACTION_PINS: Readonly<Record<string, { version: string; readinessReference: string }>> = {
@@ -766,9 +771,12 @@ function validateSecurityCiBaselineContract(repoRoot: string): { passed: boolean
 }
 
 function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boolean; details: string[] } {
+    const rawPublishWorkflow = readTextFileIfExists(path.join(repoRoot, '.github', 'workflows', 'publish.yml')) || '';
     const publishWorkflow = readWorkflowForReadiness(repoRoot, 'publish.yml');
-    const validateJob = getWorkflowJobBlock(publishWorkflow, 'validate');
-    const publishJob = getWorkflowJobBlock(publishWorkflow, 'publish');
+    const publishWorkflowExactlyReviewed = workflowStructuralBlockContractSha256(rawPublishWorkflow)
+        === TRUSTED_RELEASE_WORKFLOW_SHA256;
+    const validateJob = getWorkflowJobBlockUnderJobs(publishWorkflow, 'validate');
+    const publishJob = getWorkflowJobBlockUnderJobs(publishWorkflow, 'publish');
     const onBlock = getYamlKeyBlock(publishWorkflow, 'on');
     const pushTriggerBlock = getYamlDirectChildBlock(onBlock, 'push');
     const workflowEnv = getYamlKeyBlock(publishWorkflow, 'env');
@@ -848,7 +856,10 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
         && blockHasNonCommentLine(publishCheckoutWith, 'fetch-depth: 0');
     const tagDrivenOnly = tagTriggers.includes('v*') && !publishWorkflow.includes('workflow_dispatch:');
     const nodeVersionPinned = yamlBlockHasScalarValue(workflowEnv, 'NODE_VERSION', ['24', '24.x']);
-    const ciCommitBound = workflowRunScriptsIncludeExecutableMarkers(validateRunScripts, [
+    const ciProofStep = getWorkflowNamedStepBlock(validateJob || '', 'Require successful CI for this release commit');
+    const candidatePackStep = getWorkflowNamedStepBlock(validateJob || '', 'Pack and attest release candidate');
+    const ciCommitBound = workflowStructuralBlockContractSha256(ciProofStep) === TRUSTED_RELEASE_CI_PROOF_STEP_SHA256
+        && workflowRunScriptsIncludeExecutableMarkers(validateRunScripts, [
         'test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"',
         'actions/workflows/ci.yml/runs',
         'release-candidate.cjs verify-ci'
@@ -857,7 +868,9 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
         && workflowJobHasRunStep(publishJob || '', 'npm install -g npm@11.15.0')
         && workflowRunScriptsIncludeExecutableMarkers(validateRunScripts, ['test "$(npm --version)" = "11.15.0"'])
         && workflowRunScriptsIncludeExecutableMarkers(publishRunScripts, ['test "$(npm --version)" = "11.15.0"']);
-    const candidatePackAndUpload = workflowRunScriptsIncludeExecutableMarkersInOrder(validateRunScripts, [
+    const candidatePackAndUpload = workflowStructuralBlockContractSha256(candidatePackStep)
+        === TRUSTED_RELEASE_CANDIDATE_PACK_STEP_SHA256
+        && workflowRunScriptsIncludeExecutableMarkersInOrder(validateRunScripts, [
         'set -euo pipefail',
         'CANDIDATE_DIR="${RUNNER_TEMP}/release-candidate"',
         'npm pack --json --pack-destination "${CANDIDATE_DIR}"',
@@ -890,8 +903,7 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
     const publishUsesValidatedCandidate = blockHasNonCommentLine(publishPermissions, 'actions: read')
         && candidateStepsAdjacent
         && candidatePublishStepsHash === TRUSTED_RELEASE_CANDIDATE_PUBLISH_STEPS_SHA256
-        && publishRunScripts.every((script) => extractExecutableScriptLines(script)
-            .every((line) => !/\bnpm\s+publish\b/u.test(line)))
+        && workflowStructuralBlockContractSha256(publishJob) === TRUSTED_RELEASE_PUBLISH_JOB_SHA256
         && !workflowJobHasRunStep(publishJob, 'npm run release:preflight');
     const validateJobContract = validateJob !== null
         && blockHasNonCommentLine(validateJob, 'runs-on: ubuntu-latest')
@@ -938,6 +950,7 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
 
     const checks = [
         { passed: publishWorkflow !== '', detail: 'publish.yml present' },
+        { passed: publishWorkflowExactlyReviewed, detail: 'publish workflow exactly matches the reviewed release path' },
         { passed: tagDrivenOnly, detail: 'publish.yml is v*-tag driven without manual dispatch' },
         { passed: nodeVersionPinned, detail: 'publish workflow pins Node 24 for Trusted Publishing' },
         { passed: actionsHistoryReadable, detail: 'publish workflow has read-only access to provider workflow-run history' },

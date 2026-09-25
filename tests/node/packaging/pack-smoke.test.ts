@@ -388,6 +388,36 @@ function runCliStartupProbe(
     };
 }
 
+function preparePackSmokeTarball(repoRoot: string, fixtureRoot: string, candidatePath?: string): string {
+    if (candidatePath) {
+        assert.ok(path.isAbsolute(candidatePath), 'release candidate path must be absolute');
+        assert.ok(fs.existsSync(candidatePath), `Tarball not found at ${candidatePath}`);
+        assert.ok(fs.statSync(candidatePath).isFile(), 'release candidate must be a regular file');
+        return candidatePath;
+    }
+
+    copyPackFixture(repoRoot, fixtureRoot);
+    initializeCleanPackFixture(fixtureRoot);
+    const tarballPath = path.join(fixtureRoot, npmPack(fixtureRoot));
+    assert.ok(fs.existsSync(tarballPath), `Tarball not found at ${tarballPath}`);
+    return tarballPath;
+}
+
+test('supplied release candidate is selected without packing a fixture', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-candidate-selection-'));
+    try {
+        const candidatePath = path.join(tempRoot, 'candidate.tgz');
+        const fixtureRoot = path.join(tempRoot, 'pack-repo');
+        fs.writeFileSync(candidatePath, 'candidate fixture');
+        assert.equal(preparePackSmokeTarball(tempRoot, fixtureRoot, candidatePath), candidatePath);
+        assert.equal(fs.existsSync(fixtureRoot), false, 'candidate selection must not create or repack a fixture');
+        assert.throws(() => preparePackSmokeTarball(tempRoot, fixtureRoot, 'relative.tgz'), /absolute/u);
+        assert.throws(() => preparePackSmokeTarball(tempRoot, fixtureRoot, path.join(tempRoot, 'missing.tgz')), /not found/u);
+    } finally {
+        removePackSmokeTempRoot(tempRoot);
+    }
+});
+
 test('npm pack -> install -> CLI invoke smoke test', () => {
     const repoRoot = getRepoRoot();
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
@@ -399,16 +429,9 @@ test('npm pack -> install -> CLI invoke smoke test', () => {
     try {
         assertNoConsumerInstallLifecycleScripts(packageJson);
         assertCompiledOnlyPackageSurface(packageJson);
-        const releaseCandidateTarball = process.env.GARDA_RELEASE_CANDIDATE_PATH;
-        if (!releaseCandidateTarball) {
-            copyPackFixture(repoRoot, fixtureRoot);
-            initializeCleanPackFixture(fixtureRoot);
-        }
-
-        const tarballPath = releaseCandidateTarball || path.join(fixtureRoot, npmPack(fixtureRoot));
-        assert.ok(path.isAbsolute(tarballPath), 'release candidate path must be absolute');
-        assert.ok(fs.existsSync(tarballPath), `Tarball not found at ${tarballPath}`);
-        assert.ok(fs.statSync(tarballPath).isFile(), 'release candidate must be a regular file');
+        const tarballPath = preparePackSmokeTarball(
+            repoRoot, fixtureRoot, process.env.GARDA_RELEASE_CANDIDATE_PATH
+        );
 
         const installDurationMs = npmInstallTarball(tarballPath, installRoot);
         assert.ok(

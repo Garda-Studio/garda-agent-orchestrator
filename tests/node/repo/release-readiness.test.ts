@@ -309,46 +309,72 @@ function buildSbomWorkflow(): string {
 
 function buildPublishWorkflow(): string {
     return [
+        '# Tag-driven npm release workflow for Garda Agent Orchestrator.',
+        '# The publish job uses npm Trusted Publishing/OIDC to stage the package.',
+        '# The public release still requires npm staged approval with maintainer 2FA.',
         'name: Publish',
+        '',
         'on:',
         '  push:',
         '    tags:',
-        "      - 'v*'",
+        '      - \'v*\'',
+        '',
+        'concurrency:',
+        '  group: publish-${{ github.ref }}',
+        '  cancel-in-progress: false',
+        '',
         'permissions:',
         '  actions: read',
         '  contents: read',
+        '',
         'env:',
-        "  NODE_VERSION: '24'",
+        '  NODE_VERSION: \'24\'',
+        '',
         'jobs:',
         '  validate:',
+        '    name: Validate release package',
         '    runs-on: ubuntu-latest',
         '    outputs:',
         '      tarball_sha256: ${{ steps.pack.outputs.tarball_sha256 }}',
         '      tarball_name: ${{ steps.pack.outputs.tarball_name }}',
         '    steps:',
-        '      - uses: actions/checkout@v7.0.0',
+        '      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0',
         '        with:',
         '          fetch-depth: 0',
-        '      - uses: actions/setup-node@v6',
+        '',
+        '      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0',
         '        with:',
         '          node-version: ${{ env.NODE_VERSION }}',
         '          package-manager-cache: false',
-        '      - run: |',
+        '',
+        '      - name: Validate tag and package version',
+        '        shell: bash',
+        '        run: |',
         '          set -euo pipefail',
+        '',
         '          if [[ "${{ github.run_attempt }}" != "1" ]]; then',
+        '            echo "Release workflow reruns are rejected; prepare a new version and tag instead." >&2',
         '            exit 1',
         '          fi',
         '          if [[ "${GITHUB_REF_TYPE}" != "tag" || "${GITHUB_REF_NAME}" != v* ]]; then',
+        '            echo "Publish workflow must run from a v* tag." >&2',
         '            exit 1',
         '          fi',
+        '',
         '          TAG_VERSION="${GITHUB_REF_NAME#v}"',
         '          PACKAGE_VERSION="$(node -p "require(\'./package.json\').version")"',
         '          LOCK_VERSION="$(node -p "require(\'./package-lock.json\').version")"',
         '          LOCK_ROOT_VERSION="$(node -p "require(\'./package-lock.json\').packages[\'\'].version")"',
         '          VERSION_FILE="$(node -e "process.stdout.write(require(\'node:fs\').readFileSync(\'VERSION\', \'utf8\').trim())")"',
+        '',
         '          if [[ "${TAG_VERSION}" != "${PACKAGE_VERSION}" || "${TAG_VERSION}" != "${LOCK_VERSION}" || "${TAG_VERSION}" != "${LOCK_ROOT_VERSION}" || "${TAG_VERSION}" != "${VERSION_FILE}" ]]; then',
+        '            echo "Release tag v${TAG_VERSION} does not match package/version metadata." >&2',
+        '            echo "package.json=${PACKAGE_VERSION} package-lock=${LOCK_VERSION} package-lock-root=${LOCK_ROOT_VERSION} VERSION=${VERSION_FILE}" >&2',
         '            exit 1',
         '          fi',
+        '',
+        '          echo "Release tag v${TAG_VERSION} matches package.json, package-lock.json, package-lock root, and VERSION."',
+        '',
         '      - name: Reject previously used release tags',
         '        shell: bash',
         '        run: |',
@@ -378,53 +404,89 @@ function buildPublishWorkflow(): string {
         '            }',
         '          \' "${RUN_HISTORY_PATH}"',
         '          git update-ref -d "refs/tags/${GITHUB_REF_NAME}"',
-        '      - run: |',
+        '',
+        '      - name: Require successful CI for this release commit',
+        '        shell: bash',
+        '        run: |',
         '          set -euo pipefail',
         '          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"',
-        '          gh api repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs',
-        '          node scripts/release-candidate.cjs verify-ci "$CI_RUNS_PATH" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
-        '      - run: npm ci --no-fund --no-audit',
-        '      - run: |',
+        '          CI_RUNS_PATH="${RUNNER_TEMP}/release-ci-runs.json"',
+        '          GH_TOKEN="${{ github.token }}" gh api --method GET \\',
+        '            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \\',
+        '            -f head_sha="${GITHUB_SHA}" -f event=push -f status=completed -f per_page=100 > "${CI_RUNS_PATH}"',
+        '          node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
+        '',
+        '      - name: Install dependencies',
+        '        run: npm ci --no-fund --no-audit',
+        '',
+        '      - name: Pin release npm CLI',
+        '        run: |',
         '          set -euo pipefail',
         '          npm install -g npm@11.15.0',
         '          test "$(npm --version)" = "11.15.0"',
-        '      - run: npm run release:preflight',
-        '      - run: |',
+        '',
+        '      - name: Run local release proof',
+        '        run: npm run release:preflight',
+        '',
+        '      - name: Pack and attest release candidate',
+        '        id: pack',
+        '        shell: bash',
+        '        run: |',
         '          set -euo pipefail',
         '          CANDIDATE_DIR="${RUNNER_TEMP}/release-candidate"',
-        '          npm pack --json --pack-destination "${CANDIDATE_DIR}"',
-        '          node scripts/release-candidate.cjs create "$REPORT" "$DIR" "$SHA" "$TAG" "$NAME" "$VERSION" "${GITHUB_OUTPUT}"',
+        '          mkdir -p "${CANDIDATE_DIR}"',
+        '          npm pack --json --pack-destination "${CANDIDATE_DIR}" > "${CANDIDATE_DIR}/pack-report.json"',
+        '          PACKAGE_NAME="$(node -p "require(\'./package.json\').name")"',
+        '          PACKAGE_VERSION="$(node -p "require(\'./package.json\').version")"',
+        '          node scripts/release-candidate.cjs create \\',
+        '            "${CANDIDATE_DIR}/pack-report.json" "${CANDIDATE_DIR}" \\',
+        '            "${GITHUB_SHA}" "${GITHUB_REF_NAME}" "${PACKAGE_NAME}" "${PACKAGE_VERSION}" "${GITHUB_OUTPUT}"',
+        '',
+        '          TARBALL_NAME="$(node -p "require(process.argv[1]).tarball_name" "${CANDIDATE_DIR}/candidate-manifest.json")"',
+        '          TARBALL_SHA256="$(node -p "require(process.argv[1]).tarball_sha256" "${CANDIDATE_DIR}/candidate-manifest.json")"',
         '          GARDA_RELEASE_CANDIDATE_PATH="${CANDIDATE_DIR}/${TARBALL_NAME}" npm run test:packaging',
         '          node scripts/release-candidate.cjs verify "${CANDIDATE_DIR}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" "${TARBALL_SHA256}" "${TARBALL_NAME}"',
-        '      - uses: actions/upload-artifact@v7.0.1',
+        '',
+        '      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1',
         '        with:',
         '          name: release-candidate-${{ github.sha }}',
         '          path: ${{ runner.temp }}/release-candidate/',
         '          if-no-files-found: error',
+        '          retention-days: 7',
+        '',
         '  publish:',
-        '    needs: validate',
+        '    name: Stage package on npm',
         '    runs-on: ubuntu-latest',
+        '    needs: validate',
         '    environment: npm-release',
         '    permissions:',
         '      actions: read',
         '      contents: read',
         '      id-token: write',
         '    steps:',
-        '      - uses: actions/checkout@v7.0.0',
+        '      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0',
         '        with:',
         '          fetch-depth: 0',
-        '      - uses: actions/setup-node@v6',
+        '',
+        '      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0',
         '        with:',
         '          node-version: ${{ env.NODE_VERSION }}',
         '          registry-url: https://registry.npmjs.org',
         '          package-manager-cache: false',
-        '      - run: |',
+        '',
+        '      - name: Pin release npm CLI',
+        '        run: |',
         '          set -euo pipefail',
         '          npm install -g npm@11.15.0',
         '          test "$(npm --version)" = "11.15.0"',
-        '      - run: |',
+        '',
+        '      - name: Final publish sanity checks',
+        '        shell: bash',
+        '        run: |',
         '          set -euo pipefail',
+        '',
         '          if [[ "${{ github.run_attempt }}" != "1" ]]; then',
+        '            echo "Release workflow reruns are rejected; prepare a new version and tag instead." >&2',
         '            exit 1',
         '          fi',
         '          TAG_VERSION="${GITHUB_REF_NAME#v}"',
@@ -433,18 +495,26 @@ function buildPublishWorkflow(): string {
         '          LOCK_VERSION="$(node -p "require(\'./package-lock.json\').version")"',
         '          LOCK_ROOT_VERSION="$(node -p "require(\'./package-lock.json\').packages[\'\'].version")"',
         '          VERSION_FILE="$(node -e "process.stdout.write(require(\'node:fs\').readFileSync(\'VERSION\', \'utf8\').trim())")"',
+        '',
         '          if [[ "${GITHUB_REF_TYPE}" != "tag" || "${GITHUB_REF_NAME}" != v* ]]; then',
+        '            echo "Publish job must run from a v* tag." >&2',
         '            exit 1',
         '          fi',
         '          if [[ "${PACKAGE_NAME}" != "garda-agent-orchestrator" ]]; then',
+        '            echo "Unexpected package name: ${PACKAGE_NAME}" >&2',
         '            exit 1',
         '          fi',
         '          if [[ "${TAG_VERSION}" != "${PACKAGE_VERSION}" || "${TAG_VERSION}" != "${LOCK_VERSION}" || "${TAG_VERSION}" != "${LOCK_ROOT_VERSION}" || "${TAG_VERSION}" != "${VERSION_FILE}" ]]; then',
+        '            echo "Release tag v${TAG_VERSION} does not match package/version metadata." >&2',
         '            exit 1',
         '          fi',
+        '',
+        '          node --version',
         '          NPM_VERSION="$(npm --version)"',
+        '          echo "npm ${NPM_VERSION}"',
         '          test "${NPM_VERSION}" = "11.15.0"',
         '          git update-ref -d "refs/tags/${GITHUB_REF_NAME}"',
+        '',
         '      - name: Download validated release candidate',
         '        shell: bash',
         '        env:',
@@ -452,6 +522,7 @@ function buildPublishWorkflow(): string {
         '        run: |',
         '          set -euo pipefail',
         '          gh run download "${GITHUB_RUN_ID}" --name "release-candidate-${GITHUB_SHA}" --dir "${RUNNER_TEMP}/release-candidate"',
+        '',
         '      - name: Verify downloaded candidate',
         '        shell: bash',
         '        env:',
@@ -462,13 +533,14 @@ function buildPublishWorkflow(): string {
         '          node scripts/release-candidate.cjs verify \\',
         '            "${RUNNER_TEMP}/release-candidate" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" \\',
         '            "${EXPECTED_SHA256}" "${EXPECTED_NAME}"',
+        '',
         '      - name: Stage the validated tarball with npm Trusted Publishing',
         '        shell: bash',
         '        env:',
         '          EXPECTED_NAME: ${{ needs.validate.outputs.tarball_name }}',
         '        run: |',
         '          set -euo pipefail',
-        '          npm stage publish "${RUNNER_TEMP}/release-candidate/${EXPECTED_NAME}"'
+        '          npm stage publish "${RUNNER_TEMP}/release-candidate/${EXPECTED_NAME}"',
     ].join('\n');
 }
 
@@ -1112,6 +1184,7 @@ test('release readiness fails when tagged publish jobs allow workflow reruns', (
             fs.readFileSync(workflowPath, 'utf8').replaceAll(
                 [
                     '          if [[ "${{ github.run_attempt }}" != "1" ]]; then',
+                    '            echo "Release workflow reruns are rejected; prepare a new version and tag instead." >&2',
                     '            exit 1',
                     '          fi',
                     ''
@@ -1162,7 +1235,7 @@ test('release readiness rejects inert text containing every prior-run history ma
         writeFile(
             workflowPath,
             fs.readFileSync(workflowPath, 'utf8').replace(
-                /[ ]{6}- name: Reject previously used release tags\n[\s\S]+?(?=[ ]{6}- run: npm ci --no-fund --no-audit)/u,
+                /[ ]{6}- name: Reject previously used release tags\n[\s\S]+?(?=[ ]{6}- name: Install dependencies)/u,
                 [
                     '      - name: Reject previously used release tags',
                     '        shell: bash',
@@ -1343,7 +1416,7 @@ test('release readiness fails when trusted publish validate job only echoes vers
         writeFile(
             workflowPath,
             fs.readFileSync(workflowPath, 'utf8').replace(
-                /[ ]{6}- run: \|\n[\s\S]+?(?=[ ]{6}- name: Reject previously used release tags)/u,
+                /[ ]{6}- name: Validate tag and package version\n[\s\S]+?(?=[ ]{6}- name: Reject previously used release tags)/u,
                 [
                     '      - run: |',
                     '          echo "${GITHUB_REF_NAME}"',
@@ -1373,9 +1446,11 @@ test('release readiness fails when trusted publish validate guard markers are on
         writeFile(
             workflowPath,
             fs.readFileSync(workflowPath, 'utf8').replace(
-                /[ ]{6}- run: \|\n[\s\S]+?(?=[ ]{6}- name: Reject previously used release tags)/u,
+                /[ ]{6}- name: Validate tag and package version\n[\s\S]+?(?=[ ]{6}- name: Reject previously used release tags)/u,
                 [
-                    '      - run: |',
+                    '      - name: Validate tag and package version',
+                    '        shell: bash',
+                    '        run: |',
                     '          # set -euo pipefail',
                     '          # GITHUB_REF_TYPE',
                     '          # GITHUB_REF_NAME',
@@ -1412,10 +1487,8 @@ test('release readiness rejects CI proof markers printed without running the che
         const workflow = fs.readFileSync(workflowPath, 'utf8')
             .replace('          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"',
                 '          echo test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"')
-            .replace('          gh api repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs',
-                '          printf "gh api repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs\\n"')
-            .replace('          node scripts/release-candidate.cjs verify-ci "$CI_RUNS_PATH" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
-                '          echo node scripts/release-candidate.cjs verify-ci "$CI_RUNS_PATH" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"');
+            .replace('          node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
+                '          echo node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"');
         writeFile(workflowPath, workflow);
         const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
         assert.match(output, /validate job requires successful CI for the exact release commit=false/);
@@ -1464,13 +1537,24 @@ test('release readiness rejects a candidate upload without exact-tarball smoke',
     }
 });
 
+// These mutations exercise the reviewed workflow-step hashes, not shell parsing in isolation.
 for (const [name, before, after] of [
-    ['a masked CI proof', '          node scripts/release-candidate.cjs verify-ci "$CI_RUNS_PATH" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
-        '          node scripts/release-candidate.cjs verify-ci "$CI_RUNS_PATH" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}" || true'],
+    ['a masked CI proof', '          node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
+        '          node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}" || true'],
     ['a masked candidate verification', '          node scripts/release-candidate.cjs verify "${CANDIDATE_DIR}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" "${TARBALL_SHA256}" "${TARBALL_NAME}"',
         '          node scripts/release-candidate.cjs verify "${CANDIDATE_DIR}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" "${TARBALL_SHA256}" "${TARBALL_NAME}" || true'],
+    ['negated CI proof', '          node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
+        '          ! node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"'],
+    ['conditional candidate verification', '          node scripts/release-candidate.cjs verify "${CANDIDATE_DIR}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" "${TARBALL_SHA256}" "${TARBALL_NAME}"',
+        '          if node scripts/release-candidate.cjs verify "${CANDIDATE_DIR}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" "${TARBALL_SHA256}" "${TARBALL_NAME}"; then\n            true\n          fi'],
+    ['conditional CI proof with and-list', '          node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
+        '          true && node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"'],
     ['disabled strict shell error handling', '          CANDIDATE_DIR="${RUNNER_TEMP}/release-candidate"',
         '          set +e\\n          CANDIDATE_DIR="${RUNNER_TEMP}/release-candidate"'],
+    ['CI proof hidden in a shell assignment', '          node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
+        '          PROOF="node scripts/release-candidate.cjs verify-ci ${CI_RUNS_PATH} ${GITHUB_SHA} ${GITHUB_REPOSITORY}"'],
+    ['CI proof hidden in a shell no-op', '          node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
+        '          : "node scripts/release-candidate.cjs verify-ci ${CI_RUNS_PATH} ${GITHUB_SHA} ${GITHUB_REPOSITORY}"'],
     ['smoking a newly packed fixture instead of the candidate', '          GARDA_RELEASE_CANDIDATE_PATH="${CANDIDATE_DIR}/${TARBALL_NAME}" npm run test:packaging',
         '          npm run test:packaging']
 ] as const) {
@@ -1595,6 +1679,70 @@ for (const [name, before, after] of [
     });
 }
 
+test('release readiness rejects a sibling job that stages an unvalidated tarball', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
+        const workflow = fs.readFileSync(workflowPath, 'utf8');
+        const siblingJob = [
+            '  shadow-publish:',
+            '    needs: validate',
+            '    runs-on: ubuntu-latest',
+            '    permissions:',
+            '      contents: read',
+            '      id-token: write',
+            '    steps:',
+            '      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0',
+            '        with:',
+            "          node-version: '24'",
+            '          registry-url: https://registry.npmjs.org',
+            '      - run: |',
+            '          npm pack',
+            '          npm stage publish ./unvalidated.tgz'
+        ].join('\n');
+        writeFile(workflowPath, workflow + '\n' + siblingJob);
+        const result = validateReleaseReadiness(repoRoot);
+        const output = formatReleaseReadinessResult(result);
+        assert.equal(result.passed, false);
+        assert.match(output, /publish workflow exactly matches the reviewed release path=false/u);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness ignores a trusted publish job decoy inside a run script', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
+        const workflow = fs.readFileSync(workflowPath, 'utf8');
+        const trustedPublishJob = workflow.slice(workflow.indexOf('\n  publish:') + 1);
+        const realJobMutation = workflow.replace(
+            '          npm stage publish "${RUNNER_TEMP}/release-candidate/${EXPECTED_NAME}"',
+            '          npm pack'
+        );
+        const proofStep = '      - name: Require successful CI for this release commit';
+        const decoy = [
+            '      - name: Inert publish job text',
+            '        run: |',
+            "          : <<'PUBLISH_DECOY'",
+            ...trustedPublishJob.split('\n').map((line) => '        ' + line),
+            '          end:',
+            '          PUBLISH_DECOY',
+            '',
+            proofStep
+        ].join('\n');
+        assert.ok(realJobMutation.includes(proofStep));
+        writeFile(workflowPath, realJobMutation.replace(proofStep, decoy));
+
+        const result = validateReleaseReadiness(repoRoot);
+        const output = formatReleaseReadinessResult(result);
+        assert.equal(result.passed, false);
+        assert.match(output, /publish job verifies and stages the exact validated tarball without rebuilding=false/u);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
 test('release readiness rejects an additional direct npm publish before candidate staging', () => {
     const repoRoot = createReadinessFixture();
     try {
@@ -1609,6 +1757,24 @@ test('release readiness rejects an additional direct npm publish before candidat
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
 });
+
+for (const command of ['npm pack', 'npm run build', 'npm install -g npm@12.0.0', '"npm" pack', 'n\\pm run build']) {
+    test(`release readiness rejects publish job mutation: ${command}`, () => {
+        const repoRoot = createReadinessFixture();
+        try {
+            const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
+            const workflow = fs.readFileSync(workflowPath, 'utf8');
+            const downloadMarker = '      - name: Download validated release candidate';
+            assert.ok(workflow.includes(downloadMarker));
+            writeFile(workflowPath, workflow.replace(downloadMarker,
+                `      - run: ${command}\n` + downloadMarker));
+            const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
+            assert.match(output, /publish job verifies and stages the exact validated tarball without rebuilding=false/);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+}
 
 test('release readiness fails when trusted publish workflow uses direct npm publish', () => {
     const repoRoot = createReadinessFixture();
