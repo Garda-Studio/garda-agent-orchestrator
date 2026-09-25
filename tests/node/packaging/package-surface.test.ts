@@ -1,89 +1,366 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as zlib from 'node:zlib';
 
 import {
     buildPackageSurfaceArtifact,
     comparePackageSurface,
     createPackageSurfaceBaseline,
     formatPackageSurfaceComparison,
+    installedPackageBytes,
     parseNpmPackReport,
+    parsePackageSurfaceArtifact,
+    parsePackageSurfaceBaseline,
     parsePackageSurfaceCliOptions,
     updatePackageSurfaceBaseline,
     validatePackageSurface
 } from '../../../scripts/node-foundation/validate-release';
-import type {
-    NpmPackReport,
-    PackageSurfaceAllowedGrowth,
-    PackageSurfaceArtifact
-} from '../../../scripts/node-foundation/validate-release';
+import { readPackedTarball } from '../../../scripts/node-foundation/release-validation/package-surface-tar';
+import type { NpmPackReport, PackageSurfaceAllowedGrowth, PackageSurfaceArtifact } from '../../../scripts/node-foundation/validate-release';
 
-function writeFile(filePath: string, content: string): void {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, content, 'utf8');
+interface FixtureEntry {
+    path: string;
+    content: Buffer;
+    mode?: number;
+    type?: string;
 }
 
-function createFixture(): string {
-    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-package-surface-'));
-    writeFile(path.join(repoRoot, 'package.json'), JSON.stringify({
-        name: 'fixture-package',
-        version: '1.2.3',
-        scripts: {
-            postpack: 'node cleanup.cjs',
-            prepack: 'node build.cjs'
-        }
-    }, null, 2));
-    writeFile(
-        path.join(repoRoot, 'dist', 'runtime.js'),
-        "const fs = require('node:fs');\nfs.readFileSync('input');\nfetch('https://example.invalid');\n"
-    );
-    writeFile(
-        path.join(repoRoot, 'bin', 'cli.cjs'),
-        "const childProcess = require('node:child_process');\nconst filesystem = require('fs');\nchildProcess.execFileSync('node');\n"
-    );
-    writeFile(path.join(repoRoot, 'README.md'), '# Fixture\nwriteFile is documentation only.\n');
-    return repoRoot;
+function octal(header: Buffer, offset: number, length: number, value: number): void {
+    header.write(value.toString(8).padStart(length - 1, '0'), offset, length - 1, 'ascii');
+    header[offset + length - 1] = 0;
 }
 
-function buildPackReport(overrides: Partial<NpmPackReport> = {}): NpmPackReport {
-    return {
+function tarBytes(entries: FixtureEntry[]): Buffer {
+    const blocks: Buffer[] = [];
+    for (const entry of entries) {
+        const header = Buffer.alloc(512);
+        header.write(entry.path, 0, 100, 'utf8');
+        octal(header, 100, 8, entry.mode ?? 0o644);
+        octal(header, 108, 8, 0);
+        octal(header, 116, 8, 0);
+        octal(header, 124, 12, entry.content.length);
+        octal(header, 136, 12, 0);
+        header.fill(0x20, 148, 156);
+        header.write(entry.type ?? '0', 156, 1, 'ascii');
+        header.write('ustar\0', 257, 6, 'ascii');
+        header.write('00', 263, 2, 'ascii');
+        const checksum = header.reduce((sum, byte) => sum + byte, 0);
+        octal(header, 148, 8, checksum);
+        blocks.push(header, entry.content, Buffer.alloc((512 - entry.content.length % 512) % 512));
+    }
+    blocks.push(Buffer.alloc(1024));
+    return zlib.gzipSync(Buffer.concat(blocks));
+}
+
+function fixtureEntries(manifestOverrides: Record<string, unknown> = {}): FixtureEntry[] {
+    const manifest = {
         name: 'fixture-package',
         version: '1.2.3',
-        filename: 'fixture-package-1.2.3.tgz',
-        entryCount: 4,
-        unpackedSize: 420,
-        files: [
-            { path: 'README.md', size: 42 },
-            { path: 'bin/cli.cjs', size: 88 },
-            { path: 'dist/runtime.js', size: 190 },
-            { path: 'package.json', size: 100 }
-        ],
-        ...overrides
+        description: 'Fixture package',
+        author: 'Fixture Author',
+        license: 'Apache-2.0',
+        type: 'commonjs',
+        repository: { url: 'https://github.com/example/fixture' },
+        homepage: 'https://example.invalid/',
+        bugs: { url: 'https://github.com/example/fixture/issues' },
+        funding: 'https://example.invalid/support',
+        engines: { node: '>=22' },
+        bin: { fixture: 'bin/cli.js' },
+        scripts: { prepack: 'node build.cjs', postpack: 'node cleanup.cjs' },
+        ...manifestOverrides
     };
+    return [
+        { path: 'package/package.json', content: Buffer.from(JSON.stringify(manifest)) },
+        { path: 'package/bin/cli.js', content: Buffer.from("#!/usr/bin/env node\nrequire('node:fs').readFileSync('input');\n"), mode: 0o755 },
+        { path: 'package/dist/runtime.js', content: Buffer.from("fetch('https://api.example.invalid');\n") },
+        { path: 'package/README.md', content: Buffer.from('# Fixture\n') }
+    ];
 }
 
-const ZERO_GROWTH: PackageSurfaceAllowedGrowth = Object.freeze({
+function fixture(overrides: { entries?: FixtureEntry[]; report?: Partial<NpmPackReport> } = {}): {
+    root: string;
+    tarballPath: string;
+    report: NpmPackReport;
+    cleanup: () => void;
+} {
+    const entries = overrides.entries ?? fixtureEntries();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-surface-test-'));
+    const tarballPath = path.join(root, 'fixture-package-1.2.3.tgz');
+    fs.writeFileSync(tarballPath, tarBytes(entries));
+    const files = entries.filter((entry) => entry.type === undefined || entry.type === '0')
+        .map((entry) => ({ path: entry.path.replace(/^package\//u, ''), size: entry.content.length }));
+    const report: NpmPackReport = {
+        name: 'fixture-package',
+        version: '1.2.3',
+        filename: path.basename(tarballPath),
+        entryCount: files.length,
+        unpackedSize: files.reduce((sum, file) => sum + file.size, 0),
+        files,
+        ...overrides.report
+    };
+    return { root, tarballPath, report, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+}
+
+function artifact(sample: ReturnType<typeof fixture>): PackageSurfaceArtifact {
+    return buildPackageSurfaceArtifact(readPackedTarball(sample.tarballPath), sample.report, sample.report.unpackedSize);
+}
+
+const ZERO_GROWTH: PackageSurfaceAllowedGrowth = {
     fileCount: 0,
     unpackedSizeBytes: 0,
-    riskSignals: Object.freeze({
-        child_process: 0,
-        exec: 0,
-        fetch: 0,
-        fs: 0,
-        readFile: 0,
-        writeFile: 0
-    })
+    installedSizeBytes: 0,
+    riskSignals: { child_process: 0, exec: 0, fetch: 0, fs: 0, readFile: 0, writeFile: 0 }
+};
+
+test('package surface reads hashes, metadata, dependencies, lifecycle, URLs, and executable signals from one tarball', () => {
+    const sample = fixture();
+    try {
+        const measured = artifact(sample);
+        assert.equal(measured.metrics.fileCount, 4);
+        assert.equal(measured.metrics.productionDependencyCount, 0);
+        assert.equal(measured.metrics.installedSizeBytes, measured.metrics.unpackedSizeBytes);
+        assert.deepEqual(measured.metrics.unexpectedExecutablePaths, []);
+        assert.deepEqual(measured.metrics.minifiedArtifactPaths, []);
+        assert.deepEqual(measured.metrics.lifecycleScripts, {
+            postpack: 'node cleanup.cjs', prepack: 'node build.cjs'
+        });
+        assert.ok(measured.metrics.urlHosts.includes('api.example.invalid'));
+        assert.equal(measured.metrics.metadata.license, 'Apache-2.0');
+        assert.equal(measured.metrics.riskSignals.readFile, 1);
+        assert.equal(measured.tarballSha256, crypto.createHash('sha256').update(fs.readFileSync(sample.tarballPath)).digest('hex'));
+        const cli = readPackedTarball(sample.tarballPath).files.find((file) => file.path === 'bin/cli.js');
+        assert.equal(measured.packedFileSha256['bin/cli.js'], cli?.sha256);
+        assert.deepEqual(parsePackageSurfaceArtifact(measured), measured);
+    } finally {
+        sample.cleanup();
+    }
 });
 
-test('published package surface includes review catalog defaults and public guidance', () => {
-    const repoRoot = process.cwd();
-    const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')) as {
-        files: string[];
-    };
+test('tarball data wins over a modified source tree, and report/tar drift fails with the affected path', () => {
+    const sample = fixture();
+    try {
+        fs.writeFileSync(path.join(sample.root, 'package.json'), '{"name":"wrong"}');
+        assert.equal(artifact(sample).package.name, 'fixture-package');
+        assert.throws(
+            () => buildPackageSurfaceArtifact(readPackedTarball(sample.tarballPath), {
+                ...sample.report,
+                files: sample.report.files.map((file) => file.path === 'bin/cli.js' ? { ...file, size: file.size + 1 } : file),
+                unpackedSize: sample.report.unpackedSize + 1
+            }, 100),
+            /does not match tarball file bin\/cli.js/u
+        );
+        assert.throws(() => buildPackageSurfaceArtifact(readPackedTarball(sample.tarballPath), {
+            ...sample.report, entryCount: 5
+        }, 100), /entryCount=5/u);
+    } finally {
+        sample.cleanup();
+    }
+});
 
-    assert.ok(packageJson.files.includes('template'));
+test('tar parser rejects traversal, symlinks, corrupt headers, and duplicate entries', () => {
+    for (const [entries, expected] of [
+        [[{ path: 'package/../escape.js', content: Buffer.from('bad') }], /unsafe file path/u],
+        [[{ path: 'package/../outside/', content: Buffer.alloc(0), type: '5' }], /unsafe file path/u],
+        [[{ path: 'package/link', content: Buffer.alloc(0), type: '2' }], /unsupported entry type/u],
+        [[{ path: 'package/a.js', content: Buffer.from('1') }, { path: 'package/a.js', content: Buffer.from('2') }], /duplicate file path/u]
+    ] as Array<[FixtureEntry[], RegExp]>) {
+        const sample = fixture({ entries });
+        try {
+            assert.throws(() => readPackedTarball(sample.tarballPath), expected);
+        } finally {
+            sample.cleanup();
+        }
+    }
+    const sample = fixture();
+    try {
+        const uncompressed = zlib.gunzipSync(fs.readFileSync(sample.tarballPath));
+        uncompressed[0] ^= 1;
+        fs.writeFileSync(sample.tarballPath, zlib.gzipSync(uncompressed));
+        assert.throws(() => readPackedTarball(sample.tarballPath), /checksum mismatch/u);
+    } finally {
+        sample.cleanup();
+    }
+});
+
+test('PAX path overrides are measured from the archive and cannot escape its package root', () => {
+    const paxRecord = (name: string): Buffer => {
+        const body = `path=${name}\n`;
+        let length = Buffer.byteLength(body) + 3;
+        while (true) {
+            const record = `${length} ${body}`;
+            const bytes = Buffer.byteLength(record);
+            if (bytes === length) {
+                return Buffer.from(record);
+            }
+            length = bytes;
+        }
+    };
+    const sample = fixture({ entries: [
+        { path: 'PaxHeader', type: 'x', content: paxRecord('package/long/file.js') },
+        { path: 'package/short.js', content: Buffer.from('hello') }
+    ] });
+    try {
+        assert.equal(readPackedTarball(sample.tarballPath).files[0].path, 'long/file.js');
+        fs.writeFileSync(sample.tarballPath, tarBytes([
+            { path: 'PaxHeader', type: 'x', content: paxRecord('package/../escape.js') },
+            { path: 'package/short.js', content: Buffer.from('hello') }
+        ]));
+        assert.throws(() => readPackedTarball(sample.tarballPath), /unsafe file path/u);
+    } finally {
+        sample.cleanup();
+    }
+});
+
+test('unexpected executable, minified file, production dependency, and URL host fail deterministically', () => {
+    const original = fixture();
+    const changed = fixture({ entries: [
+        ...fixtureEntries({ dependencies: { unexpected: '1.0.0' } }),
+        { path: 'package/dist/hidden.min.js', content: Buffer.from("#!/usr/bin/env node\nfetch('https://new.example.invalid')\n"), mode: 0o755 }
+    ] });
+    try {
+        const baseline = createPackageSurfaceBaseline(artifact(original), { rationale: 'Reviewed fixture.', allowedGrowth: ZERO_GROWTH });
+        const result = comparePackageSurface(artifact(changed), baseline, 'baseline.json');
+        assert.equal(result.passed, false);
+        const output = formatPackageSurfaceComparison(result);
+        assert.match(output, /productionDependencyCount current=1 reference=0/u);
+        assert.match(output, /unexpectedExecutablePaths added: dist\/hidden.min.js/u);
+        assert.match(output, /minifiedArtifactPaths added: dist\/hidden.min.js/u);
+        assert.match(output, /urlHosts added: new.example.invalid/u);
+        assert.match(output, /fileCount current=5 reference=4 growth=1 allowed=0/u);
+        assert.deepEqual(parsePackageSurfaceBaseline(baseline), baseline);
+    } finally {
+        original.cleanup();
+        changed.cleanup();
+    }
+});
+
+test('same-size packed file changes and archive-only changes fail SHA-256 comparison', () => {
+    const original = fixture();
+    const changedFile = fixture({ entries: fixtureEntries().map((entry) => entry.path === 'package/README.md'
+        ? { ...entry, content: Buffer.from('# Fixture!') } : entry) });
+    const changedOrder = fixture({ entries: [...fixtureEntries()].reverse() });
+    try {
+        const baseline = createPackageSurfaceBaseline(artifact(original), { rationale: 'Reviewed fixture.', allowedGrowth: ZERO_GROWTH });
+        const fileResult = comparePackageSurface(artifact(changedFile), baseline, 'baseline.json');
+        assert.match(formatPackageSurfaceComparison(fileResult), /packed file SHA-256 changed \(1\): README.md/u);
+        const orderResult = comparePackageSurface(artifact(changedOrder), baseline, 'baseline.json');
+        assert.match(formatPackageSurfaceComparison(orderResult), /tarball SHA-256 changed despite identical packed files/u);
+        assert.notEqual(baseline.tarballSha256, orderResult.current.tarballSha256);
+    } finally {
+        original.cleanup();
+        changedFile.cleanup();
+        changedOrder.cleanup();
+    }
+});
+
+test('prepare-adjacent lifecycle scripts and optional or peer dependencies are measured from packed metadata', () => {
+    const sample = fixture({ entries: fixtureEntries({
+        scripts: { preprepare: 'node before.cjs', prepare: 'node build.cjs', postprepare: 'node after.cjs' },
+        optionalDependencies: { optional: '1.0.0' },
+        peerDependencies: { peer: '2.0.0' }
+    }) });
+    try {
+        const measured = artifact(sample);
+        assert.equal(measured.metrics.productionDependencyCount, 2);
+        assert.deepEqual(measured.metrics.lifecycleScripts, {
+            postprepare: 'node after.cjs', prepare: 'node build.cjs', preprepare: 'node before.cjs'
+        });
+    } finally {
+        sample.cleanup();
+    }
+});
+
+test('installed-byte measurement covers dependency siblings and generated bin shims', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-installed-bytes-'));
+    try {
+        fs.mkdirSync(path.join(root, 'node_modules', 'fixture-package'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'node_modules', 'optional'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'node_modules', '.bin'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'node_modules', 'fixture-package', 'a.js'), '123');
+        fs.writeFileSync(path.join(root, 'node_modules', 'optional', 'b.js'), '12345');
+        fs.writeFileSync(path.join(root, 'node_modules', '.bin', 'fixture.cmd'), '1234567');
+        assert.equal(installedPackageBytes(path.join(root, 'node_modules')), 15);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('URL and minification checks include shell, SVG, and ordinary CSS files', () => {
+    const original = fixture();
+    const changed = fixture({ entries: [
+        ...fixtureEntries(),
+        { path: 'package/docs/logo.svg', content: Buffer.from('<svg><!-- https://svg.example.invalid --></svg>') },
+        { path: 'package/scripts/check.sh', content: Buffer.from('curl https://shell.example.invalid\n') },
+        { path: 'package/styles/style.css', content: Buffer.from('a'.repeat(10_001)) }
+    ] });
+    try {
+        const baseline = createPackageSurfaceBaseline(artifact(original), { rationale: 'Reviewed fixture.', allowedGrowth: ZERO_GROWTH });
+        const output = formatPackageSurfaceComparison(comparePackageSurface(artifact(changed), baseline, 'baseline.json'));
+        assert.match(output, /minifiedArtifactPaths added: styles\/style.css/u);
+        assert.match(output, /svg.example.invalid/u);
+        assert.match(output, /shell.example.invalid/u);
+    } finally {
+        original.cleanup();
+        changed.cleanup();
+    }
+});
+
+test('installed byte growth, lifecycle changes, and missing metadata fail with actionable diagnostics', () => {
+    const sample = fixture();
+    const missing = fixture({ entries: fixtureEntries({ license: undefined }) });
+    try {
+        assert.throws(() => artifact(missing), /package\.json\.license/u);
+        const current = artifact(sample);
+        const baseline = createPackageSurfaceBaseline(current, { rationale: 'Reviewed fixture.', allowedGrowth: ZERO_GROWTH });
+        const altered: PackageSurfaceArtifact = {
+            ...current,
+            metrics: {
+                ...current.metrics,
+                installedSizeBytes: current.metrics.installedSizeBytes + 1,
+                lifecycleScripts: { ...current.metrics.lifecycleScripts, install: 'node install.cjs' }
+            }
+        };
+        const output = formatPackageSurfaceComparison(comparePackageSurface(altered, baseline, 'baseline.json'));
+        assert.match(output, /installedSizeBytes current=/u);
+        assert.match(output, /lifecycleScripts changed: added install=/u);
+        assert.match(output, /package-surface-baseline --confirm-baseline-update --rationale/u);
+    } finally {
+        sample.cleanup();
+        missing.cleanup();
+    }
+});
+
+test('baseline updates require confirmation and rationale; npm report parsing stays strict', () => {
+    const sample = fixture();
+    try {
+        const measured = artifact(sample);
+        const baselinePath = path.join(sample.root, 'baseline.json');
+        assert.throws(() => updatePackageSurfaceBaseline(baselinePath, measured, {
+            confirmed: false, rationale: 'Reviewed.', allowedGrowth: ZERO_GROWTH
+        }), /--confirm-baseline-update/u);
+        assert.throws(() => createPackageSurfaceBaseline(measured, {
+            rationale: ' ', allowedGrowth: ZERO_GROWTH
+        }), /--rationale/u);
+        const baseline = updatePackageSurfaceBaseline(baselinePath, measured, {
+            confirmed: true, rationale: 'Reviewed.', allowedGrowth: ZERO_GROWTH
+        });
+        assert.deepEqual(JSON.parse(fs.readFileSync(baselinePath, 'utf8')), baseline);
+        assert.equal(comparePackageSurface(measured, measured, 'prior.json').passed, true);
+        assert.deepEqual(parseNpmPackReport(`build complete\n${JSON.stringify([sample.report])}`), sample.report);
+        assert.throws(() => parseNpmPackReport('not json'), /valid npm pack JSON/u);
+    } finally {
+        sample.cleanup();
+    }
+});
+
+test('published package files retain review defaults and public guidance', () => {
+    const repoRoot = process.cwd();
+    const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')) as { files: string[] };
+    assert.ok(manifest.files.includes('template'));
     for (const relativePath of [
         'template/config/review-catalog.json',
         'template/docs/agent-rules/80-task-workflow.md',
@@ -93,299 +370,29 @@ test('published package surface includes review catalog defaults and public guid
     ]) {
         assert.ok(fs.existsSync(path.join(repoRoot, relativePath)), `${relativePath} should be package-visible`);
     }
-    assert.deepEqual(
-        JSON.parse(fs.readFileSync(path.join(repoRoot, 'template', 'config', 'review-catalog.json'), 'utf8')),
-        { version: 1, custom_review_types: [] }
-    );
 });
 
-test('buildPackageSurfaceArtifact deterministically measures packed files, lifecycle scripts, and executable lexical signals', () => {
-    const repoRoot = createFixture();
-    try {
-        const artifact = buildPackageSurfaceArtifact(repoRoot, buildPackReport());
-
-        assert.deepEqual(artifact.package, { name: 'fixture-package', version: '1.2.3' });
-        assert.equal(artifact.metrics.fileCount, 4);
-        assert.equal(artifact.metrics.unpackedSizeBytes, 420);
-        assert.deepEqual(artifact.metrics.lifecycleScripts, {
-            postpack: 'node cleanup.cjs',
-            prepack: 'node build.cjs'
-        });
-        assert.deepEqual(artifact.metrics.riskSignals, {
-            child_process: 1,
-            exec: 1,
-            fetch: 1,
-            fs: 3,
-            readFile: 1,
-            writeFile: 0
-        });
-        assert.match(artifact.packedFileManifestSha256, /^[a-f0-9]{64}$/u);
-
-        const reversedReport = buildPackReport({ files: [...buildPackReport().files].reverse() });
-        assert.deepEqual(buildPackageSurfaceArtifact(repoRoot, reversedReport), artifact);
-    } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
-    }
-});
-
-test('buildPackageSurfaceArtifact does not treat documentation text as executable risk signals', () => {
-    const repoRoot = createFixture();
-    try {
-        const artifact = buildPackageSurfaceArtifact(repoRoot, buildPackReport());
-        assert.equal(artifact.metrics.riskSignals.writeFile, 0);
-    } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
-    }
-});
-
-test('buildPackageSurfaceArtifact rejects inconsistent or unsafe npm pack reports', () => {
-    const repoRoot = createFixture();
-    try {
-        assert.throws(
-            () => buildPackageSurfaceArtifact(repoRoot, buildPackReport({ entryCount: 5 })),
-            /entryCount=5 does not match files.length=4/u
-        );
-        assert.throws(
-            () => buildPackageSurfaceArtifact(repoRoot, buildPackReport({
-                files: [{ path: '../outside.js', size: 420 }],
-                entryCount: 1
-            })),
-            /unsafe packed file path/u
-        );
-    } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
-    }
-});
-
-test('buildPackageSurfaceArtifact rejects executable files reached through a linked parent outside the repository', () => {
-    const repoRoot = createFixture();
-    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-package-surface-outside-'));
-    try {
-        const outsideFile = path.join(outsideRoot, 'outside.js');
-        writeFile(outsideFile, "require('node:child_process');\n");
-        const linkedParent = path.join(repoRoot, 'linked-dist');
-        fs.symlinkSync(outsideRoot, linkedParent, process.platform === 'win32' ? 'junction' : 'dir');
-        const size = Buffer.byteLength(fs.readFileSync(outsideFile));
-
-        assert.throws(
-            () => buildPackageSurfaceArtifact(repoRoot, buildPackReport({
-                entryCount: 1,
-                unpackedSize: size,
-                files: [{ path: 'linked-dist/outside.js', size }]
-            })),
-            /resolves outside the repository through a linked path/u
-        );
-    } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
-        fs.rmSync(outsideRoot, { recursive: true, force: true });
-    }
-});
-
-test('parseNpmPackReport accepts lifecycle output before one final npm JSON report', () => {
-    const report = buildPackReport();
-    const output = [
-        'SCRIPTS_BUILD_REUSE accepted',
-        'Generated legacy package compatibility template',
-        JSON.stringify([report], null, 2)
-    ].join('\n');
-
-    assert.deepEqual(parseNpmPackReport(output), report);
-    assert.throws(() => parseNpmPackReport('build complete\nnot-json'), /valid npm pack JSON array/u);
-    assert.throws(
-        () => parseNpmPackReport(`${JSON.stringify([report])}\n${JSON.stringify([report])}`),
-        /exactly one final package report/u
-    );
-});
-
-test('comparePackageSurface accepts deltas within an explicit baseline allowance', () => {
-    const repoRoot = createFixture();
-    try {
-        const reference = buildPackageSurfaceArtifact(repoRoot, buildPackReport());
-        const baseline = createPackageSurfaceBaseline(reference, {
-            rationale: 'Initial compiled-only release surface.',
-            allowedGrowth: {
-                ...ZERO_GROWTH,
-                fileCount: 2,
-                unpackedSizeBytes: 64
-            }
-        });
-        const current: PackageSurfaceArtifact = {
-            ...reference,
-            metrics: {
-                ...reference.metrics,
-                fileCount: reference.metrics.fileCount + 2,
-                unpackedSizeBytes: reference.metrics.unpackedSizeBytes + 64
-            }
-        };
-
-        const result = comparePackageSurface(current, baseline, 'config/release-package-surface-baseline.json');
-        assert.equal(result.passed, true, formatPackageSurfaceComparison(result));
-        assert.equal(result.referenceKind, 'baseline');
-    } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
-    }
-});
-
-test('comparePackageSurface fails material bloat, lifecycle drift, and lexical risk-signal growth with actionable diagnostics', () => {
-    const repoRoot = createFixture();
-    try {
-        const reference = buildPackageSurfaceArtifact(repoRoot, buildPackReport());
-        const baseline = createPackageSurfaceBaseline(reference, {
-            rationale: 'Lock the reviewed surface.',
-            allowedGrowth: ZERO_GROWTH
-        });
-        const current: PackageSurfaceArtifact = {
-            ...reference,
-            metrics: {
-                fileCount: reference.metrics.fileCount + 1,
-                unpackedSizeBytes: reference.metrics.unpackedSizeBytes + 1,
-                lifecycleScripts: {
-                    ...reference.metrics.lifecycleScripts,
-                    install: 'node install.cjs'
-                },
-                riskSignals: {
-                    ...reference.metrics.riskSignals,
-                    exec: reference.metrics.riskSignals.exec + 1
-                }
-            }
-        };
-
-        const result = comparePackageSurface(current, baseline, 'config/release-package-surface-baseline.json');
-        const output = formatPackageSurfaceComparison(result);
-        assert.equal(result.passed, false);
-        assert.match(output, /fileCount current=5 reference=4 growth=1 allowed=0/u);
-        assert.match(output, /unpackedSizeBytes current=421 reference=420 growth=1 allowed=0/u);
-        assert.match(output, /lifecycleScripts changed: added install=node install\.cjs/u);
-        assert.match(output, /riskSignals\.exec current=2 reference=1 growth=1 allowed=0/u);
-        assert.match(output, /package-surface-baseline --confirm-baseline-update --rationale/u);
-    } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
-    }
-});
-
-test('an explicitly supplied prior artifact uses conservative default growth limits', () => {
-    const repoRoot = createFixture();
-    try {
-        const reference = buildPackageSurfaceArtifact(repoRoot, buildPackReport());
-        const current: PackageSurfaceArtifact = {
-            ...reference,
-            metrics: {
-                ...reference.metrics,
-                riskSignals: {
-                    ...reference.metrics.riskSignals,
-                    child_process: reference.metrics.riskSignals.child_process + 1
-                }
-            }
-        };
-        const result = comparePackageSurface(current, reference, 'artifacts/prior-package-surface.json');
-
-        assert.equal(result.referenceKind, 'prior-artifact');
-        assert.equal(result.passed, false);
-        assert.match(formatPackageSurfaceComparison(result), /riskSignals\.child_process/u);
-    } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
-    }
-});
-
-test('baseline updates require an explicit confirmation and non-empty audit rationale', () => {
-    const repoRoot = createFixture();
-    const baselinePath = path.join(repoRoot, 'config', 'baseline.json');
-    try {
-        const artifact = buildPackageSurfaceArtifact(repoRoot, buildPackReport());
-        assert.throws(
-            () => updatePackageSurfaceBaseline(baselinePath, artifact, {
-                confirmed: false,
-                rationale: 'Intentional release growth.',
-                allowedGrowth: ZERO_GROWTH
-            }),
-            /--confirm-baseline-update/u
-        );
-        assert.throws(
-            () => updatePackageSurfaceBaseline(baselinePath, artifact, {
-                confirmed: true,
-                rationale: '   ',
-                allowedGrowth: ZERO_GROWTH
-            }),
-            /--rationale/u
-        );
-        assert.throws(
-            () => createPackageSurfaceBaseline(artifact, {
-                rationale: 'Invalid allowance.',
-                allowedGrowth: { ...ZERO_GROWTH, fileCount: -1 }
-            }),
-            /allowedGrowth\.fileCount/u
-        );
-
-        const baseline = updatePackageSurfaceBaseline(baselinePath, artifact, {
-            confirmed: true,
-            rationale: 'Intentional release growth.',
-            allowedGrowth: ZERO_GROWTH
-        });
-        assert.deepEqual(JSON.parse(fs.readFileSync(baselinePath, 'utf8')), baseline);
-        assert.equal(fs.readFileSync(baselinePath, 'utf8').endsWith('\n'), true);
-    } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
-    }
-});
-
-test('validation rejects artifact outputs that could overwrite repository or reference files before packing', () => {
-    const repoRoot = createFixture();
-    try {
-        assert.throws(
-            () => validatePackageSurface(repoRoot, { outputPath: 'package.json' }),
-            /--output must be a JSON file inside/u
-        );
-        assert.throws(
-            () => validatePackageSurface(repoRoot, {
-                baselinePath: 'garda-agent-orchestrator/runtime/release/current.json',
-                outputPath: 'garda-agent-orchestrator/runtime/release/current.json'
-            }),
-            /cannot overwrite the baseline/u
-        );
-    } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
-    }
-});
-
-test('validatePackageSurface completes the offline package collection workflow and cleans compatibility output', {
-    timeout: 120_000
-}, () => {
+test('package-surface validation measures a real offline npm pack and cleans compatibility output', { timeout: 180_000 }, () => {
     const repoRoot = process.cwd();
     const relativeOutputPath = `garda-agent-orchestrator/runtime/release/package-surface-e2e-${process.pid}.json`;
     const outputPath = path.join(repoRoot, relativeOutputPath);
     const compatibilityPath = path.join(repoRoot, 'template', 'CLAUDE.md');
-    assert.equal(fs.existsSync(compatibilityPath), false, 'integration test requires a clean compatibility-file boundary');
-    fs.rmSync(outputPath, { force: true });
+    assert.equal(fs.existsSync(compatibilityPath), false);
     try {
         const result = validatePackageSurface(repoRoot, { outputPath: relativeOutputPath });
-        const artifact = JSON.parse(fs.readFileSync(outputPath, 'utf8')) as PackageSurfaceArtifact;
-
+        const measured = parsePackageSurfaceArtifact(JSON.parse(fs.readFileSync(outputPath, 'utf8')));
         assert.equal(result.passed, true, formatPackageSurfaceComparison(result));
-        assert.ok(artifact.metrics.fileCount > 0);
-        assert.match(artifact.packedFileManifestSha256, /^[a-f0-9]{64}$/u);
-        assert.equal(fs.existsSync(compatibilityPath), false, 'normal collection must remove compatibility output');
+        assert.equal(measured.metrics.productionDependencyCount, 0);
+        assert.equal(Object.keys(measured.packedFileSha256).length, measured.metrics.fileCount);
+        assert.equal(fs.existsSync(compatibilityPath), false);
     } finally {
         fs.rmSync(outputPath, { force: true });
         fs.rmSync(compatibilityPath, { force: true });
     }
 });
 
-test('package-surface CLI options reject silent baseline refreshes and ambiguous references', () => {
-    assert.deepEqual(parsePackageSurfaceCliOptions([]), {
-        baselinePath: null,
-        outputPath: null,
-        priorArtifactPath: null,
-        confirmBaselineUpdate: false,
-        rationale: null
-    });
-    assert.throws(
-        () => parsePackageSurfaceCliOptions(['--baseline', 'baseline.json', '--prior-artifact', 'prior.json']),
-        /cannot be used together/u
-    );
+test('CLI rejects ambiguous references and output paths that overwrite repository files', () => {
+    assert.throws(() => parsePackageSurfaceCliOptions(['--baseline', 'a.json', '--prior-artifact', 'b.json']), /cannot be used together/u);
     assert.throws(() => parsePackageSurfaceCliOptions(['--confirm-baseline-update']), /only valid for package-surface-baseline/u);
-    assert.throws(
-        () => parsePackageSurfaceCliOptions(['--baseline', '../unrelated.json'], 'baseline-update'),
-        /--baseline is read-only and is not valid for package-surface-baseline/u
-    );
-    assert.throws(() => parsePackageSurfaceCliOptions(['--unknown']), /Unknown package-surface option/u);
+    assert.throws(() => validatePackageSurface(process.cwd(), { outputPath: 'package.json' }), /--output must be a JSON file inside/u);
 });

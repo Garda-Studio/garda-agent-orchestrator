@@ -19,6 +19,7 @@ import {
 export const DEFAULT_PACKAGE_SURFACE_ALLOWED_GROWTH: PackageSurfaceAllowedGrowth = Object.freeze({
     fileCount: 10,
     unpackedSizeBytes: 256 * 1024,
+    installedSizeBytes: 256 * 1024,
     riskSignals: Object.freeze({
         child_process: 0,
         exec: 0,
@@ -68,6 +69,7 @@ function cloneAllowedGrowth(value: PackageSurfaceAllowedGrowth): PackageSurfaceA
     return {
         fileCount: value.fileCount,
         unpackedSizeBytes: value.unpackedSizeBytes,
+        installedSizeBytes: value.installedSizeBytes,
         riskSignals: { ...value.riskSignals }
     };
 }
@@ -76,6 +78,7 @@ function assertAllowedGrowth(value: PackageSurfaceAllowedGrowth): void {
     const entries: Array<readonly [string, number]> = [
         ['fileCount', value.fileCount],
         ['unpackedSizeBytes', value.unpackedSizeBytes],
+        ['installedSizeBytes', value.installedSizeBytes],
         ...PACKAGE_SURFACE_RISK_SIGNALS.map(
             (signal): readonly [string, number] => [`riskSignals.${signal}`, value.riskSignals[signal]]
         )
@@ -99,12 +102,10 @@ export function createPackageSurfaceBaseline(
     return {
         schemaVersion: PACKAGE_SURFACE_SCHEMA_VERSION,
         package: { ...artifact.package },
-        metrics: {
-            fileCount: artifact.metrics.fileCount,
-            unpackedSizeBytes: artifact.metrics.unpackedSizeBytes,
-            lifecycleScripts: { ...artifact.metrics.lifecycleScripts },
-            riskSignals: { ...artifact.metrics.riskSignals }
-        },
+        packedFileManifestSha256: artifact.packedFileManifestSha256,
+        tarballSha256: artifact.tarballSha256,
+        packedFileSha256: { ...artifact.packedFileSha256 },
+        metrics: structuredClone(artifact.metrics),
         allowedGrowth: cloneAllowedGrowth(options.allowedGrowth),
         rationale
     };
@@ -155,6 +156,27 @@ export function comparePackageSurface(
     if (current.package.name !== reference.package.name) {
         violations.push(`package name current=${current.package.name} reference=${reference.package.name}`);
     }
+    const changedFiles = Object.keys(reference.packedFileSha256).filter((file) =>
+        Object.hasOwn(current.packedFileSha256, file)
+        && current.packedFileSha256[file] !== reference.packedFileSha256[file]
+    ).sort(compareText);
+    if (changedFiles.length > 0) {
+        violations.push(`packed file SHA-256 changed (${changedFiles.length}): ${changedFiles.slice(0, 20).join(', ')}`);
+    }
+    const removedFiles = Object.keys(reference.packedFileSha256).filter((file) =>
+        !Object.hasOwn(current.packedFileSha256, file)
+    ).sort(compareText);
+    if (removedFiles.length > 0) {
+        violations.push(`packed files removed (${removedFiles.length}): ${removedFiles.slice(0, 20).join(', ')}`);
+    }
+    const identicalFileHashes = changedFiles.length === 0 && removedFiles.length === 0
+        && Object.keys(current.packedFileSha256).length === Object.keys(reference.packedFileSha256).length;
+    if (identicalFileHashes && current.packedFileManifestSha256 !== reference.packedFileManifestSha256) {
+        violations.push('packed file manifest SHA-256 changed despite identical file hashes.');
+    }
+    if (identicalFileHashes && current.tarballSha256 !== reference.tarballSha256) {
+        violations.push(`tarball SHA-256 changed despite identical packed files: current=${current.tarballSha256} reference=${reference.tarballSha256}`);
+    }
     pushGrowthViolation(
         violations,
         'fileCount',
@@ -169,6 +191,29 @@ export function comparePackageSurface(
         reference.metrics.unpackedSizeBytes,
         allowedGrowth.unpackedSizeBytes
     );
+    pushGrowthViolation(
+        violations,
+        'installedSizeBytes',
+        current.metrics.installedSizeBytes,
+        reference.metrics.installedSizeBytes,
+        allowedGrowth.installedSizeBytes
+    );
+    if (current.metrics.productionDependencyCount !== reference.metrics.productionDependencyCount) {
+        violations.push(`productionDependencyCount current=${current.metrics.productionDependencyCount} reference=${reference.metrics.productionDependencyCount}`);
+    }
+    if (JSON.stringify(current.metrics.metadata) !== JSON.stringify(reference.metrics.metadata)) {
+        violations.push(`required package metadata changed: current=${JSON.stringify(current.metrics.metadata)} reference=${JSON.stringify(reference.metrics.metadata)}`);
+    }
+    for (const [label, currentPaths, referencePaths] of [
+        ['unexpectedExecutablePaths', current.metrics.unexpectedExecutablePaths, reference.metrics.unexpectedExecutablePaths],
+        ['minifiedArtifactPaths', current.metrics.minifiedArtifactPaths, reference.metrics.minifiedArtifactPaths],
+        ['urlHosts', current.metrics.urlHosts, reference.metrics.urlHosts]
+    ] as const) {
+        const added = currentPaths.filter((item) => !referencePaths.includes(item));
+        if (added.length > 0) {
+            violations.push(`${label} added: ${added.join(', ')}`);
+        }
+    }
     const lifecycleChanges = compareLifecycleScripts(
         current.metrics.lifecycleScripts,
         reference.metrics.lifecycleScripts
@@ -203,7 +248,15 @@ export function formatPackageSurfaceComparison(result: PackageSurfaceComparisonR
         `Reference: ${result.referenceKind} ${result.referencePath}`,
         `FileCount: ${result.current.metrics.fileCount}`,
         `UnpackedSizeBytes: ${result.current.metrics.unpackedSizeBytes}`,
+        `InstalledSizeBytes: ${result.current.metrics.installedSizeBytes}`,
+        `ProductionDependencies: ${result.current.metrics.productionDependencyCount}`,
         `LifecycleScripts: ${JSON.stringify(result.current.metrics.lifecycleScripts)}`,
+        `UnexpectedExecutables: ${JSON.stringify(result.current.metrics.unexpectedExecutablePaths)}`,
+        `MinifiedArtifacts: ${JSON.stringify(result.current.metrics.minifiedArtifactPaths)}`,
+        `KnownUrlHosts: ${JSON.stringify(result.current.metrics.urlHosts)}`,
+        `RequiredMetadata: ${JSON.stringify(result.current.metrics.metadata)}`,
+        `TarballSha256: ${result.current.tarballSha256}`,
+        `PackedFileManifestSha256: ${result.current.packedFileManifestSha256}`,
         `RiskSignals: ${JSON.stringify(result.current.metrics.riskSignals)}`
     ];
     for (const violation of result.violations) {
@@ -268,8 +321,70 @@ function parseMetrics(value: unknown, label: string): PackageSurfaceMetrics {
     return {
         fileCount: requireNonNegativeInteger(value, 'fileCount', label),
         unpackedSizeBytes: requireNonNegativeInteger(value, 'unpackedSizeBytes', label),
+        installedSizeBytes: requireNonNegativeInteger(value, 'installedSizeBytes', label),
+        productionDependencyCount: requireNonNegativeInteger(value, 'productionDependencyCount', label),
         lifecycleScripts: parseLifecycleScripts(value.lifecycleScripts, `${label}.lifecycleScripts`),
+        unexpectedExecutablePaths: parseStringList(value.unexpectedExecutablePaths, `${label}.unexpectedExecutablePaths`),
+        minifiedArtifactPaths: parseStringList(value.minifiedArtifactPaths, `${label}.minifiedArtifactPaths`),
+        urlHosts: parseStringList(value.urlHosts, `${label}.urlHosts`),
+        metadata: parseMetadata(value.metadata, `${label}.metadata`),
         riskSignals: parseRiskSignals(value.riskSignals, `${label}.riskSignals`)
+    };
+}
+
+function parseStringList(value: unknown, label: string): string[] {
+    if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || !item.trim())) {
+        throw new Error(`${label} must be an array of non-empty strings.`);
+    }
+    const items = value as string[];
+    if (new Set(items).size !== items.length) {
+        throw new Error(`${label} contains duplicate entries.`);
+    }
+    return [...items];
+}
+
+function parseStringMap(value: unknown, label: string): Record<string, string> {
+    if (!isRecord(value)) {
+        throw new Error(`${label} must be an object.`);
+    }
+    for (const [key, item] of Object.entries(value)) {
+        if (typeof item !== 'string' || !item.trim()) {
+            throw new Error(`${label}.${key} must be a non-empty string.`);
+        }
+    }
+    return Object.fromEntries(Object.entries(value)) as Record<string, string>;
+}
+
+function parseSha256(value: unknown, label: string): string {
+    if (typeof value !== 'string' || !/^[a-f0-9]{64}$/u.test(value)) {
+        throw new Error(`${label} must be a lowercase SHA-256 digest.`);
+    }
+    return value;
+}
+
+function parsePackedFileSha256(value: unknown, label: string): Record<string, string> {
+    const hashes = parseStringMap(value, label);
+    for (const [file, digest] of Object.entries(hashes)) {
+        parseSha256(digest, `${label}.${file}`);
+    }
+    return hashes;
+}
+
+function parseMetadata(value: unknown, label: string): PackageSurfaceMetrics['metadata'] {
+    if (!isRecord(value)) {
+        throw new Error(`${label} must be an object.`);
+    }
+    return {
+        description: requireString(value, 'description', label),
+        author: requireString(value, 'author', label),
+        license: requireString(value, 'license', label),
+        type: requireString(value, 'type', label),
+        repository: requireString(value, 'repository', label),
+        homepage: requireString(value, 'homepage', label),
+        bugs: requireString(value, 'bugs', label),
+        funding: requireString(value, 'funding', label),
+        bin: parseStringMap(value.bin, `${label}.bin`),
+        engines: parseStringMap(value.engines, `${label}.engines`)
     };
 }
 
@@ -294,14 +409,15 @@ export function parsePackageSurfaceArtifact(value: unknown, label = 'package-sur
         throw new Error(`${label} must be an object.`);
     }
     assertSchemaVersion(value, label);
-    const manifestHash = requireString(value, 'packedFileManifestSha256', label);
-    if (!/^[a-f0-9]{64}$/u.test(manifestHash)) {
-        throw new Error(`${label}.packedFileManifestSha256 must be a lowercase SHA-256 digest.`);
-    }
+    const manifestHash = parseSha256(value.packedFileManifestSha256, `${label}.packedFileManifestSha256`);
+    const tarballHash = parseSha256(value.tarballSha256, `${label}.tarballSha256`);
+    const packedFileSha256 = parsePackedFileSha256(value.packedFileSha256, `${label}.packedFileSha256`);
     return {
         schemaVersion: PACKAGE_SURFACE_SCHEMA_VERSION,
         package: parsePackageIdentity(value.package, `${label}.package`),
         packedFileManifestSha256: manifestHash,
+        tarballSha256: tarballHash,
+        packedFileSha256,
         metrics: parseMetrics(value.metrics, `${label}.metrics`)
     };
 }
@@ -317,6 +433,9 @@ export function parsePackageSurfaceBaseline(value: unknown, label = 'package-sur
     return {
         schemaVersion: PACKAGE_SURFACE_SCHEMA_VERSION,
         package: parsePackageIdentity(value.package, `${label}.package`),
+        packedFileManifestSha256: parseSha256(value.packedFileManifestSha256, `${label}.packedFileManifestSha256`),
+        tarballSha256: parseSha256(value.tarballSha256, `${label}.tarballSha256`),
+        packedFileSha256: parsePackedFileSha256(value.packedFileSha256, `${label}.packedFileSha256`),
         metrics: parseMetrics(value.metrics, `${label}.metrics`),
         allowedGrowth: {
             fileCount: requireNonNegativeInteger(value.allowedGrowth, 'fileCount', `${label}.allowedGrowth`),
@@ -324,6 +443,9 @@ export function parsePackageSurfaceBaseline(value: unknown, label = 'package-sur
                 value.allowedGrowth,
                 'unpackedSizeBytes',
                 `${label}.allowedGrowth`
+            ),
+            installedSizeBytes: requireNonNegativeInteger(
+                value.allowedGrowth, 'installedSizeBytes', `${label}.allowedGrowth`
             ),
             riskSignals: parseRiskSignals(
                 value.allowedGrowth.riskSignals,

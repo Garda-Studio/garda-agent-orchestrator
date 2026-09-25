@@ -242,8 +242,9 @@ environment variable can make an assigned version pass readiness.
 
 `npm run validate:package-surface` is the final `release:preflight` step. It builds
 the publish runtime, materializes the same legacy compatibility document used by
-`prepack`, and inspects `npm pack --dry-run --json --ignore-scripts`. It neither
-contacts Socket nor requires a Socket token or any other release-scoring network
+`prepack`, creates a real `npm pack --json --ignore-scripts` tarball, reads its
+contents, and installs that exact archive locally with `--offline --ignore-scripts`.
+It neither contacts Socket nor requires a Socket token or any other release-scoring network
 service. The current deterministic JSON artifact is written to the gitignored
 `garda-agent-orchestrator/runtime/release/package-surface-current.json` path.
 
@@ -251,15 +252,32 @@ The tracked reference is
 `config/release-package-surface-baseline.json`. The comparison contract is:
 
 - `fileCount` and `unpackedSizeBytes` may grow only by the numeric allowances in
-  the baseline. The default reviewed allowances are 10 files and 256 KiB.
+  the baseline. `installedSizeBytes` covers the offline `node_modules` tree,
+  including dependency packages and generated bin shims, and is measured from the offline installation
+  and has its own 256 KiB growth allowance. The default file allowance is 10.
+- Production dependency count includes direct, optional, and peer dependencies.
+  Required package metadata (`description`,
+  author, license, module type, repository, homepage, bugs, funding, bin targets,
+  and engines) must match
+  the reviewed baseline. The packed `package.json` supplies these values.
 - npm lifecycle scripts are recorded as a sorted name-to-command map. Any add,
   removal, or command change fails the comparison.
+- New executable paths (mode or shebang), minified JavaScript/CSS artifacts,
+  and concrete URL hosts in packed text fail until reviewed into the baseline. Declared bin
+  targets and their compiled CLI counterparts are known executable paths.
 - executable `.js`, `.cjs`, `.mjs`, `.ts`, `.cts`, and `.mts` files are scanned
   for the lexical signals `child_process`, `exec`/`execFile` variants, `fetch`,
   `node:fs` or `fs.` use, `readFile` variants, and `writeFile` variants. The
   baseline allows no unreviewed signal-count growth.
-- The sorted packed path-and-size manifest is SHA-256 bound in the current
-  artifact. An explicitly supplied prior artifact can replace the baseline with
+- Each packed file and the exact generated tarball has a SHA-256 digest in the
+  current artifact and tracked baseline. A changed existing file or removed
+  file fails comparison; a tarball byte change with identical packed files also
+  fails. New files remain subject to the file and byte budgets. The sorted
+  packed path, size, and SHA-256 manifest is bound by a separate SHA-256 digest.
+  npm's file report must match the tarball byte
+  for byte on path and size before any metric is accepted. The archive is
+  generated in a temporary directory and removed after measurement. An
+  explicitly supplied prior artifact can replace the baseline with
   `--prior-artifact <path>` and uses the conservative default growth allowances.
 
 These lexical counts are review prompts, not vulnerability findings. A failure

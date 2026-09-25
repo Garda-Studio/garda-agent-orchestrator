@@ -1,4 +1,4 @@
-export const PACKAGE_SURFACE_SCHEMA_VERSION = 1 as const;
+export const PACKAGE_SURFACE_SCHEMA_VERSION = 2 as const;
 
 export const PACKAGE_SURFACE_BASELINE_PATH = 'config/release-package-surface-baseline.json';
 export const PACKAGE_SURFACE_ARTIFACT_PATH = 'garda-agent-orchestrator/runtime/release/package-surface-current.json';
@@ -19,9 +19,11 @@ export const PACKAGE_SURFACE_LIFECYCLE_SCRIPTS = Object.freeze([
     'install',
     'postinstall',
     'postpack',
+    'postprepare',
     'postpublish',
     'preinstall',
     'prepack',
+    'preprepare',
     'prepare',
     'prepublish',
     'prepublishOnly',
@@ -45,7 +47,24 @@ export interface NpmPackReport {
 export interface PackageSurfaceMetrics {
     fileCount: number;
     unpackedSizeBytes: number;
+    installedSizeBytes: number;
+    productionDependencyCount: number;
     lifecycleScripts: Record<string, string>;
+    unexpectedExecutablePaths: string[];
+    minifiedArtifactPaths: string[];
+    urlHosts: string[];
+    metadata: {
+        description: string;
+        author: string;
+        license: string;
+        type: string;
+        repository: string;
+        homepage: string;
+        bugs: string;
+        funding: string;
+        bin: Record<string, string>;
+        engines: Record<string, string>;
+    };
     riskSignals: PackageSurfaceRiskSignals;
 }
 
@@ -56,12 +75,15 @@ export interface PackageSurfaceArtifact {
         version: string;
     };
     packedFileManifestSha256: string;
+    tarballSha256: string;
+    packedFileSha256: Record<string, string>;
     metrics: PackageSurfaceMetrics;
 }
 
 export interface PackageSurfaceAllowedGrowth {
     fileCount: number;
     unpackedSizeBytes: number;
+    installedSizeBytes: number;
     riskSignals: PackageSurfaceRiskSignals;
 }
 
@@ -71,6 +93,9 @@ export interface PackageSurfaceBaseline {
         name: string;
         version: string;
     };
+    packedFileManifestSha256: string;
+    tarballSha256: string;
+    packedFileSha256: Record<string, string>;
     metrics: PackageSurfaceMetrics;
     allowedGrowth: PackageSurfaceAllowedGrowth;
     rationale: string;
