@@ -32,6 +32,8 @@ import {
 } from './release-metadata';
 
 const TRUSTED_RELEASE_TAG_HISTORY_STEP_SHA256 = 'dd86883aee9e6eef46c76a284d9a90431073efaecdd74adcce97f4e53223b470';
+// Hash the source workflow before action-reference normalization so the immutable pins remain bound.
+const TRUSTED_SBOM_WORKFLOW_CONTRACT_SHA256 = '2d88c5db2ead8b460476af6b9539a7a8544c25f16bb4376083e82ff2687db05c';
 const REVIEWED_WORKFLOW_ACTION_PINS: Readonly<Record<string, { version: string; readinessReference: string }>> = {
     'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0': {
         version: 'v7.0.0',
@@ -103,6 +105,29 @@ const TRUSTED_GITLEAKS_JOB_CONTRACT = [
     '    - name: Scan for secrets',
     '      shell: bash',
     '      run: gitleaks git --config .gitleaks.toml --redact --exit-code 1 .'
+].join('\n');
+
+const TRUSTED_SBOM_IDENTITY_STEP_CONTRACT = [
+    '- name: Record SBOM toolchain identity',
+    '  shell: bash',
+    '  run: |',
+    "    node - <<'NODE' > sbom-toolchain.json",
+    "    const { createHash } = require('node:crypto');",
+    "    const { readFileSync } = require('node:fs');",
+    "    const manifest = require('./package.json');",
+    "    const lock = require('./package-lock.json');",
+    "    const installed = require('./node_modules/@cyclonedx/cyclonedx-npm/package.json');",
+    "    const locked = lock.packages['node_modules/@cyclonedx/cyclonedx-npm'];",
+    "    if (!locked?.integrity || manifest.devDependencies['@cyclonedx/cyclonedx-npm'] !== installed.version || locked.version !== installed.version) {",
+    "      throw new Error('SBOM generator does not match the locked dev dependency');",
+    '    }',
+    "    const sha256 = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');",
+    '    process.stdout.write(JSON.stringify({',
+    '      generator: { name: installed.name, version: installed.version, integrity: locked.integrity },',
+    "      lockfile_sha256: sha256('package-lock.json'),",
+    "      sbom_sha256: sha256('sbom.cdx.json')",
+    "    }, null, 2) + '\\n');",
+    '    NODE'
 ].join('\n');
 
 function extractReleaseChecklistItems(checklistMarkdown: string, version: string): {
@@ -623,6 +648,7 @@ function validateCiRuntimeMatrixContract(ciWorkflow: string): { passed: boolean;
 function validateSecurityCiBaselineContract(repoRoot: string): { passed: boolean; details: string[] } {
     const securityWorkflow = readWorkflowForReadiness(repoRoot, 'security.yml');
     const secretScanningWorkflow = readWorkflowForReadiness(repoRoot, 'secret-scanning.yml');
+    const sbomSourceWorkflow = readTextFileIfExists(path.join(repoRoot, '.github', 'workflows', 'sbom.yml')) || '';
     const sbomWorkflow = readWorkflowForReadiness(repoRoot, 'sbom.yml');
     const branchProtection = readTextFileIfExists(path.join(repoRoot, 'docs', 'branch-protection.md')) || '';
 
@@ -657,20 +683,21 @@ function validateSecurityCiBaselineContract(repoRoot: string): { passed: boolean
     }
     const uploadArtifactStep = getWorkflowUseStepBlock(sbomWorkflow, 'actions/upload-artifact@v7.0.1');
     const sbomInstallStep = getWorkflowNamedStepBlock(sbomWorkflow, 'Install dependencies');
+    const sbomGenerateStep = getWorkflowNamedStepBlock(sbomWorkflow, 'Generate CycloneDX SBOM');
     const identityStep = getWorkflowNamedStepBlock(sbomWorkflow, 'Record SBOM toolchain identity');
     const sbomRunScripts = extractWorkflowRunScripts(sbomWorkflow);
-    const sbomInstallSafe = sbomInstallStep !== null
-        && extractWorkflowRunScripts(sbomInstallStep)
-            .some((script) => extractExecutableScriptLines(script).includes('npm ci --ignore-scripts --no-fund --no-audit'));
+    const sbomInstallSafe = workflowStructuralBlockContractSha256(sbomInstallStep)
+        === workflowStructuralBlockContractSha256('- name: Install dependencies\n  run: npm ci --ignore-scripts --no-fund --no-audit');
+    const sbomGenerateLocal = workflowStructuralBlockContractSha256(sbomGenerateStep)
+        === workflowStructuralBlockContractSha256('- name: Generate CycloneDX SBOM\n  run: npm run sbom:generate');
     const sbomUploadWith = getYamlKeyBlock(uploadArtifactStep, 'with');
-    const identityRecorded = identityStep !== null
-        && extractWorkflowRunScripts(identityStep).some((script) => scriptHasExecutableCommand(script, "node - <<'NODE' > sbom-toolchain.json"))
-        && identityStep.includes("lockfile_sha256: sha256('package-lock.json')")
-        && identityStep.includes("sbom_sha256: sha256('sbom.cdx.json')");
+    const identityRecorded = workflowStructuralBlockContractSha256(identityStep)
+        === workflowStructuralBlockContractSha256(TRUSTED_SBOM_IDENTITY_STEP_CONTRACT);
     const sbomInformational = sbomToolLocked
+        && workflowStructuralBlockContractSha256(sbomSourceWorkflow) === TRUSTED_SBOM_WORKFLOW_CONTRACT_SHA256
         && sbomInstallSafe
-        && sbomRunScripts.some((script) => scriptHasExecutableCommand(script, 'npm run sbom:generate'))
-        && !sbomRunScripts.some((script) => scriptHasExecutableCommand(script, 'npx --yes @cyclonedx/cyclonedx-npm'))
+        && sbomGenerateLocal
+        && sbomRunScripts.length === 3
         && identityRecorded
         && uploadArtifactStep !== null
         && blockHasNonCommentLine(getYamlKeyBlock(sbomUploadWith, 'path'), 'sbom.cdx.json')

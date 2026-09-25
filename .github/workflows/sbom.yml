@@ -44,6 +44,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
+        # Ajv is optional to the generator but needed for npm ls; lifecycle scripts stay disabled.
         run: npm ci --ignore-scripts --no-fund --no-audit
 
       - name: Generate CycloneDX SBOM

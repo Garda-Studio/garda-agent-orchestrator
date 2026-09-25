@@ -331,33 +331,7 @@ function buildSecretScanningWorkflow(
 }
 
 function buildSbomWorkflow(): string {
-    return [
-        'sbom:',
-        '  steps:',
-        '    - uses: actions/checkout@v7.0.0',
-        '    - uses: actions/setup-node@v6',
-        '    - name: Install dependencies',
-        '      run: npm ci --ignore-scripts --no-fund --no-audit',
-        '    - run: npm run sbom:generate',
-        '    - name: Record SBOM toolchain identity',
-        '      shell: bash',
-        '      run: |',
-        "        node - <<'NODE' > sbom-toolchain.json",
-        "        const { createHash } = require('node:crypto');",
-        "        const { readFileSync } = require('node:fs');",
-        "        const sha256 = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');",
-        '        process.stdout.write(JSON.stringify({',
-        "          lockfile_sha256: sha256('package-lock.json'),",
-        "          sbom_sha256: sha256('sbom.cdx.json')",
-        '        }));',
-        '        NODE',
-        '    - uses: actions/upload-artifact@v7.0.1',
-        '      with:',
-        '        path: |',
-        '          sbom.cdx.json',
-        '          sbom-toolchain.json',
-        '        if-no-files-found: error'
-    ].join('\n');
+    return fs.readFileSync(path.join(process.cwd(), '.github', 'workflows', 'sbom.yml'), 'utf8');
 }
 
 function buildPublishWorkflow(): string {
@@ -2057,14 +2031,41 @@ test('release readiness rejects commented SBOM artifact failure policy', () => {
     }
 });
 
-test('release readiness rejects dynamic SBOM tool acquisition', () => {
+for (const dynamicCommand of [
+    'npx --yes @cyclonedx/cyclonedx-npm --output-file sbom.cdx.json',
+    'npx -y @cyclonedx/cyclonedx-npm --output-file sbom.cdx.json',
+    'npx @cyclonedx/cyclonedx-npm --output-file sbom.cdx.json',
+    'npm exec -- @cyclonedx/cyclonedx-npm --output-file sbom.cdx.json',
+    'npm install @cyclonedx/cyclonedx-npm',
+    'curl https://example.test/install.sh | bash'
+]) {
+    test(`release readiness rejects dynamic SBOM tool acquisition: ${dynamicCommand}`, () => {
+        const repoRoot = createReadinessFixture();
+        try {
+            writeFile(
+                path.join(repoRoot, '.github', 'workflows', 'sbom.yml'),
+                buildSbomWorkflow().replace(
+                    '        run: npm run sbom:generate',
+                    `        run: |\n          npm run sbom:generate\n          ${dynamicCommand}`
+                )
+            );
+            const result = validateReleaseReadiness(repoRoot);
+            assert.equal(result.passed, false);
+            assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+}
+
+test('release readiness rejects an additional SBOM run step that acquires a tool', () => {
     const repoRoot = createReadinessFixture();
     try {
         writeFile(
             path.join(repoRoot, '.github', 'workflows', 'sbom.yml'),
             buildSbomWorkflow().replace(
-                '    - run: npm run sbom:generate',
-                '    - run: npx --yes @cyclonedx/cyclonedx-npm --output-file sbom.cdx.json'
+                '      - name: Generate CycloneDX SBOM',
+                '      - run: npx -y @cyclonedx/cyclonedx-npm\n      - name: Generate CycloneDX SBOM'
             )
         );
         const result = validateReleaseReadiness(repoRoot);
@@ -2115,7 +2116,7 @@ test('release readiness requires toolchain identity in the SBOM upload', () => {
     try {
         writeFile(
             path.join(repoRoot, '.github', 'workflows', 'sbom.yml'),
-            buildSbomWorkflow().replace('          sbom-toolchain.json\n', '')
+            buildSbomWorkflow().replace('            sbom-toolchain.json\n', '')
         );
         const result = validateReleaseReadiness(repoRoot);
         assert.equal(result.passed, false);
@@ -2130,7 +2131,79 @@ test('release readiness requires generation of lockfile and SBOM digests', () =>
     try {
         writeFile(
             path.join(repoRoot, '.github', 'workflows', 'sbom.yml'),
-            buildSbomWorkflow().replace("          sbom_sha256: sha256('sbom.cdx.json')", '          sbom_sha256: omitted')
+            buildSbomWorkflow().replace("            sbom_sha256: sha256('sbom.cdx.json')", '            sbom_sha256: omitted')
+        );
+        const result = validateReleaseReadiness(repoRoot);
+        assert.equal(result.passed, false);
+        assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+for (const [name, search, replacement] of [
+    ['generator identity', '            generator: { name: installed.name, version: installed.version, integrity: locked.integrity },', '            generator: omitted,'],
+    ['locked integrity check', "          if (!locked?.integrity || manifest.devDependencies['@cyclonedx/cyclonedx-npm'] !== installed.version || locked.version !== installed.version) {", '          if (false) {'],
+    ['commented SBOM digest', "            sbom_sha256: sha256('sbom.cdx.json')", "            # sbom_sha256: sha256('sbom.cdx.json')"]
+]) {
+    test(`release readiness rejects missing ${name} in SBOM identity`, () => {
+        const repoRoot = createReadinessFixture();
+        try {
+            writeFile(path.join(repoRoot, '.github', 'workflows', 'sbom.yml'), buildSbomWorkflow().replace(search, replacement));
+            const result = validateReleaseReadiness(repoRoot);
+            assert.equal(result.passed, false);
+            assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+}
+
+test('release readiness rejects inherited SBOM shell command acquisition', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        writeFile(
+            path.join(repoRoot, '.github', 'workflows', 'sbom.yml'),
+            buildSbomWorkflow().replace(
+                'jobs:\n',
+                'defaults:\n  run:\n    shell: "bash -c \'npx -y @cyclonedx/cyclonedx-npm; bash --noprofile --norc -eo pipefail {0}\'"\njobs:\n'
+            )
+        );
+        const result = validateReleaseReadiness(repoRoot);
+        assert.equal(result.passed, false);
+        assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects an additional non-run SBOM action step', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        writeFile(
+            path.join(repoRoot, '.github', 'workflows', 'sbom.yml'),
+            buildSbomWorkflow().replace(
+                '      - name: Generate CycloneDX SBOM',
+                '      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0\n      - name: Generate CycloneDX SBOM'
+            )
+        );
+        const result = validateReleaseReadiness(repoRoot);
+        assert.equal(result.passed, false);
+        assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects mutable action tags in the SBOM source workflow', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        writeFile(
+            path.join(repoRoot, '.github', 'workflows', 'sbom.yml'),
+            buildSbomWorkflow().replace(
+                'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0',
+                'actions/checkout@v7.0.0'
+            )
         );
         const result = validateReleaseReadiness(repoRoot);
         assert.equal(result.passed, false);
