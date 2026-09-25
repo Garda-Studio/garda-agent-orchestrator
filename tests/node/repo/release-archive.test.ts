@@ -11,6 +11,8 @@ import {
     assertSupportedTarLinkTarget,
     buildReleaseArchivePlan,
     createReleaseArchive,
+    hasCredentialLikeContent,
+    readNulDelimitedGitPaths,
     writeReleaseArchivePlan
 } from '../../../scripts/node-foundation/archive-release';
 
@@ -88,6 +90,11 @@ test('source release archive plan is tracked-source only and excludes generated 
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
+});
+
+test('tracked-path decoding stops at the entry budget before sorting', () => {
+    const trackedPaths = Buffer.from('a\0'.repeat(50_001));
+    assert.throws(() => readNulDelimitedGitPaths(trackedPaths), /Archive entry budget exceeded/u);
 });
 
 test('evidence release archive plan is allowlisted evidence only and skips secrets', () => {
@@ -188,12 +195,18 @@ test('NUL padding across evidence scan chunks cannot hide a credential', () => {
     }
 });
 
-test('evidence symlink targets are scanned for credential-like content', (t) => {
+test('credential-like relative link components are detected without symlink privileges', () => {
+    assert.equal(hasCredentialLikeContent('./AUTH_TOKEN=abcd1234abcd1234abcd1234'), true);
+    assert.equal(hasCredentialLikeContent('../nested/AUTH_TOKEN=abcd1234abcd1234abcd1234'), true);
+    assert.equal(hasCredentialLikeContent('./ordinary-target'), false);
+});
+
+test('evidence symlink targets with relative prefixes cannot hide credentials', (t) => {
     const repoRoot = createArchiveFixture();
     try {
         const linkPath = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'manual-validation', 'T-001', 'shortcut');
         try {
-            fs.symlinkSync('AUTH_TOKEN=abcd1234abcd1234abcd1234', linkPath, 'file');
+            fs.symlinkSync('./AUTH_TOKEN=abcd1234abcd1234abcd1234', linkPath, 'file');
         } catch (error) {
             if ((error as NodeJS.ErrnoException).code === 'EPERM') {
                 t.skip('File symlink creation is unavailable on this host.');
@@ -205,8 +218,24 @@ test('evidence symlink targets are scanned for credential-like content', (t) => 
             () => buildReleaseArchivePlan('evidence', repoRoot, path.join(repoRoot, 'release-archives', 'evidence.tar')),
             /credential-like target/u
         );
-        fs.rmSync(linkPath);
-        fs.symlinkSync('../../../../../../outside', linkPath, 'file');
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('evidence symlink target cannot escape the archive root', (t) => {
+    const repoRoot = createArchiveFixture();
+    try {
+        const linkPath = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'manual-validation', 'T-001', 'shortcut');
+        try {
+            fs.symlinkSync('../../../../../../outside', linkPath, 'file');
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+                t.skip('File symlink creation is unavailable on this host.');
+                return;
+            }
+            throw error;
+        }
         assert.throws(
             () => buildReleaseArchivePlan('evidence', repoRoot, path.join(repoRoot, 'release-archives', 'evidence.tar')),
             /Unsupported archive symlink target/u
@@ -270,6 +299,22 @@ test('archive budget and tar link limits reject excessive values before serializ
     assert.doesNotThrow(() => assertSupportedTarLinkTarget('../inside', 'nested/link'));
 });
 
+test('writer rejects an oversized frozen plan before creating output', () => {
+    const repoRoot = createArchiveFixture();
+    try {
+        const outputPath = path.join(repoRoot, 'release-archives', 'source.tar');
+        const plan = buildReleaseArchivePlan('source', repoRoot, outputPath);
+        const oversizedEntry = { ...plan.entries[0], size: 2 * 1024 * 1024 * 1024 + 1 };
+        assert.throws(
+            () => writeReleaseArchivePlan({ ...plan, entries: [oversizedEntry] }),
+            /Archive input-byte budget exceeded/u
+        );
+        assert.equal(fs.existsSync(outputPath), false);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
 test('archive output cannot replace a selected source or evidence input', () => {
     const repoRoot = createArchiveFixture();
     try {
@@ -303,6 +348,22 @@ test('archive path validation rejects manifest descendants and drive-relative en
         );
         fs.rmSync(path.join(repoRoot, 'ARCHIVE-MANIFEST.json'), { recursive: true });
         runGit(repoRoot, ['rm', '--cached', 'ARCHIVE-MANIFEST.json/child.txt']);
+        writeFile(path.join(repoRoot, 'archive-manifest.json'), 'case conflict\n');
+        runGit(repoRoot, ['add', 'archive-manifest.json']);
+        assert.throws(
+            () => buildReleaseArchivePlan('source', repoRoot, path.join(repoRoot, 'release-archives', 'source.tar')),
+            /Unsafe archive path/u
+        );
+        runGit(repoRoot, ['rm', '--cached', 'archive-manifest.json']);
+        fs.rmSync(path.join(repoRoot, 'archive-manifest.json'));
+        writeFile(path.join(repoRoot, 'archive-manifest.json', 'child.txt'), 'case descendant conflict\n');
+        runGit(repoRoot, ['add', 'archive-manifest.json/child.txt']);
+        assert.throws(
+            () => buildReleaseArchivePlan('source', repoRoot, path.join(repoRoot, 'release-archives', 'source.tar')),
+            /Unsafe archive path/u
+        );
+        runGit(repoRoot, ['rm', '--cached', 'archive-manifest.json/child.txt']);
+        fs.rmSync(path.join(repoRoot, 'archive-manifest.json'), { recursive: true });
         if (process.platform !== 'win32') {
             writeFile(path.join(repoRoot, 'C:escape'), 'drive relative\n');
             runGit(repoRoot, ['add', 'C:escape']);
@@ -324,8 +385,11 @@ test('writer consumes the frozen plan and rejects changed inputs without creatin
         assert.equal(Object.isFrozen(plan), true);
         assert.equal(Object.isFrozen(plan.entries), true);
         writeFile(path.join(repoRoot, 'src', 'added.ts'), 'new file\n');
+        runGit(repoRoot, ['add', 'src/added.ts']);
         writeReleaseArchivePlan(plan);
-        assert.equal(readArchiveManifest(outputPath).entry_count, plan.entries.length);
+        const manifest = readArchiveManifest(outputPath);
+        assert.equal(manifest.entry_count, plan.entries.length);
+        assert.deepEqual(manifest.entries.map((entry) => entry.relativePath), plan.entries.map((entry) => entry.relativePath));
         fs.rmSync(outputPath);
         writeFile(path.join(repoRoot, 'src', 'index.ts'), 'export const value = 2;\n');
         assert.throws(() => writeReleaseArchivePlan(plan), /Archive input (identity|digest) changed/u);
@@ -336,15 +400,13 @@ test('writer consumes the frozen plan and rejects changed inputs without creatin
     }
 });
 
-test('archive writer rejects a redirected destination and parent directory', (t) => {
+test('archive writer rejects a redirected destination', (t) => {
     const repoRoot = createArchiveFixture();
     try {
         const outputDirectory = path.join(repoRoot, 'release-archives');
         const outputPath = path.join(outputDirectory, 'source.tar');
-        const outsideDirectory = path.join(repoRoot, 'redirected');
+        const outsidePath = path.join(repoRoot, 'preserve.tar');
         fs.mkdirSync(outputDirectory);
-        fs.mkdirSync(outsideDirectory);
-        const outsidePath = path.join(outsideDirectory, 'preserve.tar');
         writeFile(outsidePath, 'preserve\n');
         const plan = buildReleaseArchivePlan('source', repoRoot, outputPath);
         try {
@@ -358,9 +420,19 @@ test('archive writer rejects a redirected destination and parent directory', (t)
         }
         assert.throws(() => writeReleaseArchivePlan(plan), /Unsafe archive output path/u);
         assert.equal(fs.readFileSync(outsidePath, 'utf8'), 'preserve\n');
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
 
-        fs.rmSync(outputPath);
-        fs.rmSync(outputDirectory, { recursive: true });
+test('archive writer rejects a redirected parent directory', () => {
+    const repoRoot = createArchiveFixture();
+    try {
+        const outputDirectory = path.join(repoRoot, 'release-archives');
+        const outputPath = path.join(outputDirectory, 'source.tar');
+        const outsideDirectory = path.join(repoRoot, 'redirected');
+        fs.mkdirSync(outsideDirectory);
+        const plan = buildReleaseArchivePlan('source', repoRoot, outputPath);
         fs.symlinkSync(outsideDirectory, outputDirectory, process.platform === 'win32' ? 'junction' : 'dir');
         assert.throws(() => writeReleaseArchivePlan(plan), /Unsafe archive output directory/u);
         assert.equal(fs.existsSync(path.join(outsideDirectory, 'source.tar')), false);
@@ -391,6 +463,57 @@ test('large archive entry is written without concatenating the tar payload', () 
         assert.ok(fs.statSync(outputPath).size > 8 * 1024 * 1024);
     } finally {
         Object.defineProperty(Buffer, 'concat', { configurable: true, writable: true, value: originalConcat });
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('standard tar reader extracts manifest and long PAX path from the frozen archive', () => {
+    const repoRoot = createArchiveFixture();
+    try {
+        const longRelativePath = 'src/' + 'p'.repeat(101) + '.txt';
+        writeFile(path.join(repoRoot, longRelativePath), 'long path payload\n');
+        runGit(repoRoot, ['add', longRelativePath]);
+        const outputPath = path.join(repoRoot, 'release-archives', 'source.tar');
+        const plan = createReleaseArchive('source', repoRoot, outputPath);
+        const listing = childProcess.spawnSync('tar', ['-tf', outputPath], { encoding: 'utf8', windowsHide: true });
+        assert.equal(listing.status, 0, listing.stderr);
+        const listedPaths = listing.stdout.trim().split(/\r?\n/u);
+        assert.deepEqual(listedPaths, ['ARCHIVE-MANIFEST.json', ...plan.entries.map((entry) => entry.relativePath)]);
+        const extractionRoot = path.join(repoRoot, 'extracted');
+        fs.mkdirSync(extractionRoot);
+        const extraction = childProcess.spawnSync('tar', ['-xf', outputPath, '-C', extractionRoot], {
+            encoding: 'utf8', windowsHide: true
+        });
+        assert.equal(extraction.status, 0, extraction.stderr);
+        assert.equal(fs.readFileSync(path.join(extractionRoot, longRelativePath), 'utf8'), 'long path payload\n');
+        const manifest = JSON.parse(fs.readFileSync(path.join(extractionRoot, 'ARCHIVE-MANIFEST.json'), 'utf8')) as ReturnType<typeof readArchiveManifest>;
+        assert.equal(manifest.entry_count, plan.entries.length);
+        assert.deepEqual(manifest.entries, plan.entries.map(({ relativePath, size, sha256 }) => ({ relativePath, size, sha256 })));
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('standard tar reader preserves a source symlink target', (t) => {
+    const repoRoot = createArchiveFixture();
+    try {
+        const linkPath = path.join(repoRoot, 'src', 'shortcut.ts');
+        try {
+            fs.symlinkSync('index.ts', linkPath, 'file');
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+                t.skip('File symlink creation is unavailable on this host.');
+                return;
+            }
+            throw error;
+        }
+        runGit(repoRoot, ['add', 'src/shortcut.ts']);
+        const outputPath = path.join(repoRoot, 'release-archives', 'source.tar');
+        createReleaseArchive('source', repoRoot, outputPath);
+        const listing = childProcess.spawnSync('tar', ['-tvf', outputPath], { encoding: 'utf8', windowsHide: true });
+        assert.equal(listing.status, 0, listing.stderr);
+        assert.match(listing.stdout, /src\/shortcut\.ts\s+->\s+index\.ts/u);
+    } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
 });

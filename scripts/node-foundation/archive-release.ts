@@ -81,7 +81,8 @@ function assertSafeRelativePath(relativePath: string): void {
         || relativePath.includes('\\') || relativePath.includes('\0')
         || relativePath.split('/').some((segment) => !segment || segment === '.' || segment === '..')
         || /(^|\/)[A-Za-z]:/u.test(relativePath)
-        || relativePath === MANIFEST_ENTRY_PATH || relativePath.startsWith(`${MANIFEST_ENTRY_PATH}/`)) {
+        || relativePath.toLowerCase() === MANIFEST_ENTRY_PATH.toLowerCase()
+        || relativePath.toLowerCase().startsWith(`${MANIFEST_ENTRY_PATH.toLowerCase()}/`)) {
         throw new Error(`Unsafe archive path: ${relativePath}`);
     }
 }
@@ -98,7 +99,7 @@ function runGit(repoRoot: string, args: string[]): Buffer {
     return result.stdout;
 }
 
-function readNulDelimitedGitPaths(output: Buffer): string[] {
+export function readNulDelimitedGitPaths(output: Buffer): string[] {
     if (output.length === 0) {
         return [];
     }
@@ -112,6 +113,7 @@ function readNulDelimitedGitPaths(output: Buffer): string[] {
         if (end === start || end < 0) {
             throw new Error('git ls-files -z output contains an empty or malformed path.');
         }
+        assertReleaseArchiveBudget(paths.length + 1, 0);
         paths.push(decoder.decode(output.subarray(start, end)));
         start = end + 1;
     }
@@ -124,6 +126,10 @@ function isExcludedSourcePath(relativePath: string): boolean {
 
 function isSensitiveEvidencePath(relativePath: string): boolean {
     return SECRET_PATH_RE.test(relativePath) || relativePath === 'garda-agent-orchestrator/runtime/init-answers.json';
+}
+
+export function hasCredentialLikeContent(value: string): boolean {
+    return [value, ...value.split('/')].some((part) => SECRET_CONTENT_RES.some((pattern) => pattern.test(part)));
 }
 
 function isGeneratedReviewSupportPath(relativePath: string): boolean {
@@ -283,7 +289,7 @@ function buildEntries(repoRoot: string, relativePaths: readonly string[], kind: 
         const linkTarget = stat.isSymbolicLink() ? fs.readlinkSync(absolutePath) : undefined;
         if (linkTarget !== undefined) {
             assertSupportedTarLinkTarget(linkTarget, relativePath);
-            if (kind === 'evidence' && SECRET_CONTENT_RES.some((pattern) => pattern.test(linkTarget))) {
+            if (kind === 'evidence' && hasCredentialLikeContent(linkTarget)) {
                 throw new Error(`Refusing to archive evidence symlink with credential-like target: ${relativePath}`);
             }
         }
