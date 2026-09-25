@@ -170,12 +170,10 @@ function validateReference(repoRoot, reference, versionComment) {
     return null;
 }
 
-function validateWorkflow(repoRoot, filePath) {
-    const errors = [];
-    let referenceCount = 0;
+function scanWorkflowLines(workflow, visit) {
     let blockIndent = null;
     let quotedValue = null;
-    const lines = fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/u, '').split(/\r?\n/u);
+    const lines = workflow.replace(/^\uFEFF/u, '').split(/\r?\n/u);
     for (const [index, line] of lines.entries()) {
         const indent = /^ */u.exec(line)[0].length;
         if (blockIndent !== null) {
@@ -192,18 +190,11 @@ function validateWorkflow(repoRoot, filePath) {
         const incompleteKey = openQuote && !quotedValue &&
             !startsQuotedValue(content.slice(0, openStart));
         const match = quotedValue ? null : USES_KEY.exec(content);
-        if (match) {
-            referenceCount++;
-            const reference = parseReference(match[1]);
-            const error = validateReference(repoRoot, reference, comment);
-            if (error) {
-                errors.push(`${path.basename(filePath)}:${index + 1}: ${error}`);
-            }
-        } else if (incompleteKey || ANY_USES_KEY.test(masked) ||
+        const unsupported = !match && (incompleteKey || ANY_USES_KEY.test(masked) ||
             ESCAPED_QUOTED_KEY.test(masked) || (!quotedValue && CONTINUED_QUOTED_KEY.test(content)) ||
-            SPECIAL_MAPPING_KEY.test(masked)) {
-            errors.push(`${path.basename(filePath)}:${index + 1}: Unsupported uses syntax`);
-        } else if (BLOCK_SCALAR.test(masked)) {
+            SPECIAL_MAPPING_KEY.test(masked));
+        visit({ index, line, comment, match, unsupported });
+        if (!match && !unsupported && BLOCK_SCALAR.test(masked)) {
             // In "- name: |", the scalar key begins after the sequence marker.
             // A sibling "uses" key at that column is outside the scalar body.
             const sequencePrefix = /^ *- +/u.exec(content);
@@ -212,6 +203,32 @@ function validateWorkflow(repoRoot, filePath) {
         }
         quotedValue = incompleteKey ? null : openQuote;
     }
+}
+
+function scanWorkflowUses(workflow) {
+    const uses = [];
+    scanWorkflowLines(workflow, ({ index, line, comment, match }) => {
+        if (match) {
+            uses.push({ lineIndex: index, line, reference: parseReference(match[1]), versionComment: comment });
+        }
+    });
+    return uses;
+}
+
+function validateWorkflow(repoRoot, filePath) {
+    const errors = [];
+    let referenceCount = 0;
+    scanWorkflowLines(fs.readFileSync(filePath, 'utf8'), ({ index, comment, match, unsupported }) => {
+        if (match) {
+            referenceCount++;
+            const error = validateReference(repoRoot, parseReference(match[1]), comment);
+            if (error) {
+                errors.push(`${path.basename(filePath)}:${index + 1}: ${error}`);
+            }
+        } else if (unsupported) {
+            errors.push(`${path.basename(filePath)}:${index + 1}: Unsupported uses syntax`);
+        }
+    });
     return { errors, referenceCount };
 }
 
@@ -252,9 +269,13 @@ function main() {
     process.stdout.write(`WORKFLOW_REFERENCES_VALID: ${entries.length} workflows, ${referenceCount} references\n`);
 }
 
-try {
-    main();
-} catch (error) {
-    process.stderr.write(`${error.message}\n`);
-    process.exitCode = 1;
+module.exports = { scanWorkflowUses };
+
+if (require.main === module) {
+    try {
+        main();
+    } catch (error) {
+        process.stderr.write(`${error.message}\n`);
+        process.exitCode = 1;
+    }
 }

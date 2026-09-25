@@ -605,6 +605,36 @@ function createReadinessFixture(openChecklistItem?: string): string {
     return repoRoot;
 }
 
+function pinReadinessFixtureActions(repoRoot: string): void {
+    // Feed readiness from the validator's reviewed catalog, so a future pin
+    // update fails this test if readiness normalization is left behind.
+    const validatorSource = fs.readFileSync(path.join(process.cwd(), 'scripts', 'validate-workflow-references.cjs'), 'utf8');
+    const catalogPins = new Map<string, { sha: string; version: string }>();
+    for (const match of validatorSource.matchAll(/\['([^']+)',\s*\{\s*sha:\s*'([0-9a-f]{40})',\s*version:\s*'(v\d+\.\d+\.\d+)'/gu)) {
+        catalogPins.set(match[1], { sha: match[2], version: match[3] });
+    }
+    assert.equal(catalogPins.size, 4, 'readiness fixture must reflect the complete reviewed workflow pin catalog');
+    const reviewedPins = [
+        ['actions/checkout', 'v7.0.0'],
+        ['actions/setup-node', 'v6'],
+        ['actions/upload-artifact', 'v7.0.1'],
+        ['google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml', 'v2.3.0']
+    ] as const;
+    for (const fileName of ['security.yml', 'secret-scanning.yml', 'sbom.yml', 'publish.yml']) {
+        const workflowPath = path.join(repoRoot, '.github', 'workflows', fileName);
+        let workflow = fs.readFileSync(workflowPath, 'utf8');
+        for (const [identity, readinessVersion] of reviewedPins) {
+            const catalogPin = catalogPins.get(identity);
+            assert.ok(catalogPin, `missing reviewed workflow pin: ${identity}`);
+            workflow = workflow.replaceAll(
+                `${identity}@${readinessVersion}`,
+                `${identity}@${catalogPin.sha} # ${catalogPin.version}`
+            );
+        }
+        writeFile(workflowPath, workflow);
+    }
+}
+
 test('release readiness passes when package, CI, docs, security, and checklist contracts are present', () => {
     const repoRoot = createReadinessFixture();
     try {
@@ -628,6 +658,106 @@ test('release readiness passes when package, CI, docs, security, and checklist c
         assert.doesNotMatch(output, /Security\/audit proof:/);
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness accepts the reviewed SHA-pinned Actions across security and publish workflows', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        pinReadinessFixtureActions(repoRoot);
+        const result = validateReleaseReadiness(repoRoot);
+        assert.equal(result.passed, true, formatReleaseReadinessResult(result));
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness accepts quoted uses keys and references for reviewed pins', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        pinReadinessFixtureActions(repoRoot);
+        const workflowPath = path.join(repoRoot, '.github', 'workflows', 'secret-scanning.yml');
+        writeFile(
+            workflowPath,
+            fs.readFileSync(workflowPath, 'utf8').replace(
+                '    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0',
+                '    - "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0" # v7.0.0'
+            )
+        );
+        const result = validateReleaseReadiness(repoRoot);
+        assert.equal(result.passed, true, formatReleaseReadinessResult(result));
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness ignores a reviewed-looking uses line inside a block scalar', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        pinReadinessFixtureActions(repoRoot);
+        const workflowPath = path.join(repoRoot, '.github', 'workflows', 'security.yml');
+        const pinnedOsV = 'google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@b77c075a1235514558f0eb88dbd31e22c45e0cd2 # v2.3.0';
+        writeFile(
+            workflowPath,
+            fs.readFileSync(workflowPath, 'utf8')
+                .replace(`  uses: ${pinnedOsV}\n`, '')
+                .replace('      --lockfile=package-lock.json', `      uses: ${pinnedOsV}\n      --lockfile=package-lock.json`)
+        );
+        const result = validateReleaseReadiness(repoRoot);
+        assert.equal(result.passed, false);
+        assert.match(formatReleaseReadinessResult(result), /informational: security\.yml OSV lockfile scan present=false/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness ignores reviewed-looking uses text in multiline quoted scalars', () => {
+    const scanner = require(path.join(process.cwd(), 'scripts', 'validate-workflow-references.cjs')) as {
+        scanWorkflowUses: (content: string) => Array<{ reference: string }>;
+    };
+    for (const quote of ['"', "'"]) {
+        const repoRoot = createReadinessFixture();
+        try {
+            pinReadinessFixtureActions(repoRoot);
+            const workflowPath = path.join(repoRoot, '.github', 'workflows', 'security.yml');
+            const pinnedOsV = 'google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@b77c075a1235514558f0eb88dbd31e22c45e0cd2 # v2.3.0';
+            const workflow = fs.readFileSync(workflowPath, 'utf8').replace(
+                `  uses: ${pinnedOsV}`,
+                `  name: ${quote}OSV scan\n  uses: ${pinnedOsV}\n  ${quote}`
+            );
+            writeFile(workflowPath, workflow);
+            assert.equal(scanner.scanWorkflowUses(workflow).some((use) => use.reference.includes('osv-scanner-reusable.yml')), false);
+            const result = validateReleaseReadiness(repoRoot);
+            assert.equal(result.passed, false);
+            assert.match(formatReleaseReadinessResult(result), /informational: security\.yml OSV lockfile scan present=false/);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    }
+});
+
+test('release readiness rejects a forged SHA or version comment in a pinned Action', () => {
+    for (const replacement of [
+        'actions/checkout@0c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0',
+        'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.1'
+    ]) {
+        const repoRoot = createReadinessFixture();
+        try {
+            pinReadinessFixtureActions(repoRoot);
+            const workflowPath = path.join(repoRoot, '.github', 'workflows', 'secret-scanning.yml');
+            writeFile(
+                workflowPath,
+                fs.readFileSync(workflowPath, 'utf8').replace(
+                    'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0',
+                    replacement
+                )
+            );
+            const result = validateReleaseReadiness(repoRoot);
+            assert.equal(result.passed, false);
+            assert.match(formatReleaseReadinessResult(result), /blocking: secret-scanning\.yml gitleaks gate present=false/);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
     }
 });
 

@@ -32,6 +32,50 @@ import {
 } from './release-metadata';
 
 const TRUSTED_RELEASE_TAG_HISTORY_STEP_SHA256 = 'dd86883aee9e6eef46c76a284d9a90431073efaecdd74adcce97f4e53223b470';
+const REVIEWED_WORKFLOW_ACTION_PINS: Readonly<Record<string, { version: string; readinessReference: string }>> = {
+    'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0': {
+        version: 'v7.0.0',
+        readinessReference: 'actions/checkout@v7.0.0'
+    },
+    'actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38': {
+        version: 'v6.5.0',
+        readinessReference: 'actions/setup-node@v6'
+    },
+    'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a': {
+        version: 'v7.0.1',
+        readinessReference: 'actions/upload-artifact@v7.0.1'
+    },
+    'google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@b77c075a1235514558f0eb88dbd31e22c45e0cd2': {
+        version: 'v2.3.0',
+        readinessReference: 'google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.0'
+    }
+};
+interface WorkflowUseReference {
+    lineIndex: number;
+    line: string;
+    reference: string;
+    versionComment: string;
+}
+
+function readWorkflowForReadiness(repoRoot: string, fileName: string): string {
+    const workflow = readTextFileIfExists(path.join(repoRoot, '.github', 'workflows', fileName)) || '';
+    const scanner = require(path.join(getRepoRoot(), 'scripts', 'validate-workflow-references.cjs')) as {
+        scanWorkflowUses: (content: string) => WorkflowUseReference[];
+    };
+    const lines = workflow.split(/(\r?\n)/u);
+    for (const use of scanner.scanWorkflowUses(workflow)) {
+        const reviewedPin = REVIEWED_WORKFLOW_ACTION_PINS[use.reference];
+        if (reviewedPin?.version !== use.versionComment) {
+            continue;
+        }
+        const prefix = /^([ \t]*(?:-[ \t]+)?(?:uses|'uses'|"uses")[ \t]*:[ \t]*)/u.exec(use.line)?.[1];
+        if (prefix) {
+            lines[use.lineIndex * 2] = `${prefix.replace(/(?:'uses'|"uses")(?=[ \t]*:)/u, 'uses')}${reviewedPin.readinessReference}`;
+        }
+    }
+    return lines.join('');
+}
+
 const TRUSTED_GITLEAKS_JOB_CONTRACT = [
     'gitleaks:',
     '  name: Gitleaks',
@@ -577,9 +621,9 @@ function validateCiRuntimeMatrixContract(ciWorkflow: string): { passed: boolean;
 }
 
 function validateSecurityCiBaselineContract(repoRoot: string): { passed: boolean; details: string[] } {
-    const securityWorkflow = readTextFileIfExists(path.join(repoRoot, '.github', 'workflows', 'security.yml')) || '';
-    const secretScanningWorkflow = readTextFileIfExists(path.join(repoRoot, '.github', 'workflows', 'secret-scanning.yml')) || '';
-    const sbomWorkflow = readTextFileIfExists(path.join(repoRoot, '.github', 'workflows', 'sbom.yml')) || '';
+    const securityWorkflow = readWorkflowForReadiness(repoRoot, 'security.yml');
+    const secretScanningWorkflow = readWorkflowForReadiness(repoRoot, 'secret-scanning.yml');
+    const sbomWorkflow = readWorkflowForReadiness(repoRoot, 'sbom.yml');
     const branchProtection = readTextFileIfExists(path.join(repoRoot, 'docs', 'branch-protection.md')) || '';
 
     const npmAuditBlocking = extractWorkflowRunScripts(securityWorkflow)
@@ -637,7 +681,7 @@ function validateSecurityCiBaselineContract(repoRoot: string): { passed: boolean
 }
 
 function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boolean; details: string[] } {
-    const publishWorkflow = readTextFileIfExists(path.join(repoRoot, '.github', 'workflows', 'publish.yml')) || '';
+    const publishWorkflow = readWorkflowForReadiness(repoRoot, 'publish.yml');
     const validateJob = getWorkflowJobBlock(publishWorkflow, 'validate');
     const publishJob = getWorkflowJobBlock(publishWorkflow, 'publish');
     const onBlock = getYamlKeyBlock(publishWorkflow, 'on');
