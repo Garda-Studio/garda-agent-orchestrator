@@ -32,21 +32,90 @@ const ESCAPED_QUOTED_KEY = /(?:^|[\s,{\[])"(?:\\.|[^"\\])*\\(?:.|$)(?:\\.|[^"\\]
 const CONTINUED_QUOTED_KEY = /(?:^|[,{\[])\s*(?:-\s*)?(?:[&!]\S+\s+)*"[^"\r\n]*\\\s*$/u;
 // Explicit, alias, anchor, and tagged keys can also resolve to "uses" after YAML parsing.
 const SPECIAL_MAPPING_KEY = /(?:^|[,{\[])\s*(?:-\s*)?(?:\?(?=\s|$)|[*!&][^\s:,}]+(?:\s+[^:,}]+)?\s*:)/u;
-const BLOCK_SCALAR = /^\s*(?:-\s*)?[^:#]+:\s*[|>][-+]?\s*$/u;
+const BLOCK_SCALAR = /^\s*(?:-\s*)?(?:[^:#]+:\s*)?(?:[&!]\S+\s+)*[|>](?:[1-9][-+]?|[-+][1-9]?)?\s*$/u;
 
-function uncomment(line) {
-    let quote = null;
+function startsFlowCollection(before) {
+    const opener = /[\[{]/u.exec(before);
+    if (!opener) {
+        return false;
+    }
+    const leading = before.slice(0, opener.index)
+        .replace(/(?:[&!]\S+\s+)+$/u, '');
+    const prefix = leading.trimEnd();
+    return !prefix || /^\s*-$/u.test(prefix) ||
+        (prefix.endsWith(':') && leading.length > prefix.length);
+}
+
+function startsQuotedValue(before) {
+    const prefix = before.trimEnd();
+    return /^\s*-\s+$/u.test(before) ||
+        (prefix.endsWith(':') && (before.length > prefix.length || startsFlowCollection(before))) ||
+        /(?:^\s*-\s+|:\s+)(?:[&!]\S+\s+)+$/u.test(before) ||
+        /:\s*[\[{]+\s*(?:[&!]\S+\s+)+$/u.test(before) ||
+        /:\s*[\[{].*,\s*(?:[&!]\S+\s+)+$/u.test(before);
+}
+
+function startsYamlQuote(line, index) {
+    const before = line.slice(0, index);
+    return startsQuotedValue(before) || !before.trim() ||
+        (startsFlowCollection(before) && /[,\[{]\s*$/u.test(before));
+}
+
+function uncomment(line, initialQuote = null) {
+    let quote = initialQuote;
     for (let index = 0; index < line.length; index++) {
         const character = line[index];
-        if (character === quote && line[index - 1] !== '\\') {
+        if (quote === '"' && character === '\\') {
+            index++;
+        } else if (quote === "'" && character === "'" && line[index + 1] === "'") {
+            index++;
+        } else if (character === quote) {
             quote = null;
-        } else if (!quote && (character === '"' || character === "'")) {
+        } else if (!quote && (character === '"' || character === "'") && startsYamlQuote(line, index)) {
             quote = character;
         } else if (!quote && character === '#' && (index === 0 || /\s/u.test(line[index - 1]))) {
             return { content: line.slice(0, index), comment: line.slice(index + 1).trim() };
         }
     }
     return { content: line, comment: '' };
+}
+
+function maskQuotedValues(content, initialQuote = null) {
+    const masked = content.split('');
+    let openQuote = initialQuote;
+    let openStart = initialQuote ? 0 : -1;
+    for (let index = 0; index < content.length; index++) {
+        const character = content[index];
+        if (!openQuote) {
+            if ((character === '"' || character === "'") && startsYamlQuote(content, index)) {
+                openQuote = character;
+                openStart = index;
+            }
+            continue;
+        }
+        if (openQuote === '"' && character === '\\') {
+            index++;
+            continue;
+        }
+        if (openQuote === "'" && character === "'" && content[index + 1] === "'") {
+            index++;
+            continue;
+        }
+        if (character !== openQuote) {
+            continue;
+        }
+        // Keep quoted mapping keys visible; a quoted scalar value is inert YAML text.
+        if (initialQuote || !/^\s*:/u.test(content.slice(index + 1))) {
+            masked.fill(' ', openStart, index + 1);
+        }
+        openQuote = null;
+        openStart = -1;
+        initialQuote = null;
+    }
+    if (openQuote) {
+        masked.fill(' ', openStart);
+    }
+    return { content: masked.join(''), openQuote, openStart };
 }
 
 function parseReference(rawValue) {
@@ -105,6 +174,7 @@ function validateWorkflow(repoRoot, filePath) {
     const errors = [];
     let referenceCount = 0;
     let blockIndent = null;
+    let quotedValue = null;
     const lines = fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/u, '').split(/\r?\n/u);
     for (const [index, line] of lines.entries()) {
         const indent = /^ */u.exec(line)[0].length;
@@ -114,11 +184,14 @@ function validateWorkflow(repoRoot, filePath) {
             }
             blockIndent = null;
         }
-        const { content, comment } = uncomment(line);
+        const { content, comment } = uncomment(line, quotedValue);
         if (!content.trim()) {
             continue;
         }
-        const match = USES_KEY.exec(content);
+        const { content: masked, openQuote, openStart } = maskQuotedValues(content, quotedValue);
+        const incompleteKey = openQuote && !quotedValue &&
+            !startsQuotedValue(content.slice(0, openStart));
+        const match = quotedValue ? null : USES_KEY.exec(content);
         if (match) {
             referenceCount++;
             const reference = parseReference(match[1]);
@@ -126,16 +199,18 @@ function validateWorkflow(repoRoot, filePath) {
             if (error) {
                 errors.push(`${path.basename(filePath)}:${index + 1}: ${error}`);
             }
-        } else if (ANY_USES_KEY.test(content) || ESCAPED_QUOTED_KEY.test(content) ||
-            CONTINUED_QUOTED_KEY.test(content) ||
-            SPECIAL_MAPPING_KEY.test(content)) {
+        } else if (incompleteKey || ANY_USES_KEY.test(masked) ||
+            ESCAPED_QUOTED_KEY.test(masked) || (!quotedValue && CONTINUED_QUOTED_KEY.test(content)) ||
+            SPECIAL_MAPPING_KEY.test(masked)) {
             errors.push(`${path.basename(filePath)}:${index + 1}: Unsupported uses syntax`);
-        } else if (BLOCK_SCALAR.test(content)) {
+        } else if (BLOCK_SCALAR.test(masked)) {
             // In "- name: |", the scalar key begins after the sequence marker.
             // A sibling "uses" key at that column is outside the scalar body.
             const sequencePrefix = /^ *- +/u.exec(content);
-            blockIndent = sequencePrefix ? sequencePrefix[0].length : indent;
+            const standaloneSequenceScalar = /^\s*-\s+(?:[&!]\S+\s+)*[|>]/u.test(masked);
+            blockIndent = standaloneSequenceScalar ? indent : sequencePrefix ? sequencePrefix[0].length : indent;
         }
+        quotedValue = incompleteKey ? null : openQuote;
     }
     return { errors, referenceCount };
 }
@@ -147,6 +222,10 @@ function main() {
     }
     const repoRoot = path.resolve(process.argv[3] || path.join(__dirname, '..'));
     const workflowDir = path.join(repoRoot, '.github', 'workflows');
+    const relativeWorkflowDir = path.relative(fs.realpathSync(repoRoot), fs.realpathSync(workflowDir));
+    if (!relativeWorkflowDir || relativeWorkflowDir.startsWith('..') || path.isAbsolute(relativeWorkflowDir)) {
+        throw new Error(`Workflow directory resolves outside repository: ${workflowDir}`);
+    }
     const entries = fs.readdirSync(workflowDir, { withFileTypes: true })
         .filter((entry) => /\.ya?ml$/u.test(entry.name));
     if (entries.length === 0) {
