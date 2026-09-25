@@ -63,6 +63,7 @@
     "release:preflight": "npm run validate:release-readiness && npm run test:release-smoke && npm run validate:release && npm run validate:package-surface",
     "archive:source": "node scripts/node-foundation/build-scripts.cjs archive-release.js source",
     "archive:evidence": "node scripts/node-foundation/build-scripts.cjs archive-release.js evidence",
+    "sbom:generate": "cyclonedx-npm --output-file sbom.cdx.json --spec-version 1.5 --output-reproducible",
     "typecheck": "npm run validate:dependencies && tsc -p tsconfig.node-foundation.json",
     "validate:dependencies": "node scripts/node-foundation/build-scripts.cjs check-dependencies.js",
     "typecheck:unused": "tsc -p tsconfig.node-foundation.json --noEmit --pretty false --noUnusedLocals --noUnusedParameters",
@@ -112,6 +113,7 @@
     "VERSION"
   ],
   "devDependencies": {
+    "@cyclonedx/cyclonedx-npm": "6.0.1",
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.19.17",
     "c8": "^11.0.0",

@@ -84,6 +84,7 @@ function buildPackageJson(): string {
             'release:preflight': 'npm run validate:release-readiness && npm run test:release-smoke && npm run validate:release && npm run validate:package-surface',
             'archive:source': 'node scripts/node-foundation/build-scripts.cjs archive-release.js source',
             'archive:evidence': 'node scripts/node-foundation/build-scripts.cjs archive-release.js evidence',
+            'sbom:generate': 'cyclonedx-npm --output-file sbom.cdx.json --spec-version 1.5 --output-reproducible',
             prepack: 'npm run validate:clean-worktree && npm run build:publish-runtime && npm run validate:clean-worktree && node scripts/package-legacy-entrypoint-compat.cjs create',
             'test:unit': 'node scripts/node-foundation/build-scripts.cjs test.js tests/node/core',
             'test:gates': 'node scripts/node-foundation/build-scripts.cjs test.js tests/node/gates',
@@ -94,6 +95,9 @@ function buildPackageJson(): string {
             'test:sharded': 'node scripts/node-foundation/build-scripts.cjs test.js --garda-shards 2 --garda-shard-concurrency 2 tests/node/core tests/node/gate-runtime tests/node/schemas tests/node/validators tests/node/repo tests/node/reports tests/node/compat tests/node/policy tests/node/runtime tests/node/gates tests/node/cli tests/node/lifecycle tests/node/bin tests/node/materialization',
             'test:full': 'node scripts/node-foundation/build-scripts.cjs build.js node-foundation && node scripts/node-foundation/build-scripts.cjs test.js tests/node/core tests/node/gate-runtime tests/node/schemas tests/node/validators tests/node/repo tests/node/reports tests/node/compat tests/node/policy tests/node/runtime tests/node/gates tests/node/cli tests/node/lifecycle tests/node/bin tests/node/materialization',
             'test:fast': 'node scripts/node-foundation/build-scripts.cjs test.js tests/node/core'
+        },
+        devDependencies: {
+            '@cyclonedx/cyclonedx-npm': '6.0.1'
         },
         c8: {
             all: true,
@@ -332,9 +336,26 @@ function buildSbomWorkflow(): string {
         '  steps:',
         '    - uses: actions/checkout@v7.0.0',
         '    - uses: actions/setup-node@v6',
-        '    - run: npx --yes @cyclonedx/cyclonedx-npm --output-file sbom.cdx.json',
+        '    - name: Install dependencies',
+        '      run: npm ci --ignore-scripts --no-fund --no-audit',
+        '    - run: npm run sbom:generate',
+        '    - name: Record SBOM toolchain identity',
+        '      shell: bash',
+        '      run: |',
+        "        node - <<'NODE' > sbom-toolchain.json",
+        "        const { createHash } = require('node:crypto');",
+        "        const { readFileSync } = require('node:fs');",
+        "        const sha256 = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');",
+        '        process.stdout.write(JSON.stringify({',
+        "          lockfile_sha256: sha256('package-lock.json'),",
+        "          sbom_sha256: sha256('sbom.cdx.json')",
+        '        }));',
+        '        NODE',
         '    - uses: actions/upload-artifact@v7.0.1',
         '      with:',
+        '        path: |',
+        '          sbom.cdx.json',
+        '          sbom-toolchain.json',
         '        if-no-files-found: error'
     ].join('\n');
 }
@@ -492,6 +513,21 @@ function createReadinessFixture(openChecklistItem?: string): string {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-release-readiness-'));
 
     writeFile(path.join(repoRoot, 'package.json'), buildPackageJson());
+    writeFile(path.join(repoRoot, 'package-lock.json'), JSON.stringify({
+        name: 'garda-agent-orchestrator',
+        version: '1.1.0',
+        lockfileVersion: 3,
+        packages: {
+            '': {
+                version: '1.1.0',
+                devDependencies: { '@cyclonedx/cyclonedx-npm': '6.0.1' }
+            },
+            'node_modules/@cyclonedx/cyclonedx-npm': {
+                version: '6.0.1',
+                integrity: 'sha512-/aU3bBC6qP6cV/qQ5SfUSygE/+2hQhwgg6sJML31/gZ96NyMvIUuwdk637H4z+LS/NryRT2kjR2wtD0qBEVVHQ=='
+            }
+        }
+    }, null, 2));
     writeFile(path.join(repoRoot, 'config', 'release-package-surface-baseline.json'), buildPackageSurfaceBaseline());
     writeFile(path.join(repoRoot, 'TASK.md'), '# Local task queue is not release truth.\n');
     writeFile(path.join(repoRoot, 'SECURITY.md'), '# Security\n');
@@ -2000,9 +2036,12 @@ test('release readiness rejects commented SBOM artifact failure policy', () => {
                 '  steps:',
                 '    - uses: actions/checkout@v7.0.0',
                 '    - uses: actions/setup-node@v6',
-                '    - run: npx --yes @cyclonedx/cyclonedx-npm --output-file sbom.cdx.json',
+                '    - run: npm run sbom:generate',
                 '    - uses: actions/upload-artifact@v7.0.1',
                 '      with:',
+                '        path: |',
+                '          sbom.cdx.json',
+                '          sbom-toolchain.json',
                 '        # if-no-files-found: error'
             ].join('\n')
         );
@@ -2013,6 +2052,89 @@ test('release readiness rejects commented SBOM artifact failure policy', () => {
         assert.equal(result.passed, false);
         assert.match(output, /informational: sbom\.yml CycloneDX artifact generation present=false/);
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects dynamic SBOM tool acquisition', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        writeFile(
+            path.join(repoRoot, '.github', 'workflows', 'sbom.yml'),
+            buildSbomWorkflow().replace(
+                '    - run: npm run sbom:generate',
+                '    - run: npx --yes @cyclonedx/cyclonedx-npm --output-file sbom.cdx.json'
+            )
+        );
+        const result = validateReleaseReadiness(repoRoot);
+        assert.equal(result.passed, false);
+        assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects SBOM installation that runs dependency lifecycle scripts', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        writeFile(
+            path.join(repoRoot, '.github', 'workflows', 'sbom.yml'),
+            buildSbomWorkflow().replace(
+                'npm ci --ignore-scripts --no-fund --no-audit',
+                'npm ci --no-fund --no-audit'
+            )
+        );
+        const result = validateReleaseReadiness(repoRoot);
+        assert.equal(result.passed, false);
+        assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects SBOM generator version drift from the lockfile', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        const lockPath = path.join(repoRoot, 'package-lock.json');
+        const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8')) as {
+            packages: Record<string, { version: string; integrity?: string; devDependencies?: Record<string, string> }>;
+        };
+        lock.packages['node_modules/@cyclonedx/cyclonedx-npm'].version = '6.0.0';
+        writeFile(lockPath, JSON.stringify(lock, null, 2));
+        const result = validateReleaseReadiness(repoRoot);
+        assert.equal(result.passed, false);
+        assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness requires toolchain identity in the SBOM upload', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        writeFile(
+            path.join(repoRoot, '.github', 'workflows', 'sbom.yml'),
+            buildSbomWorkflow().replace('          sbom-toolchain.json\n', '')
+        );
+        const result = validateReleaseReadiness(repoRoot);
+        assert.equal(result.passed, false);
+        assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness requires generation of lockfile and SBOM digests', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        writeFile(
+            path.join(repoRoot, '.github', 'workflows', 'sbom.yml'),
+            buildSbomWorkflow().replace("          sbom_sha256: sha256('sbom.cdx.json')", '          sbom_sha256: omitted')
+        );
+        const result = validateReleaseReadiness(repoRoot);
+        assert.equal(result.passed, false);
+        assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
@@ -2090,12 +2212,15 @@ test('release readiness rejects misplaced SBOM artifact failure policy outside u
                 '  steps:',
                 '    - uses: actions/checkout@v7.0.0',
                 '    - uses: actions/setup-node@v6',
-                '    - run: npx --yes @cyclonedx/cyclonedx-npm --output-file sbom.cdx.json',
+                '    - run: npm run sbom:generate',
                 '    - uses: actions/upload-artifact@v7.0.1',
                 '      with:',
                 '        name: sbom-cyclonedx',
                 '    - name: Unrelated upload policy',
                 '      with:',
+                '        path: |',
+                '          sbom.cdx.json',
+                '          sbom-toolchain.json',
                 '        if-no-files-found: error',
                 '      run: echo unrelated'
             ].join('\n')

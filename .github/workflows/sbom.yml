@@ -44,15 +44,38 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci --no-fund --no-audit
+        run: npm ci --ignore-scripts --no-fund --no-audit
 
       - name: Generate CycloneDX SBOM
-        run: npx --yes @cyclonedx/cyclonedx-npm --output-file sbom.cdx.json --spec-version 1.5 --output-reproducible
+        run: npm run sbom:generate
+
+      - name: Record SBOM toolchain identity
+        shell: bash
+        run: |
+          node - <<'NODE' > sbom-toolchain.json
+          const { createHash } = require('node:crypto');
+          const { readFileSync } = require('node:fs');
+          const manifest = require('./package.json');
+          const lock = require('./package-lock.json');
+          const installed = require('./node_modules/@cyclonedx/cyclonedx-npm/package.json');
+          const locked = lock.packages['node_modules/@cyclonedx/cyclonedx-npm'];
+          if (!locked?.integrity || manifest.devDependencies['@cyclonedx/cyclonedx-npm'] !== installed.version || locked.version !== installed.version) {
+            throw new Error('SBOM generator does not match the locked dev dependency');
+          }
+          const sha256 = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
+          process.stdout.write(JSON.stringify({
+            generator: { name: installed.name, version: installed.version, integrity: locked.integrity },
+            lockfile_sha256: sha256('package-lock.json'),
+            sbom_sha256: sha256('sbom.cdx.json')
+          }, null, 2) + '\n');
+          NODE
 
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sbom-cyclonedx
-          path: sbom.cdx.json
+          path: |
+            sbom.cdx.json
+            sbom-toolchain.json
           retention-days: 90
           if-no-files-found: error

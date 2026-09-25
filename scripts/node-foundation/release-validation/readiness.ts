@@ -638,11 +638,44 @@ function validateSecurityCiBaselineContract(repoRoot: string): { passed: boolean
     const gitleaksJob = getWorkflowJobBlockUnderJobs(secretScanningWorkflow, 'gitleaks');
     const gitleaksBlocking = workflowStructuralBlockContractSha256(gitleaksJob)
         === workflowStructuralBlockContractSha256(TRUSTED_GITLEAKS_JOB_CONTRACT);
+    let sbomToolLocked = false;
+    try {
+        const manifest = JSON.parse(readTextFileIfExists(path.join(repoRoot, 'package.json')) || 'null');
+        const lock = JSON.parse(readTextFileIfExists(path.join(repoRoot, 'package-lock.json')) || 'null');
+        const declaredVersion = manifest?.devDependencies?.['@cyclonedx/cyclonedx-npm'];
+        const lockedVersion = lock?.packages?.['node_modules/@cyclonedx/cyclonedx-npm']?.version;
+        const lockedIntegrity = lock?.packages?.['node_modules/@cyclonedx/cyclonedx-npm']?.integrity;
+        sbomToolLocked = typeof declaredVersion === 'string'
+            && /^\d+\.\d+\.\d+$/u.test(declaredVersion)
+            && lock?.packages?.['']?.devDependencies?.['@cyclonedx/cyclonedx-npm'] === declaredVersion
+            && lockedVersion === declaredVersion
+            && typeof lockedIntegrity === 'string'
+            && /^sha512-[A-Za-z0-9+/]+={0,2}$/u.test(lockedIntegrity)
+            && manifest?.scripts?.['sbom:generate'] === 'cyclonedx-npm --output-file sbom.cdx.json --spec-version 1.5 --output-reproducible';
+    } catch {
+        sbomToolLocked = false;
+    }
     const uploadArtifactStep = getWorkflowUseStepBlock(sbomWorkflow, 'actions/upload-artifact@v7.0.1');
-    const sbomInformational = extractWorkflowRunScripts(sbomWorkflow)
-        .some((script) => scriptHasExecutableCommand(script, 'npx --yes @cyclonedx/cyclonedx-npm'))
+    const sbomInstallStep = getWorkflowNamedStepBlock(sbomWorkflow, 'Install dependencies');
+    const identityStep = getWorkflowNamedStepBlock(sbomWorkflow, 'Record SBOM toolchain identity');
+    const sbomRunScripts = extractWorkflowRunScripts(sbomWorkflow);
+    const sbomInstallSafe = sbomInstallStep !== null
+        && extractWorkflowRunScripts(sbomInstallStep)
+            .some((script) => extractExecutableScriptLines(script).includes('npm ci --ignore-scripts --no-fund --no-audit'));
+    const sbomUploadWith = getYamlKeyBlock(uploadArtifactStep, 'with');
+    const identityRecorded = identityStep !== null
+        && extractWorkflowRunScripts(identityStep).some((script) => scriptHasExecutableCommand(script, "node - <<'NODE' > sbom-toolchain.json"))
+        && identityStep.includes("lockfile_sha256: sha256('package-lock.json')")
+        && identityStep.includes("sbom_sha256: sha256('sbom.cdx.json')");
+    const sbomInformational = sbomToolLocked
+        && sbomInstallSafe
+        && sbomRunScripts.some((script) => scriptHasExecutableCommand(script, 'npm run sbom:generate'))
+        && !sbomRunScripts.some((script) => scriptHasExecutableCommand(script, 'npx --yes @cyclonedx/cyclonedx-npm'))
+        && identityRecorded
         && uploadArtifactStep !== null
-        && blockHasNonCommentLine(getYamlKeyBlock(uploadArtifactStep, 'with'), 'if-no-files-found: error');
+        && blockHasNonCommentLine(getYamlKeyBlock(sbomUploadWith, 'path'), 'sbom.cdx.json')
+        && blockHasNonCommentLine(getYamlKeyBlock(sbomUploadWith, 'path'), 'sbom-toolchain.json')
+        && blockHasNonCommentLine(sbomUploadWith, 'if-no-files-found: error');
     const requiredCheckGuidance = [
         'Release Security Required Checks',
         '| `CI` / release validation matrix | `blocking` |',
