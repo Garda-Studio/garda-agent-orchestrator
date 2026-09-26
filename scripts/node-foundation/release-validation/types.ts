@@ -133,12 +133,19 @@ export interface EmbeddedBundleParityItemResult {
     bundleHash: string | null;
 }
 
+export interface EmbeddedBundleParityOptions {
+    required?: boolean;
+}
+
 export interface EmbeddedBundleParityResult {
     repoRoot: string;
     bundleRoot: string;
     bundlePresent: boolean;
     bundleIgnoredByGit: boolean;
     checkedItems: string[];
+    required: boolean;
+    status: 'PASSED' | 'FAILED' | 'SKIPPED';
+    skippedReason: string | null;
     passed: boolean;
     violations: string[];
     items: EmbeddedBundleParityItemResult[];
