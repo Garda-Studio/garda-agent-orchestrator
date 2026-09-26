@@ -2,6 +2,8 @@ import * as crypto from 'node:crypto';
 import * as path from 'node:path';
 
 import { getRepoRoot } from '../build';
+import { hasReviewedSecurityWorkflow, validateCandidateReadiness, type CandidateReadinessRequest, type CandidateReadinessDependencies } from './candidate-readiness';
+export { parseCandidateReadinessArgs } from './candidate-readiness';
 import {
     FORBIDDEN_PUBLISHED_PACKAGE_SURFACE_ITEMS,
     PUBLISHED_PACKAGE_SURFACE_ITEMS,
@@ -683,7 +685,8 @@ function validateSecurityCiBaselineContract(repoRoot: string): { passed: boolean
     const branchProtection = readTextFileIfExists(path.join(repoRoot, 'docs', 'branch-protection.md')) || '';
 
     const npmAuditBlocking = extractWorkflowRunScripts(securityWorkflow)
-        .some((script) => scriptHasExecutableCommand(script, 'npm audit --audit-level=high --no-fund'));
+        .some((script) => scriptHasExecutableCommand(script, 'npm audit --audit-level=high --no-fund'))
+        || hasReviewedSecurityWorkflow(repoRoot);
     const osvScanJob = getWorkflowJobBlock(securityWorkflow, 'osv-scan');
     const osvScanArgsBlock = getYamlKeyBlock(getYamlKeyBlock(osvScanJob, 'with'), 'scan-args');
     const osvInformational = workflowHasUseStep(
@@ -1366,14 +1369,23 @@ function validateReleaseReadinessContracts(repoRoot: string): ReleaseReadinessRe
     };
 }
 
-export function validateReleaseReadiness(repoRoot: string): ReleaseReadinessResult {
-    return validateReleaseReadinessContracts(repoRoot);
+export function validateReleaseReadiness(
+    repoRoot: string, request?: CandidateReadinessRequest, dependencies?: CandidateReadinessDependencies
+): ReleaseReadinessResult {
+    const result = validateReleaseReadinessContracts(repoRoot);
+    if (!request) return result;
+    const candidate = validateCandidateReadiness(path.resolve(repoRoot), request, dependencies);
+    if (!result.passed) candidate.decision = 'NO_GO';
+    return { ...result, candidate, passed: result.passed && candidate.decision === 'GO',
+        checks: [...result.checks, ...candidate.checks], violations: [...result.violations, ...candidate.violations] };
 }
 
 export function formatReleaseReadinessResult(result: ReleaseReadinessResult): string {
     const lines: string[] = [];
 
     lines.push(result.passed ? 'RELEASE_READINESS_OK' : 'RELEASE_READINESS_FAILED');
+    lines.push(`ReleaseDecision: ${result.candidate?.decision || 'NOT_EVALUATED (static preflight only)'}`);
+    if (result.candidate) lines.push(`TaskQueueSha256: ${result.candidate.taskQueueSha256 || 'unavailable'}`);
     lines.push(`RepoRoot: ${result.repoRoot}`);
     lines.push(`Version: ${result.version || 'unknown'}`);
     lines.push(`ReleaseChecklistItems: ${result.releaseChecklistItems.length}`);
@@ -1403,8 +1415,8 @@ export function formatReleaseReadinessResult(result: ReleaseReadinessResult): st
     return lines.join('\n');
 }
 
-export function runReleaseReadinessValidation(): ReleaseReadinessResult {
-    const result = validateReleaseReadiness(getRepoRoot());
+export function runReleaseReadinessValidation(request?: CandidateReadinessRequest): ReleaseReadinessResult {
+    const result = validateReleaseReadiness(getRepoRoot(), request);
     console.log(formatReleaseReadinessResult(result));
     if (!result.passed) {
         process.exit(1);

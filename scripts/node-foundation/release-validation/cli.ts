@@ -4,7 +4,7 @@ import {
 } from './types';
 import { runCleanWorktreePreflight } from './clean-worktree';
 import { runEmbeddedBundleParityValidation } from './embedded-bundle-parity';
-import { runReleaseReadinessValidation } from './readiness';
+import { parseCandidateReadinessArgs, runReleaseReadinessValidation } from './readiness';
 import { runReleaseVersionParityValidation } from './version-parity';
 import { parsePackageSurfaceCliOptions } from './package-surface-cli';
 import { runPackageSurfaceBaselineUpdate, runPackageSurfaceValidation } from './package-surface';
@@ -23,7 +23,7 @@ export const RELEASE_VALIDATION_COMMAND_HANDLERS: Readonly<Record<ReleaseValidat
     'version-parity': () => { runReleaseVersionParityValidation(); },
     'clean-worktree': () => { runCleanWorktreePreflight(); },
     'embedded-bundle-parity': () => { runEmbeddedBundleParityValidation(); },
-    'release-readiness': () => { runReleaseReadinessValidation(); },
+    'release-readiness': (args) => { runReleaseReadinessValidation(parseCandidateReadinessArgs(args)); },
     'package-surface': (args) => {
         const options = parsePackageSurfaceCliOptions(args);
         runPackageSurfaceValidation({

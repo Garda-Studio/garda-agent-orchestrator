@@ -159,6 +159,7 @@ export interface ReleaseReadinessCheck {
 }
 
 export interface ReleaseReadinessResult {
+    candidate?: import('./candidate-readiness').CandidateReadinessResult;
     repoRoot: string;
     version: string | null;
     passed: boolean;

@@ -1,18 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as childProcess from 'node:child_process';
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
 import {
     formatReleaseReadinessResult,
+    parseCandidateReadinessArgs,
+    EMBEDDED_BUNDLE_PARITY_ITEMS,
     RELEASE_VALIDATION_COMMANDS,
     RELEASE_VALIDATION_COMMAND_HANDLERS,
     resolveReleaseValidationCommand,
     runReleaseValidationCli,
     validateReleaseReadiness
 } from '../../../scripts/node-foundation/validate-release';
+
+import type { CandidateReadinessRequest, GithubEvidenceFetcher } from '../../../scripts/node-foundation/release-validation/candidate-readiness';
 
 const RELEASE_BLOCKERS = Object.freeze([
     'T-385',
@@ -3015,5 +3020,314 @@ test('release validation CLI dispatch rejects unknown raw argv before handler lo
     } finally {
         process.exit = originalExit;
         console.error = originalError;
+    }
+});
+
+const CANDIDATE_TEST_NOW = new Date('2026-09-26T10:00:00.000Z');
+
+function candidateQueue(extraRows: string[] = []): string {
+    return [
+        '## Active Queue',
+        '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+        '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+        '| T-001 | DONE | P1 | release/proof | Release prerequisite | codex | 2026-09-26 | balanced | |',
+        '| T-057 | DONE | P1 | release/candidate-dev-toolchain-audit-proof | Candidate security proof | codex | 2026-09-26 | balanced | |',
+        ...extraRows,
+        '| T-060 | TODO | P1 | release/pre-release-go-no-go | Final handoff | codex | 2026-09-26 | balanced | |',
+        '| T-083 | DONE | P4 | release/release-provenance-checksum-policy | Public artifact policy | codex | 2026-09-26 | balanced | Manual closeout authorized by operator. |',
+        '| T-100 | TODO | P2 | workflow/feature | Future feature parent | codex | 2026-09-26 | balanced | Post-release only; optional feature. |'
+    ].join('\n');
+}
+
+function ciJobFixture(commit: string): Record<string, unknown>[] {
+    const names: [string, string[]][] = [];
+    for (const node of ['22.13.0', '24']) {
+        for (const [name, step] of [
+            ['Static Checks', 'Run typecheck'], ['Unit Tests', 'Run unit tests'],
+            ['Gate Tests', 'Run gate tests (parallel shards)'], ['CLI Tests', 'Run CLI tests (parallel shards)'],
+            ['Lifecycle Tests', 'Run lifecycle tests'], ['Binary Tests', 'Run binary tests']
+        ]) names.push([name + ' / Node ' + node, name === 'Static Checks' ? [step, 'Run lint'] : ['Build node-foundation', step]]);
+        for (const os of ['ubuntu-latest', 'windows-latest']) names.push(['Release Validation / ' + os + ' / Node ' + node, ['Validate release']]);
+        for (const os of ['ubuntu-latest', 'windows-latest', 'macos-latest']) names.push(['Smoke / ' + os + ' / Node ' + node, [
+            'Build', 'Build staged node-foundation test graph', 'Pack and install smoke test',
+            'Lifecycle smoke (cross-platform E2E install → update → uninstall)'
+        ]]);
+    }
+    return names.map(([name, steps], index) => ({
+        id: index + 100, run_id: 41, run_attempt: 1, head_sha: commit, name, status: 'completed', conclusion: 'success',
+        started_at: '2026-09-26T09:00:00Z', completed_at: '2026-09-26T09:30:00Z',
+        steps: ['Install dependencies', ...steps].map(step => ({ name: step, status: 'completed', conclusion: 'success' }))
+    }));
+}
+
+function createCandidateReadinessFixture(): {
+    root: string; request: CandidateReadinessRequest; fetch: GithubEvidenceFetcher; ci: Record<string, unknown>;
+    jobs: Record<string, unknown>[];
+} {
+    const root = createReadinessFixture();
+    try {
+        runGit(root, ['rm', '--cached', 'TASK.md']);
+        const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+        manifest.scripts = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8')).scripts;
+        writeFile(path.join(root, 'package.json'), JSON.stringify(manifest, null, 2));
+        pinReadinessFixtureActions(root);
+        for (const file of ['ci.yml', 'security.yml']) {
+            writeFile(path.join(root, '.github', 'workflows', file), fs.readFileSync(path.join(process.cwd(), '.github', 'workflows', file), 'utf8'));
+        }
+        writeFile(path.join(root, 'TASK.md'), candidateQueue());
+        writeFile(path.join(root, '.gitignore'), 'release-proof/\nTASK.md\n');
+        for (const item of EMBEDDED_BUNDLE_PARITY_ITEMS) {
+            const source = path.join(root, item);
+            if (!fs.existsSync(source)) writeFile(source, 'deterministic fixture surface\n');
+            fs.mkdirSync(path.dirname(path.join(root, 'garda-agent-orchestrator', item)), { recursive: true });
+            fs.cpSync(source, path.join(root, 'garda-agent-orchestrator', item), { recursive: true });
+        }
+        runGit(root, ['add', '.']);
+        commitFixture(root, 'fixture: freeze candidate');
+        const head = childProcess.spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true });
+        assert.equal(head.status, 0);
+        const commit = head.stdout.trim();
+        const directory = path.join(root, 'release-proof');
+        const packageContent = JSON.stringify({ name: 'garda-agent-orchestrator', version: '1.1.0' }) + '\n';
+        writeFile(path.join(directory, 'package', 'package.json'), packageContent);
+        const tarballName = 'garda-agent-orchestrator-1.1.0.tgz';
+        const tarball = path.join(directory, tarballName);
+        const packed = childProcess.spawnSync('tar', ['-czf', tarball, '-C', directory, 'package'], { windowsHide: true, encoding: 'utf8' });
+        assert.equal(packed.status, 0, packed.stderr);
+        const adapter = require(path.join(process.cwd(), 'scripts', 'release-candidate.cjs')) as {
+            createManifest(report: unknown, directory: string, commit: string, tag: string, name: string, version: string): { tarball_sha256: string };
+        };
+        const candidate = adapter.createManifest([{
+            name: 'garda-agent-orchestrator', version: '1.1.0', filename: tarballName,
+            size: fs.statSync(tarball).size, entryCount: 1, unpackedSize: Buffer.byteLength(packageContent),
+            files: [{ path: 'package.json', size: Buffer.byteLength(packageContent) }]
+        }], directory, commit, 'v1.1.0', 'garda-agent-orchestrator', '1.1.0');
+        writeFile(path.join(directory, 'candidate-manifest.json'), JSON.stringify(candidate));
+        const request = { candidateDirectory: directory, commit, tag: 'v1.1.0', tarballSha256: candidate.tarball_sha256,
+            tarballName, repository: 'fixture/garda', ciRunId: 41 };
+        const ci: Record<string, unknown> = { id: 41, head_sha: commit, repository: { full_name: request.repository },
+            path: '.github/workflows/ci.yml', head_branch: 'dev', event: 'push', status: 'completed', conclusion: 'success',
+            run_attempt: 1, run_started_at: '2026-09-26T09:00:00Z', updated_at: '2026-09-26T09:30:00Z' };
+        const jobs = ciJobFixture(commit);
+        const securityRun = { ...ci, id: 42, path: '.github/workflows/security.yml' };
+        const securityJobs = ['npm audit', 'OSV Vulnerability Scan / scan'].map((name, index) => ({
+            id: 501 + index, run_id: 42, head_sha: commit, name, status: 'completed', conclusion: 'success',
+            started_at: ci.run_started_at, completed_at: ci.updated_at,
+            steps: (index === 0 ? ['Pin release audit npm CLI', 'Install dependencies', 'Audit dependencies'] :
+                ['Run scanner', 'Run osv-scanner-reporter']).map(step => ({ name: step, status: 'completed', conclusion: 'success' }))
+        }));
+        const fetch: GithubEvidenceFetcher = endpoint => {
+            if (endpoint.includes('/runs/41')) return endpoint.includes('/jobs') ? [{ total_count: jobs.length, jobs }] : ci;
+            if (endpoint.includes('/runs/42')) return endpoint.includes('/jobs') ? [{ total_count: securityJobs.length, jobs: securityJobs }] : securityRun;
+            throw new Error('Unexpected offline fixture endpoint.');
+        };
+        const security = require(path.join(process.cwd(), 'scripts', 'release-security-evidence.cjs')) as {
+            attestOrVerify(mode: string, args: string[], root: string, now: Date, fetch: () => unknown): unknown;
+        };
+        security.attestOrVerify('attest', [directory, commit, request.tag, request.tarballSha256, tarballName, request.repository, '42'],
+            root, CANDIDATE_TEST_NOW, () => ({ run: securityRun, jobs: [{ total_count: securityJobs.length, jobs: securityJobs }] }));
+        return { root, request, fetch, ci, jobs };
+    } catch (error) {
+        fs.rmSync(root, { recursive: true, force: true });
+        throw error;
+    }
+}
+
+test('candidate readiness combines real Git and tarball proof with complete offline CI/security payloads for GO', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(result.passed, true, formatReleaseReadinessResult(result));
+        assert.equal(result.candidate?.decision, 'GO');
+        assert.match(formatReleaseReadinessResult(result), /ReleaseDecision: GO/);
+        assert.equal(result.candidate?.taskQueueSha256,
+            crypto.createHash('sha256').update(fs.readFileSync(path.join(fixture.root, 'TASK.md'))).digest('hex'));
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness rejects foreign, stale, skipped, empty and replayed suite evidence', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        for (const mutation of [
+            { head_sha: 'a'.repeat(40) }, { conclusion: 'skipped' }, { updated_at: '2026-09-24T09:30:00Z' },
+            { repository: { full_name: 'foreign/repo' } }, { run_attempt: 2 }
+        ]) {
+            const result = validateReleaseReadiness(fixture.root, fixture.request, {
+                now: CANDIDATE_TEST_NOW, fetch: endpoint => endpoint.endsWith('/41') ? { ...fixture.ci, ...mutation } : fixture.fetch(endpoint)
+            });
+            assert.equal(result.candidate?.decision, 'NO_GO');
+            assert.equal(result.checks.find(check => check.area === 'candidate-suite')?.passed, false);
+        }
+        const original = [...fixture.jobs];
+        for (const replacement of [[], original.slice(1), [{ ...original[0], conclusion: 'skipped' }, ...original.slice(1)],
+            [{ ...original[0], steps: [] }, ...original.slice(1)]]) {
+            fixture.jobs.splice(0, fixture.jobs.length, ...replacement);
+            const result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+            assert.equal(result.candidate?.decision, 'NO_GO');
+            assert.equal(result.checks.find(check => check.area === 'candidate-suite')?.passed, false);
+        }
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness recursively checks manually decomposed DONE parents and ignores post-release feature parents', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const queuePath = path.join(fixture.root, 'TASK.md');
+        const rows = [
+            '| T-010 | DONE | P1 | workflow/release | Manually decomposed parent | codex | 2026-09-26 | balanced | Decomposition source: manual-operator; Child tasks: T-011, T-012. |',
+            '| T-011 | DECOMPOSED | P1 | workflow/release | Nested parent | codex | 2026-09-26 | balanced | Decomposition source: manual-agent; Child tasks: T-013, T-014. |',
+            '| T-012 | DONE | P1 | workflow/release | Sibling | codex | 2026-09-26 | balanced | |',
+            '| T-013 | DONE | P1 | workflow/release | Leaf one | codex | 2026-09-26 | balanced | |',
+            '| T-014 | TODO | P1 | workflow/release | Leaf two | codex | 2026-09-26 | balanced | |'
+        ];
+        writeFile(queuePath, candidateQueue(rows));
+        let result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(result.candidate?.decision, 'NO_GO');
+        assert.match(formatReleaseReadinessResult(result), /Unfinished release task: T-014/);
+        writeFile(queuePath, candidateQueue(rows).replace('T-014 | TODO', 'T-014 | DONE'));
+        result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(result.candidate?.decision, 'GO', formatReleaseReadinessResult(result));
+        writeFile(queuePath, candidateQueue(rows).replace('T-010 | DONE', 'T-010 | IN_PROGRESS'));
+        result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(result.candidate?.decision, 'NO_GO');
+        writeFile(queuePath, candidateQueue(rows).replace('Child tasks: T-013, T-014.', 'Child tasks: T-010, T-014.'));
+        result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(result.candidate?.decision, 'NO_GO');
+        assert.match(formatReleaseReadinessResult(result), /decomposition cycle/);
+        writeFile(queuePath, candidateQueue(rows).replace('Child tasks: T-013, T-014.', 'Child tasks: T-013, T-099.'));
+        result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(result.candidate?.decision, 'NO_GO');
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness rejects absent mandatory evidence, altered artifacts and mid-verification queue or candidate changes', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const evidence = path.join(fixture.request.candidateDirectory, 'security-evidence.json');
+        const saved = fs.readFileSync(evidence);
+        fs.unlinkSync(evidence);
+        let result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(result.candidate?.decision, 'NO_GO');
+        assert.equal(result.checks.find(check => check.area === 'candidate-security')?.passed, false);
+        fs.writeFileSync(evidence, saved);
+        const queue = path.join(fixture.root, 'TASK.md');
+        result = validateReleaseReadiness(fixture.root, fixture.request, {
+            now: CANDIDATE_TEST_NOW, fetch: endpoint => {
+                const payload = fixture.fetch(endpoint);
+                if (endpoint.includes('/42')) fs.appendFileSync(queue, '\nOperator queue changed.\n');
+                return payload;
+            }
+        });
+        assert.equal(result.candidate?.decision, 'NO_GO');
+        assert.equal(result.checks.find(check => check.area === 'candidate-recheck')?.passed, false);
+        writeFile(queue, candidateQueue());
+        result = validateReleaseReadiness(fixture.root, fixture.request, {
+            now: CANDIDATE_TEST_NOW, fetch: endpoint => {
+                const payload = fixture.fetch(endpoint);
+                if (endpoint.includes('/42')) fs.appendFileSync(path.join(fixture.request.candidateDirectory, fixture.request.tarballName), 'altered');
+                return payload;
+            }
+        });
+        assert.equal(result.candidate?.decision, 'NO_GO');
+        assert.equal(result.checks.find(check => check.area === 'candidate-recheck')?.passed, false);
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness never exempts release blockers through incidental post-release notes', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const queue = path.join(fixture.root, 'TASK.md');
+        const blocker = '| T-010 | TODO | P1 | release/proof | Required proof | codex | 2026-09-26 | balanced | Includes a post-release comparison after publication. |';
+        writeFile(queue, candidateQueue([blocker]));
+        let result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(result.candidate?.decision, 'NO_GO');
+        assert.match(formatReleaseReadinessResult(result), /Unfinished release task: T-010/);
+        const parent = '| T-010 | DONE | P1 | workflow/release | Parent | codex | 2026-09-26 | balanced | Child tasks: T-011, T-100. |';
+        const child = '| T-011 | TODO | P1 | workflow/proof | Required child | codex | 2026-09-26 | balanced | Post-release only; misleading pre-boundary label. |';
+        writeFile(queue, candidateQueue([parent, child]));
+        result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(result.candidate?.decision, 'NO_GO');
+        assert.match(formatReleaseReadinessResult(result), /Unfinished release task: T-011/);
+        writeFile(queue, candidateQueue([parent, child]).replace('T-011 | TODO', 'T-011 | DONE'));
+        result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(result.candidate?.decision, 'GO', formatReleaseReadinessResult(result));
+        writeFile(queue, candidateQueue().replace('T-083 | DONE', 'T-083 | TODO').replace('Manual closeout authorized by operator.', 'Post-release only; mandatory policy.'));
+        result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(result.candidate?.decision, 'NO_GO');
+        assert.match(formatReleaseReadinessResult(result), /Unfinished release task: T-083/);
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness rejects missing explicit children including suffixes and range gaps', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const queue = path.join(fixture.root, 'TASK.md');
+        const child = (id: string) => '| ' + id + ' | DONE | P1 | workflow/proof | Child | codex | 2026-09-26 | balanced | |';
+        for (const [links, missing] of [
+            ['Child tasks: T-011, T-012, T-099.', 'T-099'],
+            ['Child tasks: T-011, T-012, T-099-F1.', 'T-099-F1'],
+            ['Child range T-011 through T-014.', 'T-013']
+        ]) {
+            const parent = '| T-010 | DONE | P1 | workflow/release | Parent | codex | 2026-09-26 | balanced | Decomposition source: manual-operator; ' + links + ' |';
+            writeFile(queue, candidateQueue([parent, child('T-011'), child('T-012'), child('T-014')]));
+            const result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+            assert.equal(result.candidate?.decision, 'NO_GO');
+            assert.match(formatReleaseReadinessResult(result), new RegExp('Missing release child task: ' + missing));
+        }
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness requires exact security and current or legacy provenance prerequisites', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const queue = path.join(fixture.root, 'TASK.md');
+        for (const missing of ['T-057', 'T-083']) {
+            writeFile(queue, candidateQueue().split('\n').filter(line => !line.startsWith('| ' + missing + ' |')).join('\n'));
+            const result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+            assert.equal(result.candidate?.decision, 'NO_GO');
+            assert.match(formatReleaseReadinessResult(result), /Mandatory release prerequisite/);
+        }
+        writeFile(queue, candidateQueue().replace('T-083 | DONE', 'T-099 | DONE'));
+        let result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(result.candidate?.decision, 'NO_GO');
+        writeFile(queue, candidateQueue().replace('T-083 | DONE', 'T-1027 | DONE'));
+        result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(result.candidate?.decision, 'GO', formatReleaseReadinessResult(result));
+        const duplicate = '| T-1027 | DONE | P1 | release/release-provenance-checksum-policy | Duplicate policy | codex | 2026-09-26 | balanced | |';
+        writeFile(queue, candidateQueue([duplicate]));
+        result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(result.candidate?.decision, 'NO_GO');
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness CLI keeps static preflight separate and rejects incomplete or unsafe candidate arguments', () => {
+    assert.equal(parseCandidateReadinessArgs([]), undefined);
+    for (const args of [['--candidate'], ['--skip-evidence'], ['--candidate', 'relative', 'a'.repeat(40), 'v1.1.0', 'b'.repeat(64), 'pkg.tgz', 'fixture/garda', '41']]) {
+        assert.throws(() => parseCandidateReadinessArgs(args));
+    }
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const r = fixture.request;
+        assert.deepEqual(parseCandidateReadinessArgs(['--candidate', r.candidateDirectory, r.commit, r.tag, r.tarballSha256, r.tarballName, r.repository, '41']), r);
+        assert.match(formatReleaseReadinessResult(validateReleaseReadiness(fixture.root)), /ReleaseDecision: NOT_EVALUATED/);
+        const result = validateReleaseReadiness(fixture.root, { ...r, commit: 'a'.repeat(40) }, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(result.candidate?.decision, 'NO_GO');
+        assert.equal(result.passed, false);
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
     }
 });

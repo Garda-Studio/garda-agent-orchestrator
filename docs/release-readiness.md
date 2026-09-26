@@ -2,7 +2,56 @@
 
 This tracked checklist is the release-cut source of truth for static readiness.
 Local `TASK.md` and `TASK_DONE.md` files are intentionally gitignored operator
-queues and must not be treated as publish blockers by release validation.
+queues. Static preflight does not use them. The explicit candidate GO check reads
+current `TASK.md` release-lane blockers; task status is not CI or artifact proof.
+
+## Candidate GO/NO-GO
+
+`npm run validate:release-readiness` is the offline static preflight and prints
+`ReleaseDecision: NOT_EVALUATED`. Its success is not release approval. After the
+final candidate has been frozen and its exact-commit CI and Security runs have
+completed, use the explicit candidate check from that clean checkout:
+
+```powershell
+npm run validate:release-readiness -- --candidate <absolute-candidate-dir> <commit-sha> <tag> <tarball-sha256> <tarball-name> <owner/repo> <ci-run-id>
+```
+
+The command prints `ReleaseDecision: GO` only when every static and candidate
+check succeeds. Missing, foreign, stale, failed, skipped or zero-item mandatory
+evidence yields `NO_GO` and a nonzero exit. It does not publish or mutate the
+candidate. Keep the candidate directory ignored or outside the checkout.
+
+- The clean HEAD and package version must match the explicit commit and tag.
+- The exact tarball bytes and contents manifest are reverified through the
+  pack-once candidate adapter; checksums identify bytes and do not claim signing.
+- Mandatory embedded parity must inspect actual items and return PASSED.
+- Authenticated `gh api` data must show a current successful CI run for the same
+  repository and commit, with the complete reviewed Node 22.13.0/24 test matrix,
+  Linux/Windows release validation and Linux/Windows/macOS packaged/lifecycle
+  smoke. Required job steps cannot be skipped. Rerun attempts, job identities,
+  freshness and reviewed workflow/npm-script contracts are checked.
+- Existing `security-evidence.json` is live-reverified through the T-057 adapter
+  for the same candidate, full dependency graph and blocking OSV scan.
+- The canonical local queue must contain one `release/pre-release-go-no-go`
+  boundary. Every row before it forms the release lane. A linked non-release
+  feature after the boundary is excluded only when explicitly marked
+  `Post-release only;` or `Post-release only.`; incidental notes cannot exempt
+  pre-boundary tasks or mandatory release policy. Required security and public
+  checksum/provenance prerequisites are T-057 and T-083 (legacy T-1027), with
+  their matching semantic areas, wherever they appear. Missing, substituted or
+  ambiguous prerequisite identities block GO. Manually decomposed and completed parents are traversed
+  recursively through explicit child links; missing, unfinished or cyclic
+  children block GO. The boundary itself is the handoff, not its prerequisite.
+- Checkout identity, queue bytes, security record and tarball are rechecked after
+  live verification. The reported queue digest identifies the operator snapshot.
+
+A GO result is a point-in-time observation, not an atomic lock of a mutable
+workspace or external service. Keep the frozen checkout and candidate unchanged;
+any later edit requires new affected proof and another GO check. An unavailable
+authenticated GitHub client is NO_GO, never substitute local fixture evidence.
+The reviewed CI and npm-script digests must be reviewed and synchronized when
+those execution contracts change. SBOM and final operator handoff requirements
+remain part of the final release boundary.
 
 ## Candidate-bound dependency security evidence
 
@@ -42,7 +91,7 @@ another commit or with different tarball or lockfile bytes cannot reuse the
 record. The Security run ID is obtained from GitHub Actions, and `gh` must be
 authenticated with read access to that repository. Local evidence is a
 candidate-bound verification record, not a claim that the candidate tarball
-itself was scanned. Final GO/NO-GO integration is tracked by T-059 and T-060.
+itself was scanned. The explicit candidate GO/NO-GO check consumes this record; the final release boundary also requires the complete operator handoff.
 ## Public artifact integrity and provenance policy
 
 The npm package is the supported install surface. Its registry integrity and
