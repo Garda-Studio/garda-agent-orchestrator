@@ -1,11 +1,17 @@
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
+import * as crypto from 'node:crypto';
 import * as os from 'node:os';
 import * as childProcess from 'node:child_process';
 import * as path from 'node:path';
 
 const security = require(path.join(process.cwd(), 'scripts/release-security-evidence.cjs')) as {
+    MAX_EVIDENCE_AGE_MS: number;
+    attestOrVerify: (mode: 'attest' | 'verify', argv: string[], root: string, clock: Date,
+        fetch: (repository: string, runId: number) => { run: object; jobs: object }) => {
+        evidencePath: string; evidenceSha256: string;
+    };
     assertSecurityWorkflow: (content: string) => void;
     validateSecurityRun: (run: object, jobs: object, expected: object, now: Date) => object;
     assertDevGraph: (packageJson: object, lockfile: object) => void;
@@ -255,4 +261,168 @@ test('security audit policy prevents candidate lifecycle and npm configuration d
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
+});
+
+test('security evidence accepts Git-valid nested and non-ASCII release branches', () => {
+    for (const branch of ['release/1.5/rc1', 'release/1.5+rc@team', 'release/候補/rc1', 'release/x;literal']) {
+        for (const qualified of [false, true]) {
+            const { run, jobs } = fixture();
+            run.head_branch = branch;
+            run.path = '.github/workflows/security.yml' + (qualified ? '@' + branch : '');
+            assert.doesNotThrow(() => security.validateSecurityRun(run, jobs, expected, now), branch);
+        }
+    }
+});
+
+test('security evidence rejects malformed and foreign release branches', () => {
+    for (const branch of ['feature/rc1', 'release/', 'release//rc1', 'release/a..b', 'release/a.lock',
+        'release/.hidden', 'release/a@{1}', 'release/a b', 'release/a\\b', 'release/a~b', 'release/a.']) {
+        const { run, jobs } = fixture();
+        run.head_branch = branch;
+        assert.throws(() => security.validateSecurityRun(run, jobs, expected, now), /another release commit/, branch);
+    }
+});
+
+function lifecycleFixture(t: TestContext) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-security-lifecycle-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const repoRoot = path.join(root, 'repository');
+    const directory = path.join(root, 'candidate');
+    const packedRoot = path.join(root, 'pack-input');
+    fs.mkdirSync(path.join(repoRoot, '.github', 'workflows'), { recursive: true });
+    fs.mkdirSync(directory);
+    fs.mkdirSync(path.join(packedRoot, 'package'), { recursive: true });
+    const packageJson = { name: 'garda-agent-orchestrator', version: '1.5.0',
+        devDependencies: { '@cyclonedx/cyclonedx-npm': '1.0.0' } };
+    const packageBytes = JSON.stringify(packageJson);
+    fs.writeFileSync(path.join(repoRoot, 'package.json'), packageBytes);
+    fs.writeFileSync(path.join(repoRoot, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3,
+        packages: { '': { devDependencies: packageJson.devDependencies } } }));
+    fs.copyFileSync(path.join(process.cwd(), '.github/workflows/security.yml'),
+        path.join(repoRoot, '.github/workflows/security.yml'));
+    const git = (...args: string[]) => {
+        const result = childProcess.spawnSync('git', ['-c', 'core.hooksPath=' + path.join(root, 'empty-hooks'), ...args],
+            { cwd: repoRoot, encoding: 'utf8', windowsHide: true });
+        assert.equal(result.status, 0, result.stderr);
+        return result.stdout.trim();
+    };
+    git('init', '-q');
+    git('config', 'user.name', 'Garda Fixture');
+    git('config', 'user.email', 'garda@example.invalid');
+    git('config', 'core.autocrlf', 'false');
+    git('add', '.');
+    git('commit', '-q', '--no-gpg-sign', '-m', 'fixture');
+    const fixtureCommit = git('rev-parse', 'HEAD');
+    fs.writeFileSync(path.join(packedRoot, 'package', 'package.json'), packageBytes);
+    const tarballName = 'candidate.tgz';
+    const tarballPath = path.join(directory, tarballName);
+    const tar = childProcess.spawnSync('tar', ['-C', packedRoot, '-czf', tarballPath, 'package'],
+        { encoding: 'utf8', windowsHide: true });
+    assert.equal(tar.status, 0, tar.stderr);
+    const candidate = require(path.join(process.cwd(), 'scripts/release-candidate.cjs')) as {
+        createManifest: (report: object[], directory: string, commit: string, tag: string,
+            name: string, version: string) => { tarball_sha256: string };
+    };
+    const manifest = candidate.createManifest([{ name: packageJson.name, version: packageJson.version,
+        filename: tarballName, size: fs.statSync(tarballPath).size, entryCount: 1,
+        unpackedSize: Buffer.byteLength(packageBytes),
+        files: [{ path: 'package.json', size: Buffer.byteLength(packageBytes) }] }],
+        directory, fixtureCommit, 'v1.5.0', packageJson.name, packageJson.version);
+    fs.writeFileSync(path.join(directory, 'candidate-manifest.json'), JSON.stringify(manifest));
+    const payload = fixture();
+    payload.run.head_sha = fixtureCommit;
+    payload.run.head_branch = 'release/1.5/rc1';
+    for (const job of payload.jobs.jobs) job.head_sha = fixtureCommit;
+    const calls: [string, number][] = [];
+    const fetch = (requestedRepository: string, runId: number) => {
+        calls.push([requestedRepository, runId]);
+        assert.equal(requestedRepository, repository);
+        assert.equal(runId, expected.runId);
+        return structuredClone(payload);
+    };
+    const args = [directory, fixtureCommit, 'v1.5.0', manifest.tarball_sha256, tarballName, repository];
+    return { repoRoot, directory, args, payload, calls, fetch };
+}
+
+test('security attest and verify round trip bind real candidate files and refetch the run', (t) => {
+    const data = lifecycleFixture(t);
+    const created = security.attestOrVerify('attest', [...data.args, '42'], data.repoRoot, now, data.fetch);
+    const evidenceBytes = fs.readFileSync(created.evidencePath);
+    assert.equal(created.evidenceSha256, crypto.createHash('sha256').update(evidenceBytes).digest('hex'));
+    const record = JSON.parse(evidenceBytes.toString('utf8'));
+    assert.equal(record.candidate.commit_sha, data.args[1]);
+    assert.equal(record.candidate.tarball_sha256, data.args[3]);
+    assert.equal(record.attested_at_utc, now.toISOString());
+    const verified = security.attestOrVerify('verify', data.args, data.repoRoot, now, data.fetch);
+    assert.deepEqual(verified, created);
+    assert.deepEqual(data.calls, [[repository, 42], [repository, 42]]);
+    assert.deepEqual(fs.readFileSync(created.evidencePath), evidenceBytes);
+});
+
+test('security attest rejects replacing an existing evidence file', (t) => {
+    const data = lifecycleFixture(t);
+    const created = security.attestOrVerify('attest', [...data.args, '42'], data.repoRoot, now, data.fetch);
+    const original = fs.readFileSync(created.evidencePath);
+    assert.throws(() => security.attestOrVerify('attest', [...data.args, '42'], data.repoRoot, now, data.fetch),
+        (error: unknown) => (error as NodeJS.ErrnoException).code === 'EEXIST');
+    assert.deepEqual(fs.readFileSync(created.evidencePath), original);
+});
+
+test('security verify rejects missing malformed and missing-run-ID evidence before fetch', (t) => {
+    const data = lifecycleFixture(t);
+    const evidencePath = path.join(data.directory, 'security-evidence.json');
+    assert.throws(() => security.attestOrVerify('verify', data.args, data.repoRoot, now, data.fetch),
+        (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT');
+    fs.writeFileSync(evidencePath, '{broken');
+    assert.throws(() => security.attestOrVerify('verify', data.args, data.repoRoot, now, data.fetch), SyntaxError);
+    fs.writeFileSync(evidencePath, JSON.stringify({ security: {}, attested_at_utc: now.toISOString() }));
+    assert.throws(() => security.attestOrVerify('verify', data.args, data.repoRoot, now, data.fetch), /run ID is missing/);
+    assert.deepEqual(data.calls, []);
+});
+
+test('security verify rejects replaced candidate binding without overwriting the record', (t) => {
+    const data = lifecycleFixture(t);
+    const created = security.attestOrVerify('attest', [...data.args, '42'], data.repoRoot, now, data.fetch);
+    const record = JSON.parse(fs.readFileSync(created.evidencePath, 'utf8'));
+    record.candidate.tarball_sha256 = 'd'.repeat(64);
+    const altered = JSON.stringify(record);
+    fs.writeFileSync(created.evidencePath, altered);
+    assert.throws(() => security.attestOrVerify('verify', data.args, data.repoRoot, now, data.fetch), /different candidate/);
+    assert.equal(fs.readFileSync(created.evidencePath, 'utf8'), altered);
+});
+
+test('security verify rejects stale future and pre-scan attestations with a fresh scan', (t) => {
+    const data = lifecycleFixture(t);
+    const created = security.attestOrVerify('attest', [...data.args, '42'], data.repoRoot, now, data.fetch);
+    const original = JSON.parse(fs.readFileSync(created.evidencePath, 'utf8'));
+    for (const attestedAt of [new Date(now.getTime() - security.MAX_EVIDENCE_AGE_MS - 1).toISOString(),
+        new Date(now.getTime() + 10 * 60 * 1000).toISOString(), '2026-09-25T10:19:59.000Z']) {
+        fs.writeFileSync(created.evidencePath, JSON.stringify({ ...original, attested_at_utc: attestedAt }));
+        assert.throws(() => security.attestOrVerify('verify', data.args, data.repoRoot, now, data.fetch),
+            /attestation is stale or predates the scan/, attestedAt);
+    }
+});
+
+test('security verify rejects replaced live jobs and a missing successful scan', (t) => {
+    const data = lifecycleFixture(t);
+    const created = security.attestOrVerify('attest', [...data.args, '42'], data.repoRoot, now, data.fetch);
+    const original = fs.readFileSync(created.evidencePath);
+    data.payload.jobs.jobs[0].id = 999;
+    assert.throws(() => security.attestOrVerify('verify', data.args, data.repoRoot, now, data.fetch), /different candidate/);
+    data.payload.jobs.jobs[0].id = 101;
+    data.payload.run.conclusion = 'failure';
+    assert.throws(() => security.attestOrVerify('verify', data.args, data.repoRoot, now, data.fetch), /missing, skipped, failed/);
+    assert.deepEqual(fs.readFileSync(created.evidencePath), original);
+    assert.equal(data.calls.length, 3);
+});
+
+test('security attest fails closed on fetch failure and an invalid run ID', (t) => {
+    const data = lifecycleFixture(t);
+    const unavailable = () => { throw new Error('Fixture GitHub API unavailable'); };
+    assert.throws(() => security.attestOrVerify('attest', [...data.args, '42'], data.repoRoot, now, unavailable),
+        /Fixture GitHub API unavailable/);
+    assert.equal(fs.existsSync(path.join(data.directory, 'security-evidence.json')), false);
+    assert.throws(() => security.attestOrVerify('attest', [...data.args, 'not-an-id'], data.repoRoot, now, data.fetch),
+        /run ID is missing or invalid/);
+    assert.deepEqual(data.calls, []);
 });

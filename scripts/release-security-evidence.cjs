@@ -13,7 +13,6 @@ const CLOCK_SKEW_MS = 5 * 60 * 1000;
 const COMMIT_RE = /^[a-f0-9]{40}$/u;
 const SHA256_RE = /^[a-f0-9]{64}$/u;
 const REPOSITORY_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
-const RELEASE_BRANCH_RE = /^(?:dev|main|master|release\/[A-Za-z0-9_.-]+)$/u;
 
 function fail(message) {
     throw new Error(message);
@@ -93,6 +92,24 @@ function assertAuditSteps(job) {
     }
 }
 
+function isReleaseBranch(branch) {
+    if (typeof branch !== 'string') {
+        return false;
+    }
+    if (['dev', 'main', 'master'].includes(branch)) {
+        return true;
+    }
+    if (!branch.startsWith('release/')) {
+        return false;
+    }
+    const result = childProcess.spawnSync('git', ['check-ref-format', '--branch', branch], {
+        encoding: 'utf8',
+        windowsHide: true,
+        maxBuffer: 1024 * 1024
+    });
+    return !result.error && result.status === 0;
+}
+
 function validateSecurityRun(run, jobsPayload, expected, now = new Date()) {
     const nowMs = now instanceof Date ? now.getTime() : NaN;
     if (!Number.isFinite(nowMs) || !COMMIT_RE.test(expected?.commit) ||
@@ -103,7 +120,7 @@ function validateSecurityRun(run, jobsPayload, expected, now = new Date()) {
     if (run?.id !== expected.runId || run.head_sha !== expected.commit ||
         run.repository?.full_name !== expected.repository ||
         !['.github/workflows/security.yml', '.github/workflows/security.yml@' + run.head_branch].includes(run.path) ||
-        !RELEASE_BRANCH_RE.test(run.head_branch || '') ||
+        !isReleaseBranch(run.head_branch) ||
         !['push', 'workflow_dispatch'].includes(run.event) ||
         run.status !== 'completed' || run.conclusion !== 'success' ||
         !Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1) {
