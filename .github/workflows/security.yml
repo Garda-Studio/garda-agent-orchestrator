@@ -40,13 +40,22 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      # Install without --no-audit so the registry advisory metadata is fetched.
+      - name: Pin release audit npm CLI
+        run: |
+          set -euo pipefail
+          npm install -g npm@11.15.0 --ignore-scripts --registry=https://registry.npmjs.org --no-audit --no-fund
+          test "$(npm --version)" = "11.15.0"
+
+      # Validate the full lockfile graph without executing candidate lifecycle code.
       - name: Install dependencies
-        run: npm ci --no-fund
+        run: npm ci --ignore-scripts --include=prod --include=dev --include=optional --include=peer --registry=https://registry.npmjs.org --no-audit --no-fund
 
       # Fail the job only on high or critical severity advisories.
       - name: Audit dependencies
-        run: npm audit --audit-level=high --no-fund
+        run: |
+          set -euo pipefail
+          test "$(npm --version)" = "11.15.0"
+          npm audit --package-lock=true --package-lock-only --ignore-scripts --include=prod --include=dev --include=optional --include=peer --audit-level=high --registry=https://registry.npmjs.org --no-fund
 
   # ── 2. OSV Scanner — open-source vulnerability database scan ─────────────────
   # Scans package-lock.json against the OSV database (osv.dev).
@@ -62,3 +71,4 @@ jobs:
     with:
       scan-args: |-
         --lockfile=package-lock.json
+      fail-on-vuln: true

@@ -4,6 +4,45 @@ This tracked checklist is the release-cut source of truth for static readiness.
 Local `TASK.md` and `TASK_DONE.md` files are intentionally gitignored operator
 queues and must not be treated as publish blockers by release validation.
 
+## Candidate-bound dependency security evidence
+
+The release cut requires a successful `Security` workflow run for the exact
+candidate commit. Its npm job installs the complete lockfile graph with
+lifecycle scripts disabled. Installation and audit explicitly include production,
+development, optional, and peer dependencies and use `https://registry.npmjs.org`.
+The audit reads the lockfile only, rechecks the pinned npm CLI version, and blocks
+high or critical advisories. Candidate `.npmrc` settings cannot omit those types
+or redirect the advisory registry. See npm's [include/omit contract](https://docs.npmjs.com/cli/v11/commands/npm-audit/#include).
+The pinned OSV reusable workflow scans `package-lock.json` with
+`fail-on-vuln: true`. The release-only evidence command checks the workflow
+contract, the required successful job steps, the run and job identities, and
+freshness. Ordinary offline `quality` remains unchanged.
+
+After the release candidate manifest and tarball exist in a clean checkout of
+the intended commit, and the matching Security run has completed, create the
+local evidence record. Use the absolute candidate directory, exact tarball
+name and SHA-256, repository, and GitHub Actions run ID:
+
+```powershell
+node scripts/release-security-evidence.cjs attest <absolute-candidate-dir> <commit-sha> <tag> <tarball-sha256> <tarball-name> <owner/repo> <security-run-id>
+```
+
+This writes `security-evidence.json` beside `candidate-manifest.json` and the
+candidate tarball. Record its printed SHA-256 in the release handoff. Before a
+GO decision, revalidate it against the exact candidate and authenticated live
+GitHub run/jobs data:
+
+```powershell
+node scripts/release-security-evidence.cjs verify <absolute-candidate-dir> <commit-sha> <tag> <tarball-sha256> <tarball-name> <owner/repo>
+```
+
+The command rejects missing, altered, failed, skipped, foreign, or older-than-24h
+evidence; a new exact-commit scan is needed after expiry. A candidate made from
+another commit or with different tarball or lockfile bytes cannot reuse the
+record. The Security run ID is obtained from GitHub Actions, and `gh` must be
+authenticated with read access to that repository. Local evidence is a
+candidate-bound verification record, not a claim that the candidate tarball
+itself was scanned. Final GO/NO-GO integration is tracked by T-059 and T-060.
 ## Public artifact integrity and provenance policy
 
 The npm package is the supported install surface. Its registry integrity and
