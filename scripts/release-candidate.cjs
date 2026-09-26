@@ -215,4 +215,4 @@ if (require.main === module) {
     }
 }
 
-module.exports = { createManifest, verifyCiRuns, verifyManifest };
+module.exports = { assertSafeName, createManifest, verifyCiRuns, verifyManifest };

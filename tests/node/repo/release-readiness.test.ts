@@ -3024,6 +3024,7 @@ test('release validation CLI dispatch rejects unknown raw argv before handler lo
 });
 
 const CANDIDATE_TEST_NOW = new Date('2026-09-26T10:00:00.000Z');
+const CANDIDATE_TEST_REPOSITORY = 'Shubchynskyi/garda-agent-orchestrator';
 
 function candidateQueue(extraRows: string[] = []): string {
     return [
@@ -3060,7 +3061,7 @@ function ciJobFixture(commit: string): Record<string, unknown>[] {
     }));
 }
 
-function createCandidateReadinessFixture(): {
+function createCandidateReadinessFixture(repository = CANDIDATE_TEST_REPOSITORY): {
     root: string; request: CandidateReadinessRequest; fetch: GithubEvidenceFetcher; ci: Record<string, unknown>;
     jobs: Record<string, unknown>[];
 } {
@@ -3068,11 +3069,16 @@ function createCandidateReadinessFixture(): {
     try {
         runGit(root, ['rm', '--cached', 'TASK.md']);
         const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-        manifest.scripts = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8')).scripts;
+        const sourceMetadata = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
+        manifest.scripts = sourceMetadata.scripts;
+        manifest.repository = sourceMetadata.repository;
         writeFile(path.join(root, 'package.json'), JSON.stringify(manifest, null, 2));
         pinReadinessFixtureActions(root);
         for (const file of ['ci.yml', 'security.yml']) {
             writeFile(path.join(root, '.github', 'workflows', file), fs.readFileSync(path.join(process.cwd(), '.github', 'workflows', file), 'utf8'));
+        }
+        for (const file of ['release-candidate.cjs', 'release-security-evidence.cjs', 'validate-workflow-references.cjs']) {
+            writeFile(path.join(root, 'scripts', file), fs.readFileSync(path.join(process.cwd(), 'scripts', file), 'utf8'));
         }
         writeFile(path.join(root, 'TASK.md'), candidateQueue());
         writeFile(path.join(root, '.gitignore'), 'release-proof/\nTASK.md\n');
@@ -3104,7 +3110,7 @@ function createCandidateReadinessFixture(): {
         }], directory, commit, 'v1.1.0', 'garda-agent-orchestrator', '1.1.0');
         writeFile(path.join(directory, 'candidate-manifest.json'), JSON.stringify(candidate));
         const request = { candidateDirectory: directory, commit, tag: 'v1.1.0', tarballSha256: candidate.tarball_sha256,
-            tarballName, repository: 'fixture/garda', ciRunId: 41 };
+            tarballName, repository, ciRunId: 41 };
         const ci: Record<string, unknown> = { id: 41, head_sha: commit, repository: { full_name: request.repository },
             path: '.github/workflows/ci.yml', head_branch: 'dev', event: 'push', status: 'completed', conclusion: 'success',
             run_attempt: 1, run_started_at: '2026-09-26T09:00:00Z', updated_at: '2026-09-26T09:30:00Z' };
@@ -3117,6 +3123,8 @@ function createCandidateReadinessFixture(): {
                 ['Run scanner', 'Run osv-scanner-reporter']).map(step => ({ name: step, status: 'completed', conclusion: 'success' }))
         }));
         const fetch: GithubEvidenceFetcher = endpoint => {
+            const expected = [41, 42].flatMap(id => ['repos/' + repository + '/actions/runs/' + id, 'repos/' + repository + '/actions/runs/' + id + '/jobs?per_page=100']);
+            assert.ok(expected.includes(endpoint), 'Unexpected offline fixture repository endpoint: ' + endpoint);
             if (endpoint.includes('/runs/41')) return endpoint.includes('/jobs') ? [{ total_count: jobs.length, jobs }] : ci;
             if (endpoint.includes('/runs/42')) return endpoint.includes('/jobs') ? [{ total_count: securityJobs.length, jobs: securityJobs }] : securityRun;
             throw new Error('Unexpected offline fixture endpoint.');
@@ -3328,6 +3336,156 @@ test('candidate readiness CLI keeps static preflight separate and rejects incomp
         assert.equal(result.candidate?.decision, 'NO_GO');
         assert.equal(result.passed, false);
     } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness rejects matching fork CI and security evidence before live fetch', () => {
+    const fixture = createCandidateReadinessFixture('foreign/garda-fork');
+    try {
+        let fetches = 0;
+        const result = validateReleaseReadiness(fixture.root, fixture.request, {
+            now: CANDIDATE_TEST_NOW, fetch: endpoint => { fetches += 1; return fixture.fetch(endpoint); }
+        });
+        assert.equal(result.candidate?.decision, 'NO_GO');
+        assert.equal(result.checks.find(check => check.area === 'candidate-identity')?.passed, false);
+        assert.match(formatReleaseReadinessResult(result), /authoritative verifier repository/);
+        assert.equal(fetches, 0);
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness rejects unsafe tarball names at parser and artifact boundaries', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        for (const name of ['', '../outside.tgz', '/tmp/outside.tgz', 'C:\\outside.tgz', 'nested/pkg.tgz', 'nested\\pkg.tgz', 'bad\0.tgz']) {
+            const request = { ...fixture.request, tarballName: name };
+            const args = ['--candidate', request.candidateDirectory, request.commit, request.tag, request.tarballSha256, name, request.repository, '41'];
+            assert.throws(() => parseCandidateReadinessArgs(args), /Unsafe release tarball name/);
+            let fetches = 0;
+            const result = validateReleaseReadiness(fixture.root, request, {
+                now: CANDIDATE_TEST_NOW, fetch: endpoint => { fetches += 1; return fixture.fetch(endpoint); }
+            });
+            assert.equal(result.candidate?.decision, 'NO_GO', name);
+            assert.equal(result.checks.find(check => check.area === 'candidate-identity')?.passed, false, name);
+            assert.match(formatReleaseReadinessResult(result), /Unsafe release tarball name/);
+            assert.equal(fetches, 0);
+        }
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness final recheck detects tracked checkout and security record mutations', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        for (const file of [path.join(fixture.root, 'SECURITY.md'), path.join(fixture.request.candidateDirectory, 'security-evidence.json')]) {
+            const saved = fs.readFileSync(file);
+            let mutated = false;
+            const result = validateReleaseReadiness(fixture.root, fixture.request, {
+                now: CANDIDATE_TEST_NOW, fetch: endpoint => {
+                    const payload = fixture.fetch(endpoint);
+                    if (!mutated && endpoint.endsWith('/42/jobs?per_page=100')) {
+                        fs.appendFileSync(file, '\n');
+                        mutated = true;
+                    }
+                    return payload;
+                }
+            });
+            assert.equal(mutated, true);
+            assert.equal(result.checks.find(check => check.area === 'candidate-security')?.passed, true);
+            assert.equal(result.checks.find(check => check.area === 'candidate-recheck')?.passed, false);
+            assert.equal(result.candidate?.decision, 'NO_GO');
+            fs.writeFileSync(file, saved);
+        }
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness public CLI forwards candidate identity and reports GO or NO_GO with failure exit', t => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const build = require('../../../scripts/node-foundation/build') as { getRepoRoot(): string };
+        t.mock.method(build, 'getRepoRoot', () => fixture.root);
+        t.mock.timers.enable({ apis: ['Date'], now: CANDIDATE_TEST_NOW });
+        const originalSpawn = childProcess.spawnSync;
+        const endpoints: string[] = [];
+        t.mock.method(require('node:child_process'), 'spawnSync', (command: string, args: string[], options: childProcess.SpawnSyncOptions) => {
+            if (command !== 'gh') return originalSpawn(command, args, options);
+            assert.deepEqual(args.slice(0, 3), ['api', '--hostname', 'github.com']);
+            endpoints.push(args[3]);
+            const payload = fixture.fetch(args[3], args.includes('--paginate'));
+            return { status: 0, stdout: JSON.stringify(payload), stderr: '' };
+        });
+        const output: string[] = [];
+        t.mock.method(console, 'log', (message?: unknown) => { output.push(String(message)); });
+        let exitCode: string | number | null | undefined;
+        t.mock.method(process, 'exit', (code?: string | number | null) => { exitCode = code; throw new Error('fixture process.exit'); });
+        const request = fixture.request;
+        const args = ['--candidate', request.candidateDirectory, request.commit, request.tag, request.tarballSha256, request.tarballName, request.repository, '41'];
+        runReleaseValidationCli('release-readiness', args);
+        assert.equal(exitCode, undefined);
+        assert.deepEqual(endpoints, [41, 42].flatMap(id => ['repos/' + request.repository + '/actions/runs/' + id, 'repos/' + request.repository + '/actions/runs/' + id + '/jobs?per_page=100']));
+        assert.match(output.join('\n'), /RELEASE_READINESS_OK/);
+        assert.match(output.join('\n'), /ReleaseDecision: GO/);
+        assert.match(output.join('\n'), /TaskQueueSha256: [a-f0-9]{64}/);
+        output.length = 0;
+        writeFile(path.join(fixture.root, 'TASK.md'), candidateQueue().replace('T-057 | DONE', 'T-057 | TODO'));
+        assert.throws(() => runReleaseValidationCli('release-readiness', args), /fixture process\.exit/);
+        assert.equal(exitCode, 1);
+        assert.match(output.join('\n'), /RELEASE_READINESS_FAILED/);
+        assert.match(output.join('\n'), /ReleaseDecision: NO_GO/);
+        assert.match(output.join('\n'), /Unfinished release task: T-057/);
+    } finally {
+        t.mock.restoreAll();
+        t.mock.timers.reset();
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness rejects malformed verifier repository metadata before evidence lookup', t => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const build = require('../../../scripts/node-foundation/build') as { getRepoRoot(): string };
+        t.mock.method(build, 'getRepoRoot', () => fixture.root);
+        const metadataPath = path.join(fixture.root, 'package.json');
+        const original = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+        for (const repository of [
+            undefined,
+            'https://github.com/' + CANDIDATE_TEST_REPOSITORY,
+            { type: 'svn', url: original.repository.url },
+            { type: 'git', url: 'https://example.invalid/' + CANDIDATE_TEST_REPOSITORY + '.git' },
+            { type: 'git', url: original.repository.url + '?authority=caller' }
+        ]) {
+            const metadata = { ...original };
+            if (repository === undefined) delete metadata.repository;
+            else metadata.repository = repository;
+            writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+            runGit(fixture.root, ['add', 'package.json']);
+            commitFixture(fixture.root, 'fixture: invalid verifier repository');
+            const head = childProcess.spawnSync('git', ['rev-parse', 'HEAD'], {
+                cwd: fixture.root, encoding: 'utf8', windowsHide: true
+            });
+            assert.equal(head.status, 0);
+            const clean = childProcess.spawnSync('git', ['status', '--porcelain'], {
+                cwd: fixture.root, encoding: 'utf8', windowsHide: true
+            });
+            assert.equal(clean.status, 0);
+            assert.equal(clean.stdout.trim(), '');
+            let fetches = 0;
+            const result = validateReleaseReadiness(fixture.root, { ...fixture.request, commit: head.stdout.trim() }, {
+                now: CANDIDATE_TEST_NOW, fetch: endpoint => { fetches += 1; return fixture.fetch(endpoint); }
+            });
+            assert.equal(result.candidate?.decision, 'NO_GO');
+            const identity = result.checks.find(check => check.area === 'candidate-identity');
+            assert.equal(identity?.passed, false);
+            assert.match(identity?.details.join('\n') || '', /Invalid evidence object|Authoritative verifier repository metadata/);
+            assert.equal(fetches, 0);
+        }
+    } finally {
+        t.mock.restoreAll();
         fs.rmSync(fixture.root, { recursive: true, force: true });
     }
 });

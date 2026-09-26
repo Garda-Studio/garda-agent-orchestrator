@@ -52,6 +52,24 @@ interface SecurityAdapter {
         fetch: (repository: string, runId: number) => { run: unknown; jobs: unknown }): unknown;
 }
 
+interface CandidateAdapter {
+    assertSafeName(name: string): string;
+    verifyManifest(directory: string, commit: string, tag: string, sha256: string, name: string): string;
+}
+
+function candidateAdapter(): CandidateAdapter {
+    return require(path.join(getRepoRoot(), 'scripts', 'release-candidate.cjs')) as CandidateAdapter;
+}
+
+function readAuthoritativeRepository(): string {
+    const metadata = record(JSON.parse(readRegularFile(path.join(getRepoRoot(), 'package.json')).toString('utf8')));
+    const repository = record(metadata.repository);
+    const match = typeof repository.url === 'string'
+        ? /^(?:git\+)?https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?$/u.exec(repository.url) : null;
+    if (repository.type !== 'git' || !match) throw new Error('Authoritative verifier repository metadata is missing or invalid.');
+    return match[1];
+}
+
 function securityAdapter(): SecurityAdapter {
     return require(path.join(getRepoRoot(), 'scripts', 'release-security-evidence.cjs')) as SecurityAdapter;
 }
@@ -229,6 +247,7 @@ function validateTaskBlockers(queue: Buffer): void {
 }
 
 function validateRequest(request: CandidateReadinessRequest): void {
+    candidateAdapter().assertSafeName(request.tarballName);
     if (!path.isAbsolute(request.candidateDirectory) || !/^[a-f0-9]{40}$/u.test(request.commit) ||
         !/^[a-f0-9]{64}$/u.test(request.tarballSha256) || !/^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(request.tag) ||
         !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(request.repository) ||
@@ -260,6 +279,9 @@ export function validateCandidateReadiness(
         validateRequest(request);
         if (!Number.isFinite(now.getTime())) throw new Error('Invalid evidence verification time.');
         const clean = validateCleanWorktreePreflight(repoRoot);
+        if (request.repository !== readAuthoritativeRepository()) {
+            throw new Error('Requested repository differs from the authoritative verifier repository.');
+        }
         const version = record(JSON.parse(readRegularFile(path.join(repoRoot, 'package.json')).toString('utf8'))).version;
         if (!clean.passed || clean.headSha !== request.commit || request.tag !== 'v' + version) {
             throw new Error('Candidate checkout must be clean at the exact commit and version.');
@@ -275,9 +297,7 @@ export function validateCandidateReadiness(
     });
     if (checks[0]?.passed) {
         inspect('candidate-integrity', 'exact tarball digest and contents manifest are reverified', () => {
-            const adapter = require(path.join(getRepoRoot(), 'scripts', 'release-candidate.cjs')) as {
-                verifyManifest(directory: string, commit: string, tag: string, sha256: string, name: string): string;
-            };
+            const adapter = candidateAdapter();
             verifyCandidate = () => { adapter.verifyManifest(request.candidateDirectory, request.commit, request.tag, request.tarballSha256, request.tarballName); };
             verifyCandidate();
         });

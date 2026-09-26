@@ -22,6 +22,12 @@ evidence yields `NO_GO` and a nonzero exit. It does not publish or mutate the
 candidate. Keep the candidate directory ignored or outside the checkout.
 
 - The clean HEAD and package version must match the explicit commit and tag.
+- Repository authority comes from the trusted verifier checkout package repository
+  metadata, not the caller argument or mutable Git remote. Matching fork CI and
+  Security payloads cannot authorize another repository. The verifier distribution
+  itself must be trusted; no caller authority override exists.
+- Tarball names must be safe single-file .tgz basenames; path traversal, absolute
+  paths, both separator forms and empty names are rejected before evidence lookup.
 - The exact tarball bytes and contents manifest are reverified through the
   pack-once candidate adapter; checksums identify bytes and do not claim signing.
 - Mandatory embedded parity must inspect actual items and return PASSED.
