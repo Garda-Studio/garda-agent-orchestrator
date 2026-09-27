@@ -51,6 +51,15 @@ interface RunUpdateFromGitOptions {
     updateRunner?: ((options: CheckUpdateRunnerOptions) => unknown) | null;
 }
 
+function rethrowAfterCleanup(error: unknown, cleanup: () => void): never {
+    try {
+        cleanup();
+    } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'Git update failed and staging cleanup also failed.', { cause: error });
+    }
+    throw error;
+}
+
 export function buildGitCloneArgs(repoUrl: string, branch: string | null | undefined, destinationPath: string): string[] {
     const args = isExplicitLocalGitPath(repoUrl)
         ? ['clone', '--local', '--no-hardlinks']
@@ -95,12 +104,16 @@ export async function cloneGitUpdateSource(repoUrl: string, branch: string | nul
     const cleanup = () => {
         disposeCloneCleanup?.();
         disposeTemplateCleanup?.();
+        const failures: unknown[] = [];
         try {
             if (!cloneRemoved) {
                 removeBoundContainedPath(cloneBinding, true);
                 cloneRemoved = true;
             }
-        } finally {
+        } catch (error) {
+            failures.push(error);
+        }
+        try {
             if (templateRoot && !templateBinding) {
                 throw new Error(`Cannot authenticate isolated Git template cleanup owner: ${templateRoot}`);
             }
@@ -108,7 +121,11 @@ export async function cloneGitUpdateSource(repoUrl: string, branch: string | nul
                 removeBoundContainedPath(templateBinding, true);
                 templateRemoved = true;
             }
+        } catch (error) {
+            failures.push(error);
         }
+        if (failures.length === 1) throw failures[0];
+        if (failures.length > 1) throw new AggregateError(failures, 'Failed to clean up both Git update staging roots.');
     };
     let env: NodeJS.ProcessEnv;
     try {
@@ -118,8 +135,7 @@ export async function cloneGitUpdateSource(repoUrl: string, branch: string | nul
         disposeTemplateCleanup = registerTempRoot(templateRoot, templateBinding);
         env = createIsolatedGitEnvironment(templateRoot);
     } catch (error) {
-        cleanup();
-        throw error;
+        rethrowAfterCleanup(error, cleanup);
     }
     const diagnosticSource = branch ? `${repoUrl}#${branch}` : repoUrl;
     const cloneResult = await spawnStreamed('git', buildGitCloneArgs(repoUrl, branch, tempClonePath), {
@@ -128,33 +144,30 @@ export async function cloneGitUpdateSource(repoUrl: string, branch: string | nul
         envMode: 'replace',
         onStderr(chunk) { process.stderr.write(chunk); }
     }).catch((error: unknown) => {
-        cleanup();
-        throw error;
+        rethrowAfterCleanup(error, cleanup);
     });
 
     if (cloneResult.timedOut) {
-        cleanup();
-        throw createLifecycleDiagnosticError({
+        rethrowAfterCleanup(createLifecycleDiagnosticError({
             message: `git clone timed out after ${DEFAULT_GIT_CLONE_TIMEOUT_MS} ms for '${repoUrl}'.`,
             tool: 'git',
             code: 'GIT_TIMEOUT',
             sourceReference: diagnosticSource,
             stderr: cloneResult.stderr,
             stdout: cloneResult.stdout
-        });
+        }), cleanup);
     }
 
     if (cloneResult.exitCode !== 0) {
-        cleanup();
         const diagnosticText = `${String(cloneResult.stderr || '')}\n${String(cloneResult.stdout || '')}`;
-        throw createLifecycleDiagnosticError({
+        rethrowAfterCleanup(createLifecycleDiagnosticError({
             message: `Failed to clone git update source '${repoUrl}'.`,
             tool: 'git',
             code: classifyGitDiagnostic(diagnosticText),
             sourceReference: diagnosticSource,
             stderr: cloneResult.stderr,
             stdout: cloneResult.stdout
-        });
+        }), cleanup);
     }
 
     return {
@@ -198,9 +211,10 @@ export async function runUpdateFromGit(options: RunUpdateFromGitOptions) {
     });
 
     const gitSource = await cloneGitUpdateSource(cloneRepoUrl, normalizedBranch);
-
+    let gitCommitSha: string;
+    let result: Awaited<ReturnType<typeof runCheckUpdate>>;
     try {
-        const gitCommitSha = verifyGitUpdateSource({
+        gitCommitSha = verifyGitUpdateSource({
             sourceRoot: gitSource.clonePath,
             repoUrl: cloneRepoUrl,
             branch: normalizedBranch,
@@ -209,7 +223,7 @@ export async function runUpdateFromGit(options: RunUpdateFromGitOptions) {
             requireBundle: !checkOnly && !dryRun
         });
 
-        const result = await runCheckUpdate({
+        result = await runCheckUpdate({
             targetRoot,
             bundleRoot,
             initAnswersPath,
@@ -233,17 +247,18 @@ export async function runUpdateFromGit(options: RunUpdateFromGitOptions) {
                 : null
         });
 
-        return {
-            ...result,
-            sourceType: 'git',
-            sourceReference: diagnosticSource,
-            sourcePath: null,
-            repoUrl: normalizedRepoUrl,
-            branch: normalizedBranch,
-            gitCommitSha,
-            trustPolicy: trustResult.policy
-        };
-    } finally {
-        gitSource.cleanup();
+    } catch (error) {
+        rethrowAfterCleanup(error, gitSource.cleanup);
     }
+    gitSource.cleanup();
+    return {
+        ...result,
+        sourceType: 'git',
+        sourceReference: diagnosticSource,
+        sourcePath: null,
+        repoUrl: normalizedRepoUrl,
+        branch: normalizedBranch,
+        gitCommitSha,
+        trustPolicy: trustResult.policy
+    };
 }

@@ -19,6 +19,7 @@ import {
     BUNDLE_SYNC_ITEMS,
     removePathRecursive,
     getUpdateSentinelPath,
+    getLifecycleOperationLockPath,
     readSyncBackupMetadata,
     readUpdateSentinel,
     withLifecycleOperationLockAsync
@@ -28,6 +29,14 @@ const FIRST_NPM_RELEASE_FILENAME = 'garda-agent-orchestrator-1.0.0.tgz';
 const NEXT_RELEASE_TEST_VERSION = '1.0.1';
 const NPM_NETWORK_TESTS_ENABLED = process.env.GARDA_NPM_NETWORK_TESTS === '1';
 const TEST_COMPILE_GATE_COMMAND = 'node -e "console.log(\'build ok\')"';
+
+function assertOriginalBundleSnapshot(projectRoot: string, bundleRoot: string): void {
+    const snapshotsRoot = path.join(bundleRoot, 'runtime', 'update-rollbacks');
+    const snapshots = fs.readdirSync(snapshotsRoot).filter((entry) => entry.startsWith('update-'));
+    assert.equal(snapshots.length, 1);
+    assert.equal(fs.readFileSync(path.join(snapshotsRoot, snapshots[0], 'garda-agent-orchestrator', 'VERSION'), 'utf8').trim(), '0.0.1');
+    assert.equal(fs.existsSync(getLifecycleOperationLockPath(projectRoot)), false);
+}
 
 function isNpmFixtureEnvironmentKey(key: string): boolean {
     return key.toUpperCase().startsWith('NPM_CONFIG_') || ['NPM_TOKEN', 'NODE_AUTH_TOKEN'].includes(key.toUpperCase());
@@ -622,6 +631,7 @@ describe('runCheckUpdate', () => {
             assert.equal(result.checkUpdateResult, 'UPDATED');
             assert.equal(result.updateApplied, true);
             assert.notEqual(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8').trim(), '0.0.1');
+            assertOriginalBundleSnapshot(projectRoot, bundleRoot);
         } finally {
             removePathRecursive(projectRoot);
         }
@@ -652,6 +662,7 @@ describe('runCheckUpdate', () => {
             assert.equal(result.checkUpdateResult, 'UPDATED');
             assert.equal(result.updateApplied, true);
             assert.notEqual(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8').trim(), '0.0.1');
+            assertOriginalBundleSnapshot(projectRoot, bundleRoot);
         } finally {
             removePathRecursive(projectRoot);
         }

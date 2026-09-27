@@ -9,6 +9,7 @@ import * as childProcess from 'node:child_process';
 import { runUpdateFromGit, buildGitCloneArgs, cloneGitUpdateSource } from '../../../src/lifecycle/update-git';
 import { assertGitUpdateTransport, createIsolatedGitEnvironment, verifyGitUpdateSource } from '../../../src/lifecycle/update/update-git-source-verification';
 import { removePathRecursive } from '../../../src/lifecycle/common';
+import * as containedFilesystem from '../../../src/core/contained-filesystem';
 
 const gitFixtureEnvRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-git-fixture-env-'));
 const gitFixtureEnv = createIsolatedGitEnvironment(gitFixtureEnvRoot);
@@ -200,6 +201,58 @@ describe('Git update source boundary', () => {
 });
 
 describe('verified Git clone resources', () => {
+    it('attempts both authenticated roots and preserves both cleanup failures for retry', async () => {
+        const repoRoot = createGitUpdateRepo('2.1.0');
+        const clone = await cloneGitUpdateSource(repoRoot, null);
+        const templateRoot = String(clone.env.GIT_TEMPLATE_DIR);
+        const attempted: string[] = [];
+        const injected = mock.method(containedFilesystem, 'removeBoundContainedPath', (binding: containedFilesystem.ContainedDestination) => {
+            attempted.push(binding.path);
+            throw new Error(`injected cleanup failure: ${binding.path}`);
+        });
+        try {
+            assert.throws(() => clone.cleanup(), (error: unknown) => {
+                assert.ok(error instanceof AggregateError);
+                assert.equal(error.errors.length, 2);
+                assert.match(error.errors[0].message, /injected cleanup failure/);
+                assert.match(error.errors[1].message, /injected cleanup failure/);
+                return true;
+            });
+            assert.deepEqual(attempted, [clone.clonePath, templateRoot]);
+            assert.ok(fs.existsSync(clone.clonePath));
+            assert.ok(fs.existsSync(templateRoot));
+        } finally {
+            injected.mock.restore();
+            clone.cleanup();
+            removePathRecursive(repoRoot);
+        }
+        assert.equal(fs.existsSync(clone.clonePath), false);
+        assert.equal(fs.existsSync(templateRoot), false);
+    });
+
+    it('retains the clone failure when both staging cleanups also fail', async () => {
+        const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-clone-cleanup-errors-'));
+        const bindings: containedFilesystem.ContainedDestination[] = [];
+        const injected = mock.method(containedFilesystem, 'removeBoundContainedPath', (binding: containedFilesystem.ContainedDestination) => {
+            bindings.push(binding);
+            throw new Error('injected staging cleanup failure');
+        });
+        try {
+            await assert.rejects(cloneGitUpdateSource(path.join(fixtureRoot, 'absent'), null), (error: unknown) => {
+                assert.ok(error instanceof AggregateError);
+                assert.match(error.errors[0].message, /Failed to clone git update source/);
+                assert.ok(error.errors[1] instanceof AggregateError);
+                assert.equal(error.errors[1].errors.length, 2);
+                return true;
+            });
+            assert.equal(bindings.length, 2);
+        } finally {
+            injected.mock.restore();
+            for (const binding of bindings) containedFilesystem.removeBoundContainedPath(binding, true);
+            removePathRecursive(fixtureRoot);
+        }
+    });
+
     it('removes both clone and isolated template roots after use', async () => {
         const repoRoot = createGitUpdateRepo('2.1.0');
         try {
@@ -457,6 +510,43 @@ describe('runUpdateFromGit', () => {
             removePathRecursive(repoRoot);
             removePathRecursive(targetRoot);
         }
+    });
+
+    it('retains the post-clone verification failure when both staging cleanups also fail', async () => {
+        const repoRoot = createGitUpdateRepo('2.1.0', false);
+        const sourceCommit = gitText(['rev-parse', 'HEAD'], repoRoot);
+        const { targetRoot, bundleRoot } = createDeployedWorkspace('2.0.0');
+        const bindings: containedFilesystem.ContainedDestination[] = [];
+        const cleanupFailures: Error[] = [];
+        const injected = mock.method(containedFilesystem, 'removeBoundContainedPath', (binding: containedFilesystem.ContainedDestination) => {
+            bindings.push(binding);
+            const error = new Error(`injected post-clone cleanup failure: ${binding.path}`);
+            cleanupFailures.push(error);
+            throw error;
+        });
+        try {
+            await assert.rejects(runUpdateFromGit({ targetRoot, bundleRoot, repoUrl: repoRoot, trustOverride: true }), (error: unknown) => {
+                assert.ok(error instanceof AggregateError);
+                assert.equal(error.errors.length, 2);
+                assert.match(error.errors[0].message, /UPDATE_SOURCE_PREBUILT_REQUIRED/);
+                assert.equal(error.cause, error.errors[0]);
+                assert.ok(error.errors[1] instanceof AggregateError);
+                assert.equal(error.errors[1].errors.length, 2);
+                assert.deepEqual(error.errors[1].errors, cleanupFailures);
+                return true;
+            });
+            assert.equal(bindings.length, 2);
+            assert.notEqual(bindings[0].path, bindings[1].path);
+            assert.equal(gitText(['rev-parse', 'HEAD'], bindings[0].path), sourceCommit);
+            assert.ok(fs.existsSync(path.join(bindings[1].path, 'empty.gitconfig')));
+            assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8').trim(), '2.0.0');
+        } finally {
+            injected.mock.restore();
+            for (const binding of bindings) containedFilesystem.removeBoundContainedPath(binding, true);
+            removePathRecursive(repoRoot);
+            removePathRecursive(targetRoot);
+        }
+        for (const binding of bindings) assert.equal(fs.existsSync(binding.path), false);
     });
 
     it('does not accept an uncommitted prebuilt bundle even with trust override', async () => {

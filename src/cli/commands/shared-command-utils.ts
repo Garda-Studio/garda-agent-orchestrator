@@ -7,6 +7,7 @@ import {
 import { collectUpdateAnnouncements } from '../../lifecycle/update-announcements';
 import { compareVersionStrings } from '../../lifecycle/generic-utils';
 import { type CheckUpdateRunnerOptions } from '../../lifecycle/check-update';
+import { captureLifecycleLockHandoff } from '../../lifecycle/lock/lifecycle-lock-handoff';
 import { isPathInsideRoot } from '../../core/paths';
 import { cyan, getBundlePath, green, yellow } from './cli-helpers';
 
@@ -317,6 +318,7 @@ export function buildUpdateLifecycleRunner(bundlePath: string, fallbackDryRun: b
             input: JSON.stringify({
                 bundleRoot: path.resolve(bundlePath),
                 runnerOptions: { ...runnerOptions, lifecycleLockAlreadyHeld: true },
+                lifecycleLockHandoff: captureLifecycleLockHandoff(runnerOptions.targetRoot),
                 fallbackDryRun
             }),
             encoding: 'utf8',

@@ -36,6 +36,7 @@ import { collectUpdateAnnouncements } from './update-announcements';
 import { writeUpdateReport, buildUpdateResult } from './update-reporting';
 import { assertNoRuntimeLocksBeforeUpdateApply } from '../lock/runtime-lock-preflight';
 import { assertUpdateApplyAllowedInSwitchMode } from './update-off-mode';
+import { assertLifecycleLockHandoff } from '../lock/lifecycle-lock-handoff';
 
 interface RollbackRecord {
     relativePath: string;
@@ -43,15 +44,19 @@ interface RollbackRecord {
     pathType: string;
 }
 
-function bindPreSyncBundleToSnapshot(targetRoot: string, bundleRoot: string, snapshotPath: string, records: RollbackRecord[]): void {
+function bindPreSyncBundleToSnapshot(targetRoot: string, bundleRoot: string, snapshotPath: string, records: RollbackRecord[], lifecycleLockHandoff: unknown): void {
     const sentinel = readUpdateSentinel(bundleRoot);
     if (!sentinel || sentinel.phase !== 'lifecycle') return;
+    const inheritedOwner = lifecycleLockHandoff === undefined ? null : assertLifecycleLockHandoff(targetRoot, lifecycleLockHandoff);
     const ownerPath = path.join(getLifecycleOperationLockPath(targetRoot), 'owner.json');
     assertNoLinkedPathComponents(targetRoot, ownerPath);
-    const owner = JSON.parse(fs.readFileSync(ownerPath, 'utf8')) as Record<string, unknown>;
+    const owner: Record<string, unknown> = inheritedOwner ? {
+        pid: inheritedOwner.parentPid, operation: 'update', hostname: inheritedOwner.hostname,
+        target_root: inheritedOwner.targetRoot, acquired_at_utc: inheritedOwner.acquiredAtUtc
+    } : JSON.parse(fs.readFileSync(ownerPath, 'utf8')) as Record<string, unknown>;
     const acquiredAt = Date.parse(String(owner.acquired_at_utc || ''));
     const startedAt = Date.parse(String(sentinel.startedAt || ''));
-    if (owner.operation !== 'update' || owner.pid !== process.pid
+    if (owner.operation !== 'update' || owner.pid !== (inheritedOwner?.parentPid ?? process.pid)
         || normalizeHostnameValue(owner.hostname) !== normalizeHostnameValue(os.hostname())
         || path.resolve(String(owner.target_root || '')) !== path.resolve(targetRoot)
         || !Number.isFinite(acquiredAt) || !Number.isFinite(startedAt) || startedAt < acquiredAt) {
@@ -158,6 +163,7 @@ interface RunUpdateOptions {
     contractMigrationRunner?: ((options: ContractMigrationRunnerOptions) => ContractMigrationResult) | null;
     trustContext?: UpdateTrustContext | null;
     lifecycleLockAlreadyHeld?: boolean;
+    lifecycleLockHandoff?: unknown;
 }
 
 export function getUpdateRollbackItems(rootPath: string, initAnswersResolvedPath: string): string[] {
@@ -284,10 +290,11 @@ function runValidatedUpdate(
     }
 
     if (!dryRun) {
+        if (options.lifecycleLockHandoff !== undefined) assertLifecycleLockHandoff(normalizedTarget, options.lifecycleLockHandoff);
         ensureContainedDirectory(normalizedTarget, path.dirname(rollbackSnapshotPath));
         const rollbackItems = getUpdateRollbackItems(normalizedTarget, sources.initAnswersResolvedPath);
         rollbackRecords = createRollbackSnapshot(normalizedTarget, rollbackSnapshotPath, rollbackItems) as RollbackRecord[];
-        bindPreSyncBundleToSnapshot(normalizedTarget, bundleRoot, rollbackSnapshotPath, rollbackRecords);
+        bindPreSyncBundleToSnapshot(normalizedTarget, bundleRoot, rollbackSnapshotPath, rollbackRecords, options.lifecycleLockHandoff);
         writeRollbackRecords(rollbackSnapshotPath, rollbackRecords);
         rollbackRecordCount = rollbackRecords.length;
         rollbackSnapshotCreated = true;
@@ -360,7 +367,9 @@ export function runUpdate(options: RunUpdateOptions) {
     } = options;
 
     const normalizedTarget = validateTargetRoot(targetRoot, validatedOptions.bundleRoot);
-    const effectiveLifecycleLockAlreadyHeld = lifecycleLockAlreadyHeld
+    const inheritedLock = validatedOptions.lifecycleLockHandoff !== undefined;
+    if (inheritedLock) assertLifecycleLockHandoff(normalizedTarget, validatedOptions.lifecycleLockHandoff);
+    const effectiveLifecycleLockAlreadyHeld = inheritedLock || lifecycleLockAlreadyHeld
         || hasLegacyOuterUpdateLock(normalizedTarget, validatedOptions.bundleRoot);
 
     if (effectiveLifecycleLockAlreadyHeld) {

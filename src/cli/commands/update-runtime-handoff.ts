@@ -5,11 +5,13 @@ import { isPathInsideRoot } from '../../core/paths';
 import { runContractMigrations } from '../../lifecycle/contract-migrations';
 import { type CheckUpdateRunnerOptions } from '../../lifecycle/check-update';
 import { runUpdate } from '../../lifecycle/update';
+import { assertLifecycleLockHandoff } from '../../lifecycle/lock/lifecycle-lock-handoff';
 import { formatManifestResult, formatVerifyResult, runVerify, validateManifest } from '../../validators';
 
 interface HandoffRequest {
     bundleRoot: string;
     runnerOptions: CheckUpdateRunnerOptions;
+    lifecycleLockHandoff: unknown;
     fallbackDryRun?: boolean;
 }
 
@@ -24,6 +26,7 @@ export function runUpdateRuntimeHandoff(request: HandoffRequest) {
     }
 
     const options = request.runnerOptions;
+    assertLifecycleLockHandoff(options.targetRoot, request.lifecycleLockHandoff);
     return runUpdate({
         targetRoot: options.targetRoot,
         bundleRoot: installedBundleRoot,
@@ -47,6 +50,7 @@ export function runUpdateRuntimeHandoff(request: HandoffRequest) {
             releaseProvenanceRecommendation: options.releaseProvenanceRecommendation || null
         },
         lifecycleLockAlreadyHeld: options.lifecycleLockAlreadyHeld === true,
+        lifecycleLockHandoff: request.lifecycleLockHandoff,
         contractMigrationRunner: runContractMigrations,
         verifyRunner(verifyOptions) {
             const result = runVerify({

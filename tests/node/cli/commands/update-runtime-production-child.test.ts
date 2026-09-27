@@ -18,8 +18,12 @@ describe('production update runtime child', () => {
     it('binds the installed bundle and forwards the validated lifecycle contract', (context) => {
         const handoffPath = require.resolve('../../../../src/cli/commands/update-runtime-handoff');
         const updatePath = require.resolve('../../../../src/lifecycle/update');
+        const lockHandoffPath = require.resolve('../../../../src/lifecycle/lock/lifecycle-lock-handoff');
         const originalHandoff = require.cache[handoffPath];
         const originalUpdate = require.cache[updatePath];
+        const originalLockHandoff = require.cache[lockHandoffPath];
+        const lifecycleLockHandoff = { testProof: 'validated-parent-generation' };
+        let validatedTarget: unknown;
         const bundleRoot = path.resolve(path.dirname(handoffPath), '..', '..', '..', '..');
         let received: Record<string, unknown> | null = null;
         context.after(() => {
@@ -27,11 +31,19 @@ describe('production update runtime child', () => {
             else delete require.cache[handoffPath];
             if (originalUpdate) require.cache[updatePath] = originalUpdate;
             else delete require.cache[updatePath];
+            if (originalLockHandoff) require.cache[lockHandoffPath] = originalLockHandoff;
+            else delete require.cache[lockHandoffPath];
         });
         require.cache[updatePath] = makeCacheModule(updatePath, {
             runUpdate(options: Record<string, unknown>) {
                 received = options;
                 return { previousVersion: '1.0.0', updatedVersion: '1.1.0' };
+            }
+        });
+        require.cache[lockHandoffPath] = makeCacheModule(lockHandoffPath, {
+            assertLifecycleLockHandoff(target: unknown, proof: unknown) {
+                assert.equal(proof, lifecycleLockHandoff);
+                validatedTarget = target;
             }
         });
         delete require.cache[handoffPath];
@@ -51,12 +63,14 @@ describe('production update runtime child', () => {
             resolvedPackageIntegrity: 'sha512-test',
             lifecycleLockAlreadyHeld: true
         };
-        const result = runUpdateRuntimeHandoff({ bundleRoot, runnerOptions, fallbackDryRun: false });
+        const result = runUpdateRuntimeHandoff({ bundleRoot, runnerOptions, lifecycleLockHandoff, fallbackDryRun: false });
+        assert.equal(validatedTarget, runnerOptions.targetRoot);
         assert.notEqual(received, null);
         const captured = received as unknown as Record<string, unknown>;
         assert.equal(result.updatedVersion, '1.1.0');
         assert.equal(captured.bundleRoot, bundleRoot);
         assert.equal(captured.lifecycleLockAlreadyHeld, true);
+        assert.equal(captured.lifecycleLockHandoff, lifecycleLockHandoff);
         assert.deepEqual(captured.trustContext, {
             policy: 'enforced',
             overrideUsed: false,
@@ -76,10 +90,10 @@ describe('production update runtime child', () => {
         assert.equal(typeof captured.verifyRunner, 'function');
         assert.equal(typeof captured.manifestRunner, 'function');
         assert.throws(() => runUpdateRuntimeHandoff({
-            bundleRoot: os.tmpdir(), runnerOptions, fallbackDryRun: false
+            bundleRoot: os.tmpdir(), runnerOptions, lifecycleLockHandoff, fallbackDryRun: false
         }), /unbound bundle/);
         assert.throws(() => runUpdateRuntimeHandoff({
-            bundleRoot, runnerOptions: { ...runnerOptions, trustPolicy: 'unknown' }, fallbackDryRun: false
+            bundleRoot, runnerOptions: { ...runnerOptions, trustPolicy: 'unknown' }, lifecycleLockHandoff, fallbackDryRun: false
         }), /unbound bundle or source/);
     });
 
