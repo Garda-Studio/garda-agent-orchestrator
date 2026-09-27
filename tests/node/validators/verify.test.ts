@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 
 import { UNCONFIGURED_COMPILE_GATE_COMMAND } from '../../../src/core/constants';
+import { listSkillPacks, validateSkillPacks } from '../../../src/runtime/skills';
 import {
     parseBooleanLike,
     readVerifyInitAnswers,
@@ -737,10 +738,52 @@ test('runVerify returns failed result for empty workspace', () => {
         assert.ok(result.violations.gitignoreMissing.includes('.qwen/'));
         assert.ok(!result.violations.gitignoreMissing.includes('.review-temp/'));
         assert.ok(result.violations.gitignoreMissing.includes('AGENTS.md'));
+        assert.match(result.violations.skillPackContractViolations.join('\n'), /validation failed:.*root does not exist/i);
+        assert.match(result.violations.skillsIndexContractViolations.join('\n'), /validation failed:.*root does not exist/i);
     } finally {
         cleanupVerifyTempDir(tmpDir);
     }
 });
+
+for (const invalidRoot of ['linked', 'dangling', 'file'] as const) {
+    test(`runVerify returns failed diagnostics for a ${invalidRoot} bundle root while strict listing rejects it`, (t) => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-test-'));
+        try {
+            const bundleRoot = path.join(tmpDir, 'garda-agent-orchestrator');
+            if (invalidRoot === 'file') {
+                fs.writeFileSync(bundleRoot, 'not a directory');
+            } else {
+                const outside = path.join(tmpDir, 'outside');
+                if (invalidRoot === 'linked') fs.mkdirSync(outside);
+                try {
+                    fs.symlinkSync(outside, bundleRoot, 'junction');
+                } catch (error: unknown) {
+                    const code = (error as NodeJS.ErrnoException).code;
+                    if (['EPERM', 'EACCES', 'ENOTSUP'].includes(code || '')) {
+                        t.skip(`Junctions unavailable: ${code}`);
+                        return;
+                    }
+                    throw error;
+                }
+            }
+            const diagnostic = invalidRoot === 'file' ? /not a directory/ : /symlink|junction/;
+            assert.throws(() => validateSkillPacks(bundleRoot), diagnostic);
+            assert.throws(() => listSkillPacks(bundleRoot, { refreshHeadlines: false }), diagnostic);
+
+            const result = runVerify({
+                targetRoot: tmpDir,
+                sourceOfTruth: 'Claude',
+                initAnswersPath: 'garda-agent-orchestrator/runtime/init-answers.json'
+            });
+            assert.equal(result.passed, false);
+            assert.match(result.violations.skillPackContractViolations.join('\n'), diagnostic);
+            assert.match(result.violations.skillsIndexContractViolations.join('\n'), diagnostic);
+            assert.ok(result.totalViolationCount >= 2);
+        } finally {
+            cleanupVerifyTempDir(tmpDir);
+        }
+    });
+}
 
 test('runVerify reports missing garda.config.json in manifest contract violations', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-test-'));

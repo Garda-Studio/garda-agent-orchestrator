@@ -159,4 +159,79 @@ describe('project-memory builder', () => {
             fs.rmSync(ws.bundleRoot, { recursive: true, force: true });
         }
     });
+
+    it('reports missing template ancestors while preserving existing user memory', () => {
+        const ws = setupBundleSkeleton();
+        try {
+            const memoryDir = path.join(ws.liveRoot, 'docs', 'project-memory');
+            fs.mkdirSync(memoryDir, { recursive: true });
+            const userContent = '# User memory\n\nKeep these decisions.\n';
+            fs.writeFileSync(path.join(memoryDir, 'compact.md'), userContent);
+
+            const result = seedProjectMemoryFromTemplate({
+                templateRoot: path.join(ws.bundleRoot, 'absent', 'template'),
+                liveRoot: ws.liveRoot
+            });
+
+            assert.deepEqual(result.copiedFiles, []);
+            assert.deepEqual(result.preservedFiles, ['compact.md']);
+            assert.deepEqual(result.missingTemplateFiles, PROJECT_MEMORY_REQUIRED_FILE_NAMES.filter((name) => name !== 'compact.md'));
+            assert.deepEqual(fs.readdirSync(memoryDir), ['compact.md']);
+            assert.equal(fs.readFileSync(path.join(memoryDir, 'compact.md'), 'utf8'), userContent);
+            assert.equal(validateSeededProjectMemory(result, { mode: 'strict' }).passed, false);
+        } finally {
+            fs.rmSync(ws.bundleRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('reports missing templates during dry run without creating live memory', () => {
+        const ws = setupBundleSkeleton();
+        try {
+            const result = seedProjectMemoryFromTemplate({
+                templateRoot: path.join(ws.bundleRoot, 'absent', 'template'),
+                liveRoot: ws.liveRoot,
+                dryRun: true
+            });
+
+            assert.deepEqual(result.copiedFiles, []);
+            assert.deepEqual(result.missingTemplateFiles, PROJECT_MEMORY_REQUIRED_FILE_NAMES);
+            assert.equal(fs.existsSync(result.projectMemoryDir), false);
+        } finally {
+            fs.rmSync(ws.bundleRoot, { recursive: true, force: true });
+        }
+    });
+
+    for (const invalidRoot of ['linked', 'dangling', 'file'] as const) {
+        it(`rejects a ${invalidRoot} template root instead of treating it as missing`, (t) => {
+            const ws = setupBundleSkeleton();
+            try {
+                const templateRoot = path.join(ws.bundleRoot, 'invalid-template');
+                if (invalidRoot === 'file') {
+                    fs.writeFileSync(templateRoot, 'not a directory');
+                } else {
+                    const target = invalidRoot === 'linked' ? ws.templateRoot : path.join(ws.bundleRoot, 'missing-target');
+                    try {
+                        fs.symlinkSync(target, templateRoot, 'junction');
+                    } catch (error: unknown) {
+                        const code = (error as NodeJS.ErrnoException).code;
+                        if (['EPERM', 'EACCES', 'ENOTSUP'].includes(code || '')) {
+                            t.skip(`Junctions unavailable: ${code}`);
+                            return;
+                        }
+                        throw error;
+                    }
+                }
+                const memoryDir = path.join(ws.liveRoot, 'docs', 'project-memory');
+                fs.mkdirSync(memoryDir, { recursive: true });
+                fs.writeFileSync(path.join(memoryDir, 'compact.md'), '# Preserved\n');
+
+                assert.throws(() => seedProjectMemoryFromTemplate({ templateRoot, liveRoot: ws.liveRoot }),
+                    invalidRoot === 'file' ? /not a directory/ : /symlink|junction/);
+                assert.deepEqual(fs.readdirSync(memoryDir), ['compact.md']);
+                assert.equal(fs.readFileSync(path.join(memoryDir, 'compact.md'), 'utf8'), '# Preserved\n');
+            } finally {
+                fs.rmSync(ws.bundleRoot, { recursive: true, force: true });
+            }
+        });
+    }
 });

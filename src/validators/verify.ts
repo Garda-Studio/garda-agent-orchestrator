@@ -567,6 +567,23 @@ function detectWorkflowCompileGateCommandViolations(targetRoot: string): string[
     return [];
 }
 
+function collectSkillContractViolations(bundleRoot: string): Pick<VerifyViolations, 'skillPackContractViolations' | 'skillsIndexContractViolations'> {
+    try {
+        const skillPackValidation = validateSkillPacks(bundleRoot);
+        const skillsIndexValidation = validateSkillsIndex(bundleRoot);
+        return {
+            skillPackContractViolations: skillPackValidation.issues,
+            skillsIndexContractViolations: skillsIndexValidation.issues
+        };
+    } catch (error: unknown) {
+        const issue = `Skill validation failed: ${getErrorMessage(error)}`;
+        return {
+            skillPackContractViolations: [issue],
+            skillsIndexContractViolations: [issue]
+        };
+    }
+}
+
 export function runVerify(options: RunVerifyOptions): VerifyResult {
     const targetRoot = path.resolve(options.targetRoot);
     const sourceOfTruth = options.sourceOfTruth.trim();
@@ -601,8 +618,7 @@ export function runVerify(options: RunVerifyOptions): VerifyResult {
     const taskViolations = detectTaskViolations(targetRoot, canonicalEntrypoint);
     const entrypointViolations = detectEntrypointViolations(targetRoot, canonicalEntrypoint);
     const qwenSettingsViolations = detectQwenSettingsViolations(targetRoot, canonicalEntrypoint);
-    const skillPackValidation = validateSkillPacks(path.join(targetRoot, resolveBundleName()));
-    const skillsIndexValidation = validateSkillsIndex(path.join(targetRoot, resolveBundleName()));
+    const skillContractViolations = collectSkillContractViolations(path.join(targetRoot, resolveBundleName()));
     const managedGitignoreEntries = getManagedGitignoreEntries(
         initAnswers.claudeOrchestratorFullAccess,
         initAnswers.providerMinimalism && initAnswers.activeAgentFiles.length > 0 ? initAnswers.activeAgentFiles : undefined
@@ -635,8 +651,7 @@ export function runVerify(options: RunVerifyOptions): VerifyResult {
         entrypointContractViolations: entrypointViolations,
         taskContractViolations: taskViolations,
         qwenSettingsViolations,
-        skillsIndexContractViolations: skillsIndexValidation.issues,
-        skillPackContractViolations: skillPackValidation.issues,
+        ...skillContractViolations,
         gitignoreMissing
     };
 

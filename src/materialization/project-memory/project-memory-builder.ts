@@ -119,7 +119,7 @@ export function seedProjectMemoryFromTemplate(options: ProjectMemorySeedOptions)
     for (const fileName of PROJECT_MEMORY_REQUIRED_FILE_NAMES) {
         const templatePath = path.join(templateDir, fileName);
         const destinationPath = path.join(liveDir, fileName);
-        bindContainedDestination(templateRoot, templatePath);
+        bindContainedDestination(path.parse(path.resolve(templateRoot)).root, templatePath);
         bindContainedDestination(liveRoot, destinationPath);
         if (pathExists(destinationPath)) {
             preservedFiles.push(fileName);
