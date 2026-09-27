@@ -10,7 +10,7 @@ Garda supports multiple AI coding agent provider surfaces through one canonical 
 
 `GARDA = Governed Agent Runtime, Deployment, and Audit.`
 
-**[Website](https://garda-workflow.netlify.app/)** · **[Quick Start](#quick-start)** · **[User Guide](HOW_TO.md)** · **[Providers](docs/providers.md)** · **[Architecture](docs/architecture.md)** · **[Work Example](docs/work-example.md)** · **[CLI Reference](docs/cli-reference.md)** · **[Configuration](docs/configuration.md)** · **[Changelog](CHANGELOG.md)**
+**[Website](https://garda-studio.com/products/cli)** · **[Quick Start](#quick-start)** · **[User Guide](HOW_TO.md)** · **[Providers](docs/providers.md)** · **[Architecture](docs/architecture.md)** · **[Work Example](docs/work-example.md)** · **[CLI Reference](docs/cli-reference.md)** · **[Configuration](docs/configuration.md)** · **[Changelog](CHANGELOG.md)**
 
 ## Without Garda / With Garda
 

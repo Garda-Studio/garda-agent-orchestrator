@@ -6,13 +6,13 @@
     "type": "git",
     "url": "git+https://github.com/Shubchynskyi/garda-agent-orchestrator.git"
   },
-  "homepage": "https://garda-workflow.netlify.app/",
+  "homepage": "https://garda-studio.com/products/cli",
   "bugs": {
     "url": "https://github.com/Shubchynskyi/garda-agent-orchestrator/issues"
   },
   "funding": {
     "type": "custom",
-    "url": "https://garda-workflow.netlify.app/#support"
+    "url": "https://garda-studio.com/products/cli#support"
   },
   "author": "Dmytro Shubchynskyi <d.shubchynskyi@gmail.com>",
   "license": "Apache-2.0",
