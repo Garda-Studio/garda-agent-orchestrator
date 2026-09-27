@@ -20,16 +20,19 @@ export function isUpdateMetadata(value: unknown): value is UpdateMetadata {
         && record.integrity.length > 0 && record.integrity.length <= 1024;
 }
 
-function transportEnvironment(): (readonly [string, string | undefined])[] {
+function transportEnvironment(environment: NodeJS.ProcessEnv = process.env): (readonly [string, string | undefined])[] {
     const transportKeys = new Set(['npm_execpath', 'path', 'home', 'userprofile', 'node_extra_ca_certs', 'https_proxy', 'http_proxy', 'no_proxy']);
-    return Object.entries(process.env).filter(([key]) => /^npm_config_/iu.test(key) || transportKeys.has(key.toLowerCase()))
+    return Object.entries(environment).filter(([key]) => /^npm_config_/iu.test(key) || transportKeys.has(key.toLowerCase()))
         .map(([key, value]) => [process.platform === 'win32' ? key.toLowerCase() : key, value] as const)
         .sort(([a], [b]) => a.localeCompare(b));
 }
 
 /** No filesystem access: compare the caller environment with its child launch snapshot. */
-export function updateAvailabilityEnvironmentFingerprint(): string {
-    return crypto.createHash('sha256').update(JSON.stringify(transportEnvironment())).update(process.execPath).digest('hex');
+export function updateAvailabilityEnvironmentFingerprint(environment: NodeJS.ProcessEnv = process.env): string {
+    const entries = Object.entries(environment)
+        .map(([key, value]) => [process.platform === 'win32' ? key.toLowerCase() : key, value] as const)
+        .sort(([a], [b]) => a.localeCompare(b));
+    return crypto.createHash('sha256').update(JSON.stringify(entries)).update(process.execPath).digest('hex');
 }
 
 function configurationInputs(cwd: string): { hash: crypto.Hash; configPaths: string[] } {

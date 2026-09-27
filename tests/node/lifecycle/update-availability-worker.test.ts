@@ -12,7 +12,7 @@ import { acquireFilesystemLock, releaseFilesystemLock } from '../../../src/gate-
 import { createUpdateAvailabilityService, prepareBackgroundUpdateAvailability, checkClaimedUpdateAvailability, readCachedUpdateAvailabilityView } from '../../../src/lifecycle/update-availability/update-availability-service';
 import { cachedUpdateAvailabilityNotice, prefetchUpdateAvailabilityNotice, scheduleUpdateAvailabilityCheck } from '../../../src/lifecycle/update-availability/update-availability-worker';
 
-function fixture(t: TestContext): { root: string; calls: string } {
+function fixture(t: TestContext, holdMetadata = false): { root: string; calls: string; releaseMetadata: () => void } {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-availability-worker-'));
     const bundle = path.join(root, 'garda-agent-orchestrator');
     fs.mkdirSync(bundle);
@@ -20,8 +20,10 @@ function fixture(t: TestContext): { root: string; calls: string } {
     fs.writeFileSync(path.join(bundle, 'package.json'), JSON.stringify({ name: 'garda-agent-orchestrator' }));
     const calls = path.join(root, 'calls.jsonl');
     const fakeNpm = path.join(root, 'npm-cli.js');
+    const release = path.join(root, 'release-metadata');
     fs.writeFileSync(fakeNpm, `const fs=require('node:fs');fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(process.argv.slice(2))+'\\n');
-setTimeout(()=>process.stdout.write(JSON.stringify({version:'1.4.4','dist.integrity':${JSON.stringify('sha512-' + Buffer.alloc(64, 1).toString('base64'))}})),1500);`);
+const respond=()=>process.stdout.write(JSON.stringify({version:'1.4.4','dist.integrity':${JSON.stringify('sha512-' + Buffer.alloc(64, 1).toString('base64'))}}));
+${holdMetadata ? `const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(timer);respond();}},10);` : 'setTimeout(respond,1500);'}`);
     const previous = { npm: process.env.npm_execpath, enabled: process.env.GARDA_UPDATE_CHECK };
     process.env.npm_execpath = fakeNpm;
     process.env.GARDA_UPDATE_CHECK = '1';
@@ -30,7 +32,7 @@ setTimeout(()=>process.stdout.write(JSON.stringify({version:'1.4.4','dist.integr
         if (previous.enabled === undefined) delete process.env.GARDA_UPDATE_CHECK; else process.env.GARDA_UPDATE_CHECK = previous.enabled;
         fs.rmSync(root, { recursive: true, force: true });
     });
-    return { root, calls };
+    return { root, calls, releaseMetadata: () => fs.writeFileSync(release, 'continue') };
 }
 
 test('pending launch claims coalesce and reject mismatched worker attempts', async t => {
@@ -55,13 +57,15 @@ test('pending launch claims coalesce and reject mismatched worker attempts', asy
 });
 
 test('real CLI probes launch one detached metadata worker and return before its slow query', async t => {
-    const { root, calls } = fixture(t);
+    const { root, calls, releaseMetadata } = fixture(t, true);
     const started = Date.now();
     await scheduleUpdateAvailabilityCheck(root);
     const notices = await Promise.all(Array.from({ length: 8 }, () => cachedUpdateAvailabilityNotice(root)));
     assert.deepEqual(notices, Array(8).fill(''));
-    assert.ok(Date.now() - started < 1200, 'the CLI probe does not wait for the 1500ms npm response');
+    t.diagnostic(`Detached scheduling and eight cache probes: ${Date.now() - started} ms; metadata response held by a barrier.`);
     const service = createUpdateAvailabilityService(root);
+    assert.notEqual(service.snapshot().status, 'available', 'cached probes finish while the metadata response is held');
+    releaseMetadata();
     const deadline = Date.now() + 7000;
     while (service.snapshot().status !== 'available' && Date.now() < deadline) await delay(20);
     assert.equal(service.snapshot().status, 'available');
@@ -123,15 +127,16 @@ test('cached CLI presentation isolates filesystem reads without a foreground net
             };
         }
         const started = Date.now();
+        let callerTurnAdvanced = false;
+        setImmediate(() => { callerTurnAdvanced = true; });
         cachedUpdateAvailabilityNotice(${JSON.stringify(root)}).then(notice => {
-            process.stdout.write(JSON.stringify({ notice, elapsed: Date.now() - started }));
+            process.stdout.write(JSON.stringify({ notice, elapsed: Date.now() - started, callerTurnAdvanced }));
         });
     `;
-    const started = Date.now();
-    const result = JSON.parse(execFileSync(process.execPath, ['-e', script], { encoding: 'utf8' })) as { notice: string; elapsed: number };
+    const result = JSON.parse(execFileSync(process.execPath, ['-e', script], { encoding: 'utf8' })) as { notice: string; elapsed: number; callerTurnAdvanced: boolean };
     assert.match(result.notice, /^Garda update available:/u);
-    assert.ok(result.elapsed < 250, 'cached presentation returns without network work or a fixed delay');
-    assert.ok(Date.now() - started < 2500);
+    assert.equal(result.callerTurnAdvanced, true, 'the caller event loop remains available during isolated cache reads');
+    t.diagnostic(`Cached presentation: ${result.elapsed} ms; source reads forbidden in the caller.`);
     assert.equal(fs.existsSync(calls), false);
 });
 
@@ -151,8 +156,47 @@ if(String(file).endsWith('cache.json'))fs.writeFileSync(${JSON.stringify(path.jo
     assert.equal(fs.existsSync(calls), false, 'cached presentation cannot schedule metadata work');
 });
 
+test('cancelling a speculative closeout read preserves concurrent shared cached readers', t => {
+    const { root } = fixture(t);
+    const script = `
+        const assert = require('node:assert/strict');
+        const { EventEmitter } = require('node:events');
+        const workers = [];
+        require('node:child_process').spawn = (file, args) => new class extends EventEmitter {
+            constructor() { super(); assert.equal(args[1], '--snapshot'); this.terminated = false; workers.push(this); }
+            unref() {}
+            kill(signal) { assert.equal(signal, 'SIGKILL'); this.terminated = true; this.emit('close', 0); }
+        };
+        const { readCachedUpdateAvailabilityView: read } = require(${JSON.stringify(require.resolve('../../../src/lifecycle/update-availability/update-availability-service'))});
+        const { prefetchUpdateAvailabilityNotice: prefetch } = require(${JSON.stringify(require.resolve('../../../src/lifecycle/update-availability/update-availability-worker'))});
+        const available = { status: 'available', currentVersion: '1.4.3', latestVersion: '1.4.4', updateCommand: null };
+        (async () => {
+            for (const speculativeFirst of [false, true]) {
+                const offset = workers.length;
+                let speculative, shared;
+                if (speculativeFirst) { speculative = prefetch(${JSON.stringify(root)}); shared = read(${JSON.stringify(root)}); }
+                else { shared = read(${JSON.stringify(root)}); speculative = prefetch(${JSON.stringify(root)}); }
+                const secondShared = read(${JSON.stringify(root)});
+                assert.equal(workers.length, offset + 2, 'shared readers coalesce separately from owned speculative work');
+                const speculativeWorker = workers[offset + (speculativeFirst ? 0 : 1)];
+                const sharedWorker = workers[offset + (speculativeFirst ? 1 : 0)];
+                speculative.cancel();
+                assert.equal(await speculative(), '', 'discarded closeout returns quietly');
+                assert.equal(speculativeWorker.terminated, true);
+                assert.equal(sharedWorker.terminated, false, 'cancellation must leave the concurrent UI/cache read alive');
+                sharedWorker.emit('message', available);
+                sharedWorker.emit('close', 0);
+                assert.deepEqual(await Promise.all([shared, secondShared]), [available, available]);
+                await new Promise(resolve => setImmediate(resolve));
+            }
+            process.stdout.write('completed');
+        })().catch(error => { console.error(error); process.exitCode = 1; });
+    `;
+    assert.equal(execFileSync(process.execPath, ['-e', script], { encoding: 'utf8' }), 'completed');
+});
+
 test('a short-lived task entry launches a durable scheduler without waiting for its source probe', async t => {
-    const { root, calls } = fixture(t);
+    const { root, calls, releaseMetadata } = fixture(t, true);
     const modulePath = require.resolve('../../../src/lifecycle/update-availability/update-availability-worker');
     const script = `
         require('node:worker_threads').Worker = function () { throw new Error('task entry must not start or await a local worker'); };
@@ -163,8 +207,10 @@ test('a short-lived task entry launches a durable scheduler without waiting for 
         });
     `;
     const result = JSON.parse(execFileSync(process.execPath, ['-e', script], { encoding: 'utf8' })) as { elapsed: number };
-    assert.ok(result.elapsed < 250, 'task entry performs only detached process scheduling');
+    t.diagnostic(`Short-lived task entry scheduling: ${result.elapsed} ms; metadata response held by a barrier.`);
     const service = createUpdateAvailabilityService(root);
+    assert.notEqual(service.snapshot().status, 'available', 'the task entry process exits before metadata can respond');
+    releaseMetadata();
     const deadline = Date.now() + 7000;
     while (service.snapshot().status !== 'available' && Date.now() < deadline) await delay(20);
     assert.equal(service.snapshot().status, 'available', 'scheduler survives its short-lived parent');
@@ -413,7 +459,7 @@ test('prevents lost manual refreshes after automatic and caller deadlines', t =>
             unref() { this.unreferenced = true; }
             kill(signal) { assert.equal(signal, 'SIGKILL'); this.terminated = true; }
         };
-        global.setTimeout = callback => { const timer = { callback, active: true }; timers.push(timer); return timer; };
+        global.setTimeout = callback => { const timer = { callback, active: true, lifetime: false, unref() { this.lifetime = true; } }; timers.push(timer); return timer; };
         global.clearTimeout = timer => { timer.active = false; };
         const { checkUpdateAvailabilityInProcess: check } = require(${JSON.stringify(clientPath)});
         const available = { status: 'available', currentVersion: '1.4.3', latestVersion: '1.4.4', updateCommand: 'garda check-update --apply' };
@@ -430,7 +476,7 @@ test('prevents lost manual refreshes after automatic and caller deadlines', t =>
                 timers[firstTimer + 1].callback();
                 assert.equal(workers[firstWorker].terminated, true, 'the process lifetime is bounded independently from the caller');
                 if (expireManual) {
-                    timers[firstTimer + 2].callback();
+                    for (const timer of timers.slice(firstTimer + 2).filter(timer => !timer.lifetime)) timer.callback();
                     assert.ok((await Promise.all(manual)).every(view => view.status === 'unavailable'));
                 }
                 workers[firstWorker].emit('close', 0);
@@ -448,6 +494,135 @@ test('prevents lost manual refreshes after automatic and caller deadlines', t =>
                 workers[firstWorker + 2].emit('close', 0);
                 await next;
             }
+            process.stdout.write('completed');
+        })().catch(error => { console.error(error); process.exitCode = 1; });
+    `;
+    assert.equal(execFileSync(process.execPath, ['-e', script], { encoding: 'utf8' }), 'completed');
+});
+
+test('coalesced callers retain independent deadlines after queued callers expire', t => {
+    const { root } = fixture(t);
+    const script = `
+        const assert = require('node:assert/strict');
+        const { EventEmitter } = require('node:events');
+        const workers = [], timers = [];
+        require('node:child_process').spawn = (file, args) => new class extends EventEmitter {
+            constructor() { super(); this.options = JSON.parse(args[3]).options; workers.push(this); }
+            unref() {}
+            kill() {}
+        };
+        global.setTimeout = (callback, duration) => {
+            const timer = { callback, duration, active: true, lifetime: false, unref() { this.lifetime = true; } };
+            timers.push(timer); return timer;
+        };
+        global.clearTimeout = timer => { if (timer) timer.active = false; };
+        const { checkUpdateAvailabilityInProcess: check } = require(${JSON.stringify(require.resolve('../../../src/lifecycle/update-availability/update-availability-client'))});
+        const available = { status: 'available', currentVersion: '1.4.3', latestVersion: '1.4.4', updateCommand: null };
+        require(${JSON.stringify(require.resolve('../../../src/lifecycle/update-availability/update-availability-service'))}).readCachedUpdateAvailabilityView = async () => available;
+        (async () => {
+            const repo = ${JSON.stringify(root)};
+            const automatic = check(repo, {}, {});
+            const original = check(repo, { manual: true }, {});
+            timers.filter(timer => !timer.lifetime).at(-1).callback();
+            assert.equal((await original).status, 'unavailable');
+            let lateSettled = false;
+            const late = check(repo, { manual: true }, {});
+            void late.then(() => { lateSettled = true; });
+            await Promise.resolve();
+            assert.equal(lateSettled, false, 'a fresh caller must not inherit an expired result');
+            workers[0].emit('close', 0);
+            await new Promise(resolve => setImmediate(resolve));
+            assert.equal(workers.length, 2, 'late callers reuse the still-pending manual work');
+            workers[1].emit('message', available);
+            workers[1].emit('close', 0);
+            assert.deepEqual(await late, available);
+            await automatic;
+            await new Promise(resolve => setImmediate(resolve));
+
+            const short = check(repo, { manual: true }, { timeoutMs: 10 });
+            const long = check(repo, { manual: true }, { timeoutMs: 20 });
+            workers[2].emit('close', 0);
+            await new Promise(resolve => setImmediate(resolve));
+            assert.equal(workers.length, 4, 'different execution timeouts retain distinct work');
+            assert.equal(workers[3].options.timeoutMs, 20);
+            workers[3].emit('message', available);
+            workers[3].emit('close', 0);
+            await short;
+            assert.deepEqual(await long, available);
+            assert.equal(timers.filter(timer => timer.active).length, 0, 'all caller and lifetime timers are released');
+            process.stdout.write('completed');
+        })().catch(error => { console.error(error); process.exitCode = 1; });
+    `;
+    assert.equal(execFileSync(process.execPath, ['-e', script], { encoding: 'utf8' }), 'completed');
+});
+
+test('production automatic checks preserve platform environment-key opt-out semantics', t => {
+    const { root } = fixture(t);
+    const script = `
+        const assert = require('node:assert/strict');
+        const { EventEmitter } = require('node:events');
+        let payload;
+        require('node:child_process').spawn = (file, args) => {
+            payload = JSON.parse(args[3]);
+            const child = new EventEmitter();
+            child.unref = () => {};
+            process.nextTick(() => child.emit('close', 0));
+            return child;
+        };
+        delete process.env.GARDA_UPDATE_CHECK;
+        process.env.garda_update_check = '0';
+        const expectedEnabled = process.env.GARDA_UPDATE_CHECK !== '0';
+        const { checkUpdateAvailabilityInProcess: check } = require(${JSON.stringify(require.resolve('../../../src/lifecycle/update-availability/update-availability-client'))});
+        check(${JSON.stringify(root)}, {}, {}).then(() => {
+            assert.equal(payload.options.automaticEnabled, expectedEnabled, 'capturing the environment must preserve native key lookup semantics');
+            process.stdout.write('completed');
+        }).catch(error => { console.error(error); process.exitCode = 1; });
+    `;
+    assert.equal(execFileSync(process.execPath, ['-e', script], { encoding: 'utf8' }), 'completed');
+});
+
+test('production refreshes queue changed transport environments and capture each request source', t => {
+    const { root } = fixture(t);
+    const script = `
+        const assert = require('node:assert/strict');
+        const { EventEmitter } = require('node:events');
+        const workers = [];
+        require('node:child_process').spawn = (file, args, options) => new class extends EventEmitter {
+            constructor() { super(); this.environment = options.env; workers.push(this); }
+            unref() {}
+            kill() { throw new Error('controlled workers must not reach their lifetime deadline'); }
+        };
+        const { checkUpdateAvailabilityInProcess: check } = require(${JSON.stringify(require.resolve('../../../src/lifecycle/update-availability/update-availability-client'))});
+        const available = { status: 'available', currentVersion: '1.4.3', latestVersion: '1.4.4', updateCommand: null };
+        require(${JSON.stringify(require.resolve('../../../src/lifecycle/update-availability/update-availability-service'))}).readCachedUpdateAvailabilityView = async () => available;
+        (async () => {
+            const repo = ${JSON.stringify(root)};
+            process.env.npm_config_registry = 'https://first.example.test/';
+            const first = check(repo, { manual: true }, {});
+            process.env.npm_config_registry = 'https://second.example.test/';
+            const second = check(repo, { manual: true }, {});
+            const repeated = [check(repo, { manual: true }, {}), check(repo, {}, {})];
+            process.env.npm_config_registry = 'https://third.example.test/';
+            const third = check(repo, {}, {});
+            process.env.npm_config_registry = 'https://first.example.test/';
+            repeated.push(check(repo, { manual: true }, {}));
+            process.env.npm_config_registry = 'https://second.example.test/';
+            repeated.push(check(repo, { manual: true }, {}));
+            process.env.npm_config_registry = 'https://third.example.test/';
+            const initialNodeOptions = process.env.NODE_OPTIONS;
+            process.env.NODE_OPTIONS = (initialNodeOptions || '') + ' --conditions=changed-environment';
+            const fourth = check(repo, {}, {});
+            assert.equal(workers.length, 1, 'changed sources queue without overlapping live checks');
+            for (const [index, registry] of ['first', 'second', 'third', 'third'].entries()) {
+                assert.equal(workers[index].environment.npm_config_registry, 'https://' + registry + '.example.test/');
+                assert.equal(workers[index].environment.NODE_OPTIONS, index === 3 ? process.env.NODE_OPTIONS : initialNodeOptions);
+                workers[index].emit('message', available);
+                workers[index].emit('close', 0);
+                await new Promise(resolve => setImmediate(resolve));
+                assert.equal(workers.length, Math.min(index + 2, 4));
+            }
+            assert.ok((await Promise.all([first, second, third, fourth, ...repeated])).every(view => view.status === 'available'));
+            assert.equal(workers.length, 4, 'equivalent work coalesces while each caller retains its own deadline');
             process.stdout.write('completed');
         })().catch(error => { console.error(error); process.exitCode = 1; });
     `;

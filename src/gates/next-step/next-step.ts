@@ -466,6 +466,10 @@ const REVIEW_PREPARATION_ORDER = Object.freeze([
 
 export type NextStepStatus = 'BLOCKED' | 'READY' | 'DONE' | 'DECOMPOSED' | 'SPLIT_REQUIRED';
 
+interface NextStepPresentationOptions extends NextStepOptions {
+    onCloseoutCandidate?: () => void;
+}
+
 export interface NextStepCommand {
     label: string;
     command: string;
@@ -2597,7 +2601,8 @@ function buildPendingNextStepEffectRoute(options: {
 
 export function resolveNextStepDecisionRoute(
     context: NextStepResolutionContext,
-    effects: NextStepEffectController = createNextStepEffectPlanner()
+    effects: NextStepEffectController = createNextStepEffectPlanner(),
+    onCloseoutCandidate?: () => void
 ): NextStepResult {
     const {
         repoRoot,
@@ -2723,6 +2728,11 @@ export function resolveNextStepDecisionRoute(
         taskQueueEntries: taskEntries,
         workspaceSnapshotRequest
     });
+    if (isGatePassed(summary, 'completion-gate')) {
+        // Presentation may prefetch read-only advisory data while navigation continues.
+        // Only the final authenticated decision can authorize displaying that data.
+        try { onCloseoutCandidate?.(); } catch { /* Advisory failures cannot change task routing. */ }
+    }
     const frozenReviewPolicy = resolveFrozenReviewExecutionPolicyBinding(taskMode);
     const reviewPolicy = resolveReviewPolicy(preflight, workflowReviewPolicy, frozenReviewPolicy);
     const frozenReviewDependencyGraph = frozenReviewPolicy && preflight?.effective_review_snapshot
@@ -5251,7 +5261,7 @@ export function resolveNextStepDecisionRoute(
 }
 
 function resolveNextStepWithEffectController(
-    options: NextStepOptions,
+    options: NextStepPresentationOptions,
     effects: NextStepEffectController
 ): NextStepResult {
     const repoRoot = path.resolve(options.repoRoot || '.');
@@ -5282,13 +5292,13 @@ function resolveNextStepWithEffectController(
                     eventsRoot,
                     reviewsRoot
                 });
-                return resolveNextStepDecisionRoute(context, effects);
+                return resolveNextStepDecisionRoute(context, effects, options.onCloseoutCandidate);
             })
         ))
     )));
 }
 
-function inspectNextStepEffects(options: NextStepOptions): {
+function inspectNextStepEffects(options: NextStepPresentationOptions): {
     result: NextStepResult;
     plan: NextStepEffectPlan | null;
 } {
@@ -5297,12 +5307,12 @@ function inspectNextStepEffects(options: NextStepOptions): {
     return { result, plan: effects.pendingPlan() };
 }
 
-export function resolveNextStep(options: NextStepOptions): NextStepResult {
+export function resolveNextStep(options: NextStepPresentationOptions): NextStepResult {
     return inspectNextStepEffects(options).result;
 }
 
 export function executeNextStepEffects(
-    options: NextStepOptions,
+    options: NextStepPresentationOptions,
     expectedPlanSha256: string
 ): NextStepResult {
     const inspected = inspectNextStepEffects(options);
@@ -5345,7 +5355,7 @@ export function resolveNextStepFromCliOptions(options: {
     positionals?: unknown;
     executeEffects?: unknown;
     effectPlanSha256?: unknown;
-}): NextStepResult {
+}, onCloseoutCandidate?: () => void): NextStepResult {
     const repoRoot = path.resolve(String(options.repoRoot || '.'));
     const positionals = Array.isArray(options.positionals)
         ? options.positionals.map((value) => String(value || '').trim()).filter(Boolean)
@@ -5387,7 +5397,8 @@ export function resolveNextStepFromCliOptions(options: {
         taskId,
         repoRoot,
         eventsRoot,
-        reviewsRoot
+        reviewsRoot,
+        onCloseoutCandidate
     };
     const executeEffects = options.executeEffects === true;
     const effectPlanSha256 = String(options.effectPlanSha256 || '').trim();

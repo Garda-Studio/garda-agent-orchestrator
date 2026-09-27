@@ -54,7 +54,7 @@ import { buildTaskResetMissingTaskIdMessage } from './task-reset-alias';
 import { colorizeTaskAuditSummaryText } from './task-audit-human-format';
 import { colorizeTaskEventsSummaryText } from './task-events-human-format';
 import { EXIT_GATE_FAILURE } from '../exit-codes';
-import { cachedUpdateAvailabilityNotice, scheduleUpdateAvailabilityCheck } from '../../lifecycle/update-availability/update-availability-worker';
+import { cachedUpdateAvailabilityNotice, prefetchUpdateAvailabilityNotice, scheduleUpdateAvailabilityCheck } from '../../lifecycle/update-availability/update-availability-worker';
 
 export async function handleEnterTaskMode(gateArgv: string[]): Promise<void> {
     const defs = {
@@ -472,12 +472,19 @@ export async function handleNextStep(gateArgv: string[]): Promise<void> {
     let notice = '';
     return runGateCliHandler(gateArgv, defs, async (options: Parameters<typeof resolveNextStepFromCliOptions>[0]) => {
         const root = path.resolve(String(options.repoRoot || '.'));
-        const result = resolveNextStepFromCliOptions(options);
-        if (result.status === 'DONE' && result.final_report) {
-            notice = await cachedUpdateAvailabilityNotice(root);
-            await scheduleUpdateAvailabilityCheck(root);
+        let readNotice: ReturnType<typeof prefetchUpdateAvailabilityNotice> | undefined;
+        try {
+            const result = resolveNextStepFromCliOptions(options, () => {
+                readNotice ??= prefetchUpdateAvailabilityNotice(root);
+            });
+            if (result.status === 'DONE' && result.final_report) {
+                notice = await (readNotice?.() ?? cachedUpdateAvailabilityNotice(root));
+                await scheduleUpdateAvailabilityCheck(root);
+            }
+            return result;
+        } finally {
+            readNotice?.cancel();
         }
-        return result;
     }, {
         parseConfig: { allowPositionals: true, maxPositionals: 1 },
         mapOptions: ({ options, positionals }) => ({ ...options, positionals: [...positionals] }),

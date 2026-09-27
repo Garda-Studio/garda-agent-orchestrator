@@ -7,6 +7,7 @@ import { assertContainedDestination, bindContainedDestination, ensureContainedDi
 import { withFilesystemLock } from '../../gate-runtime/task-events-locking';
 import { checkClaimedUpdateAvailability, runUpdateAvailabilityCheck, prepareBackgroundUpdateAvailability, readCachedUpdateAvailabilityView, readCachedUpdateAvailabilityLocally } from './update-availability-service';
 import { formatUpdateAvailabilityNotice } from './update-availability-notice';
+import { readUpdateAvailabilityInProcess } from './update-availability-client';
 import { UPDATE_CHECK_OPT_OUT_ENV, UPDATE_CHECK_TIMEOUT_MS, type UpdateAvailabilityServiceOptions, type UpdateAvailabilityView } from './update-availability-types';
 
 export const UPDATE_SCHEDULER_INTERVAL_MS = 60_000;
@@ -91,10 +92,13 @@ export async function cachedUpdateAvailabilityNotice(repoRoot: string): Promise<
     return formatUpdateAvailabilityNotice(repoRoot, await readCachedUpdateAvailabilityView(repoRoot));
 }
 
-/** Start a bounded read-only cache process; concurrent reads share the same launch. */
-export function prefetchUpdateAvailabilityNotice(repoRoot: string): () => Promise<string> {
-    const notice = cachedUpdateAvailabilityNotice(repoRoot);
-    return () => notice;
+/** A speculative closeout read owns its process so discarded results can be cancelled. */
+export function prefetchUpdateAvailabilityNotice(repoRoot: string): { (): Promise<string>; cancel(): void } {
+    const controller = new AbortController();
+    const notice = process.env[UPDATE_CHECK_OPT_OUT_ENV] === '0' ? Promise.resolve('')
+        : readUpdateAvailabilityInProcess(repoRoot, undefined, controller.signal)
+            .then(view => formatUpdateAvailabilityNotice(repoRoot, view)).catch(() => '');
+    return Object.assign(() => notice, { cancel: () => controller.abort() });
 }
 
 /** Launch only at task entry/closeout boundaries; no foreground network wait. */

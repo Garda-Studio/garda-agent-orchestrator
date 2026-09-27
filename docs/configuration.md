@@ -42,9 +42,11 @@ node bin/garda.js gate validate-config
 ## Update Availability
 
 Automatic version checks run in the background at successful task entry and local UI startup.
-Task closeout starts asynchronous local source/cache reads alongside the navigator, then awaits their result after completion is confirmed.
-It creates no presentation worker and never waits for npm. Source fingerprint and installed version are revalidated before the notice is shown,
+When the navigator observes passed completion evidence, the CLI starts a bounded read-only source/cache process while the remaining closeout checks run.
+It awaits and displays the cached notice only after the final navigator result confirms DONE with a ready final report, including custom review roots.
+Ordinary navigation starts no presentation process. Presentation never waits for npm. The source fingerprint and installed version are revalidated by the snapshot reader,
 so fast repeated commands keep a ready cached notice and changed configuration suppresses old hints.
+Speculative closeout reads own their child process. A blocked result or navigation exception cancels that read immediately without affecting shared UI snapshots.
 The confirmed DONE boundary also requests a detached refresh through the same scheduling ticket; presentation itself never contacts npm.
 Task entry starts a detached scheduling process, which persists a pending attempt under the shared cache lock before launching the metadata check.
 Concurrent task boundaries for the same repository share one metadata launch claim; independent repositories have independent claims.
@@ -53,8 +55,11 @@ Concurrent entries share a scheduler lease per repository. Its unique launch ide
 an expired lease can be replaced, and an unrelated process reusing an old PID cannot suppress later checks.
 The minute limits process startup and does not change the daily metadata TTL. A source changed within that minute may wait for the next boundary;
 an explicit UI refresh remains available. Corrupt or inaccessible scheduling state fails quietly.
-Equivalent UI requests coalesce. A manual refresh queued behind an automatic request still bypasses the daily cache after that process exits;
-an automatic request may join an active manual refresh. Caller deadlines remain bounded without discarding queued manual intent.
+Equivalent UI requests for the same complete child environment and execution timeout coalesce across both active and queued work, including repeated A/B/A environment changes. Each caller has its own response deadline; an expired caller does not expire the shared work or a later caller.
+Each request captures its environment before queueing; changed environments wait for the previous process to exit and run against their captured source.
+Process identity includes Node execution settings such as `NODE_OPTIONS`; the persisted daily cache continues to use the npm source/configuration fingerprint.
+A manual refresh queued behind an automatic request still bypasses the daily cache; an automatic request may join a manual refresh for the same environment.
+Caller deadlines remain bounded without discarding queued manual intent. At most one enabled check process runs per repository in the UI server.
 A separate process deadline terminates a stalled check; a successor waits for actual exit before recovering any dead-owner cache lock.
 Queued manual checks receive their own execution deadline when started. Detached schedulers start after their launch lock is released and tolerate brief lock contention.
 UI snapshot responses read source configuration and cache in a read-only child process, rechecking the installed version and preserving the cache eviction cooldown.
@@ -62,7 +67,7 @@ Production UI checks run source discovery, cache access and metadata transport i
 The UI reconstructs the current parent environment and installed version before presenting a child result.
 Metadata queries run outside the shared cache lock; publishing requires the same pending attempt and directory identity captured before the query.
 Task entry returns after detached process scheduling. Configuration discovery, cache locking and network work continue outside the CLI process.
-Concurrent cached reads share a read-only child process and return quietly after the shared four-second deadline if local filesystem reads stall, including synchronous bundle discovery and containment checks. The stalled process is terminated; results are discarded if the caller's transport environment changes during the read.
+Concurrent cached reads share a read-only child process, with a four-second response deadline for each caller and a four-second lifetime for the child. They return quietly if local filesystem reads stall, including synchronous bundle discovery and containment checks. The stalled process is terminated; results are discarded if the caller's transport environment changes during the read.
 The service uses the existing trusted npm package source and version/integrity validation,
 requesting only `version` and `dist.integrity` metadata. It never calls package acquisition,
 installation, or update application. Manual `garda check-update` and `garda update` retain their existing behavior.

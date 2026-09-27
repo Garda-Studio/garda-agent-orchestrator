@@ -2,6 +2,7 @@ import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import { EventEmitter } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { buildUpdateCommand, formatUpdateAvailabilityNotice } from '../../../../src/lifecycle/update-availability/update-availability-notice';
 import { createUpdateAvailabilityService } from '../../../../src/lifecycle/update-availability/update-availability-service';
@@ -100,6 +101,21 @@ test('public completed next-step adds English text/JSON notices without rewritin
     const ownerBefore = fs.readFileSync(ownerMode);
     const reports = ['final-user-report.md', 'final-closeout.json', 'final-closeout.md'].map(suffix => path.join(root, 'garda-agent-orchestrator', 'runtime', 'reviews', `${TASK_ID}-${suffix}`));
     const before = reports.map(file => fs.readFileSync(file));
+    const childProcesses = require('node:child_process') as typeof import('node:child_process');
+    const navigator = require('../../../../src/gates/next-step/next-step') as typeof import('../../../../src/gates/next-step/next-step');
+    const originalSpawn = childProcesses.spawn;
+    const originalResolve = navigator.resolveNextStepFromCliOptions;
+    let snapshots = 0;
+    t.mock.method(childProcesses, 'spawn', (...args: Parameters<typeof originalSpawn>) => {
+        if (Array.isArray(args[1]) && args[1].includes('--snapshot')) snapshots++;
+        return originalSpawn(...args);
+    });
+    t.mock.method(navigator, 'resolveNextStepFromCliOptions', (...args: Parameters<typeof originalResolve>) => {
+        const beforeNavigation = snapshots;
+        const result = originalResolve(...args);
+        assert.equal(snapshots, beforeNavigation + 1, 'completed navigation starts its cached read before returning');
+        return result;
+    });
     const expected = `Garda update available: 1.4.3 → 1.4.4\ngarda check-update --target-root "${root.replace(/\\/gu, '/')}" --apply`;
     const text = await runCliWithCapturedOutput(['next-step', TASK_ID, '--repo-root', root]);
     assert.equal(text.exitCode, 0, text.errors.join('\n'));
@@ -114,6 +130,72 @@ test('public completed next-step adds English text/JSON notices without rewritin
     assert.equal(fs.readFileSync(wip, 'utf8'), 'export const unfinishedRelease = 1;\n');
     assert.deepEqual(fs.readFileSync(ownerMode), ownerBefore);
     assert.match(fs.readFileSync(path.join(root, 'TASK.md'), 'utf8'), /T-060.*IN_PROGRESS/u);
+});
+
+test('ordinary next-step starts no update presentation or metadata processes', async t => {
+    const root = makeTempRepo();
+    enableAvailability(t, root);
+    seedStartedTask(root, TASK_ID);
+    const childProcesses = require('node:child_process') as typeof import('node:child_process');
+    const originalSpawn = childProcesses.spawn;
+    t.mock.method(childProcesses, 'spawn', (...args: Parameters<typeof originalSpawn>) => {
+        if (Array.isArray(args[1])) assert.equal(args[1].some(value => /update-availability-worker/u.test(value)), false);
+        return originalSpawn(...args);
+    });
+    const output = await runCliWithCapturedOutput(['next-step', TASK_ID, '--repo-root', root, '--as-json']);
+    assert.equal(output.exitCode, 0, output.errors.join('\n'));
+    assert.equal(JSON.parse(output.logs.join('\n')).update_notice, undefined);
+});
+
+test('prefetched updates cannot authorize a notice or refresh when final report integrity fails', async t => {
+    const root = makeTempRepo();
+    const calls = enableAvailability(t, root);
+    await createUpdateAvailabilityService(root, { queryMetadata: async () => ({ version: '1.4.4', integrity: 'sha512-example' }) }).check();
+    seedCompletedTaskWithIndependentCodeReview(root, TASK_ID);
+    materializeFinalCloseout(root, TASK_ID);
+    const report = path.join(root, 'garda-agent-orchestrator', 'runtime', 'reviews', `${TASK_ID}-final-user-report.md`);
+    fs.appendFileSync(report, '\nChanged after authenticated closeout.\n');
+    const childProcesses = require('node:child_process') as typeof import('node:child_process');
+    const originalSpawn = childProcesses.spawn;
+    let snapshots = 0;
+    let terminated = 0;
+    t.mock.method(childProcesses, 'spawn', (...args: Parameters<typeof originalSpawn>) => {
+        if (Array.isArray(args[1])) {
+            assert.equal(args[1].includes('--schedule'), false, 'blocked navigation cannot schedule a metadata refresh');
+            if (args[1].includes('--snapshot')) {
+                snapshots++;
+                const child = new EventEmitter() as import('node:child_process').ChildProcess;
+                child.unref = () => undefined;
+                child.kill = signal => {
+                    assert.equal(signal, 'SIGKILL');
+                    terminated++;
+                    queueMicrotask(() => child.emit('close', null));
+                    return true;
+                };
+                t.after(() => child.emit('close', null));
+                return child;
+            }
+        }
+        return originalSpawn(...args);
+    });
+    const output = await runCliWithCapturedOutput(['next-step', TASK_ID, '--repo-root', root, '--as-json']);
+    assert.equal(output.exitCode, 0, output.errors.join('\n'));
+    const parsed = JSON.parse(output.logs.join('\n')) as { status: string; update_notice?: string };
+    assert.equal(snapshots, 1, 'passed completion evidence starts only an advisory read');
+    assert.notEqual(parsed.status, 'DONE');
+    assert.equal(parsed.update_notice, undefined);
+    assert.equal(fs.existsSync(calls), false);
+    assert.equal(terminated, 1, 'discarded prefetch is terminated without waiting for the snapshot deadline');
+    const navigator = require('../../../../src/gates/next-step/next-step') as typeof import('../../../../src/gates/next-step/next-step');
+    const originalResolve = navigator.resolveNextStepFromCliOptions;
+    t.mock.method(navigator, 'resolveNextStepFromCliOptions', (...args: Parameters<typeof originalResolve>) => {
+        originalResolve(...args);
+        throw new Error('Injected navigator exception after prefetch.');
+    });
+    const failed = await runCliWithCapturedOutput(['next-step', TASK_ID, '--repo-root', root, '--as-json']);
+    assert.notEqual(failed.exitCode, 0);
+    assert.equal(snapshots, 2);
+    assert.equal(terminated, 2, 'a navigator exception also cancels its speculative snapshot');
 });
 
 test('public completed next-step preserves update notices with a custom reviews root', async t => {
