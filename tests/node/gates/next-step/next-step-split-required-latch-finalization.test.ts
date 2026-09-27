@@ -338,6 +338,66 @@ describe('gates/next-step split-required latch finalization', () => {
         assert.ok(text.includes('Status: DECOMPOSED'));
     });
 
+    it('does not recreate captured quality checklist files while routing a suspended split parent', () => {
+        const repoRoot = makeTempRepo();
+        const taskId = 'T-646';
+        const workflowConfigPath = path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config', 'workflow-config.json');
+        const workflowConfig = JSON.parse(fs.readFileSync(workflowConfigPath, 'utf8')) as {
+            optional_quality_checks: { enabled: boolean };
+        };
+        workflowConfig.optional_quality_checks.enabled = true;
+        writeJson(workflowConfigPath, workflowConfig);
+        fs.writeFileSync(path.join(repoRoot, '.gitignore'), 'garda-agent-orchestrator/runtime/\n', 'utf8');
+        fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
+            '# TASK.md',
+            '',
+            '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+            '|---|---|---|---|---|---|---|---|---|',
+            `| ${taskId} | SPLIT_REQUIRED | P1 | workflow | Parent | Codex | 2026-09-27 | balanced | Child tasks: \`${taskId}-1\` and \`${taskId}-2\`. |`,
+            `| ${taskId}-1 | TODO | P1 | workflow/parser | Parser child | Codex | 2026-09-27 | balanced | Implement parser boundary. |`,
+            `| ${taskId}-2 | TODO | P1 | workflow/validation | Validation child | Codex | 2026-09-27 | balanced | Validate transition boundary. |`,
+            ''
+        ].join('\n'), 'utf8');
+        initializeGitRepo(repoRoot);
+        fs.writeFileSync(path.join(repoRoot, 'src', 'app.ts'), 'export const value = 2;\n', 'utf8');
+        const preflightPath = writePreflight(repoRoot, taskId, {
+            ...ALL_REVIEW_FLAGS,
+            code: true
+        }, { changedFiles: ['src/app.ts'] });
+        const tmpRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'tmp');
+        fs.mkdirSync(tmpRoot, { recursive: true });
+        const checklistPaths = [
+            `${taskId}-quality-checklist-questions.md`,
+            `${taskId}-quality-checklist-answers.json`,
+            `${taskId}-quality-checklist-answers.json.binding.json`
+        ].map((name) => path.join(tmpRoot, name));
+        for (const checklistPath of checklistPaths) {
+            fs.writeFileSync(checklistPath, 'suspended author draft\n', 'utf8');
+        }
+        const capture = captureAndSuspendSplitRequiredWip({
+            repoRoot,
+            taskId,
+            preflightPath,
+            guardKind: 'scope_budget',
+            guardReason: 'Suspend parent implementation and checklist drafts before child routing.'
+        });
+        assert.equal(capture.status, 'CAPTURED', capture.violations.join('\n'));
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'src', 'app.ts'), 'utf8'), 'export const value = 1;\n');
+        assert.ok(checklistPaths.every((checklistPath) => !fs.existsSync(checklistPath)));
+        seedSplitRequiredLatchEvidence(repoRoot, taskId);
+
+        for (const parentState of ['SPLIT_REQUIRED', 'DECOMPOSED']) {
+            const result = resolveNextStep({ taskId, repoRoot });
+            assert.equal(result.status, 'DECOMPOSED', `${parentState}: ${result.reason}`);
+            assert.equal(result.next_gate, 'child-task');
+            assert.match(result.commands[0]?.command || '', /next-step "T-646-1"/u);
+            assert.equal(result.quality_checklist, null);
+            for (const checklistPath of checklistPaths) {
+                assert.equal(fs.existsSync(checklistPath), false, `${parentState}: ${checklistPath}`);
+            }
+        }
+    });
+
     it('recaptures restored parent WIP before routing a linked child task', () => {
         const repoRoot = makeTempRepo();
         const taskId = 'T-644';

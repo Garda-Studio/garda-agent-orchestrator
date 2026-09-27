@@ -220,6 +220,7 @@ import {
     isTaskQueueActiveStatus,
     isTaskQueueSplitRequiredStatus
 } from '../../core/active-task-state';
+import { isDecomposedParentTask } from './next-step-task-queue';
 import {
     buildNextStepCoreArtifactSpecs,
     fullSuiteArtifactMatchesCurrentCycle,
@@ -3014,7 +3015,9 @@ export function resolveNextStepDecisionRoute(
     });
 
     const sourceRuntimeStaleness = detectSourceCheckoutRuntimeStaleness(repoRoot);
-    const qualityChecklistReadiness = preflight
+    const parentExecutionSuspended = isTaskQueueSplitRequiredStatus(taskEntry?.status || null)
+        || isDecomposedParentTask(taskEntry);
+    const qualityChecklistReadiness = preflight && !parentExecutionSuspended
         ? readQualityChecklistReadiness({
             repoRoot,
             reviewsRoot,
