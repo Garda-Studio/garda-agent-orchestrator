@@ -28,7 +28,7 @@ import {
     verifyGitUpdateSource
 } from './update-git-source-verification';
 
-export const DEFAULT_GIT_UPDATE_REPO_URL = 'https://github.com/Shubchynskyi/garda-agent-orchestrator.git';
+export const DEFAULT_GIT_UPDATE_REPO_URL = 'https://github.com/Garda-Studio/garda-agent-orchestrator.git';
 
 interface GitCloneHandle {
     clonePath: string;

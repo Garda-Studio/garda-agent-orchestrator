@@ -1454,9 +1454,9 @@
       "author": "Dmytro Shubchynskyi <d.shubchynskyi@gmail.com>",
       "license": "Apache-2.0",
       "type": "commonjs",
-      "repository": "git+https://github.com/Shubchynskyi/garda-agent-orchestrator.git",
+      "repository": "git+https://github.com/Garda-Studio/garda-agent-orchestrator.git",
       "homepage": "https://garda-studio.com/products/cli",
-      "bugs": "https://github.com/Shubchynskyi/garda-agent-orchestrator/issues",
+      "bugs": "https://github.com/Garda-Studio/garda-agent-orchestrator/issues",
       "funding": "https://garda-studio.com/products/cli#support",
       "bin": {
         "gao": "bin/garda.js",

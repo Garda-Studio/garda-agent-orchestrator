@@ -30,7 +30,7 @@ in the GitHub repository.
 | **Require branches to be up to date before merging** | ✅ Enabled | Ensures the PR branch includes the latest target commits. |
 | **Status checks that are required** | Individual job checks listed below | `CI` is a workflow name; there is no aggregate check named `ci`. |
 
-The job names below come from [ci.yml](https://github.com/Shubchynskyi/garda-agent-orchestrator/blob/main/.github/workflows/ci.yml). Select each expanded check reported by a recent pull-request run; `{node}` and `{os}` below describe matrix values and are not literal check names.
+The job names below come from [ci.yml](https://github.com/Garda-Studio/garda-agent-orchestrator/blob/main/.github/workflows/ci.yml). Select each expanded check reported by a recent pull-request run; `{node}` and `{os}` below describe matrix values and are not literal check names.
 
 | Job check pattern | Required matrix values |
 |---|---|

@@ -1,6 +1,6 @@
 type CommandSummaryEntry = readonly [command: string, summary: string];
 
-export const DEFAULT_REPO_URL = 'https://github.com/Shubchynskyi/garda-agent-orchestrator.git';
+export const DEFAULT_REPO_URL = 'https://github.com/Garda-Studio/garda-agent-orchestrator.git';
 
 export const SKIPPED_ENTRY_NAMES = new Set<string>([
     '__pycache__',

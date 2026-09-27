@@ -7,7 +7,7 @@ import * as path from 'node:path';
 
 const scriptPath = path.resolve(process.cwd(), 'scripts/release-candidate.cjs');
 const commit = 'a'.repeat(40);
-const repository = 'Shubchynskyi/garda-agent-orchestrator';
+const repository = 'Garda-Studio/garda-agent-orchestrator';
 
 function runCandidate(args: string[]): childProcess.SpawnSyncReturns<string> {
     return childProcess.spawnSync(process.execPath, [scriptPath, ...args], {

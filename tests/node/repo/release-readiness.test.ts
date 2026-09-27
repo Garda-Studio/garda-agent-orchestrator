@@ -3024,7 +3024,7 @@ test('release validation CLI dispatch rejects unknown raw argv before handler lo
 });
 
 const CANDIDATE_TEST_NOW = new Date('2026-09-26T10:00:00.000Z');
-const CANDIDATE_TEST_REPOSITORY = 'Shubchynskyi/garda-agent-orchestrator';
+const CANDIDATE_TEST_REPOSITORY = 'Garda-Studio/garda-agent-orchestrator';
 
 function candidateQueue(extraRows: string[] = []): string {
     return [

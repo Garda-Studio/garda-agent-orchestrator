@@ -433,7 +433,7 @@ Notes:
 Apply the update workflow from a git source explicitly.
 
 ```text
-garda update git --target-root "." --repo-url "https://github.com/Shubchynskyi/garda-agent-orchestrator.git"
+garda update git --target-root "." --repo-url "https://github.com/Garda-Studio/garda-agent-orchestrator.git"
 garda update git --target-root "." --repo-url "." --check-only
 garda update git --target-root "." --repo-url "." --branch "master"
 garda update git

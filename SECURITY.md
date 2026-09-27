@@ -14,7 +14,7 @@ Older versions are not patched; please upgrade to the latest release.
 **Do not open a public issue for security vulnerabilities.**
 
 Instead, report them privately through
-[GitHub Security Advisories](https://github.com/Shubchynskyi/garda-agent-orchestrator/security/advisories/new).
+[GitHub Security Advisories](https://github.com/Garda-Studio/garda-agent-orchestrator/security/advisories/new).
 
 Please include:
 

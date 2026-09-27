@@ -13,8 +13,8 @@
  */
 
 export const TRUSTED_GIT_REPO_URLS = Object.freeze([
-    'https://github.com/Shubchynskyi/garda-agent-orchestrator.git',
-    'https://github.com/Shubchynskyi/garda-agent-orchestrator'
+    'https://github.com/Garda-Studio/garda-agent-orchestrator.git',
+    'https://github.com/Garda-Studio/garda-agent-orchestrator'
 ]);
 
 export const TRUSTED_NPM_PACKAGE_NAMES = Object.freeze([

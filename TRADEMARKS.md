@@ -47,5 +47,5 @@ here solely for identification and interoperability purposes.
 ## Contact
 
 For trademark questions or permission requests, open an issue at
-<https://github.com/Shubchynskyi/garda-agent-orchestrator/issues>
+<https://github.com/Garda-Studio/garda-agent-orchestrator/issues>
 or contact the project maintainers directly.

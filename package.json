@@ -4,11 +4,11 @@
   "description": "Governed local runtime for AI coding agents with task lifecycle, mandatory gates, reviews, and auditable completion.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Shubchynskyi/garda-agent-orchestrator.git"
+    "url": "git+https://github.com/Garda-Studio/garda-agent-orchestrator.git"
   },
   "homepage": "https://garda-studio.com/products/cli",
   "bugs": {
-    "url": "https://github.com/Shubchynskyi/garda-agent-orchestrator/issues"
+    "url": "https://github.com/Garda-Studio/garda-agent-orchestrator/issues"
   },
   "funding": {
     "type": "custom",

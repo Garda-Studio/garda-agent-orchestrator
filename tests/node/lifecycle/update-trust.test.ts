@@ -51,22 +51,22 @@ function setupCheckUpdateWorkspace(deployedVersion: string) {
 describe('normalizeGitUrl', () => {
     it('strips trailing slashes and .git suffix, lowercases', () => {
         assert.equal(
-            normalizeGitUrl('https://github.com/Shubchynskyi/garda-agent-orchestrator.git/'),
-            'https://github.com/shubchynskyi/garda-agent-orchestrator'
+            normalizeGitUrl('https://github.com/Garda-Studio/garda-agent-orchestrator.git/'),
+            'https://github.com/garda-studio/garda-agent-orchestrator'
         );
     });
 
     it('handles URL without .git suffix', () => {
         assert.equal(
-            normalizeGitUrl('https://github.com/Shubchynskyi/garda-agent-orchestrator'),
-            'https://github.com/shubchynskyi/garda-agent-orchestrator'
+            normalizeGitUrl('https://github.com/Garda-Studio/garda-agent-orchestrator'),
+            'https://github.com/garda-studio/garda-agent-orchestrator'
         );
     });
 
     it('normalises case', () => {
         assert.equal(
-            normalizeGitUrl('HTTPS://GitHub.com/SHUBCHYNSKYI/GARDA-AGENT-ORCHESTRATOR.GIT'),
-            'https://github.com/shubchynskyi/garda-agent-orchestrator'
+            normalizeGitUrl('HTTPS://GitHub.com/GARDA-STUDIO/GARDA-AGENT-ORCHESTRATOR.GIT'),
+            'https://github.com/garda-studio/garda-agent-orchestrator'
         );
     });
 });
@@ -147,19 +147,19 @@ describe('parseNpmPackageSpec', () => {
 
 describe('isGitRepoUrlTrusted', () => {
     it('accepts the canonical trusted URL with .git suffix', () => {
-        assert.equal(isGitRepoUrlTrusted('https://github.com/Shubchynskyi/garda-agent-orchestrator.git'), true);
+        assert.equal(isGitRepoUrlTrusted('https://github.com/Garda-Studio/garda-agent-orchestrator.git'), true);
     });
 
     it('accepts the canonical trusted URL without .git suffix', () => {
-        assert.equal(isGitRepoUrlTrusted('https://github.com/Shubchynskyi/garda-agent-orchestrator'), true);
+        assert.equal(isGitRepoUrlTrusted('https://github.com/Garda-Studio/garda-agent-orchestrator'), true);
     });
 
     it('accepts case-insensitive variations', () => {
-        assert.equal(isGitRepoUrlTrusted('HTTPS://GITHUB.COM/SHUBCHYNSKYI/GARDA-AGENT-ORCHESTRATOR.GIT'), true);
+        assert.equal(isGitRepoUrlTrusted('HTTPS://GITHUB.COM/GARDA-STUDIO/GARDA-AGENT-ORCHESTRATOR.GIT'), true);
     });
 
     it('accepts with trailing slash', () => {
-        assert.equal(isGitRepoUrlTrusted('https://github.com/Shubchynskyi/garda-agent-orchestrator/'), true);
+        assert.equal(isGitRepoUrlTrusted('https://github.com/Garda-Studio/garda-agent-orchestrator/'), true);
     });
 
     it('rejects a different GitHub user', () => {
@@ -349,7 +349,7 @@ describe('buildReleaseUpdateProvenance', () => {
     it('marks trusted git updates as no-signature provenance with dry-run recommendation', () => {
         const provenance = buildReleaseUpdateProvenance({
             sourceType: 'git',
-            sourceReference: 'https://github.com/Shubchynskyi/garda-agent-orchestrator.git#dev',
+            sourceReference: 'https://github.com/Garda-Studio/garda-agent-orchestrator.git#dev',
             trustPolicy: 'enforced',
             trustOverrideUsed: false
         });
@@ -390,7 +390,7 @@ describe('buildReleaseUpdateProvenance', () => {
 describe('validateGitSourceTrust', () => {
     it('returns enforced policy for trusted repo URL', () => {
         const result = validateGitSourceTrust(
-            'https://github.com/Shubchynskyi/garda-agent-orchestrator.git',
+            'https://github.com/Garda-Studio/garda-agent-orchestrator.git',
             { trustOverride: false }
         );
         assert.equal(result.trusted, true);
@@ -610,7 +610,7 @@ describe('trust allowlist contents', () => {
 
     it('trusted git URLs include the canonical repository', () => {
         assert.ok(TRUSTED_GIT_REPO_URLS.some(
-            (url) => url.includes('Shubchynskyi/garda-agent-orchestrator')
+            (url) => url.includes('Garda-Studio/garda-agent-orchestrator')
         ));
     });
 
