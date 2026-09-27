@@ -544,21 +544,21 @@ describe('Rollback safety snapshot and failure paths', () => {
             readRollbackRecords(path.join(rollbacksRoot, snapshots[0]));
             const versionBeforeRollback = fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8').trim();
             const mutableFs = require('node:fs') as typeof fs;
-            const originalRmSync = mutableFs.rmSync;
-            const versionPath = path.join(bundleRoot, 'VERSION');
+            const originalCopyFileSync = mutableFs.copyFileSync;
+            const selectedVersionPath = path.join(rollbacksRoot, snapshots[0], path.basename(bundleRoot), 'VERSION');
             let injected = false;
-            mutableFs.rmSync = ((targetPath: fs.PathLike, options?: fs.RmOptions) => {
-                if (!injected && path.resolve(String(targetPath)) === path.resolve(versionPath)) {
+            mutableFs.copyFileSync = ((...args: Parameters<typeof fs.copyFileSync>) => {
+                if (!injected && path.resolve(String(args[0])) === path.resolve(selectedVersionPath)) {
                     injected = true;
                     throw Object.assign(new Error('EBUSY during selected snapshot restore'), { code: 'EBUSY' });
                 }
-                return originalRmSync(targetPath, options);
-            }) as typeof fs.rmSync;
+                return originalCopyFileSync(...args);
+            }) as typeof fs.copyFileSync;
             try {
                 assert.throws(() => runSnapshotRollback({ targetRoot: projectRoot, bundleRoot }),
                     /safety rollback completed successfully.*EBUSY/);
             } finally {
-                mutableFs.rmSync = originalRmSync;
+                mutableFs.copyFileSync = originalCopyFileSync;
             }
             assert.equal(injected, true, 'The selected restore must reach the injected filesystem failure');
 

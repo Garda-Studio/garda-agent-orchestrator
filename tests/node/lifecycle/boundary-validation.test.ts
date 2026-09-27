@@ -364,7 +364,7 @@ describe('symlink/junction escape detection', { skip: !symlinkSupported && 'Syml
             const junction = path.join(root, 'escape');
             fs.symlinkSync(outside, junction, 'junction');
 
-            const snapshotRoot = path.join(dir, 'snapshot');
+            const snapshotRoot = path.join(root, 'snapshot');
             assert.throws(
                 () => createRollbackSnapshot(root, snapshotRoot, ['escape/secret.txt']),
                 /symlink or junction/

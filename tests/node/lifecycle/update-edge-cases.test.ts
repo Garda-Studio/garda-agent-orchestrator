@@ -631,7 +631,7 @@ describe('Partial rollback snapshot edge cases', () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-partial-snap-'));
         try {
             const rootPath = path.join(tmpDir, 'project');
-            const snapshotRoot = path.join(tmpDir, 'snapshot');
+            const snapshotRoot = path.join(rootPath, 'snapshot');
             fs.mkdirSync(rootPath, { recursive: true });
             fs.mkdirSync(snapshotRoot, { recursive: true });
 
@@ -651,7 +651,7 @@ describe('Partial rollback snapshot edge cases', () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-partial-snap-'));
         try {
             const rootPath = path.join(tmpDir, 'project');
-            const snapshotRoot = path.join(tmpDir, 'snapshot');
+            const snapshotRoot = path.join(rootPath, 'snapshot');
 
             // Create a nested directory tree
             const subDir = path.join(rootPath, 'config', 'nested');

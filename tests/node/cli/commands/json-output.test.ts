@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createRollbackSnapshot, writeRollbackRecords } from '../../../../src/lifecycle/common';
 
 import {
     formatStatusSnapshotJson
@@ -325,21 +326,9 @@ function createDeployedWorkspaceFixture(): {
         'utf8'
     );
 
-    fs.mkdirSync(path.join(snapshotRoot, 'garda-agent-orchestrator'), { recursive: true });
-    fs.writeFileSync(
-        path.join(snapshotRoot, 'rollback-records.json'),
-        JSON.stringify([
-            {
-                relativePath: 'garda-agent-orchestrator/VERSION',
-                existed: true,
-                pathType: 'file'
-            }
-        ], null, 2),
-        'utf8'
-    );
-    copyFixtureFile(
-        path.join(REPO_ROOT, 'VERSION'),
-        path.join(snapshotRoot, 'garda-agent-orchestrator', 'VERSION')
+    writeRollbackRecords(
+        snapshotRoot,
+        createRollbackSnapshot(workspaceRoot, snapshotRoot, ['garda-agent-orchestrator/VERSION'])
     );
 
     return {

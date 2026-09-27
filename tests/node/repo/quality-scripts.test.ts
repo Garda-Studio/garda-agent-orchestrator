@@ -43,6 +43,23 @@ function getWorkflowJobBlock(raw: string, jobId: string): string {
     return lines.slice(jobStart, nextJob === -1 ? undefined : nextJob).join('\n');
 }
 
+function getWorkflowStepBlock(job: string, name: string): string {
+    const lines = job.split(/\r?\n/);
+    const start = lines.findIndex((line) => line === `      - name: ${name}`);
+    assert.notEqual(start, -1, `Workflow job must define step '${name}'`);
+    const end = lines.findIndex((line, index) => index > start && /^ {6}-\s/u.test(line));
+    return lines.slice(start, end === -1 ? undefined : end).join('\n');
+}
+
+function assertCoverageUpload(job: string): void {
+    const step = getWorkflowStepBlock(job, 'Upload lcov coverage');
+    assert.match(step, /^ {8}if: always\(\)$/mu, 'Coverage upload must always run');
+    assert.match(step, /^ {8}uses: actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a +# v7\.0\.1$/mu, 'Coverage upload must use the immutable pin');
+    assert.match(step, /^ {10}name: coverage-lcov-\$\{\{ matrix\.os \}\}-node-\$\{\{ matrix\.node-version \}\}$/mu);
+    assert.match(step, /^ {10}path: coverage\/lcov\.info$/mu);
+    assert.match(step, /^ {10}if-no-files-found: warn$/mu);
+}
+
 function extractYamlListAfterKey(block: string, key: string): string[] {
     const lines = block.split(/\r?\n/);
     const keyPattern = new RegExp(`^(\\s*)${key}:\\s*$`, 'u');
@@ -165,12 +182,20 @@ test('release validation CI covers Windows quality:fast script execution', () =>
     assert.match(releaseJob, /runs-on:\s*\$\{\{ matrix\.os \}\}/);
     assert.deepEqual(extractYamlListAfterKey(releaseJob, 'os'), ['ubuntu-latest', 'windows-latest']);
     assert.match(releaseJob, /run:\s*npm run validate:release:fast/);
-    assert.match(releaseJob, /name:\s*Upload lcov coverage/);
-    assert.match(releaseJob, /if:\s*always\(\)/);
-    assert.match(releaseJob, /uses:\s*actions\/upload-artifact@v7\.0\.1/);
-    assert.match(releaseJob, /name:\s*coverage-lcov-\$\{\{ matrix\.os \}\}-node-\$\{\{ matrix\.node-version \}\}/);
-    assert.match(releaseJob, /path:\s*coverage\/lcov\.info/);
-    assert.match(releaseJob, /if-no-files-found:\s*warn/);
+    assertCoverageUpload(releaseJob);
+});
+
+test('coverage upload assertions reject a pin or condition present only in another step', () => {
+    const job = getWorkflowJobBlock(readTextRepoFile('.github/workflows/ci.yml'), 'validate-release');
+    const step = getWorkflowStepBlock(job, 'Upload lcov coverage');
+    const decoy = step.replace('Upload lcov coverage', 'Unrelated upload');
+    for (const [before, after, message] of [
+        ['043fb46d1a93c77aae656e7c1c64a875d1fc6a0a', 'v7.0.1', /immutable/],
+        ['if: always()', 'if: failure()', /always run/]
+    ] as const) {
+        const invalidJob = job.replace(step, step.replace(before, after));
+        assert.throws(() => assertCoverageUpload(`${invalidJob}\n${decoy}`), message);
+    }
 });
 
 test('CI defines focused test shard jobs covering unit, gates, CLI, lifecycle, and bin on supported Node lines', () => {

@@ -56,6 +56,24 @@ function getWorkflowJobBlock(raw: string, jobId: string): string {
     return lines.slice(jobStart, nextJob === -1 ? undefined : nextJob).join('\n');
 }
 
+function getWorkflowStepBlock(job: string, name: string): string {
+    const lines = job.split(/\r?\n/);
+    const start = lines.findIndex((line) => line === `      - name: ${name}`);
+    assert.notEqual(start, -1, `Workflow job must define step '${name}'`);
+    const end = lines.findIndex((line, index) => index > start && /^ {6}-\s/u.test(line));
+    return lines.slice(start, end === -1 ? undefined : end).join('\n');
+}
+
+function assertSmokeUpload(job: string): void {
+    const step = getWorkflowStepBlock(job, 'Upload smoke failure evidence');
+    assert.match(step, /^ {8}if: failure\(\)$/mu, 'Smoke upload must run on failure');
+    assert.match(
+        step,
+        /^ {8}uses: actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a +# v7\.0\.1$/mu,
+        'Smoke upload must use the immutable actions/upload-artifact v7.0.1 pin'
+    );
+}
+
 function extractYamlListAfterKey(block: string, key: string): string[] {
     const lines = block.split(/\r?\n/);
     const keyPattern = new RegExp(`^(\\s*)${key}:\\s*$`, 'u');
@@ -184,16 +202,20 @@ test('smoke job has failure-conditional evidence collection step', () => {
 
 test('smoke job has failure-conditional artifact upload step', () => {
     const raw = getRawContent(loadCiWorkflow());
-    assert.match(
-        raw,
-        /name:\s*Upload smoke failure evidence/,
-        'Smoke job must have an "Upload smoke failure evidence" step'
-    );
-    assert.match(
-        raw,
-        /uses:\s*actions\/upload-artifact@v7\.0\.1/,
-        'Upload step must use actions/upload-artifact@v7.0.1'
-    );
+    assertSmokeUpload(getWorkflowJobBlock(raw, 'smoke'));
+});
+
+test('smoke upload assertions reject a pin or condition present only in another step', () => {
+    const job = getWorkflowJobBlock(getRawContent(loadCiWorkflow()), 'smoke');
+    const step = getWorkflowStepBlock(job, 'Upload smoke failure evidence');
+    const decoy = step.replace('Upload smoke failure evidence', 'Unrelated upload');
+    for (const [before, after, message] of [
+        ['043fb46d1a93c77aae656e7c1c64a875d1fc6a0a', 'v7.0.1', /immutable/],
+        ['if: failure()', 'if: always()', /run on failure/]
+    ] as const) {
+        const invalidJob = job.replace(step, step.replace(before, after));
+        assert.throws(() => assertSmokeUpload(`${invalidJob}\n${decoy}`), message);
+    }
 });
 
 test('evidence collection captures npm debug logs', () => {

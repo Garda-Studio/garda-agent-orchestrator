@@ -184,18 +184,22 @@ function runWorker(command: string, args: string[], options: {
             windowsHide: true
         });
 
+        let stdout = '';
         let stderr = '';
+        child.stdout.on('data', (chunk) => {
+            stdout += String(chunk);
+        });
         child.stderr.on('data', (chunk) => {
             stderr += String(chunk);
         });
 
         child.on('error', reject);
-        child.on('exit', (code) => {
+        child.on('close', (code) => {
             if (code === 0) {
                 resolve();
                 return;
             }
-            reject(new Error(stderr || `${path.basename(command)} exited with code ${code}`));
+            reject(new Error([`${path.basename(command)} exited with code ${code}`, stdout, stderr].filter(Boolean).join('\n')));
         });
     });
 }
@@ -207,9 +211,7 @@ function createBuildScriptsFixture(repoRoot: string): string {
         'package.json',
         'VERSION',
         'tsconfig.scripts.json',
-        'src/bin',
-        'src/core/node-foundation-test-shard-markers.ts',
-        'src/core/node-foundation-test-shard-log-analysis.ts',
+        'src',
         'scripts/node-foundation'
     ];
 
