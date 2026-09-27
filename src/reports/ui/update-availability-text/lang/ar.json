@@ -1,0 +1,12 @@
+{
+  "title": "تحديثات Garda",
+  "checkButton": "التحقق من التحديثات",
+  "checking": "جارٍ التحقق من التحديثات…",
+  "upToDate": "Garda {current} محدّثة.",
+  "available": "يتوفر تحديث لـ Garda: {current} → {latest}",
+  "error": "تعذّر التحقق من التحديثات. حاول مرة أخرى.",
+  "commandLabel": "أمر التحديث",
+  "automaticDisabled": "التحقق التلقائي من التحديثات معطّل.",
+  "installed": "إصدار Garda المثبّت: {current}",
+  "unknown": "معلومات التحديث غير متاحة بعد."
+}

@@ -1,0 +1,12 @@
+{
+  "title": "Pembaruan Garda",
+  "checkButton": "Periksa pembaruan",
+  "checking": "Memeriksa pembaruan…",
+  "upToDate": "Garda {current} sudah terbaru.",
+  "available": "Pembaruan Garda tersedia: {current} → {latest}",
+  "error": "Tidak dapat memeriksa pembaruan. Coba lagi.",
+  "commandLabel": "Perintah pembaruan",
+  "automaticDisabled": "Pemeriksaan pembaruan otomatis dinonaktifkan.",
+  "installed": "Garda terpasang: {current}",
+  "unknown": "Informasi pembaruan belum tersedia."
+}

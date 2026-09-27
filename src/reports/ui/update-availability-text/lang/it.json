@@ -1,0 +1,12 @@
+{
+  "title": "Aggiornamenti di Garda",
+  "checkButton": "Cerca aggiornamenti",
+  "checking": "Ricerca aggiornamenti…",
+  "upToDate": "Garda {current} è aggiornata.",
+  "available": "Aggiornamento di Garda disponibile: {current} → {latest}",
+  "error": "Impossibile cercare aggiornamenti. Riprova.",
+  "commandLabel": "Comando di aggiornamento",
+  "automaticDisabled": "La ricerca automatica degli aggiornamenti è disattivata.",
+  "installed": "Garda installata: {current}",
+  "unknown": "Le informazioni sugli aggiornamenti non sono ancora disponibili."
+}

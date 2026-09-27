@@ -1,0 +1,12 @@
+{
+  "title": "Garda-updates",
+  "checkButton": "Controleren op updates",
+  "checking": "Updates controleren…",
+  "upToDate": "Garda {current} is bijgewerkt.",
+  "available": "Garda-update beschikbaar: {current} → {latest}",
+  "error": "Kan niet controleren op updates. Probeer het opnieuw.",
+  "commandLabel": "Updateopdracht",
+  "automaticDisabled": "Automatische updatecontroles zijn uitgeschakeld.",
+  "installed": "Geïnstalleerde Garda: {current}",
+  "unknown": "Update-informatie is nog niet beschikbaar."
+}

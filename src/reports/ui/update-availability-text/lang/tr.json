@@ -1,0 +1,12 @@
+{
+  "title": "Garda güncellemeleri",
+  "checkButton": "Güncellemeleri denetle",
+  "checking": "Güncellemeler denetleniyor…",
+  "upToDate": "Garda {current} güncel.",
+  "available": "Garda güncellemesi mevcut: {current} → {latest}",
+  "error": "Güncellemeler denetlenemedi. Tekrar deneyin.",
+  "commandLabel": "Güncelleme komutu",
+  "automaticDisabled": "Otomatik güncelleme denetimleri devre dışı.",
+  "installed": "Yüklü Garda: {current}",
+  "unknown": "Güncelleme bilgisi henüz mevcut değil."
+}

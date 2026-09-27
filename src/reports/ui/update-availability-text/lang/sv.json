@@ -1,0 +1,12 @@
+{
+  "title": "Garda-uppdateringar",
+  "checkButton": "Sök efter uppdateringar",
+  "checking": "Söker efter uppdateringar…",
+  "upToDate": "Garda {current} är uppdaterad.",
+  "available": "Garda-uppdatering tillgänglig: {current} → {latest}",
+  "error": "Kunde inte söka efter uppdateringar. Försök igen.",
+  "commandLabel": "Uppdateringskommando",
+  "automaticDisabled": "Automatiska uppdateringskontroller är avstängda.",
+  "installed": "Installerad Garda: {current}",
+  "unknown": "Uppdateringsinformation är ännu inte tillgänglig."
+}

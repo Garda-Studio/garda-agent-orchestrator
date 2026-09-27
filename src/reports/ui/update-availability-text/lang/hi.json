@@ -1,0 +1,12 @@
+{
+  "title": "Garda अपडेट",
+  "checkButton": "अपडेट जाँचें",
+  "checking": "अपडेट की जाँच हो रही है…",
+  "upToDate": "Garda {current} अद्यतित है।",
+  "available": "Garda अपडेट उपलब्ध है: {current} → {latest}",
+  "error": "अपडेट की जाँच नहीं हो सकी। फिर कोशिश करें।",
+  "commandLabel": "अपडेट कमांड",
+  "automaticDisabled": "स्वचालित अपडेट जाँच बंद है।",
+  "installed": "इंस्टॉल किया गया Garda: {current}",
+  "unknown": "अपडेट की जानकारी अभी उपलब्ध नहीं है।"
+}

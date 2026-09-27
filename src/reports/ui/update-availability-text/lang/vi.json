@@ -1,0 +1,12 @@
+{
+  "title": "Bản cập nhật Garda",
+  "checkButton": "Kiểm tra cập nhật",
+  "checking": "Đang kiểm tra cập nhật…",
+  "upToDate": "Garda {current} đã được cập nhật.",
+  "available": "Có bản cập nhật Garda: {current} → {latest}",
+  "error": "Không thể kiểm tra cập nhật. Vui lòng thử lại.",
+  "commandLabel": "Lệnh cập nhật",
+  "automaticDisabled": "Đã tắt kiểm tra cập nhật tự động.",
+  "installed": "Garda đã cài đặt: {current}",
+  "unknown": "Chưa có thông tin cập nhật."
+}

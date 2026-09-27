@@ -1,0 +1,12 @@
+{
+  "title": "Garda-Updates",
+  "checkButton": "Nach Updates suchen",
+  "checking": "Updates werden geprüft…",
+  "upToDate": "Garda {current} ist aktuell.",
+  "available": "Garda-Update verfügbar: {current} → {latest}",
+  "error": "Updates konnten nicht geprüft werden. Erneut versuchen.",
+  "commandLabel": "Update-Befehl",
+  "automaticDisabled": "Automatische Update-Prüfungen sind deaktiviert.",
+  "installed": "Installierte Garda-Version: {current}",
+  "unknown": "Update-Informationen sind noch nicht verfügbar."
+}

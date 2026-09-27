@@ -1,0 +1,12 @@
+{
+  "title": "Garda の更新",
+  "checkButton": "更新を確認",
+  "checking": "更新を確認中…",
+  "upToDate": "Garda {current} は最新です。",
+  "available": "Garda の更新があります: {current} → {latest}",
+  "error": "更新を確認できませんでした。もう一度お試しください。",
+  "commandLabel": "更新コマンド",
+  "automaticDisabled": "更新の自動確認は無効です。",
+  "installed": "インストール済みの Garda: {current}",
+  "unknown": "更新情報はまだありません。"
+}

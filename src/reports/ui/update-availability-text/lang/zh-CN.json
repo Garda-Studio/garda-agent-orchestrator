@@ -1,0 +1,12 @@
+{
+  "title": "Garda 更新",
+  "checkButton": "检查更新",
+  "checking": "正在检查更新…",
+  "upToDate": "Garda {current} 已是最新版本。",
+  "available": "Garda 有可用更新：{current} → {latest}",
+  "error": "无法检查更新。请重试。",
+  "commandLabel": "更新命令",
+  "automaticDisabled": "已禁用自动更新检查。",
+  "installed": "已安装的 Garda：{current}",
+  "unknown": "暂时没有更新信息。"
+}
