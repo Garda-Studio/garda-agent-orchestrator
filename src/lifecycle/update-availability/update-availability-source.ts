@@ -20,12 +20,21 @@ export function isUpdateMetadata(value: unknown): value is UpdateMetadata {
         && record.integrity.length > 0 && record.integrity.length <= 1024;
 }
 
-function fingerprintNpmConfiguration(cwd: string): string {
-    const hash = crypto.createHash('sha256');
-    const env = Object.entries(process.env).filter(([key]) => /^npm_config_/iu.test(key)
-        || ['npm_execpath', 'PATH', 'HOME', 'USERPROFILE', 'NODE_EXTRA_CA_CERTS', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY'].includes(key));
-    hash.update(JSON.stringify(env.sort(([a], [b]) => a.localeCompare(b))));
-    hash.update(process.execPath);
+function transportEnvironment(): (readonly [string, string | undefined])[] {
+    const transportKeys = new Set(['npm_execpath', 'path', 'home', 'userprofile', 'node_extra_ca_certs', 'https_proxy', 'http_proxy', 'no_proxy']);
+    return Object.entries(process.env).filter(([key]) => /^npm_config_/iu.test(key) || transportKeys.has(key.toLowerCase()))
+        .map(([key, value]) => [process.platform === 'win32' ? key.toLowerCase() : key, value] as const)
+        .sort(([a], [b]) => a.localeCompare(b));
+}
+
+/** No filesystem access: compare the caller environment with its child launch snapshot. */
+export function updateAvailabilityEnvironmentFingerprint(): string {
+    return crypto.createHash('sha256').update(JSON.stringify(transportEnvironment())).update(process.execPath).digest('hex');
+}
+
+function configurationInputs(cwd: string): { hash: crypto.Hash; configPaths: string[] } {
+    const env = transportEnvironment();
+    const hash = crypto.createHash('sha256').update(JSON.stringify(env)).update(process.execPath);
     const configPaths = new Set<string>([
         path.join(os.homedir(), '.npmrc'),
         path.join(path.dirname(process.execPath), 'etc', 'npmrc'),
@@ -42,7 +51,12 @@ function fingerprintNpmConfiguration(cwd: string): string {
         if (parent === directory) break;
         directory = parent;
     }
-    for (const filePath of [...configPaths].sort()) {
+    return { hash, configPaths: [...configPaths].sort() };
+}
+
+function fingerprintNpmConfiguration(cwd: string): string {
+    const { hash, configPaths } = configurationInputs(cwd);
+    for (const filePath of configPaths) {
         hash.update(filePath);
         try {
             const stat = fs.statSync(filePath);
@@ -56,26 +70,63 @@ function fingerprintNpmConfiguration(cwd: string): string {
     return hash.digest('hex');
 }
 
-export function resolveUpdateAvailabilitySource(repoRoot: string): UpdateAvailabilitySource {
-    const cwd = path.resolve(repoRoot);
-    const bundleRoot = joinOrchestratorPath(cwd, '');
-    const currentVersion = readCurrentBundleVersionOrThrow(bundleRoot);
+async function fingerprintNpmConfigurationAsync(cwd: string): Promise<string> {
+    const { hash, configPaths } = configurationInputs(cwd);
+    const contents = await Promise.all(configPaths.map(async filePath => {
+        try {
+            const stat = await fs.promises.stat(filePath);
+            if (!stat.isFile() || stat.size > 64 * 1024) throw new Error('Unsupported npm configuration file.');
+            return await fs.promises.readFile(filePath);
+        } catch (error: unknown) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+            return '<absent>';
+        }
+    }));
+    configPaths.forEach((filePath, index) => { hash.update(filePath); hash.update(contents[index]); });
+    return hash.digest('hex');
+}
+
+function sourceFor(cwd: string, bundleRoot: string, currentVersion: string, packageText: string | null, configurationSha256: string): UpdateAvailabilitySource {
     if (!isUpdateVersion(currentVersion)) throw new Error('Installed Garda version is invalid.');
-    const packagePath = path.join(bundleRoot, 'package.json');
     let packageName = PRIMARY_PACKAGE_NAME;
-    try {
-        const parsed: unknown = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    if (packageText !== null) {
+        const parsed: unknown = JSON.parse(packageText);
         if (!parsed || typeof parsed !== 'object') throw new Error('Invalid installed package metadata.');
         const name = (parsed as Record<string, unknown>).name;
         if (typeof name === 'string' && name.trim()) packageName = name.trim();
-    } catch (error: unknown) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     const packageSpec = `${packageName}@latest`;
     validateNpmSourceTrust(packageSpec, { trustOverride: false });
-    const configurationSha256 = fingerprintNpmConfiguration(cwd);
     const fingerprint = crypto.createHash('sha256')
         .update(JSON.stringify({ packageSpec, configurationSha256, trustPolicy: 'enforced' })).digest('hex');
     return { bundleRoot, cwd, currentVersion, packageSpec, fingerprint, trustPolicy: 'enforced',
         transport: { kind: 'npm-cli', configurationSha256 } };
+}
+
+export function resolveUpdateAvailabilitySource(repoRoot: string): UpdateAvailabilitySource {
+    const cwd = path.resolve(repoRoot);
+    const bundleRoot = joinOrchestratorPath(cwd, '');
+    const currentVersion = readCurrentBundleVersionOrThrow(bundleRoot);
+    const packagePath = path.join(bundleRoot, 'package.json');
+    let packageText: string | null = null;
+    try {
+        packageText = fs.readFileSync(packagePath, 'utf8');
+    } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    return sourceFor(cwd, bundleRoot, currentVersion, packageText, fingerprintNpmConfiguration(cwd));
+}
+
+export async function resolveUpdateAvailabilitySourceAsync(repoRoot: string): Promise<UpdateAvailabilitySource> {
+    const cwd = path.resolve(repoRoot);
+    const bundleRoot = joinOrchestratorPath(cwd, '');
+    const [version, packageText, configuration] = await Promise.all([
+        fs.promises.readFile(path.join(bundleRoot, 'VERSION'), 'utf8'),
+        fs.promises.readFile(path.join(bundleRoot, 'package.json'), 'utf8').catch((error: unknown) => {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+            return null;
+        }),
+        fingerprintNpmConfigurationAsync(cwd)
+    ]);
+    return sourceFor(cwd, bundleRoot, version.trim(), packageText, configuration);
 }

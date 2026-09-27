@@ -766,7 +766,8 @@ export function createLocalUiServer(repoRoot: string, runtimeOptions?: Partial<L
             return;
         }
         if (pathname === '/api/update-availability') {
-            void startupUpdateCheck.then(() => sendJson(response, 200, updates.snapshot())).catch(() => {
+            void startupUpdateCheck.then(() => updates.snapshotAsync ? updates.snapshotAsync() : updates.snapshot())
+                .then(view => sendJson(response, 200, view)).catch(() => {
                 sendJson(response, 200, { status: 'unavailable', currentVersion: null, latestVersion: null, updateCommand: null });
             });
             return;

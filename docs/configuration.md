@@ -42,15 +42,40 @@ node bin/garda.js gate validate-config
 ## Update Availability
 
 Automatic version checks run in the background at successful task entry and local UI startup.
-Task closeout reads cached metadata and may schedule a background refresh; it never waits for npm.
+Task closeout starts asynchronous local source/cache reads alongside the navigator, then awaits their result after completion is confirmed.
+It creates no presentation worker and never waits for npm. Source fingerprint and installed version are revalidated before the notice is shown,
+so fast repeated commands keep a ready cached notice and changed configuration suppresses old hints.
+The confirmed DONE boundary also requests a detached refresh through the same scheduling ticket; presentation itself never contacts npm.
+Task entry starts a detached scheduling process, which persists a pending attempt under the shared cache lock before launching the metadata check.
+Concurrent task boundaries for the same repository share one metadata launch claim; independent repositories have independent claims.
+Before spawning, task entry takes a nonwaiting contained scheduling lock and records a one-minute ticket.
+Concurrent entries share a scheduler lease per repository. Its unique launch identity renews the one-minute lease while probing;
+an expired lease can be replaced, and an unrelated process reusing an old PID cannot suppress later checks.
+The minute limits process startup and does not change the daily metadata TTL. A source changed within that minute may wait for the next boundary;
+an explicit UI refresh remains available. Corrupt or inaccessible scheduling state fails quietly.
+Equivalent UI requests coalesce. A manual refresh queued behind an automatic request still bypasses the daily cache after that process exits;
+an automatic request may join an active manual refresh. Caller deadlines remain bounded without discarding queued manual intent.
+A separate process deadline terminates a stalled check; a successor waits for actual exit before recovering any dead-owner cache lock.
+Queued manual checks receive their own execution deadline when started. Detached schedulers start after their launch lock is released and tolerate brief lock contention.
+UI snapshot responses read source configuration and cache in a read-only child process, rechecking the installed version and preserving the cache eviction cooldown.
+Production UI checks run source discovery, cache access and metadata transport in a disposable child process with its own lock-owner PID.
+The UI reconstructs the current parent environment and installed version before presenting a child result.
+Metadata queries run outside the shared cache lock; publishing requires the same pending attempt and directory identity captured before the query.
+Task entry returns after detached process scheduling. Configuration discovery, cache locking and network work continue outside the CLI process.
+Concurrent cached reads share a read-only child process and return quietly after the shared four-second deadline if local filesystem reads stall, including synchronous bundle discovery and containment checks. The stalled process is terminated; results are discarded if the caller's transport environment changes during the read.
 The service uses the existing trusted npm package source and version/integrity validation,
 requesting only `version` and `dist.integrity` metadata. It never calls package acquisition,
 installation, or update application. Manual `garda check-update` and `garda update` retain their existing behavior.
 
 - Set the environment variable `GARDA_UPDATE_CHECK=0` to disable automatic checks. The explicit UI check remains available.
-- Cache files live under the active bundle's `runtime/update-availability/` directory.
+- The cache lives in the active bundle's `runtime/update-availability/cache.json` file, with at most 32 source entries and a 128KiB read bound.
   CLI and UI share the cache and a process lock. Each effective source is checked automatically
   at most once per 24 hours, including failed or interrupted attempts.
+  Expired entries are dropped on writes. Evicting fresh history starts a coarse daily automatic cooldown,
+  preserving the throttle if a previously used source returns; explicit UI refresh still bypasses it.
+  Legacy per-source entries are read by exact fingerprint; a recognizable current-source file is removed under the lock
+  after writing that source to the shared cache. Other legacy files are left in place, without directory scans.
+  Waiting for a pending launch uses cache-only polling with bounded backoff; configuration is revalidated before presentation.
 - The source fingerprint binds the trusted package, npm configuration files and environment,
   and npm transport configuration. Configuration contents and credentials are hashed, never stored in notices or cache files.
 - **Check for updates** in the UI bypasses the daily TTL. Concurrent checks join the same request,

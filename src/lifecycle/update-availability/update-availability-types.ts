@@ -17,6 +17,12 @@ export interface UpdateMetadata {
     integrity: string;
 }
 
+/** A persisted pending attempt claimed before a detached worker is launched. */
+export interface UpdateAvailabilityClaim {
+    sourceFingerprint: string;
+    attemptId: string;
+}
+
 export interface UpdateAvailabilityCacheEntry {
     schema: 1;
     sourceFingerprint: string;
@@ -38,6 +44,7 @@ export interface UpdateAvailabilityView {
 
 export interface UpdateAvailabilityService {
     snapshot(): UpdateAvailabilityView;
+    snapshotAsync?(): Promise<UpdateAvailabilityView>;
     check(options?: { manual?: boolean }): Promise<UpdateAvailabilityView>;
 }
 

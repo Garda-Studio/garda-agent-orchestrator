@@ -86,7 +86,7 @@ export async function handleEnterTaskMode(gateArgv: string[]): Promise<void> {
         if (result.exitCode === 0) {
             const notes = await cleanupCompactAtTaskBoundary(path.resolve(String(options.repoRoot || '.')));
             result.outputLines.push(...notes.filter(note => note.startsWith('Compact housekeeping pending:')));
-            scheduleUpdateAvailabilityCheck(path.resolve(String(options.repoRoot || '.')));
+            await scheduleUpdateAvailabilityCheck(path.resolve(String(options.repoRoot || '.')));
         }
         return result;
     }, {
@@ -469,14 +469,21 @@ export async function handleNextStep(gateArgv: string[]): Promise<void> {
         '--effect-plan-sha256': { key: 'effectPlanSha256', type: 'string' },
         '--as-json': { key: 'asJson', type: 'boolean' }
     };
-    return runGateCliHandler(gateArgv, defs, resolveNextStepFromCliOptions, {
+    let notice = '';
+    return runGateCliHandler(gateArgv, defs, async (options: Parameters<typeof resolveNextStepFromCliOptions>[0]) => {
+        const root = path.resolve(String(options.repoRoot || '.'));
+        const result = resolveNextStepFromCliOptions(options);
+        if (result.status === 'DONE' && result.final_report) {
+            notice = await cachedUpdateAvailabilityNotice(root);
+            await scheduleUpdateAvailabilityCheck(root);
+        }
+        return result;
+    }, {
         parseConfig: { allowPositionals: true, maxPositionals: 1 },
         mapOptions: ({ options, positionals }) => ({ ...options, positionals: [...positionals] }),
         formatOutput: (result, { options }) => {
             const repoRoot = path.resolve(String(options.repoRoot || '.'));
             const hint = result.status === 'DONE' ? '' : compactGuidance(repoRoot, result.task_id);
-            const notice = result.status === 'DONE' && result.final_report ? cachedUpdateAvailabilityNotice(repoRoot) : '';
-            if (result.status === 'DONE' && result.final_report) scheduleUpdateAvailabilityCheck(repoRoot);
             return options.asJson === true
                 ? `${JSON.stringify({ ...result, ...(hint ? { compact_hint: hint } : {}), ...(notice ? {
                     update_notice: notice,

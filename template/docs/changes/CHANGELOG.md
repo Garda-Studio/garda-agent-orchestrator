@@ -3,6 +3,7 @@
 Current baseline:
 
 - Shared update availability: task entry and UI startup check trusted npm metadata in the background using one daily local cache. Concurrent checks coalesce and failures are throttled. Terminal closeout adds an English version notice and the existing apply command after the canonical report; the UI adds a manual refresh and complete status/accessibility translations for all 21 locales. `GARDA_UPDATE_CHECK=0` disables automatic checks. No package acquisition or automatic update is performed.
+- Update availability refinement: a shared renewable scheduling lease bounds detached task-boundary launches without trusting recycled process IDs; schedulers tolerate launch-lock contention, and queued manual refreshes survive caller deadlines. Closeout reads the local cache asynchronously alongside the navigator. Persisted pending claims coalesce metadata launches, and capped source history preserves daily throttling on eviction. Windows environment-key casing participates in source binding. Production npm, task-boundary and browser-startup regressions cover the complete notification path.
 - Confirmed work alongside unfinished tasks: `next-step` reports active owners and requests explicit consent; repeated `--allow-active-task` options bind approval to the current task and owner artifacts. Later gates reuse it, and re-entry preserves the original dirty-workspace baseline while requiring fresh consent.
 - runtime is Node-only
 - lifecycle commands and gates run through `bin/garda.js`

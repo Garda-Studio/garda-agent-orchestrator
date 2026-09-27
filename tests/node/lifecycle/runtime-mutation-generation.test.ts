@@ -96,6 +96,12 @@ const WRITER_COVERAGE_EDGES = Object.freeze({
         edgeSourcePath: 'src/lifecycle/lifecycle-common.ts',
         edgeMarker: 'withLifecycleRuntimeMutationGenerationForPath('
     },
+    rollbackIntegrityWrite: {
+        candidatePath: 'src/lifecycle/rollback/rollback-snapshot-integrity.ts',
+        ownerPath: 'src/lifecycle/lifecycle-common.ts',
+        edgeSourcePath: 'src/lifecycle/lifecycle-common.ts',
+        edgeMarker: 'writeRollbackSnapshotIntegrity('
+    },
     rollbackWrite: {
         candidatePath: 'src/lifecycle/rollback/rollback.ts',
         ownerPath: 'src/lifecycle/rollback/rollback.ts',
@@ -192,6 +198,26 @@ const NON_CANONICAL_MUTATION_CAPABILITIES = Object.freeze({
     'src/lifecycle/update/update-git.ts': {
         sourceMarker: 'mkdtempSync(',
         boundary: 'temporary Git acquisition workspace outside the six toxin roots'
+    },
+    'src/lifecycle/update/update-git-source-verification.ts': {
+        sourceMarker: 'empty.gitconfig',
+        boundary: 'private temporary Git acquisition configuration outside the six toxin roots'
+    },
+    'src/lifecycle/update-availability/update-availability-cache.ts': {
+        sourceMarker: 'writeContainedFile(',
+        boundary: 'bounded runtime/update-availability cache and exact legacy-cache cleanup outside the six toxin roots'
+    },
+    'src/lifecycle/update-availability/update-availability-service.ts': {
+        sourceMarker: 'writeUpdateCache(',
+        boundary: 'update-availability cache claims and results outside the six toxin roots'
+    },
+    'src/lifecycle/update-availability/update-availability-client.ts': {
+        sourceMarker: 'child = spawn(',
+        boundary: 'fixed metadata-only child transport mutates advisory update-availability cache outside the six toxin roots'
+    },
+    'src/lifecycle/update-availability/update-availability-worker.ts': {
+        sourceMarker: 'writeContainedFile(',
+        boundary: 'runtime/update-availability scheduler ticket and lock outside the six toxin roots'
     }
 } satisfies Record<string, NonCanonicalMutationCapability>);
 
@@ -203,7 +229,7 @@ const ROOT_WRITER_COVERAGE = Object.freeze({
         'taskEventWrite', 'cleanupDirect', 'cleanupRemoval', 'cleanupStorage', 'dailyRetentionGc'
     ],
     backups: [
-        'backupWrite', 'scheduledBackup', 'installDelegation', 'installBackupWrite',
+        'backupWrite', 'rollbackIntegrityWrite', 'scheduledBackup', 'installDelegation', 'installBackupWrite',
         'cleanupDirect', 'cleanupRemoval', 'cleanupStorage', 'dailyRetentionGc'
     ],
     'bundle-backups': [
@@ -214,13 +240,13 @@ const ROOT_WRITER_COVERAGE = Object.freeze({
         'cleanupDirect', 'cleanupRemoval', 'cleanupStorage', 'dailyRetentionGc'
     ],
     'update-rollbacks': [
-        'commonWrite', 'updateRollbackDelegation', 'rollbackWrite', 'backupWrite',
+        'commonWrite', 'rollbackIntegrityWrite', 'updateRollbackDelegation', 'rollbackWrite', 'backupWrite',
         'cleanupDirect', 'cleanupRemoval', 'cleanupStorage', 'dailyRetentionGc'
     ]
 } as const);
 
 const JOURNAL_OWNER_PATTERN = /(?:withLifecycleRuntimeMutationGeneration(?:ForPath)?|beginRuntimeMutationGeneration)/u;
-const BOUNDED_MUTATION_SURFACE_SHA256 = '9a2e8b62294daba74407278431352fe613d9175f9564e4da86aaa49ef0f4e382';
+const BOUNDED_MUTATION_SURFACE_SHA256 = 'fd0fd20b4a7925f5eb046841023420630f43eb4a7d643b4be0c48c3d39dbb5fd';
 const READ_ONLY_FS_OPERATIONS = new Set([
     'access', 'accessSync', 'close', 'closeSync', 'exists', 'existsSync',
     'fstat', 'fstatSync', 'lstat', 'lstatSync', 'open', 'opendir', 'opendirSync',

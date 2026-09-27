@@ -135,6 +135,7 @@ The UI and task-completion notices share a daily local cache, including failed a
 When a newer version is known, the terminal adds an English version notice and the existing
 `garda check-update --target-root "<workspace>" --apply` command after the canonical final report.
 The UI includes a fully localized **Check for updates** button for an immediate metadata refresh.
+CLI cache inspection is isolated from the calling thread and bounded; pending claims suppress duplicate background launches.
 No package is downloaded or installed automatically. Set `GARDA_UPDATE_CHECK=0` to disable automatic checks.
 See [Update availability](docs/configuration.md#update-availability) for cache and timeout behavior.
 
