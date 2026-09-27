@@ -39,6 +39,32 @@ The root manifest `garda.config.json` references the managed config files valida
 node bin/garda.js gate validate-config
 ```
 
+## Update Availability
+
+Automatic version checks run in the background at successful task entry and local UI startup.
+Task closeout reads cached metadata and may schedule a background refresh; it never waits for npm.
+The service uses the existing trusted npm package source and version/integrity validation,
+requesting only `version` and `dist.integrity` metadata. It never calls package acquisition,
+installation, or update application. Manual `garda check-update` and `garda update` retain their existing behavior.
+
+- Set the environment variable `GARDA_UPDATE_CHECK=0` to disable automatic checks. The explicit UI check remains available.
+- Cache files live under the active bundle's `runtime/update-availability/` directory.
+  CLI and UI share the cache and a process lock. Each effective source is checked automatically
+  at most once per 24 hours, including failed or interrupted attempts.
+- The source fingerprint binds the trusted package, npm configuration files and environment,
+  and npm transport configuration. Configuration contents and credentials are hashed, never stored in notices or cache files.
+- **Check for updates** in the UI bypasses the daily TTL. Concurrent checks join the same request,
+  including requests from separate CLI/UI processes. The button does not apply an update and works in read-only UI mode.
+- A metadata request has a four-second timeout; automatic offline/timeout failures remain quiet.
+  The UI shows a localized error only after an explicit check. Ordinary gates and finalization do not depend on network success.
+- A source change suppresses cached hints from the previous source. Installed versions are read again
+  when presenting cached metadata, so upgrading Garda suppresses obsolete update notices.
+- Available updates appear as `Garda update available: <installed> → <latest>` in terminal output,
+  followed by the existing apply command with the current target correctly quoted.
+  Agent-visible DONE output instructs the agent to append this English notice after the canonical final report.
+  Canonical report files, hashes, and integrity-bound gate evidence are unchanged.
+- UI notices, status messages, the manual button and accessibility labels are translated in all supported locales.
+
 ## Config Files Overview
 
 | File | Purpose | Editable? |

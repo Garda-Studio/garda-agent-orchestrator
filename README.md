@@ -130,6 +130,14 @@ Full reference: **[docs/cli-reference.md](docs/cli-reference.md)**
 
 ## Version
 
+Garda checks npm version metadata in the background at task entry and UI startup.
+The UI and task-completion notices share a daily local cache, including failed attempts.
+When a newer version is known, the terminal adds an English version notice and the existing
+`garda check-update --target-root "<workspace>" --apply` command after the canonical final report.
+The UI includes a fully localized **Check for updates** button for an immediate metadata refresh.
+No package is downloaded or installed automatically. Set `GARDA_UPDATE_CHECK=0` to disable automatic checks.
+See [Update availability](docs/configuration.md#update-availability) for cache and timeout behavior.
+
 - Package: `garda-agent-orchestrator`
 - Current version source of truth: `VERSION`
 - Package manifest versions: `package.json`, `package-lock.json`

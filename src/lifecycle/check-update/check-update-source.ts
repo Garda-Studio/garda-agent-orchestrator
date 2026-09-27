@@ -171,8 +171,8 @@ function parseNpmViewJson(stdout: string, sourceReference: string): { version: s
 
 let resolvedNpmInvocation: NpmInvocation | null = null;
 
-function resolveNpmInvocation(): NpmInvocation {
-    if (resolvedNpmInvocation) {
+function resolveNpmInvocation(refresh = false): NpmInvocation {
+    if (resolvedNpmInvocation && !refresh) {
         return resolvedNpmInvocation;
     }
 
@@ -236,6 +236,24 @@ async function runNpmStreamed(args: string[], options: SpawnStreamedOptions = {}
         onStdout: options.onStdout ?? undefined,
         onStderr: options.onStderr ?? undefined
     });
+}
+
+/** Metadata-only counterpart of the existing source resolver; never acquires a package. */
+export async function queryNpmUpdateMetadata(request: {
+    packageSpec: string; cwd: string; signal: AbortSignal; timeoutMs: number;
+}): Promise<{ version: string; integrity: string }> {
+    const invocation = resolveNpmInvocation(true);
+    const result = await spawnStreamed(invocation.command, [...invocation.prefixArgs,
+        'view', request.packageSpec, 'version', 'dist.integrity', '--json', '--fetch-retries=0'], {
+        cwd: request.cwd, signal: request.signal, timeoutMs: request.timeoutMs,
+        capturePolicy: { mode: 'full-buffer', maxBytes: 16 * 1024 }
+    });
+    if (result.timedOut || result.cancelled || result.stdoutTruncated) throw new Error('Update metadata check unavailable.');
+    const resolved = resolveNpmUpdateSourceSpec(request.packageSpec, {
+        viewRunner: () => ({ status: result.exitCode, stdout: result.stdout, stderr: result.stderr })
+    });
+    if (!resolved.version || !resolved.integrity) throw new Error('Update metadata is incomplete.');
+    return { version: resolved.version, integrity: resolved.integrity };
 }
 
 export function resolveNpmUpdateSourceSpec(

@@ -13,6 +13,7 @@ import { UI_DASHBOARD_CLIENT_SESSION_ACTIONS } from './dashboard-client-session-
 import { UI_DASHBOARD_CLIENT_TASK_DETAIL } from './dashboard-client-task-detail';
 import { UI_DASHBOARD_CLIENT_TASKS } from './dashboard-client-tasks';
 import { UI_DASHBOARD_CLIENT_WORKFLOW } from './dashboard-client-workflow';
+import { buildDashboardUpdatesClientScript } from './dashboard-client-updates';
 
 export function buildDashboardClientScript(options: DashboardClientPreludeOptions): string {
     return [
@@ -30,6 +31,7 @@ export function buildDashboardClientScript(options: DashboardClientPreludeOption
         UI_DASHBOARD_CLIENT_SESSION_ACTIONS,
         UI_DASHBOARD_CLIENT_POLISH,
         UI_DASHBOARD_CLIENT_TASK_DETAIL,
+        buildDashboardUpdatesClientScript(),
         UI_DASHBOARD_CLIENT_BOOTSTRAP
     ].join('\n');
 }

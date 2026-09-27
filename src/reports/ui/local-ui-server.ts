@@ -5,6 +5,8 @@ import * as crypto from 'node:crypto';
 import { URL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { isCanonicalTaskId } from '../../core/task-ids';
+import { createUpdateAvailabilityService } from '../../lifecycle/update-availability/update-availability-service';
+import type { UpdateAvailabilityService } from '../../lifecycle/update-availability/update-availability-types';
 import {
     ORDINARY_DOC_PATHS_CONFIG_KEY,
     normalizeOrdinaryDocPathPattern
@@ -158,6 +160,7 @@ export interface StartLocalUiServerOptions {
     idleWarningSeconds?: number | null;
     language?: LocalUiLanguage | null;
     actionRunner?: UiActionRunner;
+    updateAvailabilityService?: UpdateAvailabilityService;
 }
 
 export interface LocalUiServer {
@@ -622,6 +625,7 @@ export function createLocalUiServer(repoRoot: string, runtimeOptions?: Partial<L
     idleMinutes?: number | null;
     idleWarningSeconds?: number | null;
     language?: LocalUiLanguage | null;
+    updateAvailabilityService?: UpdateAvailabilityService;
 }): http.Server {
     const resolvedRepoRoot = path.resolve(repoRoot);
     const options: LocalUiServerRuntimeOptions = {
@@ -635,6 +639,8 @@ export function createLocalUiServer(repoRoot: string, runtimeOptions?: Partial<L
         report: null
     };
     const language = normalizeLocalUiLanguage(runtimeOptions?.language || DEFAULT_LOCAL_UI_LANGUAGE);
+    const updates = runtimeOptions?.updateAvailabilityService || createUpdateAvailabilityService(resolvedRepoRoot);
+    let startupUpdateCheck: Promise<unknown> = Promise.resolve();
     let server: http.Server;
     const session = buildLocalUiSessionController({
         idleShutdownEnabled: runtimeOptions?.idleShutdownEnabled !== false,
@@ -651,6 +657,19 @@ export function createLocalUiServer(repoRoot: string, runtimeOptions?: Partial<L
         }
         const parsedUrl = new URL(request.url, `http://${DEFAULT_UI_HOST}`);
         const pathname = parsedUrl.pathname;
+        if (request.method === 'POST' && pathname === '/api/update-availability/check') {
+            try {
+                assertUiPostBoundary(request, options.actionToken);
+                request.resume();
+            } catch {
+                sendApiError(response, 403, 'Update check rejected by local UI boundary.', 'update_boundary_rejected');
+                return;
+            }
+            void updates.check({ manual: true }).then(view => sendJson(response, 200, view)).catch(() => {
+                sendJson(response, 200, { status: 'unavailable', currentVersion: null, latestVersion: null, updateCommand: null });
+            });
+            return;
+        }
         if (request.method === 'POST' && pathname === '/api/session/activity') {
             try {
                 assertUiPostBoundary(request, options.actionToken);
@@ -746,6 +765,12 @@ export function createLocalUiServer(repoRoot: string, runtimeOptions?: Partial<L
             sendHtml(response, renderLocalUiHtml(options.actionsEnabled, options.actionToken, language));
             return;
         }
+        if (pathname === '/api/update-availability') {
+            void startupUpdateCheck.then(() => sendJson(response, 200, updates.snapshot())).catch(() => {
+                sendJson(response, 200, { status: 'unavailable', currentVersion: null, latestVersion: null, updateCommand: null });
+            });
+            return;
+        }
         if (pathname === '/files') {
             try {
                 assertUiFileBoundary(request, parsedUrl, options.actionToken);
@@ -819,6 +844,7 @@ export function createLocalUiServer(repoRoot: string, runtimeOptions?: Partial<L
         sendText(response, 404, 'Not found.');
     });
     server.once('close', () => session.dispose());
+    server.once('listening', () => { startupUpdateCheck = updates.check().catch(() => undefined); });
     return server;
 }
 
@@ -938,7 +964,8 @@ export async function startLocalUiServer(options: StartLocalUiServerOptions): Pr
                 idleShutdownEnabled: options.idleShutdownEnabled !== false,
                 idleMinutes: options.idleMinutes ?? DEFAULT_UI_IDLE_MINUTES,
                 idleWarningSeconds: options.idleWarningSeconds ?? DEFAULT_UI_IDLE_WARNING_SECONDS,
-                language: normalizeLocalUiLanguage(options.language || DEFAULT_LOCAL_UI_LANGUAGE)
+                language: normalizeLocalUiLanguage(options.language || DEFAULT_LOCAL_UI_LANGUAGE),
+                updateAvailabilityService: options.updateAvailabilityService
             });
             try {
                 const actualPort = await listenOnPort(server, host, port);

@@ -283,6 +283,7 @@ function renderLanguageSelector() {
   languageSelectNode.value = currentLanguage;
 }
 function applyLanguage() {
+  if (typeof renderUpdateAvailability === 'function') renderUpdateAvailability();
   if (document.documentElement) {
     document.documentElement.lang = currentLanguage;
   }

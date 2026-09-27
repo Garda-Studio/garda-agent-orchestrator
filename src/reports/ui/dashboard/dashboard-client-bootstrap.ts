@@ -42,6 +42,8 @@ planModalNode.addEventListener('click', event => {
 });
 refreshSession();
 applyLanguage();
+document.getElementById('update-check').addEventListener('click', () => refreshUpdateAvailability(true));
+void refreshUpdateAvailability(false);
 sessionPollTimer = setInterval(refreshSession, 1000);
 fetch('/api/report').then(response => response.json()).then(renderTasks).catch(error => {
   tasksNode.innerHTML = '<tr><td colspan="7" class="error">' + safe(error && error.message ? error.message : error) + '</td></tr>';

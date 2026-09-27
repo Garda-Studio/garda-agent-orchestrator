@@ -10,11 +10,13 @@ import {
     normalizeLocalUiLanguage,
     type LocalUiLanguage
 } from './ui-i18n';
+import { renderUpdateAvailabilityPanel, UPDATE_AVAILABILITY_STYLES } from './ui-update-availability';
 
 export function renderLocalUiHtml(actionsEnabled: boolean, actionToken: string, initialLanguage: LocalUiLanguage = 'en'): string {
     const language = normalizeLocalUiLanguage(initialLanguage);
     const text = getLocalUiText(language);
-    const bodyMarkup = renderDashboardBodyMarkup(text, actionsEnabled);
+    const bodyMarkup = renderDashboardBodyMarkup(text, actionsEnabled)
+        .replace('</header>', `${renderUpdateAvailabilityPanel(language)}</header>`);
     const planModalMarkup = renderDashboardPlanModalMarkup(text);
     const clientScript = buildDashboardClientScript({
         actionToken,
@@ -30,6 +32,7 @@ export function renderLocalUiHtml(actionsEnabled: boolean, actionToken: string, 
 <style>
 ${UI_DASHBOARD_STYLES}
 ${UI_DASHBOARD_POLISH_STYLES}
+${UPDATE_AVAILABILITY_STYLES}
 </style>
 </head>
 <body>
