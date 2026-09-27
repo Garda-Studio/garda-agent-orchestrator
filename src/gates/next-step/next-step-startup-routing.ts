@@ -169,6 +169,7 @@ export interface NextStepStartupRoute {
 
 export interface NextStepStartupRouteOptions {
     enterTaskModePassed: boolean;
+    unapprovedActiveTaskOwners?: string[];
     defaultExecutionProvider: string | null;
     enterTaskModeCommand: string;
     startupCycleReadiness: NextStepStartupCycleReadiness;
@@ -211,6 +212,18 @@ export function resolveNextStepStartupRoute(
                 options.protectedManifestRecovery.recovered ? 'Enter task mode' : 'Recover protected manifest after operator confirmation',
                 options.protectedManifestRecovery.command
             )]
+        };
+    }
+    if (options.unapprovedActiveTaskOwners?.length) {
+        return {
+            status: 'BLOCKED',
+            nextGate: 'enter-task-mode',
+            title: 'Confirm work alongside unfinished tasks.',
+            reason: `Unfinished tasks in this worktree: ${options.unapprovedActiveTaskOwners.join(', ')}. `
+                + 'Ask the operator to confirm working in this workspace while preserving existing changes. '
+                + 'After confirmation, use the task-mode command below with an explicit planned file scope; '
+                + 'the approval is recorded for this task and reused by later gates.',
+            commands: [buildCommand('Enter task mode after operator confirmation', options.enterTaskModeCommand)]
         };
     }
     if (!options.enterTaskModePassed) {

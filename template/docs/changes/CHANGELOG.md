@@ -2,6 +2,7 @@
 
 Current baseline:
 
+- Confirmed work alongside unfinished tasks: `next-step` reports active owners and requests explicit consent; repeated `--allow-active-task` options bind approval to the current task and owner artifacts. Later gates reuse it, and re-entry preserves the original dirty-workspace baseline while requiring fresh consent.
 - runtime is Node-only
 - lifecycle commands and gates run through `bin/garda.js`
 - template content no longer ships shell lifecycle or gate entrypoints

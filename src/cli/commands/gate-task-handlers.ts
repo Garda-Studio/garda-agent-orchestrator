@@ -65,6 +65,7 @@ export async function handleEnterTaskMode(gateArgv: string[]): Promise<void> {
         '--start-banner': { key: 'startBanner', type: 'string' },
         '--planned-changed-file': { key: 'plannedChangedFiles', type: 'string[]' },
         '--planned-changed-files': { key: 'plannedChangedFiles', type: 'string[]' },
+        '--allow-active-task': { key: 'allowedActiveTasks', type: 'string[]' },
         '--orchestrator-work': { key: 'orchestratorWork', type: 'boolean' },
         '--workflow-config-work': { key: 'workflowConfigWork', type: 'boolean' },
         '--upgrade-existing-task-mode': { key: 'upgradeExistingTaskMode', type: 'boolean' },

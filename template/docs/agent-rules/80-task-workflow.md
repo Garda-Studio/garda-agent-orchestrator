@@ -23,7 +23,7 @@ Primary entry point: selected source-of-truth entrypoint for this workspace.
   - `.junie/agents/orchestrator.md`
   - `.antigravity/agents/orchestrator.md`
 - Provider bridges must refresh skill routing from `90-skill-catalog.md` and `review-capabilities.json`, including specialist skills added after init.
-- One task in active execution at a time.
+- One task owns implementation by default. If another unfinished task owns the worktree, report its task id and ask the operator to confirm working alongside it while preserving existing changes. After explicit approval, enter task mode with repeated `--allow-active-task <id>`, fresh operator confirmation flags, and an explicit planned file scope. The recorded approval applies to this task and the approved owner entries; later gates reuse it, while new or restarted owners require renewed confirmation. Dirty-workspace protection remains mandatory.
 - Path mode values: `FAST_PATH` or `FULL_PATH`.
 - Path mode is assigned only by:
   `node garda-agent-orchestrator/bin/garda.js gate classify-change`.
@@ -46,7 +46,7 @@ Primary entry point: selected source-of-truth entrypoint for this workspace.
 - Reviewer agents, sub-agents, sidecars, and resumed cycles that already passed the start-banner step must not repeat it.
 - If `garda-agent-orchestrator/runtime/plans/<task-id>.md` exists for the selected task, read it as optional executor guidance. Missing Markdown working plans are normal: do not block, invent a waiver, pass them as `--plan-path`, or treat their absence as a reviewer/completion issue.
 - If the workspace already contains modified files before task-mode entry and the run is not isolated through staged or explicit scope, stop and treat the start as invalid.
-- One active implementation task owns a worktree. `enter-task-mode` and `compile-gate` reject a second active task while another `IN_PROGRESS` or `IN_REVIEW` task has task-mode entry evidence. Queue-only waiting rows and tasks with an authenticated current-cycle no-op do not claim implementation ownership. Audited multitask execution is unavailable until its separate mode is implemented.
+- Another `IN_PROGRESS` or `IN_REVIEW` task with task-mode evidence requires operator consent before starting work alongside it. `next-step` reports the owners and emits the explicit `--allow-active-task` approval command. Queue-only waiting rows and tasks with an authenticated current-cycle no-op do not claim implementation ownership. Valid task-specific approval is reused by later gates. Re-entry requires fresh consent and preserves the original dirty-workspace baseline, including when the artifact path changes.
 
 ## Review Catalog Context Contract
 - Built-in review lanes and their canonical verdict tokens remain compatibility-owned even when `live/config/review-catalog.json` is absent.

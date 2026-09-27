@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { isPlainRecord } from '../../core/records';
+import { findUnapprovedActiveImplementationOwners } from '../workspace/active-implementation-ownership';
 import {
     selectRulePackFiles
 } from '../review-context/review-context-token-economy';
@@ -275,16 +276,50 @@ export function buildEnterTaskModeCommand(
     cliPrefix: string,
     taskId: string,
     taskEntry: TaskQueueEntry | null,
-    provider: string | null
+    provider: string | null,
+    taskMode: Record<string, unknown> | null = null
 ): string {
+    const requestedDepth = taskMode
+        ? resolveDefaultDepthFromTaskMode(taskMode)
+        : resolveDefaultDepthFromTaskQueue(repoRoot, taskEntry);
     const parts = [
         `${cliPrefix} gate enter-task-mode`,
         `--task-id ${quoteCommandValue(taskId)}`,
-        '--entry-mode "EXPLICIT_TASK_EXECUTION"',
-        `--requested-depth ${quoteCommandValue(resolveDefaultDepthFromTaskQueue(repoRoot, taskEntry))}`,
-        `--task-summary ${quoteCommandValue(taskEntry?.title || taskId)}`
+        `--entry-mode ${quoteCommandValue(getStringField(taskMode, 'entry_mode', 'EXPLICIT_TASK_EXECUTION'))}`,
+        `--requested-depth ${quoteCommandValue(requestedDepth)}`,
+        `--task-summary ${quoteCommandValue(getStringField(taskMode, 'task_summary', taskEntry?.title || taskId))}`
     ];
-    parts.push(`--provider ${quoteProviderForCommand(provider)}`);
+    parts.push(`--provider ${taskMode
+        ? quoteCommandValue(getStringField(taskMode, 'provider', provider || '<provider>'))
+        : quoteProviderForCommand(provider)}`);
+    if (taskMode) {
+        const plan = isPlainRecord(taskMode.plan) ? taskMode.plan : null;
+        const planPath = getStringField(plan, 'plan_path', '');
+        if (planPath) parts.push(`--plan-path ${quoteCommandValue(planPath)}`);
+        for (const [field, flag] of [['start_banner', '--start-banner'], ['routed_to', '--routed-to']]) {
+            const value = getStringField(taskMode, field, '');
+            if (value) parts.push(`${flag} ${quoteCommandValue(value)}`);
+        }
+        const effectiveDepth = getNumberField(taskMode, 'effective_depth', '');
+        if (shouldPreserveEffectiveDepthForRestart(taskMode, requestedDepth, effectiveDepth)) {
+            parts.push(`--effective-depth ${quoteCommandValue(effectiveDepth)}`);
+        }
+    }
+    const owners = findUnapprovedActiveImplementationOwners(repoRoot, taskId);
+    if (owners.length > 0) {
+        for (const owner of owners) parts.push(`--allow-active-task ${quoteCommandValue(owner)}`);
+        const plannedFiles = Array.isArray(taskMode?.planned_changed_files)
+            ? taskMode.planned_changed_files.map(String) : [];
+        for (const file of plannedFiles.length > 0 ? plannedFiles : ['<task-owned-file>']) {
+            parts.push(`--planned-changed-file ${quoteCommandValue(file)}`);
+        }
+        if (taskMode) {
+            parts.push('--upgrade-existing-task-mode');
+            if (taskMode.orchestrator_work === true) parts.push('--orchestrator-work');
+            if (taskMode.workflow_config_work === true) parts.push('--workflow-config-work');
+        }
+        parts.push(...buildProtectedOperatorConfirmationCommandParts());
+    }
     parts.push('--repo-root "."');
     return parts.join(' ');
 }

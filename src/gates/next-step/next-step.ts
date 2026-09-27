@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { findUnapprovedActiveImplementationOwners } from '../workspace/active-implementation-ownership';
 import { assertWorkflowTransactionReadable } from '../../core/workflow-transaction-state';
 import * as path from 'node:path';
 
@@ -3535,9 +3536,10 @@ export function resolveNextStepDecisionRoute(
     });
     const startupRoute = resolveStartupDecisionRoute({
         enterTaskModePassed: isGatePassed(summary, 'enter-task-mode'),
+        unapprovedActiveTaskOwners: findUnapprovedActiveImplementationOwners(repoRoot, taskId, taskEntries),
         protectedManifestRecovery: readTaskModeProtectedManifestRecoveryRoute(repoRoot, eventsRoot, taskId, cliPrefix),
         defaultExecutionProvider,
-        enterTaskModeCommand: buildEnterTaskModeCommand(repoRoot, cliPrefix, taskId, taskEntry, defaultExecutionProvider),
+        enterTaskModeCommand: buildEnterTaskModeCommand(repoRoot, cliPrefix, taskId, taskEntry, defaultExecutionProvider, taskMode),
         startupCycleReadiness,
         loadRulePackPassed: isGatePassed(summary, 'load-rule-pack'),
         rulePackStage: resolveRulePackStage(rulePack),

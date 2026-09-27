@@ -50,7 +50,8 @@ import { loadFullSuiteValidationConfig } from '../../../../core/full-suite-valid
 import { resolveReviewFollowUpTaskClosurePolicy } from '../../../../core/review-follow-up-task-closure-policy';
 import { readTaskQueueEntries } from '../../../../core/task-queue-read';
 import {
-    assertSingleActiveImplementationOwner,
+    readImplementationTaskMode,
+    resolveActiveTaskEntryApproval,
     withImplementationOwnershipLock
 } from '../../../../gates/workspace/active-implementation-ownership';
 import {
@@ -211,6 +212,7 @@ export interface EnterTaskModeCommandOptions {
     taskSummary?: unknown;
     startBanner?: unknown;
     plannedChangedFiles?: unknown;
+    allowedActiveTasks?: unknown;
     orchestratorWork?: unknown;
     workflowConfigWork?: unknown;
     upgradeExistingTaskMode?: unknown;
@@ -240,6 +242,7 @@ function resolveTaskModeScopeUpgrade(input: {
     taskId: string;
     artifactPath: string;
     requested: boolean;
+    previousTaskMode?: ReturnType<typeof getTaskModeEvidence>;
     orchestratorWork: boolean;
     workflowConfigWork: boolean;
     plannedChangedFiles: string[];
@@ -250,7 +253,7 @@ function resolveTaskModeScopeUpgrade(input: {
         return null;
     }
 
-    const previousTaskMode = getTaskModeEvidence(input.repoRoot, input.taskId, input.artifactPath);
+    const previousTaskMode = input.previousTaskMode || getTaskModeEvidence(input.repoRoot, input.taskId, input.artifactPath);
     const violations = getTaskModeEvidenceViolations(previousTaskMode);
     if (violations.length > 0) {
         throw new Error(
@@ -331,18 +334,6 @@ function runEnterTaskModeWithOwnershipLock(options: EnterTaskModeCommandOptions)
     const workflowConfigPreTaskBaseline = getWorkflowConfigPreTaskBaselineState(repoRoot, workflowConfigFileHashes);
     const dirtyWorkflowConfigFiles = [...workflowConfigPreTaskBaseline.changed_files].sort();
     const startBanner = resolveTaskModeStartBanner(options.startBanner);
-    const scopeUpgrade = resolveTaskModeScopeUpgrade({
-        repoRoot,
-        taskId,
-        artifactPath,
-        requested: upgradeExistingTaskMode,
-        orchestratorWork,
-        workflowConfigWork,
-        plannedChangedFiles,
-        currentDirtyWorkspaceBaseline,
-        dirtyWorkflowConfigFiles
-    });
-    const dirtyWorkspaceBaseline = scopeUpgrade?.dirtyWorkspaceBaseline || currentDirtyWorkspaceBaseline;
 
     let planMetadata: TaskModePlanMetadata | null = null;
     const rawPlanPath = String(options.planPath || '').trim();
@@ -375,7 +366,27 @@ function runEnterTaskModeWithOwnershipLock(options: EnterTaskModeCommandOptions)
     const taskQueueEntry = taskQueueEntries.get(taskId);
     const taskQueueMetadata = readTaskQueueMetadata(repoRoot, taskId, taskQueueEntries);
 
-    assertSingleActiveImplementationOwner(repoRoot, taskId, 'task-mode entry', taskQueueEntries);
+    const activeTaskApproval = resolveActiveTaskEntryApproval({
+        repoRoot, taskId, artifactPath, entries: taskQueueEntries,
+        allowedActiveTasks: options.allowedActiveTasks,
+        operatorConfirmed: options.operatorConfirmed,
+        operatorConfirmedAtUtc: options.operatorConfirmedAtUtc,
+        plannedChangedFiles
+    });
+
+    const previousTaskMode = readImplementationTaskMode(repoRoot, taskId);
+    const preserveOwnershipBaseline = !!previousTaskMode && (
+        previousTaskMode.evidence_status !== 'EVIDENCE_FILE_MISSING' || !!previousTaskMode.timeline_artifact_path
+    );
+    const preservedScope = resolveTaskModeScopeUpgrade({
+        repoRoot, taskId, artifactPath,
+        requested: upgradeExistingTaskMode || preserveOwnershipBaseline,
+        previousTaskMode: preserveOwnershipBaseline && previousTaskMode ? previousTaskMode : undefined,
+        orchestratorWork, workflowConfigWork, plannedChangedFiles,
+        currentDirtyWorkspaceBaseline, dirtyWorkflowConfigFiles
+    });
+    const scopeUpgrade = upgradeExistingTaskMode || activeTaskApproval ? preservedScope : null;
+    const dirtyWorkspaceBaseline = preservedScope?.dirtyWorkspaceBaseline || currentDirtyWorkspaceBaseline;
 
     assertTaskModeProtectedEntryAllowed({
         repoRoot,
@@ -394,10 +405,10 @@ function runEnterTaskModeWithOwnershipLock(options: EnterTaskModeCommandOptions)
         taskQueueMetadata
     });
     const workflowConfigFileHashesForArtifact = normalizeWorkflowConfigFileHashes(options.workflowConfigFileHashesOverride)
-        || normalizeWorkflowConfigFileHashes(scopeUpgrade?.workflowConfigFileHashes)
+        || normalizeWorkflowConfigFileHashes(preservedScope?.workflowConfigFileHashes)
         || workflowConfigFileHashes;
     const workflowConfigCompatibilityBaselineFiles = options.workflowConfigCompatibilityBaselineFilesOverride === undefined
-        ? scopeUpgrade?.workflowConfigCompatibilityBaselineFiles
+        ? preservedScope?.workflowConfigCompatibilityBaselineFiles
             || workflowConfigPreTaskBaseline.compatibility_baseline_files
         : options.workflowConfigCompatibilityBaselineFilesOverride as string[];
 
@@ -561,6 +572,9 @@ function runEnterTaskModeWithOwnershipLock(options: EnterTaskModeCommandOptions)
                 : `Task mode entered via ${taskModeArtifact.entry_mode}.`,
             {
                 artifact_path: normalizeOptionalPath(artifactPath),
+                active_task_approval: activeTaskApproval
+                    ? { ...activeTaskApproval, task_mode_sha256: gateHelpers.fileSha256(artifactPath) }
+                    : null,
                 entry_mode: taskModeArtifact.entry_mode,
                 requested_depth: taskModeArtifact.requested_depth,
                 effective_depth: taskModeArtifact.effective_depth,
