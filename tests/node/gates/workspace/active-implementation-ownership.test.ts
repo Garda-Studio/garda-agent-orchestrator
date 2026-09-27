@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { appendTaskEvent } from '../../../../src/gate-runtime/task-events';
 import { acquireFilesystemLock, releaseFilesystemLock } from '../../../../src/gate-runtime/task-events-locking';
 import { buildNoOpArtifact } from '../../../../src/gates/task-mode/no-op';
@@ -10,14 +11,15 @@ import { runCompileGateCommand, splitCommandLine } from '../../../../src/cli/com
 import { EXIT_GATE_FAILURE } from '../../../../src/cli/exit-codes';
 import { getTaskModeEvidence } from '../../../../src/gates/task-mode/task-mode';
 import { serializeTaskPlan, validateTaskPlan } from '../../../../src/schemas/task-plan';
-import { deriveProtectedDirtyWorkspaceScope, detectProtectedDirtyWorkspaceDrift } from '../../../../src/gates/workspace/dirty-worktree-protection';
+import { captureDirtyWorkspaceBaseline, deriveProtectedDirtyWorkspaceScope, detectProtectedDirtyWorkspaceDrift } from '../../../../src/gates/workspace/dirty-worktree-protection';
 import { buildEnterTaskModeCommand } from '../../../../src/gates/next-step/next-step-lifecycle-command-builders';
 import { resolveNextStepStartupRoute } from '../../../../src/gates/next-step/next-step-startup-routing';
 
 import {
     assertSingleActiveImplementationOwner,
     findOtherActiveImplementationOwners,
-    findUnapprovedActiveImplementationOwners
+    findUnapprovedActiveImplementationOwners,
+    withImplementationOwnershipLock
 } from '../../../../src/gates/workspace/active-implementation-ownership';
 import { createTempRepo, initializeGitRepo } from '../../cli/commands/gate-test-repo-bootstrap';
 import { runCliWithCapturedOutput } from '../../cli/commands/gate-test-cli-capture';
@@ -470,6 +472,54 @@ test('custom-path owner restart rejects stale approval even when the old default
     assert.deepEqual(findUnapprovedActiveImplementationOwners(repoRoot, 'T-103'), ['T-101']);
     assert.throws(() => assertSingleActiveImplementationOwner(repoRoot, 'T-103', 'compile gate'), /Ask the operator/u);
     assert.match(buildEnterTaskModeCommand(repoRoot, 'node bin/garda.js', 'T-103', null, 'Codex'), /--allow-active-task "T-101"/u);
+});
+
+test('task entry without runtime ignores excludes its own lock and preserves unrelated runtime WIP', (t) => {
+    const repoRoot = createTempRepo(t);
+    seedInitAnswers(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, '.gitignore'), 'TASK.md\n');
+    seedTaskQueue(repoRoot, 'T-103');
+    initializeGitRepo(repoRoot);
+    const lockMetadata = 'garda-agent-orchestrator/runtime/task-queue-locks/active-implementation.lock/owner.json';
+    const foreignFile = 'garda-agent-orchestrator/runtime/task-queue-locks/foreign-work.txt';
+    fs.mkdirSync(path.dirname(path.join(repoRoot, foreignFile)), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, foreignFile), 'preserve this work');
+    const result = runEnterTaskMode({ repoRoot, taskId: 'T-103', taskSummary: 'Enter without runtime ignores' });
+    assert.equal(result.exitCode, 0, result.outputLines.join('\n'));
+    const baseline = getTaskModeEvidence(repoRoot, 'T-103').dirty_workspace_baseline;
+    assert.ok(baseline);
+    assert.ok(baseline.changed_files.includes(foreignFile));
+    assert.equal(baseline.changed_files.includes(lockMetadata), false);
+    assert.ok(baseline.git_change_classification?.untracked_files.includes(lockMetadata));
+    assert.equal(fs.existsSync(path.join(repoRoot, lockMetadata)), false);
+    const protectedScope = deriveProtectedDirtyWorkspaceScope(repoRoot, baseline, []);
+    assert.equal(detectProtectedDirtyWorkspaceDrift(repoRoot, protectedScope).status, 'PASS');
+    fs.writeFileSync(path.join(repoRoot, foreignFile), 'unexpected replacement');
+    assert.deepEqual(detectProtectedDirtyWorkspaceDrift(repoRoot, protectedScope).changed_files, [foreignFile]);
+});
+
+test('baseline lock exclusion requires the current acquired entry lock and retains staged metadata', (t) => {
+    const repoRoot = createTempRepo(t);
+    initializeGitRepo(repoRoot);
+    const lockMetadata = 'garda-agent-orchestrator/runtime/task-queue-locks/active-implementation.lock/owner.json';
+    withImplementationOwnershipLock(repoRoot, lock => {
+        assert.ok(captureDirtyWorkspaceBaseline(repoRoot).changed_files.includes(lockMetadata));
+        assert.throws(() => captureDirtyWorkspaceBaseline(repoRoot, [], { ...lock, lockId: 'forged' }), /current implementation ownership lock/u);
+        assert.throws(() => captureDirtyWorkspaceBaseline(repoRoot, [], { ...lock, lockPath: path.join(repoRoot, 'other.lock') }), /current implementation ownership lock/u);
+        assert.deepEqual(captureDirtyWorkspaceBaseline(repoRoot, [], lock).changed_files, []);
+        execFileSync('git', ['-C', repoRoot, 'add', '--', lockMetadata], { stdio: 'pipe' });
+        const staged = captureDirtyWorkspaceBaseline(repoRoot, [], lock);
+        assert.ok(staged.changed_files.includes(lockMetadata));
+        assert.ok(staged.staged_files?.includes(lockMetadata));
+        assert.ok(staged.staged_trust?.files[lockMetadata]);
+    });
+});
+
+test('baseline capture rejects a released entry lock', (t) => {
+    const repoRoot = createTempRepo(t);
+    initializeGitRepo(repoRoot);
+    const releasedLock = withImplementationOwnershipLock(repoRoot, lock => ({ ...lock }));
+    assert.throws(() => captureDirtyWorkspaceBaseline(repoRoot, [], releasedLock), /current implementation ownership lock/u);
 });
 
 test('task-mode entry rejects a concurrent start while the ownership lock is held', (t) => {

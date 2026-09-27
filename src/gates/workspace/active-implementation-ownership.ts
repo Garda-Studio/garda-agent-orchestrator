@@ -5,7 +5,7 @@ import { isTaskQueueActiveStatus } from '../../core/active-task-state';
 import { readTaskQueueEntries, type TaskQueueEntry } from '../../core/task-queue-read';
 import { parseOperatorConfirmationYes, validateFreshOperatorConfirmation } from '../../core/operator-confirmation';
 import { inspectTaskEventFile, readTaskTimelineJsonlEntries } from '../../gate-runtime/task-events';
-import { acquireFilesystemLock, releaseFilesystemLock } from '../../gate-runtime/task-events-locking';
+import { acquireFilesystemLock, releaseFilesystemLock, type LockHandle } from '../../gate-runtime/task-events-locking';
 import { isPathRealpathInsideRoot, joinOrchestratorPath, resolvePathInsideRepo } from '../shared/helpers';
 import { getNoOpEvidence, getCurrentNoOpEventSha256 } from '../task-mode/no-op';
 import { getTaskModeEvidence } from '../task-mode/task-mode';
@@ -143,7 +143,7 @@ export function resolveActiveTaskEntryApproval(input: {
     return { operator_confirmed_at_utc: String(input.operatorConfirmedAtUtc).trim(), owners: Object.fromEntries(ownerHashes) };
 }
 
-export function withImplementationOwnershipLock<T>(repoRoot: string, operation: () => T): T {
+export function withImplementationOwnershipLock<T>(repoRoot: string, operation: (lock: LockHandle) => T): T {
     const lockPath = joinOrchestratorPath(repoRoot, path.join('runtime', 'task-queue-locks', 'active-implementation.lock'));
     if (!isPathRealpathInsideRoot(lockPath, repoRoot, { allowMissing: true })) {
         throw new Error('Implementation ownership lock must remain inside the worktree.');
@@ -154,7 +154,7 @@ export function withImplementationOwnershipLock<T>(repoRoot: string, operation: 
         allowForeignHostStaleRecovery: false
     });
     try {
-        return operation();
+        return operation(handle);
     } finally {
         releaseFilesystemLock(handle);
     }

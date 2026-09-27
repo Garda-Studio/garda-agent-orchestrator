@@ -9,6 +9,7 @@ import {
     appendMandatoryTaskEvent,
     assertValidTaskId
 } from '../../../../gate-runtime/task-events';
+import type { LockHandle } from '../../../../gate-runtime/task-events-locking';
 import {
     buildTaskModeArtifact,
     getTaskModeEvidence,
@@ -309,11 +310,14 @@ export function runEnterTaskModeCommand(options: EnterTaskModeCommandOptions): {
     const repoRoot = path.resolve(String(options.repoRoot || '.'));
     return withImplementationOwnershipLock(
         repoRoot,
-        () => runEnterTaskModeWithOwnershipLock(options)
+        lock => runEnterTaskModeWithOwnershipLock(options, lock)
     );
 }
 
-function runEnterTaskModeWithOwnershipLock(options: EnterTaskModeCommandOptions): { outputLines: string[]; exitCode: number } {
+function runEnterTaskModeWithOwnershipLock(
+    options: EnterTaskModeCommandOptions,
+    ownershipLock: LockHandle
+): { outputLines: string[]; exitCode: number } {
     const repoRoot = path.resolve(String(options.repoRoot || '.'));
     const orchestratorRoot = resolveOrchestratorRoot(repoRoot);
     const taskId = assertValidTaskId(String(options.taskId || '').trim());
@@ -327,7 +331,7 @@ function runEnterTaskModeWithOwnershipLock(options: EnterTaskModeCommandOptions)
         protectedPlannedFiles,
         workflowConfigPlannedFiles
     } = resolveTaskModeEntryScope(repoRoot, options.plannedChangedFiles);
-    const currentDirtyWorkspaceBaseline = captureDirtyWorkspaceBaseline(repoRoot, plannedChangedFiles);
+    const currentDirtyWorkspaceBaseline = captureDirtyWorkspaceBaseline(repoRoot, plannedChangedFiles, ownershipLock);
     const orchestratorWork = parseBooleanOption(options.orchestratorWork, false);
     const workflowConfigWork = parseBooleanOption(options.workflowConfigWork, false);
     const upgradeExistingTaskMode = parseBooleanOption(options.upgradeExistingTaskMode, false);
