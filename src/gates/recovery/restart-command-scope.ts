@@ -102,15 +102,29 @@ export function resolveRestartCommandChangedFiles(
     preflightPath: string,
     options: RestartCommandChangedFilesOptions = {}
 ): string[] {
+    return resolveRestartCommandScope(repoRoot, preflightPath, options).changedFiles;
+}
+
+export function resolveRestartCommandScope(
+    repoRoot: string,
+    preflightPath: string,
+    options: RestartCommandChangedFilesOptions = {}
+): { changedFiles: string[]; useStaged: boolean } {
     const resolvedPreflightPath = resolvePreflightPath(repoRoot, preflightPath);
     if (!resolvedPreflightPath) {
-        return [];
+        return { changedFiles: [], useStaged: false };
     }
     const preflight = readJsonRecord(resolvedPreflightPath);
     if (!preflight) {
-        return [];
+        return { changedFiles: [], useStaged: false };
     }
+    return {
+        changedFiles: selectRestartChangedFiles(preflight, options),
+        useStaged: preflight.detection_source === 'git_staged_only' || preflight.detection_source === 'git_staged_plus_untracked'
+    };
+}
 
+function selectRestartChangedFiles(preflight: Record<string, unknown>, options: RestartCommandChangedFilesOptions): string[] {
     const triggers = toPlainRecord(preflight.triggers);
     const preflightChangedFiles = toNormalizedPathList(preflight.changed_files);
     const workflowConfigFiles = [...new Set([

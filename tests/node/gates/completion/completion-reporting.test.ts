@@ -26,6 +26,27 @@ function writeTaskMode(repoRoot: string, taskId: string, payload: Record<string,
 }
 
 describe('gates/completion-reporting', () => {
+    for (const detectionSource of ['git_staged_only', 'git_staged_plus_untracked']) {
+        it(`preserves ${detectionSource} isolation in both restart commands`, () => {
+            const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-restart-staged-'));
+            try {
+                const preflightPath = path.join(repoRoot, 'preflight.json');
+                fs.writeFileSync(preflightPath, JSON.stringify({ detection_source: detectionSource, changed_files: ['src/app.ts'] }));
+                const commands = [
+                    buildCoherentCycleRestartCommand(repoRoot, 'T-123', preflightPath, null, null, null),
+                    buildReviewCycleRestartCommand(repoRoot, 'T-123', preflightPath, null, null, null)
+                ];
+                for (const command of commands) {
+                    assert.match(command, /--use-staged(?:\s|$)/u);
+                    assert.doesNotMatch(command, /--changed-file/u, 'explicit paths override and erase staged selection');
+                }
+                const explicit = buildCoherentCycleRestartCommand(repoRoot, 'T-123', preflightPath, null, null, null, { changedFiles: ['src/explicit.ts'] });
+                assert.match(explicit, /--changed-file 'src\/explicit.ts'/u);
+                assert.doesNotMatch(explicit, /--use-staged/u, 'an intentional explicit scope override retains its existing contract');
+            } finally { fs.rmSync(repoRoot, { recursive: true, force: true }); }
+        });
+    }
+
     it('carries and PowerShell-quotes the current task intent in coherent-cycle restart guidance', () => {
         const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-completion-restart-intent-'));
         try {

@@ -5,7 +5,7 @@ import { buildReviewTrustSummaryFromCompatibilityArtifacts } from '../review/rev
 import {
     isRestartWorkflowConfigScopeAuthorized,
     omitWorkflowConfigChangedFiles,
-    resolveRestartCommandChangedFiles
+    resolveRestartCommandScope
 } from '../recovery/restart-command-scope';
 
 export function quotePowerShellCliValue(value: string): string {
@@ -48,14 +48,18 @@ export function buildCoherentCycleRestartCommand(
         parts.push(`--output-filters-path ${quotePowerShellCliValue(outputFiltersPath)}`);
     }
     const includeWorkflowConfigFiles = isRestartWorkflowConfigScopeAuthorized(repoRoot, taskId, taskModePath);
-    const changedFiles = options.changedFiles
-        ? [...new Set(options.changedFiles.map((entry) => String(entry || '').trim()).filter(Boolean))].sort()
-        : resolveRestartCommandChangedFiles(repoRoot, preflightPath, { includeWorkflowConfigFiles });
+    const scope = options.changedFiles
+        ? { changedFiles: [...new Set(options.changedFiles.map((entry) => String(entry || '').trim()).filter(Boolean))].sort(), useStaged: false }
+        : resolveRestartCommandScope(repoRoot, preflightPath, { includeWorkflowConfigFiles });
     const commandChangedFiles = includeWorkflowConfigFiles
-        ? changedFiles
-        : omitWorkflowConfigChangedFiles(changedFiles);
-    for (const changedFile of commandChangedFiles) {
-        parts.push(`--changed-file ${quotePowerShellCliValue(changedFile)}`);
+        ? scope.changedFiles
+        : omitWorkflowConfigChangedFiles(scope.changedFiles);
+    if (scope.useStaged) {
+        parts.push('--use-staged');
+    } else {
+        for (const changedFile of commandChangedFiles) {
+            parts.push(`--changed-file ${quotePowerShellCliValue(changedFile)}`);
+        }
     }
     if (options.requiresOperatorConfirmation === true) {
         parts.push('--operator-confirmed yes');
@@ -92,8 +96,13 @@ export function buildReviewCycleRestartCommand(
         parts.push(`--output-filters-path ${quotePowerShellCliValue(outputFiltersPath)}`);
     }
     const includeWorkflowConfigFiles = isRestartWorkflowConfigScopeAuthorized(repoRoot, taskId, taskModePath);
-    for (const changedFile of resolveRestartCommandChangedFiles(repoRoot, preflightPath, { includeWorkflowConfigFiles })) {
-        parts.push(`--changed-file ${quotePowerShellCliValue(changedFile)}`);
+    const scope = resolveRestartCommandScope(repoRoot, preflightPath, { includeWorkflowConfigFiles });
+    if (scope.useStaged) {
+        parts.push('--use-staged');
+    } else {
+        for (const changedFile of scope.changedFiles) {
+            parts.push(`--changed-file ${quotePowerShellCliValue(changedFile)}`);
+        }
     }
     return parts.join(' ');
 }

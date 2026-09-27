@@ -1741,10 +1741,11 @@ describe('cli/commands/gates — workflow-config protected control-plane', () =>
         }
     });
 
-    it('allows ordinary task preflight after audited workflow set refreshes protected manifest', { concurrency: false }, () => {
+    it('allows ordinary task preflight after audited workflow set while retaining the original baseline', { concurrency: false }, () => {
         const taskId = 'T-900workflow-config-workflow-set-refreshes-manifest';
         const repoRoot = prepareTaskRepo(taskId);
         const bundleRoot = path.join(repoRoot, 'garda-agent-orchestrator');
+        const originalTaskMode = getTaskModeEvidence(repoRoot, taskId);
 
         try {
             const workflowResult = captureConsole(() => handleWorkflow([
@@ -1768,6 +1769,9 @@ describe('cli/commands/gates — workflow-config protected control-plane', () =>
                 taskSummary: 'Start ordinary task after audited workflow set'
             });
             assert.equal(taskModeResult.exitCode, 0);
+            const resumedTaskMode = getTaskModeEvidence(repoRoot, taskId);
+            assert.deepEqual(resumedTaskMode.dirty_workspace_baseline, originalTaskMode.dirty_workspace_baseline);
+            assert.deepEqual(resumedTaskMode.workflow_config_file_hashes, originalTaskMode.workflow_config_file_hashes);
             assert.equal(loadTaskEntryRulePack(repoRoot, taskId).exitCode, 0);
             runHandshakeForTask(repoRoot, taskId);
             runShellSmokeForTask(repoRoot, taskId);
@@ -1780,7 +1784,8 @@ describe('cli/commands/gates — workflow-config protected control-plane', () =>
             });
             const payload = JSON.parse(result.outputText);
             assert.equal(payload.triggers.protected_control_plane_manifest_status, 'MATCH');
-            assert.deepEqual(payload.triggers.changed_workflow_config_files, []);
+            assert.deepEqual(payload.triggers.changed_workflow_config_files, ['garda-agent-orchestrator/live/config/workflow-config.json']);
+            assert.equal(payload.triggers.workflow_config_audit_provenance.accepted, true);
         } finally {
             fs.rmSync(repoRoot, { recursive: true, force: true });
         }

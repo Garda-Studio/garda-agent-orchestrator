@@ -305,6 +305,44 @@ test('re-entry after the approved owner completes retains the original baseline 
     }
 });
 
+test('ordinary re-entry preserves the original baseline without applying explicit scope-upgrade completeness', (t) => {
+    const repoRoot = createTempRepo(t);
+    seedInitAnswers(repoRoot);
+    writeQueue(repoRoot, 'TODO');
+    const foreign = path.join(repoRoot, 'foreign.txt');
+    fs.writeFileSync(foreign, 'original\n');
+    initializeGitRepo(repoRoot);
+    fs.writeFileSync(foreign, 'pre-existing user work\n');
+    const options = { repoRoot, taskId: 'T-101', taskSummary: 'Ordinary resumed task', plannedChangedFiles: ['src/second.ts'] };
+    assert.equal(runEnterTaskMode(options).exitCode, 0);
+    const baseline = getTaskModeEvidence(repoRoot, 'T-101').dirty_workspace_baseline;
+    fs.writeFileSync(path.join(repoRoot, 'late-user-attachment.txt'), 'unrelated arrival\n');
+    assert.equal(runEnterTaskMode(options).exitCode, 0);
+    const renewed = getTaskModeEvidence(repoRoot, 'T-101');
+    assert.deepEqual(renewed.dirty_workspace_baseline, baseline);
+    assert.throws(() => runEnterTaskMode({ ...options, upgradeExistingTaskMode: 'true' }), /requires every post-entry changed file/u);
+    fs.writeFileSync(foreign, 'changed outside scope\n');
+    assert.deepEqual(detectProtectedDirtyWorkspaceDrift(repoRoot,
+        deriveProtectedDirtyWorkspaceScope(repoRoot, renewed.dirty_workspace_baseline, options.plannedChangedFiles)
+    ).changed_files, ['foreign.txt']);
+});
+
+test('ordinary re-entry rejects a removed or malformed modern dirty workspace baseline', (t) => {
+    const repoRoot = createTempRepo(t);
+    seedInitAnswers(repoRoot);
+    const options = { repoRoot, taskId: 'T-101', taskSummary: 'Reject removed ownership evidence' };
+    assert.equal(runEnterTaskMode(options).exitCode, 0);
+    const artifactPath = getTaskModeEvidence(repoRoot, 'T-101').evidence_path!;
+    const original = JSON.parse(fs.readFileSync(artifactPath, 'utf8')) as Record<string, unknown>;
+    for (const baseline of [undefined, null, 'invalid']) {
+        const changed = { ...original, dirty_workspace_baseline: baseline };
+        const bytes = JSON.stringify(changed);
+        fs.writeFileSync(artifactPath, bytes);
+        assert.throws(() => runEnterTaskMode(options), /original dirty workspace baseline is missing/u);
+        assert.equal(fs.readFileSync(artifactPath, 'utf8'), bytes);
+    }
+});
+
 test('navigator requests confirmation before entry and prints the existing owners', (t) => {
     const repoRoot = createTempRepo(t);
     seedInitAnswers(repoRoot);

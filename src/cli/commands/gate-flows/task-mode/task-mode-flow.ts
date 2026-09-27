@@ -243,6 +243,7 @@ function resolveTaskModeScopeUpgrade(input: {
     taskId: string;
     artifactPath: string;
     requested: boolean;
+    requireCompleteUpgradeScope: boolean;
     previousTaskMode?: ReturnType<typeof getTaskModeEvidence>;
     orchestratorWork: boolean;
     workflowConfigWork: boolean;
@@ -261,14 +262,21 @@ function resolveTaskModeScopeUpgrade(input: {
             'Cannot upgrade task-mode scope without valid current task-mode evidence. ' + violations.join(' ')
         );
     }
-    if (!previousTaskMode.dirty_workspace_baseline) {
-        throw new Error('Cannot upgrade task-mode scope because the original dirty workspace baseline is missing.');
-    }
     if (previousTaskMode.orchestrator_work === true && !input.orchestratorWork) {
         throw new Error('Task-mode scope upgrade cannot remove the existing --orchestrator-work authorization.');
     }
     if (previousTaskMode.workflow_config_work === true && !input.workflowConfigWork) {
         throw new Error('Task-mode scope upgrade cannot remove the existing --workflow-config-work authorization.');
+    }
+    if (!previousTaskMode.dirty_workspace_baseline) {
+        // Legacy identity validation checks both the artifact and its entry event before backfilling.
+        if (!input.requireCompleteUpgradeScope && previousTaskMode.identity_backfilled_from_legacy && previousTaskMode.evidence_path) {
+            const originalArtifact = JSON.parse(fs.readFileSync(previousTaskMode.evidence_path, 'utf8')) as Record<string, unknown>;
+            if (!Object.prototype.hasOwnProperty.call(originalArtifact, 'dirty_workspace_baseline')) {
+                return null;
+            }
+        }
+        throw new Error('Cannot upgrade task-mode scope because the original dirty workspace baseline is missing.');
     }
 
     const originalBaselineFiles = new Set(previousTaskMode.dirty_workspace_baseline.changed_files);
@@ -276,7 +284,7 @@ function resolveTaskModeScopeUpgrade(input: {
     const unplannedTaskOwnedFiles = input.currentDirtyWorkspaceBaseline.changed_files.filter((entry) => (
         !originalBaselineFiles.has(entry) && !plannedFiles.has(entry)
     ));
-    if (unplannedTaskOwnedFiles.length > 0) {
+    if (input.requireCompleteUpgradeScope && unplannedTaskOwnedFiles.length > 0) {
         throw new Error(
             'Task-mode scope upgrade requires every post-entry changed file in the planned scope: ' +
             unplannedTaskOwnedFiles.join(', ') + '.'
@@ -378,6 +386,11 @@ function runEnterTaskModeWithOwnershipLock(
         plannedChangedFiles
     });
 
+    const profilesConfigPath = path.join(orchestratorRoot, 'live', 'config', 'profiles.json');
+    const profilesConfigExists = fs.existsSync(profilesConfigPath) && fs.statSync(profilesConfigPath).isFile();
+    const reusableProfilePolicySnapshot = readReusableProfilePolicySnapshot(repoRoot, taskId, artifactPath, {
+        requireSnapshot: profilesConfigExists
+    });
     const previousTaskMode = readImplementationTaskMode(repoRoot, taskId);
     const preserveOwnershipBaseline = !!previousTaskMode && (
         previousTaskMode.evidence_status !== 'EVIDENCE_FILE_MISSING' || !!previousTaskMode.timeline_artifact_path
@@ -385,6 +398,7 @@ function runEnterTaskModeWithOwnershipLock(
     const preservedScope = resolveTaskModeScopeUpgrade({
         repoRoot, taskId, artifactPath,
         requested: upgradeExistingTaskMode || preserveOwnershipBaseline,
+        requireCompleteUpgradeScope: upgradeExistingTaskMode,
         previousTaskMode: preserveOwnershipBaseline && previousTaskMode ? previousTaskMode : undefined,
         orchestratorWork, workflowConfigWork, plannedChangedFiles,
         currentDirtyWorkspaceBaseline, dirtyWorkflowConfigFiles
@@ -426,11 +440,6 @@ function runEnterTaskModeWithOwnershipLock(
     let profilePolicySnapshot: TaskProfilePolicySnapshot | null = null;
     let defaultTaskModeDepth = 2;
     let defaultTaskModeDepthResolvedFromProfile = false;
-    const profilesConfigPath = path.join(orchestratorRoot, 'live', 'config', 'profiles.json');
-    const profilesConfigExists = fs.existsSync(profilesConfigPath) && fs.statSync(profilesConfigPath).isFile();
-    const reusableProfilePolicySnapshot = readReusableProfilePolicySnapshot(repoRoot, taskId, artifactPath, {
-        requireSnapshot: profilesConfigExists
-    });
     if (reusableProfilePolicySnapshot) {
         profilePolicySnapshot = reusableProfilePolicySnapshot;
         taskProfile = reusableProfilePolicySnapshot.source.task_profile;
