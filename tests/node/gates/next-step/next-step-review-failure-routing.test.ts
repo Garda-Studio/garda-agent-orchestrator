@@ -2262,14 +2262,16 @@ describe('gates/next-step', { concurrency: 2 }, () => {
             return originalReadFileSync(file as never, ...(args as never[]));
         }) as typeof fs.readFileSync;
         try {
-            const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
-
-            assert.notEqual(result.next_gate, 'materialize-review-follow-up-tasks');
-            assert.notEqual(result.status, 'FAILED', `${result.next_gate}: ${result.title} :: ${result.reason}`);
+            for (let evaluation = 1; evaluation <= 2; evaluation++) {
+                const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+                assert.notEqual(result.next_gate, 'materialize-review-follow-up-tasks');
+                assert.notEqual(result.status, 'FAILED', `${result.next_gate}: ${result.title} :: ${result.reason}`);
+                assert.equal(taskReads, evaluation, 'each evaluation reads one fresh task queue snapshot');
+            }
         } finally {
             mutableFs.readFileSync = originalReadFileSync;
         }
-        assert.equal(taskReads, 1);
+        assert.equal(taskReads, 2);
     });
 
     it('rejects stale materialized follow-up artifacts without current TASK.md fingerprint rows', () => {

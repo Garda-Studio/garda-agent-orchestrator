@@ -277,7 +277,8 @@ export function buildEnterTaskModeCommand(
     taskId: string,
     taskEntry: TaskQueueEntry | null,
     provider: string | null,
-    taskMode: Record<string, unknown> | null = null
+    taskMode: Record<string, unknown> | null = null,
+    unapprovedActiveTaskOwners?: readonly string[]
 ): string {
     const requestedDepth = taskMode
         ? resolveDefaultDepthFromTaskMode(taskMode)
@@ -305,7 +306,7 @@ export function buildEnterTaskModeCommand(
             parts.push(`--effective-depth ${quoteCommandValue(effectiveDepth)}`);
         }
     }
-    const owners = findUnapprovedActiveImplementationOwners(repoRoot, taskId);
+    const owners = unapprovedActiveTaskOwners ?? findUnapprovedActiveImplementationOwners(repoRoot, taskId);
     if (owners.length > 0) {
         for (const owner of owners) parts.push(`--allow-active-task ${quoteCommandValue(owner)}`);
         const plannedFiles = Array.isArray(taskMode?.planned_changed_files)

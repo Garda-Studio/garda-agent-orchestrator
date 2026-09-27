@@ -3534,12 +3534,15 @@ export function resolveNextStepDecisionRoute(
         enforceLateRulePackAfterReviewPhase:
             !preflight || !preflightCycleReadiness.ready || !effectivePreflightWorkspaceReadiness.ready
     });
+    const unapprovedActiveTaskOwners = findUnapprovedActiveImplementationOwners(repoRoot, taskId, taskEntries);
     const startupRoute = resolveStartupDecisionRoute({
         enterTaskModePassed: isGatePassed(summary, 'enter-task-mode'),
-        unapprovedActiveTaskOwners: findUnapprovedActiveImplementationOwners(repoRoot, taskId, taskEntries),
+        unapprovedActiveTaskOwners,
         protectedManifestRecovery: readTaskModeProtectedManifestRecoveryRoute(repoRoot, eventsRoot, taskId, cliPrefix),
         defaultExecutionProvider,
-        enterTaskModeCommand: buildEnterTaskModeCommand(repoRoot, cliPrefix, taskId, taskEntry, defaultExecutionProvider, taskMode),
+        enterTaskModeCommand: buildEnterTaskModeCommand(
+            repoRoot, cliPrefix, taskId, taskEntry, defaultExecutionProvider, taskMode, unapprovedActiveTaskOwners
+        ),
         startupCycleReadiness,
         loadRulePackPassed: isGatePassed(summary, 'load-rule-pack'),
         rulePackStage: resolveRulePackStage(rulePack),
