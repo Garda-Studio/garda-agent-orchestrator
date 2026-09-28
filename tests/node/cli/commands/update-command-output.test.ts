@@ -8,8 +8,16 @@ import type { PackageJsonLike } from '../../../../src/cli/commands/cli-types';
 import { PROJECT_MEMORY_INIT_REFRESH_PROMPT } from '../../../../src/core/project-memory-rollout';
 import { OPTIONAL_QUALITY_CHECKS_ENABLED_NOTICE } from '../../../../src/core/workflow-config';
 import { printUpdateAnnouncementSections } from '../../../../src/cli/commands/shared-command-utils';
+import { withLifecycleOperationLock } from '../../../../src/lifecycle/lock/lifecycle-lock';
 
 type UpdateCommandModule = typeof import('../../../../src/cli/commands/update-command');
+
+function runUpdateWithLock(
+    runner: (options: Record<string, unknown>) => void,
+    options: { targetRoot: string } & Record<string, unknown>
+): void {
+    withLifecycleOperationLock(options.targetRoot, 'update', () => runner(options));
+}
 
 const WORKFLOW_CONFIG_MERGE_STATUS = 'live_config_missing_template_applied path=garda-agent-orchestrator/live/config/workflow-config.json full_suite_validation.enabled=false project_memory_maintenance.enabled=true project_memory_maintenance.mode=update review_cycle_guard.max_failed_non_test_reviews=10 review_cycle_guard.max_total_non_test_reviews=30 review_cycle_guard.limit_status=template_default_applied';
 const UPDATE_WARNING_TEXT = 'Review bundled announcement warnings before rollout.';
@@ -260,7 +268,7 @@ test('handleUpdate surfaces update messages and release notes in plain text and 
             [checkUpdateModulePath]: {
                 async runCheckUpdate(options: { updateRunner?: (runnerOptions: Record<string, unknown>) => void }) {
                     if (typeof options.updateRunner === 'function') {
-                        options.updateRunner({
+                        runUpdateWithLock(options.updateRunner, {
                             targetRoot: fixture.workspaceRoot,
                             initAnswersPath: 'garda-agent-orchestrator/runtime/init-answers.json',
                             skipVerify: false,
@@ -413,7 +421,7 @@ test('handleCheckUpdate --apply includes UpdateApplied in plain text and enriche
             [checkUpdateModulePath]: {
                 async runCheckUpdate(options: { updateRunner?: (runnerOptions: Record<string, unknown>) => void }) {
                     if (typeof options.updateRunner === 'function') {
-                        options.updateRunner({
+                        runUpdateWithLock(options.updateRunner, {
                             targetRoot: fixture.workspaceRoot,
                             initAnswersPath: 'garda-agent-orchestrator/runtime/init-answers.json',
                             skipVerify: false,
@@ -611,7 +619,7 @@ test('handleCheckUpdate --apply corrects stale lifecycle UpdatedVersion after de
             [checkUpdateModulePath]: {
                 async runCheckUpdate(options: { updateRunner?: (runnerOptions: Record<string, unknown>) => void }) {
                     if (typeof options.updateRunner === 'function') {
-                        options.updateRunner({
+                        runUpdateWithLock(options.updateRunner, {
                             targetRoot: fixture.workspaceRoot,
                             initAnswersPath: 'garda-agent-orchestrator/runtime/init-answers.json',
                             skipVerify: false,
@@ -925,7 +933,7 @@ test('handleUpdateGit surfaces the shared status banner in plain text without ch
             [updateGitModulePath]: {
                 async runUpdateFromGit(options: { updateRunner?: (runnerOptions: Record<string, unknown>) => void }) {
                     if (typeof options.updateRunner === 'function') {
-                        options.updateRunner({
+                        runUpdateWithLock(options.updateRunner, {
                             targetRoot: fixture.workspaceRoot,
                             initAnswersPath: 'garda-agent-orchestrator/runtime/init-answers.json',
                             skipVerify: false,
@@ -1041,7 +1049,7 @@ test('handleUpdateGit keeps same-version content drift sync output operator-focu
             [updateGitModulePath]: {
                 async runUpdateFromGit(options: { updateRunner?: (runnerOptions: Record<string, unknown>) => void }) {
                     if (typeof options.updateRunner === 'function') {
-                        options.updateRunner({
+                        runUpdateWithLock(options.updateRunner, {
                             targetRoot: fixture.workspaceRoot,
                             initAnswersPath: 'garda-agent-orchestrator/runtime/init-answers.json',
                             skipVerify: false,
@@ -1156,7 +1164,7 @@ test('handleUpdateGit uses latest applied version for announcements when lifecyc
             [updateGitModulePath]: {
                 async runUpdateFromGit(options: { updateRunner?: (runnerOptions: Record<string, unknown>) => void }) {
                     if (typeof options.updateRunner === 'function') {
-                        options.updateRunner({
+                        runUpdateWithLock(options.updateRunner, {
                             targetRoot: fixture.workspaceRoot,
                             initAnswersPath: 'garda-agent-orchestrator/runtime/init-answers.json',
                             skipVerify: false,

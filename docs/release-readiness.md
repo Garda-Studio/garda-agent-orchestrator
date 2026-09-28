@@ -204,6 +204,27 @@ candidate-to-published byte equality must be checked, not inferred. It does not
 currently generate detached signatures or a public `SHA256SUMS` asset. Automated
 pack-once publishing and candidate-bound evidence remain separate release work.
 
+## 1.4.4
+
+- [x] Root package metadata, both lockfile version fields, `VERSION`, and the package-surface baseline identify `1.4.4`.
+- [x] The changelog describes Garda Compact first, followed by navigation, review, recovery and update improvements, while preserving previous release notes.
+- [x] Product links use `https://garda-studio.com/products/cli`; repository and trusted Git update URLs use `Garda-Studio/garda-agent-orchestrator`.
+- [x] Update availability is advisory, uses the shared daily cache, keeps terminal notices in English, and includes the UI language catalogs and an explicit manual check.
+- [x] Package-surface growth was inspected before its explicit baseline refresh; production dependencies, install hooks and configured growth limits are unchanged.
+- [x] The local validation record and its limitations are documented in the source-only audit `docs/release-audit-1.4.4.md`. Static readiness does not certify a public release.
+
+The operator authorized local checks and a push to `dev` after implementation,
+independent reviews and those checks are complete. Tagging, publication, and live
+GitHub release certification are outside this run. The existing Trusted Publishing
+path through `publish.yml` and the `npm-release` environment remains unchanged;
+verify its repository identity in npm before any future publish after the repository
+transfer. The historical `Shubchynskyi` publisher configuration below is not evidence
+that the new repository owner has been configured.
+
+Before a public release, obtain the required clean-candidate, supported-platform,
+CI and Security evidence and a separate GO decision. After npm-side staged approval,
+verify the public artifact and `npx --yes garda-agent-orchestrator@1.4.4 --version`.
+
 ## 1.4.3
 
 - [x] Package metadata is aligned to `1.4.3` in `package.json`, `package-lock.json`, `VERSION`, and the tracked package-surface baseline.

@@ -1,55 +1,25 @@
 # Changelog
 
-## Unreleased
+## 1.4.4
 
-### Update Lifecycle
+### Garda Compact
 
-- Run an applied update's lifecycle in a fresh process through one contained bundle entry, reject missing or linked runtime code, and require a new host process after update or rollback instead of invalidating the module cache.
-- Git update apply now verifies the selected commit and a committed prebuilt runtime before lifecycle execution; it no longer installs dependencies or runs build scripts from the cloned source. Git update rejects `file://` and credential-bearing URLs before clone and uses local clone mode for explicit local paths.
+- Garda Compact helps AI agents keep command output from overwhelming their context. Git status and diffs, file reads, and text searches return short previews; agents can then page through the retained output or search it for the details they need.
+- UI settings control supported command families, preview sizes, and cache limits. Cached output is cleaned up after successful task completion, while unfinished tasks retain theirs.
 
-### Compact Command Output
+### Faster Navigation And CLI
 
-- Added explicit `garda compact` inspections for Git status and diffs, file metadata and line ranges, and scoped text search.
-- Added bounded output previews with paginated reads and search across the full retained output. Original stdout and stderr bytes are preserved without secret filtering; incomplete captures are explicitly marked.
-- Improved compact usability with subcommand help, sequential selected-file ranges, configurable 4 KiB read pages, UTF-8-safe retained reads, multi-query search with line context, source-range coverage metadata, and separate UI reading budgets.
-- Added Compact UI settings for enabling or disabling the feature, selecting supported command families, configuring preview and cache limits, and inspecting cache usage.
-- Added compact guidance to shared agent instructions, `next-step`, and reviewer handoffs.
-- Added bounded task-scoped output storage, cleanup on successful task completion, and recovery cleanup at task start/resume and completion. Cleanup preserves unfinished tasks and requires no background timer.
+- Faster next-step and CLI commands through fewer repeated Git and filesystem reads, improved caching, and lazy command loading.
 
-### Task Workflow and Recovery
+### More Reliable Reviews And Workflow
 
-- Separated read-only `next-step` inspection from guarded effect execution and introduced a typed decision engine with rejection of stale or incomplete execution results.
-- Improved preservation of task intent during preflight refresh, strict decomposition routing after suspended work is restored, and audited closeout for tasks with no implementation changes.
-- Added guarded migration of eligible legacy task-event suffixes with preview, content-bound confirmation, verified backups, and integrity validation.
-- Improved restored-runtime handoff and bounded re-execution, including concurrent build/finalizer coordination and authenticated disk-backed backups for split work in progress.
-- Corrected source-parity recovery guidance to rebuild and run `setup --no-prompt`; clarified the rematerialization-only behavior of `init` and `reinit`.
+- More reliable reviews, including result reuse, DELTA coverage, findings and follow-up handling, and recovery of interrupted review cycles.
+- More robust task completion and recovery, with better preservation of unfinished work, safer transactions, and improved locking and crash recovery.
 
-### Review Integrity and Remediation
+### Safer Updates And Releases
 
-- Unified review, lifecycle, completion, audit, and diagnostic consumers around authenticated snapshots bound to a single artifact generation.
-- Fixed review reuse when the original review falls outside the recent timeline window and strengthened current-pass authority across remediation and routing.
-- Fixed DELTA review coverage after test-only remediation of source-linked findings, preserving required reinspection targets and falling back to FULL when mappings cannot be trusted.
-- Fixed correction restarts selecting superseded reviewer output and improved bounded retry and completed-launch recovery.
-- Strengthened follow-up scope authentication, grouped finding associations, dependency handling, and duplicate-report prevention.
-- Allowed narrowly validated Node `--check` commands in reviewer reports. Binary and invalid UTF-8 files now remain visible in review scope without being decoded or counted as text.
-
-### Reliability and Performance
-
-- Added crash-recoverable transactions for task-queue mutations and coordinated workflow configuration, audit, policy, and protected-manifest updates.
-- Improved lock ordering, synchronous/asynchronous transaction coordination, stale-lock recovery, and cleanup diagnostics.
-- Hardened authenticated artifact replacement and cleanup while preserving recovery artifacts and original failure diagnostics.
-- Bound persisted workspace-cache reuse to authenticated invocation generations and streamed dirty/untracked file hashing to reduce memory pressure.
-- Reduced repeated timeline and workspace reads, bounded snapshot lock duration and memory usage, and added lazy CLI command loading.
-- Centralized child-process signal cleanup, preserved signal exit codes, and improved Windows descendant-process termination.
-
-### Testing and Documentation
-
-- Isolated nested bundle fixtures, Windows process snapshots, and inherited test-runner state.
-- Made package-acquisition fixtures offline by default, with a separate explicit network test command.
-- Added test-runner output backpressure, calibrated shard timing, and explicit handling of incomplete timing forecasts.
-- Added regression coverage for authenticated timeline performance, bounded filesystem reads, lock contention, future timestamps, transaction recovery, and compact output.
-- Added enforced coverage floors and CI LCOV artifacts.
-- Expanded contributor documentation, provider-native instruction and skill compatibility guidance, and operator recovery runbooks.
+- Added daily update notices with the installed and available versions and an explicit update command after task completion and at UI startup, plus a manual UI check translated into every supported language.
+- Safer updates and releases through stronger update and rollback handling, runtime and filesystem checks, and package validation.
 
 ## 1.4.3
 
