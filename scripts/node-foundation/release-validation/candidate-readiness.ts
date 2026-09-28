@@ -12,7 +12,7 @@ import { validateEmbeddedBundleParity } from './embedded-bundle-parity';
 import { pushCheck } from './shared';
 import type { ReleaseReadinessCheck } from './types';
 
-const CI_WORKFLOW_SHA256 = '525c435c871bafa5b79ac47248bf180821ed750e2c26f53d2ddb05eab51a8f70';
+const CI_WORKFLOW_SHA256 = 'e2326f30cd5bce5e8ca93c8f5b52f4d719d98753363924b6ae2e7e19f031c320';
 const CI_SCRIPTS_SHA256 = '9da4ed2b6174b6bcd9aafbf2bb36aa76d06aa5c147ddfdf9204a3e26c3b35949';
 const MAX_EVIDENCE_BYTES = 16 * 1024 * 1024;
 const CLOCK_SKEW_MS = 5 * 60 * 1000;
@@ -129,9 +129,14 @@ function requiredCiJobs(): Map<string, string[]> {
             ['Gate Tests', 'Run gate tests (parallel shards)'], ['CLI Tests', 'Run CLI tests (parallel shards)'],
             ['Lifecycle Tests', 'Run lifecycle tests'], ['Binary Tests', 'Run binary tests']
         ]) jobs.set(name + ' / Node ' + node, name === 'Static Checks'
-            ? [step, 'Run lint'] : ['Build node-foundation', step]);
+            ? [step, 'Run lint'] : name === 'Unit Tests'
+                ? ['Install ripgrep for compact integration tests', 'Build node-foundation', step]
+                : ['Build node-foundation', step]);
         for (const os of ['ubuntu-latest', 'windows-latest']) {
-            jobs.set('Release Validation / ' + os + ' / Node ' + node, ['Validate release']);
+            jobs.set('Release Validation / ' + os + ' / Node ' + node, [
+                'Install ripgrep for compact integration tests (' + (os === 'ubuntu-latest' ? 'Linux' : 'Windows') + ')',
+                'Prepare embedded release bundle', 'Bootstrap embedded release bundle', 'Validate release'
+            ]);
         }
         for (const os of ['ubuntu-latest', 'windows-latest', 'macos-latest']) {
             jobs.set('Smoke / ' + os + ' / Node ' + node, [

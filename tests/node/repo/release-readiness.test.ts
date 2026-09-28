@@ -3047,8 +3047,13 @@ function ciJobFixture(commit: string): Record<string, unknown>[] {
             ['Static Checks', 'Run typecheck'], ['Unit Tests', 'Run unit tests'],
             ['Gate Tests', 'Run gate tests (parallel shards)'], ['CLI Tests', 'Run CLI tests (parallel shards)'],
             ['Lifecycle Tests', 'Run lifecycle tests'], ['Binary Tests', 'Run binary tests']
-        ]) names.push([name + ' / Node ' + node, name === 'Static Checks' ? [step, 'Run lint'] : ['Build node-foundation', step]]);
-        for (const os of ['ubuntu-latest', 'windows-latest']) names.push(['Release Validation / ' + os + ' / Node ' + node, ['Validate release']]);
+        ]) names.push([name + ' / Node ' + node, name === 'Static Checks' ? [step, 'Run lint'] : name === 'Unit Tests'
+            ? ['Install ripgrep for compact integration tests', 'Build node-foundation', step]
+            : ['Build node-foundation', step]]);
+        for (const os of ['ubuntu-latest', 'windows-latest']) names.push(['Release Validation / ' + os + ' / Node ' + node, [
+            'Install ripgrep for compact integration tests (' + (os === 'ubuntu-latest' ? 'Linux' : 'Windows') + ')',
+            'Prepare embedded release bundle', 'Bootstrap embedded release bundle', 'Validate release'
+        ]]);
         for (const os of ['ubuntu-latest', 'windows-latest', 'macos-latest']) names.push(['Smoke / ' + os + ' / Node ' + node, [
             'Build', 'Build staged node-foundation test graph', 'Pack and install smoke test',
             'Lifecycle smoke (cross-platform E2E install → update → uninstall)'
@@ -3175,6 +3180,42 @@ test('candidate readiness rejects foreign, stale, skipped, empty and replayed su
             const result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
             assert.equal(result.candidate?.decision, 'NO_GO');
             assert.equal(result.checks.find(check => check.area === 'candidate-suite')?.passed, false);
+        }
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness requires successful tool and release preparation in every CI matrix job', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        for (const job of fixture.jobs) {
+            const release = String(job.name).startsWith('Release Validation /');
+            if (!release && !String(job.name).startsWith('Unit Tests /')) continue;
+            const original = job.steps as Record<string, unknown>[];
+            const required = original.filter(step => String(step.name).startsWith('Install ripgrep for compact integration tests') ||
+                ['Prepare embedded release bundle', 'Bootstrap embedded release bundle'].includes(String(step.name)));
+            assert.equal(required.length, release ? 3 : 1);
+            for (const step of required) {
+                for (const replacement of [original.filter(item => item !== step),
+                    original.map(item => item === step ? { ...item, conclusion: 'skipped' } : item)]) {
+                    job.steps = replacement;
+                    const result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+                    assert.equal(result.candidate?.decision, 'NO_GO', String(job.name) + ': ' + String(step.name));
+                    assert.equal(result.checks.find(check => check.area === 'candidate-suite')?.passed, false);
+                }
+                job.steps = original;
+            }
+            if (release) {
+                const otherPlatform = String(job.name).includes('ubuntu-latest') ? 'Windows' : 'Linux';
+                job.steps = [...original, {
+                    name: 'Install ripgrep for compact integration tests (' + otherPlatform + ')',
+                    status: 'completed', conclusion: 'skipped'
+                }];
+                const result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+                assert.equal(result.candidate?.decision, 'GO', formatReleaseReadinessResult(result));
+                job.steps = original;
+            }
         }
     } finally {
         fs.rmSync(fixture.root, { recursive: true, force: true });

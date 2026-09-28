@@ -77,9 +77,32 @@ jobs:
         run: npm ci --no-fund --no-audit
 
       - name: Install ripgrep for compact integration tests
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends ripgrep
+          set -euo pipefail
+          rg_setup_started=$SECONDS
+          rg_binary_sha256=e62198eb19b136b88c330af83647b5a962cb99b6b1f066758568f12de1974849
+          rg_executable="$(command -v rg || true)"
+          if [ -z "$rg_executable" ] || ! printf '%s  %s\n' "$rg_binary_sha256" "$rg_executable" | sha256sum --check --status; then
+            rg_setup_root="$(mktemp -d "${RUNNER_TEMP}/garda-ripgrep.XXXXXX")"
+            rg_archive="$rg_setup_root/ripgrep.tar.gz"
+            curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+              https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz \
+              --output "$rg_archive"
+            if ! printf '%s  %s\n' 33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c "$rg_archive" | sha256sum --check --status; then
+              printf 'Ripgrep archive checksum mismatch\n' >&2
+              exit 1
+            fi
+            tar -xzf "$rg_archive" -C "$rg_setup_root"
+            rg_executable="$rg_setup_root/ripgrep-15.2.0-x86_64-unknown-linux-musl/rg"
+          fi
+          if ! printf '%s  %s\n' "$rg_binary_sha256" "$rg_executable" | sha256sum --check --status; then
+            printf 'Ripgrep executable checksum mismatch\n' >&2
+            exit 1
+          fi
+          dirname "$rg_executable" >> "$GITHUB_PATH"
+          "$rg_executable" --version
+          printf 'Ripgrep setup duration: %ss\n' "$((SECONDS - rg_setup_started))"
 
       - name: Build node-foundation
         run: npm run build:node-foundation
@@ -288,14 +311,66 @@ jobs:
 
       - name: Install ripgrep for compact integration tests (Linux)
         if: runner.os == 'Linux'
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends ripgrep
+          set -euo pipefail
+          rg_setup_started=$SECONDS
+          rg_binary_sha256=e62198eb19b136b88c330af83647b5a962cb99b6b1f066758568f12de1974849
+          rg_executable="$(command -v rg || true)"
+          if [ -z "$rg_executable" ] || ! printf '%s  %s\n' "$rg_binary_sha256" "$rg_executable" | sha256sum --check --status; then
+            rg_setup_root="$(mktemp -d "${RUNNER_TEMP}/garda-ripgrep.XXXXXX")"
+            rg_archive="$rg_setup_root/ripgrep.tar.gz"
+            curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+              https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz \
+              --output "$rg_archive"
+            if ! printf '%s  %s\n' 33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c "$rg_archive" | sha256sum --check --status; then
+              printf 'Ripgrep archive checksum mismatch\n' >&2
+              exit 1
+            fi
+            tar -xzf "$rg_archive" -C "$rg_setup_root"
+            rg_executable="$rg_setup_root/ripgrep-15.2.0-x86_64-unknown-linux-musl/rg"
+          fi
+          if ! printf '%s  %s\n' "$rg_binary_sha256" "$rg_executable" | sha256sum --check --status; then
+            printf 'Ripgrep executable checksum mismatch\n' >&2
+            exit 1
+          fi
+          dirname "$rg_executable" >> "$GITHUB_PATH"
+          "$rg_executable" --version
+          printf 'Ripgrep setup duration: %ss\n' "$((SECONDS - rg_setup_started))"
 
       - name: Install ripgrep for compact integration tests (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: choco install ripgrep --yes --no-progress
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rgSetupTimer = [Diagnostics.Stopwatch]::StartNew()
+          $rgBinarySha256 = '14231169855ec5205cf5a1b6f1db358ff4aed4247c86b69ce8aae647c77f6680'
+          $rgCommand = Get-Command rg -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+          $rgExecutable = if ($rgCommand) { $rgCommand.Source } else { $null }
+          if (-not $rgExecutable -or (Get-FileHash -LiteralPath $rgExecutable -Algorithm SHA256).Hash.ToLowerInvariant() -ne $rgBinarySha256) {
+            $rgSetupRoot = Join-Path $env:RUNNER_TEMP ('garda-ripgrep-' + [Guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $rgSetupRoot | Out-Null
+            $rgArchive = Join-Path $rgSetupRoot 'ripgrep.zip'
+            Invoke-WebRequest -Uri 'https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-pc-windows-msvc.zip' -OutFile $rgArchive
+            if ((Get-FileHash -LiteralPath $rgArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne '71b2fef860abe467217a538ff31de02f5258807c0129f771846f87bd029aafc5') {
+              throw 'Ripgrep archive checksum mismatch'
+            }
+            Expand-Archive -LiteralPath $rgArchive -DestinationPath $rgSetupRoot
+            $rgExecutable = Join-Path $rgSetupRoot 'ripgrep-15.2.0-x86_64-pc-windows-msvc/rg.exe'
+          }
+          if ((Get-FileHash -LiteralPath $rgExecutable -Algorithm SHA256).Hash.ToLowerInvariant() -ne $rgBinarySha256) {
+            throw 'Ripgrep executable checksum mismatch'
+          }
+          Split-Path -Parent $rgExecutable | Add-Content -LiteralPath $env:GITHUB_PATH -Encoding utf8
+          & $rgExecutable --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Output "Ripgrep setup duration: $($rgSetupTimer.ElapsedMilliseconds)ms"
+
+      - name: Prepare embedded release bundle
+        run: npm run build
+
+      - name: Bootstrap embedded release bundle
+        run: node bin/garda.js bootstrap --destination garda-agent-orchestrator
 
       - name: Validate release
         run: npm run validate:release:fast

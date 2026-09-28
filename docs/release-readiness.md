@@ -34,7 +34,9 @@ candidate. Keep the candidate directory ignored or outside the checkout.
 - Authenticated `gh api` data must show a current successful CI run for the same
   repository and commit, with the complete reviewed Node 22.13.0/24 test matrix,
   Linux/Windows release validation and Linux/Windows/macOS packaged/lifecycle
-  smoke. Required job steps cannot be skipped. Rerun attempts, job identities,
+   smoke. Required job steps cannot be skipped, including ripgrep provisioning
+   and each release job's build and embedded bootstrap. The other OS's
+   conditional provisioning step may be skipped. Rerun attempts, job identities,
   freshness and reviewed workflow/npm-script contracts are checked.
 - Existing `security-evidence.json` is live-reverified through the T-057 adapter
   for the same candidate, full dependency graph and blocking OSV scan.
@@ -60,6 +62,18 @@ those execution contracts change. SBOM and final operator handoff requirements
 remain part of the final release boundary.
 
 ## Candidate-bound dependency security evidence
+
+CI compact integration uses the official ripgrep 15.2.0 Linux x64 and Windows
+x64 archives. The workflow checks pinned archive SHA-256 before extraction and
+pinned executable SHA-256 before execution. An existing executable is reused
+only when its bytes match that pin. Setup duration is printed for each job;
+package-manager metadata refresh and mutable package resolution are avoided.
+Upstream download or checksum failure fails the job rather than falling back.
+
+Clean source-clone release validation first runs the supported build and
+`node bin/garda.js bootstrap --destination garda-agent-orchestrator`. The
+subsequent release command still enforces actual embedded parity; neither
+bootstrap nor a static readiness pass certifies the public release candidate.
 
 The release cut requires a successful `Security` workflow run for the exact
 candidate commit. Its npm job installs the complete lockfile graph with
