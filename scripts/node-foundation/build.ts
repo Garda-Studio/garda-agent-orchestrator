@@ -13,6 +13,8 @@ const PRIMARY_COMPILED_CLI_RELATIVE_PATH = path.join('src', 'bin', 'garda.js');
 const PRIMARY_REPO_CLI_RELATIVE_PATH = path.join('bin', 'garda.js');
 const PRIMARY_COMPILED_CLI_COMPANION_DIRECTORY = path.join('src', 'bin', 'garda');
 const PRIMARY_REPO_CLI_COMPANION_DIRECTORY = path.join('bin', 'garda');
+const REPO_CLI_LAUNCHER_MODE = 0o755;
+const REPO_CLI_COMPANION_MODE = 0o644;
 const REPO_CLI_SYNC_LOCK_NAME = '.garda-cli-sync.lock';
 const BUILD_FINGERPRINT_SCHEMA_VERSION = 1 as const;
 const NODE_FOUNDATION_FORCE_REBUILD_ENV = 'GARDA_NODE_FOUNDATION_FORCE_REBUILD';
@@ -569,12 +571,12 @@ function normalizeRepoCliEntrypointContent(content: Buffer): Buffer {
     return normalized === text ? content : Buffer.from(normalized, 'utf8');
 }
 
-function ensureExecutableMode(filePath: string, fileSystem: RepoCliSyncFsLike): void {
+function ensureRepoCliFileMode(filePath: string, mode: number, fileSystem: RepoCliSyncFsLike): void {
     if (process.platform === 'win32') {
         return;
     }
     try {
-        fileSystem.chmodSync(filePath, 0o755);
+        fileSystem.chmodSync(filePath, mode);
     } catch {
         // Best-effort on filesystems that do not support POSIX modes.
     }
@@ -651,27 +653,27 @@ function releaseRepoCliSyncLock(lockPath: string, fileSystem: RepoCliSyncFsLike)
     }
 }
 
-function replaceRepoCliEntrypoint(repoCliPath: string, desiredContent: Buffer, fileSystem: RepoCliSyncFsLike): void {
+function replaceRepoCliFile(repoCliPath: string, desiredContent: Buffer, mode: number, fileSystem: RepoCliSyncFsLike): void {
     for (let attempt = 0; attempt <= REPO_CLI_SYNC_MAX_RETRIES; attempt += 1) {
         const tempCliPath = makeTempCliPath(repoCliPath);
         try {
             if (fileContentMatchesOrContended(repoCliPath, desiredContent, fileSystem)) {
-                ensureExecutableMode(repoCliPath, fileSystem);
+                ensureRepoCliFileMode(repoCliPath, mode, fileSystem);
                 return;
             }
 
             fileSystem.writeFileSync(tempCliPath, desiredContent);
-            ensureExecutableMode(tempCliPath, fileSystem);
+            ensureRepoCliFileMode(tempCliPath, mode, fileSystem);
 
             safeUnlink(repoCliPath, fileSystem);
             fileSystem.renameSync(tempCliPath, repoCliPath);
-            ensureExecutableMode(repoCliPath, fileSystem);
+            ensureRepoCliFileMode(repoCliPath, mode, fileSystem);
             return;
         } catch (error: unknown) {
             safeUnlink(tempCliPath, fileSystem);
 
             if (fileContentMatchesOrContended(repoCliPath, desiredContent, fileSystem)) {
-                ensureExecutableMode(repoCliPath, fileSystem);
+                ensureRepoCliFileMode(repoCliPath, mode, fileSystem);
                 return;
             }
             if (!isRetryableCliSyncError(error) || attempt >= REPO_CLI_SYNC_MAX_RETRIES) {
@@ -694,7 +696,7 @@ function replaceRepoCliCompanionDirectory(
         const destinationPath = path.join(repoCompanionDirectory, ...relativePath.split('/'));
         const sourceContent = normalizeRepoCliEntrypointContent(fileSystem.readFileSync(sourcePath));
         fileSystem.mkdirSync(path.dirname(destinationPath), { recursive: true });
-        replaceRepoCliEntrypoint(destinationPath, sourceContent, fileSystem);
+        replaceRepoCliFile(destinationPath, sourceContent, REPO_CLI_COMPANION_MODE, fileSystem);
     }
 
     for (const relativePath of collectCliCompanionFiles(repoCompanionDirectory, fileSystem)) {
@@ -725,7 +727,16 @@ export function syncRepoCliEntrypoint(compiledRoot: string, repoRoot: string, fi
         && fileContentMatchesOrContended(repoCliPath, desiredCliContentForCheck, fileSystem)
         && cliCompanionDirectoryMatches(compiledCompanionDirectory, repoCompanionDirectory, fileSystem)
     ) {
-        ensureExecutableMode(repoCliPath, fileSystem);
+        ensureRepoCliFileMode(repoCliPath, REPO_CLI_LAUNCHER_MODE, fileSystem);
+        if (process.platform !== 'win32') {
+            for (const relativePath of collectCliCompanionFiles(repoCompanionDirectory, fileSystem)) {
+                ensureRepoCliFileMode(
+                    path.join(repoCompanionDirectory, ...relativePath.split('/')),
+                    REPO_CLI_COMPANION_MODE,
+                    fileSystem
+                );
+            }
+        }
         return repoCliPath;
     }
 
@@ -735,7 +746,7 @@ export function syncRepoCliEntrypoint(compiledRoot: string, repoRoot: string, fi
     try {
         const compiledCliContent = normalizeRepoCliEntrypointContent(fileSystem.readFileSync(primaryCompiledPath));
         replaceRepoCliCompanionDirectory(compiledCompanionDirectory, repoCompanionDirectory, fileSystem);
-        replaceRepoCliEntrypoint(repoCliPath, compiledCliContent, fileSystem);
+        replaceRepoCliFile(repoCliPath, compiledCliContent, REPO_CLI_LAUNCHER_MODE, fileSystem);
     } finally {
         releaseRepoCliSyncLock(repoCliLockPath, fileSystem);
     }

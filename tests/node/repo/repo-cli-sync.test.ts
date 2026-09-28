@@ -139,6 +139,44 @@ test('syncRepoCliEntrypoint publishes launcher companion modules', () => {
     }
 });
 
+test('syncRepoCliEntrypoint gives only the launcher executable mode and repairs companions on reuse', {
+    skip: process.platform === 'win32'
+}, () => {
+    const fixture = createRepoCliFixture();
+    const companionFiles = ['root-discovery.js', 'nested/runtime-loading.js', 'settings.json'];
+    const compiledCompanionRoot = path.join(fixture.compiledRoot, 'src', 'bin', 'garda');
+    const repoCompanionRoot = path.join(fixture.repoRoot, 'bin', 'garda');
+    const assertModes = (): void => {
+        assert.equal(fs.statSync(fixture.repoCliPath).mode & 0o777, 0o755);
+        for (const relativePath of companionFiles) {
+            assert.equal(fs.statSync(path.join(repoCompanionRoot, relativePath)).mode & 0o777, 0o644, relativePath);
+        }
+    };
+
+    try {
+        for (const relativePath of companionFiles) {
+            writeTextFile(path.join(compiledCompanionRoot, relativePath), relativePath.endsWith('.json')
+                ? '{"value":"current"}\n' : 'exports.value = "current";\n');
+        }
+        syncRepoCliEntrypoint(fixture.compiledRoot, fixture.repoRoot);
+        assertModes();
+
+        for (const relativePath of companionFiles) {
+            fs.chmodSync(path.join(repoCompanionRoot, relativePath), 0o755);
+        }
+        fs.chmodSync(fixture.repoCliPath, 0o644);
+        syncRepoCliEntrypoint(fixture.compiledRoot, fixture.repoRoot);
+        assertModes();
+
+        writeTextFile(path.join(compiledCompanionRoot, companionFiles[0]), 'exports.value = "updated";\n');
+        syncRepoCliEntrypoint(fixture.compiledRoot, fixture.repoRoot);
+        assertModes();
+        assert.equal(fs.readFileSync(path.join(repoCompanionRoot, companionFiles[0]), 'utf8'), 'exports.value = "updated";\n');
+    } finally {
+        fs.rmSync(fixture.tempRoot, { recursive: true, force: true });
+    }
+});
+
 test('syncRepoCliEntrypoint keeps prior launcher when companion sync fails', () => {
     const fixture = createRepoCliFixture();
     const previousCompanionContent = 'exports.value = "previous";\n';
