@@ -145,7 +145,7 @@ test('comparator CLI reads tracked config shape and retained log files', (contex
         .update('node_modules/.package-lock.json\0').update(fs.readFileSync(installedLock)).update('\0')
         .digest('hex');
     const logs = [baselineLog, candidateLog(900), candidateLog(899, 532, 2)]
-        .map((log) => log.replaceAll('C:\\test-shards', path.join(fixtureRoot, '.node-build', 'test-shard-logs'))
+        .map((log) => log.replace(/C:\\test-shards\\(run-\d+)/gu, (_match, run: string) => path.join(fixtureRoot, '.node-build', 'test-shard-logs', run))
             .replace(`dependency_sha256=${candidateDependencySha256}`, `dependency_sha256=${fixtureDependencySha256}`));
     const paths = logs.map((log, index) => {
         const file = path.join(fixtureRoot, `quality-${index}.log`);
@@ -201,6 +201,7 @@ test('comparator CLI reads tracked config shape and retained log files', (contex
             `NODE_FOUNDATION_TEST_SHARD_LOG_DIR ${path.join(fixtureRoot, '.node-build', 'test-shard-logs', 'run-900')}\n> garda-agent-orchestrator@1.4.3 test\n`)
         .replace(`NODE_FOUNDATION_TEST_SHARD_LOG_DIR ${path.join(fixtureRoot, '.node-build', 'test-shard-logs', 'run-1')}`,
             `NODE_FOUNDATION_TEST_SHARD_LOG_DIR ${path.join(wrongCheckout, '.node-build', 'test-shard-logs', 'run-1')}`);
+    assert.ok(decoy.includes(path.join(wrongCheckout, '.node-build', 'test-shard-logs', 'run-1')));
     fs.writeFileSync(decoyLog, decoy);
     wrongCheckoutConfig.candidate_log_sha256[0] = crypto.createHash('sha256').update(decoy).digest('hex');
     fs.writeFileSync(configPath, JSON.stringify(wrongCheckoutConfig));

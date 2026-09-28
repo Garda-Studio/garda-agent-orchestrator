@@ -76,6 +76,11 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-fund --no-audit
 
+      - name: Install ripgrep for compact integration tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ripgrep
+
       - name: Build node-foundation
         run: npm run build:node-foundation
 
@@ -280,6 +285,17 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --no-fund --no-audit
+
+      - name: Install ripgrep for compact integration tests (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ripgrep
+
+      - name: Install ripgrep for compact integration tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install ripgrep --yes --no-progress
 
       - name: Validate release
         run: npm run validate:release:fast

@@ -1,4 +1,6 @@
+import { resolveMockFilesystemPath } from './fixtures/filesystem-paths';
 import assert from 'node:assert/strict';
+import { runInit } from '../../../../src/materialization/init';
 import * as childProcess from 'node:child_process';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
@@ -211,26 +213,32 @@ function makeRealRuntimeSourceRepo(): string {
     }));
     writeFile(repoRoot, 'VERSION', `${projectVersion}\n`);
     fs.cpSync(path.join(projectRoot, 'bin'), path.join(repoRoot, 'bin'), { recursive: true });
-    fs.cpSync(
-        path.join(projectRoot, 'garda-agent-orchestrator', 'live'),
-        path.join(repoRoot, 'garda-agent-orchestrator', 'live'),
-        { recursive: true }
-    );
-    for (const relativePath of [
-        'bin/garda.js',
-        'dist/src/index.js',
-        'package.json',
-        'VERSION',
-        'template/AGENTS.md',
-        'template/entrypoints/canonical-rule-index.md',
-        'template/config/garda.config.json',
-        'runtime/init-answers.json'
-    ]) {
-        const sourcePath = path.join(projectRoot, 'garda-agent-orchestrator', relativePath);
-        const targetPath = path.join(repoRoot, 'garda-agent-orchestrator', relativePath);
-        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-        fs.copyFileSync(sourcePath, targetPath);
+    const bundleRoot = path.join(repoRoot, 'garda-agent-orchestrator');
+    fs.cpSync(path.join(projectRoot, 'template'), path.join(bundleRoot, 'template'), { recursive: true });
+    fs.cpSync(path.join(projectRoot, 'bin'), path.join(bundleRoot, 'bin'), { recursive: true });
+    for (const relativePath of ['package.json', 'VERSION']) {
+        fs.copyFileSync(path.join(projectRoot, relativePath), path.join(bundleRoot, relativePath));
     }
+    const bundleIndexPath = path.join(bundleRoot, 'dist', 'src', 'index.js');
+    fs.mkdirSync(path.dirname(bundleIndexPath), { recursive: true });
+    fs.copyFileSync(path.join(compiledBuildRoot, 'src', 'index.js'), bundleIndexPath);
+    writeFile(repoRoot, 'garda-agent-orchestrator/runtime/init-answers.json', JSON.stringify({
+        AssistantLanguage: 'English',
+        AssistantBrevity: 'concise',
+        SourceOfTruth: 'Codex',
+        EnforceNoAutoCommit: 'false',
+        ClaudeOrchestratorFullAccess: 'false',
+        TokenEconomyEnabled: 'true',
+        CollectedVia: 'CLI_NONINTERACTIVE',
+        ActiveAgentFiles: 'AGENTS.md'
+    }));
+    runInit({
+        targetRoot: repoRoot,
+        bundleRoot,
+        assistantLanguage: 'English',
+        assistantBrevity: 'concise',
+        sourceOfTruth: 'Codex'
+    });
     writeFile(repoRoot, 'build-runtime.cjs', [
         "const fs = require('node:fs');",
         "const path = require('node:path');",
@@ -499,7 +507,7 @@ describe('split-required WIP restored-runtime handoff', () => {
         Reflect.set(fsModule, 'lstatSync', ((filePath: fs.PathLike, options?: fs.StatSyncOptions) => {
             if (!changedAfterVerification
                 && typeof filePath === 'string'
-                && path.resolve(filePath) === authenticatedPatchPath) {
+                && resolveMockFilesystemPath(filePath) === authenticatedPatchPath) {
                 changedAfterVerification = true;
                 fs.writeFileSync(manifestPath, `${JSON.stringify(changedManifest, null, 2)}\n`, 'utf8');
             }
@@ -561,7 +569,7 @@ describe('split-required WIP restored-runtime handoff', () => {
         fsModule.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
             if (!untrackedChangedAfterSnapshot
                 && typeof filePath === 'string'
-                && path.resolve(filePath) === path.resolve(restoredUntrackedPath)
+                && resolveMockFilesystemPath(filePath) === path.resolve(restoredUntrackedPath)
                 && isExclusiveCreate(flags)) {
                 untrackedChangedAfterSnapshot = true;
                 fs.writeFileSync(untrackedArtifactPath, 'mutated artifact\n', 'utf8');
@@ -609,7 +617,7 @@ describe('split-required WIP restored-runtime handoff', () => {
         let unselectedArtifactReads = 0;
         fsModule.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
             if (typeof filePath === 'string'
-                && path.resolve(filePath) === unselectedArtifactPath
+                && resolveMockFilesystemPath(filePath) === unselectedArtifactPath
                 && isReadOnlyOpen(flags)) {
                 unselectedArtifactReads += 1;
                 throw new Error('unselected artifact must not be opened');
@@ -688,7 +696,7 @@ describe('split-required WIP restored-runtime handoff', () => {
         fsModule.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
             if (!competingFileCreated
                 && typeof filePath === 'string'
-                && path.resolve(filePath) === path.resolve(targetPath)
+                && resolveMockFilesystemPath(filePath) === path.resolve(targetPath)
                 && isExclusiveCreate(flags)) {
                 competingFileCreated = true;
                 fs.writeFileSync(targetPath, 'competing note\n', 'utf8');
@@ -731,7 +739,7 @@ describe('split-required WIP restored-runtime handoff', () => {
         fsModule.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
             if (!competingFileCreated
                 && typeof filePath === 'string'
-                && path.resolve(filePath) === path.resolve(targetPath)
+                && resolveMockFilesystemPath(filePath) === path.resolve(targetPath)
                 && isExclusiveCreate(flags)) {
                 competingFileCreated = true;
                 fs.writeFileSync(targetPath, 'competing note\n', 'utf8');
@@ -793,7 +801,7 @@ describe('split-required WIP restored-runtime handoff', () => {
         fsModule.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
             if (!parentReplaced
                 && typeof filePath === 'string'
-                && path.resolve(filePath) === path.resolve(targetPath)
+                && resolveMockFilesystemPath(filePath) === path.resolve(targetPath)
                 && isExclusiveCreate(flags)) {
                 parentReplaced = true;
                 fs.renameSync(parentPath, originalParentPath);
@@ -832,7 +840,7 @@ describe('split-required WIP restored-runtime handoff', () => {
         fsModule.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
             if (!parentReplaced
                 && typeof filePath === 'string'
-                && path.resolve(filePath) === path.resolve(targetPath)
+                && resolveMockFilesystemPath(filePath) === path.resolve(targetPath)
                 && isReadOnlyOpen(flags)) {
                 parentReplaced = true;
                 fs.renameSync(parentPath, originalParentPath);
@@ -956,7 +964,7 @@ describe('split-required WIP restored-runtime handoff', () => {
         fsModule.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
             if (!replacedDuringOpen
                 && typeof filePath === 'string'
-                && path.resolve(filePath) === path.resolve(identity.handoffPath)) {
+                && resolveMockFilesystemPath(filePath) === path.resolve(identity.handoffPath)) {
                 replacedDuringOpen = true;
                 fs.renameSync(identity.handoffPath, replacementPath);
                 fs.copyFileSync(replacementPath, identity.handoffPath);
@@ -987,7 +995,7 @@ describe('split-required WIP restored-runtime handoff', () => {
         const originalOpenSync = fsModule.openSync;
         let parentReplaced = false;
         fsModule.openSync = ((filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
-            const resolvedFilePath = typeof filePath === 'string' ? path.resolve(filePath) : '';
+            const resolvedFilePath = typeof filePath === 'string' ? resolveMockFilesystemPath(filePath) : '';
             const replaceBeforeParentOpen = process.platform === 'win32'
                 && resolvedFilePath === path.resolve(parentPath)
                 && isReadOnlyOpen(flags);

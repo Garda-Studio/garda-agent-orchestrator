@@ -529,6 +529,8 @@ describe('runUpdateFromGit', () => {
                 assert.ok(error instanceof AggregateError);
                 assert.equal(error.errors.length, 2);
                 assert.match(error.errors[0].message, /UPDATE_SOURCE_PREBUILT_REQUIRED/);
+                assert.match(error.message, /UPDATE_SOURCE_PREBUILT_REQUIRED/);
+                assert.match(error.message, /Git staging cleanup also failed/);
                 assert.equal(error.cause, error.errors[0]);
                 assert.ok(error.errors[1] instanceof AggregateError);
                 assert.equal(error.errors[1].errors.length, 2);

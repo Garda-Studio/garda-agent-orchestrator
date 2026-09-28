@@ -55,7 +55,9 @@ function rethrowAfterCleanup(error: unknown, cleanup: () => void): never {
     try {
         cleanup();
     } catch (cleanupError) {
-        throw new AggregateError([error, cleanupError], 'Git update failed and staging cleanup also failed.', { cause: error });
+        const originalMessage = error instanceof Error ? error.message : String(error);
+        throw new AggregateError([error, cleanupError], `${originalMessage}
+Git staging cleanup also failed.`, { cause: error });
     }
     throw error;
 }

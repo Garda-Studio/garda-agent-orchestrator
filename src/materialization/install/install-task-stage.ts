@@ -60,6 +60,7 @@ export function runInstallTaskStage(options: RunInstallTaskStageOptions): void {
     if (options.dryRun) return runInstallTaskStageLocked(options);
     ensureDirectory(options.targetRoot);
     const taskPath = path.join(options.targetRoot, TASK_QUEUE_FILENAME);
+    inspectSafeTaskFile(taskPath, options.targetRoot);
     return withTaskQueueTransaction(taskPath, (message) => { throw new Error(message); }, () => (
         runInstallTaskStageLocked({
             ...options,

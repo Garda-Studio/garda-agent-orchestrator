@@ -12,7 +12,7 @@ import { validateEmbeddedBundleParity } from './embedded-bundle-parity';
 import { pushCheck } from './shared';
 import type { ReleaseReadinessCheck } from './types';
 
-const CI_WORKFLOW_SHA256 = 'e8cca08c06ad93d398cdd558bb37e249a0b15836554a12d98b2700c976755d7e';
+const CI_WORKFLOW_SHA256 = '525c435c871bafa5b79ac47248bf180821ed750e2c26f53d2ddb05eab51a8f70';
 const CI_SCRIPTS_SHA256 = '9da4ed2b6174b6bcd9aafbf2bb36aa76d06aa5c147ddfdf9204a3e26c3b35949';
 const MAX_EVIDENCE_BYTES = 16 * 1024 * 1024;
 const CLOCK_SKEW_MS = 5 * 60 * 1000;

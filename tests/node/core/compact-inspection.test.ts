@@ -84,7 +84,7 @@ test('rg reports excluded runtime directories and searches an exact runtime log'
         path: 'garda-agent-orchestrator/runtime/tmp/full-suite.log',
         query: 'memory-budget-marker'
     });
-    assert.equal(result.exitCode, 0);
+    assert.equal(result.exitCode, 0, result.sinkError || result.stderr);
     assert.match(result.stdout, /full-suite\.log:1:memory-budget-marker/);
 
     if (process.platform === 'win32') {

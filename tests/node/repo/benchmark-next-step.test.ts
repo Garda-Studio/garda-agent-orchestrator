@@ -7,6 +7,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { getRepoRoot } from '../../../scripts/node-foundation/build';
+import { createGateFixture } from '../gate-fixtures';
 
 test('next-step benchmark validates inputs and reports stable process timings', (context) => {
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-next-step-benchmark-'));
@@ -91,11 +92,13 @@ test('next-step benchmark validates inputs and reports stable process timings', 
     assert.equal(fs.readFileSync(counterPath, 'utf8'), '2');
 });
 
-test('next-step benchmark accepts the real CLI output contract', { timeout: 30_000 }, () => {
+test('next-step benchmark accepts the real CLI output contract', { timeout: 30_000 }, (context) => {
     const repoRoot = getRepoRoot();
+    const fixture = createGateFixture();
+    context.after(() => fixture.cleanup());
     const run = spawnSync(process.execPath, [
         path.join(repoRoot, 'scripts', 'benchmark-next-step.cjs'),
-        'T-BENCH-UNDECLARED', repoRoot, '6'
+        'T-BENCH-UNDECLARED', fixture.repoRoot, '6'
     ], { cwd: repoRoot, encoding: 'utf8', timeout: 25_000 });
     assert.equal(run.status, 0, run.stderr);
     const report = JSON.parse(run.stdout) as {

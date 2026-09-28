@@ -131,6 +131,7 @@ describe('install materialization stages', () => {
     });
 
     it('rejects external and dangling TASK.md symlinks before backup in both task-stage branches', (t) => {
+        let checkedCases = 0;
         for (const answerDependentOnly of [false, true]) {
             for (const targetExists of [true, false]) {
                 const targetRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-install-task-symlink-stage-'));
@@ -181,12 +182,16 @@ describe('install materialization stages', () => {
                         assert.equal(fs.existsSync(externalTaskPath), false);
                     }
                     assert.equal(filesystem.metrics.backedUp, 0);
+                    assert.equal(fs.lstatSync(taskPath).isSymbolicLink(), true);
+                    assert.equal(fs.readlinkSync(taskPath), externalTaskPath);
+                    checkedCases += 1;
                 } finally {
                     fs.rmSync(targetRoot, { recursive: true, force: true });
                     fs.rmSync(externalRoot, { recursive: true, force: true });
                 }
             }
         }
+        assert.equal(checkedCases, 4);
     });
 
     it('preserves an intentionally empty managed queue in both task-stage branches', () => {

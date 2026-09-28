@@ -389,6 +389,7 @@ describe('gates/review-tree-state', () => {
             runGit(repoRoot, ['init']);
             runGit(repoRoot, ['config', 'user.name', 'Garda Tests']);
             runGit(repoRoot, ['config', 'user.email', 'garda-tests@example.com']);
+            runGit(repoRoot, ['commit', '--allow-empty', '-m', 'baseline']);
             fs.mkdirSync(path.join(repoRoot, 'src'), { recursive: true });
             const linkPath = path.join(repoRoot, 'src', 'broken-link.ts');
             try {
@@ -428,6 +429,7 @@ describe('gates/review-tree-state', () => {
             runGit(repoRoot, ['init']);
             runGit(repoRoot, ['config', 'user.name', 'Garda Tests']);
             runGit(repoRoot, ['config', 'user.email', 'garda-tests@example.com']);
+            runGit(repoRoot, ['commit', '--allow-empty', '-m', 'baseline']);
             fs.mkdirSync(path.join(repoRoot, 'src', 'target-dir'), { recursive: true });
             fs.writeFileSync(path.join(repoRoot, 'src', 'target-dir', 'value.ts'), 'export const value = 1;\n', 'utf8');
             const linkPath = path.join(repoRoot, 'src', 'dir-link');

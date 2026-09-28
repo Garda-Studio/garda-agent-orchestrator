@@ -1,3 +1,4 @@
+import { resolveMockFilesystemPath } from './fixtures/filesystem-paths';
 import assert from 'node:assert/strict';
 import * as childProcess from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -45,6 +46,8 @@ import type {
 import { traceGitCommands } from '../git-command-trace';
 
 const TASK_ID = 'T-WIP-RESTORE-PLAN';
+
+
 
 function runGit(repoRoot: string, args: string[]): string {
     return childProcess.execFileSync('git', ['-C', repoRoot, ...args], {
@@ -198,7 +201,7 @@ describe('split-required WIP restore planning', () => {
         let backupClosed = false;
         context.mock.method(mutableFs, 'openSync', (...args: Parameters<typeof fs.openSync>) => {
             const descriptor = originalOpen(...args);
-            if (String(args[0]).includes('.garda-restore-backup-') && args[1] === fs.constants.O_RDWR) {
+            if (String(args[0]).includes('.garda-restore-backup-') && typeof args[1] === 'number' && (args[1] & fs.constants.O_RDWR) !== 0) {
                 backupDescriptor = descriptor;
             }
             return descriptor;
@@ -733,7 +736,7 @@ describe('split-required WIP restore planning', () => {
         ) => {
             const descriptor = originalOpenSync(filePath, flags, mode);
             if (!candidateReplaced
-                && path.resolve(String(filePath)) === path.resolve(candidatePath)) {
+                && resolveMockFilesystemPath(filePath) === path.resolve(candidatePath)) {
                 candidateDescriptor = descriptor;
             }
             return descriptor;
@@ -799,7 +802,7 @@ describe('split-required WIP restore planning', () => {
             destination: fs.PathLike,
             mode?: number
         ) => {
-            if (!parentMoved && path.resolve(String(destination)) === path.resolve(`${indexPath}.lock`)) {
+            if (!parentMoved && resolveMockFilesystemPath(destination) === path.resolve(`${indexPath}.lock`)) {
                 parentMoved = true;
                 fs.renameSync(parentPath, movedParentPath);
             }
@@ -874,7 +877,7 @@ describe('split-required WIP restore planning', () => {
             destination: fs.PathLike,
             mode?: number
         ) => {
-            if (!indexRaced && path.resolve(String(destination)) === path.resolve(`${indexPath}.lock`)) {
+            if (!indexRaced && resolveMockFilesystemPath(destination) === path.resolve(`${indexPath}.lock`)) {
                 indexRaced = true;
                 fs.writeFileSync(indexPath, racedIndex);
             }
@@ -937,7 +940,7 @@ describe('split-required WIP restore planning', () => {
             mode?: fs.Mode
         ) => {
             if (!parentReplaced
-                && path.resolve(String(filePath)) === path.resolve(targetPath)
+                && resolveMockFilesystemPath(filePath) === path.resolve(targetPath)
                 && typeof flags === 'number'
                 && ((flags & fs.constants.O_WRONLY) !== 0
                     || (flags & fs.constants.O_RDWR) !== 0)) {
@@ -1074,7 +1077,10 @@ describe('split-required WIP restore planning', () => {
         const originalFsyncSync = mutableFs.fsyncSync;
         let parentMoved = false;
         context.mock.method(mutableFs, 'fsyncSync', (descriptor: number) => {
-            if (!parentMoved) {
+            const descriptorIdentity = fs.fstatSync(descriptor);
+            const targetIdentity = !parentMoved ? fs.lstatSync(path.join(repoRoot, 'src', 'a.ts')) : null;
+            if (!parentMoved && targetIdentity
+                && descriptorIdentity.dev === targetIdentity.dev && descriptorIdentity.ino === targetIdentity.ino) {
                 parentMoved = true;
                 fs.renameSync(parentPath, movedParentPath);
             }
@@ -1525,7 +1531,7 @@ describe('split-required WIP restore planning', () => {
         const originalLstatSync = mutableFs.lstatSync;
         let targetLstatCount = 0;
         context.mock.method(mutableFs, 'lstatSync', (filePath: fs.PathLike) => {
-            if (path.resolve(String(filePath)) === path.resolve(handoffPath)) {
+            if (resolveMockFilesystemPath(filePath) === path.resolve(handoffPath)) {
                 targetLstatCount += 1;
                 if (targetLstatCount === 4) {
                     fs.writeFileSync(handoffPath, `${JSON.stringify(concurrentHandoff, null, 2)}\n`, 'utf8');
@@ -1589,7 +1595,7 @@ describe('split-required WIP restore planning', () => {
             newPath: fs.PathLike
         ) => {
             if (competingError === null
-                && path.resolve(String(oldPath)) === path.resolve(handoffPath)
+                && resolveMockFilesystemPath(oldPath) === path.resolve(handoffPath)
                 && String(newPath).includes('.garda-replace-displaced-')) {
                 try {
                     replaceSplitRequiredWipRestoreHandoff(
@@ -1664,7 +1670,7 @@ describe('split-required WIP restore planning', () => {
         ) => {
             if (!competingWriteCommitted
                 && String(existingPath).includes('.garda-replace-')
-                && path.resolve(String(newPath)) === path.resolve(handoffPath)) {
+                && resolveMockFilesystemPath(newPath) === path.resolve(handoffPath)) {
                 competingWriteCommitted = true;
                 fs.writeFileSync(handoffPath, concurrentContent, 'utf8');
             }
@@ -1721,7 +1727,7 @@ describe('split-required WIP restore planning', () => {
             if (!sourceReplaced
                 && sourcePath.includes('.garda-replace-')
                 && !sourcePath.includes('.garda-replace-displaced-')
-                && path.resolve(String(newPath)) === path.resolve(targetPath)) {
+                && resolveMockFilesystemPath(newPath) === path.resolve(targetPath)) {
                 sourceReplaced = true;
                 fs.renameSync(sourcePath, `${sourcePath}.captured`);
                 fs.writeFileSync(sourcePath, forgedContent, 'utf8');
@@ -1766,7 +1772,7 @@ describe('split-required WIP restore planning', () => {
             if (!sourceReplacedTwice
                 && sourcePath.includes('.garda-replace-')
                 && !sourcePath.includes('.garda-replace-displaced-')
-                && path.resolve(String(newPath)) === path.resolve(targetPath)) {
+                && resolveMockFilesystemPath(newPath) === path.resolve(targetPath)) {
                 fs.renameSync(sourcePath, `${sourcePath}.authenticated`);
                 fs.writeFileSync(sourcePath, firstForgedContent, 'utf8');
                 originalLinkSync(sourcePath, newPath);
@@ -1816,7 +1822,7 @@ describe('split-required WIP restore planning', () => {
             if (!targetReplaced
                 && String(existingPath).includes('.garda-replace-')
                 && !String(existingPath).includes('.garda-replace-displaced-')
-                && path.resolve(String(newPath)) === path.resolve(targetPath)) {
+                && resolveMockFilesystemPath(newPath) === path.resolve(targetPath)) {
                 fs.renameSync(newPath, linkedTargetPath);
                 fs.writeFileSync(newPath, concurrentContent, 'utf8');
                 targetReplaced = true;
@@ -1860,13 +1866,13 @@ describe('split-required WIP restore planning', () => {
             if (!commitFailureInjected
                 && sourcePath.includes('.garda-replace-')
                 && !sourcePath.includes('.garda-replace-displaced-')
-                && path.resolve(String(newPath)) === path.resolve(targetPath)) {
+                && resolveMockFilesystemPath(newPath) === path.resolve(targetPath)) {
                 commitFailureInjected = true;
                 throw new Error('simulated commit link failure');
             }
             if (!displacedSourceReplaced
                 && sourcePath.includes('.garda-replace-displaced-')
-                && path.resolve(String(newPath)) === path.resolve(targetPath)) {
+                && resolveMockFilesystemPath(newPath) === path.resolve(targetPath)) {
                 displacedSourceReplaced = true;
                 fs.renameSync(sourcePath, `${sourcePath}.captured`);
                 fs.writeFileSync(sourcePath, forgedContent, 'utf8');
@@ -1927,7 +1933,7 @@ describe('split-required WIP restore planning', () => {
             const sourcePath = String(existingPath);
             if (!rollbackSourceReplaced
                 && sourcePath.includes('.garda-rollback-')
-                && path.resolve(String(newPath)) === path.resolve(targetPath)) {
+                && resolveMockFilesystemPath(newPath) === path.resolve(targetPath)) {
                 rollbackSourceReplaced = true;
                 fs.renameSync(sourcePath, `${sourcePath}.captured`);
                 fs.writeFileSync(sourcePath, forgedContent, 'utf8');

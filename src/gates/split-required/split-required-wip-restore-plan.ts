@@ -139,7 +139,14 @@ function captureRepoParentSnapshot(
 
 function assertRepoParentSnapshot(snapshot: RepoParentSnapshot, relativePath: string): void {
     for (const directory of snapshot.directories) {
-        const current = fs.lstatSync(directory.path);
+        let current: fs.Stats;
+        try {
+            current = fs.lstatSync(directory.path);
+        } catch (error: unknown) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+            throw new Error(`restore parent identity changed during access: ${relativePath}`, { cause: error });
+        }
         if (current.isSymbolicLink()
             || !current.isDirectory()
             || !sameFileIdentity(directory.stat, current)
