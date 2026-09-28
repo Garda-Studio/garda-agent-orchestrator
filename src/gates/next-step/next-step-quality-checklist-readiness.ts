@@ -153,8 +153,10 @@ function qualityChecklistAnswersMaterializationRequired(options: {
     taskId: string;
     preflightPath: string;
     refreshIfOlderThanUtc: string | null;
+    answersPath?: string;
 }): boolean {
-    const answersPath = resolveDefaultQualityChecklistAnswersTemplatePath(options.repoRoot, options.taskId);
+    const answersPath = options.answersPath
+        ?? resolveDefaultQualityChecklistAnswersTemplatePath(options.repoRoot, options.taskId);
     const assessment = assessQualityChecklistAnswersTemplateFile({
         repoRoot: options.repoRoot,
         taskId: options.taskId,
@@ -213,6 +215,35 @@ function qualityChecklistAnswersMaterializationRequired(options: {
     } catch {
         return true;
     }
+}
+
+function resolveBoundQualityChecklistAnswersPath(options: {
+    repoRoot: string;
+    taskId: string;
+    preflightPath: string;
+    refreshIfOlderThanUtc: string | null;
+}): string {
+    const defaultPath = resolveDefaultQualityChecklistAnswersTemplatePath(options.repoRoot, options.taskId);
+    if (!qualityChecklistAnswersMaterializationRequired({ ...options, answersPath: defaultPath })) {
+        return defaultPath;
+    }
+    const repairPrefix = `${normalizePath(defaultPath)}.repair.json`;
+    const eventsRoot = joinOrchestratorPath(options.repoRoot, path.join('runtime', 'task-events'));
+    const events = readTaskTimelineEventLikes(eventsRoot, options.taskId);
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+        const event = events[index];
+        if (String(event.event_type || '') !== 'QUALITY_CHECKLIST_ANSWERS_TEMPLATE_BINDING_RECORDED') continue;
+        const details = isPlainRecord(event.details) ? event.details : {};
+        const candidate = normalizePath(details.answers_path);
+        if (!candidate.startsWith(repairPrefix)) continue;
+        const suffix = candidate.slice(repairPrefix.length);
+        if (suffix !== '' && suffix !== '.recovery.json'
+            && !/^\.recovery\.(?:[2-9]|[1-9]\d+)\.json$/u.test(suffix)) continue;
+        if (!qualityChecklistAnswersMaterializationRequired({ ...options, answersPath: candidate })) {
+            return candidate;
+        }
+    }
+    return defaultPath;
 }
 
 function parseOptionalNumberField(value: unknown): number | null {
@@ -513,16 +544,20 @@ function materializePendingQualityChecklistAnswers(
     },
     refreshIfOlderThanUtc: string | null = null
 ): QualityChecklistTemplateMaterialization {
-    const defaultAnswersPath = resolveDefaultQualityChecklistAnswersTemplatePath(options.repoRoot, options.taskId);
-    if (!qualityChecklistAnswersMaterializationRequired({
-        repoRoot: options.repoRoot,
-        taskId: options.taskId,
-        preflightPath: options.preflightPath,
-        refreshIfOlderThanUtc
-    })) {
-        return { error: null, answersPath: normalizePath(defaultAnswersPath) };
-    }
     try {
+        const defaultAnswersPath = resolveBoundQualityChecklistAnswersPath({
+            ...options,
+            refreshIfOlderThanUtc
+        });
+        if (!qualityChecklistAnswersMaterializationRequired({
+            repoRoot: options.repoRoot,
+            taskId: options.taskId,
+            preflightPath: options.preflightPath,
+            refreshIfOlderThanUtc,
+            answersPath: defaultAnswersPath
+        })) {
+            return { error: null, answersPath: normalizePath(defaultAnswersPath) };
+        }
         const expectedTemplate = buildQualityChecklistAnswersTemplate({
             repoRoot: options.repoRoot,
             taskId: options.taskId,

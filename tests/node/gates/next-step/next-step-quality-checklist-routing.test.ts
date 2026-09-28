@@ -30,6 +30,9 @@ import {
     runQualityChecklistCommand
 } from '../../../../src/cli/commands/gate-flows/quality-checklist/quality-checklist-flow';
 import {
+    assessQualityChecklistAnswersTemplateFile
+} from '../../../../src/gates/quality-checklist';
+import {
     readQualityChecklistReadiness
 } from '../../../../src/gates/next-step/next-step-quality-checklist-readiness';
 import {
@@ -404,6 +407,127 @@ describe('gates/next-step quality checklist routing', () => {
         assert.equal(fs.existsSync(`${answersPath}.binding.json`), false);
         assert.equal(fs.existsSync(questionReferencePath), false);
     });
+
+    it('stops planning template materialization after an authenticated repair template is created', () => {
+        const repoRoot = makeTempRepo();
+        writeWorkflowConfig(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+        const answersPath = qualityChecklistAnswersPath(repoRoot);
+        fs.mkdirSync(path.dirname(answersPath), { recursive: true });
+        fs.writeFileSync(answersPath, '{unsafe canonical json', 'utf8');
+
+        const created = readCurrentQualityChecklistReadiness(repoRoot);
+        const repairPath = qualityChecklistRepairAnswersPath(repoRoot);
+        assert.equal(normalizeTestPath(created.answersTemplatePath), normalizeTestPath(repairPath));
+        const repairBytes = fs.readFileSync(repairPath, 'utf8');
+        const planner = createNextStepEffectPlanner();
+        const repeated = readQualityChecklistReadiness({
+            ...currentQualityChecklistReadinessOptions(repoRoot),
+            effects: planner
+        });
+
+        assert.equal(planner.pendingPlan(), null);
+        assert.equal(normalizeTestPath(repeated.answersTemplatePath), normalizeTestPath(repairPath));
+        assert.equal(fs.readFileSync(answersPath, 'utf8'), '{unsafe canonical json');
+        assert.equal(fs.readFileSync(repairPath, 'utf8'), repairBytes);
+    });
+
+    it('requires materialization when a repair binding no longer matches its timeline evidence', () => {
+        const repoRoot = makeTempRepo();
+        writeWorkflowConfig(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+        const answersPath = qualityChecklistAnswersPath(repoRoot);
+        fs.mkdirSync(path.dirname(answersPath), { recursive: true });
+        fs.writeFileSync(answersPath, '{unsafe canonical json', 'utf8');
+        readCurrentQualityChecklistReadiness(repoRoot);
+        const repairPath = qualityChecklistRepairAnswersPath(repoRoot);
+        fs.appendFileSync(`${repairPath}.binding.json`, ' ');
+        const repairBytes = fs.readFileSync(repairPath, 'utf8');
+        const planner = createNextStepEffectPlanner();
+
+        readQualityChecklistReadiness({
+            ...currentQualityChecklistReadinessOptions(repoRoot),
+            effects: planner
+        });
+
+        assert.ok(planner.pendingPlan()?.effects.some(effect => effect.kind === 'materialize-quality-checklist-answers'));
+        assert.equal(fs.readFileSync(answersPath, 'utf8'), '{unsafe canonical json');
+        assert.equal(fs.readFileSync(repairPath, 'utf8'), repairBytes);
+    });
+
+    for (const candidateIndex of [1, 2, 10]) {
+        it(`reuses authenticated recovery candidate ${candidateIndex} without another materialization effect`, () => {
+            const repoRoot = makeTempRepo();
+            writeWorkflowConfig(repoRoot);
+            seedStartedTask(repoRoot, TASK_ID);
+            writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+            const answersPath = qualityChecklistAnswersPath(repoRoot);
+            fs.mkdirSync(path.dirname(answersPath), { recursive: true });
+            const preserved = new Map<string, string>([[answersPath, '{unsafe canonical json']]);
+            for (let index = 0; index < candidateIndex; index += 1) {
+                const candidate = index === 0 ? qualityChecklistRepairAnswersPath(repoRoot)
+                    : index === 1 ? qualityChecklistRecoveryAnswersPath(repoRoot)
+                        : `${qualityChecklistRepairAnswersPath(repoRoot)}.recovery.${index}.json`;
+                preserved.set(candidate, `{unsafe recovery ${index}`);
+            }
+            for (const [candidate, bytes] of preserved) fs.writeFileSync(candidate, bytes, 'utf8');
+            const created = readCurrentQualityChecklistReadiness(repoRoot);
+            const recoveryPath = candidateIndex === 1 ? qualityChecklistRecoveryAnswersPath(repoRoot)
+                : `${qualityChecklistRepairAnswersPath(repoRoot)}.recovery.${candidateIndex}.json`;
+            const recoveryBytes = fs.readFileSync(recoveryPath, 'utf8');
+            const bindingBytes = fs.readFileSync(`${recoveryPath}.binding.json`, 'utf8');
+            const planner = createNextStepEffectPlanner();
+            const repeated = readQualityChecklistReadiness({
+                ...currentQualityChecklistReadinessOptions(repoRoot), effects: planner
+            });
+
+            assert.equal(normalizeTestPath(created.answersTemplatePath), normalizeTestPath(recoveryPath));
+            assert.equal(normalizeTestPath(repeated.answersTemplatePath), normalizeTestPath(recoveryPath));
+            assert.equal(planner.pendingPlan(), null);
+            for (const [candidate, bytes] of preserved) assert.equal(fs.readFileSync(candidate, 'utf8'), bytes);
+            assert.equal(fs.readFileSync(recoveryPath, 'utf8'), recoveryBytes);
+            assert.equal(fs.readFileSync(`${recoveryPath}.binding.json`, 'utf8'), bindingBytes);
+        });
+    }
+
+    for (const candidateSuffix of ['.repair.json.lookalike', '.repair.json.recovery.1.json', '.other.json']) {
+        it(`rejects an otherwise authenticated non-repair candidate ${candidateSuffix}`, () => {
+            const repoRoot = makeTempRepo();
+            writeWorkflowConfig(repoRoot);
+            seedStartedTask(repoRoot, TASK_ID);
+            writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+            const answersPath = qualityChecklistAnswersPath(repoRoot);
+            fs.mkdirSync(path.dirname(answersPath), { recursive: true });
+            fs.writeFileSync(answersPath, '{unsafe canonical json', 'utf8');
+            readCurrentQualityChecklistReadiness(repoRoot);
+            const repairPath = qualityChecklistRepairAnswersPath(repoRoot);
+            const candidatePath = `${answersPath}${candidateSuffix}`;
+            const templateBytes = fs.readFileSync(repairPath, 'utf8');
+            fs.writeFileSync(candidatePath, templateBytes, 'utf8');
+            const binding = JSON.parse(fs.readFileSync(`${repairPath}.binding.json`, 'utf8')) as Record<string, unknown>;
+            binding.answers_path = normalizeForTimeline(candidatePath);
+            writeJson(`${candidatePath}.binding.json`, binding);
+            appendEvent(repoRoot, TASK_ID, 'QUALITY_CHECKLIST_ANSWERS_TEMPLATE_BINDING_RECORDED', 'PASS', {
+                answers_path: normalizeForTimeline(candidatePath),
+                binding_path: normalizeForTimeline(`${candidatePath}.binding.json`),
+                binding_sha256: fileSha256(`${candidatePath}.binding.json`),
+                answers_template_policy_sha256: binding.answers_template_policy_sha256
+            });
+            const options = currentQualityChecklistReadinessOptions(repoRoot);
+            assert.equal(assessQualityChecklistAnswersTemplateFile({ ...options, answersPath: candidatePath }).status, 'current');
+            fs.writeFileSync(repairPath, '{invalid repair json', 'utf8');
+            const planner = createNextStepEffectPlanner();
+            const result = readQualityChecklistReadiness({ ...options, effects: planner });
+
+            assert.ok(planner.pendingPlan()?.effects.some(effect => effect.kind === 'materialize-quality-checklist-answers'));
+            assert.notEqual(normalizeTestPath(result.answersTemplatePath), normalizeTestPath(candidatePath));
+            assert.equal(fs.readFileSync(candidatePath, 'utf8'), templateBytes);
+            assert.equal(fs.readFileSync(repairPath, 'utf8'), '{invalid repair json');
+            assert.equal(fs.readFileSync(answersPath, 'utf8'), '{unsafe canonical json');
+        });
+    }
 
     it('withholds the quality checklist command until the materialized answers are complete', () => {
         const repoRoot = makeTempRepo();
@@ -867,6 +991,7 @@ describe('gates/next-step quality checklist routing', () => {
             fs.existsSync(path.join(outsideDir, `${TASK_ID}-quality-checklist-questions.md`)),
             false
         );
+        assert.deepEqual(fs.readdirSync(outsideDir), []);
     });
 
     it('preserves current partial answers after answer validation records CONFIG_ERROR', () => {
