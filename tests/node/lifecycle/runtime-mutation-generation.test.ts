@@ -179,6 +179,10 @@ const NON_CANONICAL_MUTATION_CAPABILITIES = Object.freeze({
         sourceMarker: 'acquireLifecycleOperationLock(',
         boundary: 'ephemeral lifecycle lock state outside the six toxin roots'
     },
+    'src/lifecycle/lock/lifecycle-lock-handoff.ts': {
+        sourceMarker: 'fs.constants.O_RDONLY',
+        boundary: 'read-only lock owner inspection outside the six toxin roots; openSync cannot create or write the owner'
+    },
     'src/lifecycle/uninstall/uninstall-helpers.ts': {
         sourceMarker: 'rmdirSync(',
         boundary: 'project-tree uninstall cleanup outside the six toxin roots'
@@ -246,7 +250,7 @@ const ROOT_WRITER_COVERAGE = Object.freeze({
 } as const);
 
 const JOURNAL_OWNER_PATTERN = /(?:withLifecycleRuntimeMutationGeneration(?:ForPath)?|beginRuntimeMutationGeneration)/u;
-const BOUNDED_MUTATION_SURFACE_SHA256 = '391219361eea09dabd5b84a0bc8572eca2a9f686775de148fd138672d9417e08';
+const BOUNDED_MUTATION_SURFACE_SHA256 = '00f9199e4dd392415c71c4ef5b7ec90cbab5c827e8fe73326b54e41f6510d910';
 const READ_ONLY_FS_OPERATIONS = new Set([
     'access', 'accessSync', 'close', 'closeSync', 'exists', 'existsSync',
     'fstat', 'fstatSync', 'lstat', 'lstatSync', 'open', 'opendir', 'opendirSync',

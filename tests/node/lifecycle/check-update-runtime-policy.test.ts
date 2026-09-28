@@ -13,6 +13,8 @@ import {
     runCheckUpdate
 } from '../../../src/lifecycle/check-update';
 import { runUpdate } from '../../../src/lifecycle/update';
+import { getUpdateRollbackItems } from '../../../src/lifecycle/update/update';
+import { PUBLIC_BUNDLE_ASSETS } from '../../../src/core/public-bundle-assets';
 import { verifySyncedItemsRestoredFromBackup } from '../../../src/lifecycle/check-update/check-update-bundle-sync';
 import { runDoctor } from '../../../src/validators/doctor';
 import {
@@ -1027,6 +1029,36 @@ describe('runCheckUpdate', () => {
 
             // VERSION should be restored to original
             assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8'), '0.0.1');
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('syncs public assets and restores their pre-update state when lifecycle fails', async () => {
+        const { projectRoot, bundleRoot } = setupCheckUpdateWorkspace(repoRoot, '0.0.1');
+        try {
+            const existingDoc = path.join(bundleRoot, 'docs', 'architecture.md');
+            const newDoc = path.join(bundleRoot, 'docs', 'sbom.md');
+            fs.mkdirSync(path.dirname(existingDoc), { recursive: true });
+            fs.writeFileSync(existingDoc, 'previous architecture\n');
+            fs.rmSync(newDoc, { force: true });
+            const rollbackItems = getUpdateRollbackItems(projectRoot, path.join(bundleRoot, 'init-answers.json'));
+            for (const item of PUBLIC_BUNDLE_ASSETS) {
+                assert.ok(rollbackItems.includes(`garda-agent-orchestrator/${item}`));
+            }
+            await assert.rejects(runCheckUpdate({
+                targetRoot: projectRoot, bundleRoot, sourcePath: repoRoot,
+                noPrompt: true, apply: true, trustOverride: true,
+                updateRunner: () => {
+                    for (const item of PUBLIC_BUNDLE_ASSETS) {
+                        assert.deepEqual(fs.readFileSync(path.join(bundleRoot, item)), fs.readFileSync(path.join(repoRoot, item)));
+                    }
+                    throw new Error('Simulated public-assets lifecycle failure');
+                }
+            }), /sync rollback completed.*Simulated public-assets lifecycle failure/);
+            assert.equal(fs.readFileSync(existingDoc, 'utf8'), 'previous architecture\n');
+            assert.equal(fs.existsSync(newDoc), false);
+            assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8').trim(), '0.0.1');
         } finally {
             removePathRecursive(projectRoot);
         }

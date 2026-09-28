@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { PUBLIC_BUNDLE_ASSETS } from '../core/public-bundle-assets';
 import {
     bindContainedDestination,
     copyContainedFile,
@@ -78,6 +79,7 @@ export const BUNDLE_SYNC_ITEMS = Object.freeze([
     'AGENT_INIT_PROMPT.md',
     'CHANGELOG.md',
     'LICENSE',
+    ...PUBLIC_BUNDLE_ASSETS,
     'VERSION'
 ]);
 

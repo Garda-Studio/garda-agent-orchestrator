@@ -175,21 +175,9 @@ export function getUpdateRollbackItems(rootPath: string, initAnswersResolvedPath
         ...getProviderBridgeDirectoryPaths(),
         '.gitignore',
         '.git/hooks/pre-commit',
-        resolveBundleName() + '/.gitattributes',
-        resolveBundleName() + '/bin',
-        resolveBundleName() + '/dist',
         resolveBundleName() + '/live',
         resolveBundleName() + '/live/docs/project-memory',
-        resolveBundleName() + '/package.json',
-        resolveBundleName() + '/src',
-        resolveBundleName() + '/template',
-        resolveBundleName() + '/README.md',
-        resolveBundleName() + '/HOW_TO.md',
-        resolveBundleName() + '/MANIFEST.md',
-        resolveBundleName() + '/AGENT_INIT_PROMPT.md',
-        resolveBundleName() + '/CHANGELOG.md',
-        resolveBundleName() + '/LICENSE',
-        resolveBundleName() + '/VERSION'
+        ...BUNDLE_SYNC_ITEMS.map((item) => `${resolveBundleName()}/${item}`)
     ];
 
     const rootResolved = path.resolve(rootPath);

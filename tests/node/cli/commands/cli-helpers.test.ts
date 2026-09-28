@@ -49,6 +49,7 @@ import {
 import { dispatchCliCommand } from '../../../../src/cli/commands/command-dispatch';
 import { handleUninstall } from '../../../../src/cli/commands/workspace/workspace-maintenance-command';
 import { DEFAULT_SOURCE_OF_TRUTH } from '../../../../src/core/constants';
+import { PUBLIC_BUNDLE_ASSETS } from '../../../../src/core/public-bundle-assets';
 import { buildDefaultRetentionPolicy, RETENTION_POLICY_DEFAULTS } from '../../../../src/lifecycle/cleanup';
 import { MANAGED_END, MANAGED_START } from '../../../../src/materialization/content-builders';
 
@@ -604,6 +605,95 @@ test('deployFreshBundle copies the optional source tree when present', () => {
         deployFreshBundle(sourceRoot, destPath);
 
         assert.equal(fs.readFileSync(path.join(destPath, 'src', 'marker.ts'), 'utf8'), 'export {};\n');
+    } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+});
+
+test('bundle deployment and refresh copy public assets without copying unrelated docs', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deploy-public-assets-'));
+    try {
+        const sourceRoot = path.join(tmpDir, 'source');
+        const destination = path.join(tmpDir, 'bundle');
+        writeDeploySourceFixture(sourceRoot);
+        for (const item of PUBLIC_BUNDLE_ASSETS) {
+            fs.mkdirSync(path.dirname(path.join(sourceRoot, item)), { recursive: true });
+            fs.writeFileSync(path.join(sourceRoot, item), `first ${item}\n`);
+        }
+        fs.writeFileSync(path.join(sourceRoot, 'docs', 'private-audit.md'), 'unrelated source WIP');
+        deployFreshBundle(sourceRoot, destination);
+        for (const item of PUBLIC_BUNDLE_ASSETS) {
+            assert.equal(fs.readFileSync(path.join(destination, item), 'utf8'), `first ${item}\n`);
+            fs.writeFileSync(path.join(sourceRoot, item), `second ${item}\n`);
+        }
+        fs.writeFileSync(path.join(destination, 'docs', 'local-notes.md'), 'preserved local WIP');
+        syncBundleItems(sourceRoot, destination);
+        for (const item of PUBLIC_BUNDLE_ASSETS) {
+            assert.equal(fs.readFileSync(path.join(destination, item), 'utf8'), `second ${item}\n`);
+        }
+        assert.equal(fs.existsSync(path.join(destination, 'docs', 'private-audit.md')), false);
+        assert.equal(fs.readFileSync(path.join(destination, 'docs', 'local-notes.md'), 'utf8'), 'preserved local WIP');
+    } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+});
+
+for (const boundary of ['source', 'destination'] as const) {
+    test(`public bundle refresh rejects a linked ${boundary} ancestor without changing outside files`, () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundle-public-link-'));
+        try {
+            const sourceRoot = path.join(tmpDir, 'source');
+            const destination = path.join(tmpDir, 'bundle');
+            const outside = path.join(tmpDir, 'outside');
+            writeDeploySourceFixture(sourceRoot);
+            fs.mkdirSync(destination);
+            fs.mkdirSync(outside);
+            fs.writeFileSync(path.join(outside, 'architecture.md'), 'outside original');
+            const linkedRoot = boundary === 'source' ? sourceRoot : destination;
+            const ordinaryRoot = boundary === 'source' ? destination : sourceRoot;
+            fs.mkdirSync(path.join(ordinaryRoot, 'docs'));
+            fs.writeFileSync(path.join(ordinaryRoot, 'docs', 'architecture.md'), 'ordinary original');
+            fs.symlinkSync(outside, path.join(linkedRoot, 'docs'), process.platform === 'win32' ? 'junction' : 'dir');
+
+            assert.throws(() => syncBundleItems(sourceRoot, destination), /symlink or junction/);
+            assert.equal(fs.readFileSync(path.join(outside, 'architecture.md'), 'utf8'), 'outside original');
+            assert.equal(fs.readFileSync(path.join(ordinaryRoot, 'docs', 'architecture.md'), 'utf8'), 'ordinary original');
+            if (boundary === 'source') {
+                assert.throws(() => deployFreshBundle(sourceRoot, path.join(tmpDir, 'fresh')), /symlink or junction/);
+                assert.equal(fs.existsSync(path.join(tmpDir, 'fresh', 'docs', 'architecture.md')), false);
+            }
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+}
+
+test('public bundle refresh revalidates a destination ancestor replaced after inspection', (context) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bundle-public-replaced-parent-'));
+    try {
+        const sourceRoot = path.join(tmpDir, 'source');
+        const destination = path.join(tmpDir, 'bundle');
+        const outside = path.join(tmpDir, 'outside');
+        writeDeploySourceFixture(sourceRoot);
+        for (const root of [sourceRoot, destination]) fs.mkdirSync(path.join(root, 'docs'), { recursive: true });
+        fs.mkdirSync(outside);
+        fs.writeFileSync(path.join(outside, 'architecture.md'), 'outside original');
+        fs.writeFileSync(path.join(sourceRoot, 'docs', 'architecture.md'), 'source docs');
+        fs.writeFileSync(path.join(sourceRoot, 'NOTICE'), 'source notice');
+        const nativeFs = require('node:fs') as typeof fs;
+        const originalCopy = nativeFs.copyFileSync;
+        let replaced = false;
+        context.mock.method(nativeFs, 'copyFileSync', (...args: Parameters<typeof fs.copyFileSync>) => {
+            originalCopy(...args);
+            if (!replaced && String(args[0]) === path.join(sourceRoot, 'NOTICE')) {
+                replaced = true;
+                fs.renameSync(path.join(destination, 'docs'), path.join(destination, 'previous-docs'));
+                fs.symlinkSync(outside, path.join(destination, 'docs'), process.platform === 'win32' ? 'junction' : 'dir');
+            }
+        });
+        assert.throws(() => syncBundleItems(sourceRoot, destination), /symlink or junction|identity changed/);
+        assert.equal(replaced, true);
+        assert.equal(fs.readFileSync(path.join(outside, 'architecture.md'), 'utf8'), 'outside original');
     } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     }

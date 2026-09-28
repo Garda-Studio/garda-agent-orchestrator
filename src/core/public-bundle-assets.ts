@@ -1,0 +1,23 @@
+export const PUBLIC_BUNDLE_ASSETS = Object.freeze([
+    'NOTICE',
+    'SECURITY.md',
+    'TRADEMARKS.md',
+    'docs/assets/garda-github-social-preview.png',
+    'docs/architecture.md',
+    'docs/branch-protection.md',
+    'docs/cli-reference.md',
+    'docs/compatibility-matrix.md',
+    'docs/configuration.md',
+    'docs/node-platform-foundation.md',
+    'docs/node-runtime-contract.md',
+    'docs/threat-model.md',
+    'docs/sbom.md',
+    'docs/control-plane-isolation.md',
+    'docs/database/sqlite-persistence.md',
+    'docs/database/sqlite-query-adoption-evidence.md',
+    'docs/orchestrator-work-and-isolation.md',
+    'docs/providers.md',
+    'docs/secret-scanning.md',
+    'docs/operator-consistency-runbook.md',
+    'docs/work-example.md'
+]);

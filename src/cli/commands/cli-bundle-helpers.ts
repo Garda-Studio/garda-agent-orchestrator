@@ -2,6 +2,14 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { resolveBundleNameForTarget } from '../../core/constants';
 import {
+    assertContainedDestination,
+    assertExistingPathIdentity,
+    bindContainedDestination,
+    copyContainedFile,
+    removeBoundContainedPath
+} from '../../core/contained-filesystem';
+import { PUBLIC_BUNDLE_ASSETS } from '../../core/public-bundle-assets';
+import {
     isPathInsideRoot,
     isPathRealpathInsideRoot
 } from '../../core/paths';
@@ -168,6 +176,29 @@ export function ensureSourceItemExists(sourceRoot: string, relativePath: string)
     return sourcePath;
 }
 
+function copyPublicBundleAssets(sourceRoot: string, destinationRoot: string, replaceExisting: boolean): void {
+    const assets = PUBLIC_BUNDLE_ASSETS.map((item) => {
+        const source = bindContainedDestination(sourceRoot, path.join(sourceRoot, item));
+        const destination = bindContainedDestination(destinationRoot, path.join(destinationRoot, item));
+        for (const binding of [source, destination]) {
+            if (!binding.missingAt && !fs.lstatSync(binding.path).isFile()) {
+                throw new Error(`Public bundle asset must be an ordinary file: ${binding.path}`);
+            }
+        }
+        return { source, destination };
+    });
+    for (const { source, destination } of assets) {
+        assertContainedDestination(source);
+        assertExistingPathIdentity(destination);
+        if (!source.missingAt) {
+            copyContainedFile(destinationRoot, source.path, destination.path);
+            assertContainedDestination(source);
+        } else if (replaceExisting) {
+            removeBoundContainedPath(bindContainedDestination(destinationRoot, destination.path));
+        }
+    }
+}
+
 export function deployFreshBundle(sourceRoot: string, destinationPath: string): void {
     if (fs.existsSync(destinationPath)) {
         const stats = fs.lstatSync(destinationPath);
@@ -186,6 +217,7 @@ export function deployFreshBundle(sourceRoot: string, destinationPath: string): 
             copyPath(sourcePath, path.join(destinationPath, relativePath), sourceRoot);
         }
     }
+    copyPublicBundleAssets(sourceRoot, destinationPath, false);
     copyCompiledRuntimeArtifacts(sourceRoot, destinationPath, { replaceExisting: false });
 }
 
@@ -208,6 +240,7 @@ export function syncBundleItems(sourceRoot: string, destinationPath: string): vo
             copyPath(sourcePath, targetPath, sourceRoot);
         }
     }
+    copyPublicBundleAssets(sourceRoot, destinationPath, true);
     copyCompiledRuntimeArtifacts(sourceRoot, destinationPath, { replaceExisting: true });
 }
 

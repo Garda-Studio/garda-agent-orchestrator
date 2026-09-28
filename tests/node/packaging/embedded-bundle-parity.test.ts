@@ -211,20 +211,127 @@ test('validateEmbeddedBundleParity rejects a missing mandatory bundle', () => {
     }
 });
 
-test('validateEmbeddedBundleParity rejects missing inspection of an ignored mandatory bundle', () => {
+test('validateEmbeddedBundleParity inspects every item of an ignored mandatory bundle', () => {
     const repoRoot = createParityFixture();
     try {
         writeFile(path.join(repoRoot, '.gitignore'), 'garda-agent-orchestrator/\n');
         runGit(repoRoot, ['-c', 'init.defaultBranch=main', 'init']);
         const result = validateEmbeddedBundleParity(repoRoot);
         const output = formatEmbeddedBundleParityResult(result);
-        assert.equal(result.passed, false, output);
-        assert.equal(result.status, 'FAILED');
+        assert.equal(result.passed, true, output);
+        assert.equal(result.status, 'PASSED');
         assert.equal(result.bundleIgnoredByGit, true);
-        assert.equal(result.items.length, 0);
-        assert.match(output, /Embedded bundle is gitignored/);
-        assert.doesNotMatch(output, /RELEASE_EMBEDDED_BUNDLE_PARITY_OK|ParityStatus: PASSED/);
+        assert.equal(result.items.length, EMBEDDED_BUNDLE_PARITY_ITEMS.length);
+        assert.equal(result.skippedReason, null);
+        assert.match(output, /RELEASE_EMBEDDED_BUNDLE_PARITY_OK/);
     } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('mandatory ignored bundle inspection detects stale content and missing docs', () => {
+    const repoRoot = createParityFixture();
+    try {
+        writeFile(path.join(repoRoot, '.gitignore'), 'garda-agent-orchestrator/\n');
+        runGit(repoRoot, ['-c', 'init.defaultBranch=main', 'init']);
+        writeFile(path.join(repoRoot, 'garda-agent-orchestrator', 'bin', 'garda.js'), 'stale runtime\n');
+        fs.unlinkSync(path.join(repoRoot, 'garda-agent-orchestrator', 'docs', 'architecture.md'));
+
+        const result = validateEmbeddedBundleParity(repoRoot);
+        assert.equal(result.status, 'FAILED');
+        assert.equal(result.passed, false);
+        assert.equal(result.bundleIgnoredByGit, true);
+        assert.equal(result.items.length, EMBEDDED_BUNDLE_PARITY_ITEMS.length);
+        assert.ok(result.violations.includes('bin: hash mismatch'));
+        assert.ok(result.violations.includes('docs/architecture.md: missing root=true bundle=false'));
+        const command = runParityCommand(repoRoot, true);
+        assert.equal(command.status, 1, command.stderr || command.stdout);
+        assert.match(command.stdout, /RELEASE_EMBEDDED_BUNDLE_PARITY_FAILED/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('mandatory parity rejects an ignored bundle-root junction aliasing the repository', () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-parity-root-alias-'));
+    const bundleRoot = path.join(repoRoot, 'garda-agent-orchestrator');
+    try {
+        for (const item of EMBEDDED_BUNDLE_PARITY_ITEMS) seedSurfaceItem(repoRoot, item, 'root');
+        writeFile(path.join(repoRoot, '.gitignore'), 'garda-agent-orchestrator/\n');
+        runGit(repoRoot, ['-c', 'init.defaultBranch=main', 'init']);
+        fs.symlinkSync(repoRoot, bundleRoot, process.platform === 'win32' ? 'junction' : 'dir');
+        const result = validateEmbeddedBundleParity(repoRoot);
+        assert.equal(result.status, 'FAILED');
+        assert.equal(result.passed, false);
+        assert.equal(result.items.length, 0);
+        assert.match(result.violations.join('\n'), /Invalid embedded bundle boundary.*symlink or junction/);
+        const command = runParityCommand(repoRoot, true);
+        assert.equal(command.status, 1, command.stderr || command.stdout);
+        assert.match(command.stdout, /RELEASE_EMBEDDED_BUNDLE_PARITY_FAILED/);
+        assert.doesNotMatch(command.stdout, /RELEASE_EMBEDDED_BUNDLE_PARITY_OK/);
+    } finally {
+        if (fs.existsSync(bundleRoot)) fs.unlinkSync(bundleRoot);
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+for (const surface of ['root', 'bundle'] as const) {
+    test(`mandatory parity rejects a linked document ancestor on the ${surface} surface`, () => {
+        const repoRoot = createParityFixture();
+        try {
+            const surfaceRoot = surface === 'root' ? repoRoot : path.join(repoRoot, 'garda-agent-orchestrator');
+            const docs = path.join(surfaceRoot, 'docs');
+            const savedDocs = path.join(surfaceRoot, 'saved-docs');
+            fs.renameSync(docs, savedDocs);
+            fs.symlinkSync(savedDocs, docs, process.platform === 'win32' ? 'junction' : 'dir');
+            const result = validateEmbeddedBundleParity(repoRoot);
+            assert.equal(result.status, 'FAILED');
+            assert.equal(result.passed, false);
+            assert.match(result.violations.join('\n'), /symlink or junction/);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+}
+
+test('mandatory parity rejects a shared hard-linked file', () => {
+    const repoRoot = createParityFixture();
+    try {
+        const bundleReadme = path.join(repoRoot, 'garda-agent-orchestrator', 'README.md');
+        fs.unlinkSync(bundleReadme);
+        fs.linkSync(path.join(repoRoot, 'README.md'), bundleReadme);
+        const result = validateEmbeddedBundleParity(repoRoot);
+        assert.equal(result.status, 'FAILED');
+        assert.equal(result.passed, false);
+        assert.match(result.violations.join('\n'), /hard-linked/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('mandatory parity revalidates bundle identity after Git inspection', (context) => {
+    const repoRoot = createParityFixture();
+    const bundleRoot = path.join(repoRoot, 'garda-agent-orchestrator');
+    let replaced = false;
+    try {
+        const nativeChildProcess = require('node:child_process') as typeof childProcess;
+        const originalSpawn = nativeChildProcess.spawnSync;
+        context.mock.method(nativeChildProcess, 'spawnSync', (...args: Parameters<typeof childProcess.spawnSync>) => {
+            const result = originalSpawn(...args);
+            if (!replaced && args[0] === 'git') {
+                fs.renameSync(bundleRoot, path.join(repoRoot, 'prior-bundle'));
+                fs.symlinkSync(repoRoot, bundleRoot, process.platform === 'win32' ? 'junction' : 'dir');
+                replaced = true;
+            }
+            return result;
+        });
+        const result = validateEmbeddedBundleParity(repoRoot);
+        assert.equal(replaced, true);
+        assert.equal(result.status, 'FAILED');
+        assert.equal(result.passed, false);
+        assert.equal(result.items.length, 0);
+    } finally {
+        if (replaced) fs.unlinkSync(bundleRoot);
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
 });
