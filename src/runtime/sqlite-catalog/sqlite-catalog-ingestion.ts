@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { lstatFileIdentitySync } from '../../core/file-stat';
 import { joinOrchestratorPath } from '../../core/orchestrator-paths';
 import { isCanonicalTaskId, parseTaskIdJsonlFileName } from '../../core/task-ids';
 import { parseCanonicalActiveTaskQueue } from '../../core/task-md-table';
@@ -160,12 +161,7 @@ function assertRealParentDirectories(repoRoot: string, fullPath: string, sourceP
 }
 
 function sameFileIdentity(left: fs.Stats, right: fs.Stats): boolean {
-    // Node 22 on Windows can report dev=0 from lstat while fstat returns the
-    // volume device id for the same file. Keep inode and creation-time checks
-    // authoritative when only that platform-specific device value is absent.
-    const sameDevice = left.dev === right.dev
-        || (process.platform === 'win32' && (left.dev === 0 || right.dev === 0));
-    return sameDevice
+    return left.dev === right.dev
         && left.ino === right.ino
         && left.birthtimeMs === right.birthtimeMs;
 }
@@ -188,7 +184,7 @@ function readContainedRegularFile(
     let initialStat: fs.Stats;
     let initialRealPath: string;
     try {
-        initialStat = fs.lstatSync(fullPath);
+        initialStat = lstatFileIdentitySync(fullPath);
         initialRealPath = fs.realpathSync.native(fullPath);
     } catch {
         throw new CanonicalCatalogInputError(sourcePath, 'canonical source is missing.');
@@ -226,11 +222,13 @@ function readContainedRegularFile(
         }
         const content = fs.readFileSync(descriptor);
         const finalStat = fs.fstatSync(descriptor);
+        const finalPathStat = lstatFileIdentitySync(fullPath);
         const finalRealPath = fs.realpathSync.native(fullPath);
         assertResolvedPathInsideWorkspace(workspaceRealPath, finalRealPath, sourcePath);
         if (
             finalRealPath !== openedRealPath
             || !sameFileContentMetadata(openedStat, finalStat)
+            || !sameFileContentMetadata(finalStat, finalPathStat)
             || finalStat.size !== content.byteLength
         ) {
             throw new CanonicalCatalogInputError(sourcePath, 'canonical source changed while it was being read.');
@@ -808,7 +806,7 @@ function listRegularFiles(
     const sourcePath = portableRelativePath(repoRoot, directory);
     let initialStat: fs.Stats;
     try {
-        initialStat = fs.lstatSync(directory);
+        initialStat = lstatFileIdentitySync(directory);
     } catch (error: unknown) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
         throw error;
@@ -836,7 +834,7 @@ function listRegularFiles(
         const files = matchingEntries
             .map((entry) => path.join(directory, entry.name))
             .sort((left, right) => path.basename(left).localeCompare(path.basename(right)));
-        const finalStat = fs.lstatSync(directory);
+        const finalStat = lstatFileIdentitySync(directory);
         const finalRealPath = fs.realpathSync.native(directory);
         assertResolvedPathInsideWorkspace(workspaceRealPath, finalRealPath, sourcePath);
         if (

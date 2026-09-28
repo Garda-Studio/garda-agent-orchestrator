@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { joinOrchestratorPath } from '../../core/orchestrator-paths';
+import { lstatFileIdentitySync } from '../../core/file-stat';
 import { isPathRealpathInsideRoot } from '../../core/paths';
 import {
     PROJECT_MEMORY_FILE_DEFINITIONS,
@@ -202,7 +203,7 @@ function readSafeMemoryFile(
     try {
         assertCanonicalMemoryRoot(orchestratorRoot, memoryRoot);
         const openedStat = fs.fstatSync(fileDescriptor);
-        const pathStat = fs.lstatSync(filePath);
+        const pathStat = lstatFileIdentitySync(filePath);
         if (!openedStat.isFile() || !pathStat.isFile() || pathStat.isSymbolicLink()) {
             throw new ProjectMemorySourceError(
                 sourcePath,
@@ -233,7 +234,7 @@ function readSafeMemoryFile(
         }
         const content = readBoundedMemoryFile(fileDescriptor, sourcePath);
         const finalOpenedStat = fs.fstatSync(fileDescriptor);
-        const finalPathStat = fs.lstatSync(filePath);
+        const finalPathStat = lstatFileIdentitySync(filePath);
         if (
             !finalOpenedStat.isFile()
             || !finalPathStat.isFile()
@@ -499,7 +500,7 @@ function currentSourceFingerprintsKey(repoRoot: string): string {
             const filePath = path.resolve(memoryRoot, definition.fileName);
             let stat: fs.Stats;
             try {
-                stat = fs.lstatSync(filePath);
+                stat = lstatFileIdentitySync(filePath);
             } catch {
                 throw new ProjectMemorySourceError(
                     sourcePath,

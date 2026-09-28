@@ -149,6 +149,7 @@ function buildScriptsInputFingerprint(repoRoot) {
         'tsconfig.json',
         'tsconfig.scripts.json',
         'src/bin',
+        'src/core/file-stat.ts',
         'src/core/node-foundation-test-shard-markers.ts',
         'scripts/node-foundation'
     ]).map((filePath) => {

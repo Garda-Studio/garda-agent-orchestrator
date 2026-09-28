@@ -129,3 +129,52 @@ test('reconstructs directory identity from live descriptors', () => {
         }
     });
 });
+
+test('keeps directory identity stable when unrelated children change during inspection', () => {
+    withMissingWindowsPathDevice(file => {
+        const directory = path.dirname(file);
+        const originalFstat = mutableFs.fstatSync;
+        let injected = false;
+        mutableFs.fstatSync = ((...args: Parameters<typeof fs.fstatSync>) => {
+            const stat = Reflect.apply(originalFstat, mutableFs, args);
+            if (!injected && stat.isDirectory()) {
+                injected = true;
+                fs.mkdirSync(path.join(directory, 'unrelated-child'));
+                fs.utimesSync(directory, stat.atime, new Date(Number(stat.mtimeMs) + 2_000));
+            }
+            return stat;
+        }) as typeof fs.fstatSync;
+        try {
+            const identity = lstatFileIdentitySync(directory);
+            assert.equal(injected, true);
+            const descriptor = fs.openSync(directory, fs.constants.O_RDONLY);
+            try {
+                assert.deepEqual(identity, originalFstat(descriptor));
+            } finally {
+                fs.closeSync(descriptor);
+            }
+        } finally {
+            mutableFs.fstatSync = originalFstat;
+        }
+    });
+});
+
+for (const field of ['dev', 'ino', 'mode', 'uid', 'gid', 'rdev', 'birthtimeMs'] as const) {
+    test(`rejects changed directory ${field} while allowing child metadata changes`, () => {
+        withMissingWindowsPathDevice(file => {
+            const originalFstat = mutableFs.fstatSync;
+            let calls = 0;
+            mutableFs.fstatSync = ((descriptor: number) => {
+                const stat = originalFstat(descriptor);
+                calls += 1;
+                return calls === 2 ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+                    { [field]: stat[field] + Math.max(1, Math.abs(stat[field]) * Number.EPSILON * 2) }) : stat;
+            }) as typeof fs.fstatSync;
+            try {
+                assert.throws(() => lstatFileIdentitySync(path.dirname(file)), /File identity changed/u);
+            } finally {
+                mutableFs.fstatSync = originalFstat;
+            }
+        });
+    });
+}

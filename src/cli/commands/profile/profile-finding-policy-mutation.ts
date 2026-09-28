@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { lstatFileIdentitySync } from '../../../core/file-stat';
 
 import {
     parseOperatorConfirmationYes,
@@ -182,7 +183,7 @@ function assertOpenedAuditIdentity(
     ownership?: ProfileBundleRootOwnership
 ): void {
     const openedIdentity = fs.fstatSync(fd);
-    const pathIdentity = fs.lstatSync(auditPath);
+    const pathIdentity = lstatFileIdentitySync(auditPath);
     if (!openedIdentity.isFile() || !pathIdentity.isFile() || pathIdentity.isSymbolicLink()) {
         throw new Error('Profile policy audit must be a regular file.');
     }

@@ -19,6 +19,12 @@ import {
     runProfileFindingPolicyCommand
 } from '../../../../src/cli/commands/profile';
 import type { ProfileEntry } from '../../../../src/cli/commands/profile/profile-types';
+import {
+    assertProfileBundleRootOwnership,
+    profileFileIdentityMatches,
+    readProfilesData,
+    withProfilesDataLock
+} from '../../../../src/cli/commands/profile/profile-data';
 import { handleUiProfileRequest } from '../../../../src/reports/ui/actions/profile-actions';
 import { buildHelpText } from '../../../../src/cli/commands/cli-help-output';
 import {
@@ -30,6 +36,66 @@ import {
 } from './operator-confirmation-test-helpers';
 
 const PACKAGE_JSON = { name: 'test-pkg', version: '1.0.0' };
+
+test('profile identities require an authenticated device even when inodes match', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+        assert.equal(profileFileIdentityMatches({ dev: 42, ino: 7 }, { dev: 0, ino: 7 }), false);
+        assert.equal(profileFileIdentityMatches({ dev: 42, ino: 7 }, { dev: 43, ino: 7 }), false);
+        assert.equal(profileFileIdentityMatches({ dev: 42, ino: 7 }, { dev: 42, ino: 7 }), true);
+    } finally {
+        Object.defineProperty(process, 'platform', platform);
+    }
+});
+
+for (const boundary of ['config', 'lock', 'ownership'] as const) {
+    test(`profile ${boundary} reconstructs missing devices and rejects a different-device descriptor`, () => {
+        const bundleRoot = createTempBundleWithProfiles();
+        const profilesPath = path.join(bundleRoot, 'live', 'config', 'profiles.json');
+        const target = boundary === 'config' ? profilesPath : boundary === 'lock' ? `${profilesPath}.garda-write.lock` : bundleRoot;
+        const mutableFs = require('node:fs') as { -readonly [Key in keyof typeof fs]: typeof fs[Key] };
+        const originalLstat = mutableFs.lstatSync;
+        const originalOpen = mutableFs.openSync;
+        const originalFstat = mutableFs.fstatSync;
+        const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+        let firstTargetFd: number | undefined;
+        let substitute = false;
+        mutableFs.lstatSync = ((...args: Parameters<typeof fs.lstatSync>) => {
+            const stat = Reflect.apply(originalLstat, mutableFs, args);
+            return stat ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+                { dev: typeof stat.dev === 'bigint' ? 0n : 0 }) : stat;
+        }) as typeof fs.lstatSync;
+        mutableFs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+            const fd = Reflect.apply(originalOpen, mutableFs, args);
+            if (String(args[0]) === target && firstTargetFd === undefined) firstTargetFd = fd;
+            return fd;
+        }) as typeof fs.openSync;
+        mutableFs.fstatSync = ((...args: Parameters<typeof fs.fstatSync>) => {
+            const stat = Reflect.apply(originalFstat, mutableFs, args);
+            return substitute && args[0] === firstTargetFd
+                ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+                    { dev: typeof stat.dev === 'bigint' ? stat.dev + 1n : stat.dev + 1 }) : stat;
+        }) as typeof fs.fstatSync;
+        Object.defineProperty(process, 'platform', { value: 'win32' });
+        const operation = () => boundary === 'ownership'
+            ? assertProfileBundleRootOwnership(path.dirname(bundleRoot), bundleRoot)
+            : boundary === 'lock' ? withProfilesDataLock(profilesPath, () => readProfilesData(profilesPath))
+                : readProfilesData(profilesPath);
+        try {
+            assert.ok(operation());
+            firstTargetFd = undefined;
+            substitute = true;
+            assert.throws(operation, /identity|changed|Could not acquire/iu);
+        } finally {
+            mutableFs.lstatSync = originalLstat;
+            mutableFs.openSync = originalOpen;
+            mutableFs.fstatSync = originalFstat;
+            Object.defineProperty(process, 'platform', platform);
+            fs.rmSync(bundleRoot, { recursive: true, force: true });
+        }
+    });
+}
 
 function createTempBundleWithProfiles(profiles?: Record<string, unknown>): string {
     const bundleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-profile-'));
@@ -2183,30 +2249,42 @@ test('profiles lock release never removes a replacement cleanup guard', () => {
     const bundleRoot = createTempBundleWithProfiles();
     const profilesPath = path.join(bundleRoot, 'live', 'config', 'profiles.json');
     const cleanupPath = `${profilesPath}.garda-write.lock.dead-owner-cleanup`;
+    const releasedOriginalPath = `${cleanupPath}.released-original`;
     const fsModule = require('node:fs');
-    const originalLstatSync = fsModule.lstatSync;
-    let cleanupLstatCalls = 0;
-    fsModule.lstatSync = (targetPath: fs.PathLike) => {
-        if (path.resolve(String(targetPath)) === path.resolve(cleanupPath)) {
-            cleanupLstatCalls += 1;
-            if (cleanupLstatCalls === 2) {
-                fs.unlinkSync(cleanupPath);
-                fs.writeFileSync(cleanupPath, JSON.stringify({ replacement: true }), 'utf8');
-            }
+    const originalOpenSync = fsModule.openSync;
+    const originalCloseSync = fsModule.closeSync;
+    let cleanupOwnerFd: number | undefined;
+    let replacementInjected = false;
+    fsModule.openSync = (...args: Parameters<typeof fs.openSync>) => {
+        const fd = originalOpenSync(...args);
+        if (path.resolve(String(args[0])) === path.resolve(cleanupPath)
+            && typeof args[1] === 'number' && (args[1] & fs.constants.O_CREAT) !== 0) {
+            cleanupOwnerFd = fd;
         }
-        return originalLstatSync(targetPath);
+        return fd;
+    };
+    fsModule.closeSync = (fd: number) => {
+        originalCloseSync(fd);
+        if (!replacementInjected && fd === cleanupOwnerFd) {
+            fs.renameSync(cleanupPath, releasedOriginalPath);
+            fs.writeFileSync(cleanupPath, JSON.stringify({ replacement: true }), 'utf8');
+            replacementInjected = true;
+        }
     };
     try {
         assert.throws(
             () => handleProfile(['use', 'fast', '--bundle-root', bundleRoot], PACKAGE_JSON),
             /cleanup lock path changed|release profiles config lock/iu
         );
+        assert.equal(replacementInjected, true);
         assert.equal(JSON.parse(fs.readFileSync(cleanupPath, 'utf8')).replacement, true);
         assert.equal(JSON.parse(fs.readFileSync(profilesPath, 'utf8')).active_profile, 'fast');
     } finally {
-        fsModule.lstatSync = originalLstatSync;
+        fsModule.openSync = originalOpenSync;
+        fsModule.closeSync = originalCloseSync;
         fs.rmSync(`${profilesPath}.garda-write.lock`, { force: true });
         fs.rmSync(cleanupPath, { force: true });
+        fs.rmSync(releasedOriginalPath, { force: true });
     }
 });
 

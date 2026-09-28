@@ -40,6 +40,60 @@ const sqliteCatalogTest = SQLITE_CATALOG_CAPABILITY.available ? test : test.skip
 const childProcessModule = require('node:child_process') as typeof import('node:child_process');
 const originalSpawnSync = childProcessModule.spawnSync;
 
+sqliteCatalogTest('catalog ingestion reconstructs missing devices and rejects a different-device source descriptor', () => {
+    const workspaceRoot = createWorkspace('gao-catalog-device-');
+    const target = path.join(workspaceRoot, 'TASK.md');
+    const catalog = openDerivedSqliteCatalog(workspaceRoot);
+    assert.ok(catalog.status === 'available');
+    const mutableFs = fsModule as { -readonly [Key in keyof typeof fsModule]: typeof fsModule[Key] };
+    const originalLstat = mutableFs.lstatSync;
+    const originalOpen = mutableFs.openSync;
+    const originalFstat = mutableFs.fstatSync;
+    const originalClose = mutableFs.closeSync;
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    let firstTargetFd: number | undefined;
+    const liveTargetFds = new Set<number>();
+    let substitute = false;
+    mutableFs.lstatSync = ((...args: Parameters<typeof fs.lstatSync>) => {
+        const stat = Reflect.apply(originalLstat, mutableFs, args);
+        return stat ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+            { dev: typeof stat.dev === 'bigint' ? 0n : 0 }) : stat;
+    }) as typeof fs.lstatSync;
+    mutableFs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+        const fd = Reflect.apply(originalOpen, mutableFs, args);
+        if (String(args[0]) === target) {
+            liveTargetFds.add(fd);
+            if (firstTargetFd === undefined) firstTargetFd = fd;
+        }
+        return fd;
+    }) as typeof fs.openSync;
+    mutableFs.fstatSync = ((...args: Parameters<typeof fs.fstatSync>) => {
+        const stat = Reflect.apply(originalFstat, mutableFs, args);
+        return substitute && args[0] === firstTargetFd && liveTargetFds.has(args[0])
+            ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+                { dev: typeof stat.dev === 'bigint' ? stat.dev + 1n : stat.dev + 1 }) : stat;
+    }) as typeof fs.fstatSync;
+    mutableFs.closeSync = (fd: number) => {
+        liveTargetFds.delete(fd);
+        originalClose(fd);
+    };
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+        assert.ok(buildCanonicalCatalogProjection(workspaceRoot).sourceFingerprints.some(source => source.sourcePath === 'TASK.md'));
+        firstTargetFd = undefined;
+        substitute = true;
+        assert.throws(() => buildCanonicalCatalogProjection(workspaceRoot), CanonicalCatalogInputError);
+    } finally {
+        mutableFs.lstatSync = originalLstat;
+        mutableFs.openSync = originalOpen;
+        mutableFs.fstatSync = originalFstat;
+        mutableFs.closeSync = originalClose;
+        Object.defineProperty(process, 'platform', platform);
+        catalog.catalog.close();
+        fs.rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+});
+
 test.before(() => {
     if (process.platform !== 'win32') return;
     childProcessModule.spawnSync = ((command: string, args: string[], options: unknown) => {

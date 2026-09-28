@@ -3,14 +3,19 @@ import * as fs from 'node:fs';
 type FileStat = fs.Stats | fs.BigIntStats;
 
 function sameMetadata(left: FileStat, right: FileStat): boolean {
-    return left.ino === right.ino
+    const sameNode = left.ino === right.ino
         && left.mode === right.mode
-        && left.nlink === right.nlink
         && left.uid === right.uid
         && left.gid === right.gid
         && left.rdev === right.rdev
-        && left.size === right.size
         && left.birthtimeMs === right.birthtimeMs
+        && (!('birthtimeNs' in left && 'birthtimeNs' in right) || left.birthtimeNs === right.birthtimeNs);
+    if (!sameNode) return false;
+    // Directory children can change independently. Authenticate the directory
+    // node and permissions; callers retain their own captured metadata checks.
+    if (left.isDirectory() && right.isDirectory()) return true;
+    return left.nlink === right.nlink
+        && left.size === right.size
         && ('mtimeNs' in left && 'mtimeNs' in right
             ? left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs
                 && left.birthtimeNs === right.birthtimeNs

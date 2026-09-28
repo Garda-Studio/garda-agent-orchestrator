@@ -52,6 +52,17 @@ interface TimelineReadMetrics {
 
 interface TimelineReadProbe {
     metrics: TimelineReadMetrics;
+    identityCompatibility: {
+        calls: number;
+        opens: number;
+        closes: number;
+        lstat: number;
+        stat: number;
+        fstat: number;
+        realpath: number;
+        payloadReads: number;
+        maxLiveDescriptors: number;
+    };
     withoutRecording: <T>(callback: () => T) => T;
     restore: () => void;
 }
@@ -158,6 +169,14 @@ function installTimelineReadProbe(timelinePath: string): TimelineReadProbe {
     const originalReadFileSync = fsModule.readFileSync;
     const trackedDescriptors = new Set<number>();
     const allTimelineDescriptors = new Set<number>();
+    const compatibilityDescriptors = new Set<number>();
+    const identityFs = require('../../../src/core/file-stat') as typeof import('../../../src/core/file-stat');
+    const originalIdentityLstat = identityFs.lstatFileIdentitySync;
+    const originalIdentityStat = identityFs.statFileIdentitySync;
+    const originalIdentityComplete = identityFs.completePathFileIdentitySync;
+    let identityScope: { originalPathStatAllowance: number; opens: number } | null = null;
+    const identityCompatibility = { calls: 0, opens: 0, closes: 0, lstat: 0, stat: 0,
+        fstat: 0, realpath: 0, payloadReads: 0, maxLiveDescriptors: 0 };
     const resolvedTimelinePath = path.resolve(timelinePath);
     const resolvedEventsRoot = path.dirname(resolvedTimelinePath);
     let recording = true;
@@ -188,9 +207,33 @@ function installTimelineReadProbe(timelinePath: string): TimelineReadProbe {
         }
     };
 
+    const traceIdentity = (allowance: number, callback: () => unknown): unknown => {
+        const previous = identityScope;
+        identityScope = { originalPathStatAllowance: allowance, opens: 0 };
+        try {
+            return callback();
+        } finally {
+            identityScope = previous;
+        }
+    };
+    identityFs.lstatFileIdentitySync = ((...args: unknown[]) =>
+        traceIdentity(1, () => Reflect.apply(originalIdentityLstat, identityFs, args))) as typeof originalIdentityLstat;
+    identityFs.statFileIdentitySync = ((...args: unknown[]) =>
+        traceIdentity(1, () => Reflect.apply(originalIdentityStat, identityFs, args))) as typeof originalIdentityStat;
+    identityFs.completePathFileIdentitySync = ((...args: unknown[]) =>
+        traceIdentity(0, () => Reflect.apply(originalIdentityComplete, identityFs, args))) as typeof originalIdentityComplete;
+
     fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
         const fileDescriptor = originalOpenSync(targetPath, flags, mode);
-        if (path.resolve(String(targetPath)) === resolvedTimelinePath) {
+        if (recording && identityScope && isTrackedPath(targetPath)) {
+            if (identityScope.opens === 0) identityCompatibility.calls += 1;
+            identityScope.opens += 1;
+            identityCompatibility.opens += 1;
+            compatibilityDescriptors.add(fileDescriptor);
+            identityCompatibility.maxLiveDescriptors = Math.max(
+                identityCompatibility.maxLiveDescriptors, compatibilityDescriptors.size
+            );
+        } else if (path.resolve(String(targetPath)) === resolvedTimelinePath) {
             allTimelineDescriptors.add(fileDescriptor);
             if (recording && flags === 'r') {
                 metrics.descriptorOpenCount += 1;
@@ -207,6 +250,7 @@ function installTimelineReadProbe(timelinePath: string): TimelineReadProbe {
         position: number | null
     ) => {
         const bytesRead = originalReadSync(fileDescriptor, buffer, offset, length, position);
+        if (recording && compatibilityDescriptors.has(fileDescriptor)) identityCompatibility.payloadReads += 1;
         if (recording && trackedDescriptors.has(fileDescriptor)) {
             metrics.readCallCount += 1;
             metrics.requestedBytes += length;
@@ -219,26 +263,43 @@ function installTimelineReadProbe(timelinePath: string): TimelineReadProbe {
         try {
             originalCloseSync(fileDescriptor);
         } finally {
+            if (compatibilityDescriptors.delete(fileDescriptor)) identityCompatibility.closes += 1;
             trackedDescriptors.delete(fileDescriptor);
             allTimelineDescriptors.delete(fileDescriptor);
         }
     }) as typeof fsModule.closeSync;
     mutableStatFs.lstatSync = ((...args: unknown[]) => {
-        if (recording && isTrackedPath(args[0])) metrics.pathLstatCount += 1;
+        if (recording && isTrackedPath(args[0])) {
+            if (identityScope && identityScope.originalPathStatAllowance === 0) identityCompatibility.lstat += 1;
+            else {
+                metrics.pathLstatCount += 1;
+                if (identityScope) identityScope.originalPathStatAllowance -= 1;
+            }
+        }
         return Reflect.apply(originalLstatSync, fsModule, args);
     }) as typeof fsModule.lstatSync;
     mutableStatFs.statSync = ((...args: unknown[]) => {
-        if (recording && isTrackedPath(args[0])) metrics.pathStatCount += 1;
+        if (recording && isTrackedPath(args[0])) {
+            if (identityScope && identityScope.originalPathStatAllowance === 0) identityCompatibility.stat += 1;
+            else {
+                metrics.pathStatCount += 1;
+                if (identityScope) identityScope.originalPathStatAllowance -= 1;
+            }
+        }
         return Reflect.apply(originalStatSync, fsModule, args);
     }) as typeof fsModule.statSync;
     fsModule.fstatSync = ((...args: unknown[]) => {
-        if (recording && allTimelineDescriptors.has(args[0] as number)) {
+        if (recording && compatibilityDescriptors.has(args[0] as number)) identityCompatibility.fstat += 1;
+        else if (recording && allTimelineDescriptors.has(args[0] as number)) {
             metrics.descriptorStatCount += 1;
         }
         return Reflect.apply(originalFstatSync, fsModule, args);
     }) as typeof fsModule.fstatSync;
     fsModule.realpathSync.native = ((...args: unknown[]) => {
-        if (recording && isTrackedPath(args[0])) metrics.pathRealpathCount += 1;
+        if (recording && isTrackedPath(args[0])) {
+            if (identityScope) identityCompatibility.realpath += 1;
+            else metrics.pathRealpathCount += 1;
+        }
         return Reflect.apply(originalRealpathSyncNative, fsModule.realpathSync, args);
     }) as typeof fsModule.realpathSync.native;
     fsModule.existsSync = ((targetPath: fs.PathLike) => {
@@ -268,6 +329,7 @@ function installTimelineReadProbe(timelinePath: string): TimelineReadProbe {
 
     return {
         metrics,
+        identityCompatibility,
         withoutRecording: <T>(callback: () => T): T => {
             const previousRecording = recording;
             recording = false;
@@ -278,6 +340,9 @@ function installTimelineReadProbe(timelinePath: string): TimelineReadProbe {
             }
         },
         restore: () => {
+            identityFs.lstatFileIdentitySync = originalIdentityLstat;
+            identityFs.statFileIdentitySync = originalIdentityStat;
+            identityFs.completePathFileIdentitySync = originalIdentityComplete;
             fsModule.openSync = originalOpenSync;
             fsModule.readSync = originalReadSync;
             fsModule.closeSync = originalCloseSync;
@@ -452,6 +517,18 @@ function recordScenarioMeasurements(
         retainedPayloadBytes?: number;
     }
 ): void {
+    // Preserve the exact snapshot algorithm counts and every latency, payload,
+    // allocation and heap budget. Account for mandatory device reconstruction
+    // separately, then report the sum as physical I/O instead of hiding its cost.
+    const compatibility = probes.io.identityCompatibility;
+    assert.equal(compatibility.opens, compatibility.calls * 2);
+    assert.equal(compatibility.closes, compatibility.opens);
+    assert.equal(compatibility.fstat, compatibility.calls * 3);
+    assert.equal(compatibility.realpath, compatibility.calls * 2);
+    assert.equal(compatibility.payloadReads, 0);
+    assert.ok(compatibility.maxLiveDescriptors <= 2);
+    assert.ok(compatibility.lstat + compatibility.stat >= compatibility.calls);
+    assert.ok(compatibility.lstat + compatibility.stat <= compatibility.calls * 2);
     const latency = assertStableScenarioLatency(latencySamplesMs);
     context.diagnostic(`TIMELINE_ACCEPTANCE_MEASUREMENTS ${JSON.stringify({
         schema_version: 1,
@@ -466,7 +543,16 @@ function recordScenarioMeasurements(
         p95_ms: Number(latency.p95Ms.toFixed(3)),
         max_ms: Number(Math.max(...latencySamplesMs).toFixed(3)),
         io_scope: 'canonical_timeline_and_events_root',
-        physical_io: { ...probes.io.metrics },
+        snapshot_io: { ...probes.io.metrics },
+        identity_compatibility_io: { ...compatibility },
+        physical_io: {
+            ...probes.io.metrics,
+            descriptorOpenCount: probes.io.metrics.descriptorOpenCount + compatibility.opens,
+            pathLstatCount: probes.io.metrics.pathLstatCount + compatibility.lstat,
+            pathStatCount: probes.io.metrics.pathStatCount + compatibility.stat,
+            descriptorStatCount: probes.io.metrics.descriptorStatCount + compatibility.fstat,
+            pathRealpathCount: probes.io.metrics.pathRealpathCount + compatibility.realpath
+        },
         buffer_metrics: {
             full_payload_allocations: probes.allocation.fullPayloadAllocationCount(),
             full_payload_concats: probes.allocation.fullPayloadConcatCount(),

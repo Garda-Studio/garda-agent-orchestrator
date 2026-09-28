@@ -660,6 +660,34 @@ test('build-scripts wrapper reuses current compiled wrapper build by fingerprint
     }
 });
 
+test('build-scripts cache invalidates when the archive file-stat dependency changes', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-scripts-dependency-'));
+    const buildRoot = path.join(tempRoot, '.scripts-build');
+    const compiledEntryPath = path.join(buildRoot, 'scripts', 'node-foundation', 'test.js');
+    const dependencyPath = path.join(tempRoot, 'src', 'core', 'file-stat.ts');
+
+    try {
+        writeTextFile(dependencyPath, 'export const identity = 1;\n');
+        writeTextFile(compiledEntryPath, 'void 0;\n');
+        writeTextFile(path.join(buildRoot, 'src', 'bin', 'garda.js'), 'void 0;\n');
+        writeTextFile(path.join(buildRoot, 'scripts', 'node-foundation', 'build-root-lock.cjs'), 'module.exports = {};\n');
+        const before = buildScriptsWrapper.buildScriptsInputFingerprint(tempRoot);
+        writeTextFile(path.join(buildRoot, 'scripts-build-fingerprint.json'), JSON.stringify(before));
+        assert.equal(buildScriptsWrapper.getScriptsBuildReuseStatus(
+            tempRoot, buildRoot, compiledEntryPath, before
+        ).accepted, true);
+
+        writeTextFile(dependencyPath, 'export const identity = 2;\n');
+        const after = buildScriptsWrapper.buildScriptsInputFingerprint(tempRoot);
+        assert.notEqual(after.sha256, before.sha256);
+        assert.deepEqual(buildScriptsWrapper.getScriptsBuildReuseStatus(
+            tempRoot, buildRoot, compiledEntryPath, after
+        ), { accepted: false, reason: 'input_fingerprint_mismatch' });
+    } finally {
+        removeTempTree(tempRoot);
+    }
+});
+
 test('build-scripts prebuilt test entry still requires a current fingerprint', () => {
     const repoRoot = getRepoRoot();
     const tempRoot = createBuildScriptsFixture(repoRoot);

@@ -75,6 +75,37 @@ function createArchiveFixture(): string {
     return repoRoot;
 }
 
+test('archive plans reconstruct missing Windows path devices before descriptor authentication', () => {
+    const repoRoot = createArchiveFixture();
+    const mutableFs = require('node:fs') as { -readonly [Key in keyof typeof fs]: typeof fs[Key] };
+    const original = mutableFs.lstatSync;
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    mutableFs.lstatSync = ((...args: Parameters<typeof fs.lstatSync>) => {
+        const stat = Reflect.apply(original, mutableFs, args);
+        return stat?.isFile() ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { dev: 0 }) : stat;
+    }) as typeof fs.lstatSync;
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+        const plan = buildReleaseArchivePlan('source', repoRoot);
+        const entry = plan.entries.find(candidate => candidate.relativePath === 'docs/run-methods.md');
+        assert.ok(entry);
+        const descriptor = fs.openSync(path.join(repoRoot, entry.relativePath), 'r');
+        try {
+            assert.equal(entry.identity.dev, fs.fstatSync(descriptor).dev);
+        } finally {
+            fs.closeSync(descriptor);
+        }
+        const aliasedOutput = path.join(repoRoot, 'release-archives', 'aliased-output.tar');
+        fs.mkdirSync(path.dirname(aliasedOutput), { recursive: true });
+        fs.linkSync(path.join(repoRoot, entry.relativePath), aliasedOutput);
+        assert.throws(() => buildReleaseArchivePlan('source', repoRoot, aliasedOutput), /Archive output overlaps selected input/u);
+    } finally {
+        mutableFs.lstatSync = original;
+        Object.defineProperty(process, 'platform', platform);
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
 test('source release archive plan is tracked-source only and excludes generated runtime noise', () => {
     const repoRoot = createArchiveFixture();
     try {

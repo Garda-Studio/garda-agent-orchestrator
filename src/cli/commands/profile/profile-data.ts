@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { resolveBundleName } from '../../../core/constants';
+import { lstatFileIdentitySync } from '../../../core/file-stat';
 import { validateProfilesConfig } from '../../../schemas/config-artifacts';
 import { writeTextFileAtomically } from '../../../core/filesystem';
 import { normalizePathValue } from '../cli-helpers';
@@ -37,12 +38,7 @@ export function profileFileIdentityMatches(
     left: ProfileDirectoryIdentity,
     right: ProfileDirectoryIdentity
 ): boolean {
-    // Node 22 on Windows can report dev=0 from lstat while fstat returns the
-    // volume device id for the same file. The inode still provides the stable
-    // identity needed by the guarded open/claim paths.
-    const deviceMatches = left.dev === right.dev
-        || (process.platform === 'win32' && (left.dev === 0 || right.dev === 0));
-    return deviceMatches && left.ino === right.ino;
+    return left.dev === right.dev && left.ino === right.ino;
 }
 
 export interface ProfileBundleRootOwnership {
@@ -94,7 +90,7 @@ function pathsAreEquivalent(left: string, right: string): boolean {
 }
 
 function readRealDirectoryIdentity(directoryPath: string, label: string): ProfileDirectoryIdentity {
-    const identity = fs.lstatSync(directoryPath);
+    const identity = lstatFileIdentitySync(directoryPath);
     if (!identity.isDirectory() || identity.isSymbolicLink()) {
         throw new Error(`${label} must be a real directory.`);
     }
@@ -238,7 +234,7 @@ function assertCurrentProfilesConfigState(
 ): ProfileDirectoryIdentity {
     assertProfilesDirectoryBoundary(profilesPath, ownership);
     const openedIdentity = fs.fstatSync(profilesFd);
-    const pathIdentity = fs.lstatSync(profilesPath);
+    const pathIdentity = lstatFileIdentitySync(profilesPath);
     if (
         !openedIdentity.isFile()
         || !pathIdentity.isFile()
@@ -294,7 +290,7 @@ function restoreClaimedProfilesConfig(
     profilesPath: string,
     claimedIdentity: fs.Stats
 ): void {
-    const currentClaimedIdentity = fs.lstatSync(claimedPath);
+    const currentClaimedIdentity = lstatFileIdentitySync(claimedPath);
     if (
         !currentClaimedIdentity.isFile()
         || currentClaimedIdentity.isSymbolicLink()
@@ -303,7 +299,7 @@ function restoreClaimedProfilesConfig(
         throw new Error('Claimed profiles config changed before it could be restored.');
     }
     fs.linkSync(claimedPath, profilesPath);
-    const restoredIdentity = fs.lstatSync(profilesPath);
+    const restoredIdentity = lstatFileIdentitySync(profilesPath);
     if (!profileFileIdentityMatches(restoredIdentity, claimedIdentity)) {
         throw new Error('Claimed profiles config could not be restored safely.');
     }
@@ -353,8 +349,8 @@ function resolveRecoverableLinkedProfilesRead(profilesPath: string): ReadablePro
     if (claims.length !== 1) {
         throw new Error('Linked profiles config requires exactly one authenticated pending claim for recovery.');
     }
-    const currentIdentity = fs.lstatSync(profilesPath);
-    const claimIdentity = fs.lstatSync(claims[0].path);
+    const currentIdentity = lstatFileIdentitySync(profilesPath);
+    const claimIdentity = lstatFileIdentitySync(claims[0].path);
     const restorationPending = profileFileIdentityMatches(currentIdentity, claimIdentity);
     return {
         path: profilesPath,
@@ -372,7 +368,7 @@ function removePublishedProfilesTempLink(profilesPath: string, publishedIdentity
         .map((entry) => path.join(directoryPath, entry))
         .filter((candidatePath) => {
             try {
-                const identity = fs.lstatSync(candidatePath);
+                const identity = lstatFileIdentitySync(candidatePath);
                 return identity.isFile()
                     && !identity.isSymbolicLink()
                     && profileFileIdentityMatches(identity, publishedIdentity);
@@ -387,7 +383,7 @@ function removePublishedProfilesTempLink(profilesPath: string, publishedIdentity
     if (!unlinkObservedPath(matchingPaths[0], publishedIdentity)) {
         throw new Error('Published profiles config temporary link changed before recovery cleanup.');
     }
-    const settledIdentity = fs.lstatSync(profilesPath);
+    const settledIdentity = lstatFileIdentitySync(profilesPath);
     if (
         !profileFileIdentityMatches(settledIdentity, publishedIdentity)
         || settledIdentity.nlink !== 1
@@ -501,7 +497,7 @@ function writeOwnedProfilesDataAtomically(
         fs.closeSync(profilesFd);
         profilesFd = null;
         fs.renameSync(profilesPath, claimedPath);
-        claimedIdentity = fs.lstatSync(claimedPath);
+        claimedIdentity = lstatFileIdentitySync(claimedPath);
         assertClaimedProfilesConfigState(
             claimedPath,
             expectedIdentity,
@@ -742,7 +738,7 @@ function openExistingProfilesConfig(
     allowRecoveryHardLink = false
 ): number {
     assertProfilesDirectoryBoundary(profilesPath, ownership);
-    const initialIdentity = fs.lstatSync(profilesPath);
+    const initialIdentity = lstatFileIdentitySync(profilesPath);
     if (!initialIdentity.isFile() || initialIdentity.isSymbolicLink()) {
         throw new Error('Profiles config must be a regular file inside the bundle.');
     }
@@ -752,7 +748,7 @@ function openExistingProfilesConfig(
     const profilesFd = openPathWithoutFollowing(profilesPath, fs.constants.O_RDONLY);
     try {
         const openedIdentity = fs.fstatSync(profilesFd);
-        const pathIdentity = fs.lstatSync(profilesPath);
+        const pathIdentity = lstatFileIdentitySync(profilesPath);
         if (!openedIdentity.isFile() || !pathIdentity.isFile() || pathIdentity.isSymbolicLink()) {
             throw new Error('Profiles config must be a regular file inside the bundle.');
         }
@@ -778,7 +774,7 @@ function openExistingProfilesConfig(
 
 function assertOpenedPathIdentity(filePath: string, fd: number, expectedIdentity?: fs.Stats): fs.Stats {
     const openedIdentity = fs.fstatSync(fd);
-    const pathIdentity = fs.lstatSync(filePath);
+    const pathIdentity = lstatFileIdentitySync(filePath);
     if (!openedIdentity.isFile() || !pathIdentity.isFile() || pathIdentity.isSymbolicLink()) {
         throw new Error('Profiles config lock must be a regular file.');
     }
@@ -915,7 +911,7 @@ function claimAndUnlinkOwnedProfilesLockPath(
     observedIdentity: fs.Stats,
     expectedLockId: string
 ): boolean {
-    const currentIdentity = fs.lstatSync(lockPath);
+    const currentIdentity = lstatFileIdentitySync(lockPath);
     if (!currentIdentity.isFile() || currentIdentity.isSymbolicLink()) return false;
     if (!profileFileIdentityMatches(currentIdentity, observedIdentity)) return false;
 
@@ -1007,7 +1003,7 @@ function removeAgedMalformedLock(lockPath: string, identity: fs.Stats, minimumAg
 }
 
 function unlinkObservedPath(filePath: string, observedIdentity: fs.Stats): boolean {
-    const currentIdentity = fs.lstatSync(filePath);
+    const currentIdentity = lstatFileIdentitySync(filePath);
     if (!currentIdentity.isFile() || currentIdentity.isSymbolicLink()) return false;
     if (!profileFileIdentityMatches(currentIdentity, observedIdentity)) return false;
     fs.unlinkSync(filePath);

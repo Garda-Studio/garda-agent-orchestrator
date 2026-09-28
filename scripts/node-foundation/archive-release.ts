@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { getRepoRoot } from './build';
+import { lstatFileIdentitySync } from '../../src/core/file-stat';
 
 export type ReleaseArchiveKind = 'source' | 'evidence';
 
@@ -186,7 +187,7 @@ function hashAndScanFile(filePath: string, relativePath: string, identity: Relea
             }
         }
         assertSourceIdentity(identity, fs.fstatSync(descriptor), relativePath);
-        assertSourceIdentity(identity, fs.lstatSync(filePath), relativePath);
+        assertSourceIdentity(identity, lstatFileIdentitySync(filePath), relativePath);
         return hash.digest('hex');
     } finally {
         fs.closeSync(descriptor);
@@ -281,7 +282,7 @@ function buildEntries(repoRoot: string, relativePaths: readonly string[], kind: 
     return relativePaths.map((relativePath, index) => {
         assertSafeRelativePath(relativePath);
         const absolutePath = path.join(repoRoot, ...relativePath.split('/'));
-        const stat = fs.lstatSync(absolutePath);
+        const stat = lstatFileIdentitySync(absolutePath);
         if (!stat.isFile() && !stat.isSymbolicLink()) {
             throw new Error(`Archive entry must be a file or symlink: ${relativePath}`);
         }
@@ -299,7 +300,7 @@ function buildEntries(repoRoot: string, relativePaths: readonly string[], kind: 
         const sha256 = linkTarget === undefined
             ? hashAndScanFile(absolutePath, relativePath, identity, kind === 'evidence')
             : crypto.createHash('sha256').update(`symlink:${linkTarget}`).digest('hex');
-        assertSourceIdentity(identity, fs.lstatSync(absolutePath), relativePath);
+        assertSourceIdentity(identity, lstatFileIdentitySync(absolutePath), relativePath);
         return Object.freeze({
             relativePath,
             size,
@@ -320,7 +321,7 @@ function assertOutputSeparateFromInputs(repoRoot: string, outputPath: string, en
     const comparableOutputPath = process.platform === 'win32' ? resolvedOutputPath.toLowerCase() : resolvedOutputPath;
     let outputStat: fs.Stats | undefined;
     try {
-        outputStat = fs.lstatSync(resolvedOutputPath);
+        outputStat = lstatFileIdentitySync(resolvedOutputPath);
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
             throw error;
@@ -487,7 +488,7 @@ function writeTarEntryHeader(descriptor: number, relativePath: string, size: num
 function writePlannedEntry(outputDescriptor: number, plan: ReleaseArchivePlan, entry: ReleaseArchiveEntry): void {
     assertSafeRelativePath(entry.relativePath);
     const absolutePath = path.join(plan.repoRoot, ...entry.relativePath.split('/'));
-    const stat = fs.lstatSync(absolutePath);
+    const stat = lstatFileIdentitySync(absolutePath);
     assertSourceIdentity(entry.identity, stat, entry.relativePath);
     if (entry.type === 'symlink') {
         if (!stat.isSymbolicLink()) {
@@ -499,7 +500,7 @@ function writePlannedEntry(outputDescriptor: number, plan: ReleaseArchivePlan, e
             || crypto.createHash('sha256').update(`symlink:${linkName}`).digest('hex') !== entry.sha256) {
             throw new Error(`Archive input digest changed: ${entry.relativePath}`);
         }
-        assertSourceIdentity(entry.identity, fs.lstatSync(absolutePath), entry.relativePath);
+        assertSourceIdentity(entry.identity, lstatFileIdentitySync(absolutePath), entry.relativePath);
         writeTarEntryHeader(outputDescriptor, entry.relativePath, 0, '2', linkName);
         return;
     }
@@ -523,7 +524,7 @@ function writePlannedEntry(outputDescriptor: number, plan: ReleaseArchivePlan, e
             position += bytesRead;
         }
         assertSourceIdentity(entry.identity, fs.fstatSync(inputDescriptor), entry.relativePath);
-        assertSourceIdentity(entry.identity, fs.lstatSync(absolutePath), entry.relativePath);
+        assertSourceIdentity(entry.identity, lstatFileIdentitySync(absolutePath), entry.relativePath);
         if (hash.digest('hex') !== entry.sha256) {
             throw new Error(`Archive input digest changed: ${entry.relativePath}`);
         }

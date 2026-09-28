@@ -185,10 +185,10 @@ test('queue transaction canonicalizes its queue path once', () => {
     const original = realFs.realpathSync;
     let calls = 0;
     try {
-        realFs.realpathSync = ((...args: Parameters<typeof fs.realpathSync>) => {
+        realFs.realpathSync = Object.assign((...args: Parameters<typeof fs.realpathSync>) => {
             calls += 1;
             return original(...args);
-        }) as typeof fs.realpathSync;
+        }, { native: original.native }) as typeof fs.realpathSync;
 
         withTaskQueueTransaction(target, (message) => { throw new Error(message); }, () => undefined);
         assert.equal(calls, 1);

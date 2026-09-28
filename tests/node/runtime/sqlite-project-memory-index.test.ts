@@ -74,6 +74,89 @@ function requireCatalog(workspaceRoot: string): DerivedSqliteCatalog {
     return opened.catalog;
 }
 
+sqliteCatalogTest('project-memory refresh authenticates missing Windows source device identities', () => {
+    const workspaceRoot = createWorkspace('garda-project-memory-missing-device-');
+    const memoryRoot = path.join(workspaceRoot, 'live', 'docs', 'project-memory');
+    const statFs = mutableFs as { -readonly [Key in keyof typeof fs]: typeof fs[Key] };
+    const original = statFs.lstatSync;
+    const originalOpen = statFs.openSync;
+    const originalClose = statFs.closeSync;
+    const originalRead = statFs.readSync;
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const catalog = requireCatalog(workspaceRoot);
+    statFs.lstatSync = ((...args: Parameters<typeof fs.lstatSync>) => {
+        const stat = Reflect.apply(original, statFs, args);
+        return stat?.isFile() && String(args[0]).startsWith(memoryRoot)
+            ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { dev: 0 }) : stat;
+    }) as typeof fs.lstatSync;
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+        const result = catalog.refreshProjectMemoryIndex({ clock: () => INDEXED_AT_UTC });
+        assert.equal(result.outcome, 'applied');
+        assert.equal(result.status, 'ready');
+        assert.equal(result.sourceCount, PROJECT_MEMORY_FILE_DEFINITIONS.length);
+
+        const sourceDescriptors = new Set<number>();
+        let sourcePayloadReads = 0;
+        statFs.openSync = (filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode | null): number => {
+            const descriptor = mode === undefined
+                ? originalOpen(filePath, flags) : originalOpen(filePath, flags, mode);
+            if (path.dirname(path.resolve(String(filePath))) === path.resolve(memoryRoot)) {
+                sourceDescriptors.add(descriptor);
+            }
+            return descriptor;
+        };
+        statFs.closeSync = (descriptor: number): void => {
+            sourceDescriptors.delete(descriptor);
+            originalClose(descriptor);
+        };
+        statFs.readSync = ((...args: Parameters<typeof fs.readSync>) => {
+            if (sourceDescriptors.has(args[0])) sourcePayloadReads += 1;
+            return Reflect.apply(originalRead, statFs, args);
+        }) as typeof fs.readSync;
+
+        const firstSearch = catalog.searchProjectMemory('bounded deterministic');
+        const secondSearch = catalog.searchProjectMemory('bounded deterministic');
+        assert.equal(firstSearch.status, 'ready');
+        assert.equal(firstSearch.hits[0]?.sourcePath, 'live/docs/project-memory/architecture.md');
+        assert.deepEqual(secondSearch, firstSearch);
+        const sourcePath = 'live/docs/project-memory/README.md';
+        const firstRelationships = catalog.queryProjectMemoryRelationships(sourcePath);
+        assert.equal(firstRelationships.status, 'ready');
+        assert.ok(firstRelationships.relationships.some((relationship) => (
+            relationship.kind === 'links_to'
+            && relationship.targetSourcePath === 'live/docs/project-memory/architecture.md'
+        )));
+        assert.deepEqual(catalog.queryProjectMemoryRelationships(sourcePath), firstRelationships);
+        assert.equal(sourcePayloadReads, 0, 'ready queries must reuse the cache without rereading source payloads');
+        assert.equal(sourceDescriptors.size, 0, 'query identity descriptors must be closed');
+
+        fs.appendFileSync(path.join(memoryRoot, 'architecture.md'), '\nChanged source invalidates the cache.\n');
+        const staleSearch = catalog.searchProjectMemory('bounded deterministic');
+        assert.equal(staleSearch.status, 'stale');
+        assert.deepEqual(staleSearch.hits, []);
+        assert.deepEqual(staleSearch.changedSources, ['live/docs/project-memory/architecture.md']);
+        assert.equal(catalog.queryProjectMemoryRelationships(sourcePath).status, 'stale');
+        assert.ok(sourcePayloadReads > 0, 'changed source fingerprints must trigger payload validation');
+        assert.equal(sourceDescriptors.size, 0);
+
+        assert.equal(catalog.refreshProjectMemoryIndex({ clock: () => INDEXED_AT_UTC }).status, 'ready');
+        sourcePayloadReads = 0;
+        assert.equal(catalog.searchProjectMemory('bounded deterministic').status, 'ready');
+        assert.equal(catalog.queryProjectMemoryRelationships(sourcePath).status, 'ready');
+        assert.equal(sourcePayloadReads, 0, 'explicit refresh must restore ready-cache reuse');
+        assert.equal(sourceDescriptors.size, 0);
+    } finally {
+        statFs.lstatSync = original;
+        statFs.openSync = originalOpen;
+        statFs.closeSync = originalClose;
+        statFs.readSync = originalRead;
+        Object.defineProperty(process, 'platform', platform);
+        catalog.close();
+        removeWorkspace(workspaceRoot);
+    }
+});
+
 sqliteCatalogTest('bounded multi-megabyte project-memory refresh stays within the runtime latency budget', {
     timeout: LOAD_TEST_REFRESH_BUDGET_MS + 10_000
 }, () => {

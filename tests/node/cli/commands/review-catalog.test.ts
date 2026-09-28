@@ -202,34 +202,77 @@ function createTransactionPlanFixture(workspace: TestWorkspace): {
     return { catalogPath, capabilitiesPath, beforeCapabilities, beforeStateSha256, plan };
 }
 
-test('review-catalog file identity accepts the Node 22 Windows zero-device stat only for the same inode', () => {
+test('review-catalog file identity rejects unauthenticated zero devices even for the same inode', () => {
     const descriptorIdentity = { dev: 543659348n, ino: 105834591244330142n };
     const node22PathIdentity = { dev: 0n, ino: descriptorIdentity.ino };
 
     assert.equal(
-        sameManagedReviewCatalogFileIdentity(descriptorIdentity, node22PathIdentity, 'win32'),
+        sameManagedReviewCatalogFileIdentity(descriptorIdentity, node22PathIdentity),
+        false
+    );
+    assert.equal(
+        sameManagedReviewCatalogFileIdentity(descriptorIdentity, descriptorIdentity),
         true
     );
     assert.equal(
-        sameManagedReviewCatalogFileIdentity(descriptorIdentity, node22PathIdentity, 'linux'),
-        false
-    );
-    assert.equal(
         sameManagedReviewCatalogFileIdentity(
             descriptorIdentity,
-            { dev: 0n, ino: descriptorIdentity.ino + 1n },
-            'win32'
+            { dev: 0n, ino: descriptorIdentity.ino + 1n }
         ),
         false
     );
     assert.equal(
         sameManagedReviewCatalogFileIdentity(
             descriptorIdentity,
-            { dev: descriptorIdentity.dev + 1n, ino: descriptorIdentity.ino },
-            'win32'
+            { dev: descriptorIdentity.dev + 1n, ino: descriptorIdentity.ino }
         ),
         false
     );
+});
+
+test('review-catalog protected receipts reconstruct missing devices and reject descriptor substitutions', () => {
+    const workspace = createWorkspace();
+    const fixture = createTransactionPlanFixture(workspace);
+    const mutableFs = require('node:fs') as { -readonly [Key in keyof typeof fs]: typeof fs[Key] };
+    const originalLstat = mutableFs.lstatSync;
+    const originalOpen = mutableFs.openSync;
+    const originalFstat = mutableFs.fstatSync;
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    let receiptFd: number | undefined;
+    let substitute = false;
+    mutableFs.lstatSync = ((...args: Parameters<typeof fs.lstatSync>) => {
+        const stat = Reflect.apply(originalLstat, mutableFs, args);
+        return stat?.isFile() ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+            { dev: typeof stat.dev === 'bigint' ? 0n : 0 }) : stat;
+    }) as typeof fs.lstatSync;
+    mutableFs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+        const fd = Reflect.apply(originalOpen, mutableFs, args);
+        if (String(args[0]).includes('review-catalog-confirmations') && receiptFd === undefined) receiptFd = fd;
+        return fd;
+    }) as typeof fs.openSync;
+    mutableFs.fstatSync = ((...args: Parameters<typeof fs.fstatSync>) => {
+        const stat = Reflect.apply(originalFstat, mutableFs, args);
+        return substitute && args[0] === receiptFd ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat,
+            { dev: typeof stat.dev === 'bigint' ? stat.dev + 1n : stat.dev + 1 }) : stat;
+    }) as typeof fs.fstatSync;
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const confirm = () => issueReviewCatalogConfirmationReceipt({
+        repoRoot: workspace.repoRoot, bundleRoot: workspace.bundleRoot, plan: fixture.plan,
+        expectedStateSha256: fixture.beforeStateSha256, expectedPlanSha256: fixture.plan.plan_sha256,
+        operatorConfirmedAtUtc: new Date().toISOString(), readCurrentStateSha256: () => fixture.beforeStateSha256
+    });
+    try {
+        assert.equal(confirm().status, 'CONFIRMED');
+        receiptFd = undefined;
+        substitute = true;
+        assert.throws(confirm, /identity changed/u);
+    } finally {
+        mutableFs.lstatSync = originalLstat;
+        mutableFs.openSync = originalOpen;
+        mutableFs.fstatSync = originalFstat;
+        Object.defineProperty(process, 'platform', platform);
+        fs.rmSync(workspace.repoRoot, { recursive: true, force: true });
+    }
 });
 
 function addTransactionLockAlias(bundleRoot: string): void {
