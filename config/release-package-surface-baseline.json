@@ -4,8 +4,8 @@
     "name": "garda-agent-orchestrator",
     "version": "1.4.4"
   },
-  "packedFileManifestSha256": "e14b59505ec7ef230b7235d2ee319a0c020595f80b330659cf64515028216e36",
-  "tarballSha256": "20763491f9e59915db4979b1fa5d6ac80aa2cfbada51252435ef8558cbecd928",
+  "packedFileManifestSha256": "c0a40315163c6b366691e584d680d880b7705f18e567e27b722060d364981950",
+  "tarballSha256": "798047162db7416bd56010bfe4350dff409dbc37d78455f49cbb2d35566982f3",
   "packedFileSha256": {
     ".gitattributes": "099d1a09ca2f02b2d7d071bcc19fdd2cda5c66f01f133abe9ff9d63294a1055c",
     "AGENT_INIT_PROMPT.md": "0402c3f2d256f08e0897f4f4616cbe0ce6718fb029692d9c4aad567bd003077c",
@@ -705,7 +705,7 @@
     "dist/src/gates/split-required/split-required-wip-capture.js": "ed3413c38f483d87ed1b7762e7e00aa130681004fd4b8455e4cd459b1d93d866",
     "dist/src/gates/split-required/split-required-wip-contracts.js": "f16d32706e79451f72bc9cbd0c80a2efd3ca63a62d9c66ccb80d3f1997d86841",
     "dist/src/gates/split-required/split-required-wip-operations.js": "7531963b65d0d902c1eb2531a1cab4edf8f5a75e4e0c742b88091083a300f4ae",
-    "dist/src/gates/split-required/split-required-wip-restore-plan.js": "47f3d67761fd54df23838a49e30feff0bfbd7f81b76432665fd32fa8dd65fbcc",
+    "dist/src/gates/split-required/split-required-wip-restore-plan.js": "651e66af1c911521e2707a1e61da4687eb5cc6f1a37a4c5533d84ff00e5afe26",
     "dist/src/gates/split-required/split-required-wip-runtime-handoff-contracts.js": "875d5c347e0d0a422341c251e36df6729ac09df19d70f353ebd73e68991d81a3",
     "dist/src/gates/split-required/split-required-wip-runtime-handoff.js": "d369ca6e6833f36c37661f1f82309173ced7b156792678f3225cda4bdb9e8f60",
     "dist/src/gates/split-required/split-required-wip-runtime-reexec.js": "9b76ab3e97783d4314646e0eb43bbed4bbd83bbb7b3eef336e7b7def262c63e1",
@@ -1456,8 +1456,8 @@
   },
   "metrics": {
     "fileCount": 1446,
-    "unpackedSizeBytes": 17274306,
-    "installedSizeBytes": 17275108,
+    "unpackedSizeBytes": 17276516,
+    "installedSizeBytes": 17277318,
     "productionDependencyCount": 0,
     "lifecycleScripts": {
       "postpack": "node scripts/package-legacy-entrypoint-compat.cjs remove",
@@ -1504,7 +1504,7 @@
       "child_process": 33,
       "exec": 143,
       "fetch": 41,
-      "fs": 3178,
+      "fs": 3183,
       "readFile": 406,
       "writeFile": 79
     }
@@ -1522,5 +1522,5 @@
       "writeFile": 0
     }
   },
-  "rationale": "Preserve strict raw archive and packed-file SHA checks; document audited same-platform prior artifacts for platform-specific npm launcher modes. Public release-runbook text changed intentionally; no dependencies, hooks, hosts, risk limits or growth allowances changed."
+  "rationale": "Reviewed POSIX quarantine cleanup hotfix ce686ef4: exactly one compiled file changes, 2210 bytes and five fs signals for descriptor snapshots and bounded content hashing; all package metadata, dependencies, lifecycle scripts, paths, hosts and growth allowances remain unchanged. Independent Sol xhigh source review and full Linux coverage passed."
 }
