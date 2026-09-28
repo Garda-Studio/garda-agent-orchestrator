@@ -46,6 +46,12 @@ function writeArtifact(reviewsDir: string, fileName: string, content: string = '
     return filePath;
 }
 
+function advanceDirectoryMtime(directory: string, previousMtimeMs: number): void {
+    const changedMtime = new Date(previousMtimeMs + 1_000);
+    fs.utimesSync(directory, changedMtime, changedMtime);
+    assert.ok(fs.statSync(directory).mtimeMs > previousMtimeMs);
+}
+
 function buildCustomReviewSnapshot(reviewTypeId: string) {
     const catalog = normalizeReviewCatalog({
         version: 1,
@@ -597,9 +603,9 @@ describe('reviews-index', () => {
         it('returns true when directory mtime changed', () => {
             loadIndex(reviewsDir);
             const indexPath = resolveIndexPath(reviewsDir);
-
-            // Add a new file to change directory mtime
+            const previousMtimeMs = fs.statSync(reviewsDir).mtimeMs;
             writeArtifact(reviewsDir, 'T-099-task-mode.json');
+            advanceDirectoryMtime(reviewsDir, previousMtimeMs);
 
             assert.equal(isIndexStale(indexPath, reviewsDir), true);
         });
@@ -855,7 +861,9 @@ describe('reviews-index', () => {
             assert.equal(first.source, 'rebuilt');
             assert.equal(first.index.entries.length, 1);
 
+            const previousMtimeMs = fs.statSync(reviewsDir).mtimeMs;
             writeArtifact(reviewsDir, 'T-002-preflight.json');
+            advanceDirectoryMtime(reviewsDir, previousMtimeMs);
 
             const second = loadIndex(reviewsDir);
             assert.equal(second.source, 'rebuilt');

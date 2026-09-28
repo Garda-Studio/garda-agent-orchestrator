@@ -126,6 +126,7 @@
   },
   "c8": {
     "all": true,
+    "merge-async": true,
     "check-coverage": true,
     "statements": 35,
     "branches": 55,

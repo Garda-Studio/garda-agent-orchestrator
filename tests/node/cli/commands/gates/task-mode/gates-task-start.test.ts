@@ -30,7 +30,7 @@ import {
     appendPreflightClassifiedEvent,
     initializeGitRepo
 } from '../../gate-test-seed-helpers';
-import { createManagedTestTempDirectory } from '../../gate-test-temp-manager';
+import { createManagedTestTempDirectory, removeTempRepoWithRetry } from '../../gate-test-temp-manager';
 import {
     buildRuleFileHashes,
     getLegacyPostPreflightRulePackFiles,
@@ -606,7 +606,7 @@ describe('cli/commands/gates — task-start', () => {
         assert.match(output, /TASK_MODE_ENTERED/);
         assert.match(output, /PlannedChangedFilesCount: 2/);
 
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        removeTempRepoWithRetry(repoRoot);
     });
 
     it('parses --planned-changed-files through handleEnterTaskMode before emitting the orchestrator-work handoff', async () => {

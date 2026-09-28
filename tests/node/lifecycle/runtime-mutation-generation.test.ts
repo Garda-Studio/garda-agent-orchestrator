@@ -250,7 +250,7 @@ const ROOT_WRITER_COVERAGE = Object.freeze({
 } as const);
 
 const JOURNAL_OWNER_PATTERN = /(?:withLifecycleRuntimeMutationGeneration(?:ForPath)?|beginRuntimeMutationGeneration)/u;
-const BOUNDED_MUTATION_SURFACE_SHA256 = 'ebb89cabcbdcdae92a415ff37b55b4e114b77fa636c358d8672a1001fe1e0d74';
+const BOUNDED_MUTATION_SURFACE_SHA256 = '68bd77ba7ab3801a8feb675a9842e5f9a12390ebb02b29ab3a569f5d9f4e7a67';
 const READ_ONLY_FS_OPERATIONS = new Set([
     'access', 'accessSync', 'close', 'closeSync', 'exists', 'existsSync',
     'fstat', 'fstatSync', 'lstat', 'lstatSync', 'open', 'opendir', 'opendirSync',

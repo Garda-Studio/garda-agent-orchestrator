@@ -582,7 +582,7 @@ describe('semantic cycle rebind transaction', () => {
         }
     });
 
-    it('keeps an observed pending marker invalid after its lookup becomes missing', () => {
+    it('keeps an observed pending marker invalid and rejects the barrier after its lookup becomes missing', () => {
         const fixture = createFixture();
         const pendingPath = `${fixture.outputPath}.pending`;
         const fsModule = require('node:fs') as { lstatSync: typeof fs.lstatSync };
@@ -601,22 +601,30 @@ describe('semantic cycle rebind transaction', () => {
                 return originalLstatSync(candidate, options as never);
             }) as typeof fsModule.lstatSync;
 
-            const statuses = withReviewArtifactReadBarrier(
-                path.dirname(fixture.outputPath),
-                () => {
-                    const first = readSemanticCycleRebindManifest(fixture.repoRoot, fixture.outputPath);
+            const statuses: ReturnType<typeof readSemanticCycleRebindManifest>[] = [];
+            assert.throws(
+                () => withReviewArtifactReadBarrier(path.dirname(fixture.outputPath), () => {
+                    statuses.push(readSemanticCycleRebindManifest(fixture.repoRoot, fixture.outputPath));
                     pendingLookupIsMissing = true;
-                    const second = readSemanticCycleRebindManifest(fixture.repoRoot, fixture.outputPath);
-                    const third = readSemanticCycleRebindManifest(fixture.repoRoot, fixture.outputPath);
-                    return { first, second, third };
-                }
+                    statuses.push(readSemanticCycleRebindManifest(fixture.repoRoot, fixture.outputPath));
+                    statuses.push(readSemanticCycleRebindManifest(fixture.repoRoot, fixture.outputPath));
+                }),
+                /Review artifact read snapshot was invalidated by a concurrent review publication\./u
             );
 
-            for (const persisted of [statuses.first, statuses.second, statuses.third]) {
+            assert.equal(statuses.length, 3);
+            for (const persisted of statuses) {
                 assert.equal(persisted.status, 'INVALID');
                 assert.match(persisted.violations.join(' '), /incomplete transaction marker/u);
             }
             assert.equal(fs.existsSync(pendingPath), true);
+            pendingLookupIsMissing = false;
+            const freshRead = withReviewArtifactReadBarrier(
+                path.dirname(fixture.outputPath),
+                () => readSemanticCycleRebindManifest(fixture.repoRoot, fixture.outputPath)
+            );
+            assert.equal(freshRead.status, 'INVALID');
+            assert.match(freshRead.violations.join(' '), /incomplete transaction marker/u);
         } finally {
             fsModule.lstatSync = originalLstatSync;
             fixture.cleanup();

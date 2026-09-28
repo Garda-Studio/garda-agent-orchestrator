@@ -367,6 +367,16 @@ environment variable can make an assigned version pass readiness.
 - [x] Published tarballs use the compiled-only runtime surface: `dist/**`, `bin/garda.js`, templates, metadata, and public docs remain, while `src/**`, `tests/**`, `.node-build/**`, and `.scripts-build/**` are excluded and package smoke proves install/invoke without consumer build tooling.
 - [x] Release preflight writes and validates an offline deterministic package-surface artifact against the tracked explicit baseline; intentional material growth requires a reviewed baseline update with an audit rationale.
 
+### Full-suite coverage aggregation
+
+`npm run release:preflight` runs the full coverage proof through the installed c8
+version. The package's `c8.merge-async` setting merges every V8 coverage report
+incrementally to avoid retaining all raw reports in memory at once. It preserves
+the configured coverage thresholds, include/exclude rules, uncovered-file
+accounting and test-shard controls; it does not increase the Node heap limit.
+Keep the original exit code and raw reports when a run fails. A separately
+recovered coverage report does not turn a failed full test run into a pass.
+
 ### Offline package-surface contract
 
 `npm run validate:package-surface` is the final `release:preflight` step. It builds
@@ -409,6 +419,16 @@ The tracked reference is
   generated in a temporary directory and removed after measurement. An
   explicitly supplied prior artifact can replace the baseline with
   `--prior-artifact <path>` and uses the conservative default growth allowances.
+
+Raw npm tar archives can differ across hosts even when all packed file bytes
+match: Windows npm can encode a declared CLI launcher as `0644`, while POSIX
+encodes it as `0755`. The strict tarball digest comparison still rejects this
+difference. Validate the tracked release baseline on its publishing platform.
+For another host, inspect its real packed artifact against that baseline,
+including tar header modes, file hashes and security metrics, then use the
+explicitly audited same-host artifact with `--prior-artifact <path>`. Preserve
+the initial rejection and both artifacts in the local audit. An artifact from
+a failed comparison is not automatically an approved reference.
 
 These lexical counts are review prompts, not vulnerability findings. A failure
 means inspect the package diff; it does not assert that the matched code is

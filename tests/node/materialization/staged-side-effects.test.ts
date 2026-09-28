@@ -65,13 +65,18 @@ describe('materialization staged side effects', () => {
             const sourcePath = path.join(tempDir, 'source.txt');
             fs.writeFileSync(targetPath, 'original');
             fs.writeFileSync(sourcePath, 'source');
-            for (const stage of [
-                createWriteTextFileStage(targetPath, 'updated'),
-                createCopyFileStage(sourcePath, targetPath),
-                createRemoveFileStage(targetPath)
+            for (const createStage of [
+                () => createWriteTextFileStage(targetPath, 'updated'),
+                () => createCopyFileStage(sourcePath, targetPath),
+                () => createRemoveFileStage(targetPath)
             ]) {
+                const stage = createStage();
+                const previousIdentity = fs.statSync(targetPath, { bigint: true });
                 fs.renameSync(targetPath, path.join(tempDir, 'previous.txt'));
                 fs.writeFileSync(targetPath, 'replacement');
+                if (previousIdentity.ino !== 0n) {
+                    assert.notEqual(fs.statSync(targetPath, { bigint: true }).ino, previousIdentity.ino);
+                }
                 assert.throws(() => applyMaterializationStage(stage), /identity changed/);
                 assert.equal(fs.readFileSync(targetPath, 'utf8'), 'replacement');
                 fs.rmSync(path.join(tempDir, 'previous.txt'));

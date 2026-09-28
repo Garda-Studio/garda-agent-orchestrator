@@ -244,6 +244,8 @@ test('same-size packed file changes and archive-only changes fail SHA-256 compar
     const changedFile = fixture({ entries: fixtureEntries().map((entry) => entry.path === 'package/README.md'
         ? { ...entry, content: Buffer.from('# Fixture!') } : entry) });
     const changedOrder = fixture({ entries: [...fixtureEntries()].reverse() });
+    const changedMode = fixture({ entries: fixtureEntries().map((entry) => entry.path === 'package/bin/cli.js'
+        ? { ...entry, mode: 0o644 } : entry) });
     try {
         const baseline = createPackageSurfaceBaseline(artifact(original), { rationale: 'Reviewed fixture.', allowedGrowth: ZERO_GROWTH });
         const fileResult = comparePackageSurface(artifact(changedFile), baseline, 'baseline.json');
@@ -251,10 +253,15 @@ test('same-size packed file changes and archive-only changes fail SHA-256 compar
         const orderResult = comparePackageSurface(artifact(changedOrder), baseline, 'baseline.json');
         assert.match(formatPackageSurfaceComparison(orderResult), /tarball SHA-256 changed despite identical packed files/u);
         assert.notEqual(baseline.tarballSha256, orderResult.current.tarballSha256);
+        const modeResult = comparePackageSurface(artifact(changedMode), baseline, 'baseline.json');
+        assert.deepEqual(modeResult.current.packedFileSha256, baseline.packedFileSha256);
+        assert.equal(modeResult.passed, false);
+        assert.match(formatPackageSurfaceComparison(modeResult), /tarball SHA-256 changed despite identical packed files/u);
     } finally {
         original.cleanup();
         changedFile.cleanup();
         changedOrder.cleanup();
+        changedMode.cleanup();
     }
 });
 
@@ -464,21 +471,36 @@ test('published package files retain review defaults and public guidance', () =>
     }
 });
 
-test('package-surface validation measures a real offline npm pack and cleans compatibility output', { timeout: 180_000 }, () => {
+test('package-surface validation reproduces real offline npm packs and cleans compatibility output', { timeout: 180_000 }, () => {
     const repoRoot = process.cwd();
     const relativeOutputPath = `garda-agent-orchestrator/runtime/release/package-surface-e2e-${process.pid}.json`;
+    const relativePriorPath = `garda-agent-orchestrator/runtime/release/package-surface-e2e-prior-${process.pid}.json`;
     const outputPath = path.join(repoRoot, relativeOutputPath);
+    const priorPath = path.join(repoRoot, relativePriorPath);
     const compatibilityPath = path.join(repoRoot, 'template', 'CLAUDE.md');
     assert.equal(fs.existsSync(compatibilityPath), false);
     try {
-        const result = validatePackageSurface(repoRoot, { outputPath: relativeOutputPath });
+        // npm tar modes can differ across hosts. Compare two exact archives from
+        // this host; the release gate separately checks the audited baseline.
+        const prior = collectCurrentPackageSurface(repoRoot);
+        assert.equal(fs.existsSync(compatibilityPath), false);
+        fs.mkdirSync(path.dirname(priorPath), { recursive: true });
+        fs.writeFileSync(priorPath, JSON.stringify(prior), 'utf8');
+        const result = validatePackageSurface(repoRoot, {
+            outputPath: relativeOutputPath,
+            priorArtifactPath: relativePriorPath
+        });
         const measured = parsePackageSurfaceArtifact(JSON.parse(fs.readFileSync(outputPath, 'utf8')));
         assert.equal(result.passed, true, formatPackageSurfaceComparison(result));
+        assert.equal(result.referenceKind, 'prior-artifact');
+        assert.equal(measured.tarballSha256, prior.tarballSha256);
+        assert.deepEqual(measured.packedFileSha256, prior.packedFileSha256);
         assert.equal(measured.metrics.productionDependencyCount, 0);
         assert.equal(Object.keys(measured.packedFileSha256).length, measured.metrics.fileCount);
         assert.equal(fs.existsSync(compatibilityPath), false);
     } finally {
         fs.rmSync(outputPath, { force: true });
+        fs.rmSync(priorPath, { force: true });
         fs.rmSync(compatibilityPath, { force: true });
     }
 });

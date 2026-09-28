@@ -409,6 +409,9 @@ test('public navigator command confirms both owners through the repeated CLI fla
     const argv = tokens.slice(tokens.indexOf('gate')).map(token => token
         .replace('<task-owned-file>', 'src/second.ts').replace('<ISO-8601 timestamp>', new Date().toISOString()));
     assert.equal(argv[0], 'gate');
+    const providerIndex = argv.indexOf('--provider');
+    assert.ok(providerIndex >= 0 && providerIndex + 1 < argv.length);
+    argv[providerIndex + 1] = 'Codex';
     const planPath = path.join(repoRoot, 'garda-agent-orchestrator/runtime/reviews/T-103-task-plan.json');
     fs.writeFileSync(planPath, serializeTaskPlan(validateTaskPlan({
         schema_version: 1, task_id: 'T-103', status: 'approved', goal: 'Preserve the receiver plan',
