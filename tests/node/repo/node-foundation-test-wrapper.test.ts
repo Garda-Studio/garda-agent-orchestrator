@@ -1233,7 +1233,8 @@ test('runNodeFoundationTests times out a hung shard and records cleanup diagnost
         if (process.platform === 'win32') {
             assert.equal(hungShardKilled, true);
         } else {
-            assert.deepEqual(observedProcessKill.map((item) => item.pid), [-100, -101]);
+            // Concurrent shard timeouts may fire in either order.
+            assert.deepEqual(observedProcessKill.map((item) => item.pid).sort((left, right) => right - left), [-100, -101]);
             assert.ok(observedProcessKill.every((item) => item.signal === 'SIGKILL'));
         }
         const logDir = path.join(buildResult.repoRoot, 'timeout-shard-logs');
