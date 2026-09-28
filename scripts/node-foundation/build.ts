@@ -60,6 +60,7 @@ interface BuildManifest {
     sourceRoots?: string[];
     files?: string[];
     inputFingerprint?: BuildInputFingerprint;
+    publishedManifestSha256?: string;
 }
 
 export interface ReusableBuildCheck {
@@ -300,7 +301,8 @@ export function checkReusableBuildRoot(
     manifestPath: string,
     expectedFingerprint: BuildInputFingerprint,
     forceRebuildEnvName: string,
-    requiresScriptSupport: boolean
+    requiresScriptSupport: boolean,
+    publishedManifestPath?: string
 ): ReusableBuildCheck {
     if (process.env[forceRebuildEnvName] === '1') {
         return { accepted: false, reason: `${forceRebuildEnvName}=1` };
@@ -311,6 +313,15 @@ export function checkReusableBuildRoot(
     }
     if (manifest.inputFingerprint?.sha256 !== expectedFingerprint.sha256) {
         return { accepted: false, reason: 'input_fingerprint_mismatch', manifest };
+    }
+    if (publishedManifestPath) {
+        const publishedManifest = readFileIfExists(publishedManifestPath, DEFAULT_REPO_CLI_SYNC_FS);
+        const publishedManifestSha256 = publishedManifest
+            ? crypto.createHash('sha256').update(publishedManifest).digest('hex')
+            : undefined;
+        if (!publishedManifestSha256 || manifest.publishedManifestSha256 !== publishedManifestSha256) {
+            return { accepted: false, reason: 'published_manifest_mismatch', manifest };
+        }
     }
     if (!manifestFilesExist(buildRoot, manifest)) {
         return { accepted: false, reason: 'compiled_files_missing', manifest };
@@ -824,12 +835,14 @@ export function buildPublishRuntime(): BuildResult {
     return withBuildRootLock(buildRoot, () => {
         const inputFingerprint = buildPublishRuntimeInputFingerprint(repoRoot);
         const manifestPath = path.join(buildRoot, 'publish-runtime-manifest.json');
+        const cacheManifestPath = path.join(repoRoot, '.scripts-build', 'publish-runtime-build-cache.json');
         const reusable = checkReusableBuildRoot(
             buildRoot,
-            manifestPath,
+            cacheManifestPath,
             inputFingerprint,
             PUBLISH_RUNTIME_FORCE_REBUILD_ENV,
-            false
+            false,
+            manifestPath
         );
         printReuseDiagnostic('PUBLISH_RUNTIME_BUILD', reusable, inputFingerprint);
         if (reusable.accepted) {
@@ -856,16 +869,19 @@ export function buildPublishRuntime(): BuildResult {
             )
             : [];
 
-        fs.writeFileSync(
-            manifestPath,
-            JSON.stringify({
-                nodeEngineRange: getNodeEngineRange(repoRoot),
-                sourceRoots: ['src'],
-                files: copiedFiles,
-                inputFingerprint
-            }, null, 2) + '\n',
-            'utf8'
-        );
+        const publishedManifest = {
+            nodeEngineRange: getNodeEngineRange(repoRoot),
+            sourceRoots: ['src'],
+            files: copiedFiles
+        };
+        const publishedManifestContent = JSON.stringify(publishedManifest, null, 2) + '\n';
+        fs.writeFileSync(manifestPath, publishedManifestContent, 'utf8');
+        fs.mkdirSync(path.dirname(cacheManifestPath), { recursive: true });
+        fs.writeFileSync(cacheManifestPath, JSON.stringify({
+            ...publishedManifest,
+            inputFingerprint,
+            publishedManifestSha256: hashText(publishedManifestContent)
+        }, null, 2) + '\n', 'utf8');
 
         return { buildRoot, copiedFiles, generatedCliPath, manifestPath, repoRoot };
     });

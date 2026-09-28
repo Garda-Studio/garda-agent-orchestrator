@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -8,6 +9,7 @@ import { spawn } from 'node:child_process';
 import {
     buildNodeFoundationInputFingerprint,
     buildPublishRuntimeInputFingerprint,
+    buildPublishRuntime,
     checkReusableBuildRoot,
     getRepoRoot,
     printReuseDiagnostic,
@@ -838,6 +840,77 @@ test('node-foundation reuse rejects incomplete manifests that omit discovered te
         assert.equal(reuseStatus.accepted, false);
         assert.equal(reuseStatus.reason, 'manifest_incomplete');
     } finally {
+        fixture.cleanup();
+    }
+});
+
+test('published runtime manifest excludes host-specific build-cache fingerprints', () => {
+    const repoRoot = getRepoRoot();
+    const manifestPath = path.join(repoRoot, 'dist', 'publish-runtime-manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+    assert.deepEqual(Object.keys(manifest).sort(), ['files', 'nodeEngineRange', 'sourceRoots']);
+    assert.deepEqual(manifest.sourceRoots, ['src']);
+    assert.ok(Array.isArray(manifest.files) && manifest.files.length > 0);
+    const cachePath = path.join(repoRoot, '.scripts-build', 'publish-runtime-build-cache.json');
+    const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8')) as {
+        inputFingerprint: BuildInputFingerprint;
+        publishedManifestSha256: string;
+    };
+    assert.equal(cache.inputFingerprint.nodeVersion, process.version);
+    assert.equal(cache.inputFingerprint.platform, process.platform);
+    assert.equal(cache.publishedManifestSha256,
+        crypto.createHash('sha256').update(fs.readFileSync(manifestPath)).digest('hex'));
+    const manifestMtime = fs.statSync(manifestPath).mtimeMs;
+    assert.equal(buildPublishRuntime().manifestPath, manifestPath);
+    assert.equal(fs.statSync(manifestPath).mtimeMs, manifestMtime, 'current inputs must reuse the published runtime');
+});
+
+test('publish-runtime cache rejects changed or missing manifests and keeps input and asset guards', () => {
+    const fixture = createReusableBuildFixture('publish-runtime');
+    const cachePath = path.join(fixture.repoRoot, '.scripts-build', 'publish-runtime-build-cache.json');
+    const originalForceRebuild = process.env.GARDA_PUBLISH_RUNTIME_FORCE_REBUILD;
+    try {
+        delete process.env.GARDA_PUBLISH_RUNTIME_FORCE_REBUILD;
+        const manifest = JSON.parse(fs.readFileSync(fixture.manifestPath, 'utf8')) as Record<string, unknown>;
+        delete manifest.inputFingerprint;
+        const publishedContent = JSON.stringify(manifest, null, 2) + '\n';
+        writeTextFile(fixture.manifestPath, publishedContent);
+        const cache = {
+            ...manifest,
+            inputFingerprint: fixture.fingerprint,
+            publishedManifestSha256: crypto.createHash('sha256').update(publishedContent).digest('hex')
+        };
+        writeTextFile(cachePath, JSON.stringify(cache));
+        const inspect = (fingerprint = fixture.fingerprint) => checkReusableBuildRoot(
+            fixture.buildRoot, cachePath, fingerprint, 'GARDA_PUBLISH_RUNTIME_FORCE_REBUILD', false,
+            fixture.manifestPath
+        );
+        assert.equal(inspect().accepted, true);
+        assert.equal(inspect({ ...fixture.fingerprint, sha256: 'changed-inputs' }).reason, 'input_fingerprint_mismatch');
+        process.env.GARDA_PUBLISH_RUNTIME_FORCE_REBUILD = '1';
+        assert.equal(inspect().reason, 'GARDA_PUBLISH_RUNTIME_FORCE_REBUILD=1');
+        delete process.env.GARDA_PUBLISH_RUNTIME_FORCE_REBUILD;
+        writeTextFile(fixture.manifestPath, publishedContent + ' ');
+        assert.equal(inspect().reason, 'published_manifest_mismatch');
+        fs.unlinkSync(fixture.manifestPath);
+        assert.equal(inspect().reason, 'published_manifest_mismatch');
+        writeTextFile(fixture.manifestPath, publishedContent);
+        assert.equal(inspect().accepted, true);
+        writeTextFile(cachePath, JSON.stringify({ ...cache, publishedManifestSha256: undefined }));
+        assert.equal(inspect().reason, 'published_manifest_mismatch');
+        writeTextFile(cachePath, '{');
+        assert.equal(inspect().reason, 'manifest_missing_or_unreadable');
+        fs.unlinkSync(cachePath);
+        assert.equal(inspect().reason, 'manifest_missing_or_unreadable');
+        writeTextFile(cachePath, JSON.stringify(cache));
+        fs.unlinkSync(path.join(fixture.buildRoot, 'src', 'reports', 'ui', 'lang-packs', 'garda-ui-en.json'));
+        assert.equal(inspect().reason, 'compiled_files_missing');
+    } finally {
+        if (originalForceRebuild === undefined) {
+            delete process.env.GARDA_PUBLISH_RUNTIME_FORCE_REBUILD;
+        } else {
+            process.env.GARDA_PUBLISH_RUNTIME_FORCE_REBUILD = originalForceRebuild;
+        }
         fixture.cleanup();
     }
 });
