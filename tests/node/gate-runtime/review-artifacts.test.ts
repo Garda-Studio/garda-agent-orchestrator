@@ -1984,7 +1984,7 @@ test('review read barrier rejects an artifact replaced after its first snapshot 
     const receiptPath = path.join(reviewsDir, 'T-023-code-receipt.json');
     fs.writeFileSync(receiptPath, '{"version":1}\n', 'utf8');
     try {
-        withReviewArtifactReadBarrier(reviewsDir, () => {
+        assert.throws(() => withReviewArtifactReadBarrier(reviewsDir, () => {
             const originalSnapshot = readReviewArtifactTextSnapshot(receiptPath);
             assert.equal(originalSnapshot.value, '{"version":1}\n');
             assert.equal(originalSnapshot.sha256, fileSha256(receiptPath));
@@ -1996,7 +1996,7 @@ test('review read barrier rejects an artifact replaced after its first snapshot 
                 () => readReviewArtifactTextFile(receiptPath),
                 /Review artifact text snapshot is unavailable/
             );
-        });
+        }), /invalidated by a concurrent review publication/);
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -2055,6 +2055,51 @@ test('review-attempt artifact index invalidates a cached read when the shared sn
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
 });
+
+for (const completion of ['sync', 'async'] as const) {
+    test(`read barrier rejects observed snapshot divergence with stable directory metadata (${completion})`, async () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-stable-directory-race-'));
+        const reviewsDir = createReviewsDir(tempDir);
+        const receiptFileName = `T-024-code-receipt-${'a'.repeat(64)}.json`;
+        const receiptPath = path.join(reviewsDir, receiptFileName);
+        const fsModule = require('node:fs') as { lstatSync: typeof fs.lstatSync };
+        const originalLstatSync = fsModule.lstatSync;
+        fs.writeFileSync(receiptPath, '{"version":1}\n', 'utf8');
+        loadIndex(reviewsDir);
+        const directoryIdentity = fs.lstatSync(reviewsDir);
+        const expectedSha256 = fileSha256(receiptPath);
+        assert.ok(expectedSha256);
+        try {
+            fsModule.lstatSync = ((candidate: fs.PathLike, options?: unknown) => {
+                if (path.resolve(String(candidate)) === path.resolve(reviewsDir)) {
+                    return directoryIdentity;
+                }
+                return originalLstatSync(candidate, options as never);
+            }) as typeof fsModule.lstatSync;
+            const invoke = () => withReviewArtifactReadBarrier(reviewsDir, () => {
+                const artifactIndex = createReviewAttemptArtifactIndex(reviewsDir, 'T-024');
+                assert.equal(artifactIndex.readJsonSnapshot(receiptPath, receiptFileName, expectedSha256).valid, true);
+                const retainedPath = `${receiptPath}.retained`;
+                fs.renameSync(receiptPath, retainedPath);
+                fs.writeFileSync(receiptPath, '{"version":2}\n', 'utf8');
+                assert.notEqual(fs.lstatSync(receiptPath).ino, fs.lstatSync(retainedPath).ino);
+                assert.equal(artifactIndex.readJsonSnapshot(receiptPath, receiptFileName, expectedSha256).valid, false);
+                return completion === 'async' ? Promise.resolve('divergent') : 'divergent';
+            });
+            if (completion === 'async') {
+                await assert.rejects(async () => invoke(), /invalidated by a concurrent review publication/);
+            } else {
+                assert.throws(invoke, /invalidated by a concurrent review publication/);
+            }
+            assert.equal(withReviewArtifactReadBarrier(reviewsDir, () => (
+                readReviewArtifactJsonSnapshot(receiptPath).valid
+            )), true);
+        } finally {
+            fsModule.lstatSync = originalLstatSync;
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+    });
+}
 
 test('same-process read barrier sees complete staged artifact set during transaction', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-transaction-same-process-read-'));
@@ -2187,7 +2232,10 @@ test('nested staged barrier that outlives commit rejects a later external public
         const nestedBarrier = (await nestedBarrierReady).promise;
 
         assert.equal(await outerBarrier, 'transaction-complete');
+        const committedDirectoryMtimeMs = fs.statSync(reviewsDir).mtimeMs;
         fs.writeFileSync(externalPath, 'external\n', 'utf8');
+        fs.utimesSync(reviewsDir, new Date(), new Date(committedDirectoryMtimeMs + 1000));
+        assert.notEqual(fs.statSync(reviewsDir).mtimeMs, committedDirectoryMtimeMs);
         releaseNestedBarrier();
         await assert.rejects(nestedBarrier, /invalidated by a concurrent review publication/);
         assert.equal(fs.readFileSync(reviewPath, 'utf8'), 'new review\n');

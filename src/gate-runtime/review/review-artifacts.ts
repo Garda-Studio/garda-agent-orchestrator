@@ -74,6 +74,7 @@ interface ReviewArtifactReadBarrierState {
     expectedGeneration: ReviewArtifactGenerationCapture;
     registeredKeys: Set<string>;
     activeParticipants: number;
+    invalidated: boolean;
 }
 
 const inProcessReviewArtifactReadBarriers = new Map<string, ReviewArtifactReadBarrierState>();
@@ -948,6 +949,10 @@ function invalidateCachedReviewArtifactRead(
     cached.exists = cached.exists || exists;
     cached.sha256 = null;
     cached.valid = false;
+    const barrier = findReviewArtifactReadBarrier(snapshot.realRootPath);
+    if (barrier) {
+        barrier.invalidated = true;
+    }
 }
 
 function reviewArtifactReadPathExists(error: unknown): boolean {
@@ -1202,7 +1207,8 @@ function prepareActiveReviewArtifactReadBarrierMutation(
     const barrier = findReviewArtifactReadBarrier(reviewsDir);
     if (
         barrier
-        && !reviewArtifactGenerationMatches(barrier.expectedGeneration, captureReviewArtifactGeneration(reviewsDir))
+        && (barrier.invalidated
+            || !reviewArtifactGenerationMatches(barrier.expectedGeneration, captureReviewArtifactGeneration(reviewsDir)))
     ) {
         throw new Error('Review artifact read snapshot was invalidated by a concurrent review publication.');
     }
@@ -1371,6 +1377,9 @@ function assertReviewArtifactReadBarrierParticipantGeneration(
     transactionContext: InProcessReviewArtifactTransactionContext | null,
     options: ReviewArtifactLockOptions
 ): void {
+    if (barrier.invalidated) {
+        throw new Error('Review artifact read snapshot was invalidated by a concurrent review publication.');
+    }
     if (currentProcessOwnsReviewTransactionLock(reviewsDir)) {
         if (transactionContext) {
             return;
@@ -1441,7 +1450,8 @@ export function withReviewArtifactReadBarrier<T>(
     const barrierState: ReviewArtifactReadBarrierState = {
         expectedGeneration: generationCapture,
         registeredKeys: new Set<string>(),
-        activeParticipants: 0
+        activeParticipants: 0,
+        invalidated: false
     };
     registerReviewArtifactReadBarrierKeys(barrierState, reviewsDir);
     return runReviewArtifactReadBarrierParticipant(reviewsDir, callback, barrierState, options);
