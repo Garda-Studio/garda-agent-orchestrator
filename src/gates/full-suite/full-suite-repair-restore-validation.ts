@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
+import { lstatFileIdentitySync } from '../../core/file-stat';
 
 import {
     runGit,
@@ -394,7 +395,7 @@ export function scrubAndRemoveRestoredUntrackedFile(
     }
     let identityBeforeOpen: fs.Stats;
     try {
-        identityBeforeOpen = fs.lstatSync(targetPath);
+        identityBeforeOpen = lstatFileIdentitySync(targetPath);
     } catch (error: unknown) {
         const code = error != null && typeof error === 'object' && 'code' in error
             ? String((error as { code?: unknown }).code || '')
@@ -440,7 +441,7 @@ export function scrubAndRemoveRestoredUntrackedFile(
                 `rollback refused unsafe untracked restore target ${entry.path}: ${finalContainmentViolations.join(' ')}`
             );
         }
-        const finalPathIdentity = fs.lstatSync(targetPath);
+        const finalPathIdentity = lstatFileIdentitySync(targetPath);
         if (!sameFileIdentity(identityAfterRead, finalPathIdentity)) {
             throw new Error(`rollback target identity changed before removal: ${entry.path}`);
         }

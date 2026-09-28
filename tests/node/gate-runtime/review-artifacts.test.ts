@@ -1411,7 +1411,7 @@ test('large receipt histories stop at the aggregate snapshot artifact budget', (
     const originalOpenSync = fsModule.openSync;
     let openedReceiptCount = 0;
     fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
-        if (String(targetPath).includes('T-HISTORY-code-receipt-')) {
+        if (flags === 'r' && String(targetPath).includes('T-HISTORY-code-receipt-')) {
             openedReceiptCount += 1;
         }
         return originalOpenSync(targetPath, flags, mode);
@@ -1486,7 +1486,7 @@ test('review read barrier reuses one immutable byte read without retaining parse
     const originalOpenSync = fsModule.openSync;
     let receiptReadCount = 0;
     fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
-        if (path.resolve(String(targetPath)) === path.resolve(receiptPath)) {
+        if (flags === 'r' && path.resolve(String(targetPath)) === path.resolve(receiptPath)) {
             receiptReadCount += 1;
         }
         return originalOpenSync(targetPath, flags, mode);

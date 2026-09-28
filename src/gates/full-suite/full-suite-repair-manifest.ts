@@ -1,6 +1,7 @@
 import * as childProcess from 'node:child_process';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
+import { lstatFileIdentitySync, statFileIdentitySync } from '../../core/file-stat';
 import * as path from 'node:path';
 
 import { runGit } from '../../core/git-helpers';
@@ -65,7 +66,7 @@ export function validatePhysicalRepoContainment(repoRoot: string, absolutePath: 
         currentPath = path.join(currentPath, segment);
         let stat: fs.Stats;
         try {
-            stat = fs.lstatSync(currentPath);
+            stat = lstatFileIdentitySync(currentPath);
         } catch (error: unknown) {
             const code = error != null && typeof error === 'object' && 'code' in error
                 ? String((error as { code?: unknown }).code || '')
@@ -133,7 +134,7 @@ export function restoreContainedUntrackedFile(params: {
     if (artifactContainment.length > 0) {
         throw new Error(artifactContainment.join(' '));
     }
-    const artifactIdentityBeforeRead = fs.statSync(artifactPath);
+    const artifactIdentityBeforeRead = statFileIdentitySync(artifactPath);
     assertSingleLinkIdentity(artifactIdentityBeforeRead, `untracked artifact ${params.entry.path}`);
     const artifactMode = artifactIdentityBeforeRead.mode & 0o777;
     if (artifactMode !== params.entry.mode) {
@@ -142,7 +143,7 @@ export function restoreContainedUntrackedFile(params: {
         );
     }
     const artifactBytes = fs.readFileSync(artifactPath);
-    const artifactIdentityAfterRead = fs.statSync(artifactPath);
+    const artifactIdentityAfterRead = statFileIdentitySync(artifactPath);
     if (!sameFileIdentity(artifactIdentityBeforeRead, artifactIdentityAfterRead)) {
         throw new Error(`untracked artifact identity changed while reading: ${params.entry.path}`);
     }
@@ -177,7 +178,7 @@ export function restoreContainedUntrackedBytes(params: {
     const targetParentPath = path.dirname(targetPath);
     let targetParentIdentity: fs.Stats;
     try {
-        targetParentIdentity = fs.lstatSync(targetParentPath);
+        targetParentIdentity = lstatFileIdentitySync(targetParentPath);
     } catch (error: unknown) {
         const code = error != null && typeof error === 'object' && 'code' in error
             ? String((error as { code?: unknown }).code || '')
@@ -222,7 +223,7 @@ export function restoreContainedUntrackedBytes(params: {
         if (postOpenContainment.length > 0) {
             throw new Error(postOpenContainment.join(' '));
         }
-        const targetParentIdentityAfterOpen = fs.lstatSync(targetParentPath);
+        const targetParentIdentityAfterOpen = lstatFileIdentitySync(targetParentPath);
         if (!sameFileIdentity(targetParentIdentity, targetParentIdentityAfterOpen)) {
             throw new Error(`untracked restore target parent identity changed during creation: ${params.entry.path}`);
         }
@@ -231,7 +232,7 @@ export function restoreContainedUntrackedBytes(params: {
                 `untracked restore target parent changed to a non-directory or symbolic link: ${params.entry.path}`
             );
         }
-        const pathIdentity = fs.statSync(targetPath);
+        const pathIdentity = statFileIdentitySync(targetPath);
         if (!sameFileIdentity(openedIdentity, pathIdentity)) {
             throw new Error(`untracked restore target identity changed during creation: ${params.entry.path}`);
         }
@@ -242,7 +243,7 @@ export function restoreContainedUntrackedBytes(params: {
         fs.fchmodSync(targetFd, params.entry.mode);
         fs.fsyncSync(targetFd);
         const finalOpenedIdentity = fs.fstatSync(targetFd);
-        const finalPathIdentity = fs.statSync(targetPath);
+        const finalPathIdentity = statFileIdentitySync(targetPath);
         const finalContainment = validatePhysicalRepoContainment(
             params.repoRoot,
             targetPath,
@@ -279,7 +280,7 @@ export function restoreContainedUntrackedBytes(params: {
         }
         if (openedIdentity) {
             try {
-                const currentIdentity = fs.statSync(targetPath);
+                const currentIdentity = statFileIdentitySync(targetPath);
                 if (!sameFileIdentity(openedIdentity, currentIdentity)) {
                     cleanupViolation += `; cleanup refused because target identity changed: ${params.entry.path}`;
                 } else {

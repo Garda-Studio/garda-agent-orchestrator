@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { lstatFileIdentitySync } from './file-stat';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
@@ -63,7 +64,7 @@ export function readTransactionBytes(root: string, filePath: string, limit = MAX
             if (count === 0) throw new Error('Transaction file changed while reading.');
             offset += count;
         }
-        const after = fs.lstatSync(filePath);
+        const after = lstatFileIdentitySync(filePath);
         if (after.dev !== stat.dev || after.ino !== stat.ino || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) {
             throw new Error('Transaction file identity changed while reading.');
         }

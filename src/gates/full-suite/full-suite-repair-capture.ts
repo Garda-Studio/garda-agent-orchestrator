@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
+import { lstatFileIdentitySync } from '../../core/file-stat';
 import * as path from 'node:path';
 
 import {
@@ -169,7 +170,7 @@ export function validateUntrackedCaptureSource(repoRoot: string, relativePath: s
         return violations;
     }
     try {
-        const identity = fs.lstatSync(sourcePath);
+        const identity = lstatFileIdentitySync(sourcePath);
         if (identity.isSymbolicLink() || !identity.isFile()) {
             return [`${label} must be a regular file and must not be a symbolic-link or junction.`];
         }
@@ -227,7 +228,7 @@ export function readImmutableRegularFileSnapshot(params: {
             throw new Error(containmentViolations.join(' '));
         }
     }
-    const identityBeforeOpen = fs.lstatSync(params.filePath);
+    const identityBeforeOpen = lstatFileIdentitySync(params.filePath);
     assertSingleLinkIdentity(identityBeforeOpen, params.label);
     const noFollowFlag = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
     let descriptor: number | null = null;
@@ -240,7 +241,7 @@ export function readImmutableRegularFileSnapshot(params: {
         }
         const content = fs.readFileSync(descriptor);
         const finalOpenedIdentity = fs.fstatSync(descriptor);
-        const pathIdentityAfterRead = fs.lstatSync(params.filePath);
+        const pathIdentityAfterRead = lstatFileIdentitySync(params.filePath);
         assertSingleLinkIdentity(finalOpenedIdentity, params.label);
         assertSingleLinkIdentity(pathIdentityAfterRead, params.label);
         if (!sameFileSnapshot(openedIdentity, finalOpenedIdentity)
@@ -282,7 +283,7 @@ export function ensureContainedDirectoryPath(repoRoot: string, directoryPath: st
         if (!fs.existsSync(currentPath)) {
             fs.mkdirSync(currentPath);
         }
-        const identity = fs.lstatSync(currentPath);
+        const identity = lstatFileIdentitySync(currentPath);
         if (identity.isSymbolicLink() || !identity.isDirectory()) {
             throw new Error(`${label} traverses a non-directory or symbolic-link component: ${normalizePath(currentPath)}`);
         }
@@ -304,7 +305,7 @@ function createExclusiveCaptureRoot(repoRoot: string, captureRoot: string): fs.S
         throw new Error(containmentViolations.join(' '));
     }
     fs.mkdirSync(captureRoot);
-    const identity = fs.lstatSync(captureRoot);
+    const identity = lstatFileIdentitySync(captureRoot);
     if (identity.isSymbolicLink() || !identity.isDirectory()) {
         throw new Error(`prepared WIP capture root must be a newly created directory: ${normalizePath(captureRoot)}`);
     }
@@ -335,7 +336,7 @@ export function writeExclusiveCaptureFile(
         fs.writeFileSync(descriptor, content);
         fs.fsyncSync(descriptor);
         const finalOpenedIdentity = fs.fstatSync(descriptor);
-        const pathIdentity = fs.lstatSync(filePath);
+        const pathIdentity = lstatFileIdentitySync(filePath);
         assertSingleLinkIdentity(finalOpenedIdentity, label);
         assertSingleLinkIdentity(pathIdentity, label);
         if (!sameFileIdentity(finalOpenedIdentity, pathIdentity)) {
@@ -438,7 +439,7 @@ function copyUntrackedTaskFile(repoRoot: string, captureRoot: string, relativePa
     if (sourceViolations.length > 0) {
         throw new Error(sourceViolations.join(' '));
     }
-    const sourceIdentityBeforeCopy = fs.lstatSync(sourcePath);
+    const sourceIdentityBeforeCopy = lstatFileIdentitySync(sourcePath);
     assertSingleLinkIdentity(sourceIdentityBeforeCopy, `untracked capture source ${relativePath}`);
     const sourceMode = sourceIdentityBeforeCopy.mode & 0o777;
     ensureContainedDirectoryPath(repoRoot, path.dirname(artifactPath), `untracked capture artifact ${relativePath} parent`);
@@ -460,7 +461,7 @@ function copyUntrackedTaskFile(repoRoot: string, captureRoot: string, relativePa
     if (sourceContainmentAfterCopy.length > 0) {
         throw new Error(sourceContainmentAfterCopy.join(' '));
     }
-    const sourceIdentityAfterCopy = fs.lstatSync(sourcePath);
+    const sourceIdentityAfterCopy = lstatFileIdentitySync(sourcePath);
     assertSingleLinkIdentity(sourceIdentityAfterCopy, `untracked capture source ${relativePath}`);
     if (!sameFileSnapshot(sourceIdentityBeforeCopy, sourceIdentityAfterCopy)) {
         throw new Error(`untracked capture source changed while copying: ${relativePath}`);
@@ -473,7 +474,7 @@ function copyUntrackedTaskFile(repoRoot: string, captureRoot: string, relativePa
     if (artifactContainmentAfterCopy.length > 0) {
         throw new Error(artifactContainmentAfterCopy.join(' '));
     }
-    const artifactIdentity = fs.lstatSync(artifactPath);
+    const artifactIdentity = lstatFileIdentitySync(artifactPath);
     assertSingleLinkIdentity(artifactIdentity, `untracked capture artifact ${relativePath}`);
     if ((artifactIdentity.mode & 0o777) !== sourceMode || artifactIdentity.size !== sourceIdentityBeforeCopy.size) {
         throw new Error(`untracked capture artifact metadata mismatch: ${relativePath}`);
@@ -491,7 +492,7 @@ function removeFileIfExists(filePath: string): void {
     if (!fs.existsSync(filePath)) {
         return;
     }
-    const identity = fs.lstatSync(filePath);
+    const identity = lstatFileIdentitySync(filePath);
     assertSingleLinkIdentity(identity, `file removal target ${normalizePath(filePath)}`);
     fs.unlinkSync(filePath);
 }
@@ -670,7 +671,7 @@ export function verifyPreparedWipCapture(repoRoot: string, preparedCapture: Prep
     if (rootContainmentViolations.length > 0) {
         throw new Error(rootContainmentViolations.join(' '));
     }
-    const captureRootIdentity = fs.lstatSync(preparedCapture.captureRoot);
+    const captureRootIdentity = lstatFileIdentitySync(preparedCapture.captureRoot);
     if (!captureRootIdentity.isDirectory()
         || captureRootIdentity.isSymbolicLink()
         || !sameFileIdentity(preparedCapture.captureRootIdentity, captureRootIdentity)) {
@@ -751,7 +752,7 @@ function validateCurrentUntrackedSnapshot(
         return [`prepared WIP source is missing: ${entry.path}`];
     }
     try {
-        const identity = fs.lstatSync(targetPath);
+        const identity = lstatFileIdentitySync(targetPath);
         assertSingleLinkIdentity(identity, `prepared WIP source ${entry.path}`);
         const content = fs.readFileSync(targetPath);
         if ((identity.mode & 0o777) !== entry.mode) {
@@ -936,7 +937,7 @@ export function removePreparedWipCapture(repoRoot: string, captureRoot: string):
     }
     try {
         if (fs.existsSync(normalizedCaptureRoot)) {
-            const identity = fs.lstatSync(normalizedCaptureRoot);
+            const identity = lstatFileIdentitySync(normalizedCaptureRoot);
             if (identity.isSymbolicLink() || !identity.isDirectory()) {
                 return [`prepared WIP capture cleanup refused non-directory target: ${normalizePath(normalizedCaptureRoot)}`];
             }

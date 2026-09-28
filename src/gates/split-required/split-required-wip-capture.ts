@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
+import { lstatFileIdentitySync } from '../../core/file-stat';
 import * as path from 'node:path';
 
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
@@ -253,7 +254,7 @@ function writeExclusiveCaptureFile(filePath: string, content: Buffer): CaptureFi
     return {
         path: filePath,
         content,
-        identity: fs.lstatSync(filePath)
+        identity: lstatFileIdentitySync(filePath)
     };
 }
 
@@ -290,14 +291,14 @@ function readStableRepoFile(
     let current = normalizedRepoRoot;
     for (const segment of parentRelative.split(path.sep).filter(Boolean)) {
         current = path.join(current, segment);
-        const ancestorIdentity = fs.lstatSync(current);
+        const ancestorIdentity = lstatFileIdentitySync(current);
         if (!ancestorIdentity.isDirectory() || ancestorIdentity.isSymbolicLink()) {
             throw new Error(
                 `${label} path ancestry contains a symbolic link, junction, or non-directory: ${normalizePath(current)}`
             );
         }
     }
-    const identity = fs.lstatSync(sourcePath);
+    const identity = lstatFileIdentitySync(sourcePath);
     if (!identity.isFile() || identity.isSymbolicLink()) {
         throw new Error(`${label} must be a regular file: ${relativePath}`);
     }
@@ -307,7 +308,7 @@ function readStableRepoFile(
         throw new Error(`${label} resolved outside repository root: ${relativePath}`);
     }
     const content = fs.readFileSync(sourcePath);
-    const afterRead = fs.lstatSync(sourcePath);
+    const afterRead = lstatFileIdentitySync(sourcePath);
     if (!sameFileSnapshot(identity, afterRead)) {
         throw new Error(`${label} changed while reading: ${relativePath}`);
     }
@@ -395,7 +396,7 @@ function ensureDirectoryTreeWithoutLinks(repoRoot: string, directoryPath: string
         if (!fs.existsSync(current)) {
             fs.mkdirSync(current);
         }
-        const identity = fs.lstatSync(current);
+        const identity = lstatFileIdentitySync(current);
         if (!identity.isDirectory() || identity.isSymbolicLink()) {
             throw new Error(
                 `split-required WIP directory ancestry contains a symbolic link, junction, or non-directory: ${normalizePath(current)}`
@@ -419,7 +420,7 @@ function validateCaptureRootLocation(
         );
     }
     ensureDirectoryTreeWithoutLinks(normalizedRepoRoot, normalizedCaptureRoot);
-    const identity = fs.lstatSync(normalizedCaptureRoot);
+    const identity = lstatFileIdentitySync(normalizedCaptureRoot);
     if (!identity.isDirectory() || identity.isSymbolicLink()) {
         throw new Error(
             `split-required WIP capture root must be a regular directory: ${normalizePath(normalizedCaptureRoot)}`
@@ -453,7 +454,7 @@ function createExclusiveCaptureRoot(
 }
 
 function verifyCaptureFile(snapshot: CaptureFileSnapshot, label: string): void {
-    const identity = fs.lstatSync(snapshot.path);
+    const identity = lstatFileIdentitySync(snapshot.path);
     if (!identity.isFile()
         || identity.isSymbolicLink()
         || !sameFileIdentity(snapshot.identity, identity)) {
@@ -749,7 +750,7 @@ function restoreUntrackedSnapshot(
     const targetPath = resolveRepoPath(repoRoot, snapshot.evidence.path);
     try {
         if (fs.existsSync(targetPath)) {
-            const identity = fs.lstatSync(targetPath);
+            const identity = lstatFileIdentitySync(targetPath);
             if (!identity.isFile()
                 || identity.isSymbolicLink()
                 || !fs.readFileSync(targetPath).equals(snapshot.content)) {
@@ -829,7 +830,7 @@ function suspendUntrackedSnapshot(
         throw new Error(`untracked WIP quarantine target already exists: ${snapshot.evidence.path}`);
     }
     fs.renameSync(sourcePath, quarantinePath);
-    const quarantinedIdentity = fs.lstatSync(quarantinePath);
+    const quarantinedIdentity = lstatFileIdentitySync(quarantinePath);
     if (!quarantinedIdentity.isFile()
         || quarantinedIdentity.isSymbolicLink()
         || !sameFileIdentity(snapshot.sourceIdentity, quarantinedIdentity)
@@ -981,7 +982,7 @@ function inspectCapturedWorkspaceSuspension(
 
 function isRepoPathAbsent(repoRoot: string, relativePath: string): boolean {
     try {
-        fs.lstatSync(resolveRepoPath(repoRoot, relativePath));
+        lstatFileIdentitySync(resolveRepoPath(repoRoot, relativePath));
         return false;
     } catch (error: unknown) {
         return (error as NodeJS.ErrnoException)?.code === 'ENOENT';

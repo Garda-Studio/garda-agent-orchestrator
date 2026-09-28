@@ -1,6 +1,7 @@
 import * as childProcess from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
+import { lstatFileIdentitySync } from '../../core/file-stat';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -124,7 +125,7 @@ function captureRepoParentSnapshot(
                 }
             }
         }
-        const stat = fs.lstatSync(currentPath);
+        const stat = lstatFileIdentitySync(currentPath);
         if (stat.isSymbolicLink() || !stat.isDirectory()) {
             throw new Error(`restore parent must remain a real directory: ${relativePath}`);
         }
@@ -141,7 +142,7 @@ function assertRepoParentSnapshot(snapshot: RepoParentSnapshot, relativePath: st
     for (const directory of snapshot.directories) {
         let current: fs.Stats;
         try {
-            current = fs.lstatSync(directory.path);
+            current = lstatFileIdentitySync(directory.path);
         } catch (error: unknown) {
             const code = (error as NodeJS.ErrnoException).code;
             if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
@@ -163,7 +164,7 @@ function assertRepoTargetBound(
     descriptorIdentity: fs.Stats
 ): void {
     assertRepoParentSnapshot(snapshot, relativePath);
-    const current = fs.lstatSync(snapshot.targetPath);
+    const current = lstatFileIdentitySync(snapshot.targetPath);
     if (current.isSymbolicLink()
         || !current.isFile()
         || !sameFileIdentity(current, descriptorIdentity)
@@ -259,7 +260,7 @@ function unlinkTargetBoundToOpenedParent(
     }
     let boundTarget: fs.Stats;
     try {
-        boundTarget = fs.lstatSync(parentTarget.targetPath);
+        boundTarget = lstatFileIdentitySync(parentTarget.targetPath);
     } catch (error: unknown) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
             return false;
@@ -290,7 +291,7 @@ function unlinkTargetBoundToOpenedParent(
     try {
         fs.renameSync(parentTarget.targetPath, quarantineTargetPath);
         preserveQuarantine = true;
-        const quarantinedTarget = fs.lstatSync(quarantineTargetPath);
+        const quarantinedTarget = lstatFileIdentitySync(quarantineTargetPath);
         if (quarantinedTarget.isSymbolicLink()
             || !quarantinedTarget.isFile()
             || !(requireSnapshot
@@ -489,7 +490,7 @@ export function writeExclusiveRepoFileWithRemovalHandle(
                 if (!removed) {
                     let targetStillExists = true;
                     try {
-                        fs.lstatSync(parentTarget.targetPath);
+                        lstatFileIdentitySync(parentTarget.targetPath);
                     } catch (error: unknown) {
                         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
                             targetStillExists = false;
@@ -648,7 +649,7 @@ function writeRepoFileReplacingRegular(
     const parentSnapshot = captureRepoParentSnapshot(repoRoot, relativePath, true);
     let identityBeforeOpen: fs.Stats;
     try {
-        identityBeforeOpen = fs.lstatSync(parentSnapshot.targetPath);
+        identityBeforeOpen = lstatFileIdentitySync(parentSnapshot.targetPath);
     } catch (error: unknown) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
             throw error;
@@ -760,7 +761,7 @@ function assertAuthenticatedLinkSource(
     sourceLabel: string
 ): void {
     const descriptorIdentity = fs.fstatSync(sourceDescriptor);
-    const pathIdentity = fs.lstatSync(sourcePath);
+    const pathIdentity = lstatFileIdentitySync(sourcePath);
     if (!descriptorIdentity.isFile()
         || pathIdentity.isSymbolicLink()
         || !pathIdentity.isFile()
@@ -879,7 +880,7 @@ function authenticatedLinkSourcePathMatches(
 ): boolean {
     try {
         const descriptorIdentity = fs.fstatSync(sourceDescriptor);
-        const pathIdentity = fs.lstatSync(sourcePath);
+        const pathIdentity = lstatFileIdentitySync(sourcePath);
         return descriptorIdentity.isFile()
             && !pathIdentity.isSymbolicLink()
             && pathIdentity.isFile()
@@ -944,7 +945,7 @@ function cleanupReplacementResources(options: {
                     artifact.path, descriptor, artifact.identity, options.relativePath
                 )) {
                     // lstat also detects dangling symlinks; only ENOENT means cleanup is complete.
-                    fs.lstatSync(artifact.path);
+                    lstatFileIdentitySync(artifact.path);
                     throw new Error(`restore cleanup identity is unverified; artifact preserved at ${artifact.path}`);
                 }
             });
@@ -1026,7 +1027,7 @@ export function replaceAuthenticatedRepoFile(
             Buffer.from(`${process.pid}:${randomBytes(16).toString('hex')}\n`, 'utf8')
         );
         fs.fsyncSync(lockDescriptor);
-        const identityBeforeCommit = fs.lstatSync(parentTarget.targetPath);
+        const identityBeforeCommit = lstatFileIdentitySync(parentTarget.targetPath);
         if (identityBeforeCommit.isSymbolicLink()
             || !identityBeforeCommit.isFile()
             || !sameFileSnapshot(identityBeforeCommit, expected.identity)) {
@@ -1077,7 +1078,7 @@ export function replaceAuthenticatedRepoFile(
         }
         temporaryIdentity = stagedIdentity;
         assertRepoParentSnapshot(parentSnapshot, relativePath);
-        const currentIdentity = fs.lstatSync(parentTarget.targetPath);
+        const currentIdentity = lstatFileIdentitySync(parentTarget.targetPath);
         if (currentIdentity.isSymbolicLink()
             || !currentIdentity.isFile()
             || !sameFileSnapshot(currentIdentity, expected.identity)) {
@@ -1138,7 +1139,7 @@ export function replaceAuthenticatedRepoFile(
         }
         replacementCommitted = true;
         fsyncRepoParentDescriptor(parentTarget.descriptor);
-        const replacedIdentity = fs.lstatSync(parentTarget.targetPath);
+        const replacedIdentity = lstatFileIdentitySync(parentTarget.targetPath);
         if (!replacedIdentity.isFile()
             || !sameFileIdentity(stagedIdentity, replacedIdentity)
             || replacedIdentity.size !== content.length) {
@@ -1321,7 +1322,7 @@ export function replaceAuthenticatedRepoFile(
                     'rollback staging source'
                 );
                 fsyncRepoParentDescriptor(parentTarget.descriptor);
-                const restoredIdentity = fs.lstatSync(parentTarget.targetPath);
+                const restoredIdentity = lstatFileIdentitySync(parentTarget.targetPath);
                 if (!restoredIdentity.isFile()
                     || !sameFileIdentity(rollbackIdentity, restoredIdentity)
                     || restoredIdentity.size !== expected.content.length) {
@@ -1445,7 +1446,7 @@ function removeRepoRegularFile(
     }
     let identity: fs.Stats;
     try {
-        identity = fs.lstatSync(parentSnapshot.targetPath);
+        identity = lstatFileIdentitySync(parentSnapshot.targetPath);
     } catch (error: unknown) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
             assertRepoParentSnapshot(parentSnapshot, relativePath);
@@ -1505,14 +1506,14 @@ export function readAuthenticatedRepoFileSnapshot(
     }
     let identityBeforeOpen: fs.Stats;
     try {
-        identityBeforeOpen = fs.lstatSync(parentSnapshot.targetPath);
+        identityBeforeOpen = lstatFileIdentitySync(parentSnapshot.targetPath);
     } catch (error: unknown) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
             throw error;
         }
         assertRepoParentSnapshot(parentSnapshot, relativePath);
         try {
-            fs.lstatSync(parentSnapshot.targetPath);
+            lstatFileIdentitySync(parentSnapshot.targetPath);
             throw new Error(`restore target appeared while authenticating absence: ${relativePath}`);
         } catch (finalError: unknown) {
             if ((finalError as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -1558,7 +1559,7 @@ export function readAuthenticatedRepoFileSnapshot(
 
 function removeFileIfExists(filePath: string): void {
     try {
-        const stat = fs.lstatSync(filePath);
+        const stat = lstatFileIdentitySync(filePath);
         if (!stat.isSymbolicLink() && stat.isFile()) {
             fs.unlinkSync(filePath);
         }
@@ -1772,7 +1773,7 @@ function selectedIndexEntries(
 function fileStateSha256(filePath: string): string | null {
     let stat: fs.Stats;
     try {
-        stat = fs.lstatSync(filePath);
+        stat = lstatFileIdentitySync(filePath);
     } catch (error: unknown) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code === 'ENOENT' || code === 'ENOTDIR') {
@@ -2041,7 +2042,7 @@ export function validateNoSymlinkPaths(repoRoot: string, relativePaths: Iterable
         let cursor = target;
         while (cursor !== root) {
             try {
-                if (fs.lstatSync(cursor).isSymbolicLink()) {
+                if (lstatFileIdentitySync(cursor).isSymbolicLink()) {
                     violations.push(`selected restore path contains a symbolic link: ${relativePath}`);
                     break;
                 }
@@ -2294,7 +2295,7 @@ function validateCandidateTrackedFiles(
     for (const entry of selectedTrackedFiles) {
         const candidatePath = resolveRepoPath(workspace.candidateWorktreeRoot, entry.path);
         try {
-            if (fs.lstatSync(candidatePath).isSymbolicLink()) {
+            if (lstatFileIdentitySync(candidatePath).isSymbolicLink()) {
                 return `candidate restore target is a symbolic link: ${entry.path}`;
             }
         } catch (error: unknown) {

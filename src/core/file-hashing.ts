@@ -1,5 +1,6 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
+import { statFileIdentitySync } from './file-stat';
 
 const FILE_HASH_BUFFER_BYTES = 64 * 1024;
 
@@ -39,8 +40,11 @@ export function fileSha256(filePath: string, expectedStat?: fs.Stats): string | 
     let descriptor: number | null = null;
     try {
         const expectedPath = fs.statSync(filePath);
-        if (expectedStat && !sameExpectedFileIdentity(expectedStat, expectedPath)) return null;
-        const pathBefore = fs.statSync(filePath, { bigint: true });
+        if (expectedStat && !sameExpectedFileIdentity(expectedStat, expectedPath)) {
+            if (process.platform !== 'win32' || expectedPath.dev !== 0 || expectedStat.dev === 0
+                || !sameExpectedFileIdentity(expectedStat, statFileIdentitySync(filePath))) return null;
+        }
+        const pathBefore = statFileIdentitySync(filePath, { bigint: true });
         if (!pathBefore.isFile()) return null;
 
         descriptor = fs.openSync(filePath, 'r');
@@ -58,7 +62,7 @@ export function fileSha256(filePath: string, expectedStat?: fs.Stats): string | 
         }
 
         const descriptorAfter = fs.fstatSync(descriptor, { bigint: true });
-        const pathAfter = fs.statSync(filePath, { bigint: true });
+        const pathAfter = statFileIdentitySync(filePath, { bigint: true });
         if (
             totalBytesRead !== descriptorBefore.size
             || !sameFileIdentity(descriptorBefore, descriptorAfter)

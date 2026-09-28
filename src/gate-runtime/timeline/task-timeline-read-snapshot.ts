@@ -2,6 +2,7 @@ import { createHash, type Hash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
+import { completePathFileIdentitySync, lstatFileIdentitySync } from '../../core/file-stat';
 import * as path from 'node:path';
 
 import {
@@ -194,6 +195,7 @@ function rememberWindowsAclAuthority(
 }
 
 function hasTrustedWindowsWriteAuthority(filePath: string, identity: fs.Stats): boolean {
+    identity = completePathFileIdentitySync(filePath, identity);
     const cacheKey = normalizeSnapshotKey(filePath);
     const cached = windowsAclAuthorityCache.get(cacheKey);
     if (
@@ -256,7 +258,7 @@ function captureEventsRootBoundary(eventsRoot: string, allowMissing: boolean): E
     const resolvedEventsRoot = path.resolve(eventsRoot);
     let identity: fs.Stats;
     try {
-        identity = fs.lstatSync(resolvedEventsRoot);
+        identity = lstatFileIdentitySync(resolvedEventsRoot);
     } catch (error: unknown) {
         if (allowMissing && isMissingPathError(error)) {
             return {
@@ -296,7 +298,7 @@ function captureEventsRootBoundary(eventsRoot: string, allowMissing: boolean): E
 function isEventsRootBoundaryCurrent(boundary: EventsRootBoundary): boolean {
     if (!boundary.eventsRootIdentity) {
         try {
-            fs.lstatSync(boundary.eventsRoot);
+            lstatFileIdentitySync(boundary.eventsRoot);
             return false;
         } catch (error: unknown) {
             return isMissingPathError(error);
@@ -304,7 +306,7 @@ function isEventsRootBoundaryCurrent(boundary: EventsRootBoundary): boolean {
     }
 
     try {
-        const currentIdentity = fs.lstatSync(boundary.eventsRoot);
+        const currentIdentity = lstatFileIdentitySync(boundary.eventsRoot);
         const currentRealPath = fs.realpathSync.native(boundary.eventsRoot);
         return currentIdentity.isDirectory()
             && !currentIdentity.isSymbolicLink()
@@ -474,6 +476,7 @@ function readAuthenticatedTaskTimelineBoundedJsonlTail<T>(
         if (!isPathInside(realPathBeforeRead, boundary.realEventsRoot)) {
             throw new Error(`Task timeline snapshot is unavailable: ${timelinePath}`);
         }
+        beforeRead = completePathFileIdentitySync(timelinePath, beforeRead);
         fileDescriptor = fs.openSync(timelinePath, 'r');
         const descriptorBeforeRead = fs.fstatSync(fileDescriptor);
         if (
@@ -487,7 +490,7 @@ function readAuthenticatedTaskTimelineBoundedJsonlTail<T>(
         const start = descriptorBeforeRead.size - bytesRead;
         retainedContent = readTaskTimelineDescriptorRange(fileDescriptor, start, bytesRead);
         const descriptorAfterRead = fs.fstatSync(fileDescriptor);
-        const afterRead = fs.lstatSync(timelinePath);
+        const afterRead = lstatFileIdentitySync(timelinePath);
         const realPathAfterRead = fs.realpathSync.native(timelinePath);
         if (
             !retainedContent
@@ -519,7 +522,7 @@ function readAuthenticatedTaskTimelineBoundedJsonlTail<T>(
     }
     const result = readBoundedJsonlTailBuffer<T>(retainedContent, authenticatedIdentity.size, limits);
     try {
-        const afterParse = fs.lstatSync(timelinePath);
+        const afterParse = lstatFileIdentitySync(timelinePath);
         const realPathAfterParse = fs.realpathSync.native(timelinePath);
         if (
             !sameFileIdentity(authenticatedIdentity, afterParse)
@@ -582,6 +585,7 @@ function captureTaskTimelineRead(snapshot: ActiveTaskTimelineReadSnapshot): Cach
         if (!isPathInside(realPathBeforeRead, snapshot.realEventsRoot)) {
             return invalidCachedRead();
         }
+        beforeRead = completePathFileIdentitySync(snapshot.timelinePath, beforeRead);
         // Descriptor acquisition authenticates identity but does not transfer timeline payload bytes.
         // Keep the full payload transfer below to exactly one read per capture.
         fileDescriptor = fs.openSync(snapshot.timelinePath, 'r');
@@ -599,7 +603,7 @@ function captureTaskTimelineRead(snapshot: ActiveTaskTimelineReadSnapshot): Cach
             openedIdentityBeforeRead.size
         );
         const openedIdentityAfterRead = fs.fstatSync(fileDescriptor);
-        const afterRead = fs.lstatSync(snapshot.timelinePath);
+        const afterRead = lstatFileIdentitySync(snapshot.timelinePath);
         const realPathAfterRead = fs.realpathSync.native(snapshot.timelinePath);
         if (
             !content
@@ -648,7 +652,7 @@ function revalidateCachedRead(snapshot: ActiveTaskTimelineReadSnapshot, cachedRe
     }
     if (cachedRead.state === 'missing') {
         try {
-            fs.lstatSync(snapshot.timelinePath);
+            lstatFileIdentitySync(snapshot.timelinePath);
             invalidateCachedRead(cachedRead);
         } catch (error: unknown) {
             if (!isMissingPathError(error)) {
@@ -659,7 +663,7 @@ function revalidateCachedRead(snapshot: ActiveTaskTimelineReadSnapshot, cachedRe
     }
 
     try {
-        const currentIdentity = fs.lstatSync(snapshot.timelinePath);
+        const currentIdentity = lstatFileIdentitySync(snapshot.timelinePath);
         const currentRealPath = fs.realpathSync.native(snapshot.timelinePath);
         if (
             !cachedRead.identity
@@ -893,14 +897,18 @@ export function captureTaskTimelineAppendAuthority(filePath: string): TaskTimeli
         !beforeCapture.isFile()
         || beforeCapture.isSymbolicLink()
         || !hasExclusiveTimelineLink(beforeCapture)
-        || !hasTrustedWriteAuthority(timelinePath, beforeCapture)
         || beforeCapture.size > MAX_TASK_TIMELINE_SNAPSHOT_BYTES
+        || !hasTrustedWriteAuthority(timelinePath, beforeCapture)
     ) {
         return failChangedAppendAuthority(timelinePath);
     }
     try {
         const realTimelinePath = fs.realpathSync.native(timelinePath);
-        const afterCapture = fs.lstatSync(timelinePath);
+        if (!isPathInside(realTimelinePath, boundary.realEventsRoot)) {
+            return failChangedAppendAuthority(timelinePath);
+        }
+        beforeCapture = completePathFileIdentitySync(timelinePath, beforeCapture);
+        const afterCapture = lstatFileIdentitySync(timelinePath);
         if (
             !isPathInside(realTimelinePath, boundary.realEventsRoot)
             || !sameFileIdentity(beforeCapture, afterCapture)
@@ -934,7 +942,7 @@ function assertTaskTimelineAppendAuthorityCurrent(
 
     let currentIdentity: fs.Stats;
     try {
-        currentIdentity = fs.lstatSync(authority.timelinePath);
+        currentIdentity = lstatFileIdentitySync(authority.timelinePath);
     } catch (error: unknown) {
         if (isMissingPathError(error) && !authority.timelineIdentity) {
             return;
@@ -966,7 +974,7 @@ function assertAppendAuthorityDescriptorIdentity(
     fileDescriptor: number
 ): fs.Stats {
     const descriptorIdentity = fs.fstatSync(fileDescriptor);
-    const pathIdentity = fs.lstatSync(authority.timelinePath);
+    const pathIdentity = lstatFileIdentitySync(authority.timelinePath);
     const realPath = fs.realpathSync.native(authority.timelinePath);
     if (
         !descriptorIdentity.isFile()
@@ -994,7 +1002,7 @@ function assertAppendAuthorityPostWriteIdentity(
     expectedSize: number
 ): void {
     const descriptorIdentity = fs.fstatSync(fileDescriptor);
-    const pathIdentity = fs.lstatSync(authority.timelinePath);
+    const pathIdentity = lstatFileIdentitySync(authority.timelinePath);
     const realPath = fs.realpathSync.native(authority.timelinePath);
     if (
         !descriptorIdentity.isFile()
@@ -1062,7 +1070,7 @@ function assertAppendDescriptorIdentity(
     fileDescriptor: number
 ): void {
     const descriptorIdentity = fs.fstatSync(fileDescriptor);
-    const pathIdentity = fs.lstatSync(snapshot.timelinePath);
+    const pathIdentity = lstatFileIdentitySync(snapshot.timelinePath);
     const realPath = fs.realpathSync.native(snapshot.timelinePath);
     if (
         !descriptorIdentity.isFile()
@@ -1090,7 +1098,7 @@ function assertAppendDescriptorPostWriteIdentity(
     expectedSize: number
 ): fs.Stats {
     const descriptorIdentity = fs.fstatSync(fileDescriptor);
-    const pathIdentity = fs.lstatSync(snapshot.timelinePath);
+    const pathIdentity = lstatFileIdentitySync(snapshot.timelinePath);
     const realPath = fs.realpathSync.native(snapshot.timelinePath);
     if (
         !descriptorIdentity.isFile()

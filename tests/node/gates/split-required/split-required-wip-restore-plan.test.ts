@@ -6,7 +6,7 @@ import mutableFs from 'node:fs';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { describe, it } from 'node:test';
+import { describe, it, type TestContext } from 'node:test';
 
 import {
     captureAndSuspendSplitRequiredWip,
@@ -46,6 +46,33 @@ import type {
 import { traceGitCommands } from '../git-command-trace';
 
 const TASK_ID = 'T-WIP-RESTORE-PLAN';
+
+function afterFirstPayloadReadClose(context: TestContext, filePath: string, callback: () => void): void {
+    const originalOpen = mutableFs.openSync;
+    const originalRead = mutableFs.readSync;
+    const originalClose = mutableFs.closeSync;
+    const targetDescriptors = new Set<number>();
+    const payloadDescriptors = new Set<number>();
+    let completed = false;
+    context.mock.method(mutableFs, 'openSync', (target: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+        const descriptor = originalOpen(target, flags, mode);
+        if (resolveMockFilesystemPath(target) === path.resolve(filePath)) targetDescriptors.add(descriptor);
+        return descriptor;
+    });
+    context.mock.method(mutableFs, 'readSync', ((...args: unknown[]) => {
+        const descriptor = Number(args[0]);
+        if (targetDescriptors.has(descriptor)) payloadDescriptors.add(descriptor);
+        return Reflect.apply(originalRead, mutableFs, args);
+    }) as typeof mutableFs.readSync);
+    context.mock.method(mutableFs, 'closeSync', (descriptor: number) => {
+        originalClose(descriptor);
+        targetDescriptors.delete(descriptor);
+        if (payloadDescriptors.delete(descriptor) && !completed) {
+            completed = true;
+            callback();
+        }
+    });
+}
 
 
 
@@ -725,30 +752,12 @@ describe('split-required WIP restore planning', () => {
             : path.resolve(repoRoot, gitIndexPath);
         const originalIndexSha256 = sha256(indexPath);
         const originalFileSha256 = sha256(targetPath);
-        const originalOpenSync = mutableFs.openSync;
-        const originalCloseSync = mutableFs.closeSync;
-        let candidateDescriptor: number | null = null;
         let candidateReplaced = false;
-        context.mock.method(mutableFs, 'openSync', (
-            filePath: fs.PathLike,
-            flags: fs.OpenMode,
-            mode?: fs.Mode
-        ) => {
-            const descriptor = originalOpenSync(filePath, flags, mode);
-            if (!candidateReplaced
-                && resolveMockFilesystemPath(filePath) === path.resolve(candidatePath)) {
-                candidateDescriptor = descriptor;
-            }
-            return descriptor;
-        });
-        context.mock.method(mutableFs, 'closeSync', (descriptor: number) => {
-            originalCloseSync(descriptor);
-            if (!candidateReplaced && descriptor === candidateDescriptor) {
-                candidateReplaced = true;
-                // Replace the directory entry, not just bytes in the captured inode.
-                fs.renameSync(candidatePath, displacedCandidatePath);
-                fs.writeFileSync(candidatePath, forgedContent, 'utf8');
-            }
+        afterFirstPayloadReadClose(context, candidatePath, () => {
+            candidateReplaced = true;
+            // Replace the directory entry, not just bytes in the captured inode.
+            fs.renameSync(candidatePath, displacedCandidatePath);
+            fs.writeFileSync(candidatePath, forgedContent, 'utf8');
         });
         const trackedFile: SplitRequiredWipTrackedFileEvidence = {
             path: relativePath,
@@ -1528,16 +1537,10 @@ describe('split-required WIP restore planning', () => {
             finalized_at_utc: '2026-09-02T00:01:00.000Z'
         };
         writeFile(repoRoot, relativeHandoffPath, `${JSON.stringify(preparedHandoff, null, 2)}\n`);
-        const originalLstatSync = mutableFs.lstatSync;
-        let targetLstatCount = 0;
-        context.mock.method(mutableFs, 'lstatSync', (filePath: fs.PathLike) => {
-            if (resolveMockFilesystemPath(filePath) === path.resolve(handoffPath)) {
-                targetLstatCount += 1;
-                if (targetLstatCount === 4) {
-                    fs.writeFileSync(handoffPath, `${JSON.stringify(concurrentHandoff, null, 2)}\n`, 'utf8');
-                }
-            }
-            return originalLstatSync(filePath);
+        let concurrentReplacementInjected = false;
+        afterFirstPayloadReadClose(context, handoffPath, () => {
+            concurrentReplacementInjected = true;
+            fs.writeFileSync(handoffPath, `${JSON.stringify(concurrentHandoff, null, 2)}\n`, 'utf8');
         });
 
         assert.throws(
@@ -1548,6 +1551,7 @@ describe('split-required WIP restore planning', () => {
             ),
             /restore target identity changed before replacement/u
         );
+        assert.equal(concurrentReplacementInjected, true);
         assert.deepEqual(
             JSON.parse(fs.readFileSync(handoffPath, 'utf8')),
             concurrentHandoff

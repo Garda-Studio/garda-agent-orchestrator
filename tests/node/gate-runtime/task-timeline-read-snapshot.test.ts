@@ -81,7 +81,7 @@ test('reuses one immutable timeline payload read inside an invocation and releas
         flags: fs.OpenMode,
         mode?: fs.Mode
     ) => {
-        if (path.resolve(String(targetPath)) === path.resolve(timelinePath)) {
+        if (flags === 'r' && path.resolve(String(targetPath)) === path.resolve(timelinePath)) {
             descriptorOpenCount += 1;
         }
         return originalOpenSync(targetPath, flags, mode);
@@ -1093,7 +1093,9 @@ test('rejects a replaced path between append precondition and descriptor open', 
     let replacementInjected = false;
     let armed = false;
     fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
-        if (armed && !replacementInjected && path.resolve(String(targetPath)) === path.resolve(timelinePath)) {
+        if (armed && !replacementInjected && typeof flags === 'number'
+            && (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR)) !== 0
+            && path.resolve(String(targetPath)) === path.resolve(timelinePath)) {
             replacementInjected = true;
             fs.rmSync(timelinePath);
             fs.writeFileSync(timelinePath, originalContent.replace('Event 3', 'Replacement'), 'utf8');
@@ -1135,7 +1137,7 @@ test('authenticates the append descriptor without an explicit read snapshot', ()
     fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
         if (
             !replacementInjected
-            && flags !== 'r'
+            && typeof flags === 'number' && (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR)) !== 0
             && path.resolve(String(targetPath)) === path.resolve(timelinePath)
         ) {
             replacementInjected = true;
@@ -1204,7 +1206,7 @@ test('fails a default append when the canonical path is replaced during descript
     fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
         const fileDescriptor = originalOpenSync(targetPath, flags, mode);
         if (
-            flags !== 'r'
+            typeof flags === 'number' && (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR)) !== 0
             && path.resolve(String(targetPath)) === path.resolve(timelinePath)
         ) {
             timelineFileDescriptor = fileDescriptor;
@@ -1261,7 +1263,7 @@ test('fails a default append after same-inode same-size content tampering during
     fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
         const fileDescriptor = originalOpenSync(targetPath, flags, mode);
         if (
-            flags !== 'r'
+            typeof flags === 'number' && (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR)) !== 0
             && path.resolve(String(targetPath)) === path.resolve(timelinePath)
         ) {
             appendFileDescriptor = fileDescriptor;
@@ -1374,7 +1376,8 @@ test('does not signal canonical commit before same-size post-write authenticatio
 
     fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
         const fileDescriptor = originalOpenSync(targetPath, flags, mode);
-        if (path.resolve(String(targetPath)) === path.resolve(timelinePath)) {
+        if (typeof flags === 'number' && (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR)) !== 0
+            && path.resolve(String(targetPath)) === path.resolve(timelinePath)) {
             timelineFileDescriptor = fileDescriptor;
         }
         return fileDescriptor;

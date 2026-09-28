@@ -2,6 +2,7 @@ import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import { writeTaskQueueFile } from '../../core/task-queue/task-queue-repository';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
+import { lstatFileIdentitySync } from '../../core/file-stat';
 import * as path from 'node:path';
 
 import { isPlainRecord } from '../../core/records';
@@ -493,10 +494,10 @@ function snapshotOptionalControlPlaneFile(
             mode: null
         };
     }
-    const identityBeforeRead = fs.lstatSync(resolvedPath);
+    const identityBeforeRead = lstatFileIdentitySync(resolvedPath);
     assertSingleLinkIdentity(identityBeforeRead, label);
     const content = fs.readFileSync(resolvedPath);
-    const identityAfterRead = fs.lstatSync(resolvedPath);
+    const identityAfterRead = lstatFileIdentitySync(resolvedPath);
     assertSingleLinkIdentity(identityAfterRead, label);
     if (!sameFileSnapshot(identityBeforeRead, identityAfterRead)) {
         throw new Error(`${label} changed while taking the transaction snapshot.`);
@@ -523,7 +524,7 @@ function restoreOptionalControlPlaneFile(
             if (!fs.existsSync(snapshot.path)) {
                 return [];
             }
-            const identity = fs.lstatSync(snapshot.path);
+            const identity = lstatFileIdentitySync(snapshot.path);
             assertSingleLinkIdentity(identity, label);
             fs.unlinkSync(snapshot.path);
             return [];
@@ -537,7 +538,7 @@ function restoreOptionalControlPlaneFile(
         }
         ensureContainedDirectoryPath(repoRoot, path.dirname(snapshot.path), `${label} parent`);
         if (fs.existsSync(snapshot.path)) {
-            const currentIdentity = fs.lstatSync(snapshot.path);
+            const currentIdentity = lstatFileIdentitySync(snapshot.path);
             assertSingleLinkIdentity(currentIdentity, label);
         }
         const noFollowFlag = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
@@ -554,7 +555,7 @@ function restoreOptionalControlPlaneFile(
                 fs.fchmodSync(descriptor, snapshot.mode);
             }
             fs.fsyncSync(descriptor);
-            const pathIdentity = fs.lstatSync(snapshot.path);
+            const pathIdentity = lstatFileIdentitySync(snapshot.path);
             if (!sameFileIdentity(openedIdentity, pathIdentity)) {
                 throw new Error(`${label} identity changed while restoring the transaction snapshot.`);
             }

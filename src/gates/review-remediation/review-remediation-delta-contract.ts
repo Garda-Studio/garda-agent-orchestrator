@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { isUtf8 } from 'node:buffer';
 import * as fs from 'node:fs';
+import { lstatFileIdentitySync } from '../../core/file-stat';
 import * as path from 'node:path';
 
 import { redactSecretText, sha256RedactedJsonPayload } from '../../core/redaction';
@@ -286,7 +287,7 @@ function buildEntry(
         if (!isPathInsideRoot(observedRealPath, repoRealPath)) {
             return { entry: buildUnreviewableEntry(normalizedPath, observedMode, linkSha256), bytes_read: 0 };
         }
-        const beforeOpen = fs.lstatSync(observedRealPath, { bigint: true });
+        const beforeOpen = lstatFileIdentitySync(observedRealPath, { bigint: true });
         if (!beforeOpen.isFile() || beforeOpen.size > BigInt(Number.MAX_SAFE_INTEGER)) {
             return { entry: buildUnreviewableEntry(normalizedPath, observedMode, linkSha256), bytes_read: 0 };
         }
@@ -334,7 +335,7 @@ function buildEntry(
             fs.closeSync(fileDescriptor);
         }
         const finalRealPath = fs.realpathSync(resolvedFile);
-        const afterPath = fs.lstatSync(observedRealPath, { bigint: true });
+        const afterPath = lstatFileIdentitySync(observedRealPath, { bigint: true });
         const finalPathState = getSafeWorktreePathState(repoRoot, normalizedPath, {
             includeContentHashes: false,
             distinguishAccessErrors: true

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import * as fs from 'node:fs';
+import { completePathFileIdentitySync, lstatFileIdentitySync } from '../../core/file-stat';
 import * as path from 'node:path';
 
 import { writeFileAtomically } from '../../core/filesystem';
@@ -1030,7 +1031,7 @@ function readReviewArtifactCanonicalSnapshot(filePath: string): ReviewArtifactFi
     if (cached) {
         if (cached.valid) {
             try {
-                const currentIdentity = fs.lstatSync(resolvedPath);
+                const currentIdentity = lstatFileIdentitySync(resolvedPath);
                 if (!cached.identity || !sameReviewArtifactFileIdentity(cached.identity, currentIdentity)) {
                     invalidateCachedReviewArtifactRead(snapshot, cached, true);
                 }
@@ -1039,7 +1040,7 @@ function readReviewArtifactCanonicalSnapshot(filePath: string): ReviewArtifactFi
             }
         } else if (!cached.exists) {
             try {
-                fs.lstatSync(resolvedPath);
+                lstatFileIdentitySync(resolvedPath);
                 cached.exists = true;
             } catch (error: unknown) {
                 if (reviewArtifactReadPathExists(error)) {
@@ -1067,12 +1068,13 @@ function readReviewArtifactCanonicalSnapshot(filePath: string): ReviewArtifactFi
             return cacheInvalidReviewArtifactRead(snapshot, cacheKey, true);
         }
         assertReviewArtifactByteBudget(snapshot, beforeRead.size);
-        const content = readReviewArtifactBytesBounded(resolvedPath, beforeRead);
+        const completeIdentity = completePathFileIdentitySync(resolvedPath, beforeRead);
+        const content = readReviewArtifactBytesBounded(resolvedPath, completeIdentity);
         if (!content) {
             return cacheInvalidReviewArtifactRead(snapshot, cacheKey, true);
         }
-        const afterRead = fs.lstatSync(resolvedPath);
-        if (!sameReviewArtifactFileIdentity(beforeRead, afterRead)) {
+        const afterRead = lstatFileIdentitySync(resolvedPath);
+        if (!sameReviewArtifactFileIdentity(completeIdentity, afterRead)) {
             return cacheInvalidReviewArtifactRead(snapshot, cacheKey, true);
         }
         const sha256 = createHash('sha256').update(content).digest('hex').toLowerCase();
@@ -1172,7 +1174,7 @@ export function readReviewArtifactJsonFile(filePath: string): unknown {
 
 function captureOptionalReviewArtifactIdentity(targetPath: string): fs.Stats | null {
     try {
-        return fs.lstatSync(targetPath);
+        return lstatFileIdentitySync(targetPath);
     } catch {
         return null;
     }

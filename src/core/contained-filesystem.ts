@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { lstatFileIdentitySync } from './file-stat';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 
@@ -19,7 +20,7 @@ export interface ContainedDestination {
 
 function lstatIfPresent(filePath: string): fs.Stats | null {
     try {
-        return fs.lstatSync(filePath);
+        return lstatFileIdentitySync(filePath);
     } catch (error: unknown) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
         throw error;
@@ -28,7 +29,7 @@ function lstatIfPresent(filePath: string): fs.Stats | null {
 
 function lstatIdentityIfPresent(filePath: string): fs.BigIntStats | null {
     try {
-        return fs.lstatSync(filePath, { bigint: true });
+        return lstatFileIdentitySync(filePath, { bigint: true });
     } catch (error: unknown) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
         throw error;
@@ -111,7 +112,7 @@ export function ensureContainedDirectory(
         assertExistingPathIdentity(binding);
         const created = !lstatIfPresent(current);
         if (created) fs.mkdirSync(current);
-        const stat = fs.lstatSync(current);
+        const stat = lstatFileIdentitySync(current);
         if (!stat.isDirectory() || stat.isSymbolicLink()) {
             throw new Error(`Destination parent is not a directory: ${current}`);
         }
@@ -181,7 +182,7 @@ export function copyContainedFile(
     writeTempAndReplace(root, destinationPath, (tempPath) => {
         fs.copyFileSync(sourcePath, tempPath, fs.constants.COPYFILE_EXCL);
         bindContainedDestination(path.parse(path.resolve(sourcePath)).root, sourcePath);
-        const observed = fs.lstatSync(sourcePath);
+        const observed = lstatFileIdentitySync(sourcePath);
         if (observed.dev !== source.dev || observed.ino !== source.ino || observed.nlink !== 1) {
             throw new Error(`Copy source identity changed: ${sourcePath}`);
         }
@@ -256,10 +257,10 @@ function collectRemovalEntries(rootBinding: ContainedDestination): RemovalEntry[
         if (!stat) throw new Error(`Cleanup destination disappeared during inspection: ${currentPath}`);
         entries.push({ binding, directory: stat.isDirectory() });
         if (stat.isDirectory()) {
-            const before = fs.lstatSync(currentPath, { bigint: true });
+            const before = lstatFileIdentitySync(currentPath, { bigint: true });
             const children = fs.readdirSync(currentPath).sort().map((name) =>
                 bindContainedDestination(rootBinding.root, path.join(currentPath, name)));
-            const after = fs.lstatSync(currentPath, { bigint: true });
+            const after = lstatFileIdentitySync(currentPath, { bigint: true });
             if (before.dev !== after.dev || before.ino !== after.ino || before.mode !== after.mode
                 || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) {
                 throw new Error(`Cleanup directory changed during enumeration: ${currentPath}`);
