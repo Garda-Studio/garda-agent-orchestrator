@@ -1249,6 +1249,73 @@ describe('split-required WIP restore planning', () => {
         }
     });
 
+    it('removes an unchanged snapshot when quarantine rename advances its ctime', {
+        skip: process.platform === 'win32' ? 'Windows removal does not use a POSIX quarantine rename.' : false
+    }, (context) => {
+        const repoRoot = makeRepo((callback) => context.after(callback));
+        const relativePath = 'cleanup/rename-clock.ts';
+        const targetPath = path.join(repoRoot, relativePath);
+        writeFile(repoRoot, relativePath, 'unchanged authenticated content\n');
+        const identity = fs.lstatSync(targetPath);
+        const originalRename = mutableFs.renameSync;
+        const renamedIdentities: fs.Stats[] = [];
+        context.mock.method(mutableFs, 'renameSync', (from: fs.PathLike, to: fs.PathLike) => {
+            if (path.basename(String(from)) === path.basename(targetPath)
+                && path.basename(path.dirname(String(to))).startsWith('.garda-restore-remove-')) {
+                Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+                originalRename(from, to);
+                renamedIdentities.push(fs.lstatSync(to));
+                return;
+            }
+            return originalRename(from, to);
+        });
+
+        removeRepoFileIfIdentityMatches(repoRoot, relativePath, identity);
+        assert.equal(renamedIdentities.length, 1);
+        const renamedIdentity = renamedIdentities[0];
+        assert.ok(renamedIdentity);
+        assert.notEqual(renamedIdentity.ctimeMs, identity.ctimeMs);
+        assert.equal(fs.existsSync(targetPath), false);
+        assert.deepEqual(fs.readdirSync(path.dirname(targetPath)), []);
+    });
+
+    it('preserves same-inode content changes during quarantine rename even when size and mtime are restored', {
+        skip: process.platform === 'win32' ? 'Windows removal does not use a POSIX quarantine rename.' : false
+    }, (context) => {
+        const repoRoot = makeRepo((callback) => context.after(callback));
+        const relativePath = 'cleanup/changed-content.ts';
+        const targetPath = path.join(repoRoot, relativePath);
+        const originalContent = 'authenticated bytes\n';
+        const changedContent = 'unauthorized  bytes\n';
+        assert.equal(Buffer.byteLength(originalContent), Buffer.byteLength(changedContent));
+        writeFile(repoRoot, relativePath, originalContent);
+        fs.utimesSync(targetPath, 1_700_000_000, 1_700_000_000);
+        const identity = fs.lstatSync(targetPath);
+        const originalRename = mutableFs.renameSync;
+        let preservedPath: string | null = null;
+        context.mock.method(mutableFs, 'renameSync', (from: fs.PathLike, to: fs.PathLike) => {
+            originalRename(from, to);
+            if (path.basename(String(from)) === path.basename(targetPath)
+                && path.basename(path.dirname(String(to))).startsWith('.garda-restore-remove-')) {
+                fs.writeFileSync(to, changedContent, 'utf8');
+                fs.utimesSync(to, identity.atimeMs / 1000, identity.mtimeMs / 1000);
+                const changedIdentity = fs.lstatSync(to);
+                assert.equal(changedIdentity.dev, identity.dev);
+                assert.equal(changedIdentity.ino, identity.ino);
+                assert.equal(changedIdentity.size, identity.size);
+                assert.equal(changedIdentity.mtimeMs, identity.mtimeMs);
+                preservedPath = fs.realpathSync.native(to);
+            }
+        });
+
+        assert.throws(
+            () => removeRepoFileIfIdentityMatches(repoRoot, relativePath, identity),
+            /restore target identity changed during removal; replacement preserved at/u
+        );
+        assert.ok(preservedPath);
+        assert.equal(fs.readFileSync(preservedPath, 'utf8'), changedContent);
+    });
+
     it('preserves a replaced final component instead of unlinking it', {
         skip: process.platform === 'win32' ? 'Windows prevents replacing an open file.' : false
     }, (context) => {

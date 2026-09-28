@@ -45,6 +45,7 @@ export interface SplitRequiredWipRestoreArtifactSnapshots {
 
 const GIT_RESTORE_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const RESTORE_BACKUP_IO_CHUNK_BYTES = 64 * 1024;
+const REMOVAL_HASH_IO_CHUNK_BYTES = 64 * 1024;
 const RESTORE_BACKUP_MAX_BYTES = 4 * 1024 * 1024 * 1024;
 const GIT_RESTORE_COMMAND_TIMEOUT_MS = 2 * 60 * 1_000;
 
@@ -83,6 +84,41 @@ function sameFileSnapshot(left: fs.Stats, right: fs.Stats): boolean {
         && left.mtimeMs === right.mtimeMs
         && left.ctimeMs === right.ctimeMs
         && left.mode === right.mode;
+}
+
+function sameFileAcrossQuarantineRename(left: fs.Stats, right: fs.Stats): boolean {
+    return sameFileIdentity(left, right)
+        && left.size === right.size
+        && left.mtimeMs === right.mtimeMs
+        && left.mode === right.mode
+        && left.nlink === right.nlink
+        && left.uid === right.uid
+        && left.gid === right.gid
+        && left.birthtimeMs === right.birthtimeMs;
+}
+
+function readRemovalContentHash(descriptor: number, identity: fs.Stats): string {
+    if (!Number.isSafeInteger(identity.size) || identity.size < 0
+        || !sameFileSnapshot(identity, fs.fstatSync(descriptor))) {
+        throw new Error('restore target changed before capturing removal bytes');
+    }
+    const hash = createHash('sha256');
+    const chunk = Buffer.alloc(Math.min(identity.size, REMOVAL_HASH_IO_CHUNK_BYTES));
+    let offset = 0;
+    while (offset < identity.size) {
+        const bytesRead = fs.readSync(
+            descriptor, chunk, 0, Math.min(chunk.length, identity.size - offset), offset
+        );
+        if (bytesRead <= 0) {
+            throw new Error('restore target ended while capturing removal bytes');
+        }
+        hash.update(chunk.subarray(0, bytesRead));
+        offset += bytesRead;
+    }
+    if (!sameFileSnapshot(identity, fs.fstatSync(descriptor))) {
+        throw new Error('restore target changed while capturing removal bytes');
+    }
+    return hash.digest('hex');
 }
 
 function samePath(left: string, right: string): boolean {
@@ -279,6 +315,9 @@ function unlinkTargetBoundToOpenedParent(
         fs.unlinkSync(parentTarget.targetPath);
         return true;
     }
+    const expectedContentHash = requireSnapshot
+        ? readRemovalContentHash(targetDescriptor, expectedIdentity)
+        : null;
     const quarantineDirectory = fs.mkdtempSync(
         path.join(path.dirname(parentTarget.targetPath), '.garda-restore-remove-')
     );
@@ -289,13 +328,22 @@ function unlinkTargetBoundToOpenedParent(
     );
     let preserveQuarantine = false;
     try {
+        if (requireSnapshot && !sameFileSnapshot(expectedIdentity, fs.fstatSync(targetDescriptor))) {
+            return false;
+        }
         fs.renameSync(parentTarget.targetPath, quarantineTargetPath);
         preserveQuarantine = true;
+        const renamedIdentity = fs.fstatSync(targetDescriptor);
         const quarantinedTarget = lstatFileIdentitySync(quarantineTargetPath);
+        // POSIX rename changes ctime. Authenticate that transition through the
+        // retained descriptor, unchanged metadata and identical file bytes.
         if (quarantinedTarget.isSymbolicLink()
             || !quarantinedTarget.isFile()
             || !(requireSnapshot
-                ? sameFileSnapshot(quarantinedTarget, expectedIdentity)
+                ? sameFileAcrossQuarantineRename(renamedIdentity, expectedIdentity)
+                    && sameFileSnapshot(quarantinedTarget, renamedIdentity)
+                    && readRemovalContentHash(targetDescriptor, renamedIdentity) === expectedContentHash
+                    && sameFileSnapshot(lstatFileIdentitySync(quarantineTargetPath), renamedIdentity)
                 : sameFileIdentity(quarantinedTarget, expectedIdentity))) {
             preserveQuarantine = true;
             const recoveryPath = fs.realpathSync.native(quarantineTargetPath);
