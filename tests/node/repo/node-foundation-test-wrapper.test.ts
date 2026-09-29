@@ -1464,6 +1464,8 @@ test('runNodeFoundationTests does not time out a shard that keeps producing outp
     const originalBuildPublishRuntime = mutableBuildModule.buildPublishRuntime;
     const originalSpawn = mutableChildProcess.spawn;
     const originalProcessKill = process.kill;
+    const syntheticOutputStreams: Array<InstanceType<typeof PassThrough>> = [];
+    let syntheticChildrenClosed = 0;
     let childKillCalled = false;
     const observedProcessKill: Array<{ pid: number; signal: string | number | undefined; }> = [];
 
@@ -1490,6 +1492,24 @@ test('runNodeFoundationTests does not time out a shard that keeps producing outp
             const events = new (require('node:events').EventEmitter)() as childProcess.ChildProcess;
             const stdout = new PassThrough();
             const stderr = new PassThrough();
+            syntheticOutputStreams.push(stdout, stderr);
+            // Keep produced bytes buffered across real event-loop turns before delivery.
+            const resumeOutput = stdout.resume.bind(stdout);
+            let outputReleased = false;
+            let releaseScheduled = false;
+            stdout.resume = () => {
+                if (outputReleased) return resumeOutput();
+                if (!releaseScheduled) {
+                    releaseScheduled = true;
+                    let remainingTurns = 20;
+                    const releaseAfterTurns = (): void => {
+                        if (--remainingTurns > 0) setImmediate(releaseAfterTurns);
+                        else { outputReleased = true; resumeOutput(); }
+                    };
+                    setImmediate(releaseAfterTurns);
+                }
+                return stdout;
+            };
             Object.assign(events, {
                 pid: 700 + observedProcessKill.length,
                 stdout,
@@ -1509,6 +1529,7 @@ test('runNodeFoundationTests does not time out a shard that keeps producing outp
             setTimeout(() => {
                 stdout.end('active shard done\n');
                 stderr.end();
+                syntheticChildrenClosed += 1;
                 events.emit('exit', 0);
                 events.emit('close', 0);
             }, 115);
@@ -1521,6 +1542,12 @@ test('runNodeFoundationTests does not time out a shard that keeps producing outp
         void execution.then(() => { completed = true; }, () => { completed = true; });
         while (!completed) {
             await new Promise<void>((resolve) => setImmediate(resolve));
+            // Real log flushing after child completion must not advance the synthetic lifespan.
+            if (syntheticOutputStreams.length > 0
+                && syntheticChildrenClosed * 2 === syntheticOutputStreams.length) continue;
+            // Real streams must consume produced bytes before logical time advances.
+            if (!childKillCalled && observedProcessKill.length === 0
+                && syntheticOutputStreams.some(stream => stream.readableLength > 0)) continue;
             context.mock.timers.tick(5);
         }
         const exitCode = await execution;
