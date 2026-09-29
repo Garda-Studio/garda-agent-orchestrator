@@ -14,7 +14,7 @@ function runProgressFixture(options: ProgressFixtureOptions) {
     const temporaryRoot = path.resolve(os.tmpdir());
     const fixtureRoot = fs.mkdtempSync(path.join(temporaryRoot, 'garda-test-case-progress-'));
     try {
-        const helperPath = path.join(__dirname, 'test-case-progress.js');
+        const helperPath = path.join(__dirname, '..', 'test-case-progress.js');
         const fixturePath = path.join(fixtureRoot, 'progress.test.cjs');
         const fixture = [
             "const assert = require('node:assert/strict');",
