@@ -35,6 +35,39 @@ ${holdMetadata ? `const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify
     return { root, calls, releaseMetadata: () => fs.writeFileSync(release, 'continue') };
 }
 
+function installControlledMetadataProbe(t: TestContext, root: string, calls: string, holdMetadata = false): void {
+    const workerPath = require.resolve('../../../src/lifecycle/update-availability/update-availability-worker');
+    const sourcePath = require.resolve('../../../src/lifecycle/check-update/check-update-source');
+    const preload = path.join(root, 'controlled-metadata.cjs');
+    const release = path.join(root, 'release-metadata');
+    // Keep the real scheduler and metadata processes; isolate only their local metadata response.
+    fs.writeFileSync(preload, `
+        const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
+        if (path.resolve(process.argv[1] || '.') === ${JSON.stringify(workerPath)} && process.argv[2] === ${JSON.stringify(root)}) {
+            require(${JSON.stringify(sourcePath)}).queryNpmUpdateMetadata = request => new Promise((resolve, reject) => {
+                assert.equal(request.cwd, ${JSON.stringify(root)});
+                assert.equal(request.packageSpec, 'garda-agent-orchestrator@latest');
+                fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ packageSpec: request.packageSpec }) + '\\n');
+                let timer;
+                const abort = () => { clearInterval(timer); reject(new Error('Controlled metadata request aborted.')); };
+                const respond = () => {
+                    clearInterval(timer); request.signal.removeEventListener('abort', abort);
+                    resolve({ version: '1.4.4', integrity: ${JSON.stringify('sha512-' + Buffer.alloc(64, 1).toString('base64'))} });
+                };
+                if (request.signal.aborted) return abort();
+                request.signal.addEventListener('abort', abort, { once: true });
+                if (!${JSON.stringify(holdMetadata)} || fs.existsSync(${JSON.stringify(release)})) return respond();
+                timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) respond(); }, 10);
+            });
+        }
+    `);
+    const previous = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = `${previous ?? ''} --require ${JSON.stringify(preload.replaceAll('\\', '/'))}`;
+    t.after(() => {
+        if (previous === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous;
+    });
+}
+
 test('pending launch claims coalesce and reject mismatched worker attempts', async t => {
     const { root, calls } = fixture(t);
     const prepared = await Promise.all(Array.from({ length: 8 }, () => prepareBackgroundUpdateAvailability(root)));
@@ -197,6 +230,7 @@ test('cancelling a speculative closeout read preserves concurrent shared cached 
 
 test('a short-lived task entry launches a durable scheduler without waiting for its source probe', async t => {
     const { root, calls, releaseMetadata } = fixture(t, true);
+    installControlledMetadataProbe(t, root, calls, true);
     const modulePath = require.resolve('../../../src/lifecycle/update-availability/update-availability-worker');
     const script = `
         require('node:worker_threads').Worker = function () { throw new Error('task entry must not start or await a local worker'); };
@@ -244,6 +278,7 @@ test('concurrent entry processes create one scheduler before source and cache di
 
 test('prevents a lost scheduler launch during lock contention', async t => {
     const { root, calls } = fixture(t);
+    installControlledMetadataProbe(t, root, calls);
     const modulePath = require.resolve('../../../src/lifecycle/update-availability/update-availability-worker');
     const directory = path.join(root, 'garda-agent-orchestrator', 'runtime', 'update-availability');
     const lock = path.join(directory, 'scheduler.lock');
