@@ -40,6 +40,7 @@ import {
 import { collectEffectiveReviewTypeIds } from '../../../src/gates/task-audit/task-audit-summary-review-common';
 import { collectEvidenceArtifacts } from '../../../src/gates/task-audit/task-audit-summary-review-evidence';
 import { buildReviewIntegrityAttestation } from '../../../src/gates/task-audit/task-audit-summary-review-integrity';
+import { getReviewArtifactTransactionLockPath } from '../../../src/gate-runtime/review/review-artifacts';
 import { readReviewTrustSummaryFromReviewGate } from '../../../src/gates/task-audit/task-audit-summary-review-trust';
 import type { ProjectMemoryImpactLifecycleEvidence } from '../../../src/gates/project-memory-impact';
 
@@ -466,7 +467,9 @@ test('task audit rejects gate-derived custom trust when receipt lane evidence is
     const reviewType = 'architecture-boundary';
     const taskId = 'T-CUSTOM-AUDIT';
     const preflightSha256 = 'b'.repeat(64);
-    const reviewsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'custom-audit-trust-'));
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'custom-audit-trust-'));
+    const reviewsRoot = path.join(fixtureRoot, 'runtime', 'reviews');
+    fs.mkdirSync(reviewsRoot, { recursive: true });
     const receiptPath = path.join(reviewsRoot, `${taskId}-${reviewType}-receipt.json`);
     const reviewGate = {
         task_id: taskId,
@@ -494,6 +497,9 @@ test('task audit rejects gate-derived custom trust when receipt lane evidence is
     };
 
     try {
+        const lockRelativePath = path.relative(fixtureRoot, getReviewArtifactTransactionLockPath(reviewsRoot));
+        assert.ok(!path.isAbsolute(lockRelativePath) && !lockRelativePath.split(path.sep).includes('..'),
+            'Review transaction locks must remain inside the isolated fixture workspace.');
         fs.writeFileSync(receiptPath, JSON.stringify({
             task_id: taskId,
             review_type: reviewType
@@ -538,7 +544,7 @@ test('task audit rejects gate-derived custom trust when receipt lane evidence is
             reviewsRoot
         )?.status, 'INDEPENDENT_AUDITED');
     } finally {
-        fs.rmSync(reviewsRoot, { recursive: true, force: true });
+        fs.rmSync(fixtureRoot, { recursive: true, force: true });
     }
 });
 

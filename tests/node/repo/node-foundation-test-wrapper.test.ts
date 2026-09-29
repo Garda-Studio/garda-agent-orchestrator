@@ -1454,7 +1454,7 @@ test('runNodeFoundationTests finishes timed out shards when cleanup never emits 
     }
 });
 
-test('runNodeFoundationTests does not time out a shard that keeps producing output', async () => {
+test('runNodeFoundationTests does not time out a shard that keeps producing output', async (context) => {
     const { PassThrough } = require('node:stream') as typeof import('node:stream');
     const { buildResult, cleanup } = createBuildResultFixture();
     const originalArgv = process.argv;
@@ -1468,6 +1468,8 @@ test('runNodeFoundationTests does not time out a shard that keeps producing outp
     const observedProcessKill: Array<{ pid: number; signal: string | number | undefined; }> = [];
 
     try {
+        // Exercise inactivity deadlines without depending on wall-clock scheduling under full-suite load.
+        context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
         process.argv = [
             'node',
             'scripts/node-foundation/test.js',
@@ -1513,9 +1515,18 @@ test('runNodeFoundationTests does not time out a shard that keeps producing outp
             return events;
         }) as typeof childProcess.spawn;
 
-        const exitCode = await testModule.runNodeFoundationTests();
+        const startedAt = Date.now();
+        let completed = false;
+        const execution = testModule.runNodeFoundationTests();
+        void execution.then(() => { completed = true; }, () => { completed = true; });
+        while (!completed) {
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            context.mock.timers.tick(5);
+        }
+        const exitCode = await execution;
 
         assert.equal(exitCode, 0);
+        assert.ok(Date.now() - startedAt >= 115, 'Active output must outlive the unchanged 80 ms inactivity window.');
         assert.equal(childKillCalled, false);
         assert.deepEqual(observedProcessKill, []);
         const logDir = path.join(buildResult.repoRoot, 'active-output-shard-logs');
@@ -1534,6 +1545,7 @@ test('runNodeFoundationTests does not time out a shard that keeps producing outp
         } else {
             process.env.GARDA_NODE_FOUNDATION_TEST_SHARD_HEARTBEAT_MS = originalShardHeartbeatEnv;
         }
+        context.mock.timers.reset();
         mutableBuildModule.buildNodeFoundation = originalBuildNodeFoundation;
         mutableBuildModule.buildPublishRuntime = originalBuildPublishRuntime;
         mutableChildProcess.spawn = originalSpawn;
