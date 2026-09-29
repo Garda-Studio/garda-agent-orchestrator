@@ -265,6 +265,101 @@ test('same-size packed file changes and archive-only changes fail SHA-256 compar
     }
 });
 
+test('audited platform digests select one exact archive and reject cross-platform or unapproved archives', () => {
+    const posix = fixture();
+    const windows = fixture({ entries: fixtureEntries().map((entry) => entry.path === 'package/bin/cli.js'
+        ? { ...entry, mode: 0o644 } : entry) });
+    const reordered = fixture({ entries: [...fixtureEntries()].reverse() });
+    const edited = fixture({ entries: fixtureEntries().map((entry) => entry.path === 'package/README.md'
+        ? { ...entry, content: Buffer.from('# Changed\n') } : entry) });
+    try {
+        const posixArtifact = artifact(posix);
+        const windowsArtifact = artifact(windows);
+        const baseline = parsePackageSurfaceBaseline({
+            ...createPackageSurfaceBaseline(posixArtifact, { rationale: 'Audited modes.', allowedGrowth: ZERO_GROWTH }),
+            tarballSha256ByPlatform: { linux: posixArtifact.tarballSha256, win32: windowsArtifact.tarballSha256 }
+        });
+        assert.deepEqual(windowsArtifact.packedFileSha256, posixArtifact.packedFileSha256);
+        for (const [platform, measured] of [['linux', posixArtifact], ['win32', windowsArtifact]] as const) {
+            const result = comparePackageSurface(measured, baseline, 'baseline.json', platform);
+            assert.equal(result.passed, true, formatPackageSurfaceComparison(result));
+            assert.equal(result.referenceTarballSha256, measured.tarballSha256);
+            assert.match(formatPackageSurfaceComparison(result), new RegExp(`Platform: ${platform}`, 'u'));
+        }
+        for (const [platform, measured] of [
+            ['linux', windowsArtifact], ['win32', posixArtifact], ['linux', artifact(reordered)], ['win32', artifact(reordered)]
+        ] as const) {
+            const result = comparePackageSurface(measured, baseline, 'baseline.json', platform);
+            assert.equal(result.passed, false);
+            assert.match(formatPackageSurfaceComparison(result), /tarball SHA-256 changed despite identical packed files/u);
+        }
+        const unsupported = comparePackageSurface(posixArtifact, baseline, 'baseline.json', 'darwin');
+        assert.equal(unsupported.passed, false);
+        assert.match(formatPackageSurfaceComparison(unsupported), /No audited tarball SHA-256 for platform darwin/u);
+        const contentChange = comparePackageSurface(artifact(edited), baseline, 'baseline.json', 'win32');
+        assert.equal(contentChange.passed, false);
+        assert.match(formatPackageSurfaceComparison(contentChange), /packed file SHA-256 changed \(1\): README.md/u);
+    } finally {
+        posix.cleanup();
+        windows.cleanup();
+        reordered.cleanup();
+        edited.cleanup();
+    }
+});
+
+test('platform digest maps reject malformed, unknown, inherited, and unbound entries', () => {
+    const sample = fixture();
+    try {
+        const baseline = createPackageSurfaceBaseline(artifact(sample), { rationale: 'Reviewed.', allowedGrowth: ZERO_GROWTH });
+        for (const map of [null, [], {}, 'linux', { linux: 'invalid' }, { windows: baseline.tarballSha256 },
+            { linux: 'f'.repeat(64) }, Object.create({ linux: baseline.tarballSha256 })]) {
+            assert.throws(() => parsePackageSurfaceBaseline({ ...baseline, tarballSha256ByPlatform: map }), /tarballSha256ByPlatform/u);
+        }
+        const parsed = parsePackageSurfaceBaseline({ ...baseline, tarballSha256ByPlatform: { linux: baseline.tarballSha256 } });
+        assert.deepEqual(parsed.tarballSha256ByPlatform, { linux: baseline.tarballSha256 });
+    } finally {
+        sample.cleanup();
+    }
+});
+
+test('legacy baselines and explicit prior artifacts retain exact archive comparison on every platform', () => {
+    const sample = fixture();
+    try {
+        const measured = artifact(sample);
+        const legacy = createPackageSurfaceBaseline(measured, { rationale: 'Legacy.', allowedGrowth: ZERO_GROWTH });
+        delete legacy.tarballSha256ByPlatform;
+        assert.deepEqual(parsePackageSurfaceBaseline(legacy), legacy);
+        const prior = parsePackageSurfaceArtifact({ ...measured, tarballSha256ByPlatform: { win32: 'f'.repeat(64) } });
+        for (const platform of ['linux', 'win32', 'darwin'] as const) {
+            for (const reference of [legacy, prior]) {
+                assert.equal(comparePackageSurface(measured, reference, 'reference.json', platform).passed, true);
+                const altered = { ...measured, tarballSha256: 'f'.repeat(64) };
+                assert.equal(comparePackageSurface(altered, reference, 'reference.json', platform).passed, false);
+            }
+        }
+    } finally {
+        sample.cleanup();
+    }
+});
+
+test('an explicit baseline refresh approves only its measured platform and drops stale platform digests', () => {
+    const sample = fixture();
+    try {
+        const measured = artifact(sample);
+        const baselinePath = path.join(sample.root, 'baseline.json');
+        const old = createPackageSurfaceBaseline(measured, { rationale: 'Old.', allowedGrowth: ZERO_GROWTH });
+        old.tarballSha256ByPlatform = { linux: measured.tarballSha256, win32: 'f'.repeat(64) };
+        fs.writeFileSync(baselinePath, JSON.stringify(old));
+        const updated = updatePackageSurfaceBaseline(baselinePath, measured, {
+            confirmed: true, rationale: 'Audited refresh.', allowedGrowth: ZERO_GROWTH
+        });
+        assert.deepEqual(updated.tarballSha256ByPlatform, { [process.platform]: measured.tarballSha256 });
+        assert.deepEqual(parsePackageSurfaceBaseline(JSON.parse(fs.readFileSync(baselinePath, 'utf8'))), updated);
+    } finally {
+        sample.cleanup();
+    }
+});
+
 test('new packed paths fail even within file and byte growth allowances', () => {
     const original = fixture();
     const changed = fixture({ entries: [
@@ -498,6 +593,11 @@ test('package-surface validation reproduces real offline npm packs and cleans co
         assert.equal(measured.metrics.productionDependencyCount, 0);
         assert.equal(Object.keys(measured.packedFileSha256).length, measured.metrics.fileCount);
         assert.equal(fs.existsSync(compatibilityPath), false);
+        const defaultResult = validatePackageSurface(repoRoot, { outputPath: relativeOutputPath });
+        assert.equal(defaultResult.passed, true, formatPackageSurfaceComparison(defaultResult));
+        assert.equal(defaultResult.referenceKind, 'baseline');
+        assert.equal(defaultResult.platform, process.platform);
+        assert.equal(defaultResult.referenceTarballSha256, measured.tarballSha256);
     } finally {
         fs.rmSync(outputPath, { force: true });
         fs.rmSync(priorPath, { force: true });

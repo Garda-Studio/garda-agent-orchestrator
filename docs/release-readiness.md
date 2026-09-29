@@ -422,13 +422,21 @@ The tracked reference is
 
 Raw npm tar archives can differ across hosts even when all packed file bytes
 match: Windows npm can encode a declared CLI launcher as `0644`, while POSIX
-encodes it as `0755`. The strict tarball digest comparison still rejects this
-difference. Validate the tracked release baseline on its publishing platform.
-For another host, inspect its real packed artifact against that baseline,
-including tar header modes, file hashes and security metrics, then use the
-explicitly audited same-host artifact with `--prior-artifact <path>`. Preserve
-the initial rejection and both artifacts in the local audit. An artifact from
-a failed comparison is not automatically an approved reference.
+encodes it as `0755`. The tracked baseline can contain a
+`tarballSha256ByPlatform` map of independently audited exact archive digests.
+The default `npm run release:preflight` selects only the current Node platform's
+digest, while every platform shares the same packed-file hashes, manifest,
+metadata, security metrics, and growth allowances. An unlisted platform fails
+closed; another platform's digest or an unapproved archive is never accepted.
+Legacy baselines without this map retain their single exact digest comparison.
+
+To enroll another platform, inspect its real packed artifact against the
+canonical baseline, including tar header modes, file hashes and security
+metrics, then commit only its independently approved digest and audit rationale.
+Preserve the initial rejection and both artifacts in the local audit. An
+artifact from a failed comparison is not automatically an approved reference.
+An explicit `--prior-artifact <path>` still compares that exact archive and does
+not select platform alternatives.
 
 These lexical counts are review prompts, not vulnerability findings. A failure
 means inspect the package diff; it does not assert that the matched code is
@@ -440,7 +448,9 @@ node scripts/node-foundation/build-scripts.cjs validate-release.js package-surfa
 ```
 
 The command never silently updates the baseline: both the confirmation flag and
-a non-empty rationale are mandatory. External Socket scores remain advisory and
+a non-empty rationale are mandatory. A refresh records only the measured host's
+digest and drops older platform digests; approve fresh archives on other hosts
+before enrolling them again. External Socket scores remain advisory and
 may temporarily move because of signals such as `recentlyPublished`; their
 availability and score are not release gates.
 

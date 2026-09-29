@@ -95,6 +95,7 @@ export interface PackageSurfaceBaseline {
     };
     packedFileManifestSha256: string;
     tarballSha256: string;
+    tarballSha256ByPlatform?: Partial<Record<NodeJS.Platform, string>>;
     packedFileSha256: Record<string, string>;
     metrics: PackageSurfaceMetrics;
     allowedGrowth: PackageSurfaceAllowedGrowth;
@@ -109,6 +110,8 @@ export interface PackageSurfaceComparisonResult {
     reference: PackageSurfaceReference;
     referenceKind: 'baseline' | 'prior-artifact';
     referencePath: string;
+    platform: NodeJS.Platform;
+    referenceTarballSha256: string | null;
     allowedGrowth: PackageSurfaceAllowedGrowth;
     violations: string[];
 }

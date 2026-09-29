@@ -104,6 +104,7 @@ export function createPackageSurfaceBaseline(
         package: { ...artifact.package },
         packedFileManifestSha256: artifact.packedFileManifestSha256,
         tarballSha256: artifact.tarballSha256,
+        tarballSha256ByPlatform: { [process.platform]: artifact.tarballSha256 },
         packedFileSha256: { ...artifact.packedFileSha256 },
         metrics: structuredClone(artifact.metrics),
         allowedGrowth: cloneAllowedGrowth(options.allowedGrowth),
@@ -146,13 +147,20 @@ function compareLifecycleScripts(current: Record<string, string>, reference: Rec
 export function comparePackageSurface(
     current: PackageSurfaceArtifact,
     reference: PackageSurfaceReference,
-    referencePath: string
+    referencePath: string,
+    platform: NodeJS.Platform = process.platform
 ): PackageSurfaceComparisonResult {
     const referenceKind = isBaseline(reference) ? 'baseline' : 'prior-artifact';
     const allowedGrowth = isBaseline(reference)
         ? cloneAllowedGrowth(reference.allowedGrowth)
         : cloneAllowedGrowth(DEFAULT_PACKAGE_SURFACE_ALLOWED_GROWTH);
     const violations: string[] = [];
+    const referenceTarballSha256 = isBaseline(reference) && reference.tarballSha256ByPlatform
+        ? reference.tarballSha256ByPlatform[platform] ?? null
+        : reference.tarballSha256;
+    if (referenceTarballSha256 === null) {
+        violations.push(`No audited tarball SHA-256 for platform ${platform} in ${referencePath}.`);
+    }
     if (current.package.name !== reference.package.name) {
         violations.push(`package name current=${current.package.name} reference=${reference.package.name}`);
     }
@@ -179,8 +187,8 @@ export function comparePackageSurface(
     if (identicalFileHashes && current.packedFileManifestSha256 !== reference.packedFileManifestSha256) {
         violations.push('packed file manifest SHA-256 changed despite identical file hashes.');
     }
-    if (identicalFileHashes && current.tarballSha256 !== reference.tarballSha256) {
-        violations.push(`tarball SHA-256 changed despite identical packed files: current=${current.tarballSha256} reference=${reference.tarballSha256}`);
+    if (identicalFileHashes && referenceTarballSha256 !== null && current.tarballSha256 !== referenceTarballSha256) {
+        violations.push(`tarball SHA-256 changed despite identical packed files: current=${current.tarballSha256} reference=${referenceTarballSha256}`);
     }
     pushGrowthViolation(
         violations,
@@ -241,6 +249,8 @@ export function comparePackageSurface(
         reference,
         referenceKind,
         referencePath,
+        platform,
+        referenceTarballSha256,
         allowedGrowth,
         violations
     };
@@ -251,6 +261,8 @@ export function formatPackageSurfaceComparison(result: PackageSurfaceComparisonR
         result.passed ? 'PACKAGE_SURFACE_OK' : 'PACKAGE_SURFACE_FAILED',
         `Package: ${result.current.package.name}@${result.current.package.version}`,
         `Reference: ${result.referenceKind} ${result.referencePath}`,
+        `Platform: ${result.platform}`,
+        `ReferenceTarballSha256: ${result.referenceTarballSha256 ?? 'unapproved'}`,
         `FileCount: ${result.current.metrics.fileCount}`,
         `UnpackedSizeBytes: ${result.current.metrics.unpackedSizeBytes}`,
         `InstalledSizeBytes: ${result.current.metrics.installedSizeBytes}`,
@@ -375,6 +387,30 @@ function parsePackedFileSha256(value: unknown, label: string): Record<string, st
     return hashes;
 }
 
+function parsePlatformTarballSha256(
+    value: unknown,
+    canonicalDigest: string,
+    label: string
+): Partial<Record<NodeJS.Platform, string>> {
+    const platforms: readonly NodeJS.Platform[] = [
+        'aix', 'android', 'darwin', 'freebsd', 'haiku', 'linux', 'openbsd', 'sunos', 'win32', 'cygwin', 'netbsd'
+    ];
+    if (!isRecord(value) || Object.keys(value).length === 0) {
+        throw new Error(`${label} must be a non-empty platform-to-SHA-256 object.`);
+    }
+    const digests: Partial<Record<NodeJS.Platform, string>> = {};
+    for (const [platform, digest] of Object.entries(value)) {
+        if (!platforms.includes(platform as NodeJS.Platform)) {
+            throw new Error(`${label} contains unsupported platform: ${platform}`);
+        }
+        digests[platform as NodeJS.Platform] = parseSha256(digest, `${label}.${platform}`);
+    }
+    if (!Object.values(digests).includes(canonicalDigest)) {
+        throw new Error(`${label} must include the canonical tarballSha256 digest.`);
+    }
+    return digests;
+}
+
 function parseMetadata(value: unknown, label: string): PackageSurfaceMetrics['metadata'] {
     if (!isRecord(value)) {
         throw new Error(`${label} must be an object.`);
@@ -435,11 +471,16 @@ export function parsePackageSurfaceBaseline(value: unknown, label = 'package-sur
     if (!isRecord(value.allowedGrowth)) {
         throw new Error(`${label}.allowedGrowth must be an object.`);
     }
+    const tarballSha256 = parseSha256(value.tarballSha256, `${label}.tarballSha256`);
+    const platformDigests = Object.hasOwn(value, 'tarballSha256ByPlatform')
+        ? parsePlatformTarballSha256(value.tarballSha256ByPlatform, tarballSha256, `${label}.tarballSha256ByPlatform`)
+        : undefined;
     return {
         schemaVersion: PACKAGE_SURFACE_SCHEMA_VERSION,
         package: parsePackageIdentity(value.package, `${label}.package`),
         packedFileManifestSha256: parseSha256(value.packedFileManifestSha256, `${label}.packedFileManifestSha256`),
-        tarballSha256: parseSha256(value.tarballSha256, `${label}.tarballSha256`),
+        tarballSha256,
+        ...(platformDigests ? { tarballSha256ByPlatform: platformDigests } : {}),
         packedFileSha256: parsePackedFileSha256(value.packedFileSha256, `${label}.packedFileSha256`),
         metrics: parseMetrics(value.metrics, `${label}.metrics`),
         allowedGrowth: {

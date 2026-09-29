@@ -4,8 +4,12 @@
     "name": "garda-agent-orchestrator",
     "version": "1.4.4"
   },
-  "packedFileManifestSha256": "c0a40315163c6b366691e584d680d880b7705f18e567e27b722060d364981950",
-  "tarballSha256": "798047162db7416bd56010bfe4350dff409dbc37d78455f49cbb2d35566982f3",
+  "packedFileManifestSha256": "2e6c3379bf509597804792a77af6879a9ed672d69a8920491a9f2c32c41ff343",
+  "tarballSha256": "2dc75ad1fba44ab6e8eeca1119ca2ac63dc57bbe66f784e429adcfafb3a05cff",
+  "tarballSha256ByPlatform": {
+    "linux": "2dc75ad1fba44ab6e8eeca1119ca2ac63dc57bbe66f784e429adcfafb3a05cff",
+    "win32": "10f268caeeefcc2ed6cd570ddaf4e21c75c384cd2834640ccbd187561861ded8"
+  },
   "packedFileSha256": {
     ".gitattributes": "099d1a09ca2f02b2d7d071bcc19fdd2cda5c66f01f133abe9ff9d63294a1055c",
     "AGENT_INIT_PROMPT.md": "0402c3f2d256f08e0897f4f4616cbe0ce6718fb029692d9c4aad567bd003077c",
@@ -1238,7 +1242,7 @@
     "docs/operator-consistency-runbook.md": "fd48f3de1a70cae653464e24afe50143826956792838944a4ffda9122491add0",
     "docs/orchestrator-work-and-isolation.md": "4632ebc674438dbef4932b5be2379f50d423f490a3b38461dd2bc8f8164ec677",
     "docs/providers.md": "b2e0eaf19885c81aba82e3a38de664053909625763793eaae4ee12b3a0d1ae77",
-    "docs/release-readiness.md": "6ae699ad996a8ba58ed930b544b29091389e5bf0ae47ba5d5ba0125f51cab7f7",
+    "docs/release-readiness.md": "05cc2ba79220c6d85b220f8018a035029deb878b81c1dab7b56bd5304054fe85",
     "docs/run-methods.md": "76add653b2de2cda253d339903e4b02d8c5630a412ebce672cf33d10cbd8e40d",
     "docs/sbom.md": "ec0c4630ddabedbc5ecfaa1d1f1ee744eed2c62446c646db866cd85b8e2947af",
     "docs/secret-scanning.md": "5b10f0d20e917336601b0f55195d2761141b94ede182da46e3242f9797923373",
@@ -1456,8 +1460,8 @@
   },
   "metrics": {
     "fileCount": 1446,
-    "unpackedSizeBytes": 17276516,
-    "installedSizeBytes": 17277318,
+    "unpackedSizeBytes": 17277161,
+    "installedSizeBytes": 17277963,
     "productionDependencyCount": 0,
     "lifecycleScripts": {
       "postpack": "node scripts/package-legacy-entrypoint-compat.cjs remove",
@@ -1522,5 +1526,5 @@
       "writeFile": 0
     }
   },
-  "rationale": "Reviewed POSIX quarantine cleanup hotfix ce686ef4: exactly one compiled file changes, 2210 bytes and five fs signals for descriptor snapshots and bounded content hashing; all package metadata, dependencies, lifecycle scripts, paths, hosts and growth allowances remain unchanged. Independent Sol xhigh source review and full Linux coverage passed."
+  "rationale": "Reviewed POSIX quarantine cleanup hotfix ce686ef4: exactly one compiled file changes, 2210 bytes and five fs signals for descriptor snapshots and bounded content hashing; all package metadata, dependencies, lifecycle scripts, paths, hosts and growth allowances remain unchanged. Independent Sol xhigh source review and full Linux coverage passed. Platform-selection repair: only docs/release-readiness.md changes in the packed payload (645 bytes) to document exact audited platform digests; no metadata, dependency, lifecycle, path, URL, security signal or growth allowance changes. Real Linux Node22/npm10.9.2 and Windows Node24/npm11.18 archives have identical payloads and differ only in the declared CLI launcher's 0755/0644 mode and checksum (five tar header bytes). Local source and candidate baseline require the fresh independent Sol xhigh review before commit."
 }
