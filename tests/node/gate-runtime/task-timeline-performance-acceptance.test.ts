@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import test, { type TestContext } from 'node:test';
+import { queryObjects } from 'node:v8';
 
 import {
     appendTaskEvent,
@@ -434,11 +435,17 @@ function installBufferAllocationProbe(fullPayloadThreshold: number): BufferAlloc
 }
 
 function createHeapUsageProbe(): HeapUsageProbe {
+    // This private function is never constructed. queryObjects completes a
+    // full collection without retaining heap objects or changing V8 flags.
+    queryObjects(createHeapUsageProbe, { format: 'count' });
     const baselineHeapUsed = process.memoryUsage().heapUsed;
     let maximumHeapUsed = baselineHeapUsed;
     return {
         sample: () => {
+            // Record the real pre-collection high-water sample, then discard
+            // unreachable prior generations before measuring the next one.
             maximumHeapUsed = Math.max(maximumHeapUsed, process.memoryUsage().heapUsed);
+            queryObjects(createHeapUsageProbe, { format: 'count' });
         },
         maxGrowthBytes: () => Math.max(0, maximumHeapUsed - baselineHeapUsed)
     };
