@@ -12,6 +12,9 @@ import {
     runRollbackToVersion
 } from '../../../src/lifecycle/rollback';
 import { removePathRecursive, writeRollbackRecords } from '../../../src/lifecycle/common';
+import { registerTestCaseProgress } from '../test-case-progress';
+
+registerTestCaseProgress();
 
 const MANAGED_END = '<!-- garda-agent-orchestrator:managed-end -->';
 
