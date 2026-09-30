@@ -12,6 +12,8 @@ import {
     buildReviewOutputCorrectionTransportSelection,
     computeReviewOutputCorrectionProviderCapabilitiesSha256,
     readReviewOutputCorrectionArtifact,
+    persistReviewOutputCorrection,
+    persistReviewOutputCorrectionTransportSelection,
     REVIEW_OUTPUT_CORRECTION_FAIL_CLOSED_ATTESTATION_SOURCE
 } from '../../../../src/gates/review/review-output-correction';
 import type { ReviewReuseTelemetryEventLike } from '../../../../src/gates/review-reuse/review-reuse-telemetry';
@@ -85,6 +87,8 @@ function reviewerInvocationEvent(options: {
 }
 
 function writeSelectedCorrectionFixture(options: {
+    repoRoot?: string;
+    persistInitial?: boolean;
     reviewsRoot: string;
     taskId: string;
     reviewType: string;
@@ -138,7 +142,7 @@ function writeSelectedCorrectionFixture(options: {
     );
     fs.writeFileSync(rejectedOutputPath, rejectedOutputContent, 'utf8');
     fs.writeFileSync(validationArtifactPath, '{}\n', 'utf8');
-    const initial = buildReviewOutputCorrectionArtifact({
+    let initial = buildReviewOutputCorrectionArtifact({
         taskId: options.taskId,
         reviewType: options.reviewType,
         rejectedOutputPath,
@@ -161,7 +165,17 @@ function writeSelectedCorrectionFixture(options: {
         sessionAvailability: 'pending',
         now: '2026-08-21T00:00:00.000Z'
     });
-    fs.writeFileSync(artifactPath, `${JSON.stringify(initial, null, 2)}\n`, 'utf8');
+    if (options.persistInitial) {
+        assert.ok(options.repoRoot);
+        initial = persistReviewOutputCorrection({
+            repoRoot: options.repoRoot,
+            reviewArtifactPath: path.join(options.reviewsRoot, `${options.taskId}-${options.reviewType}.md`),
+            rawOutput: rejectedOutputContent,
+            artifact: initial
+        }).artifact;
+    } else {
+        fs.writeFileSync(artifactPath, `${JSON.stringify(initial, null, 2)}\n`, 'utf8');
+    }
     const previousFileSha256 = fileSha256(artifactPath) || '';
     const selected = options.selectTransport === false
         ? initial
@@ -180,6 +194,18 @@ function writeSelectedCorrectionFixture(options: {
             reason: 'Authenticated provider response accepted.',
             now: '2026-08-21T00:01:00.000Z'
             })
+            : options.persistInitial && options.repoRoot
+            ? persistReviewOutputCorrectionTransportSelection({
+                repoRoot: options.repoRoot,
+                artifactPath,
+                artifact: initial,
+                sessionAvailability: options.sessionAvailability,
+                reviewerIdentity: options.reviewerIdentity,
+                providerInvocationId: options.providerInvocationId,
+                attestationSource: options.attestationSource
+                    || REVIEW_OUTPUT_CORRECTION_FAIL_CLOSED_ATTESTATION_SOURCE,
+                now: '2026-08-21T00:01:00.000Z'
+            }).artifact
             : buildReviewOutputCorrectionTransportSelection({
                 artifactPath,
                 artifact: initial,
@@ -375,6 +401,83 @@ describe('gates/task-audit-summary review correction transport', () => {
             assert.equal(summary?.status, attemptEvidence === undefined ? 'CLEAR' : 'BLOCKED');
         }
     });
+
+    for (const correctionAttempt of [1, 2]) {
+        it(`reconstructs real persisted predecessor handoffs for current and historical attempt ${correctionAttempt}`, () => {
+            const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-persisted-predecessor-'));
+            const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+            fs.mkdirSync(reviewsRoot, { recursive: true });
+            tempRoots.push(repoRoot);
+            const taskId = `T-AUDIT-PERSISTED-PREDECESSOR-${correctionAttempt}`;
+            const capabilities = {
+                live_reviewer_continuation: false,
+                api_conversation_continuation: false,
+                correction_only_invocation: true
+            };
+            const invocation = reviewerInvocationEvent({
+                taskId, reviewType: 'code', reviewerIdentity: 'agent:persisted-reviewer',
+                providerId: 'Codex', providerInvocationId: '/root/persisted-reviewer',
+                eventSha256: '8'.repeat(64)
+            });
+            const persistedOptions = {
+                repoRoot, persistInitial: true, reviewsRoot, taskId, reviewType: 'code',
+                reviewerIdentity: 'agent:persisted-reviewer', providerId: 'Codex',
+                providerInvocationId: '/root/persisted-reviewer', reviewerInvocationEventSha256: '8'.repeat(64),
+                capabilities, sessionAvailability: 'stateless' as const, correctionAttempt
+            };
+            if (correctionAttempt > 1) writeSelectedCorrectionFixture({
+                ...persistedOptions, correctionAttempt: 1, selectTransport: false
+            });
+            const persisted = writeSelectedCorrectionFixture(persistedOptions);
+            const details = {
+                task_id: taskId, review_type: 'code', correction_attempt: correctionAttempt,
+                reviewer_identity: 'agent:persisted-reviewer', reviewer_attempt_id: 'attempt-1',
+                provider_id: 'Codex', provider_invocation_id: '/root/persisted-reviewer',
+                reviewer_invocation_event_sha256: '8'.repeat(64)
+            };
+            const required = correctionEvent('REVIEW_OUTPUT_CORRECTION_REQUIRED', {
+                ...details, correction_package_sha256: persisted.previousFileSha256
+            });
+            const selected = correctionEvent('REVIEW_OUTPUT_CORRECTION_ONLY_INVOCATION', {
+                ...details, previous_correction_package_sha256: persisted.previousFileSha256,
+                correction_package_sha256: persisted.selectedFileSha256,
+                correction_artifact_path: persisted.artifactPath,
+                correction_artifact_sha256: persisted.artifactSha256,
+                correction_artifact_snapshot_path: persisted.snapshotPath,
+                correction_artifact_snapshot_sha256: persisted.selectedFileSha256,
+                provider_capabilities: capabilities,
+                provider_capabilities_sha256: computeReviewOutputCorrectionProviderCapabilitiesSha256({
+                    providerId: 'Codex', capabilities
+                }), session_availability: 'stateless',
+                availability_attestation_source: REVIEW_OUTPUT_CORRECTION_FAIL_CLOSED_ATTESTATION_SOURCE,
+                availability_evidence_type: 'fail_closed_no_provider_session_receipt'
+            });
+            const nextSelection = correctionEvent('REVIEW_OUTPUT_CORRECTION_ONLY_INVOCATION', {
+                ...selected.details, correction_attempt: correctionAttempt + 1,
+                previous_correction_package_sha256: persisted.selectedFileSha256,
+                correction_package_sha256: 'f'.repeat(64)
+            });
+            for (const historical of [false, true]) {
+                for (const tampered of [false, true]) {
+                    const selection = tampered ? {
+                        ...selected, details: { ...selected.details, previous_correction_package_sha256: 'e'.repeat(64) }
+                    } : selected;
+                    const summary = buildReviewFindingsAuditSummary({
+                        repoRoot, reviewsRoot, taskId, requiredReviews: CORRECTION_REQUIRED_REVIEWS,
+                        currentPreflight: null,
+                        timelineEvents: [invocation, required, selection, ...(historical ? [nextSelection] : [])],
+                        reviewAttemptSummary: null
+                    });
+                    const violations = summary?.correction_transports?.[1]?.violations.join(' ') || '';
+                    assert.equal(/not derived from its validation-rejection predecessor package/u.test(violations),
+                        tampered, `historical=${historical}, tampered=${tampered}: ${violations}`);
+                    assert.equal(summary?.status, 'BLOCKED');
+                    assert.equal(summary?.correction_transports?.[1]?.evidence_valid, false);
+                    if (!historical && !tampered) assert.match(violations, /lacks accepted provider response/u);
+                }
+            }
+        });
+    }
 
     it('event provenance: distinguishes transports and rejects stale, duplicate, raced, or unverifiable evidence', () => {
         const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-correction-audit-'));

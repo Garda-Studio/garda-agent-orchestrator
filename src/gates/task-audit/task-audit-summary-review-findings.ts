@@ -931,6 +931,7 @@ function validateTerminalCorrectionRejectionArtifact(options: {
 
 function correctionArtifactDerivesFromPredecessorPackage(options: {
     artifact: ReviewOutputCorrectionArtifact;
+    correctionArtifactPath: string;
     predecessorPackageSha256: string | null;
 }): boolean {
     const artifact = options.artifact;
@@ -957,37 +958,41 @@ function correctionArtifactDerivesFromPredecessorPackage(options: {
         producer_response_attestation: _producerResponseAttestation,
         ...artifactWithoutDerivedFields
     } = artifact;
-    const predecessorWithoutHash: Omit<ReviewOutputCorrectionArtifact, 'artifact_sha256'> = {
-        ...artifactWithoutDerivedFields,
-        state: initialRecovery.transport === 'full_reviewer_relaunch'
-            ? 'FULL_REVIEW_REQUIRED'
-            : 'REVIEW_OUTPUT_CORRECTION_REQUIRED',
-        updated_at_utc: artifact.created_at_utc,
-        transport_binding: {
-            ...binding,
-            session_availability: 'pending',
-            availability_attestation: null
-        },
-        recovery: {
-            correction_attempt: artifact.recovery.correction_attempt,
-            max_correction_attempts: artifact.recovery.max_correction_attempts,
-            selected_transport: initialRecovery.transport,
-            available_transports: initialRecovery.available,
-            reason: initialRecovery.reason,
-            handoff: buildReviewOutputCorrectionHandoff({
-                transport: initialRecovery.transport,
-                reviewerIdentity: artifact.binding.reviewer_identity
-            })
-        }
-    };
-    const predecessor = {
-        ...predecessorWithoutHash,
-        artifact_sha256: sha256RedactedJsonPayload(predecessorWithoutHash)
-    };
-    const predecessorFileSha256 = createHash('sha256')
-        .update(`${JSON.stringify(predecessor, null, 2)}\n`)
-        .digest('hex');
-    return predecessorFileSha256 === options.predecessorPackageSha256;
+    return [options.correctionArtifactPath, null].some((correctionArtifactPath) => {
+        const predecessorWithoutHash: Omit<ReviewOutputCorrectionArtifact, 'artifact_sha256'> = {
+            ...artifactWithoutDerivedFields,
+            state: initialRecovery.transport === 'full_reviewer_relaunch'
+                ? 'FULL_REVIEW_REQUIRED'
+                : 'REVIEW_OUTPUT_CORRECTION_REQUIRED',
+            updated_at_utc: artifact.created_at_utc,
+            transport_binding: {
+                ...binding,
+                session_availability: 'pending',
+                availability_attestation: null
+            },
+            recovery: {
+                correction_attempt: artifact.recovery.correction_attempt,
+                max_correction_attempts: artifact.recovery.max_correction_attempts,
+                selected_transport: initialRecovery.transport,
+                available_transports: initialRecovery.available,
+                reason: initialRecovery.reason,
+                handoff: buildReviewOutputCorrectionHandoff({
+                    transport: initialRecovery.transport,
+                    reviewerIdentity: artifact.binding.reviewer_identity,
+                    correctionArtifactPath,
+                    correctionAttempt: artifact.recovery.correction_attempt
+                })
+            }
+        };
+        const predecessor = {
+            ...predecessorWithoutHash,
+            artifact_sha256: sha256RedactedJsonPayload(predecessorWithoutHash)
+        };
+        const predecessorFileSha256 = createHash('sha256')
+            .update(`${JSON.stringify(predecessor, null, 2)}\n`)
+            .digest('hex');
+        return predecessorFileSha256 === options.predecessorPackageSha256;
+    });
 }
 
 function selectionArtifactSnapshotMatches(options: {
@@ -1163,6 +1168,7 @@ function validateHistoricalCorrectionArtifactChain(
         options.transport !== 'full_reviewer_relaunch'
         && !correctionArtifactDerivesFromPredecessorPackage({
             artifact: snapshot,
+            correctionArtifactPath: expectedArtifactPath,
             predecessorPackageSha256: stringValue(
                 options.details.previous_correction_package_sha256
             )
@@ -1363,6 +1369,7 @@ function validateCurrentCorrectionArtifactChain(
         options.transport !== 'full_reviewer_relaunch'
         && !correctionArtifactDerivesFromPredecessorPackage({
             artifact: persisted,
+            correctionArtifactPath: expectedArtifactPath,
             predecessorPackageSha256: stringValue(
                 options.details.previous_correction_package_sha256
             )
