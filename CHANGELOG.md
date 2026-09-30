@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve available review lanes explicitly required by TASK.md when profile defaults disable them, including immutable review snapshot reconstruction and dependency ordering.
+
 - Automatically attach ready canonical JSON task plans at ordinary task entry, preserve explicit path precedence and frozen attachments, and report missing or draft optional plans without adding a planning gate.
 
 - Added `task plan save <task-id> --input <file>` for atomic prepared-plan creation or replacement before task execution. Saving and task entry share a task-local lock; started tasks and unknown start evidence refuse replacement, and ready plans require explicit acceptance, verification and scope boundaries.

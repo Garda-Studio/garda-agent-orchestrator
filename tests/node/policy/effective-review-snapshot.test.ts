@@ -19,6 +19,12 @@ import {
 import { resolveProfileReviewCatalogPolicy } from '../../../src/policy/profile-review-catalog-policy';
 import { buildTaskProfilePolicySnapshot } from '../../../src/policy/task-profile-policy-snapshot';
 import {
+    getReviewExecutionDependencies,
+    getReviewExecutionPreparationOrder,
+    LEGACY_REVIEW_EXECUTION_POLICY_MODE,
+    REVIEW_EXECUTION_POLICY_MODES
+} from '../../../src/core/review-execution-policy';
+import {
     resolveEffectiveReviewLaneSet,
     resolveEffectiveReviewLaneSetOrLegacy
 } from '../../../src/policy/effective-review-lane-set';
@@ -566,6 +572,115 @@ test('built-in compatibility decisions preserve contextual profile guardrails', 
         disabledByProfile.lanes.find((lane) => lane.id === 'code')?.inactive_reasons,
         ['profile_disabled']
     );
+});
+
+test('task-required lanes override profile defaults with frozen reconstruction and capability checks', () => {
+    const catalog = buildCatalog();
+    const capabilities = Object.fromEntries(
+        catalog.review_types.map(definition => [definition.id, true])
+    ) as ReviewCapabilitiesConfigMap;
+    const profilePolicy = resolveProfileReviewCatalogPolicy('fast', { api: false }, capabilities, catalog);
+    const options = {
+        catalog, profilePolicy, profileSnapshotSha256: PROFILE_HASH,
+        legacyRequiredReviews: { code: true, api: true },
+        taskRequiredReviewIds: ['api'], scopeCategory: 'code', taskIntent: 'Change diagnostics',
+        changedFiles: ['src/diagnostics.ts'], taskTriggers: {},
+        reviewExecutionPolicyMode: 'strict_sequential' as const
+    };
+    const snapshot = buildEffectiveReviewSnapshot(options);
+    assert.equal(snapshot.required_reviews.api, true);
+    assert.deepEqual(snapshot.inputs.task_required_review_ids, ['api']);
+    assert.deepEqual(getEffectiveReviewSnapshotViolations(snapshot), []);
+    assert.doesNotThrow(() => assertEffectiveReviewSnapshotCurrent(snapshot, catalog, PROFILE_HASH, profilePolicy));
+    assert.ok(snapshot.review_dependency_graph?.nodes.includes('api'));
+    assert.equal(buildEffectiveReviewSnapshot({ ...options, taskRequiredReviewIds: [] }).required_reviews.api, false);
+    assert.equal(buildEffectiveReviewSnapshot({ ...options, zeroDiffBaselineOnly: true }).required_reviews.api, false);
+    assert.throws(() => buildEffectiveReviewSnapshot({ ...options, taskRequiredReviewIds: ['unknown'] }), /unknown or capability-disabled/);
+    assert.throws(() => buildEffectiveReviewSnapshot({ ...options, taskRequiredReviewIds: ['api', 'api'] }), /unique/);
+    const unavailable = resolveProfileReviewCatalogPolicy('fast', { api: false }, { ...capabilities, api: false }, catalog);
+    assert.throws(() => buildEffectiveReviewSnapshot({ ...options, profilePolicy: unavailable }), /capability-disabled/);
+    const forged = JSON.parse(JSON.stringify(snapshot));
+    forged.lanes.find((lane: { id: string }) => lane.id === 'api').profile.capability_enabled = false;
+    rehashSnapshot(forged);
+    assert.ok(getEffectiveReviewSnapshotViolations(forged).some(violation => violation.includes('capability-disabled')));
+    const unknown = JSON.parse(JSON.stringify(snapshot));
+    unknown.inputs.task_required_review_ids = ['unknown'];
+    rehashSnapshot(unknown);
+    assert.ok(getEffectiveReviewSnapshotViolations(unknown).some(violation => violation.includes('unknown lane')));
+});
+
+test('task-required lanes extend explicit graphs while preserving frozen declarations and existing edges', () => {
+    const catalog = buildCatalog();
+    const capabilities = Object.fromEntries(
+        catalog.review_types.map(definition => [definition.id, true])
+    ) as ReviewCapabilitiesConfigMap;
+    const policy = Object.fromEntries(catalog.review_types.map(definition => [definition.id, false]));
+    const profilePolicy = resolveProfileReviewCatalogPolicy('fast', { ...policy, code: true, test: true }, capabilities, catalog);
+    const declaration = { preparation_order: ['code', 'test'], dependencies: { code: [], test: ['code'] } };
+    const snapshot = buildEffectiveReviewSnapshot({
+        catalog, profilePolicy, profileSnapshotSha256: PROFILE_HASH,
+        legacyRequiredReviews: { code: true, test: true, api: true }, taskRequiredReviewIds: ['api'],
+        scopeCategory: 'code', taskIntent: 'Change diagnostics', changedFiles: ['src/diagnostics.ts'], taskTriggers: {},
+        reviewExecutionPolicyMode: 'strict_sequential', reviewDependencyGraph: declaration,
+        fullSuiteValidation: { enabled: true, placement: 'after_compile_before_reviews' }
+    });
+    assert.deepEqual(snapshot.inputs.review_execution_policy?.review_dependency_graph, declaration);
+    assert.deepEqual(declaration.preparation_order, ['code', 'test']);
+    assert.deepEqual(snapshot.review_dependency_graph?.nodes, ['code', 'test', 'api']);
+    assert.deepEqual(snapshot.review_dependency_graph?.dependencies, { code: [], test: ['code'], api: ['code', 'test'] });
+    assert.deepEqual(snapshot.review_dependency_graph?.full_suite_barrier.before_review_ids, ['code', 'test', 'api']);
+    assert.deepEqual(getEffectiveReviewSnapshotViolations(snapshot), []);
+    const frozenPolicy = {
+        mode: 'strict_sequential' as const, review_dependency_graph: declaration,
+        full_suite_validation: { enabled: true, placement: 'after_compile_before_reviews' as const }
+    };
+    assert.doesNotThrow(() => assertEffectiveReviewSnapshotExecutionPolicyBinding(snapshot, frozenPolicy));
+    assert.doesNotThrow(() => assertEffectiveReviewSnapshotCurrent(snapshot, catalog, PROFILE_HASH, profilePolicy, frozenPolicy));
+    const invalidProfileGraph = resolveProfileReviewCatalogPolicy(
+        'fast', { ...policy, code: true, test: true, api: 'auto' }, capabilities, catalog
+    );
+    assert.throws(() => buildEffectiveReviewSnapshot({
+        catalog, profilePolicy: invalidProfileGraph, profileSnapshotSha256: PROFILE_HASH,
+        legacyRequiredReviews: { code: true, test: true, api: true }, taskRequiredReviewIds: ['api'],
+        scopeCategory: 'code', taskIntent: 'Change diagnostics', changedFiles: ['src/diagnostics.ts'], taskTriggers: {},
+        reviewExecutionPolicyMode: 'strict_sequential', reviewDependencyGraph: declaration
+    }), /missing active review lane 'api'/);
+});
+
+test('newly task-required lane pairs retain compatibility dependencies in every execution mode', () => {
+    const catalog = buildCatalog();
+    const capabilities = Object.fromEntries(
+        catalog.review_types.map(definition => [definition.id, true])
+    ) as ReviewCapabilitiesConfigMap;
+    const policy = Object.fromEntries(catalog.review_types.map(definition => [definition.id, false]));
+    const profilePolicy = resolveProfileReviewCatalogPolicy('fast', { ...policy, code: true }, capabilities, catalog);
+    const declaration = { preparation_order: ['code'], dependencies: { code: [] } };
+    const candidates = catalog.review_types.filter(definition => definition.built_in && definition.id !== 'code').map(definition => definition.id);
+    for (const mode of [LEGACY_REVIEW_EXECUTION_POLICY_MODE, ...REVIEW_EXECUTION_POLICY_MODES]) {
+        for (let left = 0; left < candidates.length; left += 1) {
+            for (const right of candidates.slice(left + 1)) {
+                const added = [candidates[left], right];
+                const required = Object.fromEntries(['code', ...added].map(id => [id, true]));
+                const snapshot = buildEffectiveReviewSnapshot({
+                    catalog, profilePolicy, profileSnapshotSha256: PROFILE_HASH,
+                    legacyRequiredReviews: required, taskRequiredReviewIds: added,
+                    scopeCategory: 'code', taskIntent: 'Change diagnostics', changedFiles: ['src/diagnostics.ts'], taskTriggers: {},
+                    reviewExecutionPolicyMode: mode, reviewDependencyGraph: declaration,
+                    fullSuiteValidation: { enabled: true, placement: 'after_compile_before_reviews' }
+                });
+                assert.deepEqual(snapshot.review_dependency_graph?.nodes,
+                    getReviewExecutionPreparationOrder(mode).filter(id => required[id]), `${mode}: ${added.join(',')}`);
+                for (const id of added) {
+                    assert.deepEqual(snapshot.review_dependency_graph?.dependencies[id],
+                        getReviewExecutionDependencies(id, required, mode), `${mode}: ${id}`);
+                }
+                assert.doesNotThrow(() => assertEffectiveReviewSnapshotCurrent(snapshot, catalog, PROFILE_HASH, profilePolicy, {
+                    mode, review_dependency_graph: declaration,
+                    full_suite_validation: { enabled: true, placement: 'after_compile_before_reviews' }
+                }));
+            }
+        }
+    }
 });
 
 test('zero-diff baseline suppresses profile-required built-in and custom lanes', () => {

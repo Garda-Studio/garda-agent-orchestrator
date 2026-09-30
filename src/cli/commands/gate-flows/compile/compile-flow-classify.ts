@@ -1064,6 +1064,7 @@ export function runClassifyChangeCommand(options: ClassifyChangeCommandOptions):
                 profileSnapshotSha256: taskProfileSnapshot?.snapshot_hash
                     || legacyCompatibilityBinding!.profile_snapshot_sha256,
                 legacyRequiredReviews: result.required_reviews,
+                taskRequiredReviewIds: result.task_required_review_declaration?.applied_reviews,
                 scopeCategory: result.scope_category,
                 taskIntent: resolveEffectiveReviewTaskIntent(options.taskIntent, currentTaskSummary),
                 changedFiles: result.changed_files,

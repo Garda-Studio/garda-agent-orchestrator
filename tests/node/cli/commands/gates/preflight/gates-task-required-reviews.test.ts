@@ -16,7 +16,7 @@ import {
     seedTaskQueue
 } from './gates-preflight-fixtures';
 
-function seedBalancedProfileConfig(repoRoot: string, apiCapability: boolean): void {
+function seedBalancedProfileConfig(repoRoot: string, apiCapability: boolean, profileName = 'balanced'): void {
     const configDir = path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config');
     fs.mkdirSync(configDir, { recursive: true });
     fs.writeFileSync(path.join(configDir, 'review-capabilities.json'), JSON.stringify({
@@ -32,9 +32,9 @@ function seedBalancedProfileConfig(repoRoot: string, apiCapability: boolean): vo
     }, null, 2), 'utf8');
     fs.writeFileSync(path.join(configDir, 'profiles.json'), JSON.stringify({
         version: 1,
-        active_profile: 'balanced',
+        active_profile: profileName,
         built_in_profiles: {
-            balanced: {
+            [profileName]: {
                 description: 'Balanced',
                 depth: 2,
                 review_policy: {
@@ -42,7 +42,7 @@ function seedBalancedProfileConfig(repoRoot: string, apiCapability: boolean): vo
                     db: 'auto',
                     security: 'auto',
                     refactor: 'auto',
-                    api: 'auto',
+                    api: profileName === 'fast' ? false : 'auto',
                     test: 'auto',
                     performance: 'auto',
                     infra: 'auto',
@@ -62,15 +62,15 @@ function seedBalancedProfileConfig(repoRoot: string, apiCapability: boolean): vo
     }, null, 2), 'utf8');
 }
 
-function prepareTask(repoRoot: string, taskId: string, notes: string, apiCapability: boolean): void {
-    seedBalancedProfileConfig(repoRoot, apiCapability);
+function prepareTask(repoRoot: string, taskId: string, notes: string, apiCapability: boolean, profileName = 'balanced'): void {
+    seedBalancedProfileConfig(repoRoot, apiCapability, profileName);
     fs.mkdirSync(path.join(repoRoot, 'tests'), { recursive: true });
     fs.writeFileSync(path.join(repoRoot, 'tests', 'app.test.ts'), 'export const suite = true;\n', 'utf8');
     seedTaskQueue(
         repoRoot,
         taskId,
         'TODO',
-        'balanced',
+        profileName,
         notes,
         'Add guarded local UI policy API flow'
     );
@@ -88,6 +88,31 @@ function prepareTask(repoRoot: string, taskId: string, notes: string, apiCapabil
 }
 
 describe('classify-change task required-review metadata', () => {
+    it('keeps an explicit API lane even when fast profile defaults disable it', { concurrency: false }, () => {
+        const repoRoot = createTempRepo();
+        const taskId = 'T-required-api-fast';
+        try {
+            prepareTask(repoRoot, taskId, 'Required reviews: code, api, test.', true, 'fast');
+            const result = runClassifyChangeCommand({
+                repoRoot,
+                taskId,
+                taskIntent: 'Change local diagnostics',
+                changedFiles: ['src/app.ts', 'tests/app.test.ts'],
+                outputPath: path.join(getReviewsRoot(repoRoot), `${taskId}-preflight.json`),
+                emitMetrics: false
+            });
+            const payload = JSON.parse(result.outputText) as Record<string, any>;
+            assert.equal(payload.required_reviews.api, true);
+            const apiLane = payload.effective_review_snapshot.lanes.find((lane: Record<string, unknown>) => lane.id === 'api');
+            assert.equal(apiLane.profile.state, 'disabled');
+            assert.equal(apiLane.selection, 'required');
+            assert.ok(payload.effective_review_snapshot.review_dependency_graph.nodes.includes('api'));
+            assert.ok(payload.budget_forecast.required_reviews.includes('api'));
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+
     it('keeps explicit available lanes under balanced profile policy', { concurrency: false }, () => {
         const repoRoot = createTempRepo();
         const taskId = 'T-979-33-3-shaped';
