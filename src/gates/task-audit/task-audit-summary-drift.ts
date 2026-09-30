@@ -616,9 +616,9 @@ function buildPostDoneSameScopeDriftBlocker(
         ? currentImplementationSnapshot.scope_content_sha256.trim().toLowerCase()
         : '';
     const contentChanged = !!expectedScopeContentSha256
-        && !!currentScopeContentSha256
         && currentScopeContentSha256 !== expectedScopeContentSha256;
-    const lineCountChanged = Number.isFinite(expectedChangedLinesTotal)
+    // Staging can change Git diff statistics while the selected file content is unchanged.
+    const lineCountChanged = !expectedScopeContentSha256 && Number.isFinite(expectedChangedLinesTotal)
         && currentImplementationSnapshot.changed_lines_total !== expectedChangedLinesTotal;
     if (!contentChanged && !lineCountChanged) {
         return buildPostDoneAuditedScopeDriftBlocker(
