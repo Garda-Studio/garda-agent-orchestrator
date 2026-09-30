@@ -11,6 +11,7 @@ import { runCompileGateCommand, splitCommandLine } from '../../../../src/cli/com
 import { EXIT_GATE_FAILURE } from '../../../../src/cli/exit-codes';
 import { getTaskModeEvidence } from '../../../../src/gates/task-mode/task-mode';
 import { serializeTaskPlan, validateTaskPlan } from '../../../../src/schemas/task-plan';
+import { withTaskPlanMutationLock } from '../../../../src/core/task-plan-save';
 import { captureDirtyWorkspaceBaseline, deriveProtectedDirtyWorkspaceScope, detectProtectedDirtyWorkspaceDrift } from '../../../../src/gates/workspace/dirty-worktree-protection';
 import { buildEnterTaskModeCommand } from '../../../../src/gates/next-step/next-step-lifecycle-command-builders';
 import { resolveNextStepStartupRoute } from '../../../../src/gates/next-step/next-step-startup-routing';
@@ -523,20 +524,62 @@ test('task entry without runtime ignores excludes its own lock and preserves unr
     initializeGitRepo(repoRoot);
     const lockMetadata = 'garda-agent-orchestrator/runtime/task-queue-locks/active-implementation.lock/owner.json';
     const foreignFile = 'garda-agent-orchestrator/runtime/task-queue-locks/foreign-work.txt';
+    const planLockMetadata = 'garda-agent-orchestrator/runtime/reviews/T-103-task-plan.lock/owner.json';
+    const foreignPlanFile = 'garda-agent-orchestrator/runtime/reviews/unrelated-work.txt';
     fs.mkdirSync(path.dirname(path.join(repoRoot, foreignFile)), { recursive: true });
     fs.writeFileSync(path.join(repoRoot, foreignFile), 'preserve this work');
+    fs.mkdirSync(path.dirname(path.join(repoRoot, foreignPlanFile)), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, foreignPlanFile), 'preserve this plan work');
     const result = runEnterTaskMode({ repoRoot, taskId: 'T-103', taskSummary: 'Enter without runtime ignores' });
     assert.equal(result.exitCode, 0, result.outputLines.join('\n'));
     const baseline = getTaskModeEvidence(repoRoot, 'T-103').dirty_workspace_baseline;
     assert.ok(baseline);
     assert.ok(baseline.changed_files.includes(foreignFile));
+    assert.ok(baseline.changed_files.includes(foreignPlanFile));
     assert.equal(baseline.changed_files.includes(lockMetadata), false);
+    assert.equal(baseline.changed_files.includes(planLockMetadata), false);
     assert.ok(baseline.git_change_classification?.untracked_files.includes(lockMetadata));
+    assert.ok(baseline.git_change_classification?.untracked_files.includes(planLockMetadata));
     assert.equal(fs.existsSync(path.join(repoRoot, lockMetadata)), false);
+    assert.equal(fs.existsSync(path.join(repoRoot, planLockMetadata)), false);
     const protectedScope = deriveProtectedDirtyWorkspaceScope(repoRoot, baseline, []);
     assert.equal(detectProtectedDirtyWorkspaceDrift(repoRoot, protectedScope).status, 'PASS');
     fs.writeFileSync(path.join(repoRoot, foreignFile), 'unexpected replacement');
     assert.deepEqual(detectProtectedDirtyWorkspaceDrift(repoRoot, protectedScope).changed_files, [foreignFile]);
+    fs.writeFileSync(path.join(repoRoot, foreignPlanFile), 'unexpected plan replacement');
+    assert.deepEqual(detectProtectedDirtyWorkspaceDrift(repoRoot, protectedScope).changed_files, [foreignFile, foreignPlanFile].sort());
+});
+
+test('plan lock baseline exclusion requires the live canonical handle and retains tracked metadata', (t) => {
+    const repoRoot = createTempRepo(t);
+    initializeGitRepo(repoRoot);
+    const metadata = 'garda-agent-orchestrator/runtime/reviews/T-103-task-plan.lock/owner.json';
+    const released = withTaskPlanMutationLock(repoRoot, 'T-103', handle => {
+        const proof = { taskId: 'T-103', handle };
+        assert.ok(captureDirtyWorkspaceBaseline(repoRoot).changed_files.includes(metadata));
+        assert.throws(() => captureDirtyWorkspaceBaseline(repoRoot, [], undefined, {
+            ...proof, handle: { ...handle, lockId: 'forged' }
+        }), /current implementation ownership lock or task-plan lock/u);
+        assert.throws(() => captureDirtyWorkspaceBaseline(repoRoot, [], undefined, {
+            ...proof, handle: { ...handle, lockPath: path.join(repoRoot, 'other.lock') }
+        }), /current implementation ownership lock or task-plan lock/u);
+        assert.throws(() => captureDirtyWorkspaceBaseline(repoRoot, [], undefined, {
+            ...proof, taskId: 'T-104'
+        }));
+        assert.deepEqual(captureDirtyWorkspaceBaseline(repoRoot, [], undefined, proof).changed_files, []);
+        execFileSync('git', ['-C', repoRoot, 'add', '--', metadata], { stdio: 'pipe' });
+        const staged = captureDirtyWorkspaceBaseline(repoRoot, [], undefined, proof);
+        assert.ok(staged.changed_files.includes(metadata));
+        assert.ok(staged.staged_files?.includes(metadata));
+        assert.ok(staged.staged_trust?.files[metadata]);
+        execFileSync('git', ['-C', repoRoot, 'commit', '-m', 'Track lock metadata fixture'], { stdio: 'pipe' });
+        fs.appendFileSync(path.join(repoRoot, metadata), '\n');
+        assert.ok(captureDirtyWorkspaceBaseline(repoRoot, [], undefined, proof).changed_files.includes(metadata));
+        return { ...handle };
+    });
+    assert.throws(() => captureDirtyWorkspaceBaseline(repoRoot, [], undefined, {
+        taskId: 'T-103', handle: released
+    }));
 });
 
 test('baseline lock exclusion requires the current acquired entry lock and retains staged metadata', (t) => {

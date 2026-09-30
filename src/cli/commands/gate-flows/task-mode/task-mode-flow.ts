@@ -320,13 +320,14 @@ export function runEnterTaskModeCommand(options: EnterTaskModeCommandOptions): {
     return withImplementationOwnershipLock(
         repoRoot,
         lock => withTaskPlanMutationLock(repoRoot, assertValidTaskId(String(options.taskId || '').trim()),
-            () => runEnterTaskModeWithOwnershipLock(options, lock))
+            planLock => runEnterTaskModeWithOwnershipLock(options, lock, planLock))
     );
 }
 
 function runEnterTaskModeWithOwnershipLock(
     options: EnterTaskModeCommandOptions,
-    ownershipLock: LockHandle
+    ownershipLock: LockHandle,
+    taskPlanLock: LockHandle
 ): { outputLines: string[]; exitCode: number } {
     const repoRoot = path.resolve(String(options.repoRoot || '.'));
     const orchestratorRoot = resolveOrchestratorRoot(repoRoot);
@@ -341,7 +342,9 @@ function runEnterTaskModeWithOwnershipLock(
         protectedPlannedFiles,
         workflowConfigPlannedFiles
     } = resolveTaskModeEntryScope(repoRoot, options.plannedChangedFiles);
-    const currentDirtyWorkspaceBaseline = captureDirtyWorkspaceBaseline(repoRoot, plannedChangedFiles, ownershipLock);
+    const currentDirtyWorkspaceBaseline = captureDirtyWorkspaceBaseline(
+        repoRoot, plannedChangedFiles, ownershipLock, { taskId, handle: taskPlanLock }
+    );
     const orchestratorWork = parseBooleanOption(options.orchestratorWork, false);
     const workflowConfigWork = parseBooleanOption(options.workflowConfigWork, false);
     const upgradeExistingTaskMode = parseBooleanOption(options.upgradeExistingTaskMode, false);

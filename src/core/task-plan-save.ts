@@ -10,26 +10,29 @@ import { readTaskQueueStatusToken } from './task-queue/task-queue-status';
 import {
     readBoundedTaskPlanFile, resolveCanonicalTaskPlanPath, TASK_PLAN_READ_MAX_BYTES
 } from './task-plan-read';
-import { withFilesystemLock } from '../gate-runtime/timeline/task-events-locking';
+import { acquireFilesystemLock, releaseFilesystemLock, type LockHandle } from '../gate-runtime/timeline/task-events-locking';
 import { serializeTaskPlan, validateTaskPlan } from '../schemas/task-plan';
 
 const TASK_QUEUE_MAX_BYTES = 4 * TASK_PLAN_READ_MAX_BYTES;
 const TASK_PLAN_LOCK_TIMEOUT_MS = 5000;
 
 /** Task entry and plan publication share this task-local synchronization boundary. */
-export function withTaskPlanMutationLock<T>(repoRoot: string, taskId: string, action: () => T): T {
+export function withTaskPlanMutationLock<T>(repoRoot: string, taskId: string, action: (lock: LockHandle) => T): T {
     assertCanonicalTaskId(taskId);
     const reviewsRoot = path.dirname(resolveCanonicalTaskPlanPath(repoRoot, taskId));
     ensureContainedDirectory(repoRoot, reviewsRoot);
     const parent = bindContainedDestination(repoRoot, reviewsRoot);
     const lockPath = path.join(reviewsRoot, `${taskId}-task-plan.lock`);
     bindContainedDestination(repoRoot, lockPath);
-    return withFilesystemLock(lockPath, {
+    const { handle } = acquireFilesystemLock(lockPath, {
         timeoutMs: TASK_PLAN_LOCK_TIMEOUT_MS, requireKnownDeadOwner: true, ownerLabel: 'task-plan-save-entry'
-    }, () => {
+    });
+    try {
         assertContainedDestination(parent);
-        return action();
-    }).result;
+        return action(handle);
+    } finally {
+        releaseFilesystemLock(handle);
+    }
 }
 
 function assertTaskNeverStarted(repoRoot: string, taskId: string, planPath: string): void {
