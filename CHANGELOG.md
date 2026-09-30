@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Expose bounded task progress, the current navigator action, validated final-report availability and task-owned evidence references through lazy task details without executing lifecycle actions.
+
 - Make requested task-plan preparation discoverable from task instructions and CLI help, with one-task and multiple-TODO examples, canonical provider routing and no automatic task execution.
 
 - Document reusable task-plan criteria, verification evidence and a small-task brief using the existing schema; align examples with prepared-plan saving, automatic attachment and frozen start state without adding another artifact or gate.

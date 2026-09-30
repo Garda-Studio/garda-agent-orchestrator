@@ -30,6 +30,7 @@ import type {
 import type { ReviewTriggerPolicy } from '../../policy/review-trigger-policy';
 import type { ReviewRemediationModePolicySummary } from '../../policy/review-remediation-mode-policy';
 import type { ReviewFollowUpTaskClosurePolicySnapshot } from '../../core/review-follow-up-task-closure-policy';
+import type { NextStepResult } from '../../gates/next-step';
 
 export const REPORT_DATA_CONTRACT_SCHEMA_VERSION = 1;
 export const DEFAULT_REPORT_MAX_DETAILED_TASKS = 0;
@@ -128,6 +129,24 @@ export interface ReportFullSuiteSummary {
 export interface ReportTaskDetail {
     task_id: string;
     detail_status: 'loaded' | 'skipped';
+    progress: {
+        state: 'active' | 'blocked' | 'stale' | 'unknown' | 'incomplete' | 'completed' | 'unavailable';
+        navigator_status: NextStepResult['status'] | null;
+        completed_stages: Array<{ gate: string; timestamp_utc: string | null }>;
+        current_stage: string | null;
+        remaining_stages: Array<{ gate: string; status: 'failed' | 'pending' | 'unknown' }>;
+        blocker: { gate: string | null; reason: string } | null;
+        next_action: { gate: string | null; label: string; command: string | null } | null;
+        final_report: {
+            state: 'available' | 'missing' | 'pending' | 'stale' | 'unavailable';
+            path: string | null;
+            exists: boolean;
+            sha256: string | null;
+        };
+        evidence_references: ReportArtifactLink[];
+        timing: { first_event_utc: string | null; last_event_utc: string | null };
+        diagnostics: string[];
+    } | null;
     stats: TaskStatsResult | null;
     latest_cycle_events: CompactLatestCycleTaskEventsSummary | null;
     full_suite_validation: ReportFullSuiteSummary;
