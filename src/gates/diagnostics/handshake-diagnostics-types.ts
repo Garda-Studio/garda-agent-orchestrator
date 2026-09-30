@@ -1,3 +1,5 @@
+import type { TaskPlanDiagnostics } from './task-plan-diagnostics';
+
 export interface HandshakeDiagnosticsArtifact {
     schema_version: 1;
     timestamp_utc: string;
@@ -35,6 +37,7 @@ export interface HandshakeDiagnosticsArtifact {
     cli_path: string;
     effective_cwd: string;
     workspace_root: string;
+    task_plan?: TaskPlanDiagnostics;
 
     diagnostics: HandshakeDiagnostic[];
     violations: string[];

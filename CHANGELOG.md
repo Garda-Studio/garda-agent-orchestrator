@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add consistent compact task-plan state, path, editability and reading hints to task entry and handshake. Handshake inspects the frozen attachment, reports missing or changed evidence, and keeps existing readiness checks unchanged.
+
 - Preserve available review lanes explicitly required by TASK.md when profile defaults disable them, including immutable review snapshot reconstruction and dependency ordering.
 
 - Automatically attach ready canonical JSON task plans at ordinary task entry, preserve explicit path precedence and frozen attachments, and report missing or draft optional plans without adding a planning gate.

@@ -19,6 +19,7 @@ import {
     resolveTaskModeArtifactPath
 } from '../../../../gates/task-mode/task-mode';
 import { selectTaskModePlan } from '../../../../gates/task-mode/task-mode-plan';
+import { buildTaskPlanDiagnostics, formatTaskPlanDiagnostics } from '../../../../gates/diagnostics/task-plan-diagnostics';
 import {
     captureDirtyWorkspaceBaseline,
     type DirtyWorkspaceBaseline
@@ -690,6 +691,7 @@ function runEnterTaskModeWithOwnershipLock(
                     `MarkdownWorkingPlanSha256: ${taskModeArtifact.markdown_working_plan.working_plan_sha256}`
                 ]
                 : []),
+            ...formatTaskPlanDiagnostics(buildTaskPlanDiagnostics(repoRoot, taskId, taskModeArtifact)),
             ...(taskModeArtifact.profile_selection_source
                 ? [`TaskProfile: ${taskModeArtifact.task_profile || 'default'} (${taskModeArtifact.profile_selection_source})`]
                 : []),
