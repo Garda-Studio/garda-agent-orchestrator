@@ -539,9 +539,14 @@ export function validateHistoricalReviewReuseCandidate(options: {
         ? normalizeReceiptSha256(receipt.reused_from_code_scope_sha256) || sourceReceiptCodeScopeSha256
         : sourceReceiptCodeScopeSha256;
     const remediationPreservedScopeMismatchReason = String(options.remediationPreservedScopeMismatchReason || '').trim() || null;
+    const documentationOnlyReview = options.codeScopeFingerprint.docs_only
+        && options.codeScopeFingerprint.docs_only_changed_files.length > 0;
     const acceptableContextReuseHashes = [
         expectedContextReuseSha256,
-        String(options.previousReviewContextReuseSha256 || '').trim().toLowerCase() || null
+        // Regenerated docs-only contexts are mutable; receipt-bound hashes authenticate the reviewed bytes.
+        documentationOnlyReview
+            ? null
+            : String(options.previousReviewContextReuseSha256 || '').trim().toLowerCase() || null
     ].filter((value): value is string => !!value);
     const historicalSchema3ContextReuseHashMatches = !!options.currentSchema3ContextReuseSha256
         && acceptableContextReuseHashes.includes(options.currentSchema3ContextReuseSha256);
