@@ -65,7 +65,33 @@ test('the documented save and ordinary entry flow attaches the example and refus
     assert.equal(result.exitCode, 0);
     assert.equal(getTaskModeEvidence(root, plan.task_id).plan?.plan_sha256, stored.plan_sha256);
     assert.ok(result.outputLines.includes('TaskPlanState: attached_json'));
+    fs.writeFileSync(input, JSON.stringify({ ...plan, notes: 'A newly discovered incompatible requirement needs an explicit follow-up.' }));
     assert.throws(() => saveTaskPlan(root, plan.task_id, input), /existing TODO|start evidence|lifecycle history/u);
+    assert.equal(fs.readFileSync(saved, 'utf8'), serializeTaskPlan(stored));
+});
+
+test('documented assumption examples use existing notes and preserve schema and digest compatibility', () => {
+    const headings = ['No Assumptions', 'Ordinary Implementation Assumption', 'Unresolved Product Decision'];
+    const expectedNotes = [/Assumptions: none/u, /extend the existing focused test file/u, /Resolve with the operator before implementing that behavior/u];
+    for (const [index, heading] of headings.entries()) {
+        const match = new RegExp('#### ' + heading + '\\s+```json\\s+([\\s\\S]*?)```', 'u').exec(guide);
+        assert.ok(match, `Missing assumption example: ${heading}`);
+        const fragment = JSON.parse(match[1]);
+        assert.deepEqual(Object.keys(fragment), ['notes']);
+        assert.equal(typeof fragment.notes, 'string');
+        const plan = validateTaskPlan({ ...example(), ...fragment });
+        assert.equal(plan.notes, fragment.notes);
+        assert.match(plan.notes!, expectedNotes[index]);
+        const stored = validateTaskPlan(JSON.parse(serializeTaskPlan(plan)));
+        assert.deepEqual(stored.notes, plan.notes);
+        assert.equal(stored.plan_sha256, computeTaskPlanDigest(stored));
+    }
+    assert.match(planningInstructions, /Record assumptions as `none` or a concise list in existing plan `notes` or the brief/u);
+    assert.match(planningInstructions, /Make ordinary implementation choices within authorized scope/u);
+    assert.match(planningInstructions, /before dependent work; independent investigation or work may continue/u);
+    assert.match(planningInstructions, /needs an explicit follow-up/u);
+    assert.match(guide, /After entry, the attached plan is frozen/u);
+    assert.match(guide, /do not silently rewrite the active plan/u);
 });
 
 test('documented legacy and no-plan execution remain compatible without a criteria artifact', t => {

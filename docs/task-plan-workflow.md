@@ -73,6 +73,44 @@ verification: Check the target exists and run the relevant documentation contrac
 
 No separate file is required. `done_when` is a brief label, not a new JSON field or gate. An attached plan already supplies the goal, criteria and verification expectations, so refer to them rather than duplicating them in another brief.
 
+### Assumptions and Material Decisions
+
+Record assumptions as `none` or a concise list in the existing JSON `notes` or lightweight task brief. `notes` remains a free-form string; multiple assumptions can use short lines within that string. This is guidance, not a new schema field, separate artifact or approval gate. Ordinary implementation choices within authorized scope can be made by the agent without a mandatory question for every plan.
+
+Resolve material ambiguity affecting user-visible behavior, authorization or task scope before dependent work. Use existing authoritative task context when it answers the question; otherwise ask the operator a focused question and continue only independent investigation or work. Writing an unresolved decision in notes does not resolve it.
+
+The following fragments use the existing `notes` field and can be included in the complete JSON example below. A brief can express the same information in plain text.
+
+#### No Assumptions
+
+```json
+{
+  "notes": "Assumptions: none; TASK.md already defines the intended result and scope."
+}
+```
+
+#### Ordinary Implementation Assumption
+
+```json
+{
+  "notes": "Assumption: extend the existing focused test file rather than create another file; user-visible behavior, authorization and scope remain as specified."
+}
+```
+
+This is an ordinary implementation choice the agent may make within authorized scope.
+
+#### Unresolved Product Decision
+
+```json
+{
+  "notes": "Unresolved product decision: should task history display or hide archived tasks by default? Resolve with the operator before implementing that behavior; independent investigation can continue."
+}
+```
+
+This example changes user-visible behavior, so guessing a default would exceed an implementation choice. The question belongs to that dependent work, not to every plan.
+
+Save or update a structured plan only before the task has ever started. After entry, the attached plan is frozen. If a newly discovered requirement is incompatible with the authorized active scope, record an explicit follow-up in existing task context and resolve its scope or authorization before dependent work; do not silently rewrite the active plan.
+
 ### Intended Work and Completion Evidence
 
 JSON criteria describe desired behavior; Markdown guidance and a brief describe execution intent. None proves that implementation succeeded. Record actual command outcomes, test results and accepted independent review evidence through the existing gates. Completion remains owned by the completion gate and final audit, not by an `approved` plan or a checked-off list.

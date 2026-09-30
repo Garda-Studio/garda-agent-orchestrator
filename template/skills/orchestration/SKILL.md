@@ -123,6 +123,9 @@ Default task navigator is `node garda-agent-orchestrator/bin/garda.js next-step 
 7. Build a concise execution brief from existing TASK.md intent: goal, done_when (observable result), verification, scope/files and material risks. No separate file is required for an ordinary small task.
    - When JSON is attached, read and reuse its `goal`, `acceptance_criteria`, `verification_expectations`, `out_of_scope`, `scope_files` and `validation_strategy`; do not duplicate criteria into a competing artifact.
    - Legacy plans may omit optional criteria fields; use existing task intent and the brief without a new gate, retrospective artifact or profile change.
+   - Record assumptions as `none` or a concise list in existing plan `notes` or the brief. Make ordinary implementation choices within authorized scope; no mandatory question or approval is required for every plan.
+   - Resolve material ambiguity affecting user-visible behavior, authorization or scope from authoritative task context or a focused operator question before dependent work; independent investigation or work may continue.
+   - Prepared plans freeze after task start. A newly discovered requirement incompatible with authorized active scope needs an explicit follow-up and scope or authorization resolution before dependent work; do not silently rewrite the active plan.
    - A ready plan or brief records intent. Actual command outcomes and accepted review receipts establish completion evidence; existing lifecycle gates remain authoritative.
    - `enter-task-mode` auto-emits `PLAN_CREATED`; do not backfill it manually unless recovery tooling explicitly requires it.
 8. Run handshake diagnostics after task-mode entry and baseline rule-pack loading when `next-step` requests it:
