@@ -69,6 +69,12 @@ describe('gates/build-review-context scope safety and diff bounds', () => {
             assert.equal(result.scoped_diff.expected, false);
             assert.equal(result.scoped_diff.metadata, null);
             assert.equal(result.task_scope.diff.available, true);
+            assert.deepEqual(result.review_execution.full_review_scope, ['docs/usage.md']);
+            assert.equal(result.coverage_contract.required, true);
+            assert.deepEqual(
+                result.coverage_contract.obligations.filter((entry) => entry.kind === 'file').map((entry) => entry.target),
+                ['docs/usage.md']
+            );
             fs.rmSync(repoRoot, { recursive: true, force: true });
         });
 

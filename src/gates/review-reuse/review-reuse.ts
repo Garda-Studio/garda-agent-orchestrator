@@ -1,6 +1,7 @@
 import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { DOMAIN_SCOPE_NAMES } from '../../core/domain-scope-contracts';
 
 import { matchAnyRegex } from '../../gate-runtime/text-utils';
 import {
@@ -145,6 +146,17 @@ function toNumberOrNull(value: unknown): number | null {
 function toLowerHash(value: unknown): string | null {
     const normalized = String(value || '').trim().toLowerCase();
     return /^[0-9a-f]{64}$/.test(normalized) ? normalized : null;
+}
+
+export function resolveDocumentationOnlyScopeHash(value: unknown): string | null {
+    const domains = toRecord(toRecord(value).domains);
+    const documentation = toRecord(domains.docs);
+    if (toStringList(documentation.changed_files).length === 0
+        || DOMAIN_SCOPE_NAMES.some((domain) => domain !== 'docs'
+            && toStringList(toRecord(domains[domain]).changed_files).length > 0)) {
+        return null;
+    }
+    return toLowerHash(documentation.scope_sha256);
 }
 
 export function computeReviewRuleContextReuseHash(
@@ -834,6 +846,9 @@ function buildReviewContextReuseHashSnapshot(
     const reviewerRouting = toRecord(reviewContext.reviewer_routing);
     const plan = toRecord(reviewContext.plan);
     const contractBindings = resolveReviewContextReuseContractBindings(reviewContext);
+    const documentationScopeSha256 = resolveDocumentationOnlyScopeHash(
+        toRecord(reviewContext.tree_state).domain_scope_fingerprints
+    );
 
     return {
         schema_version: schemaVersion,
@@ -862,6 +877,7 @@ function buildReviewContextReuseHashSnapshot(
         coverage_contract: {
             contract_sha256: contractBindings.coverageContractSha256
         },
+        ...(documentationScopeSha256 ? { documentation_scope_sha256: documentationScopeSha256 } : {}),
         ...(includeReviewExecution
             ? {
                 review_execution: {

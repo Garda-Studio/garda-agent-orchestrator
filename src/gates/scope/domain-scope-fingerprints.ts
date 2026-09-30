@@ -20,7 +20,8 @@ import {
 import { normalizePath, stringSha256, testPathPrefix } from '../shared/helpers';
 import {
     computeReviewRelevantScopeFingerprint,
-    computeReviewReuseCodeScopeFingerprint
+    computeReviewReuseCodeScopeFingerprint,
+    resolveDocumentationOnlyScopeHash
 } from '../review-reuse/review-reuse';
 import { isCloseoutEvidencePath } from './closeout-evidence-paths';
 
@@ -230,6 +231,10 @@ export function getReviewLaneScopeSha256(
 ): string | null {
     if (!fingerprints) {
         return null;
+    }
+    const documentationScopeSha256 = resolveDocumentationOnlyScopeHash(fingerprints);
+    if (documentationScopeSha256) {
+        return documentationScopeSha256;
     }
     const normalizedReviewType = String(reviewType || '').trim().toLowerCase();
     if (normalizedReviewType === 'test') {
