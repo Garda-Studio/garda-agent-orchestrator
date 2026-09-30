@@ -15,6 +15,7 @@ import {
     type ReviewRemediationReviewContractValidationAuthority
 } from '../review-remediation/review-remediation-review-contract';
 import { resolveCatalogReviewSkillBinding } from './review-context-skill-binding';
+import { validateReviewTriggerPolicy } from '../../policy/review-trigger-policy';
 
 const NON_CODE_SCOPE_CATEGORIES = new Set(['docs-only', 'config-only', 'audit-only', 'empty']);
 const CODE_SCOPE_CATEGORIES = new Set(['code', 'mixed']);
@@ -889,6 +890,20 @@ export function getReviewContextContractViolations(
         expectedScopedDiffUseStaged: options.expectedScopedDiffUseStaged,
         validateScopedDiffOutputFile: options.validateScopedDiffOutputFile
     }));
+    const treeState = isPlainRecord(reviewContext.tree_state) ? reviewContext.tree_state : null;
+    if (treeState?.review_trigger_policy !== undefined) {
+        try {
+            const profileSnapshot = isPlainRecord(options.expectedPreflightPayload?.profile_policy_snapshot)
+                ? options.expectedPreflightPayload.profile_policy_snapshot : null;
+            const actualPolicy = validateReviewTriggerPolicy(treeState.review_trigger_policy);
+            const expectedPolicy = validateReviewTriggerPolicy(profileSnapshot?.review_trigger_policy);
+            if (JSON.stringify(actualPolicy) !== JSON.stringify(expectedPolicy)) {
+                violations.push('tree_state.review_trigger_policy does not match the authoritative frozen preflight policy.');
+            }
+        } catch (error) {
+            violations.push(`tree_state.review_trigger_policy binding is invalid: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
     const currentPreflightRequiresCoverage = options.expectedPreflightPayload?.review_coverage_contract_required === true;
     const reviewContextSchemaVersion = Number(reviewContext.schema_version);
     if (currentPreflightRequiresCoverage

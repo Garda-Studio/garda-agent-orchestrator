@@ -10,6 +10,8 @@ import {
 import { normalizePath, stringSha256 } from '../shared/helpers';
 import { getSafeWorktreePathState } from '../workspace/worktree-path-state';
 import { isPlainRecord } from '../../core/records';
+import { getClassificationConfig } from '../preflight/classify-change';
+import { validateReviewTriggerPolicy, type ReviewTriggerPolicy } from '../../policy/review-trigger-policy';
 
 const STAGED_DETECTION_SOURCES = new Set(['git_staged_only', 'git_staged_plus_untracked']);
 
@@ -48,6 +50,7 @@ export interface ReviewTreeState {
     scope_content_sha256: string | null;
     scope_sha256: string | null;
     domain_scope_fingerprints?: DomainScopeFingerprints | null;
+    review_trigger_policy?: ReviewTriggerPolicy;
     entries: ReviewTreeStateEntry[];
     stale_staged_snapshot_files: string[];
     mixed_staged_worktree_files: string[];
@@ -194,7 +197,11 @@ export function buildReviewTreeState(options: {
     includeUntracked: boolean;
     changedFiles: string[];
     metrics?: Record<string, unknown> | null;
+    reviewTriggerPolicy?: ReviewTriggerPolicy;
 }): ReviewTreeState {
+    const reviewTriggerPolicy = options.reviewTriggerPolicy
+        ? validateReviewTriggerPolicy(options.reviewTriggerPolicy)
+        : undefined;
     const detectionSource = String(options.detectionSource || 'git_auto').trim().toLowerCase() || 'git_auto';
     const useStaged = usesStagedReviewTreeScope(detectionSource);
     const changedFiles = [...new Set(
@@ -237,11 +244,15 @@ export function buildReviewTreeState(options: {
         changed_files_sha256: normalizeOptionalHash(metrics.changed_files_sha256),
         scope_content_sha256: normalizeOptionalHash(metrics.scope_content_sha256),
         scope_sha256: normalizeOptionalHash(metrics.scope_sha256),
+        ...(reviewTriggerPolicy ? { review_trigger_policy: reviewTriggerPolicy } : {}),
         domain_scope_fingerprints: buildDomainScopeFingerprints({
             repoRoot: options.repoRoot,
             detectionSource,
             includeUntracked: !!options.includeUntracked,
-            changedFiles
+            changedFiles,
+            classificationConfig: reviewTriggerPolicy
+                ? getClassificationConfig(options.repoRoot, { reviewTriggerPolicy })
+                : undefined
         }),
         entries,
         stale_staged_snapshot_files: staleStagedSnapshotFiles,
@@ -319,6 +330,12 @@ function getOptionalBoolean(value: unknown): boolean {
     return value === true || String(value || '').trim().toLowerCase() === 'true';
 }
 
+function readStoredReviewTriggerPolicy(treeState: Record<string, unknown> | null): ReviewTriggerPolicy | undefined {
+    return treeState?.review_trigger_policy === undefined
+        ? undefined
+        : validateReviewTriggerPolicy(treeState.review_trigger_policy);
+}
+
 function reviewDomainStillMatches(options: {
     repoRoot: string;
     reviewContext: Record<string, unknown>;
@@ -337,7 +354,12 @@ function reviewDomainStillMatches(options: {
         repoRoot: options.repoRoot,
         detectionSource: options.detectionSource,
         includeUntracked: options.includeUntracked,
-        changedFiles: options.currentChangedFiles
+        changedFiles: options.currentChangedFiles,
+        classificationConfig: storedTreeState?.review_trigger_policy === undefined
+            ? undefined
+            : getClassificationConfig(options.repoRoot, {
+                reviewTriggerPolicy: readStoredReviewTriggerPolicy(storedTreeState)
+            })
     });
     const reviewType = String(options.reviewContext.review_type || '').trim().toLowerCase();
     return reviewLaneScopeSha256Matches(reviewType, [storedDomainFingerprints, currentDomainFingerprints]);
@@ -388,6 +410,7 @@ function getCurrentReviewTreeState(options: {
     includeUntracked: boolean;
     currentChangedFiles: string[];
     metrics: Record<string, unknown>;
+    reviewTriggerPolicy?: ReviewTriggerPolicy;
     freshnessCache?: ReviewTreeStateFreshnessCache | null;
 }): ReviewTreeState {
     const normalizedChangedFiles = normalizeStringArray(options.currentChangedFiles);
@@ -397,7 +420,8 @@ function getCurrentReviewTreeState(options: {
         detection_source: options.detectionSource,
         include_untracked: options.includeUntracked,
         current_changed_files: normalizedChangedFiles,
-        metrics: normalizedMetrics
+        metrics: normalizedMetrics,
+        review_trigger_policy: options.reviewTriggerPolicy
     });
     const cached = options.freshnessCache?.currentTreeStates.get(key);
     if (cached) {
@@ -408,7 +432,8 @@ function getCurrentReviewTreeState(options: {
         detectionSource: options.detectionSource,
         includeUntracked: options.includeUntracked,
         changedFiles: normalizedChangedFiles,
-        metrics: normalizedMetrics
+        metrics: normalizedMetrics,
+        reviewTriggerPolicy: options.reviewTriggerPolicy
     });
     options.freshnessCache?.currentTreeStates.set(key, treeState);
     return treeState;
@@ -502,6 +527,7 @@ export function assertReviewTreeStateFresh(options: {
         includeUntracked,
         currentChangedFiles,
         metrics: storedMetrics,
+        reviewTriggerPolicy: readStoredReviewTriggerPolicy(storedTreeState),
         freshnessCache: options.freshnessCache
     });
     const blockingViolations = getReviewTreeStateBlockingViolations(currentTreeState);

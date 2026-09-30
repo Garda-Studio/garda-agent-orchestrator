@@ -36,6 +36,7 @@ export interface CodeReviewScopeFingerprint {
     code_scope_sha256: string | null;
     test_only: boolean;
     docs_only: boolean;
+    documentation_review: boolean;
 }
 
 export interface ReviewRelevantScopeFingerprint {
@@ -48,6 +49,7 @@ export interface ReviewRelevantScopeFingerprint {
     missing_review_relevant_files: string[];
     review_scope_sha256: string | null;
     docs_only: boolean;
+    documentation_review: boolean;
 }
 
 export interface ReviewContextReuseContractBindings {
@@ -148,11 +150,11 @@ function toLowerHash(value: unknown): string | null {
     return /^[0-9a-f]{64}$/.test(normalized) ? normalized : null;
 }
 
-export function resolveDocumentationOnlyScopeHash(value: unknown): string | null {
+export function resolveDocumentationReviewScopeHash(value: unknown): string | null {
     const domains = toRecord(toRecord(value).domains);
     const documentation = toRecord(domains.docs);
     if (toStringList(documentation.changed_files).length === 0
-        || DOMAIN_SCOPE_NAMES.some((domain) => domain !== 'docs'
+        || DOMAIN_SCOPE_NAMES.some((domain) => domain !== 'docs' && domain !== 'test'
             && toStringList(toRecord(domains[domain]).changed_files).length > 0)) {
         return null;
     }
@@ -749,7 +751,9 @@ function computeCodeReviewScopeFingerprintInternal(
         missing_non_test_files: missingNonTestFiles,
         code_scope_sha256: stringSha256(fingerprintEntries.join('\n')),
         test_only: sortedNonTestFiles.length === 0 && testChangedFiles.length === allChangedFiles.length,
-        docs_only: sortedNonTestFiles.length === 0 && docsOnlyChangedFiles.length === allChangedFiles.length
+        docs_only: sortedNonTestFiles.length === 0 && docsOnlyChangedFiles.length === allChangedFiles.length,
+        documentation_review: docsOnlyChangedFiles.length > 0 && allChangedFiles.every((file) =>
+            !isCloseoutEvidencePath(file) && (docsOnlyChangedFiles.includes(file) || testChangedFiles.includes(file)))
     };
 }
 
@@ -830,7 +834,11 @@ export function computeReviewRelevantScopeFingerprint(
         review_reuse_neutral_closeout_files: reviewReuseNeutralCloseoutFiles,
         missing_review_relevant_files: missingReviewRelevantFiles,
         review_scope_sha256: stringSha256(fingerprintEntries.join('\n')),
-        docs_only: sortedReviewRelevantFiles.length === 0 && docsOnlyChangedFiles.length === allChangedFiles.length
+        docs_only: sortedReviewRelevantFiles.length === 0 && docsOnlyChangedFiles.length === allChangedFiles.length,
+        documentation_review: docsOnlyChangedFiles.length > 0 && allChangedFiles.every((file) =>
+            !isCloseoutEvidencePath(file) && (docsOnlyChangedFiles.includes(file) || matchAnyRegex(file, resolvedClassificationConfig.test_trigger_regexes, {
+                skipInvalidRegex: true, caseInsensitive: true
+            })))
     };
 }
 
@@ -846,7 +854,7 @@ function buildReviewContextReuseHashSnapshot(
     const reviewerRouting = toRecord(reviewContext.reviewer_routing);
     const plan = toRecord(reviewContext.plan);
     const contractBindings = resolveReviewContextReuseContractBindings(reviewContext);
-    const documentationScopeSha256 = resolveDocumentationOnlyScopeHash(
+    const documentationScopeSha256 = resolveDocumentationReviewScopeHash(
         toRecord(reviewContext.tree_state).domain_scope_fingerprints
     );
 

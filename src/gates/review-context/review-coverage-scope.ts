@@ -14,13 +14,13 @@ export function resolveReviewCoverageChangedFiles(options: {
             options.preflight,
             options.repoRoot
         );
-        return scope.docs_only ? scope.docs_only_changed_files : scope.review_relevant_changed_files;
+        return scope.documentation_review ? [...scope.all_changed_files].sort() : scope.review_relevant_changed_files;
     }
     const scope = computeReviewReuseCodeScopeFingerprint(
         reviewType,
         options.preflight,
         options.repoRoot
     );
-    // Reuse fingerprints omit ordinary documentation; a fresh docs-only review still needs an evidence domain.
-    return scope.docs_only ? scope.docs_only_changed_files : scope.non_test_changed_files;
+    // Documentation work can include tests; fresh review evidence must cover the authored documentation.
+    return scope.documentation_review ? scope.docs_only_changed_files : scope.non_test_changed_files;
 }
