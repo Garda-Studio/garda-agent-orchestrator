@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Document reusable task-plan criteria, verification evidence and a small-task brief using the existing schema; align examples with prepared-plan saving, automatic attachment and frozen start state without adding another artifact or gate.
+
 - Add consistent compact task-plan state, path, editability and reading hints to task entry and handshake. Handshake inspects the frozen attachment, reports missing or changed evidence, and keeps existing readiness checks unchanged.
 
 - Preserve available review lanes explicitly required by TASK.md when profile defaults disable them, including immutable review snapshot reconstruction and dependency ordering.

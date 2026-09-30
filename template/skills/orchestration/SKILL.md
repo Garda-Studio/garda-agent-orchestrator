@@ -120,7 +120,10 @@ Default task navigator is `node garda-agent-orchestrator/bin/garda.js next-step 
 6. Record baseline downstream rules explicitly before preflight when `next-step` requests it:
    - Node: `node garda-agent-orchestrator/bin/garda.js gate load-rule-pack --task-id "<task-id>" --stage "TASK_ENTRY" --loaded-rule-file "garda-agent-orchestrator/live/docs/agent-rules/00-core.md" --loaded-rule-file "garda-agent-orchestrator/live/docs/agent-rules/15-project-memory.md" --loaded-rule-file "garda-agent-orchestrator/live/docs/agent-rules/40-commands.md" --loaded-rule-file "garda-agent-orchestrator/live/docs/agent-rules/80-task-workflow.md" --loaded-rule-file "garda-agent-orchestrator/live/docs/agent-rules/90-skill-catalog.md"`
    - `load-rule-pack` writes task-scoped event `RULE_PACK_LOADED` automatically and persists `runtime/reviews/<task-id>-rule-pack.json`.
-7. Build concise plan: scope, files, risks, tests or validation strategy.
+7. Build a concise execution brief from existing TASK.md intent: goal, done_when (observable result), verification, scope/files and material risks. No separate file is required for an ordinary small task.
+   - When JSON is attached, read and reuse its `goal`, `acceptance_criteria`, `verification_expectations`, `out_of_scope`, `scope_files` and `validation_strategy`; do not duplicate criteria into a competing artifact.
+   - Legacy plans may omit optional criteria fields; use existing task intent and the brief without a new gate, retrospective artifact or profile change.
+   - A ready plan or brief records intent. Actual command outcomes and accepted review receipts establish completion evidence; existing lifecycle gates remain authoritative.
    - `enter-task-mode` auto-emits `PLAN_CREATED`; do not backfill it manually unless recovery tooling explicitly requires it.
 8. Run handshake diagnostics after task-mode entry and baseline rule-pack loading when `next-step` requests it:
    - canonical invocation: `node garda-agent-orchestrator/bin/garda.js gate handshake-diagnostics ...`.
@@ -315,7 +318,7 @@ Default task navigator is `node garda-agent-orchestrator/bin/garda.js next-step 
 - Do not skip explicit task-mode entry via `enter-task-mode` before preflight and implementation.
 - Do not skip explicit rule-pack evidence via `load-rule-pack`; reading only the top-level router is insufficient.
 - Do not skip preflight classification with explicit `--output-path`.
-- Do not move to implementation without plan.
+- Do not move to implementation without a concise execution brief or reading the attached plan; no separate criteria artifact is required.
 - Do not move to `IN_REVIEW` without passing compile gate (`COMPILE_GATE_PASSED`).
 - Do not bypass required reviews without deterministic gate override contract.
 - Do not set or hand-edit active `TASK.md` lifecycle status cells (`IN_PROGRESS`, `IN_REVIEW`, `SPLIT_REQUIRED`, `DONE`, `BLOCKED`) as a substitute for gates; task-mode, review-gate, split-required latch, and completion finalization own normal status sync, and explicit operator `task-reset` owns reset/discard.
