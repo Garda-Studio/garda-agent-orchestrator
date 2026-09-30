@@ -96,3 +96,51 @@ test('handleTask rejects unsupported task actions', async () => {
         /Unsupported task action: audit/
     );
 });
+
+test('handleTask routes plan list, missing filter and show without creating lifecycle artifacts', async t => {
+    const repoRoot = makeTmpDir();
+    t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
+        '# Tasks', '## Active Queue',
+        '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+        '|---|---|---|---|---|---|---|---|---|',
+        '| T-500 | TODO | P2 | planning | Plan | unassigned | 2026-09-30 | balanced | [plan] Request |'
+    ].join('\n'));
+    const listed = await captureOutput(() => handleTask(['plan', 'list', '--missing', '--repo-root', repoRoot], PACKAGE_JSON));
+    assert.match(listed, /T-500: missing/);
+    const shown = await captureOutput(() => handleTask(['plan', 'show', 'T-500', '--repo-root', repoRoot], PACKAGE_JSON));
+    assert.match(shown, /Plan: missing/);
+    assert.deepEqual(fs.readdirSync(repoRoot), ['TASK.md']);
+    const help = await captureOutput(() => handleTask(['plan', '--help'], PACKAGE_JSON));
+    assert.match(help, /task plan list/);
+    assert.match(help, /task plan show/);
+});
+
+test('handleTask plan show prints the original JSON text after compact diagnostics', async t => {
+    const repoRoot = makeTmpDir();
+    t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+    const planDir = path.join(repoRoot, DEFAULT_BUNDLE_NAME, 'runtime', 'reviews');
+    fs.mkdirSync(planDir, { recursive: true });
+    const original = '{\n  "task_id": "T-501", "custom_field": true\n}\n';
+    const planFile = path.join(planDir, 'T-501-task-plan.json');
+    fs.writeFileSync(planFile, original);
+    const shown = await captureOutput(() => handleTask(['plan', 'show', 'T-501', '--repo-root', repoRoot], PACKAGE_JSON));
+    assert.match(shown, /Plan: invalid/);
+    assert.match(shown, /Diagnostic:/);
+    assert.ok(shown.endsWith(original));
+    assert.equal(fs.readFileSync(planFile, 'utf8'), original);
+});
+
+test('handleTask rejects unsupported plan actions, escaping ids and mutation flags', async () => {
+    await assert.rejects(
+        () => handleTask(['plan', 'list', '--output-path', 'result.json'], PACKAGE_JSON),
+        /Unknown option: --output-path/
+    );
+    for (const argv of [
+        ['plan', 'approve', 'T-500'], ['plan', 'show'], ['plan', 'show', '../T-500'],
+        ['plan', 'show', 'T-500', '--missing'],
+        ['plan', 'list', 'T-500'], ['plan', 'show', 'T-500', 'T-501']
+    ]) {
+        await assert.rejects(() => handleTask(argv, PACKAGE_JSON));
+    }
+});

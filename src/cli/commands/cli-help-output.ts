@@ -247,10 +247,12 @@ export const COMMAND_HELP: Readonly<Record<CommandHelpName, CommandHelpDescripto
         ])
     }),
     task: Object.freeze({
-        summary: 'Inspect one task through read-only stats and event timeline views.',
+        summary: 'Inspect tasks, event timelines and optional JSON execution plans.',
         usage: Object.freeze([
             `${PRIMARY_CLI_NAME} task "<task-id>" stats [--target-root PATH] [--events-root PATH] [--reviews-root PATH] [--json]`,
             `${PRIMARY_CLI_NAME} task "<task-id>" events [--repo-root PATH] [--events-root PATH] [--reviews-root PATH] [--include-details] [--as-json]`,
+            `${PRIMARY_CLI_NAME} task plan list [--missing] [--repo-root PATH]`,
+            `${PRIMARY_CLI_NAME} task plan show "<task-id>" [--repo-root PATH]`,
             `${PRIMARY_CLI_NAME} task help`
         ]),
         examples: Object.freeze([
@@ -261,6 +263,8 @@ export const COMMAND_HELP: Readonly<Record<CommandHelpName, CommandHelpDescripto
         hints: Object.freeze([
             'This namespace is read-only and does not change task lifecycle state.',
             'Use stats for task metrics and events for the task timeline.',
+            'Plan list selects TODO rows with a literal leading [plan] Notes token; --missing selects only absent JSON plans.',
+            'Plan show preserves the original JSON text and reports draft, ready, invalid or missing. Reads are bounded to 1 MiB per plan and 4 MiB for TASK.md.',
             'The events action does not expose --output-path; use the gate command directly when you intentionally need an artifact.'
         ])
     }),
