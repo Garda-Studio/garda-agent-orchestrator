@@ -586,6 +586,10 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): Ta
             currentPreflight: preflight,
             timelineEvents: events,
             reviewAttemptSummary,
+            currentCycle,
+            reviewIntegrityAttestation,
+            timelineIntegrityStatus: integrityStatus,
+            currentPreflightSha256: preflightSha256,
             taskQueueEntries: options.taskQueueEntries
         });
         const reviewTimingAudit = buildReviewTimingAuditSummary(

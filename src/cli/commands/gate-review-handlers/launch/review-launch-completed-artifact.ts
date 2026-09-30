@@ -557,6 +557,7 @@ export function validateReviewerLaunchArtifact(options: {
     return {
         artifactPath,
         artifactSha256: reviewerLaunchArtifactSha256,
+        reviewerLaunchAttemptId,
         attestationSource,
         launchTool,
         providerInvocationId,

@@ -31,6 +31,8 @@ import {
 } from '../review/review-findings-validation-artifact';
 import { normalizePath } from '../shared/helpers';
 import type { ReviewAttemptSummary } from './task-audit-summary-review-attempts';
+import type { FinalCloseoutReviewIntegrityAttestation } from './task-audit-summary-review-integrity';
+import type { TaskCycleBindingSnapshot } from '../task-events-summary/task-events-summary-cycle-binding';
 import {
     collectKnownRequiredReviewTypes,
     isPlainRecord,
@@ -88,6 +90,11 @@ export interface ReviewFindingsRemediationCycleAudit {
 }
 
 export interface ReviewOutputCorrectionTransportAudit {
+    task_id?: string | null;
+    task_sequence?: number | null;
+    event_sha256?: string | null;
+    audit_scope?: 'CURRENT' | 'SUPERSEDED_CYCLE';
+    superseded_by_compile_event_sha256?: string | null;
     timestamp_utc: string | null;
     event_type: string;
     review_type: string;
@@ -108,6 +115,73 @@ export interface ReviewOutputCorrectionTransportAudit {
     violations: string[];
 }
 
+function correctionAuditEventBinding(event: ReviewReuseTelemetryEventLike): {
+    task_id: string | null;
+    task_sequence: number | null;
+    event_sha256: string | null;
+} {
+    const details = isPlainRecord(event.details) ? event.details : {};
+    const integrity = isPlainRecord(event.integrity) ? event.integrity : {};
+    return {
+        task_id: stringValue(details.task_id),
+        task_sequence: typeof integrity.task_sequence === 'number'
+            && Number.isInteger(integrity.task_sequence) && integrity.task_sequence > 0
+            ? integrity.task_sequence : null,
+        event_sha256: stringValue(integrity.event_sha256)
+    };
+}
+
+function scopeCorrectionTransports(options: {
+    taskId: string;
+    transports: ReviewOutputCorrectionTransportAudit[];
+    timelineEvents: readonly ReviewReuseTelemetryEventLike[];
+    currentCycle?: TaskCycleBindingSnapshot | null;
+    reviewIntegrityAttestation?: FinalCloseoutReviewIntegrityAttestation | null;
+    timelineIntegrityStatus?: string;
+    currentPreflightSha256?: string | null;
+    requiredReviewTypes: readonly string[];
+}): ReviewOutputCorrectionTransportAudit[] {
+    const attestation = options.reviewIntegrityAttestation;
+    const trustedCurrentReviews = attestation?.status === 'INDEPENDENT_REVIEW_ATTESTED'
+        && attestation.completion_review_attested && attestation.completion_allowed
+        && attestation.observed_issues.length === 0
+        && options.timelineIntegrityStatus === 'PASS'
+        && isSha256(options.currentPreflightSha256 || null)
+        && options.currentCycle?.preflight_sha256 === options.currentPreflightSha256;
+    const compileEvents = trustedCurrentReviews && options.currentCycle?.compile_gate_timestamp
+        ? options.timelineEvents.filter((event) => isPlainRecord(event)
+            && event.event_type === 'COMPILE_GATE_PASSED'
+            && event.timestamp_utc === options.currentCycle?.compile_gate_timestamp
+            && (event.task_id === options.taskId
+                || (isPlainRecord(event.details) && event.details.task_id === options.taskId)))
+        : [];
+    const compile = compileEvents.length === 1 ? compileEvents[0] : null;
+    const compileIntegrity = isPlainRecord(compile?.integrity) ? compile.integrity : {};
+    const compileSequence = compileIntegrity.task_sequence;
+    const compileSha256 = stringValue(compileIntegrity.event_sha256);
+    const hasBoundCompile = typeof compileSequence === 'number'
+        && Number.isInteger(compileSequence) && compileSequence > 0 && isSha256(compileSha256);
+    const eventHashCounts = new Map<string, number>();
+    for (const event of options.timelineEvents) {
+        const integrity = isPlainRecord(event.integrity) ? event.integrity : {};
+        const hash = stringValue(integrity.event_sha256);
+        if (hash) eventHashCounts.set(hash, (eventHashCounts.get(hash) || 0) + 1);
+    }
+    return options.transports.map((entry) => {
+        const superseded = hasBoundCompile && eventHashCounts.get(compileSha256 || '') === 1
+            && entry.task_id === options.taskId && typeof entry.task_sequence === 'number'
+            && entry.task_sequence < compileSequence
+            && isSha256(entry.event_sha256 || null) && eventHashCounts.get(entry.event_sha256 || '') === 1
+            && attestation?.required_review_types.includes(entry.review_type)
+            && options.requiredReviewTypes.includes(entry.review_type);
+        return {
+            ...entry,
+            audit_scope: superseded ? 'SUPERSEDED_CYCLE' : 'CURRENT',
+            superseded_by_compile_event_sha256: superseded ? compileSha256 : null
+        };
+    });
+}
+
 export interface ReviewFindingsAuditSummary {
     status: 'CLEAR' | 'BLOCKED' | 'INCOMPLETE';
     lanes: ReviewFindingsAuditLane[];
@@ -122,6 +196,7 @@ export interface ReviewFindingsAuditSummary {
     validation_failures: ReviewFindingsValidationFailureAudit[];
     remediation_cycles: ReviewFindingsRemediationCycleAudit[];
     correction_transports?: ReviewOutputCorrectionTransportAudit[];
+    superseded_invalid_transport_count?: number;
     fresh_review_count: number;
     reused_review_count: number;
     review_follow_up_task_closure_policy?: {
@@ -705,12 +780,15 @@ function hasTrustedOriginalReviewerInvocation(options: {
         ?? details.reviewer_launch_tool
         ?? details.launch_tool
     );
+    const originalAttemptId = Object.prototype.hasOwnProperty.call(details, 'reviewer_launch_attempt_id')
+        ? stringValue(details.reviewer_launch_attempt_id)
+        : stringValue(details.provider_invocation_id);
     return candidate.eventIndex < options.eventIndex
         && stringValue(details.task_id) === options.taskId
         && stringValue(details.review_type) === options.reviewType
         && stringValue(details.reviewer_execution_mode) === 'delegated_subagent'
         && stringValue(details.reviewer_identity) === options.reviewerIdentity
-        && stringValue(details.reviewer_launch_attempt_id) === options.reviewerAttemptId
+        && originalAttemptId === options.reviewerAttemptId
         && originalProviderId === options.providerId
         && stringValue(details.provider_invocation_id) === options.providerInvocationId
         && isSha256(stringValue(details.reviewer_launch_artifact_sha256))
@@ -1860,6 +1938,7 @@ function collectCorrectionTransports(
             }
         }
         results.push({
+            ...correctionAuditEventBinding(events[selectedEventIndex]),
             timestamp_utc: timestampUtc,
             event_type: eventType,
             review_type: reviewType,
@@ -1878,6 +1957,7 @@ function collectCorrectionTransports(
         const evidenceValid = consumedInvocationAttestationIndexes.has(invocationAttestation.eventIndex)
             && stringValue(details.task_id) === options.taskId;
         results.push({
+            ...correctionAuditEventBinding(events[invocationAttestation.eventIndex]),
             timestamp_utc: invocationAttestation.timestampUtc,
             event_type: 'REVIEW_OUTPUT_CORRECTION_INVOCATION_ATTESTED',
             review_type: stringValue(details.review_type) || 'unknown',
@@ -1903,6 +1983,7 @@ function collectCorrectionTransports(
         const evidenceValid = consumedAcceptedResponseIndexes.has(acceptedResponse.eventIndex)
             && stringValue(details.task_id) === options.taskId;
         results.push({
+            ...correctionAuditEventBinding(events[acceptedResponse.eventIndex]),
             timestamp_utc: acceptedResponse.timestampUtc,
             event_type: 'REVIEW_OUTPUT_CORRECTION_ACCEPTED',
             review_type: stringValue(details.review_type) || 'unknown',
@@ -1936,6 +2017,10 @@ export function buildReviewFindingsAuditSummary(options: {
     currentPreflight: Record<string, unknown> | null;
     timelineEvents: readonly ReviewReuseTelemetryEventLike[];
     reviewAttemptSummary: ReviewAttemptSummary | null;
+    currentCycle?: TaskCycleBindingSnapshot | null;
+    reviewIntegrityAttestation?: FinalCloseoutReviewIntegrityAttestation | null;
+    timelineIntegrityStatus?: string;
+    currentPreflightSha256?: string | null;
     taskQueueEntries?: ReadonlyMap<string, TaskQueueEntry>;
     _testHooks?: {
         onCorrectionTransportWorkMetrics?: (
@@ -1953,12 +2038,16 @@ export function buildReviewFindingsAuditSummary(options: {
         options.requiredReviews,
         options.currentPreflight
     );
-    const correctionTransports = collectCorrectionTransports(options.timelineEvents, {
+    const correctionTransports = scopeCorrectionTransports({
         ...options,
-        authorizedReviewTypes: new Set(
-            options.authorizedCorrectionReviewTypes || requiredReviewTypes
-        ),
-        onWorkMetrics: options._testHooks?.onCorrectionTransportWorkMetrics
+        requiredReviewTypes,
+        transports: collectCorrectionTransports(options.timelineEvents, {
+            ...options,
+            authorizedReviewTypes: new Set(
+                options.authorizedCorrectionReviewTypes || requiredReviewTypes
+            ),
+            onWorkMetrics: options._testHooks?.onCorrectionTransportWorkMetrics
+        })
     });
     const lanes = requiredReviewTypes
         .map((reviewType) => buildCurrentFindingsLane({ ...options, reviewType }))
@@ -1984,7 +2073,12 @@ export function buildReviewFindingsAuditSummary(options: {
         + lane.remaining_blocker_ids.length
         + (lane.validation_violations.length > 0 ? 1 : 0)
         + (lane.remaining_blocker_ids.length === 0 && lane.disposition_violations.length > 0 ? 1 : 0)
-    ), 0) + correctionTransports.filter((entry) => !entry.evidence_valid).length;
+    ), 0) + correctionTransports.filter((entry) => (
+        !entry.evidence_valid && entry.audit_scope !== 'SUPERSEDED_CYCLE'
+    )).length;
+    const supersededInvalidTransportCount = correctionTransports.filter((entry) => (
+        !entry.evidence_valid && entry.audit_scope === 'SUPERSEDED_CYCLE'
+    )).length;
     const reusedReviewCount = Object.values(options.reviewAttemptSummary?.fresh_reused_by_review_type || {})
         .reduce((count, entry) => count + entry.reused, 0);
     const freshReviewCount = options.reviewAttemptSummary?.total_attempts || 0;
@@ -2047,6 +2141,7 @@ export function buildReviewFindingsAuditSummary(options: {
         validation_failures: validationFailures,
         remediation_cycles: remediationCycles,
         correction_transports: correctionTransports,
+        superseded_invalid_transport_count: supersededInvalidTransportCount,
         fresh_review_count: freshReviewCount,
         reused_review_count: reusedReviewCount,
         review_follow_up_task_closure_policy: closurePolicySummary,
@@ -2056,5 +2151,7 @@ export function buildReviewFindingsAuditSummary(options: {
             `fix_now=${dispositionCounts.fix_now}; follow_up=${dispositionCounts.create_follow_up}; ignored=${dispositionCounts.ignore}; ` +
             `remaining_blockers=${remainingBlockerCount}; validation_failures=${validationFailures.length}; ` +
             `remediation_cycles=${remediationCycles.length}; fresh_reviews=${freshReviewCount}; reused_reviews=${reusedReviewCount}`
+            + (supersededInvalidTransportCount > 0
+                ? `; superseded_invalid_transports=${supersededInvalidTransportCount}` : '')
     };
 }

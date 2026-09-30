@@ -330,6 +330,52 @@ describe('gates/task-audit-summary review correction transport', () => {
         }
     });
 
+    it('binds legacy attempts to the original provider invocation without overriding explicit attempt evidence', () => {
+        const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-legacy-correction-audit-'));
+        const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+        fs.mkdirSync(reviewsRoot, { recursive: true });
+        tempRoots.push(repoRoot);
+        const taskId = 'T-AUDIT-LEGACY-CORRECTION';
+        const capabilities = {
+            live_reviewer_continuation: false,
+            api_conversation_continuation: false,
+            correction_only_invocation: true
+        };
+        const persisted = writeSelectedCorrectionFixture({
+            reviewsRoot, taskId, reviewType: 'code', reviewerIdentity: 'agent:legacy-reviewer',
+            providerId: 'Codex', providerInvocationId: 'attempt-1',
+            reviewerInvocationEventSha256: '8'.repeat(64), capabilities,
+            sessionAvailability: 'stateless', selectTransport: false
+        });
+        const required = correctionEvent('REVIEW_OUTPUT_CORRECTION_REQUIRED', {
+            task_id: taskId, review_type: 'code', correction_attempt: 1,
+            correction_package_sha256: persisted.previousFileSha256,
+            correction_artifact_path: persisted.artifactPath,
+            correction_artifact_sha256: persisted.artifactSha256,
+            reviewer_identity: 'agent:legacy-reviewer', reviewer_attempt_id: 'attempt-1',
+            provider_id: 'Codex', provider_invocation_id: 'attempt-1',
+            reviewer_invocation_event_sha256: '8'.repeat(64),
+            provider_capabilities_sha256: computeReviewOutputCorrectionProviderCapabilitiesSha256({
+                providerId: 'Codex', capabilities
+            }), session_availability: 'pending'
+        });
+        for (const attemptEvidence of [undefined, '', 'foreign-attempt']) {
+            const original = reviewerInvocationEvent({
+                taskId, reviewType: 'code', reviewerIdentity: 'agent:legacy-reviewer',
+                providerId: 'Codex', providerInvocationId: 'attempt-1', eventSha256: '8'.repeat(64)
+            });
+            if (attemptEvidence === undefined) delete original.details.reviewer_launch_attempt_id;
+            else original.details.reviewer_launch_attempt_id = attemptEvidence;
+            const summary = buildReviewFindingsAuditSummary({
+                repoRoot, reviewsRoot, taskId, requiredReviews: CORRECTION_REQUIRED_REVIEWS,
+                currentPreflight: null, timelineEvents: [original, required], reviewAttemptSummary: null
+            });
+            assert.equal(summary?.correction_transports?.[0]?.evidence_valid,
+                attemptEvidence === undefined, `attempt evidence: ${String(attemptEvidence)}`);
+            assert.equal(summary?.status, attemptEvidence === undefined ? 'CLEAR' : 'BLOCKED');
+        }
+    });
+
     it('event provenance: distinguishes transports and rejects stale, duplicate, raced, or unverifiable evidence', () => {
         const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-correction-audit-'));
         const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');

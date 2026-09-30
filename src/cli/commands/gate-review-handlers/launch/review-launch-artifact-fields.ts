@@ -13,6 +13,7 @@ export type ReviewerLaunchInputMode = 'copy_paste_prompt' | 'launch_artifact_pat
 export interface ReviewerLaunchArtifactValidationResult {
     artifactPath: string;
     artifactSha256: string;
+    reviewerLaunchAttemptId: string;
     attestationSource: string;
     launchTool: string;
     providerInvocationId: string;
