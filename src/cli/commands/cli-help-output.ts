@@ -247,12 +247,13 @@ export const COMMAND_HELP: Readonly<Record<CommandHelpName, CommandHelpDescripto
         ])
     }),
     task: Object.freeze({
-        summary: 'Inspect tasks, event timelines and optional JSON execution plans.',
+        summary: 'Inspect tasks and prepare optional JSON plans before execution.',
         usage: Object.freeze([
             `${PRIMARY_CLI_NAME} task "<task-id>" stats [--target-root PATH] [--events-root PATH] [--reviews-root PATH] [--json]`,
             `${PRIMARY_CLI_NAME} task "<task-id>" events [--repo-root PATH] [--events-root PATH] [--reviews-root PATH] [--include-details] [--as-json]`,
             `${PRIMARY_CLI_NAME} task plan list [--missing] [--repo-root PATH]`,
             `${PRIMARY_CLI_NAME} task plan show "<task-id>" [--repo-root PATH]`,
+            `${PRIMARY_CLI_NAME} task plan save "<task-id>" --input FILE [--repo-root PATH]`,
             `${PRIMARY_CLI_NAME} task help`
         ]),
         examples: Object.freeze([
@@ -261,10 +262,12 @@ export const COMMAND_HELP: Readonly<Record<CommandHelpName, CommandHelpDescripto
             `${PRIMARY_CLI_NAME} task "<task-id>" events --include-details`
         ]),
         hints: Object.freeze([
-            'This namespace is read-only and does not change task lifecycle state.',
+            'Stats, events, plan list and plan show are read-only. Plan save changes only the prepared JSON plan, without starting the task.',
             'Use stats for task metrics and events for the task timeline.',
             'Plan list selects TODO rows with a literal leading [plan] Notes token; --missing selects only absent JSON plans.',
             'Plan show preserves the original JSON text and reports draft, ready, invalid or missing. Reads are bounded to 1 MiB per plan and 4 MiB for TASK.md.',
+            'Plan save atomically creates or replaces a validated plan for an existing TODO task with no start evidence or retained lifecycle history. Input paths must stay inside the repository.',
+            'Ready (approved) plans require acceptance_criteria, verification_expectations and out_of_scope. Approved means ready for execution, not operator approval. Task entry freezes plan replacement, including after a reset to TODO.',
             'The events action does not expose --output-path; use the gate command directly when you intentionally need an artifact.'
         ])
     }),

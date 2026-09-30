@@ -50,6 +50,7 @@ import {
 import { loadFullSuiteValidationConfig } from '../../../../core/full-suite-validation-config';
 import { resolveReviewFollowUpTaskClosurePolicy } from '../../../../core/review-follow-up-task-closure-policy';
 import { readTaskQueueEntries } from '../../../../core/task-queue-read';
+import { withTaskPlanMutationLock } from '../../../../core/task-plan-save';
 import {
     readImplementationTaskMode,
     resolveActiveTaskEntryApproval,
@@ -318,7 +319,8 @@ export function runEnterTaskModeCommand(options: EnterTaskModeCommandOptions): {
     const repoRoot = path.resolve(String(options.repoRoot || '.'));
     return withImplementationOwnershipLock(
         repoRoot,
-        lock => runEnterTaskModeWithOwnershipLock(options, lock)
+        lock => withTaskPlanMutationLock(repoRoot, assertValidTaskId(String(options.taskId || '').trim()),
+            () => runEnterTaskModeWithOwnershipLock(options, lock))
     );
 }
 

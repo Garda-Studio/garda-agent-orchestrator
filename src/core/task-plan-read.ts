@@ -1,8 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { resolveBundleNameForTarget } from './constants';
-import { resolvePathInsideRepo } from './orchestrator-paths';
+import { joinOrchestratorPath, resolvePathInsideRepo } from './orchestrator-paths';
 import { TASK_QUEUE_FILENAME } from './orchestration-constants';
 import { assertCanonicalTaskId } from './task-ids';
 import { parseTaskQueueEntriesFromContent } from './task-queue-read';
@@ -23,11 +22,11 @@ export interface TaskPlanReadResult {
 /** Resolve the existing JSON convention; Markdown working plans are separate. */
 export function resolveCanonicalTaskPlanPath(repoRoot: string, taskId: string): string {
     const id = assertCanonicalTaskId(taskId);
-    const relative = path.join(resolveBundleNameForTarget(repoRoot), 'runtime', 'reviews', `${id}-task-plan.json`);
-    return resolvePathInsideRepo(relative, repoRoot, { allowMissing: true, enforceInside: true })!;
+    const candidate = joinOrchestratorPath(repoRoot, path.join('runtime', 'reviews', `${id}-task-plan.json`));
+    return resolvePathInsideRepo(candidate, repoRoot, { allowMissing: true, enforceInside: true })!;
 }
 
-function readBoundedFile(repoRoot: string, file: string, maxBytes: number): string | null {
+export function readBoundedTaskPlanFile(repoRoot: string, file: string, maxBytes: number): string | null {
     resolvePathInsideRepo(file, repoRoot, { allowMissing: true, enforceInside: true });
     let before: fs.Stats;
     try {
@@ -78,7 +77,7 @@ export function readTaskPlan(repoRoot: string, taskId: string): TaskPlanReadResu
         diagnostics: []
     };
     try {
-        result.content = readBoundedFile(repoRoot, planPath, TASK_PLAN_READ_MAX_BYTES);
+        result.content = readBoundedTaskPlanFile(repoRoot, planPath, TASK_PLAN_READ_MAX_BYTES);
         if (result.content === null) return result;
         const plan = validateTaskPlan(JSON.parse(result.content));
         if (plan.task_id !== taskId) throw new Error(`Plan task_id '${plan.task_id}' does not match '${taskId}'.`);
@@ -97,7 +96,7 @@ export function readTaskPlan(repoRoot: string, taskId: string): TaskPlanReadResu
 
 export function listTaskPlans(repoRoot: string, missingOnly = false): Omit<TaskPlanReadResult, 'content'>[] {
     const queueFile = path.resolve(repoRoot, TASK_QUEUE_FILENAME);
-    const content = readBoundedFile(repoRoot, queueFile, TASK_QUEUE_READ_MAX_BYTES);
+    const content = readBoundedTaskPlanFile(repoRoot, queueFile, TASK_QUEUE_READ_MAX_BYTES);
     if (content === null) throw new Error(`${TASK_QUEUE_FILENAME} was not found.`);
     const results: Omit<TaskPlanReadResult, 'content'>[] = [];
     for (const entry of parseTaskQueueEntriesFromContent(content).values()) {

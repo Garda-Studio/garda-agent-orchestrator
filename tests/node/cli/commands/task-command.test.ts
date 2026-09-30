@@ -144,3 +144,28 @@ test('handleTask rejects unsupported plan actions, escaping ids and mutation fla
         await assert.rejects(() => handleTask(argv, PACKAGE_JSON));
     }
 });
+
+test('handleTask plan save writes a prepared plan and rejects invalid save arguments', async t => {
+    const repoRoot = makeTmpDir();
+    t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
+        '## Active Queue',
+        '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+        '|---|---|---|---|---|---|---|---|---|',
+        '| T-502 | TODO | P2 | planning | Save | unassigned | 2026-09-30 | balanced | [plan] Prepare |'
+    ].join('\n'));
+    fs.writeFileSync(path.join(repoRoot, 'input.json'), JSON.stringify({
+        schema_version: 1, task_id: 'T-502', status: 'approved', goal: 'Prepare',
+        scope_files: ['src/widget.ts'], risk_level: 'low', steps: [{ id: 'a', title: 'Implement' }],
+        acceptance_criteria: ['Preserve'], verification_expectations: ['Test'], out_of_scope: ['Other code']
+    }));
+    const shown = await captureOutput(() => handleTask(['plan', 'save', 'T-502', '--input', 'input.json', '--repo-root', repoRoot], PACKAGE_JSON));
+    assert.match(shown, /Plan: saved/);
+    const saved = path.join(repoRoot, 'runtime', 'reviews', 'T-502-task-plan.json');
+    assert.equal(JSON.parse(fs.readFileSync(saved, 'utf8')).task_id, 'T-502');
+    assert.equal(fs.existsSync(path.join(repoRoot, 'runtime', 'task-events')), false);
+    await assert.rejects(() => handleTask(['plan', 'save', 'T-502', '--repo-root', repoRoot], PACKAGE_JSON), /requires --input/);
+    await assert.rejects(() => handleTask(['plan', 'save', '--input', 'input.json'], PACKAGE_JSON), /exactly one task id/);
+    await assert.rejects(() => handleTask(['plan', 'save', 'T-502', '--input', 'input.json', '--missing'], PACKAGE_JSON), /Unknown option/);
+    await assert.rejects(() => handleTask(['plan', 'show', 'T-502', '--input', 'input.json'], PACKAGE_JSON), /Unknown option/);
+});

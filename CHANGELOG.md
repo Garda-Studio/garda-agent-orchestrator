@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added `task plan save <task-id> --input <file>` for atomic prepared-plan creation or replacement before task execution. Saving and task entry share a task-local lock; started tasks and unknown start evidence refuse replacement, and ready plans require explicit acceptance, verification and scope boundaries.
 - Added read-only `task plan list` (including `--missing`) and `task plan show <task-id>` commands for opt-in TODO plans, with bounded repository-confined reads and explicit missing, draft, ready and invalid diagnostics.
 - Reject cyclic task-plan step dependencies, including self-dependencies, with a deterministic cycle path. Valid forward references and branching dependency graphs remain supported.
 
