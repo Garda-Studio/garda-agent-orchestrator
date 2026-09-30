@@ -8,7 +8,7 @@ import { DEFAULT_BUNDLE_NAME } from '../../../src/core/constants';
 import { joinOrchestratorPath } from '../../../src/core/orchestrator-paths';
 import { withImplementationOwnershipLock } from '../../../src/gates/workspace/active-implementation-ownership';
 import { saveTaskPlan, withTaskPlanMutationLock } from '../../../src/core/task-plan-save';
-import { readTaskPlan, resolveCanonicalTaskPlanPath, TASK_PLAN_READ_MAX_BYTES } from '../../../src/core/task-plan-read';
+import { readTaskPlan, TASK_PLAN_READ_MAX_BYTES } from '../../../src/core/task-plan-read';
 import { computeTaskPlanDigest, validateTaskPlan } from '../../../src/schemas/task-plan';
 import { appendTaskEvent } from '../../../src/gate-runtime/task-events';
 import { runEnterTaskModeCommand } from '../../../src/cli/commands/gate-flows/task-mode/task-mode-flow';
@@ -57,8 +57,7 @@ function seedEntry(root: string): void {
 function enter(root: string): void {
     const result = runEnterTaskModeCommand({
         repoRoot: root, taskId: TASK_ID, entryMode: 'EXPLICIT_TASK_EXECUTION',
-        requestedDepth: 2, taskSummary: 'Prepare the change', provider: 'Codex',
-        planPath: resolveCanonicalTaskPlanPath(root, TASK_ID)
+        requestedDepth: 2, taskSummary: 'Prepare the change', provider: 'Codex'
     });
     assert.equal(result.exitCode, 0);
 }

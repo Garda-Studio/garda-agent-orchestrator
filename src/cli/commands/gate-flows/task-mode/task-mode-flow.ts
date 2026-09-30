@@ -16,18 +16,13 @@ import {
     getTaskModeEvidenceViolations,
     parseTaskModeDepth,
     readOptionalMarkdownWorkingPlan,
-    resolveTaskModeArtifactPath,
-    type TaskModePlanMetadata
+    resolveTaskModeArtifactPath
 } from '../../../../gates/task-mode/task-mode';
+import { selectTaskModePlan } from '../../../../gates/task-mode/task-mode-plan';
 import {
     captureDirtyWorkspaceBaseline,
     type DirtyWorkspaceBaseline
 } from '../../../../gates/workspace/dirty-worktree-protection';
-import {
-    validateTaskPlan,
-    computeTaskPlanDigest,
-    isApprovedPlan
-} from '../../../../schemas/task-plan';
 import {
     getCurrentWorkflowConfigFileHashes,
     getWorkflowConfigPreTaskBaselineState,
@@ -352,31 +347,6 @@ function runEnterTaskModeWithOwnershipLock(
     const dirtyWorkflowConfigFiles = [...workflowConfigPreTaskBaseline.changed_files].sort();
     const startBanner = resolveTaskModeStartBanner(options.startBanner);
 
-    let planMetadata: TaskModePlanMetadata | null = null;
-    const rawPlanPath = String(options.planPath || '').trim();
-    if (rawPlanPath) {
-        const resolvedPlanPath = gateHelpers.resolvePathInsideRepo(rawPlanPath, repoRoot, { allowMissing: false });
-        if (!resolvedPlanPath || !fs.existsSync(resolvedPlanPath) || !fs.statSync(resolvedPlanPath).isFile()) {
-            throw new Error(`PlanPath not found or not a file: '${rawPlanPath}'.`);
-        }
-        const planJson = JSON.parse(fs.readFileSync(resolvedPlanPath, 'utf8'));
-        const validated = validateTaskPlan(planJson);
-        if (validated.task_id !== taskId) {
-            throw new Error(`Plan task_id '${validated.task_id}' does not match --task-id '${taskId}'.`);
-        }
-        if (!isApprovedPlan(validated)) {
-            throw new Error(`Plan status is '${validated.status}'; only approved plans can be attached at task-mode entry.`);
-        }
-        const digest = computeTaskPlanDigest(validated);
-        if (validated.plan_sha256 && validated.plan_sha256 !== digest) {
-            throw new Error(`Plan plan_sha256 mismatch: embedded '${validated.plan_sha256}' vs computed '${digest}'.`);
-        }
-        planMetadata = {
-            plan_path: gateHelpers.normalizePath(resolvedPlanPath),
-            plan_sha256: digest,
-            plan_summary: validated.goal
-        };
-    }
     const markdownWorkingPlan = readOptionalMarkdownWorkingPlan(repoRoot, taskId);
 
     const taskQueueEntries = readTaskQueueEntries(repoRoot);
@@ -410,6 +380,8 @@ function runEnterTaskModeWithOwnershipLock(
     });
     const scopeUpgrade = upgradeExistingTaskMode || activeTaskApproval ? preservedScope : null;
     const dirtyWorkspaceBaseline = preservedScope?.dirtyWorkspaceBaseline || currentDirtyWorkspaceBaseline;
+    const planSelection = selectTaskModePlan(repoRoot, taskId, String(options.planPath || '').trim(),
+        preserveOwnershipBaseline ? previousTaskMode?.plan ?? null : undefined);
 
     assertTaskModeProtectedEntryAllowed({
         repoRoot,
@@ -529,7 +501,7 @@ function runEnterTaskModeWithOwnershipLock(
         runtimeIdentityViolations: routingDecision.violations,
         routedTo: routingDecision.routedTo,
         actor: String(options.actor || 'orchestrator'),
-        plan: planMetadata,
+        plan: planSelection.plan,
         markdownWorkingPlan,
         plannedChangedFiles,
         taskProfile,
@@ -710,6 +682,7 @@ function runEnterTaskModeWithOwnershipLock(
             ...(routingDecision.routedTo ? [`RoutedTo: ${routingDecision.routedTo}`] : []),
             ...(routingDecision.reviewerSubagentLaunchStatus ? [`ReviewerSubagentLaunchStatus: ${routingDecision.reviewerSubagentLaunchStatus}`] : []),
             ...(routingDecision.reviewerSubagentLaunchRoute ? [`ReviewerSubagentLaunchRoute: ${routingDecision.reviewerSubagentLaunchRoute}`] : []),
+            planSelection.diagnostic,
             ...(taskModeArtifact.plan ? [`PlanGuided: true`, `PlanPath: ${taskModeArtifact.plan.plan_path}`] : [`PlanGuided: false`]),
             ...(taskModeArtifact.markdown_working_plan
                 ? [

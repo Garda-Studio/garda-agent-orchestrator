@@ -268,6 +268,7 @@ export const COMMAND_HELP: Readonly<Record<CommandHelpName, CommandHelpDescripto
             'Plan show preserves the original JSON text and reports draft, ready, invalid or missing. Reads are bounded to 1 MiB per plan and 4 MiB for TASK.md.',
             'Plan save atomically creates or replaces a validated plan for an existing TODO task with no start evidence or retained lifecycle history. Input paths must stay inside the repository.',
             'Ready (approved) plans require acceptance_criteria, verification_expectations and out_of_scope. Approved means ready for execution, not operator approval. Task entry freezes plan replacement, including after a reset to TODO.',
+            'Task entry automatically attaches a ready canonical JSON plan; explicit --plan-path takes precedence. Missing or draft optional plans keep freeform execution; invalid canonical plans are rejected. Re-entry preserves the original attachment.',
             'The events action does not expose --output-path; use the gate command directly when you intentionally need an artifact.'
         ])
     }),
