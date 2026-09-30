@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Reject cyclic task-plan step dependencies, including self-dependencies, with a deterministic cycle path. Valid forward references and branching dependency graphs remain supported.
+
 ## 1.4.4
 
 ### Garda Compact
