@@ -34,6 +34,18 @@ Default task navigator is `node garda-agent-orchestrator/bin/garda.js next-step 
 - Relevant rule files from `garda-agent-orchestrator/live/docs/agent-rules/`.
 - Token economy config: `garda-agent-orchestrator/live/config/token-economy.json`.
 
+## Requested Plan Preparation
+
+A leading `[plan]` token in TASK.md Notes or an explicit operator request asks the agent to investigate and prepare a ready structured plan before `enter-task-mode`. Preparation uses the existing `task plan` commands outside task execution; it is not a new navigator stage or gate.
+
+Load full details only on demand: use `task plan --help` and the packaged `docs/task-plan-workflow.md` guide when preparing or consuming a plan. In a source checkout use `node bin/garda.js task plan --help`; in a deployed workspace use `node garda-agent-orchestrator/bin/garda.js task plan --help`. Keep ordinary task context to the short discovery hint and selected task rows.
+
+For one task, read its existing plan through `task plan show <task-id>`, investigate the task intent and relevant files, then author or edit a workspace input JSON. Include ready-plan acceptance criteria, verification expectations and out-of-scope boundaries. Save with `task plan save <task-id> --input <file>` and read back through `show`; `approved` means ready, not operator-signed, and no human plan confirmation is required.
+
+For multiple TODO tasks, `task plan list --missing` finds absent JSON plans for literal leading `[plan]` Notes tokens. Use `list` to inspect existing draft, ready or invalid plans, then investigate, author and save each selected task separately. An explicit one-task request does not require retagging other rows. Saving leaves statuses untouched and does not execute planned tasks.
+
+Create or update plans only for tasks that have never started; retained start evidence refuses replacement even after reset to TODO. Ordinary entry automatically attaches a ready canonical plan, with explicit path precedence. Missing or draft optional plans keep freeform compatibility. Read the compact entry and handshake hints for the recorded attachment; they do not add readiness authority or select a later plan. Provider surfaces route to this canonical guidance rather than duplicate planning command contracts.
+
 ## Execution Depth
 - Supported: `depth=1`, `depth=2`, `depth=3`.
 - Default: `depth=2`.
@@ -108,6 +120,7 @@ Default task navigator is `node garda-agent-orchestrator/bin/garda.js next-step 
 
 ## Canonical Workflow
 1. Select highest-priority `TODO` task in `TASK.md`; successful `enter-task-mode` reconciles it to `IN_PROGRESS`.
+   - Before entering task mode, satisfy any leading `[plan]` Notes token or explicit plan-preparation request through the Requested Plan Preparation guidance above. Preparation alone does not authorize execution of the selected tasks.
 2. If no `TODO` exists, create a task from current user request; successful `enter-task-mode` then reconciles it to `IN_PROGRESS`.
 3. Resolve requested depth and record requested/effective depth in non-status `TASK.md` notes.
 4. Run the default navigator and repeat it after every command:

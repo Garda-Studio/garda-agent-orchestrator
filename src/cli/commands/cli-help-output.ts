@@ -263,6 +263,7 @@ export const COMMAND_HELP: Readonly<Record<CommandHelpName, CommandHelpDescripto
         ]),
         hints: Object.freeze([
             'Stats, events, plan list and plan show are read-only. Plan save changes only the prepared JSON plan, without starting the task.',
+            'Requested-plan preparation examples and schema guidance: docs/task-plan-workflow.md in the Garda package. Agents follow canonical orchestration planning instructions; load details only on demand.',
             'Use stats for task metrics and events for the task timeline.',
             'Plan list selects TODO rows with a literal leading [plan] Notes token; --missing selects only absent JSON plans.',
             'Plan show preserves the original JSON text and reports draft, ready, invalid or missing. Reads are bounded to 1 MiB per plan and 4 MiB for TASK.md.',

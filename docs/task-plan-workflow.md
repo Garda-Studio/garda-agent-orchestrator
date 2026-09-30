@@ -211,6 +211,46 @@ Important boundaries:
 
 ## Workflow: Authoring a Plan
 
+### Explicitly Requested Preparation
+
+A literal leading `[plan]` token in TASK.md Notes or an explicit operator request asks the agent to investigate and prepare a ready structured plan. Prepare before `enter-task-mode`, because entry freezes the plan. This is agent work with existing tooling, not a new planning mode, navigator stage, complexity threshold or provider API.
+
+Start with `garda task plan --help` on demand. In a source checkout the equivalent is `node bin/garda.js task plan --help`; in a deployed workspace use `node garda-agent-orchestrator/bin/garda.js task plan --help`. The guide path printed by help is relative to the Garda package, not the application workspace. Read only the selected task rows and relevant project files; load the full schema, help and example when preparing or consuming a plan, rather than for every ordinary task.
+
+For one requested task, first inspect any existing plan:
+
+```text
+node bin/garda.js task plan show T-048 --repo-root .
+```
+
+Investigate its goal, scope, material decisions and verification needs. Author `plan-input.json` using the complete ready example, or edit an input copy of the JSON returned by `show` for an unstarted task. Keep `task_id` matched to the selected row and include nonempty acceptance criteria, verification expectations and out-of-scope boundaries. Then save and read back:
+
+```text
+node bin/garda.js task plan save T-048 --input plan-input.json --repo-root .
+node bin/garda.js task plan show T-048 --repo-root .
+```
+
+Saving computes the new digest and replaces only the prepared JSON. It leaves TASK.md status untouched. `approved` means ready, not operator-signed; no human plan confirmation is required. Reading or saving a plan does not start task execution.
+
+For multiple TODO tasks, find absent plans for the already marked rows:
+
+```text
+node bin/garda.js task plan list --missing --repo-root .
+```
+
+`list` selects only TODO rows with the literal leading `[plan]` Notes token. `--missing` selects only absent JSON plans; use `list` without it to inspect existing draft, ready or invalid plans. Investigate and prepare each selected task separately, for example T-048 and T-049, then save its own input:
+
+```text
+node bin/garda.js task plan save T-048 --input plan-input-T-048.json --repo-root .
+node bin/garda.js task plan save T-049 --input plan-input-T-049.json --repo-root .
+```
+
+Read each result through `show`. Do not bulk retag tasks or automatically execute prepared tasks. An explicit request for one task can prepare that task without changing its Notes token or other rows. Creation and updating are refused after any retained start evidence, including a later reset to TODO; use an explicit follow-up for incompatible active scope.
+
+Ordinary task entry attaches the ready canonical plan automatically, and entry/handshake print the compact recorded-plan reading hint. Missing or draft optional plans preserve ordinary no-plan execution. Existing entry validation handles invalid plans, and existing compile/review/completion gates retain their authority. Provider instructions derive from the canonical orchestration skill instead of carrying separate planning command contracts.
+
+### Author and Save
+
 1. Investigate the existing task intent, scope, risks and relevant tests before writing the plan.
 2. Author JSON in a workspace input file, for example `plan-input.json`, using the complete example above. Set `status` to `approved` when it is ready to consume; this means ready, not operator-signed.
 3. Save it before the task has ever started:

@@ -2,7 +2,11 @@ import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { DEFAULT_BUNDLE_NAME } from '../../../src/core/constants';
+import { DEFAULT_BUNDLE_NAME, SOURCE_OF_TRUTH_VALUES } from '../../../src/core/constants';
+import { listTaskPlans, readTaskPlan } from '../../../src/core/task-plan-read';
+import { buildCommandHelpText } from '../../../src/cli/commands/cli-help-output';
+import { getCanonicalEntrypointFile, getProviderOrchestratorProfileDefinitions } from '../../../src/materialization/common';
+import { buildCanonicalManagedBlock, buildProviderOrchestratorAgentContent } from '../../../src/materialization/content-builders';
 import { saveTaskPlan } from '../../../src/core/task-plan-save';
 import { computeTaskPlanDigest, serializeTaskPlan, validateTaskPlan } from '../../../src/schemas/task-plan';
 import { runEnterTaskModeCommand } from '../../../src/cli/commands/gate-flows/task-mode/task-mode-flow';
@@ -112,6 +116,71 @@ test('documented legacy and no-plan execution remain compatible without a criter
     assert.equal(freeform.exitCode, 0);
     assert.ok(freeform.outputLines.includes('TaskPlanState: none'));
     assert.equal(getTaskModeEvidence(freeformRoot, validated.task_id).plan, null);
+});
+
+test('explicit and multiple-plan preparation select the documented tasks without changing statuses', t => {
+    const root = workspace(t, 'T-048');
+    const queuePath = path.join(root, 'TASK.md');
+    const queue = [
+        '| ID | Status | Priority | Area | Title | Assignee | Updated | Profile | Notes |',
+        '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+        '| T-048 | TODO | P1 | docs | First plan | unassigned | 2026-09-30 | default | [plan] Prepare first |',
+        '| T-049 | TODO | P1 | docs | Second plan | unassigned | 2026-09-30 | default | [plan] Prepare second |',
+        '| T-050 | TODO | P1 | docs | Ordinary task | unassigned | 2026-09-30 | default | No requested plan |',
+        '| T-051 | DONE | P1 | docs | Finished task | unassigned | 2026-09-30 | default | [plan] Historical request |'
+    ].join('\n');
+    fs.writeFileSync(queuePath, queue);
+    assert.deepEqual(listTaskPlans(root, true).map(plan => plan.task_id), ['T-048', 'T-049']);
+    for (const taskId of ['T-048', 'T-049']) {
+        const input = path.join(root, DEFAULT_BUNDLE_NAME, 'runtime', `plan-input-${taskId}.json`);
+        fs.writeFileSync(input, JSON.stringify({ ...example(), task_id: taskId }));
+        saveTaskPlan(root, taskId, input);
+        const prepared = readTaskPlan(root, taskId);
+        assert.equal(prepared.state, 'ready');
+        const edited = validateTaskPlan(JSON.parse(prepared.content!));
+        edited.notes = 'Assumptions: none; updated before task entry.';
+        fs.writeFileSync(input, JSON.stringify(edited));
+        saveTaskPlan(root, taskId, input);
+        const updated = validateTaskPlan(JSON.parse(readTaskPlan(root, taskId).content!));
+        assert.equal(updated.notes, edited.notes);
+        assert.equal(updated.plan_sha256, computeTaskPlanDigest(updated));
+        assert.equal(fs.readFileSync(queuePath, 'utf8'), queue);
+    }
+    const explicitInput = path.join(root, DEFAULT_BUNDLE_NAME, 'runtime', 'plan-input-T-050.json');
+    const incomplete = { ...example(), task_id: 'T-050', acceptance_criteria: [] };
+    fs.writeFileSync(explicitInput, JSON.stringify(incomplete));
+    assert.throws(() => saveTaskPlan(root, 'T-050', explicitInput), /nonempty acceptance_criteria/u);
+    fs.writeFileSync(explicitInput, JSON.stringify({ ...example(), task_id: 'T-050' }));
+    saveTaskPlan(root, 'T-050', explicitInput);
+    assert.equal(readTaskPlan(root, 'T-050').state, 'ready');
+    assert.equal(fs.readFileSync(queuePath, 'utf8'), queue);
+    assert.deepEqual(listTaskPlans(root, true), []);
+    assert.deepEqual(listTaskPlans(root).map(plan => plan.state), ['ready', 'ready']);
+});
+
+test('generated provider surfaces route requested planning to canonical guidance without command copies', () => {
+    const index = fs.readFileSync(path.join(process.cwd(), 'template/entrypoints/canonical-rule-index.md'), 'utf8');
+    const rules = fs.readFileSync(path.join(process.cwd(), 'template/docs/agent-rules/80-task-workflow.md'), 'utf8');
+    assert.equal(rules.match(/garda task plan --help/gu)?.length, 1);
+    for (const provider of SOURCE_OF_TRUTH_VALUES) {
+        const surface = buildCanonicalManagedBlock(getCanonicalEntrypointFile(provider), index);
+        assert.ok(surface.includes('80-task-workflow.md'), provider);
+        assert.doesNotMatch(surface, /task plan (?:list|show|save)/u);
+    }
+    for (const profile of getProviderOrchestratorProfileDefinitions()) {
+        const surface = buildProviderOrchestratorAgentContent(profile.providerLabel, 'AGENTS.md', profile.orchestratorRelativePath);
+        assert.ok(surface.includes('live/skills/orchestration/SKILL.md'), profile.providerLabel);
+        assert.doesNotMatch(surface, /task plan (?:list|show|save)/u);
+    }
+    const help = buildCommandHelpText('task');
+    assert.ok(help.includes('docs/task-plan-workflow.md'));
+    const packageManifest = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
+    assert.ok(packageManifest.files.includes('docs/task-plan-workflow.md'));
+    assert.match(planningInstructions, /prepare a ready structured plan before `enter-task-mode`/u);
+    assert.match(planningInstructions, /Saving leaves statuses untouched and does not execute planned tasks/u);
+    assert.match(planningInstructions, /load full details only on demand/iu);
+    assert.match(guide, /--missing` selects only absent JSON plans/u);
+    assert.match(guide, /explicit request for one task can prepare that task without changing its Notes token/u);
 });
 
 test('canonical planning guidance reuses attached criteria and separates intent from completion evidence', () => {
