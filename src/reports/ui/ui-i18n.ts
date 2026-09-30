@@ -685,6 +685,40 @@ export function formatLocalUiLanguageCliChoices(): string {
     return LOCAL_UI_LANGUAGES.map((language) => language.id).join('|');
 }
 
+const ENGLISH_LOCAL_UI_TASK_PROGRESS_TEXT = Object.freeze({
+    title: 'Task progress',
+    help: 'Recorded progress and the next required action. Remaining checks can still fail.',
+    completedStages: 'Completed stages',
+    currentStage: 'Current stage',
+    remainingStages: 'Remaining stages',
+    noCompletedStages: 'No confirmed completed stages.',
+    noCurrentStage: 'No current stage reported.',
+    noRemainingStages: 'No remaining stages reported.',
+    nextAction: 'Next action',
+    noNextAction: 'No next action reported.',
+    command: 'Next command',
+    copy: 'Copy command',
+    copied: 'Command copied.',
+    selectToCopy: 'Command selected. Copy it using your browser or keyboard.',
+    finalReport: 'Final report',
+    active: 'In progress',
+    blocked: 'Blocked',
+    stale: 'Stale evidence',
+    unknown: 'Unknown progress',
+    incomplete: 'Incomplete evidence',
+    completed: 'Completed',
+    unavailable: 'Unavailable',
+    available: 'Available',
+    missing: 'Missing',
+    pending: 'Pending',
+    failed: 'Failed'
+} as const);
+
+export const LOCAL_UI_TASK_PROGRESS_TEXT = buildImportedLanguageMap(
+    { en: ENGLISH_LOCAL_UI_TASK_PROGRESS_TEXT as Readonly<Record<string, string>> },
+    (pack) => Object.freeze({ ...ENGLISH_LOCAL_UI_TASK_PROGRESS_TEXT, ...pack.LOCAL_UI_TASK_PROGRESS_TEXT })
+);
+
 export function isLocalUiLanguage(value: unknown): value is LocalUiLanguage {
     return typeof value === 'string'
         && LOCAL_UI_LANGUAGES.some((language) => language.id === value);

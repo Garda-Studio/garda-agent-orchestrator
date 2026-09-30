@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Show a localized task progress card in loaded task details, with recorded stages, blockers, final-report availability and a copyable next command; preserve raw diagnostics and existing guarded actions.
+
 - Expose bounded task progress, the current navigator action, validated final-report availability and task-owned evidence references through lazy task details without executing lifecycle actions.
 
 ## 1.4.4

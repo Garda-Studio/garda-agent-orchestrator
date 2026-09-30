@@ -11,6 +11,11 @@ export const UI_DASHBOARD_STYLES = `:root { color-scheme: light; --ink: #17202a;
 --sky-ink: #1f5f82; --sky-soft: #e6f4fb;
 --backdrop: rgba(15, 23, 42, .45); --shadow-strong: rgba(15, 23, 42, .25); --shadow-soft: rgba(15, 23, 42, .06); }
 * { box-sizing: border-box; }
+.task-progress-card { margin-top: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.task-progress-card h4 { margin: 12px 0 6px; }
+.task-progress-card p, .task-progress-card .list { margin: 6px 0; }
+.task-progress-card .task-action-unavailable { color: var(--danger); }
+.task-progress-command { display: block; width: 100%; min-width: 0; margin: 8px 0; font-family: monospace; white-space: pre; }
 body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: var(--ink); background: var(--surface); }
 header { padding: 14px 22px 12px; border-bottom: 1px solid var(--line); background: var(--surface-subtle); }
 h1 { margin: 0 0 6px; font-size: 24px; line-height: 1.2; letter-spacing: 0; }
