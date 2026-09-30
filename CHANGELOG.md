@@ -20,6 +20,12 @@
 - Added read-only `task plan list` (including `--missing`) and `task plan show <task-id>` commands for opt-in TODO plans, with bounded repository-confined reads and explicit missing, draft, ready and invalid diagnostics.
 - Reject cyclic task-plan step dependencies, including self-dependencies, with a deterministic cycle path. Valid forward references and branching dependency graphs remain supported.
 
+- Bind documentation-only and documentation-with-tests review coverage, freshness, and reuse to reviewed content and frozen classification.
+
+- Scope correction-transport audit to authenticated current cycles while retaining superseded history, and reconstruct persisted predecessor handoffs using canonical paths and attempts.
+
+- Preserve authenticated completed content through Git staging without false drift from changed line statistics.
+
 ## 1.4.4
 
 ### Garda Compact
