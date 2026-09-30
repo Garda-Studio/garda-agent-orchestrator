@@ -21,7 +21,7 @@ import { normalizePath, stringSha256, testPathPrefix } from '../shared/helpers';
 import {
     computeReviewRelevantScopeFingerprint,
     computeReviewReuseCodeScopeFingerprint,
-    resolveDocumentationOnlyScopeHash
+    resolveDocumentationReviewScopeHash
 } from '../review-reuse/review-reuse';
 import { isCloseoutEvidencePath } from './closeout-evidence-paths';
 
@@ -232,11 +232,16 @@ export function getReviewLaneScopeSha256(
     if (!fingerprints) {
         return null;
     }
-    const documentationScopeSha256 = resolveDocumentationOnlyScopeHash(fingerprints);
+    const normalizedReviewType = String(reviewType || '').trim().toLowerCase();
+    const documentationScopeSha256 = resolveDocumentationReviewScopeHash(fingerprints);
     if (documentationScopeSha256) {
+        if (normalizedReviewType === 'test' && fingerprints.domains.test.changed_files.length > 0) {
+            return fingerprints.domains.test.scope_sha256
+                ? stringSha256(`${documentationScopeSha256}\n${fingerprints.domains.test.scope_sha256}`)
+                : null;
+        }
         return documentationScopeSha256;
     }
-    const normalizedReviewType = String(reviewType || '').trim().toLowerCase();
     if (normalizedReviewType === 'test') {
         return fingerprints.legacy.review_scope_sha256;
     }

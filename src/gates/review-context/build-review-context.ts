@@ -37,6 +37,8 @@ import {
     resolveAuthenticatedSplitCheckpointPreflightScope
 } from '../split-required/split-checkpoint-scope';
 import { buildDomainScopeFingerprints } from '../scope/domain-scope-fingerprints';
+import { getClassificationConfig } from '../preflight/classify-change';
+import { validateReviewTriggerPolicy } from '../../policy/review-trigger-policy';
 import { resolveRuntimeReviewerIdentity, type RuntimeReviewerIdentity } from '../review/reviewer-routing';
 import { getTaskModeEvidence } from '../task-mode/task-mode';
 import {
@@ -355,12 +357,17 @@ export function buildReviewContext(options: BuildReviewContextOptions) {
     const requiredReviewTypes = summarizeBooleanRecord(preflight.required_reviews);
     const activeTriggers = summarizeBooleanRecord(preflight.triggers);
     const preflightMetrics = asPlainRecord(preflight.metrics);
+    const frozenTriggerPolicy = asPlainRecord(preflight.profile_policy_snapshot)?.review_trigger_policy;
+    const reviewTriggerPolicy = frozenTriggerPolicy === undefined
+        ? undefined
+        : validateReviewTriggerPolicy(frozenTriggerPolicy);
     const treeState = buildReviewTreeState({
         repoRoot,
         detectionSource: preflight.detection_source,
         includeUntracked: shouldIncludeUntrackedForReviewTreeState(preflight),
         changedFiles,
-        metrics: preflightMetrics
+        metrics: preflightMetrics,
+        reviewTriggerPolicy
     });
     const treeStateViolations = getReviewTreeStateBlockingViolations(treeState);
     if (treeStateViolations.length > 0) {
@@ -611,7 +618,8 @@ export function buildReviewContext(options: BuildReviewContextOptions) {
                 repoRoot,
                 detectionSource: String(preflight.detection_source || 'git_auto'),
                 includeUntracked: preflight.include_untracked !== false,
-                changedFiles
+                changedFiles,
+                classificationConfig: reviewTriggerPolicy ? getClassificationConfig(repoRoot, { reviewTriggerPolicy }) : undefined
             }),
             required_reviews: requiredReviewTypes,
             active_triggers: activeTriggers,
