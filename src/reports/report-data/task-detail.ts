@@ -29,6 +29,7 @@ import {
 } from '../../core/review-follow-up-task-closure-policy';
 import { readCanonicalActiveQueueRows } from './task-queue';
 import { buildTaskQualityChecklist, withQualityChecklistArtifactLink } from './task-quality-checklist';
+import { buildTaskProgress } from './task-progress';
 import type {
     BuildReportTaskDetailOptions,
     ReportArtifactLink,
@@ -627,6 +628,7 @@ export function buildReportTaskDetail(options: BuildReportTaskDetailOptions): Re
     return {
         task_id: taskId,
         detail_status: 'loaded',
+        progress: buildTaskProgress({ repoRoot, taskId, eventsRoot, reviewsRoot, taskKnown: !!queueRow, audit }),
         stats,
         latest_cycle_events: readLatestCycleEvents(taskId, repoRoot, eventsRoot, reviewsRoot, unavailable),
         full_suite_validation: buildFullSuiteSummary(taskId, repoRoot, eventsRoot, reviewsRoot),
@@ -658,6 +660,7 @@ export function buildSkippedTaskDetail(taskId: string, maxDetailedTasks: number)
     return {
         task_id: taskId,
         detail_status: 'skipped',
+        progress: null,
         stats: null,
         latest_cycle_events: null,
         full_suite_validation: {

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Expose bounded task progress, the current navigator action, validated final-report availability and task-owned evidence references through lazy task details without executing lifecycle actions.
+
 ## 1.4.4
 
 ### Compile Command Chains
