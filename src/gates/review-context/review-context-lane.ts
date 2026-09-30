@@ -155,7 +155,11 @@ export function resolveReviewContextLaneBinding(
                 `Preflight required_reviews.${lane.id} does not match immutable lane selection '${lane.selection}'.`
             );
         }
-        if (!isPlainRecord(lane.profile) || lane.profile.active !== true) {
+        const taskRequired = lane.selection === 'required'
+            && isPlainRecord(lane.profile) && lane.profile.capability_enabled === true
+            && Array.isArray(snapshot?.inputs?.task_required_review_ids)
+            && snapshot.inputs.task_required_review_ids.includes(lane.id);
+        if (!isPlainRecord(lane.profile) || (lane.profile.active !== true && !taskRequired)) {
             violations.push(`Review lane '${lane.id}' profile is not active in the immutable snapshot.`);
         }
     }

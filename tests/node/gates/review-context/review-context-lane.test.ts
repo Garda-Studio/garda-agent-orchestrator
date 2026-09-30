@@ -95,6 +95,39 @@ function buildCustomPreflight(profileState: boolean | 'auto' = true): Record<str
 }
 
 describe('catalog-backed review context lane binding', () => {
+    it('binds a capability-enabled task-required API lane while preserving disabled profile defaults', () => {
+        const catalog = normalizeReviewCatalog({ version: 1, custom_review_types: [] });
+        const capabilities = Object.fromEntries(
+            catalog.review_types.map(definition => [definition.id, true])
+        ) as ReviewCapabilitiesConfigMap;
+        const profilePolicy = resolveProfileReviewCatalogPolicy('fast', { api: false }, capabilities, catalog);
+        const options = {
+            catalog, profilePolicy, profileSnapshotSha256: 'a'.repeat(64),
+            legacyRequiredReviews: { api: true }, taskRequiredReviewIds: ['api'],
+            scopeCategory: 'code', taskIntent: 'Inspect diagnostics', changedFiles: ['src/diagnostics.ts'], taskTriggers: {}
+        };
+        const snapshot = buildEffectiveReviewSnapshot(options);
+        const preflight = { required_reviews: snapshot.required_reviews, effective_review_snapshot: snapshot };
+        const binding = resolveReviewContextLaneBinding(preflight, 'api');
+        assert.equal(binding.selection, 'required');
+        assert.equal(binding.built_in, true);
+        assert.equal(binding.effective_review_snapshot_sha256, snapshot.snapshot_sha256);
+        assert.deepEqual(binding.skill_ids, ['api-review', 'api-contract-review']);
+        assert.equal(snapshot.lanes.find(lane => lane.id === 'api')?.profile.active, false);
+        const undeclared = buildEffectiveReviewSnapshot({ ...options, taskRequiredReviewIds: [] });
+        assert.throws(() => resolveReviewContextLaneBinding({
+            required_reviews: { ...undeclared.required_reviews, api: true }, effective_review_snapshot: undeclared
+        }, 'api'), /inactive in the immutable effective review snapshot/);
+        assert.throws(() => resolveReviewContextLaneBinding({
+            required_reviews: { ...snapshot.required_reviews, api: false }, effective_review_snapshot: snapshot
+        }, 'api'), /does not match immutable lane selection/);
+        const forged = JSON.parse(JSON.stringify(snapshot));
+        forged.lanes.find((lane: { id: string }) => lane.id === 'api').profile.capability_enabled = false;
+        assert.throws(() => resolveReviewContextLaneBinding({
+            required_reviews: snapshot.required_reviews, effective_review_snapshot: forged
+        }, 'api'), /capability-disabled/);
+    });
+
     it('binds a selected custom lane to snapshot hashes, role, canonical verdict, coverage, and scoped diff', () => {
         const preflight = buildCustomPreflight(true);
         const binding = resolveReviewContextLaneBinding(preflight, 'architecture-boundary');
