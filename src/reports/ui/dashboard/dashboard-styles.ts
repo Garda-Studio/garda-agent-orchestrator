@@ -1,6 +1,11 @@
 /** Shared dashboard CSS. */
 export const UI_DASHBOARD_STYLES = `:root { color-scheme: light; --ink: #17202a; --muted: #667085; --line: #d9e0ea; --panel: #f6f8fb; --accent: #18715f; --blue: #2457a6; --warn: #9a5b00; --danger: #b42318; --danger-bg: #fff1f0; --ok: #17633a; }
 * { box-sizing: border-box; }
+.task-progress-card { margin-top: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.task-progress-card h4 { margin: 12px 0 6px; }
+.task-progress-card p, .task-progress-card .list { margin: 6px 0; }
+.task-progress-card .task-action-unavailable { color: var(--danger); }
+.task-progress-command { display: block; width: 100%; min-width: 0; margin: 8px 0; font-family: monospace; white-space: pre; }
 body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: var(--ink); background: #fff; }
 header { padding: 14px 22px 12px; border-bottom: 1px solid var(--line); background: #fbfcfe; }
 h1 { margin: 0 0 6px; font-size: 24px; line-height: 1.2; letter-spacing: 0; }
