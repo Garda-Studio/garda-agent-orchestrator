@@ -219,6 +219,7 @@ describe('cli/commands/gates review launch invocation', () => {
         assert.equal(invocationDetails?.canonical_source_of_truth, 'Antigravity');
         assert.equal(invocationDetails?.reviewer_launch_tool, 'test-subagent-spawn');
         assert.equal(invocationDetails?.provider_invocation_id, 'test-invocation-123');
+        assert.equal(invocationDetails?.reviewer_launch_attempt_id, preparedLaunchArtifact.reviewer_launch_attempt_id);
         assert.equal(invocationDetails?.launch_input_mode, 'launch_artifact_path');
         assert.equal(invocationDetails?.launch_input_sha256, launchInputArtifact.sha256);
 

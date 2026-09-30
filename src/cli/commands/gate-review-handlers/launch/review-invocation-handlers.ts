@@ -252,6 +252,7 @@ export function createReviewInvocationHandlers(deps: ReviewInvocationHandlerDepe
                 launchDetails: {
                     reviewer_launch_artifact_path: normalizePath(launchArtifact.artifactPath),
                     reviewer_launch_artifact_sha256: launchArtifact.artifactSha256,
+                    reviewer_launch_attempt_id: launchArtifact.reviewerLaunchAttemptId,
                     execution_provider: runtimeIdentity.execution_provider,
                     execution_provider_source: runtimeIdentity.execution_provider_source,
                     canonical_source_of_truth: runtimeIdentity.canonical_source_of_truth,
