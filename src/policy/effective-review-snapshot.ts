@@ -15,6 +15,8 @@ import {
 import {
     LEGACY_REVIEW_EXECUTION_POLICY_MODE,
     REVIEW_EXECUTION_POLICY_MODES,
+    getReviewExecutionDependencies,
+    getReviewExecutionPreparationOrder,
     type EffectiveReviewExecutionPolicyMode,
     type ReviewExecutionPolicyMode
 } from '../core/review-execution-policy';
@@ -71,6 +73,7 @@ export interface EffectiveReviewSnapshot {
     profile_snapshot_sha256: string;
     inputs: Readonly<{
         legacy_required_reviews: Readonly<Record<string, boolean>>;
+        task_required_review_ids?: readonly string[];
         scope_category: string;
         task_intent: string;
         changed_files: readonly string[];
@@ -101,6 +104,7 @@ export interface BuildEffectiveReviewSnapshotOptions {
     profilePolicy: ResolvedProfileReviewCatalogPolicy;
     profileSnapshotSha256: string;
     legacyRequiredReviews: Readonly<Record<string, boolean>>;
+    taskRequiredReviewIds?: readonly string[];
     scopeCategory: string;
     taskIntent: string;
     changedFiles: readonly string[];
@@ -269,6 +273,11 @@ function selectCustomLane(
     profile: ProfileReviewCatalogLane,
     options: BuildEffectiveReviewSnapshotOptions
 ): Pick<EffectiveReviewSnapshotLane, 'selection' | 'trigger_reasons' | 'inactive_reasons'> {
+    if (options.taskRequiredReviewIds?.includes(definition.id)) {
+        return options.zeroDiffBaselineOnly
+            ? { selection: 'inactive', trigger_reasons: [], inactive_reasons: ['zero_diff_no_reviewable_scope'] }
+            : { selection: 'required', trigger_reasons: ['task_required_declaration'], inactive_reasons: [] };
+    }
     if (!profile.active) {
         return {
             selection: 'inactive',
@@ -328,6 +337,9 @@ function selectBuiltInLane(
             inactive_reasons: ['zero_diff_no_reviewable_scope']
         };
     }
+    if (options.taskRequiredReviewIds?.includes(definition.id)) {
+        return { selection: 'required', trigger_reasons: ['task_required_declaration'], inactive_reasons: [] };
+    }
     if (!profile.active) {
         return {
             selection: 'inactive',
@@ -345,12 +357,47 @@ function selectBuiltInLane(
     return { selection: 'optional', trigger_reasons: ['built_in_compatibility_not_required'], inactive_reasons: [] };
 }
 
+/** Extend task-specific lanes without changing the frozen profile graph or any of its edges. */
+function expandTaskRequiredReviewGraph(
+    declaration: ReviewDependencyGraphDeclaration | null,
+    lanes: readonly EffectiveReviewSnapshotLane[],
+    taskRequiredReviewIds: readonly string[] = [],
+    mode: EffectiveReviewExecutionPolicyMode
+): ReviewDependencyGraphDeclaration | null {
+    if (!declaration) return null;
+    const order = [...declaration.preparation_order];
+    const dependencies = { ...declaration.dependencies };
+    const required = Object.fromEntries(lanes.map(lane => [lane.id, lane.selection === 'required']));
+    const compatibilityOrder = [...getReviewExecutionPreparationOrder(mode), ...lanes.map(lane => lane.id)];
+    const additions = lanes.filter(lane => !lane.profile.active && lane.selection === 'required'
+        && taskRequiredReviewIds.includes(lane.id) && !order.includes(lane.id))
+        .sort((left, right) => compatibilityOrder.indexOf(left.id) - compatibilityOrder.indexOf(right.id));
+    for (const lane of additions) {
+        // Append new requirements after declared producers. Existing ordering and dependencies stay exact.
+        dependencies[lane.id] = mode === 'strict_sequential'
+            ? order.filter(id => required[id])
+            : getReviewExecutionDependencies(lane.id, required, mode).filter(id => order.includes(id));
+        order.push(lane.id);
+    }
+    return { preparation_order: order, dependencies };
+}
+
 export function buildEffectiveReviewSnapshot(options: BuildEffectiveReviewSnapshotOptions): EffectiveReviewSnapshot {
     if (options.catalog.catalog_sha256 !== options.profilePolicy.catalog_sha256) {
         throw new Error('Effective review snapshot catalog hash does not match the resolved profile review policy.');
     }
     if (!SHA256_PATTERN.test(options.profileSnapshotSha256)) {
         throw new Error('Effective review snapshot profileSnapshotSha256 must be a SHA-256 hex string.');
+    }
+    const taskRequiredReviewIds = [...(options.taskRequiredReviewIds || [])].sort();
+    if (new Set(taskRequiredReviewIds).size !== taskRequiredReviewIds.length) {
+        throw new Error('Effective review snapshot task-required review ids must be unique.');
+    }
+    for (const id of taskRequiredReviewIds) {
+        const profile = options.profilePolicy.lanes.find(lane => lane.id === id);
+        if (!options.catalog.review_types.some(definition => definition.id === id) || !profile?.capability_enabled) {
+            throw new Error(`Effective review snapshot task-required lane '${id}' is unknown or capability-disabled.`);
+        }
     }
     const includeDependencyGraph = options.includeDependencyGraph !== false;
     const normalizedDependencyGraph = options.reviewDependencyGraph == null
@@ -363,6 +410,7 @@ export function buildEffectiveReviewSnapshot(options: BuildEffectiveReviewSnapsh
                 options.legacyRequiredReviews[definition.id] === true
             ])
         ),
+        ...(taskRequiredReviewIds.length > 0 ? { task_required_review_ids: taskRequiredReviewIds } : {}),
         scope_category: String(options.scopeCategory || '').trim().toLowerCase(),
         task_intent: String(options.taskIntent || '').trim(),
         changed_files: options.changedFiles.map((changedFile) => String(changedFile).replace(/\\/g, '/')),
@@ -392,6 +440,7 @@ export function buildEffectiveReviewSnapshot(options: BuildEffectiveReviewSnapsh
     const normalizedOptions: BuildEffectiveReviewSnapshotOptions = {
         ...options,
         legacyRequiredReviews: inputs.legacy_required_reviews,
+        taskRequiredReviewIds: inputs.task_required_review_ids,
         scopeCategory: inputs.scope_category,
         taskIntent: inputs.task_intent,
         changedFiles: inputs.changed_files,
@@ -418,10 +467,13 @@ export function buildEffectiveReviewSnapshot(options: BuildEffectiveReviewSnapsh
     const reviewDependencyGraph = includeDependencyGraph
         ? compileReviewDependencyGraph({
             catalogLaneIds: lanes.map((lane) => lane.id),
-            activeLaneIds: lanes.filter((lane) => lane.profile.active).map((lane) => lane.id),
+            activeLaneIds: lanes.filter((lane) => lane.profile.active || lane.selection === 'required').map((lane) => lane.id),
             requiredReviewIds,
             mode: inputs.review_execution_policy!.mode,
-            declaration: inputs.review_execution_policy!.review_dependency_graph,
+            declaration: expandTaskRequiredReviewGraph(
+                inputs.review_execution_policy!.review_dependency_graph, lanes,
+                inputs.task_required_review_ids, inputs.review_execution_policy!.mode
+            ),
             fullSuiteValidation: inputs.review_execution_policy!.full_suite_validation
         })
         : null;
@@ -463,6 +515,13 @@ export function getEffectiveReviewSnapshotViolations(value: unknown): string[] {
         typeof inputs.zero_diff_baseline_only !== 'boolean') {
         violations.push('Effective review snapshot inputs must contain normalized decision inputs.');
     } else {
+        if (inputs.task_required_review_ids !== undefined && (
+            !isStringArray(inputs.task_required_review_ids)
+            || new Set(inputs.task_required_review_ids).size !== inputs.task_required_review_ids.length
+            || inputs.task_required_review_ids.some(id => !SIGNAL_TOKEN_PATTERN.test(id))
+        )) {
+            violations.push('Effective review snapshot task_required_review_ids must contain unique stable review ids.');
+        }
         for (const [reviewId, required] of Object.entries(inputs.legacy_required_reviews)) {
             if (!SIGNAL_TOKEN_PATTERN.test(reviewId) || typeof required !== 'boolean') {
                 violations.push('Effective review snapshot inputs.legacy_required_reviews must be a boolean review map.');
@@ -550,7 +609,13 @@ export function getEffectiveReviewSnapshotViolations(value: unknown): string[] {
             if (profile.active !== expectedActive) {
                 violations.push(`Effective review snapshot lane '${id || index}' profile activity is inconsistent.`);
             }
-            if (profile.active === false && selection !== 'inactive') {
+            const taskRequired = isJsonRecord(inputs)
+                && isStringArray(inputs.task_required_review_ids)
+                && inputs.task_required_review_ids.includes(id);
+            if (taskRequired && profile.capability_enabled !== true) {
+                violations.push(`Effective review snapshot task-required lane '${id || index}' is capability-disabled.`);
+            }
+            if (profile.active === false && selection !== 'inactive' && !taskRequired) {
                 violations.push(`Effective review snapshot inactive profile lane '${id || index}' must be inactive.`);
             }
             const zeroDiffRequiredSuppression = isJsonRecord(inputs)
@@ -567,8 +632,7 @@ export function getEffectiveReviewSnapshotViolations(value: unknown): string[] {
             const customProfileRequired = isJsonRecord(definition)
                 && definition.built_in === false
                 && profile.state === 'required';
-            if (profile.active === true
-                && (builtInCompatibilityRequired || customProfileRequired)
+            if ((taskRequired || (profile.active === true && (builtInCompatibilityRequired || customProfileRequired)))
                 && selection !== 'required'
                 && !zeroDiffRequiredSuppression) {
                 violations.push(`Effective review snapshot required profile lane '${id || index}' must be required.`);
@@ -624,6 +688,10 @@ export function getEffectiveReviewSnapshotViolations(value: unknown): string[] {
             }
         }
     };
+    if (isJsonRecord(inputs) && isStringArray(inputs.task_required_review_ids)
+        && inputs.task_required_review_ids.some(id => !seenLaneIds.has(id))) {
+        violations.push('Effective review snapshot task_required_review_ids contains an unknown lane.');
+    }
     validateProjection('required_reviews', requiredLaneIds, 'required');
     validateProjection('optional_reviews', optionalLaneIds, 'optional');
 
@@ -706,10 +774,12 @@ export function assertEffectiveReviewSnapshotExecutionPolicyBinding(
     }
     const expectedGraph = compileReviewDependencyGraph({
         catalogLaneIds: snapshot.lanes.map((lane) => lane.id),
-        activeLaneIds: snapshot.lanes.filter((lane) => lane.profile.active).map((lane) => lane.id),
+        activeLaneIds: snapshot.lanes.filter((lane) => lane.profile.active || lane.selection === 'required').map((lane) => lane.id),
         requiredReviewIds: snapshot.required_review_ids,
         mode: frozenPolicy.mode,
-        declaration: normalizedDeclaration,
+        declaration: expandTaskRequiredReviewGraph(
+            normalizedDeclaration, snapshot.lanes, snapshot.inputs.task_required_review_ids, frozenPolicy.mode
+        ),
         fullSuiteValidation: expectedInputs.full_suite_validation
     });
     if (!snapshot.review_dependency_graph ||
@@ -766,6 +836,7 @@ export function assertEffectiveReviewSnapshotCurrent(
                 profilePolicy,
                 profileSnapshotSha256,
                 legacyRequiredReviews: snapshot.inputs.legacy_required_reviews,
+                taskRequiredReviewIds: snapshot.inputs.task_required_review_ids,
                 scopeCategory: snapshot.inputs.scope_category,
                 taskIntent: snapshot.inputs.task_intent,
                 changedFiles: snapshot.inputs.changed_files,

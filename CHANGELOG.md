@@ -2,7 +2,13 @@
 
 ## Unreleased
 
-- Reject cyclic task-plan step dependencies, including self-dependencies, with a deterministic cycle path. Valid forward references and branching dependency graphs remain supported.
+### Review And Completion Fixes
+
+- Reject cyclic and self-referencing dependencies in existing task plans while preserving independent steps and valid directed acyclic graphs.
+- Preserve explicitly required review lanes when profile defaults disable them, including immutable lane binding and dependency graph reconstruction.
+- Bind documentation-only and documentation-with-tests review coverage, freshness, and reuse to reviewed content and frozen classification.
+- Scope correction-transport audit to authenticated current cycles while retaining superseded history, and reconstruct persisted predecessor handoffs using canonical paths and attempts.
+- Preserve authenticated completed content through Git staging without false drift from changed line statistics.
 
 ## 1.4.4
 
