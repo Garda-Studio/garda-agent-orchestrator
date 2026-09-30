@@ -169,6 +169,85 @@ test('validateTaskPlan rejects unknown depends_on reference', () => {
     assert.throws(() => validateTaskPlan(input), /depends on unknown step/);
 });
 
+test('validateTaskPlan rejects a self-dependency with its cycle path', () => {
+    const input = minimalValidPlan();
+    input.steps = [{ id: 'a', title: 'Step A', depends_on: ['a'] }];
+    assert.throws(() => validateTaskPlan(input), {
+        message: 'Step dependency cycle: a -> a.'
+    });
+});
+
+test('validateTaskPlan rejects two-step and longer dependency cycles', () => {
+    for (const ids of [['a', 'b'], ['a', 'b', 'c', 'd']]) {
+        const input = minimalValidPlan();
+        input.steps = ids.map((id, index) => ({
+            id,
+            title: id,
+            depends_on: [ids[(index + 1) % ids.length]]
+        }));
+        assert.throws(() => validateTaskPlan(input), {
+            message: `Step dependency cycle: ${[...ids, ids[0]].join(' -> ')}.`
+        });
+    }
+});
+
+test('validateTaskPlan reports the first cycle in step and dependency order', () => {
+    const input = minimalValidPlan();
+    input.steps = [
+        { id: 'root', title: 'Root', depends_on: ['leaf', 'b', 'a'] },
+        { id: 'a', title: 'A', depends_on: ['a'] },
+        { id: 'b', title: 'B', depends_on: ['c'] },
+        { id: 'c', title: 'C', depends_on: ['b'] },
+        { id: 'leaf', title: 'Leaf' }
+    ];
+    assert.throws(() => validateTaskPlan(input), {
+        message: 'Step dependency cycle: b -> c -> b.'
+    });
+});
+
+test('validateTaskPlan accepts independent steps and a branching DAG with forward references', () => {
+    const input = minimalValidPlan();
+    input.steps = [
+        { id: 'root', title: 'Root', depends_on: ['a', 'b'] },
+        { id: 'independent', title: 'Independent' },
+        { id: 'a', title: 'A', depends_on: ['leaf'] },
+        { id: 'b', title: 'B', depends_on: ['leaf'] },
+        { id: 'leaf', title: 'Leaf' }
+    ];
+    assert.deepEqual(validateTaskPlan(input).steps, input.steps);
+});
+
+test('validateTaskPlan retains duplicate and unknown-reference error precedence over cycles', () => {
+    const input = minimalValidPlan();
+    input.steps = [
+        { id: 'a', title: 'A', depends_on: ['a'] },
+        { id: 'b', title: 'B', depends_on: ['missing'] }
+    ];
+    assert.throws(() => validateTaskPlan(input), {
+        message: "Step 'b' depends on unknown step 'missing'."
+    });
+    input.steps = [
+        { id: 'a', title: 'A', depends_on: ['a'] },
+        { id: 'a', title: 'Duplicate A' }
+    ];
+    assert.throws(() => validateTaskPlan(input), { message: "Duplicate step id 'a'." });
+});
+
+test('validateTaskPlan handles deep acyclic plans and deep cycles without recursive stack overflow', () => {
+    const input = minimalValidPlan();
+    const steps = Array.from({ length: 15000 }, (_, index) => ({
+        id: `step-${index}`,
+        title: `Step ${index}`,
+        depends_on: index === 14999 ? [] : [`step-${index + 1}`]
+    }));
+    input.steps = steps;
+    assert.equal(validateTaskPlan(input).steps.length, steps.length);
+    steps[14999].depends_on = ['step-14998'];
+    assert.throws(() => validateTaskPlan(input), {
+        message: 'Step dependency cycle: step-14998 -> step-14999 -> step-14998.'
+    });
+});
+
 test('validateTaskPlan rejects unsupported schema_version', () => {
     const input = minimalValidPlan();
     input.schema_version = 999;

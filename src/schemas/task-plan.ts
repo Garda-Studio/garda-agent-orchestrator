@@ -182,6 +182,45 @@ function validateValidationStrategy(input: unknown): TaskPlanValidationStrategy 
     return strategy;
 }
 
+/** Check the validated references with an iterative DFS, preserving input order. */
+function validateAcyclicStepDependencies(steps: TaskPlanStep[]): void {
+    const dependencies = new Map(steps.map((step) => [step.id, step.depends_on ?? []]));
+    const completed = new Set<string>();
+    const activePositions = new Map<string, number>();
+    const stack: { id: string; nextDependency: number }[] = [];
+
+    for (const step of steps) {
+        if (completed.has(step.id)) {
+            continue;
+        }
+        activePositions.set(step.id, 0);
+        stack.push({ id: step.id, nextDependency: 0 });
+
+        while (stack.length > 0) {
+            const current = stack[stack.length - 1];
+            const currentDependencies = dependencies.get(current.id) ?? [];
+            if (current.nextDependency === currentDependencies.length) {
+                completed.add(current.id);
+                activePositions.delete(current.id);
+                stack.pop();
+                continue;
+            }
+
+            const dependency = currentDependencies[current.nextDependency++];
+            const cycleStart = activePositions.get(dependency);
+            if (cycleStart !== undefined) {
+                const cycle = stack.slice(cycleStart).map((frame) => frame.id);
+                cycle.push(dependency);
+                throw new Error(`Step dependency cycle: ${cycle.join(' -> ')}.`);
+            }
+            if (!completed.has(dependency)) {
+                activePositions.set(dependency, stack.length);
+                stack.push({ id: dependency, nextDependency: 0 });
+            }
+        }
+    }
+}
+
 export function validateTaskPlan(input: unknown): TaskPlan {
     const raw = ensurePlainObject(input, 'task-plan');
 
@@ -225,6 +264,8 @@ export function validateTaskPlan(input: unknown): TaskPlan {
             }
         }
     }
+
+    validateAcyclicStepDependencies(steps);
 
     const plan: TaskPlan = {
         schema_version: schemaVersion,
