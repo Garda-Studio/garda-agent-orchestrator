@@ -31,6 +31,7 @@ import type { ReviewTriggerPolicy } from '../../policy/review-trigger-policy';
 import type { ReviewRemediationModePolicySummary } from '../../policy/review-remediation-mode-policy';
 import type { ReviewFollowUpTaskClosurePolicySnapshot } from '../../core/review-follow-up-task-closure-policy';
 import type { NextStepResult } from '../../gates/next-step';
+import type { ReportTaskTimeline } from './task-timeline';
 
 export const REPORT_DATA_CONTRACT_SCHEMA_VERSION = 1;
 export const DEFAULT_REPORT_MAX_DETAILED_TASKS = 0;
@@ -149,6 +150,7 @@ export interface ReportTaskDetail {
     } | null;
     stats: TaskStatsResult | null;
     latest_cycle_events: CompactLatestCycleTaskEventsSummary | null;
+    timeline?: ReportTaskTimeline | null;
     full_suite_validation: ReportFullSuiteSummary;
     review_follow_up_task_closure_policy: {
         stored: ReviewFollowUpTaskClosurePolicySnapshot;
