@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Recognize direct negative-test assertions after validated regex literals, including quotes, character classes and escaped slashes, while preserving division tokens and rejecting malformed expressions or assertions embedded in inert, conditional or nested code. Use the bundled TypeScript parser to identify literals, nested method bodies and syntax errors, including generic-instantiation division and executable template substitutions; validate regex patterns and complete flags without executing matches. Builds retain the parser's license and notices, and load it only when checking test evidence. Evidence references and exact test-name requirements remain unchanged.
+
 - Task details can lazily display the existing final user report with localized controls, an explicit current summary, honest missing/stale/legacy states and original text preserved as plain text. `GET /api/tasks/<task-id>/final-report` reuses the same-origin file token boundary, requires a known canonical task, reads only its canonical report up to 256 KiB and returns read-only state/text/path/hash/diagnostics; raw report and existing evidence remain accessible.
 
 - Show a localized task progress card in loaded task details, with recorded stages, blockers, final-report availability and a copyable next command; preserve raw diagnostics and existing guarded actions.

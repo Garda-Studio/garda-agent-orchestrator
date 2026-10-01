@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { maskTestEvidenceRegexLiterals } from './test-evidence-lexing';
 
 export const TRUST_BOUNDARY_ANALYSIS_RULE_ID = 'trust_boundary_adversarial_analysis';
 export const TRUST_BOUNDARY_ANALYSIS_RULE_TITLE = 'Trust-boundary and adversarial-path analysis';
@@ -103,7 +104,9 @@ function parseTestEvidenceReference(value: string): { evidenceFile: string; test
     };
 }
 
-function declaresAssertiveNamedTestCase(source: string, testName: string): boolean {
+function declaresAssertiveNamedTestCase(sourceText: string, testName: string, evidenceFile: string): boolean {
+    const source = maskTestEvidenceRegexLiterals(sourceText, evidenceFile);
+    if (source === null) return false;
     type LexicalMode = 'code' | 'line_comment' | 'block_comment' | 'single_quote' | 'double_quote' | 'template';
     let mode: LexicalMode = 'code';
     let escaped = false;
@@ -757,7 +760,7 @@ function validateTrustBoundaryEvidenceFiles(
                         continue;
                     }
                     const source = fs.readFileSync(evidenceRealPath, 'utf8');
-                    if (!declaresAssertiveNamedTestCase(source, testName)) {
+                    if (!declaresAssertiveNamedTestCase(source, testName, evidenceFile)) {
                         violations.push(
                             `${label} must reference an exact declared it/test case name with a direct assertion statement outside conditional control flow or a nested callback.`
                         );

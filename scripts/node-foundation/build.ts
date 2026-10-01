@@ -452,6 +452,18 @@ function copyUiLanguagePacksFromSource(repoRoot: string, buildRoot: string): voi
     }
 }
 
+function copyTestEvidenceParser(repoRoot: string, buildRoot: string): void {
+    const packageRoot = path.join(repoRoot, 'node_modules', 'typescript');
+    const library = fs.readFileSync(path.join(packageRoot, 'lib', 'typescript.js'), 'utf8');
+    const notices = ['LICENSE.txt', 'ThirdPartyNoticeText.txt']
+        .map((filename) => fs.readFileSync(path.join(packageRoot, filename), 'utf8'))
+        .join('\n');
+    const noticeComments = notices.split(/\r?\n/u).map((line) => `// ${line}`).join('\n');
+    const outputPath = path.join(buildRoot, 'src', 'core', 'vendor-typescript.js');
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.writeFileSync(outputPath, library + '\n' + noticeComments + '\n', 'utf8');
+}
+
 function copyScriptRuntimeSupportFiles(compiledRoot: string, repoRoot: string): void {
     const compiledScriptsRoot = path.join(compiledRoot, 'scripts', 'node-foundation');
     fs.mkdirSync(compiledScriptsRoot, { recursive: true });
@@ -800,6 +812,7 @@ export function buildNodeFoundation(): BuildResult {
         // Compile the maintained runtime/test/build graph into .node-build.
         runTsc(['-p', 'tsconfig.tests.json'], repoRoot);
         copyUiLanguagePacksFromSource(repoRoot, buildRoot);
+        copyTestEvidenceParser(repoRoot, buildRoot);
         copyScriptRuntimeSupportFiles(buildRoot, repoRoot);
         const generatedCliPath = syncRepoCliEntrypoint(buildRoot, repoRoot);
 
@@ -860,6 +873,7 @@ export function buildPublishRuntime(): BuildResult {
 
         runTsc(['-p', 'tsconfig.build.json'], repoRoot);
         copyUiLanguagePacksFromSource(repoRoot, buildRoot);
+        copyTestEvidenceParser(repoRoot, buildRoot);
         const generatedCliPath = syncRepoCliEntrypoint(buildRoot, repoRoot);
 
         const srcBuildRoot = path.join(buildRoot, 'src');
