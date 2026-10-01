@@ -31,8 +31,12 @@ function taskFinalReportCard(detail) {
     + '<p id="task-final-report-source"></p><pre id="task-final-report-diagnostics" hidden></pre></section>';
 }
 function validateTaskFinalReport(report, taskId) {
-  const expectedPath = 'garda-agent-orchestrator/runtime/reviews/' + taskId + '-final-user-report.md';
-  if (!report || report.task_id !== taskId || report.path !== expectedPath
+  const expectedPath = 'runtime/reviews/' + taskId + '-final-user-report.md';
+  const bundlePrefix = 'garda-agent-orchestrator/';
+  const reportPath = report && typeof report.path === 'string' ? report.path : '';
+  const canonicalPath = reportPath.slice(0, bundlePrefix.length).toLowerCase() === bundlePrefix
+    ? reportPath.slice(bundlePrefix.length) : reportPath;
+  if (!report || report.task_id !== taskId || canonicalPath !== expectedPath
     || !['available', 'missing', 'pending', 'stale', 'legacy', 'unavailable'].includes(report.state)
     || (report.text !== null && (typeof report.text !== 'string' || report.text.length > ${MAX_TASK_FINAL_REPORT_BYTES}))
     || !Array.isArray(report.diagnostics) || report.diagnostics.length > 8
