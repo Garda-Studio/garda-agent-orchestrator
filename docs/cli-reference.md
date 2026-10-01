@@ -150,7 +150,7 @@ Notes:
 
 ### `garda preprompt`
 
-Read-only task bootstrap helper. It returns current task/workspace context together with the canonical next commands for the active lifecycle stage.
+Read-only task context helper. It projects the current validated `next-step` action alongside workspace diagnostics.
 
 ```text
 garda preprompt task --task-id "T-137" --json --target-root "."
@@ -159,7 +159,10 @@ garda preprompt task --task-id "T-137" --target-root "."
 
 Notes:
 - `preprompt task` does not modify task state, timelines, or review artifacts.
-- `preprompt task --json` reuses the current preflight artifact when present to derive required review types and the post-implementation command sequence.
+- JSON schema **3** adds `continuation` (inner schema 1): the task id, observation time, navigator status/gate, reason, navigator command and one current `action`. `task.current_stage` is the validated next gate or lowercase terminal status. Historical PASS events and artifact presence do not decide the route. The projection calls the shared pure query and never executes its pending effects.
+- `continuation.advisory_only` and `revalidate_before_action` are always true. Run `continuation.navigator_command` immediately before acting and follow its current output. If the navigator has multiple alternatives, `action.command` is null and `command_selection_required` is true; if it requires manual work, the command is null; terminal routes have no action. The brief does not choose an alternative or automatically re-enter task mode.
+- Migration from schema 2: the task/workspace/memory/artifact/diagnostic objects remain, but command batches are retired. `commands.startup_commands` contains at most the currently applicable `enter-task-mode` command, only when that is the validated route; resumed tasks receive their action in `continuation`. The deprecated `post_implementation_commands` is always empty, `post_implementation_sequence_available` is false, and its blocker points to the new contract. Consumers must check `schema_version` and use `continuation.action` instead of replaying schema 2 arrays.
+- Artifact inventory and `diagnostics.latest_preflight` are advisory observations, not current-cycle gate receipts. Reads of task-mode/preflight JSON require repository containment, the requested task id and a size of at most 1 MiB; malformed, foreign-task or oversized payloads are omitted. Navigator currentness and integrity checks remain authoritative. Query errors produce `continuation.status: "UNKNOWN"`, with null gate/action and the navigator reference for diagnostics; memory and optional-skill diagnostics remain available. Invalid task ids or escaped lifecycle roots fail closed. No error path issues fallback gate commands.
 - `preprompt task --json` exposes `project_memory.initialization_state` and `project_memory.init_refresh_prompt`; the top-level prompt is present only while `agent-init-state.json` is missing, invalid, or does not yet record both `ProjectMemoryInitialized=true` and `ProjectMemoryValidated=true`.
 - Missing or incomplete project-memory files make `project_memory.status` partial and add warnings, but they do not by themselves set the top-level `init_refresh_prompt` when agent-init state already records validated memory.
 - When the repo maps `optional-skill-selection-policy` through `garda-agent-orchestrator/live/config/garda.config.json`, `preprompt task --json` also shows `diagnostics.optional_skills`, including the canonical policy mode (`off`, `optional`, or `mandatory`), compact selection summary, selected skill ids, `selected_installed_skill_paths`, or an explicit `as_is` fallback reason. A stray policy file that is not mapped through `garda.config.json` does not activate the feature. The diagnostics reuse the current preflight scope when present and otherwise fall back to task-start context such as task summary and persisted planned scope.

@@ -1,10 +1,11 @@
 import type { ProjectMemoryBrief } from './preprompt-task-context';
+import type { PrepromptContinuation } from './preprompt-task-commands';
 import { isMandatoryOptionalSkillSelectionPolicyMode } from '../../../runtime/optional-skill-selection';
 
 export function buildPrepromptHelpText(): string {
     return [
         'Command: preprompt task',
-        'Build a read-only JSON task brief with current workspace/task context and exact next commands.',
+        'Build a read-only schema 3 task brief with the current validated navigator action. Revalidate before acting.',
         '',
         'Usage:',
         '  garda preprompt task --task-id "<task-id>" --json --target-root "."',
@@ -23,11 +24,18 @@ export function formatTaskBriefText(result: Record<string, unknown>): string {
     const task = result.task as Record<string, unknown>;
     const projectMemory = result.project_memory as ProjectMemoryBrief | undefined;
     const commands = result.commands as Record<string, unknown>;
+    const continuation = result.continuation as PrepromptContinuation;
     const optionalSkillTaskStartBlocker = getOptionalSkillTaskStartBlocker(result);
     const lines = [
         'GARDA_PREPROMPT_TASK',
         `Task: ${String(task?.id || '')}`,
-        `CurrentStage: ${String(task?.current_stage || 'unknown')}`
+        `CurrentStage: ${String(task?.current_stage || 'unknown')}`,
+        `ContinuationStatus: ${continuation.status}`,
+        `NextAction: ${continuation.action?.label || continuation.title}`,
+        `NextCommand: ${continuation.action?.command || 'none'}`,
+        `CommandSelectionRequired: ${continuation.action?.command_selection_required === true}`,
+        `Reason: ${continuation.reason}`,
+        `RevalidateBeforeAction: ${continuation.navigator_command}`
     ];
     if (projectMemory) {
         lines.push(
@@ -66,22 +74,13 @@ export function formatTaskBriefText(result: Record<string, unknown>): string {
         lines.push(`StartupScopeBlocker: ${startupScopeBlocker}`);
     }
     const startupCommands = Array.isArray(commands?.startup_commands) ? commands.startup_commands : [];
-    lines.push(
-        'StartupCommands:',
-        ...(startupCommands.length > 0
-            ? startupCommands.map((entry) => `  - ${String(entry)}`)
-            : ['  none'])
-    );
-    const postImplementationCommands = Array.isArray(commands?.post_implementation_commands)
-        ? commands.post_implementation_commands
-        : [];
-    if (postImplementationCommands.length > 0) {
+    if (commands.startup_pending === true) {
         lines.push(
-            'PostImplementationCommands:',
-            ...postImplementationCommands.map((entry) => `  - ${String(entry)}`)
+            'StartupCommands:',
+            ...(startupCommands.length > 0
+                ? startupCommands.map((entry) => `  - ${String(entry)}`)
+                : ['  none'])
         );
-    } else if (String(commands?.post_implementation_sequence_blocker || '').trim()) {
-        lines.push(`PostImplementationBlocker: ${String(commands.post_implementation_sequence_blocker).trim()}`);
     }
     return `${lines.join('\n')}\n`;
 }

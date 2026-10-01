@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Build schema 3 preprompt continuation from the current validated read-only navigator. Replace historical PASS stage inference and startup/review command batches with one advisory action that must be revalidated before use; retain bounded diagnostics and reject foreign-task or escaped artifact reads.
+
 - Document the current preprompt/resume context audit, bounded output measurements and the implementation plan for phase-dependent controller reads. Distinguish proposed presentation fixtures from implemented behavior, retain fresh reviewer skills and trust evidence, and separate selected-provider output size from unmeasured client instruction loads and token usage.
 
 - Show a bounded readable English task-event history in the local dashboard, including ordered times, review attempts and older or resumed cycles. Original details and projected JSON can be expanded, the guarded source-file link retains full history access, and truncated or incomplete histories are marked. Surrounding controls reuse the installed UI language packs.
