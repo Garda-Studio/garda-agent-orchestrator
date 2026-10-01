@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.4
 
 ### Review And Completion Fixes
 
@@ -9,8 +9,6 @@
 - Bind documentation-only and documentation-with-tests review coverage, freshness, and reuse to reviewed content and frozen classification.
 - Scope correction-transport audit to authenticated current cycles while retaining superseded history, and reconstruct persisted predecessor handoffs using canonical paths and attempts.
 - Preserve authenticated completed content through Git staging without false drift from changed line statistics.
-
-## 1.4.4
 
 ### Garda Compact
 
