@@ -44,6 +44,7 @@ import {
 } from './ui-action-registry';
 import { appendUiActionAudit } from './actions/action-common';
 import { renderLocalUiHtml } from './ui-dashboard-html';
+import { readTaskFinalReport } from './task-final-report';
 import {
     DEFAULT_LOCAL_UI_LANGUAGE,
     normalizeLocalUiLanguage,
@@ -819,8 +820,17 @@ export function createLocalUiServer(repoRoot: string, runtimeOptions?: Partial<L
             sendJson(response, 200, buildUiCleanupPayload(resolvedRepoRoot, options.actionsEnabled));
             return;
         }
-        const detailMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/detail$/u);
+        const detailMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/(detail|final-report)$/u);
         if (detailMatch) {
+            const isFinalReport = detailMatch[2] === 'final-report';
+            if (isFinalReport) {
+                try {
+                    assertUiFileBoundary(request, parsedUrl, options.actionToken);
+                } catch (error: unknown) {
+                    sendApiError(response, 403, error instanceof Error ? error.message : String(error), 'invalid_file_request');
+                    return;
+                }
+            }
             const taskId = decodeTaskIdSegment(detailMatch[1]);
             if (taskId === null || !isCanonicalTaskId(taskId)) {
                 sendApiError(response, 400, 'Invalid task id.', 'invalid_task_id');
@@ -835,7 +845,9 @@ export function createLocalUiServer(repoRoot: string, runtimeOptions?: Partial<L
                 repoRoot: resolvedRepoRoot,
                 taskId
             });
-            sendJson(response, 200, detail);
+            sendJson(response, 200, isFinalReport
+                ? readTaskFinalReport({ repoRoot: resolvedRepoRoot, taskId, reference: detail.progress?.final_report })
+                : detail);
             return;
         }
         if (pathname.startsWith('/api/')) {

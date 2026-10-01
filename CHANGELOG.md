@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Task details can lazily display the existing final user report with localized controls, an explicit current summary, honest missing/stale/legacy states and original text preserved as plain text. `GET /api/tasks/<task-id>/final-report` reuses the same-origin file token boundary, requires a known canonical task, reads only its canonical report up to 256 KiB and returns read-only state/text/path/hash/diagnostics; raw report and existing evidence remain accessible.
+
 - Show a localized task progress card in loaded task details, with recorded stages, blockers, final-report availability and a copyable next command; preserve raw diagnostics and existing guarded actions.
 
 - Expose bounded task progress, the current navigator action, validated final-report availability and task-owned evidence references through lazy task details without executing lifecycle actions.
