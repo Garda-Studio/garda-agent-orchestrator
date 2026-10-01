@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Document the current preprompt/resume context audit, bounded output measurements and the implementation plan for phase-dependent controller reads. Distinguish proposed presentation fixtures from implemented behavior, retain fresh reviewer skills and trust evidence, and separate selected-provider output size from unmeasured client instruction loads and token usage.
+
 - Show a bounded readable English task-event history in the local dashboard, including ordered times, review attempts and older or resumed cycles. Original details and projected JSON can be expanded, the guarded source-file link retains full history access, and truncated or incomplete histories are marked. Surrounding controls reuse the installed UI language packs.
 
 - Display existing task reports from both root-level runtime and deployed bundle layouts, preserving recognized bundle-directory casing in raw-file links. Browser validation still binds the exact report filename to the selected task; focused client regressions independently check foreign task IDs and paths, payload types, and text/diagnostic limits.

@@ -1,0 +1,506 @@
+{
+  "schema_version": 1,
+  "task_id": "T-151-1",
+  "kind": "read_only_context_audit_baseline_not_gate_evidence",
+  "measured_utc": "2026-10-01T16:31:15.514Z",
+  "source_commit": "046596cc2d0eee0907988559ebdb079f8fdd524e",
+  "units": {
+    "bytes": "UTF-8 stdout or file bytes",
+    "characters": "JavaScript UTF-16 code units",
+    "token_estimate": "ceil(characters / 4), rough proxy only; no tokenizer or usage measurement"
+  },
+  "measurement_limits": {
+    "client_loaded_instructions": "not measured; emitted pointers and source-file sizes do not prove client reads",
+    "actual_token_usage": null,
+    "future_cli_after": "not implemented; fixture serialization only",
+    "installation_size": "not measured; selected-provider default is distinct from legacy all-provider inventory"
+  },
+  "source_hashes": {
+    "src/cli/commands/preprompt/preprompt-task-context.ts": "99d423fe30b6ab5f572fbec652c2605bf2bd4c89afddb9760d6450b890b221be",
+    "src/cli/commands/preprompt/preprompt-task-commands.ts": "db8a09317bc8935dedca9a8de7db56bdcc03cdbeb410fe91d0f1e3f5f9c6dc8d",
+    "src/cli/commands/preprompt/preprompt-task-format.ts": "5403402cba2a1e7108d2ee9aa3b68a9de9e634f993b69a1e19444b747bd50c6c",
+    "src/gates/next-step/next-step.ts": "c534ffc7fbc9404ef974fabd8160d626d10c57efce37c131742ec7f5d6ac099f",
+    "src/gates/next-step/next-step-decision-engine.ts": "45d31b0bc256783135faade4bb2972105715164cc0143190e6f9547f23dcc55d",
+    "src/gates/review-context/review-context-token-economy.ts": "558ee931c7b9d8d4cce8259ba5f0e553fc2657196eb05134d76d0f46ff4f2706",
+    "src/gates/rule-pack/rule-pack-selection.ts": "aeca7c54b0393b61a941ff5932b8707c0bc3643f0a62c50ddbc799e27d9dcc97",
+    "src/materialization/init.ts": "9fe9ad464a375d26bf2ef00bcb92d572f8b883053d78bdab1dbad1f1a6d4dc3c",
+    "src/materialization/common.ts": "1e06066e9e043731d523b2748d1b85c36b8e39fc6c0ac108339a264340f5b3bc"
+  },
+  "selected_provider_default_entrypoints": [
+    "AGENTS.md"
+  ],
+  "reviewer_repository_rule_counts": {
+    "code": {
+      "full": 0,
+      "depth1": 0,
+      "depth2": 0
+    },
+    "security": {
+      "full": 0,
+      "depth1": 0,
+      "depth2": 0
+    },
+    "performance": {
+      "full": 0,
+      "depth1": 0,
+      "depth2": 0
+    },
+    "test": {
+      "full": 0,
+      "depth1": 0,
+      "depth2": 0
+    }
+  },
+  "lifecycle_read_only_check": {
+    "result": "unchanged",
+    "watched_files_count": 76,
+    "before_sha256": "40226da775be276eef5a17306cb4f5a58bc5f50494b45eedb445d3981d317c43",
+    "after_sha256": "40226da775be276eef5a17306cb4f5a58bc5f50494b45eedb445d3981d317c43",
+    "scope": "TASK.md, workflow/profile config and named tasks canonical review artifacts and timelines; not an exhaustive filesystem-write trace"
+  },
+  "cli_observations": [
+    {
+      "task_id": "T-151-2",
+      "text": {
+        "command": "node bin/garda.js preprompt task --task-id T-151-2 --target-root .",
+        "exit_code": 3,
+        "utf8_bytes": 4574,
+        "utf16_chars": 4574,
+        "token_estimate_chars_div_4": 1144,
+        "sha256": "dc616d8c010512608bc62613f73d3e9cb8fd45071f8f64fb458e5d98efdbf7a0",
+        "stderr": ""
+      },
+      "json": {
+        "command": "node bin/garda.js preprompt task --task-id T-151-2 --target-root . --json",
+        "exit_code": 3,
+        "utf8_bytes": 11150,
+        "utf16_chars": 11148,
+        "token_estimate_chars_div_4": 2787,
+        "sha256": "b114bce55c4bb122cd85f43746880996a3521666f6d23cdf3335b430434d67b6",
+        "stderr": ""
+      },
+      "inferred_stage": "start_pending",
+      "startup_pending": true,
+      "startup_command_count": 6,
+      "post_implementation_command_count": 0,
+      "read_only_navigator": {
+        "status": "BLOCKED",
+        "next_gate": "enter-task-mode",
+        "title": "Confirm work alongside unfinished tasks.",
+        "command_count": 1
+      }
+    },
+    {
+      "task_id": "T-151-1",
+      "text": {
+        "command": "node bin/garda.js preprompt task --task-id T-151-1 --target-root .",
+        "exit_code": 0,
+        "utf8_bytes": 6052,
+        "utf16_chars": 6052,
+        "token_estimate_chars_div_4": 1513,
+        "sha256": "ab9dfa7be41985833a04efb79249436f8946ae0536ce6e42794fd2116dbd1594",
+        "stderr": ""
+      },
+      "json": {
+        "command": "node bin/garda.js preprompt task --task-id T-151-1 --target-root . --json",
+        "exit_code": 0,
+        "utf8_bytes": 21039,
+        "utf16_chars": 21037,
+        "token_estimate_chars_div_4": 5260,
+        "sha256": "49ca75c22f56e30133eb90206bd14aa0435539e34d70eca6bafa88de0ab37a48",
+        "stderr": ""
+      },
+      "inferred_stage": "preflight_ready",
+      "startup_pending": false,
+      "startup_command_count": 6,
+      "post_implementation_command_count": 8,
+      "read_only_navigator": {
+        "status": "BLOCKED",
+        "next_gate": "materialize-planned-scope",
+        "title": "Materialize planned task changes before compile.",
+        "command_count": 0
+      }
+    },
+    {
+      "task_id": "T-150-4",
+      "text": {
+        "command": "node bin/garda.js preprompt task --task-id T-150-4 --target-root .",
+        "exit_code": 0,
+        "utf8_bytes": 6419,
+        "utf16_chars": 6419,
+        "token_estimate_chars_div_4": 1605,
+        "sha256": "e21a8e5647853191cb0ede8b3d73fd52f280ffd2ddffa3161ae2095173e945e7",
+        "stderr": ""
+      },
+      "json": {
+        "command": "node bin/garda.js preprompt task --task-id T-150-4 --target-root . --json",
+        "exit_code": 0,
+        "utf8_bytes": 18832,
+        "utf16_chars": 18830,
+        "token_estimate_chars_div_4": 4708,
+        "sha256": "c68420203748376b9fd76a57335aae9c8ed7d1d074d50f89f9d49cefed40b22c",
+        "stderr": ""
+      },
+      "inferred_stage": "completion_passed",
+      "startup_pending": false,
+      "startup_command_count": 6,
+      "post_implementation_command_count": 8,
+      "read_only_navigator": {
+        "status": "DONE",
+        "next_gate": null,
+        "title": "Task gate flow is complete.",
+        "command_count": 0
+      }
+    }
+  ],
+  "historical_stage_probes": [
+    {
+      "id": "compile_then_restart",
+      "event_types": [
+        "TASK_MODE_ENTERED",
+        "PREFLIGHT_CLASSIFIED",
+        "COMPILE_GATE_PASSED",
+        "COHERENT_CYCLE_RESTARTED"
+      ],
+      "observed_legacy_stage": "compiled",
+      "authority": "source-function probe; not gate evidence or a current route"
+    },
+    {
+      "id": "completion_then_new_entry",
+      "event_types": [
+        "TASK_MODE_ENTERED",
+        "COMPLETION_GATE_PASSED",
+        "TASK_MODE_ENTERED"
+      ],
+      "observed_legacy_stage": "completion_passed",
+      "authority": "source-function probe; not gate evidence or a current route"
+    },
+    {
+      "id": "review_pass_then_review_restart",
+      "event_types": [
+        "REVIEW_GATE_PASSED",
+        "REVIEW_CYCLE_RESTARTED"
+      ],
+      "observed_legacy_stage": "review_passed",
+      "authority": "source-function probe; not gate evidence or a current route"
+    },
+    {
+      "id": "compile_then_failed_review",
+      "event_types": [
+        "COMPILE_GATE_PASSED",
+        "REVIEW_RECORDED"
+      ],
+      "observed_legacy_stage": "compiled",
+      "authority": "source-function probe; not gate evidence or a current route",
+      "limitation": "REVIEW_RECORDED alone has no outcome; this event-type-only probe does not establish an authenticated failed review."
+    }
+  ],
+  "bounded_phase_presentation_scenarios": [
+    {
+      "phase": "fresh_start",
+      "input_kind": "controlled presentation fixture, not a persisted lifecycle state",
+      "before": {
+        "utf8_bytes": 4286,
+        "utf16_chars": 4286,
+        "token_estimate_chars_div_4": 1072,
+        "sha256": "44363127320bc21931350adab3a8f0f163cf19500927ad1ac34c5e32772bae76"
+      },
+      "after": {
+        "utf8_bytes": 459,
+        "utf16_chars": 459,
+        "token_estimate_chars_div_4": 115,
+        "sha256": "356cacfeea9d390434d9ed632c6fc36c101cb4b07bddc5e2f5bf4df45c64d147"
+      },
+      "after_kind": "serialized audit draft, not an implemented CLI or measured client usage",
+      "draft_text": "GARDA_PREPROMPT_TASK_DRAFT\nTask: T-151-1\nPhase: fresh_start\nAuthority: current validated read-only navigator decision\nReadSet:\n  - AGENTS.md\n  - 00-core.md\n  - start-task.md\n  - orchestration/SKILL.md\n  - TASK_ENTRY rule set\n  - memory README then compact\n  - applicable selected skills\nAction: one current navigator action; absent actions stay absent\nFallback: sufficient full context on unknown or stale state; load implementation instructions before edits\n"
+    },
+    {
+      "phase": "implementation_resume",
+      "input_kind": "controlled presentation fixture, not a persisted lifecycle state",
+      "before": {
+        "utf8_bytes": 6057,
+        "utf16_chars": 6057,
+        "token_estimate_chars_div_4": 1515,
+        "sha256": "9c4fe623851d7f116d54527ac60e53b262255df4fd874b6bf1c2dd932e2e4060"
+      },
+      "after": {
+        "utf8_bytes": 486,
+        "utf16_chars": 486,
+        "token_estimate_chars_div_4": 122,
+        "sha256": "765482d89d459f94f283e5e66cb6897c7000c55824275f1f726f0c294ca79646"
+      },
+      "after_kind": "serialized audit draft, not an implemented CLI or measured client usage",
+      "draft_text": "GARDA_PREPROMPT_TASK_DRAFT\nTask: T-151-1\nPhase: implementation_resume\nAuthority: current validated read-only navigator decision\nReadSet:\n  - AGENTS.md\n  - 00-core.md\n  - orchestration resume and implementation\n  - 40-commands.md\n  - applicable code and risk rules\n  - applicable selected skills\n  - focused memory\nAction: one current navigator action; absent actions stay absent\nFallback: sufficient full context on unknown or stale state; load implementation instructions before edits\n"
+    },
+    {
+      "phase": "test_review_only",
+      "input_kind": "controlled presentation fixture, not a persisted lifecycle state",
+      "before": {
+        "utf8_bytes": 6052,
+        "utf16_chars": 6052,
+        "token_estimate_chars_div_4": 1513,
+        "sha256": "e1295f42f6fc2184d51f2a8639347aea06192eb4e3d45a9f130776cc2293d347"
+      },
+      "after": {
+        "utf8_bytes": 495,
+        "utf16_chars": 495,
+        "token_estimate_chars_div_4": 124,
+        "sha256": "d4c430c9ba34a4285517524288dd380c55ddf900812e7b6d036feff04c4b6e31"
+      },
+      "after_kind": "serialized audit draft, not an implemented CLI or measured client usage",
+      "draft_text": "GARDA_PREPROMPT_TASK_DRAFT\nTask: T-151-1\nPhase: test_review_only\nAuthority: current validated read-only navigator decision\nReadSet:\n  - AGENTS.md\n  - 00-core.md\n  - orchestration review launch and receipts\n  - 80-task-workflow.md review trust\n  - current preflight, compile and suite bindings\n  - current upstream receipts\nAction: one current navigator action; absent actions stay absent\nFallback: sufficient full context on unknown or stale state; load implementation instructions before edits\n"
+    },
+    {
+      "phase": "docs_memory_closeout",
+      "input_kind": "controlled presentation fixture, not a persisted lifecycle state",
+      "before": {
+        "utf8_bytes": 6056,
+        "utf16_chars": 6056,
+        "token_estimate_chars_div_4": 1514,
+        "sha256": "69122886741a4bf692cc801564fa8bc2adca8f18cfd5d9f056ef900de6025922"
+      },
+      "after": {
+        "utf8_bytes": 530,
+        "utf16_chars": 530,
+        "token_estimate_chars_div_4": 133,
+        "sha256": "714fe072da10d97faf2e0d350ef55b03e76a40f2fe828cc83edd929edbbd6c1a"
+      },
+      "after_kind": "serialized audit draft, not an implemented CLI or measured client usage",
+      "draft_text": "GARDA_PREPROMPT_TASK_DRAFT\nTask: T-151-1\nPhase: docs_memory_closeout\nAuthority: current validated read-only navigator decision\nReadSet:\n  - AGENTS.md\n  - 00-core.md\n  - 80-task-workflow.md docs, memory and approval rules\n  - current doc-impact and memory decisions\n  - memory README and compact when maintenance is needed\n  - affected docs or focused memory\nAction: one current navigator action; absent actions stay absent\nFallback: sufficient full context on unknown or stale state; load implementation instructions before edits\n"
+    },
+    {
+      "phase": "completion_final_report",
+      "input_kind": "controlled presentation fixture, not a persisted lifecycle state",
+      "before": {
+        "utf8_bytes": 6059,
+        "utf16_chars": 6059,
+        "token_estimate_chars_div_4": 1515,
+        "sha256": "2fc10bb745b415a9b4ca0d6e392818a75ceed42224570ce6731dd641b74ea0b0"
+      },
+      "after": {
+        "utf8_bytes": 457,
+        "utf16_chars": 457,
+        "token_estimate_chars_div_4": 115,
+        "sha256": "6ed7494e11d07372bf6b6f77ef864a4b1c517466848c3acac105e1c779eaa1ed"
+      },
+      "after_kind": "serialized audit draft, not an implemented CLI or measured client usage",
+      "draft_text": "GARDA_PREPROMPT_TASK_DRAFT\nTask: T-151-1\nPhase: completion_final_report\nAuthority: current validated read-only navigator decision\nReadSet:\n  - AGENTS.md\n  - 00-core.md\n  - 80-task-workflow.md completion, audit, report and commit rules\n  - current completion and final report artifacts\nAction: one current navigator action; absent actions stay absent\nFallback: sufficient full context on unknown or stale state; load implementation instructions before edits\n"
+    },
+    {
+      "phase": "failed_review_remediation",
+      "input_kind": "controlled presentation fixture, not a persisted lifecycle state",
+      "before": {
+        "utf8_bytes": 6061,
+        "utf16_chars": 6061,
+        "token_estimate_chars_div_4": 1516,
+        "sha256": "d1619e21888ffafddedfd13779a479b739e9ce739d3e5cc3330bf4f6236cf530"
+      },
+      "after": {
+        "utf8_bytes": 530,
+        "utf16_chars": 530,
+        "token_estimate_chars_div_4": 133,
+        "sha256": "330149d5b73fe8f5d089b4dd168af05d5346f15cf56421093292c47e1c924709"
+      },
+      "after_kind": "serialized audit draft, not an implemented CLI or measured client usage",
+      "draft_text": "GARDA_PREPROMPT_TASK_DRAFT\nTask: T-151-1\nPhase: failed_review_remediation\nAuthority: current validated read-only navigator decision\nReadSet:\n  - AGENTS.md\n  - 00-core.md\n  - orchestration failed-review and implementation rules\n  - 40-commands.md\n  - current findings, locked disposition and remediation scope\n  - applicable code, risk and skill instructions\nAction: one current navigator action; absent actions stay absent\nFallback: sufficient full context on unknown or stale state; load implementation instructions before edits\n"
+    }
+  ],
+  "instruction_file_footprints": [
+    {
+      "path": "AGENTS.md",
+      "utf8_bytes": 6491,
+      "utf16_chars": 6490,
+      "token_estimate_chars_div_4": 1623,
+      "sha256": "9db2674504790c3e986250501e1953dac174f69a37cb0a1afd92aed4cbc4b28a"
+    },
+    {
+      "path": ".agents/workflows/start-task.md",
+      "utf8_bytes": 11603,
+      "utf16_chars": 11603,
+      "token_estimate_chars_div_4": 2901,
+      "sha256": "538eb201cbdf9fc5a3acf31366bb35042a506d33e25fb6fc0c553bc6ee727a88"
+    },
+    {
+      "path": "garda-agent-orchestrator/live/skills/orchestration/SKILL.md",
+      "utf8_bytes": 41576,
+      "utf16_chars": 41576,
+      "token_estimate_chars_div_4": 10394,
+      "sha256": "0a94d6fa2e3a581ada8559d781465a84ebf5a003c13d97eb557dc87c76162392"
+    },
+    {
+      "path": "garda-agent-orchestrator/live/docs/agent-rules/00-core.md",
+      "utf8_bytes": 6418,
+      "utf16_chars": 6416,
+      "token_estimate_chars_div_4": 1604,
+      "sha256": "68f5566236f7aa0ceec3fec22c022fde4877f093f30b76a811ded2d9ac0eb0e9"
+    },
+    {
+      "path": "garda-agent-orchestrator/live/docs/agent-rules/15-project-memory.md",
+      "utf8_bytes": 11993,
+      "utf16_chars": 11990,
+      "token_estimate_chars_div_4": 2998,
+      "sha256": "3070deb1f8a5cf93c73daf13aef1eea519b54a5f2a68fc31418cdfaf3a1498c9"
+    },
+    {
+      "path": "garda-agent-orchestrator/live/docs/agent-rules/40-commands.md",
+      "utf8_bytes": 33744,
+      "utf16_chars": 33736,
+      "token_estimate_chars_div_4": 8434,
+      "sha256": "f70b5eacfd50fe1720d675e1bc22d42b9b381fe3bbf1a8a3bc9158713664e905"
+    },
+    {
+      "path": "garda-agent-orchestrator/live/docs/agent-rules/80-task-workflow.md",
+      "utf8_bytes": 39089,
+      "utf16_chars": 39075,
+      "token_estimate_chars_div_4": 9769,
+      "sha256": "4f3f813147ecc1e34d5de35a6b377cfefc5139bc540278024a06253ebf713668"
+    },
+    {
+      "path": "garda-agent-orchestrator/live/docs/agent-rules/90-skill-catalog.md",
+      "utf8_bytes": 12978,
+      "utf16_chars": 12978,
+      "token_estimate_chars_div_4": 3245,
+      "sha256": "953221a92ed14a154de4602c0fc63ec9282ec8fd893e0a255de66c41a1e9e900"
+    },
+    {
+      "path": "garda-agent-orchestrator/live/docs/project-memory/README.md",
+      "utf8_bytes": 2688,
+      "utf16_chars": 2688,
+      "token_estimate_chars_div_4": 672,
+      "sha256": "42df88d426de8c5663a36d2504622ba1b01a908a1074b4b2c7aa32101a59eb7d"
+    },
+    {
+      "path": "garda-agent-orchestrator/live/docs/project-memory/compact.md",
+      "utf8_bytes": 11938,
+      "utf16_chars": 11936,
+      "token_estimate_chars_div_4": 2984,
+      "sha256": "cb8e48cdf5a89a033d43dc316725c72c0834f994bbf5ded830be805dcfbea9dd"
+    },
+    {
+      "path": "garda-agent-orchestrator/live/docs/project-memory/commands.md",
+      "utf8_bytes": 23147,
+      "utf16_chars": 23147,
+      "token_estimate_chars_div_4": 5787,
+      "sha256": "9303bcd11ecb5ff88c6a9134bc47c7795247d8282c492d2c04f6ab531f3830fe"
+    },
+    {
+      "path": "garda-agent-orchestrator/live/docs/project-memory/module-map.md",
+      "utf8_bytes": 16824,
+      "utf16_chars": 16824,
+      "token_estimate_chars_div_4": 4206,
+      "sha256": "4d1132d3f7ecfaf1f05ebf0383bf48e9cc442d186b6d01543b5660f9e9a77600"
+    },
+    {
+      "path": "garda-agent-orchestrator/live/docs/project-memory/risks.md",
+      "utf8_bytes": 22109,
+      "utf16_chars": 22109,
+      "token_estimate_chars_div_4": 5528,
+      "sha256": "f5f5259c24983d96127a6421fe00ae746a45b519fa86c445a1972963bcf0839c"
+    },
+    {
+      "path": "garda-agent-orchestrator/live/docs/project-memory/decisions.md",
+      "utf8_bytes": 35889,
+      "utf16_chars": 35879,
+      "token_estimate_chars_div_4": 8970,
+      "sha256": "b268cbc114e81b1f4b5f44414932c64bf2ad5c2ca10d5ea6495161993446b4a9"
+    },
+    {
+      "path": "garda-agent-orchestrator/live/skills/node-backend/SKILL.md",
+      "utf8_bytes": 4498,
+      "utf16_chars": 4498,
+      "token_estimate_chars_div_4": 1125,
+      "sha256": "1298b6d30461d7e9ef6f9905905eb3a3c8f0daf9b00f2c32ed1afe6b318974ed"
+    },
+    {
+      "path": "garda-agent-orchestrator/live/skills/testing-strategy/SKILL.md",
+      "utf8_bytes": 7369,
+      "utf16_chars": 7353,
+      "token_estimate_chars_div_4": 1839,
+      "sha256": "faef8bd0ad7eeedc0e6ec3b6b4a948bb23aee5cb71b8b76f0175d8c6dac49832"
+    }
+  ],
+  "presentation_input": {
+    "task": {
+      "id": "T-151-1",
+      "current_stage": "preflight_ready"
+    },
+    "project_memory": {
+      "status": "ready",
+      "read_strategy": "index_first",
+      "directory": "garda-agent-orchestrator/live/docs/project-memory",
+      "summary_rule": "garda-agent-orchestrator/live/docs/agent-rules/15-project-memory.md",
+      "bootstrap_report_path": "garda-agent-orchestrator/runtime/project-memory/bootstrap-report.json",
+      "initialization_state": {
+        "state_path": "garda-agent-orchestrator/runtime/agent-init-state.json",
+        "initialized": true,
+        "validated": true,
+        "pending": false,
+        "error": null
+      },
+      "init_refresh_prompt": null,
+      "read_first": [
+        "garda-agent-orchestrator/live/docs/project-memory/README.md",
+        "garda-agent-orchestrator/live/docs/project-memory/compact.md"
+      ],
+      "suggested_files": [
+        "garda-agent-orchestrator/live/docs/project-memory/architecture.md",
+        "garda-agent-orchestrator/live/docs/project-memory/decisions.md",
+        "garda-agent-orchestrator/live/docs/project-memory/module-map.md",
+        "garda-agent-orchestrator/live/docs/project-memory/risks.md"
+      ],
+      "missing_files": [],
+      "warnings": [],
+      "unknown_custom_stack_fallback": "If the stack is unknown or custom, read stack.md, commands.md, and module-map.md, then inspect repository evidence before applying any framework-specific defaults.",
+      "task_start_guidance": [
+        "Project memory is a compact project map for orientation, not proof. Read README.md, then compact.md, then only focused files relevant to the task. Verify memory facts against source, tests, config, docs, and gate evidence before changing behavior.",
+        "Read the generated summary rule as orientation after TASK_ENTRY rule loading.",
+        "Read README.md and compact.md first.",
+        "Read only the suggested focused memory files for this task.",
+        "Write durable current-state contracts only: module ownership, workflow invariants, commands, decisions, risks, and active unknowns. Do not store repeated task narratives, transient failures, large command outputs, or duplicated known orchestrator issues. Task ids are optional provenance only and should not be the default heading structure."
+      ]
+    },
+    "commands": {
+      "startup_pending": false,
+      "startup_commands": [
+        "node bin/garda.js gate enter-task-mode --task-id \"T-151-1\" --entry-mode \"EXPLICIT_TASK_EXECUTION\" [--requested-depth \"2\"] --task-summary \"Audit current preprompt and resume reads and specify the minimum context per phase\" --provider \"Codex\" [--routed-to \"<provider-bridge-or-entrypoint>\"] [--start-banner \"<repo-owned-marker>\"] [--orchestrator-work] [--workflow-config-work] [--upgrade-existing-task-mode] [--allow-active-task \"<unfinished-task-id>\" ...] [--planned-changed-file \"<task-owned-file>\" ...] [--operator-confirmed yes --operator-confirmed-at-utc \"<ISO-8601 timestamp>\"] --repo-root \".\"",
+        "node bin/garda.js gate load-rule-pack --task-id \"T-151-1\" --stage \"TASK_ENTRY\" --loaded-rule-file \"garda-agent-orchestrator/live/docs/agent-rules/00-core.md\" --loaded-rule-file \"garda-agent-orchestrator/live/docs/agent-rules/15-project-memory.md\" --loaded-rule-file \"garda-agent-orchestrator/live/docs/agent-rules/40-commands.md\" --loaded-rule-file \"garda-agent-orchestrator/live/docs/agent-rules/80-task-workflow.md\" --loaded-rule-file \"garda-agent-orchestrator/live/docs/agent-rules/90-skill-catalog.md\" --repo-root \".\"",
+        "node bin/garda.js gate handshake-diagnostics --task-id \"T-151-1\" --repo-root \".\"",
+        "node bin/garda.js gate shell-smoke-preflight --task-id \"T-151-1\" --repo-root \".\"",
+        "node bin/garda.js gate classify-change --task-id \"T-151-1\" --task-intent \"Audit current preprompt and resume reads and specify the minimum context per phase\" --changed-file \"src/<file>\" --output-path \"garda-agent-orchestrator/runtime/reviews/T-151-1-preflight.json\" --repo-root \".\"",
+        "node bin/garda.js gate load-rule-pack --task-id \"T-151-1\" --stage \"POST_PREFLIGHT\" --preflight-path \"garda-agent-orchestrator/runtime/reviews/T-151-1-preflight.json\" --loaded-rule-file \"garda-agent-orchestrator/live/docs/agent-rules/00-core.md\" --loaded-rule-file \"garda-agent-orchestrator/live/docs/agent-rules/15-project-memory.md\" --loaded-rule-file \"garda-agent-orchestrator/live/docs/agent-rules/20-architecture.md\" --loaded-rule-file \"garda-agent-orchestrator/live/docs/agent-rules/40-commands.md\" --loaded-rule-file \"garda-agent-orchestrator/live/docs/agent-rules/70-security.md\" --loaded-rule-file \"garda-agent-orchestrator/live/docs/agent-rules/80-task-workflow.md\" --loaded-rule-file \"garda-agent-orchestrator/live/docs/agent-rules/90-skill-catalog.md\" --repo-root \".\""
+      ],
+      "startup_scope_blocker": null,
+      "post_implementation_commands": [
+        "node bin/garda.js gate compile-gate --task-id \"T-151-1\" --preflight-path \"garda-agent-orchestrator/runtime/reviews/T-151-1-preflight.json\" --repo-root \".\"",
+        "node bin/garda.js gate build-review-context --review-type \"code\" --depth \"2\" --preflight-path \"garda-agent-orchestrator/runtime/reviews/T-151-1-preflight.json\" [--focused-required-test-path \"tests/<target>.test.ts\"] --repo-root \".\"",
+        "node bin/garda.js gate build-review-context --review-type \"performance\" --depth \"2\" --preflight-path \"garda-agent-orchestrator/runtime/reviews/T-151-1-preflight.json\" [--focused-required-test-path \"tests/<target>.test.ts\"] --repo-root \".\"",
+        "node bin/garda.js gate build-review-context --review-type \"security\" --depth \"2\" --preflight-path \"garda-agent-orchestrator/runtime/reviews/T-151-1-preflight.json\" [--focused-required-test-path \"tests/<target>.test.ts\"] --repo-root \".\"",
+        "node bin/garda.js gate required-reviews-check --task-id \"T-151-1\" --preflight-path \"garda-agent-orchestrator/runtime/reviews/T-151-1-preflight.json\" --review-authorship-attestation-json '{\"code\":false}' --repo-root \".\"",
+        "node bin/garda.js gate doc-impact-gate --task-id \"T-151-1\" --preflight-path \"garda-agent-orchestrator/runtime/reviews/T-151-1-preflight.json\" --decision \"NO_DOC_UPDATES\" --behavior-changed false --changelog-updated false --internal-changelog-updated false --project-memory-updated false --rationale \"Update the rationale for the actual behavior/doc impact.\" --repo-root \".\"",
+        "node bin/garda.js gate completion-gate --task-id \"T-151-1\" --preflight-path \"garda-agent-orchestrator/runtime/reviews/T-151-1-preflight.json\" --repo-root \".\"",
+        "node bin/garda.js gate task-audit-summary --task-id \"T-151-1\" --as-json --repo-root \".\""
+      ],
+      "post_implementation_sequence_blocker": null
+    },
+    "diagnostics": {
+      "optional_skills": {
+        "current_policy_mode": "mandatory",
+        "policy_mode": "mandatory",
+        "blocker": null,
+        "task_start_instruction": "Selected optional skill(s): testing-strategy, node-backend. Run the activation command(s) before implementation so the timeline records the required chosen role/skill."
+      }
+    }
+  },
+  "runtime_provenance": {
+    "node_version": "v24.11.1",
+    "recorded_utc": "2026-10-01T16:46:30.019Z",
+    "note": "Recorded while finalizing the fixture; no runtime source was changed after the original measurement.",
+    "compiled_module_hashes": {
+      ".node-build/src/cli/commands/preprompt/preprompt-task-context.js": "d2198e32b935fc7a4ca010a1ab0d066409661a697b954eec44d268f9133dfc0c",
+      ".node-build/src/cli/commands/preprompt/preprompt-task-format.js": "d6f5a564568ff828d8bfeb41377bebbe90756b40fc2a47329838bf054e2e5d9a",
+      ".node-build/src/gates/next-step/next-step.js": "17750953c68d199678832e7ed354eb2cdeb803dbdab150463738ad795d09230b",
+      ".node-build/src/gates/review-context/review-context-token-economy.js": "bcca958e51af601dc76c5dfe351a7d475c90a89612cfbcd025353e47d190a71b",
+      ".node-build/src/materialization/common.js": "34007c7227e8deaec878066954a322222e991847c627bcc9f3a49d0add77aaa4"
+    }
+  }
+}
