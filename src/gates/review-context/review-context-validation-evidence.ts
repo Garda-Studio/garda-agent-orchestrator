@@ -1,6 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { readBoundedTaskPlanFile } from '../../core/task-plan-read';
 import { type FullSuiteValidationPlacement } from '../../core/workflow-config';
+import { isFullSuiteNotRequiredForDocsOnlyScope } from '../full-suite/full-suite-validation-results';
 import { collectOrderedTimelineEvents } from '../completion/completion-evidence';
 import {
     loadFullSuiteValidationConfig,
@@ -15,6 +17,7 @@ import {
 } from '../task-events-summary/task-events-summary';
 import {
     fileSha256,
+    stringSha256,
     joinOrchestratorPath,
     normalizePath,
     toStringArray
@@ -58,6 +61,16 @@ export interface CurrentCompileGateEvidence {
     status: string | null;
     cycle_binding: TaskCycleBindingSnapshot | null;
 }
+
+interface FullSuiteValidationEvidenceOptions {
+    repoRoot: string;
+    taskId: string | null;
+    reviewType: string;
+    preflightPath: string;
+    preflightSha256: string | null;
+}
+
+const SUITE_SCOPE_PREFLIGHT_MAX_BYTES = 1024 * 1024;
 
 function asPlainRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === 'object' && !Array.isArray(value)
@@ -211,6 +224,31 @@ export function readCurrentCompileGateEvidence(repoRoot: string, taskId: string 
     }
 }
 
+function isCurrentCompiledDocsOnlyScope(
+    options: FullSuiteValidationEvidenceOptions,
+    compile: CurrentCompileGateEvidence
+): boolean {
+    const expectedSha256 = normalizeEvidenceSha256(options.preflightSha256);
+    const preflightPath = path.resolve(options.repoRoot, options.preflightPath);
+    const cycle = compile.cycle_binding;
+    if (!options.taskId || !expectedSha256 || !cycle
+        || normalizeNullablePath(cycle.preflight_path) !== normalizePath(preflightPath)
+        || cycle.preflight_sha256 !== expectedSha256
+        || compile.status !== 'PASSED' || !compile.timeline_timestamp_utc
+        || cycle.compile_gate_timestamp !== compile.timeline_timestamp_utc) {
+        return false;
+    }
+    try {
+        const content = readBoundedTaskPlanFile(options.repoRoot, preflightPath, SUITE_SCOPE_PREFLIGHT_MAX_BYTES);
+        if (content == null || stringSha256(content) !== expectedSha256) return false;
+        const preflight = asPlainRecord(JSON.parse(content));
+        return preflight?.task_id === options.taskId
+            && isFullSuiteNotRequiredForDocsOnlyScope(preflight);
+    } catch {
+        return false;
+    }
+}
+
 export function getReviewContextFullSuiteValidationViolations(options: {
     repoRoot: string;
     taskId: string | null;
@@ -319,7 +357,7 @@ export function getReviewContextFullSuiteValidationViolations(options: {
         staleReasons.push('context says full-suite is not required before this review');
     }
     if (!currentRequiresPreReviewBinding && contextEvidence.required_for_review === true) {
-        staleReasons.push('context says full-suite is required before this review but current workflow config does not require it');
+        staleReasons.push('context says full-suite is required before this review but current scope or workflow config does not require it');
     }
     if (currentRequiresPreReviewBinding && !contextEvidence.available) {
         staleReasons.push('context full-suite artifact was unavailable when the review context was built');
@@ -376,19 +414,14 @@ export function getReviewContextFullSuiteValidationViolations(options: {
     ];
 }
 
-export function buildFullSuiteValidationEvidence(options: {
-    repoRoot: string;
-    taskId: string | null;
-    reviewType: string;
-    preflightPath: string;
-    preflightSha256: string | null;
-}): ReviewContextFullSuiteValidationEvidence | null {
+export function buildFullSuiteValidationEvidence(options: FullSuiteValidationEvidenceOptions): ReviewContextFullSuiteValidationEvidence | null {
     const fullSuiteValidationConfig = loadFullSuiteValidationConfig(options.repoRoot);
     const shouldRenderEvidence = fullSuiteValidationConfig.enabled === true || options.reviewType === 'test';
     if (!shouldRenderEvidence) {
         return null;
     }
-    const requiredForReview = fullSuiteValidationConfig.enabled === true
+    const compileGateEvidence = readCurrentCompileGateEvidence(options.repoRoot, options.taskId);
+    const configuredPreReviewSuite = fullSuiteValidationConfig.enabled === true
         && (
             fullSuiteValidationConfig.placement === 'after_compile_before_reviews'
             || (
@@ -396,8 +429,10 @@ export function buildFullSuiteValidationEvidence(options: {
                 && options.reviewType === 'test'
             )
         );
+    const docsOnlyExemption = configuredPreReviewSuite
+        && isCurrentCompiledDocsOnlyScope(options, compileGateEvidence);
+    const requiredForReview = configuredPreReviewSuite && !docsOnlyExemption;
 
-    const compileGateEvidence = readCurrentCompileGateEvidence(options.repoRoot, options.taskId);
     const artifactPath = options.taskId
         ? joinOrchestratorPath(options.repoRoot, path.join('runtime', 'reviews', `${options.taskId}-full-suite-validation.json`))
         : null;
@@ -531,14 +566,15 @@ export function buildFullSuiteValidationEvidence(options: {
         return {
             review_type: options.reviewType,
             required_for_review: requiredForReview,
-            placement: artifactPlacement,
+            placement: docsOnlyExemption ? fullSuiteValidationConfig.placement : artifactPlacement,
             artifact_path: normalizedArtifactPath,
             artifact_sha256: fileSha256(artifactPath),
             artifact_freshness: artifactFreshness,
             available: true,
             status: normalizeFullSuiteValidationStatus(raw.status),
-            enabled: normalizeNullableBoolean(raw.enabled),
-            command: typeof raw.command === 'string' ? raw.command : null,
+            enabled: docsOnlyExemption ? fullSuiteValidationConfig.enabled : normalizeNullableBoolean(raw.enabled),
+            command: docsOnlyExemption ? fullSuiteValidationConfig.command
+                : typeof raw.command === 'string' ? raw.command : null,
             exit_code: normalizeNullableNumber(raw.exit_code),
             timed_out: normalizeNullableBoolean(raw.timed_out),
             duration_ms: durationMs,
@@ -567,8 +603,8 @@ export function buildFullSuiteValidationEvidence(options: {
             artifact_freshness: 'unavailable',
             available: false,
             status: null,
-            enabled: null,
-            command: null,
+            enabled: docsOnlyExemption ? fullSuiteValidationConfig.enabled : null,
+            command: docsOnlyExemption ? fullSuiteValidationConfig.command : null,
             exit_code: null,
             timed_out: null,
             duration_ms: null,
@@ -635,7 +671,18 @@ export function buildFullSuiteValidationEvidenceMarkdown(evidence: ReviewContext
     if (
         evidence.enabled === true
         && evidence.required_for_review === false
+        && evidence.placement === 'after_compile_before_reviews'
+    ) {
+        lines.push(
+            '- Reviewer note: the current hash-bound compiled docs-only scope does not require an executed pre-review suite. ' +
+            `Completion still requires the gate-owned not-required artifact. ${REVIEWER_FOCUSED_VALIDATION_REMINDER}`
+        );
+    }
+    if (
+        evidence.enabled === true
+        && evidence.required_for_review === false
         && evidence.placement === 'before_test_review'
+        && evidence.review_type !== 'test'
     ) {
         lines.push(
             `- Reviewer note: before_test_review placement reserves full-suite evidence for the test review; this ${evidence.review_type} ` +
