@@ -84,6 +84,8 @@ export interface CollectRuntimeToxinScanWithCacheOptions {
     cleanupMaxAgeDays: number;
     nowMs: number;
     cacheEnabled: boolean;
+    /** Reuse a validated cache, but scan misses without locks or persistence. */
+    readOnly?: boolean;
     collectFresh: () => RuntimeToxinScanCacheValue;
 }
 
@@ -483,6 +485,7 @@ export function collectRuntimeToxinScanWithCache(
     };
     const cached = readConfirmedCache(initialGeneration);
     if (cached) return cached;
+    if (options.readOnly) return options.collectFresh();
 
     return withFilesystemLock(
         resolveToxinSnapshotCacheBuildLockPath(options.runtimeRoot),

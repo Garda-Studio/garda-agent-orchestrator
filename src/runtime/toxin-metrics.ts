@@ -66,6 +66,7 @@ export interface CollectToxinSnapshotOptions {
     bundleRoot?: string;
     metricsPath?: string;
     useCache?: boolean;
+    readOnly?: boolean;
     cleanupMaxAgeDays?: number;
     nowMs?: number;
 }
@@ -604,6 +605,7 @@ export function collectToxinSnapshot(repoRoot: string, options: CollectToxinSnap
         cleanupMaxAgeDays,
         nowMs,
         cacheEnabled: options.useCache !== false,
+        readOnly: options.readOnly,
         collectFresh: () => scanRuntimeTreeForToxins(runtimeRoot, cleanupMaxAgeDays, nowMs)
     });
     const staleLocks = countStaleLocks(orchestratorRoot);

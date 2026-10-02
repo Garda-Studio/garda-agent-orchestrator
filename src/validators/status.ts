@@ -567,14 +567,15 @@ function readReviewRemediationModePolicyStatus(
 function readToxinMetricsSummary(
     targetRoot: string,
     bundlePath: string,
-    bundlePresent: boolean
+    bundlePresent: boolean,
+    readOnly: boolean
 ): StatusSnapshot['toxinMetricsSummary'] {
     if (!bundlePresent) {
         return null;
     }
 
     try {
-        const toxinSnapshot = collectToxinSnapshot(targetRoot, { bundleRoot: bundlePath });
+        const toxinSnapshot = collectToxinSnapshot(targetRoot, { bundleRoot: bundlePath, readOnly });
         return buildToxinStatusSummary(toxinSnapshot);
     } catch {
         return null;
@@ -619,6 +620,7 @@ function collectStatusSnapshot(
     options: {
         taskId?: string;
         includeGlobalRuntimeMetrics: boolean;
+        readOnly?: boolean;
     } = { includeGlobalRuntimeMetrics: true }
 ): StatusSnapshot {
     const resolvedTargetRoot = path.resolve(targetRoot);
@@ -719,7 +721,7 @@ function collectStatusSnapshot(
         activeProfile
     );
     const toxinMetricsSummary = options.includeGlobalRuntimeMetrics
-        ? readToxinMetricsSummary(resolvedTargetRoot, bundlePath, bundlePresent)
+        ? readToxinMetricsSummary(resolvedTargetRoot, bundlePath, bundlePresent, options.readOnly === true)
         : null;
     const scopeBudgetGuardStatus = options.includeGlobalRuntimeMetrics
         ? readScopeBudgetGuardStatus(resolvedTargetRoot, bundlePath, bundlePresent, taskStatuses)
@@ -789,9 +791,13 @@ function collectStatusSnapshot(
 export function getStatusSnapshot(
     targetRoot: string,
     initAnswersPath?: string,
-    taskQueueEntries?: ReadonlyMap<string, TaskQueueEntry>
+    taskQueueEntries?: ReadonlyMap<string, TaskQueueEntry>,
+    options: { readOnly?: boolean } = {}
 ): StatusSnapshot {
-    return collectStatusSnapshot(targetRoot, initAnswersPath, taskQueueEntries);
+    return collectStatusSnapshot(targetRoot, initAnswersPath, taskQueueEntries, {
+        includeGlobalRuntimeMetrics: true,
+        readOnly: options.readOnly
+    });
 }
 
 export function getTaskCycleStatusSnapshot(
