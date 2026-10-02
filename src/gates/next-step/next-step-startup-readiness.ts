@@ -1,5 +1,7 @@
 import * as path from 'node:path';
 
+import { buildTaskPlanDiagnostics } from '../diagnostics/task-plan-diagnostics';
+import type { TaskModeArtifact } from '../task-mode/task-mode-contracts';
 import {
     collectOrderedTimelineEvents,
     type TimelineEventEntry
@@ -22,6 +24,24 @@ export interface StartupCycleReadiness {
 
 export interface StartupCycleReadinessOptions {
     enforceLateRulePackAfterReviewPhase?: boolean;
+}
+
+export function readAttachedTaskPlanIntegrityFailure(
+    repoRoot: string,
+    taskId: string,
+    taskMode: Record<string, unknown> | null
+): string | null {
+    const plan = taskMode?.plan;
+    if (plan === undefined || plan === null) {
+        return taskMode?.plan_guided === true ? 'The frozen attached JSON task plan metadata is missing.' : null;
+    }
+    const diagnostic = buildTaskPlanDiagnostics(repoRoot, taskId, {
+        plan: plan as TaskModeArtifact['plan'],
+        markdown_working_plan: null
+    });
+    if (diagnostic.evidence === 'current') return null;
+    return `The frozen attached JSON task plan is ${diagnostic.evidence}. Restore its original approved bytes `
+        + 'and rerun the navigator; changing the plan requires the existing operator task-reset/re-entry workflow.';
 }
 
 function isPassedStartupDiagnostic(entry: TimelineEventEntry): boolean {
