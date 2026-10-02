@@ -77,6 +77,8 @@ import {
     buildDefaultReviewRemediationModePolicy
 } from '../../../../../../src/policy/review-remediation-mode-policy';
 import { compileReviewDependencyGraph } from '../../../../../../src/core/review-dependency-graph';
+import { writeReviewClassificationSnapshot } from '../../../../../../src/gates/review-remediation/review-remediation-classification-evidence';
+import { resolvePersistedRemediationReviewExecutionAuthority } from '../../../../../../src/gates/review-remediation/review-remediation-execution-authority';
 
 const IGNORED_CHANGELOG_PATH = 'garda-agent-orchestrator/live/docs/changes/CHANGELOG.md';
 const ROOT_IGNORED_CHANGELOG_PATH = 'CHANGELOG.md';
@@ -558,6 +560,33 @@ describe('cli/commands/gates – authenticated remediation execution persistence
                 persisted.reviewExecutionValidationAuthority?.authoritativeDecisionSha256,
                 decision.decision_sha256
             );
+
+            const reference = writeReviewClassificationSnapshot({ reviewsRoot, taskId, classification });
+            appendTaskEvent(bundleRoot, taskId, 'REVIEW_CYCLE_RESTARTED', 'PASS', 'Referenced review classification.', {
+                task_id: taskId, event_type: 'REVIEW_CYCLE_RESTARTED', status: 'PASSED',
+                preflight_sha256: preflightSha256, authoritative_review_decision: decision,
+                authoritative_review_classification_reference: reference
+            });
+            const referenceEvents = readTaskTimelineEvents(repoRoot, taskId);
+            const referenceOptions = { events: referenceEvents, taskId, reviewType, preflightPath, timelinePath, preflightPayload };
+            const referenced = resolvePersistedRemediationReusePolicy(referenceOptions);
+            assert.equal(referenced.reviewExecutionContract?.mode, 'DELTA', referenced.blockedReason);
+            assert.ok(referenced.reviewExecutionContract);
+            const authorityOptions = {
+                reviewsRoot, taskId, reviewType, preflightSha256,
+                fullReviewScope: [changedFile], reviewExecution: referenced.reviewExecutionContract
+            };
+            assert.deepEqual(
+                resolvePersistedRemediationReviewExecutionAuthority(authorityOptions)?.authoritativeClassification,
+                classification
+            );
+            const originalSnapshot = fs.readFileSync(reference.artifact_path);
+            fs.appendFileSync(reference.artifact_path, ' ');
+            const tampered = resolvePersistedRemediationReusePolicy(referenceOptions);
+            assert.equal(tampered.failClosed, true);
+            assert.match(tampered.blockedReason, /classification evidence is invalid.*hash does not match/iu);
+            assert.equal(resolvePersistedRemediationReviewExecutionAuthority(authorityOptions), null);
+            fs.writeFileSync(reference.artifact_path, originalSnapshot);
 
             fs.writeFileSync(preflightPath, `${JSON.stringify({ changed_files: [changedFile], stale: true })}\n`, 'utf8');
             const stale = resolvePersistedRemediationReusePolicy({

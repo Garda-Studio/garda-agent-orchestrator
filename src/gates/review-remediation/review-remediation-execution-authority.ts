@@ -11,6 +11,7 @@ import { reviewEvidenceRequiresFindingsValidation } from './review-remediation-r
 import type { ReviewRemediationDecisionClassification } from './review-remediation-recovery-routing';
 import { pathsEqual } from '../review-reuse/review-reuse-telemetry-normalization';
 import { fileSha256 } from '../shared/helpers';
+import { readRestartReviewClassification } from './review-remediation-classification-evidence';
 
 interface PersistedRemediationReviewExecutionAuthorityOptions {
     reviewsRoot: string;
@@ -236,12 +237,15 @@ export function resolvePersistedRemediationReviewExecutionAuthority(
             || details.status !== 'PASSED'
             || String(details.preflight_sha256 || '').trim().toLowerCase() !== normalizedPreflightSha256
             || !isPlainRecord(details.authoritative_review_decision)
-            || !isPlainRecord(details.authoritative_review_classification)
         ) {
             continue;
         }
         const decision = details.authoritative_review_decision;
-        const classification = details.authoritative_review_classification as unknown as ReviewRemediationDecisionClassification;
+        let classification: unknown;
+        try {
+            classification = readRestartReviewClassification({ reviewsRoot: options.reviewsRoot, taskId: options.taskId, details });
+        } catch { return null; }
+        if (!isPlainRecord(classification)) continue;
         const lane = Array.isArray(decision.lane_decisions)
             ? decision.lane_decisions.find((value) => (
                 isPlainRecord(value) && value.review_type === options.reviewType
@@ -260,7 +264,7 @@ export function resolvePersistedRemediationReviewExecutionAuthority(
             return buildAuthority(
                 options,
                 decision,
-                classification,
+                classification as unknown as ReviewRemediationDecisionClassification,
                 hasAuthenticatedFreshCurrentPassReplacement({
                     events,
                     restartIndex: index,
@@ -291,7 +295,6 @@ export function resolvePersistedRemediationReviewExecutionAuthority(
             const priorDecision = isPlainRecord(priorDetails?.authoritative_review_decision)
                 ? priorDetails.authoritative_review_decision
                 : null;
-            const priorClassification = priorDetails?.authoritative_review_classification;
             const priorLane = priorDecision && Array.isArray(priorDecision.lane_decisions)
                 ? priorDecision.lane_decisions.find((value) => (
                     isPlainRecord(value) && value.review_type === options.reviewType
@@ -304,7 +307,6 @@ export function resolvePersistedRemediationReviewExecutionAuthority(
                 && priorDetails.status === 'PASSED'
                 && normalizeSha256(priorDetails.preflight_sha256) === normalizedPreflightSha256
                 && priorDecision
-                && isPlainRecord(priorClassification)
                 && isPlainRecord(priorLane)
                 && priorLane.mode === options.reviewExecution.mode
                 && normalizeSha256(priorDecision.decision_sha256)
@@ -312,6 +314,13 @@ export function resolvePersistedRemediationReviewExecutionAuthority(
                 && normalizeSha256(priorDecision.classification_sha256)
                     === normalizeSha256(options.reviewExecution.classification_sha256)
             ) {
+                let priorClassification: unknown;
+                try {
+                    priorClassification = readRestartReviewClassification({
+                        reviewsRoot: options.reviewsRoot, taskId: options.taskId, details: priorDetails
+                    });
+                } catch { return null; }
+                if (!isPlainRecord(priorClassification)) return null;
                 return buildAuthority(
                     options,
                     priorDecision,

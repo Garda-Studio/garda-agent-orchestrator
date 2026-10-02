@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 import { sha256RedactedJsonPayload } from '../../../../core/redaction';
 import { isPlainRecord } from '../../../../core/records';
@@ -27,6 +28,7 @@ import {
     type ReviewRemediationReviewContractValidationAuthority
 } from '../../../../gates/review-remediation/review-remediation-review-contract';
 import { inspectTaskEventFile } from '../../../../gate-runtime/task-events';
+import { readRestartReviewClassification } from '../../../../gates/review-remediation/review-remediation-classification-evidence';
 import {
     buildAcceptedCurrentPassReviewContextCommandResult,
     buildGeneratedReviewContextCommandResult,
@@ -248,7 +250,19 @@ export function resolvePersistedRemediationReusePolicy(options: {
                     failClosed: true
                 });
             }
-            const authoritativeClassification = details.authoritative_review_classification;
+            let authoritativeClassification: unknown;
+            try {
+                authoritativeClassification = readRestartReviewClassification({
+                    reviewsRoot: path.resolve(path.dirname(options.timelinePath), '..', 'reviews'),
+                    taskId: options.taskId, details
+                });
+            } catch (error) {
+                return emptyPersistedRemediationReusePolicy({
+                    blockedReason: 'review reuse blocked because the persisted classification evidence is invalid: '
+                        + (error instanceof Error ? error.message : String(error)),
+                    failClosed: true
+                });
+            }
             if (authoritativeClassification !== undefined) {
                 if (!isPlainRecord(authoritativeClassification) || !preflightPayload) {
                     return emptyPersistedRemediationReusePolicy({

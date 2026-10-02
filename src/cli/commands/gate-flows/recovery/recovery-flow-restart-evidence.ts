@@ -1,5 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { isPlainRecord } from '../../../../core/records';
+import { writeReviewClassificationSnapshot } from '../../../../gates/review-remediation/review-remediation-classification-evidence';
 import {
     appendMandatoryTaskEvent
 } from '../../../../gate-runtime/task-events';
@@ -91,6 +93,14 @@ export function appendRestartCompletedEvidence(input: {
     extraDetails?: Record<string, unknown>;
 }): string {
     const artifactPath = resolveDefaultReviewsPath(input.repoRoot, `${input.taskId}${input.artifactSuffix}`);
+    const extraDetails = { ...input.extraDetails };
+    const classification = extraDetails.authoritative_review_classification;
+    if (isPlainRecord(classification) && classification.source === 'delta') {
+        extraDetails.authoritative_review_classification_reference = writeReviewClassificationSnapshot({
+            reviewsRoot: path.dirname(artifactPath), taskId: input.taskId, classification
+        });
+        delete extraDetails.authoritative_review_classification;
+    }
     const baseDetails = {
         restart_event_schema_version: 1,
         task_id: input.taskId,
@@ -108,7 +118,7 @@ export function appendRestartCompletedEvidence(input: {
         elapsed_ms: Math.max(0, Math.floor(input.elapsedMs)),
         restart_reason: input.restartReason,
         next_step_summary: input.nextStepSummary,
-        ...(input.extraDetails || {})
+        ...extraDetails
     };
     writeJsonArtifact(artifactPath, {
         schema_version: 1,
