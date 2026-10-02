@@ -1809,13 +1809,14 @@ describe('runCheckUpdate', () => {
         }
     });
 
-    it('restores previous VERSION when deferred VERSION copy fails', async () => {
+    it('restores previous VERSION when deferred VERSION copy fails', async (context) => {
         const { projectRoot, bundleRoot } = setupCheckUpdateWorkspace(repoRoot, '0.0.1');
         try {
             // Create a source directory that has a VERSION whose copy will fail.
             // We achieve this by making the source VERSION path point at a directory
             // (fs.copyFileSync throws EISDIR when the source is a directory).
             const fakeSourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-t092-src-'));
+            context.after(() => removePathRecursive(fakeSourceRoot));
             // Seed the fake source with a minimal VERSION that is a *directory*,
             // which will make fs.copyFileSync throw during the deferred copy.
             const fakeVersionPath = path.join(fakeSourceRoot, 'VERSION');
