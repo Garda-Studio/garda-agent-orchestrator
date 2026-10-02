@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Select advisory controller instruction reads by the current preprompt continuation phase. Defer implementation skills during verified review and closeout, restore implementation context before edits, retain unknown-state fallback and mandatory gate protocols, and keep fresh reviewer rule bundles empty.
+
 - Give required non-test review lanes concrete coverage for authored test-only changes and bind those test bytes in freshness and reuse. Preserve mixed-runtime and documentation scope ownership, frozen test classification, staged index snapshots, excluded closeout paths and concrete findings evidence validation.
 
 - Build schema 3 preprompt continuation from the current validated read-only navigator. Replace historical PASS stage inference and startup/review command batches with one advisory action that must be revalidated before use; retain bounded diagnostics and reject foreign-task or escaped artifact reads.

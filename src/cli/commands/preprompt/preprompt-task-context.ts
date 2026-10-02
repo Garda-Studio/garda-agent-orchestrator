@@ -48,6 +48,7 @@ import {
 } from '../../../runtime/optional-skill-selection';
 import { formatStatusSnapshotCompact, getStatusSnapshot } from '../../../validators/status';
 import { getWhyBlocked } from '../../../validators/why-blocked';
+import { buildTaskContextSelection } from './preprompt-task-context-selection';
 import {
     buildOptionalSkillActivationCommand,
     buildOptionalSkillDeclineCommand,
@@ -986,6 +987,16 @@ export function buildTaskBrief(targetRoot: string, taskId: string, initAnswersPa
         ? preflightPayload?.changed_files.map((entry) => String(entry)).filter(Boolean)
         : readPlannedChangedFiles(taskModePayload);
     const projectMemory = buildProjectMemoryBrief(targetRoot, bundleRoot, taskRow, existingChangedFiles);
+    const contextSelection = buildTaskContextSelection({
+        continuation,
+        canonicalEntrypoint: statusSnapshot.canonicalEntrypoint,
+        bundlePath: toPortableRepoPath(targetRoot, bundleRoot),
+        optionalSkillPaths: Array.isArray(optionalSkillsDiagnostics?.selected_installed_skill_paths)
+            && !optionalSkillsDiagnostics?.blocker
+            ? optionalSkillsDiagnostics.selected_installed_skill_paths.map(String)
+            : [],
+        projectMemoryReadFirst: projectMemory.read_first
+    });
     const boundedPreflightChangedFiles = boundList(existingChangedFiles, MAX_PREPROMPT_CHANGED_FILES);
     const startupScopeBlocker = buildStartupScopeBlocker(
         existingChangedFiles,
@@ -1007,6 +1018,7 @@ export function buildTaskBrief(targetRoot: string, taskId: string, initAnswersPa
         rule_search_required: false,
         project_memory: projectMemory,
         continuation,
+        context_selection: contextSelection,
         task: {
             ...taskRow,
             timeline_event_count: eventTypes.length,

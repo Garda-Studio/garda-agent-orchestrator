@@ -9,7 +9,8 @@ import { COMMAND_SUMMARY } from '../../../../src/cli/commands/cli-helpers';
 import { buildTaskBrief, readJsonArtifactIfExists } from '../../../../src/cli/commands/preprompt/preprompt-task-context';
 import { resolveNextStep } from '../../../../src/gates/next-step/next-step';
 import { formatTaskBriefText } from '../../../../src/cli/commands/preprompt/preprompt-task-format';
-import { projectTaskContinuation } from '../../../../src/cli/commands/preprompt/preprompt-task-commands';
+import { projectTaskContinuation, type PrepromptContinuation } from '../../../../src/cli/commands/preprompt/preprompt-task-commands';
+import { buildTaskContextSelection } from '../../../../src/cli/commands/preprompt/preprompt-task-context-selection';
 import { resolveNextStep as settleFixtureEffects } from '../../gates/next-step/next-step-test-support';
 import {
     TASK_ID as NAVIGATOR_TASK_ID,
@@ -69,6 +70,87 @@ function assertCurrentNavigatorProjection(repoRoot: string): Record<string, unkn
     return brief;
 }
 
+test('preprompt selects controller instructions by the current action and keeps reviewer rules isolated', () => {
+    const skillPath = 'garda-agent-orchestrator/live/skills/node-backend/SKILL.md';
+    const continuation: PrepromptContinuation = {
+        schema_version: 1,
+        task_id: NAVIGATOR_TASK_ID,
+        generated_utc: '2026-10-02T00:00:00.000Z',
+        source: 'next-step',
+        advisory_only: true,
+        revalidate_before_action: true,
+        navigator_command: 'node bin/garda.js next-step "T-NEXT-1" --repo-root "."',
+        status: 'BLOCKED',
+        next_gate: 'compile-gate',
+        title: 'Current action',
+        reason: 'Current navigator evidence',
+        action: null
+    };
+    for (const [gate, expectedPhase] of [
+        ['compile-gate', 'implementation'],
+        ['build-review-context', 'review_orchestration'],
+        ['record-review-result', 'review_orchestration'],
+        ['doc-impact-gate', 'docs_memory_closeout'],
+        ['project-memory-impact', 'docs_memory_closeout'],
+        ['completion-gate', 'completion'],
+        ['restart-review-cycle', 'implementation'],
+        ['unrecognized-action', 'implementation']
+    ]) {
+        const selected = buildTaskContextSelection({
+            continuation: { ...continuation, next_gate: gate },
+            canonicalEntrypoint: 'AGENTS.md',
+            bundlePath: 'garda-agent-orchestrator',
+            optionalSkillPaths: [skillPath],
+            projectMemoryReadFirst: ['garda-agent-orchestrator/live/docs/project-memory/README.md']
+        });
+        assert.equal(selected.phase, expectedPhase, gate);
+        assert.equal(selected.controller_read_set.some(entry => entry.path === skillPath), expectedPhase === 'implementation', gate);
+        assert.ok(selected.controller_read_set.some(entry => entry.path.endsWith('/00-core.md')), gate);
+        assert.ok(selected.controller_read_set.some(entry => entry.path === 'TASK.md' && entry.task_id === NAVIGATOR_TASK_ID), gate);
+        assert.ok(selected.before_code_edit_read_set.some(entry => entry.path === skillPath), gate);
+        assert.equal(selected.historical_rule_pack_is_session_knowledge, false);
+        assert.equal(selected.missing_section_fallback, 'full_source_and_implementation_context');
+        assert.deepEqual(selected.reviewer_context.repository_rule_files, []);
+        assert.equal(selected.reviewer_context.required_skill_and_generated_context, true);
+        assert.equal(selected.reviewer_context.fresh_isolated_context, true);
+        const workflowRead = selected.controller_read_set.find(entry => entry.path.endsWith('/80-task-workflow.md'));
+        assert.ok(workflowRead?.sections.includes(expectedPhase === 'implementation' ? '*' : 'Task Execution And Approval'));
+        if (expectedPhase === 'completion') assert.ok(workflowRead?.sections.includes('Final User Report And Commit'));
+    }
+    for (const status of ['UNKNOWN', 'DECOMPOSED', 'SPLIT_REQUIRED'] as const) {
+        const selected = buildTaskContextSelection({
+            continuation: { ...continuation, status, next_gate: 'completion-gate' },
+            canonicalEntrypoint: 'AGENTS.md',
+            bundlePath: 'garda-agent-orchestrator',
+            optionalSkillPaths: [],
+            projectMemoryReadFirst: []
+        });
+        assert.equal(selected.phase, 'implementation', status);
+        assert.equal(selected.implementation_instructions_deferred, false);
+    }
+    const completed = buildTaskContextSelection({
+        continuation: { ...continuation, status: 'DONE', next_gate: null },
+        canonicalEntrypoint: 'AGENTS.md',
+        bundlePath: 'garda-agent-orchestrator',
+        optionalSkillPaths: [],
+        projectMemoryReadFirst: []
+    });
+    assert.equal(completed.phase, 'completion');
+    for (const source of completed.controller_read_set.filter(entry => entry.path.endsWith('/80-task-workflow.md') || entry.path.endsWith('/orchestration/SKILL.md'))) {
+        const templatePath = source.path.replace('garda-agent-orchestrator/live/', 'template/');
+        const text = fs.readFileSync(path.join(process.cwd(), templatePath), 'utf8');
+        const headings = new Set(text.split(/\r?\n/u).filter(line => /^#{1,6} /u.test(line)).map(line => line.replace(/^#{1,6} /u, '')));
+        assert.ok(source.sections.every(section => headings.has(section)), templatePath);
+    }
+    assert.equal(buildTaskContextSelection({
+        continuation: { ...continuation, next_gate: 'completion-gate' },
+        canonicalEntrypoint: null,
+        bundlePath: 'garda-agent-orchestrator',
+        optionalSkillPaths: [],
+        projectMemoryReadFirst: []
+    }).phase, 'implementation');
+});
+
 test('preprompt prevents lifecycle writes while projecting a pending navigator effect', () => {
     const repoRoot = makeNavigatorRepo();
     try {
@@ -84,11 +166,13 @@ test('preprompt prevents lifecycle writes while projecting a pending navigator e
 test('preprompt rejects stale completion PASS after a new task entry', () => {
     const repoRoot = makeNavigatorRepo();
     try {
+        seedInitAnswers(repoRoot, 'Codex');
         seedCompletedTaskWithIndependentCodeReview(repoRoot, NAVIGATOR_TASK_ID);
         seedStartedTask(repoRoot, NAVIGATOR_TASK_ID);
         const before = snapshotBriefInputs(repoRoot);
         const brief = assertCurrentNavigatorProjection(repoRoot);
         assert.notEqual((brief.task as Record<string, unknown>).current_stage, 'completion_passed');
+        assert.equal((brief.context_selection as Record<string, unknown>).phase, 'implementation');
         assert.deepEqual((brief.commands as Record<string, unknown>).startup_commands, []);
         assert.deepEqual(snapshotBriefInputs(repoRoot), before);
     } finally {
@@ -99,11 +183,15 @@ test('preprompt rejects stale completion PASS after a new task entry', () => {
 test('preprompt rejects stale compile PASS after source drift', () => {
     const repoRoot = makeNavigatorRepo();
     try {
-        seedCompletedTaskWithIndependentCodeReview(repoRoot, NAVIGATOR_TASK_ID);
+        seedInitAnswers(repoRoot, 'Codex');
+        seedStartedTask(repoRoot, NAVIGATOR_TASK_ID);
+        writeNavigatorPreflight(repoRoot, NAVIGATOR_TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+        seedCompilePass(repoRoot, NAVIGATOR_TASK_ID);
         fs.writeFileSync(path.join(repoRoot, 'src', 'app.ts'), 'export const value = 999;\n', 'utf8');
         const before = snapshotBriefInputs(repoRoot);
         const brief = assertCurrentNavigatorProjection(repoRoot);
         assert.notEqual((brief.task as Record<string, unknown>).current_stage, 'completion_passed');
+        assert.equal((brief.context_selection as Record<string, unknown>).phase, 'implementation');
         assert.deepEqual(snapshotBriefInputs(repoRoot), before);
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
@@ -138,6 +226,7 @@ test('preprompt revalidates missing and foreign-task evidence without writing li
 test('preprompt resumes at the remaining test review after independently accepted code review', () => {
     const repoRoot = makeNavigatorRepo();
     try {
+        seedInitAnswers(repoRoot, 'Codex');
         seedStartedTask(repoRoot, NAVIGATOR_TASK_ID);
         writeNavigatorPreflight(repoRoot, NAVIGATOR_TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, test: true });
         seedCompilePass(repoRoot, NAVIGATOR_TASK_ID);
@@ -148,6 +237,9 @@ test('preprompt resumes at the remaining test review after independently accepte
         const before = snapshotBriefInputs(repoRoot);
         const brief = assertCurrentNavigatorProjection(repoRoot);
         const text = formatTaskBriefText(brief);
+        assert.equal((brief.context_selection as Record<string, unknown>).phase, 'review_orchestration');
+        assert.match(text, /ControllerPhase: review_orchestration/);
+        assert.match(text, /ControllerReadSet:/);
         assert.match(text, /NextCommand:.*build-review-context.*--review-type "test"/);
         assert.ok(!text.includes('StartupCommands:'));
         assert.ok(!text.includes('gate compile-gate'));
@@ -160,6 +252,7 @@ test('preprompt resumes at the remaining test review after independently accepte
 test('preprompt completion-only continuation does not replay startup, compile or review actions', () => {
     const repoRoot = makeNavigatorRepo();
     try {
+        seedInitAnswers(repoRoot, 'Codex');
         seedStartedTask(repoRoot, NAVIGATOR_TASK_ID);
         writeNavigatorPreflight(repoRoot, NAVIGATOR_TASK_ID, { ...ALL_REVIEW_FLAGS });
         seedCompilePass(repoRoot, NAVIGATOR_TASK_ID);
@@ -170,6 +263,9 @@ test('preprompt completion-only continuation does not replay startup, compile or
         const before = snapshotBriefInputs(repoRoot);
         const brief = assertCurrentNavigatorProjection(repoRoot);
         const text = formatTaskBriefText(brief);
+        assert.equal((brief.context_selection as Record<string, unknown>).phase, 'completion');
+        assert.match(text, /ControllerPhase: completion/);
+        assert.match(text, /BeforeCodeEdit:.*implementation instructions/);
         assert.match(text, /NextCommand:.*gate completion-gate/);
         assert.ok(!text.includes('StartupCommands:'));
         assert.ok(!text.includes('gate compile-gate'));

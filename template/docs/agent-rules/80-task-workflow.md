@@ -80,13 +80,16 @@ Primary entry point: selected source-of-truth entrypoint for this workspace.
 ## Task Resume Protocol
 - Apply this protocol whenever resuming an existing task in `IN_PROGRESS` or `IN_REVIEW`.
 - Mandatory resume sequence:
-  1. Re-read `AGENTS.md` routing and `00-core.md`.
-  2. Re-read orchestration workflow (`live/skills/orchestration/SKILL.md`) and current task row in `TASK.md`.
-  3. Re-read existing task evidence (`runtime/reviews/*`, `runtime/task-events/<task-id>.jsonl`) before new changes.
-  4. Continue with full mandatory gates; resume never bypasses compile/review/completion gates.
+  1. Re-read the canonical entrypoint routing, `00-core.md`, and the current `TASK.md` row, Notes and any frozen attached plan.
+  2. Read `preprompt task`'s advisory `context_selection.controller_read_set` for the current phase. A named section is its body up to the next Markdown heading; `*` means the full file. If a selected section is unavailable, read the full source and sufficient implementation context before acting. Follow task-specific constraints and required linked references too.
+  3. Run the current `next-step` command before acting. Old `RULE_PACK_LOADED` events prove lifecycle history, not current-session knowledge; read and record any rule pack the navigator currently requires.
+  4. Unknown actions, stale evidence or query failure keep sufficient implementation context. Before any source or test edit, including a new failure or requested change on a late phase, load `context_selection.before_code_edit_read_set` and applicable implementation references first.
+  5. Review orchestration, docs/memory closeout and completion may defer unrelated implementation skills while retaining core, approval, scope and report constraints. This never changes gates, freshness checks, reviewer isolation or authorization.
 - Final user report contract is mandatory on resume too.
 
 ## Mandatory Gate Contract
+
+### Task Execution And Approval
 - Before running any specific gate command, run `node garda-agent-orchestrator/bin/garda.js next-step "<task-id>" --repo-root "."` and execute only the single recommended command it prints.
 - After that command completes, rerun the exact same `next-step` command. This loop also handles missing preflight artifacts, stale preflight scope, protected control-plane drift, full-suite enablement, and review dependency order.
 - Task-mode entry command must pass before preflight or implementation:
@@ -108,6 +111,8 @@ Primary entry point: selected source-of-truth entrypoint for this workspace.
 - Shell smoke preflight must emit task-timeline event `SHELL_SMOKE_PREFLIGHT_RECORDED`.
 - Treat `handshake-diagnostics -> shell-smoke-preflight -> classify-change` as one strict same-task chain. Do not parallelize these transitions; a newer `TASK_MODE_ENTERED` invalidates older handshake evidence, and a newer `HANDSHAKE_DIAGNOSTICS_RECORDED` invalidates older shell-smoke evidence.
 - Preflight artifact must exist before review stage.
+
+### Implementation And Validation
 - Preflight classification must run with explicit `--output-path "garda-agent-orchestrator/runtime/reviews/<task-id>-preflight.json"`.
 - Preflight lifecycle telemetry must show `PREFLIGHT_STARTED` and then either `PREFLIGHT_CLASSIFIED` or `PREFLIGHT_FAILED`.
 - Clean-tree preflight (`changed_files_count=0`) is baseline-only evidence, not task completion.
@@ -127,6 +132,8 @@ Primary entry point: selected source-of-truth entrypoint for this workspace.
 - Compile gate invocation must pass `fail_tail_lines` from `live/config/token-economy.json` (fallback `50`) to keep failure-output budget deterministic.
 - Compile/review gate output compaction profiles are loaded from `live/config/output-filters.json`; invalid or missing config must warn and fall back to passthrough output instead of inventing filtered summaries.
 - Shared gate-output compaction is independent of reviewer-context token economy scope; even with token economy disabled or at the default `depth=3` policy, compile/review gates still use `output-filters.json` and `fail_tail_lines`.
+### Review Orchestration
+
 - Before each required reviewer invocation, run `node garda-agent-orchestrator/bin/garda.js gate build-review-context ...` for that review type.
 - Reviewer preparation must emit `REVIEW_PHASE_STARTED`, `SKILL_SELECTED`, and `SKILL_REFERENCE_LOADED` before the review gate can satisfy completion for code-changing tasks.
 - After `prepare-reviewer-launch`, launch the real delegated reviewer with the exact generated handoff, then immediately run `record-reviewer-delegation-started` with provider/controller invocation id and launch-input evidence. `record-review-routing` and `prepare-reviewer-launch` may bind only the planned `agent:pending:<task-id>-<review-type>` identity; do not invent, reserve, hold, or pre-complete a provider reviewer identity before launch input exists.
@@ -146,6 +153,8 @@ Primary entry point: selected source-of-truth entrypoint for this workspace.
 - Review gate command validates no workspace drift after compile evidence; post-compile edits require compile gate rerun.
 - Review gate rejects zero-diff implementation tasks unless an audited no-op artifact exists for the same task id.
 - Missing prior focused-validation evidence alone is never a reviewer finding. Only when that absence is the prospective concern, every built-in or custom reviewer first runs the smallest safe relevant local check for exactly one repository target file with no unrelated or directory target, within authenticated scope, and records its exact command, outcome, and concrete non-placeholder diagnostics in `validation_notes`; authenticated changed-file evidence must name that exact target, and shell command chaining, substitution, and expansion are prohibited. A passing check produces no finding; a failed check or exposed defect is reported normally, links `finding_ids` to the exact ordinary defect finding, and shares at least one exact changed-file evidence location with each linked finding. For an unavailable or prohibited attempt, reserved id F-000 requires either its title or description to equal `[garda:evidence-only:missing-focused-validation] test=<exact-repository-relative-test-path>; action=run-and-record-focused-test` or `[garda:evidence-only:missing-focused-validation] target=<exact-repository-relative-validation-path>; action=run-and-record-focused-validation`, replacing only the angle-bracketed path. The reviewer must not invoke Garda or descendants: after inspecting scope, optionally performing that narrow check, and writing exactly one review JSON object, it stops. After an authenticated F-000 receipt, the main agent may run that exact check with `gate run-intermediate-command` and follow `next-step`; verified post-review evidence restarts the same review scope without a fake implementation edit and does not replace compile, full-suite, or review PASS evidence.
+### Documentation And Memory Closeout
+
 - Documentation impact gate command must pass before `DONE`:
   `node garda-agent-orchestrator/bin/garda.js gate doc-impact-gate`.
 - `doc-impact-gate` is a closeout gate after required review PASS. Reviewers assess whether the scoped documentation and changelog changes are sufficient, but must not fail solely because the downstream task-owned doc-impact artifact has not yet been materialized.
@@ -163,6 +172,8 @@ Primary entry point: selected source-of-truth entrypoint for this workspace.
 - When disabled (default), `full-suite-validation` emits `SKIPPED` and `completion-gate` does not require the artifact.
 - `AUDIT_AND_WARN` policy with out-of-scope-only failures produces status `WARNED`, exits 0, and does not block completion. The warning is audited in the artifact and timeline.
 - `AUDIT_AND_BLOCK` policy with out-of-scope failures produces status `FAILED` and blocks completion.
+### Completion And Audit
+
 - Completion gate command must pass before `DONE`:
   `node garda-agent-orchestrator/bin/garda.js gate completion-gate`.
 - After `COMPLETION_GATE_PASSED`, run `node garda-agent-orchestrator/bin/garda.js gate task-audit-summary --task-id "<task-id>" --as-json`; the gate now materializes canonical closeout artifacts at `runtime/reviews/<task-id>-final-closeout.json` and `runtime/reviews/<task-id>-final-closeout.md`. Use those artifacts instead of reconstructing the final closeout order free-form.
@@ -185,6 +196,8 @@ Primary entry point: selected source-of-truth entrypoint for this workspace.
 - Gate-owned status sync is the only normal updater for active lifecycle status cells. Final reporting must not ask the implementation agent to manually synchronize `TASK.md` status; stale queue-vs-gate diagnostics should name the gate evidence or explicit operator reset/discard command.
 - Documentation impact updates are required when behavior/contracts/ops docs changed.
 - Required changelog or evidence updates to ignored orchestrator paths must stay local on disk; do not use `git add -f` unless the user explicitly requests versioning orchestrator internals.
+### Final User Report And Commit
+
 - Final user report order is mandatory: short agent-authored summary of what changed -> verbatim Garda final user report from `runtime/reviews/<task-id>-final-user-report.md` -> conventional-style `git commit -m "<type>(<scope>): <summary>"` suggestion when committable changes exist -> `Do you want me to commit now? (yes/no)` when committable changes exist.
 - The Garda final user report artifact is generated by `task-audit-summary`; do not reinterpret, summarize, reorder, or rewrite it. The implementation agent may add only the short summary before the verbatim artifact text.
 - When `next-step` prints `CopyPasteFinalUserReport`, paste `CopyPasteFinalUserReport` exactly as printed, without code fences, wrappers, paraphrase, interpretation, summarization, or reformatting.
