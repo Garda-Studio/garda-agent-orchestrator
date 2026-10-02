@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     assertCanonicalTaskId,
+    KNOWN_REVIEW_ARTIFACT_SUFFIXES,
+    parseKnownReviewArtifactTaskId,
     parseStructuredTaskArtifactTaskId,
     parseTaskIdJsonlFileName
 } from '../../../src/core/task-ids';
@@ -64,4 +66,26 @@ test('parseStructuredTaskArtifactTaskId rejects unknown artifact suffixes', () =
 test('parseStructuredTaskArtifactTaskId keeps legacy numeric unknown artifact ownership', () => {
     assert.equal(parseStructuredTaskArtifactTaskId('T-004-recent.json'), 'T-004');
     assert.equal(parseStructuredTaskArtifactTaskId('T-506-F1-bad-custom.json'), 'T-506-F1');
+});
+
+test('canonical cleanup suffixes retain semantic and nested task ownership', () => {
+    const suffixes = [
+        '-final-user-report.md',
+        '-coherent-cycle-restart.json',
+        '-review-cycle-restart.json',
+        '-quality-checklist.json',
+        '-quality-checklist-answers.json',
+        '-scoped-summary.json',
+        '-scoped-summary.md',
+        '-task-plan.json'
+    ];
+    for (const taskId of ['T-CLEANUP-ART', 'T-991-1-F1', 'T-991-1-F1-I1']) {
+        for (const suffix of suffixes) {
+            for (const compressedSuffix of ['', '.gz']) {
+                const fileName = `${taskId}${suffix}${compressedSuffix}`;
+                assert.equal(parseKnownReviewArtifactTaskId(fileName, KNOWN_REVIEW_ARTIFACT_SUFFIXES), taskId, fileName);
+                assert.equal(parseStructuredTaskArtifactTaskId(fileName), taskId, fileName);
+            }
+        }
+    }
 });

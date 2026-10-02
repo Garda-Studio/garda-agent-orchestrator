@@ -1,10 +1,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { containedDirectory } from '../../core/compact/store-paths';
 import { resolveTaskHistoryLedgerPath } from '../../gate-runtime/task-history-ledger';
 import { rebuildIndex } from '../../gate-runtime/reviews-index';
 import {
     isCanonicalTaskId,
-    parseActiveReviewArtifactTaskId,
     parseStructuredTaskArtifactTaskId
 } from '../../core/task-ids';
 import {
@@ -27,6 +27,7 @@ import {
 } from './cleanup-filesystem-utils';
 import type { CleanupItem } from './cleanup-types';
 import type { RuntimeCleanupCollectorKey, RuntimeCleanupStandardPaths } from './runtime-cleanup-ownership';
+import { hasConsistentReviewArtifactTaskId } from './cleanup-review-artifact-ownership';
 
 export interface RuntimeRetentionCandidateSelection {
     previewCandidates: CleanupItem[];
@@ -87,7 +88,7 @@ function parseMarkdownWorkingPlanTaskId(fileName: string): string | null {
         return null;
     }
     const taskId = fileName.slice(0, -'.md'.length).trim();
-    return /^T-\d+(?:-[A-Za-z0-9]+)*$/u.test(taskId) && isCanonicalTaskId(taskId) ? taskId : null;
+    return isCanonicalTaskId(taskId) ? taskId : null;
 }
 
 interface TaskArtifactInventoryCollectorOptions {
@@ -98,6 +99,7 @@ interface TaskArtifactInventoryCollectorOptions {
     taskIdFilter?: ReadonlySet<string>;
     expectedKind: 'file' | 'directory';
     activeTaskMatch?: 'exact' | 'case-insensitive';
+    rejectSymbolicLinks?: boolean;
 }
 
 function collectTaskArtifactInventoryEntries(options: TaskArtifactInventoryCollectorOptions): CleanupItem[] {
@@ -108,7 +110,8 @@ function collectTaskArtifactInventoryEntries(options: TaskArtifactInventoryColle
         parseTaskId,
         taskIdFilter,
         expectedKind,
-        activeTaskMatch = 'exact'
+        activeTaskMatch = 'exact',
+        rejectSymbolicLinks = false
     } = options;
     const items: CleanupItem[] = [];
     const activeTaskIdsLower = activeTaskMatch === 'case-insensitive'
@@ -130,7 +133,17 @@ function collectTaskArtifactInventoryEntries(options: TaskArtifactInventoryColle
             continue;
         }
         const entryPath = path.join(dirPath, entry);
-        const stat = pathStat(entryPath);
+        let stat: fs.Stats | null;
+        if (rejectSymbolicLinks) {
+            try {
+                stat = fs.lstatSync(entryPath);
+            } catch {
+                continue;
+            }
+            if (stat.isSymbolicLink()) continue;
+        } else {
+            stat = pathStat(entryPath);
+        }
         if (!stat) {
             continue;
         }
@@ -169,18 +182,18 @@ function collectTaskReviewArtifactsInventory(
     const indexedTaskIdsByFileName = new Map(
         rebuildIndex(reviewsDir).entries.map((entry) => [entry.fileName, entry.taskId])
     );
+    const activeTaskIdsLower = new Set(Array.from(activeTaskIds, (taskId) => taskId.toLowerCase()));
 
     for (const entry of entries) {
-        const activeTaskId = parseActiveReviewArtifactTaskId(entry, activeTaskIds);
-        if (activeTaskId) {
-            continue;
-        }
         const entryPath = path.join(reviewsDir, entry);
         const taskId = indexedTaskIdsByFileName.get(entry) || null;
-        if (!taskId) {
+        if (!taskId || activeTaskIdsLower.has(taskId.toLowerCase())) {
             continue;
         }
         if (taskIdFilter && !taskIdFilter.has(taskId)) {
+            continue;
+        }
+        if (!hasConsistentReviewArtifactTaskId(entryPath, taskId)) {
             continue;
         }
         try {
@@ -337,6 +350,28 @@ function collectTaskManualValidationArtifactsInventory(
     });
 }
 
+function collectTaskCompactArtifactsInventory(
+    compactDir: string,
+    activeTaskIds: ReadonlySet<string>,
+    taskIdFilter?: ReadonlySet<string>
+): CleanupItem[] {
+    try {
+        containedDirectory(path.dirname(compactDir), 'compact');
+    } catch {
+        return [];
+    }
+    return collectTaskArtifactInventoryEntries({
+        dirPath: compactDir,
+        category: 'compact',
+        activeTaskIds,
+        taskIdFilter,
+        parseTaskId: (entry) => entry,
+        expectedKind: 'directory',
+        activeTaskMatch: 'case-insensitive',
+        rejectSymbolicLinks: true
+    });
+}
+
 function collectTaskLedgerArtifactsInventory(
     taskLedgerDir: string,
     activeTaskIds: ReadonlySet<string>,
@@ -413,6 +448,8 @@ function collectTaskTmpArtifactsInventory(
 const TASK_SCOPED_ARTIFACT_COLLECTORS = Object.freeze({
     'manual-validation-task-root': ({ standardPaths, activeTaskIds, taskIdFilter }: TaskScopedCollectorContext) =>
         collectTaskManualValidationArtifactsInventory(standardPaths.manualValidationDir, activeTaskIds, taskIdFilter),
+    'compact-task-root': ({ standardPaths, activeTaskIds, taskIdFilter }: TaskScopedCollectorContext) =>
+        collectTaskCompactArtifactsInventory(standardPaths.compactDir, activeTaskIds, taskIdFilter),
     'reviews-task-artifacts': ({ standardPaths, activeTaskIds, taskIdFilter }: TaskScopedCollectorContext) =>
         collectTaskReviewArtifactsInventory(standardPaths.reviewsDir, activeTaskIds, taskIdFilter),
     'task-events-task-artifacts': ({ standardPaths, activeTaskIds, taskIdFilter }: TaskScopedCollectorContext) =>

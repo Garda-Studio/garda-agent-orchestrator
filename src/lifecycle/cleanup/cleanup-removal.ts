@@ -1,7 +1,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { containedDirectory } from '../../core/compact/store-paths';
 import { cleanupStaleTaskEventLocks, scanTaskEventLocks } from '../../gate-runtime/task-events';
 import { isCanonicalTaskId } from '../../core/task-ids';
+import { withFilesystemLock } from '../../gate-runtime/task-events-locking';
 import { LIFECYCLE_OPERATION_LOCK_DIR_NAME } from '../lock/lifecycle-lock';
 import { ensureWithinRoot, removePathRecursive } from '../generic-utils';
 import {
@@ -33,6 +35,35 @@ export interface ProcessCleanupCandidatesResult {
     skipped: CleanupItem[];
     errors: Array<{ path: string; message: string }>;
     totalFreedBytes: number;
+}
+
+const COMPACT_CLEANUP_LOCK_TIMEOUT_MS = 50;
+
+function removeCleanupCandidate(item: CleanupItem, safePath: string, runtimeRoot?: string): void {
+    const remove = (): void => {
+        const stat = fs.statSync(safePath);
+        if (stat.isDirectory()) removePathRecursive(safePath);
+        else fs.unlinkSync(safePath);
+    };
+    if (item.category !== 'compact') {
+        remove();
+        return;
+    }
+    if (!runtimeRoot || path.dirname(safePath) !== path.resolve(runtimeRoot, 'compact') || !isCanonicalTaskId(path.basename(safePath))) {
+        throw new Error('Compact cleanup requires an exact task subtree inside the runtime compact root.');
+    }
+    withFilesystemLock(path.join(runtimeRoot, 'compact.lock'), {
+        timeoutMs: COMPACT_CLEANUP_LOCK_TIMEOUT_MS,
+        requireKnownDeadOwner: true,
+        allowForeignHostStaleRecovery: false,
+        ownerLabel: 'cleanup-compact'
+    }, () => {
+        containedDirectory(runtimeRoot, 'compact');
+        ensureWithinRoot(path.join(runtimeRoot, 'compact'), safePath, 'Compact cleanup candidate');
+        const stat = fs.lstatSync(safePath);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Compact cleanup candidate is no longer an unlinked directory.');
+        remove();
+    });
 }
 
 export function processCleanupCandidates(
@@ -69,12 +100,7 @@ export function processCleanupCandidates(
         }
 
         try {
-            const stat = fs.statSync(safePath);
-            if (stat.isDirectory()) {
-                removePathRecursive(safePath);
-            } else {
-                fs.unlinkSync(safePath);
-            }
+            removeCleanupCandidate(item, safePath, runtimeRoot);
             removed.push(item);
             totalFreedBytes += item.sizeBytes;
         } catch (error: unknown) {

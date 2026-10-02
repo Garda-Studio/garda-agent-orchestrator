@@ -19,6 +19,14 @@ export const RESERVED_TASK_EVENT_TIMELINE_NAMES = new Set<string>([
 // Known artifact type suffixes used to split task-id from artifact-type.
 // Ordered longest-first so greedy suffix matching selects the right boundary.
 export const KNOWN_REVIEW_ARTIFACT_SUFFIXES: readonly string[] = Object.freeze([
+    '-quality-checklist-answers.json',
+    '-coherent-cycle-restart.json',
+    '-review-cycle-restart.json',
+    '-final-user-report.md',
+    '-quality-checklist.json',
+    '-scoped-summary.json',
+    '-scoped-summary.md',
+    '-task-plan.json',
     '-review-remediation-cycle.json',
     '-review-cycle-auto-split-prompt.md',
     '-strict-decomposition-decision.json',

@@ -28,6 +28,7 @@ export type RuntimeCleanupSharedSideEffectAction =
 
 export type RuntimeCleanupCollectorKey =
     | 'manual-validation-task-root'
+    | 'compact-task-root'
     | 'reviews-task-artifacts'
     | 'task-events-task-artifacts'
     | 'plans-task-markdown'
@@ -68,6 +69,7 @@ export interface RuntimeCleanupCollectorContract {
 
 export const TASK_SCOPED_RUNTIME_CANDIDATE_CATEGORIES = Object.freeze([
     'manual-validation',
+    'compact',
     'reviews',
     'task-events',
     'plans',
@@ -80,6 +82,7 @@ export type TaskScopedRuntimeCandidateCategory = typeof TASK_SCOPED_RUNTIME_CAND
 
 export interface RuntimeCleanupStandardPaths {
     manualValidationDir: string;
+    compactDir: string;
     reviewsDir: string;
     taskEventsDir: string;
     plansDir: string;
@@ -117,6 +120,24 @@ export const RUNTIME_CLEANUP_OWNERSHIP_ENTRIES = Object.freeze([
             'runtime/manual-validation/<task-id>/review-evidence.json',
             'runtime/manual-validation/<task-id>/full-suite-retry-evidence.json'
         ]
+    },
+    {
+        id: 'compact-task-root',
+        location: 'runtime/compact/<task-id>/',
+        ownership: 'task-scoped',
+        selectionUnit: 'task-subtree',
+        candidateCategory: 'compact',
+        collectorKey: 'compact-task-root',
+        taskLocator: 'Canonical task-id directory name owns retained command output.',
+        taskPurgeMode: 'delete-owned-artifacts',
+        retentionMode: 'task-age-or-count',
+        sharedSideEffects: [],
+        notes: [
+            'Remove the selected task subtree without retaining a compact tombstone.',
+            'Confirmed removal must acquire runtime/compact.lock so cooperating readers and writers cannot overlap deletion.',
+            'The shared compact lock and unrelated task output are not task-owned deletion candidates.'
+        ],
+        examples: ['runtime/compact/<task-id>/<capture-ref>/manifest.json']
     },
     {
         id: 'plans-task-markdown',
@@ -539,6 +560,7 @@ export function listRuntimeCleanupSideEffectActionsForRemovedCategories(
 export function resolveRuntimeCleanupStandardPaths(runtimeDir: string): RuntimeCleanupStandardPaths {
     return {
         manualValidationDir: path.join(runtimeDir, 'manual-validation'),
+        compactDir: path.join(runtimeDir, 'compact'),
         reviewsDir: path.join(runtimeDir, 'reviews'),
         taskEventsDir: path.join(runtimeDir, 'task-events'),
         plansDir: path.join(runtimeDir, 'plans'),

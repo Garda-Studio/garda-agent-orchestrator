@@ -25,6 +25,7 @@ describe('runtime cleanup ownership contract', () => {
 
         for (const requiredId of [
             'manual-validation-task-root',
+            'compact-task-root',
             'plans-task-markdown',
             'project-memory-task-artifacts',
             'project-memory-bootstrap-report',
@@ -108,6 +109,7 @@ describe('runtime cleanup ownership contract', () => {
     it('drives task purge category and side-effect decisions from the ownership map', () => {
         assert.deepEqual(listTaskPurgeableRuntimeCandidateCategories(), [
             'manual-validation',
+            'compact',
             'reviews',
             'task-events',
             'plans',
@@ -140,6 +142,7 @@ describe('runtime cleanup ownership contract', () => {
 
         assert.deepEqual(contracts.map((contract) => contract.key), [
             'manual-validation-task-root',
+            'compact-task-root',
             'plans-task-markdown',
             'project-memory-task-artifacts',
             'reviews-task-artifacts',

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Recognize current and historical task-owned review artifacts, canonical JSON and semantic Markdown plans with exact nested task ownership. Preserve invalid or conflicting JSON identities, including JSON reports stored as Markdown, and shared files during inventory and ordinary/forensic GC storage policies. Compression preserves existing staging and gzip destinations. Preserve active tasks and linked compact namespaces or task roots, and include compact output in task-scoped purge under the existing compact writer lock.
+
 - Preserve phase-scoped resume instructions in generated provider bridges. Add fresh-process continuation regressions and reproducible stdout and instruction-recipe measurements, retaining implementation reload, stale-evidence fallback and fresh reviewer protocols.
 
 - Select advisory controller instruction reads by the current preprompt continuation phase. Defer implementation skills during verified review and closeout, restore implementation context before edits, retain unknown-state fallback and mandatory gate protocols, and keep fresh reviewer rule bundles empty.
