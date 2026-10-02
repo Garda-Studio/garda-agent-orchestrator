@@ -30,6 +30,13 @@ import {
     REVIEW_LAUNCH_NAVIGATION_INSTRUCTION
 } from './content-builders-shared';
 
+const PHASE_SCOPED_RESUME_GUIDANCE = `## Phase-Scoped Resume Context
+- Use the advisory \`context_selection.controller_read_set\` from \`preprompt task\` for the current continuation phase. Keep canonical routing, core rules, the current task row and Notes, frozen attached-plan criteria, and required linked references.
+- Before acting, rerun \`context_selection.navigator_command\`; unknown or stale navigator state requires implementation context. A missing section requires the full source and implementation instructions before continuing.
+- Before any source or test edit, load the complete \`before_code_edit_read_set\` and the selected implementation skills with their required references. Historical \`RULE_PACK_LOADED\` evidence is not current session knowledge.
+- Fresh reviewer repository-rule read sets remain empty. Launch a fresh isolated reviewer with the exact prepared launch input; preserve its required skills, generated context, scoped diff, and evidence.
+- Preserve scope, approvals, mandatory gates, compile and suite validation, reviewer launch and receipt checks, and the canonical audit and verbatim final-report order.`;
+
 export function buildProviderOrchestratorAgentContent(
     providerLabel: string,
     canonicalFile: string,
@@ -75,6 +82,8 @@ Required:
 22. Fabricated review artifacts, receipts, routing metadata, telemetry, task statuses, or commit-readiness claims are critical workflow violations.
 23. If asked about workflow misconduct or integrity defects, disclose the full known set from the current run, not only the latest discovered issue.
 
+${PHASE_SCOPED_RESUME_GUIDANCE}
+
 ${buildTaskStartSnippetSection(runtimeProviderLabel, bridgePath)}
 
 Canonical workflow skill: \`${resolveBundleName()}/live/skills/orchestration/SKILL.md\`
@@ -100,6 +109,8 @@ Treat \`.agents/workflows/start-task.md\` as the shared router for every provide
 Use compact command protocol from \`40-commands.md\`: first \`scan\`, then \`inspect\`, then verbose \`debug\` only by exception.
 Do not execute task or review workflow with provider-default reviewer agents that bypass this bridge.
 Use \`${buildBundleNextStepSnippet()}\` as the default task loop in deployed workspaces, or \`${buildSourceNextStepSnippet()}\` in this source checkout. Run it before the first gate, after every suggested command, and after any gate failure.
+
+${PHASE_SCOPED_RESUME_GUIDANCE}
 
 ## Non-Negotiable Priorities
 - Honest execution and strict workflow compliance outrank speed, autonomy, context preservation, and token economy.

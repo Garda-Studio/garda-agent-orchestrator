@@ -4,15 +4,36 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { runInstall } from '../../../src/materialization/install';
-import { ANTIGRAVITY_INDEPENDENT_REVIEW_UNAVAILABLE_STOP_INSTRUCTION } from '../../../src/materialization/content-builders';
+import {
+    ANTIGRAVITY_INDEPENDENT_REVIEW_UNAVAILABLE_STOP_INSTRUCTION,
+    buildProviderOrchestratorAgentContent
+} from '../../../src/materialization/content-builders';
 import {
     findRepoRoot,
     setupTestWorkspace,
     writeInitAnswers
 } from './install-workspace-builder';
 
+function assertPhaseResumeContract(content: string): void {
+    assert.match(content, /context_selection\.controller_read_set/);
+    assert.match(content, /context_selection\.navigator_command/);
+    assert.match(content, /before_code_edit_read_set/);
+    assert.match(content, /unknown or stale.*implementation context/);
+    assert.match(content, /missing section.*full source/);
+    assert.match(content, /RULE_PACK_LOADED.*session knowledge/);
+    assert.match(content, /reviewer repository-rule read sets remain empty/);
+    assert.match(content, /exact prepared launch input/);
+    assert.match(content, /canonical audit and verbatim final-report order/);
+}
+
 describe('runInstall — provider bridges and start-task router', () => {
     const repoRoot = findRepoRoot();
+
+    it('keeps the resume contract in the Windsurf and Junie generated profiles', () => {
+        for (const [label, bridge] of [['Windsurf', '.windsurf/agents/orchestrator.md'], ['Junie', '.junie/agents/orchestrator.md']]) {
+            assertPhaseResumeContract(buildProviderOrchestratorAgentContent(label, 'AGENTS.md', bridge));
+        }
+    });
 
     it('creates provider bridges when GitHubCopilot is active', () => {
         const { projectRoot, bundleRoot } = setupTestWorkspace(repoRoot);
@@ -41,6 +62,7 @@ describe('runInstall — provider bridges and start-task router', () => {
             assert.ok(fs.existsSync(path.join(projectRoot, '.github', 'agents', 'code-review.md')));
             assert.ok(fs.existsSync(path.join(projectRoot, '.github', 'agents', 'reviewer.md')));
             const orchestratorBridge = fs.readFileSync(path.join(projectRoot, '.github', 'agents', 'orchestrator.md'), 'utf8');
+            assertPhaseResumeContract(orchestratorBridge);
             const apiBridge = fs.readFileSync(path.join(projectRoot, '.github', 'agents', 'api-review.md'), 'utf8');
             const infraBridge = fs.readFileSync(path.join(projectRoot, '.github', 'agents', 'infra-review.md'), 'utf8');
             assert.ok(orchestratorBridge.includes('dependent downstream reviewer'));
@@ -130,6 +152,7 @@ describe('runInstall — provider bridges and start-task router', () => {
             assert.ok(fs.existsSync(bridgePath));
             assert.ok(fs.existsSync(workflowPath));
             const bridge = fs.readFileSync(bridgePath, 'utf8');
+            assertPhaseResumeContract(bridge);
             const workflow = fs.readFileSync(workflowPath, 'utf8');
             assert.ok(bridge.includes('.agents/workflows/start-task.md'));
             assert.ok(bridge.includes(ANTIGRAVITY_INDEPENDENT_REVIEW_UNAVAILABLE_STOP_INSTRUCTION));
