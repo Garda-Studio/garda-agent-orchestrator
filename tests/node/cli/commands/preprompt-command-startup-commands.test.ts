@@ -223,8 +223,16 @@ test('preprompt advisory JSON reads reject foreign tasks, malformed payloads and
     const repoRoot = makeNavigatorRepo();
     try {
         const filePath = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews', `${NAVIGATOR_TASK_ID}-preflight.json`);
+        const matchingPayload = { task_id: NAVIGATOR_TASK_ID };
+        const atLimit = JSON.stringify(matchingPayload).padEnd(1024 * 1024, ' ');
+        assert.equal(Buffer.byteLength(atLimit, 'utf8'), 1024 * 1024);
+        fs.writeFileSync(filePath, atLimit, 'utf8');
+        assert.deepEqual(readJsonArtifactIfExists(filePath, { repoRoot, taskId: NAVIGATOR_TASK_ID })?.payload, matchingPayload);
+        const oversized = `${atLimit} `;
+        assert.equal(Buffer.byteLength(oversized, 'utf8'), 1024 * 1024 + 1);
+        assert.deepEqual(JSON.parse(oversized), matchingPayload);
         const payloads = [];
-        for (const content of [JSON.stringify({ task_id: 'T-FOREIGN' }), 'null', '[]', '{invalid', ' '.repeat(1024 * 1024 + 1)]) {
+        for (const content of [JSON.stringify({ task_id: 'T-FOREIGN' }), 'null', '[]', '{invalid', oversized]) {
             fs.writeFileSync(filePath, content, 'utf8');
             const before = snapshotBriefInputs(repoRoot);
             payloads.push(readJsonArtifactIfExists(filePath, { repoRoot, taskId: NAVIGATOR_TASK_ID }));
