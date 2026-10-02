@@ -5,6 +5,7 @@
 ### Review And Completion Fixes
 
 - Keep review-cycle restart events bounded by storing large delta classifications in immutable snapshots with hash-bound references and authenticated reads.
+- Restore pending grouped review follow-ups after authenticated unchanged parent-cycle review reuse, authenticating every lane's historical sources and obligations while preserving immutable findings, failed-attempt provenance, and active child ownership; write blocked diagnostics separately without following unsafe file links.
 - Reject cyclic and self-referencing dependencies in existing task plans while preserving independent steps and valid directed acyclic graphs.
 - Preserve explicitly required review lanes when profile defaults disable them, including immutable lane binding and dependency graph reconstruction.
 - Bind documentation-only and documentation-with-tests review coverage, freshness, and reuse to reviewed content and frozen classification.

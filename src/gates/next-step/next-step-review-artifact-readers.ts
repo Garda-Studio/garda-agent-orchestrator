@@ -68,6 +68,13 @@ import {
     validateReviewFindingsDispositionEvidence
 } from '../review/review-findings-disposition-evidence';
 import {
+    buildReviewFindingsDispositionArtifact,
+    getReviewFindingsDispositionArtifactPath,
+    getReviewFindingsDispositionArtifactSnapshotPath,
+    type ReviewFindingsDispositionArtifact
+} from '../review/review-findings-disposition-artifact';
+import { sha256RedactedJsonPayload } from '../../core/redaction';
+import {
     resolveReviewCoverageEvidenceSnapshotCommit,
     type ReviewCoverageContract
 } from '../review/review-coverage-ledger';
@@ -320,7 +327,7 @@ function resolveReviewFollowUpMaterializationMode(
         : 'per_finding';
 }
 
-interface CurrentReviewFollowUpMaterializationBinding {
+export interface CurrentReviewFollowUpMaterializationBinding {
     mode: ReviewFollowUpMaterializationMode;
     snapshotHash: string;
     cycleId: string;
@@ -422,7 +429,7 @@ export interface AuthenticatedReviewFollowUpScope {
     diagnostics: string[];
 }
 
-function resolveFollowUpArtifactPath(repoRoot: string, rawPath: unknown): string | null {
+export function resolveFollowUpArtifactPath(repoRoot: string, rawPath: unknown): string | null {
     const candidate = String(rawPath || '').trim();
     if (!candidate) {
         return null;
@@ -553,7 +560,7 @@ function reviewInvocationMatchesReceiptProvenance(options: {
     });
 }
 
-function resolveAuthenticatedReviewReceiptSnapshot(options: {
+export function resolveAuthenticatedReviewReceiptSnapshot(options: {
     repoRoot: string;
     taskId: string;
     reviewType: string;
@@ -624,7 +631,9 @@ function resolveAuthenticatedReviewReceiptSnapshot(options: {
                 isPlainRecord(event.integrity) ? event.integrity.task_sequence : null
             );
             const currentCompileBoundary = latestSuccessfulCompileBefore(window.events, reviewRecordedSequence);
-            if (currentCompileBoundary?.timestamp !== options.currentMaterializationBinding.compileTimestamp) {
+            const latestCompileBoundary = latestSuccessfulCompileBefore(window.events, Number.MAX_SAFE_INTEGER);
+            if (currentCompileBoundary?.timestamp !== options.currentMaterializationBinding.compileTimestamp
+                || currentCompileBoundary?.taskSequence !== latestCompileBoundary?.taskSequence) {
                 diagnostics.push(
                     `Grouped ${options.reviewType} follow-up REVIEW_RECORDED evidence is not bound to the current compile cycle.`
                 );
@@ -774,7 +783,7 @@ function resolveAuthenticatedReviewReceiptSnapshot(options: {
                     || latestSuccessfulCompileBefore(
                         window.events,
                         reviewerProvenance.task_sequence
-                    )?.timestamp !== options.currentMaterializationBinding.compileTimestamp
+                    )?.taskSequence !== latestCompileBoundary?.taskSequence
                 )
             ) {
                 diagnostics.push(
@@ -913,7 +922,7 @@ function collectValidatedFollowUpEvidenceLocations(
     };
 }
 
-function extractParentFollowUpArtifactPaths(notes: string, childTaskId: string): string[] {
+export function extractParentFollowUpArtifactPaths(notes: string, childTaskId: string): string[] {
     const artifactPaths = new Set<string>();
     const matcher = /Review follow-up tasks materialized:\s*([^;\r\n]+);\s*artifact\s+`([^`\r\n]+)`\./giu;
     for (const match of String(notes || '').matchAll(matcher)) {
@@ -925,12 +934,13 @@ function extractParentFollowUpArtifactPaths(notes: string, childTaskId: string):
     return [...artifactPaths].sort();
 }
 
-function discoverCurrentGroupedFollowUpArtifactPaths(options: {
+export function discoverGroupedFollowUpArtifactPaths(options: {
     repoRoot: string;
     reviewsRoot: string;
     parentTaskId: string;
     childTaskId: string;
-    currentMaterializationBinding: CurrentReviewFollowUpMaterializationBinding;
+    snapshotHash: string;
+    allowUnmaterializedReviewType?: string;
 }): { paths: string[]; diagnostics: string[] } {
     let entries: fs.Dirent[];
     try {
@@ -938,55 +948,223 @@ function discoverCurrentGroupedFollowUpArtifactPaths(options: {
     } catch (error) {
         return {
             paths: [],
-            diagnostics: [
-                `Grouped follow-up artifact discovery failed: ${error instanceof Error ? error.message : String(error)}`
-            ]
+            diagnostics: [`Grouped follow-up artifact discovery failed: ${error instanceof Error ? error.message : String(error)}`]
         };
     }
     const prefix = `${options.parentTaskId}-`;
-    const candidates = entries.filter((entry) => (
-        entry.isFile()
-        && entry.name.startsWith(prefix)
-        && entry.name.endsWith('-findings-follow-ups.json')
-    ));
-    if (candidates.length > 128) {
-        return {
-            paths: [],
-            diagnostics: [`Grouped follow-up artifact discovery exceeded the bounded 128-candidate limit.`]
-        };
-    }
+    const nativeNames = new Set(entries.filter((entry) => (
+        entry.name.startsWith(prefix) && entry.name.endsWith('-findings-follow-ups.json')
+    )).map((entry) => entry.name));
+    const candidateNames = new Set(nativeNames);
     const paths: string[] = [];
-    for (const candidate of candidates) {
-        const artifactPath = resolveFollowUpArtifactPath(
-            options.repoRoot,
-            path.join(options.reviewsRoot, candidate.name)
-        );
-        const artifact = artifactPath ? readReviewArtifactJsonRecord(artifactPath) : null;
-        const materializationPolicy = isPlainRecord(artifact?.materialization_policy)
-            ? artifact.materialization_policy
-            : null;
-        const items = Array.isArray(artifact?.items) ? artifact.items : [];
-        const bindsChild = items.some((item) => (
-            isPlainRecord(item)
-            && item.action === 'create_follow_up'
-            && item.task_id === options.childTaskId
-        ));
-        if (
-            artifactPath
-            && artifact?.task_id === options.parentTaskId
-            && materializationPolicy?.mode === 'grouped_by_parent'
-            && normalizeSha256(materializationPolicy.snapshot_hash)
-                === options.currentMaterializationBinding.snapshotHash
-            && normalizeSha256(materializationPolicy.cycle_id)
-                === options.currentMaterializationBinding.cycleId
-            && normalizeSha256(materializationPolicy.group_fingerprint)
-                === options.currentMaterializationBinding.groupFingerprint
-            && bindsChild
-        ) {
-            paths.push(path.resolve(artifactPath));
+    const diagnostics: string[] = [];
+    const currentBinding = resolveCurrentReviewFollowUpMaterializationBinding(
+        options.repoRoot, options.reviewsRoot, options.parentTaskId
+    );
+    const queueIndex = readTaskQueueFollowUpFingerprintIndex(options.repoRoot, options.parentTaskId);
+    if (!currentBinding || currentBinding.mode !== 'grouped_by_parent'
+        || currentBinding.snapshotHash !== options.snapshotHash || !queueIndex) {
+        return { paths: [], diagnostics: ['Grouped artifact discovery has no current authenticated materialization binding.'] };
+    }
+    const eventsRoot = joinOrchestratorPath(options.repoRoot, path.join('runtime', 'task-events'));
+    const integrity = inspectTaskEventFile(path.join(eventsRoot, `${options.parentTaskId}.jsonl`), options.parentTaskId);
+    const window = readTaskTimelineEventWindow(eventsRoot, options.parentTaskId);
+    const compile = latestSuccessfulCompileBefore(window.events, Number.MAX_SAFE_INTEGER);
+    if (integrity.violations.length > 0 || !['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(integrity.status)
+        || window.invalidJson || !compile || compile.timestamp !== currentBinding.compileTimestamp) {
+        return { paths: [], diagnostics: ['Grouped lane discovery requires an intact current compile and review timeline.'] };
+    }
+    // Integrity-bound current receipt events establish expected lanes even when
+    // mutable artifact files and both TASK.md registries have been erased.
+    for (const event of window.events) {
+        const details = isPlainRecord(event.details) ? event.details : null;
+        const sequence = Number(isPlainRecord(event.integrity) ? event.integrity.task_sequence : null);
+        const reviewType = String(details?.review_type ?? details?.reviewType ?? '').trim().toLowerCase();
+        if (String(event.event_type || '').trim().toUpperCase() === 'REVIEW_RECORDED'
+            && String((event as unknown as Record<string, unknown>).outcome || '').trim().toUpperCase() === 'PASS'
+            && sequence > compile.taskSequence
+            && String(details?.task_id ?? details?.taskId ?? '').trim() === options.parentTaskId
+            && /^[a-z][a-z0-9_-]*$/u.test(reviewType)) {
+            candidateNames.add(`${prefix}${reviewType}-findings-follow-ups.json`);
         }
     }
-    return { paths: [...new Set(paths)].sort(), diagnostics: [] };
+    if (candidateNames.size > 128) {
+        return { paths: [], diagnostics: ['Grouped follow-up artifact discovery exceeded the bounded 128-candidate limit.'] };
+    }
+    for (const candidateName of [...candidateNames].sort()) {
+        const reviewType = candidateName.slice(prefix.length, -'-findings-follow-ups.json'.length);
+        const candidatePath = path.join(options.reviewsRoot, candidateName);
+        const artifactPath = resolveFollowUpArtifactPath(options.repoRoot, candidatePath);
+        const artifact = artifactPath ? readReviewArtifactJsonRecord(artifactPath) : null;
+        const receiptPath = resolveFollowUpArtifactPath(
+            options.repoRoot, path.join(options.reviewsRoot, `${options.parentTaskId}-${reviewType}-receipt.json`)
+        );
+        const receiptSha256 = receiptPath ? readReviewArtifactFileSha256(receiptPath) : null;
+        const receiptResolution = receiptPath && receiptSha256 ? resolveAuthenticatedReviewReceiptSnapshot({
+            repoRoot: options.repoRoot, taskId: options.parentTaskId, reviewType,
+            followUpArtifact: { source_receipt: { receipt_path: receiptPath, receipt_sha256: receiptSha256 } },
+            currentMaterializationBinding: currentBinding
+        }) : null;
+        const receiptEvidence = receiptResolution?.evidence;
+        if (!/^[a-z][a-z0-9_-]*$/u.test(reviewType) || !receiptEvidence || !receiptPath) {
+            diagnostics.push(`Native grouped ${reviewType} lane has no authenticated current or reused receipt source.`);
+            diagnostics.push(...(receiptResolution?.diagnostics || []));
+            continue;
+        }
+        // Reconstruct missing-file obligations from authenticated receipt sources,
+        // never from mutable artifact summaries or an empty directory listing.
+        const sources = resolveAuthenticatedReviewFollowUpSources({
+            repoRoot: options.repoRoot, parentTaskId: options.parentTaskId, reviewType,
+            followUpArtifact: artifact || {
+                source_validation: {
+                    ...(isPlainRecord(receiptEvidence.receipt.review_findings_validation)
+                        ? receiptEvidence.receipt.review_findings_validation : {}),
+                    status: 'accepted', accepted: true
+                },
+                source_disposition: receiptEvidence.receipt.review_findings_disposition_artifact
+            },
+            followUpArtifactPath: artifactPath || candidatePath, receiptEvidence,
+            currentMaterializationBinding: currentBinding
+        });
+        if (!sources.dispositionArtifact || !sources.dispositionArtifactSha256) {
+            diagnostics.push(`Native grouped ${reviewType} lane obligations cannot be reconstructed from its authenticated sources.`);
+            diagnostics.push(...sources.diagnostics);
+            continue;
+        }
+        const deferredCount = sources.dispositionArtifact.summary.follow_up_pending_count;
+        if (!artifactPath || !artifact) {
+            const freshIncomingLane = options.allowUnmaterializedReviewType === reviewType
+                && !normalizeReviewReceiptEvidenceFields(receiptEvidence.receipt).reusedExistingReview;
+            if (!nativeNames.has(candidateName) && (deferredCount === 0 || freshIncomingLane)) continue;
+            diagnostics.push(`Native grouped ${reviewType} follow-up artifact is missing, unsafe, or unreadable despite authenticated lane obligations.`);
+            continue;
+        }
+        const materializationPolicy = isPlainRecord(artifact.materialization_policy) ? artifact.materialization_policy : null;
+        const sourceReceipt = isPlainRecord(artifact.source_receipt) ? artifact.source_receipt : null;
+        const sourceReceiptPath = resolveFollowUpArtifactPath(options.repoRoot, sourceReceipt?.receipt_path);
+        const sourceReceiptSha256 = normalizeSha256(sourceReceipt?.receipt_sha256);
+        if (artifact.task_id !== options.parentTaskId || artifact.review_type !== reviewType
+            || materializationPolicy?.mode !== 'grouped_by_parent'
+            || normalizeSha256(materializationPolicy.snapshot_hash) !== options.snapshotHash
+            || !sourceReceiptPath || path.resolve(sourceReceiptPath) !== path.resolve(receiptPath)
+            || (sourceReceiptSha256 !== receiptEvidence.receiptSha256
+                && sourceReceiptSha256 !== normalizeReviewReceiptEvidenceFields(receiptEvidence.receipt).reusedFromReceiptSha256)) {
+            diagnostics.push(`Native grouped ${reviewType} follow-up artifact has inconsistent ownership metadata or receipt binding.`);
+            continue;
+        }
+        const items = Array.isArray(artifact.items) ? artifact.items : [];
+        const childIds = new Set(items.filter((item) => isPlainRecord(item) && item.action === 'create_follow_up')
+            .map((item) => String((item as Record<string, unknown>).task_id || '').trim()));
+        const [boundChildId] = [...childIds];
+        const queueGroup = queueIndex.groupedFingerprintByTask.get(boundChildId);
+        const artifactGroup = normalizeSha256(materializationPolicy.group_fingerprint);
+        if ((queueGroup && queueGroup !== artifactGroup && queueGroup !== currentBinding.groupFingerprint)
+            || !followUpArtifactMatchesCurrentTaskQueue({
+                artifact, dispositionArtifact: sources.dispositionArtifact as unknown as Record<string, unknown>,
+                dispositionArtifactSha256: sources.dispositionArtifactSha256,
+                repoRoot: options.repoRoot, taskId: options.parentTaskId, reviewType,
+                expectedFollowUpCount: deferredCount, materializationMode: 'grouped_by_parent',
+                followUpArtifactPath: artifactPath, taskQueueFollowUpFingerprintIndex: queueIndex,
+                queueGroupFingerprint: queueGroup
+            })) {
+            diagnostics.push(`Native grouped ${reviewType} follow-up obligations do not match their authenticated sources and child ownership.`);
+            continue;
+        }
+        if (childIds.has(options.childTaskId)) paths.push(path.resolve(artifactPath));
+    }
+    return { paths: [...new Set(paths)].sort(), diagnostics };
+}
+
+export function resolveAuthenticatedReviewFollowUpSources(options: {
+    repoRoot: string;
+    parentTaskId: string;
+    reviewType: string;
+    followUpArtifact: Record<string, unknown>;
+    followUpArtifactPath: string;
+    receiptEvidence: AuthenticatedReviewReceiptSnapshot;
+    currentMaterializationBinding: CurrentReviewFollowUpMaterializationBinding;
+}): {
+    validationArtifact: ReviewFindingsValidationArtifact | null;
+    dispositionArtifact: ReviewFindingsDispositionArtifact | null;
+    dispositionArtifactSha256: string | null;
+    diagnostics: string[];
+} {
+    const rejected = (diagnostics: string[]) => ({
+        validationArtifact: null, dispositionArtifact: null, dispositionArtifactSha256: null, diagnostics
+    });
+    const receiptEvidence = options.receiptEvidence;
+    const fields = normalizeReviewReceiptEvidenceFields(receiptEvidence.receipt);
+    const validation = validateReviewFindingsValidationArtifactForReceipt({
+        receipt: receiptEvidence.receipt,
+        reviewArtifactPath: receiptEvidence.reviewArtifactPath,
+        expectedTaskId: options.parentTaskId,
+        expectedReviewType: options.reviewType,
+        expectedReviewOutputSha256: recordString(receiptEvidence.receipt, 'review_output_sha256'),
+        expectedReviewArtifactSha256: receiptEvidence.reviewArtifactSha256,
+        expectedReviewContextPath: fields.reusedExistingReview ? null : receiptEvidence.reviewContextPath,
+        expectedReviewContextSha256: fields.reusedExistingReview
+            ? fields.reusedFromReviewContextSha256 : readReviewArtifactFileSha256(receiptEvidence.reviewContextPath),
+        expectedPreflightPath: fields.reusedExistingReview ? null : options.currentMaterializationBinding.preflightPath,
+        expectedPreflightSha256: fields.reusedExistingReview ? null : options.currentMaterializationBinding.preflightSha256,
+        expectedReviewTreeStateSha256: fields.reusedExistingReview
+            ? fields.reusedFromReviewTreeStateSha256 : fields.reviewTreeStateSha256,
+        expectedReviewContext: receiptEvidence.reviewContext,
+        requireAccepted: true,
+        preferSnapshot: true
+    });
+    if (!validation.valid || !validation.artifact || !validation.reference || !validation.artifact_sha256) {
+        return rejected(validation.violations);
+    }
+    const sourceValidation = isPlainRecord(options.followUpArtifact.source_validation)
+        ? options.followUpArtifact.source_validation : null;
+    if (
+        normalizePath(sourceValidation?.artifact_path) !== normalizePath(validation.reference.artifact_path)
+        || normalizeSha256(sourceValidation?.artifact_sha256) !== validation.reference.artifact_sha256
+        || normalizeSha256(sourceValidation?.validation_result_sha256) !== validation.reference.validation_result_sha256
+        || sourceValidation?.status !== 'accepted' || sourceValidation?.accepted !== true
+    ) {
+        return rejected([`${options.reviewType} follow-up validation source binding is stale or inconsistent.`]);
+    }
+    const policyResolution = resolveLockedReviewFindingPolicyFromReceiptDispositionEvidence(receiptEvidence.receipt);
+    if (policyResolution.source === 'fallback_strict') {
+        return rejected([`${options.reviewType} follow-up disposition has no locked receipt policy.`]);
+    }
+    const disposition = buildReviewFindingsDispositionArtifact({
+        taskId: options.parentTaskId, reviewType: options.reviewType,
+        validationArtifact: validation.artifact,
+        validationArtifactPath: validation.reference.artifact_path,
+        validationArtifactSha256: validation.artifact_sha256,
+        policyResolution
+    });
+    const dispositionSha256 = sha256RedactedJsonPayload(disposition);
+    const sourceDisposition = isPlainRecord(options.followUpArtifact.source_disposition)
+        ? options.followUpArtifact.source_disposition : null;
+    const receiptDisposition = isPlainRecord(receiptEvidence.receipt.review_findings_disposition_artifact)
+        ? receiptEvidence.receipt.review_findings_disposition_artifact : null;
+    const expectedDispositionPath = getReviewFindingsDispositionArtifactPath(receiptEvidence.reviewArtifactPath);
+    const expectedSnapshotPath = getReviewFindingsDispositionArtifactSnapshotPath(expectedDispositionPath, dispositionSha256);
+    const snapshotPath = resolveFollowUpArtifactPath(options.repoRoot, receiptDisposition?.snapshot_path);
+    const outputContract = isPlainRecord(receiptEvidence.receipt.review_output_contract)
+        ? receiptEvidence.receipt.review_output_contract : null;
+    if (normalizePath(receiptDisposition?.artifact_path) !== normalizePath(expectedDispositionPath)
+        || normalizeSha256(receiptDisposition?.artifact_sha256) !== dispositionSha256
+        || normalizePath(snapshotPath) !== normalizePath(expectedSnapshotPath)
+        || normalizeSha256(receiptDisposition?.snapshot_sha256) !== dispositionSha256
+        || !snapshotPath || readReviewArtifactFileSha256(snapshotPath) !== dispositionSha256
+        || normalizeSha256(receiptDisposition?.disposition_result_sha256) !== disposition.disposition_result_sha256
+        || normalizeSha256(outputContract?.disposition_artifact_sha256) !== dispositionSha256
+        || normalizeSha256(outputContract?.disposition_result_sha256) !== disposition.disposition_result_sha256
+        || sha256RedactedJsonPayload(receiptEvidence.receipt.review_findings_disposition) !== disposition.disposition_result_sha256
+        || normalizePath(sourceDisposition?.artifact_path) !== normalizePath(expectedDispositionPath)
+        || normalizeSha256(sourceDisposition?.artifact_sha256) !== dispositionSha256
+        || normalizeSha256(sourceDisposition?.disposition_result_sha256) !== disposition.disposition_result_sha256
+        || disposition.summary.fix_now_count > 0 || disposition.summary.blocking_count > 0) {
+        return rejected([`${options.reviewType} follow-up disposition source binding is stale or inconsistent.`]);
+    }
+    return {
+        validationArtifact: validation.artifact, dispositionArtifact: disposition,
+        dispositionArtifactSha256: dispositionSha256, diagnostics: []
+    };
 }
 
 function resolveAuthenticatedReviewFollowUpArtifactScope(options: {
@@ -1040,93 +1218,45 @@ function resolveAuthenticatedReviewFollowUpArtifactScope(options: {
     if (!receiptResolution.evidence) {
         return { files: [], diagnostics: receiptResolution.diagnostics };
     }
-    const receiptEvidence = receiptResolution.evidence;
-    const sourceValidation = isPlainRecord(followUpArtifact.source_validation)
-        ? followUpArtifact.source_validation
-        : null;
-    const receiptFields = normalizeReviewReceiptEvidenceFields(receiptEvidence.receipt);
-    const validation = validateReviewFindingsValidationArtifactForReceipt({
-        receipt: receiptEvidence.receipt,
-        reviewArtifactPath: receiptEvidence.reviewArtifactPath,
-        expectedTaskId: options.parentTaskId,
-        expectedReviewType: options.reviewType,
-        expectedReviewOutputSha256: recordString(receiptEvidence.receipt, 'review_output_sha256'),
-        expectedReviewArtifactSha256: receiptEvidence.reviewArtifactSha256,
-        expectedReviewContextPath: receiptFields.reusedExistingReview ? null : receiptEvidence.reviewContextPath,
-        expectedReviewContextSha256: receiptFields.reusedExistingReview
-            ? receiptFields.reusedFromReviewContextSha256
-            : readReviewArtifactFileSha256(receiptEvidence.reviewContextPath),
-        expectedPreflightPath: options.currentMaterializationBinding.preflightPath,
-        expectedPreflightSha256: options.currentMaterializationBinding.preflightSha256,
-        expectedReviewTreeStateSha256: receiptFields.reusedExistingReview
-            ? receiptFields.reusedFromReviewTreeStateSha256
-            : receiptFields.reviewTreeStateSha256,
-        expectedReviewContext: receiptEvidence.reviewContext,
-        requireAccepted: true,
-        preferSnapshot: true
+    const sources = resolveAuthenticatedReviewFollowUpSources({
+        repoRoot: options.repoRoot, parentTaskId: options.parentTaskId, reviewType: options.reviewType,
+        followUpArtifact, followUpArtifactPath: options.followUpArtifactPath,
+        receiptEvidence: receiptResolution.evidence,
+        currentMaterializationBinding: options.currentMaterializationBinding
     });
-    if (!validation.valid || !validation.artifact || !validation.reference || !validation.artifact_sha256) {
-        return { files: [], diagnostics: validation.violations };
+    if (!sources.validationArtifact || !sources.dispositionArtifact || !sources.dispositionArtifactSha256) {
+        return { files: [], diagnostics: sources.diagnostics };
     }
-    if (
-        normalizePath(sourceValidation?.artifact_path) !== normalizePath(validation.reference.artifact_path)
-        || normalizeSha256(sourceValidation?.artifact_sha256) !== validation.reference.artifact_sha256
-        || normalizeSha256(sourceValidation?.validation_result_sha256) !== validation.reference.validation_result_sha256
-        || sourceValidation?.status !== 'accepted'
-        || sourceValidation?.accepted !== true
-    ) {
-        return {
-            files: [],
-            diagnostics: [`${modeLabel} ${options.reviewType} follow-up validation source binding is stale or inconsistent.`]
-        };
-    }
+    const sourceValidation = followUpArtifact.source_validation as Record<string, unknown>;
     const dispositionEvidence = validateReviewFindingsDispositionEvidence({
-        repoRoot: options.repoRoot,
-        receipt: receiptEvidence.receipt,
-        receiptPath: receiptEvidence.receiptSnapshotPath,
-        reviewArtifactPath: receiptEvidence.reviewArtifactPath,
-        expectedTaskId: options.parentTaskId,
-        expectedReviewType: options.reviewType,
-        validationArtifact: validation.artifact,
-        validationArtifactPath: validation.reference.artifact_path,
-        validationArtifactSha256: validation.artifact_sha256,
-        policyResolution: resolveLockedReviewFindingPolicyFromReceiptDispositionEvidence(receiptEvidence.receipt),
-        expectedReceiptPath: receiptEvidence.canonicalReceiptPath,
-        expectedReceiptSha256: receiptEvidence.receiptSha256,
+        repoRoot: options.repoRoot, receipt: receiptResolution.evidence.receipt,
+        receiptPath: receiptResolution.evidence.receiptSnapshotPath,
+        reviewArtifactPath: receiptResolution.evidence.reviewArtifactPath,
+        expectedTaskId: options.parentTaskId, expectedReviewType: options.reviewType,
+        validationArtifact: sources.validationArtifact,
+        validationArtifactPath: String(sourceValidation.artifact_path),
+        validationArtifactSha256: String(sourceValidation.artifact_sha256),
+        policyResolution: resolveLockedReviewFindingPolicyFromReceiptDispositionEvidence(receiptResolution.evidence.receipt),
+        expectedReceiptPath: receiptResolution.evidence.canonicalReceiptPath,
+        expectedReceiptSha256: receiptResolution.evidence.receiptSha256,
         preferSnapshot: true,
-        taskQueueRows: [...options.taskQueueEntries.values()].map((row) => ({
-            taskId: row.taskId,
-            notes: row.notes
-        }))
+        taskQueueRows: [...options.taskQueueEntries.values()].map((row) => ({ taskId: row.taskId, notes: row.notes }))
     });
-    if (
-        !dispositionEvidence.valid
-        || !dispositionEvidence.artifact
-        || !dispositionEvidence.artifact_sha256
-        || !dispositionEvidence.follow_up_artifact_path
-        || path.resolve(dispositionEvidence.follow_up_artifact_path) !== path.resolve(options.followUpArtifactPath)
-    ) {
-        return {
-            files: [],
-            diagnostics: [
-                ...dispositionEvidence.violations,
-                ...(dispositionEvidence.follow_up_artifact_path
-                    && path.resolve(dispositionEvidence.follow_up_artifact_path) !== path.resolve(options.followUpArtifactPath)
-                    ? [`${modeLabel} ${options.reviewType} follow-up path does not match receipt-bound disposition evidence.`]
-                    : [])
-            ]
-        };
+    if (!dispositionEvidence.valid || !dispositionEvidence.follow_up_artifact_path
+        || path.resolve(dispositionEvidence.follow_up_artifact_path) !== path.resolve(options.followUpArtifactPath)) {
+        return { files: [], diagnostics: dispositionEvidence.violations };
     }
     if (!followUpArtifactMatchesCurrentTaskQueue({
         artifact: followUpArtifact,
-        dispositionArtifact: dispositionEvidence.artifact as unknown as Record<string, unknown>,
-        dispositionArtifactSha256: dispositionEvidence.artifact_sha256,
+        dispositionArtifact: sources.dispositionArtifact as unknown as Record<string, unknown>,
+        dispositionArtifactSha256: sources.dispositionArtifactSha256,
         repoRoot: options.repoRoot,
         taskId: options.parentTaskId,
         reviewType: options.reviewType,
         expectedFollowUpCount: options.expectedFollowUpCount,
         materializationMode: options.materializationMode,
         followUpArtifactPath: options.followUpArtifactPath,
+        expectedGroupedChildTaskId: options.materializationMode === 'grouped_by_parent' ? options.childTaskId : undefined,
         taskQueueFollowUpFingerprintIndex: options.taskQueueIndex
     })) {
         return {
@@ -1147,7 +1277,7 @@ function resolveAuthenticatedReviewFollowUpArtifactScope(options: {
             diagnostics: [`${modeLabel} ${options.reviewType} follow-up artifact does not bind the current child task.`]
         };
     }
-    const evidence = collectValidatedFollowUpEvidenceLocations(validation.artifact, followUpItems);
+    const evidence = collectValidatedFollowUpEvidenceLocations(sources.validationArtifact, followUpItems);
     if (evidence.missingItemKeys.length > 0) {
         return {
             files: [],
@@ -1351,12 +1481,12 @@ function resolveAuthenticatedGroupedReviewFollowUpScopeUnlocked(
             ]
         };
     }
-    const discoveredArtifacts = discoverCurrentGroupedFollowUpArtifactPaths({
+    const discoveredArtifacts = discoverGroupedFollowUpArtifactPaths({
         repoRoot,
         reviewsRoot: path.dirname(firstLaneArtifactPath as string),
         parentTaskId,
         childTaskId: taskId,
-        currentMaterializationBinding: currentGroupedMaterializationBinding
+        snapshotHash: currentGroupedMaterializationBinding.snapshotHash
     });
     const expectedArtifactPaths = [...new Set([
         ...resolvedParentArtifactPaths,
@@ -1372,7 +1502,7 @@ function resolveAuthenticatedGroupedReviewFollowUpScopeUnlocked(
             status: 'invalid',
             files: [],
             diagnostics: [
-                `Grouped review follow-up task '${taskId}' lane set does not match the complete current-cycle materialization registry.`,
+                `Grouped review follow-up task '${taskId}' lane set does not match the complete child materialization registry.`,
                 ...discoveredArtifacts.diagnostics
             ]
         };
@@ -1669,6 +1799,8 @@ export function followUpArtifactMatchesCurrentTaskQueue(params: {
     materializationMode: ReviewFollowUpMaterializationMode;
     followUpArtifactPath: string;
     taskQueueFollowUpFingerprintIndex?: TaskQueueFollowUpFingerprintIndex | null;
+    queueGroupFingerprint?: string;
+    expectedGroupedChildTaskId?: string;
 }): boolean {
     if (!params.repoRoot) {
         return false;
@@ -1696,9 +1828,6 @@ export function followUpArtifactMatchesCurrentTaskQueue(params: {
     if (summaryFollowUpCount !== params.expectedFollowUpCount) {
         return false;
     }
-    if (followUpItems.length === 0) {
-        return params.expectedFollowUpCount === 0 && params.artifact.status === 'NOT_REQUIRED';
-    }
     if (followUpItems.length !== params.expectedFollowUpCount) {
         return false;
     }
@@ -1711,6 +1840,9 @@ export function followUpArtifactMatchesCurrentTaskQueue(params: {
     });
     if (!expectedFingerprints || expectedFingerprints.size !== params.expectedFollowUpCount) {
         return false;
+    }
+    if (followUpItems.length === 0) {
+        return params.expectedFollowUpCount === 0 && params.artifact.status === 'NOT_REQUIRED';
     }
     const taskQueueFollowUpFingerprintIndex = params.taskQueueFollowUpFingerprintIndex
         ?? readTaskQueueFollowUpFingerprintIndex(params.repoRoot, params.taskId);
@@ -1766,6 +1898,9 @@ export function followUpArtifactMatchesCurrentTaskQueue(params: {
     return (
         taskIds.size === 1
         && Boolean(groupedTaskId)
+        && (!params.expectedGroupedChildTaskId || groupedTaskId === params.expectedGroupedChildTaskId)
+        && ![...taskQueueFollowUpFingerprintIndex.groupedFingerprintByTask].some(([childId, fingerprint]) =>
+            childId !== groupedTaskId && fingerprint === (params.queueGroupFingerprint || groupFingerprint))
         && Boolean(groupFingerprint)
         && Boolean(sourceBindingSha256)
         && taskQueueHasGroupedFollowUpBinding(
@@ -1773,7 +1908,7 @@ export function followUpArtifactMatchesCurrentTaskQueue(params: {
             taskQueueFollowUpFingerprintIndex.groupedFingerprintByTask,
             params.taskId,
             groupedTaskId,
-            groupFingerprint as string,
+            params.queueGroupFingerprint || groupFingerprint as string,
             params.reviewType,
             [...fingerprints],
             sourceBindingSha256 as string,
@@ -2245,8 +2380,22 @@ export function readReviewArtifactState(
                             && readReviewArtifactFileSha256(reviewFindingsDispositionArtifactPath) === reviewFindingsDispositionArtifactSha256
                             ? safeReadJson(reviewFindingsDispositionArtifactPath)
                             : null;
+                        const groupedBinding = reviewFollowUpMaterializationMode === 'grouped_by_parent' && repoRoot
+                            ? resolveCurrentReviewFollowUpMaterializationBinding(repoRoot, reviewsRoot, taskId)
+                            : null;
+                        const materializationPolicy = isPlainRecord(followUpArtifact?.materialization_policy)
+                            ? followUpArtifact.materialization_policy : null;
+                        const sourceReceipt = isPlainRecord(followUpArtifact?.source_receipt)
+                            ? followUpArtifact.source_receipt : null;
+                        const groupedCycleCurrent = reviewFollowUpMaterializationMode !== 'grouped_by_parent'
+                            || Boolean(groupedBinding
+                                && normalizeSha256(materializationPolicy?.group_fingerprint) === groupedBinding.groupFingerprint
+                                && normalizeSha256(materializationPolicy?.snapshot_hash) === groupedBinding.snapshotHash
+                                && normalizeSha256(materializationPolicy?.cycle_id) === groupedBinding.cycleId
+                                && normalizeSha256(sourceReceipt?.receipt_sha256) === readReviewArtifactFileSha256(receiptPath));
                         reviewFindingsFollowUpSatisfied = (
                             ['MATERIALIZED', 'ALREADY_MATERIALIZED', 'NOT_REQUIRED'].includes(status)
+                            && groupedCycleCurrent
                             && sourceDispositionSha256 === reviewFindingsDispositionArtifactSha256
                             && isPlainRecord(followUpArtifact)
                             && isPlainRecord(dispositionArtifactPayload)

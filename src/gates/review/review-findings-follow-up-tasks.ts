@@ -1,6 +1,6 @@
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import { writeTaskQueueFile } from '../../core/task-queue/task-queue-repository';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -38,7 +38,17 @@ import {
     joinOrchestratorPath,
     normalizePath
 } from '../shared/helpers';
-import { readReviewArtifactState } from '../next-step/next-step-review-artifact-readers';
+import {
+    discoverGroupedFollowUpArtifactPaths,
+    extractParentFollowUpArtifactPaths,
+    followUpArtifactMatchesCurrentTaskQueue,
+    readReviewArtifactState,
+    resolveAuthenticatedReviewFollowUpSources,
+    resolveAuthenticatedReviewReceiptSnapshot,
+    resolveFollowUpArtifactPath as resolveReviewFollowUpEvidencePath,
+    type CurrentReviewFollowUpMaterializationBinding
+} from '../next-step/next-step-review-artifact-readers';
+import { normalizeReviewReceiptEvidenceFields } from './review-evidence-contract';
 import { reviewStateHasSatisfiedEvidence } from '../next-step/next-step-review-evidence';
 import { readCurrentCompileGateEvidence } from '../review-context/review-context-validation-evidence';
 import {
@@ -49,6 +59,7 @@ import {
 } from './review-findings-disposition-artifact';
 import {
     validateReviewFindingsValidationArtifact,
+    validateReviewFindingsValidationArtifactForReceipt,
     type NormalizedReviewFindingInventoryEntry,
     type NormalizedReviewResidualRiskInventoryEntry,
     type ReviewFindingsValidationArtifact
@@ -439,22 +450,8 @@ function isReviewTypeToken(value: unknown): boolean {
     }
 }
 
-function writeJson(filePath: string, value: unknown): void {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-}
-
 function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
-}
-
-function tryWriteJson(filePath: string, value: unknown, label: string): string | null {
-    try {
-        writeJson(filePath, value);
-        return null;
-    } catch (error: unknown) {
-        return `${label} write failed: ${errorMessage(error)}.`;
-    }
 }
 
 function readJsonFile(filePath: string, label: string): { value: Record<string, unknown> | null; violations: string[] } {
@@ -1434,6 +1431,141 @@ function extractExistingFingerprint(notes: string): string | null {
     return normalizeHash(String(notes || '').match(/review_follow_up_fingerprint=([0-9a-f]{64})/iu)?.[1] || null);
 }
 
+function currentGroupedBinding(params: {
+    reviewsRoot: string;
+    taskId: string;
+    context: FollowUpMaterializationContext;
+}): CurrentReviewFollowUpMaterializationBinding {
+    return {
+        mode: params.context.mode,
+        snapshotHash: params.context.snapshot_hash || '',
+        cycleId: params.context.cycle_id || '',
+        groupFingerprint: params.context.group_fingerprint,
+        preflightPath: path.join(params.reviewsRoot, `${params.taskId}-preflight.json`),
+        preflightSha256: params.context.preflight_sha256 || '',
+        compileTimestamp: params.context.compile_gate_timestamp || ''
+    };
+}
+
+function authenticatedGroupedReuse(params: {
+    repoRoot: string;
+    reviewsRoot: string;
+    taskId: string;
+    reviewType: string;
+    context: FollowUpMaterializationContext;
+    receiptPath: string;
+}) {
+    const receiptSha256 = fileSha256(params.receiptPath);
+    const resolved = resolveAuthenticatedReviewReceiptSnapshot({
+        repoRoot: params.repoRoot,
+        taskId: params.taskId,
+        reviewType: params.reviewType,
+        followUpArtifact: {
+            source_receipt: { receipt_path: params.receiptPath, receipt_sha256: receiptSha256 }
+        },
+        currentMaterializationBinding: currentGroupedBinding(params)
+    });
+    if (!resolved.evidence) return resolved;
+    const evidence = resolved.evidence;
+    const fields = normalizeReviewReceiptEvidenceFields(evidence.receipt);
+    if (!fields.reusedExistingReview) {
+        return { evidence: null, diagnostics: ['Grouped follow-up recovery requires authenticated reused review evidence.'] };
+    }
+    const validation = validateReviewFindingsValidationArtifactForReceipt({
+        receipt: evidence.receipt,
+        reviewArtifactPath: evidence.reviewArtifactPath,
+        expectedTaskId: params.taskId,
+        expectedReviewType: params.reviewType,
+        expectedReviewArtifactSha256: evidence.reviewArtifactSha256,
+        expectedReviewContextSha256: fields.reusedFromReviewContextSha256,
+        expectedReviewScopeSha256: fields.reusedFromReviewScopeSha256,
+        expectedCodeScopeSha256: fields.reusedFromCodeScopeSha256,
+        expectedReviewTreeStateSha256: fields.reusedFromReviewTreeStateSha256,
+        requireAccepted: true,
+        preferSnapshot: true
+    });
+    return validation.valid ? resolved : { evidence: null, diagnostics: validation.violations };
+}
+
+function groupedRowHasCompleteRegistry(params: {
+    repoRoot: string;
+    parentTaskId: string;
+    parentNotes: string;
+    row: CanonicalActiveTaskQueueRow;
+    allowUnmaterializedReviewType?: string;
+}): boolean {
+    const bindings = extractGroupedLaneBindings(params.row.notes);
+    const lanePaths = [...bindings.values()].map((binding) => resolveReviewFollowUpEvidencePath(params.repoRoot, binding.artifactPath));
+    if (lanePaths.length === 0 || lanePaths.some((artifactPath) => !artifactPath)) return false;
+    const parentPaths = extractParentFollowUpArtifactPaths(params.parentNotes, params.row.taskId)
+        .map((artifactPath) => resolveReviewFollowUpEvidencePath(params.repoRoot, artifactPath));
+    if (parentPaths.some((artifactPath) => !artifactPath)) return false;
+    const discovered = discoverGroupedFollowUpArtifactPaths({
+        repoRoot: params.repoRoot, reviewsRoot: path.dirname(lanePaths[0] as string),
+        parentTaskId: params.parentTaskId, childTaskId: params.row.taskId,
+        snapshotHash: normalizeHash(params.row.notes.match(/review_follow_up_snapshot_sha256=([0-9a-f]{64})/iu)?.[1]) || '',
+        allowUnmaterializedReviewType: params.allowUnmaterializedReviewType
+    });
+    return discovered.diagnostics.length === 0
+        && JSON.stringify([...new Set([...parentPaths, ...discovered.paths])].sort()) === JSON.stringify(lanePaths.sort());
+}
+
+function groupedRowMatchesAuthenticatedReuse(params: {
+    repoRoot: string;
+    parentTaskId: string;
+    context: FollowUpMaterializationContext;
+    row: CanonicalActiveTaskQueueRow;
+    parentNotes: string;
+}): boolean {
+    const snapshotHash = normalizeHash(params.row.notes.match(/review_follow_up_snapshot_sha256=([0-9a-f]{64})/iu)?.[1]);
+    if (snapshotHash !== params.context.snapshot_hash) return false;
+    const bindings = extractGroupedLaneBindings(params.row.notes);
+    if (!groupedRowHasCompleteRegistry(params)) return false;
+    return [...bindings.values()].every((binding) => {
+        if (!binding.artifactPath) return false;
+        let artifactPath: string;
+        try {
+            artifactPath = resolveInputPathInsideRepo(params.repoRoot, binding.artifactPath, 'FollowUpArtifactPath');
+        } catch { return false; }
+        const artifact = readJsonFile(artifactPath, 'Follow-up artifact').value;
+        const sourceReceipt = isPlainRecord(artifact?.source_receipt) ? artifact.source_receipt : null;
+        const receiptPathText = normalizeText(sourceReceipt?.receipt_path);
+        if (!artifact || !receiptPathText) return false;
+        let receiptPath: string;
+        try {
+            receiptPath = resolveInputPathInsideRepo(params.repoRoot, receiptPathText, 'ReceiptPath');
+        } catch { return false; }
+        const reused = authenticatedGroupedReuse({
+            repoRoot: params.repoRoot, reviewsRoot: path.dirname(artifactPath), taskId: params.parentTaskId,
+            reviewType: binding.reviewType, context: params.context, receiptPath
+        });
+        if (!reused.evidence) return false;
+        const sourceReceiptSha256 = normalizeHash(sourceReceipt?.receipt_sha256);
+        if (sourceReceiptSha256 !== reused.evidence.receiptSha256
+            && sourceReceiptSha256 !== normalizeReviewReceiptEvidenceFields(reused.evidence.receipt).reusedFromReceiptSha256) return false;
+        const sources = resolveAuthenticatedReviewFollowUpSources({
+            repoRoot: params.repoRoot, parentTaskId: params.parentTaskId, reviewType: binding.reviewType,
+            followUpArtifact: artifact, followUpArtifactPath: artifactPath, receiptEvidence: reused.evidence,
+            currentMaterializationBinding: currentGroupedBinding({
+                reviewsRoot: path.dirname(artifactPath), taskId: params.parentTaskId, context: params.context
+            })
+        });
+        if (!sources.dispositionArtifact || !sources.dispositionArtifactSha256) return false;
+        return followUpArtifactMatchesCurrentTaskQueue({
+                artifact, dispositionArtifact: sources.dispositionArtifact as unknown as Record<string, unknown>,
+                dispositionArtifactSha256: sources.dispositionArtifactSha256,
+                repoRoot: params.repoRoot, taskId: params.parentTaskId, reviewType: binding.reviewType,
+                expectedFollowUpCount: binding.itemCount, materializationMode: 'grouped_by_parent',
+                followUpArtifactPath: artifactPath,
+                expectedGroupedChildTaskId: params.row.taskId,
+                // During lane-by-lane recovery, the child can already have the new
+                // group while a validated lane artifact still retains its old cycle.
+                queueGroupFingerprint: extractGroupedFingerprint(params.row.notes) === params.context.group_fingerprint
+                    ? params.context.group_fingerprint || undefined : undefined
+            });
+    });
+}
+
 function isParentFollowUpTaskId(parentTaskId: string, taskId: string): boolean {
     const prefix = `${parentTaskId}-F`;
     if (!taskId.startsWith(prefix)) {
@@ -1483,6 +1615,7 @@ function materializeTaskQueueRows(params: {
     dispositionResultSha256: string;
     receiptSha256: string;
     materializationContext: FollowUpMaterializationContext;
+    reusedReview: boolean;
 }): TaskQueueMaterializationResult {
     const taskPath = path.join(params.repoRoot, TASK_QUEUE_FILENAME);
     if (params.obligations.length === 0) {
@@ -1586,10 +1719,59 @@ function materializeTaskQueueRows(params: {
                         rollback_content: null
                     };
                 }
-                const groupedRow = parsed.rows.find((row) => (
+                const currentGroupedRows = parsed.rows.filter((row) => (
                     isParentFollowUpTaskId(params.parentTaskId, row.taskId)
                     && extractGroupedFingerprint(row.notes) === groupFingerprint
                 ));
+                if (currentGroupedRows.length > 1) {
+                    return {
+                        outcome: 'write_failed', task_path: normalizePath(taskPath), created: [], reused: [],
+                        blocked_fingerprints: params.obligations.map((obligation) => obligation.fingerprint),
+                        error_message: 'Multiple children claim the current grouped materialization; recovery is ambiguous.',
+                        rollback_content: null
+                    };
+                }
+                const currentGroupedRow = currentGroupedRows[0];
+                if (currentGroupedRow && (!groupedRowHasCompleteRegistry({
+                    repoRoot: params.repoRoot, parentTaskId: params.parentTaskId,
+                    parentNotes: parentRow.notes, row: currentGroupedRow,
+                    allowUnmaterializedReviewType: params.reusedReview ? undefined : params.reviewType
+                }) || (params.reusedReview && !groupedRowMatchesAuthenticatedReuse({
+                    repoRoot: params.repoRoot, parentTaskId: params.parentTaskId,
+                    parentNotes: parentRow.notes, row: currentGroupedRow, context: params.materializationContext
+                })))) {
+                    return {
+                        outcome: 'write_failed', task_path: normalizePath(taskPath), created: [], reused: [],
+                        blocked_fingerprints: params.obligations.map((obligation) => obligation.fingerprint),
+                        error_message: 'Current grouped child has incomplete or inconsistent authenticated lane registry.', rollback_content: null
+                    };
+                }
+                const reusableRows = currentGroupedRow ? [] : parsed.rows.filter((row) => (
+                    isParentFollowUpTaskId(params.parentTaskId, row.taskId)
+                    && groupedRowMatchesAuthenticatedReuse({
+                        repoRoot: params.repoRoot, parentTaskId: params.parentTaskId,
+                        context: params.materializationContext, row, parentNotes: parentRow.notes
+                    })
+                ));
+                if (reusableRows.length > 1) {
+                    return {
+                        outcome: 'write_failed', task_path: normalizePath(taskPath), created: [], reused: [],
+                        blocked_fingerprints: params.obligations.map((obligation) => obligation.fingerprint),
+                        error_message: 'Authenticated grouped reuse matches multiple child tasks; recovery is ambiguous.',
+                        rollback_content: null
+                    };
+                }
+                const groupedRow = currentGroupedRow || reusableRows[0];
+                if (!groupedRow && params.reusedReview && parsed.rows.some((row) => (
+                    isParentFollowUpTaskId(params.parentTaskId, row.taskId)
+                ))) {
+                    return {
+                        outcome: 'write_failed', task_path: normalizePath(taskPath), created: [], reused: [],
+                        blocked_fingerprints: params.obligations.map((obligation) => obligation.fingerprint),
+                        error_message: 'Existing grouped child has incomplete or inconsistent authenticated reuse bindings.',
+                        rollback_content: null
+                    };
+                }
                 if (groupedRow) {
                     if (!/TODO/iu.test(groupedRow.status)) {
                         return {
@@ -2148,6 +2330,7 @@ function validateGroupedSourceCycleEvidence(params: {
     materializationContext: FollowUpMaterializationContext;
     validationArtifact: ReviewFindingsValidationArtifact;
     receipt: Record<string, unknown> | null;
+    receiptPath: string | null;
 }): string[] {
     if (params.materializationContext.mode !== 'grouped_by_parent') {
         return [];
@@ -2159,12 +2342,21 @@ function validateGroupedSourceCycleEvidence(params: {
         return ['Grouped follow-up source evidence cannot be bound because the current materialization cycle is incomplete.'];
     }
 
-    validateHashField(
-        violations,
-        'Review findings validation preflight_sha256',
-        params.validationArtifact.validation_result.bindings.scope.preflight_sha256,
-        expectedPreflightSha256
-    );
+    const reused = params.receipt?.reused_existing_review === true && params.receiptPath
+        ? authenticatedGroupedReuse({
+            repoRoot: params.repoRoot, reviewsRoot: params.reviewsRoot, taskId: params.taskId,
+            reviewType: params.reviewType, context: params.materializationContext, receiptPath: params.receiptPath
+        })
+        : null;
+    if (reused && !reused.evidence) return reused.diagnostics;
+    if (!reused) {
+        validateHashField(
+            violations,
+            'Review findings validation preflight_sha256',
+            params.validationArtifact.validation_result.bindings.scope.preflight_sha256,
+            expectedPreflightSha256
+        );
+    }
     validateHashField(
         violations,
         'Review receipt preflight_sha256',
@@ -2173,8 +2365,10 @@ function validateGroupedSourceCycleEvidence(params: {
     );
 
     const contextBinding = params.validationArtifact.validation_result.bindings.context;
-    const contextPathText = normalizeText(contextBinding.review_context_path);
-    const expectedContextSha256 = normalizeHash(contextBinding.review_context_sha256);
+    const contextPathText = reused?.evidence?.reviewContextPath || normalizeText(contextBinding.review_context_path);
+    const expectedContextSha256 = reused?.evidence
+        ? fileSha256(reused.evidence.reviewContextPath)
+        : normalizeHash(contextBinding.review_context_sha256);
     if (!contextPathText || !expectedContextSha256) {
         violations.push('Grouped follow-up source validation is missing its review context path or sha256 binding.');
         return violations;
@@ -2321,6 +2515,28 @@ function validateGroupedRequiredReviewCompletion(params: {
     return reviewReadinessViolations;
 }
 
+function tryWriteFollowUpArtifact(filePath: string, artifact: unknown, repoRoot: string, label: string): string | null {
+    let temporaryPath: string | null = null;
+    try {
+        const parentPath = fs.realpathSync(path.dirname(filePath));
+        resolveInputPathInsideRepo(fs.realpathSync(repoRoot), parentPath, 'Follow-up artifact parent');
+        if (fs.existsSync(filePath)) {
+            const stat = fs.lstatSync(filePath);
+            if (stat.isSymbolicLink() || stat.nlink > 1) throw new Error('Follow-up artifact path is an unsafe file link.');
+        }
+        temporaryPath = path.join(parentPath, `.garda-follow-up-${randomUUID()}.tmp`);
+        fs.writeFileSync(temporaryPath, `${JSON.stringify(artifact, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+        // Rename replaces the directory entry rather than following a substituted
+        // destination link between the ownership check and the final write.
+        fs.renameSync(temporaryPath, path.join(parentPath, path.basename(filePath)));
+        return null;
+    } catch (error) {
+        return `${label} write failed: ${errorMessage(error)}`;
+    } finally {
+        if (temporaryPath && fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
+    }
+}
+
 function buildBlockedResult(params: {
     repoRoot: string;
     taskId: string;
@@ -2356,7 +2572,12 @@ function buildBlockedResult(params: {
         items: params.items,
         violations
     });
-    const writeViolation = tryWriteJson(params.artifactPath, artifact, 'Review findings follow-up materialization artifact');
+    // Rejected mutable evidence cannot decide whether prior provenance survives.
+    // Diagnostics always use a separate path and never authorize recovery.
+    const diagnosticPath = params.artifactPath.replace(/\.json$/iu, '') + '-blocked.json';
+    const writeViolation = tryWriteFollowUpArtifact(
+        diagnosticPath, artifact, params.repoRoot, 'Review findings follow-up blocked diagnostic'
+    );
     if (writeViolation) {
         violations.push(writeViolation);
     }
@@ -2364,7 +2585,7 @@ function buildBlockedResult(params: {
         status: 'BLOCKED',
         task_id: params.taskId,
         review_type: params.reviewType,
-        artifact_path: normalizePath(params.artifactPath),
+        artifact_path: normalizePath(diagnosticPath),
         created_task_ids: [],
         reused_task_ids: [],
         violations,
@@ -2375,7 +2596,7 @@ function buildBlockedResult(params: {
             marker: 'REVIEW_FINDINGS_FOLLOW_UP_TASKS_BLOCKED',
             action: 'Resolve review findings follow-up materialization blockers, then rerun this gate.',
             reason: violations.join(' '),
-            artifactPath: params.artifactPath,
+            artifactPath: diagnosticPath,
             violations
         })
     };
@@ -2554,7 +2775,8 @@ export function materializeReviewFindingsFollowUpTasks(
             reviewType,
             materializationContext,
             validationArtifact,
-            receipt: receiptRead.value
+            receipt: receiptRead.value,
+            receiptPath
         })
         : [];
     const groupedRequiredReviewViolations = disposition.items.some((item) => item.action === 'create_follow_up')
@@ -2704,7 +2926,8 @@ export function materializeReviewFindingsFollowUpTasks(
             dispositionArtifactSha256,
             dispositionResultSha256: disposition.disposition_result_sha256,
             receiptSha256: receiptValidation.receiptSha256,
-            materializationContext
+            materializationContext,
+            reusedReview: receiptRead.value?.reused_existing_review === true
         });
     const queueViolations = ['task_file_missing', 'task_not_found', 'write_failed'].includes(queueResult.outcome)
         ? [`TASK.md follow-up task materialization failed: ${queueResult.outcome}${queueResult.error_message ? ` (${queueResult.error_message})` : ''}.`]
@@ -2714,7 +2937,7 @@ export function materializeReviewFindingsFollowUpTasks(
         obligations: built.obligations,
         queueResult
     });
-    if (queueViolations.length > 0) {
+    if (queueViolations.length > 0 || hasFixNowItems) {
         return buildBlockedResult({
             repoRoot,
             taskId,
@@ -2734,11 +2957,9 @@ export function materializeReviewFindingsFollowUpTasks(
         });
     }
 
-    const status: ReviewFollowUpMaterializationStatus = hasFixNowItems
-        ? 'BLOCKED'
-        : (queueResult.outcome === 'not_required'
-            ? 'NOT_REQUIRED'
-            : (queueResult.created.length > 0 ? 'MATERIALIZED' : 'ALREADY_MATERIALIZED'));
+    const status: ReviewFollowUpMaterializationStatus = queueResult.outcome === 'not_required'
+        ? 'NOT_REQUIRED'
+        : (queueResult.created.length > 0 ? 'MATERIALIZED' : 'ALREADY_MATERIALIZED');
     const artifact = buildArtifact({
         repoRoot,
         taskId,
@@ -2756,9 +2977,10 @@ export function materializeReviewFindingsFollowUpTasks(
         items,
         violations: []
     });
-    const artifactWriteViolation = tryWriteJson(
+    const artifactWriteViolation = tryWriteFollowUpArtifact(
         artifactPath,
         artifact,
+        repoRoot,
         'Review findings follow-up materialization artifact'
     );
     if (artifactWriteViolation) {
@@ -2807,9 +3029,7 @@ export function materializeReviewFindingsFollowUpTasks(
         ? 'REVIEW_FINDINGS_FOLLOW_UP_TASKS_MATERIALIZED'
         : (status === 'ALREADY_MATERIALIZED'
             ? 'REVIEW_FINDINGS_FOLLOW_UP_TASKS_ALREADY_MATERIALIZED'
-            : (status === 'BLOCKED'
-                ? 'REVIEW_FINDINGS_FOLLOW_UP_TASKS_BLOCKED'
-                : 'REVIEW_FINDINGS_FOLLOW_UP_TASKS_NOT_REQUIRED'));
+            : 'REVIEW_FINDINGS_FOLLOW_UP_TASKS_NOT_REQUIRED');
     return {
         status,
         task_id: taskId,
@@ -2824,18 +3044,14 @@ export function materializeReviewFindingsFollowUpTasks(
             taskId,
             status,
             marker,
-            action: status === 'BLOCKED'
-                ? 'Resolve review findings marked fix_now, then rerun review validation.'
-                : (status === 'NOT_REQUIRED'
+            action: status === 'NOT_REQUIRED'
                     ? 'Continue through the navigator; no deferred review findings required follow-up tasks.'
-                    : 'Continue through the navigator with review follow-up tasks linked in TASK.md.'),
+                    : 'Continue through the navigator with review follow-up tasks linked in TASK.md.',
             reason: status === 'MATERIALIZED'
                 ? `${queueResult.created.length} follow-up task(s) created.`
                 : (status === 'ALREADY_MATERIALIZED'
                     ? `${queueResult.reused.length} follow-up task(s) already linked.`
-                    : (status === 'BLOCKED'
-                        ? 'Disposition artifact contains review findings that require fix_now remediation.'
-                        : 'Disposition artifact contained no create_follow_up obligations.')),
+                    : 'Disposition artifact contained no create_follow_up obligations.'),
             artifactPath,
             violations: []
             }),

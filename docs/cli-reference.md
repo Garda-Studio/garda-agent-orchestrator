@@ -861,6 +861,13 @@ Reviewer staging note:
 - `build-review-context` also prints `ReviewReuseDecision` and `ReviewReuseReason` so agents can see whether a prior PASS review was safely rebound to the current cycle or why a fresh reviewer is still required.
 - Garda cleans current-task reviewer scratch artifacts deterministically after successful review recording, removes same-task leftovers on terminal `TASK_DONE` or `TASK_BLOCKED`, sweeps aged task-attributable staging files when they no longer belong to active `IN_PROGRESS` or `IN_REVIEW` tasks, and retains stale unattributed paths instead of deleting them by guesswork.
 
+Grouped review follow-up recovery:
+- After accepted unchanged-code parent-cycle review reuse, rerun the native findings follow-up materialization gate. Garda can rebind the existing pending grouped child when every bound review lane has authenticated current-cycle reuse evidence.
+- Historical findings validation and disposition remain bound to their original review. The child receives the current parent-cycle binding without duplicating its deferred obligations.
+- Lane completeness covers every artifact for the same child and frozen snapshot across cycles, including lanes not yet rebound during partial recovery. Removing a lane from both parent and child notes does not hide its historical obligations.
+- An active child, ambiguous ownership, or incomplete reuse evidence blocks recovery. Follow `next-step` diagnostics; do not manually relabel child notes or rewrite historical evidence.
+- Every blocked materialization attempt, including accepted `fix_now` dispositions, writes diagnostics to a separate `*-blocked.json` artifact through a confined, link-safe writer. Canonical publication also rejects unsafe links. Recovery authenticates each lane's validation and disposition against its receipt, including the real deferred obligations. Integrity-bound current review events establish expected lanes even when an artifact and both queue references disappear; unreadable, missing or inconsistent native candidates fail closed. First publication of the incoming fresh-review lane remains possible, while authenticated child scope waits for all deferred lanes. The selected child must own its lane artifacts, and multiple claims to the same group block recovery. After resolving a blocker, native materialization can retry using the preserved evidence. Historical evidence alone cannot satisfy the current cycle.
+
 Zero-diff task contract:
 - A clean-tree `classify-change` result is baseline-only evidence, not proof that the task is complete.
 - `required-reviews-check` and `completion-gate` now block zero-diff implementation tasks unless the task later produces a real diff or an audited no-op artifact is recorded.
