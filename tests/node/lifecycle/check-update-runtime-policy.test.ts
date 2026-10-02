@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 
 import { buildUpdateLifecycleRunner } from '../../../src/cli/commands/shared-command-utils';
 import { writeProtectedControlPlaneManifest } from '../../../src/gates/shared/helpers';
@@ -44,7 +45,9 @@ function isNpmFixtureEnvironmentKey(key: string): boolean {
     return key.toUpperCase().startsWith('NPM_CONFIG_') || ['NPM_TOKEN', 'NODE_AUTH_TOKEN'].includes(key.toUpperCase());
 }
 
-beforeEach((context) => {
+beforeEach(async (context) => {
+    // Flush completed test results before the next synchronous fixture workload.
+    await yieldToEventLoop();
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-offline-npm-'));
     const inherited = Object.entries(process.env).filter(([key]) => isNpmFixtureEnvironmentKey(key));
     const clear = () => {
