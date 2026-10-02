@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Give required non-test review lanes concrete coverage for authored test-only changes and bind those test bytes in freshness and reuse. Preserve mixed-runtime and documentation scope ownership, frozen test classification, staged index snapshots, excluded closeout paths and concrete findings evidence validation.
+
 - Build schema 3 preprompt continuation from the current validated read-only navigator. Replace historical PASS stage inference and startup/review command batches with one advisory action that must be revalidated before use; retain bounded diagnostics and reject foreign-task or escaped artifact reads.
 
 - Document the current preprompt/resume context audit, bounded output measurements and the implementation plan for phase-dependent controller reads. Distinguish proposed presentation fixtures from implemented behavior, retain fresh reviewer skills and trust evidence, and separate selected-provider output size from unmeasured client instruction loads and token usage.

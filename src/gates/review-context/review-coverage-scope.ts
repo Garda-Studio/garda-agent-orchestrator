@@ -1,5 +1,6 @@
 import {
     computeReviewRelevantScopeFingerprint,
+    computeReviewRelevantScopeWithoutCloseout,
     computeReviewReuseCodeScopeFingerprint
 } from '../review-reuse/review-reuse';
 
@@ -22,5 +23,11 @@ export function resolveReviewCoverageChangedFiles(options: {
         options.repoRoot
     );
     // Documentation work can include tests; fresh review evidence must cover the authored documentation.
-    return scope.documentation_review ? scope.docs_only_changed_files : scope.non_test_changed_files;
+    if (scope.documentation_review) {
+        return scope.docs_only_changed_files;
+    }
+    if (scope.test_only && scope.all_changed_files.length > 0) {
+        return computeReviewRelevantScopeWithoutCloseout(options.preflight, options.repoRoot).review_relevant_changed_files;
+    }
+    return scope.non_test_changed_files;
 }
