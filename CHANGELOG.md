@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Resnapshot current authorized parent WIP before split-required decomposition after a partial restore or an isolated repair commit. Preserve every earlier capture package and keep ordinary capture reuse, scope, containment, HEAD-race and rollback checks intact.
+
 - Authenticate source-checkout WIP restore runtime fingerprints from the local publish build cache, its complete current input inventory and the exact published manifest bytes. Keep published manifests independent of build hosts; reject missing, malformed, forged or stale cache authority, including old caches replayed after a rebuild with the same portable inventory. Recheck retained authority paths, traversed directories and absent input roots after module reads to reject concurrent input additions, rewrites and compiler-metadata changes before canonical append.
 
 - Recognize current and historical task-owned review artifacts, canonical JSON and semantic Markdown plans with exact nested task ownership. Preserve invalid or conflicting JSON identities, including JSON reports stored as Markdown, and shared files during inventory and ordinary/forensic GC storage policies. Compression preserves existing staging and gzip destinations. Preserve active tasks and linked compact namespaces or task roots, and include compact output in task-scoped purge under the existing compact writer lock.

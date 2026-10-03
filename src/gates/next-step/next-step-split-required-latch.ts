@@ -378,6 +378,7 @@ export function suspendSplitRequiredWipBeforeDecomposition(params: {
         taskId: params.taskId,
         preflightPath: path.join(params.reviewsRoot, `${params.taskId}-preflight.json`),
         guardKind,
+        reuseExistingCapture: false,
         guardReason:
             `The active ${guardKind} split-required latch requires parent WIP to remain suspended before child execution.`
     });

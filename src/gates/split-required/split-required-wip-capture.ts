@@ -995,6 +995,7 @@ export function captureAndSuspendSplitRequiredWip(params: {
     preflightPath: string;
     guardKind: SplitRequiredWipGuardKind;
     guardReason: string;
+    reuseExistingCapture?: boolean;
 }): SplitRequiredWipCaptureResult {
     const repoRoot = path.resolve(params.repoRoot || '.');
     const preflightPath = resolveInputPathInsideRepo(repoRoot, params.preflightPath, 'PreflightPath');
@@ -1006,7 +1007,7 @@ export function captureAndSuspendSplitRequiredWip(params: {
             violations: ['split-required WIP capture requires a git worktree.']
         });
     }
-    const current = findCurrentCapturedManifest({
+    const current = params.reuseExistingCapture === false ? null : findCurrentCapturedManifest({
         repoRoot,
         taskId,
         preflightPath,

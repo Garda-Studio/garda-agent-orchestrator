@@ -106,6 +106,15 @@ project-root/
 
 All generated directories are both gitignored and excluded from IDE indexing by the shipped `.vscode/settings.json`.
 
+Before split-required decomposition, the authenticated latch route creates a
+separate immutable capture of current authorized parent WIP. It does not reuse
+an earlier complete capture as checkout evidence after partial restoration or
+an isolated HEAD advance. Earlier packages remain available for restoring the
+remaining child scopes. Ordinary capture reuse still requires a verified
+suspended or fully restored checkout; a new decomposition capture retains the
+existing preflight scope, containment, source/index/HEAD revalidation and
+transaction rollback checks.
+
 Source-checkout WIP restore finalization runs in the freshly built `dist`
 runtime. Its host-local input fingerprint comes from
 `.scripts-build/publish-runtime-build-cache.json`; the cache must bind the
