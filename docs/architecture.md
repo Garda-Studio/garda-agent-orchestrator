@@ -106,6 +106,33 @@ project-root/
 
 All generated directories are both gitignored and excluded from IDE indexing by the shipped `.vscode/settings.json`.
 
+Source-checkout WIP restore finalization runs in the freshly built `dist`
+runtime. Its host-local input fingerprint comes from
+`.scripts-build/publish-runtime-build-cache.json`; the cache must bind the
+SHA-256 of the exact `dist/publish-runtime-manifest.json` bytes. Its versioned
+fingerprint payload must authenticate its own digest, match the current Node,
+platform, architecture, engine and TypeScript metadata, and declare the complete
+current build-input inventory. Every input size and SHA-256 is checked through
+the authenticated repository snapshot owner; inventory is reconstructed again
+after those reads. Replaying an older cache therefore fails even when published
+manifest bytes remain identical. Published manifests contain the portable
+runtime file inventory, without host fingerprint
+metadata. Finalization also requires a current source checkout, the exact loaded
+build root, manifest membership of the finalizer and task-event writer, and
+authenticated module hashes. After resolving module hashes, it rechecks retained
+path identities, sizes and change/modification times for the manifest, cache,
+compiler metadata, build inputs, modules and traversed input directories,
+including the absence of optional input roots. Detected content rewrites, file
+replacement or late input additions block canonical append and preserve the pending handoff.
+Generation changes before canonical event append leave restoration incomplete.
+
+Schema 1 input discovery follows the publish producer's roots and `.cjs`, `.js`,
+`.json` and `.ts` extensions, excluding nested `.git` and `node_modules` entries.
+Linked or non-regular input paths cannot supply authority. Validation is bounded
+to 8,192 input files, 65,536 traversal entries, 64 directory levels, 128 MiB of
+input reads, 64 MiB per input and 1 MiB per metadata file. Cache and published
+manifest snapshots retain their existing 16 MiB limits.
+
 ## What Is Materialized Inside Orchestrator
 
 | Path | Purpose |

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { isPlainRecord } from '../../core/records';
@@ -88,6 +89,62 @@ export function assertTaskTimelineAnchorUnchanged(
 
 const MAX_RUNTIME_MANIFEST_BYTES = 16 * 1024 * 1024;
 const MAX_RUNTIME_MODULE_BYTES = 64 * 1024 * 1024;
+const MAX_RUNTIME_INPUT_FILES = 8192;
+const MAX_RUNTIME_INPUT_ENTRIES = 65536;
+const MAX_RUNTIME_INPUT_DEPTH = 64;
+const MAX_RUNTIME_INPUT_BYTES = 128 * 1024 * 1024;
+const MAX_RUNTIME_METADATA_BYTES = 1024 * 1024;
+const RUNTIME_INPUT_ROOTS = ['package.json', 'package-lock.json', 'tsconfig.json',
+    'tsconfig.build.json', 'VERSION', 'src', 'scripts/node-foundation'] as const;
+const RUNTIME_INPUT_EXTENSIONS = new Set(['.cjs', '.js', '.json', '.ts']);
+
+interface RuntimeFingerprintFile {
+    path: string;
+    size: number;
+    sha256: string;
+}
+
+interface RuntimeInputScan {
+    pending: Array<{ absolutePath: string; depth: number }>;
+    entries: number;
+}
+
+type RuntimePathIdentities = Map<string, fs.Stats | null>;
+
+function sameRuntimePathSnapshot(left: fs.Stats | null, right: fs.Stats | null): boolean {
+    if (left === null || right === null) return left === right;
+    const sameType = (left.isFile() && right.isFile()) || (left.isDirectory() && right.isDirectory());
+    return sameType && !left.isSymbolicLink() && !right.isSymbolicLink()
+        && left.dev === right.dev && left.ino === right.ino && left.birthtimeMs === right.birthtimeMs
+        && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs
+        && left.mode === right.mode && left.nlink === right.nlink;
+}
+
+function retainRuntimePathIdentity(
+    identities: RuntimePathIdentities,
+    relativePath: string,
+    identity: fs.Stats | null
+): void {
+    if (identities.has(relativePath)
+        && !sameRuntimePathSnapshot(identities.get(relativePath) as fs.Stats | null, identity)) {
+        throw staleRuntimeFingerprint('runtime authority changed during generation validation: ' + relativePath);
+    }
+    identities.set(relativePath, identity);
+}
+
+function assertRuntimePathIdentitiesCurrent(repoRoot: string, identities: RuntimePathIdentities): void {
+    for (const [relativePath, expected] of identities) {
+        let current: fs.Stats | null;
+        try { current = fs.lstatSync(path.join(repoRoot, relativePath)); }
+        catch (error: unknown) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+            current = null;
+        }
+        if (!sameRuntimePathSnapshot(expected, current)) {
+            throw staleRuntimeFingerprint('runtime authority changed during generation validation: ' + relativePath);
+        }
+    }
+}
 
 function samePath(left: string, right: string): boolean {
     const normalize = (value: string): string => {
@@ -101,7 +158,8 @@ function readAuthenticatedRuntimeFile(
     repoRoot: string,
     filePath: string,
     label: string,
-    maxBytes: number
+    maxBytes: number,
+    identities: RuntimePathIdentities
 ): Buffer {
     const relativePath = normalizeGitPath(path.relative(repoRoot, filePath));
     const snapshot = readAuthenticatedRepoFileSnapshot(repoRoot, relativePath, maxBytes);
@@ -111,21 +169,228 @@ function readAuthenticatedRuntimeFile(
     if (snapshot.content.length > maxBytes) {
         throw new Error(`${label} exceeds the ${maxBytes}-byte limit.`);
     }
+    if (snapshot.identity === null) throw staleRuntimeFingerprint('runtime file identity is missing: ' + relativePath);
+    retainRuntimePathIdentity(identities, relativePath, snapshot.identity);
     return snapshot.content;
 }
 
-function readRuntimeManifest(repoRoot: string, manifestPath: string): Record<string, unknown> {
+function readRuntimeManifest(repoRoot: string, manifestPath: string, identities: RuntimePathIdentities): {
+    value: Record<string, unknown>;
+    sha256: string;
+} {
     const content = readAuthenticatedRuntimeFile(
         repoRoot,
         manifestPath,
         'runtime manifest',
-        MAX_RUNTIME_MANIFEST_BYTES
+        MAX_RUNTIME_MANIFEST_BYTES,
+        identities
+    );
+    const parsed: unknown = JSON.parse(content.toString('utf8'));
+    if (!isPlainRecord(parsed)) {
+        throw new Error(`runtime manifest must be a JSON object: ${manifestPath}`);
+    }
+    return { value: parsed, sha256: createHash('sha256').update(content).digest('hex') };
+}
+
+function staleRuntimeFingerprint(reason: string): Error {
+    return new Error(`stale runtime build cache fingerprint: ${reason}`);
+}
+
+function readRuntimeFingerprintMetadata(
+    repoRoot: string,
+    relativePath: string,
+    optional: boolean,
+    identities: RuntimePathIdentities
+): Record<string, unknown> | null {
+    const snapshot = readAuthenticatedRepoFileSnapshot(repoRoot, relativePath, MAX_RUNTIME_METADATA_BYTES);
+    retainRuntimePathIdentity(identities, relativePath, snapshot.identity);
+    if (!snapshot.exists || snapshot.content === null) {
+        if (optional) return null;
+        throw staleRuntimeFingerprint(`required build metadata is missing: ${relativePath}`);
+    }
+    try {
+        const parsed: unknown = JSON.parse(snapshot.content.toString('utf8'));
+        if (isPlainRecord(parsed)) return parsed;
+    } catch (error: unknown) {
+        if (!optional) throw staleRuntimeFingerprint(`invalid build metadata: ${relativePath}; ${String(error)}`);
+    }
+    if (optional) return null;
+    throw staleRuntimeFingerprint(`build metadata must be a JSON object: ${relativePath}`);
+}
+
+function assertRuntimeFingerprintMetadata(
+    repoRoot: string,
+    fingerprint: Record<string, unknown>,
+    identities: RuntimePathIdentities
+): void {
+    const pkg = readRuntimeFingerprintMetadata(repoRoot, 'package.json', false, identities) as Record<string, unknown>;
+    const compiler = readRuntimeFingerprintMetadata(repoRoot, 'node_modules/typescript/package.json', true, identities);
+    const expected = {
+        schemaVersion: 1,
+        kind: 'publish-runtime',
+        nodeVersion: process.version,
+        platform: process.platform,
+        arch: process.arch,
+        nodeEngineRange: isPlainRecord(pkg.engines) && typeof pkg.engines.node === 'string' && pkg.engines.node
+            ? pkg.engines.node : '^22.13.0 || >=24.0.0',
+        typescriptVersion: typeof compiler?.version === 'string' ? compiler.version : 'unknown'
+    };
+    if (Object.keys(fingerprint).length !== 10
+        || Object.entries(expected).some(([key, value]) => fingerprint[key] !== value)) {
+        throw staleRuntimeFingerprint('schema or build-host metadata does not match the current build inputs.');
+    }
+}
+
+function readRuntimeFingerprintFiles(fingerprint: Record<string, unknown>): RuntimeFingerprintFile[] {
+    if (!Array.isArray(fingerprint.files) || fingerprint.files.length > MAX_RUNTIME_INPUT_FILES
+        || fingerprint.fileCount !== fingerprint.files.length) {
+        throw staleRuntimeFingerprint('input file count is malformed or exceeds the bounded inventory.');
+    }
+    return fingerprint.files.map((entry: unknown) => {
+        if (!isPlainRecord(entry) || Object.keys(entry).length !== 3 || typeof entry.path !== 'string'
+            || !entry.path || !Number.isSafeInteger(entry.size) || (entry.size as number) < 0
+            || typeof entry.sha256 !== 'string' || !/^[0-9a-f]{64}$/u.test(entry.sha256)) {
+            throw staleRuntimeFingerprint('input file authority is malformed.');
+        }
+        return { path: entry.path, size: entry.size as number, sha256: entry.sha256 };
+    });
+}
+
+function enqueueRuntimeFingerprintDirectory(
+    absolutePath: string,
+    depth: number,
+    expected: fs.Stats,
+    scan: RuntimeInputScan
+): void {
+    const directory = fs.opendirSync(absolutePath);
+    try {
+        let entry: fs.Dirent | null;
+        while ((entry = directory.readSync()) !== null) {
+            if (entry.name === 'node_modules' || entry.name === '.git') continue;
+            if (++scan.entries > MAX_RUNTIME_INPUT_ENTRIES) {
+                throw staleRuntimeFingerprint('current input traversal exceeds its entry limit.');
+            }
+            scan.pending.push({ absolutePath: path.join(absolutePath, entry.name), depth: depth + 1 });
+        }
+    } finally {
+        directory.closeSync();
+    }
+    const current = fs.lstatSync(absolutePath);
+    if (!sameRuntimePathSnapshot(expected, current)) {
+        throw staleRuntimeFingerprint('input directory identity changed during traversal.');
+    }
+}
+
+function collectRuntimeFingerprintInputPaths(repoRoot: string, identities: RuntimePathIdentities): string[] {
+    const scan: RuntimeInputScan = {
+        pending: RUNTIME_INPUT_ROOTS.map((relativePath) => ({ absolutePath: path.join(repoRoot, relativePath), depth: 0 })),
+        entries: RUNTIME_INPUT_ROOTS.length
+    };
+    const files: string[] = [];
+    while (scan.pending.length > 0) {
+        const { absolutePath, depth } = scan.pending.pop() as { absolutePath: string; depth: number };
+        if (depth > MAX_RUNTIME_INPUT_DEPTH) throw staleRuntimeFingerprint('input traversal exceeds its depth limit.');
+        const relativePath = normalizeGitPath(path.relative(repoRoot, absolutePath));
+        let stat: fs.Stats;
+        try { stat = fs.lstatSync(absolutePath); }
+        catch (error: unknown) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT' && depth === 0) {
+                retainRuntimePathIdentity(identities, relativePath, null);
+                continue;
+            }
+            throw error;
+        }
+        if (stat.isSymbolicLink()) throw staleRuntimeFingerprint('linked input paths are not authoritative.');
+        if (depth === 0 || stat.isDirectory()) retainRuntimePathIdentity(identities, relativePath, stat);
+        if (stat.isDirectory()) {
+            enqueueRuntimeFingerprintDirectory(absolutePath, depth, stat, scan);
+        } else if (stat.isFile() && RUNTIME_INPUT_EXTENSIONS.has(path.extname(absolutePath))) {
+            files.push(normalizeGitPath(path.relative(repoRoot, absolutePath)));
+            if (files.length > MAX_RUNTIME_INPUT_FILES) throw staleRuntimeFingerprint('current input inventory exceeds its file limit.');
+        } else if (!stat.isFile()) {
+            throw staleRuntimeFingerprint('non-regular input paths are not authoritative.');
+        }
+    }
+    return [...new Set(files)].sort((left, right) => left.localeCompare(right));
+}
+
+function assertRuntimeFingerprintInputs(
+    repoRoot: string,
+    files: RuntimeFingerprintFile[],
+    identities: RuntimePathIdentities
+): void {
+    const currentPaths = collectRuntimeFingerprintInputPaths(repoRoot, identities);
+    if (currentPaths.length !== files.length || currentPaths.some((entry, index) => entry !== files[index].path)) {
+        throw staleRuntimeFingerprint('cached inventory does not match the complete current build inputs.');
+    }
+    let remainingBytes = MAX_RUNTIME_INPUT_BYTES;
+    for (const file of files) {
+        const content = readAuthenticatedRuntimeFile(repoRoot, path.join(repoRoot, file.path),
+            'runtime build cache fingerprint input', Math.min(MAX_RUNTIME_MODULE_BYTES, remainingBytes), identities);
+        remainingBytes -= content.length;
+        if (content.length !== file.size || createHash('sha256').update(content).digest('hex') !== file.sha256) {
+            throw staleRuntimeFingerprint(`current input content changed: ${file.path}`);
+        }
+    }
+    const afterPaths = collectRuntimeFingerprintInputPaths(repoRoot, identities);
+    if (afterPaths.length !== currentPaths.length || afterPaths.some((entry, index) => entry !== currentPaths[index])) {
+        throw staleRuntimeFingerprint('current input inventory changed during fingerprint validation.');
+    }
+}
+
+function hashRuntimeFingerprintPayload(
+    fingerprint: Record<string, unknown>,
+    files: RuntimeFingerprintFile[]
+): string {
+    // Schema 1 hashes the producer's field order, regardless of the cache JSON's key order.
+    const payload = {
+        schemaVersion: fingerprint.schemaVersion,
+        kind: fingerprint.kind,
+        nodeVersion: fingerprint.nodeVersion,
+        platform: fingerprint.platform,
+        arch: fingerprint.arch,
+        nodeEngineRange: fingerprint.nodeEngineRange,
+        typescriptVersion: fingerprint.typescriptVersion,
+        fileCount: files.length,
+        files
+    };
+    return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
+function readPublishedRuntimeFingerprint(
+    repoRoot: string,
+    publishedManifestSha256: string,
+    identities: RuntimePathIdentities
+): string {
+    const cachePath = path.join(repoRoot, '.scripts-build', 'publish-runtime-build-cache.json');
+    const content = readAuthenticatedRuntimeFile(
+        repoRoot,
+        cachePath,
+        'runtime build cache',
+        MAX_RUNTIME_MANIFEST_BYTES,
+        identities
     );
     const parsed: unknown = JSON.parse(content.toString('utf8'));
     if (!isPlainRecord(parsed) || !isPlainRecord(parsed.inputFingerprint)) {
-        throw new Error(`runtime manifest is missing authenticated input fingerprint: ${manifestPath}`);
+        throw new Error('runtime build cache is missing authenticated input fingerprint.');
     }
-    return parsed;
+    if (parsed.publishedManifestSha256 !== publishedManifestSha256) {
+        throw new Error('runtime build cache does not bind the current published manifest.');
+    }
+    if (parsed.inputFingerprint.kind !== 'publish-runtime') {
+        throw new Error('runtime build cache does not contain a publish-runtime fingerprint.');
+    }
+    const fingerprintSha256 = parsed.inputFingerprint.sha256;
+    if (typeof fingerprintSha256 !== 'string' || !/^[0-9a-f]{64}$/u.test(fingerprintSha256)) {
+        throw new Error('runtime build cache input fingerprint sha256 is missing or malformed.');
+    }
+    assertRuntimeFingerprintMetadata(repoRoot, parsed.inputFingerprint, identities);
+    const files = readRuntimeFingerprintFiles(parsed.inputFingerprint);
+    if (hashRuntimeFingerprintPayload(parsed.inputFingerprint, files) !== fingerprintSha256) {
+        throw staleRuntimeFingerprint('cached payload does not match its declared SHA-256.');
+    }
+    assertRuntimeFingerprintInputs(repoRoot, files, identities);
+    return fingerprintSha256;
 }
 
 function resolveBuildRoot(finalizerPath: string): { buildRoot: string; manifestPath: string } {
@@ -169,12 +434,8 @@ export function resolveLoadedSplitRequiredWipRuntimeGeneration(
             `restore finalizer loaded a foreign or fallback runtime generation: ${normalizePath(buildRoot)}`
         );
     }
-    const manifest = readRuntimeManifest(repoRoot, manifestPath);
-    const inputFingerprint = manifest.inputFingerprint as Record<string, unknown>;
-    const inputFingerprintSha256 = String(inputFingerprint.sha256 || '').trim().toLowerCase();
-    if (!/^[0-9a-f]{64}$/u.test(inputFingerprintSha256)) {
-        throw new Error('runtime manifest input fingerprint sha256 is missing or malformed.');
-    }
+    const identities: RuntimePathIdentities = new Map();
+    const { value: manifest, sha256: manifestSha256 } = readRuntimeManifest(repoRoot, manifestPath, identities);
     const manifestFiles = Array.isArray(manifest.files)
         ? new Set(manifest.files.filter((entry): entry is string => typeof entry === 'string'))
         : new Set<string>();
@@ -184,22 +445,26 @@ export function resolveLoadedSplitRequiredWipRuntimeGeneration(
             throw new Error(`runtime manifest does not bind required finalizer module: ${relativePath}`);
         }
     }
-    return {
+    const generation = {
         build_root: normalizePath(buildRoot),
-        input_fingerprint_sha256: inputFingerprintSha256,
+        input_fingerprint_sha256: readPublishedRuntimeFingerprint(repoRoot, manifestSha256, identities),
         finalizer_sha256: createHash('sha256').update(readAuthenticatedRuntimeFile(
             repoRoot,
             finalizerPath,
             'restore finalizer module',
-            MAX_RUNTIME_MODULE_BYTES
+            MAX_RUNTIME_MODULE_BYTES,
+            identities
         )).digest('hex'),
         writer_sha256: createHash('sha256').update(readAuthenticatedRuntimeFile(
             repoRoot,
             writerPath,
             'task-event writer module',
-            MAX_RUNTIME_MODULE_BYTES
+            MAX_RUNTIME_MODULE_BYTES,
+            identities
         )).digest('hex')
     };
+    assertRuntimePathIdentitiesCurrent(repoRoot, identities);
+    return generation;
 }
 
 function sameRuntimeGeneration(
