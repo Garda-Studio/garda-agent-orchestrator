@@ -282,6 +282,18 @@ function restoreSplitRequiredWipCore(
                 .map((entry) => normalizeGitPath(entry.path))
         );
         violations.push(...validateNoSymlinkPaths(repoRoot, effectiveSelectedPaths));
+        if (violations.length === 0) {
+            try {
+                validateRestoreArtifactAggregateBytes(manifest, selectedUntrackedFiles);
+                artifactSnapshots = captureRestoreArtifactSnapshots(
+                    repoRoot,
+                    manifest,
+                    params.dryRun ? [] : selectedUntrackedFiles
+                );
+            } catch (error: unknown) {
+                violations.push(error instanceof Error ? error.message : String(error));
+            }
+        }
         if (advancedHead) {
             if (selectedPaths.size === 0) {
                 violations.push('advanced restore requires at least one explicit include-path authorization.');
@@ -296,19 +308,15 @@ function restoreSplitRequiredWipCore(
             violations.push(...validateTrackedTargetObstructions(repoRoot, selectedTrackedFiles));
             violations.push(...validateAdvancedManifestBlobs(repoRoot, manifest, selectedTrackedFiles));
         } else {
-            violations.push(...validateSequentialRestoreWorkspace(repoRoot, manifest));
-        }
-        if (violations.length === 0) {
-            try {
-                validateRestoreArtifactAggregateBytes(manifest, selectedUntrackedFiles);
-                artifactSnapshots = captureRestoreArtifactSnapshots(
-                    repoRoot,
-                    manifest,
-                    params.dryRun ? [] : selectedUntrackedFiles
-                );
-            } catch (error: unknown) {
-                violations.push(error instanceof Error ? error.message : String(error));
+            // An explicit subset owns only its targets; earlier parent restoration stays authenticated.
+            if (selectedPaths.size > 0) {
+                violations.push(...validateSelectedTargetsClean(repoRoot, selectedPaths));
+                violations.push(...validateTrackedTargetObstructions(repoRoot, selectedTrackedFiles));
             }
+            violations.push(...validateSequentialRestoreWorkspace(repoRoot, manifest, {
+                allowUnrelatedTrackedChanges: selectedPaths.size > 0,
+                stagedPatchSnapshot: artifactSnapshots?.patches.staged
+            }));
         }
         if (params.dryRun && violations.length === 0) {
             violations.push(...validateSelectedUntrackedArtifactReferences(repoRoot, selectedUntrackedFiles));

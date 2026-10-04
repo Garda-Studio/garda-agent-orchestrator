@@ -1926,11 +1926,27 @@ function indexEntriesEqual(
     return JSON.stringify(left || null) === JSON.stringify(right || null);
 }
 
+function validateCapturedUntrackedIndex(repoRoot: string, manifest: SplitRequiredWipManifest): string[] {
+    const paths = manifest.untracked_files.map(entry => normalizeGitPath(entry.path));
+    if (paths.length === 0) return [];
+    const args = ['--literal-pathspecs', 'ls-files', '--stage', '-z', '--', ...paths];
+    const result = runGitStatus(repoRoot, args);
+    if (result.status !== 0) return [gitFailureMessage(args, result)];
+    return result.stdout.split('\0').filter(Boolean).map(entry => (
+        'captured untracked file has an index entry: ' + entry.slice(entry.indexOf('\t') + 1)
+    ));
+}
+
 export function validateSequentialRestoreWorkspace(
     repoRoot: string,
-    manifest: SplitRequiredWipManifest
+    manifest: SplitRequiredWipManifest,
+    options: {
+        allowUnrelatedTrackedChanges?: boolean;
+        validateSuspendedTrackedFiles?: boolean;
+        stagedPatchSnapshot?: Buffer;
+    } = {}
 ): string[] {
-    const violations: string[] = [];
+    const violations = validateCapturedUntrackedIndex(repoRoot, manifest);
     let unstagedPaths: string[];
     let stagedPaths: string[];
     try {
@@ -1947,15 +1963,20 @@ export function validateSequentialRestoreWorkspace(
     ]));
     const unauthorizedUnstaged = unstagedPaths.filter((relativePath) => !manifestEntries.has(relativePath));
     const unauthorizedStaged = stagedPaths.filter((relativePath) => !manifestEntries.has(relativePath));
-    if (unauthorizedUnstaged.length > 0) {
+    if (unauthorizedUnstaged.length > 0 && !options.allowUnrelatedTrackedChanges) {
         violations.push(`unstaged tracked changes exist: ${unauthorizedUnstaged.join(', ')}`);
     }
-    if (unauthorizedStaged.length > 0) {
+    if (unauthorizedStaged.length > 0 && !options.allowUnrelatedTrackedChanges) {
         violations.push(`staged changes exist: ${unauthorizedStaged.join(', ')}`);
     }
 
     const restoredPaths = new Set([...unstagedPaths, ...stagedPaths]
         .filter((relativePath) => manifestEntries.has(relativePath)));
+    if (options.validateSuspendedTrackedFiles) {
+        const suspended = manifest.tracked_files.filter(entry => !restoredPaths.has(normalizeGitPath(entry.path)));
+        violations.push(...validateSelectedTargetsClean(repoRoot, new Set(suspended.map(entry => entry.path))));
+        violations.push(...validateTrackedTargetObstructions(repoRoot, suspended));
+    }
     if (restoredPaths.size === 0) {
         return violations;
     }
@@ -1977,18 +1998,16 @@ export function validateSequentialRestoreWorkspace(
             throw new Error(gitFailureMessage(readTreeArgs, readTree));
         }
         if (hasPatchContent(manifest.patches.staged)) {
-            const stagedPatchPath = resolveInputPathInsideRepo(
-                repoRoot,
-                manifest.patches.staged.path,
-                'staged patch'
-            );
+            const stagedPatchPath = options.stagedPatchSnapshot === undefined
+                ? resolveInputPathInsideRepo(repoRoot, manifest.patches.staged.path, 'staged patch')
+                : '-';
             const applyArgs = [
                 'apply',
                 '--cached',
                 ...buildGitApplyIncludeArgs(restoredPaths),
                 stagedPatchPath
             ];
-            const applied = runGitStatus(repoRoot, applyArgs, gitEnvironment(expectedIndexPath));
+            const applied = runGitStatus(repoRoot, applyArgs, gitEnvironment(expectedIndexPath), options.stagedPatchSnapshot);
             if (applied.status !== 0) {
                 throw new Error(gitFailureMessage(applyArgs, applied));
             }

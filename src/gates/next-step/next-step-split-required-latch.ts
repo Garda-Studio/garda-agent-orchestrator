@@ -32,6 +32,7 @@ import {
     type SplitRequiredWipCaptureResult
 } from '../split-required/split-required-wip';
 import { resolveWipRoot } from '../split-required/split-required-wip-contracts';
+import { reuseRetainedWipForDecomposition } from '../split-required/split-required-wip-decomposition';
 import {
     collectOrderedTimelineEvents
 } from '../completion/completion-evidence';
@@ -372,6 +373,14 @@ export function suspendSplitRequiredWipBeforeDecomposition(params: {
             violations: []
         };
     }
+
+    const retained = reuseRetainedWipForDecomposition({
+        repoRoot: params.repoRoot,
+        taskId: params.taskId,
+        preflightPath: path.join(params.reviewsRoot, `${params.taskId}-preflight.json`),
+        guardKind
+    });
+    if (retained) return retained;
 
     return captureAndSuspendSplitRequiredWip({
         repoRoot: params.repoRoot,
