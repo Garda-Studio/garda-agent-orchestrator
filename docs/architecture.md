@@ -153,6 +153,45 @@ While a manifest is suspended, each handoff digest must equal its authenticated
 bytes. Retirement changes those bytes while preserving the original producer
 handoff digest; lifecycle callers validate that transition's authority.
 
+`src/lifecycle/cleanup/cleanup-wip-preview.ts` owns surviving reference and
+canonical retirement authority. `previewRetiredWipCleanup`, exported through
+`src/lifecycle/cleanup.ts`, takes an exact task selection and optional manifest
+selection. Its read-only result includes package classifications, counts, bytes,
+blockers and a deterministic `ownership_digest` bound to the package tree,
+queue, timelines and retained containment identities. Only a retired orphan
+with one canonical retirement event matching its current manifest is admitted.
+Finalized handoffs must match their unique canonical restore event, capture,
+predecessor anchor and runtime generation. Pending handoffs, suspended work,
+malformed authority and unfinished same-task or cross-task references block
+admission. References cover manifests, package directories and descendants,
+including Windows case variants and normalized repository-parent re-entry
+paths. Relative references with spaces, parentheses, brackets and apostrophes
+are recognized in delimited Notes and event details. Fallback alias resolution
+preserves complete directory names, checks at most 128 candidates/occurrences
+per string and scans at most 32,768 characters per candidate; exceeding either
+bound leaves the package ambiguous and blocks cleanup. Namespace enumeration
+stops at the shared entry limit before
+allocating excess names. Preview also caps a conservative estimate of global
+revalidation at 65,536 checks across the initial check and every selected file
+and directory mutation. The estimate includes authority files, timeline locks,
+retained boundaries, directory watches and lifecycle/queue ownership checks.
+An excessive selection is blocked before removal acquires any locks; use a
+smaller selection or defer cleanup until fewer tasks remain unfinished.
+
+`src/lifecycle/cleanup/cleanup-wip-removal.ts` owns confirmed mutation.
+`removeRetiredWipPackages` requires `confirmed: true` and the exact preview
+digest. It returns `CONFIRMATION_REQUIRED`, `BLOCKED`, `REMOVED` or `INCOMPLETE`,
+with removed package, file and byte counts, `mutation_attempted` and `counts_complete`.
+Apply reacquires lifecycle, queue and canonical timeline locks, rebuilds and
+compares the entire selected snapshot, then checks exact retained membership
+with the explicit WIP entry quota before the first deletion. It rechecks lock
+generations, authority, containment and file identity while consuming each
+operation. Each package manifest is removed after its payloads. Partial
+mutation is reported as incomplete; old-digest retries preserve residual data
+for explicit recovery. Source files, queue rows and task timelines survive.
+The `wip-task-packages` cleanup ownership entry excludes these packages from
+automatic GC, retention and ordinary task-purge collectors.
+
 Before split-required decomposition, the authenticated latch route creates a
 separate immutable capture of current authorized parent WIP. It does not reuse
 an earlier complete capture as checkout evidence after partial restoration or

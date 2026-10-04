@@ -102,6 +102,22 @@ export interface RuntimeCleanupStandardPaths {
 
 export const RUNTIME_CLEANUP_OWNERSHIP_ENTRIES = Object.freeze([
     {
+        id: 'wip-task-packages',
+        location: 'runtime/wip/<task-id>/**',
+        ownership: 'mixed',
+        selectionUnit: 'task-subtree',
+        taskLocator: 'Exact canonical task directory and authenticated package manifest identity.',
+        taskPurgeMode: 'exclude-from-task-purge',
+        retentionMode: 'operator-managed',
+        sharedSideEffects: [],
+        notes: [
+            'Only explicitly confirmed retired orphan packages may be removed through the separate WIP backend.',
+            'Suspended work, unfinished cross-task references, pending restore handoffs and ambiguous ownership are preserved.',
+            'WIP is excluded from automatic GC, retention and ordinary task-purge candidate walkers.'
+        ],
+        examples: ['runtime/wip/<task-id>/split-required/<timestamp>/manifest.json']
+    },
+    {
         id: 'manual-validation-task-root',
         location: 'runtime/manual-validation/<task-id>/',
         ownership: 'task-scoped',
