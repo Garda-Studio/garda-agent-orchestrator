@@ -5,6 +5,7 @@ import {
 } from '../exit-codes';
 import {
     buildWindowsBatchCommandLine,
+    createOutputCapture,
     spawnShellCommand,
     spawnStreamed,
     spawnSyncWithTimeout,
@@ -12,8 +13,12 @@ import {
 } from '../../core/subprocess';
 import { assertDependentValidationChainReady } from '../../core/dependent-validation-chains';
 import { redactSecretText } from '../../core/redaction';
+import { parseCommandChain } from '../../core/command-line';
+export { splitCommandLine } from '../../core/command-line';
 
 export const DEFAULT_SUBPROCESS_TIMEOUT_MS = 600_000;
+const COMMAND_CHAIN_OUTPUT_MAX_BYTES = 40 * 1024 * 1024;
+type CommandChainOutput = ReturnType<typeof createOutputCapture>;
 
 export interface ExecuteCommandOptions {
     cwd?: string;
@@ -67,67 +72,6 @@ function buildSubprocessEnv(overrides?: Record<string, string | undefined>): Nod
     return env;
 }
 
-export function splitCommandLine(commandText: unknown): string[] {
-    const text = String(commandText || '').trim();
-    if (!text) {
-        return [];
-    }
-
-    const tokens: string[] = [];
-    let current = '';
-    let quote = '';
-    let escaping = false;
-
-    for (let index = 0; index < text.length; index += 1) {
-        const character = text[index];
-
-        if (escaping) {
-            current += character;
-            escaping = false;
-            continue;
-        }
-
-        if (quote) {
-            if (quote === '"' && character === '\\') {
-                const nextCharacter = text[index + 1];
-                if (nextCharacter === '"' || nextCharacter === '\\') {
-                    escaping = true;
-                    continue;
-                }
-            }
-            if (character === quote) {
-                quote = '';
-            } else {
-                current += character;
-            }
-            continue;
-        }
-
-        if (character === '"' || character === '\'') {
-            quote = character;
-            continue;
-        }
-
-        if (/\s/.test(character)) {
-            if (current) {
-                tokens.push(current);
-                current = '';
-            }
-            continue;
-        }
-
-        current += character;
-    }
-
-    if (escaping || quote) {
-        throw new Error(`Command contains unterminated escaping or quotes: ${commandText}`);
-    }
-    if (current) {
-        tokens.push(current);
-    }
-    return tokens;
-}
-
 function findExecutableCandidate(candidatePath: string, extensions: string[]): string | null {
     if (path.extname(candidatePath)) {
         return fs.existsSync(candidatePath) && fs.statSync(candidatePath).isFile() ? candidatePath : null;
@@ -142,7 +86,7 @@ function findExecutableCandidate(candidatePath: string, extensions: string[]): s
 }
 
 export function resolveExecutablePath(executableName: unknown, cwd?: string, envPath?: string): string {
-    const requested = String(executableName || '').trim();
+    const requested = String(executableName || '');
     if (!requested) {
         throw new Error('Executable name must not be empty.');
     }
@@ -179,12 +123,16 @@ export function resolveExecutablePath(executableName: unknown, cwd?: string, env
     throw new Error(`${requested} is required but was not found in PATH.`);
 }
 
-export async function executeCommandAsync(commandText: string, options: ExecuteCommandOptions = {}): Promise<AsyncCommandExecutionResult> {
+function deferredSpawnObserver(callback: ExecuteCommandOptions['onSpawn']): ExecuteCommandOptions['onSpawn'] {
+    if (!callback) return undefined;
+    // Let adapters attach cancellation listeners before an observer can abort the child.
+    return (child) => queueMicrotask(() => {
+        try { callback(child); } catch (_error) { /* Diagnostic observers must not disrupt process cleanup. */ }
+    });
+}
+
+async function executeCommandSegmentAsync(tokens: string[], options: ExecuteCommandOptions): Promise<AsyncCommandExecutionResult> {
     const cwd = options.cwd || process.cwd();
-    const tokens = splitCommandLine(commandText);
-    if (tokens.length === 0) {
-        throw new Error('Command must not be empty.');
-    }
     assertDependentValidationChainReady(tokens, cwd);
 
     const executablePath = resolveExecutablePath(tokens[0], cwd, options.envPath);
@@ -198,14 +146,14 @@ export async function executeCommandAsync(commandText: string, options: ExecuteC
             env,
             timeoutMs,
             signal: options.signal ?? undefined,
-            onSpawn: options.onSpawn
+            onSpawn: deferredSpawnObserver(options.onSpawn)
         })
         : await spawnStreamed(executablePath, args, {
             cwd,
             env,
             timeoutMs,
             signal: options.signal ?? undefined,
-            onSpawn: options.onSpawn
+            onSpawn: deferredSpawnObserver(options.onSpawn)
         });
 
     if (result.timedOut) {
@@ -245,12 +193,8 @@ export async function executeCommandAsync(commandText: string, options: ExecuteC
     };
 }
 
-export function executeCommand(commandText: string, options: ExecuteCommandOptions = {}): SyncCommandExecutionResult {
+function executeCommandSegment(tokens: string[], options: ExecuteCommandOptions): SyncCommandExecutionResult {
     const cwd = options.cwd || process.cwd();
-    const tokens = splitCommandLine(commandText);
-    if (tokens.length === 0) {
-        throw new Error('Command must not be empty.');
-    }
     assertDependentValidationChainReady(tokens, cwd);
 
     const executablePath = resolveExecutablePath(tokens[0], cwd, options.envPath);
@@ -303,4 +247,86 @@ export function executeCommand(commandText: string, options: ExecuteCommandOptio
         outputLines,
         timedOut: false
     };
+}
+
+function commandChainDeadline(timeoutMs: number): number {
+    return timeoutMs > 0 ? performance.now() + timeoutMs : Number.POSITIVE_INFINITY;
+}
+
+function remainingChainTimeout(deadline: number): number {
+    return Number.isFinite(deadline) ? Math.max(1, Math.ceil(deadline - performance.now())) : 0;
+}
+
+function getCommandChainInterruption(
+    options: ExecuteCommandOptions,
+    deadline: number,
+    timeoutMs: number,
+    output: CommandChainOutput
+): AsyncCommandExecutionResult | null {
+    const cancelled = options.signal?.aborted === true;
+    const timedOut = !cancelled && performance.now() >= deadline;
+    if (!cancelled && !timedOut) return null;
+    output.append(cancelled ? 'Process was cancelled.\n' : 'Process timed out after ' + timeoutMs + ' ms.\n');
+    return {
+        exitCode: EXIT_GENERAL_FAILURE,
+        outputLines: finishCommandChainOutput(output),
+        timedOut,
+        cancelled
+    };
+}
+
+function appendCommandChainOutput(
+    output: CommandChainOutput,
+    result: SyncCommandExecutionResult,
+    timeoutMs: number
+): void {
+    const lines = result.timedOut
+        ? [...result.outputLines.slice(0, -1), 'Process timed out after ' + timeoutMs + ' ms.']
+        : result.outputLines;
+    if (lines.length > 0) output.append(lines.join('\n') + '\n');
+}
+
+function finishCommandChainOutput(output: CommandChainOutput): string[] {
+    return redactOutputLines(splitOutputLines(output.finish().text));
+}
+
+export async function executeCommandAsync(
+    commandText: string,
+    options: ExecuteCommandOptions = {}
+): Promise<AsyncCommandExecutionResult> {
+    const commands = parseCommandChain(commandText);
+    const timeoutMs = typeof options.timeoutMs === 'number' ? options.timeoutMs : DEFAULT_SUBPROCESS_TIMEOUT_MS;
+    const deadline = commandChainDeadline(timeoutMs);
+    const output = createOutputCapture(COMMAND_CHAIN_OUTPUT_MAX_BYTES);
+    for (const tokens of commands) {
+        const interruption = getCommandChainInterruption(options, deadline, timeoutMs, output);
+        if (interruption) return interruption;
+        const result = await executeCommandSegmentAsync(tokens, {
+            ...options,
+            timeoutMs: remainingChainTimeout(deadline)
+        });
+        appendCommandChainOutput(output, result, timeoutMs);
+        if (result.exitCode !== 0 || result.timedOut || result.cancelled) return { ...result, outputLines: finishCommandChainOutput(output) };
+    }
+    return { exitCode: 0, outputLines: finishCommandChainOutput(output), timedOut: false, cancelled: false };
+}
+
+export function executeCommand(commandText: string, options: ExecuteCommandOptions = {}): SyncCommandExecutionResult {
+    const commands = parseCommandChain(commandText);
+    const timeoutMs = typeof options.timeoutMs === 'number' ? options.timeoutMs : DEFAULT_SUBPROCESS_TIMEOUT_MS;
+    const deadline = commandChainDeadline(timeoutMs);
+    const output = createOutputCapture(COMMAND_CHAIN_OUTPUT_MAX_BYTES);
+    for (const tokens of commands) {
+        const interruption = getCommandChainInterruption(options, deadline, timeoutMs, output);
+        if (interruption) {
+            return { exitCode: interruption.exitCode, outputLines: interruption.outputLines, timedOut: interruption.timedOut };
+        }
+        const result = executeCommandSegment(tokens, {
+            ...options,
+            timeoutMs: remainingChainTimeout(deadline)
+        });
+        appendCommandChainOutput(output, result, timeoutMs);
+        if (result.exitCode !== 0 || result.timedOut) return { ...result, outputLines: finishCommandChainOutput(output) };
+    }
+    return { exitCode: 0, outputLines: finishCommandChainOutput(output), timedOut: false };
 }

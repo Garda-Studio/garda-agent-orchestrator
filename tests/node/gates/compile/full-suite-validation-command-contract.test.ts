@@ -6,6 +6,32 @@ import {
 } from '../../../../src/cli/commands/gate-flows/full-suite/full-suite-command-contract';
 
 describe('full-suite command contract', () => {
+    it('rejects syntax that the shared executor cannot parse before execution', () => {
+        assert.equal(validateFullSuiteCommandContract('MODE=build node build.js').supported, false);
+        for (const command of ['MODE=build node build.js', 'node build.js "unterminated', 'node build.js \u0000']) {
+            const result = validateFullSuiteCommandContract(command);
+            assert.equal(result.supported, false, command);
+            assert.equal(result.provenance.rejection_reason, 'INVALID_ARGUMENT_SYNTAX', command);
+            assert.match(result.violation || '', /argument syntax.*wrapper/i, command);
+        }
+    });
+
+    it('preserves unquoted literal punctuation in direct suite arguments', () => {
+        const result = validateFullSuiteCommandContract('node build.js $NAME folder(name) `value` $(value)');
+        assert.equal(result.supported, true);
+        assert.equal(result.provenance.validation_status, 'PASSED');
+        assert.equal(result.violation, null);
+    });
+
+    it('preserves quoted literal punctuation and empty arguments in direct suite commands', () => {
+        for (const command of ['node build.js "$NAME"', 'node build.js "folder(name)"',
+            'node build.js "`value`"', 'node build.js "a;b>c<d"', 'node build.js ""',
+            'env MODE=build node build.js', 'node --test --test-name-pattern "(A|B)$" test.js']) {
+            assert.equal(validateFullSuiteCommandContract(command).supported, true, command);
+        }
+        assert.equal(validateFullSuiteCommandContract('').supported, true);
+    });
+
     it('rejects unquoted compound command syntax before execution', () => {
         const result = validateFullSuiteCommandContract('node first.js && node second.js');
 

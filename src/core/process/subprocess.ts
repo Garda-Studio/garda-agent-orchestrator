@@ -788,7 +788,7 @@ function resolveCapturePolicy(maxBuffer: number, policy?: OutputCapturePolicy): 
     };
 }
 
-function createOutputCapture(maxBuffer: number, capturePolicy?: OutputCapturePolicy): {
+export function createOutputCapture(maxBuffer: number, capturePolicy?: OutputCapturePolicy): {
     append(chunk: string): void;
     finish(): CapturedOutput;
 } {

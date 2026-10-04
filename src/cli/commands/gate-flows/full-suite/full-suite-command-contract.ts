@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import type { FullSuiteCommandProvenance } from '../../../../gates/full-suite/full-suite-validation';
-import { splitCommandLine } from '../../../gate-cli/gates-subprocess';
+import { parseCommandChain } from '../../../../core/command-line';
 
 export interface FullSuiteCommandContractResult {
     supported: boolean;
@@ -311,14 +311,17 @@ export function validateFullSuiteCommandContract(command: string): FullSuiteComm
 
     let tokens: string[];
     try {
-        tokens = splitCommandLine(command);
-    } catch {
+        tokens = command.trim() ? parseCommandChain(command)[0] : [];
+    } catch (error) {
+        const detail = error instanceof Error && error.message.includes('unterminated')
+            ? 'unterminated quoting or escaping' : error instanceof Error ? error.message : 'invalid argument syntax';
         return {
             supported: false,
-            provenance: buildProvenance('REJECTED', 'INVALID_ARGUMENT_SYNTAX', 'unterminated quote or escape'),
+            provenance: buildProvenance('REJECTED', 'INVALID_ARGUMENT_SYNTAX', detail),
             violation:
-                'Configured full-suite command has unterminated quoting or escaping. '
-                + 'Use a directly executable command or a trusted wrapper npm script.'
+                'Configured full-suite command has invalid argument syntax. '
+                + detail + '. '
+                + 'Quote literal punctuation or use a directly executable command or a trusted wrapper npm script.'
         };
     }
 

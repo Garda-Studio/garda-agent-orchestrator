@@ -2,6 +2,17 @@
 
 ## 1.4.4
 
+### Compile Command Chains
+
+- Execute supported unquoted `&&` chains sequentially in both command executors, preserve quoted arguments, stop at the first failing child, and apply one timeout and cancellation boundary to the chain.
+- Validate the same restricted syntax during compile configuration and init, reject unsupported shell constructs before any child starts, and keep each command's test-suite restrictions independent. A failed chained child now blocks the native compile gate and subsequent review.
+- Preserve compile/test restrictions for executable npm call strings and pnpm shell mode while retaining ordinary argument data and package-runner option boundaries.
+- Reject shell expansion, ambiguous native escaping, unquoted grouping and shell comments in recognized executable strings, preserve literal direct argv, hashes and simple double-quoted parentheses, and compare enclosing shell-call segments against the configured full-suite command before expanding them for validation.
+- Reject native inline shell dispatch and env split-string execution in compile configuration, preserve interpreter wrapper-file arguments, and keep PNPM workspace-root flags boolean, including its `pn` alias.
+- Preserve delegated argv authority after explicit WSL `--exec`/`-e`, apply compile/test and native-dispatch restrictions to its actual program, and detect configured full-suite commands at every recognized executable boundary, including intermediate package runners beneath transparent wrappers. Keep host option operands and quoted program data literal; reject unsupported WSL host forms with executable-boundary or trusted-wrapper guidance.
+- Preserve attached and clustered `env` option operands when locating its delegated program; reject actual split-string dispatch without mistaking operand text for an option. Validate full-suite argument syntax with the shared executor parser before execution. Preserve ordinary unquoted dollar signs, parentheses and backticks as literal direct argv, alongside quoted control operators and empty direct-program arguments.
+- Bound each chain's aggregate output payload to 40 MiB plus a diagnostic truncation marker using the existing UTF-8 head/tail capture and final redaction. Local validation covers Windows and Linux Node 24; WSL host invocation is checked on Windows, and macOS is unverified.
+
 ### Review And Completion Fixes
 
 - Keep review-cycle restart events bounded by storing large delta classifications in immutable snapshots with hash-bound references and authenticated reads.
