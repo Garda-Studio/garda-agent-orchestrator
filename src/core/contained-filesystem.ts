@@ -190,6 +190,7 @@ export function copyContainedFile(
 }
 
 const DIRECTORY_READ_BUFFER_SIZE = 32;
+const DEFAULT_CONTAINED_REMOVAL_ENTRY_LIMIT = 4096;
 
 function assertEntryLimit(maximumEntries: number): void {
     if (!Number.isSafeInteger(maximumEntries) || maximumEntries < 0) {
@@ -339,7 +340,8 @@ function assertRetainedTree(entries: readonly RemovalEntry[], retained: readonly
 }
 
 export function assertBoundContainedRemovalTree(
-    binding: ContainedDestination, maximumEntries: number, retained?: readonly ContainedDestination[]
+    binding: ContainedDestination, maximumEntries = DEFAULT_CONTAINED_REMOVAL_ENTRY_LIMIT,
+    retained?: readonly ContainedDestination[]
 ): void {
     assertEntryLimit(maximumEntries);
     if (retained && retained.length > maximumEntries) throw new Error('Contained snapshot entry limit exceeded.');
