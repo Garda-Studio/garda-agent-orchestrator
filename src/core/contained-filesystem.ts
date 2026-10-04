@@ -189,6 +189,35 @@ export function copyContainedFile(
     }, false, onReplaced);
 }
 
+const DIRECTORY_READ_BUFFER_SIZE = 32;
+
+function assertEntryLimit(maximumEntries: number): void {
+    if (!Number.isSafeInteger(maximumEntries) || maximumEntries < 0) {
+        throw new Error('Contained directory entry limit must be a nonnegative safe integer.');
+    }
+}
+
+export function readBoundedContainedDirectory(binding: ContainedDestination, maximumEntries: number): string[] {
+    assertEntryLimit(maximumEntries);
+    assertContainedDestination(binding);
+    const directory = fs.opendirSync(binding.path, {
+        bufferSize: Math.min(DIRECTORY_READ_BUFFER_SIZE, maximumEntries + 1)
+    });
+    const names: string[] = [];
+    try {
+        for (let entry = directory.readSync(); entry; entry = directory.readSync()) {
+            if (names.length >= maximumEntries) {
+                throw new Error(`Contained directory entry limit exceeded: ${binding.path}`);
+            }
+            names.push(entry.name);
+        }
+    } finally {
+        directory.closeSync();
+    }
+    assertContainedDestination(binding);
+    return names.sort();
+}
+
 interface RemovalEntry {
     readonly binding: ContainedDestination;
     readonly directory: boolean;
@@ -241,7 +270,11 @@ function assertRemovalMountBoundary(
     }
 }
 
-function collectRemovalEntries(rootBinding: ContainedDestination): RemovalEntry[] {
+function collectRemovalEntries(
+    rootBinding: ContainedDestination, maximumEntries?: number, retained?: ReadonlyMap<string, ContainedDestination>
+): RemovalEntry[] {
+    const entryLimit = maximumEntries ?? Number.MAX_SAFE_INTEGER;
+    assertEntryLimit(entryLimit);
     const pending = [rootBinding];
     const entries: RemovalEntry[] = [];
     const rootStat = lstatIdentityIfPresent(rootBinding.path);
@@ -249,6 +282,7 @@ function collectRemovalEntries(rootBinding: ContainedDestination): RemovalEntry[
     const rootDevice = rootStat.dev;
     const mountPoints = mountedDirectoryPaths();
     while (pending.length > 0) {
+        if (entries.length >= entryLimit) throw new Error('Contained tree entry limit exceeded.');
         const binding = pending.pop()!;
         const currentPath = binding.path;
         assertContainedDestination(binding);
@@ -258,8 +292,15 @@ function collectRemovalEntries(rootBinding: ContainedDestination): RemovalEntry[
         entries.push({ binding, directory: stat.isDirectory() });
         if (stat.isDirectory()) {
             const before = lstatFileIdentitySync(currentPath, { bigint: true });
-            const children = fs.readdirSync(currentPath).sort().map((name) =>
-                bindContainedDestination(rootBinding.root, path.join(currentPath, name)));
+            const names = maximumEntries === undefined ? fs.readdirSync(currentPath).sort()
+                : readBoundedContainedDirectory(binding, maximumEntries - entries.length - pending.length);
+            const children = names.map(name => {
+                const childPath = path.join(currentPath, name);
+                if (!retained) return bindContainedDestination(rootBinding.root, childPath);
+                const original = retained.get(removalKey(childPath));
+                if (!original) throw new Error('Contained tree membership changed since the retained snapshot.');
+                return original;
+            });
             const after = lstatFileIdentitySync(currentPath, { bigint: true });
             if (before.dev !== after.dev || before.ino !== after.ino || before.mode !== after.mode
                 || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) {
@@ -275,6 +316,43 @@ function collectRemovalEntries(rootBinding: ContainedDestination): RemovalEntry[
         assertRemovalMountBoundary(entry.binding.path, rootDevice, currentMountPoints);
     }
     return entries;
+}
+
+function assertRetainedTree(entries: readonly RemovalEntry[], retained: readonly ContainedDestination[]): void {
+    const expected = new Map(retained.map(binding => [removalKey(binding.path), binding]));
+    if (expected.size !== retained.length || entries.length !== expected.size) {
+        throw new Error('Contained tree membership changed since the retained snapshot.');
+    }
+    for (const entry of entries) {
+        const original = expected.get(removalKey(entry.binding.path));
+        if (!original || original.missingAt !== null || original.existing.length !== entry.binding.existing.length
+            || original.existing.some((before, index) => {
+                const after = entry.binding.existing[index];
+                return !after || removalKey(before.path) !== removalKey(after.path)
+                    || before.dev !== after.dev || before.ino !== after.ino || before.mode !== after.mode
+                    || before.birthtimeNs !== after.birthtimeNs;
+            })) {
+            throw new Error(`Contained tree identity changed since the retained snapshot: ${entry.binding.path}`);
+        }
+        assertContainedDestination(original);
+    }
+}
+
+export function assertBoundContainedRemovalTree(
+    binding: ContainedDestination, maximumEntries: number, retained?: readonly ContainedDestination[]
+): void {
+    assertEntryLimit(maximumEntries);
+    if (retained && retained.length > maximumEntries) throw new Error('Contained snapshot entry limit exceeded.');
+    if (path.relative(binding.root, binding.path) === '') {
+        throw new Error(`Refusing to remove containment root: ${binding.path}`);
+    }
+    assertRemovalNotAmbiguous(binding.path);
+    const retainedIndex = retained ? new Map(retained.map(item => [removalKey(item.path), item])) : undefined;
+    if (retainedIndex && retainedIndex.size !== retained!.length) {
+        throw new Error('Contained tree membership changed since the retained snapshot.');
+    }
+    const entries = collectRemovalEntries(binding, maximumEntries, retainedIndex);
+    if (retained) assertRetainedTree(entries, retained);
 }
 
 export function removeBoundContainedPath(

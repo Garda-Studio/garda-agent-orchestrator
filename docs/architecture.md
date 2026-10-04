@@ -106,6 +106,53 @@ project-root/
 
 All generated directories are both gitignored and excluded from IDE indexing by the shipped `.vscode/settings.json`.
 
+`src/lifecycle/cleanup/cleanup-wip-ownership.ts` owns read-only WIP package
+snapshots. Authentication validates the canonical capture location and exact
+manifest schema, declared patch and untracked payload hashes and sizes, and
+the complete contained package tree. Unknown members, links, shared files,
+missing declarations and replaced filesystem identities fail closed. Optional
+shared read budgets reserve observed manifest and file bytes before opening
+them; malformed JSON, rejected schemas and oversized reads retain their charge.
+Observed payload size must equal its declaration and fit the remaining package
+capacity before the file is opened. Authenticated reads still cap the descriptor
+at the admitted size and recheck bytes and metadata after reading.
+Directory enumeration reads bounded entries through a closed directory handle,
+including the final containment inspection. Its allowance accounts for already
+retained and pending members before allocating names. Suspended manifests cannot
+claim retirement metadata, and nested restore commands admit only known fields.
+Declared source depth cannot exceed the package entry limit. Directory membership
+uses a component index bounded to twice that limit, covering original and possible
+suspended payload directories without retaining every full ancestor path. Both
+bounds apply before package directory reads.
+Snapshot metadata has a separate 64 MiB admission allowance per package and a
+shared allowance carried by `remainingSnapshotBytes` (initialized to the same
+limit when omitted). Conservative identity and path-character weights bound the
+potential declared ancestry before traversal; rejected snapshots retain their
+charge. The weights are a resource quota, not a heap measurement. Bindings and
+file identities use compact SHA256 values, and sorted tree identities are hashed
+incrementally. Closing inspection reuses retained bindings and rejects new
+members before capturing or enumerating their ancestry.
+Closing inspection compares exact membership and retained ancestry identities
+with the captured tree. File size, mtime and ctime must remain unchanged across
+authenticated reading and snapshot completion; this catches in-place changes
+without rereading payload bytes during closing inspection.
+Retained directory identities, modification times and change times are rechecked
+after closing traversal and file verification, with descendants before the root.
+This rejects members added to an already-enumerated parent while closing
+inspection visits its descendants.
+
+Restore handoffs reuse the producer's identity builder and restored-file
+selection contract. Prepared, pending and finalized states each require their
+own exact evidence shape. Identity reconstruction fixes timeline-anchor field
+order and retains the producer's manifest spelling while admitting equivalent
+Windows selections. Runtime generation comparison is independent of serialized
+field order. The package snapshot provides authenticated bytes and retained
+filesystem bindings; lifecycle callers own retirement authority, surviving
+references, confirmation and subsequent mutation checks.
+While a manifest is suspended, each handoff digest must equal its authenticated
+bytes. Retirement changes those bytes while preserving the original producer
+handoff digest; lifecycle callers validate that transition's authority.
+
 Before split-required decomposition, the authenticated latch route creates a
 separate immutable capture of current authorized parent WIP. It does not reuse
 an earlier complete capture as checkout evidence after partial restoration or
