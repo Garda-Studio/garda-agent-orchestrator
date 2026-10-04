@@ -2,8 +2,11 @@ import {
     buildDashboardClientScript,
     renderDashboardBodyMarkup,
     renderDashboardPlanModalMarkup,
+    UI_DASHBOARD_DARK_THEME_STYLES,
     UI_DASHBOARD_POLISH_STYLES,
-    UI_DASHBOARD_STYLES
+    UI_DASHBOARD_REFRESH_STYLES,
+    UI_DASHBOARD_STYLES,
+    UI_DASHBOARD_THEME_HEAD_SCRIPT
 } from './dashboard';
 import {
     getLocalUiText,
@@ -33,7 +36,12 @@ export function renderLocalUiHtml(actionsEnabled: boolean, actionToken: string, 
 ${UI_DASHBOARD_STYLES}
 ${UI_DASHBOARD_POLISH_STYLES}
 ${UPDATE_AVAILABILITY_STYLES}
+${UI_DASHBOARD_REFRESH_STYLES}
+${UI_DASHBOARD_DARK_THEME_STYLES}
 </style>
+<script data-garda-theme-boot>
+${UI_DASHBOARD_THEME_HEAD_SCRIPT}
+</script>
 </head>
 <body>
 ${bodyMarkup}

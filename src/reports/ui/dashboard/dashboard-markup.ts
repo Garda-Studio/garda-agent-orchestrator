@@ -22,6 +22,7 @@ export const UI_DASHBOARD_MARKUP = `<header>
 </div>
 </div>
 <label class="language-compact"><span class="language-icon" aria-hidden="true">&#127760;</span><span class="visually-hidden" data-i18n="languageTitle">\${text.languageTitle}</span><select id="language-select" data-i18n-aria-label="languageTitle"></select></label>
+<label class="language-compact theme-compact"><span class="language-icon" aria-hidden="true">&#9680;</span><span class="visually-hidden" data-i18n="themeTitle">\${text.themeTitle}</span><select id="theme-select" data-i18n-aria-label="themeTitle"><option value="system" data-i18n="themeSystem">\${text.themeSystem}</option><option value="light" data-i18n="themeLight">\${text.themeLight}</option><option value="dark" data-i18n="themeDark">\${text.themeDark}</option></select></label>
 </div>
 </div>
 </header>
