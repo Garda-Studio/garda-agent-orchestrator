@@ -88,6 +88,7 @@ export function assertTaskTimelineAnchorUnchanged(
 
 const MAX_RUNTIME_MANIFEST_BYTES = 16 * 1024 * 1024;
 const MAX_RUNTIME_MODULE_BYTES = 64 * 1024 * 1024;
+const PUBLISH_RUNTIME_BUILD_CACHE_PATH = '.scripts-build/publish-runtime-build-cache.json';
 
 function samePath(left: string, right: string): boolean {
     const normalize = (value: string): string => {
@@ -122,10 +123,29 @@ function readRuntimeManifest(repoRoot: string, manifestPath: string): Record<str
         MAX_RUNTIME_MANIFEST_BYTES
     );
     const parsed: unknown = JSON.parse(content.toString('utf8'));
-    if (!isPlainRecord(parsed) || !isPlainRecord(parsed.inputFingerprint)) {
+    if (!isPlainRecord(parsed)) {
         throw new Error(`runtime manifest is missing authenticated input fingerprint: ${manifestPath}`);
     }
-    return parsed;
+    if (Object.hasOwn(parsed, 'inputFingerprint')) {
+        if (!isPlainRecord(parsed.inputFingerprint)) {
+            throw new Error(`runtime manifest is missing authenticated input fingerprint: ${manifestPath}`);
+        }
+        return parsed;
+    }
+    const cacheContent = readAuthenticatedRuntimeFile(
+        repoRoot,
+        path.join(repoRoot, PUBLISH_RUNTIME_BUILD_CACHE_PATH),
+        'runtime build cache',
+        MAX_RUNTIME_MANIFEST_BYTES
+    );
+    const cache: unknown = JSON.parse(cacheContent.toString('utf8'));
+    if (!isPlainRecord(cache) || !isPlainRecord(cache.inputFingerprint)) {
+        throw new Error('runtime build cache is missing authenticated input fingerprint.');
+    }
+    if (cache.publishedManifestSha256 !== createHash('sha256').update(content).digest('hex')) {
+        throw new Error('runtime build cache does not bind the public runtime manifest.');
+    }
+    return { ...parsed, inputFingerprint: cache.inputFingerprint };
 }
 
 function resolveBuildRoot(finalizerPath: string): { buildRoot: string; manifestPath: string } {

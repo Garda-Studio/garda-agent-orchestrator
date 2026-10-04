@@ -268,6 +268,22 @@ function buildRealRuntimeSourceRepo(repoRoot: string): void {
     });
 }
 
+function usePrivateRuntimeFingerprint(repoRoot: string): { cachePath: string; fingerprintSha256: string } {
+    const manifestPath = path.join(repoRoot, 'dist', 'publish-runtime-manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+    const inputFingerprint = manifest.inputFingerprint as { sha256: string };
+    delete manifest.inputFingerprint;
+    const publishedContent = `${JSON.stringify(manifest, null, 2)}\n`;
+    fs.writeFileSync(manifestPath, publishedContent, 'utf8');
+    const cachePath = path.join(repoRoot, '.scripts-build', 'publish-runtime-build-cache.json');
+    writeFile(repoRoot, '.scripts-build/publish-runtime-build-cache.json', `${JSON.stringify({
+        ...manifest,
+        inputFingerprint,
+        publishedManifestSha256: createHash('sha256').update(publishedContent).digest('hex')
+    }, null, 2)}\n`);
+    return { cachePath, fingerprintSha256: inputFingerprint.sha256 };
+}
+
 function probeRuntimeGeneration(
     repoRoot: string,
     runtimeModulePath = path.join(
@@ -1320,6 +1336,102 @@ describe('split-required WIP restored-runtime handoff', () => {
         } finally {
             fs.rmSync(repoRoot, { recursive: true, force: true });
         }
+    });
+
+    it('accepts the producer private fingerprint without changing the public runtime manifest', (context) => {
+        const repoRoot = makeRealRuntimeSourceRepo();
+        context.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+        buildRealRuntimeSourceRepo(repoRoot);
+        const { fingerprintSha256 } = usePrivateRuntimeFingerprint(repoRoot);
+        const manifestPath = path.join(repoRoot, 'dist', 'publish-runtime-manifest.json');
+        const publishedBefore = fs.readFileSync(manifestPath, 'utf8');
+
+        const result = probeRuntimeGeneration(repoRoot);
+
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(JSON.parse(result.stdout).input_fingerprint_sha256, fingerprintSha256);
+        assert.equal(fs.readFileSync(manifestPath, 'utf8'), publishedBefore);
+        assert.equal(Object.hasOwn(JSON.parse(publishedBefore), 'inputFingerprint'), false);
+    });
+
+    it('rejects a missing private runtime fingerprint cache', (context) => {
+        const repoRoot = makeRealRuntimeSourceRepo();
+        context.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+        buildRealRuntimeSourceRepo(repoRoot);
+        const { cachePath } = usePrivateRuntimeFingerprint(repoRoot);
+        fs.rmSync(cachePath);
+
+        const result = probeRuntimeGeneration(repoRoot);
+
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, /runtime build cache is missing/u);
+    });
+
+    it('rejects a malformed private runtime fingerprint cache', (context) => {
+        const repoRoot = makeRealRuntimeSourceRepo();
+        context.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+        buildRealRuntimeSourceRepo(repoRoot);
+        const { cachePath } = usePrivateRuntimeFingerprint(repoRoot);
+        const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+        cache.inputFingerprint = 'malformed';
+        fs.writeFileSync(cachePath, JSON.stringify(cache), 'utf8');
+
+        const result = probeRuntimeGeneration(repoRoot);
+
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, /runtime build cache is missing authenticated input fingerprint/u);
+    });
+
+    it('rejects a private runtime cache bound to a different public manifest', (context) => {
+        const repoRoot = makeRealRuntimeSourceRepo();
+        context.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+        buildRealRuntimeSourceRepo(repoRoot);
+        const { cachePath } = usePrivateRuntimeFingerprint(repoRoot);
+        const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+        cache.publishedManifestSha256 = 'f'.repeat(64);
+        fs.writeFileSync(cachePath, JSON.stringify(cache), 'utf8');
+
+        const result = probeRuntimeGeneration(repoRoot);
+
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, /runtime build cache does not bind the public runtime manifest/u);
+    });
+
+    it('rejects a malformed private runtime fingerprint hash', (context) => {
+        const repoRoot = makeRealRuntimeSourceRepo();
+        context.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+        buildRealRuntimeSourceRepo(repoRoot);
+        const { cachePath } = usePrivateRuntimeFingerprint(repoRoot);
+        const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+        cache.inputFingerprint.sha256 = 'malformed';
+        fs.writeFileSync(cachePath, JSON.stringify(cache), 'utf8');
+
+        const result = probeRuntimeGeneration(repoRoot);
+
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, /input fingerprint sha256 is missing or malformed/u);
+    });
+
+    it('rejects a private cache that hides a missing public finalizer module', (context) => {
+        const repoRoot = makeRealRuntimeSourceRepo();
+        context.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+        buildRealRuntimeSourceRepo(repoRoot);
+        const { cachePath } = usePrivateRuntimeFingerprint(repoRoot);
+        const manifestPath = path.join(repoRoot, 'dist', 'publish-runtime-manifest.json');
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        manifest.files = manifest.files.filter((entry: string) => (
+            entry !== 'src/gates/split-required/split-required-wip-runtime-handoff.js'
+        ));
+        const publishedContent = `${JSON.stringify(manifest, null, 2)}\n`;
+        fs.writeFileSync(manifestPath, publishedContent, 'utf8');
+        const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+        cache.publishedManifestSha256 = createHash('sha256').update(publishedContent).digest('hex');
+        fs.writeFileSync(cachePath, JSON.stringify(cache), 'utf8');
+
+        const result = probeRuntimeGeneration(repoRoot);
+
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, /manifest does not bind required finalizer module/u);
     });
 
     it('rejects a generated runtime with a malformed manifest fingerprint', () => {
