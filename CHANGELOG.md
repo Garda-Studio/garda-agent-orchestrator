@@ -1,11 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- Show a localized task progress card in loaded task details, with recorded stages, blockers, final-report availability and a copyable next command; preserve raw diagnostics and existing guarded actions.
-
-- Expose bounded task progress, the current navigator action, validated final-report availability and task-owned evidence references through lazy task details without executing lifecycle actions.
-
 ## 1.4.4
 
 ### Compile Command Chains
@@ -33,6 +27,13 @@
 
 - Garda Compact helps AI agents keep command output from overwhelming their context. Git status and diffs, file reads, and text searches return short previews; agents can then page through the retained output or search it for the details they need.
 - UI settings control supported command families, preview sizes, and cache limits. Cached output is cleaned up after successful task completion, while unfinished tasks retain theirs.
+
+### Refreshed Garda UI
+
+- `garda ui` has a refreshed design and a dark theme. A theme switch in the header offers Match system, Light and Dark; the choice is remembered in the browser, applied before the page renders, and translated into every supported language.
+- Cleaner header and tabs, and a task table that keeps titles readable at narrower widths.
+- Show a localized task progress card in loaded task details, with recorded stages as a stepper that highlights the current stage, blockers, final-report availability and a copyable next command; preserve raw diagnostics and existing guarded actions.
+- Expose bounded task progress, the current navigator action, validated final-report availability and task-owned evidence references through lazy task details without executing lifecycle actions.
 
 ### Faster Navigation And CLI
 
