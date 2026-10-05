@@ -1351,14 +1351,8 @@ export function spawnSyncWithTimeout(command: string, args: string[], options?: 
 
     const result = childProcess.spawnSync(command, args, passThrough) as SpawnSyncWithTimeoutResult;
 
-    // spawnSync sets result.signal === 'SIGTERM' on timeout
-    if (result.error && (result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') {
-        result.timedOut = true;
-    } else if (result.signal === 'SIGTERM' && timeoutMs > 0) {
-        result.timedOut = true;
-    } else {
-        result.timedOut = false;
-    }
+    // Other failures, including ENOBUFS, can terminate the child with the same signal.
+    result.timedOut = (result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT';
 
     return result;
 }

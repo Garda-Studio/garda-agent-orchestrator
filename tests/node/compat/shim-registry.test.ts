@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { getGateHelpEntry } from '../../../src/cli/commands/gate-command-help';
 
 import {
     GATE_COMMANDS,
@@ -9,6 +12,19 @@ import {
 test('GATE_COMMANDS is a frozen array', () => {
     assert.equal(Object.isFrozen(GATE_COMMANDS), true);
     assert.ok(Array.isArray(GATE_COMMANDS));
+});
+
+test('available gates cover the dispatcher and every gate has public help', () => {
+    const root = path.resolve('.');
+    const dispatcher = fs.readFileSync(path.join(root, 'src/cli/commands/gate-command.ts'), 'utf8');
+    const dispatched = [...dispatcher.matchAll(/case '([^']+)':/g)].map(match => match[1]);
+    assert.ok(dispatched.length > 0);
+    assert.deepEqual([...GATE_COMMANDS].sort(), [...new Set(dispatched)].sort());
+    for (const name of GATE_COMMANDS) {
+        const help = getGateHelpEntry(name, root);
+        assert.ok(help.summary.trim(), name);
+        assert.ok(help.usage.some(usage => usage.includes(`gate ${name}`)), name);
+    }
 });
 
 test('GATE_COMMANDS is non-empty and contains only kebab-case strings', () => {

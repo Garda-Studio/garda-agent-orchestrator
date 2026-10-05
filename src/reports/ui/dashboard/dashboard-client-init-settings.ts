@@ -20,18 +20,25 @@ function renderJsonValue(value) {
 function fileViewerHref(pathValue) {
   return '/files?path=' + encodeURIComponent(pathValue) + '&action_token=' + encodeURIComponent(actionToken);
 }
+const filePreviewRequests = new WeakMap();
 async function openReadOnlyFile(pathValue, targetId) {
   const target = document.getElementById(targetId);
   if (!target) return;
+  const request = {};
+  filePreviewRequests.set(target, request);
+  const isCurrentRequest = () => filePreviewRequests.get(target) === request
+    && document.getElementById(targetId) === target;
   target.hidden = false;
   target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   target.innerHTML = '<h3><code>' + safe(pathValue) + '</code></h3><p class="empty">' + safe(t('loading')) + '</p>';
   try {
     const response = await fetch(fileViewerHref(pathValue));
     const body = await response.text();
+    if (!isCurrentRequest()) return;
     target.innerHTML = '<h3><code>' + safe(pathValue) + '</code></h3><pre>' + safe(body) + '</pre>';
     target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (error) {
+    if (!isCurrentRequest()) return;
     target.innerHTML = '<h3><code>' + safe(pathValue) + '</code></h3><p class="error">' + safe(error && error.message ? error.message : error) + '</p>';
     target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }

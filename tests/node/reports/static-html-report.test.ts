@@ -7,6 +7,22 @@ import * as vm from 'node:vm';
 import { buildDefaultWorkflowConfig } from '../../../src/core/workflow-config';
 import { buildStaticHtmlReport, renderStaticHtmlReport } from '../../../src/reports/static-html-report';
 import { buildReportDataContract } from '../../../src/reports/report-data-contract';
+import { STATIC_HTML_TASK_CLIENT_SCRIPT } from '../../../src/reports/static-html/tasks-tab';
+
+test('static task metrics treat labels and report values as text', () => {
+    const context = vm.createContext({
+        document: { querySelectorAll: () => [] },
+        report: { tasks_tab: { rows: [] } }
+    });
+    vm.runInContext(STATIC_HTML_TASK_CLIENT_SCRIPT, context);
+    const hostile = '<img src="x" onerror=\'bad\'>&';
+    context.label = hostile;
+    context.value = hostile;
+    const html = vm.runInContext('metric(label, value)', context) as string;
+    assert.equal(html, '<div class="metric"><span>&lt;img src=&quot;x&quot; onerror=&#39;bad&#39;&gt;&amp;</span><strong>&lt;img src=&quot;x&quot; onerror=&#39;bad&#39;&gt;&amp;</strong></div>');
+    assert.equal(vm.runInContext('metric("Events", 3)', context), '<div class="metric"><span>Events</span><strong>3</strong></div>');
+    assert.equal(vm.runInContext('metric("Events", null)', context), '<div class="metric"><span>Events</span><strong>-</strong></div>');
+});
 
 type StaticFakeListener = (event?: { key?: string }) => void;
 

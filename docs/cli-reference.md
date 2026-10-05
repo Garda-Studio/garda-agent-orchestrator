@@ -1,5 +1,20 @@
 # CLI Reference
 
+## Review-output correction evidence commands
+
+These helper gates record actual provider evidence for a correction attempt; they do not launch a reviewer or supply missing provenance:
+
+| Gate | Evidence and principal options |
+| --- | --- |
+| `record-review-output-correction-transport` | Selected session availability, originating reviewer identity and provider invocation. Use `--session-availability`, `--reviewer-identity`, `--provider-invocation-id`, and `--attestation-source`. |
+| `record-review-output-correction-response` | Exact raw response file returned by the originating reviewer. Use `--review-output-path` with that reviewer's identity and provider invocation. |
+| `record-review-output-correction-invocation` | Actual correction producer invocation bound to its immutable launch input. Use `--correction-producer-identity`, `--launch-input-sha256`, and `--fork-context` for the selected route. |
+
+All three require the owning `--task-id`, `--review-type`, `--correction-artifact-path` and repository root. Run `garda gate <gate-name> --help` for source/deployed syntax. The action selected by the navigator determines the permitted transport and attestations.
+
+The available-gate listing also includes `decline-optional-skill`, `materialize-full-suite-repair-task`, `restore-full-suite-repair-wip`, and `record-reviewer-launch-failed`. Their existing validation and authorization requirements apply.
+
+
 Complete command reference for Garda Agent Orchestrator.
 
 ### `garda compact`

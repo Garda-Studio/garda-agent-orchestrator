@@ -105,7 +105,7 @@ function toArtifactHref(pathValue) {
   if (value.startsWith('/')) return 'file://' + encodeURI(value);
   return '';
 }
-function metric(label, value) { return '<div class="metric"><span>' + label + '</span><strong>' + text(value) + '</strong></div>'; }
+function metric(label, value) { return '<div class="metric"><span>' + safe(label) + '</span><strong>' + safe(value) + '</strong></div>'; }
 function duration(seconds) {
   if (typeof seconds !== 'number') return '-';
   if (seconds < 60) return seconds + 's';

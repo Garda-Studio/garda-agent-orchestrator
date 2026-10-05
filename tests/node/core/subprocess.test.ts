@@ -288,6 +288,23 @@ describe('spawnStreamed', () => {
 });
 
 describe('spawnSyncWithTimeout', () => {
+    for (const stream of ['stdout', 'stderr']) {
+        it(`does not report ${stream} buffer overflow as a timeout`, () => {
+            const result = spawnSyncWithTimeout(process.execPath, ['-e', `process.${stream}.write('x'.repeat(2 * 1024 * 1024))`], {
+                encoding: 'utf8', stdio: 'pipe', timeoutMs: 5000, maxBuffer: 512
+            });
+            assert.equal((result.error as NodeJS.ErrnoException)?.code, 'ENOBUFS');
+            assert.notEqual(result.status, 0);
+            assert.equal(result.timedOut, false);
+        });
+    }
+
+    it('does not report a spawn failure as a timeout', () => {
+        const result = spawnSyncWithTimeout(path.join(os.tmpdir(), 'garda-nonexistent-executable'), [], { timeoutMs: 5000 });
+        assert.equal((result.error as NodeJS.ErrnoException)?.code, 'ENOENT');
+        assert.equal(result.timedOut, false);
+    });
+
     it('runs a process successfully', () => {
         const result = spawnSyncWithTimeout(process.execPath, ['-e', 'console.log("ok")'], {
             encoding: 'utf8',

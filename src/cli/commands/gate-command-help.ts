@@ -374,6 +374,27 @@ function buildReviewGateHelpEntries(
                 true
             )
         },
+        'record-review-output-correction-transport': {
+            ...createSingleUsageEntry(
+                'Record the actual provider session availability before selecting a review-output correction route.',
+                `${cliPrefix} gate record-review-output-correction-transport --task-id "${TASK_ID_PLACEHOLDER}" --review-type "<review-type>" --correction-artifact-path "<correction-artifact-path>" --session-availability "<session-availability>" --reviewer-identity "<agent:...>" --provider-invocation-id "<provider-owned invocation id>" --attestation-source "<provider-owned attestation>" --repo-root "."`,
+                true
+            )
+        },
+        'record-review-output-correction-response': {
+            ...createSingleUsageEntry(
+                'Bind the exact correction response to the originating reviewer session and output file.',
+                `${cliPrefix} gate record-review-output-correction-response --task-id "${TASK_ID_PLACEHOLDER}" --review-type "<review-type>" --correction-artifact-path "<correction-artifact-path>" --review-output-path "<raw-response-path>" --reviewer-identity "<agent:...>" --provider-invocation-id "<provider-owned invocation id>" --attestation-source "<provider-owned attestation>" --repo-root "."`,
+                true
+            )
+        },
+        'record-review-output-correction-invocation': {
+            ...createSingleUsageEntry(
+                'Record actual correction-producer invocation evidence for the selected transport.',
+                `${cliPrefix} gate record-review-output-correction-invocation --task-id "${TASK_ID_PLACEHOLDER}" --review-type "<review-type>" --correction-artifact-path "<correction-artifact-path>" --correction-producer-identity "<agent:...>" --launch-input-sha256 "<launch-input-sha256>" --fork-context false --provider-invocation-id "<provider-owned invocation id>" --attestation-source "<provider-owned attestation>" --repo-root "."`,
+                true
+            )
+        },
         'record-review-routing': {
             ...createSingleUsageEntry(
                 'Record reviewer routing metadata for a prepared review context.',
