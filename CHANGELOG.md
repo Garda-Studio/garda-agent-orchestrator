@@ -15,6 +15,7 @@
 
 ### Review And Completion Fixes
 
+- Reject unscoped response-file operands in attached, separate and quoted Node test loader values while preserving scoped package module compatibility.
 - Preserve quoted regular expressions and attached option operands in focused reviewer commands while rejecting real shell operators. Recognize locally resolved Node test loader operands without treating them as extra targets, retain unavailable or failed diagnostics, and keep mutation, expansion and unfocused-command controls.
 - Keep review-cycle restart events bounded by storing large delta classifications in immutable snapshots with hash-bound references and authenticated reads.
 - Restore pending grouped review follow-ups after authenticated unchanged parent-cycle review reuse, authenticating every lane's historical sources and obligations while preserving immutable findings, failed-attempt provenance, and active child ownership; write blocked diagnostics separately without following unsafe file links.

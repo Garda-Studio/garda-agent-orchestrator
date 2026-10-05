@@ -127,7 +127,9 @@ module operand. These operands identify locally resolved modules, not extra
 test targets; they must not be empty, remote, absolute or traversing paths.
 Leading `./` paths and scoped module names retain equivalent attached and
 separate operand interpretation. The scoped-module exception belongs only to
-the Node loader operand; response-file arguments elsewhere remain prohibited.
+the Node loader operand; an unscoped `@response-file` is rejected in attached,
+separate and quoted loader values. Response-file arguments elsewhere remain
+prohibited.
 Loaders remain disallowed for syntax-only checks and unrelated runners.
 
 Actual unquoted pipelines, command chains and redirections are rejected.

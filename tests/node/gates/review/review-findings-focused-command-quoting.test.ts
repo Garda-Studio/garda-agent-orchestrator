@@ -85,11 +85,13 @@ for (const loader of [
     '--import tsx', '--import=tsx', '--import "tests/helpers/test loader.mjs"',
     '--require tests/helpers/preload.cjs', '-r tests/helpers/preload.cjs',
     '--loader=tests/helpers/loader.mjs', '--experimental-loader tests/helpers/loader.mjs',
-    ...['--import', '--require', '--loader', '--experimental-loader'].flatMap((option) => [
+    ...['--import', '--require', '-r', '--loader', '--experimental-loader'].flatMap((option) => [
         `${option} ./tests/helpers/loader.mjs`, `${option}=./tests/helpers/loader.mjs`,
-        `${option} @scope/test-loader`, `${option}=@scope/test-loader`, `${option} "@scope/test-loader"`
+        `${option} @scope/test-loader`, `${option}=@scope/test-loader`,
+        `${option} "@scope/test-loader"`, `${option}="@scope/test-loader"`,
+        `${option} '@scope/test-loader'`, `${option}='@scope/test-loader'`
     ]),
-    '-r ./tests/helpers/preload.cjs', '-r @scope/test-loader', '-r "@scope/test-loader"'
+    '-r ./tests/helpers/preload.cjs'
 ]) {
     test(`focused Node test consumes the loader operand: ${loader}`, () => {
         const report = focusedReport(`node ${loader} --test --test-name-pattern="chain|loader" ${TARGET}`);
@@ -283,6 +285,18 @@ test('rejects focused loader operands replacing the required test target', () =>
     const result = validateReviewFindingsReport(focusedReport(`node --import ${TARGET} --test`), VALIDATION_OPTIONS);
     assert.equal(result.valid, false);
     assert.ok(result.violations.some((entry) => entry.includes('must execute a focused test or validation command')));
+});
+
+test('rejects unscoped response-file loader operands in every equivalent form', () => {
+    const commands = ['--import', '--require', '-r', '--loader', '--experimental-loader'].flatMap((option) => [
+        ' @response-file', '=@response-file',
+        ' "@response-file"', '="@response-file"',
+        " '@response-file'", "='@response-file'"
+    ].flatMap((operand) => [`node ${option}${operand} --test ${TARGET}`, `node ${option}${operand} ${TARGET}`]));
+    const results = commands.map((command) => validateReviewFindingsReport(focusedReport(command), VALIDATION_OPTIONS));
+    assert.deepEqual(results.map(({ valid }) => valid), commands.map(() => false));
+    assert.ok(results.every(({ violations }) => violations.some((entry) => /response-file expansion|without a supported repository-relative module operand/u.test(entry))),
+        results.flatMap(({ violations }) => violations).join('\n'));
 });
 
 test('rejects response-file arguments outside contextual Node loader operands', () => {

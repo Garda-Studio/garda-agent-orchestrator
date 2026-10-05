@@ -855,7 +855,7 @@ const REVIEWER_FOCUSED_SCALAR_OPTION_VALUE_PATTERN = /^(?:false|true|\d+)$/iu;
 const REVIEWER_NODE_LOADER_OPTION_NAMES = new Set([
     '--import', '--require', '-r', '--loader', '--experimental-loader'
 ]);
-const REVIEWER_NODE_LOADER_MODULE_PATTERN = /^(?:@?[a-z0-9_.-][a-z0-9_./ -]*|@[a-z0-9_.-]+\/[a-z0-9_./ -]+)$/iu;
+const REVIEWER_NODE_LOADER_MODULE_PATTERN = /^(?:[a-z0-9_.-][a-z0-9_./ -]*|@[a-z0-9_.-]+\/[a-z0-9_./ -]+)$/iu;
 const REVIEWER_GENERIC_DIAGNOSTICS_WORDS = new Set([
     'a', 'an', 'attempt', 'be', 'been', 'blocked', 'can', 'check', 'command', 'could', 'error', 'errored',
     'execute', 'executed', 'execution', 'failed', 'failure', 'focused', 'had', 'has', 'have', 'is', 'not',
