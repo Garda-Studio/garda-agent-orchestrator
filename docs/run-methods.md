@@ -9,6 +9,8 @@ Current package version source in this repository: `VERSION`.
 Use this when testing the repository itself without packing or installing.
 Compile first so `src/bin/garda.ts` is emitted as `bin/garda.js` and can launch the built runtime.
 
+For a fresh source contribution, follow the [contributor workflow](contributor-workflow.md). It uses the checkout's own CLI, creates ignored local workflow files through setup, and completes real agent onboarding before task execution. Run `npm ci` before the initial build. The commands below illustrate a scripted workspace; completion flags must describe onboarding steps that actually occurred.
+
 ```text
 cd D:\Projects\garda-agent-orchestrator
 

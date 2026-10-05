@@ -1,0 +1,37 @@
+name: Feature request
+description: Propose a focused Garda improvement.
+title: "[Feature] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing proposals first. Discuss a broad workflow or compatibility change before implementing it.
+        Security vulnerabilities belong in the private route described in [SECURITY.md](https://github.com/Garda-Studio/garda-agent-orchestrator/blob/master/SECURITY.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and use case
+      description: Who encounters the problem, in which workflow, and what happens today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the desired outcome and a concrete example, including affected commands or provider surfaces.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and compatibility
+      description: Existing workarounds, considered alternatives, and behavior that must remain compatible.
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Observable results and platform/provider coverage needed to consider the proposal complete.
+    validations:
+      required: false

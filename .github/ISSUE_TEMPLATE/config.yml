@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Private security reporting
+    url: https://github.com/Garda-Studio/garda-agent-orchestrator/security/policy
+    about: Read the security policy and use its private reporting route; do not disclose vulnerabilities in public issues.

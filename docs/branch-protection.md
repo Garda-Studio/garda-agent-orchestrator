@@ -18,9 +18,23 @@ Together the two layers form a defence-in-depth governance model:
 
 ## Recommended Branch Protection Settings
 
-Apply these settings to every long-lived branch (`main`, `dev`,
+Apply these settings to every long-lived branch (`master`, `dev`,
 `release/*`) through **Settings → Branches → Branch protection rules**
 in the GitHub repository.
+
+These are recommendations for repository owners, not assertions that protection is enabled. `master` is the default publication branch; normal contributions target `dev`. Settings changes require the owner's decision and are separate from updating this document.
+
+### Manual CI Policy
+
+CI must be started manually, with explicit owner authorization for this repository and the selected checks. A request to finish a task, verify a patch, push a branch, or open a PR does not authorize a cloud run. Prefer relevant local Windows/Linux checks and state unavailable platforms honestly. Keep all required checks; select them according to the task or release contract rather than removing checks to save time.
+
+Before pushing or creating a PR, inspect triggers in the source and target repositories. This checkout still contains automatic push/PR triggers in [ci.yml](https://github.com/Garda-Studio/garda-agent-orchestrator/blob/dev/.github/workflows/ci.yml); they conflict with the manual-only policy. Reconcile that conflict with the owner before proceeding. This documentation change does not modify triggers or authorize a run, and skip markers are not a substitute for resolving the policy.
+
+Before an authorized GitHub-hosted run, the owner checks the shared allowance and estimates the selected jobs' consumption, including OS accounting. If the allowance cannot be verified, disclose it and obtain approval before consuming minutes. Do not register runners, enable paid usage, change budgets, or publish private source as a workaround without separate authorization.
+
+After failure, inspect the exact failed job's logs before retrying. Run only the failed check, suite, OS, and runtime variant. Successful jobs and the full matrix must not be repeated without separate approval. An existing run retains its original commit; a fixed commit requires a new authorized filtered run. If the workflow cannot select the failed variant, prepare narrow manual selection first. A blocked billing/quota result is not a test failure and cannot be resolved with retries.
+
+Required status checks must correspond to the current reviewed commit and agreed validation scope. A job that did not run is not PASS. Before configuring protection, owners must ensure the manually authorized workflow can report the required checks without forcing an unapproved full matrix. Native task evidence and maintainer review are required independently of CI; see [CONTRIBUTING.md](../CONTRIBUTING.md#required-evidence-for-fixes).
 
 ### Required Checks
 
@@ -30,7 +44,7 @@ in the GitHub repository.
 | **Require branches to be up to date before merging** | ✅ Enabled | Ensures the PR branch includes the latest target commits. |
 | **Status checks that are required** | Individual job checks listed below | `CI` is a workflow name; there is no aggregate check named `ci`. |
 
-The job names below come from [ci.yml](https://github.com/Garda-Studio/garda-agent-orchestrator/blob/main/.github/workflows/ci.yml). Select each expanded check reported by a recent pull-request run; `{node}` and `{os}` below describe matrix values and are not literal check names.
+The job names below come from [ci.yml](https://github.com/Garda-Studio/garda-agent-orchestrator/blob/dev/.github/workflows/ci.yml). Select each expanded check reported by an authorized run of the reviewed revision; `{node}` and `{os}` below describe matrix values and are not literal check names.
 
 | Job check pattern | Required matrix values |
 |---|---|
@@ -62,13 +76,15 @@ protection and release-readiness diagnostics stay explicit.
 
 ### GitHub Action pinning decision
 
-The GitHub Actions used by the CI and security workflows remain version-tag pinned
-(`actions/checkout@v7.0.0`, `actions/setup-node@v6`,
-`actions/upload-artifact@v7.0.1`, and
-`google/osv-scanner-action/...@v2.3.0`) and are intentionally not SHA-pinned at
-this time. Gitleaks is installed as CLI v8.30.1 from its release archive and the
-archive is verified against a pinned SHA-256 digest. These choices are an
-operator-maintainability tradeoff, not a provenance guarantee.
+The GitHub Actions used by the current CI and security workflows are pinned to
+full commit SHAs; adjacent comments identify their release versions. Review
+the pinned workflow references when upgrading an action, rather than treating
+a version comment as the executable reference. Gitleaks is installed as CLI
+v8.30.1 from its release archive and verified against a pinned SHA-256 digest.
+These controls bind the selected upstream artifacts; they do not by themselves
+prove safe code or successful contributor task execution.
+Earlier guidance described the actions as version-tag pinned and not SHA-pinned;
+that description is historical and is superseded by the current full-SHA references.
 Release-sensitive operators should review action and CLI update diffs before
 broadening branch protection, and this decision does not replace future provenance or release-signing work.
 
@@ -154,9 +170,9 @@ src/   @your-org/core-team @your-username
 ```
 Developer workstation          GitHub PR
 ┌──────────────────────┐       ┌────────────────────────────┐
-│ Task agent runs       │       │ PR opened against main      │
+│ Task agent runs       │       │ PR opened against dev       │
 │ ↓                     │       │ ↓                           │
-│ enter-task-mode       │       │ CI status checks run        │
+│ enter-task-mode       │       │ Authorized checks run       │
 │ ↓                     │       │ ↓                           │
 │ implementation        │       │ CODEOWNERS matched          │
 │ ↓                     │       │ ↓                           │
@@ -179,7 +195,7 @@ bypasses or post-dates the local gate.
    checkout or your fork's maintainers.
 3. [ ] Enable **Require pull request reviews before merging** on target branches.
 4. [ ] Enable **Require review from Code Owners**.
-5. [ ] Select the expanded CI job checks above, plus the chosen security checks, as **required status checks**; verify their names on a current PR run.
+5. [ ] Resolve automatic triggers under the manual CI policy before publishing changes. Select the expanded CI job checks above, plus the chosen security checks, as **required status checks**; verify their names and commit on an authorized run without dispatching an unapproved matrix.
 6. [ ] Enable **Dismiss stale approvals when new commits are pushed**.
 7. [ ] Enable **Include administrators** to prevent bypass.
 8. [ ] Disable **Allow force pushes** and **Allow deletions**.

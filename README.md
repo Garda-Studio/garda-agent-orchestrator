@@ -177,7 +177,8 @@ See [Update availability](docs/configuration.md#update-availability) for cache a
 | Document | Description |
 |---|---|
 | **[HOW_TO.md](HOW_TO.md)** | Step-by-step user guide |
-| **[CONTRIBUTING.md](CONTRIBUTING.md)** | Source checkout, developer checks, task queue formatting, and contribution workflow |
+| **[CONTRIBUTING.md](CONTRIBUTING.md)** | Contribution policy, required native fix evidence, and PR review |
+| **[docs/contributor-workflow.md](docs/contributor-workflow.md)** | Fork, local setup, task lifecycle, scoped checks, and evidence handoff |
 | **[docs/run-methods.md](docs/run-methods.md)** | Choose between global install, one-off execution, and source checkout |
 | **[docs/cli-reference.md](docs/cli-reference.md)** | Complete CLI command reference |
 | **[docs/architecture.md](docs/architecture.md)** | Design, runtime model, deployed files |

@@ -1,0 +1,46 @@
+name: Bug report
+description: Report a reproducible Garda defect.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues before filing. For vulnerabilities, use the private reporting route in [SECURITY.md](https://github.com/Garda-Studio/garda-agent-orchestrator/blob/master/SECURITY.md).
+        Share only the affected task's relevant diagnostics; remove credentials and private project data.
+  - type: input
+    id: garda-version
+    attributes:
+      label: Garda version and source/build identity
+      description: Include the package version, installation method, and commit or build identity if known.
+      placeholder: "1.4.4; source checkout; commit ..."
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS/version, Node/npm versions, shell, and provider/model when relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Exact command, working directory, relevant configuration, and numbered steps. Use a small example without private source.
+    validations:
+      required: true
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: Expected and actual behavior
+      description: Include the exit code, gate or task state, and failure identifier if available.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Relevant diagnostics
+      description: A short error excerpt and links to safe supporting artifacts. Screenshots are optional. Do not upload the entire runtime or task queue.
+      render: text
+    validations:
+      required: false

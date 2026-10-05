@@ -107,6 +107,7 @@ Kept inside bundle:
 - docs/assets/garda-github-social-preview.png
 - docs/architecture.md
 - docs/branch-protection.md
+- docs/contributor-workflow.md
 - docs/cli-reference.md
 - docs/compatibility-matrix.md
 - docs/configuration.md
