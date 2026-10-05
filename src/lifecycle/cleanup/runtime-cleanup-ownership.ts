@@ -1,4 +1,30 @@
 import * as path from 'node:path';
+import { isCanonicalTaskId, parseStructuredTaskArtifactTaskId } from '../../core/task-ids';
+
+const PROTECTED_GENERIC_SCRATCH_NAMES = new Set([
+    'reviews', 'wip', 'scratch-writers', '.scratch-writers.lock', 'owner.json',
+    'project-memory', 'task-events', 'task-ledger', 'manual-validation', 'plans', 'compact',
+    'reviews-index.json', 'all-tasks.jsonl', 'metrics.jsonl', '.timeline-summary.json'
+]);
+
+export function resolveRuntimeTmpTaskId(name: string): string | null {
+    return isCanonicalTaskId(name) ? name : parseStructuredTaskArtifactTaskId(name);
+}
+
+export function isProtectedGenericScratchName(name: string): boolean {
+    return PROTECTED_GENERIC_SCRATCH_NAMES.has(name.toLowerCase())
+        || /^t-/iu.test(name) || resolveRuntimeTmpTaskId(name) !== null;
+}
+
+export function isTaskOwnedRuntimeTmpPath(runtimeDir: string, candidate: string): boolean {
+    const relative = path.relative(path.resolve(runtimeDir), path.resolve(candidate));
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
+    const parts = relative.split(path.sep), component = (name: string) => process.platform === 'win32' ? name.toLowerCase() : name;
+    if (parts.length === 1) return /\.(?:tmp|partial)$/u.test(parts[0]) && resolveRuntimeTmpTaskId(parts[0]) !== null;
+    if (component(parts[0]) !== 'tmp') return false;
+    if (parts.length === 2) return resolveRuntimeTmpTaskId(parts[1]) !== null;
+    return parts.length === 3 && component(parts[1]) === 'reviews' && resolveRuntimeTmpTaskId(parts[2]) !== null;
+}
 
 export type RuntimeCleanupArtifactOwnership =
     | 'task-scoped'
@@ -406,16 +432,28 @@ export const RUNTIME_CLEANUP_OWNERSHIP_ENTRIES = Object.freeze([
         selectionUnit: 'mixed-directory',
         taskLocator: 'No canonical task-id ownership can be resolved from the path.',
         taskPurgeMode: 'exclude-from-task-purge',
-        retentionMode: 'general-generated-zone-cleanup',
+        retentionMode: 'operator-managed',
         sharedSideEffects: [],
         notes: [
-            'Generic scratch remains under broad temp cleanup rather than per-task purge.',
+            'Generic scratch requires a separate read-only preview and exact confirmed removal with known-dead local writer ownership.',
             'Examples include profile sandboxes, local UI temp roots, compile caches, and other generated scratch without one owning task id.'
         ],
         examples: [
             'runtime/tmp/gao-profile-0ZNQaC',
             'runtime/tmp/node-compile-cache'
         ]
+    },
+    {
+        id: 'scratch-writer-registration',
+        location: 'runtime/scratch-writers/*.json and runtime/.scratch-writers.lock',
+        ownership: 'shared-generated',
+        selectionUnit: 'shared-directory',
+        taskLocator: 'Cooperative writer identity bound to an exact generic tmp root, independent of task ownership.',
+        taskPurgeMode: 'exclude-from-task-purge',
+        retentionMode: 'operator-managed',
+        sharedSideEffects: [],
+        notes: ['Writer metadata and the shared writer lock remain outside every deletable scratch subtree and automatic cleanup.'],
+        examples: ['runtime/scratch-writers/<root-key>.json', 'runtime/.scratch-writers.lock']
     },
     {
         id: 'metrics-jsonl',

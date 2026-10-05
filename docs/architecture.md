@@ -337,3 +337,75 @@ All gate events are logged to `runtime/task-events/<task-id>.jsonl` with hash-ch
 - `tsconfig.build.json` enforces `strict:true` for `src/**/*.ts`.
 - `tsconfig.tests.json` enforces `strict:true` for `src/**/*.ts`, `tests/node/**/*.ts`, and `scripts/node-foundation/**/*.ts`.
 - `npm run validate:release` is the explicit release proof path: `clean worktree -> build -> embedded bundle parity when present -> regular tests/coverage -> explicit package smoke -> pack/install/invoke -> clean worktree`.
+
+## Cooperative Generic Scratch Cleanup
+
+`src/lifecycle/cleanup/scratch-writer-ownership.ts` owns registration of direct
+children of the canonical workspace's `runtime/tmp` directory. A writer calls
+`registerScratchWriter({ targetRoot, bundleRoot, scratchName })` before using a
+new, uniquely named root. Registration creates the root exclusively and stores
+its creation identity, registration UUID, local hostname and process ID in
+`runtime/scratch-writers/<root-key>.json`. An existing registered root can be
+activated again only after its previous local process is positively known dead.
+An existing unowned root is preserved; registration does not adopt legacy data.
+Owner records remain after removal, reserving deleted names. Use a new unique
+name for a later root. Registration remains protective for the lifetime of its
+process; a completed operation inside a live process does not establish
+quiescence.
+
+`cleanup-scratch-preview.ts` owns
+`previewStaleScratchCleanup({ targetRoot, bundleRoot, scratchNames, cutoffUtc })`.
+Names select exact roots; `cutoffUtc` is a canonical ISO UTC timestamp with
+milliseconds in the past. Preview creates no directories, locks, journals,
+caches or receipt files. Missing, malformed, conflicting, foreign-host and
+unverifiable owners block the whole selection with an actionable diagnostic.
+Only a positively known-dead local process qualifies. A live process with old
+timestamps remains protected. Every selected root and descendant must have an
+mtime strictly before the cutoff. Task directories and prefixes, review/WIP
+names, writer metadata, durable memory and shared index names are excluded at
+every tree depth. Linked, shared, replaced and unsupported members are rejected
+before reading their bytes.
+
+The deterministic SHA256 digest binds the canonical workspace, sorted exact
+selection, cutoff, versioned policy/limits, registration bytes and identity,
+all containment ancestors and complete tree membership, metadata and file
+bytes. Inspection uses bounded handles and descriptor reads: at most 64 roots,
+4096 tree entries, depth 64, 4096 path characters, 16 KiB per owner record,
+64 MiB per file, 128 MiB aggregate file bytes and 8 MiB retained metadata.
+Multiplied whole-selection revalidation work is admitted before locks; excess
+work preserves the selection and requests fewer or smaller roots.
+
+`cleanup-scratch-removal.ts` owns
+`removeStaleScratch({ ...selection, confirmed: true, ownershipDigest })`.
+Cancellation is read-only. Apply uses the canonical lifecycle lock and
+`runtime/.scratch-writers.lock`, located outside deletable subtrees. Shared
+writer lock recovery requires a verified dead local process and never recovers
+foreign owners by age. Under both locks apply rebuilds the exact snapshot and
+validates the entire selection before its first removal. It then checks lock
+generations, registration and all remaining membership/metadata before each
+identity-bound file or empty-directory removal. File bytes are checked again
+before unlink. Mutation generation uses the existing lifecycle owner. A changed
+selection or ownership returns `INCOMPLETE`; partial errors report confirmed
+file counts/bytes and mark counts incomplete when a mutation may have failed.
+There is no recursive wildcard removal. The contained filesystem owner retains
+ambiguous failures in-process; retry requires a fresh preview and an unambiguous
+process, while stale digests preserve residual data.
+
+Ordinary cleanup/GC no longer collects generic `runtime/tmp` roots or unowned
+runtime-root `.tmp`/`.partial` files by age. Canonical task-owned scratch retains
+its existing cleanup and task/batch-purge routes. Generic scratch registration
+and confirmed cleanup are reusable backend contracts independent of task or
+batch purge. Owner metadata, WIP, task evidence and shared indexes are preserved.
+Legacy candidate mutation requires an explicit contained canonical runtime root
+under a bundle with an unshared regular `VERSION` marker. Workspace, bundle and
+runtime roots with their own `VERSION` or `TASK.md` role markers are rejected.
+Both lexical and real filesystem namespaces are checked independently of the category label.
+Ancestral runtime scratch, writer and temporary namespaces remain protected;
+nested bundle/runtime roles and aliases cannot reset these boundaries.
+Generic scratch, its containing roots and external writer metadata cannot be
+removed through category relabeling or internal path aliases.
+Public full-erasure CLI/UI and legacy-owner migration are separate work.
+Containment and retained identities detect observed pathname replacements;
+cooperative writers obey the shared lock. This remains procedural local
+coordination with descriptor/path checks, rather than atomic filesystem
+publication or a trust anchor against a hostile local process.

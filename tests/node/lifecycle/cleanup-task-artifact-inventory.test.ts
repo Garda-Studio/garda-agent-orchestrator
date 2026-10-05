@@ -63,6 +63,7 @@ describe('task-owned artifact inventory and purge', () => {
         bundle = path.join(root, 'garda-agent-orchestrator');
         runtime = path.join(bundle, 'runtime');
         fs.mkdirSync(runtime, { recursive: true });
+        fs.writeFileSync(path.join(bundle, 'VERSION'), '1.0.0\n');
     });
 
     afterEach(() => {
