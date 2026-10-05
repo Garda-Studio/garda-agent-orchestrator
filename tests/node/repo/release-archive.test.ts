@@ -229,7 +229,11 @@ test('NUL padding across evidence scan chunks cannot hide a credential', () => {
 test('credential-like relative link components are detected without symlink privileges', () => {
     assert.equal(hasCredentialLikeContent('./AUTH_TOKEN=abcd1234abcd1234abcd1234'), true);
     assert.equal(hasCredentialLikeContent('../nested/AUTH_TOKEN=abcd1234abcd1234abcd1234'), true);
+    assert.equal(hasCredentialLikeContent('.\\AUTH_TOKEN=abcd1234abcd1234abcd1234'), true);
+    assert.equal(hasCredentialLikeContent('..\\nested\\AUTH_TOKEN=abcd1234abcd1234abcd1234'), true);
+    assert.equal(hasCredentialLikeContent('../nested\\AUTH_TOKEN=abcd1234abcd1234abcd1234'), true);
     assert.equal(hasCredentialLikeContent('./ordinary-target'), false);
+    assert.equal(hasCredentialLikeContent('.\\ordinary-target'), false);
 });
 
 test('evidence symlink targets with relative prefixes cannot hide credentials', (t) => {
@@ -327,6 +331,7 @@ test('archive budget and tar link limits reject excessive values before serializ
     assert.throws(() => assertSupportedTarLinkTarget('/outside', 'nested/link'), /Unsupported archive symlink target/u);
     assert.throws(() => assertSupportedTarLinkTarget('../../outside', 'nested/link'), /Unsupported archive symlink target/u);
     assert.throws(() => assertSupportedTarLinkTarget('C:escape', 'nested/link'), /Unsupported archive symlink target/u);
+    assert.throws(() => assertSupportedTarLinkTarget('.\\ordinary-target', 'nested/link'), /Unsupported archive symlink target/u);
     assert.doesNotThrow(() => assertSupportedTarLinkTarget('../inside', 'nested/link'));
 });
 
