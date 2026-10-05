@@ -14,6 +14,7 @@ import {
 } from '../../src/core/node-foundation-test-shard-log-analysis';
 import { buildNodeFoundation, buildPublishRuntime, BuildResult } from './build';
 import { ShardOutputForwarder } from './shard-output-forwarding';
+import { beginValidationOutputRun, type ValidationOutputRun } from '../../src/core/validation-output-retention';
 import {
     addDurationReporterOptions,
     calibrateDurationWeights,
@@ -1261,7 +1262,8 @@ async function runSingleNodeTestProcess(
     requestedShardConcurrency: number | null,
     requestedShardLogDir: string | null,
     telemetryPath: string,
-    updateDurationTelemetry: boolean
+    updateDurationTelemetry: boolean,
+    validationRun?: ValidationOutputRun
 ): Promise<number> {
     const shardLogDir = resolveShardLogDir(repoRoot, buildRoot, requestedShardLogDir);
     const runtimeConfig = resolveNodeTestShardRuntimeConfig(requestedShardConcurrency);
@@ -1279,7 +1281,8 @@ async function runSingleNodeTestProcess(
         1,
         shardLogDir,
         runtimeConfig,
-        updateDurationTelemetry
+        updateDurationTelemetry,
+        validationRun
     );
     diagnoseGreenSummaryShardFailure(repoRoot, buildResult, optionArgs, result);
     diagnoseFailedShardSummary(result);
@@ -1358,7 +1361,8 @@ function runNodeTestShard(
     shardCount: number,
     shardLogDir: string,
     runtimeConfig: NodeTestShardRuntimeConfig,
-    collectFileDurations: boolean
+    collectFileDurations: boolean,
+    validationRun?: ValidationOutputRun
 ): Promise<NodeTestShardResult> {
     let shardOptionArgs = buildNodeTestShardOptionArgs(optionArgs, runtimeConfig);
     const captureEnabled = collectFileDurations && shardFiles.length > 1;
@@ -1397,6 +1401,14 @@ function runNodeTestShard(
             env: { ...process.env, [SHARD_DURATION_OUTPUT_ENV]: durationCapture?.destination ?? '' },
             windowsHide: true
         });
+        try {
+            validationRun?.trackChild(child.pid);
+        } catch (error) {
+            killShardChildTree(child);
+            logStream.destroy();
+            reject(error);
+            return;
+        }
         let exitCode = 1;
         let exitSignal: NodeJS.Signals | null = null;
         let finishing = false;
@@ -1696,7 +1708,8 @@ async function runShardedNodeTestProcesses(
     telemetryPath: string,
     telemetry: TestDurationTelemetry,
     updateDurationTelemetry: boolean,
-    maxFilesPerShard: number | null
+    maxFilesPerShard: number | null,
+    validationRun?: ValidationOutputRun
 ): Promise<number> {
     const baseRuntimeConfig = resolveNodeTestShardRuntimeConfig(requestedShardConcurrency);
     const planningRuntimeConfig: NodeTestShardRuntimeConfig = {
@@ -1799,7 +1812,7 @@ async function runShardedNodeTestProcesses(
                 return;
             }
             const shardFiles = scheduledShards[shardIndex];
-            const result = await runNodeTestShard(repoRoot, optionArgs, shardFiles, shardIndex, totalShardCount, shardLogDir, workerRuntimeConfig, updateDurationTelemetry);
+            const result = await runNodeTestShard(repoRoot, optionArgs, shardFiles, shardIndex, totalShardCount, shardLogDir, workerRuntimeConfig, updateDurationTelemetry, validationRun);
             scheduledResults[shardIndex] = result;
             diagnoseGreenSummaryShardFailure(repoRoot, buildResult, optionArgs, result);
             diagnoseFailedShardSummary(result);
@@ -1819,7 +1832,8 @@ async function runShardedNodeTestProcesses(
             totalShardCount,
             shardLogDir,
             serialRuntimeConfig,
-            updateDurationTelemetry
+            updateDurationTelemetry,
+            validationRun
         );
         results.push(result);
         diagnoseGreenSummaryShardFailure(repoRoot, buildResult, optionArgs, result);
@@ -1901,7 +1915,12 @@ export async function runNodeFoundationTests(): Promise<number> {
         && !hasExplicitTestShardOption(optionArgs)
         ? NODE_FOUNDATION_AUTO_SHARD_MAX_FILES
         : null;
-    const exitCode = shardCount === 1
+    const customLogDir = requestedShardLogDir || String(process.env[NODE_FOUNDATION_TEST_SHARD_LOG_DIR_ENV] || '').trim();
+    const validationRun = customLogDir ? undefined : beginValidationOutputRun(repoRoot, 'node-tests');
+    const shardLogDir = validationRun?.scratchDir ?? requestedShardLogDir;
+    let exitCode = 1;
+    try {
+        exitCode = shardCount === 1
         ? await runSingleNodeTestProcess(
             repoRoot,
             buildResult,
@@ -1909,9 +1928,10 @@ export async function runNodeFoundationTests(): Promise<number> {
             optionArgs,
             selectedTestFiles,
             requestedShardConcurrency,
-            requestedShardLogDir,
+            shardLogDir,
             telemetryPath,
-            updateDurationTelemetry
+            updateDurationTelemetry,
+            validationRun
         )
         : await runShardedNodeTestProcesses(
             repoRoot,
@@ -1921,18 +1941,22 @@ export async function runNodeFoundationTests(): Promise<number> {
             selectedTestFiles,
             shardCount,
             requestedShardConcurrency,
-            requestedShardLogDir,
+            shardLogDir,
             telemetryPath,
             telemetry,
             updateDurationTelemetry,
-            maxFilesPerShard
+            maxFilesPerShard,
+            validationRun
         );
-
-    if (exitCode !== 0) {
+        if (exitCode === 0) console.log('NODE_FOUNDATION_TEST_OK');
         return exitCode;
+    } finally {
+        try {
+            validationRun?.finish(exitCode);
+        } catch (error) {
+            console.warn(`NODE_FOUNDATION_TEST_OUTPUT_CLEANUP_PENDING ${error instanceof Error ? error.message : 'storage unavailable'}`);
+        }
     }
-    console.log('NODE_FOUNDATION_TEST_OK');
-    return 0;
 }
 
 // CLI entry point when run directly

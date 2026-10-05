@@ -2,6 +2,7 @@ import { TASK_QUEUE_FILENAME } from '../../../../core/orchestration-constants';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { cleanupCompactAtTaskBoundary } from '../../../../core/compact/lifecycle';
+import { cleanupTaskValidationOutput } from '../../../../core/validation-output-retention';
 
 import { writeFileAtomically } from '../../../../core/filesystem';
 import { isTaskQueueDoneStatus } from '../../../../core/active-task-state';
@@ -1025,7 +1026,7 @@ export async function reconcileSuccessfulCompletionFinalizationAsync(
         // Ephemeral output is not gate evidence. Delete before parent auto-close,
         // whose transaction owns its own rollback and must remain the last step.
         pendingFinalizationStep = 'COMPACT_CLEANUP';
-        await cleanupCompactAtTaskBoundary(repoRoot, taskId);
+        await cleanupCompactAtTaskBoundary(repoRoot, taskId, { validationOutput: false });
         pendingFinalizationStep = 'DECOMPOSED_PARENT_AUTO_CLOSE';
         decomposedParentStatusSync = closeEligibleDecomposedParentsLinkedToCompletedTask({
             repoRoot,
@@ -1094,6 +1095,12 @@ export async function reconcileSuccessfulCompletionFinalizationAsync(
             )
         );
     }
+
+    // Validation scratch survives any mandatory finalization rollback. Only after
+    // the child and parent transactions succeed may earlier failed attempts be removed.
+    for (const note of cleanupTaskValidationOutput(repoRoot, new Set([
+        taskId, ...decomposedParentStatusSync.updated_task_ids
+    ]))) console.warn(note);
 
     return {
         completion_event_recorded: completionEventRecorded,

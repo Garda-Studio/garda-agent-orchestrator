@@ -6,7 +6,7 @@ const { spawn } = require('node:child_process');
 
 const FULL_RUN_MARKER = /^NODE_FOUNDATION_TEST_SHARD_COMPARISON source=observed_run\b/u;
 const QUALITY_COMMAND_MARKER = /^> garda-agent-orchestrator@\S+ quality$/u;
-const TEST_COMMAND_MARKER = /^> garda-agent-orchestrator@\S+ test$/u;
+const TEST_COMMAND_MARKER = /^> garda-agent-orchestrator@\S+ (?:test|coverage)$/u;
 const SHARD_LOG_DIR_MARKER = /^NODE_FOUNDATION_TEST_SHARD_LOG_DIR\b/u;
 const PARTIAL_SELECTION_MARKER = /^NODE_FOUNDATION_TEST_DURATION_TELEMETRY_UPDATE_SKIPPED reason=partial_test_selection\b/u;
 const ENVIRONMENT_MARKER = /^NODE_FOUNDATION_QUALITY_ENVIRONMENT\b/u;
@@ -111,11 +111,16 @@ function candidateCheckoutFromLog(log, minimumFileCount, minimumKnownFileCount) 
     if (!path.isAbsolute(shardRoot)) {
         throw new Error('Candidate shard run directory must be an absolute path.');
     }
-    if (path.basename(shardRoot) !== 'test-shard-logs'
-        || path.basename(path.dirname(shardRoot)) !== '.node-build') {
-        throw new Error('Candidate shard run directory must be under checkout .node-build/test-shard-logs.');
+    if (path.basename(shardRoot) === 'test-shard-logs'
+        && path.basename(path.dirname(shardRoot)) === '.node-build') {
+        return path.dirname(path.dirname(shardRoot));
     }
-    return path.dirname(path.dirname(shardRoot));
+    if (path.basename(shardRoot) === 'validation-output'
+        && path.basename(path.dirname(shardRoot)) === 'runtime'
+        && path.basename(path.dirname(path.dirname(shardRoot))) === 'garda-agent-orchestrator') {
+        return path.dirname(path.dirname(path.dirname(shardRoot)));
+    }
+    throw new Error('Candidate shard run directory must be under checkout .node-build/test-shard-logs or garda-agent-orchestrator/runtime/validation-output.');
 }
 
 function readPositiveInteger(value, label) {
@@ -159,7 +164,8 @@ function parseObservedRun(log, minimumFileCount, minimumKnownFileCount) {
         throw new Error('Candidate log must contain one completed full-selection observed run.');
     }
     const shardLogDir = lines[firstShardLogDirLine].replace(SHARD_LOG_DIR_MARKER, '').trim();
-    const shardRun = /^(.*)[\\/]run-(\d+)$/u.exec(shardLogDir);
+    const shardRun = /^(.*)[\\/]run-(\d+)$/u.exec(shardLogDir)
+        || /^(.*)[\\/]([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})[\\/]scratch$/u.exec(shardLogDir);
     if (!shardRun || !shardRun[1]) {
         throw new Error('Completed quality log must identify its shard run directory.');
     }

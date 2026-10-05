@@ -10,8 +10,16 @@ import { PassThrough, Readable, Writable } from 'node:stream';
 import { ShardOutputForwarder } from '../../../scripts/node-foundation/shard-output-forwarding';
 import type { BuildResult } from '../../../scripts/node-foundation/build';
 import { isolateTestRunnerEnvironment } from '../process-environment-fixtures';
+import { validationOutputRoot } from '../../../src/core/validation-output-retention';
 
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+function retainedShardLogs(repoRoot: string): string {
+    const root = validationOutputRoot(repoRoot);
+    const runs = fs.readdirSync(root);
+    assert.equal(runs.length, 1);
+    return path.join(root, runs[0], 'scratch');
+}
 
 function controlledSink(highWaterMark = 1): {
     sink: Writable; chunks: Buffer[]; callbacks: Array<(error?: Error | null) => void>;
@@ -264,7 +272,7 @@ for (const channel of ['stdout', 'stderr'] as const) {
         await pending;
         assert.equal(result, 7);
         assert.equal(Buffer.concat(slow.chunks).toString(), `trailing ${channel}\n`);
-        const logs = path.join(fixture.buildRoot, 'test-shard-logs', `run-${process.pid}`);
+        const logs = retainedShardLogs(fixture.repoRoot);
         assert.equal(fs.readFileSync(path.join(logs, 'shard-01-of-01.log'), 'utf8'), `trailing ${channel}\n`);
     });
 
@@ -293,7 +301,7 @@ for (const channel of ['stdout', 'stderr'] as const) {
         slow.callbacks.shift()?.(new Error('broken output sink'));
         assert.equal(await pending, 1);
         assert.equal(killed, 1);
-        const logs = path.join(fixture.buildRoot, 'test-shard-logs', `run-${process.pid}`);
+        const logs = retainedShardLogs(fixture.repoRoot);
         const failureLog = fs.readFileSync(path.join(logs, 'shard-01-of-01.log'), 'utf8');
         assert.match(failureLog, /accepted tail/);
         assert.match(failureLog, /Node test output forwarding failed: broken output sink/);

@@ -147,6 +147,12 @@ npm run validate:clean-worktree
 
 Direct `npm pack` and `npm pack --dry-run` run the package `prepack` lifecycle, which enforces a clean worktree before package preparation and again after `build:publish-runtime`.
 
+Validation output retention: the guarded coverage entry runs the same canonical test scope and c8 thresholds, using a unique `garda-agent-orchestrator/runtime/validation-output/<run-id>/scratch` directory for raw V8 output. Default Node test shard logs use independently owned run directories there too. After a successful run finishes reporting, its scratch is removed. Final reports and a small result/ownership manifest remain; coverage also publishes the existing `coverage/lcov.info` surface. Concurrent runs keep separate raw data and report archives.
+
+Full-suite gates pass both `GARDA_VALIDATION_TASK_ID` and `GARDA_VALIDATION_REPO_ROOT` to bind these runs to the current task. Failed attempts keep their scratch until all mandatory child and parent completion steps succeed. That boundary records cleanup permission for each finished run; later task boundaries retry pending deletion after producer children exit. A mutable DONE entry alone never permits deletion. This cleanup works independently of general archive-purge dry-run settings and preserves reports, receipts, closeout, and audit evidence. An inherited context from another checkout is ignored. Explicit `--garda-shard-log-dir` or `GARDA_NODE_FOUNDATION_TEST_SHARD_LOG_DIR` destinations stay caller-owned and are preserved.
+
+Standalone failed runs, unfinished/crashed producers, foreign-host records, damaged manifests, unmarked historical failed runs, and old unregistered `coverage/tmp` or `.node-build/test-shard-logs` directories require ownership reconciliation; cleanup never guesses their task or follows links. Managed children are checked before deletion, including their POSIX process groups. Deliberately detached daemons that leave the managed process tree/group are outside this supervision contract and must use a caller-owned output directory. Coverage retains the existing unlimited outer test duration; normal per-test timeout and cancellation controls still apply.
+
 ## 8.1 Tag-Driven npm Staged Publish
 
 The primary npm release path is now tag-driven through `.github/workflows/publish.yml`, not a local `npm publish`.

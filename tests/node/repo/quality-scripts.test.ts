@@ -94,8 +94,8 @@ test('package quality scripts expose lint, coverage, audit, and composed release
     assert.match(scripts.lint, /"tests\/node\/\*\*\/\*\.ts"/);
     assert.match(scripts.lint, /"scripts\/node-foundation\/\*\*\/\*\.ts"/);
 
-    assert.equal(scripts.coverage, 'c8 npm test');
-    assert.equal(scripts['coverage:fast'], 'c8 npm run test:fast');
+    assert.equal(scripts.coverage, 'node scripts/node-foundation/build-scripts.cjs coverage.js test');
+    assert.equal(scripts['coverage:fast'], 'node scripts/node-foundation/build-scripts.cjs coverage.js test:fast');
 
     assert.equal(scripts['audit:prod'], 'npm audit --omit=dev');
     assert.equal(scripts['audit:all'], 'npm audit');

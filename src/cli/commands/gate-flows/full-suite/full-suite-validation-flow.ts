@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { UNCONFIGURED_FULL_SUITE_VALIDATION_COMMAND } from '../../../../core/constants';
+import { VALIDATION_REPO_ROOT_ENV, VALIDATION_TASK_ID_ENV } from '../../../../core/validation-output-retention';
 import * as gateHelpers from '../../../../gates/shared/helpers';
 import { redactSecretText } from '../../../../core/redaction';
 import {
@@ -440,7 +441,11 @@ export async function runFullSuiteValidationCommand(
             try {
                 const execution = await executeCommandAsync(config.command, {
                     cwd: repoRoot,
-                    env: buildFullSuiteValidationCommandEnv(executionConfig.timeout_ms),
+                    env: {
+                        ...buildFullSuiteValidationCommandEnv(executionConfig.timeout_ms),
+                        [VALIDATION_REPO_ROOT_ENV]: path.resolve(repoRoot),
+                        [VALIDATION_TASK_ID_ENV]: taskId
+                    },
                     timeoutMs: executionConfig.timeout_ms,
                     onSpawn: (child) => updateFullSuiteValidationRunMarkerChildProcess(repoRoot, taskId, child)
                 });

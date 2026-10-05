@@ -127,7 +127,8 @@ test('wall-time baseline binds repeated samples to comparable machine conditions
     assert.throws(() => compare(candidateLog(900).replace('schema=3', 'schema=1')), /dependency-bound schema 3/u);
 });
 
-test('comparator CLI reads tracked config shape and retained log files', (context) => {
+for (const storage of ['legacy', 'managed'] as const) {
+test(`comparator CLI reads tracked config and ${storage} retained run directories`, (context) => {
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-wall-time-cli-'));
     context.after(() => {
         assert.ok(fs.realpathSync(fixtureRoot).startsWith(`${fs.realpathSync(os.tmpdir())}${path.sep}`));
@@ -144,8 +145,15 @@ test('comparator CLI reads tracked config shape and retained log files', (contex
         .update('package-lock.json\0').update(fs.readFileSync(packageLock)).update('\0')
         .update('node_modules/.package-lock.json\0').update(fs.readFileSync(installedLock)).update('\0')
         .digest('hex');
+    const shardPath = (checkout: string, run: string): string => storage === 'legacy'
+        ? path.join(checkout, '.node-build', 'test-shard-logs', run)
+        : path.join(checkout, 'garda-agent-orchestrator', 'runtime', 'validation-output',
+            `00000000-0000-4000-8000-${run.slice(4).padStart(12, '0')}`, 'scratch');
+    const entryMarker = `> garda-agent-orchestrator@1.4.3 ${storage === 'legacy' ? 'test' : 'coverage'}\n`;
     const logs = [baselineLog, candidateLog(900), candidateLog(899, 532, 2)]
-        .map((log) => log.replace(/C:\\test-shards\\(run-\d+)/gu, (_match, run: string) => path.join(fixtureRoot, '.node-build', 'test-shard-logs', run))
+        .map((log, index) => log.replace(/C:\\test-shards\\(run-\d+)/gu, (_match, run: string) => index === 0
+            ? path.join(fixtureRoot, '.node-build', 'test-shard-logs', run) : shardPath(fixtureRoot, run))
+            .replace('> garda-agent-orchestrator@1.4.3 test\n', index === 0 ? '> garda-agent-orchestrator@1.4.3 test\n' : entryMarker)
             .replace(`dependency_sha256=${candidateDependencySha256}`, `dependency_sha256=${fixtureDependencySha256}`));
     const paths = logs.map((log, index) => {
         const file = path.join(fixtureRoot, `quality-${index}.log`);
@@ -197,11 +205,10 @@ test('comparator CLI reads tracked config shape and retained log files', (contex
     fs.writeFileSync(configPath, JSON.stringify(wrongCheckoutConfig));
     const decoyLog = path.join(fixtureRoot, 'decoy-marker.log');
     const decoy = logs[1]
-        .replace('> garda-agent-orchestrator@1.4.3 test\n',
-            `NODE_FOUNDATION_TEST_SHARD_LOG_DIR ${path.join(fixtureRoot, '.node-build', 'test-shard-logs', 'run-900')}\n> garda-agent-orchestrator@1.4.3 test\n`)
-        .replace(`NODE_FOUNDATION_TEST_SHARD_LOG_DIR ${path.join(fixtureRoot, '.node-build', 'test-shard-logs', 'run-1')}`,
-            `NODE_FOUNDATION_TEST_SHARD_LOG_DIR ${path.join(wrongCheckout, '.node-build', 'test-shard-logs', 'run-1')}`);
-    assert.ok(decoy.includes(path.join(wrongCheckout, '.node-build', 'test-shard-logs', 'run-1')));
+        .replace(entryMarker, `NODE_FOUNDATION_TEST_SHARD_LOG_DIR ${shardPath(fixtureRoot, 'run-900')}\n${entryMarker}`)
+        .replace(`NODE_FOUNDATION_TEST_SHARD_LOG_DIR ${shardPath(fixtureRoot, 'run-1')}`,
+            `NODE_FOUNDATION_TEST_SHARD_LOG_DIR ${shardPath(wrongCheckout, 'run-1')}`);
+    assert.ok(decoy.includes(shardPath(wrongCheckout, 'run-1')));
     fs.writeFileSync(decoyLog, decoy);
     wrongCheckoutConfig.candidate_log_sha256[0] = crypto.createHash('sha256').update(decoy).digest('hex');
     fs.writeFileSync(configPath, JSON.stringify(wrongCheckoutConfig));
@@ -230,6 +237,7 @@ test('comparator CLI reads tracked config shape and retained log files', (contex
     assert.notEqual(changedAfterRun.status, 0);
     assert.match(changedAfterRun.stderr, /modified after the candidate runs began/u);
 });
+}
 
 test('installed dependency digest frames file entries and accepts internal POSIX links', (context) => {
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-wall-time-tree-'));

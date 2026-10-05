@@ -45,7 +45,7 @@ function formatCommand(command, args) {
 }
 
 function resolveEntryProcessTimeoutMs(entryScript) {
-    return entryScript === 'test.js'
+    return entryScript === 'test.js' || entryScript === 'coverage.js'
         ? UNLIMITED_PROCESS_TIMEOUT_MS
         : undefined;
 }
@@ -149,8 +149,7 @@ function buildScriptsInputFingerprint(repoRoot) {
         'tsconfig.json',
         'tsconfig.scripts.json',
         'src/bin',
-        'src/core/file-stat.ts',
-        'src/core/node-foundation-test-shard-markers.ts',
+        'src/core',
         'scripts/node-foundation'
     ]).map((filePath) => {
         const stat = fs.statSync(filePath);

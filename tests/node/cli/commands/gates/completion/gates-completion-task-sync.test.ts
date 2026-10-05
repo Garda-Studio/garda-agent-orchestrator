@@ -10,6 +10,8 @@ import {
     runDocImpactGateCommand
 } from '../../../../../../src/cli/commands/gates';
 import { runCliMain } from '../../../../../../src/cli/main';
+import { beginValidationOutputRun, VALIDATION_REPO_ROOT_ENV, VALIDATION_TASK_ID_ENV } from '../../../../../../src/core/validation-output-retention';
+import { runTaskAuditSummaryCommand } from '../../../../../../src/cli/commands/gate-flows/task/task-summary-flow';
 
 import {
     captureExpectedAsyncError,
@@ -23,6 +25,7 @@ import {
     runEnterTaskMode,
     runHandshakeForTask,
     runShellSmokeForTask,
+    runGit,
     seedInitAnswers,
     seedTaskQueue,
     writeCleanReviewArtifact,
@@ -35,6 +38,24 @@ function writeTaskQueueRows(repoRoot: string, rows: string[]): void {
         '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
         ...rows
     ].join('\n'), 'utf8');
+}
+
+function createFailedValidationRun(repoRoot: string, taskId: string): ReturnType<typeof beginValidationOutputRun> {
+    const previousRoot = process.env[VALIDATION_REPO_ROOT_ENV];
+    const previousTask = process.env[VALIDATION_TASK_ID_ENV];
+    try {
+        process.env[VALIDATION_REPO_ROOT_ENV] = repoRoot;
+        process.env[VALIDATION_TASK_ID_ENV] = taskId;
+        const run = beginValidationOutputRun(repoRoot, 'node-tests');
+        fs.writeFileSync(path.join(run.scratchDir, 'failed-attempt.log'), 'previous failed attempt');
+        run.finish(1);
+        return run;
+    } finally {
+        if (previousRoot === undefined) delete process.env[VALIDATION_REPO_ROOT_ENV];
+        else process.env[VALIDATION_REPO_ROOT_ENV] = previousRoot;
+        if (previousTask === undefined) delete process.env[VALIDATION_TASK_ID_ENV];
+        else process.env[VALIDATION_TASK_ID_ENV] = previousTask;
+    }
 }
 
 async function prepareCompletionReadyTask(repoRoot: string, taskId: string, taskSummary: string): Promise<string> {
@@ -161,6 +182,10 @@ describe('cli/commands/gates', () => {
         });
         assert.equal(docImpactResult.exitCode, 0);
 
+        const validationRun = createFailedValidationRun(repoRoot, taskId);
+        const validationResultPath = path.join(validationRun.reportsDir, 'result.json');
+        const validationResultBefore = fs.readFileSync(validationResultPath, 'utf8');
+
         const previousExitCode = process.exitCode;
         const previousCwd = process.cwd();
         process.exitCode = 0;
@@ -187,6 +212,14 @@ describe('cli/commands/gates', () => {
         assert.equal(fs.existsSync(path.join(reviewsRoot, `${taskId}-final-closeout.json`)), true);
         assert.equal(fs.existsSync(path.join(reviewsRoot, `${taskId}-final-closeout.md`)), true);
         assert.equal(fs.existsSync(path.join(reviewsRoot, `${taskId}-final-user-report.md`)), true);
+        assert.equal(fs.existsSync(validationRun.scratchDir), false, 'canonical completion must clean earlier failed test scratch');
+        assert.equal(fs.readFileSync(validationResultPath, 'utf8'), validationResultBefore);
+        const stage = runGit(repoRoot, ['add', '--', 'src/app.ts', 'TASK.md']);
+        assert.equal(stage.status, 0, `${stage.stdout}\n${stage.stderr}`);
+        const commit = runGit(repoRoot, ['commit', '-m', 'Close the validation retention fixture task']);
+        assert.equal(commit.status, 0, `${commit.stdout}\n${commit.stderr}`);
+        const audit = runTaskAuditSummaryCommand({ repoRoot, taskId, asJson: true });
+        assert.equal(audit.exitCode, 0, audit.rendered);
 
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });
@@ -312,6 +345,10 @@ describe('cli/commands/gates', () => {
             taskId,
             'Rollback child completion when parent auto-close evidence fails'
         );
+        const validationRun = createFailedValidationRun(repoRoot, taskId);
+        const parentValidationRun = createFailedValidationRun(repoRoot, parentTaskId);
+        const validationResultPath = path.join(validationRun.reportsDir, 'result.json');
+        const validationResultBefore = fs.readFileSync(validationResultPath, 'utf8');
         const parentTimelinePath = path.join(
             repoRoot,
             'garda-agent-orchestrator',
@@ -346,6 +383,8 @@ describe('cli/commands/gates', () => {
 
         assert.equal(readTaskQueueStatusFromTaskFile(repoRoot, taskId), 'IN_REVIEW');
         assert.equal(readTaskQueueStatusFromTaskFile(repoRoot, parentTaskId), 'DECOMPOSED');
+        assert.equal(fs.existsSync(validationRun.scratchDir), true, 'rollback must preserve failed validation scratch');
+        assert.equal(fs.existsSync(parentValidationRun.scratchDir), true);
         const failedAttemptEvents = readTaskTimelineEvents(repoRoot, taskId);
         assert.equal(
             failedAttemptEvents.some((event) => event.event_type === 'COMPLETION_GATE_PASSED'),
@@ -360,6 +399,9 @@ describe('cli/commands/gates', () => {
 
         assert.equal(readTaskQueueStatusFromTaskFile(repoRoot, taskId), 'DONE');
         assert.equal(readTaskQueueStatusFromTaskFile(repoRoot, parentTaskId), 'DONE');
+        assert.equal(fs.existsSync(validationRun.scratchDir), false);
+        assert.equal(fs.existsSync(parentValidationRun.scratchDir), false);
+        assert.equal(fs.readFileSync(validationResultPath, 'utf8'), validationResultBefore);
         assert.equal(
             readTaskTimelineEvents(repoRoot, parentTaskId)
                 .some((event) => event.event_type === 'DECOMPOSED_PARENT_COMPLETED'),

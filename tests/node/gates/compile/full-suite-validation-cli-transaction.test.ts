@@ -1347,6 +1347,8 @@ describe('gates/full-suite-validation', () => {
                 [
                     'if (process.env.GARDA_NODE_FOUNDATION_TEST_PREBUILT !== "1") process.exit(41);',
                     'if (process.env.GARDA_NODE_FOUNDATION_REUSE_PUBLISH_RUNTIME !== "1") process.exit(42);',
+                    'if (process.env.GARDA_VALIDATION_TASK_ID !== "T-SHARD-ENV") process.exit(43);',
+                    'if (process.env.GARDA_VALIDATION_REPO_ROOT !== require("node:path").resolve(process.cwd())) process.exit(44);',
                     'process.stdout.write("node-foundation env ok\\n");'
                 ].join('\n'),
                 'utf8'

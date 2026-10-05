@@ -660,11 +660,12 @@ test('build-scripts wrapper reuses current compiled wrapper build by fingerprint
     }
 });
 
-test('build-scripts cache invalidates when the archive file-stat dependency changes', () => {
+for (const dependency of ['file-stat.ts', 'validation-output-retention.ts', 'command-line.ts', 'process/subprocess.ts']) {
+test(`build-scripts cache invalidates when script dependency ${dependency} changes`, () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-scripts-dependency-'));
     const buildRoot = path.join(tempRoot, '.scripts-build');
     const compiledEntryPath = path.join(buildRoot, 'scripts', 'node-foundation', 'test.js');
-    const dependencyPath = path.join(tempRoot, 'src', 'core', 'file-stat.ts');
+    const dependencyPath = path.join(tempRoot, 'src', 'core', dependency);
 
     try {
         writeTextFile(dependencyPath, 'export const identity = 1;\n');
@@ -687,6 +688,7 @@ test('build-scripts cache invalidates when the archive file-stat dependency chan
         removeTempTree(tempRoot);
     }
 });
+}
 
 test('build-scripts prebuilt test entry still requires a current fingerprint', () => {
     const repoRoot = getRepoRoot();
@@ -1015,6 +1017,7 @@ test('build-scripts wrapper fails hung child processes with timeout diagnostics'
 
 test('build-scripts wrapper leaves test entrypoints unlimited without changing other entrypoints', () => {
     assert.equal(buildScriptsWrapper.resolveEntryProcessTimeoutMs('test.js'), 0);
+    assert.equal(buildScriptsWrapper.resolveEntryProcessTimeoutMs('coverage.js'), 0);
     assert.equal(buildScriptsWrapper.resolveEntryProcessTimeoutMs('build.js'), undefined);
     assert.equal(buildScriptsWrapper.resolveEntryProcessTimeoutMs('release-validation.js'), undefined);
 });
