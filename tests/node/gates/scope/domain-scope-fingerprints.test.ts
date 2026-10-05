@@ -161,7 +161,7 @@ describe('gates/domain-scope-fingerprints', () => {
                 'utf8'
             );
             fs.writeFileSync(
-                path.join(repoRoot, 'custom-notes', 'classification-guide.asset'),
+                path.join(repoRoot, 'custom-notes', 'classification-guide'),
                 'classification guide\n',
                 'utf8'
             );
@@ -171,14 +171,14 @@ describe('gates/domain-scope-fingerprints', () => {
                 ...mutableConfig,
                 source: 'task_profile_policy_snapshot',
                 test_trigger_regexes: ['(^|/)custom-specs/'],
-                ordinary_doc_paths: ['custom-notes/**']
+                ordinary_doc_paths: ['custom-notes/classification-guide']
             };
             const preflight = {
                 detection_source: 'explicit_changed_files',
                 include_untracked: true,
                 changed_files: [
                     'custom-specs/classification-case.ts',
-                    'custom-notes/classification-guide.asset'
+                    'custom-notes/classification-guide'
                 ]
             };
 
@@ -207,7 +207,7 @@ describe('gates/domain-scope-fingerprints', () => {
             );
             assert.deepEqual(
                 fingerprints.domains.docs.changed_files,
-                ['custom-notes/classification-guide.asset']
+                ['custom-notes/classification-guide']
             );
             assert.deepEqual(fingerprints.domains.implementation.changed_files, []);
             assert.equal(fingerprints.legacy.review_scope_sha256, lockedReviewScope.review_scope_sha256);

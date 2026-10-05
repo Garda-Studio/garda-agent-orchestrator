@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import {
@@ -7,7 +8,10 @@ import {
 } from '../scope/domain-scope-fingerprints';
 import {
     fileSha256,
-    normalizePath
+    normalizePath,
+    joinOrchestratorPath,
+    resolvePathInsideRepo,
+    isPathRealpathInsideRoot
 } from '../shared/helpers';
 import {
     getWorkspaceSnapshotCached,
@@ -52,6 +56,144 @@ import {
     readGitIgnoredPathSet
 } from './next-step-protected-scope';
 import { isPlainRecord } from '../../core/records';
+import { assertValidTaskId, inspectTaskEventFile, readTaskTimelineJsonlEntries, type TaskTimelineJsonlEntry } from '../../gate-runtime/task-events';
+import { getCurrentNoOpEventSha256, getNoOpEvidence } from '../task-mode/no-op';
+import { getTaskModeEvidence } from '../task-mode/task-mode-evidence';
+import { getAuditedWorkflowConfigChangeProvenance } from '../workflow-config/workflow-config-work-audit';
+import { normalizeWorkflowConfigSha256 } from '../workflow-config/workflow-config-work-paths';
+
+function isCanonicalZeroDiffNoOpPreflight(preflight: Record<string, unknown>): boolean {
+    const metrics = isPlainRecord(preflight.metrics) ? preflight.metrics : {};
+    const guard = isPlainRecord(preflight.zero_diff_guard) ? preflight.zero_diff_guard : {};
+    return Array.isArray(preflight.changed_files) && preflight.changed_files.length === 0
+        && metrics.changed_lines_total === 0
+        && Array.isArray(metrics.actual_changed_files) && metrics.actual_changed_files.length === 0
+        && guard.zero_diff_detected === true && guard.completion_requires_audited_no_op === true;
+}
+
+function hasCommandOnlyConfigAuditChain(options: {
+    repoRoot: string;
+    taskId: string;
+    relativePath: string;
+    baselineHash: string | null;
+    preflightHash: string | null;
+    taskCycleEntries: readonly TaskTimelineJsonlEntry[];
+    taskEntryHash: string;
+}): boolean {
+    const currentHash = fileSha256(path.resolve(options.repoRoot, options.relativePath));
+    if (!options.baselineHash || !currentHash || currentHash !== options.preflightHash) return false;
+    const provenance = getAuditedWorkflowConfigChangeProvenance({
+        repoRoot: options.repoRoot, taskId: options.taskId, changedFiles: [options.relativePath],
+        currentFileHashes: { [options.relativePath]: currentHash }
+    });
+    if (!provenance.accepted) return false;
+    const auditPath = provenance.records[0].audit_path;
+    const records = new Map(fs.readFileSync(auditPath, 'utf8').split(/\r?\n/u)
+        .filter((line) => line.trim()).map((line) => [stringSha256(line), JSON.parse(line) as unknown]));
+    let cursor: string | null = null;
+    let baselineSeen = false;
+    const preparedRecords = new Set<string>();
+    const boundRecords = new Set<string>();
+    // Inspect the complete current cycle, including mutations that return to the baseline.
+    for (const entry of options.taskCycleEntries) {
+        const event = entry.record;
+        const prepared = event?.event_type === 'WORKFLOW_CONFIG_MUTATION_PREPARED';
+        if (!prepared && event?.event_type !== 'WORKFLOW_CONFIG_MUTATION_AUDITED') continue;
+        const details = isPlainRecord(event.details) ? event.details : {};
+        const boundConfigPath = resolvePathInsideRepo(String(details.config_path || ''), options.repoRoot, { enforceInside: true });
+        if (!boundConfigPath || normalizeWorkspaceRelativePath(options.repoRoot,
+            path.relative(options.repoRoot, boundConfigPath)) !== options.relativePath) continue;
+        const recordHash = normalizeWorkflowConfigSha256(details.audit_record_sha256);
+        const boundAuditPath = resolvePathInsideRepo(String(details.audit_path || ''), options.repoRoot, { enforceInside: true });
+        const stageRecords = prepared ? preparedRecords : boundRecords;
+        if (event?.actor !== 'workflow-config-set' || event.outcome !== (prepared ? 'INFO' : 'PASS')
+            || details.task_mode_entry_sha256 !== options.taskEntryHash
+            || !boundAuditPath || path.resolve(boundAuditPath) !== path.resolve(auditPath)
+            || !recordHash || stageRecords.has(recordHash)
+            || !prepared && !preparedRecords.has(recordHash)) return false;
+        stageRecords.add(recordHash);
+        const record = records.get(recordHash);
+        if (!isPlainRecord(record) || record.event_source !== 'workflow-config-set') return false;
+        const auditConfigPath = resolvePathInsideRepo(String(record.config_path || ''), options.repoRoot, {
+            enforceInside: true
+        });
+        if (!auditConfigPath || normalizeWorkspaceRelativePath(options.repoRoot,
+            path.relative(options.repoRoot, auditConfigPath)) !== options.relativePath) return false;
+        if (!Array.isArray(record.changed_fields) || record.changed_fields.length !== 1
+            || record.changed_fields[0] !== 'full_suite_validation.command'
+            || record.command_only_change !== true
+            || !['cli', 'local-ui'].includes(String(record.mutation_source || 'cli'))
+            || !Array.isArray(record.active_task_ids)
+            || !record.active_task_ids.includes(options.taskId)
+            || !Number.isFinite(Date.parse(String(record.timestamp_utc || '')))) return false;
+    }
+    if (preparedRecords.size !== boundRecords.size) return false;
+    // Audit publication holds the workflow lock; event publication may interleave after commit.
+    for (const [recordHash, record] of records) {
+        if (!boundRecords.has(recordHash) || !isPlainRecord(record)) continue;
+        const beforeHash = normalizeWorkflowConfigSha256(record.before_sha256);
+        const afterHash = normalizeWorkflowConfigSha256(record.after_sha256);
+        if (!beforeHash || !afterHash || (cursor !== null && beforeHash !== cursor)) return false;
+        baselineSeen ||= beforeHash === options.baselineHash || afterHash === options.baselineHash;
+        cursor = afterHash;
+    }
+    return baselineSeen && cursor === currentHash;
+}
+
+function canCloseAuthenticatedNoOpBesideProtectedBaseline(
+    repoRoot: string,
+    preflight: Record<string, unknown>,
+    protectedBaselineFiles: readonly string[],
+    changedWorkflowConfigFiles: readonly string[]
+): boolean {
+    if (!isCanonicalZeroDiffNoOpPreflight(preflight)) return false;
+    try {
+        const taskId = assertValidTaskId(String(preflight.task_id || ''));
+        const evidence = getNoOpEvidence(repoRoot, taskId);
+        const preflightPath = resolvePathInsideRepo(evidence.preflight_path || '', repoRoot);
+        const reviewsRoot = joinOrchestratorPath(repoRoot, path.join('runtime', 'reviews'));
+        if (!preflightPath || !isPathRealpathInsideRoot(preflightPath, reviewsRoot)
+            || JSON.stringify(JSON.parse(fs.readFileSync(preflightPath, 'utf8'))) !== JSON.stringify(preflight)) return false;
+        const boundEvidence = getNoOpEvidence(repoRoot, taskId, '', preflightPath);
+        const timelinePath = joinOrchestratorPath(repoRoot, path.join('runtime', 'task-events', `${taskId}.jsonl`));
+        const integrity = inspectTaskEventFile(timelinePath, taskId);
+        if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(integrity.status)
+            || !getCurrentNoOpEventSha256(repoRoot, taskId, boundEvidence)) return false;
+        let taskMode = getTaskModeEvidence(repoRoot, taskId);
+        if (taskMode.evidence_status !== 'PASS' && taskMode.timeline_artifact_path) {
+            taskMode = getTaskModeEvidence(repoRoot, taskId, taskMode.timeline_artifact_path);
+        }
+        if (taskMode.evidence_status !== 'PASS') return false;
+        const entries = readTaskTimelineJsonlEntries(timelinePath);
+        let taskEntryIndex = entries.length - 1;
+        while (taskEntryIndex >= 0 && entries[taskEntryIndex].record?.event_type !== 'TASK_MODE_ENTERED') taskEntryIndex -= 1;
+        if (taskEntryIndex < 0 || entries[taskEntryIndex].record?.outcome !== 'PASS') return false;
+        const taskEntryHash = stringSha256(entries[taskEntryIndex].rawLine.trim());
+        const baselineHashes = taskMode.dirty_workspace_baseline?.file_hashes || {};
+        const triggers = getPreflightTriggers(preflight);
+        const protectedHashes = isPlainRecord(triggers.dirty_workspace_protected_file_hashes)
+            ? triggers.dirty_workspace_protected_file_hashes : {};
+        if (!protectedBaselineFiles.every((file) => (
+            baselineHashes[file] && baselineHashes[file] === protectedHashes[file]
+        ))) return false;
+        const configHashes = getWorkflowConfigFileHashes(repoRoot, preflight);
+        const snapshot = taskMode.profile_policy_snapshot;
+        const snapshotConfigPath = snapshot && resolvePathInsideRepo(snapshot.resolution_sources.workflow_config,
+            repoRoot, { enforceInside: true });
+        return changedWorkflowConfigFiles.every((relativePath) => hasCommandOnlyConfigAuditChain({
+            repoRoot, taskId, relativePath,
+            baselineHash: snapshotConfigPath && normalizeWorkspaceRelativePath(repoRoot,
+                path.relative(repoRoot, snapshotConfigPath)) === relativePath
+                ? snapshot?.config_hashes.workflow_config || null : null,
+            preflightHash: configHashes[relativePath] || null,
+            taskEntryHash,
+            taskCycleEntries: entries.slice(taskEntryIndex + 1)
+        }));
+    } catch {
+        // Missing or malformed evidence cannot widen the existing protected-scope allowance.
+        return false;
+    }
+}
 
 export interface PreflightWorkspaceReadiness {
     ready: boolean;
@@ -350,7 +492,10 @@ export function readPreflightWorkspaceReadiness(
             const uncoveredDirtyBaselineFiles = currentGitSnapshotFiles.filter((entry) => (
                 unchangedProtectedFiles.has(entry) && !preflightSet.has(entry)
             ));
-            if (changedWorkflowConfigFiles.length > 0 && uncoveredDirtyBaselineFiles.length > 0) {
+            if (changedWorkflowConfigFiles.length > 0 && uncoveredDirtyBaselineFiles.length > 0
+                && !(violations.length === 0 && canCloseAuthenticatedNoOpBesideProtectedBaseline(
+                    repoRoot, preflight, uncoveredDirtyBaselineFiles, changedWorkflowConfigFiles
+                ))) {
                 return {
                     ready: false,
                     reason:

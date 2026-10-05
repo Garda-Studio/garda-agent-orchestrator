@@ -18,6 +18,9 @@ import { OPERATOR_CONFIRMATION_MAX_AGE_MS } from '../../../../src/core/operator-
 import { UNCONFIGURED_COMPILE_GATE_COMMAND } from '../../../../src/core/constants';
 import { resolveTaskResetAvailability } from '../../../../src/core/task-reset-availability';
 import { buildOperatorConfirmationArgs } from './operator-confirmation-test-helpers';
+import { appendMandatoryTaskEvent, inspectTaskEventFile, readTaskTimelineJsonlEntries } from '../../../../src/gate-runtime/task-events';
+import { stringSha256 } from '../../../../src/gate-runtime/hash';
+import { runLogTaskEventCommand } from '../../../../src/cli/commands/gate-flows/completion/completion-flow';
 
 const PACKAGE_JSON = { name: 'garda-agent-orchestrator', version: '1.0.0' };
 
@@ -85,6 +88,48 @@ function captureConsole<T>(run: () => T): { result: T; output: string } {
 function defaultOptionalQualityCheckRuleIds(): string {
     return DEFAULT_OPTIONAL_QUALITY_CHECK_RULES.map((rule) => rule.id).join(', ');
 }
+
+test('workflow set binds exact committed audit records to distinct native task entries', () => {
+    const bundleRoot = createBundleRoot();
+    const taskId = 'T-WORKFLOW-AUDIT-1';
+    const timeline = path.join(bundleRoot, 'runtime/task-events', `${taskId}.jsonl`);
+    try {
+        for (const command of ['node --test tests/first.test.js', 'node --test tests/second.test.js']) {
+            appendMandatoryTaskEvent(bundleRoot, taskId, 'TASK_MODE_ENTERED', 'PASS', 'Start task cycle.', {}, { actor: 'gate' });
+            const entry = readTaskTimelineJsonlEntries(timeline).at(-1);
+            assert.ok(entry);
+            const { result } = captureConsole(() => handleWorkflow([
+                'set', '--bundle-root', bundleRoot, '--full-suite-command', command,
+                ...buildOperatorConfirmationArgs()
+            ], PACKAGE_JSON));
+            assert.ok(result && result.action === 'set' && result.audit_path);
+            const auditLine = fs.readFileSync(result.audit_path, 'utf8').trim().split(/\r?\n/u).at(-1);
+            assert.ok(auditLine);
+            const stages = readTaskTimelineJsonlEntries(timeline).slice(-2).map(({ record }) => record);
+            const [prepared, binding] = stages;
+            assert.equal(prepared?.event_type, 'WORKFLOW_CONFIG_MUTATION_PREPARED');
+            assert.equal(prepared?.actor, 'workflow-config-set');
+            assert.equal(prepared?.outcome, 'INFO');
+            assert.equal(binding?.event_type, 'WORKFLOW_CONFIG_MUTATION_AUDITED');
+            assert.equal(binding?.actor, 'workflow-config-set');
+            assert.equal(binding?.outcome, 'PASS');
+            const details = binding?.details as Record<string, unknown>;
+            assert.deepEqual(prepared?.details, details);
+            assert.equal(details.task_mode_entry_sha256, stringSha256(entry.rawLine.trim()));
+            assert.equal(details.audit_record_sha256, stringSha256(auditLine));
+            assert.equal(JSON.parse(auditLine).command_only_change, true);
+        }
+        assert.equal(inspectTaskEventFile(timeline, taskId).status, 'PASS');
+        for (const eventType of ['WORKFLOW_CONFIG_MUTATION_AUDITED', 'workflow_config_mutation_prepared']) {
+            assert.throws(() => runLogTaskEventCommand({
+                repoRoot: bundleRoot, eventsRoot: path.dirname(timeline), taskId,
+                eventType, outcome: 'PASS', actor: 'workflow-config-set'
+            }), /reserved and cannot be emitted/u);
+        }
+    } finally {
+        fs.rmSync(bundleRoot, { recursive: true, force: true });
+    }
+});
 
 test('workflow set persists compact settings through the audited transaction', () => {
     const bundleRoot = createBundleRoot();

@@ -66,12 +66,14 @@ import {
     validateWorkflowCompileGateCommand
 } from './workflow-command-parsing';
 import {
+    bindCommittedWorkflowConfigAudit,
     normalizeOutputPath,
     normalizeWorkflowConfigMutationSource,
     refreshWorkflowProtectedManifest,
     resolveActualChangedFields,
     writeWorkflowConfig,
-    writeWorkflowConfigAuditRecord
+    writeWorkflowConfigAuditRecord,
+    type WorkflowConfigAuditBinding
 } from './workflow-command-mutation';
 import type {
     ParsedOptionsRecord,
@@ -306,15 +308,21 @@ function applyLegacyScopeBudgetLimit(
 
 export function handleSet(options: ParsedOptionsRecord): WorkflowSetResult {
     const roots = resolveWorkflowRoots(options);
+    const auditBindings: WorkflowConfigAuditBinding[] = [];
     const result = withWorkflowConfigTransaction(roots, resolveProtectedManifestRefreshRoot(roots), (transaction) => (
-        handleSetLocked(options, transaction)
+        handleSetLocked(options, transaction, auditBindings)
     ));
+    for (const binding of auditBindings) bindCommittedWorkflowConfigAudit(roots.bundleRoot, binding);
     console.log(formatWorkflowShowOutput(result, options.json === true));
     if (options.json !== true) console.log(formatWorkflowSetSummaryOutput(result));
     return result;
 }
 
-function handleSetLocked(options: ParsedOptionsRecord, transaction: RecoverableFileTransaction): WorkflowSetResult {
+function handleSetLocked(
+    options: ParsedOptionsRecord,
+    transaction: RecoverableFileTransaction,
+    auditBindings: WorkflowConfigAuditBinding[]
+): WorkflowSetResult {
     const roots = resolveWorkflowRoots(options);
     const state = readWorkflowConfigState(roots.configPath, roots.bundleRoot);
     const preserveLegacyMissingReviewExecutionPolicy = !state.exists
@@ -842,7 +850,8 @@ function handleSetLocked(options: ParsedOptionsRecord, transaction: RecoverableF
     const auditWriteOptions = {
         transaction,
         mutationSource: normalizeWorkflowConfigMutationSource(options.mutationSource),
-        targetRoot: roots.targetRoot
+        targetRoot: roots.targetRoot,
+        onAuditWritten: (binding: WorkflowConfigAuditBinding) => auditBindings.push(binding)
     };
     if (changed) {
         const safeSelfGuardHardening = requestedFields.length === 1
@@ -852,12 +861,13 @@ function handleSetLocked(options: ParsedOptionsRecord, transaction: RecoverableF
             requireWorkflowSetOperatorConfirmation(options);
         }
         if (workflowConfigChanged) {
+            const currentFileText = state.exists ? fs.readFileSync(roots.configPath, 'utf8') : '';
             writeWorkflowConfig(roots.configPath, nextValidated, transaction);
             auditPath = writeWorkflowConfigAuditRecord(
                 roots.bundleRoot,
                 roots.configPath,
                 actualWorkflowConfigChangedFields,
-                currentSerialized,
+                currentFileText,
                 nextSerialized,
                 auditWriteOptions
             );
