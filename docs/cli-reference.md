@@ -1,5 +1,7 @@
 # CLI Reference
 
+String and repeated string options require a value before the next recognized option, including built-in help/version flags. Negative numbers and other dash-prefixed data remain valid. If a value is itself a recognized option name, pass it inline (`--option=--literal-option-name`); shell quotes alone cannot distinguish it once arguments reach the parser.
+
 ## Review-output correction evidence commands
 
 These helper gates record actual provider evidence for a correction attempt; they do not launch a reviewer or supply missing provenance:

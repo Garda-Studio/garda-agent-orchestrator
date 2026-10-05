@@ -90,6 +90,11 @@ export function parseOptions(
         if (resolvedValue === undefined) {
             if (index + 1 >= argv.length) throw new Error(`${optionName} requires a value.`);
             resolvedValue = argv[index + 1];
+            const nextOptionName = resolvedValue.split('=', 1)[0];
+            if (Object.hasOwn(definitions, nextOptionName)
+                || ['-h', '--help', '-v', '--version'].includes(nextOptionName)) {
+                throw new Error(`${optionName} requires a value before ${nextOptionName}. To pass an option name literally, use ${optionName}=<value>.`);
+            }
             index += 1;
         }
         if (definition.type === 'string[]') {
