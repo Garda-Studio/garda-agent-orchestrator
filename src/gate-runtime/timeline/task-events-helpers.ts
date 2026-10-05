@@ -17,7 +17,8 @@ export const MAX_TASK_TIMELINE_JSONL_LINES = 100_000;
 export const MAX_TASK_TIMELINE_JSON_CONTAINERS = 300_000;
 export const MAX_TASK_TIMELINE_JSON_DEPTH = 256;
 export const MAX_TASK_TIMELINE_JSON_RECORD_BYTES = 4 * 1024 * 1024;
-export const MAX_TASK_TIMELINE_JSON_STRUCTURAL_TOKENS = 500_000;
+// Repeated strict review restarts retain full audit payloads in one bounded history.
+export const MAX_TASK_TIMELINE_JSON_STRUCTURAL_TOKENS = 1_000_000;
 export const LEGACY_TASK_EVENT_INTEGRITY_SCHEMA_VERSION = 1;
 export const TASK_EVENT_INTEGRITY_SCHEMA_VERSION = 2;
 
