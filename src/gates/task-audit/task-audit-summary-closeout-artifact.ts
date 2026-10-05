@@ -9,12 +9,14 @@ import type { TaskCycleBindingSnapshot } from '../task-events-summary/task-event
 import { getCurrentNoOpEventSha256, getNoOpEvidence } from '../task-mode/no-op';
 import { isFullSuiteNotRequiredForZeroDiffNoReviewableScope } from '../full-suite/full-suite-validation-results';
 import { buildDomainScopeFingerprints } from '../scope/domain-scope-fingerprints';
+import { buildScopeContentFingerprint } from '../compile/compile-gate';
 import {
     getWorkspaceSnapshotCached,
     resolveWorkspaceSnapshotRequest,
     type WorkspaceSnapshotRequest
 } from '../workspace/workspace-snapshot-cache';
-import { toPosix } from '../shared/helpers';
+import { stringSha256, toPosix } from '../shared/helpers';
+import { canonicalPathList, pathListSha256 } from '../shared/canonical-path-list';
 import type { ProjectMemoryImpactLifecycleEvidence } from '../project-memory-impact';
 import type {
     FinalCloseoutArtifact,
@@ -107,10 +109,9 @@ function readTaskModeDirtyWorkspaceBaselineChangedFiles(taskMode: Record<string,
     if (!Array.isArray(changedFiles)) {
         return [];
     }
-    return [...new Set(changedFiles
+    return canonicalPathList(changedFiles
         .map((entry) => toPosix(String(entry || '').trim()))
-        .filter(Boolean))]
-        .sort((left, right) => left.localeCompare(right));
+        .filter(Boolean));
 }
 
 function buildWorkflowConfigAuditSummary(input: BuildFinalCloseoutArtifactInput): FinalCloseoutWorkflowConfigAuditSummary {
@@ -190,10 +191,9 @@ function readPreflightChangedFiles(preflight: Record<string, unknown> | null): s
     const changedFiles = Array.isArray(preflight?.changed_files)
         ? preflight.changed_files
         : [];
-    return [...new Set(changedFiles
+    return canonicalPathList(changedFiles
         .map((entry) => toPosix(String(entry || '').trim()))
-        .filter(Boolean))]
-        .sort((left, right) => left.localeCompare(right));
+        .filter(Boolean));
 }
 
 function inferUseStaged(detectionSource: string | null, explicitValue: unknown): boolean | null {
@@ -231,8 +231,7 @@ function buildAuditedScopeProvenance(input: {
     const preflightChangedFiles = readPreflightChangedFiles(input.preflight);
     const changedFiles = preflightChangedFiles.length > 0
         ? preflightChangedFiles
-        : [...new Set(input.fallbackChangedFiles.map((entry) => toPosix(entry)).filter(Boolean))]
-            .sort((left, right) => left.localeCompare(right));
+        : canonicalPathList(input.fallbackChangedFiles.map((entry) => toPosix(entry)).filter(Boolean));
     const changedFilesSha256 = normalizeOptionalSha256(metrics?.changed_files_sha256)
         ?? input.currentCycle?.scope_binding?.changed_files_sha256
         ?? input.fallbackSnapshot?.changed_files_sha256
@@ -375,44 +374,63 @@ function buildFullSuiteTimeoutSummary(
     return summary;
 }
 
+function readAuditedCloseoutScopeSnapshot(
+    repoRoot: string,
+    auditedFiles: string[],
+    workspaceSnapshotRequest?: WorkspaceSnapshotRequest
+): ReturnType<typeof getWorkspaceSnapshotCached> | null {
+    const changedFiles = canonicalPathList(auditedFiles.map((entry) => toPosix(entry)).filter(Boolean));
+    if (changedFiles.length === 0) {
+        return null;
+    }
+    try {
+        const snapshot = workspaceSnapshotRequest
+            ? workspaceSnapshotRequest.read('explicit_changed_files', true, changedFiles)
+            : getWorkspaceSnapshotCached(repoRoot, 'explicit_changed_files', true, changedFiles, {
+                noCache: true,
+                readOnly: true
+            });
+        if (snapshot.authorized_files.length !== changedFiles.length
+            || !snapshot.authorized_files.every((entry, index) => entry === changedFiles[index])) {
+            return null;
+        }
+        const changedFilesSha256 = pathListSha256(changedFiles);
+        const scopeContentSha256 = buildScopeContentFingerprint(repoRoot, snapshot.detection_source, changedFiles);
+        // Git statistics can shrink after commit; completed scope identity retains every audited file.
+        return {
+            ...snapshot,
+            changed_files: changedFiles,
+            changed_files_count: changedFiles.length,
+            changed_files_sha256: changedFilesSha256,
+            scope_content_sha256: scopeContentSha256,
+            scope_sha256: stringSha256(
+                `${snapshot.detection_source}|false|${snapshot.include_untracked}|${snapshot.authorized_files_count}|` +
+                `${snapshot.authorized_files_sha256}|${changedFiles.length}|${snapshot.changed_lines_total}|` +
+                `${changedFilesSha256}|${scopeContentSha256}`
+            )
+        };
+    } catch {
+        return null;
+    }
+}
+
 export function buildFinalCloseoutArtifact(input: BuildFinalCloseoutArtifactInput): FinalCloseoutArtifact {
     const authenticatedWorkspaceSnapshotRequest = input.workspaceSnapshotRequest
         ? resolveWorkspaceSnapshotRequest(input.repoRoot, input.workspaceSnapshotRequest)
         : undefined;
-    let closeoutScopeSnapshot: ReturnType<typeof getWorkspaceSnapshotCached> | null = null;
-    if (input.changedFiles.length > 0) {
-        try {
-            closeoutScopeSnapshot = authenticatedWorkspaceSnapshotRequest
-                ? authenticatedWorkspaceSnapshotRequest.read('explicit_changed_files', true, input.changedFiles)
-                : getWorkspaceSnapshotCached(input.repoRoot, 'explicit_changed_files', true, input.changedFiles, {
-                    noCache: true,
-                    readOnly: true
-                });
-        } catch {
-            closeoutScopeSnapshot = null;
-        }
-    }
+    const closeoutScopeSnapshot = readAuditedCloseoutScopeSnapshot(
+        input.repoRoot, input.changedFiles, authenticatedWorkspaceSnapshotRequest
+    );
     const plannedChangedFiles = readTaskModePlannedChangedFiles(input.taskMode);
     const dirtyWorkspaceBaselineChangedFiles = readTaskModeDirtyWorkspaceBaselineChangedFiles(input.taskMode);
     const preflightChangedFiles = readPreflightChangedFiles(input.preflight);
     const preflightChangedFileSet = new Set(preflightChangedFiles);
-    const closeoutExtraFiles = input.changedFiles
+    const closeoutExtraFiles = canonicalPathList(input.changedFiles
         .map((entry) => toPosix(entry))
-        .filter((entry) => entry && !preflightChangedFileSet.has(entry))
-        .sort((left, right) => left.localeCompare(right));
-    let closeoutExtraSnapshot: ReturnType<typeof getWorkspaceSnapshotCached> | null = null;
-    if (closeoutExtraFiles.length > 0) {
-        try {
-            closeoutExtraSnapshot = authenticatedWorkspaceSnapshotRequest
-                ? authenticatedWorkspaceSnapshotRequest.read('explicit_changed_files', true, closeoutExtraFiles)
-                : getWorkspaceSnapshotCached(input.repoRoot, 'explicit_changed_files', true, closeoutExtraFiles, {
-                    noCache: true,
-                    readOnly: true
-                });
-        } catch {
-            closeoutExtraSnapshot = null;
-        }
-    }
+        .filter((entry) => entry && !preflightChangedFileSet.has(entry)));
+    const closeoutExtraSnapshot = readAuditedCloseoutScopeSnapshot(
+        input.repoRoot, closeoutExtraFiles, authenticatedWorkspaceSnapshotRequest
+    );
     const auditedScopeProvenance = buildAuditedScopeProvenance({
         repoRoot: input.repoRoot,
         preflight: input.preflight,
@@ -422,9 +440,8 @@ export function buildFinalCloseoutArtifact(input: BuildFinalCloseoutArtifactInpu
         closeoutExtraSnapshot
     });
     const stagedAuditedScope = auditedScopeProvenance?.use_staged === true;
-    const implementationChangedFilesSha256 = stagedAuditedScope
-        ? auditedScopeProvenance.changed_files_sha256
-        : closeoutScopeSnapshot?.changed_files_sha256 ?? null;
+    const implementationChangedFilesSha256 = closeoutScopeSnapshot?.changed_files_sha256 ?? null;
+    // Preserve reviewed index identity separately from the complete post-commit worktree binding.
     const implementationScopeContentSha256 = stagedAuditedScope
         ? auditedScopeProvenance.scope_content_sha256
         : closeoutScopeSnapshot?.scope_content_sha256 ?? null;
@@ -518,6 +535,9 @@ export function buildFinalCloseoutArtifact(input: BuildFinalCloseoutArtifactInpu
             changed_files: input.changedFiles,
             changed_files_sha256: implementationChangedFilesSha256,
             scope_content_sha256: implementationScopeContentSha256,
+            ...(stagedAuditedScope ? {
+                worktree_scope_content_sha256: closeoutScopeSnapshot?.scope_content_sha256 ?? null
+            } : {}),
             scope_sha256: implementationScopeSha256,
             domain_scope_fingerprints: implementationDomainScopeFingerprints,
             audited_scope_provenance: auditedScopeProvenance,

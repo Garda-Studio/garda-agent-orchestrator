@@ -760,9 +760,14 @@ describe('gates/workspace-snapshot-cache', () => {
             fs.writeFileSync(path.join(repoRoot, 'file.ts'), 'export const a = 2;\n', 'utf8');
             execFileSync('git', ['-C', repoRoot, 'add', 'file.ts'], { stdio: 'ignore' });
             const stagedSnapshot = getWorkspaceSnapshot(repoRoot, 'git_staged_only', false, []);
+            const worktreeSnapshot = getWorkspaceSnapshot(repoRoot, 'explicit_changed_files', true, stagedSnapshot.changed_files);
             const closeoutPath = path.join(tempDir, 'closeout.json');
             fs.writeFileSync(closeoutPath, JSON.stringify({
                 implementation_summary: {
+                    changed_files: stagedSnapshot.changed_files,
+                    changed_files_sha256: stagedSnapshot.changed_files_sha256,
+                    scope_content_sha256: stagedSnapshot.scope_content_sha256,
+                    worktree_scope_content_sha256: worktreeSnapshot.scope_content_sha256,
                     audited_scope_provenance: {
                         use_staged: true,
                         detection_source: 'git_staged_only',

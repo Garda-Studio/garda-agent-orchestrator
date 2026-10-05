@@ -480,6 +480,8 @@ describe('gates/next-step', () => {
 
         initGitRepo(repoRoot);
 
+        fs.appendFileSync(path.join(repoRoot, 'src', 'app.ts'), 'export const completedValue = 2;\n', 'utf8');
+
         seedStartedTask(repoRoot, TASK_ID);
 
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
@@ -493,6 +495,9 @@ describe('gates/next-step', () => {
         seedCompletionPass(repoRoot, TASK_ID);
 
         materializeFinalCloseout(repoRoot, TASK_ID);
+
+        runGitFixtureCommand(repoRoot, ['add', '--', 'src/app.ts']);
+        runGitFixtureCommand(repoRoot, ['commit', '-m', 'commit unchanged completed scope']);
 
 
 

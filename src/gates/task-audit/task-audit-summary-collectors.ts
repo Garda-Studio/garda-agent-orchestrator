@@ -120,6 +120,7 @@ export interface FinalCloseoutImplementationSummary {
     changed_files?: string[];
     changed_files_sha256?: string | null;
     scope_content_sha256?: string | null;
+    worktree_scope_content_sha256?: string | null;
     scope_sha256?: string | null;
     domain_scope_fingerprints?: DomainScopeFingerprints | null;
     audited_scope_provenance?: FinalCloseoutAuditedScopeProvenance | null;
