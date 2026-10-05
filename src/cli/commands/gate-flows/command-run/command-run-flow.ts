@@ -1,8 +1,16 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { appendTaskEventAsync } from '../../../../gate-runtime/task-events-io';
 import { isPlainRecord } from '../../../../core/records';
+import {
+    assertContainedDestination,
+    assertExistingPathIdentity,
+    bindContainedDestination,
+    ensureContainedDirectory,
+    removeBoundContainedPath,
+    type ContainedDestination
+} from '../../../../core/contained-filesystem';
 import { readTaskQueueEntries } from '../../../../core/task-queue-read';
 import {
     buildOutputTelemetry,
@@ -43,6 +51,16 @@ export interface RunIntermediateCommandOptions {
 interface IntermediateCommandArtifacts {
     artifactPath: string;
     outputPath: string;
+}
+
+interface ReservedIntermediateFile {
+    descriptor: number;
+    binding: ContainedDestination;
+}
+
+interface ReservedIntermediateArtifacts {
+    artifact: ReservedIntermediateFile;
+    output: ReservedIntermediateFile;
 }
 
 interface IntermediateCommandResult {
@@ -232,9 +250,75 @@ function buildDefaultArtifacts(
     const commandHash = createHash('sha256').update(command).digest('hex').slice(0, 12);
     const safeSource = commandSource.replace(/[^a-z0-9-]/gi, '-');
     const baseName = `${taskId}-intermediate-command-${safeSource}-${commandHash}`;
-    const artifactPath = gateHelpers.joinOrchestratorPath(repoRoot, path.join('runtime', 'reviews', `${baseName}.json`));
-    const outputPath = gateHelpers.joinOrchestratorPath(repoRoot, path.join('runtime', 'reviews', `${baseName}.log`));
+    const attemptDirectory = path.join('runtime', 'reviews', 'intermediate-attempts', randomUUID());
+    const artifactPath = gateHelpers.joinOrchestratorPath(repoRoot, path.join(attemptDirectory, `${baseName}.json`));
+    const outputPath = gateHelpers.joinOrchestratorPath(repoRoot, path.join(attemptDirectory, `${baseName}.log`));
     return { artifactPath, outputPath };
+}
+
+function ensureIntermediateDirectory(repoRoot: string, directoryPath: string): void {
+    const binding = bindContainedDestination(repoRoot, directoryPath);
+    const componentCount = path.relative(binding.root, binding.path).split(path.sep).length;
+    for (let remainingRaces = componentCount; ; remainingRaces -= 1) {
+        try {
+            ensureContainedDirectory(repoRoot, directoryPath);
+            break;
+        } catch (error: unknown) {
+            if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || remainingRaces === 0) throw error;
+            assertExistingPathIdentity(binding);
+            bindContainedDestination(repoRoot, directoryPath);
+        }
+    }
+    assertExistingPathIdentity(binding);
+}
+
+function reserveIntermediateFile(repoRoot: string, filePath: string): ReservedIntermediateFile {
+    bindContainedDestination(repoRoot, filePath);
+    ensureIntermediateDirectory(repoRoot, path.dirname(filePath));
+    const destination = bindContainedDestination(repoRoot, filePath);
+    if (!destination.missingAt) {
+        throw new Error(`Intermediate evidence destination already exists: ${filePath}`);
+    }
+    assertContainedDestination(destination);
+    const descriptor = fs.openSync(filePath, 'wx');
+    try {
+        const binding = bindContainedDestination(repoRoot, filePath);
+        const identity = binding.existing[binding.existing.length - 1];
+        const opened = fs.fstatSync(descriptor, { bigint: true });
+        if (!identity || identity.dev !== opened.dev || identity.ino !== opened.ino
+            || identity.birthtimeNs !== opened.birthtimeNs || !opened.isFile() || opened.nlink !== 1n) {
+            throw new Error(`Intermediate evidence destination identity changed: ${filePath}`);
+        }
+        return { descriptor, binding };
+    } catch (error: unknown) {
+        fs.closeSync(descriptor);
+        throw error;
+    }
+}
+
+function reserveIntermediateArtifacts(
+    repoRoot: string, artifacts: IntermediateCommandArtifacts
+): ReservedIntermediateArtifacts {
+    const pathKey = (filePath: string): string => process.platform === 'win32'
+        ? filePath.toLowerCase() : filePath;
+    if (pathKey(artifacts.artifactPath) === pathKey(artifacts.outputPath)) {
+        throw new Error('Intermediate JSON and raw-log destinations must use distinct paths.');
+    }
+    const artifact = reserveIntermediateFile(repoRoot, artifacts.artifactPath);
+    try {
+        const output = reserveIntermediateFile(repoRoot, artifacts.outputPath);
+        return { artifact, output };
+    } catch (error: unknown) {
+        fs.closeSync(artifact.descriptor);
+        removeBoundContainedPath(artifact.binding);
+        throw error;
+    }
+}
+
+function writeReservedIntermediateFile(file: ReservedIntermediateFile, content: string): void {
+    assertContainedDestination(file.binding);
+    fs.writeFileSync(file.descriptor, content, 'utf8');
+    assertContainedDestination(file.binding);
 }
 
 function resolveArtifacts(
@@ -399,100 +483,107 @@ export async function runIntermediateCommandCommand(
         options.artifactPath,
         options.outputPath,
     );
-    const startedAt = Date.now();
-    const result = await executeCommandAsync(command, {
-        cwd: repoRoot,
-        timeoutMs,
-        signal: options.signal
-    });
-    const durationMs = Date.now() - startedAt;
-    const rawLines = result.outputLines;
-    fs.mkdirSync(path.dirname(artifacts.outputPath), { recursive: true });
-    fs.writeFileSync(artifacts.outputPath, `${rawLines.join('\n')}\n`, 'utf8');
-    const outputArtifactSha256 = gateHelpers.fileSha256(artifacts.outputPath);
-    if (!outputArtifactSha256) {
-        throw new Error(`Unable to hash intermediate command output artifact '${artifacts.outputPath}'.`);
-    }
-    const outputArtifactSizeBytes = fs.statSync(artifacts.outputPath).size;
+    const reserved = reserveIntermediateArtifacts(repoRoot, artifacts);
+    try {
+        const startedAt = Date.now();
+        const result = await executeCommandAsync(command, {
+            cwd: repoRoot,
+            timeoutMs,
+            signal: options.signal
+        });
+        const durationMs = Date.now() - startedAt;
+        const rawLines = result.outputLines;
+        writeReservedIntermediateFile(reserved.output, `${rawLines.join('\n')}\n`);
+        const outputArtifactSha256 = gateHelpers.fileSha256(artifacts.outputPath);
+        if (!outputArtifactSha256) {
+            throw new Error(`Unable to hash intermediate command output artifact '${artifacts.outputPath}'.`);
+        }
+        const outputArtifactSizeBytes = fs.statSync(artifacts.outputPath).size;
 
-    const status: IntermediateCommandStatus = expectFailure
-        ? result.timedOut || result.cancelled
-            ? 'FAILED'
+        const status: IntermediateCommandStatus = expectFailure
+            ? result.timedOut || result.cancelled
+                ? 'FAILED'
+                : result.exitCode === EXIT_SUCCESS
+                    ? 'UNEXPECTED_PASS'
+                    : 'EXPECTED_FAILURE'
             : result.exitCode === EXIT_SUCCESS
-                ? 'UNEXPECTED_PASS'
-                : 'EXPECTED_FAILURE'
-        : result.exitCode === EXIT_SUCCESS
-            ? 'PASSED'
-            : 'FAILED';
-    const statusLines = formatStatusLines(
-        status,
-        commandSource,
-        command,
-        result.exitCode,
-        durationMs,
-        artifacts.artifactPath,
-        artifacts.outputPath,
-    );
-    const visibleLines = status === 'PASSED' ? statusLines : [...statusLines, ...boundedTail(rawLines)];
-    const telemetry = buildOutputTelemetry(rawLines, visibleLines, {
-        filterMode: 'compact_summary',
-        parserName: 'intermediate-command',
-        parserStrategy: status === 'PASSED'
-            ? 'status_summary'
-            : status === 'EXPECTED_FAILURE'
-                ? 'bounded_expected_failure_tail'
-                : 'bounded_failure_tail',
-    });
-    const record: IntermediateCommandRecord = {
-        schema_version: 1,
-        task_id: taskId,
-        command_source: commandSource,
-        command,
-        status,
-        exit_code: result.exitCode,
-        ...(expectFailure ? {
-            expected_failure: true as const,
-            test_scope_sha256: expectedFailureBinding!.testScopeSha256,
-            timed_out: result.timedOut,
-            cancelled: result.cancelled
-        } : {}),
-        duration_ms: durationMs,
-        output_artifact: artifacts.outputPath,
-        output_artifact_sha256: outputArtifactSha256,
-        output_artifact_size_bytes: outputArtifactSizeBytes,
-        ...(preflightPath ? { preflight_path: gateHelpers.normalizePath(preflightPath) } : {}),
-        ...(preflightSha256 ? { preflight_sha256: preflightSha256 } : {}),
-        ...(coverageContractSha256 ? { coverage_contract_sha256: coverageContractSha256 } : {}),
-        output_telemetry: telemetry,
-    };
-    fs.mkdirSync(path.dirname(artifacts.artifactPath), { recursive: true });
-    fs.writeFileSync(artifacts.artifactPath, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
-    const artifactSha256 = gateHelpers.fileSha256(artifacts.artifactPath);
-    if (!artifactSha256) {
-        throw new Error(`Unable to hash intermediate command artifact '${artifacts.artifactPath}'.`);
-    }
-    await persistCommandEvent(
-        repoRoot,
-        taskId,
-        commandSource,
-        command,
-        status,
-        record,
-        artifacts.artifactPath,
-        artifactSha256,
-        normalizeOptionalString(options.eventsRoot),
-    );
+                ? 'PASSED'
+                : 'FAILED';
+        const statusLines = formatStatusLines(
+            status,
+            commandSource,
+            command,
+            result.exitCode,
+            durationMs,
+            artifacts.artifactPath,
+            artifacts.outputPath,
+        );
+        const visibleLines = status === 'PASSED' ? statusLines : [...statusLines, ...boundedTail(rawLines)];
+        const telemetry = buildOutputTelemetry(rawLines, visibleLines, {
+            filterMode: 'compact_summary',
+            parserName: 'intermediate-command',
+            parserStrategy: status === 'PASSED'
+                ? 'status_summary'
+                : status === 'EXPECTED_FAILURE'
+                    ? 'bounded_expected_failure_tail'
+                    : 'bounded_failure_tail',
+        });
+        const record: IntermediateCommandRecord = {
+            schema_version: 1,
+            task_id: taskId,
+            command_source: commandSource,
+            command,
+            status,
+            exit_code: result.exitCode,
+            ...(expectFailure ? {
+                expected_failure: true as const,
+                test_scope_sha256: expectedFailureBinding!.testScopeSha256,
+                timed_out: result.timedOut,
+                cancelled: result.cancelled
+            } : {}),
+            duration_ms: durationMs,
+            output_artifact: artifacts.outputPath,
+            output_artifact_sha256: outputArtifactSha256,
+            output_artifact_size_bytes: outputArtifactSizeBytes,
+            ...(preflightPath ? { preflight_path: gateHelpers.normalizePath(preflightPath) } : {}),
+            ...(preflightSha256 ? { preflight_sha256: preflightSha256 } : {}),
+            ...(coverageContractSha256 ? { coverage_contract_sha256: coverageContractSha256 } : {}),
+            output_telemetry: telemetry,
+        };
+        writeReservedIntermediateFile(reserved.artifact, `${JSON.stringify(record, null, 2)}\n`);
+        const artifactSha256 = gateHelpers.fileSha256(artifacts.artifactPath);
+        if (!artifactSha256) {
+            throw new Error(`Unable to hash intermediate command artifact '${artifacts.artifactPath}'.`);
+        }
+        await persistCommandEvent(
+            repoRoot,
+            taskId,
+            commandSource,
+            command,
+            status,
+            record,
+            artifacts.artifactPath,
+            artifactSha256,
+            normalizeOptionalString(options.eventsRoot),
+        );
 
-    const savingsLine = formatVisibleSavingsLine(telemetry, {
-        label: 'intermediate-command',
-        minimumSavedChars: 0,
-        minimumSavedTokens: 0,
-    });
-    const outputLines = [...visibleLines, `OutputTelemetry: ${formatTelemetryLine(telemetry)}`];
-    return {
-        exitCode: expectFailure
-            ? (status === 'EXPECTED_FAILURE' ? EXIT_SUCCESS : EXIT_GATE_FAILURE)
-            : result.exitCode,
-        outputLines: savingsLine ? [...outputLines, savingsLine] : outputLines,
-    };
+        const savingsLine = formatVisibleSavingsLine(telemetry, {
+            label: 'intermediate-command',
+            minimumSavedChars: 0,
+            minimumSavedTokens: 0,
+        });
+        const outputLines = [...visibleLines, `OutputTelemetry: ${formatTelemetryLine(telemetry)}`];
+        return {
+            exitCode: expectFailure
+                ? (status === 'EXPECTED_FAILURE' ? EXIT_SUCCESS : EXIT_GATE_FAILURE)
+                : result.exitCode,
+            outputLines: savingsLine ? [...outputLines, savingsLine] : outputLines,
+        };
+    } finally {
+        try {
+            fs.closeSync(reserved.output.descriptor);
+        } finally {
+            fs.closeSync(reserved.artifact.descriptor);
+        }
+    }
 }
