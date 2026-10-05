@@ -94,6 +94,49 @@ result:
 An empty findings object is findings-satisfied only after these checks pass.
 Malformed output is not a finding and does not become pass evidence.
 
+## Focused Reviewer Commands
+
+A focused self-validation note names one repository file and the exact local
+command, outcome, diagnostics and changed-file evidence. Quoted selector data
+may contain spaces and literal operators; both attached and spaced option
+operands retain their argument boundaries:
+
+```bash
+node --test --test-name-pattern="command chain|loader" tests/node/example.test.mjs
+node --test --test-name-pattern "command chain|loader" tests/node/example.test.mjs
+node --import tsx --test tests/node/example.test.ts
+node --import=./tests/helpers/loader.mjs --test tests/node/example.test.mjs
+node --require @scope/preload --test tests/node/example.test.mjs
+```
+
+Selector values that resemble runtime switches remain argument data and cannot
+authorize a test runner or syntax check. Node selectors beginning with `--` use
+the attached spelling, for example `--test-name-pattern="--check"`.
+Node runtime validation mode comes from actual `--test` or `--check` flags;
+`--test-only` modifies test mode and cannot establish it. Validation module
+recognition with `-m` belongs to Python runtimes.
+
+A real Node `--` ends option parsing. Subsequent operands remain positional,
+including selector-looking arguments, and must still identify exactly one test
+target. Direct `node -- <test-file>` attempts retain the same unavailable or
+prohibited F-000 binding as other supported direct test commands.
+
+Node test commands may use `--import`, `--require`/`-r`, `--loader` or
+`--experimental-loader` before the test target, with an attached or separate
+module operand. These operands identify locally resolved modules, not extra
+test targets; they must not be empty, remote, absolute or traversing paths.
+Leading `./` paths and scoped module names retain equivalent attached and
+separate operand interpretation. The scoped-module exception belongs only to
+the Node loader operand; response-file arguments elsewhere remain prohibited.
+Loaders remain disallowed for syntax-only checks and unrelated runners.
+
+Actual unquoted pipelines, command chains and redirections are rejected.
+Shell substitutions and variable expansions, source-writing flags, interactive
+modes, implicit dependency fetching and unfocused checks remain prohibited.
+An unavailable loader must keep its actual diagnostics and `unavailable`
+outcome with the canonical F-000 finding; a failed executed check requires its
+linked ordinary finding. Quoting never changes those outcome or receipt rules.
+
 ## Derived Artifacts and Policy
 
 `record-review-result` preserves the exact reviewer output and derives the
