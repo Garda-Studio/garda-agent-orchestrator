@@ -2,6 +2,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import {
+    hasReviewerInlineInterpreterOption,
+    REVIEWER_INLINE_INTERPRETER_COMMAND_PATTERN,
+    REVIEWER_INLINE_INTERPRETER_REASON
+} from './reviewer-focused-validation-policy';
+
+import {
     createChangedFileLineCountResolver,
     formatReviewEvidenceLineCountSource,
     parseReviewEvidenceLocation
@@ -559,18 +565,12 @@ function validateFocusedValidationNoteCommand(
     if (!fields.command) {
         return;
     }
-    const unsafeCommandReason = getUnsafeFocusedCommandReason(fields.command);
-    if (unsafeCommandReason) {
-        violations.push(`Reviewer focused self-validation must not ${unsafeCommandReason}.`);
-    }
-    const commandTargets = getFocusedCommandTargetTokens(fields.command, repoRoot);
-    if (!focusedCommandExecutesValidation(fields.command, repoRoot)) {
-        violations.push(
-            'Reviewer focused self-validation must execute a focused test or validation command rather than only inspect or print a prospective target.'
-        );
-    } else if (
-        fields.commandOutcome !== 'passed'
-        && !focusedEvidenceExplainsTargetRelevance(fields.evidence, commandTargets[0], expectedTaskId)
+    const commandInspection = inspectReviewerFocusedValidationCommand(fields.command, repoRoot);
+    violations.push(...commandInspection.violations);
+    if (
+        commandInspection.target
+        && fields.commandOutcome !== 'passed'
+        && !focusedEvidenceExplainsTargetRelevance(fields.evidence, commandInspection.target, expectedTaskId)
     ) {
         violations.push(
             'Reviewer focused self-validation authenticated changed-file evidence must name the exact focused command target and why it is relevant in one clause: that same clause must include the current task id or affected/changed/modified/new/updated plus a relationship verb such as validates/covers/exercises/asserts. Semicolons, newlines, sentence punctuation, and contrastive conjunctions but/however/whereas/while start a new clause. Keep evidence.location inside the assigned lane domain and put the target path in evidence.observation when necessary, rather than only in note, command, or diagnostics.'
@@ -695,8 +695,8 @@ const REVIEWER_UNSAFE_FOCUSED_COMMAND_PATTERNS: ReadonlyArray<{ pattern: RegExp;
         reason: 'escape authenticated repository scope with absolute or traversal paths'
     },
     {
-        pattern: /^\s*(?:(?:node|deno|bun|python(?:3)?|ruby|perl|php)\s+(?:-e|-c|-p|--eval|--print)\b|(?:powershell|pwsh)\s+(?:-command|-encodedcommand)\b|(?:bash|sh|zsh|cmd)\s+(?:-c|\/c)\b)/iu,
-        reason: 'run inline interpreter code with unauditable side effects'
+        pattern: REVIEWER_INLINE_INTERPRETER_COMMAND_PATTERN,
+        reason: REVIEWER_INLINE_INTERPRETER_REASON
     },
     {
         pattern: /\$\(|`/u,
@@ -840,19 +840,6 @@ function normalizeFocusedOptionName(token: string): string {
     return token.toLowerCase().split('=', 1)[0];
 }
 
-function hasInlineInterpreterOption(firstToken: string, tokens: readonly string[]): boolean {
-    if (/^(?:node(?:\.exe)?|deno|bun|python(?:3)?|ruby|perl|php)$/iu.test(firstToken)) {
-        return tokens.slice(1).some((token) => /^(?:-e|-c|-p|--eval|--print)(?:$|=|[^a-z0-9-])/iu.test(token));
-    }
-    if (/^(?:powershell|pwsh)$/iu.test(firstToken)) {
-        return tokens.slice(1).some((token) => /^(?:-command|-encodedcommand)(?:$|=)/iu.test(token));
-    }
-    if (/^(?:bash|sh|zsh|cmd(?:\.exe)?)$/iu.test(firstToken)) {
-        return tokens.slice(1).some((token) => /^(?:-c|\/c)$/iu.test(token));
-    }
-    return false;
-}
-
 function isNodeSyntaxCheckOption(tokens: readonly string[], optionIndex: number): boolean {
     return /^node(?:\.exe)?$/iu.test(tokens[0] || '')
         && tokens[optionIndex] === '--check'
@@ -874,8 +861,8 @@ function getUnsafeFocusedCommandTokenReason(command: string): string | null {
     ) {
         return 'use package-execution wrappers that may fetch dependencies implicitly';
     }
-    if (hasInlineInterpreterOption(firstToken, tokens)) {
-        return 'run inline interpreter code with unauditable side effects';
+    if (hasReviewerInlineInterpreterOption(firstToken, tokens)) {
+        return REVIEWER_INLINE_INTERPRETER_REASON;
     }
     if (optionNames.some((option) => REVIEWER_MUTATING_FOCUSED_OPTION_NAMES.has(option))) {
         return 'use validation-runner flags that may mutate source files or snapshots';
@@ -1145,6 +1132,27 @@ function focusedCommandExecutesValidation(command: string, repoRoot?: string): b
     const normalizedCommand = command.replace(/\\/gu, '/');
     return focusedCommandHasValidationRunner(normalizedCommand)
         && focusedCommandHasConcreteTarget(normalizedCommand, repoRoot);
+}
+
+export function inspectReviewerFocusedValidationCommand(command: string, repoRoot?: string): {
+    syntax_supported: boolean;
+    target: string | null;
+    violations: string[];
+} {
+    const violations: string[] = [];
+    const unsafeReason = getUnsafeFocusedCommandReason(command);
+    if (unsafeReason) {
+        violations.push(`Reviewer focused self-validation must not ${unsafeReason}.`);
+    }
+    const executesValidation = focusedCommandExecutesValidation(command, repoRoot);
+    if (!executesValidation) {
+        violations.push('Reviewer focused self-validation must execute a focused test or validation command rather than only inspect or print a prospective target.');
+    }
+    return {
+        syntax_supported: violations.length === 0,
+        target: executesValidation ? getFocusedCommandTargetTokens(command, repoRoot)[0] : null,
+        violations
+    };
 }
 
 function focusedCommandExecutesMarkerTarget(command: string, markerTarget: string, repoRoot?: string): boolean {

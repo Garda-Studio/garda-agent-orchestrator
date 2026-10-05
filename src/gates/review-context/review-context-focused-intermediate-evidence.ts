@@ -6,6 +6,19 @@ import {
     type FocusedIntermediateEvidenceEntry
 } from '../review/focused-intermediate-evidence';
 import { normalizePath } from '../shared/helpers';
+import { inspectReviewerFocusedValidationCommand } from '../review/review-findings-schema';
+
+interface ReviewerFocusedCommandHints {
+    status: 'AVAILABLE' | 'NOT_AVAILABLE';
+    instruction: string;
+    commands: {
+        command: string;
+        target: string;
+        source_event_sequence: number;
+        source_artifact_sha256: string;
+    }[];
+    rejected_command_count: number;
+}
 
 export interface ReviewContextFocusedIntermediateEvidence {
     schema_version: 1;
@@ -25,6 +38,7 @@ export interface ReviewContextFocusedIntermediateEvidence {
         coverage_contract_sha256: string;
     };
     entries: FocusedIntermediateEvidenceEntry[];
+    reviewer_command_hints?: ReviewerFocusedCommandHints;
     warnings: string[];
     candidate_count: number;
     rejected_candidate_count: number;
@@ -81,10 +95,46 @@ export function buildFocusedIntermediateValidationEvidence(options: {
             coverage_contract_sha256: options.coverageContract.contract_sha256
         },
         entries: selection.entries,
+        reviewer_command_hints: buildReviewerFocusedCommandHints(selection.entries, options.repoRoot),
         warnings: selection.warnings,
         candidate_count: selection.candidate_count,
         rejected_candidate_count: selection.rejected_candidate_count,
         truncated: selection.truncated
+    };
+}
+
+function buildReviewerFocusedCommandHints(
+    entries: readonly FocusedIntermediateEvidenceEntry[],
+    repoRoot: string
+): ReviewerFocusedCommandHints {
+    const commands: ReviewerFocusedCommandHints['commands'] = [];
+    const seenCommands = new Set<string>();
+    let rejectedCommandCount = 0;
+    for (const entry of entries) {
+        const inspection = inspectReviewerFocusedValidationCommand(entry.command, repoRoot);
+        if (
+            !inspection.syntax_supported
+            || !inspection.target
+            || !entry.focused_test_paths.includes(inspection.target)
+        ) {
+            rejectedCommandCount += 1;
+            continue;
+        }
+        if (!seenCommands.has(entry.command)) {
+            seenCommands.add(entry.command);
+            commands.push({
+                command: entry.command,
+                target: inspection.target,
+                source_event_sequence: entry.event_task_sequence,
+                source_artifact_sha256: entry.artifact_sha256
+            });
+        }
+    }
+    return {
+        status: commands.length > 0 ? 'AVAILABLE' : 'NOT_AVAILABLE',
+        instruction: 'Command hints use exact current authenticated focused evidence and the review-result command validator. They describe existing PASS evidence, not execution permission or a reason to repeat gate-owned checks. Absence is not a finding or proof that a configured check cannot run; never invent an inline compiler or temporary runner.',
+        commands,
+        rejected_command_count: rejectedCommandCount
     };
 }
 
@@ -117,6 +167,23 @@ export function buildFocusedIntermediateValidationEvidenceMarkdown(
     }
     if (evidence.truncated) {
         lines.push('- Warning: additional eligible focused evidence was omitted by the bounded handoff limit.');
+    }
+    const hints = evidence.reviewer_command_hints;
+    if (hints) {
+        lines.push(
+            '### Reviewer Focused Command Hints',
+            `- Status: ${hints.status}`,
+            `- ${hints.instruction}`
+        );
+        for (const hint of hints.commands) {
+            lines.push(
+                `- Validator-compatible command: ${hint.command}`,
+                `  - Exact target: ${hint.target}; source event: ${hint.source_event_sequence}; source artifact sha256: ${hint.source_artifact_sha256}`
+            );
+        }
+        if (hints.commands.length === 0) {
+            lines.push('- No exact validator-compatible command can be supplied from current authenticated focused evidence. Use the project-configured invocation or record concrete unavailable/prohibited diagnostics without creating a substitute runner.');
+        }
     }
     return lines;
 }

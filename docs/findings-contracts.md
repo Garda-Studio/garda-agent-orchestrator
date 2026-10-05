@@ -22,6 +22,30 @@ the canonical filename but preserves unrelated user-owned files under
 
 ## Reviewer Output
 
+### Focused reviewer command policy
+
+Reviewer self-validation uses the project's configured runner for one exact
+repository target. Reviewers must not create temporary runners or replace that
+invocation with their own compilation, transpilation or dynamic module loading.
+Inline interpreter programs, including `node -e`, `python -c`, `ruby -e`,
+`perl -e`, `php -r`, PowerShell `-Command`/`-EncodedCommand` and shell `-c`/`/c`,
+are prohibited. The same rule applies to other stacks. Normal transformations
+inside a configured test tool, such as TypeScript loading or Python assertion
+rewriting, remain permitted; this is not a blanket ban on runtime compilation.
+
+The focused evidence handoff includes exact command hints from eligible current
+task/cycle-bound evidence only when the review-result validator recognizes a
+single safe target. Each hint names its source event and artifact hash. Existing
+PASS evidence must be read rather than duplicated. A hint is syntax guidance,
+not permission to execute a command, proof of filesystem isolation or a
+replacement for compile, test or review gates. Commands are never executed by
+hint generation. No command is guessed from a filename or another stack.
+
+An absent hint is not a finding. If a configured focused check cannot run,
+record its exact attempted command and concrete unavailable/prohibited
+diagnostics under the existing focused-self-validation contract. Do not invent
+an inline compiler or temporary script to manufacture a successful result.
+
 A reviewer in a new cycle returns exactly one JSON object. It reports evidence
 and findings only; it does not decide the verdict, disposition, remediation,
 follow-up, profile, or downstream task state. The generated output template is

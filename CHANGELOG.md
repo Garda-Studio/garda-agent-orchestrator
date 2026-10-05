@@ -15,6 +15,8 @@
 
 ### Review And Completion Fixes
 
+- Align focused reviewer instructions and result validation on the prohibition of custom inline interpreter runners, preserve normal transformations inside configured tools, and provide validator-compatible command hints only from authenticated current focused evidence.
+
 - Keep review-cycle restart events bounded by storing large delta classifications in immutable snapshots with hash-bound references and authenticated reads.
 - Restore pending grouped review follow-ups after authenticated unchanged parent-cycle review reuse, authenticating every lane's historical sources and obligations while preserving immutable findings, failed-attempt provenance, and active child ownership; write blocked diagnostics separately without following unsafe file links.
 - Reject cyclic and self-referencing dependencies in existing task plans while preserving independent steps and valid directed acyclic graphs.
