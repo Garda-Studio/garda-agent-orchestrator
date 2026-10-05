@@ -7,9 +7,14 @@ import { statFingerprint } from './shared';
 
 const MAX_RUNTIME_FINGERPRINT_SCAN_ENTRIES = 512;
 
-function treeFingerprint(rootPath: string, fileNamePattern: RegExp | null = null): string {
+interface SnapshotFingerprint {
+    value: string;
+    complete: boolean;
+}
+
+function treeFingerprint(rootPath: string, fileNamePattern: RegExp | null = null): SnapshotFingerprint {
     if (!fs.existsSync(rootPath)) {
-        return `${rootPath}:missing`;
+        return { value: `${rootPath}:missing`, complete: true };
     }
     const entries: string[] = [];
     const stack = [rootPath];
@@ -38,16 +43,26 @@ function treeFingerprint(rootPath: string, fileNamePattern: RegExp | null = null
         truncated = true;
     }
     const body = entries.sort().join(';') || `${rootPath}:empty`;
-    return truncated
-        ? `${body};${rootPath}:scan_truncated:${MAX_RUNTIME_FINGERPRINT_SCAN_ENTRIES}`
-        : body;
+    return {
+        value: truncated
+            ? `${body};${rootPath}:scan_truncated:${MAX_RUNTIME_FINGERPRINT_SCAN_ENTRIES}`
+            : body,
+        complete: !truncated
+    };
 }
 
-export function buildReportSnapshotFingerprint(repoRoot: string): string {
+function buildReportSnapshot(repoRoot: string): SnapshotFingerprint {
     const resolvedRoot = path.resolve(repoRoot);
     const bundleRoot = path.join(resolvedRoot, resolveBundleNameForTarget(resolvedRoot));
     const runtimeRoot = path.join(bundleRoot, 'runtime');
-    return [
+    const runtimeTrees = [
+        treeFingerprint(path.join(runtimeRoot, 'task-events'), /\.lock(?:\.json)?$/iu),
+        treeFingerprint(path.join(runtimeRoot, 'task-events'), /\.jsonl$/iu),
+        treeFingerprint(path.join(runtimeRoot, 'reviews'), /(?:-quality-checklist|-preflight)\.json$/iu),
+        treeFingerprint(path.join(runtimeRoot, 'full-suite'), /\.lock(?:\.json)?$/iu),
+        treeFingerprint(path.join(runtimeRoot, 'locks'), /\.lock(?:\.json)?$/iu)
+    ];
+    const value = [
         statFingerprint(path.join(resolvedRoot, TASK_QUEUE_FILENAME)),
         statFingerprint(path.join(resolvedRoot, 'AGENTS.md')),
         statFingerprint(path.join(bundleRoot, 'live', 'config', 'workflow-config.json')),
@@ -63,11 +78,18 @@ export function buildReportSnapshotFingerprint(repoRoot: string): string {
         statFingerprint(path.join(runtimeRoot, 'metrics', 'full-suite-validation-duration-history.json')),
         statFingerprint(path.join(runtimeRoot, 'switch', 'state.json')),
         statFingerprint(path.join(runtimeRoot, 'switch', 'off', 'AGENTS.md')),
-        treeFingerprint(path.join(runtimeRoot, 'task-events'), /\.lock(?:\.json)?$/iu),
-        treeFingerprint(path.join(runtimeRoot, 'task-events'), /\.jsonl$/iu),
-        treeFingerprint(path.join(runtimeRoot, 'reviews'), /(?:-quality-checklist|-preflight)\.json$/iu),
-        treeFingerprint(path.join(runtimeRoot, 'full-suite'), /\.lock(?:\.json)?$/iu),
-        treeFingerprint(path.join(runtimeRoot, 'locks'), /\.lock(?:\.json)?$/iu),
+        ...runtimeTrees.map((tree) => tree.value),
         statFingerprint(getBackupSnapshotsRoot(resolvedRoot))
     ].join('|');
+    return { value, complete: runtimeTrees.every((tree) => tree.complete) };
+}
+
+export function buildReportSnapshotFingerprint(repoRoot: string): string {
+    return buildReportSnapshot(repoRoot).value;
+}
+
+export function buildReportSnapshotCacheKey(repoRoot: string): string | null {
+    const snapshot = buildReportSnapshot(repoRoot);
+    // An incomplete scan cannot rule out changes in files outside the scan budget.
+    return snapshot.complete ? snapshot.value : null;
 }

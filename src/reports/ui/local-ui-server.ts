@@ -14,11 +14,11 @@ import {
 import { joinOrchestratorPath, toPosix } from '../../gates/shared/helpers';
 import {
     buildReportDataContract,
-    buildReportSnapshotFingerprint,
     buildReportTaskDetail,
     type ReportDataContract,
     type ReportTaskDetail
 } from '../report-data-contract';
+import { buildReportSnapshotCacheKey } from '../report-data/report-snapshot-fingerprint';
 import {
     buildUiActionsPayload,
     buildUiCleanupPayload,
@@ -272,8 +272,8 @@ function buildReport(repoRoot: string): ReportDataContract {
 }
 
 function getCachedReport(repoRoot: string, cache: ReportSnapshotCache): ReportDataContract {
-    const fingerprint = buildReportSnapshotFingerprint(repoRoot);
-    if (cache.report && cache.fingerprint === fingerprint) {
+    const fingerprint = buildReportSnapshotCacheKey(repoRoot);
+    if (fingerprint !== null && cache.report && cache.fingerprint === fingerprint) {
         return cache.report;
     }
     const report = buildReport(repoRoot);
