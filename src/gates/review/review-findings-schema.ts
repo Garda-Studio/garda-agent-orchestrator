@@ -466,7 +466,7 @@ function readValidationNoteFields(
 ): ParsedValidationNoteFields {
     pushUnknownKeyViolations(subject, entry, VALIDATION_NOTE_KEYS, violations);
     const topic = normalizeString(entry.topic);
-    const command = normalizeString(entry.command);
+    const command = typeof entry.command === 'string' && entry.command.trim() ? entry.command : null;
     const commandOutcome = normalizeString(entry.command_outcome)?.toLowerCase() || null;
     const diagnostics = normalizeString(entry.diagnostics);
     const findingIds = entry.finding_ids === undefined
@@ -703,7 +703,7 @@ const REVIEWER_UNSAFE_FOCUSED_COMMAND_PATTERNS: ReadonlyArray<{ pattern: RegExp;
         reason: 'run shell command substitutions inside a focused validation attempt'
     },
     {
-        pattern: /\$[a-z_{]|%[a-z_][a-z0-9_]*%|\{[^}]*\}|\[[^\]]*\]|(?:^|\s)~(?:[/\\]|\s|$)/iu,
+        pattern: /\$[\p{L}\p{N}_{?@*#!$-]|%[^%\r\n]*%|%[0-9*~]|\{[^}]*\}|\[[^\]]*\]|(?:^|\s)~(?:[/\\]|\s|$)/iu,
         reason: 'use shell variable, brace, bracket, or home expansions inside a focused validation attempt'
     },
     {
@@ -723,7 +723,15 @@ const REVIEWER_UNSAFE_FOCUSED_COMMAND_PATTERNS: ReadonlyArray<{ pattern: RegExp;
         reason: 'start background processes or services'
     },
     {
-        pattern: /[\r\n;]|&&?|\|\|?/u,
+        pattern: /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u,
+        reason: 'use ambiguous shell control characters'
+    },
+    {
+        pattern: /[\u2018\u2019\u201c\u201d]/u,
+        reason: 'use ambiguous typographic shell quotes'
+    },
+    {
+        pattern: /[\r\n]/u,
         reason: 'chain or pipe multiple commands in one focused validation attempt'
     }
 ];
@@ -756,10 +764,9 @@ function reviewerCommandInvokesGarda(command: string): boolean {
         return true;
     }
     if (/^node(?:\.exe)?$/u.test(firstBasename)) {
-        const scriptIndex = findNextFocusedCommandToken(tokens, 1);
-        const runtimeOptions = scriptIndex < 0 ? [] : tokens.slice(1, scriptIndex);
+        const scriptIndex = parseFocusedCommandOptions(tokens).programIndex;
         return scriptIndex >= 0
-            && !runtimeOptions.some(isFocusedExecutionSignalToken)
+            && !getFocusedRuntimeInvocation(tokens).nodeValidationMode
             && focusedCommandTokenBasename(tokens[scriptIndex]) === 'garda.js';
     }
     if (!/^(?:npx|bunx|npm(?:\.cmd|\.exe)?|pnpm|yarn|bun)$/u.test(firstBasename)) {
@@ -778,8 +785,54 @@ function getUnsafeFocusedCommandReason(command: string): string | null {
         return 'invoke Garda navigation, gate, or result commands';
     }
     return REVIEWER_UNSAFE_FOCUSED_COMMAND_PATTERNS.find(({ pattern }) => pattern.test(command))?.reason
+        || getUnsafeFocusedCommandShellReason(command)
         || getUnsafeFocusedCommandTokenReason(command)
         || null;
+}
+
+function getUnsafeFocusedCommandShellReason(command: string): string | null {
+    let quote: string | null = null;
+    for (let index = 0; index < command.length; index += 1) {
+        const character = command[index];
+        // Escaped quotes differ across supported shells; do not guess their boundaries.
+        if (character === '\\' && /["']/u.test(command[index + 1] || '')) {
+            return 'use ambiguous escaped shell quotes';
+        }
+        if (character === '!' && (quote !== null || command[index + 1] !== '(')) {
+            return 'use shell history or delayed expansions inside a focused validation attempt';
+        }
+        if (quote !== null) {
+            if (character === quote) {
+                quote = null;
+            }
+            continue;
+        }
+        if (character === '\\' && /[\s.]/u.test(command[index + 1] || '')) {
+            return 'use ambiguous unquoted shell escaping';
+        }
+        if (/\s/u.test(character) && character !== ' ' && character !== '\t') {
+            return 'use ambiguous shell whitespace';
+        }
+        if (character === '~') {
+            return 'use unquoted shell home expansions inside a focused validation attempt';
+        }
+        if (character === '#' || (character === '@' && command[index + 1] !== '(')) {
+            return 'use unquoted shell comment or splatting syntax';
+        }
+        if (character === '$' && /["']/u.test(command[index + 1] || '')) {
+            return 'use shell quoted-string expansions inside a focused validation attempt';
+        }
+        if (character === '"') {
+            quote = character;
+        } else if (character === "'") {
+            return 'use shell-dependent single quoting without an execution-shell binding';
+        } else if (/[;&|]/u.test(character)) {
+            return 'chain or pipe multiple commands in one focused validation attempt';
+        } else if (/[()*?]/u.test(character)) {
+            return 'use unquoted shell wildcard or grouping syntax inside a focused validation attempt';
+        }
+    }
+    return quote === null ? null : 'use unterminated shell quoting';
 }
 
 function normalizeFocusedTargetPath(value: string): string {
@@ -818,6 +871,8 @@ const REVIEWER_GENERIC_DIAGNOSTICS_SENTENCE_PATTERN =
     /^(?:(?:the|a)\s+)?(?:focused\s+)?(?:command|check|test|validation|attempt|execution|runner|runtime|target)(?:\s+(?:command|check|test|validation|attempt|execution|runner|runtime|result|outcome|target))?\s+(?:(?:is|was|has been)\s+)?(?:unavailable|prohibited|blocked|failed|passed|errored|an? error)\.?$/iu;
 const REVIEWER_FOCUSED_OPTION_WITH_VALUE_PATTERN =
     /^(?:-k|-m|-t|-g|--grep|--filter|--test-name-pattern|--testnamepattern|--config|--project|--selectprojects|--testpathignorepatterns|--testpathpattern|--include|--exclude|--match|--pattern)$/iu;
+const REVIEWER_FOCUSED_LITERAL_SELECTOR_OPTION_PATTERN =
+    /^(?:-k|-t|-g|--grep|--filter|--test-name-pattern|--testnamepattern|--testpathignorepatterns|--testpathpattern|--match|--pattern)$/iu;
 const REVIEWER_FOCUSED_OPTION_WITH_SCALAR_VALUE_PATTERN =
     /^(?:--bail|--color|--maxworkers|--pretty|--threads|--verbose)$/iu;
 const REVIEWER_FOCUSED_SCALAR_OPTION_VALUE_PATTERN = /^(?:false|true|\d+)$/iu;
@@ -831,9 +886,11 @@ const REVIEWER_CONCRETE_DIAGNOSTIC_COUNT_PATTERN =
     /\b\d+\s+(?:assertions?|cases?|checks?|errors?|failures?|tests?)\b/iu;
 
 function getFocusedCommandTokens(command: string): string[] {
-    return (command.match(/"[^"]*"|'[^']*'|[^\s]+/gu) || [])
-        .map((token) => normalizeFocusedTargetPath(token.replace(/^["']|["']$/gu, '')))
-        .filter(Boolean);
+    return (command.match(/(?:"[^"]*"|'[^']*'|[^\s"'])+/gu) || [])
+        .map((token) => token.replace(
+            /"[^"]*"|'[^']*'/gu,
+            (quotedSegment) => quotedSegment.slice(1, -1)
+        ));
 }
 
 function normalizeFocusedOptionName(token: string): string {
@@ -853,16 +910,26 @@ function hasInlineInterpreterOption(firstToken: string, tokens: readonly string[
     return false;
 }
 
-function isNodeSyntaxCheckOption(tokens: readonly string[], optionIndex: number): boolean {
+function isSafeNodeSyntaxCheckToken(
+    tokens: readonly string[], optionIndex: number,
+    options: FocusedCommandOptionParseResult, programIndex: number
+): boolean {
     return /^node(?:\.exe)?$/iu.test(tokens[0] || '')
         && tokens[optionIndex] === '--check'
         && optionIndex > 0
-        && optionIndex < findNextFocusedCommandToken(tokens, 1)
-        && !tokens.slice(1, optionIndex).includes('--');
+        && ((!options.optionIndexes.has(optionIndex) && options.consumedIndexes.has(optionIndex))
+            || (optionIndex < programIndex
+                && (options.terminatorIndex < 0 || optionIndex < options.terminatorIndex)));
 }
 
 function getUnsafeFocusedCommandTokenReason(command: string): string | null {
     const tokens = getFocusedCommandTokens(command);
+    const options = parseFocusedCommandOptions(tokens);
+    // Quoted fragments can conceal path prefixes until their tokens are reconstructed.
+    if (tokens.some((token, index) => !options.literalSelectorValueIndexes.has(index)
+        && /^(?:\/|[a-z]:)|(?:^|\/)\.\.(?:\/|$)/iu.test(normalizeFocusedTargetPath(token)))) {
+        return 'escape authenticated repository scope with absolute or traversal paths';
+    }
     const firstToken = tokens[0] || '';
     const optionNames = tokens.filter((token) => token.startsWith('-')).map(normalizeFocusedOptionName);
     if (REVIEWER_PACKAGE_EXEC_WRAPPER_PATTERN.test(firstToken)) {
@@ -889,9 +956,10 @@ function getUnsafeFocusedCommandTokenReason(command: string): string | null {
     if (/^tsc$/iu.test(firstToken) && !optionNames.includes('--noemit')) {
         return 'run TypeScript compilation without --noEmit, which may write output artifacts';
     }
+    const programIndex = options.programIndex;
     if (tokens.some((token, index) => token.startsWith('-')
         && !REVIEWER_SAFE_FOCUSED_OPTION_NAMES.has(normalizeFocusedOptionName(token))
-        && !isNodeSyntaxCheckOption(tokens, index))) {
+        && !isSafeNodeSyntaxCheckToken(tokens, index, options, programIndex))) {
         return 'use unrecognized validation-runner options whose side effects are not authenticated';
     }
     return null;
@@ -908,6 +976,64 @@ function findNextFocusedCommandToken(tokens: readonly string[], startIndex: numb
 
 function isFocusedExecutionSignalToken(token: string): boolean {
     return REVIEWER_FOCUSED_EXECUTION_SIGNAL_PATTERN.test(token);
+}
+
+function isFocusedNodeValidationOption(firstToken: string, token: string): boolean {
+    return /^node(?:\.exe)?$/iu.test(firstToken) && (token === '--test' || token === '--check');
+}
+
+interface FocusedRuntimeInvocation {
+    hasValidationRunner: boolean;
+    nodeValidationMode: boolean;
+    runnerTokenIndexes: readonly number[];
+}
+
+function getFocusedRuntimeInvocation(tokens: readonly string[]): FocusedRuntimeInvocation {
+    const firstToken = tokens[0] || '';
+    const options = parseFocusedCommandOptions(tokens);
+    const programIndex = options.programIndex;
+    const optionEnd = Math.min(
+        options.terminatorIndex >= 0 ? options.terminatorIndex : tokens.length,
+        programIndex >= 0 ? programIndex : tokens.length
+    );
+    const prefixOptions = [...options.optionIndexes].filter((index) => index > 0 && index < optionEnd);
+    const moduleFlagIndex = prefixOptions.find((index) => tokens[index] === '-m');
+    if (moduleFlagIndex !== undefined) {
+        return {
+            hasValidationRunner: /^python(?:3)?$/iu.test(firstToken)
+                && REVIEWER_DIRECT_VALIDATION_RUNNER_PATTERN.test(tokens[moduleFlagIndex + 1] || ''),
+            nodeValidationMode: false,
+            runnerTokenIndexes: [0, moduleFlagIndex, moduleFlagIndex + 1]
+        };
+    }
+    if (prefixOptions.some((index) => isFocusedNodeValidationOption(firstToken, tokens[index]))) {
+        return { hasValidationRunner: true, nodeValidationMode: true, runnerTokenIndexes: [0] };
+    }
+    if (programIndex < 0) {
+        return { hasValidationRunner: false, nodeValidationMode: false, runnerTokenIndexes: [0] };
+    }
+    const program = normalizeFocusedTargetPath(tokens[programIndex]);
+    const runnerTokenIndexes = [0];
+    if (!REVIEWER_DIRECT_TEST_TARGET_PATTERN.test(program)) {
+        runnerTokenIndexes.push(programIndex);
+    }
+    if (REVIEWER_NODE_FOUNDATION_TEST_WRAPPER_PATTERN.test(program)) {
+        const commandIndex = programIndex + 1;
+        if (commandIndex < tokens.length) runnerTokenIndexes.push(commandIndex);
+        return {
+            hasValidationRunner: commandIndex < tokens.length
+                && !tokens[commandIndex].startsWith('-') && isFocusedExecutionSignalToken(tokens[commandIndex]),
+            nodeValidationMode: false,
+            runnerTokenIndexes
+        };
+    }
+    return {
+        hasValidationRunner: !program.startsWith('-')
+            && !REVIEWER_DIRECT_VALIDATION_RUNNER_PATTERN.test(program)
+            && isFocusedExecutionSignalToken(program),
+        nodeValidationMode: false,
+        runnerTokenIndexes
+    };
 }
 
 function isActionableFocusedDiagnostics(diagnostics: string): boolean {
@@ -932,22 +1058,7 @@ function focusedCommandHasValidationRunner(command: string): boolean {
         return true;
     }
     if (REVIEWER_GENERIC_RUNTIME_PATTERN.test(firstToken)) {
-        if (tokens.slice(1).some((token) => token.startsWith('-') && isFocusedExecutionSignalToken(token))) {
-            return true;
-        }
-        const moduleFlagIndex = tokens.findIndex((token, index) => index > 0 && token === '-m');
-        if (moduleFlagIndex >= 0 && REVIEWER_DIRECT_VALIDATION_RUNNER_PATTERN.test(tokens[moduleFlagIndex + 1] || '')) {
-            return true;
-        }
-        const runnerIndex = findNextFocusedCommandToken(tokens, 1);
-        if (
-            runnerIndex >= 0
-            && REVIEWER_NODE_FOUNDATION_TEST_WRAPPER_PATTERN.test(tokens[runnerIndex])
-        ) {
-            const wrapperCommandIndex = findNextFocusedCommandToken(tokens, runnerIndex + 1);
-            return wrapperCommandIndex >= 0 && isFocusedExecutionSignalToken(tokens[wrapperCommandIndex]);
-        }
-        return runnerIndex >= 0 && isFocusedExecutionSignalToken(tokens[runnerIndex]);
+        return getFocusedRuntimeInvocation(tokens).hasValidationRunner;
     }
     if (REVIEWER_PACKAGE_MANAGER_PATTERN.test(firstToken) || REVIEWER_PACKAGE_EXEC_WRAPPER_PATTERN.test(firstToken)) {
         let runnerIndex = findNextFocusedCommandToken(tokens, 1);
@@ -966,9 +1077,10 @@ function focusedCommandHasValidationRunner(command: string): boolean {
         const runnerIndex = findNextFocusedCommandToken(tokens, 1);
         return runnerIndex >= 0 && isFocusedExecutionSignalToken(tokens[runnerIndex]);
     }
-    return /(?:^|\/)\.?[^/]*[a-z0-9][^/]*$/iu.test(firstToken)
-        && firstToken.includes('/')
-        && isFocusedExecutionSignalToken(firstToken);
+    const localProgramPath = firstToken.replace(/\\/gu, '/');
+    return /(?:^|\/)\.?[^/]*[a-z0-9][^/]*$/iu.test(localProgramPath)
+        && localProgramPath.includes('/')
+        && isFocusedExecutionSignalToken(localProgramPath);
 }
 
 function isPathInsideFocusedRepository(repoRoot: string, candidatePath: string): boolean {
@@ -998,27 +1110,28 @@ function isExistingFocusedTargetFile(token: string, repoRoot?: string): boolean 
 }
 
 function isConcreteFocusedTargetToken(token: string, repoRoot?: string): boolean {
+    const normalizedToken = normalizeFocusedTargetPath(token);
     if (
-        !token
-        || token === '.'
-        || token === '...'
-        || token === '--'
-        || token.startsWith('-')
-        || /[*?\[\]{}$%]/u.test(token)
-        || token.startsWith('~')
-        || token.startsWith('@')
-        || REVIEWER_GENERIC_FOCUSED_COMMAND_TOKEN_PATTERN.test(token)
+        !normalizedToken
+        || normalizedToken === '.'
+        || normalizedToken === '...'
+        || normalizedToken === '--'
+        || normalizedToken.startsWith('-')
+        || /[*?\[\]{}$%]/u.test(normalizedToken)
+        || normalizedToken.startsWith('~')
+        || normalizedToken.startsWith('@')
+        || REVIEWER_GENERIC_FOCUSED_COMMAND_TOKEN_PATTERN.test(normalizedToken)
     ) {
         return false;
     }
-    if (!isSafeRepositoryRelativeFocusedTarget(token)) {
+    if (!isSafeRepositoryRelativeFocusedTarget(normalizedToken)) {
         return false;
     }
     if (repoRoot) {
-        return isExistingFocusedTargetFile(token, repoRoot);
+        return isExistingFocusedTargetFile(normalizedToken, repoRoot);
     }
-    return REVIEWER_FOCUSED_FILE_TARGET_PATTERN.test(token)
-        || REVIEWER_EXTENSIONLESS_FILE_TARGET_PATTERN.test(token);
+    return REVIEWER_FOCUSED_FILE_TARGET_PATTERN.test(normalizedToken)
+        || REVIEWER_EXTENSIONLESS_FILE_TARGET_PATTERN.test(normalizedToken);
 }
 
 function isDirectValidationRunnerSubcommand(runner: string, token: string): boolean {
@@ -1027,31 +1140,7 @@ function isDirectValidationRunnerSubcommand(runner: string, token: string): bool
 }
 
 function consumeGenericRuntimeTokens(tokens: readonly string[], consumedIndexes: Set<number>): void {
-    consumedIndexes.add(0);
-    const moduleFlagIndex = tokens.findIndex((token, index) => index > 0 && token === '-m');
-    if (moduleFlagIndex >= 0 && REVIEWER_DIRECT_VALIDATION_RUNNER_PATTERN.test(tokens[moduleFlagIndex + 1] || '')) {
-        consumedIndexes.add(moduleFlagIndex);
-        consumedIndexes.add(moduleFlagIndex + 1);
-        return;
-    }
-    if (tokens.slice(1).some((token) => token.startsWith('-') && isFocusedExecutionSignalToken(token))) {
-        return;
-    }
-    const runnerIndex = findNextFocusedCommandToken(tokens, 1);
-    if (runnerIndex < 0) {
-        return;
-    }
-    if (!REVIEWER_NODE_FOUNDATION_TEST_WRAPPER_PATTERN.test(tokens[runnerIndex])) {
-        if (!REVIEWER_DIRECT_TEST_TARGET_PATTERN.test(tokens[runnerIndex])) {
-            consumedIndexes.add(runnerIndex);
-        }
-        return;
-    }
-    consumedIndexes.add(runnerIndex);
-    const wrapperCommandIndex = findNextFocusedCommandToken(tokens, runnerIndex + 1);
-    if (wrapperCommandIndex >= 0) {
-        consumedIndexes.add(wrapperCommandIndex);
-    }
+    for (const index of getFocusedRuntimeInvocation(tokens).runnerTokenIndexes) consumedIndexes.add(index);
 }
 
 function consumePackageManagerTokens(tokens: readonly string[], consumedIndexes: Set<number>): void {
@@ -1090,8 +1179,53 @@ function getFocusedRunnerTokenIndexes(tokens: readonly string[]): Set<number> {
     return consumedIndexes;
 }
 
-function consumeFocusedOptionValues(tokens: readonly string[], consumedIndexes: Set<number>): void {
-    tokens.forEach((token, index) => {
+interface FocusedCommandOptionParseResult {
+    consumedIndexes: ReadonlySet<number>;
+    literalSelectorValueIndexes: ReadonlySet<number>;
+    optionIndexes: ReadonlySet<number>;
+    terminatorIndex: number;
+    programIndex: number;
+    positionalBoundaryIndex: number;
+}
+
+function parseFocusedCommandOptions(tokens: readonly string[]): FocusedCommandOptionParseResult {
+    const consumedIndexes = new Set<number>();
+    const literalSelectorValueIndexes = new Set<number>();
+    const optionIndexes = new Set<number>();
+    const firstToken = tokens[0] || '';
+    let forwardingDelimiterAvailable = REVIEWER_PACKAGE_MANAGER_PATTERN.test(firstToken);
+    let nodeValidationOptionPresent = false;
+    let programIndex = -1;
+    let terminatorIndex = -1;
+    let positionalBoundaryIndex = -1;
+    for (let index = 0; index < tokens.length; index += 1) {
+        const token = tokens[index];
+        if (token === '--') {
+            if (!forwardingDelimiterAvailable) {
+                terminatorIndex = index;
+                positionalBoundaryIndex = index;
+                if (programIndex < 0 && index + 1 < tokens.length) programIndex = index + 1;
+                break;
+            }
+            forwardingDelimiterAvailable = false;
+            continue;
+        }
+        if (index > 0 && programIndex < 0) {
+            if (!token.startsWith('-')) {
+                programIndex = index;
+                if (nodeValidationOptionPresent) {
+                    positionalBoundaryIndex = index;
+                    break;
+                }
+            } else if (isFocusedNodeValidationOption(firstToken, token)) {
+                nodeValidationOptionPresent = true;
+            }
+        }
+        if (token.startsWith('-')) optionIndexes.add(index);
+        if (token.includes('=')
+            && REVIEWER_FOCUSED_LITERAL_SELECTOR_OPTION_PATTERN.test(normalizeFocusedOptionName(token))) {
+            literalSelectorValueIndexes.add(index);
+        }
         if (
             REVIEWER_FOCUSED_OPTION_WITH_VALUE_PATTERN.test(token)
             && !token.includes('=')
@@ -1099,7 +1233,11 @@ function consumeFocusedOptionValues(tokens: readonly string[], consumedIndexes: 
         ) {
             consumedIndexes.add(index);
             consumedIndexes.add(index + 1);
-            return;
+            if (REVIEWER_FOCUSED_LITERAL_SELECTOR_OPTION_PATTERN.test(token)) {
+                literalSelectorValueIndexes.add(index + 1);
+            }
+            index += 1;
+            continue;
         }
         if (
             REVIEWER_FOCUSED_OPTION_WITH_SCALAR_VALUE_PATTERN.test(token)
@@ -1108,8 +1246,10 @@ function consumeFocusedOptionValues(tokens: readonly string[], consumedIndexes: 
         ) {
             consumedIndexes.add(index);
             consumedIndexes.add(index + 1);
+            index += 1;
         }
-    });
+    }
+    return { consumedIndexes, literalSelectorValueIndexes, optionIndexes, terminatorIndex, programIndex, positionalBoundaryIndex };
 }
 
 interface FocusedCommandTargetParseResult {
@@ -1119,10 +1259,20 @@ interface FocusedCommandTargetParseResult {
 
 function parseFocusedCommandTargets(command: string, repoRoot?: string): FocusedCommandTargetParseResult {
     const tokens = getFocusedCommandTokens(command);
-    const consumedIndexes = getFocusedRunnerTokenIndexes(tokens);
-    consumeFocusedOptionValues(tokens, consumedIndexes);
+    const options = parseFocusedCommandOptions(tokens);
+    const consumedIndexes = new Set(options.consumedIndexes);
+    const optionTerminatorIndex = options.terminatorIndex;
+    const positionalBoundaryIndex = options.positionalBoundaryIndex;
+    const runnerTokens = optionTerminatorIndex >= 0 ? tokens.slice(0, optionTerminatorIndex) : tokens;
+    const runnerInput = REVIEWER_GENERIC_RUNTIME_PATTERN.test(tokens[0] || '') ? tokens : runnerTokens;
+    for (const index of getFocusedRunnerTokenIndexes(runnerInput)) {
+        consumedIndexes.add(index);
+    }
     const positionalTokens = tokens.filter((token, index) => (
-        !consumedIndexes.has(index) && token !== '--' && !token.startsWith('-')
+        !consumedIndexes.has(index)
+        && index !== optionTerminatorIndex
+        && ((positionalBoundaryIndex >= 0 && index > positionalBoundaryIndex)
+            || (token !== '--' && !token.startsWith('-')))
     ));
     return {
         targets: positionalTokens
@@ -1142,9 +1292,8 @@ function focusedCommandHasConcreteTarget(command: string, repoRoot?: string): bo
 }
 
 function focusedCommandExecutesValidation(command: string, repoRoot?: string): boolean {
-    const normalizedCommand = command.replace(/\\/gu, '/');
-    return focusedCommandHasValidationRunner(normalizedCommand)
-        && focusedCommandHasConcreteTarget(normalizedCommand, repoRoot);
+    return focusedCommandHasValidationRunner(command)
+        && focusedCommandHasConcreteTarget(command, repoRoot);
 }
 
 function focusedCommandExecutesMarkerTarget(command: string, markerTarget: string, repoRoot?: string): boolean {

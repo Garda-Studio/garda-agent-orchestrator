@@ -505,14 +505,18 @@ test('validateReviewFindingsReport keeps the canonical F-000 marker case-sensiti
 });
 
 test('validateReviewFindingsReport rejects focused commands with unrelated additional targets', () => {
-    for (const command of [
+    const commands = [
         'node --test tests/node/example.test.ts tests/node/other.test.ts',
         'node tools/validate-contract.js api/openapi.yaml api/other.yaml',
         'node --test tests/node/example.test.ts tests/node/*.test.ts',
         'node --test tests/node/example.test.ts not-a-target',
+        'node --test "./" tests/node/example.test.ts',
+        'node --test "" tests/node/example.test.ts',
         'node --test tests/node/example.test.ts tests/../outside.test.ts',
-        'node --test tests/node/example.test.ts C:outside.test.ts'
-    ]) {
+        'node --test tests/node/example.test.ts C:outside.test.ts',
+        'node --test --test-name-pattern="parser branch|schema branch" tests/node/example.test.ts tests/node/other.test.ts'
+    ];
+    const results = commands.map((command) => {
         const report = validReport();
         report.validation_notes = [{
             id: 'N-001',
@@ -526,12 +530,13 @@ test('validateReviewFindingsReport rejects focused commands with unrelated addit
 
         const result = validateReviewFindingsReport(report, validationOptions);
 
-        assert.equal(result.valid, false, command);
-        assert.ok(
-            result.violations.some((entry) => entry.includes('must execute a focused test or validation command')),
-            command
-        );
-    }
+        return {
+            command,
+            valid: result.valid,
+            targetViolation: result.violations.some((entry) => entry.includes('must execute a focused test or validation command'))
+        };
+    });
+    assert.deepEqual(results, commands.map((command) => ({ command, valid: false, targetViolation: true })));
 });
 
 test('validateReviewFindingsReport accepts one focused target with selector option values', () => {
@@ -559,6 +564,619 @@ test('validateReviewFindingsReport accepts one focused target with selector opti
 
         assert.equal(result.valid, true, `${command}\n${result.violations.join('\n')}`);
     }
+});
+
+test('validateReviewFindingsReport accepts quoted alternation in one focused test selector', () => {
+    for (const command of [
+        'node --test --test-name-pattern "parser|schema" tests/node/example.test.ts',
+        'node --test --test-name-pattern="parser|schema" tests/node/example.test.ts',
+        'node --test --test-name-pattern "parser branch|schema branch" tests/node/example.test.ts',
+        'node --test --test-name-pattern="parser branch|schema branch" tests/node/example.test.ts',
+        'node --test --test-name-pattern "parser;branch|schema&&branch" tests/node/example.test.ts',
+        'node --test --test-name-pattern "parser$|schema$" tests/node/example.test.ts',
+        'node --test --test-name-pattern "(parser.*|schema.?)" tests/node/example.test.ts',
+        'node --test --test-name-pattern "parser#|~schema@" tests/node/example.test.ts',
+        'node --test --test-name-pattern "parser%|schema" tests/node/example.test.ts',
+        `node --test --test-name-pattern="parser's branch|schema branch" tests/node/example.test.ts`,
+        'node --test --test-name-pattern "parser|"schema tests/node/example.test.ts',
+        'node --test --test-name-pattern="parser|"schema tests/node/example.test.ts'
+    ]) {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001',
+            topic: 'focused-self-validation',
+            note: 'The reviewer ran one exact focused target with a quoted test selector.',
+            command,
+            command_outcome: 'passed',
+            diagnostics: 'The focused selection completed with 12 passing assertions.',
+            evidence: [evidence(
+                'src/example.ts:10',
+                'The changed parser branch is covered by tests/node/example.test.ts.'
+            )]
+        }];
+
+        const result = validateReviewFindingsReport(report, validationOptions);
+
+        assert.equal(result.valid, true, `${command}\n${result.violations.join('\n')}`);
+        assert.equal((report.validation_notes as Array<{ command: string }>)[0].command, command);
+    }
+});
+
+test('validateReviewFindingsReport rejects ambiguous or unterminated focused-command quotes', () => {
+    const commands = [
+        ['node --test --test-name-pattern "parser tests/node/example.test.ts', 'unterminated shell quoting'],
+        ["node --test --test-name-pattern 'parser tests/node/example.test.ts", 'shell-dependent single quoting'],
+        [String.raw`node --test --test-name-pattern "parser\"|schema" tests/node/example.test.ts`, 'ambiguous escaped shell quotes'],
+        [String.raw`node --test --test-name-pattern "parser\'|schema" tests/node/example.test.ts`, 'ambiguous escaped shell quotes']
+    ];
+    const results = commands.map(([command, violation]) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001',
+            topic: 'focused-self-validation',
+            note: 'The reviewer attempted a focused target with an ambiguous selector.',
+            command,
+            command_outcome: 'unavailable',
+            diagnostics: 'The shell could not safely interpret the selector.',
+            evidence: [evidence()]
+        }];
+
+        const result = validateReviewFindingsReport(report, validationOptions);
+
+        return {
+            command,
+            valid: result.valid,
+            quoteViolation: result.violations.some((entry) => entry.includes(violation))
+        };
+    });
+    assert.deepEqual(results, commands.map(([command]) => ({ command, valid: false, quoteViolation: true })));
+});
+
+test('validateReviewFindingsReport rejects PowerShell typographic focused-command quotes', () => {
+    const commands = [
+        'node --test --test-name-pattern "parser\u201d; Set-Content marker x; Write-Output \u201cschema" tests/node/example.test.ts',
+        "node --test --test-name-pattern 'parser\u2019; Set-Content marker x; Write-Output \u2018schema' tests/node/example.test.ts",
+        'node --test --test-name-pattern="parser\u201d; Set-Content marker x; Write-Output \u201cschema" tests/node/example.test.ts',
+        "node --test --test-name-pattern='parser\u2019; Set-Content marker x; Write-Output \u2018schema' tests/node/example.test.ts",
+        ...['\u2018', '\u2019', '\u201c', '\u201d'].map((quote) =>
+            `node --test --test-name-pattern "parser${quote}|schema" tests/node/example.test.ts`)
+    ];
+    const results = commands.map((command) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001',
+            topic: 'focused-self-validation',
+            note: 'The reviewer claimed one focused target with mixed shell quote delimiters.',
+            command,
+            command_outcome: 'passed',
+            diagnostics: 'The focused selection completed with 12 passing assertions.',
+            evidence: [evidence(
+                'src/example.ts:10',
+                'The changed parser branch is covered by tests/node/example.test.ts.'
+            )]
+        }];
+
+        const result = validateReviewFindingsReport(report, validationOptions);
+
+        return {
+            command,
+            valid: result.valid,
+            quoteViolation: result.violations.some((entry) => entry.includes('ambiguous typographic shell quotes')),
+            originalCommandRetained: (report.validation_notes as Array<{ command: string }>)[0].command === command
+        };
+    });
+    assert.deepEqual(results, commands.map((command) => ({
+        command, valid: false, quoteViolation: true, originalCommandRetained: true
+    })));
+});
+
+test('validateReviewFindingsReport rejects shell parameter and quoted-string expansions in focused commands', () => {
+    const commands = [
+        ...['$?', '$0', '$1', '$9', '$$', '$#', '$@', '$*', '$-', '$!', '$имя', '$变数'].map((parameter) =>
+            `node --test --test-name-pattern "${parameter}|schema" tests/node/example.test.ts`),
+        "node --test --test-name-pattern $'parser|schema' tests/node/example.test.ts",
+        'node --test --test-name-pattern $"parser|schema" tests/node/example.test.ts'
+    ];
+    const results = commands.map((command) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001',
+            topic: 'focused-self-validation',
+            note: 'The reviewer claimed a focused selector containing shell-dependent expansion.',
+            command,
+            command_outcome: 'passed',
+            diagnostics: 'The focused selection completed with 12 passing assertions.',
+            evidence: [evidence(
+                'src/example.ts:10',
+                'The changed parser branch is covered by tests/node/example.test.ts.'
+            )]
+        }];
+
+        const result = validateReviewFindingsReport(report, validationOptions);
+
+        return {
+            command,
+            valid: result.valid,
+            expansionViolation: result.violations.some((entry) => entry.includes('expansions inside a focused validation attempt')),
+            originalCommandRetained: (report.validation_notes as Array<{ command: string }>)[0].command === command
+        };
+    });
+    assert.deepEqual(results, commands.map((command) => ({
+        command, valid: false, expansionViolation: true, originalCommandRetained: true
+    })));
+});
+
+test('validateReviewFindingsReport rejects unquoted wildcard and grouping syntax in focused commands', () => {
+    const commands = [
+        'node --test --test-name-pattern "parser|schema"* tests/node/example.test.ts',
+        'node --test --test-name-pattern "parser|schema"? tests/node/example.test.ts',
+        'node --test --test-name-pattern="parser|schema"* tests/node/example.test.ts',
+        'node --test --test-name-pattern="parser|schema"? tests/node/example.test.ts',
+        'node --test --test-name-pattern *"parser|schema" tests/node/example.test.ts',
+        'node --test --test-name-pattern ?"parser|schema" tests/node/example.test.ts',
+        'node --test --test-name-pattern parser* tests/node/example.test.ts',
+        'node --test --test-name-pattern parser? tests/node/example.test.ts',
+        ...['@(branch)', '+(branch)', '!(branch)', '?(branch)', '*(branch)', '(probe)'].map((suffix) =>
+            `node --test --test-name-pattern "parser|schema"${suffix} tests/node/example.test.ts`)
+    ];
+    const results = commands.map((command) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001',
+            topic: 'focused-self-validation',
+            note: 'The reviewer claimed a focused selector with unquoted shell syntax.',
+            command,
+            command_outcome: 'passed',
+            diagnostics: 'The focused selection completed with 12 passing assertions.',
+            evidence: [evidence(
+                'src/example.ts:10',
+                'The changed parser branch is covered by tests/node/example.test.ts.'
+            )]
+        }];
+
+        const result = validateReviewFindingsReport(report, validationOptions);
+
+        return {
+            command,
+            valid: result.valid,
+            shellSyntaxViolation: result.violations.some((entry) => entry.includes('unquoted shell wildcard or grouping syntax')),
+            originalCommandRetained: (report.validation_notes as Array<{ command: string }>)[0].command === command
+        };
+    });
+    assert.deepEqual(results, commands.map((command) => ({
+        command, valid: false, shellSyntaxViolation: true, originalCommandRetained: true
+    })));
+});
+
+test('validateReviewFindingsReport rejects unquoted escaped whitespace in focused commands', () => {
+    const commands = [
+        String.raw`node --test --test-name-pattern "parser|schema"\ tests/node/example.test.ts`,
+        String.raw`node --test --test-name-pattern "parser|"schema\ tests/node/example.test.ts`,
+        String.raw`node --test --test-name-pattern="parser|schema"\ tests/node/example.test.ts`,
+        'node --test --test-name-pattern "parser|schema"\\\t tests/node/example.test.ts'
+    ];
+    const results = commands.map((command) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001', topic: 'focused-self-validation',
+            note: 'The reviewer claimed a focused target after escaped whitespace.',
+            command, command_outcome: 'passed', diagnostics: 'The focused selection completed with 12 passing assertions.',
+            evidence: [evidence('src/example.ts:10', 'The changed parser branch is covered by tests/node/example.test.ts.')]
+        }];
+        const result = validateReviewFindingsReport(report, validationOptions);
+        return {
+            command, valid: result.valid,
+            escapingViolation: result.violations.some((entry) => entry.includes('ambiguous unquoted shell escaping')),
+            originalCommandRetained: (report.validation_notes as Array<{ command: string }>)[0].command === command
+        };
+    });
+    assert.deepEqual(results, commands.map((command) => ({
+        command, valid: false, escapingViolation: true, originalCommandRetained: true
+    })));
+});
+
+test('validateReviewFindingsReport rejects unquoted home expansion prefixes in focused commands', () => {
+    const commands = ['~+', '~-', '~root', '~user'].flatMap((prefix) => [
+        `node --test --test-name-pattern ${prefix}/parser"|"schema tests/node/example.test.ts`,
+        `node --test --test-name-pattern=${prefix}/parser"|"schema tests/node/example.test.ts`
+    ]);
+    const results = commands.map((command) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001', topic: 'focused-self-validation',
+            note: 'The reviewer claimed a focused selector with a home expansion prefix.',
+            command, command_outcome: 'passed', diagnostics: 'The focused selection completed with 12 passing assertions.',
+            evidence: [evidence('src/example.ts:10', 'The changed parser branch is covered by tests/node/example.test.ts.')]
+        }];
+        const result = validateReviewFindingsReport(report, validationOptions);
+        return {
+            command, valid: result.valid,
+            expansionViolation: result.violations.some((entry) => entry.includes('unquoted shell home expansion')),
+            originalCommandRetained: (report.validation_notes as Array<{ command: string }>)[0].command === command
+        };
+    });
+    assert.deepEqual(results, commands.map((command) => ({
+        command, valid: false, expansionViolation: true, originalCommandRetained: true
+    })));
+});
+
+test('validateReviewFindingsReport rejects ambiguous shell token boundaries in focused commands', () => {
+    const commands = [
+        ['node --test --test-name-pattern "parser|schema" # tests/node/example.test.ts', 'unquoted shell comment or splatting syntax'],
+        ['node --test --test-name-pattern @"parser|schema" tests/node/example.test.ts', 'unquoted shell comment or splatting syntax'],
+        ['node --test --test-name-pattern "parser|schema"\u00a0tests/node/example.test.ts', 'ambiguous shell whitespace'],
+        ['node --test --test-name-pattern "parser|schema"\vtests/node/example.test.ts', 'ambiguous shell control characters']
+    ];
+    const results = commands.map(([command, violation]) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001', topic: 'focused-self-validation',
+            note: 'The reviewer claimed a focused target across a shell-dependent token boundary.',
+            command, command_outcome: 'passed', diagnostics: 'The focused selection completed with 12 passing assertions.',
+            evidence: [evidence('src/example.ts:10', 'The changed parser branch is covered by tests/node/example.test.ts.')]
+        }];
+        const result = validateReviewFindingsReport(report, validationOptions);
+        return {
+            command, valid: result.valid,
+            boundaryViolation: result.violations.some((entry) => entry.includes(violation)),
+            originalCommandRetained: (report.validation_notes as Array<{ command: string }>)[0].command === command
+        };
+    });
+    assert.deepEqual(results, commands.map(([command]) => ({
+        command, valid: false, boundaryViolation: true, originalCommandRetained: true
+    })));
+});
+
+test('validateReviewFindingsReport rejects CMD percent expansions in focused commands', () => {
+    const expansions = ['%PATH:~0,1%', '%PATH:old=new%', '%ProgramFiles(x86)%', '%name with spaces%', '%имя%', '%%a', '%1', '%*', '%~dp0'];
+    const commands = expansions.flatMap((expansion) => [
+        `node --test --test-name-pattern "${expansion}|schema" tests/node/example.test.ts`,
+        `node --test --test-name-pattern='${expansion}|schema' tests/node/example.test.ts`
+    ]);
+    const results = commands.map((command) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001', topic: 'focused-self-validation',
+            note: 'The reviewer claimed a focused selector containing a CMD expansion.',
+            command, command_outcome: 'passed', diagnostics: 'The focused selection completed with 12 passing assertions.',
+            evidence: [evidence('src/example.ts:10', 'The changed parser branch is covered by tests/node/example.test.ts.')]
+        }];
+        const result = validateReviewFindingsReport(report, validationOptions);
+        return {
+            command, valid: result.valid,
+            expansionViolation: result.violations.some((entry) => entry.includes('expansions inside a focused validation attempt')),
+            originalCommandRetained: (report.validation_notes as Array<{ command: string }>)[0].command === command
+        };
+    });
+    assert.deepEqual(results, commands.map((command) => ({
+        command, valid: false, expansionViolation: true, originalCommandRetained: true
+    })));
+});
+
+test('validateReviewFindingsReport rejects shell control characters in focused commands', () => {
+    const commands = ['\u0000', '\u0008', '\u007f', '\u0085'].flatMap((character) => [
+        `node --test --test-name-pattern "parser${character}|schema" tests/node/example.test.ts`,
+        `node --test --test-name-pattern "parser|schema"${character} tests/node/example.test.ts`
+    ]);
+    const results = commands.map((command) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001', topic: 'focused-self-validation',
+            note: 'The reviewer claimed a focused command containing a shell control character.',
+            command, command_outcome: 'passed', diagnostics: 'The focused selection completed with 12 passing assertions.',
+            evidence: [evidence('src/example.ts:10', 'The changed parser branch is covered by tests/node/example.test.ts.')]
+        }];
+        const result = validateReviewFindingsReport(report, validationOptions);
+        return {
+            command, valid: result.valid,
+            controlViolation: result.violations.some((entry) => entry.includes('ambiguous shell control characters')),
+            originalCommandRetained: (report.validation_notes as Array<{ command: string }>)[0].command === command
+        };
+    });
+    assert.deepEqual(results, commands.map((command) => ({
+        command, valid: false, controlViolation: true, originalCommandRetained: true
+    })));
+});
+
+test('validateReviewFindingsReport rejects shell-dependent single quoting in focused commands', () => {
+    const commands = [
+        "node --test --test-name-pattern 'parser|schema' tests/node/example.test.ts",
+        "node --test --test-name-pattern='parser|schema' tests/node/example.test.ts",
+        "node --test --test-name-pattern 'parser&&schema' tests/node/example.test.ts",
+        "node --test --test-name-pattern 'parser;schema' tests/node/example.test.ts",
+        "node --test --test-name-pattern='parser branch|schema branch' tests/node/example.test.ts",
+        "node --test --test-name-pattern 'parser' tests/node/example.test.ts",
+        "node --test 'tests/node/example.test.ts'"
+    ];
+    const results = commands.map((command) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001', topic: 'focused-self-validation',
+            note: 'The reviewer claimed a focused command without an execution-shell binding.',
+            command, command_outcome: 'passed', diagnostics: 'The focused selection completed with 12 passing assertions.',
+            evidence: [evidence('src/example.ts:10', 'The changed parser branch is covered by tests/node/example.test.ts.')]
+        }];
+        const result = validateReviewFindingsReport(report, validationOptions);
+        return {
+            command, valid: result.valid,
+            quotingViolation: result.violations.some((entry) => entry.includes('shell-dependent single quoting')),
+            originalCommandRetained: (report.validation_notes as Array<{ command: string }>)[0].command === command
+        };
+    });
+    assert.deepEqual(results, commands.map((command) => ({
+        command, valid: false, quotingViolation: true, originalCommandRetained: true
+    })));
+});
+
+test('validateReviewFindingsReport rejects shell history and delayed expansion markers in focused commands', () => {
+    const commands = ['!!', '!$', '!#', '!previous', '!ProgramFiles(x86)!'].map((expansion) =>
+        `node --test --test-name-pattern "parser${expansion}|schema" tests/node/example.test.ts`);
+    const results = commands.map((command) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001', topic: 'focused-self-validation',
+            note: 'The reviewer claimed a focused selector containing shell history or delayed expansion.',
+            command, command_outcome: 'passed', diagnostics: 'The focused selection completed with 12 passing assertions.',
+            evidence: [evidence('src/example.ts:10', 'The changed parser branch is covered by tests/node/example.test.ts.')]
+        }];
+        const result = validateReviewFindingsReport(report, validationOptions);
+        return {
+            command, valid: result.valid,
+            expansionViolation: result.violations.some((entry) => entry.includes('shell history or delayed expansions')),
+            originalCommandRetained: (report.validation_notes as Array<{ command: string }>)[0].command === command
+        };
+    });
+    assert.deepEqual(results, commands.map((command) => ({
+        command, valid: false, expansionViolation: true, originalCommandRetained: true
+    })));
+});
+
+test('validateReviewFindingsReport rejects escaping paths reconstructed from quoted command fragments', () => {
+    const runnerPaths = [
+        '"."./outside-validate.js',
+        '".".\\outside-validate.js',
+        '"../"outside-validate.js',
+        'tools/"../"outside-validate.js',
+        '"C":/outside-validate.js',
+        '"C":\\outside-validate.js',
+        '"C":outside-validate.js',
+        'D"":/outside-validate.js',
+        '"//"outside-validate.js'
+    ];
+    const commands = [
+        ...runnerPaths.map((runnerPath) => `node ${runnerPath} tests/node/example.test.ts`),
+        'node --test --config "../outside-config.js" tests/node/example.test.ts',
+        'node --test --project "C:/outside-config.json" tests/node/example.test.ts',
+        'node --test --test-name-pattern "\\.branch|schema" --config "../outside-config.js" tests/node/example.test.ts',
+        'node --test --config="x/."./outside-config.js tests/node/example.test.ts',
+        'node --test --project "x/."./outside-config.json tests/node/example.test.ts',
+        'node --test --unknown-selector="x/."./schema tests/node/example.test.ts',
+        'node --test -- --test-name-pattern="x/."./schema tests/node/example.test.ts',
+        'npm test -- -- --filter="x/."./outside-schema tests/node/example.test.ts',
+        'node --test tests/node/example.test.ts --test-name-pattern "x/."./outside-schema',
+        'node --test tests/node/example.test.ts --test-name-pattern="x/."./outside-schema'
+    ];
+    const results = commands.map((command) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001', topic: 'focused-self-validation',
+            note: 'The reviewer claimed a focused command using a fragmented validator script path.',
+            command, command_outcome: 'passed', diagnostics: 'The focused selection completed with 12 passing assertions.',
+            evidence: [evidence('src/example.ts:10', 'The changed parser branch is covered by tests/node/example.test.ts.')]
+        }];
+        const result = validateReviewFindingsReport(report, validationOptions);
+        return {
+            command, valid: result.valid,
+            pathViolation: result.violations.some((entry) => entry.includes('escape authenticated repository scope')),
+            originalCommandRetained: (report.validation_notes as Array<{ command: string }>)[0].command === command
+        };
+    });
+    assert.deepEqual(results, commands.map((command) => ({
+        command, valid: false, pathViolation: true, originalCommandRetained: true
+    })));
+});
+
+test('validateReviewFindingsReport rejects unquoted escaped dots in runner and target paths', () => {
+    const commands = [
+        'node "."\\./outside-validate.js tests/node/example.test.ts',
+        'node .\\./outside-validate.js tests/node/example.test.ts',
+        'node "."\\./tools/validate-contract.js tests/node/example.test.ts',
+        'node --test "."\\./tests/node/example.test.ts',
+        'node --test --test-name-pattern="parser|schema" "."\\./tests/node/example.test.ts',
+        'node --test --test-name-pattern "parser|schema" .\\./tests/node/example.test.ts'
+    ];
+    const results = commands.map((command) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001', topic: 'focused-self-validation',
+            note: 'The reviewer claimed a focused command with an ambiguous escaped path dot.',
+            command, command_outcome: 'passed', diagnostics: 'The focused selection completed with 12 passing assertions.',
+            evidence: [evidence('src/example.ts:10', 'The changed parser branch is covered by tests/node/example.test.ts.')]
+        }];
+        const result = validateReviewFindingsReport(report, validationOptions);
+        return {
+            command, valid: result.valid,
+            escapingViolation: result.violations.some((entry) => entry.includes('ambiguous unquoted shell escaping')),
+            originalCommandRetained: (report.validation_notes as Array<{ command: string }>)[0].command === command
+        };
+    });
+    assert.deepEqual(results, commands.map((command) => ({
+        command, valid: false, escapingViolation: true, originalCommandRetained: true
+    })));
+});
+
+test('validateReviewFindingsReport accepts quoted escaped regex dots with ordinary Windows target separators', () => {
+    const commands = [
+        'node --test --test-name-pattern "parser\\.branch|schema" tests\\node\\example.test.ts',
+        'node --test --test-name-pattern "\\.branch|schema" tests\\node\\example.test.ts',
+        'node --test --test-name-pattern="\\.branch|schema" tests\\node\\example.test.ts',
+        'node --test --test-name-pattern "\\.\\.|schema" tests/node/example.test.ts',
+        'node --test --test-name-pattern "../branch|schema" tests/node/example.test.ts',
+        'jest --runInBand --testNamePattern "\\.branch|schema" tests/node/example.test.ts',
+        'jest --runInBand --testNamePattern="\\.branch|schema" tests/node/example.test.ts',
+        'node tools/validate-contract.js --filter "\\.branch|schema" tests/node/example.test.ts',
+        'node --test --test-name-pattern "x/."./schema tests/node/example.test.ts',
+        'node --test --test-name-pattern="x/."./schema tests/node/example.test.ts',
+        'jest --runInBand --testNamePattern "x/."./schema tests/node/example.test.ts',
+        'jest --runInBand --testNamePattern="x/."./schema tests/node/example.test.ts'
+    ];
+    const results = commands.map((command) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001', topic: 'focused-self-validation',
+            note: 'The reviewer ran one test with a quoted literal regex selector and a local target path.',
+            command, command_outcome: 'passed', diagnostics: 'The focused selection completed with 12 passing assertions.',
+            evidence: [evidence('src/example.ts:10', 'The changed parser branch is covered by tests/node/example.test.ts.')]
+        }];
+        const result = validateReviewFindingsReport(report, validationOptions);
+        return { command, valid: result.valid, returnedCommand: result.report?.validation_notes[0]?.command, violations: result.violations };
+    });
+    assert.deepEqual(results, commands.map((command) => ({ command, valid: true, returnedCommand: command, violations: [] })));
+});
+
+test('validateReviewFindingsReport rejects option-like positional arguments after end-of-options delimiters', () => {
+    const commands = [
+        'node -- --test tests/node/example.test.ts',
+        'node --test -- --test-name-pattern "parser|schema" tests/node/example.test.ts',
+        'node --test "--" --test-name-pattern="parser|schema" tests/node/example.test.ts',
+        'node --test -- "--test-name-pattern=parser|schema" tests/node/example.test.ts',
+        'node --test -- -- tests/node/example.test.ts',
+        'python -- -m pytest tests/python/example_test.py',
+        'vitest run -- --filter="parser|schema" tests/node/example.test.ts',
+        'npm test -- -- tests/node/example.test.ts --filter tests/node/other.test.ts',
+        'npm test -- -- --filter tests/node/other.test.ts tests/node/example.test.ts',
+        'npm run test -- "--" tests/node/example.test.ts --filter tests/node/other.test.ts',
+        'pnpm test -- -- tests/node/example.test.ts --filter tests/node/other.test.ts',
+        'yarn test -- -- tests/node/example.test.ts --filter tests/node/other.test.ts',
+        'bun test -- -- tests/node/example.test.ts --filter tests/node/other.test.ts',
+        'npm test -- --filter "--" -- tests/node/example.test.ts --filter tests/node/other.test.ts',
+        'npm test -- -- --filter="x/."./schema tests/node/example.test.ts',
+        'npm test -- -- tests/node/example.test.ts --maxWorkers 1',
+        'npm test -- -- -- tests/node/example.test.ts',
+        'node --test tests/node/example.test.ts --test-name-pattern tests/node/other.test.ts',
+        'node.exe --test tests/node/example.test.ts --test-name-pattern tests/node/other.test.ts',
+        'node --test --test-name-pattern "parser|schema" tests/node/example.test.ts --test-name-pattern tests/node/other.test.ts',
+        'node --test tests/node/example.test.ts --test-name-pattern="parser|schema"',
+        'node --test tests/node/example.test.ts --test-only',
+        'node --test tests/node/example.test.ts --maxWorkers 1',
+        'node --check tests/node/example.test.ts --filter tests/node/other.test.ts',
+        'node --test tests/node/example.test.ts -- --test-name-pattern tests/node/other.test.ts'
+    ];
+    const results = commands.map((command) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001', topic: 'focused-self-validation',
+            note: 'The reviewer claimed validation options after an end-of-options delimiter.',
+            command, command_outcome: 'passed', diagnostics: 'The focused selection completed with 12 passing assertions.',
+            evidence: [evidence('src/example.ts:10', 'The changed parser branch is covered by the concrete command target.')]
+        }];
+        const result = validateReviewFindingsReport(report, validationOptions);
+        return { command, valid: result.valid };
+    });
+    assert.deepEqual(results, commands.map((command) => ({ command, valid: false })));
+});
+
+test('validateReviewFindingsReport accepts concrete post-delimiter targets and package-manager forwarded selectors', () => {
+    const commands = [
+        'node --test -- tests/node/example.test.ts',
+        'node --test --test-name-pattern "parser|schema" -- tests/node/example.test.ts',
+        'node --test-name-pattern "--" --test tests/node/example.test.ts',
+        'node --test --test-name-pattern "" ./tests/node/example.test.ts',
+        'node ./tests/node/example.test.ts',
+        'node ./tools/validate-contract.js ./api/openapi.yaml',
+        'node -- tools/validate-contract.js api/openapi.yaml',
+        'node -- ./tools/validate-contract.js ./api/openapi.yaml',
+        'node -- scripts/node-foundation/build-scripts.cjs test.js tests/node/example.test.ts',
+        'node -- ./scripts/node-foundation/build-scripts.cjs test.js ./tests/node/example.test.ts',
+        'python -m pytest tests/python/example_test.py',
+        'python3 -m pytest -- tests/python/example_test.py',
+        'npm run validate:compliance -- --filter="parser|schema" tests/node/example.test.ts',
+        'npm test -- -- tests/node/example.test.ts',
+        'npm test -- "--" tests/node/example.test.ts',
+        'npm test -- --filter "--" tests/node/example.test.ts',
+        'npm test -- --filter "--" -- tests/node/example.test.ts',
+        'npm test -- --filter="x/."./schema tests/node/example.test.ts',
+        'pnpm test -- --filter "parser|schema" -- tests/node/example.test.ts',
+        'yarn test -- -- tests/node/example.test.ts',
+        'bun test -- -- tests/node/example.test.ts',
+        'node.exe --test --test-name-pattern="parser|schema" tests/node/example.test.ts',
+        'node tools/validate-contract.js tests/node/example.test.ts --filter "parser|schema"',
+        'node tools/validate-contract.js tests/node/example.test.ts --filter="x/."./schema',
+        'python -m pytest tests/python/example_test.py -k parser',
+        'pytest tests/python/example_test.py -k parser'
+    ];
+    const results = commands.map((command) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001', topic: 'focused-self-validation',
+            note: 'The reviewer ran a focused command with a concrete target and correctly scoped options.',
+            command, command_outcome: 'passed', diagnostics: 'The focused selection completed with 12 passing assertions.',
+            evidence: [evidence('src/example.ts:10', 'The changed parser branch is covered by the concrete command target.')]
+        }];
+        const result = validateReviewFindingsReport(report, validationOptions);
+        return { command, valid: result.valid, returnedCommand: result.report?.validation_notes[0]?.command, violations: result.violations };
+    });
+    assert.deepEqual(results, commands.map((command) => ({ command, valid: true, returnedCommand: command, violations: [] })));
+});
+
+test('validateReviewFindingsReport rejects forbidden whitespace and controls at command edges', () => {
+    const baseCommand = 'node --test --test-name-pattern "parser|schema" tests/node/example.test.ts';
+    const edgeCharacters = ['\u00a0', '\u000b', '\u000c', '\n', '\r', '\u2003', '\u2028', '\u2029', '\ufeff'];
+    const commands = edgeCharacters.flatMap((character) => [character + baseCommand, baseCommand + character]);
+    const results = commands.map((command) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001', topic: 'focused-self-validation',
+            note: 'The reviewer claimed a focused command with forbidden edge whitespace or controls.',
+            command, command_outcome: 'passed', diagnostics: 'The focused selection completed with 12 passing assertions.',
+            evidence: [evidence('src/example.ts:10', 'The changed parser branch is covered by tests/node/example.test.ts.')]
+        }];
+        const result = validateReviewFindingsReport(report, validationOptions);
+        return {
+            command, valid: result.valid,
+            safetyViolation: result.violations.some((entry) => entry.startsWith('Reviewer focused self-validation must not ')),
+            originalCommandRetained: (report.validation_notes as Array<{ command: string }>)[0].command === command
+        };
+    });
+    assert.deepEqual(results, commands.map((command) => ({
+        command, valid: false, safetyViolation: true, originalCommandRetained: true
+    })));
+});
+
+test('validateReviewFindingsReport preserves admissible ASCII whitespace at command edges', () => {
+    const report = validReport();
+    const command = ' \tnode --test --test-name-pattern "parser|schema" tests/node/example.test.ts\t ';
+    report.validation_notes = [{
+        id: 'N-001', topic: 'focused-self-validation',
+        note: 'The reviewer ran one focused command with admissible ASCII whitespace at both edges.',
+        command, command_outcome: 'passed', diagnostics: 'The focused selection completed with 12 passing assertions.',
+        evidence: [evidence('src/example.ts:10', 'The changed parser branch is covered by tests/node/example.test.ts.')]
+    }];
+    const result = validateReviewFindingsReport(report, validationOptions);
+    assert.equal(result.valid, true, result.violations.join('\n'));
+    assert.equal(result.report?.validation_notes[0]?.command, command);
+});
+
+test('validateReviewFindingsReport accepts safe local runner fragments with quoted selectors', () => {
+    const commands = [
+        'node "tools/"validate-contract.js --filter="parser|schema" tests/node/example.test.ts',
+        'tools/validate-contract.ps1 tests/node/example.test.ts',
+        'tools\\validate-contract.ps1 tests\\node\\example.test.ts',
+        './validate-contract.ps1 tests/node/example.test.ts',
+        '.\\validate-contract.ps1 tests\\node\\example.test.ts'
+    ];
+    const results = commands.map((command) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001', topic: 'focused-self-validation',
+            note: 'The reviewer ran one repository-local validator with a literal selector or local program path.',
+            command, command_outcome: 'passed', diagnostics: 'The focused selection completed with 12 passing assertions.',
+            evidence: [evidence('src/example.ts:10', 'The changed parser branch is covered by tests/node/example.test.ts.')]
+        }];
+        const result = validateReviewFindingsReport(report, validationOptions);
+        return { command, valid: result.valid, returnedCommand: result.report?.validation_notes[0]?.command, violations: result.violations };
+    });
+    assert.deepEqual(results, commands.map((command) => ({ command, valid: true, returnedCommand: command, violations: [] })));
 });
 
 test('validateReviewFindingsReport accepts direct validation runner subcommands', () => {
@@ -717,6 +1335,66 @@ test('validateReviewFindingsReport rejects passed focused notes without a valida
     assert.ok(result.violations.some((entry) => entry.includes('must execute a focused test or validation command')));
 });
 
+test('validateReviewFindingsReport rejects runtime selectors and script arguments without a validation mode', () => {
+    const commands = [
+        'node --test-name-pattern="parser|schema" src/example.ts',
+        'node --test-name-pattern "parser|schema" src/example.ts',
+        'node --test-only src/example.ts',
+        'node.exe --test-name-pattern="parser|schema" src/example.ts',
+        'node --no-warnings --test-name-pattern="parser|schema" src/example.ts',
+        'node --test-name-pattern "--test" src/example.ts',
+        'node --test-name-pattern "--check" src/example.ts',
+        'node src/example.ts --test',
+        'node --test-name-pattern="parser|schema" src/example.ts --test',
+        'node "./--test" src/example.ts',
+        'node "./--check" src/example.js',
+        'node src/example.ts -m pytest',
+        'node --test-name-pattern "-m" pytest src/example.ts',
+        'node -m pytest src/example.ts',
+        'python src/example.py -m pytest',
+        'python --test-name-pattern "-m" pytest src/example.py',
+        'python -- -m pytest src/example.py'
+    ];
+    const results = commands.map((command) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001', topic: 'focused-self-validation',
+            note: 'The reviewer claimed a validation mode using a selector or ordinary script argument.',
+            command, command_outcome: 'passed', diagnostics: 'The claimed check completed with 12 passing assertions.',
+            evidence: [evidence('src/example.ts:10', 'The changed parser branch in src/example.ts motivated the claimed check.')]
+        }];
+        const result = validateReviewFindingsReport(report, validationOptions);
+        return {
+            command, valid: result.valid,
+            validationViolation: result.violations.some((entry) => entry.includes('must execute a focused test or validation command'))
+        };
+    });
+    assert.deepEqual(results, commands.map((command) => ({ command, valid: false, validationViolation: true })));
+});
+
+test('validateReviewFindingsReport accepts genuine Node validation modes before the program target', () => {
+    const commands = [
+        'node --test-name-pattern="parser|schema" --test src/example.ts',
+        'node --test-name-pattern "--test" --test src/example.ts',
+        'node --test-name-pattern "--" --test src/example.ts',
+        'node --test-name-pattern parser --check src/example.js',
+        'node --test-name-pattern "--check" --test src/example.ts',
+        'node --check -- src/example.js'
+    ];
+    const results = commands.map((command) => {
+        const report = validReport();
+        report.validation_notes = [{
+            id: 'N-001', topic: 'focused-self-validation',
+            note: 'The reviewer used an actual Node validation mode before the concrete program target.',
+            command, command_outcome: 'passed', diagnostics: 'The focused check completed without parse errors or failing assertions.',
+            evidence: [evidence('src/example.ts:10', 'The changed parser consumes the concrete source target, which motivated this check.')]
+        }];
+        const result = validateReviewFindingsReport(report, validationOptions);
+        return { command, valid: result.valid, violations: result.violations };
+    });
+    assert.deepEqual(results, commands.map((command) => ({ command, valid: true, violations: [] })));
+});
+
 test('validateReviewFindingsReport rejects non-validation runners with validation-looking targets', () => {
     for (const command of [
         'test -f tests/node/example.test.ts',
@@ -749,6 +1427,8 @@ test('validateReviewFindingsReport rejects focused notes without a concrete file
         'npm test -- --runInBand',
         'node --test',
         'node tools/validate-contract.js',
+        'node -- tools/validate-contract.js',
+        'node -- scripts/node-foundation/build-scripts.cjs test.js',
         'node --test tests/node'
     ]) {
         const report = validReport();
@@ -1209,10 +1889,25 @@ test('validateReviewFindingsReport rejects unsafe network, mutation, and backgro
         ['npm test', 'broad build'],
         ['npm --silent test', 'broad build'],
         ['node --test tests/node/example.test.ts; npm test', 'chain or pipe'],
+        ['node --test --test-name-pattern parser|schema tests/node/example.test.ts', 'chain or pipe'],
+        ['node --test --test-name-pattern "parser|schema" tests/node/example.test.ts | node other.js', 'chain or pipe'],
+        ['node --test --test-name-pattern "parser|schema" tests/node/example.test.ts || node other.js', 'chain or pipe'],
+        ['node --test --test-name-pattern "parser|schema" tests/node/example.test.ts && node other.js', 'chain or pipe'],
+        ['node --test --test-name-pattern "parser|schema" tests/node/example.test.ts & node other.js', 'chain or pipe'],
+        ['node --test --test-name-pattern "parser|schema" tests/node/example.test.ts; node other.js', 'chain or pipe'],
+        ['node --test --test-name-pattern "parser|schema" tests/node/example.test.ts\nnode other.js', 'chain or pipe'],
+        ['node --test --test-name-pattern "parser|schema" tests/node/example.test.ts\rnode other.js', 'chain or pipe'],
+        ['node --test --test-name-pattern "parser|$(touch marker)" tests/node/example.test.ts', 'shell command substitutions'],
+        ['node --test --test-name-pattern "parser|$TEST_NAME" tests/node/example.test.ts', 'shell variable, brace, bracket, or home expansions'],
+        ['node --test --test-name-pattern "parser|%TEST_NAME%" tests/node/example.test.ts', 'shell variable, brace, bracket, or home expansions'],
+        ['node --test --test-name-pattern "parser|schema" --test-reporter-destination=src/example.ts tests/node/example.test.ts', 'write output artifacts'],
+        ['node --test --test-name-pattern="parser branch|schema branch" --test-reporter-des"tination"=src/example.ts tests/node/example.test.ts', 'write output artifacts'],
+        ['node bin/"garda".js --test tests/node/example.test.ts', 'invoke Garda navigation'],
+        ['node --test-name-pattern parser tests/garda.js', 'invoke Garda navigation'],
         ['node --test', 'broad build'],
         ['node scripts/node-foundation/build-scripts.cjs test.js', 'broad build']
     ] as const;
-    for (const [command, expectedViolation] of unsafeCommands) {
+    const results = unsafeCommands.map(([command, expectedViolation]) => {
         const report = validReport();
         report.validation_notes = [{
             id: 'N-001',
@@ -1226,9 +1921,13 @@ test('validateReviewFindingsReport rejects unsafe network, mutation, and backgro
 
         const result = validateReviewFindingsReport(report, validationOptions);
 
-        assert.equal(result.valid, false, command);
-        assert.ok(result.violations.some((entry) => entry.includes(expectedViolation)), command);
-    }
+        return {
+            command,
+            valid: result.valid,
+            unsafeViolation: result.violations.some((entry) => entry.includes(expectedViolation))
+        };
+    });
+    assert.deepEqual(results, unsafeCommands.map(([command]) => ({ command, valid: false, unsafeViolation: true })));
 });
 
 test('validateReviewFindingsReport accepts passed no-findings validation without a duplicate evidence target', () => {
