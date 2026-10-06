@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { parseFocusedCommandSyntax } from './review-focused-command-tokenizer';
+import { parseMavenFocusedCommand, resolveMavenFocusedTargets } from './review-focused-command-maven';
 import {
     createChangedFileLineCountResolver,
     formatReviewEvidenceLineCountSource,
@@ -944,6 +945,8 @@ function isNodeSyntaxCheckOption(tokens: readonly string[], optionIndex: number)
 
 function getUnsafeFocusedCommandTokenReason(command: string): string | null {
     const tokens = getFocusedCommandTokens(command);
+    const mavenCommand = parseMavenFocusedCommand(tokens);
+    if (mavenCommand) return mavenCommand.unsafeReason;
     const firstToken = tokens[0] || '';
     const valueIndexes = consumeFocusedOptionValues(tokens, new Set<number>());
     const optionTokens = tokens.filter((token, index) => token.startsWith('-') && !valueIndexes.has(index));
@@ -1051,6 +1054,8 @@ function isActionableFocusedDiagnostics(diagnostics: string): boolean {
 }
 
 function focusedCommandTokensHaveValidationRunner(tokens: readonly string[]): boolean {
+    const mavenCommand = parseMavenFocusedCommand(tokens);
+    if (mavenCommand) return !mavenCommand.unsafeReason;
     const firstToken = tokens[0] || '';
     if (REVIEWER_DIRECT_VALIDATION_RUNNER_PATTERN.test(firstToken)) {
         return true;
@@ -1258,6 +1263,13 @@ interface FocusedCommandTargetParseResult {
 
 function parseFocusedCommandTargets(command: string, repoRoot?: string): FocusedCommandTargetParseResult {
     const tokens = getFocusedCommandTokens(command);
+    const mavenCommand = parseMavenFocusedCommand(tokens);
+    if (mavenCommand) {
+        return {
+            targets: resolveMavenFocusedTargets(mavenCommand, repoRoot, isSafeRepositoryRelativeFocusedTarget),
+            invalidPositionalTokens: mavenCommand.unsafeReason ? tokens.slice(1) : []
+        };
+    }
     const consumedIndexes = getFocusedRunnerTokenIndexes(tokens);
     consumeFocusedOptionValues(tokens, consumedIndexes);
     const terminatorIndex = REVIEWER_PACKAGE_MANAGER_PATTERN.test(tokens[0] || '')

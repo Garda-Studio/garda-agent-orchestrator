@@ -132,6 +132,42 @@ separate and quoted loader values. Response-file arguments elsewhere remain
 prohibited.
 Loaders remain disallowed for syntax-only checks and unrelated runners.
 
+Maven focused commands use `mvn` or `mvnw`, including `.cmd` and `.bat`
+wrappers and leading `./`. Explicit `-o`/`--offline` is required to prohibit
+implicit dependency fetching;
+`-f`/`--file` selects a repository-contained POM or project directory and
+does not count as a test target. Attached and separate operands retain quoted
+spaces and literal operand bytes after the option separator.
+`-Dtest=<selector>`, `-D test=<selector>`, `--define=test=<selector>`
+or `--define test=<selector>` must select one concrete Java class, optionally
+with one named method, with exactly one `test` or `surefire:test` goal.
+Simple class names must resolve uniquely; qualified names and Java paths
+identify an exact file under the selected project's `src/test/java`.
+Existing default `target/test-classes` directories, their ancestors and entries
+must also remain contained and unlinked. Direct `surefire:test` requires one
+existing compiled class matching the selected source path; the `test` lifecycle
+may create missing compiled output. Ambiguous or mismatched existing compiled
+targets are rejected. Both tree scans have a bounded entry budget.
+An existing repository root and standalone POM are required. Parent model
+references are rejected because inherited test-source settings are not resolved.
+Aggregator POMs, custom test-source, build-directory or explicit class/output-directory layouts,
+linked test trees, ambiguous or missing classes, broad selectors,
+extra goals/properties, output flags and unknown options are rejected.
+Layout checks ignore XML comments and distinguish build-directory overrides
+from ordinary resource directories. Element ancestry is inspected without
+resolving inherited models, properties or plugins; unsupported declarations
+remain rejected, including active or inactive profile build overrides.
+POM reads are capped at 1 MiB. XML scanning advances once through the input,
+rejects unterminated constructs and checks build-directory ancestry at fixed depths.
+Single-hyphen long option aliases and abbreviations cannot masquerade as an
+attached `-f` project operand.
+`-Dtest ExampleTest` and `-D test ExampleTest` are rejected: Maven treats them
+as an unvalued property followed by an unrelated lifecycle phase. The property
+key and selector value must remain joined by `=`.
+These options do not acquire Maven semantics for other runners. Parser-only checks
+do not establish Maven execution; retain actual execution diagnostics and the
+existing passed, failed or unavailable report contracts.
+
 Actual unquoted pipelines, command chains and redirections are rejected.
 Shell substitutions and variable expansions, source-writing flags, interactive
 modes, implicit dependency fetching and unfocused checks remain prohibited.
