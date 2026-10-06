@@ -201,14 +201,21 @@ for explicit recovery. Source files, queue rows and task timelines survive.
 The `wip-task-packages` cleanup ownership entry excludes these packages from
 automatic GC, retention and ordinary task-purge collectors.
 
-Before split-required decomposition, the authenticated latch route creates a
-separate immutable capture of current authorized parent WIP. It does not reuse
-an earlier complete capture as checkout evidence after partial restoration or
-an isolated HEAD advance. Earlier packages remain available for restoring the
-remaining child scopes. Ordinary capture reuse still requires a verified
-suspended or fully restored checkout; a new decomposition capture retains the
-existing preflight scope, containment, source/index/HEAD revalidation and
-transaction rollback checks.
+Before split-required decomposition, the authenticated latch route verifies a
+retained parent capture without resuspending already restored child files.
+Original manifests, patches and payloads remain immutable while unrelated work
+stays in place. Retained capture reuse rejects content, index, HEAD, artifact
+and timeline drift; an isolated repair commit is not automatic authority to
+reuse an older HEAD binding. When no retained capture exists, the route creates
+a new capture of current authorized parent WIP. Ordinary capture reuse still
+requires a verified suspended or fully restored checkout; new captures retain
+preflight scope, containment, source/index/HEAD revalidation and rollback checks.
+
+Tracked WIP path discovery disables rename presentation for both index and
+worktree diffs so every source and destination endpoint remains in the authorized
+capture scope. Scoped binary patches retain Git's configured presentation;
+suspension, rollback and restore preserve both file content and staging state.
+An endpoint outside the current preflight scope blocks capture before mutation.
 
 Source-checkout WIP restore finalization runs in the freshly built `dist`
 runtime. Its host-local input fingerprint comes from

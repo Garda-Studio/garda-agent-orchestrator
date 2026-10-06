@@ -122,6 +122,10 @@ function makeRepo(): string {
 
 function capture(repoRoot: string, changedFiles: string[] = ['src/a.ts']): string {
     writeFile(repoRoot, 'src/a.ts', 'export const value = 2;\n');
+    return captureCurrentWip(repoRoot, changedFiles);
+}
+
+function captureCurrentWip(repoRoot: string, changedFiles: string[]): string {
     const preflightPath = path.join(
         repoRoot,
         'garda-agent-orchestrator',
@@ -142,7 +146,7 @@ function capture(repoRoot: string, changedFiles: string[] = ['src/a.ts']): strin
         guardKind: 'strict_decomposition',
         guardReason: 'runtime handoff fixture'
     });
-    assert.equal(captured.status, 'CAPTURED');
+    assert.equal(captured.status, 'CAPTURED', captured.violations.join('\n'));
     assert.ok(captured.manifest_path);
     return captured.manifest_path;
 }
@@ -250,6 +254,10 @@ function makeRealRuntimeSourceRepo(): string {
         "const sourceManifest = JSON.parse(fs.readFileSync(path.join(sourceBuildRoot, 'node-foundation-manifest.json'), 'utf8'));",
         "const files = sourceManifest.files.filter((entry) => typeof entry === 'string' && entry.startsWith('src/'));",
         "fs.writeFileSync(path.join(targetBuildRoot, 'src', 'a.js'), 'exports.value = 2;\\n', 'utf8');",
+        "if (fs.existsSync(path.join(__dirname, 'src', 'renamed file.ts'))) {",
+        "    fs.writeFileSync(path.join(targetBuildRoot, 'src', 'renamed file.js'), 'exports.value = 3;\\n', 'utf8');",
+        "    files.push('src/renamed file.js');",
+        "}",
         "const builtAt = new Date();",
         "fs.utimesSync(path.join(targetBuildRoot, 'src', 'index.js'), builtAt, builtAt);",
         "const publishedManifest = { nodeEngineRange: sourceManifest.nodeEngineRange, sourceRoots: ['src'], files };",
@@ -1306,6 +1314,42 @@ describe('split-required WIP restored-runtime handoff', () => {
             fs.rmSync(repoRoot, { recursive: true, force: true });
         }
     });
+
+    for (const diffRenames of ['true', 'false']) {
+        it(`T-168 restores a staged rename through the real rebuilt CLI with diff.renames=${diffRenames}`, {
+            timeout: 120_000
+        }, async (context) => {
+            const repoRoot = makeRealRuntimeSourceRepo();
+            context.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+            runGit(repoRoot, ['config', 'diff.renames', diffRenames]);
+            const sourcePath = 'src/a.ts';
+            const destinationPath = 'src/renamed file.ts';
+            const scope = [sourcePath, destinationPath];
+            runGit(repoRoot, ['mv', sourcePath, destinationPath]);
+            writeFile(repoRoot, destinationPath, 'export const value = 3;\n');
+            const indexBefore = runGit(repoRoot, ['ls-files', '--stage', '-z']);
+            const stagedBefore = runGit(repoRoot, ['diff', '--cached', '--binary', '--', ...scope]);
+            const unstagedBefore = runGit(repoRoot, ['diff', '--binary', '--', ...scope]);
+            const headBefore = runGit(repoRoot, ['rev-parse', 'HEAD']);
+            const manifestPath = captureCurrentWip(repoRoot, scope);
+            assert.equal(fs.existsSync(path.join(repoRoot, destinationPath)), false);
+            assert.equal(fs.readFileSync(path.join(repoRoot, sourcePath), 'utf8'), 'export const value = 1;\n');
+
+            const result = await restoreSplitRequiredWipThroughRuntimeHandoff({ repoRoot, taskId: TASK_ID, manifestPath });
+
+            assert.equal(result.status, 'RESTORED', result.violations.join('\n'));
+            assert.equal(fs.existsSync(path.join(repoRoot, sourcePath)), false);
+            assert.equal(fs.readFileSync(path.join(repoRoot, destinationPath), 'utf8'), 'export const value = 3;\n');
+            assert.equal(runGit(repoRoot, ['ls-files', '--stage', '-z']), indexBefore);
+            assert.equal(runGit(repoRoot, ['diff', '--cached', '--binary', '--', ...scope]), stagedBefore);
+            assert.equal(runGit(repoRoot, ['diff', '--binary', '--', ...scope]), unstagedBefore);
+            assert.equal(runGit(repoRoot, ['rev-parse', 'HEAD']), headBefore);
+            assert.equal(fs.readFileSync(path.join(repoRoot, 'build-ran'), 'utf8'), 'yes');
+            assert.equal(restoredEvents(repoRoot).length, 1);
+            const identity = resolveSplitRequiredWipRestoreHandoffIdentity({ repoRoot, taskId: TASK_ID, manifestPath });
+            assert.equal(readAndVerifySplitRequiredWipRestoreHandoff(identity).status, 'finalized');
+        });
+    }
 
     it('rejects a generated runtime older than its source checkout', () => {
         const repoRoot = makeRealRuntimeSourceRepo();

@@ -1,5 +1,9 @@
 # Changelog
 
+- Preserve both staged rename endpoints during split-required WIP capture,
+  independent of Git rename presentation. Retain exact index/worktree patches,
+  transactional rollback, scope checks and fresh-runtime restoration.
+
 - Resolve commit guard hook destinations through Git for linked worktrees,
   retain user hook backups and safe writes, honor workspace-local hooks paths,
   and create executable hooks on POSIX.
@@ -34,7 +38,7 @@
 
 - Add read-only authentication of canonical split-required WIP packages: validate declared schema, payload bytes and producer-bound restore handoffs; reject unknown, linked or replaced package members and charge initial or rejected reads against shared limits. Check declared payload size and remaining package capacity before opening each member. Bind suspended handoffs to current manifest bytes, reconcile closing membership and identities with the captured tree, and reject file and directory metadata changes through snapshot completion. Bound declared path depth, directory membership preparation and ancestry metadata before traversal; retain compact hashed identities and reuse captured bindings in closing inspection. Bound directory enumeration before allocating excess names. Preserve handoff identity across retirement byte transitions, reordered anchor fields and equivalent Windows manifest selections.
 
-- Resnapshot current authorized parent WIP before split-required decomposition after a partial restore or an isolated repair commit. Preserve every earlier capture package and keep ordinary capture reuse, scope, containment, HEAD-race and rollback checks intact.
+- Preserve verified partially restored parent WIP during split-required decomposition without resuspending child files. Retain original capture packages and unrelated work, reject changed HEAD or evidence bindings, and keep ordinary capture reuse, containment and rollback checks strict.
 
 - Authenticate source-checkout WIP restore runtime fingerprints from the local publish build cache, its complete current input inventory and the exact published manifest bytes. Keep published manifests independent of build hosts; reject missing, malformed, forged or stale cache authority, including old caches replayed after a rebuild with the same portable inventory. Recheck retained authority paths, traversed directories and absent input roots after module reads to reject concurrent input additions, rewrites and compiler-metadata changes before canonical append.
 

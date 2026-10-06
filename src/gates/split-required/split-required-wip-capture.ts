@@ -104,12 +104,13 @@ function sameFileSnapshot(left: fs.Stats, right: fs.Stats): boolean {
 }
 
 function collectTrackedChangeFiles(repoRoot: string): TrackedChangeFiles {
+    // Path inventory must retain both rename endpoints independently of patch presentation.
     const staged = new Set(
-        splitNulList(runGitBinary(repoRoot, ['diff', '--name-only', '--cached', '-z']))
+        splitNulList(runGitBinary(repoRoot, ['diff', '--no-renames', '--name-only', '--cached', '-z']))
             .map(normalizeGitPath)
     );
     const unstaged = new Set(
-        splitNulList(runGitBinary(repoRoot, ['diff', '--name-only', '-z']))
+        splitNulList(runGitBinary(repoRoot, ['diff', '--no-renames', '--name-only', '-z']))
             .map(normalizeGitPath)
     );
     return {
