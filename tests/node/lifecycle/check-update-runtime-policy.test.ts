@@ -1931,8 +1931,9 @@ describe('runCheckUpdate', () => {
         }
     });
 
-    it('restores previous VERSION for VERSION-only sources when a later apply step fails', async () => {
+    it('restores previous VERSION for VERSION-only sources when a later apply step fails', async (context) => {
         const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-version-only-source-'));
+        context.after(() => removePathRecursive(sourceRoot));
         const { projectRoot, bundleRoot } = setupCheckUpdateWorkspace(repoRoot, '0.0.1');
         try {
             fs.writeFileSync(path.join(sourceRoot, 'VERSION'), '9.9.9\n', 'utf8');
@@ -1960,7 +1961,6 @@ describe('runCheckUpdate', () => {
                 'VERSION-only apply failures must restore the previous VERSION'
             );
         } finally {
-            removePathRecursive(sourceRoot);
             removePathRecursive(projectRoot);
         }
     });
