@@ -16,6 +16,7 @@ export function withWorkflowConfigTransaction<T>(
             config: roots.configPath,
             policy: roots.optionalSkillSelectionPolicyPath,
             receipt: path.join(roots.bundleRoot, 'live/config/task-reset-enablement-receipt.json'),
+            localCommitReceipt: path.join(roots.bundleRoot, 'live/config/local-commit-enablement-receipt.json'),
             audit: path.join(roots.bundleRoot, 'runtime/workflow-config-audit.jsonl'),
             manifest: resolveProtectedControlPlaneManifestPath(roots.bundleRoot)
         }

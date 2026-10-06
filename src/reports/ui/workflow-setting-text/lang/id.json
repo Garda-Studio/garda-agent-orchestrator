@@ -1,4 +1,18 @@
 {
+  "local-commit-enabled": {
+    "label": "Izin commit lokal",
+    "description": "Pengaktifan eksplisit yang diaudit memberi izin tetap pada ruang kerja ini untuk commit tugas yang selesai dan diaudit. Menonaktifkannya mencabut izin. Tes, tinjauan dan audit setelah commit tetap wajib; tidak mengizinkan push atau CI.",
+    "options": {
+      "true": {
+        "label": "Aktif",
+        "description": "Izinkan commit asli untuk lingkup tugas yang selesai dan diaudit."
+      },
+      "false": {
+        "label": "Nonaktif",
+        "description": "Blokir commit lokal dan cabut izin sebelumnya."
+      }
+    }
+  },
   "compact-enabled": {
     "label": "Keluaran ringkas",
     "description": "Pengaturan compact. Perubahan memerlukan konfirmasi; rahasia tidak disamarkan.",

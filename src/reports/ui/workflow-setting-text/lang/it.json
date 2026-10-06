@@ -1,4 +1,18 @@
 {
+  "local-commit-enabled": {
+    "label": "Permesso di commit locale",
+    "description": "L'attivazione esplicita e verificata concede a questo spazio un permesso duraturo per le attività completate e verificate. La disattivazione lo revoca. Test, revisioni e verifica dopo il commit restano obbligatori; nessun permesso per push o CI.",
+    "options": {
+      "true": {
+        "label": "Attivo",
+        "description": "Consentire commit nativi di attività completate e verificate."
+      },
+      "false": {
+        "label": "Disattivo",
+        "description": "Bloccare i commit locali e revocare i permessi precedenti."
+      }
+    }
+  },
   "compact-enabled": {
     "label": "Output compatto",
     "description": "Impostazione compact. Le modifiche richiedono conferma; i segreti non vengono mascherati.",

@@ -541,8 +541,8 @@ function buildLifecycleGateHelpEntries(
         },
         'human-commit': {
             ...createSingleUsageEntry(
-                'Run a commit through the guarded helper path only after explicit operator yes/no confirmation.',
-                `${cliPrefix} gate human-commit --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>" --message "<commit message>" --repo-root "."`,
+                'Commit completed and audited task scope under an authenticated workspace-local ON grant. Optional --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>" never overrides OFF.',
+                `${cliPrefix} gate human-commit --task-id "<task-id>" --message "<commit message>" --repo-root "."`,
                 false
             )
         },

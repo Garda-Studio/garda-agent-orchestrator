@@ -124,10 +124,14 @@ function inferCommitSubject(taskMetadata: TaskQueueMetadata | null, scope: strin
 export function buildCommitCommandSuggestion(
     changedFiles: string[],
     taskMetadata: TaskQueueMetadata | null,
-    commitGuardEnabled: boolean
+    commitGuardEnabled: boolean,
+    localCommit?: { taskId: string }
 ): { template: string; suggestion: string } {
-    const template = commitGuardEnabled
-        ? `${getNodeGateCommandPrefix()} human-commit --operator-confirmed yes --message "<type>(<scope>): <summary>"`
+    const nativePrefix = localCommit
+        ? `${getNodeGateCommandPrefix()} human-commit --task-id "${localCommit.taskId}"`
+        : `${getNodeGateCommandPrefix()} human-commit --operator-confirmed yes`;
+    const template = localCommit || commitGuardEnabled
+        ? `${nativePrefix} --message "<type>(<scope>): <summary>"`
         : 'git commit -m "<type>(<scope>): <summary>"';
     const type = inferCommitType(taskMetadata);
     const scope = inferCommitScope(changedFiles, taskMetadata);
@@ -139,8 +143,8 @@ export function buildCommitCommandSuggestion(
     const message = `${type}(${scope}): ${subject}`;
     return {
         template,
-        suggestion: commitGuardEnabled
-            ? `${getNodeGateCommandPrefix()} human-commit --operator-confirmed yes --message "${message}"`
+        suggestion: localCommit || commitGuardEnabled
+            ? `${nativePrefix} --message "${message}"`
             : `git commit -m "${message}"`
     };
 }

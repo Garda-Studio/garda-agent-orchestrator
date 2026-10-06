@@ -16,6 +16,10 @@ metadata:
 
 # Orchestration
 
+## Local Commit Permission
+- Follow the current `80-task-workflow.md` permission contract for final closeout. Historical instructions to ask a per-task commit question do not apply while an authenticated workspace-local ON grant remains valid.
+- OFF or unavailable authority blocks native commit paths, including legacy confirmation flags. Only explicit audited operator enablement grants durable local permission. Use the generated task-bound native commit command after completion/audit PASS, then require successful post-commit audit. This grants no push, CI, publication or permission for unrelated/unaccepted work.
+
 This file is the canonical execution workflow.
 Rule files provide policy context, but lifecycle steps and gate order are defined here.
 Canonical gate surface is `node garda-agent-orchestrator/bin/garda.js gate <name>`.

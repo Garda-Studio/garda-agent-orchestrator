@@ -60,6 +60,9 @@
     "read_strategy": "index_first",
     "impact_artifact_retention_days": 30
   },
+  "local_commit": {
+    "enabled": false
+  },
   "task_reset": {
     "enabled": false
   },

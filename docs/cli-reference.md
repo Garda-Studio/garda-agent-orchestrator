@@ -1,5 +1,19 @@
 # CLI Reference
 
+## Local Commit Permission
+
+`workflow-config.local_commit.enabled` defaults to `false`, including legacy workspaces. Enable it through Garda Settings with guarded action confirmation or `garda workflow set --local-commit-enabled true --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>" --target-root "."`. Use `--local-commit on|off` as a short alias. A copied config or unaudited flag does not create authority.
+
+The authenticated enablement grants durable permission only in its original workspace and Git metadata. Audited unrelated setting changes preserve it. Setting OFF rotates the private key and revokes earlier receipts, including replayed live/runtime copies. A failed permission publication leaves prior grants invalid; a fresh explicit audited command is required to restore authority. Private keys stay in Git metadata and must not be copied or published.
+
+New enablement receipts locate their grant by a byte offset covered by the signed audit record. Permission checks stream the complete audit suffix from that grant, skipping superseded history. Verification is limited to 8 MiB and 64 KiB per record; oversized, incomplete, moved or modified audit evidence denies permission. Legacy receipts remain supported through a bounded scan from the start. If a verification budget is exceeded, issue a fresh explicit audited ON command to establish a new grant window without deleting history. The limits apply to permission verification; normal workflow transaction size limits also apply to setting writes.
+
+With ON, agents use `garda gate human-commit --task-id "<task-id>" --message "<type>(<scope>): <summary>"` after native completion and task audit PASS without repeating the commit question. The helper enforces accepted staged scope, rejects index/pathspec/amend/hook overrides and verifies post-commit task audit. Working-tree validation requires staging the accepted bytes with Git filters applied; mode changes and nonregular files require native staged validation. OFF, invalid/missing config or unavailable authentication blocks native commits, even with legacy confirmation flags. Revocation stops later launches; commits already launched retain mandatory post-commit audit. This grants no push, CI, publication or authority over unrelated or unaccepted work.
+
+Native commits run configured pre-commit, prepare-commit-msg, commit-msg and post-commit hooks through Git. Hook changes to accepted content or staged scope block publication and require renewed task validation. The helper publishes the pinned accepted tree with an atomic expected-HEAD update, honors configured commit signing and message cleanup, and requires an ordinary commit outside merge/rebase/sequencer operations. Once publication is attempted, post-commit audit runs even if the subprocess fails, times out or throws; existing commits are preserved for diagnosis.
+
+Initial working-tree/index comparison retains the accepted bytes needed for Git-filtered blob validation. Index and HEAD entry queries use literal accepted staged paths, so unrelated repository entries are not expanded into metadata maps. Subsequent publication checks compute the same content fingerprint one file at a time without retaining a whole-scope buffer map.
+
 String and repeated string options require a value before the next recognized option, including built-in help/version flags. Negative numbers and other dash-prefixed data remain valid. If a value is itself a recognized option name, pass it inline (`--option=--literal-option-name`); shell quotes alone cannot distinguish it once arguments reach the parser.
 
 ## Review-output correction evidence commands
@@ -866,7 +880,7 @@ Canonical gate surface is `garda gate <name>` or `node bin/garda.js gate <name>`
 | Next step | `garda next-step T-001` or `garda gate next-step T-001` |
 | Log event | `garda gate log-task-event --task-id "T-001" --event-type "..."` |
 | Manifest validation | `garda gate validate-manifest --manifest-path "garda-agent-orchestrator/MANIFEST.md"` |
-| Human commit | `garda gate human-commit --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>" --message "<message>"` |
+| Human commit | `garda gate human-commit --task-id "T-001" --message "<message>"` (authenticated Local commit ON required) |
 
 Use `garda next-step T-001` as the task-loop command before and after gates; it reports the effective full-suite config including placement, review policy, missing artifacts, review trust status, and a single recommended command. Full gate examples live in `template/docs/agent-rules/40-commands.md`.
 

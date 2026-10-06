@@ -416,6 +416,20 @@
       }
     }
   },
+  "local-commit-enabled": {
+    "label": "Local commit permission",
+    "description": "An explicit audited ON grants this workspace durable permission to commit completed and audited task scope. OFF revokes it. Reviews, tests and post-commit audit remain required; no push or CI permission is granted.",
+    "options": {
+      "true": {
+        "label": "On",
+        "description": "Allow native commits of completed and audited task scope in this workspace."
+      },
+      "false": {
+        "label": "Off",
+        "description": "Block native local commits and revoke earlier grants."
+      }
+    }
+  },
   "auto-backup-enabled": {
     "label": "Scheduled auto-backups",
     "description": "Allows the daily maintenance trigger to create scheduled rollback backups when due.",

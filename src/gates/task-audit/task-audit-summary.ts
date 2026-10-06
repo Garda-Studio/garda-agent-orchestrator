@@ -54,6 +54,7 @@ import {
     safeReadJson
 } from './task-audit-summary-collectors';
 import { buildCommitCommandSuggestion } from './task-audit-summary-commit-suggestion';
+import { resolveLocalCommitAvailability } from '../../core/auth/local-commit-availability';
 import {
     buildCompletionReviewOrderBlocker,
     buildLifecycleGateOutcomes,
@@ -776,7 +777,8 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): Ta
             ? commitCandidateChangedFiles
             : filterCommitCandidatesToTaskOwnedPreflightScope(repoRoot, preflight, changedFiles),
         taskMetadata,
-        commitGuardEnabled
+        commitGuardEnabled,
+        { taskId: safeTaskId }
     );
     const commitRequired = commitCandidateChangedFiles.length > 0;
     const commitCommandTemplate = commitRequired
@@ -786,7 +788,9 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): Ta
         ? commitCommand.suggestion
         : NO_COMMIT_REQUIRED_MESSAGE;
     const commitQuestionText = commitRequired
-        ? 'Do you want me to commit now? (yes/no)'
+        ? resolveLocalCommitAvailability(repoRoot).enabled
+            ? ''
+            : 'Local commit permission is disabled. Enable it through an explicitly approved audited workflow set before committing.'
         : NO_COMMIT_CONFIRMATION_MESSAGE;
     
     const {

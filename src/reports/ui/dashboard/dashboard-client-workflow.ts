@@ -185,11 +185,13 @@ function settingCurrentDisplay(setting) {
   return isDurationMsSetting(setting) ? formatDurationMs(setting.current_value) : JSON.stringify(setting.current_value);
 }
 function settingReadinessNote(setting) {
-  if (!setting || setting.id !== 'task-reset-enabled' || !setting.readiness) {
+  if (!setting || !['task-reset-enabled', 'local-commit-enabled'].includes(setting.id) || !setting.readiness) {
     return '';
   }
   const readiness = setting.readiness;
-  const state = readiness.ready === true ? t('taskResetReady') : t('taskResetNotReady');
+  const state = setting.id === 'local-commit-enabled'
+    ? localizedOption(settingTextPacks, setting.id, { value: readiness.ready === true ? 'true' : 'false' }, 'description', setting.description)
+    : readiness.ready === true ? t('taskResetReady') : t('taskResetNotReady');
   const reason = readiness.disabled_reason ? '<div><code>' + safe(readiness.disabled_reason) + '</code></div>' : '';
   const remediation = readiness.remediation_command ? '<div>' + safe(t('taskResetRemediation')) + ' <code>' + safe(readiness.remediation_command) + '</code></div>' : '';
   return '<div class="setting-note"><strong>' + safe(state) + '</strong>' + reason + remediation + '</div>';

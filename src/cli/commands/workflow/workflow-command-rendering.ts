@@ -252,6 +252,7 @@ export function buildWorkflowShowResult(
         review_cycle_guard: reviewCycleGuard,
         project_memory_maintenance: projectMemoryMaintenance,
         task_reset: taskReset,
+        local_commit: state.config.local_commit ?? buildDefaultWorkflowConfig().local_commit,
         auto_backup: autoBackup,
         optional_quality_checks: optionalQualityChecks,
         optional_skill_selection_policy: optionalSkillSelectionPolicy,
@@ -340,6 +341,7 @@ export function formatWorkflowShowOutput(result: WorkflowCommandResultBase & { a
     lines.push(result.review_cycle_guard_summary_line);
     lines.push(result.project_memory_maintenance_summary_line);
     lines.push(result.task_reset_summary_line);
+    lines.push(`Local commit permission: ${result.local_commit.enabled ? 'configured on (authenticated grant required)' : 'disabled'}`);
     lines.push(result.auto_backup_summary_line);
     lines.push(result.optional_quality_checks_summary_line);
     lines.push(result.optional_skill_selection_policy_summary_line);

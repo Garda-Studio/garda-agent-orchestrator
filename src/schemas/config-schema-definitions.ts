@@ -639,6 +639,15 @@ export const workflowConfigSchema: Record<string, unknown> = Object.freeze({
             ],
             additionalProperties: false
         },
+        local_commit: {
+            type: 'object',
+            description: 'Workspace-bound local commit permission. False or omitted denies native commits; an explicit audited enablement is required for authority.',
+            properties: {
+                enabled: { type: 'boolean', description: 'Allow native local commits of completed and audited task scope.' }
+            },
+            required: ['enabled'],
+            additionalProperties: false
+        },
         task_reset: {
             type: 'object',
             description: 'Guarded task-reset availability. Real reset mutations are disabled by default and require audited repo-local opt-in.',

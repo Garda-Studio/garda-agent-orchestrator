@@ -1,4 +1,18 @@
 {
+  "local-commit-enabled": {
+    "label": "本地提交权限",
+    "description": "经过审计的明确开启会授予此工作区持续权限，允许提交已完成且已审计的任务。关闭将撤销权限。测试、审查和提交后审计仍然必须执行；不授予 push 或 CI 权限。",
+    "options": {
+      "true": {
+        "label": "开启",
+        "description": "允许原生提交已完成且已审计的任务范围。"
+      },
+      "false": {
+        "label": "关闭",
+        "description": "阻止本地提交并撤销以前的授权。"
+      }
+    }
+  },
   "compact-enabled": {
     "label": "紧凑输出",
     "description": "compact 设置。更改需要确认；不会掩盖机密信息。",

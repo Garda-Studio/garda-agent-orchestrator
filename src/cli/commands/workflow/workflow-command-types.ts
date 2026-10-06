@@ -30,6 +30,7 @@ export type WorkflowFileConfigData = {
     review_cycle_guard?: WorkflowConfigData['review_cycle_guard'];
     project_memory_maintenance?: WorkflowConfigData['project_memory_maintenance'];
     task_reset?: WorkflowConfigData['task_reset'];
+    local_commit?: WorkflowConfigData['local_commit'];
     auto_backup?: WorkflowConfigData['auto_backup'];
     optional_quality_checks?: WorkflowConfigData['optional_quality_checks'];
     orchestrator_work_policy?: WorkflowConfigData['orchestrator_work_policy'];
@@ -80,6 +81,7 @@ export interface WorkflowCommandResultBase {
     review_cycle_guard: ReviewCycleGuardConfig;
     project_memory_maintenance: ProjectMemoryMaintenanceConfig;
     task_reset: TaskResetConfig;
+    local_commit: WorkflowConfigData['local_commit'];
     auto_backup: AutoBackupConfig;
     optional_quality_checks: OptionalQualityChecksConfig;
     optional_skill_selection_policy: {
@@ -188,6 +190,8 @@ export const WORKFLOW_SET_DEFINITIONS = {
     '--project-memory-impact-artifact-retention-days': { key: 'projectMemoryImpactArtifactRetentionDays', type: 'string' },
     '--task-reset': { key: 'taskResetAlias', type: 'string' },
     '--task-reset-enabled': { key: 'taskResetEnabled', type: 'string' },
+    '--local-commit': { key: 'localCommitAlias', type: 'string' },
+    '--local-commit-enabled': { key: 'localCommitEnabled', type: 'string' },
     '--auto-backup': { key: 'autoBackupAlias', type: 'string' },
     '--auto-backup-enabled': { key: 'autoBackupEnabled', type: 'string' },
     '--auto-backup-interval-days': { key: 'autoBackupIntervalDays', type: 'string' },
