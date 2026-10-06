@@ -28,6 +28,14 @@ export function buildReviewEvidenceDomainContractLines(
 ): string[] {
     const paths = normalizeReviewEvidenceDomainPaths(admissiblePaths);
     const renderedPaths = paths.length > 0 ? paths.join(', ') : 'none';
+    if (paths.length === 0) {
+        return [
+            `Evidence location domain for ${normalizeReviewType(reviewType)} review: none.`,
+            '- No location citation is admissible in this domain. Do not substitute planned, unchanged, historical or supporting files.',
+            '- Only an authenticated empty FULL scope permits substantive validation observations with evidence=[] and no coverage entries, findings or residual risks; do not claim source coverage.',
+            '- Supporting artifacts may inform observations but are not admissible location evidence; current native launch, context, tree and receipt checks remain mandatory.'
+        ];
+    }
     return [
         `Evidence location domain for ${normalizeReviewType(reviewType)} review: ${renderedPaths}.`,
         '- Every evidence location in validation_notes, coverage_ledger, findings, and residual_risks must use path:line from that exact domain.',

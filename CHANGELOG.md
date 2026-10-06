@@ -8,6 +8,9 @@
 - Align built-in security and refactor reviewer instructions and metadata with
   generated findings-only handoffs, retaining abuse scenarios, behavior-preservation
   checks, exhaustive coverage and the narrow focused-validation boundary.
+- Review API/schema compatibility by producer and consumer direction, including
+  enums, nullability, defaults, unknown fields, errors, persisted config and CLI
+  readers. Keep project evolution conventions and generated findings-only output.
 
 - Align built-in code and database reviewer instructions and skill metadata with
   generated findings-only handoffs. Preserve exhaustive review lenses and focused

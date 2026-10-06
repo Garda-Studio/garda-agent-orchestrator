@@ -168,7 +168,7 @@ export function buildReviewCoverageContract(options: {
     const categoryIds = [...new Set((options.categoryIds || REVIEW_CATEGORY_IDS[reviewType] || ['assigned-review-contract'])
         .map((entry) => String(entry || '').trim().toLowerCase())
         .filter(Boolean))].sort();
-    const categoryObligations = categoryIds.map((category): ReviewCoverageObligation => ({
+    const categoryObligations = (changedFiles.length > 0 ? categoryIds : []).map((category): ReviewCoverageObligation => ({
         id: `CATEGORY-${normalizeIdentifier(category)}`,
         kind: 'category',
         target: category
@@ -206,6 +206,18 @@ export function getReviewCoverageContractViolations(
         `'${deterministic.review_type}'. Expected sha256=${deterministic.contract_sha256}; ` +
         `actual sha256=${String(actual.contract_sha256 || 'missing')}.`
     ];
+}
+
+export function isEmptyReviewCoverageContract(contract: ReviewCoverageContract | null | undefined): boolean {
+    return !!contract
+        && contract.required === false
+        && contract.obligation_count === 0
+        && Array.isArray(contract.obligations)
+        && contract.obligations.length === 0
+        && getReviewCoverageContractViolations(contract, {
+            reviewType: contract.review_type,
+            changedFiles: []
+        }).length === 0;
 }
 
 function coverageSummaryStringArray(value: unknown): string[] | null {

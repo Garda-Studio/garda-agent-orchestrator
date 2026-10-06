@@ -26,19 +26,19 @@ function sha256(filePath: string): string {
     return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
-function makeFixture() {
+function makeFixture(target = TARGET) {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-reviewer-guidance-'));
     const bundleRoot = path.join(repoRoot, 'garda-agent-orchestrator');
     const reviewsRoot = path.join(bundleRoot, 'runtime', 'reviews');
     fs.mkdirSync(reviewsRoot, { recursive: true });
     fs.mkdirSync(path.join(repoRoot, 'tests', 'node'), { recursive: true });
-    fs.writeFileSync(path.join(repoRoot, TARGET), 'export {};\n', 'utf8');
+    fs.writeFileSync(path.join(repoRoot, target), 'export {};\n', 'utf8');
     const preflightPath = path.join(reviewsRoot, `${TASK_ID}-preflight.json`);
-    fs.writeFileSync(preflightPath, JSON.stringify({ task_id: TASK_ID, changed_files: [TARGET] }), 'utf8');
-    const coverageContract = buildReviewCoverageContract({ reviewType: 'code', changedFiles: [TARGET] });
+    fs.writeFileSync(preflightPath, JSON.stringify({ task_id: TASK_ID, changed_files: [target] }), 'utf8');
+    const coverageContract = buildReviewCoverageContract({ reviewType: 'code', changedFiles: [target] });
     appendTaskEvent(bundleRoot, TASK_ID, 'TASK_MODE_ENTERED', 'PASS', 'Current task.', {});
     return {
-        repoRoot, bundleRoot, reviewsRoot, preflightPath, coverageContract,
+        repoRoot, bundleRoot, reviewsRoot, preflightPath, coverageContract, target,
         preflightSha256: sha256(preflightPath)
     };
 }
@@ -95,15 +95,15 @@ function buildEvidence(fixture: Fixture, taskId: string | null = TASK_ID) {
         reviewsRoot: fixture.reviewsRoot,
         taskId,
         reviewType: 'code',
-        changedFiles: [TARGET],
+        changedFiles: [fixture.target],
         preflightPath: fixture.preflightPath,
         preflightSha256: fixture.preflightSha256,
         coverageContract: fixture.coverageContract
     });
 }
 
-function withFixture<T>(run: (fixture: Fixture) => T): T {
-    const fixture = makeFixture();
+function withFixture<T>(run: (fixture: Fixture) => T, target = TARGET): T {
+    const fixture = makeFixture(target);
     try {
         return run(fixture);
     } finally {
@@ -172,6 +172,58 @@ describe('reviewer focused validation policy', () => {
 });
 
 describe('authenticated reviewer command hints', () => {
+    it('round-trips quoted target hints and admits configured loader operands without executing them', () => {
+        const target = 'tests/node/focused path.test.ts';
+        const loader = 'tests/helpers/configured loader.mjs';
+        const command = `node scripts/node-foundation/build-scripts.cjs test.js "${target}"`;
+        const configuredCommand = `node --import "./${loader}" --test "${target}"`;
+        withFixture((fixture) => {
+            const sentinel = path.join(fixture.repoRoot, 'loader-must-not-run.txt');
+            fs.mkdirSync(path.dirname(path.join(fixture.repoRoot, loader)), { recursive: true });
+            fs.writeFileSync(path.join(fixture.repoRoot, loader),
+                `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(sentinel)}, 'unexpected');\n`, 'utf8');
+            const workflowPath = path.join(fixture.bundleRoot, 'live', 'config', 'workflow-config.json');
+            fs.mkdirSync(path.dirname(workflowPath), { recursive: true });
+            fs.writeFileSync(workflowPath, JSON.stringify({ full_suite_validation: { command: configuredCommand } }), 'utf8');
+            assert.deepEqual(inspectReviewerFocusedValidationCommand(configuredCommand, fixture.repoRoot), {
+                syntax_supported: true, target, violations: []
+            });
+            appendEvidence(fixture, { command });
+
+            const evidence = buildEvidence(fixture);
+            assert.equal(evidence.status, 'AVAILABLE');
+            assert.equal(evidence.entries.length, 1);
+            assert.equal(evidence.reviewer_command_hints!.status, 'AVAILABLE');
+            assert.equal(evidence.reviewer_command_hints!.commands.length, 1);
+            const hint = evidence.reviewer_command_hints!.commands[0];
+            assert.equal(hint.command, command);
+            assert.equal(hint.target, target);
+            assert.deepEqual(inspectReviewerFocusedValidationCommand(hint.command, fixture.repoRoot).violations, []);
+            assert.equal(hint.source_event_sequence, evidence.entries[0].event_task_sequence);
+            assert.equal(hint.source_artifact_sha256, evidence.entries[0].artifact_sha256);
+            assert.ok(buildFocusedIntermediateValidationEvidenceMarkdown(evidence).join('\n').includes(command));
+            assert.equal(fs.existsSync(sentinel), false);
+        }, target);
+    });
+
+    it('declines authenticated inline programs and literal Markdown wrappers as runnable hints', () => {
+        for (const command of [
+            `node -e "process.exit(0)" ${TARGET}`,
+            '`' + COMMAND + '`',
+            '```' + COMMAND + '```'
+        ]) {
+            withFixture((fixture) => {
+                appendEvidence(fixture, { command });
+                const evidence = buildEvidence(fixture);
+                assert.equal(inspectReviewerFocusedValidationCommand(command, fixture.repoRoot).syntax_supported, false);
+                assert.equal(evidence.reviewer_command_hints!.status, 'NOT_AVAILABLE');
+                assert.deepEqual(evidence.reviewer_command_hints!.commands, []);
+                assert.ok(!buildFocusedIntermediateValidationEvidenceMarkdown(evidence).join('\n')
+                    .includes('- Validator-compatible command:'));
+            });
+        }
+    });
+
     it('passes an exact accepted command with native source bindings to JSON and Markdown without executing it', () => {
         const result = withFixture((fixture) => {
             const sentinel = path.join(fixture.repoRoot, 'must-not-exist.txt');

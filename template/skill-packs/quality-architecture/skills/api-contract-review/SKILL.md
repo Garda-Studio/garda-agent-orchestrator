@@ -1,11 +1,11 @@
 ---
 name: api-contract-review
 description: >
-  Reviews API and interface contracts for backward compatibility, schema correctness, and breaking-change risk.
-  Use when a task touches OpenAPI/Swagger specs, protobuf/IDL definitions, GraphQL schemas, typed client contracts,
-  request/response shapes, error envelopes, pagination interfaces, or versioning headers.
+  Reviews API and interface contracts for directional compatibility, schema correctness, and breaking-change risk.
+  Use for OpenAPI/Swagger, protobuf/IDL, GraphQL, typed clients, request/response shapes, errors,
+  persisted JSON/config schemas, CLI arguments, and machine-readable CLI output consumed across versions.
   Trigger phrases: api review, contract review, schema review, breaking change review.
-  Do NOT use for purely internal module refactors that expose no external surface.
+  Do NOT use for internal refactors with no independently consumed interface or stored-data boundary.
 license: MIT
 allowed-tools:
   - Read
@@ -17,7 +17,7 @@ metadata:
   author: garda-agent-orchestrator
   version: 1.0.0
   domain: quality
-  triggers: OpenAPI, Swagger, protobuf, GraphQL, typed API client, REST contract, gRPC, JSON Schema
+  triggers: OpenAPI, Swagger, protobuf, GraphQL, typed API client, REST contract, gRPC, JSON Schema, persisted config, CLI readers
   role: specialist
   scope: review
   output-format: review-findings
@@ -27,75 +27,100 @@ metadata:
 # API Contract Review
 
 ## Generated Findings-Only Handoff
-When orchestration supplies generated role-prompt, prompt-template, reviewer-prompt, output-template, and evidence-manifest artifacts, those artifacts are the sole instruction and output-format authority. Use this skill only as the assigned review lens/checklist. Never modify source files, control artifacts, or task state, and never launch another agent; the only permitted write is the exact `ReviewOutputPath`. Return exactly one findings-only JSON object, complete the entire assigned scope and every coverage-ledger obligation, and do not add verdict, pass/fail, status, downstream disposition, or remediation fields. Any verdict-oriented text below is historical audit-only guidance and never applies to generated or other new review cycles.
+When orchestration supplies generated role-prompt, prompt-template, reviewer-prompt, output-template, and evidence-manifest artifacts, those artifacts are the sole instruction and output-format authority. Use this skill only as the assigned review lens/checklist. Never modify source files, control artifacts, or task state, and never launch another agent; the only permitted write is the exact `ReviewOutputPath`.
+
+Return exactly one findings-only JSON object using the generated output template. Complete the entire assigned scope and every coverage-ledger obligation. Do not add verdict, pass/fail, status, downstream disposition, or remediation fields. The controller owns acceptance and follow-up decisions.
 
 ## Core Workflow
 
-1. **Identify contract surfaces.** Locate every file that defines an external or inter-service contract: OpenAPI/Swagger specs, `.proto` files, GraphQL schemas, typed request/response types, error envelopes, and generated client code.
-2. **Diff against the previous version.** Compare the changed contract with its last committed state. Flag any field removal, type narrowing, required-field addition, enum value deletion, or status-code removal as a potential breaking change.
-3. **Validate schema correctness.** Confirm that request and response schemas match handler/controller implementations: field names, types, nullability, default values, and collection wrappers are consistent across spec and code.
-4. **Check versioning and evolution rules.** Verify that breaking changes increment the API version (URL prefix, header, or content-type parameter). Confirm additive changes (new optional fields, new enum values, new endpoints) do not require a version bump.
-5. **Audit error shapes and status codes.** Ensure every error response uses a consistent envelope (`code`, `message`, and optional `details`). Verify that 4xx/5xx codes are semantically correct and that no endpoint silently returns 200 for failures.
-6. **Review pagination, filtering, and idempotency.** Confirm paginated endpoints use stable cursor or offset semantics, filter parameters are validated and documented, and mutating endpoints declare idempotency keys where applicable.
-7. **Cross-check integration tests.** Verify that contract-level integration or consumer-driven contract tests exist for each changed endpoint and that they assert on status codes, required fields, and error shapes.
+1. **Locate the consumed surfaces.** Inspect changed specifications and their actual producers and consumers: HTTP/RPC schemas, typed clients, persisted JSON/config, CLI arguments and machine-readable CLI output. A file format or internal client can be a compatibility boundary when readers and writers evolve independently.
+2. **Map direction and rollout.** Identify old/new request callers and accepting servers, response producers and decoding clients, or stored-data writers and readers. Review new producer with old consumer and, where supported during rollout or rollback, old producer with new consumer. Do not classify compatibility from the word "additive" alone.
+3. **Compare the actual contract.** Use the prior committed shape, changed implementation and supplied usage evidence. Check accepted input sets, emitted output sets, field presence, types, nullability, defaults, unknown-field behavior, errors and semantic meaning using the directional matrix below.
+4. **Apply project evolution conventions.** Use the project's existing versioning, deprecation, migration and error conventions. A demonstrated break may need a compatible rollout, migration or versioned surface under those conventions. Uncertainty alone does not justify an automatic version bump; state the missing evidence and inspect it within the assigned scope.
+5. **Inspect relevant protocol behavior.** Where changed, check status/error mapping, pagination and cursor stability, filter semantics, idempotency and retry behavior. Use existing envelopes and transport semantics; do not prescribe one universal error shape or HTTP policy for every interface.
+6. **Check proportionate contract coverage.** Look for assertions using relevant old/new consumers and producers, stored fixtures or CLI readers, including negative paths and observable semantics. An annotation or generated schema alone does not prove runtime validation, default application or decoder tolerance.
+7. **Report demonstrated impact.** Continue through every assigned file, boundary and checklist category. Deduplicate shared root causes and give each supported finding concrete file:line evidence and consumer impact. Severity follows demonstrated failure, exposure and project impact; a schema edit or error-envelope difference is not automatically high severity.
+
+## Directional Compatibility Matrix
+
+Assume the prior contract and observable semantics are preserved unless the change says otherwise; verify that assumption against the assigned evidence.
+
+| Change | Request-consumer: new server accepting old callers | Response-producer: new producer serving old readers |
+|---|---|---|
+| Enum or accepted type expansion | Old callers remain valid when the new accepted set contains the old set. New callers using new values may still fail against old servers. | Newly emitted values or types may fail an old strict decoder. Check tolerant fallbacks rather than assuming expansion is safe. |
+| Enum or accepted type narrowing | Removing an input formerly accepted can reject a correct old caller. | A smaller emitted set can remain decodable by old readers, but verify promised meanings and behavior. A new narrower reader may reject values from an old producer during rollback. |
+| Nullability | Accepting null adds input capability; rejecting previously accepted null can break old callers. | Newly emitting null can break an old non-null reader. Removing emitted null can preserve decoding but may change promised meaning. |
+| Required/optional fields | Requiring a formerly omitted input can break old callers unless omission still has an actual compatible runtime path. | Omitting a formerly guaranteed output can break old readers. Adding even an optional field can break readers that reject unknown fields. |
+| Defaults | Changing the effective default can change an old caller's omitted-input behavior. A schema default annotation need not insert a value. | Changing produced defaults or interpretation of old stored data can change behavior even when the shape still validates. |
+| Unknown fields | Tightening rejection of formerly tolerated input fields can break callers. Widening acceptance still needs defined semantics and validation. | New fields can break strict old readers; tolerant readers may ignore them. Verify the actual decoder and meaningful field use. |
+| Errors and status values | New validation may reject previously accepted requests; inspect which old calls are affected. | New error codes, shapes or status meanings can break old error decoders or control flow. Use the project's existing error conventions and impact-based severity. |
+
+For persisted JSON/config, apply the same distinction to data written by a producer and accepted by a reader. For CLI arguments, review accepted input; for CLI JSON or other machine output, review emitted output. Also check old stored data with a new reader and new data with a reader retained for rollback.
+
+## Concrete Examples
+
+### Response enum expansion
+
+An old strict decoder accepts only `queued` and `done`. A new producer adds `running` and emits:
+
+```json
+{"state":"running"}
+```
+
+That old decoder rejects this response despite the enum expansion being described as additive. A producer emitting only `done` remains within its old accepted set, subject to unchanged semantics. Check actual decoder tolerance and supported rollout directions before recommending a project-specific remedy.
+
+### Request enum expansion
+
+An old server accepts `read` and `write`; a new server also accepts `append`. Both old caller payloads remain accepted:
+
+```json
+{"mode":"read"}
+```
+
+```json
+{"mode":"write"}
+```
+
+A new caller can use:
+
+```json
+{"mode":"append"}
+```
+
+The expansion preserves old callers on the new server. It does not guarantee that the old server accepts the new caller's `append`, or that unrelated response/error behavior is compatible.
+
+### Persisted config and CLI readers
+
+An existing stored config contains:
+
+```json
+{"mode":"safe"}
+```
+
+A new reader requiring `retryLimit` cannot read that old file merely because its schema annotates `default: 3`. Verify a real applied default or a migration, for example:
+
+```json
+{"mode":"safe","retryLimit":3}
+```
+
+A CLI producer can also break an old strict `phase` reader accepting only `queued` and `done` by emitting:
+
+```json
+{"phase":"running"}
+```
+
+These are schema/API compatibility surfaces even without HTTP. Preserve supported stored-data versions, CLI readers and rollback paths using the project's actual conventions.
 
 ## Reference Guide
 
 | Topic | Reference | Load When |
 |---|---|---|
-| Contract review checklist | `references/checklist.md` | Any API contract change or review |
+| Directional contract review checklist | `references/checklist.md` | Any assigned contract/schema review |
 
-## Mandatory Output Format
+## Exhaustive Scope And Validation Boundary
 
-Return the generated output template, not a free-form summary. Treat it as an immutable fill-in form: replace placeholder lines only. Preserve these required `##` headings exactly and in this order; never add, remove, rename, reorder, or nest the required `##` headings:
-1. `## Validation Notes` - concrete reviewed API contract files, behavior, boundaries, and verification evidence; required for PASS.
-2. `## Findings by Severity` - canonical `None`, or active blocking API findings with file references using parser-supported inline/list/subheading formats.
-3. `## Deferred Findings` - canonical `None`, or accepted actionable API follow-ups with a concrete next step and `Justification:`.
-4. `## Residual Risks` - canonical `None`, or active open API compatibility risks that remain after review.
-5. `## Verdict` - exact verdict token: `API REVIEW PASSED` or `API REVIEW FAILED`.
-
-Use parser-supported finding formats under `## Findings by Severity`: `- High: <file:line> <impact>; remediation: <required action>`, `High:` followed by `- <finding>`, or `### High` followed by `- <finding>`. Severity subheadings are allowed only inside `## Findings by Severity`.
-
-Parser-valid examples:
-- Validation Notes: `Reviewed src/review-parser.ts:42 and tests/review-parser.test.ts:17; checked parser-supported finding formats and rejection diagnostics.`
-- Findings by Severity: `- High: src/review-parser.ts:42 drops later findings; impact: incomplete review evidence; remediation: preserve every severity entry.`
-- Severity subheading: `### Medium` followed by `- tests/review-parser.test.ts:17 misses hierarchy coverage; impact: nested findings can be lost; remediation: cover severity subheadings.`
-- Deferred Findings: `- [Low] docs/reviews.md:12 clarify reviewer wording. Next step: update docs in T-123. Justification: documentation-only follow-up is accepted after parser coverage.`
-- Residual Risks: `- Rollout risk: legacy review artifacts may still use old wording until regenerated; mitigation: parser tests cover both canonical None and supported finding formats.`
-
-## Breaking Change Heuristics
-
-A change is breaking if any existing correct consumer would fail or behave incorrectly after deployment. Common patterns:
-
-- Removing or renaming a response field consumers may read.
-- Changing a field from optional to required in a request body.
-- Narrowing a type (e.g., `string` → `enum`, `number` → `integer`).
-- Removing an enum value from a response field.
-- Adding a required header or query parameter.
-- Changing the semantic meaning of a status code.
-- Altering pagination cursor encoding so existing cursors break.
-
-When uncertain, treat the change as breaking and require explicit version bump or migration plan.
-
-## Anti-Patterns
-
-- **Spec-only review**: approving an OpenAPI, GraphQL, or protobuf diff without cross-checking the handler or controller implementation that actually serves it.
-- **"Additive" change that is not additive**: new required headers, stricter enums, nullability shifts, or cursor format changes often break clients even when no endpoint is removed.
-- **Error-shape drift**: preserving status codes but quietly changing error envelopes, field names, or validation payload structure in ways typed clients cannot tolerate.
-- **Internal-consumer excuse**: skipping compatibility analysis because the API is "only used internally" even though internal clients still deploy on different schedules.
-
-## Exhaustive Review Contract
-- Complete the entire assigned review scope before returning a verdict. A finding at any severity does not end the review.
-- Continue through every in-scope file, behavior boundary, test, and applicable checklist or rule category, then report every distinct evidence-supported finding in the same result.
-- Deduplicate findings that share one root cause. For every distinct finding include severity, file and line evidence, impact, and required remediation; never invent or pad findings to reach a count.
-- On remediation reviews, re-sweep the complete current assigned scope instead of checking only previously reported findings.
-- Validation Notes must name the files, behavior boundaries, tests, and checklist or rule categories actually reviewed.
-- Do not widen the assigned scope. This is a process-completeness requirement, not a guarantee that every latent defect will be discovered.
-
-## Constraints
-
-- Do not approve contract changes that lack a diff against the prior committed version.
-- Do not accept undocumented nullability changes; every nullable field must be explicitly marked.
-- Do not permit silent type widening in request schemas (consumers may send unexpected data).
-- Do not skip error-shape review; inconsistent error envelopes are a high-severity finding.
-- Treat any removal of a public field, endpoint, or enum value as a hard-fail unless gated behind a version bump or deprecation window.
+- Re-sweep the complete current assigned scope on remediation reviews, and complete every generated coverage-ledger obligation with concrete evidence. A finding at any severity does not end the review.
+- Record the files, old/new directions, behavior boundaries, tests and checklist categories actually inspected. Describe concrete missing counterpart or usage evidence without inventing a compatibility guarantee or widening the assigned scope.
+- Missing prior focused execution evidence alone is not a finding. Follow the generated handoff's narrow focused self-validation contract for one authenticated repository target; do not invoke task lifecycle tools, create runners, mutate source/control artifacts, launch agents, use network services or duplicate current gate-owned checks.
+- Record exact attempted command, outcome and concrete diagnostics in the generated form. Report an exposed defect with its ordinary finding ID. An unavailable/prohibited attempt may use reserved F-000 only with the generated handoff's exact evidence-only marker and target; this skill does not redefine that marker or the schema.
+- Without a generated handoff, give clearly advisory, evidence-supported findings and limitations. Standalone advice is not a mandatory review receipt or proof of task completion.

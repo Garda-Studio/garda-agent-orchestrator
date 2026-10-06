@@ -1,8 +1,9 @@
 import {
     REVIEW_FINDINGS_SCHEMA_VERSION
 } from './review-findings-schema';
-import type {
-    ReviewCoverageContract
+import {
+    isEmptyReviewCoverageContract,
+    type ReviewCoverageContract
 } from './review-coverage-ledger';
 import {
     buildReviewEvidenceDomainContractLines
@@ -54,8 +55,18 @@ function buildCoverageLedgerEntries(contract: ReviewCoverageContract): Array<Rec
     }));
 }
 
+function hasEmptyReviewerScope(
+    coverageContract: ReviewCoverageContract,
+    executionContract: ReviewRemediationReviewContract
+): boolean {
+    return isEmptyReviewCoverageContract(coverageContract)
+        && executionContract.mode === 'FULL'
+        && executionContract.full_review_scope.length === 0;
+}
+
 export function buildReviewerFindingsOutputTemplateJson(options: ReviewerFindingsPromptContractOptions): string {
     const reviewExecutionContract = resolveReviewExecutionContract(options);
+    const emptyReviewScope = hasEmptyReviewerScope(options.coverageContract, reviewExecutionContract);
     const template = {
         schema_version: REVIEW_FINDINGS_SCHEMA_VERSION,
         task_id: normalizePlaceholder(options.taskId, '<task-id>'),
@@ -65,9 +76,11 @@ export function buildReviewerFindingsOutputTemplateJson(options: ReviewerFinding
         validation_notes: [
             {
                 id: 'N-001',
-                topic: 'complete-scope-sweep',
-                note: '<summarize the files, behavior boundaries, evidence channels, and checklist categories actually reviewed>',
-                evidence: [
+                topic: emptyReviewScope ? 'empty-scope-review' : 'complete-scope-sweep',
+                note: emptyReviewScope
+                    ? '<state that the authenticated scope is empty; name supporting records actually inspected without claiming source coverage>'
+                    : '<summarize the files, behavior boundaries, evidence channels, and checklist categories actually reviewed>',
+                evidence: emptyReviewScope ? [] : [
                     {
                         location: '<changed-file>:<line>',
                         observation: '<concrete observation proving this review area was inspected>'
@@ -93,7 +106,9 @@ export function buildReviewerFindingsOutputTemplateJson(options: ReviewerFinding
             low: []
         },
         residual_risks: [],
-        reviewer_notes: [
+        reviewer_notes: emptyReviewScope ? [
+            'The authenticated review scope is empty. Do not claim source coverage, add coverage entries, invent location evidence, or execute focused commands.'
+        ] : [
             'Active finding object shape: {"id":"F-001","title":"<short defect title>","description":"<observed defect impact only>","evidence":[{"location":"<changed-file>:<line>","observation":"<concrete observation>"}],"coverage_obligation_ids":["<obligation-id>"]}. Put this object in exactly one severity array when reporting an active defect.',
             'Focused self-validation note shape when the narrow exception is used: {"id":"N-###","topic":"focused-self-validation","note":"<why the focused check was needed>","command":"<exact local command naming one target>","command_outcome":"passed|failed|unavailable|prohibited","diagnostics":"<concise actionable result>","finding_ids":["<required ordinary F-### id when outcome is failed; omit otherwise>"],"evidence":[{"location":"<changed-file>:<line>","observation":"<why this changed-file evidence makes the command target relevant; for a passed command, the target path may be omitted here even when another finding exists>"}]}.',
             '<optional evidence-bound note; omit policy decisions and downstream disposition choices>'
@@ -104,6 +119,7 @@ export function buildReviewerFindingsOutputTemplateJson(options: ReviewerFinding
 
 export function buildReviewerFindingsPromptContractMarkdown(options: ReviewerFindingsPromptContractOptions): string {
     const reviewExecutionContract = resolveReviewExecutionContract(options);
+    const emptyReviewScope = hasEmptyReviewerScope(options.coverageContract, reviewExecutionContract);
     const reviewLabel = `${normalizePlaceholder(options.reviewType, '<review-type>')} review`;
     const evidenceDomainPaths = options.coverageContract.obligations
         .filter((entry) => entry.kind === 'file')
@@ -120,13 +136,23 @@ export function buildReviewerFindingsPromptContractMarkdown(options: ReviewerFin
         'Complete the entire assigned review scope before returning. Finding an issue does not end the review.',
         'Continue through every in-scope file, behavior boundary, test, and applicable checklist or rule category, then return every distinct evidence-supported issue in the same JSON object.',
         'Deduplicate issues that share one root cause. Do not invent, pad, or split findings to reach a count.',
-        'Fill every coverage_ledger.entries item with concrete path:line evidence. Use an empty finding_ids array only when that obligation exposed no issue.',
+        ...(emptyReviewScope
+            ? [
+                'The authenticated FULL scope is empty. Do not claim source coverage or substitute planned, unchanged, historical or supporting files.',
+                'Return at least one substantive validation note with evidence=[], coverage_ledger.entries=[], empty findings arrays and residual_risks=[].',
+                'Current task, context, tree, coverage and execution bindings remain mandatory; an empty result does not accept any source implementation.'
+            ]
+            : ['Fill every coverage_ledger.entries item with concrete path:line evidence. Use an empty finding_ids array only when that obligation exposed no issue.']),
         ...buildReviewEvidenceDomainContractLines(options.reviewType, evidenceDomainPaths),
         'For each active finding, use exactly one F-### id, include concrete evidence, and reference every related coverage obligation id.',
-        'Active finding object shape: {"id":"F-001","title":"<short defect title>","description":"<observed defect impact only>","evidence":[{"location":"<changed-file>:<line>","observation":"<concrete observation>"}],"coverage_obligation_ids":["<obligation-id>"]}.',
+        ...(!emptyReviewScope ? [
+            'Active finding object shape: {"id":"F-001","title":"<short defect title>","description":"<observed defect impact only>","evidence":[{"location":"<changed-file>:<line>","observation":"<concrete observation>"}],"coverage_obligation_ids":["<obligation-id>"]}.'
+        ] : []),
         'Use findings.critical, findings.high, findings.medium, and findings.low for active defects by severity.',
         'Use validation_notes only for what was reviewed and how it was verified; do not hide findings or residual risks there.',
-        ...buildReviewerFocusedSelfValidationContractLines(),
+        ...(emptyReviewScope
+            ? ['An empty evidence domain has no authorized focused command target; inspect existing validation records without executing commands.']
+            : buildReviewerFocusedSelfValidationContractLines()),
         'Use residual_risks only for concrete evidence-bound risks that remain after the review.',
         'The local orchestrator does not claim OS-enforced containment against another process running as the same OS user. Do not report deliberate same-user workspace-directory replacement between system calls as an active defect unless the authenticated task acceptance criteria explicitly require that stronger boundary.',
         'Continue to report ordinary path traversal, symlink or junction escape, stale identity, and observable replacement defects that violate the authenticated task or path-ownership contract.',

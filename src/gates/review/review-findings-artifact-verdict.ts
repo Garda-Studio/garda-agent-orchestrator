@@ -95,6 +95,7 @@ export function parseJsonReviewFindingsArtifact(
         ...(coverageContract
             ? {
                 expectedCoverageObligationIds: getCoverageObligationIds(coverageContract),
+                expectedCoverageContract: coverageContract,
                 expectedChangedFilePaths: getCoverageChangedFilePaths(coverageContract)
             }
             : {}),
@@ -163,6 +164,7 @@ export function validateReviewFindingsContract(
         expectedTaskId: options.expectedTaskId,
         expectedReviewType: options.expectedReviewType,
         expectedCoverageObligationIds: getCoverageObligationIds(options.coverageContract),
+        expectedCoverageContract: options.coverageContract || undefined,
         expectedChangedFilePaths: getCoverageChangedFilePaths(options.coverageContract),
         expectedReviewContextSha256: options.expectedReviewContextSha256 || undefined,
         expectedTreeStateSha256: options.expectedTreeStateSha256 || undefined,
