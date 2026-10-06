@@ -1,6 +1,7 @@
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { resolveBundleName } from '../../core/constants';
 
 import { rebuildIndex } from '../../gate-runtime/reviews-index';
 import { inspectTaskEventFile } from '../../gate-runtime/task-events';
@@ -21,6 +22,9 @@ import {
     SQLITE_BULK_QUERY_MIN_TASK_EVENT_FILES
 } from '../../runtime/sqlite-catalog';
 import { isTaskScopedRuntimeCandidateCategory } from '../cleanup/runtime-cleanup-ownership';
+import { inspectCompletedTaskEvidenceBatch } from '../cleanup/completed-task-evidence';
+
+export { inspectCompletedTaskEvidence, type CompletedTaskEvidence, type CompletedTaskEvidenceOptions } from '../cleanup/completed-task-evidence';
 
 export type RuntimeRetentionTier =
     | 'active_evidence'
@@ -425,7 +429,7 @@ function classifyTaskPreview(
     policy: RuntimeRetentionPolicy,
     runtimeState: ReturnType<typeof collectRuntimeTaskState>,
     queueStatuses: ReadonlyMap<string, string>
-): RuntimeRetentionTaskPreview {
+): { preview: RuntimeRetentionTaskPreview; resolveEarlierFailure: boolean } {
     const queueStatus = queueStatuses.get(taskId) ?? null;
 
     const activeByRuntime = runtimeState.activeTaskIds.has(taskId);
@@ -448,6 +452,9 @@ function classifyTaskPreview(
         (queueStatus === 'DONE' || timelineEvidence.hasCompletionPass)
         && timelineSummary?.completeness_status === 'COMPLETE'
     );
+    const resolveEarlierFailure = hasCompleteDoneEvidence
+        && !activeByRuntime && queueStatus === 'DONE'
+        && (timelineEvidence.hasBlockedEvent || timelineEvidence.hasFailureEvent);
 
     if (integrityStatus !== 'PASS') {
         healthState = 'tampered';
@@ -515,7 +522,7 @@ function classifyTaskPreview(
         reasons.push('Problem task detailed evidence is preserved by policy.');
     }
 
-    return {
+    return { resolveEarlierFailure, preview: {
         task_id: taskId,
         queue_status: queueStatus,
         health_state: healthState,
@@ -528,7 +535,18 @@ function classifyTaskPreview(
         candidate_categories: Array.from(candidateGroup.categories).sort(),
         candidate_count: candidateGroup.count,
         reasons
-    };
+    } };
+}
+
+function resolveHealthyDonePreview(preview: RuntimeRetentionTaskPreview, policy: RuntimeRetentionPolicy): RuntimeRetentionTaskPreview {
+    const thresholdDays = policy.healthyDone.compactAfterDays;
+    const reasons = ['Terminal DONE evidence is complete and integrity passed.'];
+    if (policy.healthyDone.requireLedger) reasons.push(preview.ledger_status === 'VERIFIED'
+        ? 'Verified task ledger exists for this task.' : 'Heavy artifacts stay authoritative until a ledger exists and is verified.');
+    return { ...preview, health_state: 'healthy_done', retention_tier: 'compact_ledger_candidate',
+        threshold_days: thresholdDays, reasons,
+        eligible_now: preview.age_days !== null && thresholdDays !== null && preview.age_days >= thresholdDays
+            && (!policy.healthyDone.requireLedger || preview.ledger_status === 'VERIFIED') };
 }
 
 function readRetentionQueueStatuses(
@@ -562,13 +580,27 @@ function readRetentionQueueStatuses(
     return statuses;
 }
 
+function resolveRetentionEvidenceWorkspace(targetRoot: string, bundleRoot: string): string | null {
+    try {
+        const workspaceRoot = fs.realpathSync.native(path.resolve(targetRoot));
+        const runtimeBundleRoot = fs.realpathSync.native(path.resolve(bundleRoot));
+        return path.relative(path.join(workspaceRoot, resolveBundleName()), runtimeBundleRoot) === ''
+            ? workspaceRoot : null;
+    } catch {
+        // An unreadable or unrelated bundle cannot use this workspace's successful closeout.
+        return null;
+    }
+}
+
 export function buildRuntimeRetentionPreview(
     targetRoot: string,
     bundleRoot: string,
     candidates: ReadonlyArray<{ path: string; category: string }>,
     options: RuntimeRetentionPreviewOptions = {}
 ): RuntimeRetentionPreviewSummary {
-    const policy = loadRuntimeRetentionPolicy(bundleRoot);
+    const evidenceWorkspace = resolveRetentionEvidenceWorkspace(targetRoot, bundleRoot);
+    const runtimeBundleRoot = evidenceWorkspace === null ? bundleRoot : path.join(evidenceWorkspace, resolveBundleName());
+    const policy = loadRuntimeRetentionPolicy(runtimeBundleRoot);
     const candidateGroups = new Map<string, CandidateGroup>();
     const reviewTaskIdsByDirectory = new Map<string, ReadonlyMap<string, string>>();
     for (const candidate of candidates) {
@@ -611,21 +643,28 @@ export function buildRuntimeRetentionPreview(
         candidateGroups.set(taskId, group);
     }
 
-    const runtimeState = collectRuntimeTaskState(bundleRoot);
+    const runtimeState = collectRuntimeTaskState(runtimeBundleRoot);
     const queueStatuses = readRetentionQueueStatuses(
-        targetRoot,
+        evidenceWorkspace ?? targetRoot,
         candidateGroups.size,
         options.queryTaskActivitySummaries ?? queryPerformanceQualifiedTaskActivitySummaries
     );
-    const tasks = Array.from(candidateGroups.entries())
+    const classified = Array.from(candidateGroups.entries())
         .map(([taskId, group]) => classifyTaskPreview(
-            bundleRoot,
+            runtimeBundleRoot,
             taskId,
             group,
             policy,
             runtimeState,
             queueStatuses
-        ))
+        ));
+    const completedEvidence = inspectCompletedTaskEvidenceBatch({
+        repoRoot: evidenceWorkspace ?? targetRoot, requireCommittedScope: false,
+        taskIds: evidenceWorkspace === null ? []
+            : classified.filter(task => task.resolveEarlierFailure).map(task => task.preview.task_id)
+    });
+    const tasks = classified.map(task => task.resolveEarlierFailure && completedEvidence.get(task.preview.task_id)?.eligible
+        ? resolveHealthyDonePreview(task.preview, policy) : task.preview)
         .sort((left, right) => left.task_id.localeCompare(right.task_id));
 
     const tiers: Record<RuntimeRetentionTier, number> = {
@@ -657,7 +696,7 @@ export function buildRuntimeRetentionPreview(
     }
 
     return {
-        policy_path: resolveRuntimeRetentionPolicyConfigPath(bundleRoot),
+        policy_path: resolveRuntimeRetentionPolicyConfigPath(runtimeBundleRoot),
         config_version: policy.version,
         task_count: tasks.length,
         eligible_now_count: tasks.filter((task) => task.eligible_now).length,

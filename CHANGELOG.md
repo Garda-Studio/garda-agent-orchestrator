@@ -5,6 +5,9 @@
 - Make performance reviewer guidance proportional to changed risks and quantitative
   claims. Preserve overload, growth and ordering checks while removing universal
   TTL/telemetry demands and conflicting legacy verdict output instructions.
+- Align built-in security and refactor reviewer instructions and metadata with
+  generated findings-only handoffs, retaining abuse scenarios, behavior-preservation
+  checks, exhaustive coverage and the narrow focused-validation boundary.
 
 - Align built-in code and database reviewer instructions and skill metadata with
   generated findings-only handoffs. Preserve exhaustive review lenses and focused
@@ -23,6 +26,13 @@
 ### Legacy Review Verdicts
 
 - Reject conflicting legacy PASS/FAIL outcomes and token examples before they can be treated as review authority. Preserve unambiguous canonical verdicts, supported code-review aliases and the modern findings-only JSON contract.
+
+### Completed Evidence Eligibility
+
+- Resolve earlier failed or blocked attempts for retention only after a current native audit and hash-bound compact closeout/ledger verification in the preview's canonical workspace. Keep later failures, reopened work, changed evidence and foreign workspace references protected.
+- Add a read-only completed-task eligibility proof that compares accepted paths with immutable commit blobs or committed absence, including files hidden by Git index flags, and binds the workspace, task, completion event, commit and evidence for subsequent contained cleanup transactions. Preserve existing retention ages and raw evidence authority.
+- Share a verified invocation-owned queue snapshot across recovered-task retention checks and batch bounded literal Git tree/blob verification without weakening per-file content checks.
+- Recheck accepted source scope against authenticated materialized closeout in both committed and retention proofs, preserving edits, changed deletions and different commits made during verification.
 
 ### Automatic Cleanup Defaults
 

@@ -1,7 +1,7 @@
 {
   "id": "refactor-review",
   "name": "Refactor Review",
-  "summary": "Independent refactor safety review for behavior-preserving changes with strict pass/fail verdict.",
+  "summary": "Independent refactor safety review for behavior-preserving changes with evidence-supported findings-only output.",
   "tags": ["core", "review", "refactor"],
   "aliases": ["refactor review", "cleanup review", "restructure review"],
   "references": ["refactor-review-checklist.md"],
