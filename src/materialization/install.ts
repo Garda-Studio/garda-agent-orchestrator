@@ -1,5 +1,7 @@
 import * as path from 'node:path';
-import { ensureDirectory, pathExists, readTextFile } from '../core/filesystem';
+import * as fs from 'node:fs';
+import { assertContainedDestination } from '../core/contained-filesystem';
+import { pathExists, readTextFile } from '../core/filesystem';
 import { readJsonFile } from '../core/json';
 import { normalizeLineEndings } from '../core/line-endings';
 import { resolvePathInsideRoot } from '../core/paths';
@@ -19,6 +21,11 @@ import {
     buildCommitGuardManagedBlock
 } from './content-builders';
 import { createUniqueInstallBackupRoot } from './install/install-backups';
+import {
+    assertCommitGuardHookMetadata,
+    ensureCommitGuardHookExecutable,
+    resolveCommitGuardHookDestination
+} from './install/commit-guard-hook-path';
 import type {
     BackupFileCallback,
     RunInstallOptions
@@ -366,7 +373,7 @@ export function applyCommitGuardHook(
     backupFile?: BackupFileCallback
 ): boolean {
     const gitDirPath = path.join(targetRoot, '.git');
-    if (!pathExists(gitDirPath)) {
+    if (!fs.existsSync(gitDirPath)) {
         if (enabled) {
             throw new Error(
                 `EnforceNoAutoCommit=true but .git directory is missing at '${gitDirPath}'. Initialize git or set EnforceNoAutoCommit=false in init answers.`
@@ -375,19 +382,31 @@ export function applyCommitGuardHook(
         return false;
     }
 
-    const hookPath = path.join(targetRoot, '.git', 'hooks', 'pre-commit');
+    const destination = resolveCommitGuardHookDestination(targetRoot);
+    const { hookPath } = destination;
     const managedBlock = buildCommitGuardManagedBlock();
     const pattern = getCommitGuardManagedBlockPattern();
+
+    function writeHook(content: string): void {
+        assertCommitGuardHookMetadata(destination);
+        assertContainedDestination(destination.binding);
+        const stage = createWriteTextFileStage(hookPath, content, destination.root);
+        applyMaterializationStage({
+            label: stage.label,
+            apply: () => {
+                assertCommitGuardHookMetadata(destination);
+                stage.apply();
+                if (enabled) ensureCommitGuardHookExecutable(destination);
+            },
+            rollback: stage.rollback
+        }, { dryRun });
+    }
 
     if (!pathExists(hookPath)) {
         if (!enabled) return false;
         if (!dryRun) {
-            ensureDirectory(path.dirname(hookPath));
             const hookContent = `#!/usr/bin/env bash\n\n${managedBlock}\n`;
-            applyMaterializationStage(
-                createWriteTextFileStage(hookPath, hookContent),
-                { dryRun }
-            );
+            writeHook(hookContent);
         }
         return true;
     }
@@ -412,15 +431,14 @@ export function applyCommitGuardHook(
         return false;
     }
 
-    if (updatedContent === content) return false;
+    const needsExecutableMode = enabled && process.platform !== 'win32'
+        && (fs.statSync(hookPath).mode & 0o111) !== 0o111;
+    if (updatedContent === content && !needsExecutableMode) return false;
     if (backupFile) {
         backupFile(hookPath, '.git/hooks/pre-commit');
     }
     if (!dryRun) {
-        applyMaterializationStage(
-            createWriteTextFileStage(hookPath, updatedContent),
-            { dryRun }
-        );
+        writeHook(updatedContent);
     }
     return true;
 }

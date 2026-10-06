@@ -1,5 +1,9 @@
 # Changelog
 
+- Resolve commit guard hook destinations through Git for linked worktrees,
+  retain user hook backups and safe writes, honor workspace-local hooks paths,
+  and create executable hooks on POSIX.
+
 ## 1.4.4
 
 ### Automatic Cleanup Defaults

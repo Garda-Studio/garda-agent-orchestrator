@@ -67,8 +67,17 @@ One entrypoint is canonical. Additional entrypoints are created only when they w
 | `.claude/settings.local.json` | `ClaudeOrchestratorFullAccess=true` |
 | `.qwen/settings.json` | Only when the project already contains this file; managed entries mirror `TASK.md` plus the current canonical entrypoint |
 | `.vscode/settings.json` | Always materialized; adds `files.exclude`, `search.exclude`, and `files.watcherExclude` patterns for generated directories |
-| `.git/hooks/pre-commit` | `EnforceNoAutoCommit=true` |
+| Git-resolved `hooks/pre-commit` | `EnforceNoAutoCommit=true`; linked worktrees use their shared Git metadata, and workspace-local `core.hooksPath` is honored |
 | `.gitignore` | Managed entries for agent artifacts |
+
+The commit guard installer accepts an ordinary `.git` directory or Git's gitdir
+pointer file. It preserves existing user hook content and backups, and makes the
+managed hook executable on POSIX. A linked worktree's default hooks are shared
+with its main repository; enabling or disabling the guard there affects that
+shared hook. Symbolic-link, junction and hard-link hook destinations are rejected.
+Custom `core.hooksPath` destinations must stay inside the current workspace or
+its Git metadata directory; external destinations fail closed. Dry-run does not
+create hook directories, change hook contents or change permissions.
 
 ## IDE Responsiveness Hardening
 

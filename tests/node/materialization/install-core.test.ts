@@ -610,6 +610,9 @@ describe('runInstall — core deploy and invariants', () => {
             );
             assert.ok(hookContent.includes('commit-guard'));
             assert.ok(hookContent.includes('GARDA_ALLOW_COMMIT'));
+            if (process.platform !== 'win32') {
+                assert.equal(fs.statSync(path.join(projectRoot, '.git', 'hooks', 'pre-commit')).mode & 0o111, 0o111);
+            }
         } finally {
             fs.rmSync(projectRoot, { recursive: true, force: true });
         }
