@@ -25,9 +25,11 @@ import { resolveCanonicalReviewContextPath } from '../review-context/review-cont
 import {
     parseJsonReviewFindingsArtifact,
     reviewContextRequiresFindingsOnlyArtifact,
-    resolveReviewFindingsArtifactVerdictToken
+    resolveReviewFindingsArtifactVerdictToken,
+    validateReviewFindingsContract
 } from './review-findings-artifact-verdict';
-import type { ReviewCoverageContract } from './review-coverage-ledger';
+import { isEmptyReviewCoverageContract, type ReviewCoverageContract } from './review-coverage-ledger';
+import type { ReviewRemediationReviewContract } from '../review-remediation/review-remediation-review-contract';
 import { resolveRuntimeReviewerIdentity, type RuntimeReviewerIdentity } from './reviewer-routing';
 
 export interface ReviewDependencyTimelineEvent {
@@ -374,11 +376,18 @@ export function assessUpstreamReviewDependencyStatus(options: {
     const reviewContextSha256 = String(readReviewArtifactFileSha256(reviewContextPath) || '').trim().toLowerCase() || null;
     const requiresFindingsOnlyArtifact = reviewContextRequiresFindingsOnlyArtifact(reviewContext);
     if (requiresFindingsOnlyArtifact) {
-        const findingsReport = parseJsonReviewFindingsArtifact(
-            artifactContent,
-            undefined,
-            reviewContext.coverage_contract as ReviewCoverageContract | null | undefined
-        );
+        const coverageContract = reviewContext.coverage_contract as ReviewCoverageContract | null | undefined;
+        const findingsReport = isEmptyReviewCoverageContract(coverageContract)
+            ? validateReviewFindingsContract({
+                content: artifactContent,
+                expectedTaskId: options.taskId,
+                expectedReviewType: options.upstreamReviewType,
+                expectedReviewContextSha256: reviewContextSha256,
+                expectedTreeStateSha256: getReviewTreeStateSha256(reviewContext),
+                coverageContract,
+                expectedReviewExecutionContract: reviewContext.review_execution as ReviewRemediationReviewContract | undefined
+            }).report
+            : parseJsonReviewFindingsArtifact(artifactContent, undefined, coverageContract);
         if (!findingsReport) {
             return blockedDependencyStatus(
                 options.upstreamReviewType,

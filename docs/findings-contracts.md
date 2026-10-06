@@ -51,6 +51,21 @@ and findings only; it does not decide the verdict, disposition, remediation,
 follow-up, profile, or downstream task state. The generated output template is
 the authoritative fill-in form for the cycle.
 
+A current authenticated empty `FULL` source scope has zero coverage obligations.
+It requires a substantive validation observation with `evidence: []`, an empty
+coverage ledger, empty findings arrays and no residual risks. Supporting records
+may inform that observation, but no supporting, planned, unchanged or historical
+file becomes location evidence, and no focused command target is authorized.
+
+This exception requires matching current context and tree hashes, the deterministic
+non-required zero-obligation coverage contract and the authenticated empty execution
+contract. A report cannot grant the exception through its own fields. The JSON
+Schema permits empty observation evidence structurally; native ingestion enforces
+these scope conditions. Every nonempty scope retains complete concrete note,
+finding, risk and coverage evidence requirements. Native delegated launch, receipt
+and audited-no-op integrity checks still apply. Regenerate current handoffs after
+this contract change; rejected reports and prior source acceptance remain history.
+
 The following is a schema-valid empty-findings example. Its hashes and coverage
 obligations are illustrative and must be replaced with the exact values from
 the generated handoff; copying this example into a real cycle will fail its
@@ -58,7 +73,7 @@ binding and complete-coverage checks.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "task_id": "T-001",
   "review_type": "code",
   "review_context_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -90,6 +105,12 @@ binding and complete-coverage checks.
         "finding_ids": []
       }
     ]
+  },
+  "review_execution": {
+    "mode": "FULL",
+    "contract_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "covered_delta_targets": [],
+    "inspected_prior_finding_ids": []
   },
   "findings": {
     "critical": [],

@@ -13,6 +13,7 @@ import type {
     GitDiffSummary
 } from './review-context-diff';
 import {
+    isEmptyReviewCoverageContract,
     type ReviewCoverageContract
 } from '../review/review-coverage-ledger';
 import {
@@ -188,7 +189,15 @@ export function buildReviewContextHandoffArtifactPaths(outputPath: string): Revi
     };
 }
 
-export function buildExhaustiveReviewContractLines(): string[] {
+export function buildExhaustiveReviewContractLines(coverageContract?: ReviewCoverageContract): string[] {
+    if (isEmptyReviewCoverageContract(coverageContract)) {
+        return [
+            '- The authenticated assigned source scope is empty. Do not claim source-file, behavior-boundary or checklist-category coverage.',
+            '- Inspect current bindings and supporting validation records; return a substantive observation with evidence=[], no coverage entries, findings or residual risks.',
+            '- Do not manufacture citations or substitute planned, unchanged, historical or supporting files for the current scope.',
+            '- Current launch, context, tree, coverage and execution bindings remain mandatory. This result does not accept a source implementation or waive native audited-no-op checks.'
+        ];
+    }
     return [
         '- Complete the entire assigned review scope before returning findings. Finding a Critical, High, Medium, or Low defect does not end the review.',
         '- Continue through every in-scope file, behavior boundary, test, and applicable checklist or rule category, then report every distinct evidence-supported finding in the same result.',
@@ -328,7 +337,7 @@ function buildReviewerRolePromptMarkdown(options: {
                 '- Exhaust every required delta target and every coverage obligation. Context files may be inspected but do not widen which prior findings may be cleared.'
             ]
             : ['- FULL mode requires a complete sweep of the full review scope.']),
-        ...buildExhaustiveReviewContractLines(),
+        ...buildExhaustiveReviewContractLines(options.coverageContract),
         ...buildReviewerFocusedSelfValidationContractLines(),
         ...testReviewStrictNote,
         ...buildReviewerTerminalContractLines(),

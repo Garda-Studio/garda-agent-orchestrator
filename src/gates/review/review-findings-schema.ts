@@ -12,7 +12,9 @@ import {
 import {
     createChangedFileLineCountResolver,
     formatReviewEvidenceLineCountSource,
-    parseReviewEvidenceLocation
+    parseReviewEvidenceLocation,
+    isEmptyReviewCoverageContract,
+    type ReviewCoverageContract
 } from './review-coverage-ledger';
 import {
     formatReviewEvidenceDomainViolation,
@@ -161,6 +163,7 @@ export interface ReviewFindingsValidationOptions {
     expectedTaskId: string;
     expectedReviewType: string;
     expectedCoverageObligationIds?: readonly string[];
+    expectedCoverageContract?: ReviewCoverageContract;
     expectedChangedFilePaths?: readonly string[];
     expectedReviewContextSha256?: string;
     expectedTreeStateSha256?: string;
@@ -236,7 +239,7 @@ export const reviewFindingsReportJsonSchema = {
                 note: { type: 'string', minLength: 1 },
                 evidence: {
                     type: 'array',
-                    minItems: 1,
+                    minItems: 0,
                     items: { $ref: '#/definitions/evidence' }
                 },
                 command: { type: 'string', minLength: 1 },
@@ -404,7 +407,12 @@ function collectForbiddenDecisionKeys(value: unknown, path: string, violations: 
     }
 }
 
-function parseEvidenceArray(value: unknown, subject: string, violations: string[]): ReviewFindingsEvidence[] {
+function parseEvidenceArray(
+    value: unknown,
+    subject: string,
+    violations: string[],
+    allowEmptyEvidence = false
+): ReviewFindingsEvidence[] {
     if (!Array.isArray(value)) {
         violations.push(`${subject}.evidence must be an array.`);
         return [];
@@ -429,7 +437,7 @@ function parseEvidenceArray(value: unknown, subject: string, violations: string[
             evidence.push({ location, observation });
         }
     });
-    if (evidence.length === 0) {
+    if (evidence.length === 0 && !allowEmptyEvidence) {
         violations.push(`${subject}.evidence must contain at least one concrete evidence item.`);
     }
     return evidence;
@@ -465,12 +473,14 @@ interface ParsedValidationNoteFields {
     isFocusedSelfValidation: boolean;
     hasFocusedCommandFields: boolean;
     requiresFocusedCommandFields: boolean;
+    allowsEmptyEvidence: boolean;
 }
 
 function readValidationNoteFields(
     entry: Record<string, unknown>,
     subject: string,
-    violations: string[]
+    violations: string[],
+    emptyReviewScope = false
 ): ParsedValidationNoteFields {
     pushUnknownKeyViolations(subject, entry, VALIDATION_NOTE_KEYS, violations);
     const topic = normalizeString(entry.topic);
@@ -485,19 +495,21 @@ function readValidationNoteFields(
         || commandOutcome !== null
         || diagnostics !== null
         || entry.finding_ids !== undefined;
+    const allowsEmptyEvidence = emptyReviewScope && !isFocusedSelfValidation && !hasFocusedCommandFields;
     return {
         subject,
         id: normalizeString(entry.id),
         topic,
         note: normalizeString(entry.note),
-        evidence: parseEvidenceArray(entry.evidence, subject, violations),
+        evidence: parseEvidenceArray(entry.evidence, subject, violations, allowsEmptyEvidence),
         command,
         commandOutcome,
         diagnostics,
         findingIds,
         isFocusedSelfValidation,
         hasFocusedCommandFields,
-        requiresFocusedCommandFields: isFocusedSelfValidation || hasFocusedCommandFields
+        requiresFocusedCommandFields: isFocusedSelfValidation || hasFocusedCommandFields,
+        allowsEmptyEvidence
     };
 }
 
@@ -599,7 +611,7 @@ function buildValidationNote(fields: ParsedValidationNoteFields): ReviewFindings
         !fields.id
         || !fields.topic
         || !fields.note
-        || fields.evidence.length === 0
+        || (fields.evidence.length === 0 && !fields.allowsEmptyEvidence)
         || (fields.requiresFocusedCommandFields
             && (!fields.command || !fields.commandOutcome || !fields.diagnostics))
     ) {
@@ -627,7 +639,8 @@ function parseValidationNotes(
     value: unknown,
     violations: string[],
     repoRoot?: string,
-    expectedTaskId?: string
+    expectedTaskId?: string,
+    emptyReviewScope = false
 ): ReviewFindingsValidationNote[] {
     if (!Array.isArray(value)) {
         violations.push('validation_notes must be an array.');
@@ -641,7 +654,7 @@ function parseValidationNotes(
             violations.push(`${subject} must be an object.`);
             return;
         }
-        const fields = readValidationNoteFields(entry, subject, violations);
+        const fields = readValidationNoteFields(entry, subject, violations, emptyReviewScope);
         validateValidationNoteIdentity(fields, violations);
         validateFocusedValidationNote(fields, violations, repoRoot, expectedTaskId);
         if (fields.id && REVIEW_VALIDATION_NOTE_ID_PATTERN.test(fields.id)) {
@@ -1850,9 +1863,6 @@ function validateConcreteReviewEvidenceLocations(
     }
     const admissiblePaths = normalizeReviewEvidenceDomainPaths(expectedChangedFilePaths);
     const changedFiles = new Set(admissiblePaths);
-    if (changedFiles.size === 0) {
-        return;
-    }
     const getChangedFileLineCount = lineValidationOptions.repoRoot
         ? createChangedFileLineCountResolver(lineValidationOptions)
         : null;
@@ -2015,7 +2025,8 @@ function getAllFindings(findings: ReviewFindingsBySeverity | null): ReviewFindin
 function validateCrossReferences(
     report: Pick<ReviewFindingsReport, 'coverage_ledger' | 'findings'>,
     expectedCoverageObligationIds: readonly string[] | undefined,
-    violations: string[]
+    violations: string[],
+    emptyReviewScope = false
 ): void {
     const coverageIds = report.coverage_ledger.entries.map((entry) => entry.obligation_id);
     if (expectedCoverageObligationIds) {
@@ -2066,9 +2077,24 @@ function validateCrossReferences(
             }
         }
     }
-    if (findings.length === 0 && report.coverage_ledger.entries.length === 0) {
+    if (findings.length === 0 && report.coverage_ledger.entries.length === 0 && !emptyReviewScope) {
         violations.push('Empty findings are valid only with complete coverage ledger evidence.');
     }
+}
+
+function hasAuthenticatedEmptyReviewScope(options: ReviewFindingsValidationOptions): boolean {
+    const execution = options.expectedReviewExecutionContract;
+    return options.allowStructuralOnlyReviewExecution !== true
+        && !!normalizeSha256(options.expectedReviewContextSha256)
+        && !!normalizeSha256(options.expectedTreeStateSha256)
+        && isEmptyReviewCoverageContract(options.expectedCoverageContract)
+        && options.expectedCoverageContract?.review_type === options.expectedReviewType.trim().toLowerCase()
+        && options.expectedCoverageObligationIds?.length === 0
+        && options.expectedChangedFilePaths?.length === 0
+        && execution?.source === 'initial_full'
+        && execution.mode === 'FULL'
+        && Array.isArray(execution.full_review_scope)
+        && execution.full_review_scope.length === 0;
 }
 
 export function validateReviewFindingsReport(
@@ -2120,14 +2146,20 @@ export function validateReviewFindingsReport(
         violations.push('tree_state_sha256 does not match the current review tree state.');
     }
 
+    const emptyReviewScope = hasAuthenticatedEmptyReviewScope(options);
     const findings = parseFindings(value.findings, violations);
     const validationNotes = parseValidationNotes(
         value.validation_notes,
         violations,
         options.repoRoot,
-        options.expectedTaskId
+        options.expectedTaskId,
+        emptyReviewScope
     );
     const coverageLedger = parseCoverageLedger(value.coverage_ledger, violations);
+    if (options.expectedCoverageContract && coverageLedger
+        && coverageLedger.coverage_contract_sha256 !== options.expectedCoverageContract.contract_sha256) {
+        violations.push('coverage_ledger.coverage_contract_sha256 does not match the authenticated coverage contract.');
+    }
     const reviewExecution = parseReviewExecutionDeclaration(value.review_execution, violations);
     const expectedReviewExecutionContract = options.expectedReviewExecutionContract;
     if (!expectedReviewExecutionContract) {
@@ -2183,7 +2215,7 @@ export function validateReviewFindingsReport(
         validateCrossReferences({
             coverage_ledger: coverageLedger,
             findings
-        }, options.expectedCoverageObligationIds, violations);
+        }, options.expectedCoverageObligationIds, violations, emptyReviewScope);
     }
 
     const report = taskId && reviewType && reviewContextSha256 && treeStateSha256
