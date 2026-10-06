@@ -175,9 +175,11 @@ slashes, drive prefixes and `..` path segments are prohibited even when split
 across quoted fragments, including in the validator script path.
 
 Pipes, command chaining and background operators outside quotes remain
-prohibited. Line breaks, substitutions, expansions, network access, mutation
-flags and output-file options remain prohibited even when a selector is
-quoted. Typographic quotes, unterminated quotes and backslash-escaped quotes are rejected because
+prohibited. Line breaks, substitutions, variable expansions and network access
+remain prohibited inside quoted selectors. Literal braces, brackets and caret
+anchors inside ordinary double quotes remain regex data. Mutation and output-file
+options are rejected in option positions; the same spelling inside a consumed
+selector value is data. Typographic quotes, unterminated quotes and backslash-escaped quotes are rejected because
 their boundaries cannot be interpreted consistently across supported shells.
 Special and positional dollar parameters, Unicode variable names and
 shell-prefixed quote forms are also rejected. Literal regex end anchors inside
@@ -197,6 +199,87 @@ Percent expansion guards include CMD substring/replacement syntax, complex or
 Unicode environment names and positional/batch forms. Shell control characters,
 including NUL, are rejected inside and outside quotes. A single percent sign
 without an expansion prefix remains a supported literal selector character.
+
+## Focused Reviewer Commands
+
+A focused self-validation note names one repository file and the exact local
+command, outcome, diagnostics and changed-file evidence. Quoted selector data
+may contain spaces and literal operators; both attached and spaced option
+operands retain their argument boundaries:
+
+```bash
+node --test --test-name-pattern="command chain|loader" tests/node/example.test.mjs
+node --test --test-name-pattern "command chain|loader" tests/node/example.test.mjs
+node --import tsx --test tests/node/example.test.ts
+node --import=./tests/helpers/loader.mjs --test tests/node/example.test.mjs
+node --require @scope/preload --test tests/node/example.test.mjs
+```
+
+Selector values that resemble runtime switches remain argument data and cannot
+authorize a test runner or syntax check. Node selectors beginning with `--` use
+the attached spelling, for example `--test-name-pattern="--check"`.
+Node runtime validation mode comes from actual `--test` or `--check` flags;
+`--test-only` modifies test mode and cannot establish it. Validation module
+recognition with `-m` belongs to Python runtimes.
+
+A real Node `--` ends option parsing. Subsequent operands remain positional,
+including selector-looking arguments, and must still identify exactly one test
+target. Direct `node -- <test-file>` attempts retain the same unavailable or
+prohibited F-000 binding as other supported direct test commands.
+
+Node test commands may use `--import`, `--require`/`-r`, `--loader` or
+`--experimental-loader` before the test target, with an attached or separate
+module operand. These operands identify locally resolved modules, not extra
+test targets; they must not be empty, remote, absolute or traversing paths.
+Leading `./` paths and scoped module names retain equivalent attached and
+separate operand interpretation. The scoped-module exception belongs only to
+the Node loader operand; an unscoped `@response-file` is rejected in attached,
+separate and quoted loader values. Response-file arguments elsewhere remain
+prohibited.
+Loaders remain disallowed for syntax-only checks and unrelated runners.
+
+Maven focused commands use `mvn` or `mvnw`, including `.cmd` and `.bat`
+wrappers and leading `./`. Explicit `-o`/`--offline` is required to prohibit
+implicit dependency fetching;
+`-f`/`--file` selects a repository-contained POM or project directory and
+does not count as a test target. Attached and separate operands retain quoted
+spaces and literal operand bytes after the option separator.
+`-Dtest=<selector>`, `-D test=<selector>`, `--define=test=<selector>`
+or `--define test=<selector>` must select one concrete Java class, optionally
+with one named method, with exactly one `test` or `surefire:test` goal.
+Simple class names must resolve uniquely; qualified names and Java paths
+identify an exact file under the selected project's `src/test/java`.
+Existing default `target/test-classes` directories, their ancestors and entries
+must also remain contained and unlinked. Direct `surefire:test` requires one
+existing compiled class matching the selected source path; the `test` lifecycle
+may create missing compiled output. Ambiguous or mismatched existing compiled
+targets are rejected. Both tree scans have a bounded entry budget.
+An existing repository root and standalone POM are required. Parent model
+references are rejected because inherited test-source settings are not resolved.
+Aggregator POMs, custom test-source, build-directory or explicit class/output-directory layouts,
+linked test trees, ambiguous or missing classes, broad selectors,
+extra goals/properties, output flags and unknown options are rejected.
+Layout checks ignore XML comments and distinguish build-directory overrides
+from ordinary resource directories. Element ancestry is inspected without
+resolving inherited models, properties or plugins; unsupported declarations
+remain rejected, including active or inactive profile build overrides.
+POM reads are capped at 1 MiB. XML scanning advances once through the input,
+rejects unterminated constructs and checks build-directory ancestry at fixed depths.
+Single-hyphen long option aliases and abbreviations cannot masquerade as an
+attached `-f` project operand.
+`-Dtest ExampleTest` and `-D test ExampleTest` are rejected: Maven treats them
+as an unvalued property followed by an unrelated lifecycle phase. The property
+key and selector value must remain joined by `=`.
+These options do not acquire Maven semantics for other runners. Parser-only checks
+do not establish Maven execution; retain actual execution diagnostics and the
+existing passed, failed or unavailable report contracts.
+
+Actual unquoted pipelines, command chains and redirections are rejected.
+Shell substitutions and variable expansions, source-writing flags, interactive
+modes, implicit dependency fetching and unfocused checks remain prohibited.
+An unavailable loader must keep its actual diagnostics and `unavailable`
+outcome with the canonical F-000 finding; a failed executed check requires its
+linked ordinary finding. Quoting never changes those outcome or receipt rules.
 
 ## Derived Artifacts and Policy
 

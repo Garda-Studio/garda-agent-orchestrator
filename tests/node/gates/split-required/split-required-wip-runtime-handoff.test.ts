@@ -278,7 +278,9 @@ function buildRealRuntimeSourceRepo(repoRoot: string): void {
 function usePrivateRuntimeFingerprint(repoRoot: string): { cachePath: string; fingerprintSha256: string } {
     const manifestPath = path.join(repoRoot, 'dist', 'publish-runtime-manifest.json');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
-    const inputFingerprint = manifest.inputFingerprint as { sha256: string };
+    const existingCachePath = path.join(repoRoot, '.scripts-build', 'publish-runtime-build-cache.json');
+    const inputFingerprint = (manifest.inputFingerprint
+        ?? JSON.parse(fs.readFileSync(existingCachePath, 'utf8')).inputFingerprint) as { sha256: string };
     delete manifest.inputFingerprint;
     const publishedContent = `${JSON.stringify(manifest, null, 2)}\n`;
     fs.writeFileSync(manifestPath, publishedContent, 'utf8');

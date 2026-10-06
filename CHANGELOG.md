@@ -77,6 +77,9 @@
 
 - Align focused reviewer instructions and result validation on the prohibition of custom inline interpreter runners, preserve normal transformations inside configured tools, and provide validator-compatible command hints only from authenticated current focused evidence.
 
+- Interpret Maven offline, project-file and focused test operands by runner, resolve one contained Java test, and preserve native ingestion diagnostics while rejecting broad selectors, output flags and unsupported layouts.
+- Reject unscoped response-file operands in attached, separate and quoted Node test loader values while preserving scoped package module compatibility.
+- Preserve quoted regular expressions and attached option operands in focused reviewer commands while rejecting real shell operators. Recognize locally resolved Node test loader operands without treating them as extra targets, retain unavailable or failed diagnostics, and keep mutation, expansion and unfocused-command controls.
 - Keep review-cycle restart events bounded by storing large delta classifications in immutable snapshots with hash-bound references and authenticated reads.
 - Restore pending grouped review follow-ups after authenticated unchanged parent-cycle review reuse, authenticating every lane's historical sources and obligations while preserving immutable findings, failed-attempt provenance, and active child ownership; write blocked diagnostics separately without following unsafe file links.
 - Reject cyclic and self-referencing dependencies in existing task plans while preserving independent steps and valid directed acyclic graphs.

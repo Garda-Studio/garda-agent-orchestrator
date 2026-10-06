@@ -839,6 +839,7 @@ describe('cleanup invalidates reviews index', () => {
     });
 
     it('runCleanup invalidates reviews index when review artifacts are removed', () => {
+        fs.writeFileSync(path.join(bundleRoot, 'VERSION'), '1.4.4\n');
         const reviewsDir = path.join(runtimeDir, 'reviews');
         fs.mkdirSync(reviewsDir, { recursive: true });
         for (let i = 1; i <= 5; i++) {

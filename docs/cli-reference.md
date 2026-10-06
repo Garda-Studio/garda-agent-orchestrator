@@ -870,6 +870,18 @@ Canonical gate surface is `garda gate <name>` or `node bin/garda.js gate <name>`
 
 Use `garda next-step T-001` as the task-loop command before and after gates; it reports the effective full-suite config including placement, review policy, missing artifacts, review trust status, and a single recommended command. Full gate examples live in `template/docs/agent-rules/40-commands.md`.
 
+`gate run-intermediate-command` retains a separate JSON record and redacted raw
+log for every attempt, including repeated or concurrent runs of the same command.
+Default pairs live under `runtime/reviews/intermediate-attempts/<attempt-id>/`
+inside the orchestrator bundle; the event records their exact paths and hashes.
+Use those recorded paths when inspecting earlier results.
+Optional `--artifact-path` and `--output-path` select unused destinations inside
+the repository. Both files are reserved exclusively before the command starts;
+an existing destination, linked path, or shared JSON/log path is rejected without
+running the command or replacing earlier evidence. Use new paths for a retry.
+Consumer authentication still requires task-owned evidence inside the reviews
+root with matching hashes; retaining a failed attempt does not make it PASS.
+
 Task-start identity and preflight notes:
 - `enter-task-mode` and related runtime identity checks normalize explicit provider aliases such as `github-copilot-cli` to the canonical provider id `GitHubCopilot`; artifacts record the canonical id.
 - When `classify-change` receives `--task-id` but no `--output-path`, it writes the canonical task preflight artifact at `garda-agent-orchestrator/runtime/reviews/<task-id>-preflight.json`. Non-task ad hoc classification can still run without writing an artifact.

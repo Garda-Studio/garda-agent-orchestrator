@@ -1,5 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { parseFocusedCommandSyntax } from './review-focused-command-tokenizer';
+import { parseMavenFocusedCommand, resolveMavenFocusedTargets } from './review-focused-command-maven';
 
 import {
     hasReviewerInlineInterpreterOption,
@@ -673,7 +675,7 @@ const MISSING_FOCUSED_VALIDATION_MARKER_PATTERN = new RegExp(
 );
 const MISSING_FOCUSED_VALIDATION_CLAIM_PATTERN =
     /\b(?:missing|absent|no)\s+(?:prior\s+)?focused\s+(?:(?:test|check|validation)\s+)?(?:execution|run|evidence)\b|\bfocused\s+(?:test|check|validation|execution)(?:\s+(?:execution|run|evidence))?\b.{0,48}\b(?:missing|absent|unavailable|prohibited|not\s+(?:run|executed))\b|\b(?:could\s+not|cannot|can't|unable\s+to)\s+(?:run|execute)\b.{0,48}\bfocused\s+(?:test|check|validation)\b/iu;
-const REVIEWER_UNSAFE_FOCUSED_COMMAND_PATTERNS: ReadonlyArray<{ pattern: RegExp; reason: string }> = [
+const REVIEWER_UNSAFE_FOCUSED_COMMAND_PATTERNS: ReadonlyArray<{ pattern: RegExp; reason: string; unquotedOnly?: boolean }> = [
     {
         pattern: /^\s*(?:(?:curl|wget|ssh|scp|sftp|ftp|telnet|nc|netcat|invoke-webrequest|invoke-restmethod|iwr|irm)\b|git\s+(?:clone|fetch|pull|push)\b|(?:npm|pnpm|yarn|bun)\s+(?:install|add|update|publish)\b|pip\s+install\b)/iu,
         reason: 'access network services or install/publish dependencies'
@@ -703,12 +705,22 @@ const REVIEWER_UNSAFE_FOCUSED_COMMAND_PATTERNS: ReadonlyArray<{ pattern: RegExp;
         reason: 'run shell command substitutions inside a focused validation attempt'
     },
     {
-        pattern: /\$[\p{L}\p{N}_{?@*#!$-]|%[^%\r\n]*%|%[0-9*~]|\{[^}]*\}|\[[^\]]*\]|(?:^|\s)~(?:[/\\]|\s|$)/iu,
+        pattern: /\$[\p{L}\p{N}_{?@*#!$-]|%[^%\r\n]*%|%[0-9*~]/iu,
         reason: 'use shell variable, brace, bracket, or home expansions inside a focused validation attempt'
     },
     {
-        pattern: /[<>^]|(?:^|\s)[@!+]\(|![a-z_][a-z0-9_]*!|(?:^|\s)@[a-z0-9_./\\-]+/iu,
+        pattern: /\{[^}]*\}|\[[^\]]*\]|(?:^|\s)~(?:[/\\]|\s|$)/iu,
+        reason: 'use shell variable, brace, bracket, or home expansions inside a focused validation attempt',
+        unquotedOnly: true
+    },
+    {
+        pattern: /![a-z_][a-z0-9_]*!/iu,
         reason: 'use shell redirection, process expansion, escaping, or response-file expansion inside a focused validation attempt'
+    },
+    {
+        pattern: /[<>^]/iu,
+        reason: 'use shell redirection, process expansion, escaping, or response-file expansion inside a focused validation attempt',
+        unquotedOnly: true
     },
     {
         pattern: /^\s*(?:(?:npm(?:\.cmd|\.exe)?|pnpm|yarn|bun)(?:\s+--?[^\s]+)*\s+(?:run\s+)?(?:build|test|check|lint)(?:\s+--?[^\s]+)*|(?:mvnw?|gradlew?|dotnet)\s+(?:build|test)|pytest)\s*$/iu,
@@ -781,16 +793,22 @@ function reviewerCommandInvokesGarda(command: string): boolean {
 }
 
 function getUnsafeFocusedCommandReason(command: string): string | null {
-    if (reviewerCommandInvokesGarda(command)) {
-        return 'invoke Garda navigation, gate, or result commands';
-    }
-    return REVIEWER_UNSAFE_FOCUSED_COMMAND_PATTERNS.find(({ pattern }) => pattern.test(command))?.reason
-        || getUnsafeFocusedCommandShellReason(command)
+    if (reviewerCommandInvokesGarda(command)) return 'invoke Garda navigation, gate, or result commands';
+    const syntax = parseFocusedCommandSyntax(command);
+    const scopedOperands = getFocusedNodeLoaderOperands(syntax.tokens)
+        .filter(({ value }) => value.startsWith('@') && value.includes('/')
+            && isSafeRepositoryRelativeFocusedTarget(value) && REVIEWER_NODE_LOADER_MODULE_PATTERN.test(value));
+    const scopedIndexes = new Set(scopedOperands.map(({ valueIndex }) => valueIndex));
+    const unsafeResponse = syntax.tokens.some((token, index) => /^@/u.test(token) && !scopedIndexes.has(index));
+    return REVIEWER_UNSAFE_FOCUSED_COMMAND_PATTERNS.find(({ pattern, unquotedOnly }) => pattern.test(unquotedOnly ? syntax.unquotedText : command))?.reason
+        || getUnsafeFocusedCommandShellReason(command, new Set(scopedOperands.map(({ value }) => value)))
+        || (unsafeResponse ? 'use shell redirection, process expansion, escaping, or response-file expansion inside a focused validation attempt' : null)
+        || syntax.invalidSyntaxReason
         || getUnsafeFocusedCommandTokenReason(command)
         || null;
 }
 
-function getUnsafeFocusedCommandShellReason(command: string): string | null {
+function getUnsafeFocusedCommandShellReason(command: string, scopedLoaders: ReadonlySet<string>): string | null {
     let quote: string | null = null;
     for (let index = 0; index < command.length; index += 1) {
         const character = command[index];
@@ -816,8 +834,9 @@ function getUnsafeFocusedCommandShellReason(command: string): string | null {
         if (character === '~') {
             return 'use unquoted shell home expansions inside a focused validation attempt';
         }
-        if (character === '#' || (character === '@' && command[index + 1] !== '(')) {
-            return 'use unquoted shell comment or splatting syntax';
+        if (character === '#' || (character === '@' && command[index + 1] !== '('
+            && ![...scopedLoaders].some((value) => command.startsWith(value, index)))) {
+            return 'use unquoted shell comment or splatting syntax; use shell redirection, process expansion, escaping, or response-file expansion inside a focused validation attempt';
         }
         if (character === '$' && /["']/u.test(command[index + 1] || '')) {
             return 'use shell quoted-string expansions inside a focused validation attempt';
@@ -841,7 +860,6 @@ function normalizeFocusedTargetPath(value: string): string {
 
 const REVIEWER_FOCUSED_EXECUTION_SIGNAL_PATTERN =
     /(?:^|[\s/\\._:-])(?:test|spec|check|lint|validat|verif|audit|bench)[a-z0-9]*(?=$|[\s/\\._:=#-])|(?:^|[\s/\\._:-])(?:vitest|jest|mocha|ava|tap|pytest|rspec|phpunit|playwright|cypress|spectral|ajv|eslint|tsc|hyperfine)(?=$|[\s/\\._:=#-])/iu;
-const REVIEWER_DIRECTLY_EXECUTABLE_TARGET_PATTERN = /\.(?:[cm]?[jt]sx?|py|rb|php|sh|ps1)$/iu;
 const REVIEWER_GENERIC_FOCUSED_COMMAND_TOKEN_PATTERN =
     /^(?:node(?:\.exe)?|deno|bun|python(?:3)?|pytest|ruby|perl|php|tsx|ts-node|npx|npm(?:\.cmd|\.exe)?|pnpm|yarn|mvnw?|gradlew?|dotnet|go|cargo|make|just|java|openssl|spectral|ajv|eslint|tsc|vitest|jest|mocha|ava|tap|rspec|phpunit|playwright|cypress|hyperfine|powershell|pwsh|bash|sh|zsh|run|exec|test|tests|spec|check|lint|validate|validation|verify|audit|bench|build)$/iu;
 const REVIEWER_DIRECT_VALIDATION_RUNNER_PATTERN =
@@ -876,6 +894,10 @@ const REVIEWER_FOCUSED_LITERAL_SELECTOR_OPTION_PATTERN =
 const REVIEWER_FOCUSED_OPTION_WITH_SCALAR_VALUE_PATTERN =
     /^(?:--bail|--color|--maxworkers|--pretty|--threads|--verbose)$/iu;
 const REVIEWER_FOCUSED_SCALAR_OPTION_VALUE_PATTERN = /^(?:false|true|\d+)$/iu;
+const REVIEWER_NODE_LOADER_OPTION_NAMES = new Set([
+    '--import', '--require', '-r', '--loader', '--experimental-loader'
+]);
+const REVIEWER_NODE_LOADER_MODULE_PATTERN = /^(?:[a-z0-9_.-][a-z0-9_./ -]*|@[a-z0-9_.-]+\/[a-z0-9_./ -]+)$/iu;
 const REVIEWER_GENERIC_DIAGNOSTICS_WORDS = new Set([
     'a', 'an', 'attempt', 'be', 'been', 'blocked', 'can', 'check', 'command', 'could', 'error', 'errored',
     'execute', 'executed', 'execution', 'failed', 'failure', 'focused', 'had', 'has', 'have', 'is', 'not',
@@ -886,15 +908,59 @@ const REVIEWER_CONCRETE_DIAGNOSTIC_COUNT_PATTERN =
     /\b\d+\s+(?:assertions?|cases?|checks?|errors?|failures?|tests?)\b/iu;
 
 function getFocusedCommandTokens(command: string): string[] {
-    return (command.match(/(?:"[^"]*"|'[^']*'|[^\s"'])+/gu) || [])
-        .map((token) => token.replace(
-            /"[^"]*"|'[^']*'/gu,
-            (quotedSegment) => quotedSegment.slice(1, -1)
-        ));
+    return parseFocusedCommandSyntax(command).tokens;
 }
 
 function normalizeFocusedOptionName(token: string): string {
     return token.toLowerCase().split('=', 1)[0];
+}
+
+interface FocusedNodeLoaderOperand {
+    optionIndex: number;
+    valueIndex: number | null;
+    value: string;
+}
+
+function getFocusedNodeLoaderOperands(tokens: readonly string[]): FocusedNodeLoaderOperand[] {
+    if (!/^node(?:\.exe)?$/iu.test(tokens[0] || '')) return [];
+    const operands: FocusedNodeLoaderOperand[] = [];
+    for (let index = 1; index < tokens.length; index += 1) {
+        const token = tokens[index];
+        if (token === '--' || !token.startsWith('-')) break;
+        if (REVIEWER_NODE_LOADER_OPTION_NAMES.has(normalizeFocusedOptionName(token))) {
+            const equalsIndex = token.indexOf('=');
+            const valueIndex = equalsIndex < 0 && tokens[index + 1] && !tokens[index + 1].startsWith('-')
+                ? index + 1 : null;
+            operands.push({
+                optionIndex: index,
+                valueIndex,
+                value: normalizeFocusedTargetPath(equalsIndex >= 0 ? token.slice(equalsIndex + 1) : valueIndex == null ? '' : tokens[valueIndex])
+            });
+            if (valueIndex != null) index = valueIndex;
+        } else if (!token.includes('=') && (
+            REVIEWER_FOCUSED_OPTION_WITH_VALUE_PATTERN.test(token)
+            || REVIEWER_FOCUSED_OPTION_WITH_SCALAR_VALUE_PATTERN.test(token)
+                && REVIEWER_FOCUSED_SCALAR_OPTION_VALUE_PATTERN.test(tokens[index + 1] || '')
+        )) {
+            index += 1;
+        }
+    }
+    return operands;
+}
+
+function getUnsafeNodeLoaderReason(tokens: readonly string[], operands: readonly FocusedNodeLoaderOperand[]): string | null {
+    if (operands.length === 0) return null;
+    const runnerIndex = parseFocusedCommandOptions(tokens).programIndex;
+    const runtimeOptions = [...parseFocusedCommandOptions(tokens).optionIndexes]
+        .filter((index) => runnerIndex < 0 || index < runnerIndex).map((index) => tokens[index]);
+    if (runtimeOptions.includes('--check') || (!runtimeOptions.includes('--test')
+        && !REVIEWER_DIRECT_TEST_TARGET_PATTERN.test(tokens[runnerIndex] || ''))) {
+        return 'use unrecognized validation-runner options outside a focused Node test';
+    }
+    return operands.some(({ value }) => !value || !isSafeRepositoryRelativeFocusedTarget(value)
+        || !REVIEWER_NODE_LOADER_MODULE_PATTERN.test(value))
+        ? 'use Node loader options without a supported repository-relative module operand'
+        : null;
 }
 
 function isSafeNodeSyntaxCheckToken(
@@ -911,14 +977,21 @@ function isSafeNodeSyntaxCheckToken(
 
 function getUnsafeFocusedCommandTokenReason(command: string): string | null {
     const tokens = getFocusedCommandTokens(command);
+    const mavenCommand = parseMavenFocusedCommand(tokens);
+    if (mavenCommand) return mavenCommand.unsafeReason;
     const options = parseFocusedCommandOptions(tokens);
+    const loaderOperands = getFocusedNodeLoaderOperands(tokens);
+    const loaderReason = getUnsafeNodeLoaderReason(tokens, loaderOperands);
+    if (loaderReason) return loaderReason;
+    const valueIndexes = new Set([...options.consumedIndexes].filter((index) => !options.optionIndexes.has(index)));
+    const optionTokens = tokens.filter((_, index) => !valueIndexes.has(index));
     // Quoted fragments can conceal path prefixes until their tokens are reconstructed.
     if (tokens.some((token, index) => !options.literalSelectorValueIndexes.has(index)
         && /^(?:\/|[a-z]:)|(?:^|\/)\.\.(?:\/|$)/iu.test(normalizeFocusedTargetPath(token)))) {
         return 'escape authenticated repository scope with absolute or traversal paths';
     }
     const firstToken = tokens[0] || '';
-    const optionNames = tokens.filter((token) => token.startsWith('-')).map(normalizeFocusedOptionName);
+    const optionNames = optionTokens.filter((token) => token.startsWith('-')).map(normalizeFocusedOptionName);
     if (REVIEWER_PACKAGE_EXEC_WRAPPER_PATTERN.test(firstToken)) {
         return 'use package-execution wrappers that may fetch dependencies implicitly';
     }
@@ -928,7 +1001,7 @@ function getUnsafeFocusedCommandTokenReason(command: string): string | null {
     ) {
         return 'use package-execution wrappers that may fetch dependencies implicitly';
     }
-    if (hasReviewerInlineInterpreterOption(firstToken, tokens)) {
+    if (hasReviewerInlineInterpreterOption(firstToken, optionTokens)) {
         return REVIEWER_INLINE_INTERPRETER_REASON;
     }
     if (optionNames.some((option) => REVIEWER_MUTATING_FOCUSED_OPTION_NAMES.has(option))) {
@@ -945,6 +1018,8 @@ function getUnsafeFocusedCommandTokenReason(command: string): string | null {
     }
     const programIndex = options.programIndex;
     if (tokens.some((token, index) => token.startsWith('-')
+        && !valueIndexes.has(index)
+        && !loaderOperands.some((operand) => operand.optionIndex === index)
         && !REVIEWER_SAFE_FOCUSED_OPTION_NAMES.has(normalizeFocusedOptionName(token))
         && !isSafeNodeSyntaxCheckToken(tokens, index, options, programIndex))) {
         return 'use unrecognized validation-runner options whose side effects are not authenticated';
@@ -1040,6 +1115,8 @@ function isActionableFocusedDiagnostics(diagnostics: string): boolean {
 
 function focusedCommandHasValidationRunner(command: string): boolean {
     const tokens = getFocusedCommandTokens(command);
+    const mavenCommand = parseMavenFocusedCommand(tokens);
+    if (mavenCommand) return !mavenCommand.unsafeReason;
     const firstToken = tokens[0] || '';
     if (REVIEWER_DIRECT_VALIDATION_RUNNER_PATTERN.test(firstToken)) {
         return true;
@@ -1180,6 +1257,7 @@ function parseFocusedCommandOptions(tokens: readonly string[]): FocusedCommandOp
     const literalSelectorValueIndexes = new Set<number>();
     const optionIndexes = new Set<number>();
     const firstToken = tokens[0] || '';
+    const loaderOperands = getFocusedNodeLoaderOperands(tokens);
     let forwardingDelimiterAvailable = REVIEWER_PACKAGE_MANAGER_PATTERN.test(firstToken);
     let nodeValidationOptionPresent = false;
     let programIndex = -1;
@@ -1209,6 +1287,15 @@ function parseFocusedCommandOptions(tokens: readonly string[]): FocusedCommandOp
             }
         }
         if (token.startsWith('-')) optionIndexes.add(index);
+        const loader = loaderOperands.find((operand) => operand.optionIndex === index);
+        if (loader) {
+            consumedIndexes.add(index);
+            if (loader.valueIndex != null) {
+                consumedIndexes.add(loader.valueIndex);
+                index = loader.valueIndex;
+            }
+            continue;
+        }
         if (token.includes('=')
             && REVIEWER_FOCUSED_LITERAL_SELECTOR_OPTION_PATTERN.test(normalizeFocusedOptionName(token))) {
             literalSelectorValueIndexes.add(index);
@@ -1246,6 +1333,11 @@ interface FocusedCommandTargetParseResult {
 
 function parseFocusedCommandTargets(command: string, repoRoot?: string): FocusedCommandTargetParseResult {
     const tokens = getFocusedCommandTokens(command);
+    const mavenCommand = parseMavenFocusedCommand(tokens);
+    if (mavenCommand) return {
+        targets: resolveMavenFocusedTargets(mavenCommand, repoRoot, isSafeRepositoryRelativeFocusedTarget),
+        invalidPositionalTokens: mavenCommand.unsafeReason ? tokens.slice(1) : []
+    };
     const options = parseFocusedCommandOptions(tokens);
     const consumedIndexes = new Set(options.consumedIndexes);
     const optionTerminatorIndex = options.terminatorIndex;
@@ -1314,27 +1406,18 @@ function focusedCommandExecutesMarkerTarget(command: string, markerTarget: strin
     ) {
         return false;
     }
-    const normalizedCommand = command.replace(/\\/gu, '/');
-    const escapedTarget = normalizedTarget.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-    const commandWithoutTarget = normalizedCommand.replace(
-        new RegExp(`(?:\\./)?${escapedTarget}`, 'gu'),
-        ' '
-    );
-    if (
-        focusedCommandHasValidationRunner(commandWithoutTarget)
-    ) {
-        return true;
-    }
-    if (
-        !REVIEWER_DIRECTLY_EXECUTABLE_TARGET_PATTERN.test(normalizedTarget)
-        || !REVIEWER_DIRECT_TEST_TARGET_PATTERN.test(normalizedTarget)
-    ) {
-        return false;
-    }
-    return new RegExp(
-        `^\\s*(?:(?:node(?:\\.exe)?|deno|bun|python(?:3)?|ruby|perl|php|tsx|ts-node)(?:\\s+--?[a-z0-9][^\\s]*)*\\s+)?["']?(?:\\./)?${escapedTarget}["']?(?:\\s|$)`,
-        'u'
-    ).test(normalizedCommand);
+    const tokens = getFocusedCommandTokens(command);
+    const invocation = getFocusedRuntimeInvocation(tokens);
+    const programIndex = parseFocusedCommandOptions(tokens).programIndex;
+    const moduleRunner = invocation.hasValidationRunner
+        && invocation.runnerTokenIndexes.some((index) => tokens[index] === '-m');
+    const directTarget = normalizeFocusedTargetPath(tokens[0] || '') === normalizedTarget
+        || (REVIEWER_GENERIC_RUNTIME_PATTERN.test(tokens[0] || '')
+            && !invocation.nodeValidationMode && !moduleRunner
+            && normalizeFocusedTargetPath(tokens[programIndex] || '') === normalizedTarget);
+    if (directTarget && (!/\.(?:[cm]?[jt]sx?|py|rb|php|sh|ps1)$/iu.test(normalizedTarget)
+        || !REVIEWER_DIRECT_TEST_TARGET_PATTERN.test(normalizedTarget))) return false;
+    return focusedCommandHasValidationRunner(command);
 }
 
 const FOCUSED_EVIDENCE_CHANGED_BEHAVIOR_PATTERN =
