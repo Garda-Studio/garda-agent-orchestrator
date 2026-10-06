@@ -1,7 +1,7 @@
 {
   "id": "db-review",
   "name": "DB Review",
-  "summary": "Independent database risk review with strict pass/fail verdict.",
+  "summary": "Independent database risk review with evidence-supported findings-only output.",
   "tags": ["core", "review", "database"],
   "aliases": ["db review", "review migration", "sql safety check"],
   "references": ["db-trigger-matrix.md"],
