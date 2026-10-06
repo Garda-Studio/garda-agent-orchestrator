@@ -12,6 +12,7 @@ import { DEFAULT_GIT_TIMEOUT_MS, spawnSyncWithTimeout } from '../../core/subproc
 import { normalizeGitRepoRelativePath } from '../../core/git-change-classification';
 import { getSafeWorktreePathState } from './worktree-path-state';
 import { normalizeGitChangeClassificationEvidence } from '../../core/git-change-classification';
+import { canonicalPathList, pathListSha256 } from '../shared/canonical-path-list';
 
 const CACHE_VERSION = 6;
 const CACHE_INTEGRITY_SCHEMA_VERSION = 3;
@@ -101,11 +102,11 @@ interface WorkspaceSnapshotCacheGeneration {
 const workspaceSnapshotCacheGenerations = new WeakSet<WorkspaceSnapshotCacheGeneration>();
 
 function normalizeExplicitChangedFiles(explicitChangedFiles: string[]): string[] {
-    return [...new Set(
+    return canonicalPathList(
         (explicitChangedFiles || [])
             .map((filePath) => normalizeGitRepoRelativePath(filePath))
             .filter((filePath): filePath is string => filePath !== null)
-    )].sort();
+    );
 }
 
 function normalizeExplicitRequestFiles(repoRoot: string, explicitChangedFiles: string[]): string[] {
@@ -398,14 +399,14 @@ function authenticateWorkspaceSnapshot(
     if (
         !sameStringList(changedFiles, snapshot.changed_files)
         || snapshot.changed_files_count !== changedFiles.length
-        || snapshot.changed_files_sha256 !== stringSha256(changedFiles.join('\n'))
+        || snapshot.changed_files_sha256 !== pathListSha256(changedFiles)
     ) {
         throw new Error('Workspace snapshot authentication failed: changed-file binding is inconsistent.');
     }
     if (
         !sameStringList(authorizedFiles, snapshot.authorized_files)
         || snapshot.authorized_files_count !== authorizedFiles.length
-        || snapshot.authorized_files_sha256 !== stringSha256(authorizedFiles.join('\n'))
+        || snapshot.authorized_files_sha256 !== pathListSha256(authorizedFiles)
     ) {
         throw new Error('Workspace snapshot authentication failed: authorized-file binding is inconsistent.');
     }

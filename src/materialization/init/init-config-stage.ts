@@ -1,7 +1,8 @@
 import * as path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { cloneJsonValue, isPlainObject, mergeConfig } from '../../core/config-merge';
 import { pathExists } from '../../core/filesystem';
-import { writeContainedFile } from '../../core/contained-filesystem';
+import { bindContainedDestination, writeContainedFile } from '../../core/contained-filesystem';
 import { readJsonFile } from '../../core/json';
 import {
     buildDefaultWorkflowConfig,
@@ -308,6 +309,7 @@ export function runInitConfigStage(
         const templateConfigPath = path.join(templateRoot, `config/${configName}.json`);
         const destConfigPath = path.join(liveRoot, `config/${configName}.json`);
         let pendingWrite: string | null = null;
+        let preserveExistingWorkflowConfig = false;
 
         if (!pathExists(templateConfigPath)) {
             configMergeStatuses[configName] = 'template_missing_preservation_skipped';
@@ -401,7 +403,12 @@ export function runInitConfigStage(
             }
 
             if (!dryRun) {
-                pendingWrite = JSON.stringify(materializedConfig, null, 2);
+                preserveExistingWorkflowConfig = configName === 'workflow-config'
+                    && existingConfig !== null
+                    && isDeepStrictEqual(existingConfig, materializedConfig);
+                if (!preserveExistingWorkflowConfig) {
+                    pendingWrite = JSON.stringify(materializedConfig, null, 2);
+                }
             }
 
             configMergeStatuses[configName] = configName === 'workflow-config'
@@ -422,7 +429,9 @@ export function runInitConfigStage(
         } catch {
             configMergeStatuses[configName] = 'merge_failed_template_applied';
         }
-        if (pendingWrite !== null) {
+        if (preserveExistingWorkflowConfig) {
+            bindContainedDestination(targetRoot, destConfigPath);
+        } else if (pendingWrite !== null) {
             writeContainedFile(targetRoot, destConfigPath, pendingWrite);
         }
     }

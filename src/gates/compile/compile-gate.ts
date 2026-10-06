@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { UNCONFIGURED_COMPILE_GATE_COMMAND } from '../../core/constants';
 import { parseCommandChain, splitCommandLine } from '../../core/command-line';
 import { countFileLines, stringSha256, normalizePath, joinOrchestratorPath } from '../shared/helpers';
+import { canonicalPathList, pathListSha256 } from '../shared/canonical-path-list';
 import { DEFAULT_GIT_TIMEOUT_MS, spawnSyncWithTimeout } from '../../core/subprocess';
 import {
     readStagedBlobFingerprints,
@@ -754,8 +755,7 @@ export function buildScopeContentFingerprint(
         return getSplitCheckpointWorkspaceSnapshot(repoRoot, source, changedFiles).scope_content_sha256;
     }
     const useStaged = ['git_staged_only', 'git_staged_plus_untracked'].includes(source);
-    const normalizedChangedFiles = [...new Set(changedFiles.map((entry) => normalizePath(entry)).filter(Boolean))]
-        .sort();
+    const normalizedChangedFiles = canonicalPathList(changedFiles.map((entry) => normalizePath(entry)).filter(Boolean));
     const resolvedStagedBlobFingerprints = useStaged
         ? stagedBlobFingerprints || readStagedBlobFingerprints(repoRoot, normalizedChangedFiles)
         : undefined;
@@ -958,7 +958,7 @@ export function getWorkspaceSnapshot(
             generatedRuntimeSplitOptions
         );
         ignoredGeneratedRuntimeFiles.push(...canonicalSplit.ignoredGeneratedRuntimeFiles);
-        const normalizedChanged = [...new Set(canonicalSplit.reviewableFiles)].sort();
+        const normalizedChanged = canonicalPathList(canonicalSplit.reviewableFiles);
         const normalizedChangedSet = new Set(normalizedChanged);
         const gitChangeClassification = selectGitChangeClassificationLayers(completeGitClassification, {
             layers: selectedGitLayers,
@@ -1010,7 +1010,7 @@ export function getWorkspaceSnapshot(
         }
 
         const changedLinesTotal = additionsTotal + deletionsTotal;
-        const filesFingerprint = stringSha256(normalizedChanged.join('\n'));
+        const filesFingerprint = pathListSha256(normalizedChanged);
         const authorizedFilesFingerprint = stringSha256(normalizedExplicit.join('\n'));
         const contentFingerprint = buildScopeContentFingerprint(repoRoot, source, normalizedChanged);
         const scopeFingerprint = stringSha256(
@@ -1055,7 +1055,7 @@ export function getWorkspaceSnapshot(
         generatedRuntimeSplitOptions
     );
     ignoredGeneratedRuntimeFiles.push(...canonicalSplit.ignoredGeneratedRuntimeFiles);
-    const normalizedChanged = [...new Set(canonicalSplit.reviewableFiles)].sort();
+    const normalizedChanged = canonicalPathList(canonicalSplit.reviewableFiles);
     const normalizedChangedSet = new Set(normalizedChanged);
     const gitChangeClassification = selectGitChangeClassificationLayers(completeGitClassification, {
         layers: selectedGitLayers,
@@ -1106,7 +1106,7 @@ export function getWorkspaceSnapshot(
     }
 
     const changedLinesTotal = additionsTotal + deletionsTotal;
-    const filesFingerprint = stringSha256(normalizedChanged.join('\n'));
+    const filesFingerprint = pathListSha256(normalizedChanged);
     const contentFingerprint = buildScopeContentFingerprint(
         repoRoot,
         source,
@@ -1186,7 +1186,7 @@ export function getPreflightContext(preflightPath: string, taskId: string) {
         throw new Error('Preflight field `required_reviews` is required.');
     }
 
-    const preflightChangedFiles = [...new Set(
+    const preflightChangedFiles: string[] = [...new Set<string>(
         (preflightObject.changed_files || []).map((f: string) => normalizePath(String(f).replace(/\\/g, '/'))).filter(Boolean)
     )].sort();
     const preflightAuthorizedFiles: string[] = [...new Set<string>(
@@ -1234,7 +1234,7 @@ export function getPreflightContext(preflightPath: string, taskId: string) {
         changed_files: preflightChangedFiles,
         changed_files_count: preflightChangedFiles.length,
         changed_lines_total: changedLinesTotal,
-        changed_files_sha256: actualChangedFilesSha256 || stringSha256(preflightChangedFiles.join('\n')),
+        changed_files_sha256: actualChangedFilesSha256 || pathListSha256(preflightChangedFiles),
         scope_sha256: scopeSha256 || null,
         scope_content_sha256: scopeContentSha256 || null,
         budget_forecast: preflightObject.budget_forecast ?? null

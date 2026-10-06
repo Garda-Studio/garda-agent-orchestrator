@@ -162,7 +162,7 @@ describe('gates/next-step split-required latch finalization', () => {
         assert.ok(taskMd.includes('| T-700-1 | 🟩 DONE |'));
     });
 
-    it('transitions a reset split-required parent to decomposed when child tasks are linked', () => {
+    it('reuses retained WIP when restoring a reset split-required parent with linked children', () => {
         const repoRoot = makeTempRepo();
         fs.writeFileSync(
             path.join(repoRoot, '.gitignore'),
@@ -212,11 +212,14 @@ describe('gates/next-step split-required latch finalization', () => {
         assert.ok(taskMd.includes('| T-646 | 🟪 DECOMPOSED |'));
         assert.ok(events.includes('"event_type":"SPLIT_REQUIRED_RESTORED"'));
         assert.ok(events.includes('"event_type":"SPLIT_REQUIRED_CLEARED"'));
-        assert.equal((events.match(/"event_type":"SPLIT_REQUIRED_WIP_CAPTURED"/gu) || []).length, 2);
-        assert.equal(appStatus, '');
+        assert.equal((events.match(/"event_type":"SPLIT_REQUIRED_WIP_CAPTURED"/gu) || []).length, 1);
+        assert.equal(appStatus, 'M src/app.ts');
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'src', 'app.ts'), 'utf8'), restoredContent);
+        assert.ok(initialCapture.manifest_path);
+        assert.equal(fileSha256(initialCapture.manifest_path), initialCapture.manifest_sha256);
     });
 
-    it('keeps a restored permanent latch active when parent WIP cannot be suspended', () => {
+    it('preserves unrelated work while restoring a permanent latch and routing a child', () => {
         const repoRoot = makeTempRepo();
         const taskId = 'T-649';
         fs.writeFileSync(
@@ -255,14 +258,17 @@ describe('gates/next-step split-required latch finalization', () => {
         const taskMd = fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8');
         const events = fs.readFileSync(path.join(eventsRoot(repoRoot), `${taskId}.jsonl`), 'utf8');
 
-        assert.equal(result.status, 'SPLIT_REQUIRED');
-        assert.equal(result.next_gate, 'split-required-latch');
-        assert.match(result.reason, /Parent WIP could not be captured and suspended before child routing/iu);
-        assert.match(result.reason, /retained split-required WIP checkout is neither verified suspended nor restored/iu);
-        assert.match(result.reason, /tracked WIP path set does not match the retained capture/iu);
-        assert.ok(taskMd.includes(`| ${taskId} | 🟫 SPLIT_REQUIRED |`));
+        assert.equal(result.status, 'DECOMPOSED');
+        assert.equal(result.next_gate, 'child-task');
+        assert.ok(result.commands[0]?.command.includes(`next-step "${taskId}-1"`));
+        assert.ok(taskMd.includes(`| ${taskId} | 🟪 DECOMPOSED |`));
         assert.ok(events.includes('SPLIT_REQUIRED_RESTORED'));
-        assert.ok(!events.includes('SPLIT_REQUIRED_CLEARED'));
+        assert.ok(events.includes('SPLIT_REQUIRED_CLEARED'));
+        assert.equal((events.match(/"event_type":"SPLIT_REQUIRED_WIP_CAPTURED"/gu) || []).length, 1);
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'src', 'outside.ts'), 'utf8'), 'export const outside = 2;\n');
+        assert.equal(runGit(repoRoot, ['status', '--short', '--', 'src/outside.ts']).stdout.trim(), 'M src/outside.ts');
+        assert.ok(initialCapture.manifest_path);
+        assert.equal(fileSha256(initialCapture.manifest_path), initialCapture.manifest_sha256);
     });
 
     it('does not clear split-required latch for unrelated task mentions in parent notes', () => {
@@ -398,7 +404,7 @@ describe('gates/next-step split-required latch finalization', () => {
         }
     });
 
-    it('recaptures restored parent WIP before routing a linked child task', () => {
+    it('reuses the original capture for restored parent WIP before routing a linked child task', () => {
         const repoRoot = makeTempRepo();
         const taskId = 'T-644';
         fs.writeFileSync(
@@ -448,15 +454,20 @@ describe('gates/next-step split-required latch finalization', () => {
         };
 
         assert.equal(result.status, 'DECOMPOSED');
-        assert.equal(appStatus, '');
-        assert.equal(captureEvents.length, 2);
-        assert.notEqual(latestManifestPath, initialCapture.manifest_path);
+        assert.equal(result.next_gate, 'child-task');
+        assert.ok(result.commands[0]?.command.includes(`next-step "${taskId}-1"`));
+        assert.equal(appStatus, 'M src/app.ts');
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'src', 'app.ts'), 'utf8'), restoredContent);
+        assert.equal(captureEvents.length, 1);
+        assert.equal(latestManifestPath, initialCapture.manifest_path);
+        assert.equal(latestCaptureDetails?.manifest_sha256, initialCapture.manifest_sha256);
+        assert.equal(fileSha256(latestManifestPath), initialCapture.manifest_sha256);
         assert.equal(latestManifest.tracked_files.length, 1);
         assert.equal(latestManifest.tracked_files[0]?.path, 'src/app.ts');
         assert.equal(latestManifest.tracked_files[0]?.worktree_sha256, sha256Text(restoredContent));
     });
 
-    it('keeps a split-required parent latched when WIP cannot be suspended safely', () => {
+    it('preserves unrelated work while decomposing an already split-required parent', () => {
         const repoRoot = makeTempRepo();
         const taskId = 'T-645';
         fs.writeFileSync(
@@ -495,13 +506,16 @@ describe('gates/next-step split-required latch finalization', () => {
         const taskMd = fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8');
         const events = fs.readFileSync(path.join(eventsRoot(repoRoot), `${taskId}.jsonl`), 'utf8');
 
-        assert.equal(result.status, 'SPLIT_REQUIRED');
-        assert.equal(result.next_gate, 'split-required-latch');
-        assert.match(result.reason, /Parent WIP could not be captured and suspended before child routing/iu);
-        assert.match(result.reason, /retained split-required WIP checkout is neither verified suspended nor restored/iu);
-        assert.match(result.reason, /tracked WIP path set does not match the retained capture/iu);
-        assert.ok(taskMd.includes(`| ${taskId} | SPLIT_REQUIRED |`));
-        assert.ok(!events.includes('SPLIT_REQUIRED_CLEARED'));
+        assert.equal(result.status, 'DECOMPOSED');
+        assert.equal(result.next_gate, 'child-task');
+        assert.ok(result.commands[0]?.command.includes(`next-step "${taskId}-1"`));
+        assert.ok(taskMd.includes(`| ${taskId} | 🟪 DECOMPOSED |`));
+        assert.ok(events.includes('SPLIT_REQUIRED_CLEARED'));
+        assert.equal((events.match(/"event_type":"SPLIT_REQUIRED_WIP_CAPTURED"/gu) || []).length, 1);
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'src', 'outside.ts'), 'utf8'), 'export const outside = 2;\n');
+        assert.equal(runGit(repoRoot, ['status', '--short', '--', 'src/outside.ts']).stdout.trim(), 'M src/outside.ts');
+        assert.ok(initialCapture.manifest_path);
+        assert.equal(fileSha256(initialCapture.manifest_path), initialCapture.manifest_sha256);
     });
 
     it('keeps the parent and split evidence unchanged when only one child is linked', () => {

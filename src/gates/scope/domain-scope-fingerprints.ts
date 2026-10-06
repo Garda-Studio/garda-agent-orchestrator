@@ -24,6 +24,7 @@ import {
     resolveDocumentationReviewScopeHash
 } from '../review-reuse/review-reuse';
 import { isCloseoutEvidencePath } from './closeout-evidence-paths';
+import { canonicalPathList, pathListSha256 } from '../shared/canonical-path-list';
 
 export { DOMAIN_SCOPE_NAMES } from '../../core/domain-scope-contracts';
 export type {
@@ -41,7 +42,7 @@ function normalizeDomainScopeFiles(value: unknown): string[] {
     if (!Array.isArray(value)) {
         return [];
     }
-    return [...new Set(value.map((entry) => normalizePath(entry)).filter(Boolean))].sort();
+    return canonicalPathList(value.map((entry) => normalizePath(entry)).filter(Boolean));
 }
 
 function classifyDomainFile(
@@ -83,8 +84,8 @@ function buildScopeFingerprintEntry(
     domainFiles: string[],
     stagedBlobFingerprints?: StagedBlobFingerprints
 ): DomainScopeFingerprintEntry {
-    const changedFiles = [...new Set(domainFiles.map((entry) => normalizePath(entry)).filter(Boolean))].sort();
-    const changedFilesSha256 = stringSha256(changedFiles.join('\n'));
+    const changedFiles = canonicalPathList(domainFiles.map((entry) => normalizePath(entry)).filter(Boolean));
+    const changedFilesSha256 = pathListSha256(changedFiles);
     const scopeContentSha256 = buildScopeContentFingerprint(
         repoRoot,
         detectionSource,
@@ -120,7 +121,7 @@ export function buildDomainScopeFingerprints(options: {
     const detectionSource = String(options.detectionSource || 'git_auto').trim().toLowerCase() || 'git_auto';
     const includeUntracked = options.includeUntracked === true;
     const useStaged = ['git_staged_only', 'git_staged_plus_untracked'].includes(detectionSource);
-    const changedFiles = [...new Set(options.changedFiles.map((entry) => normalizePath(entry)).filter(Boolean))].sort();
+    const changedFiles = canonicalPathList(options.changedFiles.map((entry) => normalizePath(entry)).filter(Boolean));
     const stagedBlobFingerprints = useStaged
         ? readStagedBlobFingerprints(options.repoRoot, changedFiles)
         : undefined;
@@ -305,11 +306,11 @@ export function getCombinedDomainScopeFingerprint(
     if (!fingerprints) {
         return null;
     }
-    const changedFiles = [...new Set(domains.flatMap((domain) => fingerprints.domains[domain].changed_files))].sort();
+    const changedFiles = canonicalPathList(domains.flatMap((domain) => fingerprints.domains[domain].changed_files));
     return {
         changed_files: changedFiles,
         changed_files_count: changedFiles.length,
-        changed_files_sha256: stringSha256(changedFiles.join('\n')),
+        changed_files_sha256: pathListSha256(changedFiles),
         scope_content_sha256: stringSha256(
             domains.map((domain) => `${domain}:${fingerprints.domains[domain].scope_content_sha256 || ''}`).join('\n')
         ),

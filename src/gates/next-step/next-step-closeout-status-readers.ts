@@ -39,6 +39,7 @@ import {
     readPostDoneAuditedScopeFingerprint
 } from '../task-audit/task-audit-summary-drift';
 import { isPlainRecord } from '../../core/records';
+import { canonicalPathList } from '../shared/canonical-path-list';
 
 export interface NextStepFinalReportSummary {
     closeout_json_path: string;
@@ -71,7 +72,7 @@ function normalizeSha256(value: unknown): string | null {
 
 function getPreflightChangedFiles(preflight: Record<string, unknown> | null): string[] {
     return Array.isArray(preflight?.changed_files)
-        ? [...new Set(preflight.changed_files.map((entry) => normalizePath(entry)).filter(Boolean))].sort()
+        ? canonicalPathList(preflight.changed_files.map((entry) => normalizePath(entry)).filter(Boolean))
         : [];
 }
 
@@ -79,12 +80,10 @@ function getPostDoneAuditedChangedFiles(
     preflight: Record<string, unknown> | null,
     docImpactPath: string
 ): string[] {
-    return [
-        ...new Set([
-            ...getPreflightChangedFiles(preflight),
-            ...getDocImpactDeclaredDocsUpdated(docImpactPath).map((entry) => normalizePath(entry)).filter(Boolean)
-        ])
-    ].sort();
+    return canonicalPathList([
+        ...getPreflightChangedFiles(preflight),
+        ...getDocImpactDeclaredDocsUpdated(docImpactPath).map((entry) => normalizePath(entry)).filter(Boolean)
+    ]);
 }
 
 function isFinalReportCommitCommandSuggestion(value: string): boolean {
@@ -353,12 +352,11 @@ export function readPostDoneWorkspaceDriftDecision(
         auditedFiles: auditedChangedFiles,
         currentChangedFiles,
         finalCloseoutJsonPath,
+        preflight,
         workspaceSnapshotRequest: authenticatedWorkspaceSnapshotRequest
     });
     if (stagedScopeDecision) {
-        return stagedScopeDecision.blocked
-            ? { blocked: true, reason: stagedScopeDecision.reason }
-            : { blocked: false, reason: stagedScopeDecision.reason };
+        return { blocked: stagedScopeDecision.blocked, reason: stagedScopeDecision.reason };
     }
     const closeout = safeReadJson(finalCloseoutJsonPath);
     const implementationSummary = isPlainRecord(closeout?.implementation_summary) ? closeout.implementation_summary : null;

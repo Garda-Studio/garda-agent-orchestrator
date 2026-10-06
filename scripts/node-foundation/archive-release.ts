@@ -130,7 +130,7 @@ function isSensitiveEvidencePath(relativePath: string): boolean {
 }
 
 export function hasCredentialLikeContent(value: string): boolean {
-    return [value, ...value.split('/')].some((part) => SECRET_CONTENT_RES.some((pattern) => pattern.test(part)));
+    return [value, ...value.split(/[\\/]/u)].some((part) => SECRET_CONTENT_RES.some((pattern) => pattern.test(part)));
 }
 
 function isGeneratedReviewSupportPath(relativePath: string): boolean {
@@ -289,10 +289,10 @@ function buildEntries(repoRoot: string, relativePaths: readonly string[], kind: 
         const identity = sourceIdentity(stat);
         const linkTarget = stat.isSymbolicLink() ? fs.readlinkSync(absolutePath) : undefined;
         if (linkTarget !== undefined) {
-            assertSupportedTarLinkTarget(linkTarget, relativePath);
             if (kind === 'evidence' && hasCredentialLikeContent(linkTarget)) {
                 throw new Error(`Refusing to archive evidence symlink with credential-like target: ${relativePath}`);
             }
+            assertSupportedTarLinkTarget(linkTarget, relativePath);
         }
         const size = linkTarget === undefined ? stat.size : Buffer.byteLength(linkTarget, 'utf8');
         totalBytes += size;
