@@ -300,4 +300,16 @@ export function writeTaskModeArtifactFixture(
         reviewerSubagentLaunchRemediation: options.reviewerSubagentLaunchRemediation ?? null,
         plan: options.plan ?? null
     }), null, 2), 'utf8');
+    if (options.plan) {
+        // Plan-bearing fixtures need the same immutable entry binding as real tasks.
+        appendTaskEvent(pathModule.join(repoRoot, 'garda-agent-orchestrator'), taskId, 'TASK_MODE_ENTERED', 'PASS', 'Synthetic plan-bound task entry.', {
+            artifact_path: taskModePath.replace(/\\/g, '/'),
+            canonical_source_of_truth: options.canonicalSourceOfTruth,
+            execution_provider_source: options.executionProviderSource ?? null,
+            runtime_identity_status: options.runtimeIdentityStatus ?? null,
+            plan_guided: true,
+            plan_path: options.plan.plan_path,
+            plan_sha256: options.plan.plan_sha256
+        });
+    }
 }

@@ -21,6 +21,17 @@ export function getTaskModeRuleSectionMigrations(): readonly RuleContractSection
     Object.freeze({
         liveRelativePath: `${bn}/live/docs/agent-rules/40-commands.md`,
         templateRelativePath: `${bn}/template/docs/agent-rules/40-commands.md`,
+        heading: '### Manual Validation Evidence Selector',
+        requiredSnippets: Object.freeze([
+            'root `task_id` matching the current task',
+            '"task_id": "T-042"',
+            '"selected_logs"',
+            'they never replace mandatory gates or review receipts'
+        ])
+    }),
+    Object.freeze({
+        liveRelativePath: `${bn}/live/docs/agent-rules/40-commands.md`,
+        templateRelativePath: `${bn}/template/docs/agent-rules/40-commands.md`,
         heading: '### Compile Gate (Mandatory)',
         requiredSnippets: Object.freeze([
             '### Compile Gate (Mandatory)',

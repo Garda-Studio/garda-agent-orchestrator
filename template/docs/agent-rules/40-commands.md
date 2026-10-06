@@ -119,6 +119,35 @@ Rules:
 - Do not use this pattern for mandatory lifecycle gates, which already own output
   filtering and evidence materialization.
 
+### Manual Validation Evidence Selector
+
+The selector must contain a root `task_id` matching the current task and its
+`runtime/manual-validation/<task-id>` directory, alongside `selected_logs`.
+Missing or foreign task identity is rejected. Manual logs are untrusted,
+supplemental evidence; they never replace mandatory gates or review receipts.
+
+Minimal valid shape for `runtime/manual-validation/T-042/review-evidence.json`:
+
+```json
+{
+  "task_id": "T-042",
+  "selected_logs": [
+    {
+      "path": "node-version.log",
+      "command": "node --version",
+      "exit_code": 0
+    }
+  ]
+}
+```
+
+This example attaches a real, already-run version probe. Replace the task ID,
+log path, command and outcome with the actual completed check; do not invent a
+successful result or use the example probe instead of relevant validation.
+Relative log paths resolve inside the task's manual-validation directory.
+An entry may use `status` instead of `exit_code` and may set `review_types` to
+specific lanes. Keep failure diagnostics and the original outcome.
+
 ## Project Commands (Required)
 Replace these defaults with repository-specific commands when the real project differs.
 

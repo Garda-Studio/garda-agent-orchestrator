@@ -1,5 +1,7 @@
 # Changelog
 
+- Include the current task identity in manual-validation selector guidance and
+  navigator recovery hints, and migrate the published example into managed rules.
 - Make performance reviewer guidance proportional to changed risks and quantitative
   claims. Preserve overload, growth and ordering checks while removing universal
   TTL/telemetry demands and conflicting legacy verdict output instructions.
