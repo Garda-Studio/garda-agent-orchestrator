@@ -658,6 +658,8 @@ test('local UI cleanup settings expose policy edits dynamic cleanup and task pur
             confirmation_phrase: string;
             settings: {
                 daily_maintenance_enabled: boolean;
+                daily_maintenance_dry_run: boolean;
+                purge_require_confirm: boolean;
                 eligible_older_than_days: number;
                 keep_latest_tasks: number;
                 include_problematic_tasks: boolean;
@@ -666,6 +668,8 @@ test('local UI cleanup settings expose policy edits dynamic cleanup and task pur
         assert.equal(policy.enabled, true);
         assert.equal(policy.confirmation_phrase, 'SAVE CLEANUP SETTINGS');
         assert.equal(policy.settings.daily_maintenance_enabled, false);
+        assert.equal(policy.settings.daily_maintenance_dry_run, false);
+        assert.equal(policy.settings.purge_require_confirm, false);
         assert.equal(policy.settings.eligible_older_than_days, 30);
         assert.equal(policy.settings.keep_latest_tasks, 0);
         assert.equal(policy.settings.include_problematic_tasks, false);
@@ -718,6 +722,21 @@ test('local UI cleanup settings expose policy edits dynamic cleanup and task pur
             keep_latest_tasks: 3,
             dry_run: false
         });
+
+        for (const preview of [true, false]) {
+            const toggle = await fetch(`${server.url}api/cleanup-settings`, {
+                method: 'POST',
+                headers: actionHeaders,
+                body: JSON.stringify({ mode: 'execute', settings: { daily_maintenance_dry_run: preview }, confirmation: 'SAVE CLEANUP SETTINGS' })
+            });
+            assert.equal(toggle.status, 200);
+            const reloaded = await (await fetch(`${server.url}api/cleanup-settings`)).json() as {
+                settings: { daily_maintenance_dry_run: boolean; purge_require_confirm: boolean };
+            };
+            assert.equal(reloaded.settings.daily_maintenance_dry_run, preview);
+            assert.equal(reloaded.settings.purge_require_confirm, false);
+            assert.equal(JSON.parse(fs.readFileSync(runtimeRetentionPath, 'utf8')).daily_maintenance.dry_run, preview);
+        }
 
         const runPreviewResponse = await fetch(`${server.url}api/cleanup-run`, {
             method: 'POST',

@@ -875,11 +875,37 @@ describe('runInit', () => {
             const materializedConfig = JSON.parse(fs.readFileSync(runtimeRetentionPath, 'utf8'));
             assert.equal(materializedConfig.healthy_done.compact_after_days, 45);
             assert.equal(materializedConfig.purge.require_confirm, true);
+            assert.equal(materializedConfig.daily_maintenance.dry_run, true);
             assert.equal(result.runtimeRetentionConfigMergeStatus, 'existing_values_preserved_and_missing_keys_filled');
 
             const report = fs.readFileSync(result.initReportPath, 'utf8');
             assert.ok(report.includes('Runtime retention config sync policy: preserve existing live values, fill missing keys from template.'));
             assert.ok(report.includes('Runtime retention config merge status: existing_values_preserved_and_missing_keys_filled'));
+        } finally {
+            fs.rmSync(projectRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('preserves runtime-retention mode choices and legacy preview on reinit', () => {
+        const { projectRoot, bundleRoot } = setupTestWorkspace(repoRoot);
+        try {
+            const options = { targetRoot: projectRoot, bundleRoot, sourceOfTruth: 'Claude' as const };
+            runInit(options);
+            const configPath = path.join(bundleRoot, 'live/config/runtime-retention.json');
+            const fresh = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            assert.equal(fresh.daily_maintenance.enabled, true);
+            assert.equal(fresh.daily_maintenance.dry_run, false);
+            assert.equal(fresh.purge.require_confirm, false);
+            for (const preview of [undefined, true, false]) {
+                const legacy = JSON.parse(JSON.stringify(fresh));
+                if (preview === undefined) delete legacy.daily_maintenance.dry_run;
+                else legacy.daily_maintenance.dry_run = preview;
+                fs.writeFileSync(configPath, JSON.stringify(legacy));
+                runInit(options);
+                const updated = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                assert.equal(updated.daily_maintenance.dry_run, preview ?? true);
+                assert.equal(updated.purge.require_confirm, false);
+            }
         } finally {
             fs.rmSync(projectRoot, { recursive: true, force: true });
         }

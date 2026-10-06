@@ -2,6 +2,10 @@
 
 ## 1.4.4
 
+### Automatic Cleanup Defaults
+
+- Apply retention-approved daily cleanup by default in new installations, retain the UI preview switch and optional confirmation safeguard, and show the effective scheduled mode. Preserve existing preview settings, legacy compatibility, protected evidence and explicit confirmation for manual cleanup.
+
 ### Compile Command Chains
 
 - Execute supported unquoted `&&` chains sequentially in both command executors, preserve quoted arguments, stop at the first failing child, and apply one timeout and cancellation boundary to the chain.

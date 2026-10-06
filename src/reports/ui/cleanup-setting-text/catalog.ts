@@ -56,12 +56,12 @@ export function buildCleanupSettingTextCatalog(): Readonly<Record<CleanupSetting
             label: 'Also delete problematic tasks'
         },
         daily_maintenance_dry_run: {
-            label: 'Daily maintenance dry-run',
-            description: 'When true, scheduled daily maintenance only lists candidates and writes audit output; it does not delete or compress artifacts. Use true while tuning thresholds, then switch to false to apply.'
+            label: 'Preview daily cleanup',
+            description: 'Off by default in new installations: daily maintenance applies retention-approved cleanup. Turn on to preview candidates without deleting or compressing artifacts. Existing preview choices are preserved. The confirmation safeguard below also forces preview when enabled.'
         },
         purge_require_confirm: {
             label: 'Automatic cleanup confirmation safeguard',
-            description: 'When true, scheduled or CLI destructive cleanup remains confirmation-gated instead of running silently. Manual UI cleanup and task-artifact cleanup always require their own typed confirmation phrases.'
+            description: 'Off by default in new installations. Turn on to force scheduled cleanup into preview even when preview mode is off. Manual CLI cleanup still requires --confirm. Manual UI cleanup and task-artifact cleanup always require their own typed confirmation phrases.'
         },
         healthy_done_compact_after_days: {
             label: 'Compress healthy DONE after (days)',

@@ -151,14 +151,14 @@ const DEFAULT_POLICY_DOCUMENT: RuntimeRetentionPolicyDocument = Object.freeze({
         preserve_detailed_evidence: true
     },
     purge: {
-        require_confirm: true
+        require_confirm: false
     },
     daily_maintenance: {
         enabled: false,
         max_tasks_per_run: 25,
         eligible_older_than_days: 30,
         keep_latest_tasks: 0,
-        dry_run: true
+        dry_run: false
     }
 });
 

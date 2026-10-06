@@ -598,7 +598,7 @@ Notes:
 - `clean` is a public alias for `gc`.
 - `--category plans` limits `gc` to retained Markdown working plans under `garda-agent-orchestrator/runtime/plans/*.md`; active task plans are preserved.
 - `--category reviews` previews or applies retention-approved review artifact removal/compression. Healthy `DONE` tasks require verified ledger evidence before ledger-only compaction; problem tasks stay recoverable and compress only heavy forensic artifacts.
-- Daily opportunistic maintenance after final closeout uses the same retention-only GC path, is lock-bound and non-critical, and defaults to dry-run. It writes a small daily report sentinel and does not perform broad generated-zone cleanup from the finalization path.
+- Daily opportunistic maintenance after final closeout uses the same retention-only GC path and is lock-bound and non-critical. New installations apply eligible cleanup by default (`daily_maintenance.dry_run=false`, `purge.require_confirm=false`). In the UI cleanup settings, enable daily cleanup preview to inspect candidates without deletion; the optional confirmation safeguard also forces preview. Existing explicit preview/safeguard choices and legacy documents without a dry-run field remain unchanged. Manual `gc` still requires `--confirm`. Maintenance writes a small daily report sentinel and does not perform broad generated-zone cleanup from the finalization path.
 
 ### Task Reset Aliases
 

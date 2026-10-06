@@ -364,6 +364,20 @@ export function runInitConfigStage(
                         })
                         : mergeConfig(templateConfig, existingConfig);
 
+            if (configName === 'runtime-retention' && hadExistingConfig) {
+                const existingDaily = existingConfig?.daily_maintenance;
+                const existingPurge = existingConfig?.purge;
+                // Missing legacy mode fields meant preview; new defaults apply only to new installations.
+                if (isPlainObject(materializedConfig.daily_maintenance)
+                    && (!isPlainObject(existingDaily) || !Object.hasOwn(existingDaily, 'dry_run'))) {
+                    materializedConfig.daily_maintenance.dry_run = true;
+                }
+                if (isPlainObject(materializedConfig.purge)
+                    && (!isPlainObject(existingPurge) || !Object.hasOwn(existingPurge, 'require_confirm'))) {
+                    materializedConfig.purge.require_confirm = true;
+                }
+            }
+
             if (configName === 'review-catalog') {
                 catalogReviewTypeIds = normalizeReviewCatalog(materializedConfig)
                     .review_types.map(({ id }) => id);

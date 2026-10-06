@@ -15,6 +15,7 @@ import {
 import { writeRollbackRecords } from '../../../src/lifecycle/common';
 import { appendTaskEvent } from '../../../src/gate-runtime/task-events';
 import { buildDefaultWorkflowConfig, type WorkflowConfigData } from '../../../src/core/workflow-config';
+import { readRuntimeRetentionPolicyDocument } from '../../../src/lifecycle/runtime-retention-policy';
 
 function makeWorkspace(prefix: string): { targetRoot: string; bundleRoot: string; cleanup: () => void } {
     const targetRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -199,6 +200,40 @@ function createHealthyDoneRetentionCandidate(
 }
 
 describe('daily retention maintenance', () => {
+    it('applies new-install defaults while explicit preview preserves eligible evidence', () => {
+        for (const preview of [false, true]) {
+            const workspace = makeWorkspace('daily-retention-default-mode-');
+            try {
+                const fallback = readRuntimeRetentionPolicyDocument(workspace.bundleRoot);
+                assert.equal(fallback.daily_maintenance.enabled, false, 'missing policy must not enable maintenance');
+                assert.equal(fallback.daily_maintenance.dry_run, false);
+                assert.equal(fallback.purge.require_confirm, false);
+                const template = JSON.parse(fs.readFileSync(path.resolve('template/config/runtime-retention.json'), 'utf8'));
+                assert.equal(template.daily_maintenance.enabled, true);
+                assert.equal(template.daily_maintenance.dry_run, false);
+                assert.equal(template.purge.require_confirm, false);
+                template.daily_maintenance.dry_run = preview;
+                const configPath = path.join(workspace.bundleRoot, 'live/config/runtime-retention.json');
+                fs.mkdirSync(path.dirname(configPath), { recursive: true });
+                fs.writeFileSync(configPath, JSON.stringify(template));
+                const candidate = createHealthyDoneRetentionCandidate(workspace.bundleRoot, 'T-700');
+                const unrelatedScratch = createOldRuntimeTmpEntry(workspace.bundleRoot);
+                const result = runDailyRetentionMaintenance({
+                    targetRoot: workspace.targetRoot,
+                    bundleRoot: workspace.bundleRoot,
+                    now: new Date('2026-05-21T10:00:00.000Z')
+                });
+                assert.equal(result.status, preview ? 'DRY_RUN' : 'SUCCESS');
+                assert.equal(result.dry_run, preview);
+                assert.equal(fs.existsSync(candidate.finalCloseoutPath), preview);
+                assert.equal(fs.existsSync(path.join(workspace.bundleRoot, 'runtime/task-ledger/T-700.json')), true);
+                assert.equal(fs.existsSync(unrelatedScratch), true, 'daily cleanup remains retention-only');
+            } finally {
+                workspace.cleanup();
+            }
+        }
+    });
+
     it('runs confirmed maintenance once per local day and then skips by sentinel', () => {
         const workspace = makeWorkspace('daily-retention-once-');
         try {

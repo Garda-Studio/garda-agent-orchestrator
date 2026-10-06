@@ -601,6 +601,12 @@ test('local UI cleanup settings rerender when the dashboard language changes', a
         vm.runInNewContext(extractDashboardScript(html), context);
         await flushPromises();
         const cleanupSettingsHtml = fakeDocument.elements['cleanup-settings'].innerHTML;
+        assert.match(cleanupSettingsHtml, /data-cleanup-maintenance-mode><strong>Daily maintenance:<\/strong> Preview calculation/u);
+        const maintenanceMode = context.cleanupMaintenanceModeLabel as (settings: Record<string, boolean>) => string;
+        assert.equal(maintenanceMode({ daily_maintenance_enabled: true, daily_maintenance_dry_run: false, purge_require_confirm: false }), 'Run cleanup');
+        assert.equal(maintenanceMode({ daily_maintenance_enabled: true, daily_maintenance_dry_run: true, purge_require_confirm: false }), 'Preview calculation');
+        assert.equal(maintenanceMode({ daily_maintenance_enabled: true, daily_maintenance_dry_run: false, purge_require_confirm: true }), 'Preview calculation');
+        assert.notEqual(maintenanceMode({ daily_maintenance_enabled: false, daily_maintenance_dry_run: false, purge_require_confirm: false }), 'Run cleanup');
         assert.match(cleanupSettingsHtml, /Delete tasks older than \(days\)/u);
         assert.match(cleanupSettingsHtml, /Keep at least newest tasks \(count\)/u);
         assert.match(cleanupSettingsHtml, /Also delete problematic tasks/u);
