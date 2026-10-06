@@ -1,12 +1,15 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 
 import { buildProtectedControlPlaneManifest, resolveProtectedControlPlaneManifestPath, writeProtectedControlPlaneManifest } from '../../../gates/protected-control-plane/protected-control-plane';
 import type { RecoverableFileTransaction } from '../../../core/recoverable-file-transaction';
 import { writeFileAtomically } from '../../../core/filesystem';
 import { validateWorkflowConfig } from '../../../schemas/config-artifacts';
 import { resolveActiveTaskIds } from '../../../core/task-queue/active-task-state';
+import { appendMandatoryTaskEvent, inspectTaskEventFile, readTaskTimelineJsonlEntries } from '../../../gate-runtime/task-events';
+import { normalizeWorkflowFileConfig } from './workflow-command-state';
 import type {
     WorkflowConfigMutationSource,
     WorkflowFileConfigData
@@ -16,6 +19,49 @@ export interface WorkflowConfigAuditWriteOptions {
     transaction?: RecoverableFileTransaction;
     mutationSource?: WorkflowConfigMutationSource | null;
     targetRoot?: string | null;
+    onAuditWritten?: (binding: WorkflowConfigAuditBinding) => void;
+}
+
+export interface WorkflowConfigAuditBinding {
+    auditPath: string;
+    configPath: string;
+    recordSha256: string;
+    taskEntryHashes: Record<string, string>;
+}
+
+function readAuditTaskEntryHash(bundleRoot: string, taskId: string): string | null {
+    const timelinePath = path.join(bundleRoot, 'runtime', 'task-events', `${taskId}.jsonl`);
+    if (!fs.existsSync(timelinePath)
+        || !['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(inspectTaskEventFile(timelinePath, taskId).status)) return null;
+    const entry = [...readTaskTimelineJsonlEntries(timelinePath)].reverse()
+        .find(({ record }) => record?.event_type === 'TASK_MODE_ENTERED');
+    return entry?.record?.outcome === 'PASS' ? sha256Text(entry.rawLine.trim()) : null;
+}
+
+function recordWorkflowConfigAuditStage(
+    bundleRoot: string,
+    binding: WorkflowConfigAuditBinding,
+    committed: boolean
+): void {
+    for (const [taskId, entryHash] of Object.entries(binding.taskEntryHashes)) {
+        if (readAuditTaskEntryHash(bundleRoot, taskId) !== entryHash) {
+            throw new Error(`Workflow audit cannot bind to a changed task cycle for '${taskId}'.`);
+        }
+        appendMandatoryTaskEvent(bundleRoot, taskId,
+            committed ? 'WORKFLOW_CONFIG_MUTATION_AUDITED' : 'WORKFLOW_CONFIG_MUTATION_PREPARED',
+            committed ? 'PASS' : 'INFO',
+            committed ? 'Committed workflow configuration mutation bound to the current task cycle.'
+                : 'Workflow configuration mutation prepared for the current task cycle.', {
+                audit_path: normalizeOutputPath(binding.auditPath),
+                config_path: normalizeOutputPath(binding.configPath),
+                audit_record_sha256: binding.recordSha256,
+                task_mode_entry_sha256: entryHash
+            }, { actor: 'workflow-config-set' });
+    }
+}
+
+export function bindCommittedWorkflowConfigAudit(bundleRoot: string, binding: WorkflowConfigAuditBinding): void {
+    recordWorkflowConfigAuditStage(bundleRoot, binding, true);
 }
 
 export function getWorkflowConfigField(config: WorkflowFileConfigData, fieldPath: string): unknown {
@@ -87,6 +133,18 @@ function resolveAuditActiveTaskIds(bundleRoot: string, targetRoot: string | null
     }
 }
 
+function isCommandOnlyConfigChange(beforeText: string, afterText: string): boolean {
+    try {
+        const before = normalizeWorkflowFileConfig(validateWorkflowConfig(JSON.parse(beforeText)) as WorkflowFileConfigData);
+        const after = normalizeWorkflowFileConfig(validateWorkflowConfig(JSON.parse(afterText)) as WorkflowFileConfigData);
+        before.full_suite_validation.command = '';
+        after.full_suite_validation.command = '';
+        return isDeepStrictEqual(before, after);
+    } catch {
+        return false;
+    }
+}
+
 export function writeWorkflowConfigAuditRecord(
     bundleRoot: string,
     configPath: string,
@@ -99,6 +157,11 @@ export function writeWorkflowConfigAuditRecord(
     fs.mkdirSync(path.dirname(auditPath), { recursive: true });
     const mutationSource = normalizeWorkflowConfigMutationSource(options.mutationSource);
     const activeTaskIds = resolveAuditActiveTaskIds(bundleRoot, options.targetRoot);
+    const taskEntryHashes: Record<string, string> = {};
+    for (const taskId of activeTaskIds) {
+        const entryHash = readAuditTaskEntryHash(bundleRoot, taskId);
+        if (entryHash) taskEntryHashes[taskId] = entryHash;
+    }
     const record = {
         schema_version: 1,
         event_source: 'workflow-config-set',
@@ -117,9 +180,13 @@ export function writeWorkflowConfigAuditRecord(
             }
             : null,
         before_sha256: sha256Text(beforeText),
-        after_sha256: sha256Text(afterText)
+        after_sha256: sha256Text(afterText),
+        command_only_change: isCommandOnlyConfigChange(beforeText, afterText)
     };
     const serializedRecord = JSON.stringify(record);
+    const binding = { auditPath, configPath, recordSha256: sha256Text(serializedRecord), taskEntryHashes };
+    // Persist the cycle binding before commit so interrupted publication remains visible.
+    recordWorkflowConfigAuditStage(bundleRoot, binding, false);
     if (options.transaction) options.transaction.append(auditPath, serializedRecord + '\n');
     else fs.appendFileSync(auditPath, serializedRecord + '\n', 'utf8');
     if (changedFields.includes('task_reset.enabled')) {
@@ -131,6 +198,8 @@ export function writeWorkflowConfigAuditRecord(
             options.transaction
         );
     }
+    if (options.onAuditWritten) options.onAuditWritten(binding);
+    else if (!options.transaction) bindCommittedWorkflowConfigAudit(bundleRoot, binding);
     return auditPath;
 }
 

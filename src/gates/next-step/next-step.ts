@@ -169,6 +169,7 @@ import {
     selectTaskEntryRulePackFileNames
 } from '../rule-pack/rule-pack-selection';
 import { readTaskModeProtectedManifestRecoveryRoute } from './next-step-startup-routing';
+import { hasAuthenticatedZeroDiffAuditScope } from './next-step-preflight-workspace-readiness';
 import {
     readCompileReadiness,
     readPreflightWorkspaceReadiness
@@ -3483,6 +3484,27 @@ export function resolveNextStepDecisionRoute(
             workspaceSnapshotRequest
         })
         : { ready: false, reason: 'No current preflight exists.' };
+    const zeroDiffProfileGuardrails = isPlainRecord(preflight?.profile_guardrails) ? preflight.profile_guardrails : {};
+    const zeroDiffReviewSnapshot = isPlainRecord(preflight?.effective_review_snapshot) ? preflight.effective_review_snapshot : {};
+    const zeroDiffReviewInputs = isPlainRecord(zeroDiffReviewSnapshot.inputs) ? zeroDiffReviewSnapshot.inputs : {};
+    const zeroDiffAuditPolicyCurrent = zeroDiffProfileGuardrails.zero_diff_no_reviewable_scope === true
+        && zeroDiffReviewInputs.zero_diff_baseline_only === true;
+    const auditedNoOpCommand = `${cliPrefix} gate record-no-op --task-id "${taskId}" --classification "AUDIT_ONLY" --reason "<operator-approved no-op rationale>" --preflight-path "${preflightCommandPath}" --repo-root "."`;
+    if (preflight && isPlainRecord(preflight.triggers)
+        && preflight.triggers.zero_diff_review_policy_refresh_allowed === true
+        && !zeroDiffAuditPolicyCurrent
+        && hasAuthenticatedZeroDiffAuditScope(repoRoot, preflight, workspaceSnapshotRequest)) {
+        const refreshCommand = buildClassifyChangeCommand({
+            repoRoot, cliPrefix, taskId, taskMode, taskModePath, preflightCommandPath,
+            includePlannedScope: false, changedFiles: []
+        }).replace(' gate classify-change ', ' gate classify-change --use-staged ');
+        return buildDecisionRouteResult({
+            status: 'BLOCKED', nextGate: 'classify-change',
+            title: 'Refresh authenticated zero-diff audit policy.',
+            reason: 'Current native ALREADY_DONE evidence proves an empty child audit beside unchanged parent work. Refresh the staged preflight policy, then bind a new native no-op to its hash before closeout.',
+            commands: [{ label: 'Refresh staged audit policy', command: refreshCommand }]
+        });
+    }
     const strictPreGuardWorkspaceReadiness = preflight
         ? readPreflightWorkspaceReadiness(repoRoot, preflight, {
             failedReviewType: null,
@@ -4186,12 +4208,23 @@ export function resolveNextStepDecisionRoute(
                 passed: evidence?.evidence_status === 'PASS'
                     && !!getCurrentNoOpEventSha256(repoRoot, taskId, evidence, eventsRoot),
                 evidenceStatus: evidence?.evidence_status || 'EVIDENCE_FILE_MISSING',
-                command:
-                    `${cliPrefix} gate record-no-op --task-id "${taskId}" --classification "AUDIT_ONLY" --reason "<operator-approved no-op rationale>" --preflight-path "${preflightCommandPath}" --repo-root "."`
+                command: auditedNoOpCommand
             };
         }
         return auditedNoOpState;
     };
+    if (preflight?.detection_source === 'git_staged_only' && zeroDiffAuditPolicyCurrent
+        && preflightRequiresAuditedNoOp(preflight) && preflightWorkspaceReadiness.ready
+        && isPlainRecord(preflight.triggers)
+        && preflight.triggers.zero_diff_review_policy_refresh_allowed === true
+        && !resolveAuditedNoOpState().passed) {
+        return buildDecisionRouteResult({
+            status: 'BLOCKED', nextGate: 'record-no-op',
+            title: 'Bind the refreshed zero-diff audit policy.',
+            reason: 'The authenticated staged audit policy is current. Bind a native no-op to its new preflight hash before continuing closeout.',
+            commands: [{ label: 'Bind current audited no-op', command: auditedNoOpCommand }]
+        });
+    }
     const resolveFullSuiteLifecycleRoute = () => {
         const fullSuiteRepairTaskCommand =
             `${cliPrefix} gate materialize-full-suite-repair-task --task-id "${taskId}" --preflight-path "${preflightCommandPath}" --full-suite-artifact-path "${toRepoDisplayPath(repoRoot, readinessArtifacts.paths.fullSuiteValidationPath)}" --repo-root "."`;

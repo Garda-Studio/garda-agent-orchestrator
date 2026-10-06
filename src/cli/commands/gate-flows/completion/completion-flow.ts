@@ -209,6 +209,8 @@ export function runLogTaskEventCommand(options: LogTaskEventCommandOptions): { o
         'RULE_PACK_LOADED',
         'HANDSHAKE_DIAGNOSTICS_RECORDED',
         'SHELL_SMOKE_PREFLIGHT_RECORDED',
+        'WORKFLOW_CONFIG_MUTATION_AUDITED',
+        'WORKFLOW_CONFIG_MUTATION_PREPARED',
         'REVIEW_PHASE_STARTED',
         'REVIEW_RECORDED',
         'REVIEWER_DELEGATION_ROUTED',
