@@ -1,4 +1,18 @@
 {
+  "local-commit-enabled": {
+    "label": "Uprawnienie do lokalnego commitu",
+    "description": "Jawne i audytowane włączenie daje temu obszarowi roboczemu trwałe uprawnienie do commitów zakończonych i sprawdzonych zadań. Wyłączenie je cofa. Testy, przeglądy i audyt po commicie pozostają wymagane; bez uprawnień do push ani CI.",
+    "options": {
+      "true": {
+        "label": "Włączone",
+        "description": "Zezwól na natywne commity zakończonych i sprawdzonych zadań."
+      },
+      "false": {
+        "label": "Wyłączone",
+        "description": "Zablokuj lokalne commity i cofnij wcześniejsze uprawnienia."
+      }
+    }
+  },
   "compact-enabled": {
     "label": "Zwięzłe wyjście",
     "description": "Ustawienie compact. Zmiany wymagają potwierdzenia; sekrety nie są maskowane.",

@@ -697,6 +697,18 @@ export const WORKFLOW_SETTING_DEFINITIONS: readonly WorkflowSettingDefinition[] 
         )
     },
     {
+        id: 'local-commit-enabled',
+        key: 'local_commit.enabled',
+        label: 'Local commit permission',
+        description: 'An explicit audited ON grants this workspace durable permission to commit completed and audited task scope. OFF revokes it. Reviews, tests and post-commit audit remain required; no push or CI permission is granted.',
+        flag: '--local-commit-enabled',
+        value_type: 'boolean',
+        options: booleanOptions(
+            'Allow native commits of completed and audited task scope in this workspace.',
+            'Block native local commits and revoke earlier grants.'
+        )
+    },
+    {
         id: 'auto-backup-enabled',
         key: 'auto_backup.enabled',
         label: 'Scheduled auto-backups',

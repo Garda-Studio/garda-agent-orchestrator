@@ -106,11 +106,10 @@ export function buildFinalReportOrder(summary: TaskAuditSummaryResult): string[]
         .filter((entry) => entry !== 'Do you want me to commit now? (yes/no)' && entry !== 'No commit confirmation required.')
         .filter((entry) => String(entry || '').trim().length > 0);
     if (
-        isFinalReportCommitCommandSuggestion(summary.final_report_contract.commit_command_suggestion || '') &&
-        summary.final_report_contract.commit_question === 'Do you want me to commit now? (yes/no)'
+        isFinalReportCommitCommandSuggestion(summary.final_report_contract.commit_command_suggestion || '')
     ) {
         reportOrder.push(summary.final_report_contract.commit_command_suggestion);
-        reportOrder.push(summary.final_report_contract.commit_question);
+        if (summary.final_report_contract.commit_question) reportOrder.push(summary.final_report_contract.commit_question);
     }
     return reportOrder;
 }

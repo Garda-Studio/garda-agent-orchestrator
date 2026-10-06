@@ -1,4 +1,18 @@
 {
+  "local-commit-enabled": {
+    "label": "로컬 커밋 권한",
+    "description": "감사된 명시적 활성화는 이 작업 공간에서 완료되고 감사된 작업을 커밋할 지속적인 권한을 부여합니다. 비활성화하면 취소됩니다. 테스트, 검토 및 커밋 후 감사는 필수이며 push나 CI 권한은 부여하지 않습니다.",
+    "options": {
+      "true": {
+        "label": "켜짐",
+        "description": "완료되고 감사된 작업 범위의 기본 커밋을 허용합니다."
+      },
+      "false": {
+        "label": "꺼짐",
+        "description": "로컬 커밋을 차단하고 기존 권한을 취소합니다."
+      }
+    }
+  },
   "compact-enabled": {
     "label": "간결한 출력",
     "description": "compact 설정입니다. 변경 시 확인이 필요하며 비밀 정보는 가려지지 않습니다.",

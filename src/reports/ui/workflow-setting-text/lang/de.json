@@ -1,4 +1,18 @@
 {
+  "local-commit-enabled": {
+    "label": "Lokale Commit-Berechtigung",
+    "description": "Explizites, protokolliertes EIN erlaubt diesem Workspace dauerhaft Commits abgeschlossener und geprüfter Aufgaben. AUS widerruft dies. Tests, Reviews und nachträgliches Audit bleiben Pflicht; keine Push- oder CI-Freigabe.",
+    "options": {
+      "true": {
+        "label": "Ein",
+        "description": "Native Commits abgeschlossener und geprüfter Aufgaben erlauben."
+      },
+      "false": {
+        "label": "Aus",
+        "description": "Lokale Commits sperren und frühere Freigaben widerrufen."
+      }
+    }
+  },
   "compact-enabled": {
     "label": "Kompakte Ausgabe",
     "description": "Einstellung für compact. Änderungen benötigen eine Bestätigung; Geheimnisse werden nicht maskiert.",

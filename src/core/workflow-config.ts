@@ -185,6 +185,7 @@ export interface WorkflowConfigData {
     review_cycle_guard: ReviewCycleGuardConfig;
     project_memory_maintenance: ProjectMemoryMaintenanceConfig;
     task_reset: TaskResetConfig;
+    local_commit: { enabled: boolean };
     auto_backup: AutoBackupConfig;
     optional_quality_checks: OptionalQualityChecksConfig;
     orchestrator_work_policy: OrchestratorWorkPolicyConfig;
@@ -241,6 +242,9 @@ const DEFAULT_WORKFLOW_CONFIG: WorkflowConfigData = Object.freeze({
         impact_artifact_retention_days: 30
     }),
     task_reset: Object.freeze({
+        enabled: false
+    }),
+    local_commit: Object.freeze({
         enabled: false
     }),
     auto_backup: Object.freeze({

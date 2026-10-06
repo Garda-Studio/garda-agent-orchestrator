@@ -1,4 +1,18 @@
 {
+  "local-commit-enabled": {
+    "label": "Behörighet för lokala commits",
+    "description": "Uttrycklig och granskad aktivering ger denna arbetsyta varaktig behörighet för avslutade och granskade uppgifter. Avaktivering återkallar den. Tester, granskningar och kontroll efter commit krävs fortfarande; ingen behörighet för push eller CI.",
+    "options": {
+      "true": {
+        "label": "På",
+        "description": "Tillåt inbyggda commits för avslutade och granskade uppgifter."
+      },
+      "false": {
+        "label": "Av",
+        "description": "Blockera lokala commits och återkalla tidigare behörigheter."
+      }
+    }
+  },
   "compact-enabled": {
     "label": "Kompakt utdata",
     "description": "Inställning för compact. Ändringar kräver bekräftelse; hemligheter maskeras inte.",

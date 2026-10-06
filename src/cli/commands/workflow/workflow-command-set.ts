@@ -703,6 +703,14 @@ function handleSetLocked(
         changedFields.push('task_reset.enabled');
     }
     nextConfig.task_reset = nextTaskReset;
+    const localCommitSetting = resolveBooleanSettingOption({
+        parsedOptions: options, canonicalKey: 'localCommitEnabled', aliasKey: 'localCommitAlias',
+        canonicalFlag: '--local-commit-enabled', aliasFlag: '--local-commit'
+    });
+    if (localCommitSetting) {
+        nextConfig.local_commit = { enabled: parseBooleanText(localCommitSetting.value, localCommitSetting.flagName) };
+        changedFields.push('local_commit.enabled');
+    }
 
     const nextAutoBackup = cloneAutoBackupConfig(
         normalizeAutoBackupConfig(nextConfig.auto_backup ?? buildDefaultWorkflowConfig().auto_backup)
@@ -844,6 +852,7 @@ function handleSetLocked(
         && requestedFields.includes('task_reset.enabled')
         && nextValidated.task_reset?.enabled === true
         && String(options.operatorConfirmed || '').trim() === 'yes';
+    const localCommitAuditRequested = requestedFields.includes('local_commit.enabled');
 
     let auditPath: string | null = null;
     let protectedManifestPath: string | null = null;
@@ -860,15 +869,15 @@ function handleSetLocked(
         if (!safeSelfGuardHardening) {
             requireWorkflowSetOperatorConfirmation(options);
         }
-        if (workflowConfigChanged) {
+        if (workflowConfigChanged || localCommitAuditRequested) {
             const currentFileText = state.exists ? fs.readFileSync(roots.configPath, 'utf8') : '';
-            writeWorkflowConfig(roots.configPath, nextValidated, transaction);
+            if (workflowConfigChanged) writeWorkflowConfig(roots.configPath, nextValidated, transaction);
             auditPath = writeWorkflowConfigAuditRecord(
                 roots.bundleRoot,
                 roots.configPath,
-                actualWorkflowConfigChangedFields,
+                [...new Set([...actualWorkflowConfigChangedFields, ...(localCommitAuditRequested ? ['local_commit.enabled'] : [])])],
                 currentFileText,
-                nextSerialized,
+                workflowConfigChanged ? nextSerialized : currentFileText,
                 auditWriteOptions
             );
         }
@@ -884,13 +893,13 @@ function handleSetLocked(
             );
         }
         protectedManifestPath = refreshWorkflowProtectedManifest(resolveProtectedManifestRefreshRoot(roots), transaction);
-    } else if (taskResetAuditRepairRequested) {
+    } else if (taskResetAuditRepairRequested || localCommitAuditRequested) {
         requireWorkflowSetOperatorConfirmation(options);
         const currentFileText = fs.readFileSync(roots.configPath, 'utf8');
         auditPath = writeWorkflowConfigAuditRecord(
             roots.bundleRoot,
             roots.configPath,
-            ['task_reset.enabled'],
+            [...(taskResetAuditRepairRequested ? ['task_reset.enabled'] : []), ...(localCommitAuditRequested ? ['local_commit.enabled'] : [])],
             currentFileText,
             currentFileText,
             auditWriteOptions

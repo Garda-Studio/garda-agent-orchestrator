@@ -1,4 +1,18 @@
 {
+  "local-commit-enabled": {
+    "label": "Permissão de commit local",
+    "description": "A ativação explícita e auditada concede a este espaço permissão duradoura para tarefas concluídas e auditadas. Desativar revoga a permissão. Testes, revisões e auditoria após o commit continuam obrigatórios; não autoriza push nem CI.",
+    "options": {
+      "true": {
+        "label": "Ativado",
+        "description": "Permitir commits nativos de tarefas concluídas e auditadas."
+      },
+      "false": {
+        "label": "Desativado",
+        "description": "Bloquear commits locais e revogar permissões anteriores."
+      }
+    }
+  },
   "compact-enabled": {
     "label": "Saída compacta",
     "description": "Definição de compact. As alterações exigem confirmação; os segredos não são ocultados.",

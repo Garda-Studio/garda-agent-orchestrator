@@ -1,4 +1,18 @@
 {
+  "local-commit-enabled": {
+    "label": "Quyền commit cục bộ",
+    "description": "Bật rõ ràng qua kiểm toán cấp quyền lâu dài trong không gian này cho các tác vụ đã hoàn tất và được kiểm toán. Tắt sẽ thu hồi quyền. Kiểm thử, rà soát và kiểm toán sau commit vẫn bắt buộc; không cấp quyền push hay CI.",
+    "options": {
+      "true": {
+        "label": "Bật",
+        "description": "Cho phép commit gốc cho phạm vi tác vụ đã hoàn tất và được kiểm toán."
+      },
+      "false": {
+        "label": "Tắt",
+        "description": "Chặn commit cục bộ và thu hồi các quyền trước đó."
+      }
+    }
+  },
   "compact-enabled": {
     "label": "Đầu ra rút gọn",
     "description": "Thiết lập compact. Thay đổi cần xác nhận; thông tin bí mật không bị che.",

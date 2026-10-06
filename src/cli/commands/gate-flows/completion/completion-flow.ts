@@ -1,10 +1,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 import {
     EXIT_GENERAL_FAILURE
 } from '../../../exit-codes';
 import {
     DEFAULT_GIT_TIMEOUT_MS,
+    spawnSyncWithTimeout,
     spawnStreamed
 } from '../../../../core/subprocess';
 import {
@@ -35,6 +37,9 @@ import {
     parseJsonOption
 } from '../../../gate-cli/gates-parser';
 import { requireResolvedPath } from '../../shared-command-utils';
+import { bindContainedDestination, ensureContainedDirectory } from '../../../../core/contained-filesystem';
+import { resolveLocalCommitAvailability } from '../../../../core/auth/local-commit-availability';
+import { buildTaskAuditSummary, synchronizeFinalCloseoutArtifacts } from '../../../../gates/task-audit/task-audit-summary';
 import {
     resolveOrchestratorRoot,
     isPlainObject
@@ -60,11 +65,12 @@ export interface HumanCommitOptions {
 function parseHumanCommitInvocation(
     gitArgs: unknown,
     options: HumanCommitOptions
-): { commitArgs: string[]; cwd: string } {
+): { commitArgs: string[]; cwd: string; taskId: string } {
     const invocationCwd = options.cwd || process.cwd();
     let cwd = invocationCwd;
     let operatorConfirmed = false;
     let operatorConfirmedAtUtc: string | null = null;
+    let taskId = '';
     const commitArgs: string[] = [];
     const rawArgs = gateHelpers.toStringArray(gitArgs).filter(function (item: string) {
         return String(item || '').trim() !== '';
@@ -72,6 +78,11 @@ function parseHumanCommitInvocation(
 
     for (let index = 0; index < rawArgs.length; index += 1) {
         const argument = rawArgs[index];
+        if (argument === '--task-id') {
+            if (taskId || !rawArgs[index + 1]) throw new Error('--task-id requires exactly one task identity.');
+            taskId = assertValidTaskId(rawArgs[++index]);
+            continue;
+        }
         if (argument === '--') {
             commitArgs.push(...rawArgs.slice(index));
             break;
@@ -114,7 +125,7 @@ function parseHumanCommitInvocation(
         commitArgs.push(argument);
     }
 
-    validateFreshOperatorConfirmation({
+    if (operatorConfirmed || operatorConfirmedAtUtc) validateFreshOperatorConfirmation({
         actionLabel: 'human-commit',
         confirmed: operatorConfirmed,
         confirmedAtUtc: operatorConfirmedAtUtc,
@@ -125,7 +136,13 @@ function parseHumanCommitInvocation(
         throw new Error('Provide git commit arguments, for example: -m "feat: message"');
     }
 
-    return { commitArgs, cwd };
+    const permission = resolveLocalCommitAvailability(cwd);
+    if (!permission.enabled) throw new Error(`Local commit permission is disabled: ${permission.disabledReason}. ${permission.remediationCommand}`);
+    if (!taskId) throw new Error('Native local commits require --task-id for completed, audited task scope.');
+    const messageOnly = commitArgs.length === 2 && ['-m', '--message'].includes(commitArgs[0])
+        || commitArgs.length === 1 && /^--message=.+/u.test(commitArgs[0]);
+    if (!messageOnly) throw new Error('Native local commits accept only --message; amend, pathspec, hooks and index overrides are forbidden.');
+    return { commitArgs, cwd, taskId };
 }
 
 interface CommandAuditPayload {
@@ -332,15 +349,217 @@ export function runLogTaskEventCommand(options: LogTaskEventCommandOptions): { o
     };
 }
 
+function prepareNativeCommit(cwd: string) {
+    if (Object.entries(process.env).some(([key, value]) => value
+        && /^GIT_(?:DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|NAMESPACE|CONFIG(?:_.*)?|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CEILING_DIRECTORIES)$/iu.test(key))) {
+        throw new Error('Native local commits reject inherited Git workspace, index and configuration overrides.');
+    }
+    const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/iu.test(key)));
+    const git = (args: string[], input?: Buffer, useCommitIndex = false) => {
+        const result = spawnSyncWithTimeout('git', args, { cwd, input, encoding: 'utf8', timeoutMs: DEFAULT_GIT_TIMEOUT_MS,
+            env: useCommitIndex ? { ...environment, GIT_INDEX_FILE: commitIndex } : environment });
+        if (result.status !== 0) throw new Error(`Native commit Git inspection failed: ${result.stderr}`);
+        return result.stdout;
+    };
+    const readHead = () => {
+        const result = spawnSyncWithTimeout('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd, encoding: 'utf8', timeoutMs: DEFAULT_GIT_TIMEOUT_MS, env: environment });
+        if (result.status === 0) return result.stdout.trim();
+        if (result.status === 1) return null;
+        throw new Error(`Native commit HEAD inspection failed: ${result.stderr}`);
+    };
+    const head = readHead();
+    for (const operation of ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply', 'sequencer']) {
+        if (fs.existsSync(path.resolve(cwd, git(['rev-parse', '--git-path', operation]).trim()))) {
+            throw new Error('Native local commits require an ordinary task commit outside an active merge, rebase or sequencer.');
+        }
+    }
+    const indexPath = path.resolve(cwd, git(['rev-parse', '--git-path', 'index']).trim());
+    const indexDirectory = path.join(resolveOrchestratorRoot(cwd), 'runtime', 'tmp');
+    ensureContainedDirectory(cwd, indexDirectory);
+    const commitIndex = path.join(indexDirectory, `local-commit-${process.pid}-${Date.now()}.index`);
+    bindContainedDestination(cwd, commitIndex);
+    fs.copyFileSync(indexPath, commitIndex, fs.constants.COPYFILE_EXCL);
+    return { environment, git, readHead, head, indexPath, commitIndex };
+}
+
+function readNativeGitFileEntries(output: string, index: boolean): Map<string, { mode: string; objectId: string }> {
+    const pattern = index ? /^(\d{6}) ([a-f0-9]{40,64}) 0$/u : /^(\d{6}) \w+ ([a-f0-9]{40,64})$/u;
+    const entries = new Map<string, { mode: string; objectId: string }>();
+    for (let offset = 0; offset < output.length;) {
+        const end = output.indexOf('\0', offset);
+        if (end < 0) throw new Error('Native commit rejects incomplete Git file entries.');
+        const record = output.slice(offset, end);
+        offset = end + 1;
+        const separator = record.indexOf('\t');
+        const match = pattern.exec(record.slice(0, separator));
+        if (!match || separator < 0) throw new Error('Native commit rejects unresolved or invalid Git file entries.');
+        entries.set(record.slice(separator + 1), { mode: match[1], objectId: match[2] });
+    }
+    return entries;
+}
+
+function assertAcceptedWorkingBytes(cwd: string, files: readonly string[], expectedHash: string | null | undefined, snapshots?: Map<string, Buffer | null>): void {
+    const frames = [...new Set(files)].sort().map((file) => {
+        const destination = path.resolve(cwd, file);
+        bindContainedDestination(cwd, destination);
+        if (!fs.existsSync(destination)) {
+            snapshots?.set(file, null);
+            return `${file}:missing`;
+        }
+        if (!fs.lstatSync(destination).isFile()) throw new Error('Native working-tree commits require regular files; use native staged validation for other file types.');
+        const bytes = fs.readFileSync(destination);
+        snapshots?.set(file, bytes);
+        // Native worktree scope framing binds the captured bytes, rather than a later filesystem read.
+        return `${file}:worktree:file:${bytes.length}:${createHash('sha256').update(bytes).digest('hex')}`;
+    });
+    if (createHash('sha256').update(frames.join('\n')).digest('hex') !== expectedHash) {
+        throw new Error('Native commit captured content differs from authenticated accepted task evidence.');
+    }
+}
+
+function assertAcceptedNativeIndexContent(
+    cwd: string, prepared: ReturnType<typeof prepareNativeCommit>, files: string[], audit: ReturnType<typeof buildTaskAuditSummary>
+): void {
+    const implementation = audit.final_closeout.implementation_summary;
+    // Native task audit reconstructs original staged/untracked provenance and binds blob modes/OIDs.
+    if (implementation.audited_scope_provenance?.use_staged === true) return;
+    const snapshots = new Map<string, Buffer | null>();
+    assertAcceptedWorkingBytes(cwd, implementation.changed_files ?? [], implementation.scope_content_sha256, snapshots);
+    const index = readNativeGitFileEntries(prepared.git(['--literal-pathspecs', 'ls-files', '--stage', '-z', '--', ...files]), true);
+    const base = prepared.head ? readNativeGitFileEntries(prepared.git(['--literal-pathspecs', 'ls-tree', '-r', '-z', prepared.head, '--', ...files]), false) : new Map();
+    for (const file of files) {
+        const bytes = snapshots.get(file);
+        const entry = index.get(file);
+        if (bytes === null && !entry) continue;
+        if (!entry || !bytes || !['100644', '100755'].includes(entry.mode)
+            || entry.mode !== (base.get(file)?.mode ?? '100644')) {
+            throw new Error('Native commit staged mode differs from accepted working-tree scope; use native staged validation for mode changes.');
+        }
+        const acceptedObjectId = prepared.git(['hash-object', `--path=${file}`, '--stdin'], bytes).trim();
+        if (entry.objectId !== acceptedObjectId) throw new Error('Native commit staged content differs from authenticated accepted task evidence.');
+    }
+}
+
+function assertNativeCommitReadiness(
+    invocation: ReturnType<typeof parseHumanCommitInvocation>, prepared: ReturnType<typeof prepareNativeCommit>
+) {
+    const audit = buildTaskAuditSummary({ taskId: invocation.taskId, repoRoot: invocation.cwd });
+    if (audit.status !== 'PASS' || !['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(audit.integrity_status)) {
+        throw new Error(`Native local commit requires completion and task audit PASS: ${audit.status}.`);
+    }
+    const acceptedFiles = new Set(audit.final_closeout.implementation_summary.changed_files ?? []);
+    const stagedFiles = prepared.git(['diff', '--cached', '--no-renames', '--name-only', '-z']).split('\0').filter(Boolean);
+    if (stagedFiles.length === 0 || stagedFiles.some((file) => !acceptedFiles.has(file))) {
+        throw new Error('Native local commit rejects empty or unrelated staged scope.');
+    }
+    assertAcceptedNativeIndexContent(invocation.cwd, prepared, stagedFiles, audit);
+    const indexBytes = fs.readFileSync(prepared.indexPath);
+    if (!indexBytes.equals(fs.readFileSync(prepared.commitIndex))
+        || prepared.readHead() !== prepared.head
+        || !resolveLocalCommitAvailability(invocation.cwd).enabled) throw new Error('Native commit readiness changed before Git launch.');
+    return { audit, indexBytes, tree: prepared.git(['write-tree'], undefined, true).trim() };
+}
+
+function assertNativeCommitPublication(
+    invocation: ReturnType<typeof parseHumanCommitInvocation>, prepared: ReturnType<typeof prepareNativeCommit>,
+    accepted: ReturnType<typeof assertNativeCommitReadiness>
+): void {
+    bindContainedDestination(invocation.cwd, prepared.commitIndex);
+    if (prepared.git(['write-tree'], undefined, true).trim() !== accepted.tree
+        || !fs.readFileSync(prepared.indexPath).equals(accepted.indexBytes)
+        || prepared.readHead() !== prepared.head
+        || !resolveLocalCommitAvailability(invocation.cwd).enabled) {
+        throw new Error('Native commit readiness changed after Git hooks; accepted scope must be validated again.');
+    }
+    const implementation = accepted.audit.final_closeout.implementation_summary;
+    if (implementation.audited_scope_provenance?.use_staged !== true) {
+        assertAcceptedWorkingBytes(invocation.cwd, implementation.changed_files ?? [], implementation.scope_content_sha256);
+    }
+}
+
+async function runNativeCommitHook(
+    invocation: ReturnType<typeof parseHumanCommitInvocation>, prepared: ReturnType<typeof prepareNativeCommit>,
+    hook: string, args: string[] = []
+): Promise<number> {
+    const result = await spawnStreamed('git', ['hook', 'run', '--ignore-missing', hook, ...(args.length ? ['--', ...args] : [])], {
+        cwd: invocation.cwd, inheritStdio: true, timeoutMs: DEFAULT_GIT_TIMEOUT_MS,
+        env: { ...prepared.environment, GARDA_ALLOW_COMMIT: '1', GIT_INDEX_FILE: prepared.commitIndex, GIT_EDITOR: ':' }, envMode: 'replace'
+    });
+    return result.exitCode || (result.timedOut || result.cancelled || result.sinkError ? EXIT_GENERAL_FAILURE : 0);
+}
+
+function readNativeCommitSetting(prepared: ReturnType<typeof prepareNativeCommit>, cwd: string, key: string, boolean = false): string | null {
+    const result = spawnSyncWithTimeout('git', ['config', ...(boolean ? ['--type=bool'] : []), '--get', key], {
+        cwd, encoding: 'utf8', timeoutMs: DEFAULT_GIT_TIMEOUT_MS, env: prepared.environment
+    });
+    if (result.status === 1) return null;
+    if (result.status !== 0) throw new Error(`Native commit configuration inspection failed: ${result.stderr}`);
+    return result.stdout.trim();
+}
+
+function createAcceptedNativeCommit(
+    invocation: ReturnType<typeof parseHumanCommitInvocation>, prepared: ReturnType<typeof prepareNativeCommit>, tree: string
+): string {
+    const messagePath = `${prepared.commitIndex}.message`;
+    bindContainedDestination(invocation.cwd, messagePath);
+    let message = fs.readFileSync(messagePath);
+    const cleanup = readNativeCommitSetting(prepared, invocation.cwd, 'commit.cleanup') ?? 'default';
+    if (!['default', 'whitespace', 'verbatim', 'strip', 'scissors'].includes(cleanup)) throw new Error(`Unsupported Git commit.cleanup: ${cleanup}.`);
+    if (cleanup !== 'verbatim') message = Buffer.from(prepared.git(['stripspace', ...(cleanup === 'strip' ? ['--strip-comments'] : [])], message));
+    if (!message.toString('utf8').trim()) throw new Error('Native commits require a nonempty commit message after hooks and cleanup.');
+    const signing = readNativeCommitSetting(prepared, invocation.cwd, 'commit.gpgSign', true) === 'true' ? ['-S'] : [];
+    // Publishing a pinned object prevents hook/background index writes from changing the accepted tree.
+    return prepared.git(['commit-tree', tree, ...(prepared.head ? ['-p', prepared.head] : []), ...signing, '-F', '-'], message).trim();
+}
+
+function finalizeNativeCommit(
+    invocation: ReturnType<typeof parseHumanCommitInvocation>, prepared: ReturnType<typeof prepareNativeCommit>,
+    acceptedTree: string | undefined, publishedCommit: string | undefined
+): void {
+    const postCommitAudit = buildTaskAuditSummary({ taskId: invocation.taskId, repoRoot: invocation.cwd });
+    synchronizeFinalCloseoutArtifacts(postCommitAudit);
+    if (postCommitAudit.status !== 'PASS') throw new Error(`Post-commit task audit failed: ${postCommitAudit.status}. Preserve the commit for diagnosis.`);
+    if (!acceptedTree || !publishedCommit || prepared.readHead() !== publishedCommit
+        || prepared.git(['rev-parse', 'HEAD^{tree}']).trim() !== acceptedTree) {
+        throw new Error('Local commit identity or tree changed; post-commit acceptance is blocked. Preserve the commit for diagnosis.');
+    }
+    const parentMatches = prepared.head === null
+        ? prepared.git(['rev-list', '--parents', '-n', '1', 'HEAD']).trim().split(/\s+/u).length === 1
+        : prepared.git(['rev-parse', 'HEAD^']).trim() === prepared.head;
+    if (!parentMatches) throw new Error('Local commit parent changed; post-commit acceptance is blocked.');
+}
+
 export async function runHumanCommitCommand(gitArgs: unknown, options: HumanCommitOptions = {}): Promise<number> {
     const invocation = parseHumanCommitInvocation(gitArgs, options);
-
-    const result = await spawnStreamed('git', ['commit', ...invocation.commitArgs], {
-        cwd: invocation.cwd,
-        inheritStdio: true,
-        timeoutMs: DEFAULT_GIT_TIMEOUT_MS,
-        env: { GARDA_ALLOW_COMMIT: '1' }
-    });
-
-    return result.exitCode;
+    const prepared = prepareNativeCommit(invocation.cwd);
+    let accepted: ReturnType<typeof assertNativeCommitReadiness> | undefined;
+    let publicationAttempted = false;
+    let publishedCommit: string | undefined;
+    try {
+        accepted = assertNativeCommitReadiness(invocation, prepared);
+        const messagePath = `${prepared.commitIndex}.message`;
+        const message = invocation.commitArgs.length === 1 ? invocation.commitArgs[0].slice('--message='.length) : invocation.commitArgs[1];
+        bindContainedDestination(invocation.cwd, messagePath);
+        fs.writeFileSync(messagePath, `${message}\n`, { flag: 'wx', mode: 0o600 });
+        for (const [hook, args] of [['pre-commit', []], ['prepare-commit-msg', [messagePath, 'message']], ['commit-msg', [messagePath]]] as const) {
+            const exitCode = await runNativeCommitHook(invocation, prepared, hook, [...args]);
+            if (exitCode !== 0) return exitCode;
+        }
+        assertNativeCommitPublication(invocation, prepared, accepted);
+        const commit = createAcceptedNativeCommit(invocation, prepared, accepted.tree);
+        assertNativeCommitPublication(invocation, prepared, accepted);
+        publicationAttempted = true;
+        prepared.git(['update-ref', '-m', `commit: ${message.split('\n')[0]}`, 'HEAD', commit, prepared.head ?? '0'.repeat(commit.length)]);
+        publishedCommit = commit;
+        return await runNativeCommitHook(invocation, prepared, 'post-commit');
+    } finally {
+        try {
+            if (publicationAttempted || prepared.readHead() !== prepared.head) finalizeNativeCommit(invocation, prepared, accepted?.tree, publishedCommit);
+        } finally {
+            for (const suffix of ['', '.lock', '.message']) {
+                bindContainedDestination(invocation.cwd, `${prepared.commitIndex}${suffix}`);
+                fs.rmSync(`${prepared.commitIndex}${suffix}`, { force: true });
+            }
+        }
+    }
 }

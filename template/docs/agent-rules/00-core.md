@@ -13,7 +13,7 @@ Default response brevity: {{ASSISTANT_RESPONSE_BREVITY}}.
 2. Keep responses {{ASSISTANT_RESPONSE_BREVITY}} unless the user explicitly asks for more or less detail.
 3. Keep code in English (variables, functions, classes, comments in code).
 4. Keep documentation in English (README, docs, file content).
-5. Task completion always ends with a short agent-authored summary followed by the Garda-generated final user report printed verbatim from `runtime/reviews/<task-id>-final-user-report.md`, then the suggested conventional-style `git commit -m "<type>(<scope>): <summary>"` command and explicit `Do you want me to commit now? (yes/no)` question when there are committable changes (see `80-task-workflow.md`, Mandatory Gate Contract).
+5. Task completion ends with a short agent-authored summary and the verbatim Garda final user report, followed by the native commit guidance in the current final-report contract. An authenticated workspace-local ON grant supplies durable operator permission; do not ask the same commit question again. OFF or missing authority blocks native commits. Follow `80-task-workflow.md` for scope checks and post-commit audit.
 
 ## Project Memory — Storage Directive
 1. Durable project knowledge (architecture, conventions, stack details, domain constraints, design decisions) must be written to `garda-agent-orchestrator/live/docs/project-memory/` as a compact project map, not as a task log.

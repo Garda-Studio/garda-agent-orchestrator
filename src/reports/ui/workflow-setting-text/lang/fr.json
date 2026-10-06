@@ -1,4 +1,18 @@
 {
+  "local-commit-enabled": {
+    "label": "Autorisation de commit local",
+    "description": "Une activation explicite et auditée accorde à cet espace une autorisation durable pour les tâches terminées et auditées. La désactivation la révoque. Tests, revues et audit après commit restent obligatoires ; aucun droit de push ou de CI.",
+    "options": {
+      "true": {
+        "label": "Activé",
+        "description": "Autoriser les commits natifs des tâches terminées et auditées."
+      },
+      "false": {
+        "label": "Désactivé",
+        "description": "Bloquer les commits locaux et révoquer les autorisations antérieures."
+      }
+    }
+  },
   "compact-enabled": {
     "label": "Sortie compacte",
     "description": "Paramètre compact. Les modifications nécessitent une confirmation ; les secrets ne sont pas masqués.",

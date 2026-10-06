@@ -10,6 +10,7 @@ import { validateWorkflowConfig } from '../../../schemas/config-artifacts';
 import { resolveActiveTaskIds } from '../../../core/task-queue/active-task-state';
 import { appendMandatoryTaskEvent, inspectTaskEventFile, readTaskTimelineJsonlEntries } from '../../../gate-runtime/task-events';
 import { normalizeWorkflowFileConfig } from './workflow-command-state';
+import { authenticateLocalCommitWorkflowAudit, localCommitReceiptPath } from '../../../core/auth/local-commit-availability';
 import type {
     WorkflowConfigMutationSource,
     WorkflowFileConfigData
@@ -162,7 +163,9 @@ export function writeWorkflowConfigAuditRecord(
         const entryHash = readAuditTaskEntryHash(bundleRoot, taskId);
         if (entryHash) taskEntryHashes[taskId] = entryHash;
     }
-    const record = {
+    const permissionRequested = changedFields.includes('local_commit.enabled');
+    const auditRecordByteOffset = permissionRequested && fs.existsSync(auditPath) ? fs.statSync(auditPath).size : 0;
+    const record = authenticateLocalCommitWorkflowAudit(options.targetRoot || path.dirname(bundleRoot), {
         schema_version: 1,
         event_source: 'workflow-config-set',
         timestamp_utc: new Date().toISOString(),
@@ -181,8 +184,10 @@ export function writeWorkflowConfigAuditRecord(
             : null,
         before_sha256: sha256Text(beforeText),
         after_sha256: sha256Text(afterText),
-        command_only_change: isCommandOnlyConfigChange(beforeText, afterText)
-    };
+        command_only_change: isCommandOnlyConfigChange(beforeText, afterText),
+        ...(permissionRequested ? { local_commit_enabled: (JSON.parse(afterText) as WorkflowFileConfigData).local_commit?.enabled === true,
+            audit_record_byte_offset: auditRecordByteOffset } : {})
+    }, permissionRequested);
     const serializedRecord = JSON.stringify(record);
     const binding = { auditPath, configPath, recordSha256: sha256Text(serializedRecord), taskEntryHashes };
     // Persist the cycle binding before commit so interrupted publication remains visible.
@@ -197,6 +202,15 @@ export function writeWorkflowConfigAuditRecord(
             sha256Text(serializedRecord),
             options.transaction
         );
+    }
+    if (permissionRequested) {
+        const receiptPath = localCommitReceiptPath(options.targetRoot || path.dirname(bundleRoot));
+        const content = JSON.stringify({ schema_version: 2, event_source: 'local-commit-enablement-receipt',
+            enabled: record.local_commit_enabled, after_sha256: record.after_sha256,
+            audit_record_byte_offset: auditRecordByteOffset,
+            audit_record_sha256: sha256Text(serializedRecord) }, null, 2) + '\n';
+        if (options.transaction) options.transaction.write(receiptPath, content);
+        else writeFileAtomically(receiptPath, content);
     }
     if (options.onAuditWritten) options.onAuditWritten(binding);
     else if (!options.transaction) bindCommittedWorkflowConfigAudit(bundleRoot, binding);

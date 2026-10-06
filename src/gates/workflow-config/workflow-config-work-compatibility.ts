@@ -15,6 +15,7 @@ import {
     COMPATIBILITY_FULL_SUITE_VALIDATION_KEYS,
     COMPATIBILITY_FULL_SUITE_VALIDATION_OPTIONAL_KEYS,
     COMPATIBILITY_FULL_SUITE_VALIDATION_REQUIRED_KEYS,
+    COMPATIBILITY_LOCAL_COMMIT_KEYS,
     COMPATIBILITY_OPTIONAL_QUALITY_CHECK_RULE_OPTIONAL_KEYS,
     COMPATIBILITY_OPTIONAL_QUALITY_CHECK_RULE_REQUIRED_KEYS,
     COMPATIBILITY_OPTIONAL_QUALITY_CHECKS_KEYS,
@@ -292,6 +293,19 @@ function isSafeIgnoredWorkflowConfigCompatibilityBaseline(config: Record<string,
             || !hasExactOwnKeys(defaultTaskReset, COMPATIBILITY_TASK_RESET_KEYS)
             || !hasExactOwnKeys(taskReset, COMPATIBILITY_TASK_RESET_KEYS)
             || taskReset.enabled !== false
+        ) {
+            return false;
+        }
+    }
+
+    if (hasOwnKey(config, 'local_commit')) {
+        const localCommit = toPlainRecord(config.local_commit);
+        const defaultLocalCommit = SAFE_WORKFLOW_CONFIG_COMPATIBILITY_BASELINE.local_commit as unknown as Record<string, unknown>;
+        if (
+            !localCommit
+            || !hasExactOwnKeys(defaultLocalCommit, COMPATIBILITY_LOCAL_COMMIT_KEYS)
+            || !hasExactOwnKeys(localCommit, COMPATIBILITY_LOCAL_COMMIT_KEYS)
+            || localCommit.enabled !== false
         ) {
             return false;
         }

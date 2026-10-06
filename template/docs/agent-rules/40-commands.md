@@ -318,7 +318,7 @@ node garda-agent-orchestrator/bin/garda.js gate build-review-context --review-ty
 node garda-agent-orchestrator/bin/garda.js gate record-review-result --task-id "<task-id>" --review-type "<code|db|security|refactor|api|test|performance|infra|dependency>" --preflight-path "garda-agent-orchestrator/runtime/reviews/<task-id>-preflight.json" --review-output-path "garda-agent-orchestrator/runtime/reviews/<task-id>-<review-type>-review-output.md" --reviewer-execution-mode "delegated_subagent" --reviewer-identity "<agent:...>"
 node garda-agent-orchestrator/bin/garda.js gate record-review-result --task-id "<task-id>" --review-type "<code|db|security|refactor|api|test|performance|infra|dependency>" --preflight-path "garda-agent-orchestrator/runtime/reviews/<task-id>-preflight.json" --review-output-stdin --reviewer-execution-mode "delegated_subagent" --reviewer-identity "<agent:...>"
 node garda-agent-orchestrator/bin/garda.js gate validate-manifest --manifest-path "garda-agent-orchestrator/MANIFEST.md"
-node garda-agent-orchestrator/bin/garda.js gate human-commit --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>" --message "<message>"
+node garda-agent-orchestrator/bin/garda.js gate human-commit --task-id "<task-id>" --message "<message>"
 ```
 
 Notes:
@@ -335,7 +335,7 @@ Notes:
 - In a dirty workspace, prefer `--use-staged` after staging task-related tracked files.
 - `--use-staged` includes untracked files by default, so new files are classified even before `git add`.
 - Do not use `git add -f` for ignored orchestration control-plane files (`TASK.md`, `garda-agent-orchestrator/runtime/**`, `garda-agent-orchestrator/live/docs/changes/CHANGELOG.md`); their absence from staged diff is expected.
-- `human-commit` is valid only after the operator answers `Do you want me to commit now? (yes/no)` with yes; pass `--operator-confirmed yes` together with a fresh `--operator-confirmed-at-utc "<ISO-8601 timestamp>"` and do not treat reset/revert as a normal continuation path after a mistaken commit.
+- `human-commit --task-id "<task-id>" --message "<message>"` requires authenticated workspace-local `local_commit.enabled` authority, current completion/audit PASS and exactly accepted staged task scope. Explicit audited ON is durable operator permission; do not ask the commit question again while it remains valid. OFF, omitted/invalid config, copied state or unaudited flags block native commits. Legacy `--operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>"` cannot override OFF or task checks. Post-commit audit remains mandatory; reset/revert is not normal recovery after a mistaken commit.
 - `workflow set` mutates guarded workflow-config policy and requires separate explicit operator approval with `--operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>"`; agents must not approve workflow-config mutations for themselves.
 - `gate record-review-cycle-continuation --decision "allow_one_more_cycle"` records a task-scoped one-shot review-cycle continuation after explicit operator approval. It writes runtime evidence only, does not edit `workflow-config.json`, and must not be described as raising review-cycle limits.
 - For maximum precision, pass planned task file list via repeated `--changed-file`.

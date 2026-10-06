@@ -1,4 +1,18 @@
 {
+  "local-commit-enabled": {
+    "label": "Yerel commit izni",
+    "description": "Denetlenen açık etkinleştirme, bu çalışma alanında tamamlanmış ve denetlenmiş görevler için kalıcı commit izni verir. Kapatmak izni geri alır. Testler, incelemeler ve commit sonrası denetim zorunludur; push veya CI izni vermez.",
+    "options": {
+      "true": {
+        "label": "Açık",
+        "description": "Tamamlanmış ve denetlenmiş görev kapsamının yerel commitlerini etkinleştir."
+      },
+      "false": {
+        "label": "Kapalı",
+        "description": "Yerel commitleri engelle ve önceki izinleri geri al."
+      }
+    }
+  },
   "compact-enabled": {
     "label": "Kısa çıktı",
     "description": "compact ayarı. Değişiklikler onay gerektirir; gizli bilgiler maskelenmez.",

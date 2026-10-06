@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { compactCacheUsage } from '../../core/compact/store-paths';
 import { buildDefaultWorkflowConfig, type WorkflowConfigData } from '../../core/workflow-config';
 import { resolveTaskResetAvailability } from '../../core/task-reset-availability';
+import { resolveLocalCommitAvailability } from '../../core/auth/local-commit-availability';
 import { joinOrchestratorPath, toPosix } from '../../gates/shared/helpers';
 import { validateManagedConfigByName, validateWorkflowConfig } from '../../schemas/config-artifacts';
 import {
@@ -312,6 +313,12 @@ function buildWorkflowSetting(
             remediation_command: readiness.remediationCommand,
             remediation_action_id: 'task-reset-enable-audited'
         };
+    }
+    if (key === 'local_commit.enabled') {
+        const readiness = resolveLocalCommitAvailability(path.resolve(repoRoot));
+        setting.readiness = { ready: readiness.enabled, configured_enabled: readiness.configuredEnabled,
+            audited_enablement: readiness.auditedEnablement, disabled_reason: readiness.disabledReason,
+            remediation_command: readiness.remediationCommand, remediation_action_id: null };
     }
     return setting;
 }

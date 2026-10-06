@@ -68,8 +68,8 @@ describe('gates/task-audit-summary', () => {
                 reviewsRoot: reviewsDir
             });
 
-            assert.equal(result.final_report_contract.commit_command_template, 'git commit -m "<type>(<scope>): <summary>"');
-            assert.equal(result.final_report_contract.commit_command_suggestion, 'git commit -m "fix(orchestration): conventional commit suggestion"');
+            assert.equal(result.final_report_contract.commit_command_template, 'node garda-agent-orchestrator/bin/garda.js gate human-commit --task-id "T-AUDIT-1" --message "<type>(<scope>): <summary>"');
+            assert.equal(result.final_report_contract.commit_command_suggestion, 'node garda-agent-orchestrator/bin/garda.js gate human-commit --task-id "T-AUDIT-1" --message "fix(orchestration): conventional commit suggestion"');
             assert.deepEqual(result.final_report_contract.required_order, [
                 'short agent-authored summary of what changed',
                 'verbatim Garda final user report'
@@ -109,7 +109,7 @@ describe('gates/task-audit-summary', () => {
 
             assert.equal(
                 result.final_report_contract.commit_command_suggestion,
-                'git commit -m "fix(orchestration): address grouped deferred review findings and residual risks"'
+                'node garda-agent-orchestrator/bin/garda.js gate human-commit --task-id "T-AUDIT-1" --message "fix(orchestration): address grouped deferred review findings and residual risks"'
             );
         });
 
@@ -146,7 +146,7 @@ describe('gates/task-audit-summary', () => {
 
             assert.equal(
                 result.final_report_contract.commit_command_suggestion,
-                'git commit -m "fix(orchestration): address deferred review finding F 001"'
+                'node garda-agent-orchestrator/bin/garda.js gate human-commit --task-id "T-AUDIT-1" --message "fix(orchestration): address deferred review finding F 001"'
             );
         });
 
@@ -182,7 +182,7 @@ describe('gates/task-audit-summary', () => {
 
             assert.equal(
                 result.final_report_contract.commit_command_suggestion,
-                'git commit -m "fix(orchestration): next step transition table"'
+                'node garda-agent-orchestrator/bin/garda.js gate human-commit --task-id "T-AUDIT-1" --message "fix(orchestration): next step transition table"'
             );
         });
 
@@ -252,8 +252,8 @@ describe('gates/task-audit-summary', () => {
                 reviewsRoot: reviewsDir
             });
 
-            assert.match(result.final_report_contract.commit_command_suggestion, /^git commit -m "/);
-            assert.equal(result.final_report_contract.commit_question, 'Do you want me to commit now? (yes/no)');
+            assert.match(result.final_report_contract.commit_command_suggestion, /human-commit .*--message "/);
+            assert.equal(result.final_report_contract.commit_question, 'Local commit permission is disabled. Enable it through an explicitly approved audited workflow set before committing.');
             assert.deepEqual(result.final_report_contract.required_order, [
                 'short agent-authored summary of what changed',
                 'verbatim Garda final user report'
@@ -287,8 +287,8 @@ describe('gates/task-audit-summary', () => {
                 reviewsRoot: reviewsDir
             });
 
-            assert.match(result.final_report_contract.commit_command_suggestion, /^git commit -m "/);
-            assert.equal(result.final_report_contract.commit_question, 'Do you want me to commit now? (yes/no)');
+            assert.match(result.final_report_contract.commit_command_suggestion, /human-commit .*--message "/);
+            assert.equal(result.final_report_contract.commit_question, 'Local commit permission is disabled. Enable it through an explicitly approved audited workflow set before committing.');
             assert.deepEqual(result.final_report_contract.required_order, [
                 'short agent-authored summary of what changed',
                 'verbatim Garda final user report'
@@ -349,7 +349,7 @@ describe('gates/task-audit-summary', () => {
 
             assert.equal(
                 result.final_report_contract.commit_command_suggestion,
-                'git commit -m "fix(orchestration): dirty baseline recovery commit scope"'
+                'node garda-agent-orchestrator/bin/garda.js gate human-commit --task-id "T-AUDIT-1" --message "fix(orchestration): dirty baseline recovery commit scope"'
             );
         });
 
@@ -409,7 +409,7 @@ describe('gates/task-audit-summary', () => {
                 'No commit required: no committable changes are present.'
             );
             assert.equal(result.final_report_contract.commit_question, 'No commit confirmation required.');
-            assert.ok(!renderedMarkdown.includes('git commit -m "'));
+            assert.ok(!renderedMarkdown.includes('node garda-agent-orchestrator/bin/garda.js gate human-commit --task-id "T-AUDIT-1" --message "'));
             assert.ok(renderedMarkdown.includes('No commit required: no committable changes are present.'));
         });
 

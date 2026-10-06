@@ -1,4 +1,18 @@
 {
+  "local-commit-enabled": {
+    "label": "Toestemming voor lokale commits",
+    "description": "Expliciet en gecontroleerd AAN verleent deze werkruimte blijvende toestemming voor commits van afgeronde en gecontroleerde taken. UIT trekt dit in. Tests, reviews en controle na de commit blijven verplicht; geen toestemming voor push of CI.",
+    "options": {
+      "true": {
+        "label": "Aan",
+        "description": "Native commits van afgeronde en gecontroleerde taken toestaan."
+      },
+      "false": {
+        "label": "Uit",
+        "description": "Lokale commits blokkeren en eerdere toestemmingen intrekken."
+      }
+    }
+  },
   "compact-enabled": {
     "label": "Compacte uitvoer",
     "description": "Instelling voor compact. Wijzigingen vereisen bevestiging; geheimen worden niet gemaskeerd.",

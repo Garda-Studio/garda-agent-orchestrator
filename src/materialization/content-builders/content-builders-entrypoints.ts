@@ -122,7 +122,7 @@ done
 
 if [ -n "$garda_detected_agent_var" ]; then
   echo "Commit blocked: agent commit guard is enabled (detected env: $garda_detected_agent_var)."
-  echo "If this is a manual human commit from the same shell, use helper:"
+  echo "For completed and audited task scope under authenticated local commit permission ON, use helper:"
   echo "  ${getNodeHumanCommitCommand().replace(/"/g, '\\"')}"
   exit 1
 fi
