@@ -391,6 +391,25 @@ lane evidence without silently accepting stale output.
 Legacy data remains readable, but it never becomes current evidence merely
 because it can be parsed.
 
+Legacy text verdicts must have one unambiguous exact outcome. Conflicting
+recognized PASS and FAIL lines, including repeated verdict sections, yield no
+accepted token. Every present `## Verdict` section must contain an accepted
+token; an empty or invalid repeated section cannot reuse another section's
+token or fall back to unrelated text. Fenced code and example or allowed-token
+headings and labels are examples, not verdict authority. Body labels must be
+explicit example or token-list labels; ordinary prose beginning with `Example`
+or `Examples` remains review text. Balanced inline code and markers indented
+by four or more columns within their containing block do not open a fence or
+example region. Structural markers retain their significant indentation.
+List-item indentation and containment also remain significant; a fence or
+example region ends when its containing item ends, and external tokens cannot
+fill an empty list-contained Verdict section. Canonical tokens, supported
+code-review aliases and matching repetitions of the same outcome remain readable. Content
+inside an active fence stays literal, including bullet-prefixed fence markers.
+The modern findings-only JSON consumer retains its schema, coverage and
+execution bindings and derives the result from
+structured findings.
+
 | Legacy state | Runtime behavior and diagnostic | Supported operator action |
 |---|---|---|
 | Profile missing `review_finding_policy` | Resolves fail-closed to `strict` and reports `missing review_finding_policy; resolved fail-closed to strict`. | Preview and apply an explicit policy with the guarded CLI below. |

@@ -31,7 +31,7 @@ interface ScopeCategoryOptions {
  * - `test-only`: all files match configured test-scope patterns
  * - `config-only`: all files match config/infra patterns (no code)
  * - `audit-only`: all files are orchestrator control-plane artifacts
- * - `mixed`: mix of code and non-code files
+ * - `mixed`: files from more than one category
  * - `empty`: no changed files
  */
 export function classifyScopeCategory(
@@ -157,5 +157,5 @@ export function classifyScopeCategory(
     if (testCount > 0) reasons.push(`tests=${testCount}`);
     if (configCount > 0) reasons.push(`config=${configCount}`);
     if (auditCount > 0) reasons.push(`audit=${auditCount}`);
-    return { category: 'docs-only', reasons: [...reasons, 'all_non_code'] };
+    return { category: 'mixed', reasons: [...reasons, 'mixed_non_code'] };
 }

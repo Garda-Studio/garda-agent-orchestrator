@@ -152,7 +152,7 @@ function reconcileProfileGuardrailsWithRequiredReviews(
     };
 }
 
-function applyEffectiveTaskPolicyToPreflightResult(
+export function applyEffectiveTaskPolicyToPreflightResult(
     result: ClassifyChangeResult,
     effectiveTaskPolicy: ReturnType<typeof resolveTaskProfileSelection>['effective_policy']
 ): void {
