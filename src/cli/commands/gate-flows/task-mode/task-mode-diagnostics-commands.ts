@@ -44,6 +44,8 @@ import {
     resolveOrchestratorRoot
 } from '../compile/gate-flow-helpers';
 import { readRoutingDecision } from './routing-decision';
+import { getTaskModeEvidence } from '../../../../gates/task-mode/task-mode';
+import { buildTaskPlanDiagnostics } from '../../../../gates/diagnostics/task-plan-diagnostics';
 import {
     buildGateCommandPrefix,
     quotePowerShellCliValue
@@ -169,6 +171,8 @@ export function runHandshakeDiagnosticsCommand(options: HandshakeDiagnosticsComm
             runtimeIdentityViolations: routingDecision.violations,
             precheckViolations: handshakePrecheckViolations
         });
+        const entryEvidence = getTaskModeEvidence(repoRoot, taskId, options.taskModePath || '');
+        artifact.task_plan = buildTaskPlanDiagnostics(repoRoot, taskId, entryEvidence, entryEvidence.evidence_status);
 
         writeJsonArtifact(artifactPath, artifact);
 

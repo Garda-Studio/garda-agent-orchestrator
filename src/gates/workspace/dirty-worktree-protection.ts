@@ -9,6 +9,7 @@ import {
     type GitChangeClassificationEvidence
 } from '../../core/git-change-classification';
 import { DEFAULT_GIT_TIMEOUT_MS, spawnSyncWithTimeout } from '../../core/subprocess';
+import { resolveCanonicalTaskPlanPath } from '../../core/task-plan-read';
 import { inspectFilesystemLock, type LockHandle } from '../../gate-runtime/task-events-locking';
 import {
     fileSha256,
@@ -617,8 +618,7 @@ function buildFileHashMap(repoRoot: string, relativePaths: string[]): Record<str
     return fileHashes;
 }
 
-function resolveOwnedEntryLockMetadataPath(repoRoot: string, lock: LockHandle): string {
-    const expectedLockPath = joinOrchestratorPath(repoRoot, 'runtime/task-queue-locks/active-implementation.lock');
+function resolveOwnedEntryLockMetadataPath(repoRoot: string, lock: LockHandle, expectedLockPath: string): string {
     const metadataPath = path.join(expectedLockPath, 'owner.json');
     const relativePath = normalizeWorkspaceRelativePath(repoRoot, path.relative(repoRoot, metadataPath));
     const inspection = inspectFilesystemLock(expectedLockPath);
@@ -627,7 +627,7 @@ function resolveOwnedEntryLockMetadataPath(repoRoot: string, lock: LockHandle): 
         || inspection.metadata.pid !== process.pid || inspection.ownerHostMatchesCurrent !== true
         || !fs.lstatSync(expectedLockPath).isDirectory() || fs.lstatSync(expectedLockPath).isSymbolicLink()
         || !fs.lstatSync(metadataPath).isFile() || fs.lstatSync(metadataPath).isSymbolicLink()) {
-        throw new Error('Cannot capture the task-entry baseline without its current implementation ownership lock.');
+        throw new Error('Cannot capture the task-entry baseline without its current implementation ownership lock or task-plan lock.');
     }
     return relativePath;
 }
@@ -635,9 +635,14 @@ function resolveOwnedEntryLockMetadataPath(repoRoot: string, lock: LockHandle): 
 export function captureDirtyWorkspaceBaseline(
     repoRoot: string,
     plannedChangedFiles: string[] = [],
-    ownershipLock?: LockHandle
+    ownershipLock?: LockHandle,
+    taskPlanLock?: { taskId: string; handle: LockHandle }
 ): DirtyWorkspaceBaseline {
-    const ownedLockMetadataPath = ownershipLock ? resolveOwnedEntryLockMetadataPath(repoRoot, ownershipLock) : null;
+    const ownedLocks = [
+        ...(ownershipLock ? [{ handle: ownershipLock, path: joinOrchestratorPath(repoRoot, 'runtime/task-queue-locks/active-implementation.lock') }] : []),
+        ...(taskPlanLock ? [{ handle: taskPlanLock.handle, path: resolveCanonicalTaskPlanPath(repoRoot, taskPlanLock.taskId).replace(/\.json$/u, '.lock') }] : [])
+    ];
+    const ownedLockMetadataPaths = ownedLocks.map(lock => resolveOwnedEntryLockMetadataPath(repoRoot, lock.handle, lock.path));
     const gitChangeClassification = buildGitChangeClassificationEvidence(classifyGitChanges(repoRoot, {
         timeoutMs: DEFAULT_GIT_TIMEOUT_MS
     }));
@@ -646,16 +651,15 @@ export function captureDirtyWorkspaceBaseline(
         gitChangeClassification.effective_changed_files
     );
     // Preserve the raw Git evidence; only the untracked metadata of this entry's
-    // acquired lock is temporary. Tracked metadata and neighbouring WIP remain protected.
-    const temporaryLockMetadataPath = ownedLockMetadataPath
-        && gitChangeClassification.untracked_files.includes(ownedLockMetadataPath)
-        && !gitChangeClassification.staged_files.includes(ownedLockMetadataPath)
-        ? ownedLockMetadataPath : null;
+    // acquired locks is temporary. Tracked metadata and neighbouring WIP remain protected.
+    const temporaryLockMetadataPaths = new Set(ownedLockMetadataPaths.filter(relativePath =>
+        gitChangeClassification.untracked_files.includes(relativePath)
+        && !gitChangeClassification.staged_files.includes(relativePath)));
     const changedFiles = [...new Set([
         ...snapshotChangedFiles,
         ...collectExplicitlyAuthorizedDirtyPaths(repoRoot, snapshotChangedFiles, plannedChangedFiles)
-    ])].filter(relativePath => relativePath !== temporaryLockMetadataPath).sort();
-    if (ownershipLock) resolveOwnedEntryLockMetadataPath(repoRoot, ownershipLock);
+    ])].filter(relativePath => !temporaryLockMetadataPaths.has(relativePath)).sort();
+    for (const lock of ownedLocks) resolveOwnedEntryLockMetadataPath(repoRoot, lock.handle, lock.path);
     const changedFileSet = new Set(changedFiles);
     const entryAuthorizedFiles = normalizeWorkspaceRelativePaths(repoRoot, plannedChangedFiles)
         .filter((relativePath) => changedFileSet.has(relativePath));
@@ -667,7 +671,7 @@ export function captureDirtyWorkspaceBaseline(
         include_untracked: true,
         changed_files: changedFiles,
         changed_files_sha256: stringSha256(changedFiles.join('\n')),
-        scope_sha256: !temporaryLockMetadataPath && changedFiles.length === snapshotChangedFiles.length
+        scope_sha256: temporaryLockMetadataPaths.size === 0 && changedFiles.length === snapshotChangedFiles.length
             ? classificationScopeSha256
             : stringSha256(`${classificationScopeSha256 || ''}|${changedFiles.join('\n')}`),
         file_hashes: buildFileHashMap(repoRoot, changedFiles),

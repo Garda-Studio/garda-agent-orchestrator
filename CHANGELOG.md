@@ -17,7 +17,23 @@
 - Preserve attached and clustered `env` option operands when locating its delegated program; reject actual split-string dispatch without mistaking operand text for an option. Validate full-suite argument syntax with the shared executor parser before execution. Preserve ordinary unquoted dollar signs, parentheses and backticks as literal direct argv, alongside quoted control operators and empty direct-program arguments.
 - Bound each chain's aggregate output payload to 40 MiB plus a diagnostic truncation marker using the existing UTF-8 head/tail capture and final redaction. Local validation covers Windows and Linux Node 24; WSL host invocation is checked on Windows, and macOS is unverified.
 
-### Review And Completion Fixes
+- Show a localized task progress card in loaded task details, with recorded stages, blockers, final-report availability and a copyable next command; preserve raw diagnostics and existing guarded actions.
+
+- Expose bounded task progress, the current navigator action, validated final-report availability and task-owned evidence references through lazy task details without executing lifecycle actions.
+
+- Make requested task-plan preparation discoverable from task instructions and CLI help, with one-task and multiple-TODO examples, canonical provider routing and no automatic task execution.
+
+- Document reusable task-plan criteria, verification evidence and a small-task brief using the existing schema; align examples with prepared-plan saving, automatic attachment and frozen start state without adding another artifact or gate.
+
+- Add consistent compact task-plan state, path, editability and reading hints to task entry and handshake. Handshake inspects the frozen attachment, reports missing or changed evidence, and keeps existing readiness checks unchanged.
+
+- Preserve available review lanes explicitly required by TASK.md when profile defaults disable them, including immutable review snapshot reconstruction and dependency ordering.
+
+- Automatically attach ready canonical JSON task plans at ordinary task entry, preserve explicit path precedence and frozen attachments, and report missing or draft optional plans without adding a planning gate.
+
+- Added `task plan save <task-id> --input <file>` for atomic prepared-plan creation or replacement before task execution. Saving and task entry share a task-local lock; started tasks and unknown start evidence refuse replacement, and ready plans require explicit acceptance, verification and scope boundaries.
+- Added read-only `task plan list` (including `--missing`) and `task plan show <task-id>` commands for opt-in TODO plans, with bounded repository-confined reads and explicit missing, draft, ready and invalid diagnostics.
+- Reject cyclic task-plan step dependencies, including self-dependencies, with a deterministic cycle path. Valid forward references and branching dependency graphs remain supported.
 
 - Reject invalid orchestrator-defect acknowledgements before recording events, sharing the final audit's linkage contract and one current TASK.md snapshot; preserve historical declarations and revalidate later task drift at closeout.
 - Retain verified compile and review evidence when final closeout failed solely on durable defect linkage; retry after canonical correction only while source, HEAD, rules, config, task contracts and evidence remain unchanged.
@@ -29,7 +45,9 @@
 - Reject cyclic and self-referencing dependencies in existing task plans while preserving independent steps and valid directed acyclic graphs.
 - Preserve explicitly required review lanes when profile defaults disable them, including immutable lane binding and dependency graph reconstruction.
 - Bind documentation-only and documentation-with-tests review coverage, freshness, and reuse to reviewed content and frozen classification.
+
 - Scope correction-transport audit to authenticated current cycles while retaining superseded history, and reconstruct persisted predecessor handoffs using canonical paths and attempts.
+
 - Preserve authenticated completed content through Git staging without false drift from changed line statistics.
 
 ### Garda Compact

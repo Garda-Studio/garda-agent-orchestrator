@@ -45,6 +45,7 @@ function getLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): {
     start_banner: string | null;
     declares_profile_policy_snapshot: boolean;
     profile_policy_snapshot_hash: string | null;
+    plan_binding: { guided: unknown; path: unknown; sha256: unknown } | null;
 } {
     const timelinePath = getTaskTimelinePath(repoRoot, taskId);
     return withTaskTimelineReadSnapshot(path.dirname(timelinePath), taskId, () => {
@@ -55,7 +56,8 @@ function getLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): {
                 declares_start_banner: false,
                 start_banner: null,
                 declares_profile_policy_snapshot: false,
-                profile_policy_snapshot_hash: null
+                profile_policy_snapshot_hash: null,
+                plan_binding: null
             };
         }
 
@@ -99,7 +101,10 @@ function getLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): {
                     start_banner: normalizeOrchestratorStartBanner(details?.start_banner),
                     declares_profile_policy_snapshot: details?.profile_policy_snapshot_required === true
                         || validProfilePolicySnapshotHash !== null,
-                    profile_policy_snapshot_hash: validProfilePolicySnapshotHash
+                    profile_policy_snapshot_hash: validProfilePolicySnapshotHash,
+                    plan_binding: ['plan_guided', 'plan_path', 'plan_sha256'].some(key => (
+                        Object.prototype.hasOwnProperty.call(details || {}, key)
+                    )) ? { guided: details?.plan_guided, path: details?.plan_path, sha256: details?.plan_sha256 } : null
                 };
             } catch {
                 continue;
@@ -112,7 +117,8 @@ function getLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): {
             declares_start_banner: false,
             start_banner: null,
             declares_profile_policy_snapshot: false,
-            profile_policy_snapshot_hash: null
+            profile_policy_snapshot_hash: null,
+            plan_binding: null
         };
     });
 }
@@ -260,6 +266,28 @@ export function getTaskModeEvidence(repoRoot: string, taskId: string | null, art
         const planSummary = String(planObj.plan_summary || '').trim();
         if (planPath && planSha256 && planSummary) {
             result.plan = { plan_path: planPath, plan_sha256: planSha256, plan_summary: planSummary };
+        }
+    }
+    if (rawPlan != null && !result.plan) {
+        result.evidence_status = 'EVIDENCE_PLAN_METADATA_INVALID';
+        return result;
+    }
+    const planBinding = timelineMetadata.plan_binding;
+    if (!planBinding && result.plan) {
+        result.evidence_status = 'EVIDENCE_PLAN_BINDING_MISSING';
+        return result;
+    }
+    if (planBinding) {
+        const bindingMatches = planBinding.guided === true
+            ? !!result.plan && typeof planBinding.path === 'string' && typeof planBinding.sha256 === 'string'
+                && /^[a-f0-9]{64}$/u.test(planBinding.sha256)
+                && normalizePath(result.plan.plan_path) === normalizePath(planBinding.path)
+                && result.plan.plan_sha256 === planBinding.sha256
+            : planBinding.guided === false && rawPlan == null
+                && planBinding.path == null && planBinding.sha256 == null;
+        if (!bindingMatches) {
+            result.evidence_status = 'EVIDENCE_PLAN_BINDING_MISMATCH';
+            return result;
         }
     }
     const rawMarkdownWorkingPlan = artifactObject.markdown_working_plan;
@@ -440,6 +468,12 @@ export function getTaskModeEvidenceViolations(result: TaskModeEvidenceResult): s
             ];
         case 'EVIDENCE_INVALID_JSON':
             return [`Task-mode entry evidence is invalid JSON at '${evidencePath}'. Re-run enter-task-mode.`];
+        case 'EVIDENCE_PLAN_METADATA_INVALID':
+            return ['Task-mode plan attachment metadata is malformed; original attachment cannot be verified.'];
+        case 'EVIDENCE_PLAN_BINDING_MISSING':
+            return ['Task-mode plan attachment is not bound to TASK_MODE_ENTERED timeline evidence.'];
+        case 'EVIDENCE_PLAN_BINDING_MISMATCH':
+            return ['Task-mode plan attachment does not match the original TASK_MODE_ENTERED timeline binding.'];
         case 'EVIDENCE_TASK_MISMATCH':
             return [
                 `Task-mode entry evidence task mismatch. Expected '${result.task_id}', got '${result.evidence_task_id}'.`

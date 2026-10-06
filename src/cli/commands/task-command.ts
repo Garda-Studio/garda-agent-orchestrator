@@ -3,6 +3,7 @@ import { PackageJsonLike, buildCommandHelpText, parseOptions } from './cli-helpe
 import { handleStats } from './debug-command';
 import { handleGate } from './gate-command';
 import { ParsedOptionsRecord } from './shared-command-utils';
+import { handleTaskPlan } from './task-plan-command';
 
 function shouldPrintTaskHelp(commandArgv: string[]): boolean {
     return commandArgv.length === 0
@@ -58,6 +59,11 @@ function normalizeTaskEventsArgs(taskId: string, actionArgv: string[]): string[]
 export async function handleTask(commandArgv: string[], packageJson: PackageJsonLike): Promise<void> {
     if (shouldPrintTaskHelp(commandArgv)) {
         console.log(buildCommandHelpText('task'));
+        return;
+    }
+
+    if (commandArgv[0] === 'plan') {
+        handleTaskPlan(commandArgv.slice(1));
         return;
     }
 

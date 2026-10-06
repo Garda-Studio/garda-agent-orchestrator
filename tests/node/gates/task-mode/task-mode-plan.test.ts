@@ -311,7 +311,7 @@ test('buildTaskModeArtifact preserves blocked reviewer-subagent launch metadata 
 
 // getTaskModeEvidence — plan round-trip
 
-test('getTaskModeEvidence reads plan metadata from artifact', () => {
+test('getTaskModeEvidence rejects unbound plan metadata and reads a timeline-bound plan', () => {
     const tmpDir = makeTempDir();
     try {
         const bundleDir = path.join(tmpDir, 'garda-agent-orchestrator', 'runtime', 'reviews');
@@ -326,6 +326,16 @@ test('getTaskModeEvidence reads plan metadata from artifact', () => {
             plan: PLAN_METADATA
         });
         fs.writeFileSync(artifactPath, JSON.stringify(artifact, null, 2));
+
+        const unboundEvidence = getTaskModeEvidence(tmpDir, 'T-099');
+        assert.equal(unboundEvidence.evidence_status, 'EVIDENCE_PLAN_BINDING_MISSING');
+        assert.ok(getTaskModeEvidenceViolations(unboundEvidence).some(message => message.includes('plan attachment')));
+        appendTaskEvent(path.join(tmpDir, 'garda-agent-orchestrator'), 'T-099', 'TASK_MODE_ENTERED', 'PASS', 'Entry with a recorded plan binding.', {
+            artifact_path: artifactPath.replace(/\\/gu, '/'),
+            plan_guided: true,
+            plan_path: PLAN_METADATA.plan_path,
+            plan_sha256: PLAN_METADATA.plan_sha256
+        });
 
         const evidence = getTaskModeEvidence(tmpDir, 'T-099');
         assert.equal(evidence.evidence_status, 'PASS');
@@ -363,7 +373,7 @@ test('getTaskModeEvidence returns null plan when artifact has no plan', () => {
     }
 });
 
-test('getTaskModeEvidence ignores malformed plan object in artifact', () => {
+test('getTaskModeEvidence rejects malformed plan object in artifact', () => {
     const tmpDir = makeTempDir();
     try {
         const bundleDir = path.join(tmpDir, 'garda-agent-orchestrator', 'runtime', 'reviews');
@@ -382,14 +392,15 @@ test('getTaskModeEvidence ignores malformed plan object in artifact', () => {
         fs.writeFileSync(artifactPath, JSON.stringify(raw, null, 2));
 
         const evidence = getTaskModeEvidence(tmpDir, 'T-099');
-        assert.equal(evidence.evidence_status, 'PASS');
+        assert.equal(evidence.evidence_status, 'EVIDENCE_PLAN_METADATA_INVALID');
         assert.equal(evidence.plan, null);
+        assert.ok(getTaskModeEvidenceViolations(evidence).some(message => message.includes('plan attachment')));
     } finally {
         cleanupDir(tmpDir);
     }
 });
 
-test('getTaskModeEvidence ignores non-object plan value in artifact', () => {
+test('getTaskModeEvidence rejects non-object plan value in artifact', () => {
     const tmpDir = makeTempDir();
     try {
         const bundleDir = path.join(tmpDir, 'garda-agent-orchestrator', 'runtime', 'reviews');
@@ -407,14 +418,15 @@ test('getTaskModeEvidence ignores non-object plan value in artifact', () => {
         fs.writeFileSync(artifactPath, JSON.stringify(raw, null, 2));
 
         const evidence = getTaskModeEvidence(tmpDir, 'T-099');
-        assert.equal(evidence.evidence_status, 'PASS');
+        assert.equal(evidence.evidence_status, 'EVIDENCE_PLAN_METADATA_INVALID');
         assert.equal(evidence.plan, null);
+        assert.ok(getTaskModeEvidenceViolations(evidence).some(message => message.includes('plan attachment')));
     } finally {
         cleanupDir(tmpDir);
     }
 });
 
-test('getTaskModeEvidence ignores array plan value in artifact', () => {
+test('getTaskModeEvidence rejects array plan value in artifact', () => {
     const tmpDir = makeTempDir();
     try {
         const bundleDir = path.join(tmpDir, 'garda-agent-orchestrator', 'runtime', 'reviews');
@@ -432,8 +444,9 @@ test('getTaskModeEvidence ignores array plan value in artifact', () => {
         fs.writeFileSync(artifactPath, JSON.stringify(raw, null, 2));
 
         const evidence = getTaskModeEvidence(tmpDir, 'T-099');
-        assert.equal(evidence.evidence_status, 'PASS');
+        assert.equal(evidence.evidence_status, 'EVIDENCE_PLAN_METADATA_INVALID');
         assert.equal(evidence.plan, null);
+        assert.ok(getTaskModeEvidenceViolations(evidence).some(message => message.includes('plan attachment')));
     } finally {
         cleanupDir(tmpDir);
     }

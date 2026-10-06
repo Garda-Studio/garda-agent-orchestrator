@@ -16,18 +16,14 @@ import {
     getTaskModeEvidenceViolations,
     parseTaskModeDepth,
     readOptionalMarkdownWorkingPlan,
-    resolveTaskModeArtifactPath,
-    type TaskModePlanMetadata
+    resolveTaskModeArtifactPath
 } from '../../../../gates/task-mode/task-mode';
+import { selectTaskModePlan } from '../../../../gates/task-mode/task-mode-plan';
+import { buildTaskPlanDiagnostics, formatTaskPlanDiagnostics } from '../../../../gates/diagnostics/task-plan-diagnostics';
 import {
     captureDirtyWorkspaceBaseline,
     type DirtyWorkspaceBaseline
 } from '../../../../gates/workspace/dirty-worktree-protection';
-import {
-    validateTaskPlan,
-    computeTaskPlanDigest,
-    isApprovedPlan
-} from '../../../../schemas/task-plan';
 import {
     getCurrentWorkflowConfigFileHashes,
     getWorkflowConfigPreTaskBaselineState,
@@ -50,6 +46,7 @@ import {
 import { loadFullSuiteValidationConfig } from '../../../../core/full-suite-validation-config';
 import { resolveReviewFollowUpTaskClosurePolicy } from '../../../../core/review-follow-up-task-closure-policy';
 import { readTaskQueueEntries } from '../../../../core/task-queue-read';
+import { withTaskPlanMutationLock } from '../../../../core/task-plan-save';
 import {
     readImplementationTaskMode,
     resolveActiveTaskEntryApproval,
@@ -318,13 +315,15 @@ export function runEnterTaskModeCommand(options: EnterTaskModeCommandOptions): {
     const repoRoot = path.resolve(String(options.repoRoot || '.'));
     return withImplementationOwnershipLock(
         repoRoot,
-        lock => runEnterTaskModeWithOwnershipLock(options, lock)
+        lock => withTaskPlanMutationLock(repoRoot, assertValidTaskId(String(options.taskId || '').trim()),
+            planLock => runEnterTaskModeWithOwnershipLock(options, lock, planLock))
     );
 }
 
 function runEnterTaskModeWithOwnershipLock(
     options: EnterTaskModeCommandOptions,
-    ownershipLock: LockHandle
+    ownershipLock: LockHandle,
+    taskPlanLock: LockHandle
 ): { outputLines: string[]; exitCode: number } {
     const repoRoot = path.resolve(String(options.repoRoot || '.'));
     const orchestratorRoot = resolveOrchestratorRoot(repoRoot);
@@ -339,7 +338,9 @@ function runEnterTaskModeWithOwnershipLock(
         protectedPlannedFiles,
         workflowConfigPlannedFiles
     } = resolveTaskModeEntryScope(repoRoot, options.plannedChangedFiles);
-    const currentDirtyWorkspaceBaseline = captureDirtyWorkspaceBaseline(repoRoot, plannedChangedFiles, ownershipLock);
+    const currentDirtyWorkspaceBaseline = captureDirtyWorkspaceBaseline(
+        repoRoot, plannedChangedFiles, ownershipLock, { taskId, handle: taskPlanLock }
+    );
     const orchestratorWork = parseBooleanOption(options.orchestratorWork, false);
     const workflowConfigWork = parseBooleanOption(options.workflowConfigWork, false);
     const upgradeExistingTaskMode = parseBooleanOption(options.upgradeExistingTaskMode, false);
@@ -347,31 +348,6 @@ function runEnterTaskModeWithOwnershipLock(
     const dirtyWorkflowConfigFiles = [...workflowConfigPreTaskBaseline.changed_files].sort();
     const startBanner = resolveTaskModeStartBanner(options.startBanner);
 
-    let planMetadata: TaskModePlanMetadata | null = null;
-    const rawPlanPath = String(options.planPath || '').trim();
-    if (rawPlanPath) {
-        const resolvedPlanPath = gateHelpers.resolvePathInsideRepo(rawPlanPath, repoRoot, { allowMissing: false });
-        if (!resolvedPlanPath || !fs.existsSync(resolvedPlanPath) || !fs.statSync(resolvedPlanPath).isFile()) {
-            throw new Error(`PlanPath not found or not a file: '${rawPlanPath}'.`);
-        }
-        const planJson = JSON.parse(fs.readFileSync(resolvedPlanPath, 'utf8'));
-        const validated = validateTaskPlan(planJson);
-        if (validated.task_id !== taskId) {
-            throw new Error(`Plan task_id '${validated.task_id}' does not match --task-id '${taskId}'.`);
-        }
-        if (!isApprovedPlan(validated)) {
-            throw new Error(`Plan status is '${validated.status}'; only approved plans can be attached at task-mode entry.`);
-        }
-        const digest = computeTaskPlanDigest(validated);
-        if (validated.plan_sha256 && validated.plan_sha256 !== digest) {
-            throw new Error(`Plan plan_sha256 mismatch: embedded '${validated.plan_sha256}' vs computed '${digest}'.`);
-        }
-        planMetadata = {
-            plan_path: gateHelpers.normalizePath(resolvedPlanPath),
-            plan_sha256: digest,
-            plan_summary: validated.goal
-        };
-    }
     const markdownWorkingPlan = readOptionalMarkdownWorkingPlan(repoRoot, taskId);
 
     const taskQueueEntries = readTaskQueueEntries(repoRoot);
@@ -405,6 +381,8 @@ function runEnterTaskModeWithOwnershipLock(
     });
     const scopeUpgrade = upgradeExistingTaskMode || activeTaskApproval ? preservedScope : null;
     const dirtyWorkspaceBaseline = preservedScope?.dirtyWorkspaceBaseline || currentDirtyWorkspaceBaseline;
+    const planSelection = selectTaskModePlan(repoRoot, taskId, String(options.planPath || '').trim(),
+        preserveOwnershipBaseline ? previousTaskMode?.plan ?? null : undefined);
 
     assertTaskModeProtectedEntryAllowed({
         repoRoot,
@@ -524,7 +502,7 @@ function runEnterTaskModeWithOwnershipLock(
         runtimeIdentityViolations: routingDecision.violations,
         routedTo: routingDecision.routedTo,
         actor: String(options.actor || 'orchestrator'),
-        plan: planMetadata,
+        plan: planSelection.plan,
         markdownWorkingPlan,
         plannedChangedFiles,
         taskProfile,
@@ -705,6 +683,7 @@ function runEnterTaskModeWithOwnershipLock(
             ...(routingDecision.routedTo ? [`RoutedTo: ${routingDecision.routedTo}`] : []),
             ...(routingDecision.reviewerSubagentLaunchStatus ? [`ReviewerSubagentLaunchStatus: ${routingDecision.reviewerSubagentLaunchStatus}`] : []),
             ...(routingDecision.reviewerSubagentLaunchRoute ? [`ReviewerSubagentLaunchRoute: ${routingDecision.reviewerSubagentLaunchRoute}`] : []),
+            planSelection.diagnostic,
             ...(taskModeArtifact.plan ? [`PlanGuided: true`, `PlanPath: ${taskModeArtifact.plan.plan_path}`] : [`PlanGuided: false`]),
             ...(taskModeArtifact.markdown_working_plan
                 ? [
@@ -712,6 +691,7 @@ function runEnterTaskModeWithOwnershipLock(
                     `MarkdownWorkingPlanSha256: ${taskModeArtifact.markdown_working_plan.working_plan_sha256}`
                 ]
                 : []),
+            ...formatTaskPlanDiagnostics(buildTaskPlanDiagnostics(repoRoot, taskId, taskModeArtifact)),
             ...(taskModeArtifact.profile_selection_source
                 ? [`TaskProfile: ${taskModeArtifact.task_profile || 'default'} (${taskModeArtifact.profile_selection_source})`]
                 : []),

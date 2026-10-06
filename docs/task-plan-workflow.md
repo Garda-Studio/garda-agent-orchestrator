@@ -2,26 +2,23 @@
 
 ## Overview
 
-The Garda orchestrator supports an optional **planner/executor split** where a stronger reasoning model authors a structured plan and a cheaper model executes it. The workflow is fully opt-in: when no plan artifact is present, task execution continues exactly as it does today (freeform mode).
-
-This pattern is sometimes called **expensive-planner + cheap-executor**. The idea is to front-load the hard reasoning (scope analysis, risk assessment, step ordering) into a single planning pass, then let a cost-efficient model carry out the plan under the orchestrator's existing gate infrastructure.
+Agents can prepare a structured plan before task execution and consume it through the existing orchestrator lifecycle. Planning is optional for ordinary tasks. A plan describes intended work; successful checks and accepted reviewer receipts provide evidence of completed work.
 
 Garda now recognizes two intentionally separate planning surfaces:
 
 | Surface | Location | Purpose | Enforcement |
 |---|---|---|---|
-| Structured JSON task plan | `<bundle>/runtime/reviews/<task-id>-task-plan.json` | Approved planner/executor handoff with scope drift checks | Enforced only when passed to `enter-task-mode --plan-path` |
+| Structured JSON task plan | `<bundle>/runtime/reviews/<task-id>-task-plan.json` | Ready handoff with scope drift checks | Ready canonical plans attach automatically at ordinary entry; an explicit `--plan-path` takes precedence |
 | Markdown working plan | `garda-agent-orchestrator/runtime/plans/<task-id>.md` | Optional human-readable executor guidance | Not schema-enforced; absence is neutral |
 
 ## When to Use a Plan
 
 | Scenario | Recommendation |
 |---|---|
-| Small docs-only or config change | Skip the plan — freeform execution is fine |
-| Single-file bug fix with clear scope | Skip the plan — overhead outweighs benefit |
+| Small change or bug fix with clear scope | A short execution brief is enough unless a structured plan was requested |
 | Multi-file feature with dependencies | Author a plan — the executor stays on track |
 | Cross-cutting refactor or migration | Author a plan — drift detection catches scope creep |
-| High-risk security or data change | Author a plan at depth ≥ 2 — reviewers see the plan context |
+| Security or data change with material boundaries | Prepare a plan when useful; the selected task profile and existing gates govern review |
 
 ## Structured JSON Task Plan
 
@@ -45,7 +42,78 @@ Required fields:
 | `risk_level` | enum | `low`, `medium`, or `high` |
 | `steps` | array | Ordered execution steps (each with `id` and `title`) |
 
-Optional fields: `validation_strategy`, `notes`, `created_by`, `created_at`, `plan_sha256`.
+Optional schema fields: `acceptance_criteria`, `verification_expectations`, `out_of_scope`, `validation_strategy`, `notes`, `created_by`, `created_at`, `plan_sha256`.
+
+### Criteria and Verification
+
+Use the existing fields together instead of creating another success-criteria artifact:
+
+| Field | Question it answers | Example |
+|---|---|---|
+| `goal` | What result does the existing TASK.md intent ask for? | Validate structured task plans |
+| `acceptance_criteria` | What observable behavior means the goal is met? | Invalid step references are rejected |
+| `verification_expectations` | What evidence will demonstrate those criteria? | Focused tests exercise valid and invalid references |
+| `out_of_scope` | What must this task leave for other work? | No new mandatory planning gate |
+| `scope_files` | Which files may the implementation change? | Schema, focused tests and changelog |
+| `validation_strategy` | How should the executor obtain verification evidence? | Focused regression command plus the routed lifecycle checks |
+
+New `approved` plans saved through `task plan save` require nonempty `acceptance_criteria`, `verification_expectations` and `out_of_scope`. The JSON schema still accepts legacy plans without those optional fields. This save-time authoring check does not add a criteria gate to ordinary task execution, require another file, or select a stricter profile.
+
+When a plan is attached, read its existing criteria and verification expectations before implementation. Reuse TASK.md intent rather than copying it into a second competing specification. If a legacy attached plan omits criteria, use the task intent and a concise execution brief; no retrospective criteria artifact is required.
+
+### Small-Task Execution Brief
+
+An ordinary small task can keep a short brief in the conversation or existing task context:
+
+```text
+goal: Fix the broken task-plan documentation link described in TASK.md.
+done_when: The link opens the existing guide and neighboring links remain unchanged.
+verification: Check the target exists and run the relevant documentation contract test.
+```
+
+No separate file is required. `done_when` is a brief label, not a new JSON field or gate. An attached plan already supplies the goal, criteria and verification expectations, so refer to them rather than duplicating them in another brief.
+
+### Assumptions and Material Decisions
+
+Record assumptions as `none` or a concise list in the existing JSON `notes` or lightweight task brief. `notes` remains a free-form string; multiple assumptions can use short lines within that string. This is guidance, not a new schema field, separate artifact or approval gate. Ordinary implementation choices within authorized scope can be made by the agent without a mandatory question for every plan.
+
+Resolve material ambiguity affecting user-visible behavior, authorization or task scope before dependent work. Use existing authoritative task context when it answers the question; otherwise ask the operator a focused question and continue only independent investigation or work. Writing an unresolved decision in notes does not resolve it.
+
+The following fragments use the existing `notes` field and can be included in the complete JSON example below. A brief can express the same information in plain text.
+
+#### No Assumptions
+
+```json
+{
+  "notes": "Assumptions: none; TASK.md already defines the intended result and scope."
+}
+```
+
+#### Ordinary Implementation Assumption
+
+```json
+{
+  "notes": "Assumption: extend the existing focused test file rather than create another file; user-visible behavior, authorization and scope remain as specified."
+}
+```
+
+This is an ordinary implementation choice the agent may make within authorized scope.
+
+#### Unresolved Product Decision
+
+```json
+{
+  "notes": "Unresolved product decision: should task history display or hide archived tasks by default? Resolve with the operator before implementing that behavior; independent investigation can continue."
+}
+```
+
+This example changes user-visible behavior, so guessing a default would exceed an implementation choice. The question belongs to that dependent work, not to every plan.
+
+Save or update a structured plan only before the task has ever started. After entry, the attached plan is frozen. If a newly discovered requirement is incompatible with the authorized active scope, record an explicit follow-up in existing task context and resolve its scope or authorization before dependent work; do not silently rewrite the active plan.
+
+### Intended Work and Completion Evidence
+
+JSON criteria describe desired behavior; Markdown guidance and a brief describe execution intent. None proves that implementation succeeded. Record actual command outcomes, test results and accepted independent review evidence through the existing gates. Completion remains owned by the completion gate and final audit, not by an `approved` plan or a checked-off list.
 
 ## Optional Markdown Working Plans
 
@@ -81,7 +149,7 @@ Important boundaries:
 - Reviewer context treats a missing optional Markdown working plan, and a missing task-mode JSON plan in non-plan-guided execution, as neutral `not_provided` context. Reviewers must not turn that absence into an active finding, deferred finding, residual risk, or no-plan waiver requirement. If a JSON task plan was explicitly attached and is missing, stale, invalid, or contradictory, that attached-plan problem is still reviewable.
 - Do not create a retrospective Markdown plan only to satisfy a reviewer or completion gate.
 
-### Example Plan
+### Complete Ready JSON Example
 
 ```json
 {
@@ -95,6 +163,18 @@ Important boundaries:
     "CHANGELOG.md"
   ],
   "risk_level": "low",
+  "acceptance_criteria": [
+    "Valid plans with forward step references are accepted",
+    "Unknown dependencies and dependency cycles are rejected with useful diagnostics"
+  ],
+  "verification_expectations": [
+    "Focused schema tests cover valid references, unknown references and cycles",
+    "The configured compile, validation and independent review gates accept the final change"
+  ],
+  "out_of_scope": [
+    "A new mandatory planning or success-criteria gate",
+    "Model or provider API invocation"
+  ],
   "steps": [
     {
       "id": "define-schema",
@@ -121,34 +201,73 @@ Important boundaries:
     }
   ],
   "validation_strategy": {
-    "approach": "Run npm test and verify all task-plan tests pass",
-    "commands": ["npm test"]
+    "approach": "Run the focused schema regression check through the supported validation path and follow the navigator for mandatory lifecycle checks",
+    "commands": ["node scripts/node-foundation/build-scripts.cjs test.js tests/node/schemas/task-plan.test.ts"]
   },
-  "created_by": "planner:claude-opus",
+  "created_by": "agent",
   "created_at": "2026-04-09T10:00:00Z"
 }
 ```
 
 ## Workflow: Authoring a Plan
 
-1. **Choose a planner model.** Use a stronger reasoning model (e.g. Claude Opus, GPT-5, o3) for the planning pass. The planner needs to understand the codebase well enough to enumerate scope files and order steps correctly.
+### Explicitly Requested Preparation
 
-2. **Create the plan artifact.** The planner writes a JSON file conforming to the task-plan schema. Place it at `<bundle>/runtime/reviews/<task-id>-task-plan.json`.
+A literal leading `[plan]` token in TASK.md Notes or an explicit operator request asks the agent to investigate and prepare a ready structured plan. Prepare before `enter-task-mode`, because entry freezes the plan. This is agent work with existing tooling, not a new planning mode, navigator stage, complexity threshold or provider API.
 
-3. **Set status to `approved`.** Only `approved` plans are treated as guidance by the executor. A `draft` plan is ignored during gate checks; a `superseded` plan indicates a replaced version.
+Start with `garda task plan --help` on demand. In a source checkout the equivalent is `node bin/garda.js task plan --help`; in a deployed workspace use `node garda-agent-orchestrator/bin/garda.js task plan --help`. The guide path printed by help is relative to the Garda package, not the application workspace. Read only the selected task rows and relevant project files; load the full schema, help and example when preparing or consuming a plan, rather than for every ordinary task.
 
-4. **Validate the plan.** The `validateTaskPlan()` function enforces:
-   - Required fields and types.
-   - `scope_files` has at least one entry.
-   - `steps` has at least one entry.
-   - Step `id` values are unique within the plan.
-   - `depends_on` references point to existing step ids.
+For one requested task, first inspect any existing plan:
 
-5. **Compute the digest.** Call `serializeTaskPlan()` to automatically embed `plan_sha256` — a SHA-256 digest of the canonical plan content (excluding the digest field itself). This digest is used for downstream integrity checks.
+```text
+node bin/garda.js task plan show T-048 --repo-root .
+```
+
+Investigate its goal, scope, material decisions and verification needs. Author `plan-input.json` using the complete ready example, or edit an input copy of the JSON returned by `show` for an unstarted task. Keep `task_id` matched to the selected row and include nonempty acceptance criteria, verification expectations and out-of-scope boundaries. Then save and read back:
+
+```text
+node bin/garda.js task plan save T-048 --input plan-input.json --repo-root .
+node bin/garda.js task plan show T-048 --repo-root .
+```
+
+Saving computes the new digest and replaces only the prepared JSON. It leaves TASK.md status untouched. `approved` means ready, not operator-signed; no human plan confirmation is required. Reading or saving a plan does not start task execution.
+
+For multiple TODO tasks, find absent plans for the already marked rows:
+
+```text
+node bin/garda.js task plan list --missing --repo-root .
+```
+
+`list` selects only TODO rows with the literal leading `[plan]` Notes token. `--missing` selects only absent JSON plans; use `list` without it to inspect existing draft, ready or invalid plans. Investigate and prepare each selected task separately, for example T-048 and T-049, then save its own input:
+
+```text
+node bin/garda.js task plan save T-048 --input plan-input-T-048.json --repo-root .
+node bin/garda.js task plan save T-049 --input plan-input-T-049.json --repo-root .
+```
+
+Read each result through `show`. Do not bulk retag tasks or automatically execute prepared tasks. An explicit request for one task can prepare that task without changing its Notes token or other rows. Creation and updating are refused after any retained start evidence, including a later reset to TODO; use an explicit follow-up for incompatible active scope.
+
+Ordinary task entry attaches the ready canonical plan automatically, and entry/handshake print the compact recorded-plan reading hint. Missing or draft optional plans preserve ordinary no-plan execution. Existing entry validation handles invalid plans, and existing compile/review/completion gates retain their authority. Provider instructions derive from the canonical orchestration skill instead of carrying separate planning command contracts.
+
+### Author and Save
+
+1. Investigate the existing task intent, scope, risks and relevant tests before writing the plan.
+2. Author JSON in a workspace input file, for example `plan-input.json`, using the complete example above. Set `status` to `approved` when it is ready to consume; this means ready, not operator-signed.
+3. Save it before the task has ever started:
+
+   ```text
+   node bin/garda.js task plan save T-048 --input plan-input.json --repo-root .
+   node bin/garda.js task plan show T-048 --repo-root .
+   ```
+
+   In a deployed workspace, use `node garda-agent-orchestrator/bin/garda.js` instead of `node bin/garda.js`.
+4. Save validates schema, task identity, ready-plan criteria and dependency integrity, computes `plan_sha256`, and atomically writes the canonical JSON. It requires an existing TODO task with no retained start or lifecycle evidence. It leaves TASK.md status unchanged.
+
+`validateTaskPlan()` and `serializeTaskPlan()` are the shared schema and digest functions. Save is the supported publication command; do not replace an active canonical plan by editing the runtime file directly.
 
 ## Workflow: Executing a Plan
 
-The executor model (e.g. Claude Haiku, GPT-4.1, a cheaper tier) follows the standard orchestrator lifecycle with one addition: it passes `--plan-path` at task-mode entry.
+The executor follows the normal navigator and reads the attached plan before implementation. Ordinary entry automatically attaches a ready canonical JSON plan when no explicit path is supplied. An explicit `--plan-path` selects another valid JSON plan in the repository and takes precedence.
 
 ### Gate Integration
 
@@ -156,11 +275,13 @@ The executor model (e.g. Claude Haiku, GPT-4.1, a cheaper tier) follows the stan
 enter-task-mode --task-id "T-048" --plan-path "<bundle>/runtime/reviews/T-048-task-plan.json" ...
 ```
 
-When `--plan-path` is supplied:
+When either automatic or explicit attachment selects a ready JSON plan:
 - The gate validates the plan artifact (approved status, matching `task_id`, SHA-256 integrity).
 - Plan metadata (`plan_path`, `plan_sha256`, `plan_summary`) is embedded in the task-mode artifact.
 - The `TASK_MODE_ENTERED` timeline event records `plan_guided: true`.
 - Downstream gates (`build-review-context`, `completion-gate`) propagate plan metadata so reviewers can see whether the task is plan-guided or freeform.
+
+Entry and handshake print the same compact `TaskPlanState`, `TaskPlanPath`, `TaskPlanEditable`, `TaskPlanEvidence` and `ReadPlanHint` lines. Handshake inspects the attachment recorded at entry; it does not select a later plan. JSON, optional Markdown guidance, no attachment and invalid evidence are distinct diagnostic states. Missing or changed attachment content is observational for handshake readiness; existing plan validation and compile checks retain their authority.
 
 ### Compile Gate and Drift Detection
 
@@ -209,7 +330,7 @@ PlanPath: garda-agent-orchestrator/runtime/reviews/T-048-task-plan.json
 
 ## Fallback: No Plan Present
 
-When no `--plan-path` is passed to `enter-task-mode`:
+When no explicit JSON plan is supplied and canonical preparation is missing or draft:
 
 - `plan_guided` is `false` everywhere.
 - `plan` fields are `null` in all artifacts.
@@ -217,56 +338,32 @@ When no `--plan-path` is passed to `enter-task-mode`:
 - The full orchestrator lifecycle (preflight, compile gate, reviews, completion) runs identically to the pre-plan behavior.
 - An optional Markdown working plan at `runtime/plans/<task-id>.md` may still be read by the executor, but it does not change gate behavior.
 
-No configuration changes are needed to use freeform mode — it is the default.
+Invalid canonical preparation fails entry rather than becoming freeform. No configuration changes or no-plan waiver are needed for an ordinary task without a ready plan.
 
 ## Lifecycle Summary
 
-```
-┌─────────────────────────────────────────────────────┐
-│  Planner (expensive model)                          │
-│                                                     │
-│  1. Analyze task from TASK.md                       │
-│  2. Enumerate scope_files and steps                 │
-│  3. Write <task-id>-task-plan.json (status=approved) │
-│  4. Compute plan_sha256 via serializeTaskPlan()     │
-└──────────────────────┬──────────────────────────────┘
-                       │ plan artifact on disk
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│  Executor (cheap model)                             │
-│                                                     │
-│  1. Run next-step and follow its printed command    │
-│  2. enter-task-mode --plan-path <plan>              │
-│  3. classify-change (preflight)                     │
-│  4. Implement following plan steps in order         │
-│  5. compile-gate -> drift detection against plan    │
-│     • NO_DRIFT → pass                              │
-│     • REPLAN_REQUIRED → stop, request new plan     │
-│     • PLAN_DRIFT + override → pass with violation  │
-│  6. Reviews (plan metadata visible to reviewers)    │
-│  7. completion-gate (plan evidence in output)       │
-│  8. next-step -> task-audit-summary -> DONE         │
-└─────────────────────────────────────────────────────┘
-```
+1. Prepare and save a requested JSON plan before task start, or keep an ordinary small-task brief.
+2. Run `next-step` and follow its printed entry, rule-loading, handshake and preflight commands.
+3. Read recorded attachment criteria or existing task intent before implementation.
+4. Implement within authorized scope and run the navigator's compile, validation and review commands.
+5. Resolve reported drift without silently replacing the frozen attachment.
+6. Complete docs/memory/closeout gates and deliver the generated final report with actual evidence.
 
 ## Plan Statuses
 
 | Status | Meaning |
 |---|---|
 | `draft` | Plan is being authored; not enforced by gates |
-| `approved` | Plan is active; executor should follow it; drift detection is enabled |
-| `superseded` | Plan has been replaced by a newer version; treated as inactive |
+| `approved` | Plan is ready to attach; attached plans supply guidance and scope checks |
+| `superseded` | Historical replaced version; cannot be attached as a ready plan |
 
 ## Replanning
 
 When drift detection returns `REPLAN_REQUIRED`:
 
 1. The executor stops implementation and reports the drift (extra files outside `scope_files`).
-2. The planner (or a human operator) reviews the situation.
-3. Options:
-   - **Replan**: Author a new plan with expanded `scope_files`, set the old plan to `superseded`, and restart execution with the new plan.
-   - **Override**: Re-run the compile gate with `--allow-plan-drift --allow-plan-drift-reason "<justification>"` if the scope expansion is justified but a full replan is unnecessary.
-   - **Abort**: Mark the task as `BLOCKED` if the scope expansion indicates a fundamental misunderstanding.
+2. Check whether the existing authorized task scope permits a documented drift override. Follow the routed compile command with `--allow-plan-drift` and a specific reason only when appropriate.
+3. Materially incompatible scope needs an explicit follow-up rather than rewriting the active plan. Save and ordinary re-entry preserve the original attachment or freeform state once start evidence exists; resetting the queue row to TODO does not permit replacement. Lifecycle statuses remain gate-owned.
 
 ## Step Dependencies
 
@@ -289,8 +386,8 @@ The optional `validation_strategy` field tells the executor how to verify the im
 ```json
 {
   "validation_strategy": {
-    "approach": "Run the full test suite and verify no regressions",
-    "commands": ["npm test", "npm run typecheck"]
+    "approach": "Run the focused schema regression check, then follow the navigator for configured mandatory validation",
+    "commands": ["node scripts/node-foundation/build-scripts.cjs test.js tests/node/schemas/task-plan.test.ts"]
   }
 }
 ```

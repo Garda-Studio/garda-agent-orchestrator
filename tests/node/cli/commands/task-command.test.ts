@@ -96,3 +96,76 @@ test('handleTask rejects unsupported task actions', async () => {
         /Unsupported task action: audit/
     );
 });
+
+test('handleTask routes plan list, missing filter and show without creating lifecycle artifacts', async t => {
+    const repoRoot = makeTmpDir();
+    t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
+        '# Tasks', '## Active Queue',
+        '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+        '|---|---|---|---|---|---|---|---|---|',
+        '| T-500 | TODO | P2 | planning | Plan | unassigned | 2026-09-30 | balanced | [plan] Request |'
+    ].join('\n'));
+    const listed = await captureOutput(() => handleTask(['plan', 'list', '--missing', '--repo-root', repoRoot], PACKAGE_JSON));
+    assert.match(listed, /T-500: missing/);
+    const shown = await captureOutput(() => handleTask(['plan', 'show', 'T-500', '--repo-root', repoRoot], PACKAGE_JSON));
+    assert.match(shown, /Plan: missing/);
+    assert.deepEqual(fs.readdirSync(repoRoot), ['TASK.md']);
+    const help = await captureOutput(() => handleTask(['plan', '--help'], PACKAGE_JSON));
+    assert.match(help, /task plan list/);
+    assert.match(help, /task plan show/);
+});
+
+test('handleTask plan show prints the original JSON text after compact diagnostics', async t => {
+    const repoRoot = makeTmpDir();
+    t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+    const planDir = path.join(repoRoot, DEFAULT_BUNDLE_NAME, 'runtime', 'reviews');
+    fs.mkdirSync(planDir, { recursive: true });
+    const original = '{\n  "task_id": "T-501", "custom_field": true\n}\n';
+    const planFile = path.join(planDir, 'T-501-task-plan.json');
+    fs.writeFileSync(planFile, original);
+    const shown = await captureOutput(() => handleTask(['plan', 'show', 'T-501', '--repo-root', repoRoot], PACKAGE_JSON));
+    assert.match(shown, /Plan: invalid/);
+    assert.match(shown, /Diagnostic:/);
+    assert.ok(shown.endsWith(original));
+    assert.equal(fs.readFileSync(planFile, 'utf8'), original);
+});
+
+test('handleTask rejects unsupported plan actions, escaping ids and mutation flags', async () => {
+    await assert.rejects(
+        () => handleTask(['plan', 'list', '--output-path', 'result.json'], PACKAGE_JSON),
+        /Unknown option: --output-path/
+    );
+    for (const argv of [
+        ['plan', 'approve', 'T-500'], ['plan', 'show'], ['plan', 'show', '../T-500'],
+        ['plan', 'show', 'T-500', '--missing'],
+        ['plan', 'list', 'T-500'], ['plan', 'show', 'T-500', 'T-501']
+    ]) {
+        await assert.rejects(() => handleTask(argv, PACKAGE_JSON));
+    }
+});
+
+test('handleTask plan save writes a prepared plan and rejects invalid save arguments', async t => {
+    const repoRoot = makeTmpDir();
+    t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
+        '## Active Queue',
+        '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+        '|---|---|---|---|---|---|---|---|---|',
+        '| T-502 | TODO | P2 | planning | Save | unassigned | 2026-09-30 | balanced | [plan] Prepare |'
+    ].join('\n'));
+    fs.writeFileSync(path.join(repoRoot, 'input.json'), JSON.stringify({
+        schema_version: 1, task_id: 'T-502', status: 'approved', goal: 'Prepare',
+        scope_files: ['src/widget.ts'], risk_level: 'low', steps: [{ id: 'a', title: 'Implement' }],
+        acceptance_criteria: ['Preserve'], verification_expectations: ['Test'], out_of_scope: ['Other code']
+    }));
+    const shown = await captureOutput(() => handleTask(['plan', 'save', 'T-502', '--input', 'input.json', '--repo-root', repoRoot], PACKAGE_JSON));
+    assert.match(shown, /Plan: saved/);
+    const saved = path.join(repoRoot, 'runtime', 'reviews', 'T-502-task-plan.json');
+    assert.equal(JSON.parse(fs.readFileSync(saved, 'utf8')).task_id, 'T-502');
+    assert.equal(fs.existsSync(path.join(repoRoot, 'runtime', 'task-events')), false);
+    await assert.rejects(() => handleTask(['plan', 'save', 'T-502', '--repo-root', repoRoot], PACKAGE_JSON), /requires --input/);
+    await assert.rejects(() => handleTask(['plan', 'save', '--input', 'input.json'], PACKAGE_JSON), /exactly one task id/);
+    await assert.rejects(() => handleTask(['plan', 'save', 'T-502', '--input', 'input.json', '--missing'], PACKAGE_JSON), /Unknown option/);
+    await assert.rejects(() => handleTask(['plan', 'show', 'T-502', '--input', 'input.json'], PACKAGE_JSON), /Unknown option/);
+});

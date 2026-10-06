@@ -37,6 +37,7 @@ Primary entry point: selected source-of-truth entrypoint for this workspace.
   - preflight requires specialized review (`db`, `security`, `refactor`, or enabled optional specialist review).
 
 ## Agent Start Contract
+- Planning discovery: for a leading `[plan]` Notes token or explicit plan request, see `garda task plan --help` and canonical orchestration planning guidance; load full details only on demand.
 - The canonical user instruction is: Execute task <task-id> from TASK.md strictly through the orchestrator. Use `next-step` as the navigator; when independent review is required, launch a sub-agent using your internal tools.
 - Default executable navigator is `node garda-agent-orchestrator/bin/garda.js next-step "<task-id>" --repo-root "."`; run it before the first gate, after every suggested command, and after any gate failure.
 - Static gate order below is policy context. Agents must not start at `compile-gate`, infer default flags, or skip to review from the static list when `next-step` can inspect current task evidence.

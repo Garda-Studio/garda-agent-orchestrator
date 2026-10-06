@@ -34,6 +34,18 @@ Default task navigator is `node garda-agent-orchestrator/bin/garda.js next-step 
 - Relevant rule files from `garda-agent-orchestrator/live/docs/agent-rules/`.
 - Token economy config: `garda-agent-orchestrator/live/config/token-economy.json`.
 
+## Requested Plan Preparation
+
+A leading `[plan]` token in TASK.md Notes or an explicit operator request asks the agent to investigate and prepare a ready structured plan before `enter-task-mode`. Preparation uses the existing `task plan` commands outside task execution; it is not a new navigator stage or gate.
+
+Load full details only on demand: use `task plan --help` and the packaged `docs/task-plan-workflow.md` guide when preparing or consuming a plan. In a source checkout use `node bin/garda.js task plan --help`; in a deployed workspace use `node garda-agent-orchestrator/bin/garda.js task plan --help`. Keep ordinary task context to the short discovery hint and selected task rows.
+
+For one task, read its existing plan through `task plan show <task-id>`, investigate the task intent and relevant files, then author or edit a workspace input JSON. Include ready-plan acceptance criteria, verification expectations and out-of-scope boundaries. Save with `task plan save <task-id> --input <file>` and read back through `show`; `approved` means ready, not operator-signed, and no human plan confirmation is required.
+
+For multiple TODO tasks, `task plan list --missing` finds absent JSON plans for literal leading `[plan]` Notes tokens. Use `list` to inspect existing draft, ready or invalid plans, then investigate, author and save each selected task separately. An explicit one-task request does not require retagging other rows. Saving leaves statuses untouched and does not execute planned tasks.
+
+Create or update plans only for tasks that have never started; retained start evidence refuses replacement even after reset to TODO. Ordinary entry automatically attaches a ready canonical plan, with explicit path precedence. Missing or draft optional plans keep freeform compatibility. Read the compact entry and handshake hints for the recorded attachment; they do not add readiness authority or select a later plan. Provider surfaces route to this canonical guidance rather than duplicate planning command contracts.
+
 ## Execution Depth
 - Supported: `depth=1`, `depth=2`, `depth=3`.
 - Default: `depth=2`.
@@ -108,6 +120,7 @@ Default task navigator is `node garda-agent-orchestrator/bin/garda.js next-step 
 
 ## Canonical Workflow
 1. Select highest-priority `TODO` task in `TASK.md`; successful `enter-task-mode` reconciles it to `IN_PROGRESS`.
+   - Before entering task mode, satisfy any leading `[plan]` Notes token or explicit plan-preparation request through the Requested Plan Preparation guidance above. Preparation alone does not authorize execution of the selected tasks.
 2. If no `TODO` exists, create a task from current user request; successful `enter-task-mode` then reconciles it to `IN_PROGRESS`.
 3. Resolve requested depth and record requested/effective depth in non-status `TASK.md` notes.
 4. Run the default navigator and repeat it after every command:
@@ -120,7 +133,13 @@ Default task navigator is `node garda-agent-orchestrator/bin/garda.js next-step 
 6. Record baseline downstream rules explicitly before preflight when `next-step` requests it:
    - Node: `node garda-agent-orchestrator/bin/garda.js gate load-rule-pack --task-id "<task-id>" --stage "TASK_ENTRY" --loaded-rule-file "garda-agent-orchestrator/live/docs/agent-rules/00-core.md" --loaded-rule-file "garda-agent-orchestrator/live/docs/agent-rules/15-project-memory.md" --loaded-rule-file "garda-agent-orchestrator/live/docs/agent-rules/40-commands.md" --loaded-rule-file "garda-agent-orchestrator/live/docs/agent-rules/80-task-workflow.md" --loaded-rule-file "garda-agent-orchestrator/live/docs/agent-rules/90-skill-catalog.md"`
    - `load-rule-pack` writes task-scoped event `RULE_PACK_LOADED` automatically and persists `runtime/reviews/<task-id>-rule-pack.json`.
-7. Build concise plan: scope, files, risks, tests or validation strategy.
+7. Build a concise execution brief from existing TASK.md intent: goal, done_when (observable result), verification, scope/files and material risks. No separate file is required for an ordinary small task.
+   - When JSON is attached, read and reuse its `goal`, `acceptance_criteria`, `verification_expectations`, `out_of_scope`, `scope_files` and `validation_strategy`; do not duplicate criteria into a competing artifact.
+   - Legacy plans may omit optional criteria fields; use existing task intent and the brief without a new gate, retrospective artifact or profile change.
+   - Record assumptions as `none` or a concise list in existing plan `notes` or the brief. Make ordinary implementation choices within authorized scope; no mandatory question or approval is required for every plan.
+   - Resolve material ambiguity affecting user-visible behavior, authorization or scope from authoritative task context or a focused operator question before dependent work; independent investigation or work may continue.
+   - Prepared plans freeze after task start. A newly discovered requirement incompatible with authorized active scope needs an explicit follow-up and scope or authorization resolution before dependent work; do not silently rewrite the active plan.
+   - A ready plan or brief records intent. Actual command outcomes and accepted review receipts establish completion evidence; existing lifecycle gates remain authoritative.
    - `enter-task-mode` auto-emits `PLAN_CREATED`; do not backfill it manually unless recovery tooling explicitly requires it.
 8. Run handshake diagnostics after task-mode entry and baseline rule-pack loading when `next-step` requests it:
    - canonical invocation: `node garda-agent-orchestrator/bin/garda.js gate handshake-diagnostics ...`.
@@ -315,7 +334,7 @@ Default task navigator is `node garda-agent-orchestrator/bin/garda.js next-step 
 - Do not skip explicit task-mode entry via `enter-task-mode` before preflight and implementation.
 - Do not skip explicit rule-pack evidence via `load-rule-pack`; reading only the top-level router is insufficient.
 - Do not skip preflight classification with explicit `--output-path`.
-- Do not move to implementation without plan.
+- Do not move to implementation without a concise execution brief or reading the attached plan; no separate criteria artifact is required.
 - Do not move to `IN_REVIEW` without passing compile gate (`COMPILE_GATE_PASSED`).
 - Do not bypass required reviews without deterministic gate override contract.
 - Do not set or hand-edit active `TASK.md` lifecycle status cells (`IN_PROGRESS`, `IN_REVIEW`, `SPLIT_REQUIRED`, `DONE`, `BLOCKED`) as a substitute for gates; task-mode, review-gate, split-required latch, and completion finalization own normal status sync, and explicit operator `task-reset` owns reset/discard.

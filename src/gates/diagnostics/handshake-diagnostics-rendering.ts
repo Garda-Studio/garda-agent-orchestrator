@@ -1,4 +1,5 @@
 import type { HandshakeDiagnosticsArtifact } from './handshake-diagnostics-types';
+import { formatTaskPlanDiagnostics } from './task-plan-diagnostics';
 
 export function formatHandshakeDiagnosticsResult(artifact: HandshakeDiagnosticsArtifact): string[] {
     const lines: string[] = [
@@ -23,6 +24,8 @@ export function formatHandshakeDiagnosticsResult(artifact: HandshakeDiagnosticsA
         `EffectiveCwd: ${artifact.effective_cwd}`,
         `WorkspaceRoot: ${artifact.workspace_root}`
     ];
+
+    if (artifact.task_plan) lines.push(...formatTaskPlanDiagnostics(artifact.task_plan));
 
     if (artifact.diagnostics.length > 0) {
         lines.push('Diagnostics:');
