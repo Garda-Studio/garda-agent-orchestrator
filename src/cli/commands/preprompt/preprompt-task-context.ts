@@ -925,7 +925,7 @@ export function buildTaskBrief(targetRoot: string, taskId: string, initAnswersPa
         throw new Error(`Task '${taskId}' was not found in TASK.md.`);
     }
 
-    const statusSnapshot = getStatusSnapshot(targetRoot, initAnswersPath);
+    const statusSnapshot = getStatusSnapshot(targetRoot, initAnswersPath, undefined, { readOnly: true });
     const workspaceSnapshot = (() => {
         try {
             return summarizeWorkspaceSnapshot(getWorkspaceSnapshot(targetRoot, 'git_auto', true, []));

@@ -106,6 +106,128 @@ project-root/
 
 All generated directories are both gitignored and excluded from IDE indexing by the shipped `.vscode/settings.json`.
 
+`src/lifecycle/cleanup/cleanup-wip-ownership.ts` owns read-only WIP package
+snapshots. Authentication validates the canonical capture location and exact
+manifest schema, declared patch and untracked payload hashes and sizes, and
+the complete contained package tree. Unknown members, links, shared files,
+missing declarations and replaced filesystem identities fail closed. Optional
+shared read budgets reserve observed manifest and file bytes before opening
+them; malformed JSON, rejected schemas and oversized reads retain their charge.
+Observed payload size must equal its declaration and fit the remaining package
+capacity before the file is opened. Authenticated reads still cap the descriptor
+at the admitted size and recheck bytes and metadata after reading.
+Directory enumeration reads bounded entries through a closed directory handle,
+including the final containment inspection. Its allowance accounts for already
+retained and pending members before allocating names. Suspended manifests cannot
+claim retirement metadata, and nested restore commands admit only known fields.
+Declared source depth cannot exceed the package entry limit. Directory membership
+uses a component index bounded to twice that limit, covering original and possible
+suspended payload directories without retaining every full ancestor path. Both
+bounds apply before package directory reads.
+Snapshot metadata has a separate 64 MiB admission allowance per package and a
+shared allowance carried by `remainingSnapshotBytes` (initialized to the same
+limit when omitted). Conservative identity and path-character weights bound the
+potential declared ancestry before traversal; rejected snapshots retain their
+charge. The weights are a resource quota, not a heap measurement. Bindings and
+file identities use compact SHA256 values, and sorted tree identities are hashed
+incrementally. Closing inspection reuses retained bindings and rejects new
+members before capturing or enumerating their ancestry.
+Closing inspection compares exact membership and retained ancestry identities
+with the captured tree. File size, mtime and ctime must remain unchanged across
+authenticated reading and snapshot completion; this catches in-place changes
+without rereading payload bytes during closing inspection.
+Retained directory identities, modification times and change times are rechecked
+after closing traversal and file verification, with descendants before the root.
+This rejects members added to an already-enumerated parent while closing
+inspection visits its descendants.
+
+Restore handoffs reuse the producer's identity builder and restored-file
+selection contract. Prepared, pending and finalized states each require their
+own exact evidence shape. Identity reconstruction fixes timeline-anchor field
+order and retains the producer's manifest spelling while admitting equivalent
+Windows selections. Runtime generation comparison is independent of serialized
+field order. The package snapshot provides authenticated bytes and retained
+filesystem bindings; lifecycle callers own retirement authority, surviving
+references, confirmation and subsequent mutation checks.
+While a manifest is suspended, each handoff digest must equal its authenticated
+bytes. Retirement changes those bytes while preserving the original producer
+handoff digest; lifecycle callers validate that transition's authority.
+
+`src/lifecycle/cleanup/cleanup-wip-preview.ts` owns surviving reference and
+canonical retirement authority. `previewRetiredWipCleanup`, exported through
+`src/lifecycle/cleanup.ts`, takes an exact task selection and optional manifest
+selection. Its read-only result includes package classifications, counts, bytes,
+blockers and a deterministic `ownership_digest` bound to the package tree,
+queue, timelines and retained containment identities. Only a retired orphan
+with one canonical retirement event matching its current manifest is admitted.
+Finalized handoffs must match their unique canonical restore event, capture,
+predecessor anchor and runtime generation. Pending handoffs, suspended work,
+malformed authority and unfinished same-task or cross-task references block
+admission. References cover manifests, package directories and descendants,
+including Windows case variants and normalized repository-parent re-entry
+paths. Relative references with spaces, parentheses, brackets and apostrophes
+are recognized in delimited Notes and event details. Fallback alias resolution
+preserves complete directory names, checks at most 128 candidates/occurrences
+per string and scans at most 32,768 characters per candidate; exceeding either
+bound leaves the package ambiguous and blocks cleanup. Namespace enumeration
+stops at the shared entry limit before
+allocating excess names. Preview also caps a conservative estimate of global
+revalidation at 65,536 checks across the initial check and every selected file
+and directory mutation. The estimate includes authority files, timeline locks,
+retained boundaries, directory watches and lifecycle/queue ownership checks.
+An excessive selection is blocked before removal acquires any locks; use a
+smaller selection or defer cleanup until fewer tasks remain unfinished.
+
+`src/lifecycle/cleanup/cleanup-wip-removal.ts` owns confirmed mutation.
+`removeRetiredWipPackages` requires `confirmed: true` and the exact preview
+digest. It returns `CONFIRMATION_REQUIRED`, `BLOCKED`, `REMOVED` or `INCOMPLETE`,
+with removed package, file and byte counts, `mutation_attempted` and `counts_complete`.
+Apply reacquires lifecycle, queue and canonical timeline locks, rebuilds and
+compares the entire selected snapshot, then checks exact retained membership
+with the explicit WIP entry quota before the first deletion. It rechecks lock
+generations, authority, containment and file identity while consuming each
+operation. Each package manifest is removed after its payloads. Partial
+mutation is reported as incomplete; old-digest retries preserve residual data
+for explicit recovery. Source files, queue rows and task timelines survive.
+The `wip-task-packages` cleanup ownership entry excludes these packages from
+automatic GC, retention and ordinary task-purge collectors.
+
+Before split-required decomposition, the authenticated latch route creates a
+separate immutable capture of current authorized parent WIP. It does not reuse
+an earlier complete capture as checkout evidence after partial restoration or
+an isolated HEAD advance. Earlier packages remain available for restoring the
+remaining child scopes. Ordinary capture reuse still requires a verified
+suspended or fully restored checkout; a new decomposition capture retains the
+existing preflight scope, containment, source/index/HEAD revalidation and
+transaction rollback checks.
+
+Source-checkout WIP restore finalization runs in the freshly built `dist`
+runtime. Its host-local input fingerprint comes from
+`.scripts-build/publish-runtime-build-cache.json`; the cache must bind the
+SHA-256 of the exact `dist/publish-runtime-manifest.json` bytes. Its versioned
+fingerprint payload must authenticate its own digest, match the current Node,
+platform, architecture, engine and TypeScript metadata, and declare the complete
+current build-input inventory. Every input size and SHA-256 is checked through
+the authenticated repository snapshot owner; inventory is reconstructed again
+after those reads. Replaying an older cache therefore fails even when published
+manifest bytes remain identical. Published manifests contain the portable
+runtime file inventory, without host fingerprint
+metadata. Finalization also requires a current source checkout, the exact loaded
+build root, manifest membership of the finalizer and task-event writer, and
+authenticated module hashes. After resolving module hashes, it rechecks retained
+path identities, sizes and change/modification times for the manifest, cache,
+compiler metadata, build inputs, modules and traversed input directories,
+including the absence of optional input roots. Detected content rewrites, file
+replacement or late input additions block canonical append and preserve the pending handoff.
+Generation changes before canonical event append leave restoration incomplete.
+
+Schema 1 input discovery follows the publish producer's roots and `.cjs`, `.js`,
+`.json` and `.ts` extensions, excluding nested `.git` and `node_modules` entries.
+Linked or non-regular input paths cannot supply authority. Validation is bounded
+to 8,192 input files, 65,536 traversal entries, 64 directory levels, 128 MiB of
+input reads, 64 MiB per input and 1 MiB per metadata file. Cache and published
+manifest snapshots retain their existing 16 MiB limits.
+
 ## What Is Materialized Inside Orchestrator
 
 | Path | Purpose |
@@ -215,3 +337,75 @@ All gate events are logged to `runtime/task-events/<task-id>.jsonl` with hash-ch
 - `tsconfig.build.json` enforces `strict:true` for `src/**/*.ts`.
 - `tsconfig.tests.json` enforces `strict:true` for `src/**/*.ts`, `tests/node/**/*.ts`, and `scripts/node-foundation/**/*.ts`.
 - `npm run validate:release` is the explicit release proof path: `clean worktree -> build -> embedded bundle parity when present -> regular tests/coverage -> explicit package smoke -> pack/install/invoke -> clean worktree`.
+
+## Cooperative Generic Scratch Cleanup
+
+`src/lifecycle/cleanup/scratch-writer-ownership.ts` owns registration of direct
+children of the canonical workspace's `runtime/tmp` directory. A writer calls
+`registerScratchWriter({ targetRoot, bundleRoot, scratchName })` before using a
+new, uniquely named root. Registration creates the root exclusively and stores
+its creation identity, registration UUID, local hostname and process ID in
+`runtime/scratch-writers/<root-key>.json`. An existing registered root can be
+activated again only after its previous local process is positively known dead.
+An existing unowned root is preserved; registration does not adopt legacy data.
+Owner records remain after removal, reserving deleted names. Use a new unique
+name for a later root. Registration remains protective for the lifetime of its
+process; a completed operation inside a live process does not establish
+quiescence.
+
+`cleanup-scratch-preview.ts` owns
+`previewStaleScratchCleanup({ targetRoot, bundleRoot, scratchNames, cutoffUtc })`.
+Names select exact roots; `cutoffUtc` is a canonical ISO UTC timestamp with
+milliseconds in the past. Preview creates no directories, locks, journals,
+caches or receipt files. Missing, malformed, conflicting, foreign-host and
+unverifiable owners block the whole selection with an actionable diagnostic.
+Only a positively known-dead local process qualifies. A live process with old
+timestamps remains protected. Every selected root and descendant must have an
+mtime strictly before the cutoff. Task directories and prefixes, review/WIP
+names, writer metadata, durable memory and shared index names are excluded at
+every tree depth. Linked, shared, replaced and unsupported members are rejected
+before reading their bytes.
+
+The deterministic SHA256 digest binds the canonical workspace, sorted exact
+selection, cutoff, versioned policy/limits, registration bytes and identity,
+all containment ancestors and complete tree membership, metadata and file
+bytes. Inspection uses bounded handles and descriptor reads: at most 64 roots,
+4096 tree entries, depth 64, 4096 path characters, 16 KiB per owner record,
+64 MiB per file, 128 MiB aggregate file bytes and 8 MiB retained metadata.
+Multiplied whole-selection revalidation work is admitted before locks; excess
+work preserves the selection and requests fewer or smaller roots.
+
+`cleanup-scratch-removal.ts` owns
+`removeStaleScratch({ ...selection, confirmed: true, ownershipDigest })`.
+Cancellation is read-only. Apply uses the canonical lifecycle lock and
+`runtime/.scratch-writers.lock`, located outside deletable subtrees. Shared
+writer lock recovery requires a verified dead local process and never recovers
+foreign owners by age. Under both locks apply rebuilds the exact snapshot and
+validates the entire selection before its first removal. It then checks lock
+generations, registration and all remaining membership/metadata before each
+identity-bound file or empty-directory removal. File bytes are checked again
+before unlink. Mutation generation uses the existing lifecycle owner. A changed
+selection or ownership returns `INCOMPLETE`; partial errors report confirmed
+file counts/bytes and mark counts incomplete when a mutation may have failed.
+There is no recursive wildcard removal. The contained filesystem owner retains
+ambiguous failures in-process; retry requires a fresh preview and an unambiguous
+process, while stale digests preserve residual data.
+
+Ordinary cleanup/GC no longer collects generic `runtime/tmp` roots or unowned
+runtime-root `.tmp`/`.partial` files by age. Canonical task-owned scratch retains
+its existing cleanup and task/batch-purge routes. Generic scratch registration
+and confirmed cleanup are reusable backend contracts independent of task or
+batch purge. Owner metadata, WIP, task evidence and shared indexes are preserved.
+Legacy candidate mutation requires an explicit contained canonical runtime root
+under a bundle with an unshared regular `VERSION` marker. Workspace, bundle and
+runtime roots with their own `VERSION` or `TASK.md` role markers are rejected.
+Both lexical and real filesystem namespaces are checked independently of the category label.
+Ancestral runtime scratch, writer and temporary namespaces remain protected;
+nested bundle/runtime roles and aliases cannot reset these boundaries.
+Generic scratch, its containing roots and external writer metadata cannot be
+removed through category relabeling or internal path aliases.
+Public full-erasure CLI/UI and legacy-owner migration are separate work.
+Containment and retained identities detect observed pathname replacements;
+cooperative writers obey the shared lock. This remains procedural local
+coordination with descriptor/path checks, rather than atomic filesystem
+publication or a trust anchor against a hostile local process.

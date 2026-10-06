@@ -21,6 +21,7 @@ import {
     seedHealthyDoneTaskArtifacts,
     writeTaskQueue
 } from './cleanup-fixtures';
+import { collectStandardCandidates } from '../../../src/lifecycle/cleanup/cleanup-removal';
 
 describe('GC_ALLOWLIST', () => {
     it('contains expected categories', () => {
@@ -398,7 +399,7 @@ describe('runGc', () => {
         assert.equal(backupItems.length, 0, 'should not touch backups when filtered');
     });
 
-    it('cleans aged generated runtime zones while preserving active reviewer scratch', () => {
+    it('cleans other generated zones and task reviewer scratch while preserving unowned generic tmp', () => {
         writeTaskQueue(tmpDir, [
             { id: 'T-001', status: '🟨 IN_PROGRESS', title: 'Active task' }
         ]);
@@ -443,7 +444,7 @@ describe('runGc', () => {
             retentionPolicy: { maxAgeDays: 30 }
         });
         assert.ok(dryRun.skipped.some((item) => item.category === 'tmp' && item.path === inactiveScratch));
-        assert.ok(dryRun.skipped.some((item) => item.category === 'tmp' && item.path === runtimeTempFile));
+        assert.ok(!dryRun.skipped.some((item) => item.path === runtimeTempFile || item.path === tmpOldEntry));
         for (const [, category] of zones) {
             assert.ok(dryRun.categories[category], `dry-run should report ${category}`);
         }
@@ -459,24 +460,71 @@ describe('runGc', () => {
         assert.ok(result.removed.some((item) => item.category === 'tmp' && item.path === inactiveScratch));
         assert.equal(fs.existsSync(activeScratch), true, 'active reviewer scratch must survive cleanup');
         assert.equal(fs.existsSync(inactiveScratch), false, 'inactive reviewer scratch should be removed');
-        assert.equal(fs.existsSync(tmpOldEntry), false, 'aged runtime tmp entry should be removed');
-        assert.equal(fs.existsSync(runtimeTempFile), false, 'aged runtime root temp file should be removed');
+        assert.equal(fs.existsSync(tmpOldEntry), true, 'generic tmp requires separate registered ownership and confirmation');
+        assert.equal(fs.existsSync(runtimeTempFile), true, 'unowned root temp has no generic deletion authority');
         for (const [dirName] of zones) {
             assert.equal(fs.existsSync(path.join(runtimeDir, dirName, 'old-entry')), false, `${dirName} should be removed`);
         }
         assert.equal(fs.existsSync(liveProjectMemory), true, 'live project memory is canonical and must not be cleaned');
     });
 
+    it('bounds active-task traversal while preserving exact scratch owners', () => {
+        const activeTaskIds = new Set([
+            't-001', 'T-002',
+            ...Array.from({ length: 128 }, (_, index) => `T-${1000 + index}`)
+        ]);
+        let iterations = 0;
+        const originalIterator = activeTaskIds[Symbol.iterator].bind(activeTaskIds);
+        activeTaskIds[Symbol.iterator] = () => {
+            iterations += 1;
+            return originalIterator();
+        };
+        const active = [
+            path.join(runtimeDir, 'T-001-debug.partial'),
+            path.join(runtimeDir, 'tmp', 'T-001-output'),
+            path.join(runtimeDir, 'tmp', 'reviews', 'T-002'),
+            path.join(runtimeDir, 'tmp', 'reviews', 'T-002-output')
+        ];
+        const inactive = [
+            path.join(runtimeDir, 'T-003-debug.partial'),
+            path.join(runtimeDir, 'tmp', 'T-001-2'),
+            path.join(runtimeDir, 'tmp', 'reviews', 'T-003-output')
+        ];
+        const generic = path.join(runtimeDir, 'tmp', 'unowned');
+        for (const candidate of [...active, ...inactive, generic]) {
+            if (candidate.endsWith('.partial')) {
+                fs.writeFileSync(candidate, 'scratch');
+            } else {
+                fs.mkdirSync(candidate, { recursive: true });
+                fs.writeFileSync(path.join(candidate, 'payload'), 'scratch');
+            }
+            agePath(candidate, 4);
+        }
+        const candidates = collectStandardCandidates(runtimeDir,
+            { ...buildDefaultRetentionPolicy(), maxAgeDays: 2 }, new Date(), activeTaskIds);
+        assert.deepEqual(candidates.map(item => item.path).sort(), inactive.sort(),
+            'case-insensitive active owners and generic scratch stay protected; inactive exact children remain eligible');
+        assert.ok(iterations <= 1,
+            `scratch filtering must not rescan the ${activeTaskIds.size} active tasks per entry (iterations=${iterations})`);
+        assert.ok([...active, ...inactive, generic].every(candidate => fs.existsSync(candidate)),
+            'candidate collection remains read-only');
+    });
+
     it('filters generated runtime zone cleanup by category', () => {
         const tmpOldEntry = path.join(runtimeDir, 'tmp', 'old-batch');
+        const taskTmpEntry = path.join(runtimeDir, 'tmp', 'T-002');
         const cacheOldEntry = path.join(runtimeDir, 'cache', 'old-entry');
         fs.mkdirSync(tmpOldEntry, { recursive: true });
+        fs.mkdirSync(taskTmpEntry, { recursive: true });
         fs.mkdirSync(cacheOldEntry, { recursive: true });
         fs.writeFileSync(path.join(tmpOldEntry, 'payload.txt'), 'tmp', 'utf8');
+        fs.writeFileSync(path.join(taskTmpEntry, 'payload.txt'), 'task tmp', 'utf8');
         fs.writeFileSync(path.join(cacheOldEntry, 'payload.txt'), 'cache', 'utf8');
         agePath(path.join(tmpOldEntry, 'payload.txt'), 45);
         agePath(path.join(cacheOldEntry, 'payload.txt'), 45);
         agePath(tmpOldEntry, 45);
+        agePath(path.join(taskTmpEntry, 'payload.txt'), 45);
+        agePath(taskTmpEntry, 45);
         agePath(cacheOldEntry, 45);
 
         const result = runGc({
@@ -487,8 +535,9 @@ describe('runGc', () => {
             retentionPolicy: { maxAgeDays: 30 }
         });
 
-        assert.ok(result.removed.some((item) => item.category === 'tmp' && item.path === tmpOldEntry));
-        assert.equal(fs.existsSync(tmpOldEntry), false, 'tmp filter should remove tmp candidates');
+        assert.ok(result.removed.some((item) => item.category === 'tmp' && item.path === taskTmpEntry));
+        assert.equal(fs.existsSync(taskTmpEntry), false, 'tmp filter retains canonical task-owned cleanup');
+        assert.equal(fs.existsSync(tmpOldEntry), true, 'category confirmation is insufficient for generic tmp');
         assert.equal(fs.existsSync(cacheOldEntry), true, 'tmp filter must not remove cache candidates');
     });
 

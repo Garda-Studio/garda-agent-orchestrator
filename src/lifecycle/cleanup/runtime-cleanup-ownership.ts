@@ -1,4 +1,30 @@
 import * as path from 'node:path';
+import { isCanonicalTaskId, parseStructuredTaskArtifactTaskId } from '../../core/task-ids';
+
+const PROTECTED_GENERIC_SCRATCH_NAMES = new Set([
+    'reviews', 'wip', 'scratch-writers', '.scratch-writers.lock', 'owner.json',
+    'project-memory', 'task-events', 'task-ledger', 'manual-validation', 'plans', 'compact',
+    'reviews-index.json', 'all-tasks.jsonl', 'metrics.jsonl', '.timeline-summary.json'
+]);
+
+export function resolveRuntimeTmpTaskId(name: string): string | null {
+    return isCanonicalTaskId(name) ? name : parseStructuredTaskArtifactTaskId(name);
+}
+
+export function isProtectedGenericScratchName(name: string): boolean {
+    return PROTECTED_GENERIC_SCRATCH_NAMES.has(name.toLowerCase())
+        || /^t-/iu.test(name) || resolveRuntimeTmpTaskId(name) !== null;
+}
+
+export function isTaskOwnedRuntimeTmpPath(runtimeDir: string, candidate: string): boolean {
+    const relative = path.relative(path.resolve(runtimeDir), path.resolve(candidate));
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
+    const parts = relative.split(path.sep), component = (name: string) => process.platform === 'win32' ? name.toLowerCase() : name;
+    if (parts.length === 1) return /\.(?:tmp|partial)$/u.test(parts[0]) && resolveRuntimeTmpTaskId(parts[0]) !== null;
+    if (component(parts[0]) !== 'tmp') return false;
+    if (parts.length === 2) return resolveRuntimeTmpTaskId(parts[1]) !== null;
+    return parts.length === 3 && component(parts[1]) === 'reviews' && resolveRuntimeTmpTaskId(parts[2]) !== null;
+}
 
 export type RuntimeCleanupArtifactOwnership =
     | 'task-scoped'
@@ -28,6 +54,7 @@ export type RuntimeCleanupSharedSideEffectAction =
 
 export type RuntimeCleanupCollectorKey =
     | 'manual-validation-task-root'
+    | 'compact-task-root'
     | 'reviews-task-artifacts'
     | 'task-events-task-artifacts'
     | 'plans-task-markdown'
@@ -68,6 +95,7 @@ export interface RuntimeCleanupCollectorContract {
 
 export const TASK_SCOPED_RUNTIME_CANDIDATE_CATEGORIES = Object.freeze([
     'manual-validation',
+    'compact',
     'reviews',
     'task-events',
     'plans',
@@ -80,6 +108,7 @@ export type TaskScopedRuntimeCandidateCategory = typeof TASK_SCOPED_RUNTIME_CAND
 
 export interface RuntimeCleanupStandardPaths {
     manualValidationDir: string;
+    compactDir: string;
     reviewsDir: string;
     taskEventsDir: string;
     plansDir: string;
@@ -99,6 +128,22 @@ export interface RuntimeCleanupStandardPaths {
 
 export const RUNTIME_CLEANUP_OWNERSHIP_ENTRIES = Object.freeze([
     {
+        id: 'wip-task-packages',
+        location: 'runtime/wip/<task-id>/**',
+        ownership: 'mixed',
+        selectionUnit: 'task-subtree',
+        taskLocator: 'Exact canonical task directory and authenticated package manifest identity.',
+        taskPurgeMode: 'exclude-from-task-purge',
+        retentionMode: 'operator-managed',
+        sharedSideEffects: [],
+        notes: [
+            'Only explicitly confirmed retired orphan packages may be removed through the separate WIP backend.',
+            'Suspended work, unfinished cross-task references, pending restore handoffs and ambiguous ownership are preserved.',
+            'WIP is excluded from automatic GC, retention and ordinary task-purge candidate walkers.'
+        ],
+        examples: ['runtime/wip/<task-id>/split-required/<timestamp>/manifest.json']
+    },
+    {
         id: 'manual-validation-task-root',
         location: 'runtime/manual-validation/<task-id>/',
         ownership: 'task-scoped',
@@ -117,6 +162,24 @@ export const RUNTIME_CLEANUP_OWNERSHIP_ENTRIES = Object.freeze([
             'runtime/manual-validation/<task-id>/review-evidence.json',
             'runtime/manual-validation/<task-id>/full-suite-retry-evidence.json'
         ]
+    },
+    {
+        id: 'compact-task-root',
+        location: 'runtime/compact/<task-id>/',
+        ownership: 'task-scoped',
+        selectionUnit: 'task-subtree',
+        candidateCategory: 'compact',
+        collectorKey: 'compact-task-root',
+        taskLocator: 'Canonical task-id directory name owns retained command output.',
+        taskPurgeMode: 'delete-owned-artifacts',
+        retentionMode: 'task-age-or-count',
+        sharedSideEffects: [],
+        notes: [
+            'Remove the selected task subtree without retaining a compact tombstone.',
+            'Confirmed removal must acquire runtime/compact.lock so cooperating readers and writers cannot overlap deletion.',
+            'The shared compact lock and unrelated task output are not task-owned deletion candidates.'
+        ],
+        examples: ['runtime/compact/<task-id>/<capture-ref>/manifest.json']
     },
     {
         id: 'plans-task-markdown',
@@ -369,16 +432,28 @@ export const RUNTIME_CLEANUP_OWNERSHIP_ENTRIES = Object.freeze([
         selectionUnit: 'mixed-directory',
         taskLocator: 'No canonical task-id ownership can be resolved from the path.',
         taskPurgeMode: 'exclude-from-task-purge',
-        retentionMode: 'general-generated-zone-cleanup',
+        retentionMode: 'operator-managed',
         sharedSideEffects: [],
         notes: [
-            'Generic scratch remains under broad temp cleanup rather than per-task purge.',
+            'Generic scratch requires a separate read-only preview and exact confirmed removal with known-dead local writer ownership.',
             'Examples include profile sandboxes, local UI temp roots, compile caches, and other generated scratch without one owning task id.'
         ],
         examples: [
             'runtime/tmp/gao-profile-0ZNQaC',
             'runtime/tmp/node-compile-cache'
         ]
+    },
+    {
+        id: 'scratch-writer-registration',
+        location: 'runtime/scratch-writers/*.json and runtime/.scratch-writers.lock',
+        ownership: 'shared-generated',
+        selectionUnit: 'shared-directory',
+        taskLocator: 'Cooperative writer identity bound to an exact generic tmp root, independent of task ownership.',
+        taskPurgeMode: 'exclude-from-task-purge',
+        retentionMode: 'operator-managed',
+        sharedSideEffects: [],
+        notes: ['Writer metadata and the shared writer lock remain outside every deletable scratch subtree and automatic cleanup.'],
+        examples: ['runtime/scratch-writers/<root-key>.json', 'runtime/.scratch-writers.lock']
     },
     {
         id: 'metrics-jsonl',
@@ -539,6 +614,7 @@ export function listRuntimeCleanupSideEffectActionsForRemovedCategories(
 export function resolveRuntimeCleanupStandardPaths(runtimeDir: string): RuntimeCleanupStandardPaths {
     return {
         manualValidationDir: path.join(runtimeDir, 'manual-validation'),
+        compactDir: path.join(runtimeDir, 'compact'),
         reviewsDir: path.join(runtimeDir, 'reviews'),
         taskEventsDir: path.join(runtimeDir, 'task-events'),
         plansDir: path.join(runtimeDir, 'plans'),

@@ -17,6 +17,17 @@ function tailPathSegment(value: string): string {
 }
 
 describe('runtime cleanup ownership contract', () => {
+    it('keeps WIP packages outside automatic task purge and retention collectors', () => {
+        const entry = findRuntimeCleanupOwnershipEntry('wip-task-packages');
+        assert.ok(entry);
+        assert.equal(entry.ownership, 'mixed');
+        assert.equal(entry.taskPurgeMode, 'exclude-from-task-purge');
+        assert.equal(entry.retentionMode, 'operator-managed');
+        assert.equal(entry.collectorKey, undefined);
+        assert.equal(entry.candidateCategory, undefined);
+        assert.ok(entry.notes.some(note => /retired.*orphan/iu.test(note)));
+    });
+
     it('defines each required runtime cleanup area exactly once', () => {
         const entries = listRuntimeCleanupOwnershipEntries();
         const ids = entries.map((entry) => entry.id);
@@ -25,6 +36,7 @@ describe('runtime cleanup ownership contract', () => {
 
         for (const requiredId of [
             'manual-validation-task-root',
+            'compact-task-root',
             'plans-task-markdown',
             'project-memory-task-artifacts',
             'project-memory-bootstrap-report',
@@ -108,6 +120,7 @@ describe('runtime cleanup ownership contract', () => {
     it('drives task purge category and side-effect decisions from the ownership map', () => {
         assert.deepEqual(listTaskPurgeableRuntimeCandidateCategories(), [
             'manual-validation',
+            'compact',
             'reviews',
             'task-events',
             'plans',
@@ -140,6 +153,7 @@ describe('runtime cleanup ownership contract', () => {
 
         assert.deepEqual(contracts.map((contract) => contract.key), [
             'manual-validation-task-root',
+            'compact-task-root',
             'plans-task-markdown',
             'project-memory-task-artifacts',
             'reviews-task-artifacts',

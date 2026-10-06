@@ -1,12 +1,45 @@
-# T-151-1: task context audit and working plan
+# Task resume context audit and regression contract
 
-This is the analysis contract for T-151-2 through T-151-4. T-151-1 changes documentation and a measurement fixture only. The proposed read recipes below do not waive the current full resume protocol, alter runtime policy, authorize edits, or satisfy lifecycle gates.
+This document retains the dated T-151-1 analysis and records the implemented continuation contract from T-151-2 through T-151-4. Historical findings and presentation drafts below describe their captured baseline, not the current CLI. Instruction selection remains advisory and cannot authorize edits or satisfy lifecycle gates.
+
+## Current resume contract
+
+`preprompt task` emits schema 3 with the current read-only navigator continuation and an advisory `context_selection`. It does not replay startup or post-implementation command batches. Run `context_selection.navigator_command` immediately before acting and after the action; an earlier brief does not authorize work after inputs change.
+
+| Current remaining work | Controller recipe and reload boundary |
+| --- | --- |
+| Implementation, failed review, unknown or stale evidence | Complete implementation context and selected implementation skills with required references. Keep the actual navigator blocker and approved scope. |
+| Test/review orchestration only | Phase sections for compile, suite, routing, fresh launch, evidence and receipts. A source or test fix first reloads `before_code_edit_read_set`. |
+| Documentation or memory closeout | Current impact, memory and approval instructions, required memory sources and affected documentation. Behavior changes first reload implementation context. |
+| Completion and report | Current completion, audit and generated-report protocol. Keep the canonical audit and verbatim final-report order; status or old PASS evidence is insufficient. |
+
+Every recipe retains canonical routing, core constraints, the current task row and Notes, frozen attached-plan criteria and required linked references. A missing named section requires reading the full source and implementation instructions. Historical `RULE_PACK_LOADED` records are lifecycle evidence, not knowledge in a fresh session. Actual implementation instructions must be read before edits, even when the preceding continuation selected a smaller recipe.
+
+Fresh required reviewers retain empty repository-rule read sets. They still receive the exact prepared launch input, resolved lane skill and references, generated context, scoped diff, upstream evidence and output contract. Isolation, one-shot launch, actual delegation-start evidence, receipt validation and session release remain mandatory. Provider bridge source templates apply the same resume contract to standard profiles and the compact router; broad provider shortening remains T-155 scope.
+
+## Fresh-process regression and measurements
+
+[preprompt-command-resume-context.test.ts](../tests/node/cli/commands/preprompt-command-resume-context.test.ts) prepares lifecycle fixtures and invokes the real CLI in separate Node processes for JSON and text. Cases cover implementation, test-review-only, completion-only, documentation impact, memory impact, failed review, changed source, removed compile evidence and frozen-plan tampering. The mutation cases first prove a completion-ready state before changing the bound input. Each case compares the emitted decision with the pure current navigator, asserts empty startup batches and implementation reload instructions, and compares file content hashes and modification times before and after brief reads. Fixture setup and explicit effect settlement happen before that snapshot.
+
+[install-provider-bridges.test.ts](../tests/node/materialization/install-provider-bridges.test.ts) checks the generated resume contract for GitHub Copilot, Windsurf, Junie and the Antigravity compact router while retaining existing provider installation checks.
+
+The test emits one `GARDA_RESUME_CONTEXT_MEASUREMENT` JSON diagnostic per passing case. [task-resume-context-current.json](task-resume-context-current.json) records the captured observations and reproduction provenance. Raw stdout counts include the trailing newline; `chars` means JavaScript UTF-16 code units and `utf8_bytes` means UTF-8 bytes. Recipe comparisons use the same temporary fixture corpus: source rule/skill templates, the generated router, fixture task/entrypoint and seeded memory. Each named section includes its heading and body up to the next Markdown heading, at any level. Section ranges are deduplicated per file; a missing section selects the complete implementation recipe as the effective fallback. These are recipe footprints, not observed client reads.
+
+Reproduce the focused observations from the repository root through the current task's guarded validation command:
+
+```text
+node scripts/node-foundation/build-scripts.cjs test.js tests/node/cli/commands/preprompt-command-resume-context.test.ts tests/node/materialization/install-provider-bridges.test.ts
+```
+
+The surrounding `gate run-intermediate-command` must bind the current preflight and capture the validation log under the normal workflow. Its build happens before test consumers. Measurements do not count linked-reference bodies, reviewer handoffs, actual client instruction loads, token usage or execution cost. Additive schema fields can enlarge emitted JSON even when a selected instruction recipe is smaller. The historical baseline uses different state, schema and paths, so it is not a controlled before/after performance benchmark. No universal savings percentage or token estimate is claimed.
+
+## Historical audit baseline
 
 Baseline: commit `046596cc2d0eee0907988559ebdb079f8fdd524e`, measured `2026-10-01T16:31:15.514Z`. [task-resume-context-baseline.json](task-resume-context-baseline.json) contains source hashes, units, observations and controlled presentation fixtures. The controller for this audit uses Codex through root `AGENTS.md`, balanced profile, and current selected `node-backend` and `testing-strategy` skills. Required reviews are code, security and performance in strict sequence.
 
 The baseline predates the separate docs-only suite-binding repair in commit `c2e0626e1e0191a51e8710f6b0e17ff80bd394d6`. That repair also updated live project memory and regenerated its rule summary. Instruction-file footprints therefore describe the dated captured bytes, verified against an archived copy; they are not a post-repair measurement of live instructions. The selected preprompt source/module hashes and presentation fixtures can be checked separately without certifying the entire current runtime.
 
-## Source findings
+## Historical source findings
 
 References identify the implementation at the baseline commit; top-level `preprompt-*.ts` files are compatibility facades for `src/cli/commands/preprompt/`.
 
@@ -50,7 +83,7 @@ Projection immutability alone does not authenticate caller-created evidence. Reu
 
 The orchestration skill's [Token Economy prose](../garda-agent-orchestrator/live/skills/orchestration/SKILL.md#L47) still describes older reviewer repository packs. That prose differs from the actual empty selection above. T-151-3 must reconcile relevant resume guidance with the real contract; T-155 owns broad generated-entrypoint/bridge duplication. Preserve the selected reviewer skill and launch trust evidence throughout.
 
-## Proposed minimum controller reads by phase
+## Historical proposed minimum controller reads by phase
 
 These are implementation specifications for later children, **not currently effective replacement instructions**. Every proposed phase includes current root routing, `00-core.md`, the current `TASK.md` row, and current validated navigator diagnostics. A new agent actually reads the selected instructions; old rule-load evidence cannot stand in for that read. Canonical paths below are relative to `garda-agent-orchestrator/live/`: rules are `docs/agent-rules/`, memory is `docs/project-memory/`, and skills are `skills/<id>/SKILL.md` with selected references.
 
@@ -65,7 +98,7 @@ These are implementation specifications for later children, **not currently effe
 
 The optimization reduces irrelevant *controller reads* after verified phase selection. It must not suppress a gate, skip applicable selected skills, change review order, or permit unknown state to select a smaller read set. No manual phase toggle, separate handoff system or new approval mechanism is planned.
 
-## Measured baseline and its limits
+## Historical measured baseline and its limits
 
 The real CLI was invoked in text and JSON modes for three existing states; each mode uses a separate read-only process. Units are UTF-8 bytes and JavaScript UTF-16 code units, including stdout's trailing newline.
 
@@ -94,7 +127,7 @@ The JSON retains a single formatter-input snapshot and the exact draft strings f
 
 Current materialization defaults are selected-provider emission: [init](../src/materialization/init.ts#L38) sets `providerMinimalism=true`, `activeAgentFilesSeed=null`; [getActiveAgentEntrypointFiles](../src/materialization/common.ts#L60) yields only `AGENTS.md` for the default Codex selection ([default source](../src/core/constants.ts#L191)). Extra provider entries can be explicitly selected. This is an entrypoint-selection observation, not total installation size, automatic client-loading evidence, or a native discovery certification. Legacy all-provider installation size is unmeasured here and is not the current default context cost.
 
-## Bounded implementation and validation plan
+## Historical bounded implementation and validation plan
 
 | Owner | Concrete work and completion evidence |
 | --- | --- |
@@ -105,7 +138,7 @@ Current materialization defaults are selected-provider emission: [init](../src/m
 
 Existing test entry points for regression expansion: [preprompt startup/scope output](../tests/node/cli/commands/preprompt-command-startup-commands.test.ts#L35), [startup currentness](../tests/node/gates/next-step/next-step-startup-routing.test.ts#L32), [decision projection](../tests/node/gates/next-step/next-step-decision-engine.test.ts#L86), [stale/unauthorized fixes](../tests/node/gates/next-step/next-step-post-review-source-mutation-guard.test.ts#L286), [launch-input tampering](../tests/node/gates/next-step/next-step-reviewer-launch-evidence.test.ts#L410), and [failed-review restart routing](../tests/node/gates/next-step/next-step-review-failure-routing.test.ts#L3917). These references are research inputs, not claims that T-151-1 ran those tests. Each child follows its current TASK file budget and mandatory navigator gates; split coherent work before exceeding the budget.
 
-## Reproduction
+## Historical baseline reproduction
 
 For new real CLI observations, run `node bin/garda.js preprompt task --task-id <id> --target-root .` and its `--json` variant with bounded captured stdout, preserving each exit code. Record `Buffer.byteLength(stdout, 'utf8')`, `stdout.length` and SHA-256; separately query `resolveNextStep({repoRoot, taskId})` without effects. Hash the named lifecycle files before and after. Record the commit, evidence state, runtime provenance and diagnostic outcomes: different task state legitimately produces different output. Rebuild through the repository's normal workflow if compiled modules are stale.
 

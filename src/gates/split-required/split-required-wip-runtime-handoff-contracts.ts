@@ -118,11 +118,13 @@ function sameFileIdentity(left: fs.Stats, right: fs.Stats): boolean {
     return left.dev === right.dev && left.ino === right.ino;
 }
 
-function readAuthenticatedManifestSnapshot(
+export function readAuthenticatedSplitRequiredWipManifestSnapshot(
     repoRoot: string,
     manifestPath: string,
-    wipRoot: string
+    wipRoot: string,
+    maximumBytes = MAX_MANIFEST_BYTES
 ): { manifest: SplitRequiredWipManifest; sha256: string } {
+    if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 0) throw new Error('WIP manifest read bound is invalid.');
     const resolvedRepoRoot = path.resolve(repoRoot);
     const resolvedManifestPath = path.resolve(manifestPath);
     const resolvedWipRoot = path.resolve(wipRoot);
@@ -135,7 +137,7 @@ function readAuthenticatedManifestSnapshot(
         snapshot = readAuthenticatedRepoFileSnapshot(
             resolvedRepoRoot,
             normalizeGitPath(path.relative(resolvedRepoRoot, resolvedManifestPath)),
-            MAX_MANIFEST_BYTES
+            Math.min(MAX_MANIFEST_BYTES, maximumBytes)
         );
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
@@ -245,7 +247,7 @@ function resolveRestoreTimelineAnchor(
     });
 }
 
-function expectedRestoredFiles(manifest: SplitRequiredWipManifest, selectedPaths: readonly string[]): string[] {
+export function expectedRestoredFiles(manifest: SplitRequiredWipManifest, selectedPaths: readonly string[]): string[] {
     const selected = new Set(selectedPaths);
     return [
         ...selectedFiles(manifest.tracked_files, selected),
@@ -361,6 +363,30 @@ export function replaceSplitRequiredWipRestoreHandoff(
     }
 }
 
+export function buildSplitRequiredWipRestoreHandoffId(params: {
+    repoRoot: string;
+    taskId: string;
+    manifestPath: string;
+    manifestSha256: string;
+    selectedPaths: readonly string[];
+    timelineAnchor: TaskEventAppendState;
+}): string {
+    return sha256(JSON.stringify({
+        schema_version: HANDOFF_SCHEMA_VERSION,
+        repo_root: canonicalRoot(params.repoRoot),
+        task_id: params.taskId,
+        manifest_path: normalizePath(params.manifestPath),
+        manifest_sha256: params.manifestSha256,
+        selected_paths: params.selectedPaths,
+        timeline_anchor: {
+            matching_events: params.timelineAnchor.matching_events,
+            parse_errors: params.timelineAnchor.parse_errors,
+            last_integrity_sequence: params.timelineAnchor.last_integrity_sequence,
+            last_event_sha256: params.timelineAnchor.last_event_sha256
+        }
+    }));
+}
+
 export function resolveSplitRequiredWipRestoreHandoffIdentity(params: {
     repoRoot: string;
     taskId: string;
@@ -374,7 +400,7 @@ export function resolveSplitRequiredWipRestoreHandoffIdentity(params: {
     if (!pathIsInside(path.resolve(manifestPath), path.resolve(wipRoot))) {
         throw new Error('WIP manifest must be a regular file inside the task-owned split-required WIP root.');
     }
-    const manifestSnapshot = readAuthenticatedManifestSnapshot(repoRoot, manifestPath, wipRoot);
+    const manifestSnapshot = readAuthenticatedSplitRequiredWipManifestSnapshot(repoRoot, manifestPath, wipRoot);
     const manifest = manifestSnapshot.manifest;
     if (manifest.task_id !== taskId) {
         throw new Error(`WIP manifest task_id mismatch: expected=${taskId}; actual=${manifest.task_id}.`);
@@ -400,16 +426,9 @@ export function resolveSplitRequiredWipRestoreHandoffIdentity(params: {
         manifestSha256,
         selectedPaths
     );
-    const identityPayload = JSON.stringify({
-        schema_version: HANDOFF_SCHEMA_VERSION,
-        repo_root: canonicalRoot(repoRoot),
-        task_id: taskId,
-        manifest_path: normalizePath(manifestPath),
-        manifest_sha256: manifestSha256,
-        selected_paths: selectedPaths,
-        timeline_anchor: timelineAnchor
+    const handoffId = buildSplitRequiredWipRestoreHandoffId({
+        repoRoot, taskId, manifestPath, manifestSha256, selectedPaths, timelineAnchor
     });
-    const handoffId = sha256(identityPayload);
     return {
         repoRoot,
         taskId,
@@ -507,7 +526,7 @@ export function readAndVerifySplitRequiredWipRestoreHandoffSnapshot(
     identity: SplitRequiredWipRestoreHandoffIdentity
 ): { handoff: SplitRequiredWipRestoreHandoff; manifest: SplitRequiredWipManifest } {
     const handoff = parseHandoff(identity);
-    const snapshot = readAuthenticatedManifestSnapshot(
+    const snapshot = readAuthenticatedSplitRequiredWipManifestSnapshot(
         identity.repoRoot,
         identity.manifestPath,
         resolveWipRoot(identity.repoRoot, identity.taskId)

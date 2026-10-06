@@ -1,7 +1,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { containedDirectory } from '../../core/compact/store-paths';
 import { cleanupStaleTaskEventLocks, scanTaskEventLocks } from '../../gate-runtime/task-events';
-import { isCanonicalTaskId } from '../../core/task-ids';
+import { isCanonicalTaskId, parseStructuredTaskArtifactTaskId } from '../../core/task-ids';
+import { withFilesystemLock } from '../../gate-runtime/task-events-locking';
 import { LIFECYCLE_OPERATION_LOCK_DIR_NAME } from '../lock/lifecycle-lock';
 import { ensureWithinRoot, removePathRecursive } from '../generic-utils';
 import {
@@ -13,7 +15,7 @@ import {
     isNotFoundError,
     pathStat
 } from './cleanup-filesystem-utils';
-import { resolveRuntimeCleanupStandardPaths } from './runtime-cleanup-ownership';
+import { isTaskOwnedRuntimeTmpPath, resolveRuntimeCleanupStandardPaths, resolveRuntimeTmpTaskId } from './runtime-cleanup-ownership';
 import type { CleanupItem, RetentionPolicy } from './cleanup-types';
 export {
     collectRuntimeRetentionCandidates,
@@ -33,6 +35,84 @@ export interface ProcessCleanupCandidatesResult {
     skipped: CleanupItem[];
     errors: Array<{ path: string; message: string }>;
     totalFreedBytes: number;
+}
+
+const COMPACT_CLEANUP_LOCK_TIMEOUT_MS = 50;
+
+function resolveLegacyRuntimeRoot(runtimeRoot: string): string {
+    try {
+        const realRuntimeRoot = fs.realpathSync(runtimeRoot);
+        const bundleRoot = path.dirname(realRuntimeRoot);
+        if (path.relative(containedDirectory(bundleRoot, 'runtime'), realRuntimeRoot) !== '') {
+            throw new Error('The root must be the contained runtime directory of a bundle.');
+        }
+        const version = fs.lstatSync(path.join(bundleRoot, 'VERSION'));
+        if (!version.isFile() || version.isSymbolicLink() || version.nlink !== 1) {
+            throw new Error('The bundle VERSION marker must be an unshared regular file.');
+        }
+        for (const marker of ['VERSION', 'TASK.md']) {
+            try {
+                fs.lstatSync(path.join(realRuntimeRoot, marker));
+                throw new Error(`The runtime root has an ambiguous ${marker} role marker.`);
+            } catch (error: unknown) {
+                if (!isNotFoundError(error)) throw error;
+            }
+        }
+        for (let ancestor = path.dirname(realRuntimeRoot); ancestor !== path.dirname(ancestor); ancestor = path.dirname(ancestor)) {
+            const name = path.basename(ancestor);
+            if ((process.platform === 'win32' ? name.toLowerCase() : name) === 'runtime'
+                && isScratchCleanupNamespace(ancestor, realRuntimeRoot)) {
+                throw new Error('The runtime root is nested in a protected scratch namespace.');
+            }
+        }
+        return realRuntimeRoot;
+    } catch (error: unknown) {
+        throw new Error(`Legacy cleanup requires a canonical bundle runtime root: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+
+function isScratchCleanupNamespace(runtimeRoot: string, candidate: string): boolean {
+    const relative = path.relative(path.resolve(runtimeRoot), candidate);
+    const first = relative.split(path.sep)[0];
+    const namespace = process.platform === 'win32' ? first.toLowerCase() : first;
+    return relative === '' || namespace === 'tmp' || namespace === 'scratch-writers'
+        || namespace === '.scratch-writers.lock'
+        || /\.(?:tmp|partial)$/u.test(namespace);
+}
+
+function removeCleanupCandidate(item: CleanupItem, safePath: string, runtimeRoot?: string): void {
+    if (!runtimeRoot) throw new Error('Legacy cleanup mutation requires an explicit runtime root.');
+    const realRuntimeRoot = resolveLegacyRuntimeRoot(runtimeRoot), realPath = fs.realpathSync(safePath);
+    const scratchNamespace = isScratchCleanupNamespace(runtimeRoot, safePath)
+        || isScratchCleanupNamespace(realRuntimeRoot, realPath);
+    if ((item.category === 'tmp' || scratchNamespace)
+        && (!isTaskOwnedRuntimeTmpPath(runtimeRoot, safePath) || !isTaskOwnedRuntimeTmpPath(realRuntimeRoot, realPath))) {
+        throw new Error('Legacy cleanup cannot remove generic scratch or writer ownership metadata.');
+    }
+    const remove = (): void => {
+        const stat = fs.statSync(safePath);
+        if (stat.isDirectory()) removePathRecursive(safePath);
+        else fs.unlinkSync(safePath);
+    };
+    if (item.category !== 'compact') {
+        remove();
+        return;
+    }
+    if (path.dirname(safePath) !== path.resolve(runtimeRoot, 'compact') || !isCanonicalTaskId(path.basename(safePath))) {
+        throw new Error('Compact cleanup requires an exact task subtree inside the runtime compact root.');
+    }
+    withFilesystemLock(path.join(runtimeRoot, 'compact.lock'), {
+        timeoutMs: COMPACT_CLEANUP_LOCK_TIMEOUT_MS,
+        requireKnownDeadOwner: true,
+        allowForeignHostStaleRecovery: false,
+        ownerLabel: 'cleanup-compact'
+    }, () => {
+        containedDirectory(runtimeRoot, 'compact');
+        ensureWithinRoot(path.join(runtimeRoot, 'compact'), safePath, 'Compact cleanup candidate');
+        const stat = fs.lstatSync(safePath);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Compact cleanup candidate is no longer an unlinked directory.');
+        remove();
+    });
 }
 
 export function processCleanupCandidates(
@@ -69,12 +149,7 @@ export function processCleanupCandidates(
         }
 
         try {
-            const stat = fs.statSync(safePath);
-            if (stat.isDirectory()) {
-                removePathRecursive(safePath);
-            } else {
-                fs.unlinkSync(safePath);
-            }
+            removeCleanupCandidate(item, safePath, runtimeRoot);
             removed.push(item);
             totalFreedBytes += item.sizeBytes;
         } catch (error: unknown) {
@@ -146,12 +221,14 @@ function collectUpdateNamedDirs(dirPath: string, category: string, maxCount: num
     return collectCountOrAgeNamedEntries(dirPath, category, maxCount, maxAgeDays, now, parseUpdateTimestampName);
 }
 
-function collectAgedEntries(dirPath: string, category: string, maxAgeDays: number, now: Date): CleanupItem[] {
+function collectAgedEntries(dirPath: string, category: string, maxAgeDays: number, now: Date,
+    includeEntry: (name: string) => boolean = () => true): CleanupItem[] {
     const entries = directoryEntries(dirPath);
     const items: CleanupItem[] = [];
     const cutoff = ageCutoff(now, maxAgeDays);
 
     for (const entryName of entries) {
+        if (!includeEntry(entryName)) continue;
         const entryPath = path.join(dirPath, entryName);
         const stat = pathStat(entryPath);
         if (!stat) {
@@ -172,7 +249,13 @@ function collectAgedEntries(dirPath: string, category: string, maxAgeDays: numbe
     return items;
 }
 
-function collectRuntimeRootTempFiles(runtimeDir: string, maxAgeDays: number, now: Date): CleanupItem[] {
+function isActiveTaskScratchName(name: string, activeTaskIdsLower: ReadonlySet<string>): boolean {
+    const owner = parseStructuredTaskArtifactTaskId(name) ?? resolveRuntimeTmpTaskId(name);
+    return owner !== null && activeTaskIdsLower.has(owner.toLowerCase());
+}
+
+function collectRuntimeRootTempFiles(runtimeDir: string, maxAgeDays: number, now: Date,
+    activeTaskIdsLower: ReadonlySet<string>): CleanupItem[] {
     const entries = directoryEntries(runtimeDir);
     const items: CleanupItem[] = [];
     const cutoff = ageCutoff(now, maxAgeDays);
@@ -180,6 +263,7 @@ function collectRuntimeRootTempFiles(runtimeDir: string, maxAgeDays: number, now
         if (!entry.endsWith('.tmp') && !entry.endsWith('.partial')) {
             continue;
         }
+        if (!resolveRuntimeTmpTaskId(entry) || isActiveTaskScratchName(entry, activeTaskIdsLower)) continue;
         const entryPath = path.join(runtimeDir, entry);
         const stat = pathStat(entryPath);
         if (!stat) {
@@ -199,14 +283,14 @@ function collectRuntimeRootTempFiles(runtimeDir: string, maxAgeDays: number, now
     return items;
 }
 
-function collectRuntimeTmp(tmpDir: string, maxAgeDays: number, now: Date, activeTaskIds: ReadonlySet<string>): CleanupItem[] {
-    const items = collectAgedEntries(tmpDir, 'tmp', maxAgeDays, now)
-        .filter((item) => path.basename(item.path) !== 'reviews');
+function collectRuntimeTmp(tmpDir: string, maxAgeDays: number, now: Date, activeTaskIdsLower: ReadonlySet<string>): CleanupItem[] {
+    const items = collectAgedEntries(tmpDir, 'tmp', maxAgeDays, now,
+        name => name !== 'reviews' && resolveRuntimeTmpTaskId(name) !== null && !isActiveTaskScratchName(name, activeTaskIdsLower));
     const reviewScratchDir = path.join(tmpDir, 'reviews');
-    const activeTaskIdsLower = new Set(Array.from(activeTaskIds).map((taskId) => taskId.toLowerCase()));
     const cutoff = ageCutoff(now, maxAgeDays);
 
     for (const entry of directoryEntries(reviewScratchDir)) {
+        if (!resolveRuntimeTmpTaskId(entry) || isActiveTaskScratchName(entry, activeTaskIdsLower)) continue;
         const entryPath = path.join(reviewScratchDir, entry);
         const stat = pathStat(entryPath);
         if (!stat) {
@@ -217,9 +301,6 @@ function collectRuntimeTmp(tmpDir: string, maxAgeDays: number, now: Date, active
             if (stat.mtime < cutoff) {
                 items.push({ path: entryPath, category: 'tmp', reason: 'age', sizeBytes: stat.size });
             }
-            continue;
-        }
-        if (isCanonicalTaskId(entry) && activeTaskIdsLower.has(entry.toLowerCase())) {
             continue;
         }
         items.push({
@@ -365,13 +446,14 @@ export function collectStandardCandidates(
     activeTaskIds: ReadonlySet<string> = new Set<string>()
 ): CleanupItem[] {
     const standardPaths = resolveRuntimeCleanupStandardPaths(runtimeDir);
+    const activeTaskIdsLower = new Set(Array.from(activeTaskIds, taskId => taskId.toLowerCase()));
 
     return [
         ...collectTimestampedDirs(standardPaths.backupsDir, 'backups', policy.maxBackups, policy.maxAgeDays, now),
         ...collectTimestampedDirs(standardPaths.bundleBackupsDir, 'bundle-backups', policy.maxBundleBackups, policy.maxAgeDays, now),
         ...collectOrphanedCompletenessCaches(standardPaths.taskEventsDir, activeTaskIds),
-        ...collectRuntimeRootTempFiles(runtimeDir, policy.maxAgeDays, now),
-        ...collectRuntimeTmp(standardPaths.tmpDir, policy.maxAgeDays, now, activeTaskIds),
+        ...collectRuntimeRootTempFiles(runtimeDir, policy.maxAgeDays, now, activeTaskIdsLower),
+        ...collectRuntimeTmp(standardPaths.tmpDir, policy.maxAgeDays, now, activeTaskIdsLower),
         ...collectAgedEntries(standardPaths.testScratchDir, 'test-scratch', policy.maxAgeDays, now),
         ...collectAgedEntries(standardPaths.cacheDir, 'cache', policy.maxAgeDays, now),
         ...collectAgedEntries(standardPaths.reportsDir, 'reports', policy.maxAgeDays, now),

@@ -1,0 +1,345 @@
+{
+  "schema_version": 1,
+  "kind": "OBSERVED_FRESH_PROCESS_CONTEXT_MEASUREMENTS_NOT_GATE_EVIDENCE",
+  "task_id": "T-151-4",
+  "captured_at_utc": "2026-10-02T09:30:37.483Z",
+  "repository_head": "b1b9a635ae38258fe2170883e5393900d9d5882b",
+  "runtime": {
+    "node": "v24.11.1",
+    "platform": "win32",
+    "arch": "x64"
+  },
+  "units": {
+    "chars": "JavaScript UTF-16 code units",
+    "utf8_bytes": "UTF-8 bytes"
+  },
+  "observation_source": {
+    "command": "node scripts/node-foundation/build-scripts.cjs test.js tests/node/cli/commands/preprompt-command-resume-context.test.ts tests/node/materialization/install-provider-bridges.test.ts",
+    "command_artifact": "garda-agent-orchestrator/runtime/reviews/T-151-4-intermediate-command-targeted-test-99c96ebf1cc5.json",
+    "command_artifact_sha256": "ee7d7c1123651bc3a2244be37b980927279a18839777f618753cc5fe8df77a53",
+    "command_exit_code": 0,
+    "bound_preflight_sha256": "3c9300137579f052c2311c2866d30399d6065eacee6b3a6ccb73f6993e02999b",
+    "raw_log": "garda-agent-orchestrator/runtime/reviews/T-151-4-intermediate-command-targeted-test-99c96ebf1cc5.log",
+    "raw_log_sha256": "afeb27685e8b476479f6ab2b74774fb5d1f00896bbe2c6bff49eadcb9838b6bf",
+    "raw_log_bytes": 7857
+  },
+  "source_sha256": {
+    "CHANGELOG.md": "c00d1987f9ca7364d9f7177a69c9f7180d1229f0a7c29dd4e5aa753431a6f9cb",
+    "docs/task-resume-context-audit.md": "55ad2e3889e6d201ad60ada5eb33237d891cb133f5d2df53377d906bc6a58931",
+    "src/materialization/content-builders/content-builders-provider-bridges.ts": "b0609a6f40c3a4279ecdd3a3cf43ee42d1ee5c70ce9d03639bbf524d02d2b65d",
+    "tests/node/materialization/install-provider-bridges.test.ts": "f08b3d3bcff97c30a5acfd9cf82865f59bb9e88f322f6d36a2be5d405553b932",
+    "tests/node/cli/commands/preprompt-command-resume-context.test.ts": "de798e56c4d8286b2416ca5976bf25b6821e443339eac70ab3bbb9d7b4ba6d4f",
+    "src/cli/commands/preprompt/preprompt-task-context-selection.ts": "32cd76a4e191dad04deaa9879d18dedab18d16f4d961555f176b72641b7c5594",
+    "src/cli/commands/preprompt/preprompt-task-context.ts": "6a650422a16d14b1ff298ef63bc7df8d8c17a6942f3474617006c112a2b3f5de",
+    "src/cli/commands/preprompt/preprompt-task-format.ts": "867d95e701e08e0b820c94cc8963eb9c920a266911624e2d7afad5500fc3ccf0",
+    "src/validators/status.ts": "9d433f25a2d85a132ae0f9d70966b1bfe7bf5fec4e905ca357af4e0950f871fa",
+    "src/runtime/toxin-metrics.ts": "fd70556f037761216fa9ba9a1eaa382290ce65f2d96a3499be584ea4e62a051a",
+    "src/runtime/toxin-snapshot-cache.ts": "6c2a83185a888e0d6a73463c48927c6cf84575c1c668d7ef329c6d99aadbcbac",
+    "src/gates/next-step/next-step-startup-readiness.ts": "3e964241a643b7ce435ceb5c51e27adc814c27ac72ebcc6f9a7d2d7e43d970f1",
+    "src/gates/next-step/next-step.ts": "4d0c192cdd2e190e290c854337309a35d5986fe5d324266cf5d7eaff532afb7a",
+    "AGENTS.md": "9db2674504790c3e986250501e1953dac174f69a37cb0a1afd92aed4cbc4b28a",
+    ".agents/workflows/start-task.md": "538eb201cbdf9fc5a3acf31366bb35042a506d33e25fb6fc0c553bc6ee727a88",
+    "template/skills/orchestration/SKILL.md": "3b7f795381fd9a704002f7981de050bae4d3915c437a47022edfd5d06802311d",
+    "template/docs/agent-rules/00-core.md": "dd520d3e8a743cb02463534d65826376461d2250aca7c21aa122906e2ee84c8c",
+    "template/docs/agent-rules/35-strict-coding-rules.md": "696a9fafbd352c6d71e96cd5cfbdd36e87ecc17f87be601df01ef2ef521cdf97",
+    "template/docs/agent-rules/40-commands.md": "1e3b9afedf4e974a8de0c65b4aa37625493d3fedb8b16047c5dfdabd301b80bb",
+    "template/docs/agent-rules/50-structure-and-docs.md": "533e6cfdfba41d75d7d861f62b3a40231858283d46ed538d01a99cd2853e895e",
+    "template/docs/agent-rules/70-security.md": "6e6ad12246a5eeaf14d28994a234acff530d085fb90b35990cf6e295dc698966",
+    "template/docs/agent-rules/80-task-workflow.md": "4404766d9f0f3c04dcba43ff750b1ab8661bd104e54487badbfc1c45b0a90cb4",
+    "template/docs/agent-rules/90-skill-catalog.md": "ea3ac123aaa0e3aaa09e265dbe5504eb069a93af0711282a08cb698c27fe5e27"
+  },
+  "method": {
+    "fixture_corpus": "Canonical source rule and skill templates, generated router, fixture task/entrypoint and seeded memory",
+    "sections": "Each named heading and its body up to the next Markdown heading; whole-file *; unique section ranges per file",
+    "missing_section": "Effective footprint falls back to the full implementation recipe",
+    "stdout": "Exact JSON and text output including trailing newline"
+  },
+  "observations": [
+    {
+      "scenario": "implementation",
+      "phase": "implementation",
+      "gate": "compile-gate",
+      "fixture_root_chars": 56,
+      "emitted_json": {
+        "chars": 18315,
+        "utf8_bytes": 18315,
+        "sha256": "e8078de8696462f229326ffb00a0bb4224ec366001c6cff824283efb56b0b8a8"
+      },
+      "emitted_text": {
+        "chars": 6956,
+        "utf8_bytes": 6956,
+        "sha256": "9b5d506d11dab8da2cc591b4f99e8fd6a6d81cf35fa2a9a527c16c6504a03fb6"
+      },
+      "implementation_recipe": {
+        "chars": 173367,
+        "utf8_bytes": 173748,
+        "missing": []
+      },
+      "selected_recipe": {
+        "chars": 173367,
+        "utf8_bytes": 173748,
+        "missing": []
+      },
+      "effective_recipe": {
+        "chars": 173367,
+        "utf8_bytes": 173748,
+        "missing": []
+      }
+    },
+    {
+      "scenario": "test_review",
+      "phase": "review_orchestration",
+      "gate": "build-review-context",
+      "fixture_root_chars": 56,
+      "emitted_json": {
+        "chars": 18762,
+        "utf8_bytes": 18762,
+        "sha256": "613930645b2992c2885dfde5f1ff7b1ee8ae72994004543914bb86b9c63e45d8"
+      },
+      "emitted_text": {
+        "chars": 7376,
+        "utf8_bytes": 7376,
+        "sha256": "e29b94f251ed2171d122cb2323e15b1bdf71d038d71fcb2b592cd79e7ae40d83"
+      },
+      "implementation_recipe": {
+        "chars": 173367,
+        "utf8_bytes": 173748,
+        "missing": []
+      },
+      "selected_recipe": {
+        "chars": 53315,
+        "utf8_bytes": 53318,
+        "missing": []
+      },
+      "effective_recipe": {
+        "chars": 53315,
+        "utf8_bytes": 53318,
+        "missing": []
+      }
+    },
+    {
+      "scenario": "completion",
+      "phase": "completion",
+      "gate": "completion-gate",
+      "fixture_root_chars": 56,
+      "emitted_json": {
+        "chars": 17917,
+        "utf8_bytes": 17917,
+        "sha256": "4ee58403dd9ce62aed6a0443de2a9299f2e0f8e0fd32f931575e195d0089ca96"
+      },
+      "emitted_text": {
+        "chars": 6688,
+        "utf8_bytes": 6688,
+        "sha256": "8b9db05419b48c132e7cfca7249f348589b4ffd3b8152f63d450de02b911fc8e"
+      },
+      "implementation_recipe": {
+        "chars": 173367,
+        "utf8_bytes": 173748,
+        "missing": []
+      },
+      "selected_recipe": {
+        "chars": 39889,
+        "utf8_bytes": 39892,
+        "missing": []
+      },
+      "effective_recipe": {
+        "chars": 39889,
+        "utf8_bytes": 39892,
+        "missing": []
+      }
+    },
+    {
+      "scenario": "docs",
+      "phase": "docs_memory_closeout",
+      "gate": "doc-impact-gate",
+      "fixture_root_chars": 56,
+      "emitted_json": {
+        "chars": 19614,
+        "utf8_bytes": 19614,
+        "sha256": "60a328a8a3ed3b51bf0259ce044afe3424129fc05aade436427fe9e1fb3e7555"
+      },
+      "emitted_text": {
+        "chars": 8268,
+        "utf8_bytes": 8268,
+        "sha256": "2e6e3ff60a8359aedf6b20a426fb9642c13a38a5949abb9fad0c38cc87c87ed3"
+      },
+      "implementation_recipe": {
+        "chars": 173367,
+        "utf8_bytes": 173748,
+        "missing": []
+      },
+      "selected_recipe": {
+        "chars": 44007,
+        "utf8_bytes": 44010,
+        "missing": []
+      },
+      "effective_recipe": {
+        "chars": 44007,
+        "utf8_bytes": 44010,
+        "missing": []
+      }
+    },
+    {
+      "scenario": "memory",
+      "phase": "docs_memory_closeout",
+      "gate": "project-memory-impact",
+      "fixture_root_chars": 56,
+      "emitted_json": {
+        "chars": 18744,
+        "utf8_bytes": 18744,
+        "sha256": "b4ebd4697906f3c53ae3bbf6570df0ff3c456868d9e1a69a81e630765a4fc2e9"
+      },
+      "emitted_text": {
+        "chars": 7336,
+        "utf8_bytes": 7336,
+        "sha256": "708d14c44a4696de67e8864394d2993ade47662b98cdfb670603b73908a1c842"
+      },
+      "implementation_recipe": {
+        "chars": 173367,
+        "utf8_bytes": 173748,
+        "missing": []
+      },
+      "selected_recipe": {
+        "chars": 44007,
+        "utf8_bytes": 44010,
+        "missing": []
+      },
+      "effective_recipe": {
+        "chars": 44007,
+        "utf8_bytes": 44010,
+        "missing": []
+      }
+    },
+    {
+      "scenario": "review_failure",
+      "phase": "implementation",
+      "gate": "implementation",
+      "fixture_root_chars": 56,
+      "emitted_json": {
+        "chars": 18665,
+        "utf8_bytes": 18665,
+        "sha256": "7f54e792c899417a5abc74b54fdbcfa6237509c4b29b3260c81e6c53003f7521"
+      },
+      "emitted_text": {
+        "chars": 6949,
+        "utf8_bytes": 6949,
+        "sha256": "fb69193eeade885008aabb4d70c5bd84c4db518a69b793696bf45861ec2956e0"
+      },
+      "implementation_recipe": {
+        "chars": 173367,
+        "utf8_bytes": 173748,
+        "missing": []
+      },
+      "selected_recipe": {
+        "chars": 173367,
+        "utf8_bytes": 173748,
+        "missing": []
+      },
+      "effective_recipe": {
+        "chars": 173367,
+        "utf8_bytes": 173748,
+        "missing": []
+      }
+    },
+    {
+      "scenario": "stale_source",
+      "phase": "implementation",
+      "gate": "classify-change",
+      "fixture_root_chars": 56,
+      "emitted_json": {
+        "chars": 19000,
+        "utf8_bytes": 19000,
+        "sha256": "7656421d062841c673ff37372c7f0b6745ebad0f6a8ec6e3d908488738895928"
+      },
+      "emitted_text": {
+        "chars": 7376,
+        "utf8_bytes": 7376,
+        "sha256": "5f62d5ef24e6a39d23a3fae2551f690b378cd9ba9c85f97f34d73f51518238ee"
+      },
+      "implementation_recipe": {
+        "chars": 173367,
+        "utf8_bytes": 173748,
+        "missing": []
+      },
+      "selected_recipe": {
+        "chars": 173367,
+        "utf8_bytes": 173748,
+        "missing": []
+      },
+      "effective_recipe": {
+        "chars": 173367,
+        "utf8_bytes": 173748,
+        "missing": []
+      }
+    },
+    {
+      "scenario": "missing_compile",
+      "phase": "implementation",
+      "gate": "compile-gate",
+      "fixture_root_chars": 56,
+      "emitted_json": {
+        "chars": 18469,
+        "utf8_bytes": 18469,
+        "sha256": "707edd8e0eee69921dd95cf6db48777a0c8215c1953ff5406dc5321c8602cce9"
+      },
+      "emitted_text": {
+        "chars": 6956,
+        "utf8_bytes": 6956,
+        "sha256": "afd0cd081cf5cf0f4ee344eed61cbdaba90361f42a6542f058cb40bdf6f58eb4"
+      },
+      "implementation_recipe": {
+        "chars": 173367,
+        "utf8_bytes": 173748,
+        "missing": []
+      },
+      "selected_recipe": {
+        "chars": 173367,
+        "utf8_bytes": 173748,
+        "missing": []
+      },
+      "effective_recipe": {
+        "chars": 173367,
+        "utf8_bytes": 173748,
+        "missing": []
+      }
+    },
+    {
+      "scenario": "plan_tampering",
+      "phase": "implementation",
+      "gate": "task-plan-integrity",
+      "fixture_root_chars": 56,
+      "emitted_json": {
+        "chars": 21398,
+        "utf8_bytes": 21400,
+        "sha256": "15d8b43660dd2a0117b1c2f40bfd3631876ffd6fedaead04bc3aee5611051346"
+      },
+      "emitted_text": {
+        "chars": 6897,
+        "utf8_bytes": 6897,
+        "sha256": "8bd8047528b13c1422ddea5a4ee2a820f01bfc0309045b59bf44aee997c58eb4"
+      },
+      "implementation_recipe": {
+        "chars": 173565,
+        "utf8_bytes": 173948,
+        "missing": []
+      },
+      "selected_recipe": {
+        "chars": 173565,
+        "utf8_bytes": 173948,
+        "missing": []
+      },
+      "effective_recipe": {
+        "chars": 173565,
+        "utf8_bytes": 173948,
+        "missing": []
+      }
+    }
+  ],
+  "limitations": [
+    "Observations are fixture measurements, not actual client instruction loads or token usage.",
+    "Linked-reference bodies, reviewer handoffs and execution cost are not counted.",
+    "Raw output hashes depend on observation times and temporary paths; reproduction compares contracts and measured units, not an identical output digest.",
+    "The dated historical baseline uses different state, schema and paths and is not a controlled before/after benchmark.",
+    "The measured test log precedes creation of this observation document; final lifecycle validation must still bind the final scope."
+  ]
+}

@@ -242,6 +242,7 @@ function makeRealRuntimeSourceRepo(): string {
     writeFile(repoRoot, 'build-runtime.cjs', [
         "const fs = require('node:fs');",
         "const path = require('node:path');",
+        "const crypto = require('node:crypto');",
         `const sourceBuildRoot = ${JSON.stringify(compiledBuildRoot)};`,
         "const targetBuildRoot = path.join(__dirname, 'dist');",
         "fs.rmSync(targetBuildRoot, { recursive: true, force: true });",
@@ -251,7 +252,13 @@ function makeRealRuntimeSourceRepo(): string {
         "fs.writeFileSync(path.join(targetBuildRoot, 'src', 'a.js'), 'exports.value = 2;\\n', 'utf8');",
         "const builtAt = new Date();",
         "fs.utimesSync(path.join(targetBuildRoot, 'src', 'index.js'), builtAt, builtAt);",
-        "fs.writeFileSync(path.join(targetBuildRoot, 'publish-runtime-manifest.json'), JSON.stringify({ ...sourceManifest, sourceRoots: ['src'], files }, null, 2) + '\\n', 'utf8');",
+        "const publishedManifest = { nodeEngineRange: sourceManifest.nodeEngineRange, sourceRoots: ['src'], files };",
+        "const publishedContent = JSON.stringify(publishedManifest, null, 2) + '\\n';",
+        "fs.writeFileSync(path.join(targetBuildRoot, 'publish-runtime-manifest.json'), publishedContent, 'utf8');",
+        "const { buildPublishRuntimeInputFingerprint } = require(path.join(sourceBuildRoot, 'scripts', 'node-foundation', 'build.js'));",
+        "const inputFingerprint = buildPublishRuntimeInputFingerprint(__dirname);",
+        "fs.mkdirSync(path.join(__dirname, '.scripts-build'), { recursive: true });",
+        "fs.writeFileSync(path.join(__dirname, '.scripts-build', 'publish-runtime-build-cache.json'), JSON.stringify({ ...publishedManifest, inputFingerprint, publishedManifestSha256: crypto.createHash('sha256').update(publishedContent).digest('hex') }, null, 2) + '\\n', 'utf8');",
         "fs.writeFileSync(path.join(__dirname, 'build-ran'), 'yes', 'utf8');",
         ''
     ].join('\n'));
@@ -1394,7 +1401,7 @@ describe('split-required WIP restored-runtime handoff', () => {
         const result = probeRuntimeGeneration(repoRoot);
 
         assert.equal(result.status, 1);
-        assert.match(result.stderr, /runtime build cache does not bind the public runtime manifest/u);
+        assert.match(result.stderr, /runtime build cache does not bind the current published manifest/u);
     });
 
     it('rejects a malformed private runtime fingerprint hash', (context) => {
@@ -1434,11 +1441,11 @@ describe('split-required WIP restored-runtime handoff', () => {
         assert.match(result.stderr, /manifest does not bind required finalizer module/u);
     });
 
-    it('rejects a generated runtime with a malformed manifest fingerprint', () => {
+    it('rejects a generated runtime with a malformed local cache fingerprint', () => {
         const repoRoot = makeRealRuntimeSourceRepo();
         try {
             buildRealRuntimeSourceRepo(repoRoot);
-            const manifestPath = path.join(repoRoot, 'dist', 'publish-runtime-manifest.json');
+            const manifestPath = path.join(repoRoot, '.scripts-build', 'publish-runtime-build-cache.json');
             const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
                 inputFingerprint: { sha256: string };
             };
@@ -1452,6 +1459,352 @@ describe('split-required WIP restored-runtime handoff', () => {
         } finally {
             fs.rmSync(repoRoot, { recursive: true, force: true });
         }
+    });
+
+    it('resolves the production publish-cache fingerprint without host metadata in the published manifest', () => {
+        const repoRoot = makeRealRuntimeSourceRepo();
+        try {
+            buildRealRuntimeSourceRepo(repoRoot);
+            const manifestPath = path.join(repoRoot, 'dist', 'publish-runtime-manifest.json');
+            const cachePath = path.join(repoRoot, '.scripts-build', 'publish-runtime-build-cache.json');
+            const manifestBytes = fs.readFileSync(manifestPath);
+            const cacheBytes = fs.readFileSync(cachePath);
+            const manifest = JSON.parse(manifestBytes.toString('utf8')) as Record<string, unknown>;
+            const cache = JSON.parse(cacheBytes.toString('utf8')) as {
+                inputFingerprint: { sha256: string };
+            };
+
+            const result = probeRuntimeGeneration(repoRoot);
+
+            assert.equal(result.status, 0, result.stderr);
+            assert.equal(Object.hasOwn(manifest, 'inputFingerprint'), false);
+            assert.equal((JSON.parse(result.stdout) as SplitRequiredWipRuntimeGeneration).input_fingerprint_sha256,
+                cache.inputFingerprint.sha256);
+            assert.deepEqual(fs.readFileSync(manifestPath), manifestBytes);
+            assert.deepEqual(fs.readFileSync(cachePath), cacheBytes);
+            const reorderedCache = JSON.parse(cacheBytes.toString('utf8')) as {
+                inputFingerprint: Record<string, unknown>;
+            };
+            const reorderedFingerprint = Object.fromEntries(Object.entries(reorderedCache.inputFingerprint).reverse());
+            reorderedFingerprint.files = (reorderedCache.inputFingerprint.files as Array<Record<string, unknown>>)
+                .map((entry) => Object.fromEntries(Object.entries(entry).reverse()));
+            reorderedCache.inputFingerprint = reorderedFingerprint;
+            fs.writeFileSync(cachePath, JSON.stringify(reorderedCache, null, 2) + '\n');
+            const reorderedBytes = fs.readFileSync(cachePath);
+
+            const reorderedResult = probeRuntimeGeneration(repoRoot);
+
+            assert.equal(reorderedResult.status, 0, reorderedResult.stderr);
+            assert.equal((JSON.parse(reorderedResult.stdout) as SplitRequiredWipRuntimeGeneration).input_fingerprint_sha256,
+                cache.inputFingerprint.sha256);
+            assert.deepEqual(fs.readFileSync(cachePath), reorderedBytes);
+            assert.deepEqual(fs.readFileSync(manifestPath), manifestBytes);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects missing malformed and unbound local publish-cache authority', () => {
+        const scenarios = [
+            { kind: 'missing', expected: /runtime build cache is missing/u },
+            { kind: 'invalid-json', expected: /JSON/u },
+            { kind: 'invalid-record', expected: /cache.*input fingerprint/u },
+            { kind: 'foreign-kind', expected: /publish-runtime fingerprint/u },
+            { kind: 'coerced-sha', expected: /input fingerprint sha256/u },
+            { kind: 'unbound-manifest', expected: /cache.*published manifest/u },
+            { kind: 'oversized', expected: /byte limit/u }
+        ];
+        let rejected = 0;
+        for (const { kind, expected } of scenarios) {
+            const repoRoot = makeRealRuntimeSourceRepo();
+            try {
+                buildRealRuntimeSourceRepo(repoRoot);
+                const manifestPath = path.join(repoRoot, 'dist', 'publish-runtime-manifest.json');
+                const manifestBytes = fs.readFileSync(manifestPath);
+                const cachePath = path.join(repoRoot, '.scripts-build', 'publish-runtime-build-cache.json');
+                const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8')) as {
+                    inputFingerprint: { kind: string; sha256: unknown };
+                    publishedManifestSha256: string;
+                };
+                if (kind === 'missing') fs.unlinkSync(cachePath);
+                else if (kind === 'invalid-json') fs.writeFileSync(cachePath, '{');
+                else if (kind === 'invalid-record') fs.writeFileSync(cachePath, '[]');
+                else if (kind === 'oversized') fs.writeFileSync(cachePath, Buffer.alloc(16 * 1024 * 1024 + 1, 32));
+                else {
+                    if (kind === 'foreign-kind') cache.inputFingerprint.kind = 'node-foundation';
+                    if (kind === 'coerced-sha') cache.inputFingerprint.sha256 = [cache.inputFingerprint.sha256];
+                    if (kind === 'unbound-manifest') cache.publishedManifestSha256 = 'd'.repeat(64);
+                    fs.writeFileSync(cachePath, JSON.stringify(cache, null, 2) + '\n', 'utf8');
+                }
+
+                const result = probeRuntimeGeneration(repoRoot);
+
+                assert.equal(result.status, 1, kind);
+                assert.match(result.stderr, expected, kind);
+                assert.deepEqual(fs.readFileSync(manifestPath), manifestBytes, kind);
+                assert.equal(restoredEvents(repoRoot).length, 0, kind);
+                rejected += 1;
+            } finally {
+                fs.rmSync(repoRoot, { recursive: true, force: true });
+            }
+        }
+        assert.equal(rejected, scenarios.length);
+    });
+
+    it('rejects a stale local cache fingerprint after a rebuild with identical published manifest bytes', () => {
+        const scenarios = ['source-content', 'build-config', 'new-build-input'] as const;
+        let rejected = 0;
+        for (const scenario of scenarios) {
+            const repoRoot = makeRealRuntimeSourceRepo();
+            try {
+                writeFile(repoRoot, 'tsconfig.build.json', '{"compilerOptions":{"strict":true}}\n');
+                buildRealRuntimeSourceRepo(repoRoot);
+                const manifestPath = path.join(repoRoot, 'dist', 'publish-runtime-manifest.json');
+                const cachePath = path.join(repoRoot, '.scripts-build', 'publish-runtime-build-cache.json');
+                const manifestBytes = fs.readFileSync(manifestPath);
+                const oldCacheBytes = fs.readFileSync(cachePath);
+                const oldCache = JSON.parse(oldCacheBytes.toString('utf8')) as {
+                    inputFingerprint: { sha256: string };
+                };
+                if (scenario === 'source-content') {
+                    writeFile(repoRoot, 'src/index.ts', 'export const revised = true;\n');
+                } else if (scenario === 'build-config') {
+                    writeFile(repoRoot, 'tsconfig.build.json', '{"compilerOptions":{"strict":false}}\n');
+                } else {
+                    writeFile(repoRoot, 'scripts/node-foundation/new-input.cjs', 'exports.changed = true;\n');
+                }
+                buildRealRuntimeSourceRepo(repoRoot);
+                const currentCache = JSON.parse(fs.readFileSync(cachePath, 'utf8')) as {
+                    inputFingerprint: { sha256: string };
+                };
+                assert.notEqual(currentCache.inputFingerprint.sha256, oldCache.inputFingerprint.sha256, scenario);
+                assert.deepEqual(fs.readFileSync(manifestPath), manifestBytes, scenario);
+                fs.writeFileSync(cachePath, oldCacheBytes);
+
+                const result = probeRuntimeGeneration(repoRoot);
+
+                assert.equal(result.status, 1, scenario);
+                assert.match(result.stderr, /stale runtime build cache fingerprint/u, scenario);
+                assert.deepEqual(fs.readFileSync(cachePath), oldCacheBytes, scenario);
+                assert.deepEqual(fs.readFileSync(manifestPath), manifestBytes, scenario);
+                assert.equal(restoredEvents(repoRoot).length, 0, scenario);
+                rejected += 1;
+            } finally {
+                fs.rmSync(repoRoot, { recursive: true, force: true });
+            }
+        }
+        assert.equal(rejected, scenarios.length);
+    });
+
+    it('rejects concurrent runtime authority edits before canonical append', () => {
+        const scenarios = ['later-input-read', 'final-inventory-walk', 'file-replacement',
+            'runtime-module-read', 'compiler-metadata', 'runtime-input-added',
+            'runtime-file-root-created', 'runtime-directory-root-created'] as const;
+        const observations: Array<Record<string, unknown>> = [];
+        for (const scenario of scenarios) {
+            const repoRoot = makeRealRuntimeSourceRepo();
+            try {
+                const manifestPath = capture(repoRoot);
+                const identity = resolveSplitRequiredWipRestoreHandoffIdentity({
+                    repoRoot, taskId: TASK_ID, manifestPath, includePaths: ['src/a.ts']
+                });
+                prepareSplitRequiredWipRestoreHandoff(identity, captureHealthyTaskTimelineAnchor(repoRoot, TASK_ID));
+                assert.equal(restoreSplitRequiredWipForPreparedRuntimeHandoff(identity).status, 'RESTORED');
+                promotePreparedSplitRequiredWipRestoreHandoff(identity);
+                writeFile(repoRoot, 'package-lock.json', '{"generation":1}\n');
+                writeFile(repoRoot, 'node_modules/typescript/package.json', '{"version":"5.9.1"}\n');
+                const addedInputPath = scenario === 'runtime-input-added' ? 'src/late.json'
+                    : scenario === 'runtime-file-root-created' ? 'tsconfig.build.json'
+                        : scenario === 'runtime-directory-root-created' ? 'scripts/node-foundation/late.json' : '';
+                if (addedInputPath) assert.equal(fs.existsSync(path.join(repoRoot, addedInputPath)), false, scenario);
+                buildRealRuntimeSourceRepo(repoRoot);
+                const cachePath = path.join(repoRoot, '.scripts-build', 'publish-runtime-build-cache.json');
+                const publishedPath = path.join(repoRoot, 'dist', 'publish-runtime-manifest.json');
+                const cacheBytes = fs.readFileSync(cachePath);
+                const publishedBytes = fs.readFileSync(publishedPath);
+                const handoffBytes = fs.readFileSync(identity.handoffPath);
+                const probe = [
+                    "const fs = require('node:fs');",
+                    "const path = require('node:path');",
+                    "const [root, manifestPath, taskId, scenario, addedInputPath] = process.argv.slice(1);",
+                    "const runtimeRoot = path.join(root, 'dist', 'src');",
+                    "const runtime = require(path.join(runtimeRoot, 'gates', 'split-required', 'split-required-wip-runtime-handoff.js'));",
+                    "const contracts = require(path.join(runtimeRoot, 'gates', 'split-required', 'split-required-wip-runtime-handoff-contracts.js'));",
+                    "const identity = contracts.resolveSplitRequiredWipRestoreHandoffIdentity({ repoRoot: root, taskId, manifestPath, includePaths: ['src/a.ts'] });",
+                    "let mutated = false;",
+                    "let generationReads = 0;",
+                    "const mutate = () => {",
+                    "  if (mutated) return;",
+                    "  if (addedInputPath) {",
+                    "    const added = path.join(root, addedInputPath);",
+                    "    fs.mkdirSync(path.dirname(added), { recursive: true });",
+                    "    fs.writeFileSync(added, '{}\\n');",
+                    "    mutated = true;",
+                    "    return;",
+                    "  }",
+                    "  const target = path.join(root, scenario === 'compiler-metadata' ? 'node_modules/typescript/package.json' : 'package-lock.json');",
+                    "  const before = fs.statSync(target);",
+                    "  if (scenario === 'file-replacement') {",
+                    "    const replacement = target + '.replacement';",
+                    "    fs.copyFileSync(target, replacement);",
+                    "    fs.utimesSync(replacement, before.atime, before.mtime);",
+                    "    fs.renameSync(replacement, target);",
+                    "  } else {",
+                    "    fs.writeFileSync(target, scenario === 'compiler-metadata' ? '{\"version\":\"5.9.2\"}\\n' : '{\"generation\":2}\\n');",
+                    "    fs.utimesSync(target, before.atime, before.mtime);",
+                    "  }",
+                    "  mutated = true;",
+                    "};",
+                    "const installMutation = () => {",
+                    "  const originalOpen = fs.openSync;",
+                    "  fs.openSync = function(file, ...args) {",
+                    "    const resolved = path.resolve(String(file));",
+                    "    if ((scenario === 'later-input-read' || scenario === 'compiler-metadata') && resolved === path.join(root, 'src', 'a.ts')) mutate();",
+                    "    if ((scenario === 'runtime-module-read' || addedInputPath) && resolved === path.join(runtimeRoot, 'gate-runtime', 'timeline', 'task-events-io.js')) mutate();",
+                    "    return originalOpen.call(fs, file, ...args);",
+                    "  };",
+                    "  let sourceWalks = 0;",
+                    "  const originalOpenDirectory = fs.opendirSync;",
+                    "  fs.opendirSync = function(directory, ...args) {",
+                    "    if (path.resolve(String(directory)) === path.join(root, 'src')) {",
+                    "      sourceWalks += 1;",
+                    "      if (sourceWalks === 2 && (scenario === 'final-inventory-walk' || scenario === 'file-replacement')) mutate();",
+                    "    }",
+                    "    return originalOpenDirectory.call(fs, directory, ...args);",
+                    "  };",
+                    "};",
+                    "const result = runtime.finalizeSplitRequiredWipRestoreHandoff(identity, (repoRoot) => {",
+                    "  generationReads += 1;",
+                    "  if (generationReads === 2) installMutation();",
+                    "  return runtime.resolveLoadedSplitRequiredWipRuntimeGeneration(repoRoot);",
+                    "});",
+                    "process.stdout.write(JSON.stringify({ ...result, mutated, generationReads }));"
+                ].join('\n');
+                const child = childProcess.spawnSync(process.execPath,
+                    ['-e', probe, repoRoot, manifestPath, TASK_ID, scenario, addedInputPath],
+                    { cwd: repoRoot, encoding: 'utf8', timeout: 30_000 });
+                assert.equal(child.status, 0, child.stderr);
+                const result = JSON.parse(child.stdout) as {
+                    status: string; mutated: boolean; generationReads: number; violations: string[];
+                };
+                assert.equal(result.mutated, true, scenario);
+                assert.equal(result.generationReads, 2, scenario);
+                if (result.status === 'BLOCKED') {
+                    assert.match(result.violations.join('\n'), /runtime.*changed|current input/u, scenario);
+                }
+                observations.push({
+                    scenario,
+                    status: result.status,
+                    events: restoredEvents(repoRoot).length,
+                    pending_preserved: fs.readFileSync(identity.handoffPath).equals(handoffBytes),
+                    cache_preserved: fs.readFileSync(cachePath).equals(cacheBytes),
+                    manifest_preserved: fs.readFileSync(publishedPath).equals(publishedBytes)
+                });
+            } finally {
+                fs.rmSync(repoRoot, { recursive: true, force: true });
+            }
+        }
+        assert.deepEqual(observations, scenarios.map(scenario => ({
+            scenario, status: 'BLOCKED', events: 0, pending_preserved: true,
+            cache_preserved: true, manifest_preserved: true
+        })));
+    });
+
+    it('rejects forged local cache fingerprint payload and input authority', () => {
+        const scenarios = ['payload-sha', 'changed-file-hash', 'omitted-files', 'foreign-host',
+            'schema-version', 'coerced-count', 'path-alias'] as const;
+        let rejected = 0;
+        for (const scenario of scenarios) {
+            const repoRoot = makeRealRuntimeSourceRepo();
+            try {
+                buildRealRuntimeSourceRepo(repoRoot);
+                const manifestPath = path.join(repoRoot, 'dist', 'publish-runtime-manifest.json');
+                const manifestBytes = fs.readFileSync(manifestPath);
+                const cachePath = path.join(repoRoot, '.scripts-build', 'publish-runtime-build-cache.json');
+                const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8')) as {
+                    inputFingerprint: Record<string, unknown> & {
+                        files: Array<{ path: string; size: number; sha256: string }>;
+                    };
+                };
+                const fingerprint = cache.inputFingerprint;
+                if (scenario === 'payload-sha') fingerprint.sha256 = 'a'.repeat(64);
+                else {
+                    if (scenario === 'changed-file-hash') fingerprint.files[0].sha256 = 'b'.repeat(64);
+                    if (scenario === 'omitted-files') { fingerprint.files = []; fingerprint.fileCount = 0; }
+                    if (scenario === 'foreign-host') fingerprint.platform = process.platform === 'win32' ? 'linux' : 'win32';
+                    if (scenario === 'schema-version') fingerprint.schemaVersion = 2;
+                    if (scenario === 'coerced-count') fingerprint.fileCount = [fingerprint.fileCount];
+                    if (scenario === 'path-alias') fingerprint.files[0].path = `../${path.basename(repoRoot)}/${fingerprint.files[0].path}`;
+                    const { sha256: _sha256, ...payload } = fingerprint;
+                    fingerprint.sha256 = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+                }
+                fs.writeFileSync(cachePath, JSON.stringify(cache, null, 2) + '\n', 'utf8');
+                const cacheBytes = fs.readFileSync(cachePath);
+
+                const result = probeRuntimeGeneration(repoRoot);
+
+                assert.equal(result.status, 1, scenario);
+                assert.match(result.stderr, /runtime build cache fingerprint/u, scenario);
+                assert.deepEqual(fs.readFileSync(cachePath), cacheBytes, scenario);
+                assert.deepEqual(fs.readFileSync(manifestPath), manifestBytes, scenario);
+                assert.equal(restoredEvents(repoRoot).length, 0, scenario);
+                rejected += 1;
+            } finally {
+                fs.rmSync(repoRoot, { recursive: true, force: true });
+            }
+        }
+        assert.equal(rejected, scenarios.length);
+    });
+
+    it('rejects over-budget local fingerprint authority and input discovery', () => {
+        const scenarios = ['file-count', 'depth', 'metadata-bytes', 'input-bytes', 'aggregate-bytes'] as const;
+        let rejected = 0;
+        for (const scenario of scenarios) {
+            const repoRoot = makeRealRuntimeSourceRepo();
+            try {
+                if (scenario === 'depth') writeFile(repoRoot, `src/${'d/'.repeat(65)}deep.json`, '{}\n');
+                if (scenario === 'metadata-bytes') {
+                    writeFile(repoRoot, 'node_modules/typescript/package.json',
+                        JSON.stringify({ version: 'unknown', padding: ' '.repeat(1024 * 1024) }));
+                }
+                if (scenario === 'input-bytes' || scenario === 'aggregate-bytes') {
+                    const input = Buffer.alloc((scenario === 'input-bytes' ? 65 : 50) * 1024 * 1024, 32);
+                    input[0] = 123;
+                    input[input.length - 1] = 125;
+                    const count = scenario === 'input-bytes' ? 1 : 3;
+                    for (let index = 0; index < count; index += 1) {
+                        fs.writeFileSync(path.join(repoRoot, 'src', `large-${index}.json`), input);
+                    }
+                }
+                buildRealRuntimeSourceRepo(repoRoot);
+                const manifestPath = path.join(repoRoot, 'dist', 'publish-runtime-manifest.json');
+                const cachePath = path.join(repoRoot, '.scripts-build', 'publish-runtime-build-cache.json');
+                const manifestBytes = fs.readFileSync(manifestPath);
+                if (scenario === 'file-count') {
+                    const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8')) as {
+                        inputFingerprint: Record<string, unknown> & { files: Array<Record<string, unknown>> };
+                    };
+                    cache.inputFingerprint.files = Array.from({ length: 8193 }, () => cache.inputFingerprint.files[0]);
+                    cache.inputFingerprint.fileCount = cache.inputFingerprint.files.length;
+                    const { sha256: _sha256, ...payload } = cache.inputFingerprint;
+                    cache.inputFingerprint.sha256 = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+                    fs.writeFileSync(cachePath, JSON.stringify(cache, null, 2) + '\n');
+                }
+                const cacheBytes = fs.readFileSync(cachePath);
+
+                const result = probeRuntimeGeneration(repoRoot);
+
+                assert.equal(result.status, 1, scenario);
+                assert.match(result.stderr, /bounded inventory|depth limit|byte limit/u, scenario);
+                assert.deepEqual(fs.readFileSync(cachePath), cacheBytes, scenario);
+                assert.deepEqual(fs.readFileSync(manifestPath), manifestBytes, scenario);
+                assert.equal(restoredEvents(repoRoot).length, 0, scenario);
+                rejected += 1;
+            } finally {
+                fs.rmSync(repoRoot, { recursive: true, force: true });
+            }
+        }
+        assert.equal(rejected, scenarios.length);
     });
 
     it('rejects a generated runtime whose manifest omits the finalizer module', () => {

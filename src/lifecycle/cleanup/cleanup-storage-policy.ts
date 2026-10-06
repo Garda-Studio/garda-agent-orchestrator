@@ -10,6 +10,7 @@ import {
     parseStructuredTaskArtifactTaskId
 } from '../../core/task-ids';
 import { ensureWithinRoot } from '../generic-utils';
+import { hasConsistentReviewArtifactTaskId } from './cleanup-review-artifact-ownership';
 import type {
     ReviewArtifactRetentionMode,
     ReviewArtifactStoragePolicy,
@@ -100,13 +101,22 @@ export function isGateReceipt(fileName: string, suffixes: string[]): boolean {
 }
 
 export function compressFileGzip(filePath: string): string {
-    const content = fs.readFileSync(filePath);
-    const compressed = zlib.gzipSync(content);
     const compressedPath = `${filePath}.gz`;
     const tmpPath = `${compressedPath}.tmp`;
-    fs.writeFileSync(tmpPath, compressed);
-    fs.renameSync(tmpPath, compressedPath);
-    fs.unlinkSync(filePath);
+    if (fs.existsSync(compressedPath) || fs.existsSync(tmpPath)) {
+        throw new Error('Compression output already exists.');
+    }
+    const content = fs.readFileSync(filePath);
+    const compressed = zlib.gzipSync(content);
+    const fd = fs.openSync(tmpPath, 'wx');
+    try {
+        fs.writeFileSync(fd, compressed);
+        fs.copyFileSync(tmpPath, compressedPath, fs.constants.COPYFILE_EXCL);
+        fs.unlinkSync(filePath);
+    } finally {
+        fs.closeSync(fd);
+        fs.unlinkSync(tmpPath);
+    }
     return compressedPath;
 }
 
@@ -169,7 +179,8 @@ export function applyForensicCompressionPolicy(
         let safeFilePath: string;
         try {
             safeFilePath = ensureWithinRoot(runtimeRoot, filePath, 'Review artifact');
-            if (!fs.statSync(safeFilePath).isFile()) {
+            if (!fs.statSync(safeFilePath).isFile()
+                || !hasConsistentReviewArtifactTaskId(safeFilePath, indexedEntry.taskId)) {
                 result.preserved.push(entry);
                 continue;
             }
@@ -256,6 +267,10 @@ export function applyStoragePolicy(
             continue;
         }
         if (protectedTaskIds.has(taskId)) {
+            result.preserved.push(entry);
+            continue;
+        }
+        if (!hasConsistentReviewArtifactTaskId(safeFilePath, taskId)) {
             result.preserved.push(entry);
             continue;
         }

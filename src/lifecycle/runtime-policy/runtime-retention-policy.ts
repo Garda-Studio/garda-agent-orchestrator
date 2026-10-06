@@ -285,7 +285,7 @@ function parseTaskIdFromProjectMemoryArtifact(fileName: string): string | null {
     return null;
 }
 
-function parseTaskIdFromManualValidationArtifact(fileName: string): string | null {
+function parseTaskIdFromTaskDirectory(fileName: string): string | null {
     try {
         return assertCanonicalTaskId(fileName);
     } catch {
@@ -329,7 +329,8 @@ function parseTaskIdFromCandidatePath(
     const fileName = path.basename(candidatePath);
     switch (category) {
         case 'manual-validation':
-            return parseTaskIdFromManualValidationArtifact(fileName);
+        case 'compact':
+            return parseTaskIdFromTaskDirectory(fileName);
         case 'reviews':
             return indexedReviewTaskIds.get(fileName) || null;
         case 'task-events':
