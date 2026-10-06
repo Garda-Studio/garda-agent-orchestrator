@@ -1384,10 +1384,10 @@ describe('classifyScopeCategory', () => {
         assert.equal(result.category, 'mixed');
     });
 
-    it('classifies docs+config as docs-only (all_non_code)', () => {
+    it('prevents docs+config from granting docs-only policy', () => {
         const result = classifyScopeCategory(['README.md', 'tsconfig.json'], codeLikeRegexes, runtimeRoots);
-        assert.equal(result.category, 'docs-only');
-        assert.ok(result.reasons.includes('all_non_code'));
+        assert.equal(result.category, 'mixed');
+        assert.ok(result.reasons.includes('mixed_non_code'));
     });
 
     it('classifies CHANGELOG.md as docs-only', () => {
