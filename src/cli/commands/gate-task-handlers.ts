@@ -6,6 +6,8 @@ import {
 } from '../../gate-runtime/lifecycle-events';
 import * as gateHelpers from '../../gates/shared/helpers';
 import { formatCompletionGateResult, runCompletionGate } from '../../gates/completion/completion';
+import { buildCloseoutRecoveryFinalizationVerifier, captureCloseoutRecoverySnapshot, getCloseoutLinkageRecoveryProof, readCloseoutLinkageRecovery } from '../../gates/completion/completion-linkage-recovery';
+import { appendTaskEventAsync } from '../../gate-runtime/task-events';
 import { formatNextStepText, resolveNextStepFromCliOptions } from '../../gates/next-step/next-step';
 import { withCompletionGateFinalizationLockAsync } from '../../gates/locks/finalization-lock';
 import {
@@ -594,9 +596,24 @@ export async function handleCompletionGate(gateArgv: string[]): Promise<void> {
             if (resolvedCompletionTaskId) {
                 const orchestratorRoot = gateHelpers.joinOrchestratorPath(repoRoot, '');
                 if (completionResult.outcome === 'PASS') {
+                    const recovery = readCloseoutLinkageRecovery(repoRoot, resolvedCompletionTaskId,
+                        String(completionResult.preflight_path), String(completionResult.timeline_path));
+                    if (recovery) {
+                        await appendTaskEventAsync(orchestratorRoot, resolvedCompletionTaskId, 'CLOSEOUT_METADATA_RETRY_STARTED',
+                            'INFO', 'Retrying unchanged validated scope after canonical follow-up linkage correction.', {
+                                preflight_path: recovery.preflight_path, state_sha256: recovery.state_sha256
+                            });
+                    }
+                    const recoverySnapshot = captureCloseoutRecoverySnapshot(repoRoot, resolvedCompletionTaskId,
+                        String(completionResult.preflight_path), true);
                     try {
+                        if (recovery && !readCloseoutLinkageRecovery(repoRoot, resolvedCompletionTaskId,
+                            String(completionResult.preflight_path), String(completionResult.timeline_path))) {
+                            throw new Error('Closeout metadata recovery bindings changed before finalization; rerun next-step.');
+                        }
                         await reconcileSuccessfulCompletionFinalizationAsync({
                             repoRoot,
+                            assertRecoveryBindings: recovery ? buildCloseoutRecoveryFinalizationVerifier(repoRoot, recovery) : undefined,
                             taskId: resolvedCompletionTaskId,
                             preflightPath: String(completionResult.preflight_path || ''),
                             previousStatusHint: 'IN_REVIEW',
@@ -616,7 +633,8 @@ export async function handleCompletionGate(gateArgv: string[]): Promise<void> {
                                 preflight_path: completionResult.preflight_path,
                                 timeline_path: completionResult.timeline_path,
                                 violations: completionResult.violations,
-                                finalization_error: error instanceof Error ? error.message : String(error)
+                                finalization_error: error instanceof Error ? error.message : String(error),
+                                closeout_linkage_recovery: getCloseoutLinkageRecoveryProof(error, recoverySnapshot, repoRoot)
                             });
                         } catch (eventError: unknown) {
                             throw new Error(

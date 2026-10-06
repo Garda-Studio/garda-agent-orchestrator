@@ -50,6 +50,7 @@ import {
     findLatestTimelineEvent
 } from './next-step-timeline-readers';
 import { isPlainRecord } from '../../core/records';
+import { readCloseoutLinkageRecovery } from '../completion/completion-linkage-recovery';
 
 export interface NextStepProjectMemorySummary {
     enabled: boolean;
@@ -380,6 +381,13 @@ export function buildStaleCompletionFailureDocCloseoutAllowance(
 ): PreflightCycleReadinessOptions {
     if (!preflightWorkspaceReadiness.ready) {
         return {};
+    }
+    if (readCloseoutLinkageRecovery(repoRoot, taskId, preflightPath,
+        timelineSnapshot?.timelinePath || path.join(eventsRoot, `${taskId}.jsonl`))) {
+        return {
+            allowStaleCompletionFailureForDocCloseout: true,
+            staleCompletionFailureDocCloseoutReason: 'canonical follow-up linkage is corrected and all original validation bindings remain unchanged'
+        };
     }
     const projectMemoryOrderRecoveryReason = getProjectMemoryOrderOnlyRecoveryReason(
         eventsRoot,

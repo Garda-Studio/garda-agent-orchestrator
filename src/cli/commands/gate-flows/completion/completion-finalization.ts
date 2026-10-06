@@ -46,6 +46,7 @@ import {
     type TaskQueueStatusSyncResult
 } from '../task/task-queue-sync';
 import type { TimelineEventEntry } from '../../../../gates/completion/completion-evidence';
+import { buildCloseoutFailure, CloseoutLinkageFailure, type CloseoutRecoveryEventSignature } from '../../../../gates/completion/completion-linkage-recovery';
 
 interface CompletionEventDetails {
     status: unknown;
@@ -94,10 +95,7 @@ interface FileSnapshot {
     content: string | null;
 }
 
-interface RollbackEventSignature {
-    event_type: string;
-    detail_subset: Record<string, string>;
-}
+type RollbackEventSignature = CloseoutRecoveryEventSignature;
 
 interface RollbackEventIdentity {
     task_id: string;
@@ -121,6 +119,7 @@ export interface ReconcileSuccessfulCompletionFinalizationOptions {
     preflightPath: string;
     completionEventDetails: CompletionEventDetails;
     previousStatusHint?: string;
+    assertRecoveryBindings?: (expectedEvents: readonly CloseoutRecoveryEventSignature[]) => void;
 }
 
 function quotePowerShellCliValue(value: string): string {
@@ -802,6 +801,7 @@ function materializeFinalCloseoutArtifactsForCompletionGate(options: {
     taskId: string;
     eventsRoot: string;
     reviewsRoot: string;
+    assertRecoveryBindings?: () => void;
 }): void {
     const summary = buildTaskAuditSummary({
         taskId: options.taskId,
@@ -810,6 +810,7 @@ function materializeFinalCloseoutArtifactsForCompletionGate(options: {
         reviewsRoot: options.reviewsRoot,
         ignoreActiveCompletionFinalizationLock: true
     });
+    options.assertRecoveryBindings?.();
     synchronizeFinalCloseoutArtifacts(summary);
     const finalCloseout = summary.final_closeout;
     const requiredArtifactPaths = [
@@ -826,11 +827,12 @@ function materializeFinalCloseoutArtifactsForCompletionGate(options: {
         || finalCloseout.artifact_state !== 'MATERIALIZED'
         || missingArtifacts.length > 0
     ) {
-        throw new Error(
+        throw buildCloseoutFailure(
             `final closeout materialization did not produce a READY report: `
             + `audit_status=${summary.status}, closeout_status=${finalCloseout.status}, `
             + `artifact_state=${finalCloseout.artifact_state}, `
-            + `missing_artifacts=${missingArtifacts.map((entry) => path.basename(entry)).join(', ') || '<none>'}`
+            + `missing_artifacts=${missingArtifacts.map((entry) => path.basename(entry)).join(', ') || '<none>'}`,
+            summary
         );
     }
 }
@@ -1016,17 +1018,28 @@ export async function reconcileSuccessfulCompletionFinalizationAsync(
             await emitMandatoryCompletionGateEventAsync(orchestratorRoot, taskId, true, options.completionEventDetails);
             completionEventRecorded = true;
         }
+        // Recovery must check after the last await, before closeout removes review scratch.
+        if (options.assertRecoveryBindings) {
+            pendingFinalizationStep = 'COMPACT_CLEANUP';
+            await cleanupCompactAtTaskBoundary(repoRoot, taskId, { validationOutput: false });
+        }
         pendingFinalizationStep = 'FINAL_CLOSEOUT';
         materializeFinalCloseoutArtifactsForCompletionGate({
             repoRoot,
             taskId,
             eventsRoot: taskEventsRoot,
-            reviewsRoot
+            reviewsRoot,
+            assertRecoveryBindings: options.assertRecoveryBindings ? () => options.assertRecoveryBindings?.(
+                resolveAllowedRollbackEventSequences('FINAL_CLOSEOUT', statusDoneRecorded, completionPassRecorded,
+                    statusEventRecorded, completionEventRecorded, previousStatusForDoneTransition, options.completionEventDetails)[0]
+            ) : undefined
         });
         // Ephemeral output is not gate evidence. Delete before parent auto-close,
         // whose transaction owns its own rollback and must remain the last step.
-        pendingFinalizationStep = 'COMPACT_CLEANUP';
-        await cleanupCompactAtTaskBoundary(repoRoot, taskId, { validationOutput: false });
+        if (!options.assertRecoveryBindings) {
+            pendingFinalizationStep = 'COMPACT_CLEANUP';
+            await cleanupCompactAtTaskBoundary(repoRoot, taskId, { validationOutput: false });
+        }
         pendingFinalizationStep = 'DECOMPOSED_PARENT_AUTO_CLOSE';
         decomposedParentStatusSync = closeEligibleDecomposedParentsLinkedToCompletedTask({
             repoRoot,
@@ -1073,8 +1086,7 @@ export async function reconcileSuccessfulCompletionFinalizationAsync(
                 error_message: rollbackErrors.join(' | ')
             };
 
-        throw new Error(
-            buildFinalizationRepairMessage(
+        const repairMessage = buildFinalizationRepairMessage(
                 repoRoot,
                 taskId,
                 options.preflightPath,
@@ -1092,8 +1104,10 @@ export async function reconcileSuccessfulCompletionFinalizationAsync(
                 restoredCompletionPassRecorded,
                 restoredStatusDoneRecorded,
                 effectiveSyncResult
-            )
-        );
+            );
+        throw pendingFinalizationStep === 'FINAL_CLOSEOUT' && rollbackErrors.length === 0 && error instanceof CloseoutLinkageFailure
+            ? new CloseoutLinkageFailure(repairMessage, error.defects)
+            : new Error(repairMessage);
     }
 
     // Validation scratch survives any mandatory finalization rollback. Only after

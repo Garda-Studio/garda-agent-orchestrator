@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { readCloseoutLinkageRecovery } from '../completion/completion-linkage-recovery';
 import { findUnapprovedActiveImplementationOwners } from '../workspace/active-implementation-ownership';
 import { assertWorkflowTransactionReadable } from '../../core/workflow-transaction-state';
 import * as path from 'node:path';
@@ -2938,6 +2939,12 @@ export function resolveNextStepDecisionRoute(
     const latestCompletionFailureSequence = reviewGateAlreadyPassed
         ? readLatestTaskEventSequence(eventsRoot, taskId, ['COMPLETION_GATE_FAILED'])
         : null;
+    const linkageCloseoutRecoveryActive = reviewGateAlreadyPassed && latestCompletionFailureSequence != null
+        && readCloseoutLinkageRecovery(repoRoot, taskId, preflightPath, path.join(eventsRoot, `${taskId}.jsonl`)) !== null;
+    const reviewSatisfiedForCloseout = (state: ReviewArtifactState): boolean => (
+        reviewStateHasSatisfiedEvidence(repoRoot, eventsRoot, taskId, state)
+        || Boolean(linkageCloseoutRecoveryActive && state.ready && state.contextExists && state.domainScopeCurrent && !state.failed)
+    );
     const postReviewGateFreshnessRecoveryActive = Boolean(
         reviewGateAlreadyPassed
         && latestReviewGatePassSequence != null
@@ -2975,12 +2982,7 @@ export function resolveNextStepDecisionRoute(
                 reviewGateOverrideSkippedReviewTypes.has(normalizeReviewTypeValue(state.reviewType) || '')
                 || isReviewSatisfiedBySemanticCycleResume({
                     reviewType: state.reviewType,
-                    ordinarySatisfied: reviewStateHasSatisfiedEvidence(
-                        repoRoot,
-                        eventsRoot,
-                        taskId,
-                        state as ReviewArtifactState
-                    ),
+                    ordinarySatisfied: reviewSatisfiedForCloseout(state as ReviewArtifactState),
                     semanticResumeReusable,
                     acceptedReviewTypes: semanticCycleResume.accepted_review_types
                 })
@@ -3348,7 +3350,7 @@ export function resolveNextStepDecisionRoute(
                 const reviewCycleGuardResult = readReviewCycleGuardEvaluation(repoRoot, eventsRoot, taskId);
                 const pendingRequiredReviewTypes = requiredReviewTypes.filter((reviewType) => {
                     const state = reviewStates.find((candidate) => candidate.reviewType === reviewType);
-                    return !state || !reviewStateHasSatisfiedEvidence(repoRoot, eventsRoot, taskId, state);
+                    return !state || !reviewSatisfiedForCloseout(state);
                 });
                 splitRequiredReviewCycleContinuationAssessment = assessReviewCycleContinuationEvidence({
                     repoRoot,
@@ -3981,7 +3983,7 @@ export function resolveNextStepDecisionRoute(
             evaluation,
             getPendingRequiredReviewTypes: () => requiredReviewTypes.filter((reviewType) => {
                 const state = reviewStates.find((candidate) => candidate.reviewType === reviewType);
-                return !state || !reviewStateHasSatisfiedEvidence(repoRoot, eventsRoot, taskId, state);
+                return !state || !reviewSatisfiedForCloseout(state);
             }),
             assessContinuation: (pendingReviewTypes) => assessReviewCycleContinuationEvidence({
                 repoRoot,
@@ -4352,7 +4354,7 @@ export function resolveNextStepDecisionRoute(
             ? state.reusedExistingReview && timelineHasReviewReuseRecordedAfterCompile(eventsRoot, taskId, state)
             : false;
         const currentReviewEvidenceSatisfied = state
-            ? reviewStateHasSatisfiedEvidence(repoRoot, eventsRoot, taskId, state)
+            ? reviewSatisfiedForCloseout(state)
             : false;
         const currentReviewRecordedEvidenceCurrent = state
             ? reviewStateHasCurrentRecordedEvidence(repoRoot, eventsRoot, taskId, state)
@@ -4388,7 +4390,7 @@ export function resolveNextStepDecisionRoute(
             taskId,
             reviewType,
             state,
-            (candidateState) => reviewStateHasSatisfiedEvidence(repoRoot, eventsRoot, taskId, candidateState)
+            reviewSatisfiedForCloseout
         );
         const resolveFindingsFollowUpRoute = (): NextStepDecisionRoutePayload | null => {
             const dispositionArtifactPath = state?.reviewFindingsDispositionArtifactPath
@@ -4543,7 +4545,7 @@ export function resolveNextStepDecisionRoute(
                 taskId,
                 upstreamReviewType,
                 upstreamState,
-                (candidateState) => reviewStateHasSatisfiedEvidence(repoRoot, eventsRoot, taskId, candidateState)
+                reviewSatisfiedForCloseout
             );
             const upstreamReviewContextChain = buildReviewGateChainStatusSummary({
                 repoRoot,

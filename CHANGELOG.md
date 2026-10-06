@@ -15,6 +15,8 @@
 
 ### Review And Completion Fixes
 
+- Retain verified compile and review evidence when final closeout failed solely on durable defect linkage; retry after canonical correction only while source, HEAD, rules, config, task contracts and evidence remain unchanged.
+
 - Align focused reviewer instructions and result validation on the prohibition of custom inline interpreter runners, preserve normal transformations inside configured tools, and provide validator-compatible command hints only from authenticated current focused evidence.
 
 - Keep review-cycle restart events bounded by storing large delta classifications in immutable snapshots with hash-bound references and authenticated reads.
