@@ -44,7 +44,7 @@
     "description": "선택한 활성 에이전트 파일이 명시적으로 확인되었는지 여부입니다."
   },
   "ProjectRulesUpdated": {
-    "label": "프ро젝트 규칙 업데이트됨",
+    "label": "프로젝트 규칙 업데이트됨",
     "description": "에이전트 초기화 중 프로젝트 규칙을 검토하거나 수락했는지 여부입니다."
   },
   "SkillsPromptCompleted": {

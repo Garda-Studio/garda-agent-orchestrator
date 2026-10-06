@@ -46,7 +46,7 @@ export interface OptionalQualityChecksRuleSetDiagnostics {
     suggestedCustomRuleIds: string[];
 }
 
-export const OPTIONAL_QUALITY_CHECKS_ENABLED_NOTICE = 'режим опциональных проверок включен, проверь в garda ui перед стартом';
+export const OPTIONAL_QUALITY_CHECKS_ENABLED_NOTICE = 'Optional quality checks are enabled. Review their settings in the Garda UI before starting.';
 export const OPTIONAL_QUALITY_CHECKS_BASELINE_VERSION = '2026-07-21.t969';
 export const DEFAULT_OPTIONAL_QUALITY_CHECKS_REVIEW_FAILURE_CADENCE_INTERVAL = 3;
 export const MAX_OPTIONAL_QUALITY_CHECKS_REVIEW_FAILURE_CADENCE_INTERVAL = 100;
