@@ -1,6 +1,6 @@
 ---
 name: db-review
-description: Independent database risk review with strict pass/fail verdict. Use for requests like "DB review", "review migration", "SQL safety check", or when preflight requires db review. Do NOT use for generic code-style-only feedback.
+description: Independent database risk review with evidence-supported findings-only output. Use for requests like "DB review", "review migration", "SQL safety check", or when preflight requires db review. Do NOT use for generic code-style-only feedback.
 allowed-tools:
   - Read
   - Grep
@@ -15,80 +15,50 @@ metadata:
 
 # DB Review
 
-## Generated Findings-Only Handoff
-When orchestration supplies generated role-prompt, prompt-template, reviewer-prompt, output-template, and evidence-manifest artifacts, those artifacts are the sole instruction and output-format authority. Use this skill only as the assigned review lens/checklist. Never modify source files, control artifacts, or task state, and never launch another agent; the only permitted write is the exact `ReviewOutputPath`. Return exactly one findings-only JSON object, complete the entire assigned scope and every coverage-ledger obligation, and do not add verdict, pass/fail, status, downstream disposition, or remediation fields. Any verdict-oriented text below is historical audit-only guidance and never applies to generated or other new review cycles.
+Use this skill to inspect concrete database changes for correctness, performance and data safety.
 
-Use this skill for independent database risk assessment.
-Prioritize correctness, performance, and data safety.
+## Generated Findings-Only Handoff
+When orchestration supplies generated role-prompt, prompt-template, reviewer-prompt, output-template, and evidence-manifest artifacts, those artifacts are the sole instruction and output-format authority. Use this skill only as the assigned review lens/checklist. Never modify source files, control artifacts, or task state, and never launch another agent; the only permitted write is the exact `ReviewOutputPath`.
+
+Return exactly one findings-only JSON object using the generated output template. Complete the entire assigned scope and every coverage-ledger obligation. Do not add verdict, pass/fail, status, downstream disposition, or remediation fields. The controller owns policy decisions, follow-up creation and acceptance; the reviewer reports evidence-supported findings and risks.
 
 ## Required Inputs
-- Task goal and expected DB behavior.
-- Changed files list and diff.
-- Migration files and repository/query changes.
-- Optional review-context artifact from orchestration: `garda-agent-orchestrator/runtime/reviews/<task-id>-<review-type>-review-context.json`.
-- Review-only rule context selected and explicitly passed by orchestration; do not load task-lifecycle rules or commands independently.
+- Task goal and expected database behavior.
+- Authenticated changed-file scope and diff supplied by orchestration, including assigned migrations, repositories and queries.
+- Generated handoff artifacts and selected review-only rule context.
+- Available migration, query-plan, test and inspection evidence.
 
-## Token Economy Mode
-- Config source: `garda-agent-orchestrator/live/config/token-economy.json`.
-- Apply this section only when `enabled=true` and effective depth is in `enabled_depths`.
-- Default policy keeps `enabled_depths=[1,2]`, so `depth=3` follows full review behavior.
-- If a deployment explicitly includes `3` in `enabled_depths`, keep the full review scope and allow only non-scope-reducing compaction (for example stripped examples/code blocks or compact reviewer artifacts).
-- While active, this section takes precedence over any static rule-file list in `Required Inputs`.
-- If orchestration provides review-context artifact, treat its `rule_pack.selected_rule_files`, `rule_pack.omitted_rule_files`, `token_economy.omitted_sections`, nested `rule_context.*`, and `scoped_diff` fallback metadata as the source of truth for compact DB review scope.
-- When `rule_context.artifact_path` is present, use that markdown snapshot as the primary rule text instead of reloading raw rule files.
-- Depth-aware required-rules behavior:
-  - `depth=1`: evaluate required DB rules directly triggered by changed scope first; avoid unrelated rule expansion and full static rule loading.
-  - `depth=2`: evaluate the full required DB checklist for changed scope.
-  - other depths: follow full review behavior; if `depth=3` is explicitly enabled, only non-scope-reducing compaction may still apply.
-- Compact mode contract:
-  - when `compact_reviewer_output=true`, keep the same mandatory output sections and exact verdict token.
-  - keep findings concise (`risk -> evidence -> required action`) and move detail overflow to residual DB risks.
-  - when including failing command/test snippets, cap pasted tail output to `fail_tail_lines`.
-  - review/completion gates may emit non-blocking warnings if the artifact exceeds compactness budgets or still contains stripped example markers.
+Use the supplied rule snapshot and scope metadata. Do not independently load task-lifecycle rules, task state, commands or token-economy configuration. If supplied inputs are missing or unreadable, describe the concrete limitation in the generated form rather than inventing scope, evidence or authority.
 
-## Review Workflow
-1. Detect DB-impact scope using `references/db-trigger-matrix.md`.
-2. Review migrations for safety, rollback implications, and compatibility.
-3. Review queries for N+1, full scans, index usage risks, and lock risks.
-4. Review transaction boundaries and read/write routing consistency.
-5. Review data integrity, constraints, and idempotency implications.
-6. Use artifact structure from `garda-agent-orchestrator/live/docs/reviews/TEMPLATE.md`.
-7. Produce final DB verdict.
+## Scope And Compact Evidence
+- Review every assigned file, behavior boundary and applicable checklist category, including all generated coverage obligations.
+- Follow only the omissions explicitly authorized by the generated handoff; concise output must not reduce assigned coverage or omit findings.
+- Keep observations concise and evidence-bound. Record exact commands and actionable diagnostics for checks actually performed, using the generated output budget.
+- On remediation reviews, re-sweep the complete current assigned scope rather than checking only previously reported findings.
 
-## Exhaustive Review Contract
-- Complete the entire assigned review scope before returning a verdict. A finding at any severity does not end the review.
-- Continue through every in-scope file, behavior boundary, test, and applicable checklist or rule category, then report every distinct evidence-supported finding in the same result.
-- Deduplicate findings that share one root cause. For every distinct finding include severity, file and line evidence, impact, and required remediation; never invent or pad findings to reach a count.
-- On remediation reviews, re-sweep the complete current assigned scope instead of checking only previously reported findings.
-- Validation Notes must name the files, behavior boundaries, tests, and checklist or rule categories actually reviewed.
-- Do not widen the assigned scope. This is a process-completeness requirement, not a guarantee that every latent defect will be discovered.
+## Database Review Lenses
+1. Use `references/db-trigger-matrix.md` to understand the assigned database impact; preflight owns trigger evaluation and lane selection.
+2. Inspect migration safety, data-loss paths, rollback implications and compatibility with existing data and callers.
+3. Inspect query paths for N+1, unbounded scans, index usage and lock risks. Tie performance concerns to concrete queries and relevant execution evidence.
+4. Check whether critical filters and sorts have an appropriate index strategy; identify query columns and the expected index pattern when reporting a defect.
+5. Inspect transaction boundaries, isolation assumptions, read/write routing and consistency with the stated data guarantees.
+6. Inspect constraints, data integrity and idempotency, including retry and partial-failure behavior.
 
-## Mandatory Output Format
-Return the generated output template, not a free-form summary. Treat it as an immutable fill-in form: replace placeholder lines only. Preserve these required `##` headings exactly and in this order; never add, remove, rename, reorder, or nest the required `##` headings:
-1. `## Validation Notes` - concrete reviewed DB files, behavior, boundaries, and verification evidence; required for PASS.
-2. `## Findings by Severity` - canonical `None`, or active blocking DB findings with file references using parser-supported inline/list/subheading formats.
-3. `## Deferred Findings` - canonical `None`, or accepted actionable DB follow-ups with a concrete next step and `Justification:`.
-4. `## Residual Risks` - canonical `None`, or active open DB risks that remain after review.
-5. `## Verdict` - exact verdict token: `DB REVIEW PASSED` or `DB REVIEW FAILED`.
+## Evidence And Findings
+- Continue the full review after finding an issue. Report every distinct supported defect and residual risk without inventing or padding findings.
+- Deduplicate findings that share one root cause; describe the observed impact with concrete file:line evidence.
+- Record the files, behavior boundaries, checks and applicable checklist categories actually inspected in the generated validation notes and coverage ledger.
+- Distinguish a demonstrated migration, query, index or transaction defect from speculation or a missing command log.
+- If an existing exception is relevant, cite its supplied artifact and rule ID. Do not grant or create exceptions.
+- Do not widen the assigned scope or claim that an exhaustive sweep guarantees the absence of every latent defect.
 
-Use parser-supported finding formats under `## Findings by Severity`: `- High: <file:line> <impact>; remediation: <required action>`, `High:` followed by `- <finding>`, or `### High` followed by `- <finding>`. Severity subheadings are allowed only inside `## Findings by Severity`.
+## Focused Validation Boundary
+Missing prior focused execution evidence alone is not a finding or residual risk. When that absence is the prospective concern, follow the generated handoff's narrow focused self-validation contract: attempt the smallest safe permitted local check for exactly one relevant authenticated repository target and obey its command restrictions. Record the exact command, outcome and concrete diagnostics in the generated validation note.
 
-Parser-valid examples:
-- Validation Notes: `Reviewed src/review-parser.ts:42 and tests/review-parser.test.ts:17; checked parser-supported finding formats and rejection diagnostics.`
-- Findings by Severity: `- High: src/review-parser.ts:42 drops later findings; impact: incomplete review evidence; remediation: preserve every severity entry.`
-- Severity subheading: `### Medium` followed by `- tests/review-parser.test.ts:17 misses hierarchy coverage; impact: nested findings can be lost; remediation: cover severity subheadings.`
-- Deferred Findings: `- [Low] docs/reviews.md:12 clarify reviewer wording. Next step: update docs in T-123. Justification: documentation-only follow-up is accepted after parser coverage.`
-- Residual Risks: `- Rollout risk: legacy review artifacts may still use old wording until regenerated; mitigation: parser tests cover both canonical None and supported finding formats.`
+A passing check produces no finding. Report an exposed defect with its ordinary finding ID and linked evidence. An unavailable or prohibited attempt may use reserved F-000 only with the exact evidence-only marker and target required by the generated handoff; do not substitute a generic lack-of-testing finding. This skill does not redefine that marker or the output schema.
 
-## Hard Fail Conditions
-Return `DB REVIEW FAILED` when any item is true:
-- Migration safety risk can cause data loss without mitigation.
-- Query path likely causes N+1 or unbounded scan on hot path.
-- Required index strategy is missing for critical filter/sort path.
-- Transaction semantics are ambiguous or inconsistent with data guarantees.
-- Evidence is missing or non-auditable.
+## Standalone Advice
+Without a generated handoff, provide advisory findings with severity, concrete scope and evidence. Label limitations honestly. Standalone advice is not a mandatory review receipt or proof of task completion; do not fabricate generated bindings, policy decisions or acceptance.
 
-## Evidence Rules
-- Attach file:line references for each finding.
-- For performance claims, provide concrete query path and why risk exists.
-- For index recommendations, specify query columns and expected index pattern.
+## Review Selection
+Preflight and the current generated handoff own lane selection and escalation. This skill does not duplicate trigger rules or independently start another review.

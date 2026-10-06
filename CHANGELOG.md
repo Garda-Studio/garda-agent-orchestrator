@@ -1,5 +1,9 @@
 # Changelog
 
+- Align built-in code and database reviewer instructions and skill metadata with
+  generated findings-only handoffs. Preserve exhaustive review lenses and focused
+  validation while removing conflicting legacy verdict and disposition recipes.
+
 - Preserve both staged rename endpoints during split-required WIP capture,
   independent of Git rename presentation. Retain exact index/worktree patches,
   transactional rollback, scope checks and fresh-runtime restoration.
