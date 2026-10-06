@@ -1,5 +1,9 @@
 # Changelog
 
+- Align built-in code and database reviewer instructions and skill metadata with
+  generated findings-only handoffs. Preserve exhaustive review lenses and focused
+  validation while removing conflicting legacy verdict and disposition recipes.
+
 ## 1.4.4
 
 ### Automatic Cleanup Defaults

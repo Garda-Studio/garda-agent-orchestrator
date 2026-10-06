@@ -1,7 +1,7 @@
 {
   "id": "code-review",
   "name": "Code Review",
-  "summary": "Independent runtime code review with strict pass/fail verdict and auditable evidence.",
+  "summary": "Independent runtime code review with evidence-supported findings-only output.",
   "tags": ["core", "review", "code"],
   "aliases": ["code review", "review this diff", "review before merge"],
   "references": ["code-review-checklist.md"],
