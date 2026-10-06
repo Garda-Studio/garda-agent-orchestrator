@@ -628,6 +628,40 @@ test('rejects oversized individual JSON records before parsing them', () => {
     );
 });
 
+test('preserves complete multi-record histories above the former token ceiling and rejects aggregate append overflow', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-timeline-complete-history-'));
+    tempRoots.push(root);
+    const eventsRoot = path.join(root, 'runtime', 'task-events');
+    fs.mkdirSync(eventsRoot, { recursive: true });
+    const taskId = 'T-COMPLETE-HISTORY';
+    const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
+    const values = `[${'0,'.repeat(200_000)}0]`;
+    const record = `{"task_id":"${taskId}","details":${values}}\n`;
+    const completeHistory = record.repeat(3);
+    fs.writeFileSync(timelinePath, completeHistory, 'utf8');
+
+    withTaskTimelineReadSnapshot(eventsRoot, taskId, () => {
+        const entries = readTaskTimelineJsonlEntries(timelinePath);
+        assert.equal(entries.length, 3);
+        for (const entry of entries) {
+            assert.ok(entry.record);
+            const parsedValues = entry.record.details;
+            assert.ok(Array.isArray(parsedValues));
+            assert.equal(parsedValues.length, 200_001);
+            assert.equal(parsedValues.at(-1), 0);
+        }
+        assert.doesNotThrow(() => assertTaskTimelineJsonlAppendWithinLimits(timelinePath, '{}'));
+    });
+    const oversizedAppend = `{"details":[${'0,'.repeat(400_000)}0]}`;
+    assert.throws(
+        () => withTaskTimelineReadSnapshot(eventsRoot, taskId, () => {
+            assertTaskTimelineJsonlAppendWithinLimits(timelinePath, oversizedAppend);
+        }),
+        new RegExp(`${MAX_TASK_TIMELINE_JSON_STRUCTURAL_TOKENS} structural token limit`)
+    );
+    assert.equal(fs.readFileSync(timelinePath, 'utf8'), completeHistory);
+});
+
 test('rejects structurally dense JSON before materializing its value graph', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-timeline-token-bound-'));
     tempRoots.push(root);

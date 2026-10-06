@@ -118,6 +118,86 @@ result:
 An empty findings object is findings-satisfied only after these checks pass.
 Malformed output is not a finding and does not become pass evidence.
 
+### Focused command evidence
+
+Task timeline history retains immutable review and restart evidence within a
+finite 1,000,000 structural-token budget. Existing container, depth, record,
+line and snapshot byte limits continue to apply. Increasing this bounded
+capacity does not permit rewriting history or reusing stale review receipts.
+
+A focused self-validation attempt must name exactly one concrete repository
+target. A quoted `--test-name-pattern` may contain literal regex alternation,
+for example `node --test --test-name-pattern "parser|schema" tests/parser.test.js`.
+ASCII double quotes are supported, including `--test-name-pattern="parser|schema"`.
+Single quoting is rejected without an execution-shell binding because CMD treats
+apostrophes as ordinary characters and may interpret enclosed operators.
+The original attempted command remains unchanged in the review evidence.
+The command field is validated and returned without trimming. Admissible ASCII
+spaces and tabs at either edge remain part of the attempted evidence; forbidden
+whitespace and controls are rejected at the edges as well as inside the command.
+For runtimes and direct validators, `--` ends option parsing: subsequent arguments
+are positional and cannot supply a validation option or hide additional targets.
+Recognized package managers permit one argument-forwarding delimiter; the next
+actual `--` ends the forwarded runner's option parsing. Following selector and
+scalar flags remain positional and cannot hide additional input files. A consumed
+selector value of `"--"` neither uses the forwarding allowance nor terminates
+option parsing.
+Argument spelling and empty arguments remain intact until their roles are known:
+`./` cannot disappear as a positional directory, and `./--test` cannot become a
+runtime option. Path normalization applies only to path checks and comparisons.
+Known literal selector values remain regex data, including a leading escaped dot;
+separate-value and `=` forms have the same admission behavior. Reconstructed path
+restrictions still apply to programs, positional inputs and non-selector option
+values, including consumed configuration paths.
+Inline selector roles apply only before the actual option terminator; unknown
+options and post-terminator arguments cannot gain that exemption. Local validator
+program paths accept both `/` and ordinary Windows `\` separators by normalizing
+a program-path copy while retaining the command and selector spelling.
+Node's built-in validation mode requires an actual `--test` or `--check` option
+before the program target and option terminator. Selectors such as
+`--test-name-pattern` and `--test-only` do not establish that mode; consumed
+selector values and arguments after an ordinary script name cannot supply it.
+For Node's built-in test/check modes, the first file operand ends option roles:
+later selector or scalar tokens remain positional and cannot conceal more files
+or retain literal-selector path exemptions. Program and positional boundaries
+come from the same argument-role parse used for runner and target accounting.
+Recognized local validation scripts retain their existing admission rules.
+Without a built-in Node mode, recognized validator scripts retain their own
+selector arguments; Python module validators retain their runner arguments.
+A runtime terminator does not hide its following program: local validator
+programs and the known Node test wrapper remain distinct from their one concrete
+input. A wrapper command must occupy its actual first program-argument position.
+Python module validation requires a real `-m` option before the program and
+terminator, followed by a recognized validator module. Other runtimes, consumed
+selector values and ordinary script arguments cannot supply Python module mode.
+Reconstructed command tokens must also remain repository-relative: leading
+slashes, drive prefixes and `..` path segments are prohibited even when split
+across quoted fragments, including in the validator script path.
+
+Pipes, command chaining and background operators outside quotes remain
+prohibited. Line breaks, substitutions, expansions, network access, mutation
+flags and output-file options remain prohibited even when a selector is
+quoted. Typographic quotes, unterminated quotes and backslash-escaped quotes are rejected because
+their boundaries cannot be interpreted consistently across supported shells.
+Special and positional dollar parameters, Unicode variable names and
+shell-prefixed quote forms are also rejected. Literal regex end anchors inside
+ordinary ASCII quotes remain supported.
+History and delayed expansion markers (`!`) are conservatively rejected inside
+and outside quotes; unquoted `!(...)` remains prohibited.
+Unquoted wildcard and grouping syntax is rejected, including prefixes or suffixes
+attached to quoted selector fragments. Literal regex wildcards and parentheses
+inside ordinary ASCII quotes remain supported.
+Unquoted backslash-escaped whitespace or dots, tilde prefixes (including `~user`, `~+` and `~-`),
+comment/splatting markers and whitespace other than ASCII space or tab are
+rejected because they can change shell argument boundaries or values. Ordinary
+Windows path separators remain supported, except before an unquoted dot: POSIX
+shells can interpret that escape as part of a parent traversal hidden by Windows
+path normalization. Escaped regex dots inside double quotes remain supported.
+Percent expansion guards include CMD substring/replacement syntax, complex or
+Unicode environment names and positional/batch forms. Shell control characters,
+including NUL, are rejected inside and outside quotes. A single percent sign
+without an expansion prefix remains a supported literal selector character.
+
 ## Derived Artifacts and Policy
 
 `record-review-result` preserves the exact reviewer output and derives the
