@@ -1,5 +1,9 @@
 # Changelog
 
+- Make performance reviewer guidance proportional to changed risks and quantitative
+  claims. Preserve overload, growth and ordering checks while removing universal
+  TTL/telemetry demands and conflicting legacy verdict output instructions.
+
 - Align built-in code and database reviewer instructions and skill metadata with
   generated findings-only handoffs. Preserve exhaustive review lenses and focused
   validation while removing conflicting legacy verdict and disposition recipes.

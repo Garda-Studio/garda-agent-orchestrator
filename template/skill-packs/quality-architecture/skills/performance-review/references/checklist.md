@@ -1,10 +1,12 @@
 # Performance Review Checklist
 
+Apply each item only to a relevant changed behavior, resource boundary or quantitative claim. Explain inapplicable categories in the generated validation notes while completing every assigned file and coverage obligation. Lane selection alone does not require benchmarks, new SLOs, TTL or hit-rate telemetry. Concrete unbounded work, overload and correctness risks remain review findings.
+
 ## Latency Budget
 
-- [ ] Target latency percentile (p50/p95/p99) is defined for each affected endpoint or stage.
-- [ ] End-to-end latency budget is allocated across stages; no single stage exceeds its share.
-- [ ] Timeout values are set and consistent with the latency budget (timeout ≤ budget, not >>).
+- [ ] Existing SLO, percentile or deadline requirements relevant to the change are identified; do not require a new SLO for an unrelated or descriptive change.
+- [ ] Where a real end-to-end deadline exists, changed stages respect it and preserve timeout/cancellation propagation.
+- [ ] Claimed latency improvements identify the metric and appropriate comparison; a missing unrelated percentile metric alone is not a finding.
 
 ## Hot Path & I/O
 
@@ -15,10 +17,10 @@
 
 ## Caching
 
-- [ ] Every cache has a bounded TTL; no indefinite in-memory growth.
-- [ ] Invalidation strategy is explicit and tested (event-driven, TTL, versioned key).
-- [ ] Cache-stampede protection exists (singleflight, lock, request coalescing).
-- [ ] Cache hit-rate is observable (metric or log); cold-start behaviour is acceptable.
+- [ ] Capacity, eviction or owner lifetime bounds retained data; inspect actual unbounded growth.
+- [ ] Freshness and invalidation fit the data contract (event-driven invalidation, TTL, versioned keys or bounded lifetime); TTL is not universal.
+- [ ] Stampede protection and cold-start behavior are assessed where concurrent population is possible.
+- [ ] Hit-rate telemetry supports a stated claim or concrete operational need where applicable; its absence alone is not a defect.
 - [ ] Cached data does not bypass authorization checks on read.
 
 ## Concurrency & Pools
@@ -26,21 +28,21 @@
 - [ ] Connection/thread/worker pool sizes are configured, not left at unbounded defaults.
 - [ ] Pool exhaustion produces a clear signal (reject, backpressure, metric) not silent hang.
 - [ ] Shared mutable state is accessed under proper synchronization (lock, atomic, channel).
-- [ ] No lock held across I/O or awaited future on the hot path.
+- [ ] Lock duration fits required ownership and ordering; report avoidable contention without recommending unsafe unlocks.
 
 ## Payload & Serialization
 
 - [ ] Response payloads are bounded (pagination, field selection, max-items).
 - [ ] Large payloads use streaming or chunked transfer where appropriate.
-- [ ] Compression is enabled for text-heavy responses over the size threshold.
+- [ ] Streaming, chunking or compression is considered where payload size, consumers and measured cost justify it.
 - [ ] No unnecessary deep clone or re-serialization on the hot path.
 
 ## Fan-Out & Downstream Calls
 
-- [ ] Parallel calls have bounded concurrency (semaphore, pool, `Promise.allSettled` with limit).
-- [ ] Each downstream call has an individual timeout shorter than the overall budget.
-- [ ] Partial failure handling is defined (degrade, retry subset, abort).
-- [ ] Sequential calls that could safely run in parallel are flagged for improvement.
+- [ ] Parallel work is independent and has bounded concurrency consistent with shared-resource capacity.
+- [ ] Downstream timeouts/cancellation respect the actual request or operation deadline where one exists.
+- [ ] Relevant partial failures have defined handling (degrade, retry subset, abort).
+- [ ] Intentionally serial mutations, transaction order and lock-protected shared resources retain their ordering. Parallelism requires proven independence, correctness and benefit.
 
 ## Queue & Backpressure
 
@@ -51,7 +53,8 @@
 
 ## Measurement & Evidence
 
-- [ ] Before/after benchmark or load-test results are provided for performance claims.
-- [ ] Results include metric name, percentile, sample size, and test environment.
-- [ ] Micro-benchmarks account for warm-up, GC, and JIT effects.
-- [ ] Regression tests or performance gates exist to prevent silent future degradation.
+- [ ] Quantitative improvement claims have reproducible comparable before/after measurements.
+- [ ] Those measurements identify workload, environment, relevant metric, sample size and distribution; account for warm-up, GC and JIT where applicable.
+- [ ] Concrete regressions use appropriate source/data-flow evidence, a focused test, a profile or a reproducible workload; not every selected lane requires a benchmark.
+- [ ] Existing current validation is used without duplicating gate-owned execution. Missing prior focused execution follows only the generated handoff's narrow safe-check exception.
+- [ ] Relevant regression checks protect actual changed risks; do not introduce an unrelated benchmark or telemetry framework.
