@@ -15,6 +15,7 @@
 
 ### Review And Completion Fixes
 
+- Reject invalid orchestrator-defect acknowledgements before recording events, sharing the final audit's linkage contract and one current TASK.md snapshot; preserve historical declarations and revalidate later task drift at closeout.
 - Retain verified compile and review evidence when final closeout failed solely on durable defect linkage; retry after canonical correction only while source, HEAD, rules, config, task contracts and evidence remain unchanged.
 
 - Align focused reviewer instructions and result validation on the prohibition of custom inline interpreter runners, preserve normal transformations inside configured tools, and provide validator-compatible command hints only from authenticated current focused evidence.

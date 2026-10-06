@@ -16,6 +16,10 @@ import {
     assertValidTaskId
 } from '../../../../gate-runtime/task-events';
 import { auditCommandCompactness } from '../../../../gates/task-events-summary/task-events-summary';
+import {
+    buildOrchestratorDefectCaptureSummary,
+    ORCHESTRATOR_DEFECT_ACKNOWLEDGED_EVENT
+} from '../../../../gates/task-audit/task-audit-summary-orchestrator-defects';
 import type { CommandCompactnessAudit } from '../../../../gates/task-events-summary/task-events-summary';
 import * as gateHelpers from '../../../../gates/shared/helpers';
 import {
@@ -215,6 +219,17 @@ export function runLogTaskEventCommand(options: LogTaskEventCommandOptions): { o
     const normalizedEventType = eventType.toUpperCase();
     if (reservedEventTypes.has(normalizedEventType) || reservedEventPattern.test(normalizedEventType)) {
         throw new Error(`EventType '${eventType}' is reserved and cannot be emitted via log-task-event.`);
+    }
+    if (normalizedEventType === ORCHESTRATOR_DEFECT_ACKNOWLEDGED_EVENT) {
+        const capture = buildOrchestratorDefectCaptureSummary({
+            repoRoot,
+            taskId,
+            events: [{ task_id: taskId, event_type: normalizedEventType, details }]
+        });
+        if (capture.status !== 'CAPTURED') {
+            throw new Error(`${ORCHESTRATOR_DEFECT_ACKNOWLEDGED_EVENT} admission rejected: `
+                + (capture.violations.join('; ') || capture.visible_summary_line));
+        }
     }
 
     fs.mkdirSync(eventsRoot, { recursive: true });

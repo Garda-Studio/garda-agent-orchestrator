@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import { TASK_ID_ALLOWED_PATTERN } from '../../core/task-ids';
-import { readTaskQueueEntries, type TaskQueueEntry } from '../../core/task-queue-read';
+import { parseTaskQueueEntriesFromContent, type TaskQueueEntry } from '../../core/task-queue-read';
 import type { TaskAuditEvent } from './task-audit-summary-lifecycle';
 
 export const ORCHESTRATOR_DEFECT_ACKNOWLEDGED_EVENT = 'ORCHESTRATOR_DEFECT_ACKNOWLEDGED';
@@ -233,7 +233,7 @@ export function buildOrchestratorDefectCaptureSummary(options: {
     }
 
     const taskContent = readTaskContent(options.repoRoot);
-    const taskEntries = readTaskQueueEntries(options.repoRoot);
+    const taskEntries = parseTaskQueueEntriesFromContent(taskContent ?? '');
     const problemRecordBlocks = taskContent ? readProblemRecordBlocks(taskContent) : [];
     const records = acknowledgements.map((acknowledgement) => validateAcknowledgement(
         acknowledgement,
