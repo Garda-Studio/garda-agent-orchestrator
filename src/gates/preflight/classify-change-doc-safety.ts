@@ -12,15 +12,7 @@ import {
 
 const DOC_LIKE_REGEXES = [
     '\\.(md|mdx|txt|rst|adoc|asciidoc|textile)$',
-    '(^|/)docs?/',
-    '(^|/)README',
-    '(^|/)CHANGELOG',
-    '(^|/)LICENSE',
-    '(^|/)CONTRIBUTING',
-    '(^|/)SECURITY\\.md$',
-    '(^|/)NOTICE$',
-    '(^|/)TRADEMARKS',
-    '(^|/)CODEOWNERS$'
+    '(^|/)(README|CHANGELOG|LICENSE|CONTRIBUTING|SECURITY|NOTICE|TRADEMARKS|CODEOWNERS)$'
 ];
 
 const CONFIG_LIKE_REGEXES = [
@@ -74,8 +66,19 @@ export function isOrdinaryOrchestratorCacheMaintenancePath(pathValue: string): b
 
 export function isDocumentationLikePath(pathValue: string, ordinaryDocPaths: string[] = []): boolean {
     const normalizedPath = normalizePath(pathValue);
-    return testPrecompiled(normalizedPath, DOC_LIKE_COMPILED)
-        || matchOrdinaryDocPathPattern(normalizedPath, ordinaryDocPaths) !== null;
+    if (testPrecompiled(normalizedPath, DOC_LIKE_COMPILED)) {
+        return true;
+    }
+    const filename = normalizedPath.split('/').pop() || '';
+    if (!filename || filename.includes('.')) {
+        return false;
+    }
+    // Unfamiliar extensionless documents require an exact opt-in, never a directory glob.
+    const exactPattern = matchOrdinaryDocPathPattern(
+        normalizedPath,
+        ordinaryDocPaths.filter((pattern) => !/[*?]/u.test(pattern))
+    );
+    return exactPattern !== null && !/[*?]/u.test(exactPattern);
 }
 
 export function isConfigLikePath(pathValue: string): boolean {
@@ -113,7 +116,7 @@ export function isSecuritySensitiveDocumentationScopePath(
     config: SafeOrdinaryDocumentationPathConfig
 ): boolean {
     const normalizedPath = normalizePath(pathValue);
-    return testPrecompiled(normalizedPath, DOC_LIKE_COMPILED)
+    return isDocumentationLikePath(normalizedPath, config.ordinary_doc_paths)
         && !isRuntimeCodeLikePath(normalizedPath, config.code_like_regexes, config.runtime_roots)
         && !isAuditOnlyPath(normalizedPath)
         && !testPathPrefix(normalizedPath, config.protected_control_plane_roots)
@@ -157,29 +160,17 @@ export function isSafeOrdinaryDocumentationPath(
     ) {
         return false;
     }
-    return testPrecompiled(normalizedPath, DOC_LIKE_COMPILED)
-        || matchOrdinaryDocPathPattern(normalizedPath, config.ordinary_doc_paths) !== null;
+    return isDocumentationLikePath(normalizedPath, config.ordinary_doc_paths);
 }
 
 export function getSafeOrdinaryDocPathMatches(
     normalizedFiles: string[],
     classificationConfig: ResolvedClassificationConfig
 ): OrdinaryDocPathMatch[] {
-    const candidateFiles = normalizedFiles.filter((filePath) => {
-        const normalizedPath = normalizePath(filePath);
-        return !isRuntimeCodeLikePath(
-            normalizedPath,
-            classificationConfig.code_like_regexes,
-            classificationConfig.runtime_roots
-        )
-            && !isAuditOnlyPath(normalizedPath)
-            && !testPathPrefix(normalizedPath, classificationConfig.protected_control_plane_roots)
-            && !isConfigLikePath(normalizedPath)
-            && !matchesSensitiveOrdinaryDocTrigger(normalizedPath, classificationConfig);
-    });
+    const candidateFiles = normalizedFiles.filter((filePath) =>
+        isSafeOrdinaryDocumentationPath(filePath, classificationConfig));
     return collectOrdinaryDocPathMatches(
         candidateFiles,
         classificationConfig.ordinary_doc_paths
-    )
-        .filter((match) => isSafeOrdinaryDocumentationPath(match.path, classificationConfig));
+    );
 }

@@ -39,6 +39,25 @@ The root manifest `garda.config.json` references the managed config files valida
 node bin/garda.js gate validate-config
 ```
 
+## Ordinary documentation paths
+
+`paths.json` may declare `ordinary_doc_paths`, such as `docs/**` or
+`examples/**`. These patterns identify candidates; they do not certify an
+executable, test file or unknown extension as documentation. The shared
+classification contract requires a text documentation extension (`md`, `mdx`,
+`txt`, `rst`, `adoc`, `asciidoc` or `textile`) or a conventional extensionless
+name (`README`, `CHANGELOG`, `LICENSE`, `CONTRIBUTING`, `SECURITY`, `NOTICE`,
+`TRADEMARKS` or `CODEOWNERS`). An unfamiliar extensionless document, such as
+`BACKLOG`, requires its exact configured path rather than a glob.
+
+Files such as `docs/worker.js`, `README.js`, `README/index.js` and executable
+files under custom documentation globs retain their implementation or test
+classification, independently of runtime roots and configured code suffixes.
+Sensitive documentation, configuration and protected control-plane paths keep
+their existing review boundaries. Repository-wide wildcard patterns and path
+traversal remain invalid configuration. The file-form contract is shared by
+balanced, fast and strict; each profile still applies its own review policy.
+
 ## Update Availability
 
 Automatic version checks run in the background at successful task entry and local UI startup.
