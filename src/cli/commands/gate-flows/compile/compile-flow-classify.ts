@@ -1,6 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
+import { isPlainRecord } from '../../../../core/records';
+import { hasAuthenticatedZeroDiffAuditScope } from '../../../../gates/next-step/next-step-preflight-workspace-readiness';
 import {
     emitMandatoryPreflightFailedEvent,
     emitMandatoryPreflightStartedEvent
@@ -567,6 +569,32 @@ export function runClassifyChangeCommand(options: ClassifyChangeCommandOptions):
             preflightErrors.push(error instanceof Error ? error.message : String(error));
         }
         const domainSurface = buildDomainReviewSurface(result);
+        const zeroDiffReviewPolicyRefreshAllowed = !parseBooleanOption(options.forceAllDomainReviews, false)
+            && !parseBooleanOption(options.forceCodeReview, false)
+            && (result.task_required_review_declaration?.applied_reviews.length || 0) === 0;
+        (result.triggers as unknown as Record<string, unknown>).zero_diff_review_policy_refresh_allowed =
+            actualZeroDiffDetected && zeroDiffReviewPolicyRefreshAllowed;
+        let authenticatedNoOpScope = false;
+        if (actualZeroDiffDetected && zeroDiffReviewPolicyRefreshAllowed && result.detection_source === 'git_staged_only') {
+            try {
+                const previousPath = gateHelpers.joinOrchestratorPath(repoRoot,
+                    path.join('runtime', 'reviews', `${resolvedTaskId}-preflight.json`));
+                const previous: unknown = JSON.parse(fs.readFileSync(previousPath, 'utf8'));
+                if (isPlainRecord(previous) && isPlainRecord(previous.metrics)
+                    && isPlainRecord(previous.triggers)
+                    && previous.task_id === resolvedTaskId
+                    && previous.triggers.zero_diff_review_policy_refresh_allowed === true
+                    && (previous.detection_source === 'explicit_changed_files'
+                        || (previous.detection_source === result.detection_source
+                            && previous.metrics.scope_sha256 === result.metrics.scope_sha256
+                            && previous.metrics.scope_content_sha256 === result.metrics.scope_content_sha256
+                            && previous.metrics.changed_files_sha256 === result.metrics.changed_files_sha256))) {
+                    authenticatedNoOpScope = hasAuthenticatedZeroDiffAuditScope(repoRoot, previous);
+                }
+            } catch {
+                // Initial or malformed preflight evidence cannot remove profile reviews.
+            }
+        }
         const profileGuardrailOptions = {
             domainSurface,
             forceAllDomainReviews: parseBooleanOption(options.forceAllDomainReviews, false),
@@ -574,11 +602,12 @@ export function runClassifyChangeCommand(options: ClassifyChangeCommandOptions):
             localizationOnlyScope: isLocalizationOnlyReviewTriggerScope(result),
             protectedControlPlaneChanged: result.triggers.protected_control_plane_changed === true,
             protectedControlPlaneDocsOnly: result.triggers.protected_control_plane_docs_only === true,
-            zeroDiffBaselineOnly: isZeroDiffBaselineOnlyNoReviewableScope(
+            zeroDiffBaselineOnly: zeroDiffReviewPolicyRefreshAllowed && isZeroDiffBaselineOnlyNoReviewableScope(
                 result,
                 domainSurface,
                 taskModeEvidence.planned_changed_files || [],
-                taskModeEvidence.dirty_workspace_baseline?.changed_files || []
+                taskModeEvidence.dirty_workspace_baseline?.changed_files || [],
+                authenticatedNoOpScope
             )
         };
         zeroDiffBaselineOnlyNoReviewableScope = profileGuardrailOptions.zeroDiffBaselineOnly;

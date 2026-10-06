@@ -4,6 +4,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+import { splitCommandLine } from '../../../../src/core/command-line';
+import { handleGate } from '../../../../src/cli/commands/gate-command';
 import { runClassifyChangeCommand, runLoadRulePackCommand, runRecordNoOpCommand } from '../../../../src/cli/commands/gates';
 import { appendTaskEvent, inspectTaskEventFile } from '../../../../src/gate-runtime/task-events';
 import { getCurrentNoOpEventSha256, getNoOpEvidence } from '../../../../src/gates/task-mode/no-op';
@@ -65,6 +67,10 @@ function makeChild(options: {
     const repoRoot = makeTempRepo();
     const bundleRoot = path.join(repoRoot, 'garda-agent-orchestrator');
     const configPath = path.join(repoRoot, WORKFLOW_CONFIG_FILE);
+    editJson(path.join(bundleRoot, 'live/config/profiles.json'), (profiles) => {
+        const builtIns = profiles.built_in_profiles as Record<string, Record<string, unknown>>;
+        builtIns.balanced.review_policy = { code: true, test: true };
+    });
     const initialConfig = readWorkflowConfigState(configPath, bundleRoot).rawConfig;
     assert.ok(initialConfig);
     writeWorkflowConfig(configPath, initialConfig);
@@ -172,6 +178,52 @@ function makeChild(options: {
 
 type ChildFixture = ReturnType<typeof makeChild>;
 
+async function runNavigatorGate(fixture: ChildFixture, command: string): Promise<void> {
+    const tokens = splitCommandLine(command);
+    const argv = tokens.slice(tokens.indexOf('gate') + 1);
+    const rootIndex = argv.indexOf('--repo-root');
+    assert.ok(rootIndex >= 0, command);
+    argv[rootIndex + 1] = fixture.repoRoot;
+    const reasonIndex = argv.indexOf('--reason');
+    if (reasonIndex >= 0) {
+        argv[reasonIndex + 1] = 'The committed child remains unchanged beside preserved parent work.';
+    }
+    await handleGate(argv);
+}
+
+function classifyStagedChild(fixture: ChildFixture, forceCodeReview = false) {
+    runClassifyChangeCommand({
+        repoRoot: fixture.repoRoot, taskId: TASK_ID,
+        taskIntent: 'Audit already implemented child beside unchanged parent work',
+        useStaged: true, forceCodeReview, outputPath: fixture.preflightPath, emitMetrics: false
+    });
+    fixture.preflight = JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8')) as Record<string, unknown>;
+    assert.deepEqual(fixture.preflight.changed_files, []);
+    const loaded = runLoadRulePackCommand({
+        repoRoot: fixture.repoRoot, taskId: TASK_ID, stage: 'POST_PREFLIGHT',
+        preflightPath: fixture.preflightPath,
+        loadedRuleFiles: ['00-core.md', '15-project-memory.md', '30-code-style.md',
+            '35-strict-coding-rules.md', '40-commands.md', '50-structure-and-docs.md',
+            '70-security.md', '80-task-workflow.md', '90-skill-catalog.md'],
+        emitMetrics: false
+    });
+    assert.equal(loaded.exitCode, 0, loaded.outputLines.join('\n'));
+    return fixture.preflight;
+}
+
+function recordCurrentChildNoOp(fixture: ChildFixture) {
+    const recorded = runRecordNoOpCommand({
+        repoRoot: fixture.repoRoot, taskId: TASK_ID, classification: 'ALREADY_DONE',
+        preflightPath: fixture.preflightPath,
+        reason: 'The child implementation is already committed; preserve the unchanged parent work.',
+        emitMetrics: false
+    });
+    assert.equal(recorded.exitCode, 0);
+    const noOp = getNoOpEvidence(fixture.repoRoot, TASK_ID, '', fixture.preflightPath);
+    assert.equal(noOp.evidence_status, 'PASS');
+    assert.ok(getCurrentNoOpEventSha256(fixture.repoRoot, TASK_ID, noOp));
+}
+
 function readiness(fixture: ChildFixture) {
     return readPreflightWorkspaceReadiness(fixture.repoRoot, fixture.preflight, {
         plannedChangedFiles: [CHILD_FILE],
@@ -223,8 +275,115 @@ describe('authenticated zero-diff closeout beside protected parent WIP', () => {
         assert.deepEqual(fs.readFileSync(path.join(fixture.repoRoot, PARENT_FILE)), parentBefore);
         assert.deepEqual(getWorkspaceSnapshot(fixture.repoRoot, 'git_auto', true, []).changed_files, [PARENT_FILE]);
         const next = resolveNextStep({ repoRoot: fixture.repoRoot, taskId: TASK_ID });
-        assert.notEqual(next.next_gate, 'classify-change', next.reason);
+        assert.equal(next.next_gate, 'classify-change', next.reason);
+        assert.ok(next.commands.some((command) => command.command.includes('--use-staged')));
         assert.ok(!next.commands.some((command) => command.command.includes(`--changed-file "${PARENT_FILE}"`)));
+    });
+
+    it('executes the first explicit-to-staged refresh and native audit-only rebind', async () => {
+        const fixture = makeChild();
+        const parentBytes = fs.readFileSync(path.join(fixture.repoRoot, PARENT_FILE));
+        assert.equal(fixture.preflight.detection_source, 'explicit_changed_files');
+        const next = resolveNextStep({ repoRoot: fixture.repoRoot, taskId: TASK_ID });
+        assert.equal(next.next_gate, 'classify-change', next.reason);
+        assert.ok(next.commands.some((command) => command.command.includes('--use-staged')));
+        await runNavigatorGate(fixture, next.commands[0].command);
+        fixture.preflight = JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8')) as Record<string, unknown>;
+        assert.equal(fixture.preflight.detection_source, 'git_staged_only');
+        const required = fixture.preflight.required_reviews as Record<string, unknown>;
+        assert.equal(required.code, false);
+        assert.equal(required.test, false);
+        const staleNoOp = getNoOpEvidence(fixture.repoRoot, TASK_ID, '', fixture.preflightPath);
+        assert.equal(staleNoOp.evidence_status, 'EVIDENCE_PREFLIGHT_HASH_MISMATCH');
+        assert.equal(getCurrentNoOpEventSha256(fixture.repoRoot, TASK_ID, staleNoOp), null);
+        const ruleBinding = resolveNextStep({ repoRoot: fixture.repoRoot, taskId: TASK_ID });
+        assert.equal(ruleBinding.next_gate, 'load-rule-pack', ruleBinding.reason);
+        await runNavigatorGate(fixture, ruleBinding.commands[0].command);
+        const rebind = resolveNextStep({ repoRoot: fixture.repoRoot, taskId: TASK_ID });
+        assert.equal(rebind.next_gate, 'record-no-op', rebind.reason);
+        assert.match(rebind.commands[0].command, /--classification "AUDIT_ONLY"/u);
+        await runNavigatorGate(fixture, rebind.commands[0].command);
+        const currentNoOp = getNoOpEvidence(fixture.repoRoot, TASK_ID, '', fixture.preflightPath);
+        assert.equal(currentNoOp.classification, 'AUDIT_ONLY');
+        assert.equal(currentNoOp.evidence_status, 'PASS');
+        assert.ok(getCurrentNoOpEventSha256(fixture.repoRoot, TASK_ID, currentNoOp));
+        const after = resolveNextStep({ repoRoot: fixture.repoRoot, taskId: TASK_ID });
+        assert.notEqual(after.next_gate, 'classify-change', after.reason);
+        assert.notEqual(after.next_gate, 'build-review-context', after.reason);
+        assert.notEqual(after.next_gate, 'prepare-reviewer-launch', after.reason);
+        assert.deepEqual(fs.readFileSync(path.join(fixture.repoRoot, PARENT_FILE)), parentBytes);
+        assert.deepEqual(getWorkspaceSnapshot(fixture.repoRoot, 'git_auto', true, []).changed_files, [PARENT_FILE]);
+    });
+
+    it('keeps profile reviews until a staged no-op is genuinely recorded', () => {
+        const fixture = makeChild({ recordNoOp: false });
+        const preflight = classifyStagedChild(fixture);
+        const required = preflight.required_reviews as Record<string, unknown>;
+        assert.equal(required.code, true);
+        assert.equal(required.test, true);
+    });
+
+    it('refuses native no-op rebind when refreshed parent work changes', () => {
+        const fixture = makeChild();
+        const preflight = classifyStagedChild(fixture);
+        assert.equal((preflight.required_reviews as Record<string, unknown>).code, false);
+        fs.appendFileSync(path.join(fixture.repoRoot, PARENT_FILE), 'export const laterParent = 3;\n');
+        const next = resolveNextStep({ repoRoot: fixture.repoRoot, taskId: TASK_ID });
+        assert.notEqual(next.next_gate, 'record-no-op', next.reason);
+        assert.equal(readiness(fixture).ready, false);
+    });
+
+    it('preserves an explicit code-review request during native no-op policy refresh', () => {
+        const fixture = makeChild();
+        classifyStagedChild(fixture, true);
+        recordCurrentChildNoOp(fixture);
+        const next = resolveNextStep({ repoRoot: fixture.repoRoot, taskId: TASK_ID });
+        assert.notEqual(next.next_gate, 'classify-change', next.reason);
+        const preflight = classifyStagedChild(fixture, true);
+        assert.equal((preflight.required_reviews as Record<string, unknown>).code, true);
+    });
+
+    it('rejects a forged current no-op when selecting staged audit policy', () => {
+        const fixture = makeChild();
+        classifyStagedChild(fixture);
+        recordCurrentChildNoOp(fixture);
+        editJson(path.join(reviewsRoot(fixture.repoRoot), `${TASK_ID}-no-op.json`), (payload) => {
+            payload.reason = 'Forged local no-op reason without native producer evidence.';
+        });
+        const preflight = classifyStagedChild(fixture);
+        const required = preflight.required_reviews as Record<string, unknown>;
+        assert.equal(required.code, true);
+        assert.equal(required.test, true);
+    });
+
+    for (const extraChange of ['unstaged child', 'untracked source', 'parent drift'] as const) {
+        it(`keeps staged audit reviews when the global workspace has ${extraChange}`, () => {
+            const fixture = makeChild();
+            classifyStagedChild(fixture);
+            recordCurrentChildNoOp(fixture);
+            if (extraChange === 'untracked source') {
+                fs.writeFileSync(path.join(fixture.repoRoot, 'src/unowned.ts'), 'export const unowned = true;\n');
+            } else {
+                const file = extraChange === 'parent drift' ? PARENT_FILE : CHILD_FILE;
+                fs.appendFileSync(path.join(fixture.repoRoot, file), 'export const laterChange = true;\n');
+            }
+            if (extraChange === 'parent drift') {
+                assert.throws(() => classifyStagedChild(fixture), /Protected pre-existing workspace edits changed outside task scope/u);
+                return;
+            }
+            const preflight = classifyStagedChild(fixture);
+            assert.equal((preflight.required_reviews as Record<string, unknown>).code, true);
+            assert.equal((preflight.required_reviews as Record<string, unknown>).test, true);
+        });
+    }
+
+    it('keeps staged audit reviews after an interrupted policy round trip', () => {
+        const fixture = makeChild({ interruptedPolicyRoundTrip: true });
+        classifyStagedChild(fixture);
+        recordCurrentChildNoOp(fixture);
+        const preflight = classifyStagedChild(fixture);
+        assert.equal((preflight.required_reviews as Record<string, unknown>).code, true);
+        assert.equal((preflight.required_reviews as Record<string, unknown>).test, true);
     });
 
     it('keeps a zero-diff child blocked until the native no-op is recorded', () => {

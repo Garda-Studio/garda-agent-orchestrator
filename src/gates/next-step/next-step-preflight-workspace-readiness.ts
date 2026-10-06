@@ -140,6 +140,14 @@ function hasCommandOnlyConfigAuditChain(options: {
     return baselineSeen && cursor === currentHash;
 }
 
+function getCurrentAuditTaskMode(repoRoot: string, taskId: string) {
+    let taskMode = getTaskModeEvidence(repoRoot, taskId);
+    if (taskMode.evidence_status !== 'PASS' && taskMode.timeline_artifact_path) {
+        taskMode = getTaskModeEvidence(repoRoot, taskId, taskMode.timeline_artifact_path);
+    }
+    return taskMode;
+}
+
 function canCloseAuthenticatedNoOpBesideProtectedBaseline(
     repoRoot: string,
     preflight: Record<string, unknown>,
@@ -159,10 +167,7 @@ function canCloseAuthenticatedNoOpBesideProtectedBaseline(
         const integrity = inspectTaskEventFile(timelinePath, taskId);
         if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(integrity.status)
             || !getCurrentNoOpEventSha256(repoRoot, taskId, boundEvidence)) return false;
-        let taskMode = getTaskModeEvidence(repoRoot, taskId);
-        if (taskMode.evidence_status !== 'PASS' && taskMode.timeline_artifact_path) {
-            taskMode = getTaskModeEvidence(repoRoot, taskId, taskMode.timeline_artifact_path);
-        }
+        const taskMode = getCurrentAuditTaskMode(repoRoot, taskId);
         if (taskMode.evidence_status !== 'PASS') return false;
         const entries = readTaskTimelineJsonlEntries(timelinePath);
         let taskEntryIndex = entries.length - 1;
@@ -191,6 +196,113 @@ function canCloseAuthenticatedNoOpBesideProtectedBaseline(
         }));
     } catch {
         // Missing or malformed evidence cannot widen the existing protected-scope allowance.
+        return false;
+    }
+}
+
+function hasPreservedZeroDiffAuditWorkspace(
+    repoRoot: string,
+    preflight: Record<string, unknown>,
+    workspaceSnapshotRequest?: WorkspaceSnapshotRequest
+): boolean {
+    if (!isCanonicalZeroDiffNoOpPreflight(preflight)
+        || (preflight.zero_diff_guard as Record<string, unknown>).status !== 'BASELINE_ONLY') return false;
+    try {
+        const taskId = assertValidTaskId(String(preflight.task_id || ''));
+        const taskMode = getCurrentAuditTaskMode(repoRoot, taskId);
+        const snapshot = taskMode.profile_policy_snapshot;
+        if (taskMode.evidence_status !== 'PASS' || taskMode.profile_policy_snapshot_status !== 'PASS'
+            || !snapshot) return false;
+        const baseline = taskMode.dirty_workspace_baseline;
+        const baselineFiles = normalizeWorkspaceRelativePaths(repoRoot, baseline?.changed_files || []);
+        const baselineHashes = baseline?.file_hashes || {};
+        const triggers = getPreflightTriggers(preflight);
+        const protectedHashes = isPlainRecord(triggers.dirty_workspace_protected_file_hashes)
+            ? triggers.dirty_workspace_protected_file_hashes : {};
+        if (baselineFiles.length !== (baseline?.changed_files.length || 0)
+            || !baselineFiles.every((file) => baselineHashes[file]
+                && baselineHashes[file] === protectedHashes[file]
+                && isPathRealpathInsideRoot(path.resolve(repoRoot, file), repoRoot)
+                && fileSha256(path.resolve(repoRoot, file)) === baselineHashes[file])) return false;
+
+        const sourcePaths = snapshot.resolution_sources as unknown as Record<string, unknown>;
+        for (const [name, expectedHash] of Object.entries(snapshot.config_hashes)) {
+            if (name === 'workflow_config') continue;
+            const sourcePath = sourcePaths[name];
+            if (!sourcePath) {
+                if (expectedHash !== null) return false;
+                continue;
+            }
+            const source = resolvePathInsideRepo(String(sourcePath), repoRoot, {
+                enforceInside: true, allowMissing: expectedHash === null
+            });
+            if (!source || fileSha256(source) !== expectedHash) return false;
+        }
+        const configPath = resolvePathInsideRepo(snapshot.resolution_sources.workflow_config,
+            repoRoot, { enforceInside: true });
+        if (!configPath) return false;
+        const configFile = normalizeWorkspaceRelativePath(repoRoot, path.relative(repoRoot, configPath));
+        if (!configFile) return false;
+        const configHash = fileSha256(configPath);
+        if (!configHash || getWorkflowConfigFileHashes(repoRoot, preflight)[configFile] !== configHash) return false;
+        const timelinePath = joinOrchestratorPath(repoRoot, path.join('runtime', 'task-events', `${taskId}.jsonl`));
+        if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(inspectTaskEventFile(timelinePath, taskId).status)) return false;
+        const entries = readTaskTimelineJsonlEntries(timelinePath);
+        let entryIndex = entries.length - 1;
+        while (entryIndex >= 0 && entries[entryIndex].record?.event_type !== 'TASK_MODE_ENTERED') entryIndex -= 1;
+        if (entryIndex < 0 || entries[entryIndex].record?.outcome !== 'PASS') return false;
+        const cycleEntries = entries.slice(entryIndex + 1);
+        const mutations = cycleEntries.filter((entry) => (
+            entry.record?.event_type === 'WORKFLOW_CONFIG_MUTATION_PREPARED'
+                || entry.record?.event_type === 'WORKFLOW_CONFIG_MUTATION_AUDITED'
+        ));
+        if (mutations.some((entry) => {
+            const record = entry.record;
+            const details = record && isPlainRecord(record.details) ? record.details : {};
+            return resolvePathInsideRepo(String(details.config_path || ''), repoRoot, { enforceInside: true }) !== configPath;
+        })) return false;
+        if ((configHash !== snapshot.config_hashes.workflow_config || mutations.length > 0)
+            && !hasCommandOnlyConfigAuditChain({
+                repoRoot, taskId, relativePath: configFile,
+                baselineHash: snapshot.config_hashes.workflow_config,
+                preflightHash: configHash, taskCycleEntries: cycleEntries,
+                taskEntryHash: stringSha256(entries[entryIndex].rawLine.trim())
+            })) return false;
+        const globalSnapshot = readCurrentGitWorkspaceSnapshot(repoRoot, true, workspaceSnapshotRequest);
+        if (!globalSnapshot) return false;
+        const baselineSet = new Set(baselineFiles);
+        return filterSourceCheckoutGeneratedRuntimeArtifacts(repoRoot, globalSnapshot.changed_files)
+            .every((file) => baselineSet.has(file) || file === configFile);
+    } catch {
+        return false;
+    }
+}
+
+export function hasAuthenticatedZeroDiffAuditScope(
+    repoRoot: string,
+    preflight: Record<string, unknown>,
+    workspaceSnapshotRequest?: WorkspaceSnapshotRequest
+): boolean {
+    if (!hasPreservedZeroDiffAuditWorkspace(repoRoot, preflight, workspaceSnapshotRequest)) return false;
+    try {
+        const taskId = assertValidTaskId(String(preflight.task_id || ''));
+        const canonicalPath = path.resolve(joinOrchestratorPath(repoRoot,
+            path.join('runtime', 'reviews', `${taskId}-preflight.json`)));
+        const noOp = getNoOpEvidence(repoRoot, taskId, '', canonicalPath);
+        const boundPath = resolvePathInsideRepo(noOp.preflight_path || '', repoRoot, { enforceInside: true });
+        if (noOp.classification !== 'ALREADY_DONE' || boundPath !== canonicalPath) return false;
+        const taskMode = getCurrentAuditTaskMode(repoRoot, taskId);
+        if (!readPreflightWorkspaceReadiness(repoRoot, preflight, {
+            plannedChangedFiles: taskMode.planned_changed_files || [],
+            dirtyWorkspaceBaselineChangedFiles: taskMode.dirty_workspace_baseline?.changed_files || [],
+            dirtyWorkspaceBaselineFileHashes: Object.fromEntries(Object.entries(
+                taskMode.dirty_workspace_baseline?.file_hashes || {}
+            ).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
+            allowDocsOnlyDelta: false, workspaceSnapshotRequest
+        }).ready) return false;
+        return canCloseAuthenticatedNoOpBesideProtectedBaseline(repoRoot, preflight,
+            taskMode.dirty_workspace_baseline?.changed_files || [], []);
+    } catch {
         return false;
     }
 }
@@ -293,6 +405,15 @@ export function readPreflightWorkspaceReadiness(
 
     const detectionSource = String(preflight.detection_source || 'git_auto').trim() || 'git_auto';
     const normalizedDetectionSource = detectionSource.toLowerCase();
+    if (normalizedDetectionSource === 'git_staged_only'
+        && getPreflightTriggers(preflight).zero_diff_review_policy_refresh_allowed === true
+        && isCanonicalZeroDiffNoOpPreflight(preflight)
+        && !hasPreservedZeroDiffAuditWorkspace(repoRoot, preflight, options.workspaceSnapshotRequest)) {
+        return {
+            ready: false,
+            reason: 'Staged zero-diff audit no longer matches the unchanged parent baseline, global workspace or authenticated frozen settings.'
+        };
+    }
     const includeUntracked = normalizedDetectionSource === 'git_staged_only'
         ? false
         : (typeof preflight.include_untracked === 'boolean' ? preflight.include_untracked : true);

@@ -112,16 +112,19 @@ export function isZeroDiffBaselineOnlyNoReviewableScope(
     result: ClassificationResult,
     domainSurface: Record<string, boolean>,
     plannedChangedFiles: string[],
-    dirtyWorkspaceBaselineChangedFiles: string[]
+    dirtyWorkspaceBaselineChangedFiles: string[],
+    authenticatedNoOpScope = false
 ): boolean {
     const zeroDiffGuard = result.zero_diff_guard as Record<string, unknown> | undefined;
 
-    return result.detection_source === 'git_auto'
+    const noReviewableWorkspace = (result.detection_source === 'git_auto'
+        && plannedChangedFiles.length === 0 && dirtyWorkspaceBaselineChangedFiles.length === 0)
+        || (result.detection_source === 'git_staged_only' && authenticatedNoOpScope);
+
+    return noReviewableWorkspace
         && result.scope_category === 'empty'
         && Array.isArray(result.changed_files)
         && result.changed_files.length === 0
-        && plannedChangedFiles.length === 0
-        && dirtyWorkspaceBaselineChangedFiles.length === 0
         && result.metrics.changed_files_count === 0
         && result.metrics.changed_lines_total === 0
         && zeroDiffGuard?.zero_diff_detected === true
