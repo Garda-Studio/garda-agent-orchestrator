@@ -158,6 +158,7 @@ import {
     resolveFirstActiveTaskLifecycleGate
 } from '../../runtime/task-lifecycle-phase-runtime';
 import {
+    readAttachedTaskPlanIntegrityFailure,
     readStartupCycleReadiness
 } from './next-step-startup-readiness';
 import {
@@ -3550,7 +3551,7 @@ export function resolveNextStepDecisionRoute(
             !preflight || !preflightCycleReadiness.ready || !effectivePreflightWorkspaceReadiness.ready
     });
     const unapprovedActiveTaskOwners = findUnapprovedActiveImplementationOwners(repoRoot, taskId, taskEntries);
-    const startupRoute = resolveStartupDecisionRoute({
+    let startupRoute = resolveStartupDecisionRoute({
         enterTaskModePassed: isGatePassed(summary, 'enter-task-mode'),
         unapprovedActiveTaskOwners,
         protectedManifestRecovery: readTaskModeProtectedManifestRecoveryRoute(repoRoot, eventsRoot, taskId, cliPrefix),
@@ -3568,6 +3569,18 @@ export function resolveNextStepDecisionRoute(
         shellSmokePreflightPassed: isGatePassed(summary, 'shell-smoke-preflight'),
         shellSmokePreflightCommand: `${cliPrefix} gate shell-smoke-preflight --task-id "${taskId}" --repo-root "."`
     });
+    if (!startupRoute) {
+        const attachedPlanFailure = readAttachedTaskPlanIntegrityFailure(repoRoot, taskId, taskMode);
+        if (attachedPlanFailure) {
+            startupRoute = {
+                status: 'BLOCKED',
+                nextGate: 'task-plan-integrity',
+                title: 'Restore the frozen attached JSON task plan before continuing.',
+                reason: attachedPlanFailure,
+                commands: []
+            };
+        }
+    }
     const startupDecision = selectProjectedDecisionRoute('startup', 'normal', startupRoute);
     if (startupDecision) {
         return buildDecisionRouteResult(startupDecision);

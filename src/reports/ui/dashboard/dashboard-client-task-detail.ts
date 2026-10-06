@@ -3,9 +3,11 @@ import {
     TASK_CLOSURE_POLICY_CONFIRMATION_PHRASE
 } from '../actions/task-closure-policy-actions';
 import { UI_DASHBOARD_CLIENT_TASK_PROGRESS } from './dashboard-client-task-progress';
+import { UI_DASHBOARD_CLIENT_TASK_FINAL_REPORT } from './dashboard-client-task-final-report';
+import { UI_DASHBOARD_CLIENT_TASK_TIMELINE } from './dashboard-client-task-timeline';
 
 /** Browser-side dashboard script fragment (task-detail). */
-export const UI_DASHBOARD_CLIENT_TASK_DETAIL = UI_DASHBOARD_CLIENT_TASK_PROGRESS + `function reviewSummary(audit) {
+export const UI_DASHBOARD_CLIENT_TASK_DETAIL = UI_DASHBOARD_CLIENT_TASK_PROGRESS + UI_DASHBOARD_CLIENT_TASK_FINAL_REPORT + UI_DASHBOARD_CLIENT_TASK_TIMELINE + `function reviewSummary(audit) {
   const attempts = audit && audit.review_attempt_summary;
   const summary = attempts && (attempts.by_type || attempts.review_types);
   if (!summary || summary.length === 0) {
@@ -410,16 +412,18 @@ function renderTaskDetail(detail) {
     + metric(t('dataColumn'), t('dataFull'))
     + '</div>'
     + taskProgressCard(detail.progress)
+    + taskFinalReportCard(detail)
     + taskClosurePolicyPanel(detail)
     + '<h3 class="task-section-title">' + safe(t('taskActionsTitle')) + '</h3><p class="empty">' + safe(t('taskActionsHelp')) + '</p><div class="task-command-buttons">' + planButton(detail) + '</div><div id="task-action-status" class="task-action-status"></div>' + taskCommandList(detail.task_id)
     + '<h3 class="task-section-title">' + safe(t('fullSuiteTitle')) + '</h3>' + fullSuiteSummary(fullSuite)
     + '<h3 class="task-section-title">' + safe(t('qualityGateLatestCheck')) + '</h3>' + taskQualityChecklistSummary(detail.quality_checklist)
-    + '<h3 class="task-section-title">' + safe(t('gateTimeline')) + '</h3><p class="empty">' + safe(t('gateTimelineHelp')) + '</p><pre>' + safe(JSON.stringify(detail.latest_cycle_events || {}, null, 2)) + '</pre>'
+    + taskTimeline(detail)
     + (blockers.length > 0 ? '<h3 class="task-section-title">' + safe(t('runtimeDiagnosticsTitle')) + '</h3>' + auditDiagnosticsList(blockers) : '')
     + '<h3 class="task-section-title">' + safe(t('reviews')) + '</h3>' + reviewSummary(audit)
     + '<h3 class="task-section-title">' + safe(t('artifacts')) + '</h3>' + artifactList(detail.artifact_links);
   wireTaskActionButtons(detail.task_id);
   wireTaskProgressCopy(detail.progress);
+  wireTaskFinalReport(detail);
   wireTaskClosurePolicyControls(detail.task_id);
   const showPlanButton = document.getElementById('show-task-plan');
   if (showPlanButton) {

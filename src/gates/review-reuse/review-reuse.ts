@@ -161,6 +161,17 @@ export function resolveDocumentationReviewScopeHash(value: unknown): string | nu
     return toLowerHash(documentation.scope_sha256);
 }
 
+function resolveTestOnlyReviewScopeHash(value: unknown): string | null {
+    const domains = toRecord(toRecord(value).domains);
+    const tests = toRecord(domains.test);
+    if (toStringList(tests.changed_files).length === 0
+        || DOMAIN_SCOPE_NAMES.some((domain) => domain !== 'test' && domain !== 'closeout'
+            && toStringList(toRecord(domains[domain]).changed_files).length > 0)) {
+        return null;
+    }
+    return toLowerHash(tests.scope_sha256);
+}
+
 export function computeReviewRuleContextReuseHash(
     reviewContext: Record<string, unknown>
 ): string | null {
@@ -772,11 +783,46 @@ export function computeReviewReuseCodeScopeFingerprint(
     stagedBlobFingerprints?: StagedBlobFingerprints
 ): CodeReviewScopeFingerprint {
     const normalizedReviewType = String(reviewType || '').trim().toLowerCase();
-    return computeCodeReviewScopeFingerprintInternal(preflight, repoRoot, {
+    const scopeOptions = {
         excludeNonRuntimePerformanceSupportFiles: normalizedReviewType === 'code',
         classificationConfig,
         stagedBlobFingerprints
-    });
+    };
+    const scope = computeCodeReviewScopeFingerprintInternal(preflight, repoRoot, scopeOptions);
+    const reviewPreflight = resolveReviewPreflightWithoutCloseout(preflight);
+    const reviewScope = reviewPreflight.changed_files.length === scope.all_changed_files.length
+        ? scope
+        : computeCodeReviewScopeFingerprintInternal(reviewPreflight, repoRoot, scopeOptions);
+    if (!reviewScope.test_only || reviewScope.all_changed_files.length === 0) {
+        return scope;
+    }
+    // A test-only lane must bind the same test bytes assigned by its coverage contract.
+    return {
+        ...reviewScope,
+        code_scope_sha256: computeReviewRelevantScopeFingerprint(
+            reviewPreflight, repoRoot, classificationConfig, stagedBlobFingerprints
+        ).review_scope_sha256
+    };
+}
+
+function resolveReviewPreflightWithoutCloseout(
+    preflight: Record<string, unknown>
+): Record<string, unknown> & { changed_files: string[] } {
+    const changedFiles = Array.isArray(preflight.changed_files)
+        ? preflight.changed_files.map((entry) => normalizePath(entry)).filter((file) => file && !isCloseoutEvidencePath(file))
+        : [];
+    return { ...preflight, changed_files: changedFiles };
+}
+
+export function computeReviewRelevantScopeWithoutCloseout(
+    preflight: Record<string, unknown>,
+    repoRoot: string,
+    classificationConfig?: ResolvedClassificationConfig,
+    stagedBlobFingerprints?: StagedBlobFingerprints
+): ReviewRelevantScopeFingerprint {
+    return computeReviewRelevantScopeFingerprint(
+        resolveReviewPreflightWithoutCloseout(preflight), repoRoot, classificationConfig, stagedBlobFingerprints
+    );
 }
 
 export function computeReviewRelevantScopeFingerprint(
@@ -857,6 +903,9 @@ function buildReviewContextReuseHashSnapshot(
     const documentationScopeSha256 = resolveDocumentationReviewScopeHash(
         toRecord(reviewContext.tree_state).domain_scope_fingerprints
     );
+    const testOnlyScopeSha256 = resolveTestOnlyReviewScopeHash(
+        toRecord(reviewContext.tree_state).domain_scope_fingerprints
+    );
 
     return {
         schema_version: schemaVersion,
@@ -886,6 +935,7 @@ function buildReviewContextReuseHashSnapshot(
             contract_sha256: contractBindings.coverageContractSha256
         },
         ...(documentationScopeSha256 ? { documentation_scope_sha256: documentationScopeSha256 } : {}),
+        ...(testOnlyScopeSha256 ? { test_only_scope_sha256: testOnlyScopeSha256 } : {}),
         ...(includeReviewExecution
             ? {
                 review_execution: {

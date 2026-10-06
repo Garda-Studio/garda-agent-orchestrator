@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
+import { createRequire } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -29,7 +30,231 @@ function buildMatrix(kind: typeof TRUST_BOUNDARY_NEGATIVE_PATH_KINDS[number]) {
     }];
 }
 
+function assessNamedTestSource(source: string, extension = '.ts'): string[] {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-regex-evidence-'));
+    try {
+        fs.mkdirSync(path.join(repoRoot, 'tests'));
+        const evidenceFile = `tests/negative-path.test${extension}`;
+        fs.writeFileSync(path.join(repoRoot, evidenceFile), source, 'utf8');
+        const matrix = buildMatrix('replaced');
+        matrix[0].negative_paths[0].evidence_files = [
+            `${evidenceFile}#replaced reviewer evidence is presented`
+        ];
+        return assessTrustBoundaryMatrix(matrix, { repoRoot }).violations;
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+}
+
+function namedTestBody(body: string): string {
+    return `test('replaced reviewer evidence is presented', () => {\n${body}\n});\n`;
+}
+
 describe('trust-boundary analysis contract', () => {
+    it('recognizes direct assertions after regex quotes, classes, escaped delimiters and callback cleanup', () => {
+        const bodies = [
+            String.raw`const match = html.match(/const actionToken = "([^"]+)";/u);
+assert.equal(match[1], expected);`,
+            String.raw`const pattern = /['"{}()[\]\/]/u;
+assert.ok(pattern.test(value));`,
+            String.raw`try { html.match(/const actionToken = "([^"]+)";/u); }
+finally { stop(); }
+assert.equal(status, 403);`,
+            String.raw`const pattern = /escaped\/delimiter\\and"quote/gu;
+assert.ok(pattern.test(value));`,
+            String.raw`const options = { pattern: /["'}]/u };
+assert.ok(options.pattern.test(value));`,
+            String.raw`const callback = (pattern = /["'}]/u) => pattern.test(value);
+assert.ok(callback());`,
+            String.raw`for (const value of /["'}]/u.exec(text) || []) { work(value); }
+assert.equal(status, expected);`,
+            String.raw`for (const λ of /["'}]/u.exec(text) || []) { work(λ); }
+assert.equal(status, expected);`
+        ];
+        assert.deepEqual(bodies.map((body) => assessNamedTestSource(namedTestBody(body))), bodies.map(() => []));
+    });
+
+    it('distinguishes division and division assignment from a regex operand before direct assertions', () => {
+        const bodies = [
+            'const result = count / 2 / divisor;\nassert.equal(result, expected);',
+            'count /= 2;\nassert.equal(count, expected);',
+            'const result = getCount() / values[0];\nassert.equal(result, expected);',
+            'const result = object.if(value) / divisor / 2;\nassert.equal(result, expected);',
+            'const result = (count + 1) / divisor;\nassert.equal(result, expected);',
+            'const result = count++ / divisor;\nassert.equal(result, expected);',
+            'const result = count! / 2;\nassert.equal(result, expected);',
+            'const result = fn<number> / divisor;\nassert.equal(result, expected);',
+            'const result = fn<Array<number>> / divisor;\nassert.equal(result, expected);',
+            'const of = 8; const result = of / 2;\nassert.equal(result, expected);',
+            'const λ = 8; const result = λ / 2;\nassert.equal(result, expected);',
+            'const \u{10400} = 8; const result = \u{10400} / 2;\nassert.equal(result, expected);',
+            String.raw`const result = count / /["'}]/u.test(value);
+assert.equal(result, expected);`,
+            String.raw`const result = count !== /["'}]/u.test(value);
+assert.equal(result, expected);`,
+            String.raw`const result = !/["'}]/u.test(value);
+assert.equal(result, expected);`,
+            String.raw`const result = count > /["'}]/u.test(value);
+assert.equal(result, expected);`
+        ];
+        assert.deepEqual(bodies.map((body) => assessNamedTestSource(namedTestBody(body))), bodies.map(() => []));
+    });
+
+    it('rejects forged regex assertion text and conditional or nested-only assertions after regex literals', () => {
+        const bodies = [
+            String.raw`const pattern = /assert.equal\(value, expected\);/u;`,
+            String.raw`const pattern = /["'}]/u; /* assert.equal(value, expected); */
+const note = "assert.equal(value, expected);";`,
+            String.raw`if (/["'}]/u.test(value)) { assert.equal(value, expected); }`,
+            String.raw`while (/["'}]/u.test(value)) { assert.equal(value, expected); }`,
+            String.raw`const pattern = /["'}]/u;
+const callback = () => { assert.equal(value, expected); };`,
+            String.raw`const pattern = /["'}]/u;
+values.forEach(() => { assert.equal(value, expected); });`,
+            String.raw`const pattern = /["'}]/u;
+false && assert.equal(value, expected);`
+        ];
+        assert.deepEqual(bodies.map((body) => assessNamedTestSource(namedTestBody(body)).length > 0), bodies.map(() => true));
+    });
+
+    it('rejects forged test names inside regex literals and preserves real declarations after regex literals', () => {
+        const realTest = namedTestBody('assert.equal(value, expected);');
+        const prefix = String.raw`const pattern = /["'}]/u;` + '\n';
+        assert.deepEqual(assessNamedTestSource(prefix + realTest), []);
+        assert.ok(assessNamedTestSource(
+            String.raw`const pattern = /test\('replaced reviewer evidence is presented', \(\) => \{ assert.equal\(1, 1\); \}\);/u;`
+        ).length > 0);
+        assert.ok(assessNamedTestSource(
+            'if (false) {\n' + prefix + realTest + '}\n'
+        ).length > 0);
+    });
+
+    it('rejects nested-only object and class method assertions after regex literals', () => {
+        const assertion = String.raw`const pattern = /["'}]/u; assert.equal(1, 1);`;
+        const bodies = [
+            `const never = { check() { ${assertion} } };`,
+            `const never = { async check() { ${assertion} } };`,
+            `const never = { *check() { ${assertion} } };`,
+            `const never = { [name]() { ${assertion} } };`,
+            `const never = { get value() { ${assertion} return 1; } };`,
+            `const never = { set value(input) { ${assertion} } };`,
+            `class Never { check() { ${assertion} } }`,
+            `class Never { constructor() { ${assertion} } }`,
+            `class Never { get value() { ${assertion} return 1; } }`,
+            `class Never { static { ${assertion} } }`
+        ];
+        for (const body of bodies) {
+            assert.ok(assessNamedTestSource(namedTestBody(body)).length > 0, body);
+            assert.deepEqual(assessNamedTestSource(namedTestBody(body + '\nassert.equal(value, expected);')), [], body);
+        }
+        assert.ok(assessNamedTestSource(
+            `const never = { check() { ${assertion}\n${namedTestBody('assert.equal(value, expected);')} } };`
+        ).length > 0);
+    });
+
+    it('fails closed for malformed regex literals even when direct assertion text is present', () => {
+        const bodies = [
+            'const pattern = /unterminated;\nassert.equal(value, expected);',
+            'const pattern = /[unterminated/;\nassert.equal(value, expected);',
+            String.raw`const pattern = /escaped\/;
+assert.equal(value, expected);`,
+            'const pattern = /(/u;\nassert.equal(value, expected);',
+            'const pattern = /value/uu;\nassert.equal(value, expected);',
+            'const pattern = /value/z;\nassert.equal(value, expected);',
+            'const pattern = /value/uv;\nassert.equal(value, expected);',
+            'const pattern = /value/λ;\nassert.equal(value, expected);',
+            'const pattern = /value/uλ;\nassert.equal(value, expected);',
+            'const pattern = /value/\u0301;\nassert.equal(value, expected);',
+            'const pattern = /value/\u{10400};\nassert.equal(value, expected);',
+            String.raw`const pattern = /value/\u0067;
+assert.equal(value, expected);`,
+            'assert.equal(value, expected);\nconst pattern = /unterminated;',
+            'const pattern = /value\u2028other/u;\nassert.equal(value, expected);'
+        ];
+        assert.deepEqual(bodies.map((body) => assessNamedTestSource(namedTestBody(body)).length > 0), bodies.map(() => true));
+    });
+
+    it('rejects contextual identifier division that could forge conditional assertion evidence', () => {
+        const bodies = [
+            'const of = 8; of / 2; if (false) { /(?:value)/;\nassert.equal(1, 1);\n}',
+            'const await = 8; await / 2; if (false) { /(?:value)/;\nassert.equal(1, 1);\n}',
+            'const yield = 8; yield / 2; if (false) { /(?:value)/;\nassert.equal(1, 1);\n}',
+            'const λ = 8; λ / 2; if (false) { /(?:value)/;\nassert.equal(1, 1);\n}',
+            'const \u{10400} = 8; \u{10400} / 2; if (false) { /(?:value)/;\nassert.equal(1, 1);\n}'
+        ];
+        assert.deepEqual(bodies.map((body) => assessNamedTestSource(namedTestBody(body)).length > 0), bodies.map(() => true));
+    });
+
+    it('distinguishes regex and division after closing braces before direct assertions', () => {
+        const bodies = [
+            'const result = { value: 1 } / divisor;\nassert.equal(result, expected);',
+            String.raw`if (false) {} /["'}]/u.test(value);
+assert.equal(value, expected);`
+        ];
+        assert.deepEqual(bodies.map((body) => assessNamedTestSource(namedTestBody(body))), bodies.map(() => []));
+    });
+
+    it('rejects generic-instantiation division that could hide conditional assertions', () => {
+        const bodies = [
+            'const result = fn<number> / 2; if (false) { /(?:value)/;\nassert.equal(1, 1);\n}',
+            'const result = fn<Array<number>> / 2; if (false) { /(?:value)/;\nassert.equal(1, 1);\n}'
+        ];
+        assert.deepEqual(bodies.map((body) => assessNamedTestSource(namedTestBody(body)).length > 0), bodies.map(() => true));
+    });
+
+    it('validates regex syntax in executable template substitutions without accepting embedded assertions', () => {
+        const validBodies = [
+            'const value = `${/value/u.test(input)}`;\nassert.equal(value, expected);',
+            'const value = tag`${/value/u.test(input)}`;\nassert.equal(value, expected);',
+            'const value = `${`${/value/u.test(input)}`}`;\nassert.equal(value, expected);',
+            'const value = `/(/u`;\nassert.equal(value, expected);'
+        ];
+        assert.deepEqual(validBodies.map((body) => assessNamedTestSource(namedTestBody(body))), validBodies.map(() => []));
+        const invalidBodies = [
+            'const value = `${/(/u}`;\nassert.equal(value, expected);',
+            'assert.equal(value, expected);\nconst value = `${/(/u}`;',
+            'const value = tag`${/(/u}`;\nassert.equal(value, expected);',
+            'const value = `${`${/value/\u03bb}`}`;\nassert.equal(value, expected);',
+            'const value = `${assert.equal(value, expected)}`;',
+            'const value = `${value;\nassert.equal(value, expected);'
+        ];
+        assert.deepEqual(invalidBodies.map((body) => assessNamedTestSource(namedTestBody(body)).length > 0), invalidBodies.map(() => true));
+    });
+
+    it('preserves supported source kinds and ignores assertion-looking JSX text', () => {
+        const source = namedTestBody('const pattern = /value/u;\nassert.ok(pattern.test(value));');
+        for (const extension of ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']) {
+            assert.deepEqual(assessNamedTestSource(source, extension), [], extension);
+        }
+        assert.deepEqual(assessNamedTestSource(namedTestBody(
+            'const value = <div>{/value/u.test(input)}</div>;\nassert.equal(value, expected);'
+        ), '.tsx'), []);
+        assert.ok(assessNamedTestSource(namedTestBody(
+            'const value = <div>;assert.equal(value, expected);</div>;'
+        ), '.tsx').length > 0);
+    });
+
+    it('uses bundled parser for regex evidence in a detached runtime without development dependencies', () => {
+        const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-detached-evidence-'));
+        try {
+            const requireFromTest = createRequire(__filename);
+            const compiledCore = path.dirname(requireFromTest.resolve('../../../src/core/trust-boundary-analysis'));
+            for (const filename of ['trust-boundary-analysis.js', 'test-evidence-lexing.js', 'vendor-typescript.js']) {
+                fs.copyFileSync(path.join(compiledCore, filename), path.join(repoRoot, filename));
+            }
+            fs.mkdirSync(path.join(repoRoot, 'tests'));
+            fs.writeFileSync(path.join(repoRoot, 'tests', 'replaced-review-evidence.test.ts'), namedTestBody(
+                'const result = fn<number> / divisor;\nassert.equal(result, expected);'
+            ));
+            const detached = requireFromTest(path.join(repoRoot, 'trust-boundary-analysis.js')) as {
+                assessTrustBoundaryMatrix: typeof assessTrustBoundaryMatrix;
+            };
+            assert.deepEqual(detached.assessTrustBoundaryMatrix(buildMatrix('replaced'), { repoRoot }).violations, []);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+
     it('accepts targeted forged, replaced, missing, foreign, and stale negative paths', () => {
         for (const kind of TRUST_BOUNDARY_NEGATIVE_PATH_KINDS.filter((entry) => entry !== 'other')) {
             const assessment = assessTrustBoundaryMatrix(buildMatrix(kind));

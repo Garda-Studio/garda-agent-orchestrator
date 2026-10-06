@@ -3,8 +3,28 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as childProcess from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 import { COMMAND_SUMMARY } from '../../../../src/cli/commands/cli-helpers';
+import { buildTaskBrief, readJsonArtifactIfExists } from '../../../../src/cli/commands/preprompt/preprompt-task-context';
+import { resolveNextStep } from '../../../../src/gates/next-step/next-step';
+import { formatTaskBriefText } from '../../../../src/cli/commands/preprompt/preprompt-task-format';
+import { projectTaskContinuation, type PrepromptContinuation } from '../../../../src/cli/commands/preprompt/preprompt-task-commands';
+import { buildTaskContextSelection } from '../../../../src/cli/commands/preprompt/preprompt-task-context-selection';
+import { resolveNextStep as settleFixtureEffects } from '../../gates/next-step/next-step-test-support';
+import {
+    TASK_ID as NAVIGATOR_TASK_ID,
+    makeTempRepo as makeNavigatorRepo,
+    seedStartedTask,
+    seedCompletedTaskWithIndependentCodeReview,
+    ALL_REVIEW_FLAGS,
+    writePreflight as writeNavigatorPreflight,
+    seedCompilePass,
+    seedReviewGatePass,
+    seedDocImpactPass,
+    writeFreshReviewContextWithoutRouting,
+    writeReviewEvidence
+} from '../../gates/next-step/next-step-completion-fixtures';
 import { runCliWithCapturedOutput } from './gate-test-helpers';
 import {
     createTempRepo,
@@ -12,6 +32,329 @@ import {
     seedTaskQueue,
     writePreflight
 } from './gate-test-helpers';
+
+function snapshotBriefInputs(repoRoot: string): Record<string, string> {
+    const files: Record<string, string> = {};
+    function visit(directory: string): void {
+        for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+            if (entry.name === '.git') {
+                continue;
+            }
+            const filePath = path.join(directory, entry.name);
+            if (entry.isDirectory()) {
+                visit(filePath);
+            } else {
+                const stat = fs.statSync(filePath);
+                files[path.relative(repoRoot, filePath)] = `${stat.mtimeMs}:${createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')}`;
+            }
+        }
+    }
+    visit(repoRoot);
+    return files;
+}
+
+function assertCurrentNavigatorProjection(repoRoot: string): Record<string, unknown> {
+    const expected = resolveNextStep({ repoRoot, taskId: NAVIGATOR_TASK_ID });
+    const brief = buildTaskBrief(repoRoot, NAVIGATOR_TASK_ID);
+    assert.equal((brief.task as Record<string, unknown>).current_stage, expected.next_gate || expected.status.toLowerCase());
+    assert.equal(brief.schema_version, 3);
+    const continuation = brief.continuation as Record<string, unknown>;
+    assert.equal(continuation.status, expected.status);
+    assert.equal(continuation.next_gate, expected.next_gate);
+    assert.equal(continuation.navigator_command, expected.navigator_command);
+    assert.equal(continuation.advisory_only, true);
+    assert.equal(continuation.revalidate_before_action, true);
+    const action = continuation.action as Record<string, unknown> | null;
+    assert.equal(action?.command || null, expected.commands.length === 1 ? expected.commands[0].command : null);
+    assert.deepEqual((brief.commands as Record<string, unknown>).post_implementation_commands, []);
+    return brief;
+}
+
+test('preprompt selects controller instructions by the current action and keeps reviewer rules isolated', () => {
+    const skillPath = 'garda-agent-orchestrator/live/skills/node-backend/SKILL.md';
+    const continuation: PrepromptContinuation = {
+        schema_version: 1,
+        task_id: NAVIGATOR_TASK_ID,
+        generated_utc: '2026-10-02T00:00:00.000Z',
+        source: 'next-step',
+        advisory_only: true,
+        revalidate_before_action: true,
+        navigator_command: 'node bin/garda.js next-step "T-NEXT-1" --repo-root "."',
+        status: 'BLOCKED',
+        next_gate: 'compile-gate',
+        title: 'Current action',
+        reason: 'Current navigator evidence',
+        action: null
+    };
+    for (const [gate, expectedPhase] of [
+        ['compile-gate', 'implementation'],
+        ['build-review-context', 'review_orchestration'],
+        ['record-review-result', 'review_orchestration'],
+        ['doc-impact-gate', 'docs_memory_closeout'],
+        ['project-memory-impact', 'docs_memory_closeout'],
+        ['completion-gate', 'completion'],
+        ['restart-review-cycle', 'implementation'],
+        ['unrecognized-action', 'implementation']
+    ]) {
+        const selected = buildTaskContextSelection({
+            continuation: { ...continuation, next_gate: gate },
+            canonicalEntrypoint: 'AGENTS.md',
+            bundlePath: 'garda-agent-orchestrator',
+            optionalSkillPaths: [skillPath],
+            projectMemoryReadFirst: ['garda-agent-orchestrator/live/docs/project-memory/README.md']
+        });
+        assert.equal(selected.phase, expectedPhase, gate);
+        assert.equal(selected.controller_read_set.some(entry => entry.path === skillPath), expectedPhase === 'implementation', gate);
+        assert.ok(selected.controller_read_set.some(entry => entry.path.endsWith('/00-core.md')), gate);
+        assert.ok(selected.controller_read_set.some(entry => entry.path === 'TASK.md' && entry.task_id === NAVIGATOR_TASK_ID), gate);
+        assert.ok(selected.before_code_edit_read_set.some(entry => entry.path === skillPath), gate);
+        assert.equal(selected.historical_rule_pack_is_session_knowledge, false);
+        assert.equal(selected.missing_section_fallback, 'full_source_and_implementation_context');
+        assert.deepEqual(selected.reviewer_context.repository_rule_files, []);
+        assert.equal(selected.reviewer_context.required_skill_and_generated_context, true);
+        assert.equal(selected.reviewer_context.fresh_isolated_context, true);
+        const workflowRead = selected.controller_read_set.find(entry => entry.path.endsWith('/80-task-workflow.md'));
+        assert.ok(workflowRead?.sections.includes(expectedPhase === 'implementation' ? '*' : 'Task Execution And Approval'));
+        if (expectedPhase === 'completion') assert.ok(workflowRead?.sections.includes('Final User Report And Commit'));
+    }
+    for (const status of ['UNKNOWN', 'DECOMPOSED', 'SPLIT_REQUIRED'] as const) {
+        const selected = buildTaskContextSelection({
+            continuation: { ...continuation, status, next_gate: 'completion-gate' },
+            canonicalEntrypoint: 'AGENTS.md',
+            bundlePath: 'garda-agent-orchestrator',
+            optionalSkillPaths: [],
+            projectMemoryReadFirst: []
+        });
+        assert.equal(selected.phase, 'implementation', status);
+        assert.equal(selected.implementation_instructions_deferred, false);
+    }
+    const completed = buildTaskContextSelection({
+        continuation: { ...continuation, status: 'DONE', next_gate: null },
+        canonicalEntrypoint: 'AGENTS.md',
+        bundlePath: 'garda-agent-orchestrator',
+        optionalSkillPaths: [],
+        projectMemoryReadFirst: []
+    });
+    assert.equal(completed.phase, 'completion');
+    for (const source of completed.controller_read_set.filter(entry => entry.path.endsWith('/80-task-workflow.md') || entry.path.endsWith('/orchestration/SKILL.md'))) {
+        const templatePath = source.path.replace('garda-agent-orchestrator/live/', 'template/');
+        const text = fs.readFileSync(path.join(process.cwd(), templatePath), 'utf8');
+        const headings = new Set(text.split(/\r?\n/u).filter(line => /^#{1,6} /u.test(line)).map(line => line.replace(/^#{1,6} /u, '')));
+        assert.ok(source.sections.every(section => headings.has(section)), templatePath);
+    }
+    assert.equal(buildTaskContextSelection({
+        continuation: { ...continuation, next_gate: 'completion-gate' },
+        canonicalEntrypoint: null,
+        bundlePath: 'garda-agent-orchestrator',
+        optionalSkillPaths: [],
+        projectMemoryReadFirst: []
+    }).phase, 'implementation');
+});
+
+test('preprompt prevents lifecycle writes while projecting a pending navigator effect', () => {
+    const repoRoot = makeNavigatorRepo();
+    try {
+        seedStartedTask(repoRoot, NAVIGATOR_TASK_ID);
+        const before = snapshotBriefInputs(repoRoot);
+        assertCurrentNavigatorProjection(repoRoot);
+        assert.deepEqual(snapshotBriefInputs(repoRoot), before);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('preprompt rejects stale completion PASS after a new task entry', () => {
+    const repoRoot = makeNavigatorRepo();
+    try {
+        seedInitAnswers(repoRoot, 'Codex');
+        seedCompletedTaskWithIndependentCodeReview(repoRoot, NAVIGATOR_TASK_ID);
+        seedStartedTask(repoRoot, NAVIGATOR_TASK_ID);
+        const before = snapshotBriefInputs(repoRoot);
+        const brief = assertCurrentNavigatorProjection(repoRoot);
+        assert.notEqual((brief.task as Record<string, unknown>).current_stage, 'completion_passed');
+        assert.equal((brief.context_selection as Record<string, unknown>).phase, 'implementation');
+        assert.deepEqual((brief.commands as Record<string, unknown>).startup_commands, []);
+        assert.deepEqual(snapshotBriefInputs(repoRoot), before);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('preprompt rejects stale compile PASS after source drift', () => {
+    const repoRoot = makeNavigatorRepo();
+    try {
+        seedInitAnswers(repoRoot, 'Codex');
+        seedStartedTask(repoRoot, NAVIGATOR_TASK_ID);
+        writeNavigatorPreflight(repoRoot, NAVIGATOR_TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+        seedCompilePass(repoRoot, NAVIGATOR_TASK_ID);
+        fs.writeFileSync(path.join(repoRoot, 'src', 'app.ts'), 'export const value = 999;\n', 'utf8');
+        const before = snapshotBriefInputs(repoRoot);
+        const brief = assertCurrentNavigatorProjection(repoRoot);
+        assert.notEqual((brief.task as Record<string, unknown>).current_stage, 'completion_passed');
+        assert.equal((brief.context_selection as Record<string, unknown>).phase, 'implementation');
+        assert.deepEqual(snapshotBriefInputs(repoRoot), before);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('preprompt revalidates missing and foreign-task evidence without writing lifecycle files', () => {
+    const staleCompletionClaims: boolean[] = [];
+    for (const mutation of ['missing', 'foreign-task']) {
+        const repoRoot = makeNavigatorRepo();
+        try {
+            seedCompletedTaskWithIndependentCodeReview(repoRoot, NAVIGATOR_TASK_ID);
+            const compilePath = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews', `${NAVIGATOR_TASK_ID}-compile-gate.json`);
+            if (mutation === 'missing') {
+                fs.rmSync(compilePath);
+            } else {
+                const compile = JSON.parse(fs.readFileSync(compilePath, 'utf8'));
+                compile.task_id = 'T-FOREIGN';
+                fs.writeFileSync(compilePath, JSON.stringify(compile), 'utf8');
+            }
+            const before = snapshotBriefInputs(repoRoot);
+            const brief = assertCurrentNavigatorProjection(repoRoot);
+            staleCompletionClaims.push((brief.task as Record<string, unknown>).current_stage === 'completion_passed');
+            assert.deepEqual(snapshotBriefInputs(repoRoot), before);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    }
+    assert.deepEqual(staleCompletionClaims, [false, false]);
+});
+
+test('preprompt resumes at the remaining test review after independently accepted code review', () => {
+    const repoRoot = makeNavigatorRepo();
+    try {
+        seedInitAnswers(repoRoot, 'Codex');
+        seedStartedTask(repoRoot, NAVIGATOR_TASK_ID);
+        writeNavigatorPreflight(repoRoot, NAVIGATOR_TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, test: true });
+        seedCompilePass(repoRoot, NAVIGATOR_TASK_ID);
+        writeReviewEvidence(repoRoot, NAVIGATOR_TASK_ID, 'code');
+        const route = settleFixtureEffects({ repoRoot, taskId: NAVIGATOR_TASK_ID });
+        assert.equal(route.next_gate, 'build-review-context', route.reason);
+        assert.equal(route.review.next_review_type, 'test');
+        const before = snapshotBriefInputs(repoRoot);
+        const brief = assertCurrentNavigatorProjection(repoRoot);
+        const text = formatTaskBriefText(brief);
+        assert.equal((brief.context_selection as Record<string, unknown>).phase, 'review_orchestration');
+        assert.match(text, /ControllerPhase: review_orchestration/);
+        assert.match(text, /ControllerReadSet:/);
+        assert.match(text, /NextCommand:.*build-review-context.*--review-type "test"/);
+        assert.ok(!text.includes('StartupCommands:'));
+        assert.ok(!text.includes('gate compile-gate'));
+        assert.deepEqual(snapshotBriefInputs(repoRoot), before);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('preprompt completion-only continuation does not replay startup, compile or review actions', () => {
+    const repoRoot = makeNavigatorRepo();
+    try {
+        seedInitAnswers(repoRoot, 'Codex');
+        seedStartedTask(repoRoot, NAVIGATOR_TASK_ID);
+        writeNavigatorPreflight(repoRoot, NAVIGATOR_TASK_ID, { ...ALL_REVIEW_FLAGS });
+        seedCompilePass(repoRoot, NAVIGATOR_TASK_ID);
+        seedReviewGatePass(repoRoot, NAVIGATOR_TASK_ID);
+        seedDocImpactPass(repoRoot, NAVIGATOR_TASK_ID);
+        const route = settleFixtureEffects({ repoRoot, taskId: NAVIGATOR_TASK_ID });
+        assert.equal(route.next_gate, 'completion-gate', route.reason);
+        const before = snapshotBriefInputs(repoRoot);
+        const brief = assertCurrentNavigatorProjection(repoRoot);
+        const text = formatTaskBriefText(brief);
+        assert.equal((brief.context_selection as Record<string, unknown>).phase, 'completion');
+        assert.match(text, /ControllerPhase: completion/);
+        assert.match(text, /BeforeCodeEdit:.*implementation instructions/);
+        assert.match(text, /NextCommand:.*gate completion-gate/);
+        assert.ok(!text.includes('StartupCommands:'));
+        assert.ok(!text.includes('gate compile-gate'));
+        assert.ok(!text.includes('build-review-context'));
+        assert.deepEqual(snapshotBriefInputs(repoRoot), before);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('preprompt prevents startup replay and arbitrary reviewer routing selection', () => {
+    const repoRoot = makeNavigatorRepo();
+    try {
+        seedStartedTask(repoRoot, NAVIGATOR_TASK_ID);
+        writeNavigatorPreflight(repoRoot, NAVIGATOR_TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+        seedCompilePass(repoRoot, NAVIGATOR_TASK_ID);
+        writeFreshReviewContextWithoutRouting(repoRoot, NAVIGATOR_TASK_ID, 'code');
+        const route = settleFixtureEffects({ repoRoot, taskId: NAVIGATOR_TASK_ID });
+        assert.equal(route.next_gate, 'record-review-routing', route.reason);
+        assert.equal(route.commands.length, 1);
+        const before = snapshotBriefInputs(repoRoot);
+        const brief = assertCurrentNavigatorProjection(repoRoot);
+        const action = (brief.continuation as Record<string, unknown>).action as Record<string, unknown>;
+        assert.equal(action.command, route.commands[0].command);
+        assert.equal(action.command_selection_required, false);
+        assert.deepEqual((brief.commands as Record<string, unknown>).startup_commands, []);
+        const alternativeProjection = projectTaskContinuation({
+            ...route,
+            commands: [...route.commands, { label: 'Alternative', command: 'alternative from navigator' }]
+        });
+        assert.equal(alternativeProjection.action?.command, null);
+        assert.equal(alternativeProjection.action?.command_selection_required, true);
+        assert.deepEqual(snapshotBriefInputs(repoRoot), before);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('preprompt rejects traversal ids before reading task evidence', () => {
+    const repoRoot = makeNavigatorRepo();
+    try {
+        const before = snapshotBriefInputs(repoRoot);
+        assert.throws(() => buildTaskBrief(repoRoot, '../T-NEXT-1'), /task.*id/i);
+        assert.deepEqual(snapshotBriefInputs(repoRoot), before);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('preprompt advisory JSON reads reject foreign tasks, malformed payloads and oversized artifacts', () => {
+    const repoRoot = makeNavigatorRepo();
+    try {
+        const filePath = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews', `${NAVIGATOR_TASK_ID}-preflight.json`);
+        const matchingPayload = { task_id: NAVIGATOR_TASK_ID };
+        const atLimit = JSON.stringify(matchingPayload).padEnd(1024 * 1024, ' ');
+        assert.equal(Buffer.byteLength(atLimit, 'utf8'), 1024 * 1024);
+        fs.writeFileSync(filePath, atLimit, 'utf8');
+        assert.deepEqual(readJsonArtifactIfExists(filePath, { repoRoot, taskId: NAVIGATOR_TASK_ID })?.payload, matchingPayload);
+        const oversized = `${atLimit} `;
+        assert.equal(Buffer.byteLength(oversized, 'utf8'), 1024 * 1024 + 1);
+        assert.deepEqual(JSON.parse(oversized), matchingPayload);
+        const payloads = [];
+        for (const content of [JSON.stringify({ task_id: 'T-FOREIGN' }), 'null', '[]', '{invalid', oversized]) {
+            fs.writeFileSync(filePath, content, 'utf8');
+            const before = snapshotBriefInputs(repoRoot);
+            payloads.push(readJsonArtifactIfExists(filePath, { repoRoot, taskId: NAVIGATOR_TASK_ID }));
+            assert.deepEqual(snapshotBriefInputs(repoRoot), before);
+        }
+        assert.deepEqual(payloads, [null, null, null, null, null]);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('preprompt rejects escaped lifecycle roots without following a directory junction', () => {
+    const repoRoot = makeNavigatorRepo();
+    const outsideRoot = makeNavigatorRepo();
+    try {
+        const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+        fs.rmSync(reviewsRoot, { recursive: true });
+        fs.symlinkSync(outsideRoot, reviewsRoot, process.platform === 'win32' ? 'junction' : 'dir');
+        const outsideBefore = snapshotBriefInputs(outsideRoot);
+        assert.throws(() => buildTaskBrief(repoRoot, NAVIGATOR_TASK_ID), /inside repo root|escape/i);
+        assert.deepEqual(snapshotBriefInputs(outsideRoot), outsideBefore);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(outsideRoot, { recursive: true, force: true });
+    }
+});
 
 
 
@@ -32,7 +375,7 @@ test('preprompt task --help renders command help', async () => {
     assert.ok(output.includes('--json'));
 });
 
-test('preprompt task --json derives post-implementation commands from current preflight', async () => {
+test('preprompt rejects incomplete preflight as authority for future command batches', async () => {
     const repoRoot = createTempRepo();
     const taskId = 'T-137';
     try {
@@ -67,13 +410,15 @@ test('preprompt task --json derives post-implementation commands from current pr
         const diagnostics = payload.diagnostics as Record<string, unknown>;
         const commands = payload.commands as Record<string, unknown>;
         assert.deepEqual(diagnostics.required_review_types, ['code', 'test']);
-        assert.equal(commands.post_implementation_sequence_available, true);
+        assert.equal(payload.schema_version, 3);
+        assert.equal(diagnostics.artifact_presence_is_advisory, true);
+        assert.equal(commands.post_implementation_sequence_available, false);
         const postImplementationCommands = commands.post_implementation_commands as string[];
-        assert.ok(postImplementationCommands[0].includes('gate compile-gate'));
-        assert.ok(postImplementationCommands.some((line) => line.includes('build-review-context') && line.includes('--review-type "code"')));
-        assert.ok(postImplementationCommands.some((line) => line.includes('build-review-context') && line.includes('--review-type "test"')));
-        assert.ok(postImplementationCommands.some((line) => line.includes('required-reviews-check')));
-        assert.ok(postImplementationCommands.some((line) => line.includes('completion-gate')));
+        assert.deepEqual(postImplementationCommands, []);
+        const continuation = payload.continuation as Record<string, unknown>;
+        assert.equal(continuation.status, 'UNKNOWN');
+        assert.equal(continuation.action, null);
+        assert.ok((commands.startup_commands as string[]).length <= 1);
 
         const latestPreflight = diagnostics.latest_preflight as Record<string, unknown>;
         assert.equal(latestPreflight.mode, 'FULL_PATH');
@@ -87,7 +432,7 @@ test('preprompt task --json derives post-implementation commands from current pr
     }
 });
 
-test('preprompt task text output includes post-implementation commands from current preflight', async () => {
+test('preprompt task text output prints the current action and revalidation instead of future commands', async () => {
     const repoRoot = createTempRepo();
     const taskId = 'T-137';
     try {
@@ -118,18 +463,17 @@ test('preprompt task text output includes post-implementation commands from curr
 
         assert.equal(result.exitCode, 0);
         const output = result.logs.join('\n');
-        assert.match(output, /PostImplementationCommands:/);
-        assert.match(output, /gate compile-gate/);
-        assert.match(output, /build-review-context --review-type "code"/);
-        assert.match(output, /build-review-context --review-type "test"/);
-        assert.match(output, /required-reviews-check/);
-        assert.match(output, /completion-gate/);
+        assert.match(output, /NextCommand:/);
+        assert.match(output, /RevalidateBeforeAction:.*next-step/);
+        assert.ok(!output.includes('PostImplementationCommands:'));
+        assert.ok(!output.includes('build-review-context --review-type "test"'));
+        assert.ok(!output.includes('gate completion-gate'));
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
 });
 
-test('preprompt task --json reuses rule-pack artifacts for exact startup load-rule-pack commands', async () => {
+test('preprompt does not replay historical rule-pack paths as startup instructions', async () => {
     const repoRoot = createTempRepo();
     const taskId = 'T-137';
     try {
@@ -179,15 +523,11 @@ test('preprompt task --json reuses rule-pack artifacts for exact startup load-ru
         assert.equal(result.exitCode, 0);
         const payload = JSON.parse(result.logs.join('\n')) as Record<string, unknown>;
         const startupCommands = ((payload.commands as Record<string, unknown>).startup_commands as string[]);
-        const taskEntryCommand = startupCommands.find((line) => line.includes('load-rule-pack') && line.includes('TASK_ENTRY'));
-        const postPreflightCommand = startupCommands.find((line) => line.includes('load-rule-pack') && line.includes('POST_PREFLIGHT'));
-        assert.ok(taskEntryCommand);
-        assert.ok(postPreflightCommand);
-        assert.match(String(taskEntryCommand), /live\/docs\/agent-rules\/00-core\.md/);
-        assert.match(String(taskEntryCommand), /live\/docs\/agent-rules\/40-commands\.md/);
-        assert.match(String(postPreflightCommand), /live\/docs\/agent-rules\/35-strict-coding-rules\.md/);
-        assert.ok(!String(postPreflightCommand).includes('<task-specific-downstream-rule-file>'));
-        assert.ok(!String(postPreflightCommand).includes('<additional-task-specific-rule-file>'));
+        assert.ok(startupCommands.length <= 1);
+        assert.ok(!startupCommands.some((line) => line.includes('load-rule-pack')));
+        const continuation = payload.continuation as Record<string, unknown>;
+        assert.equal(continuation.status, 'UNKNOWN');
+        assert.equal(continuation.action, null);
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
@@ -215,7 +555,7 @@ test('preprompt task --json does not invent --use-staged for an unstaged-only di
         const payload = JSON.parse(result.logs.join('\n')) as Record<string, unknown>;
         const commands = payload.commands as Record<string, unknown>;
         const startupCommands = commands.startup_commands as string[];
-        assert.ok(startupCommands.some((line) => line.includes('--changed-file "src/<file>"')));
+        assert.ok(startupCommands.length <= 1);
         assert.ok(!startupCommands.some((line) => line.includes('gate classify-change') && line.includes('--use-staged')));
         assert.match(
             String(commands.startup_scope_blocker || ''),
@@ -255,7 +595,7 @@ test('preprompt task text output reports dirty-workspace startup blocker', async
     }
 });
 
-test('preprompt task --json emits --use-staged when staged task scope exists', async () => {
+test('preprompt task --json preserves staged scope diagnostics without queuing future classification', async () => {
     const repoRoot = createTempRepo();
     const taskId = 'T-137';
     try {
@@ -278,7 +618,8 @@ test('preprompt task --json emits --use-staged when staged task scope exists', a
         const payload = JSON.parse(result.logs.join('\n')) as Record<string, unknown>;
         const commands = payload.commands as Record<string, unknown>;
         const startupCommands = commands.startup_commands as string[];
-        assert.ok(startupCommands.some((line) => line.includes('gate classify-change') && line.includes('--use-staged')));
+        assert.ok(startupCommands.length <= 1);
+        assert.ok(!startupCommands.some((line) => line.includes('gate classify-change')));
         assert.equal(commands.startup_scope_blocker, null);
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });

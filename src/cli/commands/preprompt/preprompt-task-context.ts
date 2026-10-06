@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
 import { parseTaskMdTableRow } from '../../../core/task-md-table';
+import { assertCanonicalTaskId } from '../../../core/task-ids';
 import {
     buildTargetBundleRelativePath,
     resolveBundleRootForTarget
@@ -45,20 +46,19 @@ import {
     type OptionalSkillPathEvidenceSource,
     type OptionalSkillSelectionPhase
 } from '../../../runtime/optional-skill-selection';
-import { readActiveProfileHint } from '../../../validators/task-command';
 import { formatStatusSnapshotCompact, getStatusSnapshot } from '../../../validators/status';
 import { getWhyBlocked } from '../../../validators/why-blocked';
+import { buildTaskContextSelection } from './preprompt-task-context-selection';
 import {
     buildOptionalSkillActivationCommand,
     buildOptionalSkillDeclineCommand,
-    buildPostImplementationCommands,
-    buildStartupCommands,
-    buildStartupScopeBlocker,
-    readRulePackStageFilesFromPayload
+    buildTaskContinuation,
+    buildStartupScopeBlocker
 } from './preprompt-task-commands';
 
 const MAX_PREPROMPT_CHANGED_FILES = 12;
 const MAX_PREPROMPT_REVIEW_ARTIFACTS = 12;
+const MAX_PREPROMPT_ARTIFACT_BYTES = 1024 * 1024;
 
 export interface TaskQueueRow {
     id: string;
@@ -119,16 +119,32 @@ export function computeSha256FromText(text: string): string {
     return createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
+function resolveBriefPath(repoRoot: string, filePath: string): string {
+    const confinedPath = resolvePathInsideRepo(filePath, repoRoot, { allowMissing: true, enforceInside: true });
+    if (!confinedPath) {
+        throw new Error('A nonempty repository-confined brief path is required.');
+    }
+    return confinedPath;
+}
+
 export function readJsonArtifactIfExists<T extends Record<string, unknown>>(
     filePath: string,
-    options: { includeSha?: boolean } = {}
+    options: { includeSha?: boolean; repoRoot?: string; taskId?: string } = {}
 ): JsonArtifactReadResult<T> | null {
     try {
-        if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+        if (options.repoRoot) {
+            filePath = resolveBriefPath(options.repoRoot, filePath);
+        }
+        if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()
+            || fs.statSync(filePath).size > MAX_PREPROMPT_ARTIFACT_BYTES) {
             return null;
         }
         const fileText = fs.readFileSync(filePath, 'utf8');
         const payload = JSON.parse(fileText) as T;
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+            || (options.taskId && payload.task_id !== options.taskId)) {
+            return null;
+        }
         return {
             payload,
             sha256: options.includeSha === true ? computeSha256FromText(fileText) : ''
@@ -372,8 +388,8 @@ export function buildProjectMemoryBrief(
 
 export function listTaskArtifacts(targetRoot: string, taskId: string): ExistingTaskArtifacts {
     const bundleRoot = resolveBundleRootForTarget(targetRoot);
-    const reviewsRoot = path.join(bundleRoot, 'runtime', 'reviews');
-    const timelinePath = path.join(bundleRoot, 'runtime', 'task-events', `${taskId}.jsonl`);
+    const reviewsRoot = resolveBriefPath(targetRoot, path.join(bundleRoot, 'runtime', 'reviews'));
+    const timelinePath = resolveBriefPath(targetRoot, path.join(bundleRoot, 'runtime', 'task-events', `${taskId}.jsonl`));
     const reviewArtifacts = fs.existsSync(reviewsRoot) && fs.statSync(reviewsRoot).isDirectory()
         ? fs.readdirSync(reviewsRoot)
             .filter((entry) => entry.startsWith(`${taskId}-`))
@@ -381,7 +397,7 @@ export function listTaskArtifacts(targetRoot: string, taskId: string): ExistingT
                 const absolutePath = path.join(reviewsRoot, entry);
                 let modifiedTimeMs = 0;
                 try {
-                    modifiedTimeMs = fs.statSync(absolutePath).mtimeMs;
+                    modifiedTimeMs = fs.statSync(resolveBriefPath(targetRoot, absolutePath)).mtimeMs;
                 } catch {
                     modifiedTimeMs = 0;
                 }
@@ -408,7 +424,7 @@ export function listTaskArtifacts(targetRoot: string, taskId: string): ExistingT
 }
 
 export function readTaskTimelineEvents(targetRoot: string, taskId: string): string[] {
-    const timelinePath = path.join(resolveBundleRootForTarget(targetRoot), 'runtime', 'task-events', `${taskId}.jsonl`);
+    const timelinePath = resolveBriefPath(targetRoot, path.join(resolveBundleRootForTarget(targetRoot), 'runtime', 'task-events', `${taskId}.jsonl`));
     if (!fs.existsSync(timelinePath) || !fs.statSync(timelinePath).isFile()) {
         return [];
     }
@@ -897,42 +913,18 @@ export function getRequiredReviewTypes(preflightPayload: Record<string, unknown>
         .sort();
 }
 
-export function inferCurrentStage(eventTypes: string[]): string {
-    if (eventTypes.includes('COMPLETION_GATE_PASSED')) {
-        return 'completion_passed';
-    }
-    if (eventTypes.includes('REVIEW_GATE_PASSED') || eventTypes.includes('REVIEW_GATE_PASSED_WITH_OVERRIDE')) {
-        return 'review_passed';
-    }
-    if (eventTypes.includes('COMPILE_GATE_PASSED')) {
-        return 'compiled';
-    }
-    if (eventTypes.includes('PREFLIGHT_CLASSIFIED')) {
-        return 'preflight_ready';
-    }
-    if (eventTypes.includes('SHELL_SMOKE_PREFLIGHT_RECORDED')) {
-        return 'shell_smoke_ready';
-    }
-    if (eventTypes.includes('HANDSHAKE_DIAGNOSTICS_RECORDED')) {
-        return 'handshake_ready';
-    }
-    if (eventTypes.includes('RULE_PACK_LOADED')) {
-        return 'task_entry_rules_loaded';
-    }
-    if (eventTypes.includes('TASK_MODE_ENTERED')) {
-        return 'task_mode_entered';
-    }
-    return 'start_pending';
-}
-
 export function buildTaskBrief(targetRoot: string, taskId: string, initAnswersPath?: string): Record<string, unknown> {
-    const taskPath = path.join(targetRoot, TASK_QUEUE_FILENAME);
+    assertCanonicalTaskId(taskId);
+    const bundleRoot = resolveBundleRootForTarget(targetRoot);
+    resolveBriefPath(targetRoot, path.join(bundleRoot, 'runtime', 'reviews'));
+    resolveBriefPath(targetRoot, path.join(bundleRoot, 'runtime', 'task-events', `${taskId}.jsonl`));
+    const continuation = buildTaskContinuation(targetRoot, taskId);
+    const taskPath = resolveBriefPath(targetRoot, path.join(targetRoot, TASK_QUEUE_FILENAME));
     const taskRow = normalizeTaskRow(taskPath, taskId);
     if (!taskRow) {
         throw new Error(`Task '${taskId}' was not found in TASK.md.`);
     }
 
-    const bundleRoot = resolveBundleRootForTarget(targetRoot);
     const statusSnapshot = getStatusSnapshot(targetRoot, initAnswersPath);
     const workspaceSnapshot = (() => {
         try {
@@ -975,10 +967,8 @@ export function buildTaskBrief(targetRoot: string, taskId: string, initAnswersPa
     const eventTypes = readTaskTimelineEvents(targetRoot, taskId);
     const taskModePath = path.join(bundleRoot, 'runtime', 'reviews', `${taskId}-task-mode.json`);
     const preflightPath = path.join(bundleRoot, 'runtime', 'reviews', `${taskId}-preflight.json`);
-    const taskModeArtifact = readJsonArtifactIfExists<Record<string, unknown>>(taskModePath);
-    const preflightArtifact = readJsonArtifactIfExists<Record<string, unknown>>(preflightPath, { includeSha: true });
-    const rulePackPath = path.join(bundleRoot, 'runtime', 'reviews', `${taskId}-rule-pack.json`);
-    const rulePackArtifact = readJsonArtifactIfExists<Record<string, unknown>>(rulePackPath);
+    const taskModeArtifact = readJsonArtifactIfExists<Record<string, unknown>>(taskModePath, { repoRoot: targetRoot, taskId });
+    const preflightArtifact = readJsonArtifactIfExists<Record<string, unknown>>(preflightPath, { includeSha: true, repoRoot: targetRoot, taskId });
     const taskModePayload = taskModeArtifact?.payload || null;
     const preflightPayload = preflightArtifact?.payload || null;
     const optionalSkillsDiagnostics = buildOptionalSkillsDiagnostics(
@@ -992,60 +982,47 @@ export function buildTaskBrief(targetRoot: string, taskId: string, initAnswersPa
         preflightArtifact?.sha256 || null,
         taskModePayload
     );
-    const activeProfileHint = readActiveProfileHint(bundleRoot);
     const requiredReviewTypes = getRequiredReviewTypes(preflightPayload);
-    const taskEntryRuleFiles = readRulePackStageFilesFromPayload(rulePackArtifact?.payload || null, 'task_entry');
-    const postPreflightRuleFiles = readRulePackStageFilesFromPayload(rulePackArtifact?.payload || null, 'post_preflight');
-    const provider = String(
-        taskModePayload?.provider
-        || statusSnapshot.sourceOfTruth
-        || 'Codex'
-    ).trim() || 'Codex';
-    const effectiveDepth = Number(
-        taskModePayload?.effective_depth
-        || taskModePayload?.requested_depth
-        || activeProfileHint.activeProfileDepth
-        || 2
-    ) || 2;
-    const orchestratorWork = taskModePayload?.orchestrator_work === true;
     const existingChangedFiles = Array.isArray(preflightPayload?.changed_files)
         ? preflightPayload?.changed_files.map((entry) => String(entry)).filter(Boolean)
         : readPlannedChangedFiles(taskModePayload);
     const projectMemory = buildProjectMemoryBrief(targetRoot, bundleRoot, taskRow, existingChangedFiles);
+    const contextSelection = buildTaskContextSelection({
+        continuation,
+        canonicalEntrypoint: statusSnapshot.canonicalEntrypoint,
+        bundlePath: toPortableRepoPath(targetRoot, bundleRoot),
+        optionalSkillPaths: Array.isArray(optionalSkillsDiagnostics?.selected_installed_skill_paths)
+            && !optionalSkillsDiagnostics?.blocker
+            ? optionalSkillsDiagnostics.selected_installed_skill_paths.map(String)
+            : [],
+        projectMemoryReadFirst: projectMemory.read_first
+    });
     const boundedPreflightChangedFiles = boundList(existingChangedFiles, MAX_PREPROMPT_CHANGED_FILES);
     const startupScopeBlocker = buildStartupScopeBlocker(
         existingChangedFiles,
         Number(workspaceSnapshot.changed_files_count || 0),
         Number(stagedWorkspaceSnapshot.changed_files_count || 0)
     );
-    const startupCommands = buildStartupCommands(
-        targetRoot,
-        targetRoot,
-        taskId,
-        taskRow.title,
-        provider,
-        effectiveDepth,
-        orchestratorWork,
-        existingChangedFiles,
-        Number(stagedWorkspaceSnapshot.changed_files_count || 0),
-        taskEntryRuleFiles,
-        postPreflightRuleFiles
-    );
-    const postImplementationCommands = buildPostImplementationCommands(targetRoot, taskId, requiredReviewTypes, effectiveDepth);
+    const startupPending = continuation.next_gate === 'enter-task-mode';
+    const startupCommands = startupPending && continuation.action?.command
+        ? [continuation.action.command]
+        : [];
     const currentTaskBlockers = [
         ...whyBlocked.blocked_tasks,
         ...whyBlocked.in_progress_tasks
     ].filter((entry) => entry.task.id === taskId);
 
     return {
-        schema_version: 2,
+        schema_version: 3,
         command: 'preprompt task',
         rule_search_required: false,
         project_memory: projectMemory,
+        continuation,
+        context_selection: contextSelection,
         task: {
             ...taskRow,
             timeline_event_count: eventTypes.length,
-            current_stage: inferCurrentStage(eventTypes)
+            current_stage: continuation.next_gate || continuation.status.toLowerCase()
         },
         workspace: {
             target_root: targetRoot.replace(/\\/g, '/'),
@@ -1063,6 +1040,7 @@ export function buildTaskBrief(targetRoot: string, taskId: string, initAnswersPa
             preflight_path: buildTargetBundleRelativePath(targetRoot, `runtime/reviews/${taskId}-preflight.json`)
         },
         diagnostics: {
+            artifact_presence_is_advisory: true,
             why_blocked: currentTaskBlockers,
             required_review_types: requiredReviewTypes,
             latest_preflight: preflightPayload ? {
@@ -1083,14 +1061,12 @@ export function buildTaskBrief(targetRoot: string, taskId: string, initAnswersPa
             ...(optionalSkillsDiagnostics ? { optional_skills: optionalSkillsDiagnostics } : {})
         },
         commands: {
-            startup_pending: taskModePayload === null,
-            startup_scope_blocker: taskModePayload === null ? startupScopeBlocker : null,
+            startup_pending: startupPending,
+            startup_scope_blocker: startupPending ? startupScopeBlocker : null,
             startup_commands: startupCommands,
-            post_implementation_sequence_available: preflightPayload !== null,
-            post_implementation_sequence_blocker: preflightPayload === null
-                ? 'No current preflight artifact is available yet, so required review types are still unknown.'
-                : null,
-            post_implementation_commands: preflightPayload ? postImplementationCommands : []
+            post_implementation_sequence_available: false,
+            post_implementation_sequence_blocker: 'Schema 3 replaces command batches with continuation.action; rerun continuation.navigator_command before acting.',
+            post_implementation_commands: []
         }
     };
 }

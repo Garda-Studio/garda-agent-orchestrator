@@ -107,11 +107,14 @@ test('preprompt task --json returns read-only startup context for a queued task'
         assert.equal(Object.hasOwn(payload.diagnostics as Record<string, unknown>, 'optional_skills'), false);
 
         const startupCommands = (payload.commands as Record<string, unknown>).startup_commands as string[];
-        assert.equal(startupCommands.length, 6);
+        assert.equal(payload.schema_version, 3);
+        assert.equal(startupCommands.length, 1);
         assert.ok(startupCommands[0].includes(`--task-id "${taskId}"`));
         assert.ok(startupCommands[0].includes('--provider "Codex"'));
-        assert.ok(startupCommands.some((line) => line.includes('gate classify-change')));
-        assert.ok(startupCommands.some((line) => line.includes('load-rule-pack') && line.includes('POST_PREFLIGHT')));
+        assert.ok(startupCommands[0].includes('gate enter-task-mode'));
+        const continuation = payload.continuation as Record<string, unknown>;
+        assert.equal(continuation.next_gate, 'enter-task-mode');
+        assert.equal(continuation.revalidate_before_action, true);
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }

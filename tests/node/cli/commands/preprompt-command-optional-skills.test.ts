@@ -1295,7 +1295,10 @@ test('preprompt task --json derives optional-skill preview from task-mode planne
         assert.equal(optionalSkills.selected_installed_skill_activation_ready, false);
         assert.match(String(optionalSkills.selected_installed_skill_activation_blocker || ''), /requires a current materialized selection artifact/i);
         assert.deepEqual(optionalSkills.selected_installed_skill_activation_commands, []);
-        assert.ok((commands.startup_commands as string[]).some((entry) => entry.includes('--changed-file "src/api/orders.ts"')));
+        assert.deepEqual(commands.startup_commands, []);
+        const continuation = payload.continuation as Record<string, unknown>;
+        assert.equal(continuation.revalidate_before_action, true);
+        assert.notEqual(continuation.next_gate, 'enter-task-mode');
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }

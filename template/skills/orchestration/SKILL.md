@@ -68,21 +68,8 @@ Create or update plans only for tasks that have never started; retained start ev
   - `depth=2`: load `depth=1` context plus required checklists and only relevant rule sections.
   - default `depth=3` policy: use full reviewer context.
   - if a deployment explicitly includes `3` in `enabled_depths`, keep the full reviewer context and allow only non-scope-reducing compaction (for example stripped examples/code blocks or compact reviewer output).
-- Depth-aware reviewer rule-pack contract when active:
-  - `code` reviewer:
-    - `depth=1`: `00-core.md`, `80-task-workflow.md`, plus rule ids/snippets directly triggered by changed scope.
-    - `depth=2`: `00-core.md`, `35-strict-coding-rules.md`, `50-structure-and-docs.md`, `70-security.md`, `80-task-workflow.md`.
-  - `db` reviewer:
-    - `depth=1`: `00-core.md`, `80-task-workflow.md`, plus DB-triggered rule ids/snippets.
-    - `depth=2`: `00-core.md`, `35-strict-coding-rules.md`, `70-security.md`, `80-task-workflow.md`.
-  - `security` reviewer:
-    - `depth=1`: `00-core.md`, `80-task-workflow.md`, plus security-triggered rule ids/snippets.
-    - `depth=2`: `00-core.md`, `35-strict-coding-rules.md`, `70-security.md`, `80-task-workflow.md`.
-  - `refactor` reviewer:
-    - `depth=1`: `00-core.md`, `80-task-workflow.md`, plus refactor-triggered rule ids/snippets.
-    - `depth=2`: `00-core.md`, `30-code-style.md`, `35-strict-coding-rules.md`, `50-structure-and-docs.md`, `80-task-workflow.md`.
-  - default `depth=3` policy or token economy disabled: full reviewer rule packs.
-  - if a deployment explicitly includes `3` in `enabled_depths`, keep full reviewer rule packs and allow only non-scope-reducing compaction.
+- Fresh reviewer repository-rule read sets remain empty for every lane and depth. Controller context selection never becomes a reviewer rule bundle.
+- The exact generated launch input supplies the required review skill, its required references, task scope, checklists, context, diff, evidence and output contract. These remain mandatory even when controller implementation skills are deferred.
 - Context trimming when active:
   - `strip_examples=true`: remove examples from generated reviewer rule-context markdown snapshot.
   - `strip_code_blocks=true`: remove code blocks from generated reviewer rule-context markdown snapshot.
@@ -95,20 +82,29 @@ Create or update plans only for tasks that have never started; retained start ev
   - generate reviewer context artifact before reviewer launch:
     - Node: `node garda-agent-orchestrator/bin/garda.js gate build-review-context --review-type "<review-type>" --depth "<1|2|3>" --preflight-path "garda-agent-orchestrator/runtime/reviews/<task-id>-preflight.json" --scoped-diff-metadata-path "garda-agent-orchestrator/runtime/reviews/<task-id>-<review-type>-scoped.json" --output-path "garda-agent-orchestrator/runtime/reviews/<task-id>-<review-type>-review-context.json"`
   - JSON artifact must record selected rule pack, omitted sections, `deferred_by_depth` reason when applicable, scoped-diff fallback evidence, and nested `rule_context.*` metadata for the generated markdown snapshot.
-  - sibling markdown snapshot (`rule_context.artifact_path`) is the preferred prompt payload for reviewer rule text when token economy mode is active.
+  - generated context and launch input own reviewer instructions; retained rule-context metadata does not authorize adding controller rule files to the reviewer prompt.
 - Compact reviewer output contract when active:
   - if `compact_reviewer_output=true`, keep the complete findings-only JSON schema and coverage ledger while shortening only free-text evidence.
   - on failed command/test evidence, cap pasted tail output to `fail_tail_lines`.
   - review/completion gates audit compactness best-effort and emit warnings when reviewer artifacts exceed compact budgets.
 
+## Phase-Scoped Resume Context
+
+- `preprompt task` selects an advisory controller read set from its current pure navigator projection: `implementation`, `review_orchestration`, `docs_memory_closeout`, or `completion`. It does not execute gates, choose a manual phase or turn historical events into current authority.
+- Read the canonical entrypoint, core constraints, current task row and Notes, frozen attached-plan criteria and the named controller sources. A named section ends at the next Markdown heading; `*` means the full file. If a selected section is unavailable in an older deployment, read the full source and implementation context before acting. Applicable linked references and task-specific constraints remain required.
+- Before acting, rerun `context_selection.navigator_command` and follow the current single action. If its phase changes, load the newly applicable instructions first. Old `RULE_PACK_LOADED` evidence does not prove that a fresh session knows those instructions; satisfy any current navigator-directed rule-pack read and recording.
+- Unknown or stale state falls back to sufficient implementation instructions. Before any source or test modification, load `before_code_edit_read_set` and the applicable references of selected implementation skills, including after a new failure or requested code change during review or closeout. A narrow late-phase read set is never permission to edit with missing implementation context.
+- Review controllers retain the exact launch/start/completion/invocation/result/receipt sequence, dependency barriers and cleanup. Fresh reviewers receive only the exact prepared launch input, required skill and generated context; repository-rule read sets remain empty and never inherit controller instructions.
+- Docs and memory writes retain their normal scope and operator authorization. Completion retains the canonical audit and verbatim final-report order. Context selection never waives compile, full-suite, independent review, currentness, approval or task-scope requirements.
+
 ## Task Resume Protocol
 - When resuming a task already in `IN_PROGRESS` or `IN_REVIEW`, treat resume as full orchestration execution.
 - Mandatory resume sequence:
-  1. Re-read `AGENTS.md` routing, `00-core.md`, and this orchestration skill before any edits.
-  2. Re-open current task row in `TASK.md` and latest artifacts in `runtime/reviews/` plus timeline `runtime/task-events/<task-id>.jsonl`.
+  1. Re-read canonical routing, `00-core.md`, the current task row and frozen attached criteria, then follow Phase-Scoped Resume Context.
+  2. Read the current `context_selection.controller_read_set` and relevant task evidence. Read implementation instructions before any code edit; historical rule-pack receipts are not session knowledge.
   3. Run `node garda-agent-orchestrator/bin/garda.js next-step "<task-id>" --repo-root "."` and follow only its single recommended command.
   4. Continue from current stage, but do not skip compile/review/completion gates.
-  5. Final report contract remains mandatory on resume: review integrity attestation -> implementation summary -> commit command -> explicit commit question.
+  5. Final report contract remains mandatory on resume: short implementation summary -> verbatim generated Garda user report -> only the commit command and permission question listed by `FinalReportOrder`.
 
 ## Task Start Contract
 - The canonical user command is: ``Execute task <task-id> from TASK.md strictly through the orchestrator. Use `next-step` as the navigator; when independent review is required, launch a sub-agent using your internal tools.``
@@ -180,7 +176,7 @@ Create or update plans only for tasks that have never started; retained start ev
     - if runtime identity is missing, contradictory, still relies on canonical SourceOfTruth fallback, or does not attest launchable reviewer subagents, rerun `enter-task-mode` with explicit runtime identity before `handshake-diagnostics` or `build-review-context`.
     - baseline: `code`, `db`, `security`, `refactor`
     - optional when enabled in `garda-agent-orchestrator/live/config/review-capabilities.json`: `api`, `test`, `performance`, `infra`, `dependency`
-    - when token economy mode is active, generate review-context artifact and attach both the JSON metadata artifact and its `rule_context.artifact_path` markdown snapshot to the reviewer prompt.
+    - generate the required review context and pass the exact prepared launch input; do not append controller rule files or reconstruct a prompt.
     - when `scoped_diffs=true` and required reviewer is `db`, `security`, or `refactor`, run scoped diff helper and attach scoped artifact path plus scoped metadata fallback flag to reviewer prompt.
     - Log event per reviewer invocation: `REVIEW_REQUESTED`.
 18. Run `required-reviews-check` and treat result as release gate when `next-step` requests it.
@@ -268,8 +264,8 @@ Create or update plans only for tasks that have never started; retained start ev
      - changed files list from preflight artifact;
      - diff summary (or exact staged diff if available);
      - mandatory skill path for this review type;
-     - explicit rule-context package paths selected for this reviewer/depth (do not include non-selected rule files while token economy mode is active);
-     - review-context artifact path (`garda-agent-orchestrator/runtime/reviews/<task-id>-<review-type>-review-context.json`) and nested markdown snapshot from `rule_context.artifact_path`; this artifact is mandatory lifecycle evidence even when token economy mode is inactive;
+     - exact generated launch-input paths for role, prompt, output template, evidence manifest and required review skill; repository-rule read sets stay empty;
+     - generated review-context artifact path (`garda-agent-orchestrator/runtime/reviews/<task-id>-<review-type>-review-context.json`); it remains mandatory lifecycle evidence even when token economy mode is inactive;
      - token economy flags when active (`depth`, `compact_reviewer_output`, `strip_examples`, `strip_code_blocks`);
       - for `db` / `security` / `refactor` required reviews when scoped diffs are enabled: scoped artifact produced by `node garda-agent-orchestrator/bin/garda.js gate build-scoped-diff`, with scoped metadata artifact and full-diff fallback when helper reports empty scope;
       - required output contract:

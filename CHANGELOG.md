@@ -17,6 +17,22 @@
 - Preserve attached and clustered `env` option operands when locating its delegated program; reject actual split-string dispatch without mistaking operand text for an option. Validate full-suite argument syntax with the shared executor parser before execution. Preserve ordinary unquoted dollar signs, parentheses and backticks as literal direct argv, alongside quoted control operators and empty direct-program arguments.
 - Bound each chain's aggregate output payload to 40 MiB plus a diagnostic truncation marker using the existing UTF-8 head/tail capture and final redaction. Local validation covers Windows and Linux Node 24; WSL host invocation is checked on Windows, and macOS is unverified.
 
+- Select advisory controller instruction reads by the current preprompt continuation phase. Defer implementation skills during verified review and closeout, restore implementation context before edits, retain unknown-state fallback and mandatory gate protocols, and keep fresh reviewer rule bundles empty.
+
+- Give required non-test review lanes concrete coverage for authored test-only changes and bind those test bytes in freshness and reuse. Preserve mixed-runtime and documentation scope ownership, frozen test classification, staged index snapshots, excluded closeout paths and concrete findings evidence validation.
+
+- Build schema 3 preprompt continuation from the current validated read-only navigator. Replace historical PASS stage inference and startup/review command batches with one advisory action that must be revalidated before use; retain bounded diagnostics and reject foreign-task or escaped artifact reads.
+
+- Document the current preprompt/resume context audit, bounded output measurements and the implementation plan for phase-dependent controller reads. Distinguish proposed presentation fixtures from implemented behavior, retain fresh reviewer skills and trust evidence, and separate selected-provider output size from unmeasured client instruction loads and token usage.
+
+- Show a bounded readable English task-event history in the local dashboard, including ordered times, review attempts and older or resumed cycles. Original details and projected JSON can be expanded, the guarded source-file link retains full history access, and truncated or incomplete histories are marked. Surrounding controls reuse the installed UI language packs.
+
+- Display existing task reports from both root-level runtime and deployed bundle layouts, preserving recognized bundle-directory casing in raw-file links. Browser validation still binds the exact report filename to the selected task; focused client regressions independently check foreign task IDs and paths, payload types, and text/diagnostic limits.
+
+- Recognize direct negative-test assertions after validated regex literals, including quotes, character classes and escaped slashes, while preserving division tokens and rejecting malformed expressions or assertions embedded in inert, conditional or nested code. Use the bundled TypeScript parser to identify literals, nested method bodies and syntax errors, including generic-instantiation division and executable template substitutions; validate regex patterns and complete flags without executing matches. Builds retain the parser's license and notices, and load it only when checking test evidence. Evidence references and exact test-name requirements remain unchanged.
+
+- Task details can lazily display the existing final user report with localized controls, an explicit current summary, honest missing/stale/legacy states and original text preserved as plain text. `GET /api/tasks/<task-id>/final-report` reuses the same-origin file token boundary, requires a known canonical task, reads only its canonical report up to 256 KiB and returns read-only state/text/path/hash/diagnostics; raw report and existing evidence remain accessible.
+
 - Show a localized task progress card in loaded task details, with recorded stages, blockers, final-report availability and a copyable next command; preserve raw diagnostics and existing guarded actions.
 
 - Expose bounded task progress, the current navigator action, validated final-report availability and task-owned evidence references through lazy task details without executing lifecycle actions.

@@ -30,6 +30,7 @@ import {
 import { readCanonicalActiveQueueRows } from './task-queue';
 import { buildTaskQualityChecklist, withQualityChecklistArtifactLink } from './task-quality-checklist';
 import { buildTaskProgress } from './task-progress';
+import { buildReportTaskTimeline, type ReportTaskTimeline } from './task-timeline';
 import type {
     BuildReportTaskDetailOptions,
     ReportArtifactLink,
@@ -48,13 +49,13 @@ import {
 
 const TERMINAL_TASK_STATUS_TOKENS = new Set(['DONE']);
 
-function readLatestCycleEvents(
+function readTaskEventViews(
     taskId: string,
     repoRoot: string,
     eventsRoot: string,
     reviewsRoot: string,
     unavailable: ReportDataUnavailableEntry[]
-): CompactLatestCycleTaskEventsSummary | null {
+): { latestCycle: CompactLatestCycleTaskEventsSummary | null; timeline: ReportTaskTimeline | null } {
     try {
         const summary = buildTaskEventsSummary({
             taskId,
@@ -62,13 +63,17 @@ function readLatestCycleEvents(
             repoRoot,
             reviewsRoot
         }) as TaskEventsSummaryResult;
-        return buildCompactLatestCycleTaskEventsSummary(summary);
+        const latestCycle = buildCompactLatestCycleTaskEventsSummary(summary);
+        return {
+            latestCycle,
+            timeline: buildReportTaskTimeline(summary, toPosix(path.relative(repoRoot, summary.source_path)), latestCycle)
+        };
     } catch (error: unknown) {
         unavailable.push({
             scope: `task:${taskId}:events`,
             reason: error instanceof Error ? error.message : String(error)
         });
-        return null;
+        return { latestCycle: null, timeline: null };
     }
 }
 
@@ -624,13 +629,15 @@ export function buildReportTaskDetail(options: BuildReportTaskDetailOptions): Re
         reviewsRoot,
         workspaceSnapshotRequest
     );
+    const eventViews = readTaskEventViews(taskId, repoRoot, eventsRoot, reviewsRoot, unavailable);
 
     return {
         task_id: taskId,
         detail_status: 'loaded',
         progress: buildTaskProgress({ repoRoot, taskId, eventsRoot, reviewsRoot, taskKnown: !!queueRow, audit }),
         stats,
-        latest_cycle_events: readLatestCycleEvents(taskId, repoRoot, eventsRoot, reviewsRoot, unavailable),
+        latest_cycle_events: eventViews.latestCycle,
+        timeline: eventViews.timeline,
         full_suite_validation: buildFullSuiteSummary(taskId, repoRoot, eventsRoot, reviewsRoot),
         review_follow_up_task_closure_policy: buildTaskClosurePolicyDetail(
             queueRow,
@@ -663,6 +670,7 @@ export function buildSkippedTaskDetail(taskId: string, maxDetailedTasks: number)
         progress: null,
         stats: null,
         latest_cycle_events: null,
+        timeline: null,
         full_suite_validation: {
             state: 'not_required',
             freshness: 'not_required',
