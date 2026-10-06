@@ -2,6 +2,10 @@
 
 ## 1.4.4
 
+### Legacy Review Verdicts
+
+- Reject conflicting legacy PASS/FAIL outcomes and token examples before they can be treated as review authority. Preserve unambiguous canonical verdicts, supported code-review aliases and the modern findings-only JSON contract.
+
 ### Automatic Cleanup Defaults
 
 - Apply retention-approved daily cleanup by default in new installations, retain the UI preview switch and optional confirmation safeguard, and show the effective scheduled mode. Preserve existing preview settings, legacy compatibility, protected evidence and explicit confirmation for manual cleanup.
