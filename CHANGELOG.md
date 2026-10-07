@@ -1,5 +1,9 @@
 # Changelog
 
+- Bound output-pipe draining after interrupted subprocess exit when detached
+  descendants retain inherited handles. Preserve the direct child's exit status,
+  collected output and existing process-tree termination safeguards.
+
 - Resolve the Windows batch command processor to the trusted system location
   when ComSpec is unset or blank. Require configured paths to be fully qualified
   existing files, without falling back to working-directory or PATH lookup.

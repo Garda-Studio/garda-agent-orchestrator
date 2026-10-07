@@ -966,6 +966,71 @@ export function buildWindowsBatchCommandLine(executablePath: string, args: reado
     return commandParts.join(' ');
 }
 
+function attachDecodedOutput(
+    readable: ChildProcess['stdout'],
+    capture: ReturnType<typeof createOutputCapture>,
+    callback?: (chunk: string) => void
+): () => void {
+    const decoder = new StringDecoder('utf8');
+    let finished = false;
+    function finish(): void {
+        if (finished) return;
+        finished = true;
+        readable?.removeListener('end', finish);
+        readable?.removeListener('close', finish);
+        const remainder = decoder.end();
+        capture.append(remainder);
+        if (remainder) callback?.(remainder);
+    }
+    readable?.on('data', function (chunk: Buffer | string) {
+        if (finished) return;
+        const text = decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        capture.append(text);
+        if (text) callback?.(text);
+    });
+    readable?.once('end', finish);
+    readable?.once('close', finish);
+    return finish;
+}
+
+function createInterruptedPipeDrain(child: ChildProcess): {
+    interrupt: () => void;
+    wasDrained: (stream: 'stdout' | 'stderr') => boolean;
+    dispose: () => void;
+} {
+    let interrupted = false;
+    let drainTimer: ReturnType<typeof setTimeout> | null = null;
+    const drainedStreams = new Set<'stdout' | 'stderr'>();
+    function armDrain(): void {
+        if (!interrupted || drainTimer || (child.exitCode === null && child.signalCode === null)) return;
+        // A detached descendant can retain these handles after the direct child
+        // exits. Bound interrupted draining without inventing a child exit status.
+        drainTimer = setTimeout(function () {
+            for (const stream of ['stdout', 'stderr'] as const) {
+                const readable = child[stream];
+                if (readable && !readable.destroyed) {
+                    drainedStreams.add(stream);
+                    readable.destroy();
+                }
+            }
+        }, SUBPROCESS_TERMINATION_TIMEOUT_MS);
+    }
+    child.once('exit', armDrain);
+    return {
+        interrupt(): void {
+            interrupted = true;
+            armDrain();
+        },
+        wasDrained(stream): boolean {
+            return drainedStreams.has(stream);
+        },
+        dispose(): void {
+            child.removeListener('exit', armDrain);
+            if (drainTimer) clearTimeout(drainTimer);
+        }
+    };
+}
+
 export function spawnStreamed(command: string, args: string[], options?: SpawnStreamedOptions): Promise<SpawnStreamedResult> {
     const opts = options || {};
     const cwd = opts.cwd || process.cwd();
@@ -1003,6 +1068,7 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
         const stderrCapture = createOutputCapture(maxBuffer, opts.capturePolicy);
         let sinkError: string | undefined;
         const sinkReads: Promise<void>[] = [];
+        const finishCaptures: Array<() => void> = [];
         let sinkQueue = Promise.resolve();
         const sinkController = new AbortController();
         function awaitSink(write: Promise<void>): Promise<void> {
@@ -1034,6 +1100,7 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
         const creationWindowStartUtcMs = performance.timeOrigin + performance.now();
         const child: ChildProcess = childProcess.spawn(command, args, spawnOpts);
         const managedChild = registerManagedChild(child, creationWindowStartUtcMs);
+        const pipeDrain = createInterruptedPipeDrain(child);
         notifySpawnedProcess(opts.onSpawn, {
             pid: child.pid ?? null,
             command,
@@ -1042,6 +1109,7 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
         });
 
         function cleanup(): void {
+            pipeDrain.dispose();
             if (timeoutHandle) {
                 clearTimeout(timeoutHandle);
                 timeoutHandle = null;
@@ -1053,6 +1121,7 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
         }
 
         function killChild(force = false): void {
+            pipeDrain.interrupt();
             void terminateManagedChild(managedChild, force);
         }
 
@@ -1102,18 +1171,27 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
                 const decoder = new StringDecoder('utf8');
                 const capture = stream === 'stdout' ? stdoutCapture : stderrCapture;
                 const callback = stream === 'stdout' ? opts.onStdout : opts.onStderr;
+                let awaitingChunk = true;
                 try {
-                    for await (const chunk of readable) {
-                        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-                        const text = decoder.write(bytes);
-                        capture.append(text);
-                        callback?.(text);
-                        const write = sinkQueue.then(() => {
-                            sinkController.signal.throwIfAborted();
-                            return sink.write(stream, bytes, sinkController.signal);
-                        });
-                        sinkQueue = write.catch(() => undefined);
-                        await awaitSink(write);
+                    try {
+                        for await (const chunk of readable) {
+                            awaitingChunk = false;
+                            const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+                            const text = decoder.write(bytes);
+                            capture.append(text);
+                            callback?.(text);
+                            const write = sinkQueue.then(() => {
+                                sinkController.signal.throwIfAborted();
+                                return sink.write(stream, bytes, sinkController.signal);
+                            });
+                            sinkQueue = write.catch(() => undefined);
+                            await awaitSink(write);
+                            awaitingChunk = true;
+                        }
+                    } catch (error) {
+                        const drainedClose = awaitingChunk && pipeDrain.wasDrained(stream)
+                            && (error as NodeJS.ErrnoException)?.code === 'ERR_STREAM_PREMATURE_CLOSE';
+                        if (!drainedClose) throw error;
                     }
                     const remainder = decoder.end();
                     capture.append(remainder);
@@ -1126,28 +1204,13 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
             };
             sinkReads.push(consume('stdout'), consume('stderr'));
         } else if (!inheritStdio) {
-            if (child.stdout) {
-                child.stdout.setEncoding('utf8');
-                child.stdout.on('data', function (chunk: string) {
-                    stdoutCapture.append(chunk);
-                    if (opts.onStdout) {
-                        opts.onStdout(chunk);
-                    }
-                });
-            }
-            if (child.stderr) {
-                child.stderr.setEncoding('utf8');
-                child.stderr.on('data', function (chunk: string) {
-                    stderrCapture.append(chunk);
-                    if (opts.onStderr) {
-                        opts.onStderr(chunk);
-                    }
-                });
-            }
+            finishCaptures.push(attachDecodedOutput(child.stdout, stdoutCapture, opts.onStdout));
+            finishCaptures.push(attachDecodedOutput(child.stderr, stderrCapture, opts.onStderr));
         }
 
         child.once('close', async function (code: number | null) {
             await Promise.all(sinkReads);
+            for (const finish of finishCaptures) finish();
             const stdout = stdoutCapture.finish();
             const stderr = stderrCapture.finish();
             settle({
@@ -1254,6 +1317,7 @@ export function spawnShellCommand(
         const creationWindowStartUtcMs = performance.timeOrigin + performance.now();
         const child: ChildProcess = childProcess.spawn(shellCommand, shellArgs, spawnOptions);
         const managedChild = registerManagedChild(child, creationWindowStartUtcMs);
+        const pipeDrain = createInterruptedPipeDrain(child);
         notifySpawnedProcess(opts.onSpawn, {
             pid: child.pid ?? null,
             command: shellCommand,
@@ -1262,6 +1326,7 @@ export function spawnShellCommand(
         });
 
         function cleanup(): void {
+            pipeDrain.dispose();
             if (timeoutHandle) {
                 clearTimeout(timeoutHandle);
                 timeoutHandle = null;
@@ -1273,6 +1338,7 @@ export function spawnShellCommand(
         }
 
         function killChild(force = false): void {
+            pipeDrain.interrupt();
             void terminateManagedChild(managedChild, force);
         }
 
@@ -1308,26 +1374,12 @@ export function spawnShellCommand(
             reject(error);
         });
 
-        if (child.stdout) {
-            child.stdout.setEncoding('utf8');
-            child.stdout.on('data', function (chunk: string) {
-                stdoutCapture.append(chunk);
-                if (opts.onStdout) {
-                    opts.onStdout(chunk);
-                }
-            });
-        }
-        if (child.stderr) {
-            child.stderr.setEncoding('utf8');
-            child.stderr.on('data', function (chunk: string) {
-                stderrCapture.append(chunk);
-                if (opts.onStderr) {
-                    opts.onStderr(chunk);
-                }
-            });
-        }
+        const finishStdout = attachDecodedOutput(child.stdout, stdoutCapture, opts.onStdout);
+        const finishStderr = attachDecodedOutput(child.stderr, stderrCapture, opts.onStderr);
 
         child.once('close', function (code: number | null) {
+            finishStdout();
+            finishStderr();
             const stdout = stdoutCapture.finish();
             const stderr = stderrCapture.finish();
             settle({

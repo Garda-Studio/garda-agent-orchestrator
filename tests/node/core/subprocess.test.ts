@@ -66,6 +66,123 @@ function createNodeBatchFixture(scriptSource = 'console.log("shelltest")'): { sc
     };
 }
 
+function createRetainedPipeFixture(): { scriptPath: string; batchPath: string; pidPath: string; cleanup: () => Promise<void> } {
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-retained-pipes-'));
+    const scriptPath = path.join(fixtureRoot, 'parent.js');
+    const descendantPath = path.join(fixtureRoot, 'descendant.js');
+    const batchPath = path.join(fixtureRoot, 'run-parent.cmd');
+    const pidPath = path.join(fixtureRoot, 'descendant.pid');
+    fs.writeFileSync(descendantPath, [
+        'const fs = require("node:fs");',
+        `const pidPath = ${JSON.stringify(pidPath)};`,
+        'fs.writeFileSync(pidPath + ".tmp", String(process.pid));',
+        'fs.renameSync(pidPath + ".tmp", pidPath);',
+        'process.stdout.write("descendant-ready\\n");',
+        'process.stdout.write(Buffer.from([0xe2]));',
+        'process.stderr.write(Buffer.from([0xe2]));',
+        'setTimeout(() => {}, 60_000);'
+    ].join('\n'));
+    fs.writeFileSync(scriptPath, [
+        'const { spawn } = require("node:child_process");',
+        `const descendant = spawn(process.execPath, [${JSON.stringify(descendantPath)}], {`,
+        '    detached: true, windowsHide: true, stdio: ["ignore", "inherit", "inherit"]',
+        '});',
+        'descendant.unref();',
+        'process.stdout.write("parent-output\\n");',
+        'process.stderr.write("parent-error\\n");',
+        'process.exitCode = 7;'
+    ].join('\n'));
+    fs.writeFileSync(batchPath, `@echo off\r\n"${process.execPath}" "${scriptPath}"\r\nexit /b %errorlevel%\r\n`);
+    return {
+        scriptPath,
+        batchPath,
+        pidPath,
+        async cleanup() {
+            if (fs.existsSync(pidPath)) {
+                const pid = Number(fs.readFileSync(pidPath, 'utf8'));
+                if (Number.isInteger(pid) && pid > 0 && isProcessAlive(pid)) {
+                    try { process.kill(pid, 'SIGKILL'); } catch { /* Fixture already exited. */ }
+                    await waitForProcessExit(pid);
+                }
+            }
+            fs.rmSync(fixtureRoot, { recursive: true, force: true });
+        }
+    };
+}
+
+describe('retained descendant pipes', () => {
+    const timeoutMs = 1_500;
+    const schedulingMarginMs = 2_500;
+    for (const mode of ['streamed', 'streamed-sink', 'shell'] as const) {
+        for (const interruption of ['timeout', 'cancel'] as const) {
+            it(`${mode} settles after ${interruption} despite retained descendant pipes`, {
+                skip: mode === 'shell' && process.platform !== 'win32'
+            }, async () => {
+                const fixture = createRetainedPipeFixture();
+                const controller = new AbortController();
+                let parentPid: number | null = null;
+                let settled = false;
+                let observedStdout = '';
+                let observedStderr = '';
+                let watchdog: ReturnType<typeof setTimeout> | undefined;
+                const startedAt = performance.now();
+                const options = {
+                    timeoutMs: interruption === 'timeout' ? timeoutMs : 0,
+                    signal: controller.signal,
+                    onSpawn(info: { pid: number | null }) { parentPid = info.pid; },
+                    onStdout(chunk: string) { observedStdout += chunk; },
+                    onStderr(chunk: string) { observedStderr += chunk; }
+                };
+                const pending = mode === 'shell'
+                    ? spawnShellCommand(fixture.batchPath, [], options)
+                    : spawnStreamed(process.execPath, [fixture.scriptPath], {
+                        ...options,
+                        ...(mode === 'streamed-sink' ? { outputSink: { async write() {} } } : {})
+                    });
+                void pending.then(() => { settled = true; }, () => { settled = true; });
+                const boundMs = timeoutMs + SUBPROCESS_TERMINATION_TIMEOUT_MS + schedulingMarginMs;
+                const bounded = Promise.race([
+                    pending,
+                    new Promise<never>((_resolve, reject) => {
+                        watchdog = setTimeout(() => reject(new Error('Subprocess did not settle within the retained-pipe bound.')), boundMs);
+                    })
+                ]);
+                void bounded.catch(() => undefined);
+                try {
+                    assert.equal(await waitForFile(fixture.pidPath), true, 'detached descendant must start');
+                    assert.ok(parentPid !== null);
+                    assert.equal(await waitForProcessExit(parentPid), true, 'direct child must have exited');
+                    const descendantPid = Number(fs.readFileSync(fixture.pidPath, 'utf8'));
+                    assert.equal(isProcessAlive(descendantPid), true, 'descendant must still hold inherited pipes');
+                    assert.equal(settled, false, 'the fixture must delay close before interruption');
+                    if (interruption === 'cancel') controller.abort();
+                    const result = await bounded;
+                    assert.equal(result.sinkError, undefined, 'successful sink writes must not report an intentional pipe-close error');
+                    assert.equal(result.exitCode, 7);
+                    assert.match(result.stdout, /parent-output/);
+                    assert.match(result.stdout, /descendant-ready/);
+                    assert.match(result.stderr, /parent-error/);
+                    assert.equal(result.timedOut, interruption === 'timeout');
+                    assert.equal(result.cancelled, interruption === 'cancel');
+                    assert.equal(result.stdoutOriginalBytes, Buffer.byteLength(result.stdout));
+                    assert.equal(result.stderrOriginalBytes, Buffer.byteLength(result.stderr));
+                    assert.equal(result.stdoutTruncated, false);
+                    assert.equal(result.stderrTruncated, false);
+                    assert.equal(result.stdout, observedStdout);
+                    assert.equal(result.stderr, observedStderr);
+                    assert.equal(result.stdout.at(-1), '\ufffd');
+                    assert.equal(result.stderr.at(-1), '\ufffd');
+                    assert.ok(performance.now() - startedAt < boundMs);
+                } finally {
+                    if (watchdog) clearTimeout(watchdog);
+                    await fixture.cleanup();
+                    await pending.catch(() => undefined);
+                }
+            });
+        }
+    }
+});
+
 describe('spawnStreamed', () => {
     it('shares one termination listener across concurrent children and removes it when idle', async () => {
         const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
