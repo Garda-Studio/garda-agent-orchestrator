@@ -1,5 +1,8 @@
 # Changelog
 
+- Preserve mandatory code review and explicit review intent for unfamiliar project
+  sources, including mixed documentation changes and the frozen fast-profile code floor.
+
 - Require explicit semantic exit codes for optional Git queries, preserve process
   failure causes, and verify a genuinely unborn HEAD before treating its tree as empty.
 

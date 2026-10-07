@@ -32,6 +32,33 @@ function classifyRuntimeIntent(
 }
 
 describe('security review task-intent classification', () => {
+    it('keeps explicit security review intent on unfamiliar source outside runtime roots', () => {
+        const result = classifyRuntimeIntent(
+            'Require security review for trust boundary validation',
+            defaultCapabilities,
+            ['module/parser.custom']
+        );
+
+        assert.equal(result.scope_category, 'code');
+        assert.equal(result.triggers.security_intent, true);
+        assert.equal(result.required_reviews.security, true);
+        assert.equal(result.required_reviews.code, true);
+        assert.equal(result.triggers.runtime_code_changed, false);
+    });
+
+    it('rejects security review downgrade for unfamiliar source mixed with ordinary documentation', () => {
+        const result = classifyRuntimeIntent(
+            '[security] Follow up high F-001: Reject forged source evidence',
+            defaultCapabilities,
+            ['project/validator', 'README.md']
+        );
+
+        assert.equal(result.scope_category, 'mixed');
+        assert.equal(result.triggers.security_intent, true);
+        assert.equal(result.required_reviews.security, true);
+        assert.equal(result.required_reviews.code, true);
+    });
+
     it('recognizes the exact structured follow-up shape that created T-979-17-F1', () => {
         const taskIntent =
             '[security] Follow up medium F-001: Dirty-baseline command scope preserves outside-root paths';

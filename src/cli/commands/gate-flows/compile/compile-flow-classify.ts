@@ -152,6 +152,17 @@ function reconcileProfileGuardrailsWithRequiredReviews(
     };
 }
 
+function requiresCodeReviewSafetyFloor(
+    result: ClassifyChangeResult,
+    policy: ReturnType<typeof resolveTaskProfileSelection>['effective_policy'] | null
+): boolean {
+    return result.mode === 'FULL_PATH'
+        && (result.scope_category === 'code' || result.scope_category === 'mixed')
+        && policy?.guardrail_diagnostics?.is_code_changing_task === true
+        && policy.guardrail_diagnostics.decisions.some(decision =>
+            decision.review_type === 'code' && decision.effective_value === true);
+}
+
 export function applyEffectiveTaskPolicyToPreflightResult(
     result: ClassifyChangeResult,
     effectiveTaskPolicy: ReturnType<typeof resolveTaskProfileSelection>['effective_policy']
@@ -159,6 +170,7 @@ export function applyEffectiveTaskPolicyToPreflightResult(
     const guardrailDecisions = new Map(
         (effectiveTaskPolicy.guardrail_diagnostics?.decisions || []).map((decision) => [decision.review_type, decision])
     );
+    const codeReviewSafetyFloor = requiresCodeReviewSafetyFloor(result, effectiveTaskPolicy);
     for (const [reviewType, currentValue] of Object.entries(result.required_reviews)) {
         const guardrailDecision = guardrailDecisions.get(reviewType);
         if (guardrailDecision?.decision === 'zero_diff_no_reviewable_scope') {
@@ -171,6 +183,7 @@ export function applyEffectiveTaskPolicyToPreflightResult(
                 guardrailDecision.profile_wanted === true
                 || guardrailDecision.decision === 'profile_forced'
                 || guardrailDecision.decision === 'domain_triggered'
+                || (reviewType === 'code' && codeReviewSafetyFloor)
             )
         ) {
             result.required_reviews[reviewType] = true;
@@ -1093,6 +1106,7 @@ export function runClassifyChangeCommand(options: ClassifyChangeCommandOptions):
                 profileSnapshotSha256: taskProfileSnapshot?.snapshot_hash
                     || legacyCompatibilityBinding!.profile_snapshot_sha256,
                 legacyRequiredReviews: result.required_reviews,
+                codeReviewSafetyFloor: requiresCodeReviewSafetyFloor(result, effectiveTaskPolicy),
                 taskRequiredReviewIds: result.task_required_review_declaration?.applied_reviews,
                 scopeCategory: result.scope_category,
                 taskIntent: resolveEffectiveReviewTaskIntent(options.taskIntent, currentTaskSummary),

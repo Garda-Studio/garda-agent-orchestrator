@@ -232,6 +232,37 @@ function buildSnapshot(
     });
 }
 
+test('rejects disabled frozen security lanes for explicit security intent', () => {
+    const input = { taskTriggers: { security_intent: true }, legacyRequiredReviews: { code: true, security: true } };
+    assert.throws(() => buildSnapshot(false, input, { profileOverrides: { security: false } }), /security-review intent/);
+    const snapshot = buildSnapshot(false, input);
+    assert.equal(snapshot.required_reviews.security, true);
+    assert.deepEqual(getEffectiveReviewSnapshotViolations(snapshot), []);
+    const ordinary = buildSnapshot(false, { taskTriggers: {}, legacyRequiredReviews: { security: true } },
+        { profileOverrides: { security: false } });
+    assert.equal(ordinary.required_reviews.security, false);
+});
+
+test('rejects rehashed security-intent snapshots that remove required review', () => {
+    const snapshot = JSON.parse(JSON.stringify(buildSnapshot(false, {
+        taskTriggers: { security_intent: true }, legacyRequiredReviews: { code: true, security: true },
+        reviewExecutionPolicyMode: 'strict_sequential'
+    }))) as Record<string, unknown>;
+    const lanes = snapshot.lanes as Record<string, unknown>[];
+    const security = lanes.find(lane => lane.id === 'security')!;
+    Object.assign(security, { selection: 'inactive', trigger_reasons: [], inactive_reasons: ['profile_disabled'] });
+    Object.assign(security.profile as Record<string, unknown>, {
+        state: 'disabled', active: false, inactive_reason: 'profile_disabled'
+    });
+    snapshot.required_review_ids = (snapshot.required_review_ids as string[]).filter(id => id !== 'security');
+    (snapshot.required_reviews as Record<string, boolean>).security = false;
+    (snapshot.optional_reviews as Record<string, boolean>).security = false;
+    suppressReviewInDependencyGraph(snapshot, 'security');
+    rehashSnapshot(snapshot);
+    assert.ok(getEffectiveReviewSnapshotViolations(snapshot).some(violation =>
+        violation.includes("required profile lane 'security'")));
+});
+
 test('effective review snapshot preserves built-in requirements and never triggers a disabled custom lane', () => {
     const snapshot = buildSnapshot(false, {
         taskIntent: 'Architecture change',
@@ -572,6 +603,68 @@ test('built-in compatibility decisions preserve contextual profile guardrails', 
         disabledByProfile.lanes.find((lane) => lane.id === 'code')?.inactive_reasons,
         ['profile_disabled']
     );
+});
+
+test('mandatory code-review safety floor is bound and reconstructs the selected lane', () => {
+    const input = { legacyRequiredReviews: { code: true }, codeReviewSafetyFloor: true };
+    const snapshot = buildSnapshot('auto', input);
+    assert.equal((snapshot.inputs as unknown as Record<string, unknown>).code_review_safety_floor, true);
+    assert.equal(snapshot.required_reviews.code, true);
+    assert.deepEqual(snapshot.lanes.find(lane => lane.id === 'code')?.trigger_reasons, ['code_review_safety_floor']);
+    assert.deepEqual(getEffectiveReviewSnapshotViolations(snapshot), []);
+});
+
+test('canonical reconstruction rejects a self-rehashed code-floor reason substitution', () => {
+    const catalog = buildCatalog();
+    const capabilities = Object.fromEntries(catalog.review_types.map(definition => [definition.id, true])) as ReviewCapabilitiesConfigMap;
+    const profilePolicy = resolveProfileReviewCatalogPolicy('balanced', { 'architecture-boundary': 'auto' }, capabilities, catalog);
+    const snapshot = buildSnapshot('auto', { legacyRequiredReviews: { code: true }, codeReviewSafetyFloor: true });
+    assert.doesNotThrow(() => assertEffectiveReviewSnapshotCurrent(snapshot, catalog, PROFILE_HASH, profilePolicy));
+    const substituted = JSON.parse(JSON.stringify(snapshot)) as typeof snapshot;
+    const lane = substituted.lanes.find(entry => entry.id === 'code');
+    assert.ok(lane);
+    lane.trigger_reasons = ['built_in_compatibility_required'];
+    rehashSnapshot(substituted as unknown as Record<string, unknown>);
+    assert.deepEqual(getEffectiveReviewSnapshotViolations(substituted), []);
+    assert.throws(() => assertEffectiveReviewSnapshotCurrent(substituted, catalog, PROFILE_HASH, profilePolicy),
+        /canonical reconstruction mismatch/u);
+});
+
+test('mandatory code-review safety floor fails closed for an inactive configured code lane', () => {
+    const input = { legacyRequiredReviews: { code: true }, codeReviewSafetyFloor: true };
+    assert.throws(() => buildSnapshot('auto', input, { profileOverrides: { code: false } }),
+        /code.review safety floor.*inactive/i);
+    const catalog = buildCatalog();
+    const capabilities = Object.fromEntries(catalog.review_types.map(definition => [definition.id, true])) as ReviewCapabilitiesConfigMap;
+    capabilities.code = false;
+    const profilePolicy = resolveProfileReviewCatalogPolicy('fast', { code: 'auto' }, capabilities, catalog);
+    assert.throws(() => buildEffectiveReviewSnapshot({ catalog, profilePolicy, profileSnapshotSha256: PROFILE_HASH,
+        scopeCategory: 'code', taskIntent: 'Adjust widget processing', changedFiles: ['scripts/widget.py'],
+        taskTriggers: {}, ...input }), /code.review safety floor.*inactive/i);
+});
+
+test('zero-diff suppression takes precedence over the code-review safety floor', () => {
+    const input = { legacyRequiredReviews: { code: true }, codeReviewSafetyFloor: true, zeroDiffBaselineOnly: true };
+    const snapshot = buildSnapshot('auto', input);
+    assert.equal(snapshot.required_reviews.code, false);
+    assert.equal((snapshot.inputs as unknown as Record<string, unknown>).code_review_safety_floor, undefined);
+    assert.deepEqual(getEffectiveReviewSnapshotViolations(snapshot), []);
+});
+
+test('code-review safety floor rejects contradictory input bindings even after rehashing', () => {
+    for (const changedInput of [
+        { code_review_safety_floor: false },
+        { zero_diff_baseline_only: true },
+        { scope_category: 'docs-only' },
+        { legacy_required_reviews: { code: false } }
+    ]) {
+        const snapshot = JSON.parse(JSON.stringify(buildSnapshot('auto'))) as Record<string, unknown>;
+        const inputs = snapshot.inputs as Record<string, unknown>;
+        Object.assign(inputs, { code_review_safety_floor: true }, changedInput);
+        rehashSnapshot(snapshot);
+        assert.ok(getEffectiveReviewSnapshotViolations(snapshot).some(violation =>
+            violation.includes('code-review safety floor')), JSON.stringify(changedInput));
+    }
 });
 
 test('task-required lanes override profile defaults with frozen reconstruction and capability checks', () => {

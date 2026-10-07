@@ -59,6 +59,34 @@ describe('gates/classify-change', () => {
     });
 
     describe('classifyChange', () => {
+        it('requires code review for unfamiliar code without inventing runtime detection', () => {
+            const result = classifyChange({
+                normalizedFiles: ['project/implementation.custom'],
+                taskIntent: 'Change the implementation behavior',
+                changedLinesTotal: 24,
+                classificationConfig: makeConfig(),
+                reviewCapabilities: defaultCapabilities
+            });
+
+            assert.equal(result.scope_category, 'code');
+            assert.equal(result.mode, 'FULL_PATH');
+            assert.equal(result.required_reviews.code, true);
+            assert.equal(result.triggers.runtime_code_changed, false);
+        });
+
+        it('rejects a documentation waiver for unfamiliar source under an ordinary doc glob', () => {
+            const result = classifyChange({
+                normalizedFiles: ['docs/implementation.custom', 'README.md'],
+                taskIntent: 'Change the implementation behavior',
+                changedLinesTotal: 24,
+                classificationConfig: makeConfig(),
+                reviewCapabilities: defaultCapabilities
+            });
+
+            assert.equal(result.scope_category, 'mixed');
+            assert.equal(result.required_reviews.code, true);
+        });
+
         it('returns FAST_PATH for small frontend change', () => {
             const result = classifyChange({
                 normalizedFiles: ['frontend/Button.tsx'],

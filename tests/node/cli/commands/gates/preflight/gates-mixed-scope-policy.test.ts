@@ -81,7 +81,7 @@ function createPolicyRoot(): string {
     return root;
 }
 
-function createPolicyClassifier(profile: string) {
+function createPolicyClassifier(profile: string, taskIntent = TASK_INTENT) {
     const root = createPolicyRoot();
     const bundleRoot = path.join(root, 'garda-agent-orchestrator');
     const snapshot = buildTaskProfilePolicySnapshot(bundleRoot, profile, {
@@ -104,7 +104,7 @@ function createPolicyClassifier(profile: string) {
         root,
         classify(files: string[]) {
             const result = classifyChange({
-                normalizedFiles: files, repoRoot: root, taskIntent: TASK_INTENT,
+                normalizedFiles: files, repoRoot: root, taskIntent,
                 changedLinesTotal: files.length, classificationConfig, reviewCapabilities,
                 reviewExecutionPolicyMode: snapshot.review_execution_policy.mode
             });
@@ -117,7 +117,7 @@ function createPolicyClassifier(profile: string) {
             const effectiveReviewSnapshot = buildEffectiveReviewSnapshot({
                 catalog, profilePolicy, profileSnapshotSha256: snapshot.snapshot_hash,
                 legacyRequiredReviews: result.required_reviews,
-                scopeCategory: result.scope_category, taskIntent: TASK_INTENT,
+                scopeCategory: result.scope_category, taskIntent,
                 changedFiles: files,
                 taskTriggers: Object.fromEntries(Object.entries(result.triggers)
                     .filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean')),
@@ -196,6 +196,51 @@ function assertReviewMonotonicity(before: ReturnType<typeof classify>, after: Re
 }
 
 const PROFILES = ['balanced', 'fast', 'strict'];
+
+it('rejects review asymmetry between known and unfamiliar sources under frozen profiles', () => {
+    const selections: Array<[string, boolean, boolean]> = [];
+    for (const profile of PROFILES) {
+        const files = ['module/implementation.ts', 'module/implementation.custom'];
+        const fixture = createPolicyFixture(profile, files);
+        try {
+            for (const file of files) writeFile(fixture.root, file, 'project implementation input\n');
+            const known = classify(fixture, [files[0]]);
+            const unfamiliar = classify(fixture, [files[1]]);
+            assert.equal(unfamiliar.mode, known.mode);
+            assert.equal(unfamiliar.required_reviews.code, known.required_reviews.code);
+            assert.equal(known.required_reviews.code, true);
+            assert.equal(unfamiliar.effective_review_snapshot.inputs.code_review_safety_floor, true);
+            assert.deepEqual(unfamiliar.required_reviews, unfamiliar.effective_review_snapshot.required_reviews);
+            selections.push([profile, known.required_reviews.code, unfamiliar.required_reviews.code]);
+        } finally {
+            fs.rmSync(fixture.root, { recursive: true, force: true });
+        }
+    }
+    assert.deepEqual(selections, [
+        ['balanced', true, true], ['fast', true, true], ['strict', true, true]
+    ]);
+});
+
+it('rejects disabled explicit security review through a frozen profile for unfamiliar source', () => {
+    const blocked = createPolicyClassifier('fast', 'Require security review for trust boundary validation');
+    const fixture = createPolicyClassifier('balanced', 'Require security review for trust boundary validation');
+    try {
+        for (const files of [['frontend/Validator.tsx'], ['module/validator.custom'], ['module/validator.custom', 'README.md']]) {
+            assert.throws(() => blocked.classify(files), /security-review intent/);
+        }
+        const source = fixture.classify(['module/validator.custom']);
+        const mixed = fixture.classify(['module/validator.custom', 'README.md']);
+
+        assert.equal(source.required_reviews.code, true);
+        assert.equal(source.required_reviews.security, true);
+        assert.equal(mixed.required_reviews.code, true);
+        assert.equal(mixed.required_reviews.security, true);
+        assertReviewMonotonicity(source, mixed);
+    } finally {
+        fs.rmSync(blocked.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
 
 it('prevents documentation from removing final review requirements for every non-doc scope', () => {
     let verifiedCombinations = 0;

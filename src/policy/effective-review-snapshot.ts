@@ -73,6 +73,7 @@ export interface EffectiveReviewSnapshot {
     profile_snapshot_sha256: string;
     inputs: Readonly<{
         legacy_required_reviews: Readonly<Record<string, boolean>>;
+        code_review_safety_floor?: true;
         task_required_review_ids?: readonly string[];
         scope_category: string;
         task_intent: string;
@@ -104,6 +105,7 @@ export interface BuildEffectiveReviewSnapshotOptions {
     profilePolicy: ResolvedProfileReviewCatalogPolicy;
     profileSnapshotSha256: string;
     legacyRequiredReviews: Readonly<Record<string, boolean>>;
+    codeReviewSafetyFloor?: boolean;
     taskRequiredReviewIds?: readonly string[];
     scopeCategory: string;
     taskIntent: string;
@@ -340,6 +342,18 @@ function selectBuiltInLane(
     if (options.taskRequiredReviewIds?.includes(definition.id)) {
         return { selection: 'required', trigger_reasons: ['task_required_declaration'], inactive_reasons: [] };
     }
+    if (definition.id === 'code' && options.codeReviewSafetyFloor === true) {
+        if (!profile.active || !profile.capability_enabled) {
+            throw new Error('The code-review safety floor cannot be satisfied because the configured code-review lane is inactive.');
+        }
+        return { selection: 'required', trigger_reasons: ['code_review_safety_floor'], inactive_reasons: [] };
+    }
+    if (definition.id === 'security' && options.taskTriggers.security_intent === true) {
+        if (!profile.active || !profile.capability_enabled) {
+            throw new Error('Explicit security-review intent cannot be satisfied because the configured security-review lane is inactive.');
+        }
+        return { selection: 'required', trigger_reasons: ['explicit_security_review_intent'], inactive_reasons: [] };
+    }
     if (!profile.active) {
         return {
             selection: 'inactive',
@@ -400,6 +414,11 @@ export function buildEffectiveReviewSnapshot(options: BuildEffectiveReviewSnapsh
         }
     }
     const includeDependencyGraph = options.includeDependencyGraph !== false;
+    const codeReviewSafetyFloor = options.codeReviewSafetyFloor === true && options.zeroDiffBaselineOnly !== true;
+    if (codeReviewSafetyFloor && (options.legacyRequiredReviews.code !== true
+        || !['code', 'mixed'].includes(String(options.scopeCategory || '').trim().toLowerCase()))) {
+        throw new Error('Effective review snapshot code-review safety floor binding is invalid.');
+    }
     const normalizedDependencyGraph = options.reviewDependencyGraph == null
         ? null
         : normalizeReviewDependencyGraphDeclaration(options.reviewDependencyGraph);
@@ -411,6 +430,7 @@ export function buildEffectiveReviewSnapshot(options: BuildEffectiveReviewSnapsh
             ])
         ),
         ...(taskRequiredReviewIds.length > 0 ? { task_required_review_ids: taskRequiredReviewIds } : {}),
+        ...(codeReviewSafetyFloor ? { code_review_safety_floor: true as const } : {}),
         scope_category: String(options.scopeCategory || '').trim().toLowerCase(),
         task_intent: String(options.taskIntent || '').trim(),
         changed_files: options.changedFiles.map((changedFile) => String(changedFile).replace(/\\/g, '/')),
@@ -440,6 +460,7 @@ export function buildEffectiveReviewSnapshot(options: BuildEffectiveReviewSnapsh
     const normalizedOptions: BuildEffectiveReviewSnapshotOptions = {
         ...options,
         legacyRequiredReviews: inputs.legacy_required_reviews,
+        codeReviewSafetyFloor: inputs.code_review_safety_floor === true,
         taskRequiredReviewIds: inputs.task_required_review_ids,
         scopeCategory: inputs.scope_category,
         taskIntent: inputs.task_intent,
@@ -515,6 +536,14 @@ export function getEffectiveReviewSnapshotViolations(value: unknown): string[] {
         typeof inputs.zero_diff_baseline_only !== 'boolean') {
         violations.push('Effective review snapshot inputs must contain normalized decision inputs.');
     } else {
+        if (inputs.code_review_safety_floor !== undefined && (
+            inputs.code_review_safety_floor !== true
+            || inputs.zero_diff_baseline_only === true
+            || !['code', 'mixed'].includes(String(inputs.scope_category))
+            || inputs.legacy_required_reviews.code !== true
+        )) {
+            violations.push('Effective review snapshot code-review safety floor binding is invalid.');
+        }
         if (inputs.task_required_review_ids !== undefined && (
             !isStringArray(inputs.task_required_review_ids)
             || new Set(inputs.task_required_review_ids).size !== inputs.task_required_review_ids.length
@@ -629,10 +658,15 @@ export function getEffectiveReviewSnapshotViolations(value: unknown): string[] {
                 && isJsonRecord(inputs)
                 && isJsonRecord(inputs.legacy_required_reviews)
                 && inputs.legacy_required_reviews[id] === true;
+            const codeReviewSafetyFloor = id === 'code' && isJsonRecord(inputs)
+                && inputs.code_review_safety_floor === true;
+            const explicitSecurityIntent = id === 'security' && isJsonRecord(inputs)
+                && isJsonRecord(inputs.task_triggers) && inputs.task_triggers.security_intent === true;
             const customProfileRequired = isJsonRecord(definition)
                 && definition.built_in === false
                 && profile.state === 'required';
-            if ((taskRequired || (profile.active === true && (builtInCompatibilityRequired || customProfileRequired)))
+            if ((taskRequired || codeReviewSafetyFloor || explicitSecurityIntent
+                || (profile.active === true && (builtInCompatibilityRequired || customProfileRequired)))
                 && selection !== 'required'
                 && !zeroDiffRequiredSuppression) {
                 violations.push(`Effective review snapshot required profile lane '${id || index}' must be required.`);
@@ -836,6 +870,7 @@ export function assertEffectiveReviewSnapshotCurrent(
                 profilePolicy,
                 profileSnapshotSha256,
                 legacyRequiredReviews: snapshot.inputs.legacy_required_reviews,
+                codeReviewSafetyFloor: snapshot.inputs.code_review_safety_floor === true,
                 taskRequiredReviewIds: snapshot.inputs.task_required_review_ids,
                 scopeCategory: snapshot.inputs.scope_category,
                 taskIntent: snapshot.inputs.task_intent,

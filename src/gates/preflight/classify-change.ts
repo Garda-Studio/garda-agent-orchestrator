@@ -289,7 +289,7 @@ export function classifyChange(options: ClassifyChangeOptions): ClassifyChangeRe
         ? uiI18nCompanionScope.effectiveChangedLinesTotal
         : changedLinesTotal;
 
-    const rawScopeClassification = classifyScopeCategory(normalizedFiles, codeLike, runtimeRoots, {
+    const scopeCategoryOptions = {
         ordinaryDocPaths: classificationConfig.ordinary_doc_paths,
         protectedControlPlaneRoots: classificationConfig.protected_control_plane_roots,
         testTriggerRegexes: classificationConfig.test_trigger_regexes,
@@ -298,7 +298,11 @@ export function classifyChange(options: ClassifyChangeOptions): ClassifyChangeRe
         securityTriggerRegexes: classificationConfig.security_trigger_regexes,
         apiTriggerRegexes: classificationConfig.api_trigger_regexes,
         dependencyTriggerRegexes: classificationConfig.dependency_trigger_regexes
-    });
+    };
+    const rawScopeClassification = classifyScopeCategory(normalizedFiles, codeLike, runtimeRoots, scopeCategoryOptions);
+    const reviewableCodeChanged = reviewTriggerFiles.some((file) => (
+        classifyScopeCategory([file], codeLike, runtimeRoots, scopeCategoryOptions).category === 'code'
+    ));
     const scopeClassification = uiI18nCompanionScope.eligible
         ? {
             category: 'code' as ScopeCategory,
@@ -309,7 +313,7 @@ export function classifyChange(options: ClassifyChangeOptions): ClassifyChangeRe
         }
         : rawScopeClassification;
     const testOnlyDomainReviewSuppressed = scopeClassification.category === 'test-only';
-    const runtimeIntentReviewEligible = pathTriggers.runtimeCodeChanged && !testOnlyDomainReviewSuppressed;
+    const runtimeIntentReviewEligible = (pathTriggers.runtimeCodeChanged || reviewableCodeChanged) && !testOnlyDomainReviewSuppressed;
 
     const securityIntentClassification = runtimeIntentReviewEligible
         ? classifySecurityReviewIntent(taskIntent)
@@ -366,7 +370,7 @@ export function classifyChange(options: ClassifyChangeOptions): ClassifyChangeRe
     }
 
     const requiredReviews = buildRequiredReviews({
-        runtimeCodeChanged: pathTriggers.runtimeCodeChanged,
+        runtimeCodeChanged: pathTriggers.runtimeCodeChanged || reviewableCodeChanged,
         mode,
         dbTriggered: pathTriggers.dbTriggered,
         securityTriggered,
