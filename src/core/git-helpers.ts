@@ -2,6 +2,7 @@ import * as childProcess from 'node:child_process';
 
 export interface RunGitOptions {
     allowFailure?: boolean;
+    allowedFailureExitCodes?: readonly number[];
     maxBuffer?: number;
     timeoutMs?: number;
 }
@@ -20,9 +21,26 @@ const GIT_TREE_METADATA_MIN_BUFFER_BYTES = 1024 * 1024;
 const GIT_TREE_METADATA_BYTES_PER_REQUEST = 512;
 const GIT_TREE_BATCH_MAX_BUFFER_BYTES = 256 * 1024 * 1024;
 
-function isGitTimeoutError(error: unknown): boolean {
-    const details = error as NodeJS.ErrnoException & { killed?: boolean };
-    return details?.code === 'ETIMEDOUT' || details?.killed === true;
+class GitCommandError extends Error {
+    constructor(args: readonly string[], cause: unknown) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        super(`git ${args.join(' ')} failed: ${message}`, { cause });
+    }
+}
+
+export function isGitExitFailure(error: unknown, exitCode: number): boolean {
+    const cause = error instanceof GitCommandError ? error.cause : error;
+    if (cause === null || typeof cause !== 'object') return false;
+    const details = cause as { status?: unknown; signal?: unknown; code?: unknown; killed?: unknown };
+    return Number.isInteger(exitCode) && exitCode > 0 && details.status === exitCode
+        && (details.signal === undefined || details.signal === null)
+        && (details.code === undefined || details.code === null)
+        && details.killed !== true;
+}
+
+function isAllowedGitFailure(error: unknown, options: RunGitOptions): boolean {
+    return options.allowFailure === true
+        && (options.allowedFailureExitCodes || []).some((code) => isGitExitFailure(error, code));
 }
 
 export function runGit(repoRoot: string, args: string[], options: RunGitOptions = {}): string {
@@ -34,18 +52,17 @@ export function runGit(repoRoot: string, args: string[], options: RunGitOptions 
             stdio: ['ignore', 'pipe', 'pipe']
         });
     } catch (error: unknown) {
-        if (options.allowFailure && !isGitTimeoutError(error)) {
+        if (isAllowedGitFailure(error, options)) {
             return '';
         }
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`git ${args.join(' ')} failed: ${message}`);
+        throw new GitCommandError(args, error);
     }
 }
 
 export function runGitBinary(
     repoRoot: string,
     args: string[],
-    options: Pick<RunGitBinaryOptions, 'allowFailure' | 'input' | 'maxBuffer' | 'timeoutMs'> = {}
+    options: RunGitBinaryOptions = {}
 ): Buffer {
     try {
         return childProcess.execFileSync('git', ['-C', repoRoot, ...args], {
@@ -55,11 +72,10 @@ export function runGitBinary(
             stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe']
         });
     } catch (error: unknown) {
-        if (options.allowFailure && !isGitTimeoutError(error)) {
+        if (isAllowedGitFailure(error, options)) {
             return Buffer.alloc(0);
         }
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`git ${args.join(' ')} failed: ${message}`);
+        throw new GitCommandError(args, error);
     }
 }
 

@@ -25,7 +25,7 @@ const CONFLICT_STAGES_BY_STATUS = Object.freeze({
     UU: [1, 2, 3]
 } as const);
 
-function makeRepo(autocrlf: 'false' | 'input' | 'true' = 'false'): string {
+function makeRepo(autocrlf: 'false' | 'input' | 'true' = 'false', commit: boolean = true): string {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-git-change-classification-'));
     tempRoots.push(repoRoot);
     runGit(repoRoot, ['init']);
@@ -35,7 +35,7 @@ function makeRepo(autocrlf: 'false' | 'input' | 'true' = 'false'): string {
     runGit(repoRoot, ['config', 'core.safecrlf', 'false']);
     fs.writeFileSync(path.join(repoRoot, 'tracked.txt'), 'alpha\nbeta\n', 'utf8');
     runGit(repoRoot, ['add', 'tracked.txt']);
-    runGit(repoRoot, ['commit', '-m', 'seed']);
+    if (commit) runGit(repoRoot, ['commit', '-m', 'seed']);
     return repoRoot;
 }
 
@@ -94,11 +94,94 @@ function configureUnmergedStatus(
     return filePath;
 }
 
+function injectCompletedHeadTreeFailure(): { failure: Error; observedCommands: string[] } {
+    const processModule = require('node:child_process') as typeof childProcess;
+    const originalExec = processModule.execFileSync;
+    const failure = Object.assign(new Error('HEAD tree query failed'), { status: 128 });
+    const observedCommands: string[] = [];
+    mock.method(processModule, 'execFileSync', (...args: Parameters<typeof childProcess.execFileSync>) => {
+        const command = Array.isArray(args[1]) ? args[1][2] : undefined;
+        if (command && ['ls-tree', 'symbolic-ref', 'show-ref'].includes(command)) {
+            observedCommands.push(command);
+        }
+        if (command === 'ls-tree') throw failure;
+        return Reflect.apply(originalExec, processModule, args);
+    });
+    return { failure, observedCommands };
+}
+
 describe('Git change classification', () => {
     afterEach(() => {
+        mock.restoreAll();
         for (const tempRoot of tempRoots.splice(0)) {
             fs.rmSync(tempRoot, { recursive: true, force: true });
         }
+    });
+
+    it('preserves valid unborn HEAD as an empty committed tree', () => {
+        const repoRoot = makeRepo('false', false);
+        assert.deepEqual(classifyGitChanges(repoRoot).stagedFiles, ['tracked.txt']);
+    });
+
+    it('rejects corrupt HEAD instead of treating it as an unborn branch', () => {
+        const repoRoot = makeRepo();
+        const headRef = runGit(repoRoot, ['symbolic-ref', 'HEAD']).trim();
+        fs.writeFileSync(path.join(repoRoot, '.git', headRef), `${'f'.repeat(40)}\n`);
+        assert.throws(() => classifyGitChanges(repoRoot), /git .* failed:/);
+    });
+
+    it('rejects completed HEAD tree failures when the branch already exists', () => {
+        const repoRoot = makeRepo();
+        fs.writeFileSync(path.join(repoRoot, 'tracked.txt'), 'changed\n');
+        runGit(repoRoot, ['add', 'tracked.txt']);
+        const { failure, observedCommands } = injectCompletedHeadTreeFailure();
+        assert.throws(() => classifyGitChanges(repoRoot),
+            (error: unknown) => error instanceof Error && error.cause === failure);
+        assert.deepEqual(observedCommands, ['ls-tree', 'symbolic-ref', 'show-ref']);
+    });
+
+    it('rejects completed HEAD tree failures for a detached HEAD', () => {
+        const repoRoot = makeRepo();
+        runGit(repoRoot, ['checkout', '--detach']);
+        fs.writeFileSync(path.join(repoRoot, 'tracked.txt'), 'changed\n');
+        runGit(repoRoot, ['add', 'tracked.txt']);
+        const { failure, observedCommands } = injectCompletedHeadTreeFailure();
+        assert.throws(() => classifyGitChanges(repoRoot),
+            (error: unknown) => error instanceof Error && error.cause === failure);
+        assert.deepEqual(observedCommands, ['ls-tree', 'symbolic-ref']);
+    });
+
+    it('rejects HEAD tree buffer errors instead of classifying an empty tree', () => {
+        const repoRoot = makeRepo();
+        fs.writeFileSync(path.join(repoRoot, 'tracked.txt'), 'changed\n');
+        runGit(repoRoot, ['add', 'tracked.txt']);
+        const processModule = require('node:child_process') as typeof childProcess;
+        const originalExec = processModule.execFileSync;
+        const failure = Object.assign(new Error('tree buffer exhausted'), { code: 'ENOBUFS', status: 1 });
+        let attemptedHeadTree = false;
+        mock.method(processModule, 'execFileSync', (...args: Parameters<typeof childProcess.execFileSync>) => {
+            if (Array.isArray(args[1]) && args[1].includes('ls-tree')) {
+                attemptedHeadTree = true;
+                throw failure;
+            }
+            return Reflect.apply(originalExec, processModule, args);
+        });
+        assert.throws(() => classifyGitChanges(repoRoot),
+            (error: unknown) => error instanceof Error && error.cause === failure);
+        assert.equal(attemptedHeadTree, true);
+    });
+
+    it('rejects optional configuration transport errors instead of using defaults', () => {
+        const repoRoot = makeRepo();
+        const processModule = require('node:child_process') as typeof childProcess;
+        const originalExec = processModule.execFileSync;
+        const failure = Object.assign(new Error('configuration spawn failed'), { code: 'ENOENT', status: 1 });
+        mock.method(processModule, 'execFileSync', (...args: Parameters<typeof childProcess.execFileSync>) => {
+            if (Array.isArray(args[1]) && args[1].includes('--get-regexp')) throw failure;
+            return Reflect.apply(originalExec, processModule, args);
+        });
+        assert.throws(() => classifyGitChanges(repoRoot),
+            (error: unknown) => error instanceof Error && error.cause === failure);
     });
 
     it('applies the shared finite Git timeout when timeoutMs is omitted', () => {

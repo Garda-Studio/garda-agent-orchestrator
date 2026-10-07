@@ -1,5 +1,8 @@
 # Changelog
 
+- Require explicit semantic exit codes for optional Git queries, preserve process
+  failure causes, and verify a genuinely unborn HEAD before treating its tree as empty.
+
 - Decode Git-quoted UTF-8 paths and preserve exact rename destinations in scoped
   review diffs. Reject undecodable paths instead of silently omitting their files.
 

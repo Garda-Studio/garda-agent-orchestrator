@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { TextDecoder } from 'node:util';
 
-import { runGitBinary } from './git-helpers';
+import { isGitExitFailure, runGitBinary } from './git-helpers';
 import { normalizeLineEndings } from './line-endings';
 import { isPathInsideRoot, isPathRealpathInsideRoot } from './paths';
 import { DEFAULT_GIT_TIMEOUT_MS } from './subprocess';
@@ -392,18 +392,42 @@ function readIndexBlobReferences(
     return parseIndexBlobReferences(output, wantedPaths);
 }
 
+function hasUnbornHead(repoRoot: string, budget: GitCommandBudget): boolean {
+    const reference = runGitBinary(repoRoot, ['symbolic-ref', '--quiet', 'HEAD'], {
+        allowFailure: true,
+        allowedFailureExitCodes: [1],
+        maxBuffer: GIT_STATUS_MAX_BUFFER_BYTES,
+        timeoutMs: remainingGitCommandTimeoutMs(budget)
+    }).toString('utf8').trim();
+    if (!reference.startsWith('refs/heads/')) return false;
+    try {
+        runGitBinary(repoRoot, ['show-ref', '--verify', '--quiet', reference], {
+            maxBuffer: GIT_STATUS_MAX_BUFFER_BYTES,
+            timeoutMs: remainingGitCommandTimeoutMs(budget)
+        });
+        return false;
+    } catch (error: unknown) {
+        if (isGitExitFailure(error, 1)) return true;
+        throw error;
+    }
+}
+
 function readHeadBlobReferences(
     repoRoot: string,
     wantedPaths: ReadonlySet<string>,
     budget: GitCommandBudget
 ): Map<string, GitBlobReference> {
     if (wantedPaths.size === 0) return new Map();
-    const output = runGitBinary(repoRoot, ['ls-tree', '-r', '-z', 'HEAD'], {
-        allowFailure: true,
-        maxBuffer: GIT_STATUS_MAX_BUFFER_BYTES,
-        timeoutMs: remainingGitCommandTimeoutMs(budget)
-    });
-    return parseHeadBlobReferences(output, wantedPaths);
+    try {
+        const output = runGitBinary(repoRoot, ['ls-tree', '-r', '-z', 'HEAD'], {
+            maxBuffer: GIT_STATUS_MAX_BUFFER_BYTES,
+            timeoutMs: remainingGitCommandTimeoutMs(budget)
+        });
+        return parseHeadBlobReferences(output, wantedPaths);
+    } catch (error: unknown) {
+        if (isGitExitFailure(error, 128) && hasUnbornHead(repoRoot, budget)) return new Map();
+        throw error;
+    }
 }
 
 function parseBatchObjectSizes(output: Buffer): Map<string, number> {
@@ -718,6 +742,7 @@ function readRelevantGitConfig(
         '^core\.(autocrlf|eol|safecrlf)$'
     ], {
         allowFailure: true,
+        allowedFailureExitCodes: [1],
         timeoutMs: remainingGitCommandTimeoutMs(budget)
     });
     for (const record of output.toString('utf8').split('\0')) {
