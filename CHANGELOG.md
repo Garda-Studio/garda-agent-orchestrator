@@ -1,5 +1,8 @@
 # Changelog
 
+- Decode Git-quoted UTF-8 paths and preserve exact rename destinations in scoped
+  review diffs. Reject undecodable paths instead of silently omitting their files.
+
 - Flush parent stdout and stderr before starting the retained-pipe test descendant
   so incomplete UTF-8 tail assertions do not depend on process scheduling.
 

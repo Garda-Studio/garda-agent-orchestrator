@@ -1,5 +1,9 @@
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 import {
     buildScopedDiffMetadata,
@@ -226,6 +230,94 @@ test('parseUnifiedDiff normalizes CRLF input without retaining stray carriage re
     assert.equal(blocks[0].hunks[0].lines.some((line) => line.includes('\r')), false);
 });
 
+
+function makeGitDiffRepo(t: TestContext) {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-scoped-diff-'));
+    t.after(() => {
+        const resolved = fs.realpathSync(repoRoot);
+        assert.equal(path.dirname(resolved), fs.realpathSync(os.tmpdir()));
+        assert.ok(path.basename(resolved).startsWith('garda-scoped-diff-'));
+        fs.rmSync(resolved, { recursive: true, force: true });
+    });
+    const git = (...args: string[]) => execFileSync('git', ['-C', repoRoot, ...args], {
+        encoding: 'utf8',
+        timeout: 10_000,
+        stdio: ['ignore', 'pipe', 'pipe']
+    });
+    git('init');
+    git('config', 'user.name', 'Garda Tests');
+    git('config', 'user.email', 'tests@example.com');
+    git('config', 'core.autocrlf', 'false');
+    const write = (name: string, content: string) => {
+        const target = path.join(repoRoot, name);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, content, 'utf8');
+    };
+    return { repoRoot, git, write };
+}
+
+for (const quotePath of ['true', 'false']) {
+    for (const staged of [false, true]) {
+        const layer = staged ? 'staged' : 'unstaged';
+        test('real Git ' + layer + ' quoted paths remain in scoped diff with quotepath=' + quotePath, (t) => {
+            const { git, write } = makeGitDiffRepo(t);
+            const names = ['src/plain space.ts', 'src/literal b/space.ts', 'src/ café.ts', 'src/日本.ts'];
+            if (process.platform !== 'win32') {
+                names.push('src/quote"name.ts', 'src/back\\slash.ts', 'src/tab\tname.ts',
+                    'src/line\nname.ts', 'src/carriage\rname.ts', 'src/trailing.ts ');
+            }
+            for (const name of names) write(name, 'before\n');
+            git('add', '--', '.');
+            git('commit', '-m', 'seed');
+            git('config', 'core.quotepath', quotePath);
+            for (const name of names) write(name, 'after\n');
+            if (staged) git('add', '--', '.');
+            const diff = git('diff', ...(staged ? ['--cached'] : []), '--no-ext-diff', '--no-textconv');
+            assert.deepEqual(parseUnifiedDiff(diff).map(block => block.filePath).sort(), [...names].sort());
+            const filtered = filterDiffByHunks(diff, ['^src/']);
+            assert.equal(filtered.includedFileBlocks, names.length);
+            assert.deepEqual(parseUnifiedDiff(filtered.filteredDiffText).map(block => block.filePath).sort(), [...names].sort());
+        });
+
+        test('real Git ' + layer + ' rename destination is exact with quotepath=' + quotePath, (t) => {
+            const { repoRoot, git, write } = makeGitDiffRepo(t);
+            const oldName = 'src/old b/日本.ts';
+            const newName = 'src/new b/café.ts';
+            write(oldName, 'unchanged\n');
+            write('src/plain b/old.ts', 'plain\n');
+            git('add', '--', '.');
+            git('commit', '-m', 'seed');
+            git('config', 'core.quotepath', quotePath);
+            for (const [from, to] of [[oldName, newName], ['src/plain b/old.ts', 'src/new b/plain.ts']]) {
+                fs.mkdirSync(path.dirname(path.join(repoRoot, to)), { recursive: true });
+                fs.renameSync(path.join(repoRoot, from), path.join(repoRoot, to));
+                if (!staged) git('add', '-N', '--', to);
+            }
+            if (staged) git('add', '-A');
+            const diff = git('diff', ...(staged ? ['--cached'] : []), '--find-renames',
+                '--no-ext-diff', '--no-textconv');
+            assert.match(diff, /rename to /);
+            assert.deepEqual(parseUnifiedDiff(diff).map(block => block.filePath).sort(),
+                [newName, 'src/new b/plain.ts'].sort());
+            const filtered = filterDiffByHunks(diff, ['^src/new b/']);
+            assert.equal(filtered.includedFileBlocks, 2);
+            assert.match(filtered.filteredDiffText, /rename to /);
+        });
+    }
+}
+
+test('extractFilePathFromDiffLine decodes Git octal UTF-8 and mixed quoted rename endpoints', () => {
+    assert.equal(extractFilePathFromDiffLine('diff --git "a/src/\\346\\227\\245\\346\\234\\254.ts" "b/src/\\346\\227\\245\\346\\234\\254.ts"'), 'src/日本.ts');
+    assert.equal(extractFilePathFromDiffLine('diff --git "a/old\\ttab.ts" b/new name.ts'), 'new name.ts');
+    assert.equal(extractFilePathFromDiffLine('diff --git a/old name.ts "b/new\\"quote.ts"'), 'new"quote.ts');
+    assert.equal(extractFilePathFromDiffLine('diff --git "a/back\\\\slash.ts" "b/back\\\\slash.ts"'), 'back\\slash.ts');
+});
+
+test('parseUnifiedDiff rejects undecodable Git paths instead of silently filtering their blocks away', () => {
+    assert.throws(() => filterDiffByHunks('diff --git "a/bad\\q.ts" "b/bad\\q.ts"', ['^src/']), /decodable Git path/);
+    assert.throws(() => filterDiffByHunks('diff --git "a/bad\\377.ts" "b/bad\\377.ts"', ['^src/']), /decodable Git path/);
+    assert.throws(() => filterDiffByHunks('diff --git "a/bad\\000.ts" "b/bad\\000.ts"', ['^src/']), /decodable Git path/);
+});
 
 test('extractFilePathFromDiffLine extracts b-side path', () => {
     assert.equal(extractFilePathFromDiffLine('diff --git a/src/auth.ts b/src/auth.ts'), 'src/auth.ts');

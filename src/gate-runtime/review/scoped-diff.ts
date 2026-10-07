@@ -1,5 +1,6 @@
 import { matchAnyRegex } from '../text-utils';
 import * as path from 'node:path';
+import { TextDecoder } from 'node:util';
 
 /**
  * Build a scoped diff by filtering changed files against trigger regexes.
@@ -103,6 +104,52 @@ export interface DiffFileBlock {
     hunks: DiffHunk[];
 }
 
+const GIT_PATH_ESCAPES: Readonly<Record<string, string>> = {
+    a: '\x07', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v',
+    '\\': '\\', '"': '"'
+};
+const GIT_PATH_UTF8_DECODER = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+
+function parseQuotedGitPath(text: string): { value: string; length: number } | null {
+    const match = text.match(/^"((?:[^"\\]|\\.)*)"/u);
+    if (!match) return null;
+    const chunks: Buffer[] = [];
+    for (const part of match[1].split(/(\\(?:[0-7]{1,3}|.))/u)) {
+        if (!part.startsWith('\\')) {
+            chunks.push(Buffer.from(part, 'utf8'));
+        } else if (/^\\[0-7]{1,3}$/u.test(part)) {
+            const byte = Number.parseInt(part.slice(1), 8);
+            if (byte > 255) return null;
+            chunks.push(Buffer.from([byte]));
+        } else {
+            const escaped = GIT_PATH_ESCAPES[part.slice(1)];
+            if (escaped === undefined) return null;
+            chunks.push(Buffer.from(escaped, 'utf8'));
+        }
+    }
+    try {
+        // Git's octal escapes encode UTF-8 bytes, not Unicode code points.
+        const value = GIT_PATH_UTF8_DECODER.decode(Buffer.concat(chunks));
+        return value && !value.includes('\0') ? { value, length: match[0].length } : null;
+    } catch {
+        return null;
+    }
+}
+
+function readGitDiffPath(text: string, prefix: string): string | null {
+    const quoted = text.startsWith('"') ? parseQuotedGitPath(text) : null;
+    if (text.startsWith('"') && (!quoted || quoted.length !== text.length)) return null;
+    const value = quoted ? quoted.value : text;
+    return value.startsWith(prefix) && value.length > prefix.length && !value.includes('\0')
+        ? value.slice(prefix.length)
+        : null;
+}
+
+function appendDiffBlock(blocks: DiffFileBlock[], block: DiffFileBlock): void {
+    if (!block.filePath) throw new Error('Diff block has no decodable Git path; refusing incomplete review scope.');
+    blocks.push(block);
+}
+
 /**
  * Parse a unified diff into per-file blocks with per-hunk granularity.
  * Handles standard `diff --git` format.
@@ -127,7 +174,7 @@ export function parseUnifiedDiff(diffText: string): DiffFileBlock[] {
                 currentBlock.hunks.push(currentHunk);
             }
             if (currentBlock) {
-                blocks.push(currentBlock);
+                appendDiffBlock(blocks, currentBlock);
             }
             const filePath = extractFilePathFromDiffLine(line);
             currentBlock = { filePath, headerLines: [line], hunks: [] };
@@ -149,6 +196,15 @@ export function parseUnifiedDiff(diffText: string): DiffFileBlock[] {
 
         if (headerPhase) {
             currentBlock.headerLines.push(line);
+            const pathPrefix = line.startsWith('+++ ') ? '+++ ' : line.startsWith('rename to ') ? 'rename to ' : null;
+            if (pathPrefix && line.slice(pathPrefix.length) !== '/dev/null') {
+                let operand = line.slice(pathPrefix.length);
+                // Git adds a tab separator to patch paths with spaces, quoted or not.
+                if (pathPrefix === '+++ ' && operand.endsWith('\t')) operand = operand.slice(0, -1);
+                const filePath = readGitDiffPath(operand, pathPrefix === '+++ ' ? 'b/' : '');
+                if (!filePath) throw new Error('Diff header has no decodable Git path; refusing incomplete review scope.');
+                currentBlock.filePath = filePath;
+            }
         } else if (currentHunk) {
             currentHunk.lines.push(line);
         }
@@ -158,7 +214,7 @@ export function parseUnifiedDiff(diffText: string): DiffFileBlock[] {
         currentBlock.hunks.push(currentHunk);
     }
     if (currentBlock) {
-        blocks.push(currentBlock);
+        appendDiffBlock(blocks, currentBlock);
     }
 
     return blocks;
@@ -170,9 +226,18 @@ export function parseUnifiedDiff(diffText: string): DiffFileBlock[] {
  * paths containing ` b/`, then falls back to first ` b/` split.
  */
 export function extractFilePathFromDiffLine(line: string): string {
-    const prefix = 'diff --git a/';
+    const prefix = 'diff --git ';
     if (!line.startsWith(prefix)) return '';
-    const rest = line.substring(prefix.length);
+    const operands = line.substring(prefix.length);
+    if (operands.startsWith('"')) {
+        const aSide = parseQuotedGitPath(operands);
+        if (!aSide || !aSide.value.startsWith('a/') || operands[aSide.length] !== ' ') return '';
+        return readGitDiffPath(operands.slice(aSide.length + 1), 'b/') || '';
+    }
+    if (!operands.startsWith('a/')) return '';
+    const quotedBIndex = operands.indexOf(' "b/');
+    if (quotedBIndex >= 0) return readGitDiffPath(operands.slice(quotedBIndex + 1), 'b/') || '';
+    const rest = operands.slice(2);
     // Try each ` b/` position: check if a-side equals b-side (same-file diff)
     let searchFrom = 0;
     while (true) {
