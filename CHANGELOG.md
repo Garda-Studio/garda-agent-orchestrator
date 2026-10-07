@@ -1,5 +1,8 @@
 # Changelog
 
+- Flush parent stdout and stderr before starting the retained-pipe test descendant
+  so incomplete UTF-8 tail assertions do not depend on process scheduling.
+
 - Bound output-pipe draining after interrupted subprocess exit when detached
   descendants retain inherited handles. Preserve the direct child's exit status,
   collected output and existing process-tree termination safeguards.

@@ -84,13 +84,15 @@ function createRetainedPipeFixture(): { scriptPath: string; batchPath: string; p
     ].join('\n'));
     fs.writeFileSync(scriptPath, [
         'const { spawn } = require("node:child_process");',
-        `const descendant = spawn(process.execPath, [${JSON.stringify(descendantPath)}], {`,
-        '    detached: true, windowsHide: true, stdio: ["ignore", "inherit", "inherit"]',
-        '});',
-        'descendant.unref();',
-        'process.stdout.write("parent-output\\n");',
-        'process.stderr.write("parent-error\\n");',
-        'process.exitCode = 7;'
+        'process.stdout.write("parent-output\\n", () => {',
+        '    process.stderr.write("parent-error\\n", () => {',
+        `        const descendant = spawn(process.execPath, [${JSON.stringify(descendantPath)}], {`,
+        '            detached: true, windowsHide: true, stdio: ["ignore", "inherit", "inherit"]',
+        '        });',
+        '        descendant.unref();',
+        '        process.exitCode = 7;',
+        '    });',
+        '});'
     ].join('\n'));
     fs.writeFileSync(batchPath, `@echo off\r\n"${process.execPath}" "${scriptPath}"\r\nexit /b %errorlevel%\r\n`);
     return {
