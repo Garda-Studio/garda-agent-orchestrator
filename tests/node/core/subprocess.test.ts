@@ -900,6 +900,149 @@ describe('shutdown cleanup concurrency', () => {
 });
 
 describe('shell-surface hardening', () => {
+    it('spawnShellCommand rejects cwd and child-environment replacements using the trusted system fallback', async () => {
+        if (process.platform !== 'win32') return;
+        const fixture = createNodeBatchFixture();
+        const fixtureRoot = path.dirname(fixture.scriptPath);
+        fs.writeFileSync(fixture.scriptPath, '@echo off\r\necho shelltest\r\n', 'utf8');
+        const trustedProcessor = fs.realpathSync.native(path.join(
+            fs.realpathSync.native('\\\\?\\GLOBALROOT\\SystemRoot'), 'System32', 'cmd.exe'
+        ));
+        fs.copyFileSync(path.join(path.dirname(trustedProcessor), 'where.exe'), path.join(fixtureRoot, 'cmd.exe'));
+        const originalComSpec = process.env.ComSpec;
+        let successfulFallbacks = 0;
+        try {
+            for (const configured of [undefined, '', '   ']) {
+                if (configured === undefined) delete process.env.ComSpec;
+                else process.env.ComSpec = configured;
+                let selectedProcessor = '';
+                const result = await spawnShellCommand(fixture.scriptPath, [], {
+                    cwd: fixtureRoot,
+                    timeoutMs: 5_000,
+                    env: { ComSpec: 'cmd.exe', SystemRoot: fixtureRoot, PATH: fixtureRoot },
+                    onSpawn(info) { selectedProcessor = info.command; }
+                });
+                assert.equal(result.exitCode, 0);
+                assert.equal(result.stdout.trim(), 'shelltest');
+                assert.equal(selectedProcessor.toLowerCase(), trustedProcessor.toLowerCase());
+                successfulFallbacks += 1;
+            }
+            assert.equal(successfulFallbacks, 3);
+        } finally {
+            if (originalComSpec === undefined) delete process.env.ComSpec;
+            else process.env.ComSpec = originalComSpec;
+            fixture.cleanup();
+        }
+    });
+
+    it('spawnShellCommand preserves an existing fully qualified configured command processor', async () => {
+        if (process.platform !== 'win32') return;
+        const fixture = createNodeBatchFixture('console.log("configured processor"); process.exitCode = 7;');
+        const originalComSpec = process.env.ComSpec;
+        const trustedProcessor = fs.realpathSync.native(path.join(
+            fs.realpathSync.native('\\\\?\\GLOBALROOT\\SystemRoot'), 'System32', 'cmd.exe'
+        ));
+        try {
+            for (const configured of [trustedProcessor, path.toNamespacedPath(trustedProcessor)]) {
+                process.env.ComSpec = configured;
+                let selectedProcessor = '';
+                const result = await spawnShellCommand(fixture.scriptPath, [], {
+                    timeoutMs: 5_000,
+                    onSpawn(info) { selectedProcessor = info.command; }
+                });
+                assert.equal(result.exitCode, 7);
+                assert.equal(result.stdout.trim(), 'configured processor');
+                assert.equal(selectedProcessor.toLowerCase(), trustedProcessor.toLowerCase());
+            }
+        } finally {
+            if (originalComSpec === undefined) delete process.env.ComSpec;
+            else process.env.ComSpec = originalComSpec;
+            fixture.cleanup();
+        }
+    });
+
+    it('spawnShellCommand rejects relative, drive-relative and root-relative ComSpec without spawning', async () => {
+        if (process.platform !== 'win32') return;
+        const fixture = createNodeBatchFixture();
+        const originalComSpec = process.env.ComSpec;
+        let spawned = false;
+        try {
+            for (const configured of [
+                'cmd.exe',
+                'C:cmd.exe',
+                '\\Windows\\System32\\cmd.exe',
+                '///Windows/System32/cmd.exe',
+                '\\\\\\Windows\\System32\\cmd.exe',
+                '\\\\server',
+                '/\\/Windows/System32/cmd.exe'
+            ]) {
+                process.env.ComSpec = configured;
+                await assert.rejects(spawnShellCommand(fixture.scriptPath, [], {
+                    timeoutMs: 5_000,
+                    onSpawn() { spawned = true; }
+                }), /fully qualified absolute path/);
+            }
+            assert.equal(spawned, false);
+        } finally {
+            if (originalComSpec === undefined) delete process.env.ComSpec;
+            else process.env.ComSpec = originalComSpec;
+            fixture.cleanup();
+        }
+    });
+
+    it('spawnShellCommand rejects missing and directory ComSpec paths without a PATH fallback', async () => {
+        if (process.platform !== 'win32') return;
+        const fixture = createNodeBatchFixture();
+        const fixtureRoot = path.dirname(fixture.scriptPath);
+        const originalComSpec = process.env.ComSpec;
+        let spawned = false;
+        try {
+            for (const configured of [path.join(fixtureRoot, 'missing-cmd.exe'), fixtureRoot]) {
+                process.env.ComSpec = configured;
+                await assert.rejects(spawnShellCommand(fixture.scriptPath, [], {
+                    timeoutMs: 5_000,
+                    onSpawn() { spawned = true; }
+                }), /Windows command processor/);
+            }
+            assert.equal(spawned, false);
+        } finally {
+            if (originalComSpec === undefined) delete process.env.ComSpec;
+            else process.env.ComSpec = originalComSpec;
+            fixture.cleanup();
+        }
+    });
+
+    it('spawnShellCommand fails closed when its trusted system fallback is unavailable', async () => {
+        if (process.platform !== 'win32') return;
+        const fixture = createNodeBatchFixture();
+        const trustedProcessor = fs.realpathSync.native(path.join(
+            fs.realpathSync.native('\\\\?\\GLOBALROOT\\SystemRoot'), 'System32', 'cmd.exe'
+        ));
+        const mutableFs = require('node:fs') as { statSync: typeof fs.statSync };
+        const originalStat = mutableFs.statSync;
+        const originalComSpec = process.env.ComSpec;
+        let spawned = false;
+        try {
+            delete process.env.ComSpec;
+            mutableFs.statSync = ((...args: Parameters<typeof fs.statSync>) => {
+                if (String(args[0]).toLowerCase() === trustedProcessor.toLowerCase()) {
+                    throw Object.assign(new Error('Fixture: missing trusted command processor'), { code: 'ENOENT' });
+                }
+                return originalStat(...args);
+            }) as typeof fs.statSync;
+            await assert.rejects(spawnShellCommand(fixture.scriptPath, [], {
+                timeoutMs: 5_000,
+                onSpawn() { spawned = true; }
+            }), /Windows command processor/);
+            assert.equal(spawned, false);
+        } finally {
+            mutableFs.statSync = originalStat;
+            if (originalComSpec === undefined) delete process.env.ComSpec;
+            else process.env.ComSpec = originalComSpec;
+            fixture.cleanup();
+        }
+    });
+
     it('buildWindowsBatchCommandLine quotes absolute batch paths and literal args', () => {
         const commandLine = buildWindowsBatchCommandLine('C:\\Program Files\\Tools\\npm.cmd', ['run', 'build script']);
         assert.equal(commandLine, 'call "C:\\Program Files\\Tools\\npm.cmd" run "build script"');

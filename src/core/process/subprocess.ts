@@ -935,7 +935,24 @@ function assertBatchCommandToken(commandToken: string, label: string, requireAbs
 }
 
 function getWindowsCommandProcessor(): string {
-    return process.env.ComSpec || 'cmd.exe';
+    const configuredProcessor = process.env.ComSpec?.trim();
+    const processorPath = configuredProcessor || path.join(WINDOWS_SYSTEM32_ROOT, 'cmd.exe');
+    const normalizedProcessorPath = path.win32.normalize(processorPath);
+    const processorRoot = path.win32.parse(normalizedProcessorPath).root;
+    if (!path.win32.isAbsolute(normalizedProcessorPath) || processorRoot === path.win32.sep) {
+        throw new Error('Windows command processor must use a fully qualified absolute path.');
+    }
+    try {
+        const resolvedProcessor = fs.realpathSync.native(normalizedProcessorPath);
+        if (!fs.statSync(resolvedProcessor).isFile()) {
+            throw new Error('Windows command processor must be a regular file.');
+        }
+        return resolvedProcessor;
+    } catch (error) {
+        throw new Error(`Cannot resolve Windows command processor as a regular file: ${processorPath}`, {
+            cause: error
+        });
+    }
 }
 
 export function buildWindowsBatchCommandLine(executablePath: string, args: readonly string[] = []): string {

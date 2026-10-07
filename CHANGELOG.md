@@ -1,5 +1,9 @@
 # Changelog
 
+- Resolve the Windows batch command processor to the trusted system location
+  when ComSpec is unset or blank. Require configured paths to be fully qualified
+  existing files, without falling back to working-directory or PATH lookup.
+
 - Include the current task identity in manual-validation selector guidance and
   navigator recovery hints, and migrate the published example into managed rules.
 - Make performance reviewer guidance proportional to changed risks and quantitative
