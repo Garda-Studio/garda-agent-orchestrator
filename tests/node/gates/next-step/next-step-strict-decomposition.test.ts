@@ -10,10 +10,20 @@ import { buildTaskModeArtifact } from './next-step-test-support';
 import { buildEventIntegrityHash } from './next-step-test-support';
 import { buildDefaultWorkflowConfig } from './next-step-test-support';
 import { buildStrictDecompositionDecisionArtifact } from './next-step-test-support';
+import { getWorkspaceSnapshot } from './next-step-test-support';
 import {
     buildStrictDecompositionDecisionRequirement
 } from '../../../../src/gates/next-step/next-step-strict-decomposition-routing';
 import type { NextStepProfileSummary } from '../../../../src/gates/next-step/next-step';
+import { normalizeReviewCatalog } from '../../../../src/core/review-catalog';
+import type { ReviewCapabilitiesConfigMap } from '../../../../src/core/review-capabilities';
+import { buildEffectiveReviewSnapshot, type EffectiveReviewSnapshot } from '../../../../src/policy/effective-review-snapshot';
+import { resolveProfileReviewCatalogPolicy } from '../../../../src/policy/profile-review-catalog-policy';
+import {
+    parseTaskQueueEntriesFromContent,
+    resolveStrictDecompositionSplitRoutingState
+} from '../../../../src/gates/next-step/next-step-task-queue';
+import { syncTaskQueueStatusFromStrictDecompositionToDecomposed } from '../../../../src/gates/next-step/next-step-task-queue-status-sync';
 import {
     buildTaskProfilePolicySnapshot,
     type TaskProfilePolicySnapshot
@@ -146,6 +156,60 @@ function writePreflightScope(repoRoot: string, taskId: string, changedFiles: str
     });
 }
 
+function buildFrozenSplitReviewSnapshot(
+    changedFiles: string[],
+    profileSnapshot: TaskProfilePolicySnapshot
+): EffectiveReviewSnapshot {
+    const catalog = normalizeReviewCatalog({ version: 1, custom_review_types: [] }, { knownSkillIds: [] });
+    const profilePolicy = resolveProfileReviewCatalogPolicy(
+        profileSnapshot.source.effective_profile,
+        profileSnapshot.review_lane_selection.profile_review_policy,
+        profileSnapshot.review_lane_selection.review_capabilities as ReviewCapabilitiesConfigMap,
+        catalog
+    );
+    const frozenPolicy = profileSnapshot.review_execution_policy;
+    return buildEffectiveReviewSnapshot({
+        catalog, profilePolicy, profileSnapshotSha256: profileSnapshot.snapshot_hash,
+        legacyRequiredReviews: { code: true, test: true },
+        scopeCategory: 'code', taskIntent: 'Route frozen balanced split', changedFiles, taskTriggers: {},
+        reviewExecutionPolicyMode: frozenPolicy.mode,
+        reviewDependencyGraph: frozenPolicy.review_dependency_graph,
+        fullSuiteValidation: frozenPolicy.full_suite_validation,
+        includeDependencyGraph: true
+    });
+}
+
+function writeFrozenPreflightScope(
+    repoRoot: string,
+    taskId: string,
+    changedFiles: string[],
+    profileSnapshot: TaskProfilePolicySnapshot
+): string {
+    const effectiveSnapshot = buildFrozenSplitReviewSnapshot(changedFiles, profileSnapshot);
+    const frozenPolicy = profileSnapshot.review_execution_policy;
+    const preflightPath = path.join(reviewsRoot(repoRoot), `${taskId}-preflight.json`);
+    const scope = getWorkspaceSnapshot(repoRoot, 'explicit_changed_files', true, changedFiles);
+    writeJson(preflightPath, {
+        task_id: taskId, changed_files: changedFiles,
+        detection_source: scope.detection_source, mode: 'FULL_PATH', scope_category: 'code',
+        metrics: {
+            changed_files_count: scope.changed_files_count,
+            changed_lines_total: scope.changed_lines_total,
+            changed_files_sha256: scope.changed_files_sha256,
+            scope_content_sha256: scope.scope_content_sha256,
+            scope_sha256: scope.scope_sha256
+        },
+        required_reviews: effectiveSnapshot.required_reviews,
+        profile_policy_snapshot: { snapshot_hash: profileSnapshot.snapshot_hash },
+        review_execution_policy: { mode: frozenPolicy.mode, dependency_graph: effectiveSnapshot.review_dependency_graph },
+        effective_review_snapshot: effectiveSnapshot
+    });
+    appendEvent(repoRoot, taskId, 'PREFLIGHT_CLASSIFIED', 'INFO', {
+        output_path: preflightPath.replace(/\\/g, '/'),
+        effective_review_snapshot: effectiveSnapshot
+    });
+    return preflightPath;
+}
 
 
 
@@ -161,6 +225,8 @@ function writeStrictDecompositionDecision(
         taskSummary?: string;
         expectedReviewTypes?: string[];
         proposedChildTaskIds?: string[];
+        taskProfile?: string;
+        schemaVersion?: number;
     } = {}
 ): void {
     const decision = options.decision || 'single-cycle';
@@ -173,6 +239,7 @@ function writeStrictDecompositionDecision(
         buildStrictDecompositionDecisionArtifact({
             taskId,
             decision,
+            taskProfile: options.taskProfile,
             taskSummary: options.taskSummary || 'Seeded next-step task',
             reason: 'This strict task is intentionally bounded for the current lifecycle cycle.',
             scopeRisk: 'The scope is constrained by the test fixture and must keep normal review gates.',
@@ -181,11 +248,11 @@ function writeStrictDecompositionDecision(
             proposedChildTaskIds,
             workPackageContract: decision === 'split-required'
                 ? {
-                    schema_version: 1,
+                    schema_version: options.schemaVersion || 1,
                     finding_obligations: [],
                     work_packages: (proposedChildTaskIds || []).map((childTaskId, index) => ({
                         task_id: childTaskId,
-                        profile: 'strict',
+                        profile: options.schemaVersion === 2 ? options.taskProfile : 'strict',
                         root_cause_area: `root-cause-${index + 1}`,
                         objective: `Implement independently executable root-cause package ${index + 1}.`,
                         scope_obligations: [`Preserve bounded parent scope obligation ${index + 1}.`],
@@ -273,7 +340,7 @@ function seedStartedTaskWithFrozenDecompositionPolicy(
     taskId: string,
     profile: string,
     enabled: boolean
-): void {
+): TaskProfilePolicySnapshot {
     const profilesConfigPath = path.join(
         repoRoot,
         'garda-agent-orchestrator',
@@ -349,6 +416,7 @@ function seedStartedTaskWithFrozenDecompositionPolicy(
     seedRulePack(repoRoot, taskId, 'TASK_ENTRY', taskModePath);
     appendEvent(repoRoot, taskId, 'HANDSHAKE_DIAGNOSTICS_RECORDED');
     appendEvent(repoRoot, taskId, 'SHELL_SMOKE_PREFLIGHT_RECORDED');
+    return profilePolicySnapshot;
 }
 
 function buildTaskModeTimelineDetails(
@@ -369,25 +437,28 @@ function buildTaskModeTimelineDetails(
 
 
 
-function seedRulePack(repoRoot: string, taskId: string, stage: 'TASK_ENTRY' | 'POST_PREFLIGHT', taskModePath = ''): void {
+function seedRulePack(repoRoot: string, taskId: string, stage: 'TASK_ENTRY' | 'POST_PREFLIGHT', taskModePath = '', preflightPath = ''): void {
     const rulePackPath = path.join(reviewsRoot(repoRoot), `${taskId}-rule-pack.json`);
     const artifact = buildRulePackArtifact({
         repoRoot,
         taskId,
         stage,
         taskModePath,
+        preflightPath: preflightPath || undefined,
         loadedRuleFiles: [
             '00-core.md',
             '15-project-memory.md',
             '40-commands.md',
             '80-task-workflow.md',
-            '90-skill-catalog.md'
+            '90-skill-catalog.md',
+            ...(preflightPath ? ['30-code-style.md', '35-strict-coding-rules.md', '50-structure-and-docs.md', '70-security.md'] : [])
         ]
     });
     writeJson(rulePackPath, artifact);
     appendEvent(repoRoot, taskId, 'RULE_PACK_LOADED', 'PASS', {
         stage,
-        artifact_path: normalizeForTimeline(rulePackPath)
+        artifact_path: normalizeForTimeline(rulePackPath),
+        ...(preflightPath ? { preflight_path: normalizeForTimeline(preflightPath) } : {})
     });
 }
 
@@ -745,6 +816,78 @@ describe('gates/next-step strict decomposition', () => {
         assert.ok(result.reason.includes('missing linked proposed child tasks'));
         assert.equal(text.includes('gate classify-change'), false);
         assert.equal(text.includes('gate compile-gate'), false);
+    });
+
+    function seedVersion2BalancedSplit(repoRoot: string, firstChildProfile = 'balanced'): TaskProfilePolicySnapshot {
+        fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
+            '# TASK.md',
+            '',
+            '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+            '|---|---|---|---|---|---|---|---|---|',
+            `| ${TASK_ID} | TODO | P1 | workflow/decomposition | Route frozen balanced split | test | 2026-10-07 | balanced | Child tasks: ${TASK_ID}-1, ${TASK_ID}-2. |`,
+            `| ${TASK_ID}-1 | TODO | P1 | workflow/evidence | Validate immutable package evidence | test | 2026-10-07 | ${firstChildProfile} | Child of ${TASK_ID}. |`,
+            `| ${TASK_ID}-2 | TODO | P1 | workflow/routing | Route next bounded package | test | 2026-10-07 | balanced | Child of ${TASK_ID}. |`,
+            ''
+        ].join('\n'), 'utf8');
+        const profileSnapshot = seedStartedTaskWithFrozenDecompositionPolicy(repoRoot, TASK_ID, 'balanced', true);
+        writeStrictDecompositionDecision(repoRoot, TASK_ID, {
+            decision: 'split-required', taskProfile: 'balanced', schemaVersion: 2
+        });
+        initGitRepo(repoRoot);
+        return profileSnapshot;
+    }
+
+    it('routes version-2 balanced children through native WIP suspension and queue transition', () => {
+        const repoRoot = makeTempRepo();
+        const profileSnapshot = seedVersion2BalancedSplit(repoRoot);
+        fs.writeFileSync(path.join(repoRoot, 'src', 'app.ts'), 'export const value = 2;\n', 'utf8');
+        const preflightPath = writeFrozenPreflightScope(repoRoot, TASK_ID, ['src/app.ts'], profileSnapshot);
+        seedRulePack(repoRoot, TASK_ID, 'POST_PREFLIGHT',
+            path.join(reviewsRoot(repoRoot), `${TASK_ID}-task-mode.json`), preflightPath);
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+
+        assert.equal(result.status, 'DECOMPOSED', formatNextStepText(result));
+        assert.equal(result.next_gate, 'child-task');
+        assert.ok(result.commands[0].command.includes(`next-step "${TASK_ID}-1"`));
+        assert.ok(result.reason.includes('linked parent-derived balanced child tasks match the decision artifact'));
+        assert.ok(fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8').includes(`| ${TASK_ID} | 🟪 DECOMPOSED |`));
+        assert.ok(fs.readFileSync(path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`), 'utf8').includes('STRICT_DECOMPOSITION_SPLIT_ROUTED'));
+        const wip = listSplitRequiredWip({ repoRoot, taskId: TASK_ID });
+        assert.equal(wip.status, 'FOUND');
+        assert.deepEqual(wip.manifests[0].tracked_files, ['src/app.ts']);
+        assert.equal(runGitFixtureCommand(repoRoot, ['status', '--short', '--', 'src/app.ts']).stdout.trim(), '');
+    });
+
+    it('blocks version-2 child profile drift without transitioning the balanced parent', () => {
+        const repoRoot = makeTempRepo();
+        seedVersion2BalancedSplit(repoRoot, 'fast');
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+
+        assert.equal(result.status, 'BLOCKED');
+        assert.equal(result.next_gate, 'strict-decomposition-split-routing');
+        assert.ok(result.reason.includes('child tasks without balanced profile'));
+        assert.equal(result.commands.length, 0);
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8').includes('DECOMPOSED'), false);
+        assert.equal(fs.readFileSync(path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`), 'utf8').includes('STRICT_DECOMPOSITION_SPLIT_ROUTED'), false);
+    });
+
+    it('rejects balanced child profile drift under the native queue transition lock', () => {
+        const repoRoot = makeTempRepo();
+        seedVersion2BalancedSplit(repoRoot);
+        const taskPath = path.join(repoRoot, 'TASK.md');
+        const before = fs.readFileSync(taskPath, 'utf8');
+        const children = [`${TASK_ID}-1`, `${TASK_ID}-2`];
+        assert.equal(resolveStrictDecompositionSplitRoutingState(
+            parseTaskQueueEntriesFromContent(before), TASK_ID, children, 'balanced'
+        ).ready, true);
+        const changed = before.split('\n').map(line => line.startsWith(`| ${TASK_ID}-1 |`)
+            ? line.replace('| balanced |', '| fast |') : line).join('\n');
+        fs.writeFileSync(taskPath, changed, 'utf8');
+
+        const result = syncTaskQueueStatusFromStrictDecompositionToDecomposed(repoRoot, TASK_ID, children, 'balanced');
+        assert.notEqual(result.outcome, 'updated');
+        assert.match(result.error_message || '', /complete balanced child task set is not valid/);
+        assert.equal(fs.readFileSync(taskPath, 'utf8'), changed);
     });
 
     it('routes strict split-required decisions through linked parent-derived strict children', () => {

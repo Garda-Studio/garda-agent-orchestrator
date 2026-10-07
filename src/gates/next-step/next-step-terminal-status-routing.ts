@@ -317,6 +317,7 @@ export function resolveDecomposedParentTerminalRoute(options: {
 
 export function resolveStrictDecompositionSplitTerminalRoute(options: {
     taskId: string;
+    childProfile?: string;
     transitionResult: TerminalStatusSyncSummary;
     childRoute: TerminalChildRoute | null;
     continueChildCommand: TerminalRoutingCommand | null;
@@ -327,7 +328,7 @@ export function resolveStrictDecompositionSplitTerminalRoute(options: {
             nextGate: 'strict-decomposition-split-routing',
             title: 'Strict decomposition child routing status sync failed.',
             reason:
-                'A current strict decomposition decision says split-required and linked strict child tasks were detected, but the gate could not transition the parent to DECOMPOSED. ' +
+                `A current strict decomposition decision says split-required and linked ${options.childProfile || 'strict'} child tasks were detected, but the gate could not transition the parent to DECOMPOSED. ` +
                 `Status sync outcome: ${describeStatusSync(options.transitionResult)}. ` +
                 'Do not run parent classify, compile, review, full-suite, completion, or final closeout gates until status sync succeeds.',
             commands: []
@@ -341,7 +342,7 @@ export function resolveStrictDecompositionSplitTerminalRoute(options: {
             nextGate: 'child-task',
             title: 'Strict decomposition split routed; continue with the next child.',
             reason:
-                'A current strict decomposition decision says split-required, and linked parent-derived strict child tasks match the decision artifact. ' +
+                `A current strict decomposition decision says split-required, and linked parent-derived ${options.childProfile || 'strict'} child tasks match the decision artifact. ` +
                 'The gate transitioned the parent to DECOMPOSED, so it is no longer an executable lifecycle scope. ' +
                 `Continue through child chain ${chain}; next unfinished child status is ${formatInlineValue(options.childRoute.status || 'unknown')}. ` +
                 decomposedChildFullSuiteScopeCheckpoint(),
@@ -354,7 +355,7 @@ export function resolveStrictDecompositionSplitTerminalRoute(options: {
         nextGate: null,
         title: 'Strict decomposition split routed; no unfinished child remains.',
         reason:
-            'A current strict decomposition decision says split-required, and linked parent-derived strict child tasks match the decision artifact. ' +
+            `A current strict decomposition decision says split-required, and linked parent-derived ${options.childProfile || 'strict'} child tasks match the decision artifact. ` +
             'The gate transitioned the parent to DECOMPOSED, but no unfinished child task could be resolved from its notes. ' +
             'Do not run classify, compile, review, full-suite, completion, or final closeout gates on the parent.',
         commands: []

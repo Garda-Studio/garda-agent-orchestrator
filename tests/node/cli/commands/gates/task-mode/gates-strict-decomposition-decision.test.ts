@@ -7,15 +7,15 @@ import * as path from 'node:path';
 import { runRecordStrictDecompositionDecisionCommand } from '../../../../../../src/cli/commands/gates';
 
 describe('cli/gates record-strict-decomposition-decision', () => {
-    function writeWorkPackageContract(repoRoot: string): string {
+    function writeWorkPackageContract(repoRoot: string, profile = 'strict', schemaVersion = 1): string {
         const contractPath = path.join(repoRoot, 'runtime', 'tmp', 'T-200-work-package-contract.json');
         fs.mkdirSync(path.dirname(contractPath), { recursive: true });
         fs.writeFileSync(contractPath, `${JSON.stringify({
-            schema_version: 1,
+            schema_version: schemaVersion,
             finding_obligations: [],
             work_packages: [1, 2].map((ordinal) => ({
                 task_id: `T-200-${ordinal}`,
-                profile: 'strict',
+                profile,
                 root_cause_area: `root-cause-${ordinal}`,
                 objective: `Implement independently executable root-cause package ${ordinal}.`,
                 scope_obligations: [`Preserve bounded parent scope obligation ${ordinal}.`],
@@ -101,6 +101,43 @@ describe('cli/gates record-strict-decomposition-decision', () => {
             ['root-cause-1', 'root-cause-2']
         );
         fs.rmSync(repoRoot, { recursive: true, force: true });
+    });
+
+    it('records version-2 balanced split contracts through actual native admission', () => {
+        const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-balanced-split-cli-'));
+        try {
+            const result = runRecordStrictDecompositionDecisionCommand({
+                ...baseOptions(repoRoot),
+                decision: 'split-required',
+                taskProfile: 'balanced',
+                workPackageContractPath: writeWorkPackageContract(repoRoot, 'balanced', 2)
+            });
+            assert.equal(result.exitCode, 0);
+            const artifact = JSON.parse(fs.readFileSync(
+                path.join(repoRoot, 'runtime', 'reviews', 'T-200-strict-decomposition-decision.json'), 'utf8'
+            )) as { proposed_children: Array<{ profile: string }>; work_package_contract: { schema_version: number } };
+            assert.equal(artifact.work_package_contract.schema_version, 2);
+            assert.deepEqual(artifact.proposed_children.map(child => child.profile), ['balanced', 'balanced']);
+            assert.match(fs.readFileSync(path.join(repoRoot, 'runtime', 'task-events', 'T-200.jsonl'), 'utf8'), /STRICT_DECOMPOSITION_DECISION_RECORDED/);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects a foreign version-2 child profile without publishing native evidence', () => {
+        const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-balanced-split-rejected-'));
+        try {
+            assert.throws(() => runRecordStrictDecompositionDecisionCommand({
+                ...baseOptions(repoRoot),
+                decision: 'split-required',
+                taskProfile: 'balanced',
+                workPackageContractPath: writeWorkPackageContract(repoRoot, 'fast', 2)
+            }), /profile is required and must be balanced/);
+            assert.equal(fs.existsSync(path.join(repoRoot, 'runtime', 'reviews', 'T-200-strict-decomposition-decision.json')), false);
+            assert.equal(fs.existsSync(path.join(repoRoot, 'runtime', 'task-events', 'T-200.jsonl')), false);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
     });
 
     it('rejects explicit artifact and metrics paths outside the repo root', () => {

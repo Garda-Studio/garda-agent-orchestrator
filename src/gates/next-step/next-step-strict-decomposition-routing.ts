@@ -514,7 +514,8 @@ export function resolveStrictDecompositionContinuationRoute(params: {
     const splitRoutingState = resolveStrictDecompositionSplitRoutingState(
         params.taskEntries,
         params.taskId,
-        evidence.proposed_child_task_ids
+        evidence.proposed_child_task_ids,
+        evidence.child_task_profile || 'strict'
     );
     if (!splitRoutingState.ready) {
         const riskSignals = params.requirement.riskSignals.length > 0
@@ -532,7 +533,7 @@ export function resolveStrictDecompositionContinuationRoute(params: {
                 `Preserved finding obligations: ${formatNextStepInlineList(evidence.finding_obligation_ids)}. ` +
                 `Linked child tasks: ${formatNextStepInlineList(splitRoutingState.linkedChildTaskIds)}. ` +
                 `Child routing is not ready: ${formatStrictDecompositionSplitRoutingViolations(splitRoutingState)}. ` +
-                'Create and link parent-derived strict child task rows that match the decision artifact before continuing; later scope-budget or review-cycle split latches remain authoritative.',
+                `Create and link parent-derived ${evidence.child_task_profile || 'strict'} child task rows that match the decision artifact before continuing; later scope-budget or review-cycle split latches remain authoritative.`,
             commands: [],
             missingArtifacts: [],
             presentArtifacts: [
@@ -550,7 +551,8 @@ export function resolveStrictDecompositionContinuationRoute(params: {
         input: {
             task_id: params.taskId,
             decision_evidence_hash: evidence.evidence_hash,
-            proposed_child_task_ids: evidence.proposed_child_task_ids
+            proposed_child_task_ids: evidence.proposed_child_task_ids,
+            child_task_profile: evidence.child_task_profile
         },
         preview: () => ({
             outcome: 'updated',
@@ -560,11 +562,13 @@ export function resolveStrictDecompositionContinuationRoute(params: {
             repoRoot: params.repoRoot,
             eventsRoot: params.eventsRoot,
             taskId: params.taskId,
-            proposedChildTaskIds: evidence.proposed_child_task_ids
+            proposedChildTaskIds: evidence.proposed_child_task_ids,
+            expectedChildProfile: evidence.child_task_profile || 'strict'
         })
     });
     const strictSplitRoute = resolveStrictDecompositionSplitTerminalRoute({
         taskId: params.taskId,
+        childProfile: evidence.child_task_profile || 'strict',
         transitionResult: {
             outcome: syncResult.outcome,
             errorMessage: syncResult.error_message

@@ -151,11 +151,13 @@ export function transitionStrictDecompositionParentToDecomposed(params: {
     eventsRoot: string;
     taskId: string;
     proposedChildTaskIds: string[];
+    expectedChildProfile?: string;
 }): TaskQueueStatusSyncResult {
     const syncResult = syncTaskQueueStatusFromStrictDecompositionToDecomposed(
         params.repoRoot,
         params.taskId,
-        params.proposedChildTaskIds
+        params.proposedChildTaskIds,
+        params.expectedChildProfile || 'strict'
     );
     if (syncResult.outcome === 'updated') {
         appendMandatoryTaskEvent(

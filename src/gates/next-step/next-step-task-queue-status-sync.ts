@@ -223,15 +223,16 @@ export function syncTaskQueueStatusFromSplitRequiredToDecomposed(repoRoot: strin
 export function syncTaskQueueStatusFromStrictDecompositionToDecomposed(
     repoRoot: string,
     taskId: string,
-    proposedChildTaskIds: string[]
+    proposedChildTaskIds: string[],
+    expectedChildProfile = 'strict'
 ): TaskQueueStatusSyncResult {
     return syncTaskQueueStatusToDecomposed(repoRoot, taskId, {
         allowedPreviousStatuses: ['TODO', 'IN_PROGRESS', 'IN_REVIEW'],
         validate: (taskEntries) => {
-            const state = resolveStrictDecompositionSplitRoutingState(taskEntries, taskId, proposedChildTaskIds);
+            const state = resolveStrictDecompositionSplitRoutingState(taskEntries, taskId, proposedChildTaskIds, expectedChildProfile);
             return state.ready
                 ? null
-                : 'The complete strict child task set is not valid for an atomic decomposition transition.';
+                : `The complete ${expectedChildProfile} child task set is not valid for an atomic decomposition transition.`;
         }
     });
 }

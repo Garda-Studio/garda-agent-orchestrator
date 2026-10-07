@@ -61,6 +61,7 @@ interface NumericTaskIdRangeEndpoint {
 }
 
 export interface StrictDecompositionSplitRoutingState {
+    expectedChildProfile: string;
     ready: boolean;
     linkedChildTaskIds: string[];
     missingLinkedChildTaskIds: string[];
@@ -758,7 +759,8 @@ function isParentDerivedChildTaskId(parentTaskId: string, childTaskId: string): 
 export function resolveStrictDecompositionSplitRoutingState(
     taskEntries: Map<string, TaskQueueEntry>,
     parentTaskId: string,
-    proposedChildTaskIds: string[]
+    proposedChildTaskIds: string[],
+    expectedChildProfile = 'strict'
 ): StrictDecompositionSplitRoutingState {
     const parentEntry = taskEntries.get(parentTaskId);
     const linkedChildTaskIds = extractExplicitLinkedChildTaskIds(
@@ -780,7 +782,7 @@ export function resolveStrictDecompositionSplitRoutingState(
     const nonStrictChildTaskIds = proposedChildTaskIds
         .filter((childTaskId) => {
             const childEntry = taskEntries.get(childTaskId);
-            return childEntry && String(childEntry.profile || '').trim().toLowerCase() !== 'strict';
+            return childEntry && String(childEntry.profile || '').trim().toLowerCase() !== expectedChildProfile;
         });
     // Strict routing shares the complete child-quality contract with generic split-required routing.
     const quality = childSetQuality(taskEntries, proposedChildTaskIds);
@@ -800,6 +802,7 @@ export function resolveStrictDecompositionSplitRoutingState(
         ready,
         linkedChildTaskIds,
         missingLinkedChildTaskIds,
+        expectedChildProfile,
         missingChildTaskIds,
         nonParentDerivedChildTaskIds,
         unexpectedLinkedChildTaskIds,
@@ -829,7 +832,7 @@ export function formatStrictDecompositionSplitRoutingViolations(state: StrictDec
         violations.push(`linked child tasks not declared in the decision artifact: ${state.unexpectedLinkedChildTaskIds.join(', ')}`);
     }
     if (state.nonStrictChildTaskIds.length > 0) {
-        violations.push(`child tasks without strict profile: ${state.nonStrictChildTaskIds.join(', ')}`);
+        violations.push(`child tasks without ${state.expectedChildProfile} profile: ${state.nonStrictChildTaskIds.join(', ')}`);
     }
     if (state.terminalChildTaskIds.length > 0) {
         violations.push(`terminal child tasks cannot establish a new split: ${state.terminalChildTaskIds.join(', ')}`);

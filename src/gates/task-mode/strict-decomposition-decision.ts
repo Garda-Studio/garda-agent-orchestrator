@@ -35,7 +35,7 @@ export type StrictDecompositionDecision = (typeof STRICT_DECOMPOSITION_DECISIONS
 
 export interface StrictDecompositionProposedChild {
     task_id: string;
-    profile: 'strict';
+    profile: string;
 }
 
 export interface StrictDecompositionDecisionArtifact {
@@ -84,6 +84,7 @@ export interface StrictDecompositionDecisionEvidenceResult {
     task_summary_sha256: string | null;
     expected_review_types: string[];
     proposed_child_task_ids: string[];
+    child_task_profile: string | null;
     work_package_task_ids: string[];
     work_package_root_cause_areas: string[];
     finding_obligation_ids: string[];
@@ -158,7 +159,7 @@ function normalizeAtomicityConstraints(value: unknown): string[] {
     return uniqueConstraints;
 }
 
-function normalizeProposedChildren(taskId: string, decision: StrictDecompositionDecision, value: unknown): StrictDecompositionProposedChild[] {
+function normalizeProposedChildTaskIds(taskId: string, decision: StrictDecompositionDecision, value: unknown): string[] {
     const childIds = toStringArray(value, { trimValues: true })
         .flatMap((entry) => String(entry).split(/[\r\n,;]+/))
         .map((entry) => entry.trim())
@@ -180,10 +181,7 @@ function normalizeProposedChildren(taskId: string, decision: StrictDecomposition
         if (normalizedChildId.toLowerCase() === taskId.toLowerCase()) {
             throw new Error('ProposedChildTaskId must not equal the parent task id.');
         }
-        return {
-            task_id: normalizedChildId,
-            profile: 'strict'
-        };
+        return normalizedChildId;
     });
 }
 
@@ -235,26 +233,28 @@ export function buildStrictDecompositionDecisionArtifact(
         .flatMap((entry) => String(entry).split(/[\r\n,;]+/))
         .map((entry) => entry.trim())
         .filter(Boolean);
-    let proposedChildren = rawProposedChildTaskIds.length > 0 || decision !== 'split-required'
-        ? normalizeProposedChildren(taskId, decision, rawProposedChildTaskIds)
+    let proposedChildTaskIds = rawProposedChildTaskIds.length > 0 || decision !== 'split-required'
+        ? normalizeProposedChildTaskIds(taskId, decision, rawProposedChildTaskIds)
         : [];
     const workPackageContract = decision === 'split-required'
         ? normalizeStrictDecompositionWorkPackageContract(
             taskId,
             options.workPackageContract,
-            expectedReviews.expected_review_types
+            expectedReviews.expected_review_types,
+            taskProfile
         )
         : null;
+    const childProfile = workPackageContract?.work_packages[0]?.profile || 'strict';
     if (decision !== 'split-required' && options.workPackageContract != null) {
         throw new Error('WorkPackageContract is only allowed for decision split-required.');
     }
     if (workPackageContract) {
         const contractTaskIds = workPackageContract.work_packages.map((entry) => entry.task_id);
-        if (proposedChildren.length === 0) {
-            proposedChildren = normalizeProposedChildren(taskId, decision, contractTaskIds);
+        if (proposedChildTaskIds.length === 0) {
+            proposedChildTaskIds = normalizeProposedChildTaskIds(taskId, decision, contractTaskIds);
         } else if (
-            proposedChildren.length !== contractTaskIds.length
-            || proposedChildren.some((entry) => !contractTaskIds.includes(entry.task_id))
+            proposedChildTaskIds.length !== contractTaskIds.length
+            || proposedChildTaskIds.some((childTaskId) => !contractTaskIds.includes(childTaskId))
         ) {
             throw new Error('ProposedChildTaskId values must exactly match WorkPackageContract work package task ids.');
         }
@@ -262,6 +262,10 @@ export function buildStrictDecompositionDecisionArtifact(
     const workPackageContractSha256 = workPackageContract
         ? stringSha256(JSON.stringify(workPackageContract))
         : null;
+    const proposedChildren = proposedChildTaskIds.map((childTaskId) => ({
+        task_id: childTaskId,
+        profile: childProfile
+    }));
 
     return {
         timestamp_utc: new Date().toISOString(),
@@ -298,6 +302,7 @@ function buildUnknownEvidence(taskId: string | null): StrictDecompositionDecisio
         task_summary_sha256: null,
         expected_review_types: [],
         proposed_child_task_ids: [],
+        child_task_profile: null,
         work_package_task_ids: [],
         work_package_root_cause_areas: [],
         finding_obligation_ids: [],
@@ -400,11 +405,6 @@ export function getStrictDecompositionDecisionEvidence(
                 result.evidence_status = 'EVIDENCE_INVALID: Proposed child entries must be objects.';
                 return result;
             }
-            const childProfile = String((child as Record<string, unknown>).profile || '').trim().toLowerCase();
-            if (childProfile !== 'strict') {
-                result.evidence_status = 'EVIDENCE_INVALID: Proposed child profile must be strict.';
-                return result;
-            }
         }
     }
 
@@ -432,6 +432,16 @@ export function getStrictDecompositionDecisionEvidence(
         if (result.work_package_contract_sha256 !== rebuiltArtifact.work_package_contract_sha256) {
             throw new Error('WorkPackageContract sha256 is missing or mismatched.');
         }
+        const childProfile = rebuiltArtifact.proposed_children[0]?.profile || 'strict';
+        if (Array.isArray(artifactObject.proposed_children)) {
+            for (const child of artifactObject.proposed_children) {
+                const declaredProfile = (child as Record<string, unknown>).profile;
+                if (typeof declaredProfile !== 'string' || declaredProfile.trim().toLowerCase() !== childProfile) {
+                    throw new Error(`Proposed child profile must be ${childProfile}.`);
+                }
+            }
+        }
+        result.child_task_profile = rebuiltArtifact.proposed_children.length > 0 ? childProfile : null;
         if (rebuiltArtifact.work_package_contract) {
             const sourceViolations = validateStrictDecompositionWorkPackageFindingSources(
                 repoRoot,

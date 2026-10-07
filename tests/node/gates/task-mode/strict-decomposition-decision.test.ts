@@ -78,13 +78,18 @@ function workPackageContract(taskId = 'T-100') {
     };
 }
 
-function scopeOnlyWorkPackageContract(taskId = 'T-100', taskIds = [`${taskId}-1`, `${taskId}-2`]) {
+function scopeOnlyWorkPackageContract(
+    taskId = 'T-100',
+    taskIds = [`${taskId}-1`, `${taskId}-2`],
+    profile = 'strict',
+    schemaVersion = 1
+) {
     return {
-        schema_version: 1,
+        schema_version: schemaVersion,
         finding_obligations: [],
         work_packages: taskIds.map((childTaskId, index) => ({
             task_id: childTaskId,
-            profile: 'strict',
+            profile,
             root_cause_area: `root-cause-${index + 1}`,
             objective: `Implement independently executable root-cause package ${index + 1}.`,
             scope_obligations: [`Preserve bounded parent scope obligation ${index + 1}.`],
@@ -158,6 +163,94 @@ function writeAcceptedFindingValidation(repoRoot: string, taskId: string): strin
 }
 
 describe('gates/strict-decomposition-decision', () => {
+    function profiledSplitOptions(profile: string, schemaVersion = 2) {
+        return {
+            taskId: 'T-100',
+            decision: 'split-required',
+            taskProfile: profile,
+            taskSummary: 'Split independently executable packages under the frozen parent profile.',
+            reason: 'Separate root causes need bounded sequential child execution.',
+            scopeRisk: 'Keep profile authority, exact child identity and native transitions bound.',
+            expectedReviewTypes: ['code'],
+            atomicityConstraints: ['Retain the immutable child profile through every boundary.'],
+            workPackageContract: scopeOnlyWorkPackageContract('T-100', undefined, profile, schemaVersion)
+        };
+    }
+
+    it('binds version-2 work packages and proposed children to the immutable parent profile', () => {
+        for (const profile of ['balanced', 'strict', 'custom-review']) {
+            const artifact = buildStrictDecompositionDecisionArtifact(profiledSplitOptions(profile));
+
+            assert.equal(artifact.work_package_contract?.schema_version, 2);
+            assert.deepEqual(artifact.proposed_children, [
+                { task_id: 'T-100-1', profile },
+                { task_id: 'T-100-2', profile }
+            ]);
+        }
+    });
+
+    it('preserves supported Unicode parent profile names in version-2 split contracts', () => {
+        const profile = 'проверка-2';
+        const artifact = buildStrictDecompositionDecisionArtifact(profiledSplitOptions(profile));
+
+        assert.equal(artifact.task_profile, profile);
+        assert.deepEqual(artifact.proposed_children, [
+            { task_id: 'T-100-1', profile },
+            { task_id: 'T-100-2', profile }
+        ]);
+    });
+
+    it('rejects unsupported version-2 parent profile names at the canonical profile boundary', () => {
+        assert.throws(
+            () => buildStrictDecompositionDecisionArtifact(profiledSplitOptions('invalid-profile-')),
+            /Invalid profile name/
+        );
+    });
+
+    it('rejects missing or foreign version-2 work-package profiles', () => {
+        const options = profiledSplitOptions('balanced');
+        options.workPackageContract.work_packages[0].profile = 'strict';
+        assert.throws(() => buildStrictDecompositionDecisionArtifact(options), /profile is required and must be balanced/);
+        delete (options.workPackageContract.work_packages[0] as { profile?: string }).profile;
+        assert.throws(() => buildStrictDecompositionDecisionArtifact(options), /profile is required and must be balanced/);
+        (options.workPackageContract.work_packages[0] as { profile?: unknown }).profile = ['balanced'];
+        assert.throws(() => buildStrictDecompositionDecisionArtifact(options), /profile is required and must be balanced/);
+    });
+
+    it('rejects unsupported work-package versions instead of inferring profile authority', () => {
+        assert.throws(
+            () => buildStrictDecompositionDecisionArtifact(profiledSplitOptions('balanced', 3)),
+            /schema_version must equal 1 or 2/
+        );
+    });
+
+    it('preserves legacy version-1 strict children for a balanced parent', () => {
+        const options = profiledSplitOptions('balanced', 1);
+        options.workPackageContract = scopeOnlyWorkPackageContract();
+        const artifact = buildStrictDecompositionDecisionArtifact(options);
+        assert.deepEqual(artifact.proposed_children.map(child => child.profile), ['strict', 'strict']);
+    });
+
+    it('rejects tampered version-2 proposed child profiles and foreign parent bindings', () => {
+        const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'decomposition-v2-profile-'));
+        try {
+            const options = profiledSplitOptions('balanced');
+            const artifact = buildStrictDecompositionDecisionArtifact(options);
+            const artifactPath = resolveStrictDecompositionDecisionArtifactPath(repoRoot, 'T-100');
+            writeJsonArtifact(artifactPath, artifact);
+            assert.equal(getStrictDecompositionDecisionEvidence(repoRoot, 'T-100', '', options.taskSummary, 'balanced').evidence_status, 'PASS');
+            assert.equal(getStrictDecompositionDecisionEvidence(repoRoot, 'T-100', '', options.taskSummary, 'strict').evidence_status, 'EVIDENCE_TASK_PROFILE_MISMATCH');
+            artifact.proposed_children[0].profile = 'fast';
+            writeJsonArtifact(artifactPath, artifact);
+            assert.match(getStrictDecompositionDecisionEvidence(repoRoot, 'T-100', '', options.taskSummary, 'balanced').evidence_status, /Proposed child profile must be balanced/);
+            (artifact.proposed_children[0] as { profile: unknown }).profile = ['balanced'];
+            writeJsonArtifact(artifactPath, artifact);
+            assert.match(getStrictDecompositionDecisionEvidence(repoRoot, 'T-100', '', options.taskSummary, 'balanced').evidence_status, /Proposed child profile must be balanced/);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+
     it('builds split-required evidence with strict parent-derived children', () => {
         const artifact = buildStrictDecompositionDecisionArtifact({
             taskId: 'T-100',

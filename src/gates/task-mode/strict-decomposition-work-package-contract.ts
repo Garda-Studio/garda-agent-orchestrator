@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { assertValidTaskId } from '../../gate-runtime/task-events';
+import { assertValidProfileName } from '../../cli/commands/profile/profile-model';
 import {
     isPathRealpathInsideRoot,
     joinOrchestratorPath,
@@ -39,7 +40,7 @@ export interface StrictDecompositionFindingObligation {
 
 export interface StrictDecompositionWorkPackage {
     task_id: string;
-    profile: 'strict';
+    profile: string;
     root_cause_area: string;
     objective: string;
     scope_obligations: string[];
@@ -49,12 +50,13 @@ export interface StrictDecompositionWorkPackage {
 }
 
 export interface StrictDecompositionWorkPackageContract {
-    schema_version: 1;
+    schema_version: 1 | 2;
     finding_obligations: StrictDecompositionFindingObligation[];
     work_packages: StrictDecompositionWorkPackage[];
 }
 
-const CONTRACT_SCHEMA_VERSION = 1;
+const LEGACY_CONTRACT_SCHEMA_VERSION = 1;
+const PARENT_PROFILE_CONTRACT_SCHEMA_VERSION = 2;
 const MAX_CONTRACT_FILE_BYTES = 256 * 1024;
 const MAX_FINDING_OBLIGATIONS = 256;
 const MAX_WORK_PACKAGES = 64;
@@ -242,7 +244,7 @@ function normalizeFindingObligation(value: unknown, parentTaskId: string, index:
     };
 }
 
-function normalizeWorkPackage(value: unknown, parentTaskId: string, index: number): StrictDecompositionWorkPackage {
+function normalizeWorkPackage(value: unknown, parentTaskId: string, index: number, expectedProfile: string): StrictDecompositionWorkPackage {
     const label = `WorkPackage[${index}]`;
     if (!isRecord(value)) {
         throw new Error(`${label} must be an object.`);
@@ -257,9 +259,9 @@ function normalizeWorkPackage(value: unknown, parentTaskId: string, index: numbe
         'finding_obligation_ids',
         'required_review_types'
     ], label);
-    const profile = String(value.profile || '').trim().toLowerCase();
-    if (profile !== 'strict') {
-        throw new Error(`${label}.profile is required and must be strict.`);
+    const profile = typeof value.profile === 'string' ? value.profile.trim().toLowerCase() : '';
+    if (profile !== expectedProfile) {
+        throw new Error(`${label}.profile is required and must be ${expectedProfile}.`);
     }
     const findingObligationIds = normalizeUniqueTextArray(
         value.finding_obligation_ids,
@@ -273,7 +275,7 @@ function normalizeWorkPackage(value: unknown, parentTaskId: string, index: numbe
     }
     return {
         task_id: normalizeTaskIdArray([value.task_id], `${label}.task_id`, parentTaskId)[0],
-        profile: 'strict',
+        profile: expectedProfile,
         root_cause_area: normalizeRootCauseArea(value.root_cause_area, `${label}.root_cause_area`),
         objective: normalizeText(value.objective, `${label}.objective`),
         scope_obligations: normalizeUniqueTextArray(value.scope_obligations, `${label}.scope_obligations`),
@@ -294,16 +296,25 @@ function equalSets(left: readonly string[], right: readonly string[]): boolean {
 export function normalizeStrictDecompositionWorkPackageContract(
     parentTaskIdValue: unknown,
     value: unknown,
-    expectedReviewTypesValue: unknown
+    expectedReviewTypesValue: unknown,
+    parentProfileValue: unknown = 'strict'
 ): StrictDecompositionWorkPackageContract {
     const parentTaskId = assertValidTaskId(String(parentTaskIdValue || '').trim());
     if (!isRecord(value)) {
         throw new Error('Decision split-required requires a WorkPackageContract object.');
     }
     assertExactKeys(value, ['schema_version', 'finding_obligations', 'work_packages'], 'WorkPackageContract');
-    if (value.schema_version !== CONTRACT_SCHEMA_VERSION) {
-        throw new Error(`WorkPackageContract.schema_version must equal ${CONTRACT_SCHEMA_VERSION}.`);
+    const schemaVersion = value.schema_version;
+    if (schemaVersion !== LEGACY_CONTRACT_SCHEMA_VERSION && schemaVersion !== PARENT_PROFILE_CONTRACT_SCHEMA_VERSION) {
+        throw new Error('WorkPackageContract.schema_version must equal 1 or 2.');
     }
+    const expectedProfile = schemaVersion === LEGACY_CONTRACT_SCHEMA_VERSION
+        ? 'strict'
+        : typeof parentProfileValue === 'string' ? parentProfileValue.trim().toLowerCase() : '';
+    if (!expectedProfile) {
+        throw new Error('WorkPackageContract requires a valid immutable parent profile.');
+    }
+    assertValidProfileName(expectedProfile);
     if (!Array.isArray(value.finding_obligations)) {
         throw new Error('WorkPackageContract.finding_obligations must be an array.');
     }
@@ -321,7 +332,7 @@ export function normalizeStrictDecompositionWorkPackageContract(
         (entry, index) => normalizeFindingObligation(entry, parentTaskId, index)
     );
     const workPackages = value.work_packages.map(
-        (entry, index) => normalizeWorkPackage(entry, parentTaskId, index)
+        (entry, index) => normalizeWorkPackage(entry, parentTaskId, index, expectedProfile)
     );
     const obligationIds = findingObligations.map((entry) => entry.obligation_id);
     if (new Set(obligationIds).size !== obligationIds.length) {
@@ -391,7 +402,7 @@ export function normalizeStrictDecompositionWorkPackageContract(
     }
 
     return {
-        schema_version: 1,
+        schema_version: schemaVersion,
         finding_obligations: findingObligations,
         work_packages: workPackages
     };
