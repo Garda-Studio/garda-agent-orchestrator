@@ -29,8 +29,11 @@ import {
     type TaskProfilePolicySnapshot
 } from '../../../../src/policy/task-profile-policy-snapshot';
 import {
-    listSplitRequiredWip
+    listSplitRequiredWip,
+    restoreSplitRequiredWip
 } from '../../../../src/gates/split-required/split-required-wip-operations';
+import { captureAndSuspendSplitRequiredWip } from '../../../../src/gates/split-required/split-required-wip-capture';
+import { suspendStrictDecompositionWipIfRequired } from '../../../../src/gates/next-step/next-step-strict-decomposition-wip';
 import {
     initGitRepo,
     runGitFixtureCommand
@@ -836,6 +839,173 @@ describe('gates/next-step strict decomposition', () => {
         initGitRepo(repoRoot);
         return profileSnapshot;
     }
+
+    function seedSuspendedParentAfterChildCommit(ignoredEvidencePath?: string) {
+        const repoRoot = makeTempRepo();
+        const childPath = path.join(repoRoot, 'src', 'child.ts');
+        fs.writeFileSync(childPath, 'export const child = 1;\n');
+        const profileSnapshot = seedVersion2BalancedSplit(repoRoot);
+        const base = runGitFixtureCommand(repoRoot, ['rev-parse', 'HEAD']).stdout.trim();
+        fs.writeFileSync(path.join(repoRoot, 'src', 'app.ts'), 'export const value = 2;\n');
+        const ignoredInput = 'garda-agent-orchestrator/runtime/tmp/shared-parent-input.txt';
+        fs.mkdirSync(path.dirname(path.join(repoRoot, ignoredInput)), { recursive: true });
+        fs.writeFileSync(path.join(repoRoot, ignoredInput), 'original ignored parent input\n');
+        if (ignoredEvidencePath) {
+            fs.mkdirSync(path.dirname(path.join(repoRoot, ignoredEvidencePath)), { recursive: true });
+            fs.writeFileSync(path.join(repoRoot, ignoredEvidencePath), 'retained gate-owned evidence\n');
+        }
+        const preflightPath = writeFrozenPreflightScope(repoRoot, TASK_ID,
+            ['src/app.ts', ignoredInput, ...(ignoredEvidencePath ? [ignoredEvidencePath] : [])], profileSnapshot);
+        seedRulePack(repoRoot, TASK_ID, 'POST_PREFLIGHT',
+            path.join(reviewsRoot(repoRoot), `${TASK_ID}-task-mode.json`), preflightPath);
+        if (ignoredEvidencePath) {
+            const initialCapture = captureAndSuspendSplitRequiredWip({
+                repoRoot, taskId: TASK_ID, preflightPath, guardKind: 'strict_decomposition',
+                guardReason: 'Capture legacy parent scope while retaining gate-owned ignored evidence.'
+            });
+            assert.equal(initialCapture.status, 'CAPTURED', initialCapture.violations.join('\n'));
+            assert.equal(initialCapture.untracked_files.includes(ignoredEvidencePath), false);
+            // Already-DECOMPOSED legacy status is fixture input, not transition authority.
+            const queuePath = path.join(repoRoot, 'TASK.md');
+            fs.writeFileSync(queuePath, fs.readFileSync(queuePath, 'utf8')
+                .replace(`| ${TASK_ID} | TODO |`, `| ${TASK_ID} | DECOMPOSED |`));
+        } else {
+            const initialRoute = resolveNextStep({ taskId: TASK_ID, repoRoot });
+            assert.equal(initialRoute.status, 'DECOMPOSED', initialRoute.reason);
+            assert.equal(initialRoute.next_gate, 'child-task');
+        }
+        const suspendedParentBytes = fs.readFileSync(path.join(repoRoot, 'src', 'app.ts'));
+        const capture = listSplitRequiredWip({ repoRoot, taskId: TASK_ID });
+        assert.equal(capture.status, 'FOUND');
+        assert.equal(capture.manifests.length, 1);
+        const manifestPath = capture.manifests[0].manifest_path;
+        const packageBytes: Array<{ filePath: string; bytes: Buffer }> = [];
+        function snapshotDirectory(directory: string): void {
+            for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+                const filePath = path.join(directory, entry.name);
+                assert.equal(entry.isSymbolicLink(), false);
+                if (entry.isDirectory()) snapshotDirectory(filePath);
+                else packageBytes.push({ filePath, bytes: fs.readFileSync(filePath) });
+            }
+        }
+        snapshotDirectory(path.dirname(manifestPath));
+        const queuePath = path.join(repoRoot, 'TASK.md');
+        // Queue status is a fixture input; acceptance authority is tested by its owning gates.
+        fs.writeFileSync(queuePath, fs.readFileSync(queuePath, 'utf8')
+            .replace(`| ${TASK_ID}-1 | TODO |`, `| ${TASK_ID}-1 | DONE |`));
+        fs.writeFileSync(childPath, 'export const child = 2;\n');
+        runGitFixtureCommand(repoRoot, ['add', '--', 'src/child.ts']);
+        runGitFixtureCommand(repoRoot, ['commit', '-m', 'Real child source commit after parent WIP suspension']);
+        const childCommit = runGitFixtureCommand(repoRoot, ['rev-parse', 'HEAD']).stdout.trim();
+        assert.notEqual(childCommit, base);
+        assert.equal(runGitFixtureCommand(repoRoot, ['status', '--porcelain=v1', '--', 'src']).stdout.trim(), '');
+        return { repoRoot, preflightPath, manifestPath, packageBytes, base, childCommit, childPath, ignoredInput, suspendedParentBytes };
+    }
+
+    it('rejects original-HEAD recapture and routes a suspended balanced parent after a real child commit without changing saved WIP', () => {
+        const fixture = seedSuspendedParentAfterChildCommit();
+        const { repoRoot, preflightPath, manifestPath, packageBytes, base, childCommit } = fixture;
+        const preflightBytes = fs.readFileSync(preflightPath);
+        const directCapture = captureAndSuspendSplitRequiredWip({
+            repoRoot, taskId: TASK_ID, preflightPath, guardKind: 'strict_decomposition', guardReason: 'Verify deep capture identity remains strict.'
+        });
+        assert.equal(directCapture.status, 'BLOCKED');
+        assert.ok(directCapture.violations.some(value => value.includes(`expected HEAD ${base}; found ${childCommit}`)));
+        const preview = restoreSplitRequiredWip({
+            repoRoot, taskId: TASK_ID, manifestPath, includePaths: ['src/app.ts'], dryRun: true
+        });
+        assert.equal(preview.status, 'DRY_RUN_OK', preview.violations.join('\n'));
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+
+        assert.equal(result.status, 'DECOMPOSED', `${result.next_gate}: ${result.reason}`);
+        assert.equal(result.next_gate, 'child-task');
+        assert.ok(result.commands[0].command.includes(`next-step "${TASK_ID}-2"`));
+        assert.equal(suspendStrictDecompositionWipIfRequired({ repoRoot, taskId: TASK_ID }).status, 'NOT_REQUIRED');
+        assert.deepEqual(fs.readFileSync(path.join(repoRoot, 'src', 'app.ts')), fixture.suspendedParentBytes);
+        assert.equal(fs.readFileSync(fixture.childPath, 'utf8'), 'export const child = 2;\n');
+        assert.deepEqual(fs.readFileSync(preflightPath), preflightBytes);
+        for (const saved of packageBytes) assert.deepEqual(fs.readFileSync(saved.filePath), saved.bytes);
+        assert.equal(listSplitRequiredWip({ repoRoot, taskId: TASK_ID }).manifests.length, 1);
+        assert.equal(runGitFixtureCommand(repoRoot, ['rev-parse', 'HEAD']).stdout.trim(), childCommit);
+    });
+
+    it('rejects original-HEAD recapture for present staged, unstaged, visible or ignored implementation WIP', () => {
+        const kinds = ['staged', 'unstaged', 'visible-untracked', 'ignored-task-tmp', 'ignored-allowed-input'];
+        const actualStates: Array<{ kind: string; status: string }> = [];
+        for (const kind of kinds) {
+            const fixture = seedSuspendedParentAfterChildCommit();
+            const { repoRoot, packageBytes, base, childCommit } = fixture;
+            const relativePath = kind === 'visible-untracked' ? 'unowned.ts'
+                : kind === 'ignored-task-tmp' ? `garda-agent-orchestrator/runtime/tmp/${TASK_ID}-draft.json`
+                    : kind === 'ignored-allowed-input' ? fixture.ignoredInput : 'src/app.ts';
+            const filePath = path.join(repoRoot, relativePath);
+            fs.mkdirSync(path.dirname(filePath), { recursive: true });
+            const bytes = Buffer.from('current implementation must stay intact\n');
+            fs.writeFileSync(filePath, bytes);
+            if (kind === 'staged') runGitFixtureCommand(repoRoot, ['add', '--', relativePath]);
+
+            const result = suspendStrictDecompositionWipIfRequired({ repoRoot, taskId: TASK_ID });
+
+            actualStates.push({ kind, status: result.status });
+            assert.ok(result.violations.some(value => value.includes(`expected HEAD ${base}; found ${childCommit}`)), kind);
+            assert.deepEqual(fs.readFileSync(filePath), bytes, kind);
+            for (const saved of packageBytes) assert.deepEqual(fs.readFileSync(saved.filePath), saved.bytes, kind);
+        }
+        assert.deepEqual(actualStates, kinds.map(kind => ({ kind, status: 'BLOCKED' })));
+    });
+
+    it('rejects false recapture of native-retained ignored evidence after a real child commit', () => {
+        const evidencePaths = [
+            `garda-agent-orchestrator/runtime/reviews/${TASK_ID}-legacy-evidence.json`,
+            `garda-agent-orchestrator/runtime/task-events/${TASK_ID}-legacy-evidence.json`,
+            `garda-agent-orchestrator/runtime/task-ledger/${TASK_ID}-legacy-evidence.json`,
+            `garda-agent-orchestrator/runtime/project-memory/${TASK_ID}-legacy-evidence.json`,
+            `garda-agent-orchestrator/runtime/wip/notes/${TASK_ID}-legacy-evidence.json`,
+            'garda-agent-orchestrator/runtime/metrics.json'
+        ];
+        const actualStates: Array<{ path: string; status: string; nextGate: string | null }> = [];
+        for (const evidencePath of evidencePaths) {
+            const fixture = seedSuspendedParentAfterChildCommit(evidencePath);
+            const { repoRoot, manifestPath, packageBytes, childCommit } = fixture;
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            assert.ok(manifest.ignored_runtime_artifacts.includes(evidencePath));
+            const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+            actualStates.push({ path: evidencePath, status: result.status, nextGate: result.next_gate });
+            assert.equal(fs.readFileSync(path.join(repoRoot, evidencePath), 'utf8'), 'retained gate-owned evidence\n');
+            assert.equal(runGitFixtureCommand(repoRoot, ['rev-parse', 'HEAD']).stdout.trim(), childCommit);
+            for (const saved of packageBytes) assert.deepEqual(fs.readFileSync(saved.filePath), saved.bytes, evidencePath);
+        }
+        assert.deepEqual(actualStates, evidencePaths.map(filePath => ({ path: filePath, status: 'DECOMPOSED', nextGate: 'child-task' })));
+    });
+
+    it('rejects missing or foreign preflight identity and unavailable Git inventory instead of claiming no capture is required', () => {
+        const kinds = ['missing-task-id', 'foreign-task-id', 'invalid-preflight', 'unavailable-git'];
+        const actualStates: Array<{ kind: string; status: string }> = [];
+        for (const kind of kinds) {
+            const fixture = seedSuspendedParentAfterChildCommit();
+            const { repoRoot, preflightPath, packageBytes } = fixture;
+            const gitPath = path.join(repoRoot, '.git');
+            const savedGitPath = path.join(repoRoot, 'preserved-git-fixture');
+            if (kind === 'unavailable-git') fs.renameSync(gitPath, savedGitPath);
+            else if (kind === 'invalid-preflight') fs.writeFileSync(preflightPath, '{invalid json');
+            else {
+                const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8'));
+                if (kind === 'missing-task-id') delete preflight.task_id;
+                else preflight.task_id = 'T-FOREIGN';
+                writeJson(preflightPath, preflight);
+            }
+            try {
+                const result = suspendStrictDecompositionWipIfRequired({ repoRoot, taskId: TASK_ID });
+                actualStates.push({ kind, status: result.status });
+                assert.ok(result.violations.length > 0, kind);
+                for (const saved of packageBytes) assert.deepEqual(fs.readFileSync(saved.filePath), saved.bytes, kind);
+            } finally {
+                if (kind === 'unavailable-git') fs.renameSync(savedGitPath, gitPath);
+            }
+        }
+        assert.deepEqual(actualStates, kinds.map(kind => ({ kind, status: 'BLOCKED' })));
+    });
 
     it('routes version-2 balanced children through native WIP suspension and queue transition', () => {
         const repoRoot = makeTempRepo();

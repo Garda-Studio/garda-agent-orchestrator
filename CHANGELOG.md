@@ -356,3 +356,8 @@
 
 ### Unreleased — guarded decomposition profiles
 - Add version-2 work-package contracts bound to the frozen parent profile, including balanced native child routing, while preserving version-1 strict compatibility.
+
+- Route decomposed parents after a clean child source commit without recapturing
+  already suspended WIP against the original HEAD. Inspect current tracked,
+  visible and authorized ignored inputs, excluding exactly the evidence retained
+  by native capture; retain native capture and restore guards.

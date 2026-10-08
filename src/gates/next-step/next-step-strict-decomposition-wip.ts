@@ -1,6 +1,15 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
+import { isPlainRecord } from '../../core/records';
+import {
+    collectCapturedUntrackedFiles,
+    collectTrackedChangeFiles,
+    collectVisibleUntrackedFiles,
+    readPreflightChangedFileScope
+} from '../full-suite/full-suite-repair-capture';
+import { safeReadJson } from '../task-audit/task-audit-summary-collectors';
 import {
     captureAndSuspendSplitRequiredWip
 } from '../split-required/split-required-wip-capture';
@@ -24,6 +33,48 @@ export type StrictDecompositionWipSuspensionResult = SplitRequiredWipCaptureResu
     violations: string[];
 };
 
+function noWipSuspensionRequired(): StrictDecompositionWipSuspensionResult {
+    return {
+        status: 'NOT_REQUIRED',
+        manifest_path: null,
+        manifest_sha256: null,
+        tracked_files: [],
+        untracked_files: [],
+        violations: []
+    };
+}
+
+function isRetainedIgnoredRuntimeEvidence(filePath: string): boolean {
+    // Match the private split-capture contract; inventory paths are already normalized.
+    const lower = filePath.toLowerCase();
+    return lower.startsWith('garda-agent-orchestrator/runtime/reviews/')
+        || lower.startsWith('garda-agent-orchestrator/runtime/task-events/')
+        || lower.startsWith('garda-agent-orchestrator/runtime/task-ledger/')
+        || lower.startsWith('garda-agent-orchestrator/runtime/project-memory/')
+        || lower.startsWith('garda-agent-orchestrator/runtime/wip/')
+        || lower.startsWith('garda-agent-orchestrator/runtime/metrics');
+}
+
+function hasCurrentImplementationWip(repoRoot: string, taskId: string, preflightPath: string): boolean {
+    try {
+        const preflight = safeReadJson(preflightPath);
+        if (!isPlainRecord(preflight) || preflight.task_id !== taskId) return true;
+        const scope = readPreflightChangedFileScope(repoRoot, preflightPath, taskId);
+        if (scope.violations.length > 0) return true;
+        const trackedFiles = collectTrackedChangeFiles(repoRoot).all
+            .filter(filePath => filePath !== TASK_QUEUE_FILENAME);
+        const untrackedFiles = collectVisibleUntrackedFiles(repoRoot)
+            .filter(filePath => filePath !== `${TASK_QUEUE_FILENAME}.garda-status-sync.lock/owner.json`);
+        return trackedFiles.length > 0
+            || untrackedFiles.length > 0
+            || collectCapturedUntrackedFiles(repoRoot, taskId, scope.allowed)
+                .some(filePath => !isRetainedIgnoredRuntimeEvidence(filePath));
+    } catch {
+        // An uncertain inventory must still go through guarded native capture.
+        return true;
+    }
+}
+
 export function suspendStrictDecompositionWipIfRequired(params: {
     repoRoot: string;
     taskId: string;
@@ -34,14 +85,7 @@ export function suspendStrictDecompositionWipIfRequired(params: {
         params.taskId
     );
     if (evidence.evidence_status !== 'PASS' || evidence.decision !== 'split-required') {
-        return {
-            status: 'NOT_REQUIRED',
-            manifest_path: null,
-            manifest_sha256: null,
-            tracked_files: [],
-            untracked_files: [],
-            violations: []
-        };
+        return noWipSuspensionRequired();
     }
 
     const preflightPath = joinOrchestratorPath(
@@ -49,14 +93,10 @@ export function suspendStrictDecompositionWipIfRequired(params: {
         path.join('runtime', 'reviews', `${params.taskId}-preflight.json`)
     );
     if (!fs.existsSync(preflightPath)) {
-        return {
-            status: 'NOT_REQUIRED',
-            manifest_path: null,
-            manifest_sha256: null,
-            tracked_files: [],
-            untracked_files: [],
-            violations: []
-        };
+        return noWipSuspensionRequired();
+    }
+    if (!hasCurrentImplementationWip(params.repoRoot, params.taskId, preflightPath)) {
+        return noWipSuspensionRequired();
     }
 
     return captureAndSuspendSplitRequiredWip({
