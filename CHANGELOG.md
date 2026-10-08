@@ -1,5 +1,8 @@
 # Changelog
 
+- Integrate accepted generic event admission checks before timeline writes and terminal cleanup.
+
+
 - Integrate accepted dashboard escaping, task requests and local UI admission checks.
 
 

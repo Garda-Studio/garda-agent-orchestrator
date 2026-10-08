@@ -37,6 +37,7 @@ import {
     parseJsonOption
 } from '../../../gate-cli/gates-parser';
 import { requireResolvedPath } from '../../shared-command-utils';
+import { assertGenericTaskEventAdmission } from '../../../../gate-runtime/timeline/task-event-generic-admission';
 import { bindContainedDestination, ensureContainedDirectory } from '../../../../core/contained-filesystem';
 import { resolveLocalCommitAvailability } from '../../../../core/auth/local-commit-availability';
 import { buildTaskAuditSummary, synchronizeFinalCloseoutArtifacts } from '../../../../gates/task-audit/task-audit-summary';
@@ -203,6 +204,7 @@ function getCommandAuditPayload(detailsObject: unknown): CommandAuditPayload | n
 }
 
 export function runLogTaskEventCommand(options: LogTaskEventCommandOptions): { outputText: string; exitCode: number } {
+    assertGenericTaskEventAdmission(options.eventType);
     const repoRoot = path.resolve(String(options.repoRoot || '.'));
     const orchestratorRoot = resolveOrchestratorRoot(repoRoot);
     const eventsRoot = options.eventsRoot
@@ -215,30 +217,10 @@ export function runLogTaskEventCommand(options: LogTaskEventCommandOptions): { o
     const message = String(options.message || '');
     const details = parseJsonOption(options.detailsJson || '', 'DetailsJson');
 
-    if (!eventType) {
-        throw new Error('EventType must not be empty.');
-    }
     if (!['INFO', 'PASS', 'FAIL', 'BLOCKED'].includes(outcome)) {
         throw new Error(`Outcome must be one of INFO, PASS, FAIL, BLOCKED. Got '${outcome}'.`);
     }
-    const reservedEventTypes = new Set([
-        'TASK_MODE_ENTERED',
-        'RULE_PACK_LOADED',
-        'HANDSHAKE_DIAGNOSTICS_RECORDED',
-        'SHELL_SMOKE_PREFLIGHT_RECORDED',
-        'WORKFLOW_CONFIG_MUTATION_AUDITED',
-        'WORKFLOW_CONFIG_MUTATION_PREPARED',
-        'REVIEW_PHASE_STARTED',
-        'REVIEW_RECORDED',
-        'REVIEWER_DELEGATION_ROUTED',
-        'REVIEWER_LAUNCH_PREPARED',
-        'REVIEWER_INVOCATION_ATTESTED'
-    ]);
-    const reservedEventPattern = /^(COMPILE_GATE_|REVIEW_GATE_|REVIEWER_|PREFLIGHT_|COMPLETION_GATE_|FULL_SUITE_VALIDATION_|DOC_IMPACT_)/;
     const normalizedEventType = eventType.toUpperCase();
-    if (reservedEventTypes.has(normalizedEventType) || reservedEventPattern.test(normalizedEventType)) {
-        throw new Error(`EventType '${eventType}' is reserved and cannot be emitted via log-task-event.`);
-    }
     if (normalizedEventType === ORCHESTRATOR_DEFECT_ACKNOWLEDGED_EVENT) {
         const capture = buildOrchestratorDefectCaptureSummary({
             repoRoot,
