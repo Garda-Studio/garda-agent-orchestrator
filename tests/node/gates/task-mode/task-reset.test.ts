@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 
 import { buildDefaultWorkflowConfig } from '../../../../src/core/workflow-config';
 import { handleWorkflow } from '../../../../src/cli/commands/workflow-command';
+import { handleTaskReset } from '../../../../src/cli/commands/gate-task-handlers';
 import { computeProtectedSnapshotDigest } from '../../../../src/gates/protected-control-plane/protected-control-plane';
 import {
     resolveTaskResetScope,
@@ -1046,5 +1047,178 @@ describe('runTaskResetCommand — full artifact cleanup', () => {
         } finally {
             cleanup(repoRoot);
         }
+    });
+});
+
+describe('runTaskResetCommand — confirmed one-action reset', () => {
+    it('CLI reset handler admits a fresh confirmed one-action without changing permanent OFF', async () => {
+        const fixture = buildFakeRepo({ taskResetEnabled: false, hasEventsFile: true });
+        const configPath = path.join(fixture.repoRoot, 'garda-agent-orchestrator/live/config/workflow-config.json');
+        const originalConfig = fs.readFileSync(configPath);
+        try {
+            fs.mkdirSync(path.join(fixture.repoRoot, '.git'));
+            await handleTaskReset(['--task-id', fixture.taskId, '--reopen', '--confirm', '--one-action',
+                '--operator-confirmed', 'yes', '--operator-confirmed-at-utc', new Date().toISOString(),
+                '--repo-root', fixture.repoRoot]);
+            assert.deepEqual(fs.readFileSync(configPath), originalConfig);
+            assert.equal(fs.existsSync(path.join(fixture.eventsRoot, `${fixture.taskId}.jsonl`)), false);
+            assert.match(fs.readFileSync(path.join(fixture.repoRoot, 'TASK.md'), 'utf8'), /TODO/u);
+        } finally { cleanup(fixture.repoRoot); }
+    });
+
+    it('executes a confirmed one-action reset while permanent reset stays disabled', () => {
+        const fixture = buildFakeRepo({ taskResetEnabled: false, hasEventsFile: true });
+        const configPath = path.join(fixture.repoRoot, 'garda-agent-orchestrator/live/config/workflow-config.json');
+        const originalConfig = fs.readFileSync(configPath);
+        try {
+            fs.mkdirSync(path.join(fixture.repoRoot, '.git'));
+            const options = {
+                ...fixture, confirm: true, reopen: true, oneAction: true,
+                operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString()
+            };
+            const result = runTaskResetCommand(options);
+            assert.equal(result.outcome, 'RESET_COMPLETE');
+            assert.deepEqual(fs.readFileSync(configPath), originalConfig);
+        } finally {
+            cleanup(fixture.repoRoot);
+        }
+    });
+
+    it('interrupted authority preparation preserves permanent OFF and blocks unqualified reset', () => {
+        const fixture = buildFakeRepo({ taskResetEnabled: false, hasEventsFile: true });
+        const configPath = path.join(fixture.repoRoot, 'garda-agent-orchestrator/live/config/workflow-config.json');
+        const originalConfig = fs.readFileSync(configPath);
+        try {
+            fs.mkdirSync(path.join(fixture.repoRoot, '.git'));
+            const prepared = runTaskResetCommand({ ...fixture, reopen: true, prepareOneAction: true,
+                operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() });
+            assert.equal(prepared.outcome, 'ONE_ACTION_AUTHORITY_PREPARED');
+            assert.match(prepared.oneActionAuthority ?? '', /^[a-f0-9]{64}$/u);
+            assert.deepEqual(fs.readFileSync(configPath), originalConfig);
+            assert.equal(fs.existsSync(path.join(fixture.eventsRoot, `${fixture.taskId}.jsonl`)), true);
+            assert.equal(fs.existsSync(path.join(fixture.reviewsRoot, `${fixture.taskId}-reset-report.json`)), false);
+            assert.equal(runTaskResetCommand({ ...fixture, reopen: true, confirm: true }).outcome, 'TASK_RESET_DISABLED');
+        } finally { cleanup(fixture.repoRoot); }
+    });
+
+    it('later explicit audited enable survives one-action reset completion', () => {
+        const fixture = buildFakeRepo({ taskResetEnabled: false, hasEventsFile: true });
+        const bundleRoot = path.join(fixture.repoRoot, 'garda-agent-orchestrator');
+        const configPath = path.join(bundleRoot, 'live/config/workflow-config.json');
+        try {
+            fs.mkdirSync(path.join(fixture.repoRoot, '.git'));
+            const prepared = runTaskResetCommand({ ...fixture, reopen: true, prepareOneAction: true,
+                operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() });
+            captureConsole(() => handleWorkflow(['set', '--bundle-root', bundleRoot,
+                '--task-reset-enabled', 'true', '--operator-confirmed', 'yes',
+                '--operator-confirmed-at-utc', new Date().toISOString()],
+            { name: 'garda-agent-orchestrator', version: '1.0.0' }));
+            const enabledConfig = fs.readFileSync(configPath);
+            const receiptPath = path.join(bundleRoot, 'live/config/task-reset-enablement-receipt.json');
+            const enabledReceipt = fs.readFileSync(receiptPath);
+            const result = runTaskResetCommand({ ...fixture, reopen: true, confirm: true,
+                oneActionAuthority: prepared.oneActionAuthority });
+            assert.equal(result.outcome, 'RESET_COMPLETE');
+            assert.deepEqual(fs.readFileSync(configPath), enabledConfig);
+            assert.deepEqual(fs.readFileSync(receiptPath), enabledReceipt);
+            assert.equal(JSON.parse(fs.readFileSync(configPath, 'utf8')).task_reset.enabled, true);
+        } finally { cleanup(fixture.repoRoot); }
+    });
+
+    it('rejects malformed authority even when permanent reset is audited ON', () => {
+        const fixture = buildFakeRepo({ hasEventsFile: true });
+        try {
+            assert.throws(() => runTaskResetCommand({ ...fixture, reopen: true, confirm: true,
+                oneActionAuthority: '' }), /malformed/);
+            assert.equal(fs.existsSync(path.join(fixture.eventsRoot, `${fixture.taskId}.jsonl`)), true);
+            assert.equal(fs.existsSync(path.join(fixture.reviewsRoot, `${fixture.taskId}-reset-report.json`)), false);
+        } finally { cleanup(fixture.repoRoot); }
+    });
+
+    it('rejects replay of prepared authority after native reset completion', () => {
+        const fixture = buildFakeRepo({ taskResetEnabled: false, hasEventsFile: true });
+        try {
+            fs.mkdirSync(path.join(fixture.repoRoot, '.git'));
+            const prepared = runTaskResetCommand({ ...fixture, reopen: true, prepareOneAction: true,
+                operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() });
+            const options = { ...fixture, reopen: true, confirm: true, oneActionAuthority: prepared.oneActionAuthority };
+            assert.equal(runTaskResetCommand(options).outcome, 'RESET_COMPLETE');
+            const report = fs.readFileSync(path.join(fixture.reviewsRoot, `${fixture.taskId}-reset-report.json`));
+            assert.throws(() => runTaskResetCommand(options), /replay|mismatch/);
+            assert.deepEqual(fs.readFileSync(path.join(fixture.reviewsRoot, `${fixture.taskId}-reset-report.json`)), report);
+        } finally { cleanup(fixture.repoRoot); }
+    });
+
+    it('rejects replaced task evidence between preparation and reset effects', () => {
+        const fixture = buildFakeRepo({ taskResetEnabled: false, hasEventsFile: true });
+        try {
+            fs.mkdirSync(path.join(fixture.repoRoot, '.git'));
+            const prepared = runTaskResetCommand({ ...fixture, reopen: true, prepareOneAction: true,
+                operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() });
+            const events = path.join(fixture.eventsRoot, `${fixture.taskId}.jsonl`);
+            fs.appendFileSync(events, '{"changed":true}\n');
+            assert.throws(() => runTaskResetCommand({ ...fixture, reopen: true, confirm: true,
+                oneActionAuthority: prepared.oneActionAuthority }), /mismatch/);
+            assert.equal(fs.readFileSync(events, 'utf8').includes('"changed":true'), true);
+            assert.equal(fs.existsSync(path.join(fixture.reviewsRoot, `${fixture.taskId}-reset-report.json`)), false);
+        } finally { cleanup(fixture.repoRoot); }
+    });
+
+    it('rejects changed existing scratch descendants after authority preparation', () => {
+        const fixture = buildFakeRepo({ taskResetEnabled: false, hasReviewTempDir: true });
+        try {
+            fs.mkdirSync(path.join(fixture.repoRoot, '.git'));
+            const scratch = path.join(fixture.repoRoot, '.review-temp', fixture.taskId);
+            const nested = path.join(scratch, 'nested');
+            fs.mkdirSync(nested);
+            const context = path.join(nested, 'context.md');
+            fs.writeFileSync(context, '# original nested evidence\n');
+            const prepared = runTaskResetCommand({ ...fixture, reopen: true, prepareOneAction: true,
+                operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() });
+            const directoryBefore = fs.statSync(nested);
+            fs.writeFileSync(context, '# changed nested evidence\n');
+            const directoryAfter = fs.statSync(nested);
+            assert.equal(directoryAfter.mtimeMs, directoryBefore.mtimeMs);
+            assert.equal(directoryAfter.ctimeMs, directoryBefore.ctimeMs);
+            assert.throws(() => runTaskResetCommand({ ...fixture, reopen: true, confirm: true,
+                oneActionAuthority: prepared.oneActionAuthority }), /mismatch/);
+            assert.equal(fs.readFileSync(context, 'utf8'), '# changed nested evidence\n');
+            assert.equal(fs.existsSync(path.join(fixture.reviewsRoot, `${fixture.taskId}-reset-report.json`)), false);
+        } finally { cleanup(fixture.repoRoot); }
+    });
+
+    it('rejects count-preserving aggregate task evidence changes after authority preparation', () => {
+        const fixture = buildFakeRepo({ taskResetEnabled: false, hasAggregateLines: true });
+        try {
+            fs.mkdirSync(path.join(fixture.repoRoot, '.git'));
+            const aggregate = path.join(fixture.eventsRoot, 'all-tasks.jsonl');
+            const prepared = runTaskResetCommand({ ...fixture, reopen: true, prepareOneAction: true,
+                operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() });
+            const replacement = fs.readFileSync(aggregate, 'utf8').replace('COMPILE_PASSED', 'COMPILE_FAILED');
+            fs.writeFileSync(aggregate, replacement);
+            assert.equal(resolveTaskResetScope(fixture).aggregateLineCount, 2);
+            assert.throws(() => runTaskResetCommand({ ...fixture, reopen: true, confirm: true,
+                oneActionAuthority: prepared.oneActionAuthority }), /mismatch/);
+            assert.equal(fs.readFileSync(aggregate, 'utf8'), replacement);
+            assert.equal(fs.existsSync(path.join(fixture.reviewsRoot, `${fixture.taskId}-reset-report.json`)), false);
+        } finally { cleanup(fixture.repoRoot); }
+    });
+
+    it('preserves unrelated aggregate additions without invalidating task-specific authority', () => {
+        const fixture = buildFakeRepo({ taskResetEnabled: false, hasAggregateLines: true });
+        try {
+            fs.mkdirSync(path.join(fixture.repoRoot, '.git'));
+            const aggregate = path.join(fixture.eventsRoot, 'all-tasks.jsonl');
+            const prepared = runTaskResetCommand({ ...fixture, reopen: true, prepareOneAction: true,
+                operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() });
+            const foreignLine = '{"task_id":"T-999","event_type":"NEW_UNRELATED_EVIDENCE"}';
+            fs.appendFileSync(aggregate, foreignLine + '\n');
+            const result = runTaskResetCommand({ ...fixture, reopen: true, confirm: true,
+                oneActionAuthority: prepared.oneActionAuthority });
+            assert.equal(result.outcome, 'RESET_COMPLETE');
+            assert.equal(result.aggregateLinesRemoved, 2);
+            assert.equal(fs.readFileSync(aggregate, 'utf8'),
+                '{"task_id":"T-999","event_type":"OTHER","outcome":"INFO"}\n' + foreignLine + '\n');
+        } finally { cleanup(fixture.repoRoot); }
     });
 });

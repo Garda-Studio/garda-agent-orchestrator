@@ -1,5 +1,11 @@
 # Changelog
 
+- Add confirmed one-action native task-reset authority with workspace/task/action
+  binding, authenticated one-time consumption and serialized reset admission.
+  Preserve permanent OFF and later explicit audited enablement without global toggles.
+
+
+
 - Integrate accepted manual CI evidence, release validation and materialization contracts.
 
 

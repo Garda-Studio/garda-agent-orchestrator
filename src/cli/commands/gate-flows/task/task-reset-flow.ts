@@ -1,6 +1,8 @@
 import { TASK_QUEUE_FILENAME } from '../../../../core/orchestration-constants';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
+import { StringDecoder } from 'node:string_decoder';
 
 import { writeFileAtomically } from '../../../../core/filesystem';
 import { writeTaskQueueFile } from '../../../../core/task-queue/task-queue-repository';
@@ -12,6 +14,14 @@ import {
     type CanonicalActiveTaskQueueRow
 } from '../../../../core/task-md-table';
 import { resolveTaskResetAvailability } from '../../../../core/task-reset-availability';
+import {
+    assertExistingPathIdentity, bindContainedDestination, readBoundedContainedDirectory
+} from '../../../../core/contained-filesystem';
+import { completePathFileIdentitySync, lstatFileIdentitySync } from '../../../../core/file-stat';
+import {
+    prepareTaskResetOneActionAuthority, withTaskResetMutationLock, withTaskResetOneActionAuthority,
+    type TaskResetAuthorityAction
+} from '../../../../core/task-reset-one-action-authority';
 import { assertValidTaskId } from '../../../../gate-runtime/task-events';
 import { withFilesystemLock } from '../../../../gate-runtime/task-events-locking';
 import { loadIndex, removeEntries } from '../../../../gate-runtime/reviews-index';
@@ -26,6 +36,7 @@ import {
 
 export type TaskResetOutcome =
     | 'RESET_COMPLETE'
+    | 'ONE_ACTION_AUTHORITY_PREPARED'
     | 'ALREADY_RESET'
     | 'TARGET_STATUS_REQUIRED'
     | 'CONFIRMATION_REQUIRED'
@@ -69,6 +80,7 @@ export interface TaskResetCommandResult {
     statusSyncOutcome: string | null;
     outputLines: string[];
     exitCode: number;
+    oneActionAuthority?: string;
 }
 
 export interface RunTaskResetOptions {
@@ -82,6 +94,11 @@ export interface RunTaskResetOptions {
     eventsRoot?: string;
     reviewsRoot?: string;
     asJson?: boolean;
+    prepareOneAction?: boolean;
+    oneAction?: boolean;
+    oneActionAuthority?: unknown;
+    operatorConfirmed?: unknown;
+    operatorConfirmedAtUtc?: unknown;
 }
 
 function escapeRegExp(str: string): string {
@@ -460,7 +477,148 @@ function buildOutputLines(
     return lines;
 }
 
+const RESET_SCOPE_READ_BUFFER_BYTES = 64 * 1024;
+const RESET_SCOPE_MAX_DIRECTORY_ENTRIES = 4096;
+
+function resetScopeMetadata(stat: fs.Stats): number[] {
+    return [stat.dev, stat.ino, stat.mode, stat.nlink, stat.size,
+        stat.birthtimeMs, stat.mtimeMs, stat.ctimeMs];
+}
+
+function readResetScopeFile(repoRoot: string, filePath: string, consume: (chunk: Buffer) => void): fs.Stats {
+    const binding = bindContainedDestination(repoRoot, filePath);
+    const before = lstatFileIdentitySync(filePath);
+    if (!before.isFile() || before.nlink !== 1) {
+        throw new Error('Task reset scope input must be an ordinary unlinked file.');
+    }
+    const descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    try {
+        const opened = completePathFileIdentitySync(filePath, fs.fstatSync(descriptor));
+        if (!opened.isFile() || JSON.stringify(resetScopeMetadata(opened)) !== JSON.stringify(resetScopeMetadata(before))) {
+            throw new Error('Task reset scope file identity changed before authority binding.');
+        }
+        const buffer = Buffer.alloc(RESET_SCOPE_READ_BUFFER_BYTES);
+        let offset = 0;
+        while (offset < before.size) {
+            const length = fs.readSync(descriptor, buffer, 0, Math.min(buffer.length, before.size - offset), offset);
+            if (!length) throw new Error('Task reset scope file was truncated during authority binding.');
+            consume(buffer.subarray(0, length));
+            offset += length;
+        }
+        const after = completePathFileIdentitySync(filePath, fs.fstatSync(descriptor));
+        const current = lstatFileIdentitySync(binding.path);
+        if (JSON.stringify(resetScopeMetadata(before)) !== JSON.stringify(resetScopeMetadata(after))
+            || JSON.stringify(resetScopeMetadata(current)) !== JSON.stringify(resetScopeMetadata(after))) {
+            throw new Error('Task reset scope file changed during authority binding.');
+        }
+        assertExistingPathIdentity(binding);
+        return after;
+    } finally { fs.closeSync(descriptor); }
+}
+
+function resetArtifactFingerprint(repoRoot: string, artifact: TaskResetArtifact, budget = { remaining: RESET_SCOPE_MAX_DIRECTORY_ENTRIES }): unknown[] {
+    const binding = bindContainedDestination(repoRoot, artifact.path);
+    const before = lstatFileIdentitySync(artifact.path);
+    if (before.isFile()) {
+        const hash = createHash('sha256');
+        const after = readResetScopeFile(repoRoot, artifact.path, (chunk) => { hash.update(chunk); });
+        return [artifact.path, artifact.type, resetScopeMetadata(after), hash.digest('hex')];
+    }
+    if (!before.isDirectory()) throw new Error('Task reset scratch must contain only ordinary files and directories.');
+    const names = readBoundedContainedDirectory(binding, budget.remaining);
+    budget.remaining -= names.length;
+    const descendants = names.map((name) => resetArtifactFingerprint(repoRoot,
+        { path: path.join(artifact.path, name), type: artifact.type }, budget));
+    const after = lstatFileIdentitySync(artifact.path);
+    assertExistingPathIdentity(binding);
+    if (JSON.stringify(resetScopeMetadata(before)) !== JSON.stringify(resetScopeMetadata(after))) {
+        throw new Error('Task reset scratch directory changed during authority binding.');
+    }
+    return [artifact.path, artifact.type, resetScopeMetadata(after), descendants];
+}
+
+function aggregateTaskFingerprint(repoRoot: string, aggregatePath: string, taskId: string): string {
+    bindContainedDestination(repoRoot, aggregatePath);
+    const hash = createHash('sha256');
+    if (!fs.existsSync(aggregatePath)) return hash.digest('hex');
+    const decoder = new StringDecoder('utf8');
+    let pending = '';
+    const consumeLine = (line: string): void => {
+        if (parseAggregateTaskId(line) === taskId) hash.update(JSON.stringify(line) + '\n');
+    };
+    readResetScopeFile(repoRoot, aggregatePath, (chunk) => {
+        pending += decoder.write(chunk);
+        let newline: number;
+        while ((newline = pending.indexOf('\n')) >= 0) {
+            consumeLine(pending.slice(0, newline));
+            pending = pending.slice(newline + 1);
+        }
+    });
+    consumeLine(pending + decoder.end());
+    return hash.digest('hex');
+}
+
+function resolveOneActionBinding(options: RunTaskResetOptions): { repoRoot: string; action: TaskResetAuthorityAction } {
+    const taskId = assertValidTaskId(String(options.taskId || '').trim());
+    const repoRoot = resolveRepoRoot(options.repoRoot);
+    const targetStatus = resolveTaskResetTargetStatus(options);
+    if (!targetStatus) throw new Error('One-action task reset requires --reopen, --discard or --to-status.');
+    assertTaskExistsInTaskMd(repoRoot, taskId);
+    const eventsRoot = resolveEventsRoot(repoRoot, options.eventsRoot);
+    const reviewsRoot = resolveReviewsRoot(repoRoot, options.reviewsRoot);
+    bindContainedDestination(repoRoot, eventsRoot);
+    bindContainedDestination(repoRoot, reviewsRoot);
+    const scope = resolveTaskResetScope({ taskId, repoRoot, eventsRoot, reviewsRoot });
+    const fingerprint = scope.artifacts.map((artifact) => resetArtifactFingerprint(repoRoot, artifact));
+    const scopeSha256 = createHash('sha256').update(JSON.stringify([
+        scope.previousStatus, fingerprint, scope.aggregateLineCount,
+        aggregateTaskFingerprint(repoRoot, scope.aggregatePath, taskId),
+        scope.pendingFollowUpTaskIds, scope.preservedFollowUpTaskIds
+    ])).digest('hex');
+    return { repoRoot, action: { taskId, targetStatus, eventsRoot, reviewsRoot, scopeSha256 } };
+}
+
+function runOneActionReset(options: RunTaskResetOptions): TaskResetCommandResult {
+    const hasAuthority = options.oneActionAuthority !== undefined;
+    if ([options.prepareOneAction === true, options.oneAction === true, hasAuthority].filter(Boolean).length !== 1) {
+        throw new Error('Use exactly one of --prepare-one-action, --one-action or --one-action-authority.');
+    }
+    if (options.dryRun || (options.prepareOneAction ? options.confirm : !options.confirm)) {
+        throw new Error('Prepare authority without --confirm; execute one-action reset with --confirm. Dry-run does not consume authority.');
+    }
+    const binding = resolveOneActionBinding(options);
+    const authorityId = hasAuthority ? options.oneActionAuthority : prepareTaskResetOneActionAuthority({
+        ...binding, operatorConfirmed: options.operatorConfirmed, operatorConfirmedAtUtc: options.operatorConfirmedAtUtc
+    });
+    if (options.prepareOneAction) {
+        return {
+            outcome: 'ONE_ACTION_AUTHORITY_PREPARED', taskId: binding.action.taskId,
+            previousStatus: null, targetStatus: binding.action.targetStatus, dryRun: false,
+            artifacts: [], aggregateLinesRemoved: 0, resetReportPath: null, statusSyncOutcome: null, exitCode: 0,
+            oneActionAuthority: String(authorityId),
+            outputLines: ['TASK_RESET_ONE_ACTION_AUTHORITY_PREPARED', `OneActionAuthority: ${String(authorityId)}`,
+                `TaskId: ${binding.action.taskId}`, `TargetStatus: ${binding.action.targetStatus}`,
+                'PermanentTaskResetSetting: unchanged']
+        };
+    }
+    return withTaskResetOneActionAuthority({
+        repoRoot: binding.repoRoot, taskId: binding.action.taskId, authorityId,
+        action: () => resolveOneActionBinding(options).action
+    }, () => runTaskResetWithoutOneAction(options, createHash('sha256').update(String(authorityId)).digest('hex')));
+}
+
 export function runTaskResetCommand(options: RunTaskResetOptions): TaskResetCommandResult {
+    if (options.prepareOneAction || options.oneAction || options.oneActionAuthority !== undefined) {
+        return runOneActionReset(options);
+    }
+    if (!options.dryRun && options.confirm && resolveTaskResetTargetStatus(options)) {
+        return withTaskResetMutationLock(resolveRepoRoot(options.repoRoot),
+            assertValidTaskId(String(options.taskId || '').trim()), () => runTaskResetWithoutOneAction(options));
+    }
+    return runTaskResetWithoutOneAction(options);
+}
+
+function runTaskResetWithoutOneAction(options: RunTaskResetOptions, oneActionAuthoritySha256?: string): TaskResetCommandResult {
     const rawTaskId = String(options.taskId || '').trim();
 
     const validatedId = assertValidTaskId(rawTaskId);
@@ -475,7 +633,7 @@ export function runTaskResetCommand(options: RunTaskResetOptions): TaskResetComm
 
     assertTaskExistsInTaskMd(repoRoot, taskId);
 
-    if (!dryRun && confirm && targetStatus) {
+    if (!dryRun && confirm && targetStatus && !oneActionAuthoritySha256) {
         const taskResetAvailability = resolveTaskResetAvailability(repoRoot);
         if (!taskResetAvailability.enabled) {
             const outputLines = buildOutputLines(
@@ -604,6 +762,8 @@ export function runTaskResetCommand(options: RunTaskResetOptions): TaskResetComm
     const resetReport = {
         timestamp_utc: new Date().toISOString(),
         event_source: 'task-reset',
+        ...(oneActionAuthoritySha256 ? { reset_authorization: 'one_action',
+            one_action_authority_sha256: oneActionAuthoritySha256 } : {}),
         task_id: taskId,
         previous_status: scope.previousStatus,
         target_status: targetStatus,
