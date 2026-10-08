@@ -12,6 +12,7 @@ interface ClosableLocalUiServer {
 }
 
 const localUiTempRepos = new Set<string>();
+const localUiTempRemovalOptions = { recursive: true, force: true, maxRetries: 5, retryDelay: 50 };
 
 afterEach(() => {
     let firstError: unknown = null;
@@ -299,12 +300,7 @@ export function removeLocalUiTempRepo(repoRoot: string | null | undefined): void
     if (!repoRoot) {
         return;
     }
-    fs.rmSync(repoRoot, {
-        recursive: true,
-        force: true,
-        maxRetries: 5,
-        retryDelay: 50
-    });
+    fs.rmSync(repoRoot, localUiTempRemovalOptions);
     localUiTempRepos.delete(repoRoot);
 }
 
@@ -342,7 +338,10 @@ export async function cleanupLocalUiTestResources(options: {
         }
     }
     try {
-        removeLocalUiTempRepo(options.repoRoot);
+        if (options.repoRoot) {
+            await fs.promises.rm(options.repoRoot, localUiTempRemovalOptions);
+            localUiTempRepos.delete(options.repoRoot);
+        }
     } catch (error: unknown) {
         capture(error);
     }

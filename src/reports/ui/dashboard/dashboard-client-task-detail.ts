@@ -7,7 +7,53 @@ import { UI_DASHBOARD_CLIENT_TASK_FINAL_REPORT } from './dashboard-client-task-f
 import { UI_DASHBOARD_CLIENT_TASK_TIMELINE } from './dashboard-client-task-timeline';
 
 /** Browser-side dashboard script fragment (task-detail). */
-export const UI_DASHBOARD_CLIENT_TASK_DETAIL = UI_DASHBOARD_CLIENT_TASK_PROGRESS + UI_DASHBOARD_CLIENT_TASK_FINAL_REPORT + UI_DASHBOARD_CLIENT_TASK_TIMELINE + `function reviewSummary(audit) {
+export const UI_DASHBOARD_CLIENT_TASK_DETAIL = UI_DASHBOARD_CLIENT_TASK_PROGRESS + UI_DASHBOARD_CLIENT_TASK_FINAL_REPORT + UI_DASHBOARD_CLIENT_TASK_TIMELINE + `let taskDetailContext = null;
+function ownsTaskDetailContext(context) {
+  return Boolean(context && context === taskDetailContext && context.taskId === selectedTaskId);
+}
+function lockTaskActionControls(context) {
+  if (!ownsTaskDetailContext(context) || !context.pendingAction) return;
+  for (const control of detailNode.querySelectorAll('button[data-task-action-id], .task-closure-policy-card button, .task-closure-policy-card input')) {
+    if (!context.pendingAction.has(control)) context.pendingAction.set(control, control.disabled);
+    control.disabled = true;
+  }
+}
+function beginTaskAction(taskId, statusId) {
+  const context = taskDetailContext;
+  if (!ownsTaskDetailContext(context) || context.taskId !== taskId || !currentTaskDetail || context.pendingAction) return null;
+  context.pendingAction = new Map();
+  lockTaskActionControls(context);
+  const node = document.getElementById(statusId);
+  if (node) node.innerHTML = '<p class="empty">' + safe(t('loading')) + '</p>';
+  return context;
+}
+function finishTaskAction(context) {
+  if (ownsTaskDetailContext(context)) {
+    for (const [control, disabled] of context.pendingAction) {
+      if (control.isConnected !== false) control.disabled = disabled;
+    }
+  }
+  context.pendingAction = null;
+}
+function renderTaskRequestError(context, node, error) {
+  if (!ownsTaskDetailContext(context) || !node) return;
+  node.innerHTML = '<p class="error">' + safe(t('actionUnavailable')) + ': '
+    + safe(error instanceof Error ? error.message : String(error)) + '</p>';
+  focusVisibleActionResult(node);
+}
+async function refreshTaskAfterAction(context) {
+  try {
+    const response = await fetch('/api/report');
+    if (!ownsTaskDetailContext(context) || !response.ok) return;
+    const report = await response.json();
+    if (!ownsTaskDetailContext(context)) return;
+    currentReport = report;
+    await loadDetail(context.taskId);
+  } catch {
+    // Keep the command result visible if report refresh fails.
+  }
+}
+function reviewSummary(audit) {
   const attempts = audit && audit.review_attempt_summary;
   const summary = attempts && (attempts.by_type || attempts.review_types);
   if (!summary || summary.length === 0) {
@@ -109,6 +155,8 @@ function renderTaskClosurePolicyResult(taskId, result) {
   focusVisibleActionResult(node);
 }
 async function requestTaskClosurePolicy(taskId, mode) {
+  const currentContext = taskDetailContext;
+  if (!ownsTaskDetailContext(currentContext) || currentContext.taskId !== taskId || currentContext.pendingAction) return;
   const proposedValue = taskClosurePolicyFormValue();
   if (mode === 'execute' && (
     !currentTaskClosurePolicyPreview
@@ -123,41 +171,56 @@ async function requestTaskClosurePolicy(taskId, mode) {
     ? window.prompt(t('typeToRunAction') + ' "' + ${JSON.stringify(TASK_CLOSURE_POLICY_CONFIRMATION_PHRASE)} + '" ' + t('typeToRunActionTail'))
     : null;
   if (mode === 'execute' && confirmation === null) return;
-  const response = await fetch('/api/tasks/' + encodeURIComponent(taskId) + '/actions', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-garda-action-token': actionToken },
-    body: JSON.stringify({
-      action_id: ${JSON.stringify(TASK_CLOSURE_POLICY_ACTION_ID)},
-      mode,
-      confirmation,
-      ...proposedValue,
-      expected_notes_sha256: mode === 'execute' ? currentTaskClosurePolicyPreview.expected_notes_sha256 : null
-    })
-  });
-  const result = await response.json();
-  renderTaskClosurePolicyResult(taskId, result);
-  if (response.ok && result.status === 'previewed') {
-    currentTaskClosurePolicyPreview = {
-      task_id: taskId,
-      proposed_value: proposedValue,
-      expected_notes_sha256: result.expected_notes_sha256
-    };
-  }
-  if (response.ok && result.status === 'executed') {
-    currentTaskClosurePolicyPreview = null;
-    const reportResponse = await fetch('/api/report');
-    currentReport = await reportResponse.json();
-    await loadDetail(taskId);
+  const expectedNotesSha256 = mode === 'execute' ? currentTaskClosurePolicyPreview.expected_notes_sha256 : null;
+  const context = beginTaskAction(taskId, 'task-closure-policy-status');
+  if (!context) return;
+  if (mode === 'preview') currentTaskClosurePolicyPreview = null;
+  try {
+    const response = await fetch('/api/tasks/' + encodeURIComponent(taskId) + '/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-garda-action-token': actionToken },
+      body: JSON.stringify({
+        action_id: ${JSON.stringify(TASK_CLOSURE_POLICY_ACTION_ID)},
+        mode,
+        confirmation,
+        ...proposedValue,
+        expected_notes_sha256: expectedNotesSha256
+      })
+    });
+    if (!ownsTaskDetailContext(context)) return;
+    const result = await response.json();
+    if (!ownsTaskDetailContext(context)) return;
+    renderTaskClosurePolicyResult(taskId, result);
+    if (response.ok && result.status === 'previewed') {
+      currentTaskClosurePolicyPreview = {
+        task_id: taskId,
+        proposed_value: proposedValue,
+        expected_notes_sha256: result.expected_notes_sha256
+      };
+    }
+    if (response.ok && result.status === 'executed') {
+      currentTaskClosurePolicyPreview = null;
+      await refreshTaskAfterAction(context);
+    }
+  } catch (error) {
+    renderTaskRequestError(context, document.getElementById('task-closure-policy-status'), error);
+  } finally {
+    finishTaskAction(context);
   }
 }
 function wireTaskClosurePolicyControls(taskId) {
+  const context = taskDetailContext;
   const previewButton = document.getElementById('task-closure-policy-preview');
   const applyButton = document.getElementById('task-closure-policy-apply');
   const skipLow = document.getElementById('task-closure-skip-low');
   const forbidChildren = document.getElementById('task-closure-forbid-children');
-  const clearPreview = () => { currentTaskClosurePolicyPreview = null; };
-  if (previewButton) previewButton.addEventListener('click', () => requestTaskClosurePolicy(taskId, 'preview'));
-  if (applyButton) applyButton.addEventListener('click', () => requestTaskClosurePolicy(taskId, 'execute'));
+  const clearPreview = () => { if (ownsTaskDetailContext(context)) currentTaskClosurePolicyPreview = null; };
+  if (previewButton) previewButton.addEventListener('click', () => {
+    if (ownsTaskDetailContext(context) && !previewButton.disabled) return requestTaskClosurePolicy(taskId, 'preview');
+  });
+  if (applyButton) applyButton.addEventListener('click', () => {
+    if (ownsTaskDetailContext(context) && !applyButton.disabled) return requestTaskClosurePolicy(taskId, 'execute');
+  });
   if (skipLow) skipLow.addEventListener('change', clearPreview);
   if (forbidChildren) forbidChildren.addEventListener('change', clearPreview);
 }
@@ -179,8 +242,10 @@ function auditDiagnosticsList(blockers) {
   return '<ul class="list">' + blockers.map(item => '<li>' + safe(blockerText(item)) + '</li>').join('') + '</ul>';
 }
 function wireTaskActionButtons(taskId) {
+  const context = taskDetailContext;
   for (const button of detailNode.querySelectorAll('button[data-task-action-id]')) {
     button.addEventListener('click', async () => {
+      if (!ownsTaskDetailContext(context) || button.disabled) return;
       const actionId = button.dataset.taskActionId;
       const mode = button.dataset.taskActionMode;
       const confirmationPhrase = taskActionConfirmationPhrase(actionId);
@@ -201,34 +266,38 @@ function taskActionConfirmationPhrase(actionId) {
   return null;
 }
 async function runTaskAction(taskId, actionId, mode, confirmation) {
-  const response = await fetch('/api/tasks/' + encodeURIComponent(taskId) + '/actions', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-garda-action-token': actionToken },
-    body: JSON.stringify({ action_id: actionId, mode, confirmation })
-  });
-  const result = await response.json();
-  const node = document.getElementById('task-action-status');
-  if (!node) {
-    return;
-  }
-  node.innerHTML = '<section class="command-preview-panel">'
-    + '<div class="command-preview-main"><strong>' + safe(result.task_id || taskId) + '</strong></div>'
-    + '<div class="command-preview-meta"><span>' + safe(t('statusColumn')) + '<code>' + safe(resultStatusText(result.status)) + '</code></span></div>'
-    + (result.unavailable_reason ? '<p class="task-action-unavailable">' + safe(result.unavailable_reason) + '</p>' : '')
-    + (result.audit_path ? '<p><strong>' + safe(t('audit')) + ':</strong> <code>' + safe(result.audit_path) + '</code></p>' : '')
-    + outputBlock('stdout', result.stdout)
-    + outputBlock('stderr', result.stderr)
-    + '</section>';
-  focusVisibleActionResult(node);
-  const exitCode = Number.isFinite(Number(result.exit_code)) ? Number(result.exit_code) : null;
-  if (response.ok && result.status === 'executed' && (exitCode === null || exitCode === 0) && (actionId === 'task-reset-reopen' || actionId === 'task-reset-discard')) {
-    try {
-      const reportResponse = await fetch('/api/report');
-      currentReport = await reportResponse.json();
-      await loadDetail(taskId);
-    } catch {
-      // Keep the command result visible if refresh fails.
+  const context = beginTaskAction(taskId, 'task-action-status');
+  if (!context) return;
+  try {
+    const response = await fetch('/api/tasks/' + encodeURIComponent(taskId) + '/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-garda-action-token': actionToken },
+      body: JSON.stringify({ action_id: actionId, mode, confirmation })
+    });
+    if (!ownsTaskDetailContext(context)) return;
+    const result = await response.json();
+    if (!ownsTaskDetailContext(context)) return;
+    const node = document.getElementById('task-action-status');
+    if (!node) {
+      return;
     }
+    node.innerHTML = '<section class="command-preview-panel">'
+      + '<div class="command-preview-main"><strong>' + safe(result.task_id || taskId) + '</strong></div>'
+      + '<div class="command-preview-meta"><span>' + safe(t('statusColumn')) + '<code>' + safe(resultStatusText(result.status)) + '</code></span></div>'
+      + (result.unavailable_reason ? '<p class="task-action-unavailable">' + safe(result.unavailable_reason) + '</p>' : '')
+      + (result.audit_path ? '<p><strong>' + safe(t('audit')) + ':</strong> <code>' + safe(result.audit_path) + '</code></p>' : '')
+      + outputBlock('stdout', result.stdout)
+      + outputBlock('stderr', result.stderr)
+      + '</section>';
+    focusVisibleActionResult(node);
+    const exitCode = Number.isFinite(Number(result.exit_code)) ? Number(result.exit_code) : null;
+    if (response.ok && result.status === 'executed' && (exitCode === null || exitCode === 0) && (actionId === 'task-reset-reopen' || actionId === 'task-reset-discard')) {
+      await refreshTaskAfterAction(context);
+    }
+  } catch (error) {
+    renderTaskRequestError(context, document.getElementById('task-action-status'), error);
+  } finally {
+    finishTaskAction(context);
   }
 }
 function planButton(detail) {
@@ -372,24 +441,33 @@ function taskQualityChecklistSummary(checklist) {
   return latestHtml + taskQualityChecklistHistory(history);
 }
 async function loadDetail(taskId) {
+  const context = { taskId, pendingAction: null };
+  taskDetailContext = context;
   selectedTaskId = taskId;
+  currentTaskDetail = null;
+  currentTaskClosurePolicyPreview = null;
   detailNode.innerHTML = '<p class="empty">' + safe(t('loadingTaskPrefix')) + ' ' + safe(taskId) + '...</p>';
   renderTaskRows();
-  const response = await fetch('/api/tasks/' + encodeURIComponent(taskId) + '/detail');
-  if (!response.ok) {
-    detailNode.innerHTML = '<p class="error">' + safe(t('unableToLoadDetails')) + ' ' + response.status + '</p>';
-    return;
-  }
-  const detail = await response.json();
-  currentTaskDetail = detail;
-  loadedTaskDetails[detail.task_id] = detail;
-  renderTaskDetail(detail);
-  renderTaskRows();
-  if (currentSettingsPayload) {
-    renderSettingsEditor(currentSettingsPayload);
+  try {
+    const response = await fetch('/api/tasks/' + encodeURIComponent(taskId) + '/detail');
+    if (!ownsTaskDetailContext(context)) return;
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const detail = await response.json();
+    if (!ownsTaskDetailContext(context)) return;
+    if (!detail || detail.task_id !== taskId) throw new Error('Task detail response does not match the requested task');
+    currentTaskDetail = detail;
+    loadedTaskDetails[detail.task_id] = detail;
+    renderTaskDetail(detail);
+    renderTaskRows();
+    if (currentSettingsPayload) {
+      renderSettingsEditor(currentSettingsPayload);
+    }
+  } catch (error) {
+    renderTaskRequestError(context, detailNode, error);
   }
 }
 function renderTaskDetail(detail) {
+  if (taskDetailContext && detail.task_id !== taskDetailContext.taskId) return;
   const task = findReportTask(detail.task_id);
   const stats = detail.stats || {};
   const audit = detail.audit || {};
@@ -425,6 +503,7 @@ function renderTaskDetail(detail) {
   wireTaskProgressCopy(detail.progress);
   wireTaskFinalReport(detail);
   wireTaskClosurePolicyControls(detail.task_id);
+  lockTaskActionControls(taskDetailContext);
   const showPlanButton = document.getElementById('show-task-plan');
   if (showPlanButton) {
     showPlanButton.addEventListener('click', () => renderTaskPlanModal(detail));

@@ -84,7 +84,7 @@ function getExpectedOrigin(request: http.IncomingMessage, options: Pick<LocalUiS
     if (typeof localPort !== 'number' || !Number.isInteger(localPort) || localPort < 0 || localPort > 65535) {
         return null;
     }
-    return `http://${options.trustedOriginHost}:${localPort}`;
+    return new URL(`http://${options.trustedOriginHost}:${localPort}`).origin;
 }
 
 export function isValidActionRequestBoundary(

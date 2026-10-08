@@ -43,6 +43,7 @@ import {
     type UiActionRunnerResult
 } from './ui-action-registry';
 import { appendUiActionAudit } from './actions/action-common';
+import { isValidActionRequestBoundary } from './actions/http/action-http-common';
 import { renderLocalUiHtml } from './ui-dashboard-html';
 import { readTaskFinalReport } from './task-final-report';
 import {
@@ -574,20 +575,40 @@ function expectedLocalUiOrigin(request: http.IncomingMessage): string | null {
     if (typeof localPort !== 'number' || !Number.isInteger(localPort) || localPort < 0 || localPort > 65535) {
         return null;
     }
-    return `http://${DEFAULT_UI_HOST}:${localPort}`;
+    return new URL(`http://${DEFAULT_UI_HOST}:${localPort}`).origin;
 }
 
 function assertUiPostBoundary(request: http.IncomingMessage, actionToken: string): void {
-    const contentType = headerValue(request.headers['content-type']).toLowerCase().split(';', 1)[0].trim();
-    const origin = headerValue(request.headers.origin);
-    const token = headerValue(request.headers['x-garda-action-token']);
+    if (!isValidActionRequestBoundary(request, { actionToken, trustedOriginHost: DEFAULT_UI_HOST })) {
+        throw new Error('Session request rejected by local UI boundary.');
+    }
+}
+
+function admitLocalUiRequest(request: http.IncomingMessage): URL {
     const expectedOrigin = expectedLocalUiOrigin(request);
-    if (contentType !== 'application/json' || token !== actionToken) {
-        throw new Error('Session request rejected by local UI boundary.');
+    const fetchSite = request.headers['sec-fetch-site'];
+    const hostHeaderCount = request.rawHeaders.filter((value, index) => index % 2 === 0 && value.toLowerCase() === 'host').length;
+    if (expectedOrigin === null || hostHeaderCount !== 1
+        || (request.headers.host !== `${DEFAULT_UI_HOST}:${request.socket.localPort}`
+            && !(request.socket.localPort === 80 && request.headers.host === DEFAULT_UI_HOST))
+        || (request.headers.origin !== undefined && request.headers.origin !== expectedOrigin)
+        || (fetchSite !== undefined && fetchSite !== 'same-origin' && fetchSite !== 'none')
+        || !request.url?.startsWith('/')) {
+        throw new Error('Request rejected by local UI boundary.');
     }
-    if (expectedOrigin === null || origin !== expectedOrigin) {
-        throw new Error('Session request rejected by local UI boundary.');
+    const parsedUrl = new URL(request.url, expectedOrigin);
+    if (parsedUrl.origin !== expectedOrigin) {
+        throw new Error('Request rejected by local UI boundary.');
     }
+    return parsedUrl;
+}
+
+function localUiBoundaryErrorCode(request: http.IncomingMessage): string {
+    if (request.method !== 'POST') return 'local_ui_boundary_rejected';
+    if (request.url?.startsWith('/api/session/')) return 'session_boundary_rejected';
+    if (request.url === '/api/update-availability/check') return 'update_boundary_rejected';
+    if (request.url === '/api/ordinary-docs') return 'ordinary_docs_boundary_rejected';
+    return 'action_boundary_rejected';
 }
 
 function headerOriginMatches(value: string, expectedOrigin: string): boolean {
@@ -652,11 +673,22 @@ export function createLocalUiServer(repoRoot: string, runtimeOptions?: Partial<L
         }
     });
     server = http.createServer((request, response) => {
-        if (!request.url) {
-            sendText(response, 405, 'Only GET is supported.');
+        response.setHeader('x-content-type-options', 'nosniff');
+        response.setHeader('x-frame-options', 'DENY');
+        response.setHeader('content-security-policy', "frame-ancestors 'none'; base-uri 'none'; object-src 'none'");
+        response.setHeader('cross-origin-resource-policy', 'same-origin');
+        response.setHeader('referrer-policy', 'same-origin');
+        let parsedUrl: URL;
+        try {
+            parsedUrl = admitLocalUiRequest(request);
+        } catch {
+            if (request.url?.startsWith('/api/')) {
+                sendApiError(response, 403, 'Request rejected by local UI boundary.', localUiBoundaryErrorCode(request));
+            } else {
+                sendText(response, 403, 'Request rejected by local UI boundary.');
+            }
             return;
         }
-        const parsedUrl = new URL(request.url, `http://${DEFAULT_UI_HOST}`);
         const pathname = parsedUrl.pathname;
         if (request.method === 'POST' && pathname === '/api/update-availability/check') {
             try {
@@ -739,6 +771,16 @@ export function createLocalUiServer(repoRoot: string, runtimeOptions?: Partial<L
         }
         const taskActionMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/actions$/u);
         if (request.method === 'POST' && taskActionMatch) {
+            if (!options.actionsEnabled) {
+                sendApiError(response, 403, 'UI actions are disabled. Restart with --actions to enable allow-listed commands.', 'actions_disabled');
+                return;
+            }
+            try {
+                assertUiPostBoundary(request, options.actionToken);
+            } catch {
+                sendApiError(response, 403, 'UI action request failed origin, token, or content-type validation.', 'action_boundary_rejected');
+                return;
+            }
             const taskId = decodeTaskIdSegment(taskActionMatch[1]);
             if (taskId === null || !isCanonicalTaskId(taskId)) {
                 sendApiError(response, 400, 'Invalid task id.', 'invalid_task_id');

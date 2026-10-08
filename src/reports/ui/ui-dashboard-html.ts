@@ -14,6 +14,7 @@ import {
     type LocalUiLanguage
 } from './ui-i18n';
 import { renderUpdateAvailabilityPanel, UPDATE_AVAILABILITY_STYLES } from './ui-update-availability';
+import { escapeHtml } from '../static-html/common';
 
 export function renderLocalUiHtml(actionsEnabled: boolean, actionToken: string, initialLanguage: LocalUiLanguage = 'en'): string {
     const language = normalizeLocalUiLanguage(initialLanguage);
@@ -27,11 +28,11 @@ export function renderLocalUiHtml(actionsEnabled: boolean, actionToken: string, 
         initialLanguage: language
     });
     return `<!doctype html>
-<html lang="${language}">
+<html lang="${escapeHtml(language)}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${text.appTitle}</title>
+<title>${escapeHtml(text.appTitle)}</title>
 <style>
 ${UI_DASHBOARD_STYLES}
 ${UI_DASHBOARD_POLISH_STYLES}

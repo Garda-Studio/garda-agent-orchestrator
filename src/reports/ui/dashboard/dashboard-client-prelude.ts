@@ -14,6 +14,7 @@ import {
     type LocalUiLanguage
 } from '../ui-i18n';
 import { INSTRUCTIONS_REPORT_UI_TAB_CONTRACT } from './instructions-report-ui-tab';
+import { escapeJsonForScript } from '../../static-html/common';
 
 export interface DashboardClientPreludeOptions {
     actionToken: string;
@@ -24,20 +25,20 @@ export interface DashboardClientPreludeOptions {
 /** Browser-side dashboard DOM bindings and i18n pack constants. */
 export function buildDashboardClientPrelude(options: DashboardClientPreludeOptions): string {
     const { actionToken, actionsEnabled, initialLanguage } = options;
-    return `const languagePacks = ${JSON.stringify(LOCAL_UI_TEXT)};
-const settingTextPacks = ${JSON.stringify(LOCAL_UI_SETTING_TEXT)};
-const actionTextPacks = ${JSON.stringify(LOCAL_UI_ACTION_TEXT)};
-const initSettingTextPacks = ${JSON.stringify(LOCAL_UI_INIT_SETTING_TEXT)};
-const cleanupSettingTextPacks = ${JSON.stringify(LOCAL_UI_CLEANUP_SETTING_TEXT)};
-const backupsTabTextPacks = ${JSON.stringify(LOCAL_UI_BACKUPS_TAB_TEXT)};
-const projectMemoryStatusTextPacks = ${JSON.stringify(LOCAL_UI_PROJECT_MEMORY_STATUS_TEXT)};
-const projectMemoryTextPacks = ${JSON.stringify(LOCAL_UI_PROJECT_MEMORY_TEXT)};
-const actionCategoryTextPacks = ${JSON.stringify(LOCAL_UI_ACTION_CATEGORY_TEXT)};
-const instructionTextPacks = ${JSON.stringify(LOCAL_UI_INSTRUCTION_TEXT)};
-const taskClosurePolicyTextPacks = ${JSON.stringify(LOCAL_UI_TASK_CLOSURE_POLICY_TEXT)};
-const languageMetadata = ${JSON.stringify(LOCAL_UI_LANGUAGES)};
+    return `const languagePacks = ${escapeJsonForScript(LOCAL_UI_TEXT)};
+const settingTextPacks = ${escapeJsonForScript(LOCAL_UI_SETTING_TEXT)};
+const actionTextPacks = ${escapeJsonForScript(LOCAL_UI_ACTION_TEXT)};
+const initSettingTextPacks = ${escapeJsonForScript(LOCAL_UI_INIT_SETTING_TEXT)};
+const cleanupSettingTextPacks = ${escapeJsonForScript(LOCAL_UI_CLEANUP_SETTING_TEXT)};
+const backupsTabTextPacks = ${escapeJsonForScript(LOCAL_UI_BACKUPS_TAB_TEXT)};
+const projectMemoryStatusTextPacks = ${escapeJsonForScript(LOCAL_UI_PROJECT_MEMORY_STATUS_TEXT)};
+const projectMemoryTextPacks = ${escapeJsonForScript(LOCAL_UI_PROJECT_MEMORY_TEXT)};
+const actionCategoryTextPacks = ${escapeJsonForScript(LOCAL_UI_ACTION_CATEGORY_TEXT)};
+const instructionTextPacks = ${escapeJsonForScript(LOCAL_UI_INSTRUCTION_TEXT)};
+const taskClosurePolicyTextPacks = ${escapeJsonForScript(LOCAL_UI_TASK_CLOSURE_POLICY_TEXT)};
+const languageMetadata = ${escapeJsonForScript(LOCAL_UI_LANGUAGES)};
 const fallbackLanguage = 'en';
-const initialLanguage = ${JSON.stringify(initialLanguage)};
+const initialLanguage = ${escapeJsonForScript(initialLanguage)};
 const tasksNode = document.getElementById('tasks');
 const tasksConfigPathNode = document.getElementById('tasks-config-path');
 const detailNode = document.getElementById('detail');
@@ -59,7 +60,7 @@ const projectMemoryConfigPathNode = document.getElementById('project-memory-conf
 const backupsConfigPathNode = document.getElementById('backups-config-path');
 const cleanupConfigPathNode = document.getElementById('cleanup-config-path');
 const settingsEditorNode = document.getElementById('settings-editor');
-const instructionsNode = document.getElementById(${JSON.stringify(INSTRUCTIONS_REPORT_UI_TAB_CONTRACT.id)});
+const instructionsNode = document.getElementById(${escapeJsonForScript(INSTRUCTIONS_REPORT_UI_TAB_CONTRACT.id)});
 const initSettingsNode = document.getElementById('init-settings');
 const projectMemoryNode = document.getElementById('project-memory');
 const actionsNode = document.getElementById('actions');
@@ -78,8 +79,8 @@ const priorityFilterNode = document.getElementById('priority-filter');
 const planModalNode = document.getElementById('plan-modal');
 const planModalBodyNode = document.getElementById('plan-modal-body');
 const planModalCloseNode = document.getElementById('plan-modal-close');
-const actionToken = ${JSON.stringify(actionToken)};
-const actionsEnabled = ${JSON.stringify(actionsEnabled)};
+const actionToken = ${escapeJsonForScript(actionToken)};
+const actionsEnabled = ${escapeJsonForScript(actionsEnabled)};
 let currentReport = null;
 let currentSession = null;
 let currentActionsPayload = null;

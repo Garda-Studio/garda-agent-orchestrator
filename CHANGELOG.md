@@ -1,5 +1,8 @@
 # Changelog
 
+- Integrate accepted dashboard escaping, task requests and local UI admission checks.
+
+
 - Integrate accepted review authority, frozen profile consistency, scoped skill
   binding, correction and follow-up handling from the preserved C2 source snapshot.
 
