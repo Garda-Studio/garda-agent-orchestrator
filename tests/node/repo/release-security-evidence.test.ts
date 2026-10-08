@@ -9,11 +9,12 @@ import * as path from 'node:path';
 const security = require(path.join(process.cwd(), 'scripts/release-security-evidence.cjs')) as {
     MAX_EVIDENCE_AGE_MS: number;
     attestOrVerify: (mode: 'attest' | 'verify', argv: string[], root: string, clock: Date,
-        fetch: (repository: string, runId: number) => { run: object; jobs: object }) => {
+        fetch: (repository: string, runId: number) => { run: object; jobs: object; fetchAttempt?: (attempt: number) => object }) => {
         evidencePath: string; evidenceSha256: string;
     };
-    assertSecurityWorkflow: (content: string) => void;
-    validateSecurityRun: (run: object, jobs: object, expected: object, now: Date) => object;
+    assertSecurityWorkflow: (content: string, selector?: string) => void;
+    validateSecurityRun: (run: object, jobs: object, expected: object, now: Date, fetchAttempt?: (attempt: number) => object) => object;
+    readJobsPayload: (payload: object) => object[];
     assertDevGraph: (packageJson: object, lockfile: object) => void;
     createEvidence: (candidate: object, scan: object, attestedAt: string) => object;
     assertEvidenceMatches: (recorded: object, current: object) => void;
@@ -33,7 +34,7 @@ function fixture() {
         head_branch: 'dev',
         repository: { full_name: repository },
         path: '.github/workflows/security.yml',
-        event: 'push',
+        event: 'workflow_dispatch',
         status: 'completed',
         conclusion: 'success',
         run_attempt: 1,
@@ -43,6 +44,7 @@ function fixture() {
     const auditJob = {
         id: 101,
         run_id: 42,
+        run_attempt: 1,
         head_sha: commit,
         name: 'npm audit',
         status: 'completed',
@@ -66,7 +68,10 @@ function fixture() {
             successfulStep('Run osv-scanner-reporter')
         ]
     };
-    return { run, jobs: { total_count: 2, jobs: [auditJob, osvJob] } };
+    const authorizeJob = { ...auditJob, id: 100, name: 'Authorize Security selection',
+        started_at: '2026-09-25T10:00:00Z', completed_at: '2026-09-25T10:01:00Z',
+        steps: [successfulStep('Authorize selected jobs')] };
+    return { run, jobs: { total_count: 3, jobs: [auditJob, osvJob, authorizeJob] } };
 }
 
 test('security evidence accepts only the successful full-graph npm and OSV run', () => {
@@ -74,10 +79,16 @@ test('security evidence accepts only the successful full-graph npm and OSV run',
     assert.deepEqual(security.validateSecurityRun(run, jobs, expected, now), {
         run_id: 42,
         run_attempt: 1,
-        run_event: 'push',
+        run_event: 'workflow_dispatch',
         run_completed_at_utc: '2026-09-25T10:20:00Z',
+        authorization_job_id: 100,
         audit_job_id: 101,
-        osv_job_ids: [102]
+        osv_job_ids: [102],
+        job_attempts: [
+            { name: 'Authorize Security selection', id: 100, attempt: 1 },
+            { name: 'npm audit', id: 101, attempt: 1 },
+            { name: 'OSV Vulnerability Scan / osv-scan', id: 102, attempt: 1 }
+        ]
     });
 });
 
@@ -98,13 +109,13 @@ test('security evidence rejects a stale or foreign workflow run', () => {
 
 test('security evidence rejects incomplete or bypassed jobs and required steps', () => {
     for (const mutate of [
-        (jobs: ReturnType<typeof fixture>['jobs']) => { jobs.total_count = 3; },
+        (jobs: ReturnType<typeof fixture>['jobs']) => { jobs.total_count = 4; },
         (jobs: ReturnType<typeof fixture>['jobs']) => { jobs.jobs[0].head_sha = 'b'.repeat(40); },
         (jobs: ReturnType<typeof fixture>['jobs']) => { jobs.jobs[0].conclusion = 'skipped'; },
         (jobs: ReturnType<typeof fixture>['jobs']) => { jobs.jobs[0].steps[2].conclusion = 'skipped'; },
         (jobs: ReturnType<typeof fixture>['jobs']) => { jobs.jobs[1].steps[1].conclusion = 'skipped'; },
         (jobs: ReturnType<typeof fixture>['jobs']) => { jobs.jobs[1].steps[2].conclusion = 'skipped'; },
-        (jobs: ReturnType<typeof fixture>['jobs']) => { jobs.jobs.pop(); jobs.total_count = 1; }
+        (jobs: ReturnType<typeof fixture>['jobs']) => { jobs.jobs.splice(1, 1); jobs.total_count = 2; }
     ]) {
         const { run, jobs } = fixture();
         mutate(jobs);
@@ -122,6 +133,25 @@ test('security workflow and root lockfile bind the reviewed scan and release too
     security.assertDevGraph(packageJson, lockfile);
     delete lockfile.packages[''].devDependencies['@cyclonedx/cyclonedx-npm'];
     assert.throws(() => security.assertDevGraph(packageJson, lockfile));
+});
+
+test('security evidence rejects scalar source drift while accepting CRLF', () => {
+    const workflow = fs.readFileSync(path.join(process.cwd(), '.github/workflows/security.yml'), 'utf8');
+    const anchor = '          set -euo pipefail\n';
+    assert.ok(workflow.includes(anchor));
+    security.assertSecurityWorkflow(workflow);
+    security.assertSecurityWorkflow(workflow.replace(/\r?\n/gu, '\r\n'));
+    for (const inserted of [
+        "          # ${{ fromJSON('\"\\nexit 0\\n\"') }}\n",
+        '          # An unreviewed scalar comment\n',
+        '\n',
+        '          \n'
+    ]) {
+        const changed = workflow.replace(anchor, inserted + anchor);
+        assert.notEqual(changed, workflow);
+        assert.throws(() => security.assertSecurityWorkflow(changed), /reviewed manually authorized audit and OSV contract/);
+    }
+    assert.throws(() => security.assertSecurityWorkflow(workflow.trimEnd()), /reviewed manually authorized audit and OSV contract/);
 });
 
 test('candidate evidence binds exact artifact and lockfile digests', () => {
@@ -145,6 +175,47 @@ test('candidate evidence binds exact artifact and lockfile digests', () => {
             recorded, security.createEvidence(changed, scan, now.toISOString())));
     }
 });
+
+test('security evidence serializes the independently specified schema-2 scan contract', () => {
+    const candidate = { commit_sha: commit, tag: 'v1.5.0', tarball_name: 'candidate.tgz',
+        tarball_sha256: 'b'.repeat(64), lockfile_sha256: 'c'.repeat(64), repository };
+    const { run, jobs } = fixture();
+    assert.deepEqual(security.createEvidence(candidate,
+        security.validateSecurityRun(run, jobs, expected, now), now.toISOString()), {
+        schema_version: 2,
+        source: 'authenticated_github_actions_api',
+        candidate,
+        security: {
+            run_id: 42,
+            run_attempt: 1,
+            run_event: 'workflow_dispatch',
+            run_completed_at_utc: '2026-09-25T10:20:00Z',
+            authorization_job_id: 100,
+            audit_job_id: 101,
+            osv_job_ids: [102],
+            job_attempts: [
+                { name: 'Authorize Security selection', id: 100, attempt: 1 },
+                { name: 'npm audit', id: 101, attempt: 1 },
+                { name: 'OSV Vulnerability Scan / osv-scan', id: 102, attempt: 1 }
+            ],
+            workflow_sha256: '6052f5d04a1eae574aae2e7236d424c7f4e48a8aedcd39ae6cf4220f24d83ed5',
+            selector_sha256: 'cb34c3544940e746ad023a8fa4c9e6de4b789fec05e1cdef106bbb7c0da034a5',
+            node_version: '24',
+            npm_cli_version: '11.15.0',
+            npm_audit_registry: 'https://registry.npmjs.org',
+            npm_install_ignore_scripts: true,
+            npm_audit_lockfile_only: true,
+            npm_audit_scope: 'all_dependencies_including_dev',
+            npm_audit_policy: 'high_or_critical_blocking',
+            osv_action_ref: 'google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@b77c075a1235514558f0eb88dbd31e22c45e0cd2',
+            osv_checkout_ref: commit,
+            osv_scan_args: '--lockfile=package-lock.json',
+            osv_fail_on_vuln: true
+        },
+        attested_at_utc: '2026-09-25T12:00:00.000Z'
+    });
+});
+
 test('security evidence rejects a foreign repository', () => {
     const { run, jobs } = fixture();
     run.repository.full_name = 'other/repository';
@@ -213,6 +284,141 @@ test('security evidence rejects a foreign branch-qualified workflow path', () =>
     const { run, jobs } = fixture();
     run.path = '.github/workflows/security.yml@master';
     assert.throws(() => security.validateSecurityRun(run, jobs, expected, now));
+});
+
+test('security evidence rejects automatic push PR and scheduled runs', () => {
+    const { run, jobs } = fixture();
+    for (const event of ['push', 'pull_request', 'schedule']) {
+        assert.throws(() => security.validateSecurityRun({ ...run, event }, jobs, expected, now));
+    }
+});
+
+test('security evidence rejects missing authorization and bypassed authorization steps', () => {
+    const { run, jobs } = fixture();
+    assert.throws(() => security.validateSecurityRun(run,
+        { total_count: 2, jobs: jobs.jobs.slice(0, 2) }, expected, now));
+    jobs.jobs[2].steps[0].conclusion = 'skipped';
+    assert.throws(() => security.validateSecurityRun(run, jobs, expected, now));
+});
+
+test('security job pagination rejects inconsistent totals empty pages and unbounded history', () => {
+    const { jobs } = fixture();
+    assert.deepEqual(security.readJobsPayload([{ total_count: 3, jobs: jobs.jobs.slice(0, 1) },
+        { total_count: 3, jobs: jobs.jobs.slice(1) }]), jobs.jobs);
+    assert.throws(() => security.readJobsPayload([{ total_count: 3, jobs: jobs.jobs.slice(0, 1) },
+        { total_count: 2, jobs: jobs.jobs.slice(1) }]));
+    assert.throws(() => security.readJobsPayload([]));
+    assert.throws(() => security.readJobsPayload({ total_count: 1001, jobs: Array(1001).fill(jobs.jobs[0]) }));
+});
+
+function retryFixture() {
+    const { run, jobs } = fixture();
+    const prior = { ...run, conclusion: 'failure' };
+    const retry = { ...jobs.jobs[1], id: 202, run_attempt: 2,
+        started_at: '2026-09-25T10:30:00Z', completed_at: '2026-09-25T10:40:00Z' };
+    jobs.jobs[1].conclusion = 'failure';
+    jobs.jobs.push(retry);
+    jobs.total_count = jobs.jobs.length;
+    Object.assign(run, { run_attempt: 2, run_started_at: '2026-09-25T10:30:00Z', updated_at: '2026-09-25T10:45:00Z' });
+    const calls: number[] = [];
+    const fetchAttempt = (attempt: number) => { calls.push(attempt); assert.equal(attempt, 1); return prior; };
+    return { run, jobs, prior, retry, calls, fetchAttempt };
+}
+
+test('security evidence accepts failed-job reruns with authenticated retained full-scan history', () => {
+    const data = retryFixture();
+    const result = security.validateSecurityRun(data.run, [
+        { total_count: 4, jobs: data.jobs.jobs.slice(0, 2) },
+        { total_count: 4, jobs: data.jobs.jobs.slice(2) }
+    ], expected, now, data.fetchAttempt) as { audit_job_id: number; osv_job_ids: number[]; job_attempts: object[] };
+    assert.equal(result.audit_job_id, 101);
+    assert.deepEqual(result.osv_job_ids, [202]);
+    assert.deepEqual(result.job_attempts, [
+        { name: 'Authorize Security selection', id: 100, attempt: 1 },
+        { name: 'npm audit', id: 101, attempt: 1 },
+        { name: 'OSV Vulnerability Scan / osv-scan', id: 202, attempt: 2 }
+    ]);
+    assert.deepEqual(data.calls, [1]);
+});
+
+test('security evidence rejects missing authenticated attempt metadata', () => {
+    const data = retryFixture();
+    assert.throws(() => security.validateSecurityRun(data.run, data.jobs, expected, now));
+});
+
+test('security evidence rejects duplicate job identities attempts and replayed current coverage', () => {
+    const { run, jobs } = fixture();
+    assert.throws(() => security.validateSecurityRun(run, { total_count: 4,
+        jobs: [...jobs.jobs, { ...jobs.jobs[0], id: 999 }] }, expected, now));
+    jobs.jobs[1].id = jobs.jobs[0].id;
+    assert.throws(() => security.validateSecurityRun(run, jobs, expected, now));
+    jobs.jobs[1].id = 102;
+    assert.throws(() => security.validateSecurityRun({ ...run, run_attempt: 2 }, jobs, expected, now,
+        () => ({ ...run })));
+    for (const run_attempt of [0, 2, undefined]) {
+        assert.throws(() => security.validateSecurityRun(run, { ...jobs,
+            jobs: [{ ...jobs.jobs[0], run_attempt }, ...jobs.jobs.slice(1)] }, expected, now));
+    }
+});
+
+test('security evidence rejects latest failures and skips despite an earlier successful job', () => {
+    const data = retryFixture();
+    data.jobs.jobs[1].conclusion = 'success';
+    data.retry.conclusion = 'failure';
+    assert.throws(() => security.validateSecurityRun(data.run, data.jobs, expected, now, data.fetchAttempt));
+    for (const conclusion of ['skipped', 'cancelled']) {
+        data.retry.conclusion = conclusion;
+        assert.throws(() => security.validateSecurityRun(data.run, data.jobs, expected, now, data.fetchAttempt));
+    }
+});
+
+test('security evidence rejects foreign stale reversed and overlapping attempt provenance', () => {
+    const data = retryFixture();
+    for (const replacement of [
+        { id: 99 }, { head_sha: 'b'.repeat(40) }, { repository: { full_name: 'foreign/repository' } },
+        { run_attempt: 2 }, { event: 'push' }, { path: '.github/workflows/security.yml@master' },
+        { head_branch: 'main' }, { status: 'queued' }, { updated_at: '2026-09-23T10:20:00Z' },
+        { run_started_at: '2026-09-25T11:00:00Z', updated_at: '2026-09-25T11:05:00Z' },
+        { updated_at: '2026-09-25T10:40:00Z' }
+    ]) {
+        assert.throws(() => security.validateSecurityRun(data.run, data.jobs, expected, now,
+            () => ({ ...data.prior, ...replacement })));
+    }
+});
+
+test('security evidence rejects jobs outside their authenticated attempt timeline', () => {
+    const data = retryFixture();
+    data.jobs.jobs[0].started_at = '2026-09-25T09:00:00Z';
+    assert.throws(() => security.validateSecurityRun(data.run, data.jobs, expected, now, data.fetchAttempt));
+    data.jobs.jobs[0].started_at = '2026-09-25T10:01:00Z';
+    data.retry.completed_at = '2026-09-25T11:00:00Z';
+    assert.throws(() => security.validateSecurityRun(data.run, data.jobs, expected, now, data.fetchAttempt));
+});
+
+test('security evidence accepts only superseded earlier unexpanded skipped reusable jobs', () => {
+    const data = retryFixture();
+    const skipped = { ...data.jobs.jobs[1], name: 'OSV Vulnerability Scan', conclusion: 'skipped', steps: [] };
+    data.jobs.jobs.splice(1, 1, skipped);
+    assert.doesNotThrow(() => security.validateSecurityRun(data.run, data.jobs, expected, now, data.fetchAttempt));
+    for (const replacement of [{ name: 'OSV Vulnerability Scan / foreign' }, { conclusion: 'success' },
+        { run_attempt: 2 }, { status: 'queued' }, { steps: [successfulStep('Run scanner')] }]) {
+        assert.throws(() => security.validateSecurityRun(data.run, { ...data.jobs,
+            jobs: [data.jobs.jobs[0], { ...skipped, ...replacement }, ...data.jobs.jobs.slice(2)] }, expected, now, data.fetchAttempt));
+    }
+});
+
+test('security workflow rejects replaced manual authorization and selector contracts', () => {
+    const workflow = fs.readFileSync(path.join(process.cwd(), '.github/workflows/security.yml'), 'utf8');
+    const selector = fs.readFileSync(path.join(process.cwd(), 'scripts/manual-workflow-authorization.cjs'), 'utf8');
+    assert.doesNotThrow(() => security.assertSecurityWorkflow(workflow, selector));
+    assert.doesNotMatch(workflow, /^  (?:push|pull_request|schedule):/mu);
+    assert.match(workflow, /options: \[npm-audit, osv, all\]/u);
+    assert.match(workflow, /options: \[ubuntu-latest, all\]/u);
+    assert.match(workflow, /options: \['24', all\]/u);
+    assert.match(workflow, /MANUAL_WORKFLOW: security/u);
+    assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/u);
+    assert.throws(() => security.assertSecurityWorkflow(workflow, selector + '\n// replaced selector\n'));
+    assert.throws(() => security.assertSecurityWorkflow(workflow.replace('needs: [authorize]', 'needs: []'), selector));
 });
 test('security evidence rejects a replaced lifecycle-enabled npm installation', () => {
     const workflow = fs.readFileSync(path.join(process.cwd(), '.github/workflows/security.yml'), 'utf8');
@@ -300,6 +506,9 @@ function lifecycleFixture(t: TestContext) {
         packages: { '': { devDependencies: packageJson.devDependencies } } }));
     fs.copyFileSync(path.join(process.cwd(), '.github/workflows/security.yml'),
         path.join(repoRoot, '.github/workflows/security.yml'));
+    fs.mkdirSync(path.join(repoRoot, 'scripts'));
+    fs.copyFileSync(path.join(process.cwd(), 'scripts/manual-workflow-authorization.cjs'),
+        path.join(repoRoot, 'scripts/manual-workflow-authorization.cjs'));
     const git = (...args: string[]) => {
         const result = childProcess.spawnSync('git', ['-c', 'core.hooksPath=' + path.join(root, 'empty-hooks'), ...args],
             { cwd: repoRoot, encoding: 'utf8', windowsHide: true });
@@ -352,6 +561,10 @@ test('security attest and verify round trip bind real candidate files and refetc
     const record = JSON.parse(evidenceBytes.toString('utf8'));
     assert.equal(record.candidate.commit_sha, data.args[1]);
     assert.equal(record.candidate.tarball_sha256, data.args[3]);
+    assert.equal(record.schema_version, 2);
+    assert.equal(record.security.workflow_sha256, '6052f5d04a1eae574aae2e7236d424c7f4e48a8aedcd39ae6cf4220f24d83ed5');
+    assert.equal(record.security.selector_sha256, 'cb34c3544940e746ad023a8fa4c9e6de4b789fec05e1cdef106bbb7c0da034a5');
+    assert.equal(record.security.osv_checkout_ref, data.args[1]);
     assert.equal(record.attested_at_utc, now.toISOString());
     const verified = security.attestOrVerify('verify', data.args, data.repoRoot, now, data.fetch);
     assert.deepEqual(verified, created);
@@ -389,6 +602,49 @@ test('security verify rejects replaced candidate binding without overwriting the
     fs.writeFileSync(created.evidencePath, altered);
     assert.throws(() => security.attestOrVerify('verify', data.args, data.repoRoot, now, data.fetch), /different candidate/);
     assert.equal(fs.readFileSync(created.evidencePath, 'utf8'), altered);
+});
+
+test('security verify rejects the obsolete normalized workflow digest without overwriting', (t) => {
+    const data = lifecycleFixture(t);
+    const created = security.attestOrVerify('attest', [...data.args, '42'], data.repoRoot, now, data.fetch);
+    const record = JSON.parse(fs.readFileSync(created.evidencePath, 'utf8'));
+    assert.equal(record.security.workflow_sha256, '6052f5d04a1eae574aae2e7236d424c7f4e48a8aedcd39ae6cf4220f24d83ed5');
+    record.security.workflow_sha256 = '75df431f6967c0613af98b0dab944491e1a5cd07294be7fa0013a42ae0e0e139';
+    const altered = JSON.stringify(record);
+    fs.writeFileSync(created.evidencePath, altered);
+    assert.throws(() => security.attestOrVerify('verify', data.args, data.repoRoot, now, data.fetch),
+        /Security evidence is absent, altered, stale, or bound to a different candidate/);
+    assert.equal(fs.readFileSync(created.evidencePath, 'utf8'), altered);
+});
+
+test('security verify rejects legacy schema and missing or altered scan bindings without overwriting', (t) => {
+    const data = lifecycleFixture(t);
+    const created = security.attestOrVerify('attest', [...data.args, '42'], data.repoRoot, now, data.fetch);
+    const original = JSON.parse(fs.readFileSync(created.evidencePath, 'utf8')) as {
+        schema_version?: number; security: Record<string, unknown>;
+    };
+    const mutations = [
+        (record: typeof original) => { record.schema_version = 1; },
+        (record: typeof original) => { delete record.schema_version; },
+        (record: typeof original) => { delete record.security.selector_sha256; },
+        (record: typeof original) => { record.security.selector_sha256 = 'd'.repeat(64); },
+        (record: typeof original) => { delete record.security.osv_checkout_ref; },
+        (record: typeof original) => { record.security.osv_checkout_ref = 'd'.repeat(40); },
+        (record: typeof original) => {
+            record.schema_version = 1;
+            delete record.security.selector_sha256;
+            delete record.security.osv_checkout_ref;
+        }
+    ];
+    for (const mutate of mutations) {
+        const record = structuredClone(original);
+        mutate(record);
+        const altered = JSON.stringify(record);
+        fs.writeFileSync(created.evidencePath, altered);
+        assert.throws(() => security.attestOrVerify('verify', data.args, data.repoRoot, now, data.fetch),
+            /Security evidence is absent, altered, stale, or bound to a different candidate/);
+        assert.equal(fs.readFileSync(created.evidencePath, 'utf8'), altered);
+    }
 });
 
 test('security verify rejects stale future and pre-scan attestations with a fresh scan', (t) => {

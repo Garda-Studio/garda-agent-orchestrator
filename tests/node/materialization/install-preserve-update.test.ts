@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { runInstall } from '../../../src/materialization/install';
+import { runInit } from '../../../src/materialization/init';
 import {
     findRepoRoot,
     setupTestWorkspace,
@@ -12,6 +13,20 @@ import {
 
 describe('runInstall — preserve/update semantics and IDE settings', () => {
     const repoRoot = findRepoRoot();
+
+    function assertFinalReportGuidance(bundleRoot: string) {
+        for (const relativePath of [
+            'docs/agent-rules/80-task-workflow.md',
+            'skills/orchestration/SKILL.md',
+            'skills/orchestration-depth1/SKILL.md'
+        ]) {
+            const content = fs.readFileSync(path.join(bundleRoot, 'live', relativePath), 'utf8');
+            assert.ok(content.includes('Do not add an agent-authored output-compaction line'), relativePath);
+            assert.ok(content.includes('diagnostic/statistics telemetry remain active'), relativePath);
+            assert.ok(!content.includes('Suppressed output:'), relativePath);
+            assert.ok(!content.includes('savings are reported in the implementation summary'), relativePath);
+        }
+    }
 
     it('preserves pre-existing extra root entrypoints when ActiveAgentFiles is narrower', () => {
         const { projectRoot, bundleRoot } = setupTestWorkspace(repoRoot);
@@ -30,7 +45,8 @@ describe('runInstall — preserve/update semantics and IDE settings', () => {
             runInstall({
                 targetRoot: projectRoot,
                 bundleRoot,
-                runInit: false,
+                runInit: true,
+                initRunner: (options) => { runInit({ ...options, bundleRoot, lifecycleLockAlreadyHeld: true }); },
                 assistantLanguage: 'English',
                 assistantBrevity: 'concise',
                 sourceOfTruth: 'Claude',
@@ -38,6 +54,7 @@ describe('runInstall — preserve/update semantics and IDE settings', () => {
             });
 
             assert.ok(fs.existsSync(path.join(projectRoot, 'GEMINI.md')), 'GEMINI.md should exist after first install');
+            assertFinalReportGuidance(bundleRoot);
 
             const answersPath2 = writeInitAnswers(bundleRoot, {
                 AssistantLanguage: 'English',
@@ -56,7 +73,8 @@ describe('runInstall — preserve/update semantics and IDE settings', () => {
                 bundleRoot,
                 preserveExisting: true,
                 alignExisting: true,
-                runInit: false,
+                runInit: true,
+                initRunner: (options) => { runInit({ ...options, bundleRoot, lifecycleLockAlreadyHeld: true }); },
                 assistantLanguage: 'English',
                 assistantBrevity: 'concise',
                 sourceOfTruth: 'Claude',
@@ -69,6 +87,7 @@ describe('runInstall — preserve/update semantics and IDE settings', () => {
             const geminiContent = fs.readFileSync(path.join(projectRoot, 'GEMINI.md'), 'utf8');
             assert.ok(geminiContent.includes('CLAUDE.md'),
                 'Preserved GEMINI.md should redirect to canonical CLAUDE.md');
+            assertFinalReportGuidance(bundleRoot);
         } finally {
             fs.rmSync(projectRoot, { recursive: true, force: true });
         }

@@ -358,6 +358,19 @@ function normalizeGitignoreComparableEntry(entry: string | null | undefined): st
     return trimmed;
 }
 
+export function hasManagedGitignoreEntry(existingEntries: ReadonlySet<string>, entry: string): boolean {
+    if (existingEntries.has(entry)) {
+        return true;
+    }
+
+    // Managed control paths require root coverage; global globs retain their original scope.
+    const segments = entry.replace(/\/$/, '').split('/');
+    const literalRootPath = Boolean(entry) && !entry.startsWith('/') &&
+        !entry.startsWith('#') && !entry.startsWith('!') && !/[\\*?[\]\s]/.test(entry) &&
+        !segments.some(segment => !segment || segment === '.' || segment === '..');
+    return literalRootPath && existingEntries.has(`/${entry}`);
+}
+
 export function syncManagedGitignoreBlockInContent(
     content: string | null | undefined,
     entries: string[],
@@ -402,8 +415,10 @@ export function syncManagedGitignoreBlockInContent(
         }
     }
 
+    const userOwnedRawEntries = new Set(preservedLines);
     const managedEntries = canonicalComparableEntries
-        .filter((item) => !userOwnedComparableEntries.has(item.normalized))
+        .filter((item) => !userOwnedComparableEntries.has(item.normalized) &&
+            !hasManagedGitignoreEntry(userOwnedRawEntries, item.entry))
         .map((item) => item.entry);
 
     const canonicalBlockLines = [GITIGNORE_MANAGED_COMMENT, ...managedEntries];

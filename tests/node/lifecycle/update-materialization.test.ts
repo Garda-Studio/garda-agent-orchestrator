@@ -6,6 +6,7 @@ import * as os from 'node:os';
 
 import { runUpdate } from '../../../src/lifecycle/update';
 import { runContractMigrations } from '../../../src/lifecycle/contract-migrations';
+import { migrateLegacyOutputCompactionGuidance } from '../../../src/materialization/rule-materialization';
 import { removePathRecursive } from '../../../src/lifecycle/common';
 import { formatManifestResult, formatVerifyResult, runVerify, validateManifest } from '../../../src/validators';
 import {
@@ -190,13 +191,25 @@ function setupSyncedUpdateWorkspace(repoRoot: string) {
 
 describe('runUpdate', () => {
     const repoRoot = findRepoRoot();
-    it('rematerializes live/ content during update', () => {
+    const legacyReportingLine = '- At `depth=1` and `depth=2`, the implementation summary must include an output-compaction line; at `depth=3` it is optional. Use chars as the primary unit, keep approximate percentage when baseline is known, keep spaced breakdown formatting, and include token estimate only as a secondary note when available: `Suppressed output: ~3528 chars (~67%) (code review context ~3296 chars + DB review context ~100 chars + compile gate output ~132 chars). Token estimate: ~882.`';
+    it('rematerializes stale live/ content during update', () => {
         const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
         try {
             // Seed stale live/ content to simulate a previous version
             const liveRuleDir = path.join(bundleRoot, 'live', 'docs', 'agent-rules');
             fs.mkdirSync(liveRuleDir, { recursive: true });
             fs.writeFileSync(path.join(liveRuleDir, '00-core.md'), 'STALE_CORE_RULE');
+            const workflowTemplate = fs.readFileSync(
+                path.join(bundleRoot, 'template', 'docs', 'agent-rules', '80-task-workflow.md'), 'utf8'
+            );
+            const reportingLine = workflowTemplate.split(/\r?\n/).find((line) => (
+                line.startsWith('- Do not add an agent-authored output-compaction line ')
+            ));
+            assert.ok(reportingLine);
+            const userRule = '- User-owned completion note: retain the local release checklist.';
+            fs.writeFileSync(path.join(liveRuleDir, '80-task-workflow.md'), workflowTemplate.replace(
+                reportingLine, `${legacyReportingLine}\n${userRule}`
+            ));
 
             const liveConfigDir = path.join(bundleRoot, 'live', 'config');
             fs.mkdirSync(liveConfigDir, { recursive: true });
@@ -206,6 +219,15 @@ describe('runUpdate', () => {
             const liveSkillsDir = path.join(bundleRoot, 'live', 'skills');
             fs.mkdirSync(liveSkillsDir, { recursive: true });
             fs.writeFileSync(path.join(liveSkillsDir, 'stale-marker.txt'), 'STALE');
+            for (const skill of ['orchestration', 'orchestration-depth1']) {
+                const skillDir = path.join(liveSkillsDir, skill);
+                fs.mkdirSync(skillDir, { recursive: true });
+                fs.writeFileSync(path.join(skillDir, 'SKILL.md'), 'The final summary must include Suppressed output:');
+            }
+            const memoryPath = path.join(bundleRoot, 'live', 'docs', 'project-memory', 'commands.md');
+            const userMemory = '# Commands\n\nUser-owned validation command: npm run user-check.\n';
+            fs.mkdirSync(path.dirname(memoryPath), { recursive: true });
+            fs.writeFileSync(memoryPath, userMemory);
 
             const result = runUpdate({
                 targetRoot: projectRoot,
@@ -222,6 +244,22 @@ describe('runUpdate', () => {
             const coreRuleContent = fs.readFileSync(path.join(liveRuleDir, '00-core.md'), 'utf8');
             assert.ok(coreRuleContent !== 'STALE_CORE_RULE', 'Core rule should be refreshed from template');
             assert.ok(coreRuleContent.length > 10, 'Core rule should have real content');
+
+            for (const relativePath of [
+                'docs/agent-rules/80-task-workflow.md',
+                'skills/orchestration/SKILL.md',
+                'skills/orchestration-depth1/SKILL.md'
+            ]) {
+                const content = fs.readFileSync(path.join(bundleRoot, 'live', relativePath), 'utf8');
+                assert.ok(content.includes('Do not add an agent-authored output-compaction line'), relativePath);
+                assert.ok(content.includes('diagnostic/statistics telemetry remain active'), relativePath);
+                assert.ok(!content.includes('Suppressed output:'), relativePath);
+                assert.ok(!content.includes('savings are reported in the implementation summary'), relativePath);
+            }
+            assert.equal(fs.readFileSync(memoryPath, 'utf8'), userMemory, 'User-owned memory must survive update');
+            assert.equal(fs.readFileSync(path.join(liveRuleDir, '80-task-workflow.md'), 'utf8'),
+                workflowTemplate.replace(reportingLine, `${reportingLine}\n${userRule}`),
+                'Only the known legacy reporting line should change; user rule text must survive');
 
             // skills-index.json should be regenerated, not stale
             const skillsIndex = JSON.parse(fs.readFileSync(path.join(liveConfigDir, 'skills-index.json'), 'utf8'));
@@ -241,6 +279,17 @@ describe('runUpdate', () => {
         } finally {
             removePathRecursive(projectRoot);
         }
+    });
+
+    it('preserves CRLF and custom legacy-like text during final-report migration', () => {
+        const reportingLine = '- Do not add an agent-authored output-compaction line at any depth. Keep $& literal.';
+        const input = `User heading\r\n${legacyReportingLine}\r\n${legacyReportingLine} custom\r\nQuote: ${legacyReportingLine}\r\n`;
+        const expected = `User heading\r\n${reportingLine}\r\n${legacyReportingLine} custom\r\nQuote: ${legacyReportingLine}\r\n`;
+        const migrated = migrateLegacyOutputCompactionGuidance(input, reportingLine);
+        assert.equal(migrated, expected, 'Only the exact shipped line changes, with literal replacement text');
+        assert.equal(migrateLegacyOutputCompactionGuidance(migrated, reportingLine), migrated, 'Migration is idempotent');
+        assert.equal(migrateLegacyOutputCompactionGuidance(input, 'Unrecognized template guidance'), input,
+            'Missing replacement guidance must preserve the original content');
     });
 
     it('rematerializes config files from template during update', () => {

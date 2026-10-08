@@ -40,8 +40,8 @@ function loadCiWorkflow(): WorkflowFile {
     return loadWorkflow('.github/workflows/ci.yml', 'CI');
 }
 
-function loadScheduledSmokeWorkflow(): WorkflowFile {
-    return loadWorkflow('.github/workflows/smoke-schedule.yml', 'Scheduled smoke');
+function loadManualSmokeWorkflow(): WorkflowFile {
+    return loadWorkflow('.github/workflows/smoke-schedule.yml', 'Manual smoke');
 }
 
 function getRawContent(workflow: WorkflowFile): string {
@@ -72,6 +72,36 @@ function assertSmokeUpload(job: string): void {
         /^ {8}uses: actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a +# v7\.0\.1$/mu,
         'Smoke upload must use the immutable actions/upload-artifact v7.0.1 pin'
     );
+}
+
+function assertSmokeForensics(job: string): void {
+    const lifecycle = getWorkflowStepBlock(job, 'Lifecycle smoke (cross-platform E2E install → update → uninstall)');
+    assert.match(lifecycle, /^ {8}id: lifecycle-smoke$/mu);
+    assert.ok(lifecycle.split(/\r?\n/u).map(line => line.trim())
+        .includes('echo "smoke_dir=$SMOKE_DIR" >> "$GITHUB_OUTPUT"'));
+    const collection = getWorkflowStepBlock(job, 'Collect smoke failure evidence');
+    assert.match(collection, /^ {8}if: failure\(\)$/mu, 'Smoke collection must run on failure');
+    const lines = collection.split(/\r?\n/u).map(line => line.trim());
+    for (const required of [
+        'mkdir -p smoke-failure-evidence',
+        'for log in "$HOME"/.npm/_logs/*.log; do',
+        '[ -f "$log" ] && cp "$log" smoke-failure-evidence/ || true',
+        'SMOKE_DIR="${{ steps.lifecycle-smoke.outputs.smoke_dir }}"',
+        'cp -r "$SMOKE_DIR/garda-agent-orchestrator/runtime" smoke-failure-evidence/smoke-runtime',
+        'cp -r "$SMOKE_DIR/garda-agent-orchestrator/live/config" smoke-failure-evidence/smoke-config',
+        'echo "runner_os=$RUNNER_OS"',
+        'echo "smoke_dir=$SMOKE_DIR"',
+        '} > smoke-failure-evidence/runner-env.txt'
+    ]) assert.ok(lines.includes(required), 'Missing executable Smoke evidence statement: ' + required);
+    assertSmokeUpload(job);
+    const uploadLines = getWorkflowStepBlock(job, 'Upload smoke failure evidence').split(/\r?\n/u)
+        .map(line => line.trim());
+    for (const required of [
+        'name: smoke-failure-evidence-${{ matrix.os }}-node${{ matrix.node-version }}',
+        'path: smoke-failure-evidence/',
+        'retention-days: 15',
+        'if-no-files-found: ignore'
+    ]) assert.ok(uploadLines.includes(required), 'Missing Smoke upload contract: ' + required);
 }
 
 function assertReleasePreparation(job: string): void {
@@ -186,32 +216,28 @@ test('ripgrep assertions reject missing, commented or reordered real checks desp
     }
 });
 
-function extractYamlListAfterKey(block: string, key: string): string[] {
-    const lines = block.split(/\r?\n/);
-    const keyPattern = new RegExp(`^(\\s*)${key}:\\s*$`, 'u');
-    const keyIndex = lines.findIndex((line) => keyPattern.test(line));
-    assert.notEqual(keyIndex, -1, `Expected YAML key '${key}'`);
-    const keyIndent = keyPattern.exec(lines[keyIndex])![1].length;
-    const values: string[] = [];
-    for (const line of lines.slice(keyIndex + 1)) {
-        const indent = line.match(/^\s*/u)![0].length;
-        if (line.trim() && indent <= keyIndent) {
-            break;
-        }
-        const item = /^\s*-\s*(.+?)\s*$/u.exec(line);
-        if (item) {
-            values.push(item[1].replace(/^['"]|['"]$/gu, ''));
-        }
-    }
-    return values;
-}
-
-function assertSupportedNodeMatrix(raw: string, jobId: string, label: string): void {
-    const jobBlock = getWorkflowJobBlock(raw, jobId);
+function assertSupportedSmokeMatrix(raw: string, workflowProfile: string, label: string): void {
+    const jobBlock = getWorkflowJobBlock(raw, 'smoke');
+    assert.ok(jobBlock.includes("matrix: ${{ fromJSON(needs.authorize.outputs.selection).jobs['smoke'].matrix }}"));
+    const selector = require(path.join(getRepoRoot(), 'scripts/manual-workflow-authorization.cjs')) as {
+        AUTHORIZATION_PHRASE: string;
+        selectManualWorkflow(env: Record<string, string>): {
+            jobs: Record<string, { matrix: { include: Array<{ os: string; 'node-version': string }> } }>;
+        };
+    };
+    // Pure registry inspection; these synthetic inputs never launch a workflow.
+    const full = selector.selectManualWorkflow({ MANUAL_WORKFLOW: workflowProfile, GITHUB_EVENT_NAME: 'workflow_dispatch',
+        GITHUB_REPOSITORY: 'fixture/contract', MANUAL_REPOSITORY: 'fixture/contract',
+        GITHUB_SHA: 'a'.repeat(40), MANUAL_COMMIT: 'a'.repeat(40), MANUAL_AUTHORIZATION: selector.AUTHORIZATION_PHRASE,
+        MANUAL_JOB: 'all', MANUAL_OS: 'all', MANUAL_RUNTIME: 'all' });
     assert.deepEqual(
-        extractYamlListAfterKey(jobBlock, 'node-version'),
-        ['22.13.0', '24'],
-        `${label} must run on Node 22.13.0 and Node 24`
+        full.jobs.smoke.matrix.include,
+        [
+            { os: 'ubuntu-latest', 'node-version': '22.13.0' }, { os: 'ubuntu-latest', 'node-version': '24' },
+            { os: 'windows-latest', 'node-version': '22.13.0' }, { os: 'windows-latest', 'node-version': '24' },
+            { os: 'macos-latest', 'node-version': '22.13.0' }, { os: 'macos-latest', 'node-version': '24' }
+        ],
+        `${label} must preserve all six supported OS/Node combinations`
     );
 }
 
@@ -225,26 +251,22 @@ test('CI workflow smoke job covers supported Node runtime lines', () => {
     const smokeJob = getWorkflowJobBlock(raw, 'smoke');
 
     assert.match(smokeJob, /name:\s*Smoke \/ \$\{\{\s*matrix\.os\s*}} \/ Node \$\{\{\s*matrix\.node-version\s*}}/);
-    assertSupportedNodeMatrix(raw, 'smoke', 'CI smoke job');
+    assertSupportedSmokeMatrix(raw, 'ci', 'CI smoke job');
 });
 
-test('scheduled smoke workflow covers supported Node runtime lines', () => {
-    const raw = getRawContent(loadScheduledSmokeWorkflow());
+test('manual smoke workflow covers supported OS and Node combinations', () => {
+    const raw = getRawContent(loadManualSmokeWorkflow());
     const smokeJob = getWorkflowJobBlock(raw, 'smoke');
 
-    assert.match(raw, /^\s+smoke:/m, 'Scheduled smoke workflow must define a smoke job');
+    assert.match(raw, /^\s+smoke:/m, 'Manual smoke workflow must define a smoke job');
     assert.match(smokeJob, /name:\s*Smoke \/ \$\{\{\s*matrix\.os\s*}} \/ Node \$\{\{\s*matrix\.node-version\s*}}/);
-    assert.deepEqual(
-        extractYamlListAfterKey(smokeJob, 'os'),
-        ['ubuntu-latest', 'windows-latest', 'macos-latest']
-    );
-    assertSupportedNodeMatrix(raw, 'smoke', 'Scheduled smoke job');
+    assertSupportedSmokeMatrix(raw, 'smoke-schedule', 'Manual smoke job');
 });
 
 test('lifecycle smoke commits the prebuilt bundle atop the checked-out commit', () => {
     const workflows = [
         ['CI', getWorkflowJobBlock(getRawContent(loadCiWorkflow()), 'smoke')],
-        ['Scheduled smoke', getWorkflowJobBlock(getRawContent(loadScheduledSmokeWorkflow()), 'smoke')]
+        ['Manual smoke', getWorkflowJobBlock(getRawContent(loadManualSmokeWorkflow()), 'smoke')]
     ] as const;
 
     for (const [label, smokeJob] of workflows) {
@@ -374,3 +396,41 @@ test('upload artifact has bounded retention', () => {
         'Upload artifact must specify retention-days to bound storage cost'
     );
 });
+
+for (const [label, load] of [['CI', loadCiWorkflow], ['Manual smoke', loadManualSmokeWorkflow]] as const) {
+    test(label + ' preserves scoped lifecycle output, failure snapshots and upload contracts', () => {
+        assertSmokeForensics(getWorkflowJobBlock(getRawContent(load()), 'smoke'));
+    });
+
+    test(label + ' forensic assertions reject disabled or removed diagnostics despite neighboring decoys', () => {
+        const job = getWorkflowJobBlock(getRawContent(load()), 'smoke');
+        const collection = getWorkflowStepBlock(job, 'Collect smoke failure evidence');
+        const upload = getWorkflowStepBlock(job, 'Upload smoke failure evidence');
+        const lifecycle = getWorkflowStepBlock(job, 'Lifecycle smoke (cross-platform E2E install → update → uninstall)');
+        const decoys = '\n' + collection.replace('Collect smoke failure evidence', 'Unrelated collection') +
+            '\n' + upload.replace('Upload smoke failure evidence', 'Unrelated upload');
+        for (const [step, before, after] of [
+            [collection, 'Collect smoke failure evidence', 'Removed collection'],
+            [collection, 'if: failure()', 'if: always()'],
+            [collection, 'for log in "$HOME"/.npm/_logs/*.log; do', '# removed npm log loop'],
+            [collection, 'SMOKE_DIR="${{ steps.lifecycle-smoke.outputs.smoke_dir }}"', '# removed output forwarding'],
+            [collection, 'cp -r "$SMOKE_DIR/garda-agent-orchestrator/runtime" smoke-failure-evidence/smoke-runtime',
+                '# removed runtime capture'],
+            [collection, 'cp -r "$SMOKE_DIR/garda-agent-orchestrator/live/config" smoke-failure-evidence/smoke-config',
+                '# removed configuration capture'],
+            [collection, '} > smoke-failure-evidence/runner-env.txt', '} > unrelated-environment.txt'],
+            [upload, 'Upload smoke failure evidence', 'Removed upload'],
+            [upload, 'if: failure()', 'if: always()'],
+            [upload, '043fb46d1a93c77aae656e7c1c64a875d1fc6a0a', 'v7.0.1'],
+            [upload, 'name: smoke-failure-evidence-${{ matrix.os }}-node${{ matrix.node-version }}', 'name: unqualified-evidence'],
+            [upload, 'path: smoke-failure-evidence/', 'path: unrelated/'],
+            [upload, 'retention-days: 15', 'retention-days: 999'],
+            [lifecycle, 'id: lifecycle-smoke', '# removed lifecycle id'],
+            [lifecycle, 'echo "smoke_dir=$SMOKE_DIR" >> "$GITHUB_OUTPUT"', '# removed lifecycle output']
+        ] as const) {
+            const mutated = step.replace(before, after);
+            assert.notEqual(mutated, step, 'Negative fixture must alter the selected statement');
+            assert.throws(() => assertSmokeForensics(job.replace(step, mutated) + decoys));
+        }
+    });
+}

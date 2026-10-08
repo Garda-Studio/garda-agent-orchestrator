@@ -12,10 +12,7 @@ import { validateEmbeddedBundleParity } from './embedded-bundle-parity';
 import { pushCheck } from './shared';
 import type { ReleaseReadinessCheck } from './types';
 
-const CI_WORKFLOW_SHA256 = 'e2326f30cd5bce5e8ca93c8f5b52f4d719d98753363924b6ae2e7e19f031c320';
-const CI_SCRIPTS_SHA256 = '9da4ed2b6174b6bcd9aafbf2bb36aa76d06aa5c147ddfdf9204a3e26c3b35949';
 const MAX_EVIDENCE_BYTES = 16 * 1024 * 1024;
-const CLOCK_SKEW_MS = 5 * 60 * 1000;
 const REQUIRED_RELEASE_TASKS = [
     { ids: ['T-057'], area: 'release/candidate-dev-toolchain-audit-proof' },
     { ids: ['T-083', 'T-1027'], area: 'release/release-provenance-checksum-policy' }
@@ -44,12 +41,9 @@ export interface CandidateReadinessResult {
 }
 
 interface SecurityAdapter {
-    MAX_EVIDENCE_AGE_MS: number;
-    workflowContractSha256(content: string): string;
-    assertSecurityWorkflow(content: string): void;
-    readJobsPayload(payload: unknown): Record<string, unknown>[];
+    assertSecurityWorkflow(content: string, selector: Buffer): void;
     attestOrVerify(mode: string, args: string[], repoRoot: string, now: Date,
-        fetch: (repository: string, runId: number) => { run: unknown; jobs: unknown }): unknown;
+        fetch: (repository: string, runId: number) => { run: unknown; jobs: unknown; fetchAttempt: (attempt: number) => unknown }): unknown;
 }
 
 interface CandidateAdapter {
@@ -76,7 +70,9 @@ function securityAdapter(): SecurityAdapter {
 
 export function hasReviewedSecurityWorkflow(repoRoot: string): boolean {
     try {
-        securityAdapter().assertSecurityWorkflow(readRegularFile(path.join(repoRoot, '.github', 'workflows', 'security.yml')).toString('utf8'));
+        securityAdapter().assertSecurityWorkflow(
+            readRegularFile(path.join(repoRoot, '.github', 'workflows', 'security.yml')).toString('utf8'),
+            readRegularFile(path.join(repoRoot, 'scripts', 'manual-workflow-authorization.cjs')));
         return true;
     } catch {
         return false;
@@ -110,96 +106,12 @@ function record(value: unknown): Record<string, unknown> {
     return value as Record<string, unknown>;
 }
 
-function recentTimestamp(value: unknown, now: Date, maxAgeMs: number): number {
-    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/u.test(value)) {
-        throw new Error('CI evidence timestamp is missing or invalid.');
-    }
-    const timestamp = Date.parse(value);
-    if (!Number.isFinite(timestamp) || timestamp > now.getTime() + CLOCK_SKEW_MS || now.getTime() - timestamp > maxAgeMs) {
-        throw new Error('CI evidence is stale or in the future.');
-    }
-    return timestamp;
-}
-
-function requiredCiJobs(): Map<string, string[]> {
-    const jobs = new Map<string, string[]>();
-    for (const node of ['22.13.0', '24']) {
-        for (const [name, step] of [
-            ['Static Checks', 'Run typecheck'], ['Unit Tests', 'Run unit tests'],
-            ['Gate Tests', 'Run gate tests (parallel shards)'], ['CLI Tests', 'Run CLI tests (parallel shards)'],
-            ['Lifecycle Tests', 'Run lifecycle tests'], ['Binary Tests', 'Run binary tests']
-        ]) jobs.set(name + ' / Node ' + node, name === 'Static Checks'
-            ? [step, 'Run lint'] : name === 'Unit Tests'
-                ? ['Install ripgrep for compact integration tests', 'Build node-foundation', step]
-                : ['Build node-foundation', step]);
-        for (const os of ['ubuntu-latest', 'windows-latest']) {
-            jobs.set('Release Validation / ' + os + ' / Node ' + node, [
-                'Install ripgrep for compact integration tests (' + (os === 'ubuntu-latest' ? 'Linux' : 'Windows') + ')',
-                'Prepare embedded release bundle', 'Bootstrap embedded release bundle', 'Validate release'
-            ]);
-        }
-        for (const os of ['ubuntu-latest', 'windows-latest', 'macos-latest']) {
-            jobs.set('Smoke / ' + os + ' / Node ' + node, [
-                'Build', 'Build staged node-foundation test graph', 'Pack and install smoke test',
-                'Lifecycle smoke (cross-platform E2E install → update → uninstall)'
-            ]);
-        }
-    }
-    return jobs;
-}
-
 function validateCiEvidence(repoRoot: string, request: CandidateReadinessRequest, now: Date, fetch: GithubEvidenceFetcher): void {
-    const adapter = securityAdapter();
-    const workflow = readRegularFile(path.join(repoRoot, '.github', 'workflows', 'ci.yml')).toString('utf8');
-    const scripts = record(JSON.parse(readRegularFile(path.join(repoRoot, 'package.json')).toString('utf8'))).scripts;
-    if (adapter.workflowContractSha256(workflow) !== CI_WORKFLOW_SHA256 ||
-        sha256(JSON.stringify(Object.entries(record(scripts)).sort(([a], [b]) => a.localeCompare(b, 'en')))) !== CI_SCRIPTS_SHA256) {
-        throw new Error('CI workflow or npm scripts differ from the reviewed complete-suite contract.');
-    }
-    const endpoint = 'repos/' + request.repository + '/actions/runs/' + request.ciRunId;
-    const run = record(fetch(endpoint));
-    if (run.id !== request.ciRunId || run.head_sha !== request.commit ||
-        record(run.repository).full_name !== request.repository ||
-        !['.github/workflows/ci.yml', '.github/workflows/ci.yml@' + run.head_branch].includes(String(run.path)) ||
-        !['dev', 'main', 'master'].includes(String(run.head_branch)) ||
-        !['push', 'workflow_dispatch'].includes(String(run.event)) ||
-        run.status !== 'completed' || run.conclusion !== 'success' ||
-        !Number.isSafeInteger(run.run_attempt) || Number(run.run_attempt) < 1) {
-        throw new Error('CI run is absent, failed, skipped, foreign, or for another candidate commit.');
-    }
-    const completed = recentTimestamp(run.updated_at, now, adapter.MAX_EVIDENCE_AGE_MS);
-    const started = recentTimestamp(run.run_started_at, now, adapter.MAX_EVIDENCE_AGE_MS);
-    if (started > completed) throw new Error('CI run timeline is inconsistent.');
-    const jobs = adapter.readJobsPayload(fetch(endpoint + '/jobs?per_page=100', true));
-    const required = requiredCiJobs();
-    const ids = new Set<unknown>();
-    if (jobs.length !== required.size) throw new Error('CI suite job matrix is incomplete or unexpected.');
-    for (const job of jobs) {
-        const steps = required.get(String(job.name));
-        if (!steps || ids.has(job.id) || !Number.isSafeInteger(job.id) || Number(job.id) <= 0 ||
-            job.run_id !== run.id || job.head_sha !== request.commit ||
-            job.run_attempt !== run.run_attempt || job.status !== 'completed' || job.conclusion !== 'success') {
-            throw new Error('CI suite job identity, attempt, or non-skipped success is invalid.');
-        }
-        ids.add(job.id);
-        required.delete(String(job.name));
-        const jobStarted = recentTimestamp(job.started_at, now, adapter.MAX_EVIDENCE_AGE_MS);
-        const jobCompleted = recentTimestamp(job.completed_at, now, adapter.MAX_EVIDENCE_AGE_MS);
-        if (jobStarted < started - CLOCK_SKEW_MS || jobStarted > jobCompleted || jobCompleted > completed + CLOCK_SKEW_MS) {
-            throw new Error('CI job timeline is inconsistent.');
-        }
-        if (!Array.isArray(job.steps)) throw new Error('CI job steps are missing.');
-        const actualSteps = job.steps.map(record);
-        if (actualSteps.some(step => step.status !== 'completed' || !['success', 'skipped'].includes(String(step.conclusion)))) {
-            throw new Error('CI job contains a failed or incomplete step.');
-        }
-        for (const name of ['Install dependencies', ...steps]) {
-            if (actualSteps.filter(step => step.name === name && step.status === 'completed' && step.conclusion === 'success').length !== 1) {
-                throw new Error('CI job lacks a successful required step: ' + name);
-            }
-        }
-    }
-    if (required.size !== 0) throw new Error('CI suite has uninspected mandatory jobs.');
+    // Execute the authoritative verifier, never code imported from the candidate checkout.
+    const adapter = require(path.join(getRepoRoot(), 'scripts', 'manual-ci-evidence.cjs')) as {
+        verifyCiEvidence(root: string, identity: CandidateReadinessRequest, now: Date, fetch: GithubEvidenceFetcher): unknown;
+    };
+    adapter.verifyCiEvidence(repoRoot, request, now, fetch);
 }
 
 function isPostReleaseFeature(row: CanonicalActiveTaskQueueRow, boundary: CanonicalActiveTaskQueueRow): boolean {
@@ -315,7 +227,8 @@ export function validateCandidateReadiness(
                 request.candidateDirectory, request.commit, request.tag, request.tarballSha256, request.tarballName, request.repository
             ], repoRoot, now, (repository, runId) => {
                 const endpoint = 'repos/' + repository + '/actions/runs/' + runId;
-                return { run: fetch(endpoint), jobs: fetch(endpoint + '/jobs?per_page=100', true) };
+                return { run: fetch(endpoint), jobs: fetch(endpoint + '/jobs?filter=all&per_page=100', true),
+                    fetchAttempt: attempt => fetch(endpoint + '/attempts/' + attempt) };
             });
         });
     }

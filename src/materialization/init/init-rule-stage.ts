@@ -8,6 +8,7 @@ import {
     GENERATED_RULE_FILES,
     generateProjectMemorySummary,
     isBootstrapOnlyLegacyCodeStyleRule,
+    migrateLegacyOutputCompactionGuidance,
     RULE_FILES,
     selectRuleSource
 } from '../rule-materialization';
@@ -116,6 +117,12 @@ function materializeRuleFiles(
 
         if (source.origin === 'template') {
             content = applyContextDefaults(content, ruleFile, discoveryOverlay);
+        }
+        if (ruleFile === '80-task-workflow.md' && source.origin !== 'template') {
+            const templatePath = path.join(templateRuleRoot, ruleFile);
+            if (pathExists(templatePath)) {
+                content = migrateLegacyOutputCompactionGuidance(content, readTextFile(templatePath));
+            }
         }
         content = applyCompileGateCommandDefaults(content, ruleFile, [compileGateCommandForGuidance]);
         content = applyAssistantDefaults(content, ruleFile, lang, brevity);

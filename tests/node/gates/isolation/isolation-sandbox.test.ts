@@ -26,6 +26,32 @@ function createTempDir(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'gao-sandbox-test-'));
 }
 
+function canWriteFile(filePath: string): boolean {
+    const original = fs.readFileSync(filePath);
+    let fd: number | undefined;
+    try {
+        fd = fs.openSync(filePath, 'r+');
+        // Write the same bytes so capability checks do not create content drift.
+        assert.equal(fs.writeSync(fd, original, 0, original.length, 0), original.length);
+        return true;
+    } catch (err: unknown) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'EACCES' || code === 'EPERM') {
+            return false;
+        }
+        throw err;
+    } finally {
+        if (fd !== undefined) fs.closeSync(fd);
+    }
+}
+
+function canWriteReadonlyFixture(root: string): boolean {
+    const probePath = path.join(root, 'readonly-capability-probe.txt');
+    fs.writeFileSync(probePath, 'readonly capability probe\n');
+    fs.chmodSync(probePath, 0o444);
+    return canWriteFile(probePath);
+}
+
 function setupMinimalWorkspace(root: string): void {
     const bundleRoot = path.join(root, 'garda-agent-orchestrator');
     fs.mkdirSync(path.join(bundleRoot, 'live', 'config'), { recursive: true });
@@ -115,24 +141,15 @@ describe('gates/isolation-sandbox', () => {
             assert.ok(fs.existsSync(sandboxRule), 'live/docs/agent-rules/00-core.md should be in sandbox');
         });
 
-        it('marks sandbox files as read-only', () => {
+        it('applies read-only attributes and reflects actual write capability', () => {
+            const expectedWritable = canWriteReadonlyFixture(tempDir);
             writeIsolationConfig(tempDir, { enabled: true });
             const result = prepareSandbox(tempDir);
             assert.equal(result.read_only_applied, true);
 
             const sandboxBin = path.join(result.sandbox_root, 'bin', 'garda.js');
-            // Verify write fails on the read-only file
-            let writeBlocked = false;
-            try {
-                const fd = fs.openSync(sandboxBin, 'r+');
-                fs.closeSync(fd);
-            } catch (err: unknown) {
-                const code = (err as NodeJS.ErrnoException).code;
-                if (code === 'EACCES' || code === 'EPERM') {
-                    writeBlocked = true;
-                }
-            }
-            assert.ok(writeBlocked, 'Sandbox files should be read-only');
+            // Same-user attributes are advisory, especially for privileged users.
+            assert.equal(canWriteFile(sandboxBin), expectedWritable);
         });
 
         it('does not copy node_modules or runtime into sandbox', () => {
@@ -260,11 +277,24 @@ describe('gates/isolation-sandbox', () => {
             assert.ok(result.drift_files.length > 0, 'Expected drift after tampering');
         });
 
-        it('reports read-only intact status', () => {
+        it('reports read-only intact according to actual write capability', () => {
+            const expectedReadOnly = !canWriteReadonlyFixture(tempDir);
             writeIsolationConfig(tempDir, { enabled: true });
             prepareSandbox(tempDir);
             const result = validateSandbox(tempDir);
-            assert.equal(result.read_only_intact, true);
+            assert.equal(result.read_only_intact, expectedReadOnly);
+        });
+
+        it('detects writable sandbox files without content drift', () => {
+            writeIsolationConfig(tempDir, { enabled: true });
+            const prepResult = prepareSandbox(tempDir);
+            const targetFile = path.join(prepResult.sandbox_root, 'MANIFEST.md');
+            fs.chmodSync(targetFile, 0o666);
+            assert.equal(canWriteFile(targetFile), true);
+
+            const result = validateSandbox(tempDir);
+            assert.equal(result.drift_files.length, 0);
+            assert.equal(result.read_only_intact, false);
         });
     });
 
@@ -355,6 +385,7 @@ describe('gates/isolation-sandbox', () => {
 
     describe('end-to-end isolation execution path', () => {
         it('full lifecycle: prepare → resolve → validate → compare', () => {
+            const expectedReadOnly = !canWriteReadonlyFixture(tempDir);
             writeIsolationConfig(tempDir, { enabled: true, enforcement: 'STRICT' });
 
             // 1. Prepare sandbox
@@ -372,7 +403,7 @@ describe('gates/isolation-sandbox', () => {
             assert.equal(validation.exists, true);
             assert.equal(validation.manifest_valid, true);
             assert.equal(validation.drift_files.length, 0);
-            assert.equal(validation.read_only_intact, true);
+            assert.equal(validation.read_only_intact, expectedReadOnly);
 
             // 4. Compare should match
             const comparison = compareSandboxToLive(tempDir);

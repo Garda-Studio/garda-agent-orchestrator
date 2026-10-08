@@ -168,6 +168,24 @@ describe('cli/commands/gates command help and syntax remediation', () => {
         }
     });
 
+    it('documents every public gate in the CLI reference inventory', () => {
+        const reference = fs.readFileSync(path.resolve('docs/cli-reference.md'), 'utf8');
+        const inventory = reference.match(
+            /### Dispatched gate inventory\n([\s\S]*?)\n### Gate invocation examples\n/
+        );
+        assert.ok(inventory, 'CLI reference must separate the complete inventory from selected examples');
+
+        const documentedGates = [...inventory[1].matchAll(/^\| `([a-z][a-z-]+)` \|/gm)]
+            .map(match => match[1]);
+        assert.deepEqual(
+            documentedGates.sort(),
+            getAllShimmedGateNames().sort(),
+            'the reference inventory must contain every dispatched gate exactly once and no unknown gates'
+        );
+        assert.ok(inventory[1].includes('`garda gate --help`'));
+        assert.ok(inventory[1].includes('`garda gate <gate-name> --help`'));
+    });
+
     it('prints canonical --task-id remediation for common task-start flag mistakes', async () => {
         const sourceCheckoutNestedCwd = getSourceCheckoutNestedCwd();
         const flagResult = await runCliWithCapturedOutput(['gate', 'enter-task-mode', '--task', 'T-008'], { cwd: sourceCheckoutNestedCwd });

@@ -35,13 +35,16 @@ import {
 
 const TRUSTED_RELEASE_TAG_HISTORY_STEP_SHA256 = 'dd86883aee9e6eef46c76a284d9a90431073efaecdd74adcce97f4e53223b470';
 const TRUSTED_RELEASE_CANDIDATE_PUBLISH_STEPS_SHA256 = '26b8e7c2f66cd01ae719d68cc3836566164362e429d62181dad7e4039fa8590f';
-const TRUSTED_RELEASE_CI_PROOF_STEP_SHA256 = '6babce8ec31d4a33df128186cbf02f604e2b7777c8d7801a296c4216a6d7b10f';
+const TRUSTED_RELEASE_CI_PROOF_STEP_SHA256 = '6c179f18032c2487f7697a8cec81441bad618868deebf882f53f93fcd79d1c45';
 const TRUSTED_RELEASE_CANDIDATE_PACK_STEP_SHA256 = 'f62df6d8ca1b684eb8bfaede8763254ae4da5488464b053095d0b6891b27de39';
 const TRUSTED_RELEASE_PUBLISH_JOB_SHA256 = 'f9258da3a0dfa441cddcfc7f0be1c37338e6096900012accdf0d107b91646c2b';
 // Bind all release jobs, workflow permissions, and immutable action pins.
-const TRUSTED_RELEASE_WORKFLOW_SHA256 = 'e2d391fffc786c0cd9c61ce2b8e1770fa302d5a1772c7c6069da475bb184a188';
-// Hash the source workflow before action-reference normalization so the immutable pins remain bound.
-const TRUSTED_SBOM_WORKFLOW_CONTRACT_SHA256 = '2d88c5db2ead8b460476af6b9539a7a8544c25f16bb4376083e82ff2687db05c';
+const TRUSTED_RELEASE_WORKFLOW_SHA256 = '48f688bc902041781ed07ed5eefcb2add08dbbc7dbacba6ec09d517a37c775af';
+// Bind all manual workflow bytes, including executable scalar comments, while
+// permitting CRLF and canonical quoting of the exact reviewed action pins.
+const TRUSTED_SECRET_WORKFLOW_CONTRACT_SHA256 = '8bc27162b24d5f8ea37e9afcb72836ce798501d0c861867c81c5db0bdb96b0d7';
+const TRUSTED_SBOM_WORKFLOW_CONTRACT_SHA256 = 'f73eab636918fd22d13607fadcf433291095071c420c477d26f1347e934aa408';
+const TRUSTED_MANUAL_SELECTOR_SHA256 = 'cb34c3544940e746ad023a8fa4c9e6de4b789fec05e1cdef106bbb7c0da034a5';
 const REVIEWED_WORKFLOW_ACTION_PINS: Readonly<Record<string, { version: string; readinessReference: string }>> = {
     'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0': {
         version: 'v7.0.0',
@@ -67,7 +70,7 @@ interface WorkflowUseReference {
     versionComment: string;
 }
 
-function readWorkflowForReadiness(repoRoot: string, fileName: string): string {
+function readWorkflowForReadiness(repoRoot: string, fileName: string, preserveReviewedPins = false): string {
     const workflow = readTextFileIfExists(path.join(repoRoot, '.github', 'workflows', fileName)) || '';
     const scanner = require(path.join(getRepoRoot(), 'scripts', 'validate-workflow-references.cjs')) as {
         scanWorkflowUses: (content: string) => WorkflowUseReference[];
@@ -80,7 +83,12 @@ function readWorkflowForReadiness(repoRoot: string, fileName: string): string {
         }
         const prefix = /^([ \t]*(?:-[ \t]+)?(?:uses|'uses'|"uses")[ \t]*:[ \t]*)/u.exec(use.line)?.[1];
         if (prefix) {
-            lines[use.lineIndex * 2] = `${prefix.replace(/(?:'uses'|"uses")(?=[ \t]*:)/u, 'uses')}${reviewedPin.readinessReference}`;
+            // Canonical quoting may vary, but a source contract still binds the exact
+            // immutable pin and reviewed version instead of accepting a mutable tag.
+            const reference = preserveReviewedPins
+                ? `${use.reference} # ${use.versionComment}`
+                : reviewedPin.readinessReference;
+            lines[use.lineIndex * 2] = `${prefix.replace(/(?:'uses'|"uses")(?=[ \t]*:)/u, 'uses')}${reference}`;
         }
     }
     return lines.join('');
@@ -90,9 +98,13 @@ const TRUSTED_GITLEAKS_JOB_CONTRACT = [
     'gitleaks:',
     '  name: Gitleaks',
     '  runs-on: ubuntu-latest',
+    '  needs: [authorize]',
+    "  if: ${{ !cancelled() && needs.authorize.result == 'success' && fromJSON(needs.authorize.outputs.selection).jobs['gitleaks'].enabled }}",
     '  steps:',
     '    - uses: actions/checkout@v7.0.0',
     '      with:',
+    '        ref: ${{ github.sha }}',
+    '        persist-credentials: false',
     '        fetch-depth: 0',
     '    - name: Install Gitleaks CLI',
     '      shell: bash',
@@ -212,19 +224,6 @@ function validateReleaseChecklist(repoRoot: string, version: string | null): {
     return { releaseChecklistItems, openReleaseChecklistItems, details };
 }
 
-function getWorkflowJobBlock(workflowText: string, jobId: string): string | null {
-    const lines = workflowText.split(/\r?\n/u);
-    const jobPattern = new RegExp(`^(\\s*)${escapeRegExp(jobId)}:\\s*$`, 'u');
-    const jobStart = lines.findIndex((line) => jobPattern.test(line));
-    if (jobStart === -1) {
-        return null;
-    }
-    const jobIndent = jobPattern.exec(lines[jobStart])![1].length;
-    const nextJobPattern = new RegExp(`^\\s{${jobIndent}}[A-Za-z0-9_-]+:\\s*$`, 'u');
-    const nextJob = lines.findIndex((line, index) => index > jobStart && nextJobPattern.test(line));
-    return lines.slice(jobStart, nextJob === -1 ? undefined : nextJob).join('\n');
-}
-
 function getWorkflowJobBlockUnderJobs(workflowText: string, jobId: string): string | null {
     const lines = workflowText.split(/\r?\n/u);
     const jobsStart = lines.findIndex((line) => /^jobs:\s*$/u.test(line));
@@ -310,6 +309,12 @@ function workflowBlockContractSha256(block: string | null): string | null {
     return crypto.createHash('sha256').update(normalized).digest('hex');
 }
 
+function workflowSourceContractSha256(workflow: string): string {
+    // GitHub expands expressions before the shell parses a run scalar. A # line
+    // in scalar data can therefore execute commands and must remain hash-bound.
+    return crypto.createHash('sha256').update(workflow.replace(/\r\n/gu, '\n')).digest('hex');
+}
+
 function workflowStructuralBlockContractSha256(block: string | null): string | null {
     if (block === null) {
         return null;
@@ -380,10 +385,6 @@ function getYamlDirectChildBlock(block: string | null, key: string): string | nu
         }
     }
     return lines.slice(keyIndex, endIndex).join('\n');
-}
-
-function stringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
-    return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function workflowJobHasRunStep(block: string | null, command: string): boolean {
@@ -625,77 +626,41 @@ function stripYamlQuotes(value: string): string {
     return value.replace(/^['"]|['"]$/gu, '');
 }
 
-function validateCiRuntimeMatrixContract(ciWorkflow: string): { passed: boolean; details: string[] } {
-    const releaseJob = getWorkflowJobBlock(ciWorkflow, 'validate-release');
-    const smokeJob = getWorkflowJobBlock(ciWorkflow, 'smoke');
-    const testUnitJob = getWorkflowJobBlock(ciWorkflow, 'test-unit');
-    const testGatesJob = getWorkflowJobBlock(ciWorkflow, 'test-gates');
-    const testCliJob = getWorkflowJobBlock(ciWorkflow, 'test-cli');
-    const testLifecycleJob = getWorkflowJobBlock(ciWorkflow, 'test-lifecycle');
-    const testBinJob = getWorkflowJobBlock(ciWorkflow, 'test-bin');
-    const supportedNodeLines = ['22.13.0', '24'];
-    const releaseOsLines = ['ubuntu-latest', 'windows-latest'];
-    const smokeOsLines = ['ubuntu-latest', 'windows-latest', 'macos-latest'];
-    const releaseNodeVersions = extractYamlListAfterKey(releaseJob, 'node-version');
-    const smokeNodeVersions = extractYamlListAfterKey(smokeJob, 'node-version');
-    const releaseOsVersions = extractYamlListAfterKey(releaseJob, 'os');
-    const smokeOsVersions = extractYamlListAfterKey(smokeJob, 'os');
-    const testUnitOk = testUnitJob !== null
-        && stringArraysEqual(extractYamlListAfterKey(testUnitJob, 'node-version'), supportedNodeLines);
-    const testGatesOk = testGatesJob !== null
-        && stringArraysEqual(extractYamlListAfterKey(testGatesJob, 'node-version'), supportedNodeLines)
-        && testGatesJob.includes('GARDA_NODE_FOUNDATION_TEST_SHARDS');
-    const testCliOk = testCliJob !== null
-        && stringArraysEqual(extractYamlListAfterKey(testCliJob, 'node-version'), supportedNodeLines)
-        && testCliJob.includes('GARDA_NODE_FOUNDATION_TEST_SHARDS');
-    const testLifecycleOk = testLifecycleJob !== null
-        && stringArraysEqual(extractYamlListAfterKey(testLifecycleJob, 'node-version'), supportedNodeLines);
-    const testBinOk = testBinJob !== null
-        && stringArraysEqual(extractYamlListAfterKey(testBinJob, 'node-version'), supportedNodeLines);
-    const releaseMatrixOk = stringArraysEqual(releaseNodeVersions, supportedNodeLines)
-        && stringArraysEqual(releaseOsVersions, releaseOsLines)
-        && (workflowJobHasRunStep(releaseJob, 'npm run validate:release:fast') || workflowJobHasRunStep(releaseJob, 'npm run validate:release'));
-    const smokeMatrixOk = stringArraysEqual(smokeNodeVersions, supportedNodeLines)
-        && stringArraysEqual(smokeOsVersions, smokeOsLines)
-        && workflowJobHasRunStep(smokeJob, '$CLI setup')
-        && workflowJobHasRunStep(smokeJob, '$CLI update git')
-        && workflowJobHasRunStep(smokeJob, '$CLI doctor')
-        && workflowJobHasRunStep(smokeJob, '$CLI uninstall');
-    return {
-        passed: releaseMatrixOk && smokeMatrixOk && testUnitOk && testGatesOk && testCliOk && testLifecycleOk && testBinOk,
-        details: [
-            `test-unit present=${testUnitOk}`,
-            `test-gates present+sharded=${testGatesOk}`,
-            `test-cli present+sharded=${testCliOk}`,
-            `test-lifecycle present=${testLifecycleOk}`,
-            `test-bin present=${testBinOk}`,
-            `validate-release node-version=${releaseNodeVersions.join(', ') || 'missing'}`,
-            `validate-release os=${releaseOsVersions.join(', ') || 'missing'}`,
-            `smoke node-version=${smokeNodeVersions.join(', ') || 'missing'}`,
-            `smoke os=${smokeOsVersions.join(', ') || 'missing'}`
-        ]
+function validateCiRuntimeMatrixContract(repoRoot: string): { passed: boolean; details: string[] } {
+    const adapter = require(path.join(getRepoRoot(), 'scripts', 'manual-ci-evidence.cjs')) as {
+        assertCiContract(root: string, checkScripts: boolean): void;
     };
+    try {
+        // The reviewed source digest binds authorization, matrix expansion, preparation,
+        // action pins and lifecycle commands together, including the trusted selector.
+        adapter.assertCiContract(repoRoot, false);
+        return { passed: true, details: [
+            'Manual-only exact-SHA CI contract verified; 22 required suite jobs plus authorization.',
+            'Linux static/test jobs; Linux/Windows release; Linux/Windows/macOS lifecycle smoke; Node 22.13.0 and 24.'
+        ] };
+    } catch (error) {
+        return { passed: false, details: [error instanceof Error ? error.message : 'CI contract verification failed.'] };
+    }
 }
 
 function validateSecurityCiBaselineContract(repoRoot: string): { passed: boolean; details: string[] } {
-    const securityWorkflow = readWorkflowForReadiness(repoRoot, 'security.yml');
+    const secretSourceWorkflow = readWorkflowForReadiness(repoRoot, 'secret-scanning.yml', true);
     const secretScanningWorkflow = readWorkflowForReadiness(repoRoot, 'secret-scanning.yml');
-    const sbomSourceWorkflow = readTextFileIfExists(path.join(repoRoot, '.github', 'workflows', 'sbom.yml')) || '';
+    const sbomSourceWorkflow = readWorkflowForReadiness(repoRoot, 'sbom.yml', true);
     const sbomWorkflow = readWorkflowForReadiness(repoRoot, 'sbom.yml');
     const branchProtection = readTextFileIfExists(path.join(repoRoot, 'docs', 'branch-protection.md')) || '';
 
-    const npmAuditBlocking = extractWorkflowRunScripts(securityWorkflow)
-        .some((script) => scriptHasExecutableCommand(script, 'npm audit --audit-level=high --no-fund'))
-        || hasReviewedSecurityWorkflow(repoRoot);
-    const osvScanJob = getWorkflowJobBlock(securityWorkflow, 'osv-scan');
-    const osvScanArgsBlock = getYamlKeyBlock(getYamlKeyBlock(osvScanJob, 'with'), 'scan-args');
-    const osvInformational = workflowHasUseStep(
-        osvScanJob || '',
-        'google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.0'
-    )
-        && blockHasNonCommentLine(osvScanArgsBlock, '--lockfile=package-lock.json');
+    const reviewedManualSecurity = hasReviewedSecurityWorkflow(repoRoot);
+    // Structural markers cannot replace the authoritative reviewed-source binding.
+    const npmAuditBlocking = reviewedManualSecurity;
+    const osvInformational = reviewedManualSecurity;
     const gitleaksJob = getWorkflowJobBlockUnderJobs(secretScanningWorkflow, 'gitleaks');
-    const gitleaksBlocking = workflowStructuralBlockContractSha256(gitleaksJob)
+    const selectorSource = readTextFileIfExists(path.join(repoRoot, 'scripts', 'manual-workflow-authorization.cjs')) || '';
+    const reviewedManualSelector = crypto.createHash('sha256').update(selectorSource).digest('hex')
+        === TRUSTED_MANUAL_SELECTOR_SHA256;
+    const gitleaksBlocking = reviewedManualSelector
+        && workflowSourceContractSha256(secretSourceWorkflow) === TRUSTED_SECRET_WORKFLOW_CONTRACT_SHA256
+        && workflowStructuralBlockContractSha256(gitleaksJob)
         === workflowStructuralBlockContractSha256(TRUSTED_GITLEAKS_JOB_CONTRACT);
     let sbomToolLocked = false;
     try {
@@ -727,10 +692,11 @@ function validateSecurityCiBaselineContract(repoRoot: string): { passed: boolean
     const identityRecorded = workflowStructuralBlockContractSha256(identityStep)
         === workflowStructuralBlockContractSha256(TRUSTED_SBOM_IDENTITY_STEP_CONTRACT);
     const sbomInformational = sbomToolLocked
-        && workflowStructuralBlockContractSha256(sbomSourceWorkflow) === TRUSTED_SBOM_WORKFLOW_CONTRACT_SHA256
+        && reviewedManualSelector
+        && workflowSourceContractSha256(sbomSourceWorkflow) === TRUSTED_SBOM_WORKFLOW_CONTRACT_SHA256
         && sbomInstallSafe
         && sbomGenerateLocal
-        && sbomRunScripts.length === 3
+        && sbomRunScripts.length === 4
         && identityRecorded
         && uploadArtifactStep !== null
         && blockHasNonCommentLine(getYamlKeyBlock(sbomUploadWith, 'path'), 'sbom.cdx.json')
@@ -774,9 +740,9 @@ function validateSecurityCiBaselineContract(repoRoot: string): { passed: boolean
 }
 
 function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boolean; details: string[] } {
-    const rawPublishWorkflow = readTextFileIfExists(path.join(repoRoot, '.github', 'workflows', 'publish.yml')) || '';
+    const publishSourceWorkflow = readWorkflowForReadiness(repoRoot, 'publish.yml', true);
     const publishWorkflow = readWorkflowForReadiness(repoRoot, 'publish.yml');
-    const publishWorkflowExactlyReviewed = workflowStructuralBlockContractSha256(rawPublishWorkflow)
+    const publishWorkflowExactlyReviewed = workflowSourceContractSha256(publishSourceWorkflow)
         === TRUSTED_RELEASE_WORKFLOW_SHA256;
     const validateJob = getWorkflowJobBlockUnderJobs(publishWorkflow, 'validate');
     const publishJob = getWorkflowJobBlockUnderJobs(publishWorkflow, 'publish');
@@ -1271,8 +1237,7 @@ function validateReleaseReadinessContracts(repoRoot: string): ReleaseReadinessRe
             : missingShardScripts.map((name) => `missing: ${name}`)
     );
 
-    const ciWorkflow = readTextFileIfExists(path.join(normalizedRoot, '.github', 'workflows', 'ci.yml')) || '';
-    const ciRuntimeMatrix = validateCiRuntimeMatrixContract(ciWorkflow);
+    const ciRuntimeMatrix = validateCiRuntimeMatrixContract(normalizedRoot);
     pushCheck(
         checks,
         violations,

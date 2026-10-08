@@ -260,52 +260,18 @@ function buildCiWorkflow(options: BuildCiWorkflowOptions = {}): string {
 }
 
 function buildSecurityWorkflow(): string {
-    return [
-        'npm-audit:',
-        '  steps:',
-        '    - uses: actions/checkout@v7.0.0',
-        '    - uses: actions/setup-node@v6',
-        '    - run: npm audit --audit-level=high --no-fund',
-        'osv-scan:',
-        '  uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.0',
-        '  with:',
-        '    scan-args: |',
-        '      --lockfile=package-lock.json'
-    ].join('\n');
+    return fs.readFileSync(path.join(process.cwd(), '.github/workflows/security.yml'), 'utf8');
 }
 
 function buildSecretScanningWorkflow(
     transformJob: (job: string) => string = (job) => job
 ): string {
-    const job = transformJob([
-        'gitleaks:',
-        '  name: Gitleaks',
-        '  runs-on: ubuntu-latest',
-        '  steps:',
-        '    - uses: actions/checkout@v7.0.0',
-        '      with:',
-        '        fetch-depth: 0',
-        '    - name: Install Gitleaks CLI',
-        '      shell: bash',
-        '      env:',
-        "        GITLEAKS_VERSION: '8.30.1'",
-        "        GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'",
-        '      run: |',
-        '        set -euo pipefail',
-        '        install_dir="$(mktemp -d "${RUNNER_TEMP}/gitleaks.XXXXXX")"',
-        '        archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"',
-        '        curl --fail --silent --show-error --location --retry 3 \\',
-        '          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" \\',
-        '          --output "${install_dir}/${archive}"',
-        "        printf '%s  %s\\n' \"$GITLEAKS_SHA256\" \"${install_dir}/${archive}\" | sha256sum --check --strict",
-        '        tar -xzf "${install_dir}/${archive}" -C "$install_dir" gitleaks',
-        '        chmod +x "${install_dir}/gitleaks"',
-        '        echo "$install_dir" >> "$GITHUB_PATH"',
-        '    - name: Scan for secrets',
-        '      shell: bash',
-        '      run: gitleaks git --config .gitleaks.toml --redact --exit-code 1 .'
-    ].join('\n'));
-    return ['jobs:', ...job.split('\n').map((line) => `  ${line}`)].join('\n');
+    const workflow = fs.readFileSync(path.join(process.cwd(), '.github/workflows/secret-scanning.yml'), 'utf8');
+    const start = workflow.indexOf('\n  gitleaks:\n') + 1;
+    assert.ok(start > 0, 'The reviewed workflow contains its top-level scanner job');
+    const job = workflow.slice(start).replace(/^ {2}/gmu, '');
+    return workflow.slice(0, start) + transformJob(job).split('\n')
+        .map((line) => line ? `  ${line}` : '').join('\n');
 }
 
 function buildSbomWorkflow(): string {
@@ -313,240 +279,7 @@ function buildSbomWorkflow(): string {
 }
 
 function buildPublishWorkflow(): string {
-    return [
-        '# Tag-driven npm release workflow for Garda Agent Orchestrator.',
-        '# The publish job uses npm Trusted Publishing/OIDC to stage the package.',
-        '# The public release still requires npm staged approval with maintainer 2FA.',
-        'name: Publish',
-        '',
-        'on:',
-        '  push:',
-        '    tags:',
-        '      - \'v*\'',
-        '',
-        'concurrency:',
-        '  group: publish-${{ github.ref }}',
-        '  cancel-in-progress: false',
-        '',
-        'permissions:',
-        '  actions: read',
-        '  contents: read',
-        '',
-        'env:',
-        '  NODE_VERSION: \'24\'',
-        '',
-        'jobs:',
-        '  validate:',
-        '    name: Validate release package',
-        '    runs-on: ubuntu-latest',
-        '    outputs:',
-        '      tarball_sha256: ${{ steps.pack.outputs.tarball_sha256 }}',
-        '      tarball_name: ${{ steps.pack.outputs.tarball_name }}',
-        '    steps:',
-        '      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0',
-        '        with:',
-        '          fetch-depth: 0',
-        '',
-        '      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0',
-        '        with:',
-        '          node-version: ${{ env.NODE_VERSION }}',
-        '          package-manager-cache: false',
-        '',
-        '      - name: Validate tag and package version',
-        '        shell: bash',
-        '        run: |',
-        '          set -euo pipefail',
-        '',
-        '          if [[ "${{ github.run_attempt }}" != "1" ]]; then',
-        '            echo "Release workflow reruns are rejected; prepare a new version and tag instead." >&2',
-        '            exit 1',
-        '          fi',
-        '          if [[ "${GITHUB_REF_TYPE}" != "tag" || "${GITHUB_REF_NAME}" != v* ]]; then',
-        '            echo "Publish workflow must run from a v* tag." >&2',
-        '            exit 1',
-        '          fi',
-        '',
-        '          TAG_VERSION="${GITHUB_REF_NAME#v}"',
-        '          PACKAGE_VERSION="$(node -p "require(\'./package.json\').version")"',
-        '          LOCK_VERSION="$(node -p "require(\'./package-lock.json\').version")"',
-        '          LOCK_ROOT_VERSION="$(node -p "require(\'./package-lock.json\').packages[\'\'].version")"',
-        '          VERSION_FILE="$(node -e "process.stdout.write(require(\'node:fs\').readFileSync(\'VERSION\', \'utf8\').trim())")"',
-        '',
-        '          if [[ "${TAG_VERSION}" != "${PACKAGE_VERSION}" || "${TAG_VERSION}" != "${LOCK_VERSION}" || "${TAG_VERSION}" != "${LOCK_ROOT_VERSION}" || "${TAG_VERSION}" != "${VERSION_FILE}" ]]; then',
-        '            echo "Release tag v${TAG_VERSION} does not match package/version metadata." >&2',
-        '            echo "package.json=${PACKAGE_VERSION} package-lock=${LOCK_VERSION} package-lock-root=${LOCK_ROOT_VERSION} VERSION=${VERSION_FILE}" >&2',
-        '            exit 1',
-        '          fi',
-        '',
-        '          echo "Release tag v${TAG_VERSION} matches package.json, package-lock.json, package-lock root, and VERSION."',
-        '',
-        '      - name: Reject previously used release tags',
-        '        shell: bash',
-        '        run: |',
-        '          set -euo pipefail',
-        '',
-        '          RUN_HISTORY_PATH="${RUNNER_TEMP}/publish-workflow-runs.json"',
-        '          GH_TOKEN="${{ github.token }}" gh api --method GET \\',
-        '            "repos/${GITHUB_REPOSITORY}/actions/workflows/publish.yml/runs" \\',
-        '            -f event=push \\',
-        '            -f branch="${GITHUB_REF_NAME}" \\',
-        '            -f per_page=100 \\',
-        '            --paginate \\',
-        '            --slurp > "${RUN_HISTORY_PATH}"',
-        '          node -e \'',
-        '            const fs = require("node:fs");',
-        '            const pages = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));',
-        '            const currentRunId = process.env.GITHUB_RUN_ID;',
-        '            if (!Array.isArray(pages) || !currentRunId) {',
-        '              throw new Error("GitHub workflow-run history is unavailable.");',
-        '            }',
-        '            const priorRuns = pages',
-        '              .flatMap((page) => Array.isArray(page.workflow_runs) ? page.workflow_runs : [])',
-        '              .filter((run) => String(run.id) !== currentRunId);',
-        '            if (priorRuns.length > 0) {',
-        '              console.error(`Release tag ${process.env.GITHUB_REF_NAME} already triggered workflow run(s): ${priorRuns.map((run) => run.id).join(", ")}`);',
-        '              process.exit(1);',
-        '            }',
-        '          \' "${RUN_HISTORY_PATH}"',
-        '          git update-ref -d "refs/tags/${GITHUB_REF_NAME}"',
-        '',
-        '      - name: Require successful CI for this release commit',
-        '        shell: bash',
-        '        run: |',
-        '          set -euo pipefail',
-        '          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"',
-        '          CI_RUNS_PATH="${RUNNER_TEMP}/release-ci-runs.json"',
-        '          GH_TOKEN="${{ github.token }}" gh api --method GET \\',
-        '            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \\',
-        '            -f head_sha="${GITHUB_SHA}" -f event=push -f status=completed -f per_page=100 > "${CI_RUNS_PATH}"',
-        '          node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
-        '',
-        '      - name: Install dependencies',
-        '        run: npm ci --no-fund --no-audit',
-        '',
-        '      - name: Pin release npm CLI',
-        '        run: |',
-        '          set -euo pipefail',
-        '          npm install -g npm@11.15.0',
-        '          test "$(npm --version)" = "11.15.0"',
-        '',
-        '      - name: Run local release proof',
-        '        run: npm run release:preflight',
-        '',
-        '      - name: Pack and attest release candidate',
-        '        id: pack',
-        '        shell: bash',
-        '        run: |',
-        '          set -euo pipefail',
-        '          CANDIDATE_DIR="${RUNNER_TEMP}/release-candidate"',
-        '          mkdir -p "${CANDIDATE_DIR}"',
-        '          npm pack --json --pack-destination "${CANDIDATE_DIR}" > "${CANDIDATE_DIR}/pack-report.json"',
-        '          PACKAGE_NAME="$(node -p "require(\'./package.json\').name")"',
-        '          PACKAGE_VERSION="$(node -p "require(\'./package.json\').version")"',
-        '          node scripts/release-candidate.cjs create \\',
-        '            "${CANDIDATE_DIR}/pack-report.json" "${CANDIDATE_DIR}" \\',
-        '            "${GITHUB_SHA}" "${GITHUB_REF_NAME}" "${PACKAGE_NAME}" "${PACKAGE_VERSION}" "${GITHUB_OUTPUT}"',
-        '',
-        '          TARBALL_NAME="$(node -p "require(process.argv[1]).tarball_name" "${CANDIDATE_DIR}/candidate-manifest.json")"',
-        '          TARBALL_SHA256="$(node -p "require(process.argv[1]).tarball_sha256" "${CANDIDATE_DIR}/candidate-manifest.json")"',
-        '          GARDA_RELEASE_CANDIDATE_PATH="${CANDIDATE_DIR}/${TARBALL_NAME}" npm run test:packaging',
-        '          node scripts/release-candidate.cjs verify "${CANDIDATE_DIR}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" "${TARBALL_SHA256}" "${TARBALL_NAME}"',
-        '',
-        '      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1',
-        '        with:',
-        '          name: release-candidate-${{ github.sha }}',
-        '          path: ${{ runner.temp }}/release-candidate/',
-        '          if-no-files-found: error',
-        '          retention-days: 7',
-        '',
-        '  publish:',
-        '    name: Stage package on npm',
-        '    runs-on: ubuntu-latest',
-        '    needs: validate',
-        '    environment: npm-release',
-        '    permissions:',
-        '      actions: read',
-        '      contents: read',
-        '      id-token: write',
-        '    steps:',
-        '      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0',
-        '        with:',
-        '          fetch-depth: 0',
-        '',
-        '      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0',
-        '        with:',
-        '          node-version: ${{ env.NODE_VERSION }}',
-        '          registry-url: https://registry.npmjs.org',
-        '          package-manager-cache: false',
-        '',
-        '      - name: Pin release npm CLI',
-        '        run: |',
-        '          set -euo pipefail',
-        '          npm install -g npm@11.15.0',
-        '          test "$(npm --version)" = "11.15.0"',
-        '',
-        '      - name: Final publish sanity checks',
-        '        shell: bash',
-        '        run: |',
-        '          set -euo pipefail',
-        '',
-        '          if [[ "${{ github.run_attempt }}" != "1" ]]; then',
-        '            echo "Release workflow reruns are rejected; prepare a new version and tag instead." >&2',
-        '            exit 1',
-        '          fi',
-        '          TAG_VERSION="${GITHUB_REF_NAME#v}"',
-        '          PACKAGE_NAME="$(node -p "require(\'./package.json\').name")"',
-        '          PACKAGE_VERSION="$(node -p "require(\'./package.json\').version")"',
-        '          LOCK_VERSION="$(node -p "require(\'./package-lock.json\').version")"',
-        '          LOCK_ROOT_VERSION="$(node -p "require(\'./package-lock.json\').packages[\'\'].version")"',
-        '          VERSION_FILE="$(node -e "process.stdout.write(require(\'node:fs\').readFileSync(\'VERSION\', \'utf8\').trim())")"',
-        '',
-        '          if [[ "${GITHUB_REF_TYPE}" != "tag" || "${GITHUB_REF_NAME}" != v* ]]; then',
-        '            echo "Publish job must run from a v* tag." >&2',
-        '            exit 1',
-        '          fi',
-        '          if [[ "${PACKAGE_NAME}" != "garda-agent-orchestrator" ]]; then',
-        '            echo "Unexpected package name: ${PACKAGE_NAME}" >&2',
-        '            exit 1',
-        '          fi',
-        '          if [[ "${TAG_VERSION}" != "${PACKAGE_VERSION}" || "${TAG_VERSION}" != "${LOCK_VERSION}" || "${TAG_VERSION}" != "${LOCK_ROOT_VERSION}" || "${TAG_VERSION}" != "${VERSION_FILE}" ]]; then',
-        '            echo "Release tag v${TAG_VERSION} does not match package/version metadata." >&2',
-        '            exit 1',
-        '          fi',
-        '',
-        '          node --version',
-        '          NPM_VERSION="$(npm --version)"',
-        '          echo "npm ${NPM_VERSION}"',
-        '          test "${NPM_VERSION}" = "11.15.0"',
-        '          git update-ref -d "refs/tags/${GITHUB_REF_NAME}"',
-        '',
-        '      - name: Download validated release candidate',
-        '        shell: bash',
-        '        env:',
-        '          GH_TOKEN: ${{ github.token }}',
-        '        run: |',
-        '          set -euo pipefail',
-        '          gh run download "${GITHUB_RUN_ID}" --name "release-candidate-${GITHUB_SHA}" --dir "${RUNNER_TEMP}/release-candidate"',
-        '',
-        '      - name: Verify downloaded candidate',
-        '        shell: bash',
-        '        env:',
-        '          EXPECTED_SHA256: ${{ needs.validate.outputs.tarball_sha256 }}',
-        '          EXPECTED_NAME: ${{ needs.validate.outputs.tarball_name }}',
-        '        run: |',
-        '          set -euo pipefail',
-        '          node scripts/release-candidate.cjs verify \\',
-        '            "${RUNNER_TEMP}/release-candidate" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" \\',
-        '            "${EXPECTED_SHA256}" "${EXPECTED_NAME}"',
-        '',
-        '      - name: Stage the validated tarball with npm Trusted Publishing',
-        '        shell: bash',
-        '        env:',
-        '          EXPECTED_NAME: ${{ needs.validate.outputs.tarball_name }}',
-        '        run: |',
-        '          set -euo pipefail',
-        '          npm stage publish "${RUNNER_TEMP}/release-candidate/${EXPECTED_NAME}"',
-    ].join('\n');
+    return fs.readFileSync(path.join(process.cwd(), '.github/workflows/publish.yml'), 'utf8');
 }
 
 function buildBranchProtectionDoc(): string {
@@ -695,8 +428,10 @@ function createReadinessFixture(openChecklistItem?: string): string {
     );
     writeFile(
         path.join(repoRoot, '.github', 'workflows', 'ci.yml'),
-        buildCiWorkflow()
+        fs.readFileSync(path.join(process.cwd(), '.github/workflows/ci.yml'), 'utf8')
     );
+    writeFile(path.join(repoRoot, 'scripts/manual-workflow-authorization.cjs'),
+        fs.readFileSync(path.join(process.cwd(), 'scripts/manual-workflow-authorization.cjs'), 'utf8'));
     writeFile(path.join(repoRoot, '.github', 'workflows', 'security.yml'), buildSecurityWorkflow());
     writeFile(path.join(repoRoot, '.github', 'workflows', 'secret-scanning.yml'), buildSecretScanningWorkflow());
     writeFile(path.join(repoRoot, '.github', 'workflows', 'sbom.yml'), buildSbomWorkflow());
@@ -778,16 +513,91 @@ test('release readiness accepts quoted uses keys and references for reviewed pin
     const repoRoot = createReadinessFixture();
     try {
         pinReadinessFixtureActions(repoRoot);
-        const workflowPath = path.join(repoRoot, '.github', 'workflows', 'secret-scanning.yml');
-        writeFile(
-            workflowPath,
-            fs.readFileSync(workflowPath, 'utf8').replace(
+        for (const name of ['secret-scanning.yml', 'sbom.yml', 'publish.yml']) {
+            const workflowPath = path.join(repoRoot, '.github', 'workflows', name);
+            const original = fs.readFileSync(workflowPath, 'utf8');
+            const quoted = original.replace(
                 '    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0',
                 '    - "uses": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0" # v7.0.0'
-            )
-        );
+            );
+            assert.notEqual(quoted, original);
+            writeFile(workflowPath, quoted);
+        }
         const result = validateReleaseReadiness(repoRoot);
         assert.equal(result.passed, true, formatReleaseReadinessResult(result));
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness accepts CRLF reviewed CI, Security, auxiliary and Publish workflows', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        for (const name of ['ci.yml', 'security.yml', 'secret-scanning.yml', 'sbom.yml', 'publish.yml']) {
+            const workflowPath = path.join(repoRoot, '.github', 'workflows', name);
+            const original = fs.readFileSync(workflowPath, 'utf8');
+            const crlf = original.replace(/\r?\n/gu, '\r\n');
+            assert.notEqual(crlf, original);
+            writeFile(workflowPath, crlf);
+        }
+        const result = validateReleaseReadiness(repoRoot);
+        assert.equal(result.passed, true, formatReleaseReadinessResult(result));
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects manual Security source drift without a legacy marker fallback', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        const workflowPath = path.join(repoRoot, '.github/workflows/security.yml');
+        const original = fs.readFileSync(workflowPath, 'utf8');
+        const anchor = '          npm audit --package-lock=true';
+        assert.ok(original.includes(anchor));
+        assert.equal(validateReleaseReadiness(repoRoot).passed, true);
+        const changed = original.replace(anchor,
+            "          # ${{ fromJSON('\"\\nexit 0\\n\"') }}\n" +
+            '          npm audit --audit-level=high --no-fund\n' + anchor);
+        assert.notEqual(changed, original);
+        const verifier = require(path.join(process.cwd(), 'scripts/release-security-evidence.cjs')) as {
+            assertSecurityWorkflow(content: string): void;
+        };
+        assert.throws(() => verifier.assertSecurityWorkflow(changed), /differs from the reviewed/);
+        writeFile(workflowPath, changed);
+        const result = validateReleaseReadiness(repoRoot);
+        assert.equal(result.passed, false);
+        assert.equal(result.checks.find(check => check.area === 'security-ci')?.passed, false);
+        const output = formatReleaseReadinessResult(result);
+        assert.match(output, /blocking: security\.yml npm audit high-severity gate present=false/);
+        assert.match(output, /informational: security\.yml OSV lockfile scan present=false/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects executable scalar source drift in reviewed Publish', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        const workflowPath = path.join(repoRoot, '.github/workflows/publish.yml');
+        const original = fs.readFileSync(workflowPath, 'utf8');
+        const anchor = '          set -euo pipefail\n';
+        assert.ok(original.includes(anchor));
+        assert.equal(validateReleaseReadiness(repoRoot).passed, true);
+        for (const inserted of [
+            "          # ${{ fromJSON('\"\\nexit 0\\n\"') }}\n",
+            '          # An unreviewed scalar comment\n',
+            '\n',
+            '          \n'
+        ]) {
+            const changed = original.replace(anchor, inserted + anchor);
+            assert.notEqual(changed, original);
+            writeFile(workflowPath, changed);
+            const result = validateReleaseReadiness(repoRoot);
+            assert.equal(result.passed, false);
+            assert.ok(result.violations.some(violation => violation.startsWith('trusted-publish-workflow:')));
+        }
+        writeFile(workflowPath, original.trimEnd());
+        assert.ok(validateReleaseReadiness(repoRoot).violations.some(violation => violation.startsWith('trusted-publish-workflow:')));
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
@@ -1492,8 +1302,8 @@ test('release readiness rejects CI proof markers printed without running the che
         const workflow = fs.readFileSync(workflowPath, 'utf8')
             .replace('          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"',
                 '          echo test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"')
-            .replace('          node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
-                '          echo node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"');
+            .replace('          node scripts/release-candidate.cjs verify-ci "${CI_RUN_ID}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
+                '          echo node scripts/release-candidate.cjs verify-ci "${CI_RUN_ID}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"');
         writeFile(workflowPath, workflow);
         const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
         assert.match(output, /validate job requires successful CI for the exact release commit=false/);
@@ -1544,22 +1354,22 @@ test('release readiness rejects a candidate upload without exact-tarball smoke',
 
 // These mutations exercise the reviewed workflow-step hashes, not shell parsing in isolation.
 for (const [name, before, after] of [
-    ['a masked CI proof', '          node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
-        '          node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}" || true'],
+    ['a masked CI proof', '          node scripts/release-candidate.cjs verify-ci "${CI_RUN_ID}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
+        '          node scripts/release-candidate.cjs verify-ci "${CI_RUN_ID}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}" || true'],
     ['a masked candidate verification', '          node scripts/release-candidate.cjs verify "${CANDIDATE_DIR}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" "${TARBALL_SHA256}" "${TARBALL_NAME}"',
         '          node scripts/release-candidate.cjs verify "${CANDIDATE_DIR}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" "${TARBALL_SHA256}" "${TARBALL_NAME}" || true'],
-    ['negated CI proof', '          node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
-        '          ! node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"'],
+    ['negated CI proof', '          node scripts/release-candidate.cjs verify-ci "${CI_RUN_ID}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
+        '          ! node scripts/release-candidate.cjs verify-ci "${CI_RUN_ID}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"'],
     ['conditional candidate verification', '          node scripts/release-candidate.cjs verify "${CANDIDATE_DIR}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" "${TARBALL_SHA256}" "${TARBALL_NAME}"',
         '          if node scripts/release-candidate.cjs verify "${CANDIDATE_DIR}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" "${TARBALL_SHA256}" "${TARBALL_NAME}"; then\n            true\n          fi'],
-    ['conditional CI proof with and-list', '          node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
-        '          true && node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"'],
+    ['conditional CI proof with and-list', '          node scripts/release-candidate.cjs verify-ci "${CI_RUN_ID}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
+        '          true && node scripts/release-candidate.cjs verify-ci "${CI_RUN_ID}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"'],
     ['disabled strict shell error handling', '          CANDIDATE_DIR="${RUNNER_TEMP}/release-candidate"',
         '          set +e\\n          CANDIDATE_DIR="${RUNNER_TEMP}/release-candidate"'],
-    ['CI proof hidden in a shell assignment', '          node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
-        '          PROOF="node scripts/release-candidate.cjs verify-ci ${CI_RUNS_PATH} ${GITHUB_SHA} ${GITHUB_REPOSITORY}"'],
-    ['CI proof hidden in a shell no-op', '          node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
-        '          : "node scripts/release-candidate.cjs verify-ci ${CI_RUNS_PATH} ${GITHUB_SHA} ${GITHUB_REPOSITORY}"'],
+    ['CI proof hidden in a shell assignment', '          node scripts/release-candidate.cjs verify-ci "${CI_RUN_ID}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
+        '          PROOF="node scripts/release-candidate.cjs verify-ci ${CI_RUN_ID} ${GITHUB_SHA} ${GITHUB_REPOSITORY}"'],
+    ['CI proof hidden in a shell no-op', '          node scripts/release-candidate.cjs verify-ci "${CI_RUN_ID}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"',
+        '          : "node scripts/release-candidate.cjs verify-ci ${CI_RUN_ID} ${GITHUB_SHA} ${GITHUB_REPOSITORY}"'],
     ['smoking a newly packed fixture instead of the candidate', '          GARDA_RELEASE_CANDIDATE_PATH="${CANDIDATE_DIR}/${TARBALL_NAME}" npm run test:packaging',
         '          npm run test:packaging']
 ] as const) {
@@ -1910,6 +1720,121 @@ test('release readiness rejects commented release-security workflow commands', (
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+for (const [workflowName, jobId] of [['secret-scanning', 'gitleaks'], ['sbom', 'sbom']] as const) {
+    for (const [label, before, after] of [
+        ['automatic trigger', '  workflow_dispatch:', '  push:\n    branches: [dev]\n  workflow_dispatch:'],
+        ['mutable action tag', 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0', 'actions/checkout@v7.0.0'],
+        ['foreign pinned action', 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0',
+            'actions/checkout@' + 'a'.repeat(40) + ' # v7.0.0'],
+        ['foreign selector profile', 'MANUAL_WORKFLOW: ' + workflowName, 'MANUAL_WORKFLOW: ci'],
+        ['mutable checkout', 'ref: ${{ github.sha }}', 'ref: dev'],
+        ['retained checkout credentials', 'persist-credentials: false', 'persist-credentials: true'],
+        ['unbound authorization shell input', 'run: node scripts/manual-workflow-authorization.cjs',
+            'run: node scripts/manual-workflow-authorization.cjs ${{ inputs.authorization }}'],
+        ['bypassed selected-job guard', "if: ${{ !cancelled() && needs.authorize.result == 'success' && fromJSON(needs.authorize.outputs.selection).jobs['" + jobId + "'].enabled }}",
+            'if: ${{ always() }}']
+    ]) {
+        test('release readiness rejects manual ' + workflowName + ' ' + label, () => {
+            const repoRoot = createReadinessFixture();
+            try {
+                const workflowPath = path.join(repoRoot, '.github/workflows', workflowName + '.yml');
+                const original = fs.readFileSync(workflowPath, 'utf8');
+                assert.ok(original.includes(before), 'The negative mutation must exercise the real reviewed contract');
+                const altered = original.replace(before, after);
+                assert.notEqual(altered, original);
+                writeFile(workflowPath, altered);
+                const result = validateReleaseReadiness(repoRoot);
+                assert.equal(result.passed, false);
+                assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
+                assert.match(formatReleaseReadinessResult(result), workflowName === 'sbom'
+                    ? /informational: sbom\.yml CycloneDX artifact generation present=false/
+                    : /blocking: secret-scanning\.yml gitleaks gate present=false/);
+            } finally {
+                fs.rmSync(repoRoot, { recursive: true, force: true });
+            }
+        });
+    }
+}
+
+test('release readiness rejects an altered shared manual selector for both auxiliary scanners', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        assert.equal(validateReleaseReadiness(repoRoot).passed, true);
+        const selector = path.join(repoRoot, 'scripts/manual-workflow-authorization.cjs');
+        fs.appendFileSync(selector, '\n// Unreviewed selector bytes must not inherit an authorization PASS.\n');
+        const result = validateReleaseReadiness(repoRoot);
+        assert.equal(result.passed, false);
+        assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
+        const output = formatReleaseReadinessResult(result);
+        assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
+        assert.match(output, /informational: sbom\.yml CycloneDX artifact generation present=false/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects expression comments inside the Gitleaks install scalar', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        assert.equal(validateReleaseReadiness(repoRoot).passed, true);
+        const workflowPath = path.join(repoRoot, '.github', 'workflows', 'secret-scanning.yml');
+        const original = fs.readFileSync(workflowPath, 'utf8');
+        const needle = '          chmod +x "${install_dir}/gitleaks"';
+        const expression = '# ${{ fromJSON(\'"\\ncp /usr/bin/true ${install_dir}/gitleaks\\n"\') }}';
+        assert.ok(original.includes(needle));
+        const altered = original.replace(needle, needle + '\n          ' + expression);
+        assert.notEqual(altered, original);
+        writeFile(workflowPath, altered);
+        // Workflow text is inspected only; neither the expression nor scanner is executed.
+        const result = validateReleaseReadiness(repoRoot);
+        assert.equal(result.passed, false);
+        assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
+        assert.match(formatReleaseReadinessResult(result), /blocking: secret-scanning\.yml gitleaks gate present=false/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects expression comments after the SBOM identity heredoc', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        assert.equal(validateReleaseReadiness(repoRoot).passed, true);
+        const workflowPath = path.join(repoRoot, '.github', 'workflows', 'sbom.yml');
+        const original = fs.readFileSync(workflowPath, 'utf8');
+        const needle = '          NODE\n';
+        const expression = '# ${{ fromJSON(\'"\\ncp /dev/null sbom.cdx.json\\n"\') }}';
+        assert.ok(original.includes(needle));
+        const altered = original.replace(needle, needle + '          ' + expression + '\n');
+        assert.notEqual(altered, original);
+        writeFile(workflowPath, altered);
+        const result = validateReleaseReadiness(repoRoot);
+        assert.equal(result.passed, false);
+        assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
+        assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('release readiness retains ordinary comment bytes inside scanner run scalars', () => {
+    for (const name of ['secret-scanning.yml', 'sbom.yml']) {
+        const repoRoot = createReadinessFixture();
+        try {
+            const workflowPath = path.join(repoRoot, '.github', 'workflows', name);
+            const original = fs.readFileSync(workflowPath, 'utf8');
+            const altered = original.replace('        run: |\n',
+                '        run: |\n          # Unreviewed scalar bytes remain part of the source contract.\n');
+            assert.notEqual(altered, original);
+            writeFile(workflowPath, altered);
+            const result = validateReleaseReadiness(repoRoot);
+            assert.equal(result.passed, false);
+            assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
     }
 });
 
@@ -2626,22 +2551,11 @@ test('release readiness matches exact tracked checklist version heading', () => 
     }
 });
 
-test('release readiness accepts multiline CI lifecycle smoke run steps', () => {
+test('release readiness accepts reviewed multiline manual CI lifecycle smoke run steps', () => {
     const repoRoot = createReadinessFixture();
     try {
-        writeFile(
-            path.join(repoRoot, '.github', 'workflows', 'ci.yml'),
-            buildCiWorkflow({
-                smokeSteps: [
-                    '    - name: lifecycle smoke',
-                    '      run: |',
-                    '        $CLI setup --target-root "$SMOKE_DIR"',
-                    '        $CLI update git --target-root "$SMOKE_DIR"',
-                    '        $CLI doctor --target-root "$SMOKE_DIR"',
-                    '        $CLI uninstall --target-root "$SMOKE_DIR"'
-                ].join('\n')
-            })
-        );
+        const workflow = fs.readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8');
+        assert.match(workflow, /name: Lifecycle smoke[^\n]*\n {8}id: lifecycle-smoke\n {8}shell: bash\n {8}run: \|/u);
 
         const result = validateReleaseReadiness(repoRoot);
         const output = formatReleaseReadinessResult(result);
@@ -2653,7 +2567,7 @@ test('release readiness accepts multiline CI lifecycle smoke run steps', () => {
     }
 });
 
-test('release readiness accepts multiline CI lifecycle smoke run steps with chomping indicators', () => {
+test('release readiness rejects legacy CI lifecycle steps without manual authorization even with chomping indicators', () => {
     const repoRoot = createReadinessFixture();
     try {
         writeFile(
@@ -2673,8 +2587,9 @@ test('release readiness accepts multiline CI lifecycle smoke run steps with chom
         const result = validateReleaseReadiness(repoRoot);
         const output = formatReleaseReadinessResult(result);
 
-        assert.equal(result.passed, true, output);
-        assert.match(output, /RELEASE_READINESS_OK/);
+        assert.equal(result.passed, false, output);
+        assert.equal(result.checks.find(check => check.area === 'ci')?.passed, false);
+        assert.match(output, /reviewed manual complete-suite contract/);
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
@@ -2783,7 +2698,7 @@ test('release readiness fails when CLI tests are not sharded in CI', () => {
         const output = formatReleaseReadinessResult(result);
 
         assert.equal(result.passed, false);
-        assert.match(output, /test-cli present\+sharded=false/);
+        assert.match(output, /reviewed manual complete-suite contract/);
         assert.ok(result.violations.some(v => v.startsWith('ci:')));
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
@@ -3025,6 +2940,11 @@ test('release validation CLI dispatch rejects unknown raw argv before handler lo
 
 const CANDIDATE_TEST_NOW = new Date('2026-09-26T10:00:00.000Z');
 const CANDIDATE_TEST_REPOSITORY = 'Garda-Studio/garda-agent-orchestrator';
+const publicationCi = require(path.join(process.cwd(), 'scripts/release-candidate.cjs')) as {
+    verifyCiRun(runId: string | number, commit: string, repository: string, dependencies?: {
+        root: string; now: Date; fetch: GithubEvidenceFetcher;
+    }): { run_id: number; run_attempt: number; verified_jobs: number; attempts: number[] };
+};
 
 function candidateQueue(extraRows: string[] = []): string {
     return [
@@ -3041,13 +2961,13 @@ function candidateQueue(extraRows: string[] = []): string {
 }
 
 function ciJobFixture(commit: string): Record<string, unknown>[] {
-    const names: [string, string[]][] = [];
+    const names: [string, string[]][] = [['Authorize CI selection', ['Authorize selected jobs']]];
     for (const node of ['22.13.0', '24']) {
         for (const [name, step] of [
             ['Static Checks', 'Run typecheck'], ['Unit Tests', 'Run unit tests'],
             ['Gate Tests', 'Run gate tests (parallel shards)'], ['CLI Tests', 'Run CLI tests (parallel shards)'],
             ['Lifecycle Tests', 'Run lifecycle tests'], ['Binary Tests', 'Run binary tests']
-        ]) names.push([name + ' / Node ' + node, name === 'Static Checks' ? [step, 'Run lint'] : name === 'Unit Tests'
+        ]) names.push([name + ' / Node ' + node, name === 'Static Checks' ? ['Validate workflow references', step, 'Run lint'] : name === 'Unit Tests'
             ? ['Install ripgrep for compact integration tests', 'Build node-foundation', step]
             : ['Build node-foundation', step]]);
         for (const os of ['ubuntu-latest', 'windows-latest']) names.push(['Release Validation / ' + os + ' / Node ' + node, [
@@ -3062,13 +2982,13 @@ function ciJobFixture(commit: string): Record<string, unknown>[] {
     return names.map(([name, steps], index) => ({
         id: index + 100, run_id: 41, run_attempt: 1, head_sha: commit, name, status: 'completed', conclusion: 'success',
         started_at: '2026-09-26T09:00:00Z', completed_at: '2026-09-26T09:30:00Z',
-        steps: ['Install dependencies', ...steps].map(step => ({ name: step, status: 'completed', conclusion: 'success' }))
+        steps: (name === 'Authorize CI selection' ? steps : ['Install dependencies', ...steps]).map(step => ({ name: step, status: 'completed', conclusion: 'success' }))
     }));
 }
 
 function createCandidateReadinessFixture(repository = CANDIDATE_TEST_REPOSITORY): {
     root: string; request: CandidateReadinessRequest; fetch: GithubEvidenceFetcher; ci: Record<string, unknown>;
-    jobs: Record<string, unknown>[];
+    jobs: Record<string, unknown>[]; securityRun: Record<string, unknown>; securityJobs: Record<string, unknown>[];
 } {
     const root = createReadinessFixture();
     try {
@@ -3082,7 +3002,7 @@ function createCandidateReadinessFixture(repository = CANDIDATE_TEST_REPOSITORY)
         for (const file of ['ci.yml', 'security.yml']) {
             writeFile(path.join(root, '.github', 'workflows', file), fs.readFileSync(path.join(process.cwd(), '.github', 'workflows', file), 'utf8'));
         }
-        for (const file of ['release-candidate.cjs', 'release-security-evidence.cjs', 'validate-workflow-references.cjs']) {
+        for (const file of ['release-candidate.cjs', 'release-candidate-ci-evidence.cjs', 'release-security-evidence.cjs', 'validate-workflow-references.cjs', 'manual-ci-evidence.cjs', 'manual-workflow-authorization.cjs']) {
             writeFile(path.join(root, 'scripts', file), fs.readFileSync(path.join(process.cwd(), 'scripts', file), 'utf8'));
         }
         writeFile(path.join(root, 'TASK.md'), candidateQueue());
@@ -3117,18 +3037,20 @@ function createCandidateReadinessFixture(repository = CANDIDATE_TEST_REPOSITORY)
         const request = { candidateDirectory: directory, commit, tag: 'v1.1.0', tarballSha256: candidate.tarball_sha256,
             tarballName, repository, ciRunId: 41 };
         const ci: Record<string, unknown> = { id: 41, head_sha: commit, repository: { full_name: request.repository },
-            path: '.github/workflows/ci.yml', head_branch: 'dev', event: 'push', status: 'completed', conclusion: 'success',
+            path: '.github/workflows/ci.yml', head_branch: 'dev', event: 'workflow_dispatch', status: 'completed', conclusion: 'success',
             run_attempt: 1, run_started_at: '2026-09-26T09:00:00Z', updated_at: '2026-09-26T09:30:00Z' };
         const jobs = ciJobFixture(commit);
-        const securityRun = { ...ci, id: 42, path: '.github/workflows/security.yml' };
-        const securityJobs = ['npm audit', 'OSV Vulnerability Scan / scan'].map((name, index) => ({
-            id: 501 + index, run_id: 42, head_sha: commit, name, status: 'completed', conclusion: 'success',
+        const securityRun: Record<string, unknown> = { ...ci, id: 42, path: '.github/workflows/security.yml' };
+        const securityJobs: Record<string, unknown>[] = ['npm audit', 'OSV Vulnerability Scan / osv-scan', 'Authorize Security selection'].map((name, index) => ({
+            id: 501 + index, run_id: 42, run_attempt: 1, head_sha: commit, name, status: 'completed', conclusion: 'success',
             started_at: ci.run_started_at, completed_at: ci.updated_at,
             steps: (index === 0 ? ['Pin release audit npm CLI', 'Install dependencies', 'Audit dependencies'] :
-                ['Run scanner', 'Run osv-scanner-reporter']).map(step => ({ name: step, status: 'completed', conclusion: 'success' }))
+                index === 1 ? ['Run scanner', 'Run osv-scanner-reporter'] : ['Authorize selected jobs'])
+                .map(step => ({ name: step, status: 'completed', conclusion: 'success' }))
         }));
         const fetch: GithubEvidenceFetcher = endpoint => {
-            const expected = [41, 42].flatMap(id => ['repos/' + repository + '/actions/runs/' + id, 'repos/' + repository + '/actions/runs/' + id + '/jobs?per_page=100']);
+            const expected = ['repos/' + repository + '/actions/runs/41', 'repos/' + repository + '/actions/runs/41/jobs?filter=all&per_page=100',
+                'repos/' + repository + '/actions/runs/42', 'repos/' + repository + '/actions/runs/42/jobs?filter=all&per_page=100'];
             assert.ok(expected.includes(endpoint), 'Unexpected offline fixture repository endpoint: ' + endpoint);
             if (endpoint.includes('/runs/41')) return endpoint.includes('/jobs') ? [{ total_count: jobs.length, jobs }] : ci;
             if (endpoint.includes('/runs/42')) return endpoint.includes('/jobs') ? [{ total_count: securityJobs.length, jobs: securityJobs }] : securityRun;
@@ -3139,7 +3061,7 @@ function createCandidateReadinessFixture(repository = CANDIDATE_TEST_REPOSITORY)
         };
         security.attestOrVerify('attest', [directory, commit, request.tag, request.tarballSha256, tarballName, request.repository, '42'],
             root, CANDIDATE_TEST_NOW, () => ({ run: securityRun, jobs: [{ total_count: securityJobs.length, jobs: securityJobs }] }));
-        return { root, request, fetch, ci, jobs };
+        return { root, request, fetch, ci, jobs, securityRun, securityJobs };
     } catch (error) {
         fs.rmSync(root, { recursive: true, force: true });
         throw error;
@@ -3160,12 +3082,113 @@ test('candidate readiness combines real Git and tarball proof with complete offl
     }
 });
 
+test('candidate readiness rejects legacy Security records and missing or altered schema-2 bindings', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const evidencePath = path.join(fixture.request.candidateDirectory, 'security-evidence.json');
+        const original = JSON.parse(fs.readFileSync(evidencePath, 'utf8')) as {
+            schema_version?: number; security: Record<string, unknown>;
+        };
+        assert.equal(original.schema_version, 2);
+        assert.equal(original.security.selector_sha256, 'cb34c3544940e746ad023a8fa4c9e6de4b789fec05e1cdef106bbb7c0da034a5');
+        assert.equal(original.security.osv_checkout_ref, fixture.request.commit);
+        const mutations = [
+            (record: typeof original) => { record.schema_version = 1; },
+            (record: typeof original) => { delete record.schema_version; },
+            (record: typeof original) => { delete record.security.selector_sha256; },
+            (record: typeof original) => { record.security.selector_sha256 = 'd'.repeat(64); },
+            (record: typeof original) => { delete record.security.osv_checkout_ref; },
+            (record: typeof original) => { record.security.osv_checkout_ref = 'd'.repeat(40); },
+            (record: typeof original) => {
+                record.schema_version = 1;
+                delete record.security.selector_sha256;
+                delete record.security.osv_checkout_ref;
+            }
+        ];
+        for (const mutate of mutations) {
+            const record = structuredClone(original);
+            mutate(record);
+            const altered = JSON.stringify(record);
+            fs.writeFileSync(evidencePath, altered);
+            const result = validateReleaseReadiness(fixture.root, fixture.request,
+                { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+            assert.equal(result.passed, false);
+            assert.equal(result.candidate?.decision, 'NO_GO');
+            assert.equal(result.checks.find(check => check.area === 'candidate-security')?.passed, false);
+            assert.equal(fs.readFileSync(evidencePath, 'utf8'), altered);
+        }
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness accepts retained security scans only through authenticated attempt fetches', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const prior = { ...fixture.securityRun, conclusion: 'failure' };
+        const retry = { ...fixture.securityJobs[1], id: 601, run_attempt: 2,
+            started_at: '2026-09-26T09:40:00Z', completed_at: '2026-09-26T09:45:00Z' };
+        fixture.securityJobs[1].conclusion = 'failure';
+        fixture.securityJobs.push(retry);
+        Object.assign(fixture.securityRun, { run_attempt: 2,
+            run_started_at: '2026-09-26T09:40:00Z', updated_at: '2026-09-26T09:50:00Z' });
+        const r = fixture.request;
+        const adapter = require(path.join(process.cwd(), 'scripts/release-security-evidence.cjs')) as {
+            attestOrVerify(mode: string, args: string[], root: string, now: Date, fetch: () => unknown): unknown;
+        };
+        fs.unlinkSync(path.join(r.candidateDirectory, 'security-evidence.json'));
+        adapter.attestOrVerify('attest', [r.candidateDirectory, r.commit, r.tag, r.tarballSha256,
+            r.tarballName, r.repository, '42'], fixture.root, CANDIDATE_TEST_NOW,
+        () => ({ run: fixture.securityRun, jobs: { total_count: fixture.securityJobs.length, jobs: fixture.securityJobs },
+            fetchAttempt: () => prior }));
+        const endpoints: string[] = [];
+        const fetch: GithubEvidenceFetcher = (endpoint, paginate) => {
+            endpoints.push(endpoint);
+            if (endpoint.endsWith('/42/attempts/1')) return prior;
+            if (endpoint.includes('/42/jobs')) assert.equal(paginate, true);
+            return fixture.fetch(endpoint, paginate);
+        };
+        const result = validateReleaseReadiness(fixture.root, r, { now: CANDIDATE_TEST_NOW, fetch });
+        assert.equal(result.candidate?.decision, 'GO', formatReleaseReadinessResult(result));
+        assert.equal(result.checks.find(check => check.area === 'candidate-security')?.passed, true);
+        assert.ok(endpoints.some(endpoint => endpoint.endsWith('/42/jobs?filter=all&per_page=100')));
+        assert.ok(endpoints.some(endpoint => endpoint.endsWith('/42/attempts/1')));
+        for (const mutation of [{ head_sha: 'a'.repeat(40) }, { event: 'push' }, { run_attempt: 2 },
+            { run_started_at: '2026-09-26T09:55:00Z', updated_at: '2026-09-26T09:56:00Z' }]) {
+            const invalid = validateReleaseReadiness(fixture.root, r, { now: CANDIDATE_TEST_NOW,
+                fetch: (endpoint, paginate) => endpoint.endsWith('/42/attempts/1') ? { ...prior, ...mutation } : fetch(endpoint, paginate) });
+            assert.equal(invalid.candidate?.decision, 'NO_GO');
+            assert.equal(invalid.checks.find(check => check.area === 'candidate-security')?.passed, false);
+        }
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness rejects automatic and partial security evidence at the actual adapter boundary', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const automatic = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW,
+            fetch: (endpoint, paginate) => endpoint.endsWith('/42')
+                ? { ...fixture.securityRun, event: 'push' } : fixture.fetch(endpoint, paginate) });
+        assert.equal(automatic.candidate?.decision, 'NO_GO');
+        assert.equal(automatic.checks.find(check => check.area === 'candidate-security')?.passed, false);
+        fixture.securityJobs.splice(1, 1);
+        const partial = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(partial.candidate?.decision, 'NO_GO');
+        assert.equal(partial.checks.find(check => check.area === 'candidate-security')?.passed, false);
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
 test('candidate readiness rejects foreign, stale, skipped, empty and replayed suite evidence', () => {
     const fixture = createCandidateReadinessFixture();
     try {
         for (const mutation of [
             { head_sha: 'a'.repeat(40) }, { conclusion: 'skipped' }, { updated_at: '2026-09-24T09:30:00Z' },
-            { repository: { full_name: 'foreign/repo' } }, { run_attempt: 2 }
+            { repository: { full_name: 'foreign/repo' } }, { run_attempt: 2 }, { event: 'push' },
+            { event: 'pull_request' }, { event: 'schedule' }, { head_branch: 'unreviewed' }
         ]) {
             const result = validateReleaseReadiness(fixture.root, fixture.request, {
                 now: CANDIDATE_TEST_NOW, fetch: endpoint => endpoint.endsWith('/41') ? { ...fixture.ci, ...mutation } : fixture.fetch(endpoint)
@@ -3180,6 +3203,455 @@ test('candidate readiness rejects foreign, stale, skipped, empty and replayed su
             const result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
             assert.equal(result.candidate?.decision, 'NO_GO');
             assert.equal(result.checks.find(check => check.area === 'candidate-suite')?.passed, false);
+        }
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness accepts a narrow failed-job rerun only with complete authenticated same-SHA history', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const prior = { ...fixture.ci, conclusion: 'failure' };
+        const failed = fixture.jobs.find(job => job.name === 'Smoke / windows-latest / Node 24')!;
+        const retry = { ...failed, id: 900, run_attempt: 2,
+            started_at: '2026-09-26T09:40:00Z', completed_at: '2026-09-26T09:45:00Z' };
+        failed.conclusion = 'failure';
+        fixture.jobs.push(retry);
+        Object.assign(fixture.ci, { run_attempt: 2, run_started_at: '2026-09-26T09:40:00Z', updated_at: '2026-09-26T09:50:00Z' });
+        const endpoints: string[] = [];
+        const fetch: GithubEvidenceFetcher = endpoint => {
+            endpoints.push(endpoint);
+            return endpoint.endsWith('/41/attempts/1') ? prior : fixture.fetch(endpoint);
+        };
+        const result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch });
+        assert.equal(result.candidate?.decision, 'GO', formatReleaseReadinessResult(result));
+        assert.ok(endpoints.some(endpoint => endpoint.endsWith('/41/jobs?filter=all&per_page=100')));
+        assert.ok(endpoints.some(endpoint => endpoint.endsWith('/41/attempts/1')));
+        assert.equal(fixture.jobs.filter(job => job.run_attempt === 2).length, 1);
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness accepts recovered upstream failures only after every skipped matrix family executes', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const original = fixture.jobs.map(job => ({ ...job }));
+        const prior: Record<string, unknown> = { ...fixture.ci, conclusion: 'failure' };
+        const families = ['Unit Tests', 'Gate Tests', 'CLI Tests', 'Lifecycle Tests', 'Binary Tests', 'Release Validation', 'Smoke'];
+        const fetch: GithubEvidenceFetcher = endpoint => endpoint.endsWith('/41/attempts/1') ? prior : fixture.fetch(endpoint);
+        const verify = () => validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch });
+        Object.assign(fixture.ci, { run_attempt: 2, run_started_at: '2026-09-26T09:40:00Z', updated_at: '2026-09-26T09:50:00Z' });
+        for (const failedFamily of ['Static Checks', 'Unit Tests']) {
+            const skippedFamilies = failedFamily === 'Static Checks' ? families : ['Release Validation', 'Smoke'];
+            const inFamily = (job: Record<string, unknown>, family: string) => String(job.name).startsWith(family + ' / ');
+            const historical = original.filter(job => !skippedFamilies.some(family => inFamily(job, family)))
+                .map(job => inFamily(job, failedFamily) ? { ...job, conclusion: 'failure' } : { ...job });
+            // GitHub retains the literal expression-bearing name when a job-level if skips matrix expansion.
+            const skipped = skippedFamilies.map((family, index) => ({
+                id: 900 + index, run_id: 41, head_sha: fixture.request.commit, run_attempt: 1,
+                name: family + (['Release Validation', 'Smoke'].includes(family)
+                    ? ' / ${{ matrix.os }} / Node ${{ matrix.node-version }}' : ' / Node ${{ matrix.node-version }}'),
+                status: 'completed', conclusion: 'skipped', steps: [],
+                started_at: prior.updated_at, completed_at: prior.updated_at
+            }));
+            const retried = original.filter(job => [failedFamily, ...skippedFamilies].some(family => inFamily(job, family)))
+                .map((job, index) => ({ ...job, id: 1000 + index, run_attempt: 2,
+                    started_at: '2026-09-26T09:40:00Z', completed_at: '2026-09-26T09:45:00Z' }));
+            const recovered = [...historical, ...skipped, ...retried];
+            fixture.jobs.splice(0, fixture.jobs.length, ...recovered);
+            const result = verify();
+            assert.equal(result.candidate?.decision, 'GO', failedFamily + ': ' + formatReleaseReadinessResult(result));
+            assert.equal(result.checks.find(check => check.area === 'candidate-suite')?.passed, true);
+            for (const mutation of [
+                { name: 'Foreign matrix / Node ${{ matrix.node-version }}' }, { conclusion: 'success' },
+                { status: 'queued' }, { run_attempt: 2 }, { head_sha: 'b'.repeat(40) },
+                { steps: [{ name: 'Run scanner', status: 'completed', conclusion: 'success' }] },
+                { started_at: '2026-09-26T08:00:00Z' }
+            ]) {
+                fixture.jobs.splice(0, fixture.jobs.length, ...historical, { ...skipped[0], ...mutation }, ...skipped.slice(1), ...retried);
+                const invalid = verify();
+                assert.equal(invalid.candidate?.decision, 'NO_GO', JSON.stringify(mutation));
+                assert.equal(invalid.checks.find(check => check.area === 'candidate-suite')?.passed, false);
+            }
+            fixture.jobs.splice(0, fixture.jobs.length, ...recovered, { ...skipped[0], id: 999 });
+            assert.equal(verify().candidate?.decision, 'NO_GO');
+            const unsuperseded = retried.map(job => inFamily(job, skippedFamilies[0])
+                ? { ...job, run_attempt: 1, started_at: prior.run_started_at, completed_at: prior.updated_at } : job);
+            fixture.jobs.splice(0, fixture.jobs.length, ...historical, ...skipped, ...unsuperseded);
+            const missingExecution = verify();
+            assert.equal(missingExecution.candidate?.decision, 'NO_GO');
+            assert.ok(missingExecution.checks.find(check => check.area === 'candidate-suite')?.details
+                .some(value => value.includes('skipped matrix family was not fully superseded')), formatReleaseReadinessResult(missingExecution));
+            fixture.jobs.splice(0, fixture.jobs.length, ...historical, ...skipped, ...retried.slice(1));
+            assert.equal(verify().candidate?.decision, 'NO_GO');
+            fixture.jobs.splice(0, fixture.jobs.length, ...recovered);
+            const foreignAttempt = validateReleaseReadiness(fixture.root, fixture.request, {
+                now: CANDIDATE_TEST_NOW, fetch: endpoint => endpoint.endsWith('/41/attempts/1')
+                    ? { ...prior, head_sha: 'b'.repeat(40) } : fixture.fetch(endpoint)
+            });
+            assert.equal(foreignAttempt.candidate?.decision, 'NO_GO');
+            assert.ok(foreignAttempt.checks.find(check => check.area === 'candidate-suite')?.details
+                .some(value => value.includes('CI run belongs to another run, repository or candidate commit')), formatReleaseReadinessResult(foreignAttempt));
+        }
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('publication CI proof rejects failed and reversed retained attempts after authenticating the complete manual matrix', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const endpoints: Array<{ endpoint: string; paginate: boolean }> = [];
+        const prior = { ...fixture.ci };
+        const fetch: GithubEvidenceFetcher = (endpoint, paginate = false) => {
+            endpoints.push({ endpoint, paginate });
+            return endpoint.endsWith('/attempts/1') ? prior : fixture.fetch(endpoint);
+        };
+        const verify = () => publicationCi.verifyCiRun('41', fixture.request.commit, fixture.request.repository,
+            { root: fixture.root, now: CANDIDATE_TEST_NOW, fetch });
+        assert.deepEqual(verify(), { run_id: 41, run_attempt: 1, commit: fixture.request.commit,
+            verified_jobs: 23, attempts: [1] });
+        assert.ok(endpoints.some(call => call.endpoint.endsWith('/jobs?filter=all&per_page=100') && call.paginate));
+        fixture.jobs.push({ ...fixture.jobs[1], id: 900, run_attempt: 2,
+            started_at: '2026-09-26T09:40:00Z', completed_at: '2026-09-26T09:45:00Z' });
+        Object.assign(fixture.ci, { run_attempt: 2, run_started_at: '2026-09-26T09:40:00Z', updated_at: '2026-09-26T09:50:00Z' });
+        assert.deepEqual(verify().attempts, [1, 2]);
+        fixture.jobs[fixture.jobs.length - 1].conclusion = 'failure';
+        assert.throws(verify, /Latest CI matrix job did not succeed/u);
+        fixture.jobs[fixture.jobs.length - 1].conclusion = 'success';
+        prior.updated_at = '2026-09-26T09:55:00Z';
+        assert.throws(verify, /attempt timelines are reversed or overlapping/u);
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('publication CI proof rejects summary-only, missing, partial, skipped, forged and stale success', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const verify = (fetch: GithubEvidenceFetcher = fixture.fetch) => publicationCi.verifyCiRun(41,
+            fixture.request.commit, fixture.request.repository, { root: fixture.root, now: CANDIDATE_TEST_NOW, fetch });
+        assert.equal(verify().verified_jobs, 23);
+        assert.throws(() => verify(() => ({ workflow_runs: [fixture.ci] })), /another run, repository or candidate commit/u);
+        const originalRun = { ...fixture.ci };
+        for (const mutation of [
+            { id: 42 }, { head_sha: 'b'.repeat(40) }, { repository: { full_name: 'foreign/repo' } },
+            { event: 'push' }, { event: 'pull_request' }, { head_branch: 'feature' },
+            { path: '.github/workflows/foreign.yml' }, { conclusion: 'failure' }, { status: 'in_progress' },
+            { updated_at: '2026-09-24T10:00:00Z' }, { updated_at: '2026-09-27T10:00:00Z' }
+        ]) {
+            Object.assign(fixture.ci, originalRun, mutation);
+            assert.throws(() => verify(), JSON.stringify(mutation));
+        }
+        Object.assign(fixture.ci, originalRun);
+        const originalJobs = [...fixture.jobs];
+        for (const jobs of [originalJobs.slice(0, 2), originalJobs.slice(1),
+            [{ ...originalJobs[0], conclusion: 'skipped' }, ...originalJobs.slice(1)],
+            [{ ...originalJobs[0], steps: [] }, ...originalJobs.slice(1)],
+            [{ ...originalJobs[0], head_sha: 'b'.repeat(40) }, ...originalJobs.slice(1)],
+            [...originalJobs, { ...originalJobs[1], id: 999 }],
+            [...originalJobs.slice(0, -1), { ...originalJobs.at(-1), steps: [{ name: 'Install dependencies', status: 'completed', conclusion: 'success' }] }]
+        ]) {
+            fixture.jobs.splice(0, fixture.jobs.length, ...jobs);
+            assert.throws(() => verify());
+        }
+        fixture.jobs.splice(0, fixture.jobs.length, ...originalJobs);
+        assert.throws(() => verify(endpoint => endpoint.includes('/jobs')
+            ? [{ total_count: originalJobs.length + 1, jobs: originalJobs }] : fixture.fetch(endpoint)), /history is incomplete/u);
+        assert.throws(() => verify(() => { throw new Error('Authenticated Actions evidence unavailable (offline control).'); }), /evidence unavailable/u);
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('publication CI transport rejects missing or malformed evidence while pinning host and paginated jobs', t => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        t.mock.timers.enable({ apis: ['Date'], now: CANDIDATE_TEST_NOW });
+        const calls: Array<{ command: unknown; args: string[]; options: childProcess.SpawnSyncOptions }> = [];
+        const transport = t.mock.method(require('node:child_process'), 'spawnSync',
+            (command: unknown, args: string[], options: childProcess.SpawnSyncOptions) => {
+                calls.push({ command, args, options });
+                return { status: 0, stdout: JSON.stringify(fixture.fetch(args[3])), stderr: '' };
+            });
+        assert.equal(publicationCi.verifyCiRun('41', fixture.request.commit, fixture.request.repository).verified_jobs, 23);
+        assert.equal(calls.length, 2);
+        for (const call of calls) {
+            assert.equal(call.command, 'gh');
+            assert.deepEqual(call.args.slice(0, 3), ['api', '--hostname', 'github.com']);
+            assert.equal(call.options.maxBuffer, 16 * 1024 * 1024);
+            assert.equal(call.options.shell, undefined);
+            assert.equal(call.options.windowsHide, true);
+        }
+        assert.deepEqual(calls[1].args.slice(4), ['--paginate', '--slurp']);
+        transport.mock.mockImplementation(() => ({ status: 1, stdout: '', stderr: 'not copied into release evidence' }));
+        assert.throws(() => publicationCi.verifyCiRun('41', fixture.request.commit, fixture.request.repository),
+            /Authenticated GitHub CI evidence is unavailable/u);
+        transport.mock.mockImplementation(() => ({ status: 0, stdout: 'not JSON', stderr: '' }));
+        assert.throws(() => publicationCi.verifyCiRun('41', fixture.request.commit, fixture.request.repository));
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects replaced publication CI discovery and token transport', () => {
+    const root = createReadinessFixture();
+    try {
+        const workflowPath = path.join(root, '.github/workflows/publish.yml');
+        const original = fs.readFileSync(workflowPath, 'utf8');
+        const withoutToken = original.replace('          GH_TOKEN: ${{ github.token }}', '          UNRELATED_TOKEN: ${{ github.token }}');
+        assert.notEqual(withoutToken, original);
+        writeFile(workflowPath, withoutToken);
+        assert.equal(validateReleaseReadiness(root).checks.find(check => check.area === 'trusted-publish-workflow')?.passed, false);
+        for (const changed of [
+            original.replace('-f event=workflow_dispatch', '-f event=push'),
+            original.replace("--jq '.workflow_runs[0].id'", "--jq '.workflow_runs[] | select(.conclusion == \"success\") | .id'"),
+            original.replace('verify-ci "${CI_RUN_ID}"', 'verify-ci "41"'),
+            original.replace('-f per_page=1', '-f status=completed -f per_page=1')
+        ]) {
+            assert.notEqual(changed, original);
+            writeFile(workflowPath, changed);
+            const result = validateReleaseReadiness(root);
+            assert.equal(result.checks.find(check => check.area === 'trusted-publish-workflow')?.passed, false,
+                formatReleaseReadinessResult(result));
+        }
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness rejects a historical skipped matrix family without later full execution', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const staticJob = fixture.jobs.find(job => job.name === 'Static Checks / Node 24')!;
+        fixture.jobs.push({ ...staticJob, id: 900, run_attempt: 2, conclusion: 'failure',
+            started_at: '2026-09-26T09:35:00Z', completed_at: '2026-09-26T09:45:00Z' });
+        fixture.jobs.push({ ...staticJob, id: 901, run_attempt: 3,
+            started_at: '2026-09-26T09:50:00Z', completed_at: '2026-09-26T09:55:00Z' });
+        fixture.jobs.push({ id: 902, run_id: 41, head_sha: fixture.request.commit, run_attempt: 2,
+            name: 'Unit Tests / Node ${{ matrix.node-version }}', status: 'completed', conclusion: 'skipped', steps: [],
+            started_at: '2026-09-26T09:45:00Z', completed_at: '2026-09-26T09:45:00Z' });
+        Object.assign(fixture.ci, { run_attempt: 3, run_started_at: '2026-09-26T09:50:00Z', updated_at: '2026-09-26T10:00:00Z' });
+        const result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(result.candidate?.decision, 'NO_GO');
+        assert.equal(result.checks.find(check => check.area === 'candidate-suite')?.passed, false);
+        assert.ok(result.checks.find(check => check.area === 'candidate-suite')?.details
+            .some(value => value.includes('skipped matrix family was not fully superseded')), formatReleaseReadinessResult(result));
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness rejects reversed or overlapping retained attempts despite complete successful job history', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const first = { ...fixture.ci, conclusion: 'failure' };
+        const second = { ...fixture.ci, run_attempt: 2, conclusion: 'failure',
+            run_started_at: '2026-09-26T09:35:00Z', updated_at: '2026-09-26T09:45:00Z' };
+        const windows = fixture.jobs.find(job => job.name === 'Smoke / windows-latest / Node 22.13.0')!;
+        const macos = fixture.jobs.find(job => job.name === 'Smoke / macos-latest / Node 24')!;
+        fixture.jobs.push({ ...windows, id: 900, run_attempt: 2,
+            started_at: second.run_started_at, completed_at: second.updated_at });
+        fixture.jobs.push({ ...macos, id: 901, run_attempt: 2, conclusion: 'failure',
+            started_at: second.run_started_at, completed_at: second.updated_at });
+        fixture.jobs.push({ ...macos, id: 902, run_attempt: 3,
+            started_at: '2026-09-26T09:50:00Z', completed_at: '2026-09-26T09:59:00Z' });
+        windows.conclusion = 'failure';
+        macos.conclusion = 'failure';
+        Object.assign(fixture.ci, { run_attempt: 3, run_started_at: '2026-09-26T09:50:00Z', updated_at: '2026-09-26T10:00:00Z' });
+        const endpoints: string[] = [];
+        const fetch: GithubEvidenceFetcher = endpoint => {
+            endpoints.push(endpoint);
+            if (endpoint.endsWith('/41/attempts/1')) return first;
+            if (endpoint.endsWith('/41/attempts/2')) return second;
+            return fixture.fetch(endpoint);
+        };
+        const verify = () => validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch });
+        const setTimeline = (attempt: 1 | 2, started: string, completed: string) => {
+            Object.assign(attempt === 1 ? first : second, { run_started_at: started, updated_at: completed });
+            for (const job of fixture.jobs.filter(job => job.run_attempt === attempt)) {
+                Object.assign(job, { started_at: started, completed_at: completed });
+            }
+        };
+        const ordered = verify();
+        assert.equal(ordered.candidate?.decision, 'GO', formatReleaseReadinessResult(ordered));
+        assert.ok(endpoints.some(endpoint => endpoint.endsWith('/41/attempts/1')));
+        assert.ok(endpoints.some(endpoint => endpoint.endsWith('/41/attempts/2')));
+        setTimeline(1, '2026-09-26T09:35:00Z', '2026-09-26T09:45:00Z');
+        setTimeline(2, '2026-09-26T09:00:00Z', '2026-09-26T09:30:00Z');
+        const reversed = verify();
+        assert.equal(reversed.candidate?.decision, 'NO_GO');
+        assert.equal(reversed.checks.find(check => check.area === 'candidate-suite')?.passed, false);
+        assert.ok(reversed.checks.find(check => check.area === 'candidate-suite')?.details
+            .some(value => value.includes('CI attempt timelines are reversed or overlapping')), formatReleaseReadinessResult(reversed));
+        setTimeline(1, '2026-09-26T09:00:00Z', '2026-09-26T09:30:00Z');
+        setTimeline(2, '2026-09-26T09:20:00Z', '2026-09-26T09:40:00Z');
+        const overlapping = verify();
+        assert.equal(overlapping.candidate?.decision, 'NO_GO');
+        assert.ok(overlapping.checks.find(check => check.area === 'candidate-suite')?.details
+            .some(value => value.includes('CI attempt timelines are reversed or overlapping')), formatReleaseReadinessResult(overlapping));
+        setTimeline(1, '2026-09-26T09:00:00Z', '2026-09-26T09:35:00Z');
+        setTimeline(2, '2026-09-26T09:31:00Z', '2026-09-26T09:34:00Z');
+        const reversedCompletion = verify();
+        assert.equal(reversedCompletion.candidate?.decision, 'NO_GO');
+        assert.ok(reversedCompletion.checks.find(check => check.area === 'candidate-suite')?.details
+            .some(value => value.includes('CI attempt timelines are reversed or overlapping')), formatReleaseReadinessResult(reversedCompletion));
+        setTimeline(1, '2026-09-26T09:00:00Z', '2026-09-26T09:30:00Z');
+        setTimeline(2, '2026-09-26T09:28:00Z', '2026-09-26T09:40:00Z');
+        const clockSkewAllowance = verify();
+        assert.equal(clockSkewAllowance.candidate?.decision, 'GO', formatReleaseReadinessResult(clockSkewAllowance));
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness rejects replayed, foreign and inconsistent rerun attempts despite a successful run summary', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const prior = { ...fixture.ci, conclusion: 'failure' };
+        const original = [...fixture.jobs];
+        const retry = { ...original[1], id: 900, run_attempt: 2,
+            started_at: '2026-09-26T09:40:00Z', completed_at: '2026-09-26T09:45:00Z' };
+        fixture.jobs.push(retry);
+        Object.assign(fixture.ci, { run_attempt: 2, run_started_at: '2026-09-26T09:40:00Z', updated_at: '2026-09-26T09:50:00Z' });
+        const fetch = (endpoint: string): unknown => endpoint.endsWith('/41/attempts/1') ? prior : fixture.fetch(endpoint);
+        for (const mutation of [{ conclusion: 'failure' }, { conclusion: 'skipped' }, { run_attempt: 3 },
+            { run_id: 42 }, { head_sha: 'b'.repeat(40) }, { id: original[0].id },
+            { started_at: '2026-09-26T09:00:00Z' }, { completed_at: '2026-09-26T10:10:00Z' }]) {
+            fixture.jobs.splice(0, fixture.jobs.length, ...original, { ...retry, ...mutation });
+            const result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch });
+            assert.equal(result.candidate?.decision, 'NO_GO', JSON.stringify(mutation));
+            assert.equal(result.checks.find(check => check.area === 'candidate-suite')?.passed, false);
+        }
+        fixture.jobs.splice(0, fixture.jobs.length, ...original, retry);
+        for (const mutation of [{ run_attempt: 2 }, { head_sha: 'b'.repeat(40) }, { id: 42 },
+            { repository: { full_name: 'foreign/repo' } }, { event: 'push' },
+            { updated_at: '2026-09-26T09:55:00Z' }, { updated_at: '2026-09-24T09:30:00Z' }]) {
+            const result = validateReleaseReadiness(fixture.root, fixture.request, {
+                now: CANDIDATE_TEST_NOW, fetch: endpoint => endpoint.endsWith('/41/attempts/1') ? { ...prior, ...mutation } : fixture.fetch(endpoint)
+            });
+            assert.equal(result.candidate?.decision, 'NO_GO', JSON.stringify(mutation));
+            assert.equal(result.checks.find(check => check.area === 'candidate-suite')?.passed, false);
+        }
+        fixture.jobs.push({ ...retry, id: 901 });
+        const duplicate = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch });
+        assert.equal(duplicate.candidate?.decision, 'NO_GO');
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('candidate readiness rejects partial coverage and missing authorization despite complete-matrix intent', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const original = [...fixture.jobs];
+        fixture.ci.complete_matrix_requested = true;
+        fixture.jobs.splice(0, fixture.jobs.length, ...original.slice(0, 2));
+        const partial = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(partial.candidate?.decision, 'NO_GO');
+        assert.equal(partial.checks.find(check => check.area === 'candidate-suite')?.passed, false);
+        for (const jobs of [original.slice(1),
+            [{ ...original[0], conclusion: 'skipped' }, ...original.slice(1)],
+            [{ ...original[0], steps: [] }, ...original.slice(1)],
+            [...original, { ...original[0], id: 999 }]]) {
+            fixture.jobs.splice(0, fixture.jobs.length, ...jobs);
+            const result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+            assert.equal(result.candidate?.decision, 'NO_GO');
+            assert.equal(result.checks.find(check => check.area === 'candidate-suite')?.passed, false);
+        }
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
+test('release readiness rejects changed manual CI authorization and candidate selector code without executing it', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        const workflow = path.join(repoRoot, '.github/workflows/ci.yml');
+        const original = fs.readFileSync(workflow, 'utf8');
+        for (const invalid of [original.replace("needs.authorize.result == 'success'", 'true'),
+            original.replace('ref: ${{ github.sha }}', 'ref: ${{ inputs.commit }}'),
+            original.replace('  workflow_dispatch:', '  push:'),
+            original.replace('contents: read', 'contents: write'),
+            original.replace('$CLI setup --target-root', 'echo $CLI setup --target-root'),
+            original.replace('npm run test:cli', 'echo npm run test:cli'),
+            original.replace('          GARDA_NODE_FOUNDATION_TEST_SHARDS:', '          UNRELATED_SHARD_MARKER:')]) {
+            assert.notEqual(invalid, original);
+            writeFile(workflow, invalid);
+            const result = validateReleaseReadiness(repoRoot);
+            assert.equal(result.passed, false);
+            assert.equal(result.checks.find(check => check.area === 'ci')?.passed, false);
+        }
+        writeFile(workflow, original);
+        const sentinel = path.join(repoRoot, 'selector-executed');
+        writeFile(path.join(repoRoot, 'scripts/manual-workflow-authorization.cjs'),
+            'require("node:fs").writeFileSync(' + JSON.stringify(sentinel) + ', "unsafe");\n');
+        const result = validateReleaseReadiness(repoRoot);
+        assert.equal(result.checks.find(check => check.area === 'ci')?.passed, false);
+        assert.equal(fs.existsSync(sentinel), false);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('reviewed CI evidence rejects executable scalar source drift while accepting CRLF', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        const verifier = require(path.join(process.cwd(), 'scripts/manual-ci-evidence.cjs')) as {
+            assertCiContract(root: string, checkScripts?: boolean): void;
+        };
+        const workflowPath = path.join(repoRoot, '.github/workflows/ci.yml');
+        const original = fs.readFileSync(workflowPath, 'utf8');
+        const anchor = '          set -euo pipefail\n';
+        assert.ok(original.includes(anchor));
+        verifier.assertCiContract(repoRoot, false);
+        writeFile(workflowPath, original.replace(/\r?\n/gu, '\r\n'));
+        verifier.assertCiContract(repoRoot, false);
+        for (const inserted of [
+            "          # ${{ fromJSON('\"\\nexit 0\\n\"') }}\n",
+            '          # An unreviewed scalar comment\n',
+            '\n',
+            '          \n'
+        ]) {
+            const changed = original.replace(anchor, inserted + anchor);
+            assert.notEqual(changed, original);
+            writeFile(workflowPath, changed);
+            assert.throws(() => verifier.assertCiContract(repoRoot, false), /reviewed manual complete-suite contract/);
+        }
+        writeFile(workflowPath, original.trimEnd());
+        assert.throws(() => verifier.assertCiContract(repoRoot, false), /reviewed manual complete-suite contract/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+});
+
+test('reviewed CI evidence rejects weakened npm scripts, missing permissions and symlink selector inputs', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        const verifier = require(path.join(process.cwd(), 'scripts/manual-ci-evidence.cjs')) as { assertCiContract(root: string): void };
+        verifier.assertCiContract(fixture.root);
+        const packagePath = path.join(fixture.root, 'package.json');
+        const original = fs.readFileSync(packagePath);
+        const manifest = JSON.parse(original.toString());
+        manifest.scripts.coverage = 'node --version';
+        writeFile(packagePath, JSON.stringify(manifest));
+        assert.throws(() => verifier.assertCiContract(fixture.root), /npm scripts differ/);
+        fs.writeFileSync(packagePath, original);
+        const unavailable = validateReleaseReadiness(fixture.root, fixture.request, {
+            now: CANDIDATE_TEST_NOW, fetch: () => { throw new Error('Actions read permission unavailable (offline control).'); }
+        });
+        assert.equal(unavailable.candidate?.decision, 'NO_GO');
+        assert.equal(unavailable.checks.find(check => check.area === 'candidate-suite')?.passed, false);
+        const selector = path.join(fixture.root, 'scripts/manual-workflow-authorization.cjs');
+        const target = selector + '.saved';
+        fs.renameSync(selector, target);
+        if (process.platform !== 'win32') {
+            fs.symlinkSync(target, selector);
+            assert.throws(() => verifier.assertCiContract(fixture.root), /bounded regular file/);
+        } else {
+            assert.throws(() => verifier.assertCiContract(fixture.root), /ENOENT/);
         }
     } finally {
         fs.rmSync(fixture.root, { recursive: true, force: true });
@@ -3427,7 +3899,7 @@ test('candidate readiness final recheck detects tracked checkout and security re
             const result = validateReleaseReadiness(fixture.root, fixture.request, {
                 now: CANDIDATE_TEST_NOW, fetch: endpoint => {
                     const payload = fixture.fetch(endpoint);
-                    if (!mutated && endpoint.endsWith('/42/jobs?per_page=100')) {
+                    if (!mutated && endpoint.endsWith('/42/jobs?filter=all&per_page=100')) {
                         fs.appendFileSync(file, '\n');
                         mutated = true;
                     }
@@ -3468,7 +3940,10 @@ test('candidate readiness public CLI forwards candidate identity and reports GO 
         const args = ['--candidate', request.candidateDirectory, request.commit, request.tag, request.tarballSha256, request.tarballName, request.repository, '41'];
         runReleaseValidationCli('release-readiness', args);
         assert.equal(exitCode, undefined);
-        assert.deepEqual(endpoints, [41, 42].flatMap(id => ['repos/' + request.repository + '/actions/runs/' + id, 'repos/' + request.repository + '/actions/runs/' + id + '/jobs?per_page=100']));
+        assert.deepEqual(endpoints, ['repos/' + request.repository + '/actions/runs/41',
+            'repos/' + request.repository + '/actions/runs/41/jobs?filter=all&per_page=100',
+            'repos/' + request.repository + '/actions/runs/42',
+            'repos/' + request.repository + '/actions/runs/42/jobs?filter=all&per_page=100']);
         assert.match(output.join('\n'), /RELEASE_READINESS_OK/);
         assert.match(output.join('\n'), /ReleaseDecision: GO/);
         assert.match(output.join('\n'), /TaskQueueSha256: [a-f0-9]{64}/);

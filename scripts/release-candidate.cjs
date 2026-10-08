@@ -5,10 +5,10 @@ const childProcess = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { verifyCiRun } = require('./release-candidate-ci-evidence.cjs');
 
 const SHA256_RE = /^[a-f0-9]{64}$/u;
 const COMMIT_RE = /^[a-f0-9]{40}$/u;
-const RELEASE_BRANCHES = new Set(['dev', 'main', 'master']);
 
 function readJson(filePath) {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -101,24 +101,6 @@ function reportFiles(report) {
     return files;
 }
 
-function verifyCiRuns(payload, commit, repository) {
-    assertCommit(commit);
-    if (!repository || typeof repository !== 'string' || !Array.isArray(payload?.workflow_runs)) {
-        throw new Error('CI workflow-run evidence is unavailable.');
-    }
-    const passing = payload.workflow_runs.some((run) =>
-        run?.head_sha === commit &&
-        run?.repository?.full_name === repository &&
-        run?.event === 'push' &&
-        run?.status === 'completed' &&
-        run?.conclusion === 'success' &&
-        RELEASE_BRANCHES.has(run?.head_branch)
-    );
-    if (!passing) {
-        throw new Error('No successful branch-push CI run for the exact release commit.');
-    }
-}
-
 function createManifest(reportPayload, directory, commit, tag, expectedName, expectedVersion) {
     assertCommit(commit);
     if (!/^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/u.test(tag || '') ||
@@ -185,7 +167,7 @@ function verifyManifest(directory, commit, tag, expectedSha256, expectedName) {
 function main(argv) {
     const [command, ...args] = argv;
     if (command === 'verify-ci' && args.length === 3) {
-        verifyCiRuns(readJson(args[0]), args[1], args[2]);
+        verifyCiRun(args[0], args[1], args[2]);
         process.stdout.write('RELEASE_CI_COMMIT_VERIFIED\n');
         return;
     }
@@ -215,4 +197,4 @@ if (require.main === module) {
     }
 }
 
-module.exports = { assertSafeName, createManifest, verifyCiRuns, verifyManifest };
+module.exports = { assertSafeName, createManifest, verifyCiRun, verifyManifest };

@@ -43,7 +43,7 @@ function createTarFixture(): { root: string; directory: string; reportPath: stri
     return { root, directory, reportPath, tarballPath, outputPath: path.join(root, 'github-output.txt') };
 }
 
-test('release CI proof accepts only a successful branch push for the exact commit', () => {
+test('release CI proof rejects old summary files and invalid run identities before fetching evidence', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-ci-proof-'));
     try {
         const evidencePath = path.join(root, 'runs.json');
@@ -56,25 +56,19 @@ test('release CI proof accepts only a successful branch push for the exact commi
             head_branch: 'dev'
         };
         fs.writeFileSync(evidencePath, JSON.stringify({ workflow_runs: [matchingRun] }));
-        assert.equal(runCandidate(['verify-ci', evidencePath, commit, repository]).status, 0);
-        for (const wrongRun of [
-            { ...matchingRun, head_sha: 'b'.repeat(40) },
-            { ...matchingRun, conclusion: 'failure' },
-            { ...matchingRun, event: 'pull_request' },
-            { ...matchingRun, repository: { full_name: 'foreign/repo' } },
-            { ...matchingRun, head_branch: 'feature' }
-        ]) {
-            fs.writeFileSync(evidencePath, JSON.stringify({ workflow_runs: [wrongRun] }));
-            const result = runCandidate(['verify-ci', evidencePath, commit, repository]);
+        assert.notEqual(runCandidate(['verify-ci', evidencePath, commit, repository]).status, 0);
+        for (const runIdentity of [evidencePath, '0', '-1', '01', '1.0', '9007199254740992', '41;echo unsafe']) {
+            const result = runCandidate(['verify-ci', runIdentity, commit, repository]);
             assert.notEqual(result.status, 0);
-            assert.match(result.stderr, /No successful branch-push CI run/u);
+            assert.match(result.stderr, /CI run ID must be a positive safe integer/u);
+            assert.doesNotMatch(result.stdout, /RELEASE_CI_COMMIT_VERIFIED/u);
         }
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
 
-test('release candidate manifest binds the exact tarball, commit, and npm pack file list', () => {
+test('release candidate manifest rejects replaced commit or tarball bytes after binding the exact npm pack file list', () => {
     const fixture = createTarFixture();
     try {
         const create = runCandidate([

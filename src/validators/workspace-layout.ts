@@ -12,6 +12,7 @@ import {
 } from '../core/constants';
 import { pathExists, readTextFile } from '../core/filesystem';
 import { normalizeProviderId } from '../core/provider-registry';
+import { hasManagedGitignoreEntry } from '../materialization/content-builders';
 import { isSourceCheckoutRoot } from './workspace-layout/source-runtime';
 
 export {
@@ -522,16 +523,8 @@ export function detectGitignoreViolations(targetRoot: string, requiredEntries: r
         return [...requiredEntries];
     }
 
-    const existingLines = readTextFile(gitignorePath).split(/\r?\n/);
-    const missing: string[] = [];
-
-    for (const entry of requiredEntries) {
-        if (!existingLines.includes(entry)) {
-            missing.push(entry);
-        }
-    }
-
-    return missing;
+    const existingEntries = new Set(readTextFile(gitignorePath).split(/\r?\n/));
+    return requiredEntries.filter(entry => !hasManagedGitignoreEntry(existingEntries, entry));
 }
 
 export function detectManagedMarkers(filePath: string): { hasStart: boolean; hasEnd: boolean } {

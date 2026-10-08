@@ -1,29 +1,46 @@
 # CycloneDX SBOM generation for Garda Agent Orchestrator.
 # Generates a Software Bill of Materials in CycloneDX JSON format from
 # package-lock.json and uploads it as a build artifact.
-# Runs on push/PR to main branches, on release tags, and on manual dispatch.
+# Runs only after explicit manual authorization for the exact run SHA.
 name: SBOM
 
 on:
-  push:
-    branches:
-      - main
-      - master
-      - dev
-      - 'release/**'
-    tags:
-      - 'v*'
-  pull_request:
-    branches:
-      - main
-      - master
-      - dev
-      - 'release/**'
   workflow_dispatch:
+    inputs:
+      repository:
+        description: Exact current owner/repository
+        required: true
+        type: string
+      commit:
+        description: Full lowercase SHA of the selected workflow ref
+        required: true
+        type: string
+      authorization:
+        description: Type I authorize this selected run
+        required: true
+        type: string
+      job:
+        description: Validation selection (all is the same single supported job)
+        required: true
+        type: choice
+        default: sbom
+        options: [sbom, all]
+      os:
+        description: Hosted Linux runner selection
+        required: true
+        type: choice
+        default: ubuntu-latest
+        options: [ubuntu-latest, all]
+      runtime:
+        description: Node version for authorization and validation
+        required: true
+        type: choice
+        default: '24'
+        options: ['24', all]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -32,11 +49,41 @@ env:
   NODE_VERSION: '24'
 
 jobs:
+  authorize:
+    name: Authorize SBOM selection
+    runs-on: ubuntu-latest
+    outputs:
+      selection: ${{ steps.selection.outputs.selection }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+      - name: Authorize selected jobs
+        id: selection
+        env:
+          MANUAL_WORKFLOW: sbom
+          MANUAL_REPOSITORY: ${{ inputs.repository }}
+          MANUAL_COMMIT: ${{ inputs.commit }}
+          MANUAL_AUTHORIZATION: ${{ inputs.authorization }}
+          MANUAL_JOB: ${{ inputs.job }}
+          MANUAL_OS: ${{ inputs.os }}
+          MANUAL_RUNTIME: ${{ inputs.runtime }}
+        run: node scripts/manual-workflow-authorization.cjs
+
   sbom:
     name: Generate SBOM
     runs-on: ubuntu-latest
+    needs: [authorize]
+    if: ${{ !cancelled() && needs.authorize.result == 'success' && fromJSON(needs.authorize.outputs.selection).jobs['sbom'].enabled }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:

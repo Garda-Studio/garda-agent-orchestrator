@@ -186,8 +186,15 @@ both jobs also reject `github.run_attempt` values above `1`. A rerun or a new
 run after deleting and recreating a consumed release tag therefore fails
 closed. Prepare a new version and tag instead.
 
-The validate job also requires a successful branch-push CI run for the exact
-release commit. After `release:preflight`, it creates one candidate tarball,
+The validate job selects the latest manual CI run for the exact release commit,
+without filtering out failed or unfinished runs. `release-candidate.cjs verify-ci`
+accepts a positive run ID, not a saved success summary, and uses the reviewed
+`manual-ci-evidence.cjs` adapter to authenticate the repository/SHA, release lane,
+authorization, all 23 job identities and required steps, retained attempt chronology
+and 24-hour freshness. Partial, automatic, skipped, stale or unavailable evidence
+blocks validation; it never falls back to an older green summary. The step-level
+`GH_TOKEN` authorizes discovery and verification with read-only Actions access.
+After `release:preflight`, it creates one candidate tarball,
 runs the full packaging smoke against that exact file via
 `GARDA_RELEASE_CANDIDATE_PATH`, rechecks its SHA-256, and uploads the
 candidate with its manifest. The dependent `publish` job downloads the artifact

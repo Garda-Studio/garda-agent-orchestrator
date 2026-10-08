@@ -338,6 +338,19 @@ export function applyCompileGateCommandDefaults(content: string, ruleFile: strin
     return content.replace(sectionPattern, `$1${command}$3`);
 }
 
+export function migrateLegacyOutputCompactionGuidance(content: string, templateContent: string): string {
+    const legacyLine = '- At `depth=1` and `depth=2`, the implementation summary must include an output-compaction line; at `depth=3` it is optional. Use chars as the primary unit, keep approximate percentage when baseline is known, keep spaced breakdown formatting, and include token estimate only as a secondary note when available: `Suppressed output: ~3528 chars (~67%) (code review context ~3296 chars + DB review context ~100 chars + compile gate output ~132 chars). Token estimate: ~882.`';
+    if (!content.includes(legacyLine)) return content;
+
+    const replacement = templateContent.split(/\r?\n/).find((line) => (
+        line.startsWith('- Do not add an agent-authored output-compaction line ')
+    ));
+    if (!replacement) return content;
+
+    // Replace only the exact shipped legacy line; retain user wording and line endings.
+    return content.replace(new RegExp(`^${escapeRegex(legacyLine)}(?=\\r?$)`, 'gm'), () => replacement);
+}
+
 export function applyAssistantDefaults(content: string, ruleFile: string, assistantLanguage: string, assistantBrevity: string): string {
     if (ruleFile !== '00-core.md') return content;
 

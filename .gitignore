@@ -3,7 +3,7 @@
 *.iml
 .vscode/*
 !.vscode/settings.json
-.claude/
+/.claude/
 
 # OS metadata
 .DS_Store
@@ -16,6 +16,7 @@ Desktop.ini
 /bin/garda.js
 /bin/garda/
 dist/
+/dist.lock/
 .node-build/
 .scripts-build/
 .scripts-build.lock/
@@ -38,21 +39,21 @@ docs_local
 /TASK_DONE.md
 
 # garda-agent-orchestrator managed ignores
-.agentignore
-.agents/workflows/start-task.md
-.antigravity/
-.antigravity/rules.md
-.github/agents/
-.github/copilot-instructions.md
-.junie/
-.junie/guidelines.md
-.qwen/
-.windsurf/
-.windsurf/rules/rules.md
-AGENTS.md
-CLAUDE.md
-GEMINI.md
-QWEN.md
-TASK.md
-garda-agent-orchestrator/
+# Root entrypoints only; nested templates and user projects stay visible
+/.agentignore
+/.agents/workflows/start-task.md
+/.antigravity/
+/.antigravity/rules.md
+/.github/agents/
+/.github/copilot-instructions.md
+/.junie/
+/.junie/guidelines.md
+/.qwen/
+/.windsurf/
+/.windsurf/rules/rules.md
+/AGENTS.md
+/CLAUDE.md
+/GEMINI.md
+/QWEN.md
+/garda-agent-orchestrator/
 /TASK.md

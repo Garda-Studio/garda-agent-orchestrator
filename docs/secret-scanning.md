@@ -19,15 +19,16 @@ through.
 
 ## CI Integration
 
-The GitHub Actions workflow `.github/workflows/secret-scanning.yml` runs
-gitleaks automatically on:
+The GitHub Actions workflow `.github/workflows/secret-scanning.yml` accepts only
+an explicitly authorized `workflow_dispatch`. Supply the exact repository and
+full lowercase run commit SHA, type `I authorize this selected run`, and select
+`gitleaks`, `ubuntu-latest` and Node `24`. The explicit `all` choice maps to that
+same single-job Linux set. Repository, SHA and authorization have no defaults.
+The shared selector rejects foreign or malformed inputs before scanning; a failed
+or cancelled authorization prevents the scan. See [manual selection](manual-ci.md).
 
-- every push to `main`, `master`, `dev`, and `release/**` branches;
-- every pull request targeting those branches;
-- a weekly schedule (Monday 04:00 UTC);
-- manual `workflow_dispatch`.
-
-The workflow checks out the full commit history with `fetch-depth: 0`, downloads
+The workflow checks out the exact run SHA without persisting Git credentials,
+retains the full commit history with `fetch-depth: 0`, downloads
 Gitleaks CLI v8.30.1, verifies the release archive against its pinned SHA-256
 digest, and runs `gitleaks git` with `.gitleaks.toml`. The scan uses redacted
 output and exits with status 1 when a leak is found.
@@ -59,7 +60,7 @@ go install github.com/gitleaks/gitleaks/v8@latest
 ### Run a full-repository scan
 
 ```bash
-gitleaks detect --source . --config .gitleaks.toml --verbose
+gitleaks git --config .gitleaks.toml --redact .
 ```
 
 This scans the entire Git history. On first run it may take a few seconds
@@ -68,7 +69,7 @@ depending on repository size.
 ### Scan only staged changes (pre-commit)
 
 ```bash
-gitleaks protect --source . --config .gitleaks.toml --staged --verbose
+gitleaks git --config .gitleaks.toml --redact --pre-commit --staged .
 ```
 
 Use this before committing to catch secrets early.
@@ -76,7 +77,7 @@ Use this before committing to catch secrets early.
 ### Scan a specific commit range
 
 ```bash
-gitleaks detect --source . --config .gitleaks.toml --log-opts="HEAD~5..HEAD"
+gitleaks git --config .gitleaks.toml --redact --log-opts="HEAD~5..HEAD" .
 ```
 
 ### Exit codes
@@ -90,16 +91,43 @@ gitleaks detect --source . --config .gitleaks.toml --log-opts="HEAD~5..HEAD"
 ## Configuration
 
 The repository-level configuration lives in `.gitleaks.toml` at the
-repository root. It extends the gitleaks built-in ruleset (AWS keys, GCP
-credentials, GitHub/GitLab tokens, generic high-entropy secrets, private
-keys, and more) with project-specific allowlists:
+repository root. Its explicit `[extend] useDefault = true` retains the built-in
+ruleset (AWS keys, GCP credentials, GitHub/GitLab tokens, generic high-entropy
+secrets, private keys, and more) with project-specific allowlists:
 
-- **Generated runtime artifacts and narrow known fixtures** — paths under
-  `runtime/`, `garda-agent-orchestrator/runtime/`, `.node-build/`,
-  `node_modules/`, `testResults.xml`, and the intentional
-  `tests/node/core/redaction.test.ts` fixture are excluded.
-- **Placeholder tokens** — lines matching patterns like `EXAMPLE_TOKEN`,
-  `changeme`, or `dummy` are suppressed.
+- **Root generated artifacts and one known fixture** — anchored paths under
+  `garda-agent-orchestrator/runtime/`, `.node-build/`, and `node_modules/`,
+  plus exact root `testResults.xml` and `tests/node/core/redaction.test.ts`,
+  are excluded. A project's `runtime/`, nested runtime-like paths, and
+  fixture-name lookalikes remain covered.
+- Words such as `dummy` or `EXAMPLE_TOKEN` on a line do not suppress an
+  otherwise detected secret. Use public placeholders that cannot be credentials.
+
+The inherited default allowlist also excludes dependency paths such as
+`node_modules/`. The canary control verifies that exclusion even when its fixture
+is tracked in Git; this is not detection coverage inside installed dependencies.
+
+### Local coverage canaries
+
+Use the same pinned Gitleaks version as the workflow. Set `GARDA_GITLEAKS_BIN`
+to the verified local executable and run:
+
+```bash
+GARDA_GITLEAKS_BIN=/absolute/path/to/gitleaks node scripts/node-foundation/build-scripts.cjs test.js tests/node/repo/secret-scanner-canaries.test.ts
+```
+
+The tests create deterministic public canaries in isolated temporary directories,
+exercise directory scanning and local Git-history scanning, require detection in
+source/scripts and nested runtime-like paths, and compare the project exceptions
+with a default-rule Git control while retaining its built-in dependency exclusion.
+Reports are redacted; no issued credentials,
+network access, or CI dispatch is involved. Without this explicit local tool
+input, these integration tests report a dependency skip. An invalid supplied
+path/version or missing detection fails the tests. A skip is not scanner coverage.
+
+For directory scanning, run `gitleaks dir --config .gitleaks.toml --redact .`
+from the repository root so the root-relative allowlist has the same path contract
+as Git-history scanning.
 
 ### Adding an allowlist entry
 
@@ -109,16 +137,7 @@ If gitleaks flags a legitimate false positive, add an entry to the
 ```toml
 # Suppress a single known-safe fixture path
 paths = [
-  '''tests/node/my-fixture.test.ts''',
-  '''my-new-fixture/.*''',
-]
-```
-
-Or suppress a specific pattern:
-
-```toml
-regexes = [
-  '''MY_KNOWN_SAFE_PATTERN''',
+  '''^tests/node/my-fixture\.test\.ts$''',
 ]
 ```
 
@@ -133,7 +152,7 @@ To enforce scanning automatically before every commit, add gitleaks to a
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.21.2
+    rev: v8.30.1
     hooks:
       - id: gitleaks
 ```
@@ -149,6 +168,6 @@ pre-commit install
 | Symptom | Action |
 |---|---|
 | False positive on a test fixture | Add the path to `[allowlist].paths` in `.gitleaks.toml`. |
-| False positive on a placeholder | Add the regex to `[allowlist].regexes` in `.gitleaks.toml`. |
-| `gitleaks` not found | Install gitleaks (see above) or run via Docker: `docker run --rm -v "$(pwd):/repo" zricethezav/gitleaks detect --source /repo --config /repo/.gitleaks.toml`. |
+| False positive on a placeholder | Use an unmistakably public placeholder; justify any precise exception without suppressing whole lines by fixture labels. |
+| `gitleaks` not found | Install gitleaks (see above) or run via Docker: `docker run --rm -v "$(pwd):/repo" -w /repo zricethezav/gitleaks:v8.30.1 dir --config .gitleaks.toml --redact .`. |
 | CI job fails unexpectedly | Check the install checksum and scan logs; confirm the pinned version/SHA pair and `.gitleaks.toml` path match the workflow. |

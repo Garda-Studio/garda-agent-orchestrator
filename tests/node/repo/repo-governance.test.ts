@@ -240,9 +240,11 @@ test('repo governance files use the current owner handle and root-relative paths
 
     assert.ok(!gitleaks.includes("'''tests/.*'''"));
     assert.ok(!gitleaks.includes("'''dist/.*'''"));
-    assert.match(gitleaks, /'''runtime\/\.\*'''/);
-    assert.match(gitleaks, /'''garda-agent-orchestrator\/runtime\/\.\*'''/);
-    assert.ok(gitleaks.includes("'''tests/node/core/redaction\\.test\\.ts'''"));
+    assert.match(gitleaks, /\[extend\]\s+useDefault = true/u);
+    assert.ok(!gitleaks.includes("'''runtime/.*'''"));
+    assert.ok(gitleaks.includes("'''^garda-agent-orchestrator/runtime/'''"));
+    assert.ok(gitleaks.includes("'''^tests/node/core/redaction\\.test\\.ts$'''"));
+    assert.ok(!gitleaks.includes('regexTarget = "line"'));
 });
 
 test('review artifact templates point new cycles to generated findings-only JSON', () => {
@@ -562,6 +564,12 @@ function assertGeneratedHandoffAuthority(content: string, label: string): void {
         assert.ok(content.includes(snippet) || content.includes(sentenceCaseSnippet),
             `${label} must include findings-only handoff snippet: ${snippet}`);
     }
+    if (/## Verdict|REVIEW (?:PASSED|FAILED)|Produce final [^\n]*verdict/u.test(content)) {
+        assert.ok(
+            content.includes('historical audit-only guidance and never applies to generated or other new review cycles'),
+            `${label} must isolate retained verdict recipes from new review cycles`
+        );
+    }
     assert.ok(
         content.indexOf('## Generated Findings-Only Handoff') < content.indexOf('## Core Workflow')
             || !content.includes('## Core Workflow'),
@@ -612,4 +620,20 @@ test('generated handoff governance accepts sentence case without obsolete recipe
         assert.throws(() => assertGeneratedHandoffAuthority(missingAuthority, 'missing obligation'),
             /must include findings-only handoff snippet/u);
     }
+});
+
+test('findings-only governance rejects missing authority, field bans and legacy isolation', () => {
+    const canonical = readRepoFile('template/skills/code-review/SKILL.md');
+    assert.throws(
+        () => assertGeneratedHandoffAuthority(canonical.replace('sole instruction and output-format authority', ''), 'authority-negative'),
+        /sole instruction and output-format authority/u
+    );
+    assert.throws(
+        () => assertGeneratedHandoffAuthority(canonical.replace(/do not add verdict, pass\/fail, status, downstream disposition, or remediation fields/iu, ''), 'field-ban-negative'),
+        /do not add verdict/iu
+    );
+    assert.throws(
+        () => assertGeneratedHandoffAuthority(`${canonical}\n## Verdict\nREVIEW PASSED\n`, 'legacy-negative'),
+        /isolate retained verdict recipes/u
+    );
 });

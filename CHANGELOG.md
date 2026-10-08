@@ -1,5 +1,8 @@
 # Changelog
 
+- Integrate accepted manual CI evidence, release validation and materialization contracts.
+
+
 - Integrate accepted exact task documentation matching and next-step documentation closeout readiness.
 
 

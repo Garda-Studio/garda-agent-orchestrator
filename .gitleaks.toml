@@ -4,28 +4,21 @@
 
 title = "Garda Agent Orchestrator — gitleaks config"
 
-# Use the default built-in rules; they cover AWS keys, GCP credentials,
-# GitHub/GitLab tokens, generic high-entropy secrets, private keys, etc.
-# Only project-specific tuning is added below.
+# Explicitly retain the built-in rules when loading this custom config.
+[extend]
+useDefault = true
 
 # ── Global allowlist ─────────────────────────────────────────────────────────
 # Paths and patterns that are known to produce false positives in this repo.
 [allowlist]
 description = "Project-wide false-positive suppressions"
 
-# Generated runtime artifacts and the intentional redaction fixture are not secrets.
+# Root generated artifacts and one intentional redaction fixture only.
+# A project's own runtime/ or a nested runtime-like path must still be scanned.
 paths = [
-  '''testResults\.xml''',
-  '''runtime/.*''',
-  '''garda-agent-orchestrator/runtime/.*''',
-  '''\.node-build/.*''',
-  '''tests/node/core/redaction\.test\.ts''',
-  '''node_modules/.*''',
-]
-
-# Placeholder tokens used in documentation and templates.
-regexTarget = "line"
-regexes = [
-  '''EXAMPLE[_-]?(?:TOKEN|KEY|SECRET|PASSWORD)''',
-  '''(?i)placeholder|changeme|dummy|fake[-_]?secret''',
+  '''^testResults\.xml$''',
+  '''^garda-agent-orchestrator/runtime/''',
+  '''^\.node-build/''',
+  '''^tests/node/core/redaction\.test\.ts$''',
+  '''^node_modules/''',
 ]

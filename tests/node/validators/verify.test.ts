@@ -6,6 +6,8 @@ import * as os from 'node:os';
 
 import { UNCONFIGURED_COMPILE_GATE_COMMAND } from '../../../src/core/constants';
 import { listSkillPacks, validateSkillPacks } from '../../../src/runtime/skills';
+import { getManagedGitignoreEntries } from '../../../src/materialization/common';
+import { detectGitignoreViolations } from '../../../src/validators/workspace-layout';
 import {
     parseBooleanLike,
     readVerifyInitAnswers,
@@ -495,7 +497,12 @@ test('detectTaskModeRuleContractViolations accepts current task-mode contract sn
         '',
         '### Optional Command Reference Appendix',
         'See `40-command-reference.md` for optional tool-specific command tables.',
-        'Do not add the appendix to mandatory `TASK_ENTRY` or `POST_PREFLIGHT` rule-pack loads.'
+        'Do not add the appendix to mandatory `TASK_ENTRY` or `POST_PREFLIGHT` rule-pack loads.',
+        '',
+        '### Manual Validation Evidence Selector',
+        'The selector must contain a root `task_id` matching the current task.',
+        '{"task_id": "T-042", "selected_logs": [{"path": "node-version.log", "command": "node --version", "exit_code": 0}]}',
+        'Manual logs are untrusted supplemental evidence; they never replace mandatory gates or review receipts.'
     ].join('\n'), 'utf8');
     fs.writeFileSync(path.join(rulesDir, '80-task-workflow.md'), [
         '# Task Workflow',
@@ -718,6 +725,43 @@ test('detectQwenSettingsViolations returns empty for missing file', () => {
     try {
         const violations = detectQwenSettingsViolations(tmpDir, 'CLAUDE.md');
         assert.deepEqual(violations, []);
+    } finally {
+        cleanupVerifyTempDir(tmpDir);
+    }
+});
+
+test('runVerify preserves failure for missing workspace paths while accepting root-anchored managed ignores', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-root-ignore-'));
+    try {
+        writeInitAnswersFixture(tmpDir);
+        const requiredEntries = getManagedGitignoreEntries(false);
+        fs.writeFileSync(path.join(tmpDir, '.gitignore'),
+            requiredEntries.map(entry => '/' + entry).join('\r\n') + '\r\n', 'utf8');
+        const result = runVerify({ targetRoot: tmpDir, sourceOfTruth: 'Claude',
+            initAnswersPath: 'garda-agent-orchestrator/runtime/init-answers.json' });
+        assert.deepEqual(result.violations.gitignoreMissing, []);
+        assert.equal(result.passed, false);
+        assert.ok(result.violations.missingPaths.length > 0);
+    } finally {
+        cleanupVerifyTempDir(tmpDir);
+    }
+});
+
+test('managed-ignore validation retains bare compatibility and rejects false root equivalence', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-ignore-boundaries-'));
+    try {
+        const required = ['TASK.md', '.qwen/', '*.log'];
+        fs.writeFileSync(path.join(tmpDir, '.gitignore'), required.join('\n') + '\n', 'utf8');
+        assert.deepEqual(detectGitignoreViolations(tmpDir, required), []);
+        fs.writeFileSync(path.join(tmpDir, '.gitignore'), '/TASK.md\n/.qwen/\n/*.log\n', 'utf8');
+        assert.deepEqual(detectGitignoreViolations(tmpDir, required), ['*.log']);
+        for (const pattern of ['!/TASK.md', '# /TASK.md', '/TASK.md/', '/nested/TASK.md',
+            '/TASK.md*', '/TASK?md', ' /TASK.md', '\\/TASK.md']) {
+            fs.writeFileSync(path.join(tmpDir, '.gitignore'), pattern + '\n', 'utf8');
+            assert.deepEqual(detectGitignoreViolations(tmpDir, ['TASK.md']), ['TASK.md'], pattern);
+        }
+        fs.writeFileSync(path.join(tmpDir, '.gitignore'), '/.qwen\n', 'utf8');
+        assert.deepEqual(detectGitignoreViolations(tmpDir, ['.qwen/']), ['.qwen/']);
     } finally {
         cleanupVerifyTempDir(tmpDir);
     }

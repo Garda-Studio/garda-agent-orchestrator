@@ -1,34 +1,87 @@
-# Scheduled smoke matrix for Garda Agent Orchestrator.
-# Runs the cross-platform lifecycle smoke suite on a weekly schedule to detect
-# runner image drift, Node.js default-version changes, and other environment
-# regressions even when no pushes or PRs are active.
-name: Scheduled Smoke
+# Manual smoke matrix for Garda Agent Orchestrator.
+# Runs only the explicitly authorized OS/runtime selection at the exact run SHA.
+name: Manual Smoke
 
 on:
-  schedule:
-    # Weekly: every Sunday at 04:15 UTC.
-    - cron: '15 4 * * 0'
   workflow_dispatch:
+    inputs:
+      repository:
+        description: Exact current owner/repository
+        required: true
+        type: string
+      commit:
+        description: Full lowercase SHA of the selected workflow ref
+        required: true
+        type: string
+      authorization:
+        description: Type I authorize this selected run
+        required: true
+        type: string
+      job:
+        description: Smoke validation selection
+        required: true
+        type: choice
+        default: smoke
+        options: [smoke, all]
+      os:
+        description: Hosted smoke runner selection
+        required: true
+        type: choice
+        default: ubuntu-latest
+        options: [ubuntu-latest, windows-latest, macos-latest, all]
+      runtime:
+        description: Node version for the selected smoke runners
+        required: true
+        type: choice
+        default: '24'
+        options: ['22.13.0', '24', all]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
+  authorize:
+    name: Authorize Smoke selection
+    runs-on: ubuntu-latest
+    outputs:
+      selection: ${{ steps.selection.outputs.selection }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+      - name: Authorize selected jobs
+        id: selection
+        env:
+          MANUAL_WORKFLOW: smoke-schedule
+          MANUAL_REPOSITORY: ${{ inputs.repository }}
+          MANUAL_COMMIT: ${{ inputs.commit }}
+          MANUAL_AUTHORIZATION: ${{ inputs.authorization }}
+          MANUAL_JOB: ${{ inputs.job }}
+          MANUAL_OS: ${{ inputs.os }}
+          MANUAL_RUNTIME: ${{ inputs.runtime }}
+        run: node scripts/manual-workflow-authorization.cjs
+
   smoke:
     name: Smoke / ${{ matrix.os }} / Node ${{ matrix.node-version }}
     runs-on: ${{ matrix.os }}
+    needs: [authorize]
+    if: ${{ !cancelled() && needs.authorize.result == 'success' && fromJSON(needs.authorize.outputs.selection).jobs['smoke'].enabled }}
     strategy:
       fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
-        node-version:
-          - '22.13.0'
-          - '24'
+      matrix: ${{ fromJSON(needs.authorize.outputs.selection).jobs['smoke'].matrix }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:

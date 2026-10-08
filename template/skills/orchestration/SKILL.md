@@ -64,7 +64,7 @@ Create or update plans only for tasks that have never started; retained start ev
 - Config source: `garda-agent-orchestrator/live/config/token-economy.json`.
 - Activate reviewer-context compaction only when `enabled=true` and effective depth is in `enabled_depths`.
 - Shared gate output filters from `garda-agent-orchestrator/live/config/output-filters.json` stay active regardless of reviewer-context token-economy state.
-- Default: keep `enabled=true` with `enabled_depths=[1,2]`; at these depths reviewer context is compacted and token-economy savings are reported in the implementation summary.
+- Default: keep `enabled=true` with `enabled_depths=[1,2]`; at these depths reviewer context is compacted. Compaction telemetry remains available in diagnostic/statistics artifacts.
 - Recommendation when reviewer-context token economy is enabled: use `enabled=true` with `depth=1` only for small, well-localized tasks; prefer `depth=2` or `depth=3` when correctness depends on broader context.
 - Short-form `depth=1` guidance is available at `garda-agent-orchestrator/live/skills/orchestration-depth1/SKILL.md`. If your client supports targeted skill loading, prefer that short form over the full orchestration skill when effective depth stays at `1` and no escalation trigger fires.
 - Depth-aware reviewer context loading when active:
@@ -227,10 +227,7 @@ Create or update plans only for tasks that have never started; retained start ev
 27. Report to user in exact order:
     1. concise implementation summary (include depth, path mode, review result status, docs updated)
        - do not paste the full final-closeout markdown or duplicate its complete section order in chat; link or name the canonical artifact when useful, then report only the status, key changes, validations, and commit readiness;
-       - at `depth=1` and `depth=2`, include an output-compaction line; at `depth=3` it is optional;
-       - use chars as the primary unit, keep approximate percentage when baseline is known, keep spaced breakdown formatting, and include token estimate only as a secondary note when available;
-       - keep spaces between numeric values and labels and around `+`; do not emit compressed fragments like `824code review context` or `+25DB review context`;
-       - localized summaries may translate the wording, but must preserve the numeric structure; example: `Suppressed output: ~3528 chars (~67%) (code review context ~3296 chars + DB review context ~100 chars + compile gate output ~132 chars). Token estimate: ~882.`
+       - Do not add an agent-authored output-compaction line to the implementation summary or final user report at any depth. Command-output compaction and diagnostic/statistics telemetry remain active; character-based estimates are not measured model-token savings.
     2. commit suggestion as exact command form, defaulting to conventional style: `git commit -m "<type>(<scope>): <summary>"`
        - if `final_closeout.commit_command_suggestion` is populated, use it verbatim by default; otherwise fall back to the conventional template above.
     3. explicit follow-up question: `Do you want me to commit now? (yes/no)`

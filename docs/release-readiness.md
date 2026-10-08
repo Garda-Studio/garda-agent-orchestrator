@@ -5,6 +5,22 @@ Local `TASK.md` and `TASK_DONE.md` files are intentionally gitignored operator
 queues. Static preflight does not use them. The explicit candidate GO check reads
 current `TASK.md` release-lane blockers; task status is not CI or artifact proof.
 
+## Local Release-Input Ownership
+
+Root-anchored `.github/CODEOWNERS` rules assign `scripts/**`,
+`config/release-package-surface-baseline.json`, `VERSION`, `.github/CODEOWNERS`
+and this checklist to the existing maintainer, `@Shubchynskyi`. GitHub uses the
+last matching rule; later rules must preserve these release-input owners.
+
+`tests/node/repo/codeowners-release-inputs.test.ts` checks representative paths
+and root boundaries with Git's matcher for each rule in the shared supported
+pattern subset, then selects the last matching CODEOWNERS rule. Evaluating each
+rule separately avoids `.gitignore`'s excluded-parent pruning. Local coverage
+does not prove GitHub enforcement: required
+code-owner reviews depend on remote branch/ruleset configuration and eligible
+owner permissions. Verify those separately before release; these rules neither
+change remote permissions nor authorize CI, tagging or publication.
+
 ## Candidate GO/NO-GO
 
 `npm run validate:release-readiness` is the offline static preflight and prints
@@ -60,6 +76,59 @@ authenticated GitHub client is NO_GO, never substitute local fixture evidence.
 The reviewed CI and npm-script digests must be reviewed and synchronized when
 those execution contracts change. SBOM and final operator handoff requirements
 remain part of the final release boundary.
+
+## Publication CI proof
+
+Before packing the publication candidate, `publish.yml` discovers the latest manual
+CI run for the exact release SHA without a success-only filter. The CLI contract is
+`node scripts/release-candidate.cjs verify-ci <ci-run-id> <commit-sha> <owner/repo>`;
+old JSON run-summary files are no longer proof inputs. The reviewed manual CI adapter
+live-verifies authorization, release-lane repository/SHA, all 23 jobs and preparation
+steps, paginated latest-attempt history, chronological retained attempts and 24-hour
+freshness. An unfinished or failed latest run blocks validation instead of selecting
+an older green result. Missing authenticated Actions access also blocks validation.
+The candidate manifest/digest, tag/version checks, pack-once staging, OIDC environment
+and npm staged approval remain independent guards. This source change grants no
+permission to execute CI or publish, and does not change the tag trigger/retry policy.
+
+## Publication history guard (not yet wired)
+
+`scripts/release-publish-history-evidence.cjs` defines read-only `validate` and
+`stage-publish` history checks for the future manual Publish workflow. It is not
+called by the current tag-push workflow. Its reviewed Publish source binding must
+be refreshed in the separately reviewed wiring change; synthetic job fixtures are
+not evidence that a real manual publication run is available or accepted.
+
+The guard verifies the local reviewed workflow/selector and their authenticated
+contents at the candidate SHA, the live tag target, repository/workflow/run/attempt
+identity, successful authorization and complete same-tag run/job pagination.
+It inspects every retained attempt, uses a total budget of three attempts across
+all run IDs for that tag, and checks non-overlap across every attempt of every run. A new
+dispatch cannot reset this budget. Metadata older than 24 hours, missing records,
+foreign identities, duplicate jobs and uncertain histories fail closed.
+An active attempt has no end time: its jobs are bounded by the observation time,
+not its last metadata update. Completed attempts retain their recorded end bound.
+
+Only proven validation failures with skipped, unexecuted staging may retry.
+Every earlier stage job must be skipped without executed steps. Any completed,
+failed, cancelled, started or uncertain stage operation prevents restaging. At the
+current staging checkpoint, validation must have succeeded and the exact npm step
+must still be queued with null execution timestamps, after the active history guard.
+During current validation, that exact attempt's stage job may be queued with null
+execution timestamps and only unstarted queued steps; prior queued staging is refused.
+Validation also requires recorded staging state: a missing stage entry is incomplete
+evidence, even if the provider's job count matches the shorter response.
+The two checkpoints use `Check publication history before validation` and
+`Check publication history before staging`; authorization uses
+`Authorize publish selection` / `Authorize selected jobs`.
+
+The guard rechecks current run identity, tag target and local source before returning.
+GitHub API reads do not provide an atomic lock or a reusable publication grant;
+the eventual caller must preserve same-tag non-cancelling serialization and run
+the check immediately in the corresponding job step. Candidate-byte verification,
+CI/security proof, tag/version checks, OIDC/environment restrictions and npm staged
+approval remain independent requirements. Missing authenticated `gh` access blocks
+the check; request errors do not print token or provider stderr bytes.
 
 ## Candidate-bound dependency security evidence
 

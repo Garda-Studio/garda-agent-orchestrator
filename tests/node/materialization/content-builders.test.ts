@@ -1027,7 +1027,7 @@ describe('managed gitignore block sync', () => {
         assert.ok(result.content.includes('node_modules/'));
     });
 
-    it('deduplicates by trimmed string only and keeps /TASK.md distinct from TASK.md', () => {
+    it('preserves a root-anchored control path without adding its bare variant', () => {
         const content = [
             'node_modules/',
             '/TASK.md',
@@ -1053,10 +1053,42 @@ describe('managed gitignore block sync', () => {
             }
             managedEntries.push(line);
         }
-        assert.deepEqual(managedEntries, ['AGENTS.md', 'TASK.md']);
+        assert.deepEqual(managedEntries, ['AGENTS.md']);
         assert.ok(lines.includes('/TASK.md'));
+        assert.ok(!lines.includes('TASK.md'));
         assert.ok(lines.includes('garda-agent-orchestrator/'));
         assert.ok(lines.includes('.claude/'));
+    });
+
+    it('preserves root-anchored file and directory entries, comments and CRLF bytes idempotently', () => {
+        const entries = ['.agentignore', '.agents/workflows/start-task.md', '.qwen/',
+            'AGENTS.md', 'TASK.md', 'garda-agent-orchestrator/'];
+        const content = ['node_modules/', '# garda-agent-orchestrator managed ignores',
+            '# Root controls only', ...entries.map(entry => '/' + entry), ''].join('\r\n');
+        const result = syncManagedGitignoreBlockInContent(content, entries, false);
+        assert.equal(result.content, content);
+        assert.equal(result.changed, false);
+        assert.equal(result.addedEntries, 0);
+        assert.deepEqual(syncManagedGitignoreBlockInContent(result.content, entries, false), result);
+    });
+
+    it('rejects negated, commented, malformed or lookalike root control aliases', () => {
+        const patterns = ['!/TASK.md', '# /TASK.md', '/TASK.md/', '/nested/TASK.md',
+            '/TASK.md*', '/TASK?md', ' /TASK.md', '\\/TASK.md'];
+        const results = patterns.map(pattern =>
+            syncManagedGitignoreBlockInContent(pattern + '\n', ['TASK.md'], false));
+        assert.deepEqual(results.map(result => result.addedEntries), patterns.map(() => 1));
+        assert.deepEqual(results.map((result, index) => ({
+            required: result.content.split('\n').includes('TASK.md'),
+            original: result.content.split('\n').includes(patterns[index])
+        })), patterns.map(() => ({ required: true, original: true })));
+    });
+
+    it('rejects a root-scoped substitute for a required global glob', () => {
+        const result = syncManagedGitignoreBlockInContent('/*.log\n', ['*.log'], false);
+        assert.equal(result.addedEntries, 1);
+        assert.ok(result.content.split('\n').includes('*.log'));
+        assert.ok(result.content.split('\n').includes('/*.log'));
     });
 
     it('migrates legacy uninstall backup ignore entries outside managed block', () => {

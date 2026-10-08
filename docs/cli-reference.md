@@ -416,6 +416,13 @@ Provider values: `Claude`, `Codex`, `Cursor`, `DeepSeek`, `Gemini`, `Qwen`, `Git
 
 Notes:
 - `verify --compact` preserves failure output but reduces the green path to `Verification: PASS | paths=<count> | violations=0`.
+- Managed root control paths accept either the legacy bare pattern or its literal
+  root-anchored form, such as `/TASK.md` or `/garda-agent-orchestrator/`.
+  Setup/update preserve existing anchored lines without adding broader bare variants.
+- This validates required pattern presence, not the effective order of every Git
+  ignore rule. A negated, commented, different or wildcard pattern cannot substitute
+  for a required literal path; a required global glob still needs its original form.
+  Use Git to inspect the complete file's effective ignore behavior.
 
 ### `garda check-update`
 
@@ -856,6 +863,77 @@ garda diff-managed --target-root "." --json
 ### `garda gate`
 
 Canonical gate surface is `garda gate <name>` or `node bin/garda.js gate <name>`.
+
+### Dispatched gate inventory
+
+`garda gate --help` lists the gates exposed by the current dispatcher. Use
+`garda gate <gate-name> --help` for authoritative options and source-checkout or
+deployed invocation syntax. Help is read-only and does not execute the gate.
+
+All names below are available on the public CLI surface. Recovery, review
+evidence and isolation helpers support the guarded workflow; their availability
+does not authorize running them outside their task, evidence or operator approval
+requirements. During task execution, follow the single command from `next-step`.
+The examples below are selected invocations, rather than a second gate inventory.
+
+| Gate | Workflow or maintenance role |
+|---|---|
+| `validate-manifest` | Deployment manifest validation |
+| `enter-task-mode` | Task admission and runtime identity |
+| `recover-task-mode-protected-manifest` | Protected-manifest recovery for task admission |
+| `restart-coherent-cycle` | Coherent task-cycle restart |
+| `restart-review-cycle` | Review-cycle restart after remediation |
+| `load-rule-pack` | Rule loading evidence |
+| `bind-rule-pack-to-preflight` | Current rule evidence binding |
+| `record-no-op` | Audited no-change outcome |
+| `record-review-cycle-continuation` | Operator-approved review-cycle continuation |
+| `record-review-cycle-split-decision` | Review-cycle split decision |
+| `record-strict-decomposition-decision` | Guarded decomposition decision |
+| `list-split-required-wip` | Split-required WIP inspection |
+| `restore-split-required-wip` | Split-required WIP restoration |
+| `retire-split-required-wip` | Split-required WIP retirement |
+| `compile-gate` | Compile, build or type-check validation |
+| `full-suite-validation` | Configured mandatory test validation |
+| `full-suite-run-marker-recovery` | Interrupted test-run marker recovery |
+| `materialize-full-suite-repair-task` | Test-failure repair task materialization |
+| `restore-full-suite-repair-wip` | Test-failure repair WIP restoration |
+| `completion-gate` | Task completion validation |
+| `classify-change` | Scope and required-review classification |
+| `build-scoped-diff` | Scoped reviewer diff preparation |
+| `build-review-context` | Current reviewer context preparation |
+| `activate-optional-skill` | Selected optional skill activation |
+| `decline-optional-skill` | Optional skill selection decision |
+| `doc-impact-gate` | Documentation impact evidence |
+| `required-reviews-check` | Required findings receipts and release checks |
+| `record-review-result` | Findings validation and result materialization |
+| `record-review-output-correction-transport` | Correction session and transport evidence |
+| `record-review-output-correction-response` | Original reviewer's correction response evidence |
+| `record-review-output-correction-invocation` | Correction producer invocation evidence |
+| `materialize-review-follow-up-tasks` | Required review follow-up materialization |
+| `record-review-routing` | Planned reviewer routing evidence |
+| `prepare-reviewer-launch` | Immutable reviewer launch input preparation |
+| `record-reviewer-delegation-started` | Actual delegated reviewer start evidence |
+| `record-reviewer-launch-failed` | Actual reviewer launch failure evidence |
+| `complete-reviewer-launch` | Post-return reviewer launch completion evidence |
+| `record-review-invocation` | Actual review invocation evidence |
+| `record-review-receipt` | Review receipt recording |
+| `log-task-event` | Task event recording |
+| `task-events-summary` | Task timeline inspection |
+| `task-audit-summary` | Task audit and final report materialization |
+| `next-step` | Deterministic task navigator |
+| `human-commit` | Authorized accepted-scope local commit |
+| `handshake-diagnostics` | Runtime and reviewer capability diagnostics |
+| `shell-smoke-preflight` | Local shell and CLI readiness checks |
+| `command-timeout-diagnostics` | Command timeout diagnostics |
+| `quality-checklist` | Scoped implementation self-check evidence |
+| `run-intermediate-command` | Auditable focused validation |
+| `project-memory-impact` | Project-memory impact and update evidence |
+| `validate-isolation` | Isolation validation |
+| `prepare-isolation` | Isolation preparation |
+| `task-reset` | Operator-controlled task reset or discard |
+| `validate-config` | Configuration validation |
+
+### Gate invocation examples
 
 | Gate | Canonical invocation |
 |---|---|

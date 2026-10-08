@@ -51,3 +51,10 @@ GEMINI.md                                  @Shubchynskyi
 package.json                               @Shubchynskyi
 package-lock.json                          @Shubchynskyi
 tsconfig*.json                             @Shubchynskyi
+
+# -- Root release inputs (last matching rule wins) --
+/scripts/**                                @Shubchynskyi
+/config/release-package-surface-baseline.json @Shubchynskyi
+/VERSION                                   @Shubchynskyi
+/.github/CODEOWNERS                         @Shubchynskyi
+/docs/release-readiness.md                  @Shubchynskyi

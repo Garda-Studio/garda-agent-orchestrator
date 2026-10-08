@@ -96,14 +96,16 @@ jobs:
 
       - name: Require successful CI for this release commit
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
-          CI_RUNS_PATH="${RUNNER_TEMP}/release-ci-runs.json"
-          GH_TOKEN="${{ github.token }}" gh api --method GET \
+          CI_RUN_ID="$(gh api --hostname github.com --method GET \
             "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
-            -f head_sha="${GITHUB_SHA}" -f event=push -f status=completed -f per_page=100 > "${CI_RUNS_PATH}"
-          node scripts/release-candidate.cjs verify-ci "${CI_RUNS_PATH}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"
+            -f head_sha="${GITHUB_SHA}" -f event=workflow_dispatch -f per_page=1 \
+            --jq '.workflow_runs[0].id')"
+          node scripts/release-candidate.cjs verify-ci "${CI_RUN_ID}" "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"
 
       - name: Install dependencies
         run: npm ci --no-fund --no-audit
