@@ -72,6 +72,37 @@ describe('gates/full-suite-validation', () => {
             process.exitCode = undefined;
         });
 
+        it('rejects invalid configuration before emitting disabled full-suite evidence', async (context) => {
+            const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-fsv-cli-invalid-'));
+            context.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+            const configDir = path.join(tempDir, 'garda-agent-orchestrator', 'live', 'config');
+            const reviewsDir = path.join(tempDir, 'garda-agent-orchestrator', 'runtime', 'reviews');
+            const eventsDir = path.join(tempDir, 'garda-agent-orchestrator', 'runtime', 'task-events');
+            fs.mkdirSync(configDir, { recursive: true });
+            fs.mkdirSync(reviewsDir, { recursive: true });
+            fs.mkdirSync(eventsDir, { recursive: true });
+            const configPath = path.join(configDir, 'workflow-config.json');
+            fs.writeFileSync(configPath, JSON.stringify({ full_suite_validation: { enabled: true, command: 'npm test' } }));
+            const taskId = 'T-INVALID-CONFIG';
+            const preflightPath = path.join(reviewsDir, `${taskId}-preflight.json`);
+            writeFullSuitePreflight(tempDir, preflightPath, { task_id: taskId, changed_files: ['src/changed.ts'] }, { seedCompileEvidence: false });
+
+            for (const bytes of ['{"full_suite_validation":{"enabled":true},', '{"full_suite_validation":[]}', '{"full_suite_validation":{"enabled":"invalid"}}']) {
+                fs.writeFileSync(configPath, bytes);
+                const result = await runCliWithCapturedOutput([
+                    'gate', 'full-suite-validation', '--task-id', taskId,
+                    '--preflight-path', preflightPath, '--repo-root', tempDir
+                ], { cwd: path.resolve(process.cwd()) });
+                assert.notEqual(result.exitCode, 0, [...result.logs, ...result.errors].join('\n'));
+                assert.match(result.errors.join('\n'), /workflow-config/);
+                assert.equal(fs.existsSync(path.join(reviewsDir, `${taskId}-full-suite-validation.json`)), false);
+                const timelinePath = path.join(eventsDir, `${taskId}.jsonl`);
+                if (fs.existsSync(timelinePath)) {
+                    assert.doesNotMatch(fs.readFileSync(timelinePath, 'utf8'), /FULL_SUITE_VALIDATION_SKIPPED|FULL_SUITE_VALIDATION_PASSED/);
+                }
+            }
+        });
+
         it('gate full-suite-validation prints SKIPPED and writes JSON artifact when disabled', async () => {
             const repoRoot = path.resolve(process.cwd());
             const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-fsv-cli-skip-'));

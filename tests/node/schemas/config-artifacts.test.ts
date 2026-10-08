@@ -38,6 +38,48 @@ const DEPRECATED_PROJECT_ONLY_OPTIONAL_QUALITY_RULE_IDS = [
     'zero_diff_noop_preemption'
 ];
 
+test('task test-selection permission accepts explicit booleans and keeps omitted legacy config valid', () => {
+    const defaults = buildDefaultWorkflowConfig();
+    for (const requireOperatorConfirmation of [true, false]) {
+        const result = validateWorkflowConfig({
+            ...defaults,
+            task_test_selection: { require_operator_confirmation: requireOperatorConfirmation }
+        });
+        assert.deepEqual(result.task_test_selection, { require_operator_confirmation: requireOperatorConfirmation });
+    }
+    const legacy: Record<string, unknown> = { ...defaults };
+    delete legacy.task_test_selection;
+    assert.equal(Object.hasOwn(validateWorkflowConfig(legacy), 'task_test_selection'), false);
+    assert.deepEqual(validateWorkflowConfig({ ...defaults, task_test_selection: {} }).task_test_selection,
+        { require_operator_confirmation: false });
+});
+
+test('task test-selection permission rejects malformed values, misspelled keys and piggyback options', () => {
+    const defaults = buildDefaultWorkflowConfig();
+    for (const value of [null, undefined, 'false', 'true', 0, 1, '', [], {}]) {
+        assert.throws(() => validateWorkflowConfig({
+            ...defaults,
+            task_test_selection: { require_operator_confirmation: value }
+        }), /workflow-config\.task_test_selection\.require_operator_confirmation must be a boolean/);
+    }
+    for (const section of [null, [], false, 'false']) {
+        assert.throws(() => validateWorkflowConfig({ ...defaults, task_test_selection: section }),
+            /workflow-config\.task_test_selection must be a JSON object/);
+    }
+    for (const section of [
+        { Require_Operator_Confirmation: false },
+        { require_operator_confirmaton: false },
+        { require_operator_confirmation: false, enabled: false },
+        { require_operator_confirmation: false, command: 'node -e ""' }
+    ]) {
+        assert.throws(() => validateWorkflowConfig({ ...defaults, task_test_selection: section }),
+            /workflow-config\.task_test_selection/);
+    }
+    const legacy: Record<string, unknown> = { ...defaults };
+    delete legacy.task_test_selection;
+    assert.throws(() => validateWorkflowConfig({ ...legacy, Task_Test_Selection: {} }), /task_test_selection/);
+});
+
 function expectedOptionalQualityRule(
     rule: typeof DEFAULT_OPTIONAL_QUALITY_CHECK_RULES[number]
 ): Record<string, unknown> {

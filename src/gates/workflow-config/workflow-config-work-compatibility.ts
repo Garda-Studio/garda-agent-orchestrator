@@ -26,6 +26,7 @@ import {
     COMPATIBILITY_REVIEW_EXECUTION_POLICY_KEYS,
     COMPATIBILITY_SCOPE_BUDGET_GUARD_KEYS,
     COMPATIBILITY_TASK_RESET_KEYS,
+    COMPATIBILITY_TASK_TEST_SELECTION_KEYS,
     COMPATIBILITY_TOP_LEVEL_KEYS,
     SAFE_FULL_SUITE_COMPATIBILITY_COMMANDS,
     SAFE_WORKFLOW_CONFIG_COMPATIBILITY_BASELINE,
@@ -306,6 +307,21 @@ function isSafeIgnoredWorkflowConfigCompatibilityBaseline(config: Record<string,
             || !hasExactOwnKeys(defaultLocalCommit, COMPATIBILITY_LOCAL_COMMIT_KEYS)
             || !hasExactOwnKeys(localCommit, COMPATIBILITY_LOCAL_COMMIT_KEYS)
             || localCommit.enabled !== false
+        ) {
+            return false;
+        }
+    }
+
+    if (hasOwnKey(config, 'task_test_selection')) {
+        const taskTestSelection = toPlainRecord(config.task_test_selection);
+        const defaultTaskTestSelection = SAFE_WORKFLOW_CONFIG_COMPATIBILITY_BASELINE.task_test_selection as unknown as Record<string, unknown>;
+        if (
+            !taskTestSelection
+            || !hasExactOwnKeys(defaultTaskTestSelection, COMPATIBILITY_TASK_TEST_SELECTION_KEYS)
+            || defaultTaskTestSelection.require_operator_confirmation !== false
+            || !hasRequiredOwnKeysAndOnlyOptionalKeys(taskTestSelection, [], COMPATIBILITY_TASK_TEST_SELECTION_KEYS)
+            || (hasOwnKey(taskTestSelection, 'require_operator_confirmation')
+                && typeof taskTestSelection.require_operator_confirmation !== 'boolean')
         ) {
             return false;
         }

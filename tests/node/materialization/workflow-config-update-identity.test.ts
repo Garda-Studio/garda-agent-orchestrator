@@ -52,18 +52,34 @@ describe('unchanged workflow-config materialization identity', () => {
         });
     }
 
-    for (const original of ['{', 'null', '[]', '{}']) {
-        it(`materializes ${original} instead of treating it as an unchanged configuration`, () => {
+    for (const original of ['{ "private_fixture": "retained-marker"', 'null', '[]']) {
+        it(`rejects ${original} without replacing existing configuration bytes`, () => {
             const { projectRoot, options, configPath } = createConfigStageWorkspace();
             try {
                 fs.writeFileSync(configPath, original);
-                const result = runInitConfigStage({ ...options, workflowConfigExistedBeforeRun: true });
-                assert.notEqual(fs.readFileSync(configPath, 'utf8'), original);
-                assert.deepEqual(JSON.parse(fs.readFileSync(configPath, 'utf8')), result.materializedWorkflowConfig);
-                assert.ok(Object.hasOwn(result.materializedWorkflowConfig, 'compile_gate'));
+                assert.throws(() => runInitConfigStage({ ...options, workflowConfigExistedBeforeRun: true }),
+                    (error: unknown) => {
+                        assert.ok(error instanceof Error);
+                        assert.match(error.message, /existing.*config|config.*existing/i);
+                        assert.equal(error.message.includes('retained-marker'), false);
+                        return true;
+                    });
+                assert.equal(fs.readFileSync(configPath, 'utf8'), original);
             } finally {
                 fs.rmSync(projectRoot, { recursive: true, force: true });
             }
         });
     }
+
+    it('fills valid empty-object configuration with missing defaults', () => {
+        const { projectRoot, options, configPath } = createConfigStageWorkspace();
+        try {
+            fs.writeFileSync(configPath, '{}');
+            const result = runInitConfigStage({ ...options, workflowConfigExistedBeforeRun: true });
+            assert.deepEqual(JSON.parse(fs.readFileSync(configPath, 'utf8')), result.materializedWorkflowConfig);
+            assert.ok(Object.hasOwn(result.materializedWorkflowConfig, 'compile_gate'));
+        } finally {
+            fs.rmSync(projectRoot, { recursive: true, force: true });
+        }
+    });
 });

@@ -9,12 +9,18 @@ import {
 import {
     buildRulePackArtifact,
     getPostPreflightRulePackRebindDecision,
+    getPostPreflightSequenceEvidence,
+    getRulePackEvidence,
+    getRulePackEvidenceViolations,
     resolveRulePackArtifactPath
 } from '../../../../gates/rule-pack/rule-pack';
 import {
     buildNoOpArtifact,
+    resolveCurrentNoOpPreflightPath,
     resolveNoOpArtifactPath
 } from '../../../../gates/task-mode/no-op';
+import { getPreflightContext } from '../../../../gates/compile/compile-gate';
+import { getWorkspaceSnapshotCached } from '../../../../gates/workspace/workspace-snapshot-cache';
 import {
     buildStrictDecompositionDecisionArtifact,
     resolveStrictDecompositionDecisionArtifactPath
@@ -306,6 +312,65 @@ export function runBindRulePackToPreflightCommand(options: BindRulePackToPreflig
     };
 }
 
+function readNoOpPreflightBinding(repoRoot: string, taskId: string, explicitPath: unknown) {
+    try {
+        const preflightPath = resolveCurrentNoOpPreflightPath(repoRoot, taskId, explicitPath);
+        const context = getPreflightContext(preflightPath, taskId);
+        if (context.preflight.task_id !== taskId) {
+            throw new Error('Preflight must declare the exact current task identity.');
+        }
+        if (!Array.isArray(context.preflight.changed_files)
+            || !Number.isFinite(context.changed_lines_total)
+            || context.changed_lines_total !== 0 || context.changed_files_count !== 0) {
+            throw new Error('No-op artifact requires a valid zero-diff preflight.');
+        }
+        const rulePack = getRulePackEvidence(repoRoot, taskId, 'POST_PREFLIGHT', { preflightPath });
+        const sequence = getPostPreflightSequenceEvidence(repoRoot, taskId, preflightPath);
+        const violations = [...getRulePackEvidenceViolations(rulePack), ...sequence.violations];
+        if (violations.length > 0 || !sequence.binding_equivalent_to_current_preflight) {
+            throw new Error(`Current preflight binding is invalid. ${violations.join(' ')}`);
+        }
+        const currentScope = getWorkspaceSnapshotCached(
+            repoRoot, context.detection_source, context.include_untracked, context.authorized_files,
+            { noCache: true, readOnly: true }
+        );
+        if (currentScope.changed_files_count !== 0 || currentScope.changed_lines_total !== 0
+            || context.scope_sha256 && context.scope_sha256 !== currentScope.scope_sha256
+            || context.scope_content_sha256 && context.scope_content_sha256 !== currentScope.scope_content_sha256) {
+            throw new Error('Preflight workspace scope is stale or no longer zero-diff.');
+        }
+        const preflightSha256 = gateHelpers.fileSha256(preflightPath);
+        if (!preflightSha256) {
+            throw new Error('Current preflight cannot be hashed.');
+        }
+        return { preflightPath, preflightSha256 };
+    } catch (error) {
+        throw new Error(`Cannot record no-op: ${getErrorMessage(error)} Run next-step "${taskId}" to refresh native preflight and rule binding.`);
+    }
+}
+
+function assertDistinctNoOpPublicationPaths(filePaths: string[]): void {
+    const identities = filePaths.map((filePath) => {
+        let ancestor = filePath;
+        while (!fs.existsSync(ancestor)) {
+            ancestor = path.dirname(ancestor);
+        }
+        const physicalPath = path.join(fs.realpathSync.native(ancestor), path.relative(ancestor, filePath));
+        return {
+            path: process.platform === 'win32' ? physicalPath.toLowerCase() : physicalPath,
+            file: fs.existsSync(filePath) ? fs.statSync(filePath, { bigint: true }) : null
+        };
+    });
+    for (let index = 0; index < identities.length; index += 1) {
+        const current = identities[index];
+        if (identities.slice(0, index).some((previous) => current.path === previous.path
+            || current.file && previous.file && current.file.ino > 0n
+            && current.file.dev === previous.file.dev && current.file.ino === previous.file.ino)) {
+            throw new Error('Cannot record no-op: publication paths must be distinct from each other and the preflight input.');
+        }
+    }
+}
+
 export function runRecordNoOpCommand(options: RecordNoOpCommandOptions): { outputLines: string[]; exitCode: number } {
     const repoRoot = path.resolve(String(options.repoRoot || '.'));
     const orchestratorRoot = resolveOrchestratorRoot(repoRoot);
@@ -317,23 +382,14 @@ export function runRecordNoOpCommand(options: RecordNoOpCommandOptions): { outpu
     const artifactPath = options.artifactPath
         ? requireResolvedPath(resolvePathForWrite(options.artifactPath, repoRoot), 'ArtifactPath')
         : resolveNoOpArtifactPath(repoRoot, taskId, '');
-    const preflightPath = String(options.preflightPath || '').trim()
-        ? requireResolvedPath(gateHelpers.resolvePathInsideRepo(String(options.preflightPath), repoRoot, { allowMissing: true }), 'PreflightPath')
-        : null;
-
-    if (preflightPath) {
-        const preflightPayload = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
-        const metrics = preflightPayload.metrics && typeof preflightPayload.metrics === 'object' && !Array.isArray(preflightPayload.metrics)
-            ? preflightPayload.metrics as Record<string, unknown>
-            : null;
-        const changedLinesTotal = metrics && typeof metrics.changed_lines_total === 'number'
-            ? metrics.changed_lines_total
-            : 0;
-        const changedFilesCount = Array.isArray(preflightPayload.changed_files) ? preflightPayload.changed_files.length : 0;
-        if (changedLinesTotal > 0 || changedFilesCount > 0) {
-            throw new Error('No-op artifact is only allowed for zero-diff preflight artifacts.');
-        }
-    }
+    const { preflightPath, preflightSha256 } = readNoOpPreflightBinding(repoRoot, taskId, options.preflightPath);
+    const metricsPath = options.metricsPath
+        ? requireResolvedPath(resolvePathForWrite(options.metricsPath, repoRoot), 'MetricsPath')
+        : resolveDefaultMetricsPath(repoRoot);
+    const emitMetrics = parseBooleanOption(options.emitMetrics, true);
+    assertDistinctNoOpPublicationPaths(emitMetrics
+        ? [preflightPath, artifactPath, metricsPath]
+        : [preflightPath, artifactPath]);
 
     const artifact = buildNoOpArtifact({
         taskId,
@@ -341,13 +397,10 @@ export function runRecordNoOpCommand(options: RecordNoOpCommandOptions): { outpu
         reason,
         actor: options.actor,
         preflightPath,
-        preflightSha256: preflightPath ? gateHelpers.fileSha256(preflightPath) : null
+        preflightSha256
     });
     writeJsonArtifact(artifactPath, artifact);
 
-    const metricsPath = options.metricsPath
-        ? requireResolvedPath(resolvePathForWrite(options.metricsPath, repoRoot), 'MetricsPath')
-        : resolveDefaultMetricsPath(repoRoot);
     appendMetricsIfEnabled(repoRoot, metricsPath, {
         timestamp_utc: artifact.timestamp_utc,
         event_type: 'no_op_recorded',
@@ -356,7 +409,7 @@ export function runRecordNoOpCommand(options: RecordNoOpCommandOptions): { outpu
         classification: artifact.classification,
         preflight_path: artifact.preflight_path,
         preflight_sha256: artifact.preflight_sha256
-    }, parseBooleanOption(options.emitMetrics, true));
+    }, emitMetrics);
 
     appendTaskEvent(
         orchestratorRoot,

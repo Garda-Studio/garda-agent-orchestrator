@@ -2,8 +2,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { assertWorkflowTransactionReadable } from './workflow-transaction-state';
 
-import { normalizeBooleanLike, normalizeInteger } from '../schemas/shared';
-import { UNCONFIGURED_FULL_SUITE_VALIDATION_COMMAND } from './constants';
+import { ensurePlainObject, normalizeBooleanLike, normalizeInteger } from '../schemas/shared';
+import {
+    isRecognizedBundleName,
+    UNCONFIGURED_FULL_SUITE_VALIDATION_COMMAND
+} from './constants';
 import { joinOrchestratorPath } from './orchestrator-paths';
 import {
     FULL_SUITE_TIMEOUT_RETRY_COUNT_MAX,
@@ -43,61 +46,134 @@ export const DEFAULT_FULL_SUITE_VALIDATION_CONFIG: FullSuiteValidationConfig = O
 });
 
 export function resolveWorkflowConfigPath(repoRoot: string): string {
-    return joinOrchestratorPath(repoRoot, path.join('live', 'config', 'workflow-config.json'));
+    const configPath = joinOrchestratorPath(repoRoot, path.join('live', 'config', 'workflow-config.json'));
+    return resolveReadableWorkflowConfigPath(repoRoot, configPath);
 }
 
 export function loadFullSuiteValidationConfig(repoRoot: string): FullSuiteValidationConfig {
     const configPath = resolveWorkflowConfigPath(repoRoot);
     assertWorkflowTransactionReadable(path.dirname(path.dirname(path.dirname(configPath))));
-    if (!fs.existsSync(configPath) || !fs.statSync(configPath).isFile()) {
+    const config = readWorkflowConfig(configPath);
+    if (config?.full_suite_validation === undefined) {
         return { ...DEFAULT_FULL_SUITE_VALIDATION_CONFIG };
     }
+    return normalizeFullSuiteConfig(ensurePlainObject(
+        config.full_suite_validation,
+        'workflow-config.full_suite_validation'
+    ));
+}
 
+function readWorkflowConfig(configPath: string): Record<string, unknown> | undefined {
+    let fileInfo: fs.Stats;
+    try {
+        fileInfo = fs.lstatSync(configPath);
+    } catch (error) {
+        if (isMissingPathError(error)) {
+            assertConfigAncestorsReadable(configPath);
+            return undefined;
+        }
+        throw new Error('workflow-config cannot be read as a regular file.');
+    }
+    let contents: string;
+    try {
+        if (!(fileInfo.isSymbolicLink() ? fs.statSync(configPath) : fileInfo).isFile()) {
+            throw new Error('Not a regular file.');
+        }
+        contents = fs.readFileSync(configPath, 'utf8');
+    } catch {
+        throw new Error('workflow-config cannot be read as a regular file.');
+    }
     let raw: unknown;
     try {
-        raw = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        raw = JSON.parse(contents);
     } catch {
-        return { ...DEFAULT_FULL_SUITE_VALIDATION_CONFIG };
+        throw new Error('workflow-config contains invalid JSON.');
     }
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-        return { ...DEFAULT_FULL_SUITE_VALIDATION_CONFIG };
+    return ensurePlainObject(raw, 'workflow-config');
+}
+
+function resolveReadableWorkflowConfigPath(repoRoot: string, configPath: string): string {
+    if (configPath !== path.resolve(repoRoot, 'live', 'config', 'workflow-config.json')) {
+        return configPath;
     }
-    const config = raw as Record<string, unknown>;
-    const section = config.full_suite_validation;
-    if (!section || typeof section !== 'object' || Array.isArray(section)) {
-        return { ...DEFAULT_FULL_SUITE_VALIDATION_CONFIG };
+    if (fs.existsSync(path.resolve(repoRoot, 'MANIFEST.md')) && fs.existsSync(path.resolve(repoRoot, 'VERSION'))) {
+        return configPath;
     }
-    const record = section as Record<string, unknown>;
+    let entries: fs.Dirent[];
+    try {
+        entries = fs.readdirSync(repoRoot, { withFileTypes: true });
+    } catch (error) {
+        if (isMissingPathError(error)) {
+            assertConfigAncestorsReadable(configPath);
+            return configPath;
+        }
+        throw new Error('workflow-config cannot be read as a regular file.');
+    }
+    const candidates: string[] = [];
+    for (const entry of entries) {
+        if (isRecognizedBundleName(entry.name)) {
+            const candidatePath = path.resolve(repoRoot, entry.name, 'live', 'config', 'workflow-config.json');
+            assertConfigAncestorsReadable(candidatePath);
+            candidates.push(candidatePath);
+        }
+    }
+    if (candidates.length > 1) {
+        throw new Error('workflow-config deployed bundle path is ambiguous.');
+    }
+    return candidates[0] ?? configPath;
+}
+
+function isMissingPathError(error: unknown): boolean {
+    return error instanceof Error && 'code' in error && error.code === 'ENOENT';
+}
+
+function assertConfigAncestorsReadable(configPath: string): void {
+    let ancestor = path.dirname(configPath);
+    while (true) {
+        let fileInfo: fs.Stats;
+        try {
+            fileInfo = fs.lstatSync(ancestor);
+        } catch (error) {
+            const parent = path.dirname(ancestor);
+            if (!isMissingPathError(error) || parent === ancestor) {
+                throw new Error('workflow-config cannot be read as a regular file.');
+            }
+            ancestor = parent;
+            continue;
+        }
+        try {
+            if (!(fileInfo.isSymbolicLink() ? fs.statSync(ancestor) : fileInfo).isDirectory()) {
+                throw new Error('Not a directory.');
+            }
+        } catch {
+            throw new Error('workflow-config cannot be read as a regular file.');
+        }
+        return;
+    }
+}
+
+function normalizeFullSuiteConfig(record: Record<string, unknown>): FullSuiteValidationConfig {
+    const defaults = DEFAULT_FULL_SUITE_VALIDATION_CONFIG;
+    const field = (name: string): string => `workflow-config.full_suite_validation.${name}`;
     return {
-        enabled: record.enabled === true,
-        command: typeof record.command === 'string' && record.command.trim()
-            ? record.command.trim()
-            : DEFAULT_FULL_SUITE_VALIDATION_CONFIG.command,
-        timeout_ms: typeof record.timeout_ms === 'number' && record.timeout_ms > 0
-            ? record.timeout_ms
-            : DEFAULT_FULL_SUITE_VALIDATION_CONFIG.timeout_ms,
+        enabled: normalizeBooleanLikeOrDefault(record.enabled, field('enabled'), defaults.enabled),
+        command: normalizeCommand(record.command),
+        timeout_ms: normalizeIntegerOrDefault(record.timeout_ms, field('timeout_ms'), defaults.timeout_ms, { minimum: 1 }),
         timeout_blocker: normalizeBooleanLikeOrDefault(
-            record.timeout_blocker,
-            'workflow-config.full_suite_validation.timeout_blocker',
-            DEFAULT_FULL_SUITE_VALIDATION_CONFIG.timeout_blocker ?? true
+            record.timeout_blocker, field('timeout_blocker'), defaults.timeout_blocker ?? true
         ),
         timeout_retry_count: normalizeIntegerOrDefault(
-            record.timeout_retry_count,
-            'workflow-config.full_suite_validation.timeout_retry_count',
-            DEFAULT_FULL_SUITE_VALIDATION_CONFIG.timeout_retry_count ?? 1,
+            record.timeout_retry_count, field('timeout_retry_count'), defaults.timeout_retry_count ?? 1,
             { minimum: 0, maximum: FULL_SUITE_TIMEOUT_RETRY_COUNT_MAX }
         ),
-        green_summary_max_lines: typeof record.green_summary_max_lines === 'number' && record.green_summary_max_lines > 0
-            ? record.green_summary_max_lines
-            : DEFAULT_FULL_SUITE_VALIDATION_CONFIG.green_summary_max_lines,
-        red_failure_chunk_lines: typeof record.red_failure_chunk_lines === 'number' && record.red_failure_chunk_lines > 0
-            ? record.red_failure_chunk_lines
-            : DEFAULT_FULL_SUITE_VALIDATION_CONFIG.red_failure_chunk_lines,
+        green_summary_max_lines: normalizeIntegerOrDefault(
+            record.green_summary_max_lines, field('green_summary_max_lines'), defaults.green_summary_max_lines, { minimum: 1 }
+        ),
+        red_failure_chunk_lines: normalizeIntegerOrDefault(
+            record.red_failure_chunk_lines, field('red_failure_chunk_lines'), defaults.red_failure_chunk_lines, { minimum: 1 }
+        ),
         out_of_scope_failure_policy: normalizeOutOfScopePolicy(record.out_of_scope_failure_policy),
-        placement: normalizeFullSuiteValidationPlacement(record.placement, {
-            rejectInvalidExplicit: true,
-            errorPath: 'workflow-config.full_suite_validation.placement'
-        })
+        placement: normalizePlacement(record.placement)
     };
 }
 
@@ -105,11 +181,10 @@ function normalizeBooleanLikeOrDefault(value: unknown, fieldName: string, fallba
     if (value === undefined) {
         return fallback;
     }
-    try {
-        return normalizeBooleanLike(value, fieldName);
-    } catch {
-        return fallback;
+    if (!['boolean', 'number', 'string'].includes(typeof value)) {
+        throw new Error(`${fieldName} must be boolean-like.`);
     }
+    return normalizeBooleanLike(value, fieldName);
 }
 
 function normalizeIntegerOrDefault(
@@ -121,17 +196,39 @@ function normalizeIntegerOrDefault(
     if (value === undefined) {
         return fallback;
     }
-    try {
-        return normalizeInteger(value, fieldName, options);
-    } catch {
-        return fallback;
+    if (typeof value !== 'number' && typeof value !== 'string') {
+        throw new Error(`${fieldName} must be an integer.`);
     }
+    return normalizeInteger(value, fieldName, { maximum: Number.MAX_SAFE_INTEGER, ...options });
+}
+
+function normalizeCommand(value: unknown): string {
+    if (value === undefined) {
+        return DEFAULT_FULL_SUITE_VALIDATION_CONFIG.command;
+    }
+    if (typeof value !== 'string' || !value.trim()) {
+        throw new Error('workflow-config.full_suite_validation.command must be a non-empty string.');
+    }
+    return value.trim();
+}
+
+function normalizePlacement(value: unknown): FullSuiteValidationPlacement {
+    if (value !== undefined && typeof value !== 'string') {
+        throw new Error('workflow-config.full_suite_validation.placement must be a string.');
+    }
+    return normalizeFullSuiteValidationPlacement(value, {
+        rejectInvalidExplicit: true,
+        errorPath: 'workflow-config.full_suite_validation.placement'
+    });
 }
 
 function normalizeOutOfScopePolicy(value: unknown): OutOfScopeFailurePolicy {
-    const normalized = String(value || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+    if (value === undefined) {
+        return DEFAULT_FULL_SUITE_VALIDATION_CONFIG.out_of_scope_failure_policy;
+    }
+    const normalized = typeof value === 'string' ? value.trim().toUpperCase().replace(/[\s-]+/g, '_') : '';
     if (OUT_OF_SCOPE_FAILURE_POLICIES.includes(normalized as OutOfScopeFailurePolicy)) {
         return normalized as OutOfScopeFailurePolicy;
     }
-    return 'AUDIT_AND_BLOCK';
+    throw new Error('workflow-config.full_suite_validation.out_of_scope_failure_policy must be AUDIT_AND_BLOCK or AUDIT_AND_WARN.');
 }

@@ -893,15 +893,10 @@ describe('gates/compile-gate', () => {
     });
 
     describe('getWorkspaceSnapshot', () => {
-        it('recovers from adversarial absolute and traversal generated-runtime paths as ignored evidence', () => {
+        it('rejects generated ownership for foreign paths while retaining canonical explicit source scope', () => {
             const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'compile-gate-generated-runtime-'));
             const repoRoot = path.join(tempDir, 'repo');
             const appPath = path.join(repoRoot, 'src', 'app.ts');
-            const ignoredPaths = [
-                '../outside/runtime/reviews/T-983-2-code-review.json',
-                '../runtime/reviews/T-983-2-traversal-prefixed.json',
-                'Z:/missing/root/runtime/task-events/T-983-2.jsonl'
-            ];
             const explicitPaths = [
                 '../outside/runtime/reviews/T-983-2-code-review.json',
                 'src/../../runtime/reviews/T-983-2-traversal-prefixed.json',
@@ -923,8 +918,8 @@ describe('gates/compile-gate', () => {
 
                 assert.deepEqual(snapshot.authorized_files, ['src/app.ts']);
                 assert.deepEqual(snapshot.changed_files, ['src/app.ts']);
-                assert.deepEqual(snapshot.ignored_generated_runtime_files, ignoredPaths);
-                assert.equal(snapshot.ignored_generated_runtime_files_count, ignoredPaths.length);
+                assert.deepEqual(snapshot.ignored_generated_runtime_files, []);
+                assert.equal(snapshot.ignored_generated_runtime_files_count, 0);
             } finally {
                 fs.rmSync(tempDir, { recursive: true, force: true });
             }

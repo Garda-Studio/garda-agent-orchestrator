@@ -1,88 +1,62 @@
+import * as path from 'node:path';
+import { DEFAULT_BUNDLE_NAME } from '../../core/constants';
 import { normalizePath } from './helpers';
 
-const USER_OWNED_PREFIXES = Object.freeze([
-    'src/',
-    'app/',
-    'apps/',
-    'backend/',
-    'frontend/',
-    'web/',
-    'api/',
-    'services/',
-    'packages/',
-    'tests/',
-    'test/',
-    '__tests__/',
-    'docs/',
-    'doc/',
-    'fixtures/',
-    'testdata/',
-    'template/',
-    'live/',
-    'config/',
-    '.github/',
-    '.agents/'
-]);
-
-function isUnderUserOwnedPrefix(normalizedPath: string): boolean {
-    return USER_OWNED_PREFIXES.some((prefix) => (
-        normalizedPath === prefix.slice(0, -1) || normalizedPath.startsWith(prefix)
-    ));
-}
-
-function hasRuntimeSegment(normalizedPath: string, segment: string): boolean {
+function isRuntimeSubtree(normalizedPath: string, segment: string): boolean {
     return normalizedPath === segment.slice(0, -1)
-        || normalizedPath.startsWith(segment)
-        || normalizedPath.includes(`/${segment}`);
+        || normalizedPath.startsWith(segment);
 }
 
 export function isGeneratedRuntimeControlPlaneArtifactPath(pathValue: string | null | undefined): boolean {
-    const normalizedPath = normalizePath(String(pathValue || '')).replace(/^\.\//, '');
-    if (!normalizedPath || isUnderUserOwnedPrefix(normalizedPath)) {
+    const inputPath = path.posix.normalize(normalizePath(String(pathValue || '')));
+    const bundlePrefix = `${DEFAULT_BUNDLE_NAME}/`;
+    const normalizedPath = inputPath.startsWith(bundlePrefix) ? inputPath.slice(bundlePrefix.length) : inputPath;
+    // These are supported bundle-relative namespaces, not arbitrary nested path segments.
+    if (!normalizedPath.startsWith('runtime/')) {
         return false;
     }
 
-    if (hasRuntimeSegment(normalizedPath, 'runtime/task-events/')) {
+    if (isRuntimeSubtree(normalizedPath, 'runtime/task-events/')) {
         return true;
     }
 
-    if (hasRuntimeSegment(normalizedPath, 'runtime/reviews/')) {
+    if (isRuntimeSubtree(normalizedPath, 'runtime/reviews/')) {
         return true;
     }
 
-    if (hasRuntimeSegment(normalizedPath, 'runtime/reports/')) {
+    if (isRuntimeSubtree(normalizedPath, 'runtime/reports/')) {
         return true;
     }
 
-    if (hasRuntimeSegment(normalizedPath, 'runtime/plans/')) {
+    if (isRuntimeSubtree(normalizedPath, 'runtime/plans/')) {
         return true;
     }
 
-    if (hasRuntimeSegment(normalizedPath, 'runtime/cache/')) {
+    if (isRuntimeSubtree(normalizedPath, 'runtime/cache/')) {
         return true;
     }
 
-    if (hasRuntimeSegment(normalizedPath, 'runtime/locks/')) {
+    if (isRuntimeSubtree(normalizedPath, 'runtime/locks/')) {
         return true;
     }
 
-    if (hasRuntimeSegment(normalizedPath, 'runtime/.runtime-mutation-generation/')) {
+    if (isRuntimeSubtree(normalizedPath, 'runtime/.runtime-mutation-generation/')) {
         return true;
     }
 
-    if (hasRuntimeSegment(normalizedPath, 'runtime/.runtime-mutation-generation.lock/')) {
+    if (isRuntimeSubtree(normalizedPath, 'runtime/.runtime-mutation-generation.lock/')) {
         return true;
     }
 
-    if (/(^|\/)runtime\/\.reviews-(?:index|transaction)\.lock(?:\/|$)/i.test(normalizedPath)) {
+    if (/^runtime\/\.reviews-(?:index|transaction)\.lock(?:\/|$)/i.test(normalizedPath)) {
         return true;
     }
 
-    if (/(^|\/)runtime\/\.runtime-mutation-generation\.anchor\.json$/i.test(normalizedPath)) {
+    if (/^runtime\/\.runtime-mutation-generation\.anchor\.json$/i.test(normalizedPath)) {
         return true;
     }
 
-    return /(^|\/)runtime\/(metrics|task-index|review-index|task-audit-summary)\.(jsonl?|md)$/i.test(normalizedPath);
+    return /^runtime\/(metrics|task-index|review-index|task-audit-summary)\.(jsonl?|md)$/i.test(normalizedPath);
 }
 
 export function isSourceCheckoutGeneratedRuntimeArtifactPath(

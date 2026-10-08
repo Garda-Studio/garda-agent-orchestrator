@@ -1,8 +1,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { assertValidTaskId, readTaskTimelineJsonlEntries } from '../../gate-runtime/task-events';
-import { fileSha256, joinOrchestratorPath, normalizePath, resolvePathInsideRepo } from '../shared/helpers';
+import {
+    assertValidTaskId,
+    inspectTaskEventFile,
+    readTaskTimelineJsonlEntries,
+    withTaskTimelineReadSnapshot
+} from '../../gate-runtime/task-events';
+import { fileSha256, isPathRealpathInsideRoot, joinOrchestratorPath, normalizePath, resolvePathInsideRepo } from '../shared/helpers';
 
 export const NO_OP_CLASSIFICATIONS = Object.freeze([
     'NO_CHANGES_REQUIRED',
@@ -93,6 +98,44 @@ export function resolveNoOpArtifactPath(repoRoot: string, taskId: string, artifa
         return resolvedPath;
     }
     return joinOrchestratorPath(repoRoot, path.join('runtime', 'reviews', `${taskId}-no-op.json`));
+}
+
+export function resolveCurrentNoOpPreflightPath(repoRoot: string, taskId: string, explicitPath: unknown = ''): string {
+    const resolvedTaskId = assertValidTaskId(taskId);
+    const eventsRoot = joinOrchestratorPath(repoRoot, path.join('runtime', 'task-events'));
+    const timelinePath = path.join(eventsRoot, `${resolvedTaskId}.jsonl`);
+    return withTaskTimelineReadSnapshot(eventsRoot, resolvedTaskId, () => {
+        const integrity = inspectTaskEventFile(timelinePath, resolvedTaskId);
+        if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(integrity.status)) {
+            throw new Error('Current preflight requires an authenticated native task timeline.');
+        }
+        const events = readTaskTimelineJsonlEntries(timelinePath).map((entry) => entry.record);
+        const eventTypes = events.map((event) => event?.event_type);
+        const entryIndex = eventTypes.lastIndexOf('TASK_MODE_ENTERED');
+        const preflightIndex = eventTypes.lastIndexOf('PREFLIGHT_CLASSIFIED');
+        if (entryIndex < 0 || preflightIndex <= entryIndex || events[entryIndex]?.outcome !== 'PASS') {
+            throw new Error('A successful preflight must be classified in the current task-mode cycle.');
+        }
+        if (eventTypes.lastIndexOf('PREFLIGHT_FAILED') > preflightIndex
+            || eventTypes.lastIndexOf('PREFLIGHT_STARTED') > preflightIndex) {
+            throw new Error('The current preflight is superseded by a failed or unfinished classification.');
+        }
+        const details = events[preflightIndex]?.details as Record<string, unknown> | undefined;
+        const currentPath = resolvePathInsideRepo(String(details?.output_path || details?.outputPath || ''), repoRoot, {
+            enforceInside: true
+        });
+        const selectedPath = String(explicitPath || '').trim()
+            ? resolvePathInsideRepo(String(explicitPath), repoRoot, { enforceInside: true })
+            : currentPath;
+        if (!currentPath || !selectedPath
+            || fs.realpathSync.native(selectedPath) !== fs.realpathSync.native(currentPath)) {
+            throw new Error('Preflight path must match the latest native classification for this task.');
+        }
+        if (!isPathRealpathInsideRoot(selectedPath, repoRoot) || !fs.statSync(selectedPath).isFile()) {
+            throw new Error('Current preflight must be a regular file inside the repository root.');
+        }
+        return currentPath;
+    });
 }
 
 export function buildNoOpArtifact(options: BuildNoOpArtifactOptions): NoOpArtifact {

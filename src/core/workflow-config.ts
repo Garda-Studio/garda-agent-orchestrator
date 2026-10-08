@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { compactSettingsToConfig } from './compact/setting-definitions';
 import {
@@ -152,6 +153,10 @@ export interface TaskResetConfig {
     [key: string]: unknown;
 }
 
+export interface TaskTestSelectionConfig {
+    require_operator_confirmation: boolean;
+}
+
 export interface AutoBackupConfig {
     enabled: boolean;
     interval_days: number;
@@ -186,6 +191,7 @@ export interface WorkflowConfigData {
     project_memory_maintenance: ProjectMemoryMaintenanceConfig;
     task_reset: TaskResetConfig;
     local_commit: { enabled: boolean };
+    task_test_selection: TaskTestSelectionConfig;
     auto_backup: AutoBackupConfig;
     optional_quality_checks: OptionalQualityChecksConfig;
     orchestrator_work_policy: OrchestratorWorkPolicyConfig;
@@ -246,6 +252,9 @@ const DEFAULT_WORKFLOW_CONFIG: WorkflowConfigData = Object.freeze({
     }),
     local_commit: Object.freeze({
         enabled: false
+    }),
+    task_test_selection: Object.freeze({
+        require_operator_confirmation: false
     }),
     auto_backup: Object.freeze({
         enabled: false,
@@ -721,11 +730,18 @@ export function mergeWorkflowConfigWithTemplate(
 
 export function readWorkflowConfigForMerge(workflowConfigPath: string): WorkflowConfigReadResult {
     assertWorkflowTransactionReadable(path.dirname(path.dirname(path.dirname(workflowConfigPath))));
-    if (!pathExists(workflowConfigPath)) {
-        return { status: 'missing', config: null };
-    }
-
     try {
+        let fileInfo: fs.Stats;
+        try {
+            fileInfo = fs.lstatSync(workflowConfigPath);
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+            assertWorkflowConfigAncestorsReadable(workflowConfigPath);
+            return { status: 'missing', config: null };
+        }
+        if (!(fileInfo.isSymbolicLink() ? fs.statSync(workflowConfigPath) : fileInfo).isFile()) {
+            return { status: 'invalid_json', config: null };
+        }
         const parsed = readJsonFile(workflowConfigPath);
         if (!isPlainObject(parsed)) {
             return { status: 'non_object', config: null };
@@ -736,15 +752,40 @@ export function readWorkflowConfigForMerge(workflowConfigPath: string): Workflow
     }
 }
 
+function assertWorkflowConfigAncestorsReadable(workflowConfigPath: string): void {
+    let ancestor = path.dirname(path.resolve(workflowConfigPath));
+    while (true) {
+        let fileInfo: fs.Stats;
+        try {
+            fileInfo = fs.lstatSync(ancestor);
+        } catch (error) {
+            const parent = path.dirname(ancestor);
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || parent === ancestor) throw error;
+            ancestor = parent;
+            continue;
+        }
+        if (!(fileInfo.isSymbolicLink() ? fs.statSync(ancestor) : fileInfo).isDirectory()) {
+            throw new Error('Workflow-config ancestor is not a readable directory.');
+        }
+        return;
+    }
+}
+
 export function syncWorkflowConfigWithTemplate(
     bundleRoot: string,
     options: WorkflowConfigMergeOptions = {}
 ): Record<string, unknown> {
     const workflowConfigPath = getWorkflowConfigPath(bundleRoot);
+    const existing = readWorkflowConfigForMerge(workflowConfigPath);
+    if (existing.status !== 'present' && existing.status !== 'missing') {
+        throw new Error(
+            `Existing workflow-config cannot be read as a JSON object (status=${existing.status}). `
+            + 'Repair the existing configuration before retrying; its contents have been preserved.'
+        );
+    }
     const templateConfig = readWorkflowConfigTemplate(bundleRoot);
-    const existingConfig = readWorkflowConfigForMerge(workflowConfigPath).config;
 
-    const nextConfig = mergeWorkflowConfigWithTemplate(templateConfig, existingConfig, options);
+    const nextConfig = mergeWorkflowConfigWithTemplate(templateConfig, existing.config, options);
     writeJsonFile(workflowConfigPath, nextConfig);
     return nextConfig;
 }

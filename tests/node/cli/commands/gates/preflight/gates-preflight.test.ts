@@ -1687,8 +1687,8 @@ describe('cli/commands/gates — preflight', () => {
                 'tests/node/cli/commands/gates-preflight.test.ts',
                 'garda-agent-orchestrator/runtime/reports/garda-report.html',
                 'garda-agent-orchestrator/runtime/task-events/T-930-generated-runtime-artifacts.jsonl',
-                'Z:/missing/root/runtime/task-events/all-tasks.jsonl',
-                'mnt/wsl/projects/missing/runtime/task-events/T-930-generated-runtime-artifacts.jsonl'
+                'runtime/task-events/all-tasks.jsonl',
+                'garda-agent-orchestrator/runtime/locks/task-lock/owner.json'
             ],
             taskId,
             taskIntent: 'Ignore generated runtime artifacts during preflight scope classification',
@@ -1702,10 +1702,10 @@ describe('cli/commands/gates — preflight', () => {
         assert.equal(payload.metrics.changed_files_count, 1);
         assert.equal(payload.metrics.ignored_generated_runtime_files_count, 4);
         assert.deepEqual(payload.triggers.ignored_generated_runtime_files, [
-            'Z:/missing/root/runtime/task-events/all-tasks.jsonl',
+            'garda-agent-orchestrator/runtime/locks/task-lock/owner.json',
             'garda-agent-orchestrator/runtime/reports/garda-report.html',
             'garda-agent-orchestrator/runtime/task-events/T-930-generated-runtime-artifacts.jsonl',
-            'mnt/wsl/projects/missing/runtime/task-events/T-930-generated-runtime-artifacts.jsonl'
+            'runtime/task-events/all-tasks.jsonl'
         ]);
         assert.equal(payload.required_reviews.code, false);
         assert.equal(payload.required_reviews.security, false);

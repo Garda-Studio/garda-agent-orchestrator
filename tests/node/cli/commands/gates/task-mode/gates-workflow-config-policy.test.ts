@@ -693,6 +693,117 @@ describe('cli/commands/gates — workflow-config protected control-plane', () =>
         }
     });
 
+    it('preserves safe initial choices and rejects direct post-entry task-test-selection edits', { concurrency: false }, () => {
+        const detectedChanges: string[][] = [];
+        for (const selection of [undefined, {}, { require_operator_confirmation: false }, { require_operator_confirmation: true }]) {
+            const taskId = 'T-900workflow-config-test-selection-safe';
+            const repoRoot = createTempRepo();
+            try {
+                writeIgnoredRuntimePolicy(repoRoot, { ignoreBundle: true });
+                writeBaselineAgentEntrypoint(repoRoot);
+                seedTaskQueue(repoRoot, taskId);
+                seedInitAnswers(repoRoot);
+                resetCompileGateCommandToUnconfigured(repoRoot);
+                initializeGitRepo(repoRoot);
+                const configPath = path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config', 'workflow-config.json');
+                const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+                if (selection === undefined) {
+                    delete config.task_test_selection;
+                } else {
+                    config.task_test_selection = selection;
+                }
+                const originalBytes = JSON.stringify(config, null, 2) + '\n';
+                fs.writeFileSync(configPath, originalBytes, 'utf8');
+
+                const baseline = getWorkflowConfigPreTaskBaselineState(repoRoot);
+                assert.deepEqual(baseline.changed_files, []);
+                assert.deepEqual(baseline.compatibility_baseline_files, ['garda-agent-orchestrator/live/config/workflow-config.json']);
+                const entered = runEnterTaskMode({ repoRoot, taskId, taskSummary: 'Start from safe task-test-selection choice' });
+                assert.equal(entered.exitCode, 0);
+                assert.equal(fs.readFileSync(configPath, 'utf8'), originalBytes);
+                const taskModeEvidence = getTaskModeEvidence(repoRoot, taskId);
+
+                config.task_test_selection = { require_operator_confirmation: selection?.require_operator_confirmation !== true };
+                fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
+                detectedChanges.push(getCurrentWorkflowConfigChanges(repoRoot, taskModeEvidence.workflow_config_file_hashes).changed_files);
+            } finally {
+                fs.rmSync(repoRoot, { recursive: true, force: true });
+            }
+        }
+        assert.deepEqual(detectedChanges, Array.from({ length: 4 }, () => [
+            'garda-agent-orchestrator/live/config/workflow-config.json'
+        ]));
+    });
+
+    it('rejects malformed or unknown ignored task-test-selection authority before entry', { concurrency: false }, () => {
+        const invalidSelections = [
+            null, false, 0, 'false', [],
+            { require_operator_confirmation: null },
+            { require_operator_confirmation: 'false' },
+            { require_operator_confirmation: 0 },
+            { require_operator_confirmation: [] },
+            { require_operator_confirmation: {} },
+            { Require_operator_confirmation: false },
+            { require_operator_confirmation: false, unknown: true }
+        ];
+        const taskEvidenceStatuses: string[] = [];
+        for (const selection of invalidSelections) {
+            const taskId = 'T-900workflow-config-test-selection-unsafe';
+            const repoRoot = createTempRepo();
+            try {
+                writeIgnoredRuntimePolicy(repoRoot, { ignoreBundle: true });
+                writeBaselineAgentEntrypoint(repoRoot);
+                seedTaskQueue(repoRoot, taskId);
+                seedInitAnswers(repoRoot);
+                resetCompileGateCommandToUnconfigured(repoRoot);
+                initializeGitRepo(repoRoot);
+                const configPath = path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config', 'workflow-config.json');
+                const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+                config.task_test_selection = selection;
+                fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
+
+                const baseline = getWorkflowConfigPreTaskBaselineState(repoRoot);
+                assert.deepEqual(baseline.compatibility_baseline_files, []);
+                assert.deepEqual(baseline.changed_files, ['garda-agent-orchestrator/live/config/workflow-config.json']);
+                assert.throws(() => runEnterTaskMode({ repoRoot, taskId, taskSummary: 'Reject malformed test-selection authority' }));
+                taskEvidenceStatuses.push(getTaskModeEvidence(repoRoot, taskId).evidence_status);
+            } finally {
+                fs.rmSync(repoRoot, { recursive: true, force: true });
+            }
+        }
+        assert.deepEqual(taskEvidenceStatuses, invalidSelections.map(() => 'EVIDENCE_FILE_MISSING'));
+    });
+
+    it('rejects unrelated weakening and case-mismatched top-level keys with a valid test-selection choice', { concurrency: false }, () => {
+        for (const mutation of [
+            (config: Record<string, unknown>) => { config.Task_test_selection = config.task_test_selection; delete config.task_test_selection; },
+            (config: Record<string, unknown>) => { (config.full_suite_validation as Record<string, unknown>).command = 'true'; },
+            (config: Record<string, unknown>) => { (config.full_suite_validation as Record<string, unknown>).timeout_blocker = false; },
+            (config: Record<string, unknown>) => { (config.scope_budget_guard as Record<string, unknown>).enabled = false; },
+            (config: Record<string, unknown>) => { config.local_commit = { enabled: true }; },
+            (config: Record<string, unknown>) => { config.task_reset = { enabled: true }; }
+        ]) {
+            const repoRoot = createTempRepo();
+            try {
+                writeIgnoredRuntimePolicy(repoRoot, { ignoreBundle: true });
+                writeBaselineAgentEntrypoint(repoRoot);
+                seedInitAnswers(repoRoot);
+                resetCompileGateCommandToUnconfigured(repoRoot);
+                initializeGitRepo(repoRoot);
+                const configPath = path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config', 'workflow-config.json');
+                const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+                config.task_test_selection = { require_operator_confirmation: true };
+                mutation(config);
+                fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
+                const baseline = getWorkflowConfigPreTaskBaselineState(repoRoot);
+                assert.deepEqual(baseline.compatibility_baseline_files, []);
+                assert.deepEqual(baseline.changed_files, ['garda-agent-orchestrator/live/config/workflow-config.json']);
+            } finally {
+                fs.rmSync(repoRoot, { recursive: true, force: true });
+            }
+        }
+    });
+
     it('allows ignored pre-existing materialized workflow-config with legacy required-review limit', { concurrency: false }, () => {
         const taskId = 'T-900workflow-config-upgrade-ignored-legacy-review-limit';
         const repoRoot = createTempRepo();

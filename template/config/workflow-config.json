@@ -63,6 +63,9 @@
   "local_commit": {
     "enabled": false
   },
+  "task_test_selection": {
+    "require_operator_confirmation": false
+  },
   "task_reset": {
     "enabled": false
   },

@@ -42,7 +42,7 @@ const VALID_WORKFLOW_FULL_SUITE_FAILURE_POLICIES = new Set(['AUDIT_AND_BLOCK', '
 
 export function validateWorkflowConfig(input: unknown): Record<string, unknown> {
     const raw = ensurePlainObject(input, 'workflow-config');
-    const knownKeyList = ['compact', 'compile_gate', 'full_suite_validation', 'review_execution_policy', 'review_delegation', 'scope_budget_guard', 'review_cycle_guard', 'project_memory_maintenance', 'task_reset', 'local_commit', 'auto_backup', 'optional_quality_checks', 'orchestrator_work_policy'] as const;
+    const knownKeyList = ['compact', 'compile_gate', 'full_suite_validation', 'review_execution_policy', 'review_delegation', 'scope_budget_guard', 'review_cycle_guard', 'project_memory_maintenance', 'task_reset', 'local_commit', 'task_test_selection', 'auto_backup', 'optional_quality_checks', 'orchestrator_work_policy'] as const;
     const knownKeys = new Set(knownKeyList);
     assertNoCaseMismatchedKnownKeys(
         raw,
@@ -52,6 +52,9 @@ export function validateWorkflowConfig(input: unknown): Record<string, unknown> 
     assertNoLikelyTypoKeys(raw, knownKeyList, 'workflow-config');
     const normalized = cloneUnknownProperties(raw, knownKeys);
     if (raw.local_commit !== undefined) normalized.local_commit = validateLocalCommitSection(raw.local_commit);
+    if (raw.task_test_selection !== undefined) {
+        normalized.task_test_selection = validateTaskTestSelectionSection(raw.task_test_selection);
+    }
     if (raw.compact !== undefined) normalized.compact = compactSettingsToConfig(compactSettingsFromConfig(raw.compact));
 
     const section = ensurePlainObject(raw.full_suite_validation, 'workflow-config.full_suite_validation');
@@ -289,6 +292,21 @@ function validateLocalCommitSection(input: unknown): Record<string, unknown> {
     assertNoCaseMismatchedKnownKeys(section, ['enabled'], 'workflow-config.local_commit');
     assertNoUnknownKeys(section, ['enabled'], 'workflow-config.local_commit');
     return { enabled: normalizeBooleanLike(section.enabled ?? false, 'workflow-config.local_commit.enabled') };
+}
+
+function validateTaskTestSelectionSection(input: unknown): Record<string, unknown> {
+    const subject = 'workflow-config.task_test_selection';
+    const section = ensurePlainObject(input, subject);
+    const field = 'require_operator_confirmation';
+    assertNoCaseMismatchedKnownKeys(section, [field], subject);
+    assertNoUnknownKeys(section, [field], subject);
+    const requireOperatorConfirmation = Object.hasOwn(section, field)
+        ? section[field]
+        : buildDefaultWorkflowConfig().task_test_selection.require_operator_confirmation;
+    if (typeof requireOperatorConfirmation !== 'boolean') {
+        throw new Error(`${subject}.${field} must be a boolean.`);
+    }
+    return { require_operator_confirmation: requireOperatorConfirmation };
 }
 
 function validateTaskResetSection(input: unknown): Record<string, unknown> {

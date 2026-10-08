@@ -1166,8 +1166,8 @@ describe('gates/classify-change', () => {
                 'garda-agent-orchestrator/runtime/.runtime-mutation-generation/state-a.json',
                 'garda-agent-orchestrator/runtime/.runtime-mutation-generation/state-b.json',
                 'garda-agent-orchestrator/runtime/.runtime-mutation-generation.lock/owner.json',
-                'Z:/missing/root/runtime/task-events/all-tasks.jsonl',
-                'mnt/wsl/projects/missing/runtime/task-events/T-504.jsonl'
+                'runtime/task-events/all-tasks.jsonl',
+                'garda-agent-orchestrator/runtime/locks/task-lock/owner.json'
             ];
             const result = classifyChange({
                 normalizedFiles: [

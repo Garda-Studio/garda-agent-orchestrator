@@ -283,6 +283,44 @@ function applyDiscoveredCompileGateCommand(
     };
 }
 
+function readExistingInitConfigs(
+    targetRoot: string,
+    templateRoot: string,
+    liveRoot: string
+): Map<string, Record<string, unknown> | null> {
+    const configs = new Map<string, Record<string, unknown> | null>();
+    // Reject any invalid existing input before this stage writes even an earlier config.
+    for (const configName of MANAGED_CONFIG_NAMES) {
+        if (!pathExists(path.join(templateRoot, `config/${configName}.json`))) continue;
+        const configPath = path.join(liveRoot, `config/${configName}.json`);
+        const binding = bindContainedDestination(targetRoot, configPath);
+        if (binding.missingAt !== null) {
+            configs.set(configName, null);
+            continue;
+        }
+        let config: Record<string, unknown> | null = null;
+        try {
+            if (configName === 'workflow-config') {
+                const result = readWorkflowConfigForMerge(configPath);
+                if (result.status === 'present') config = result.config;
+            } else {
+                const parsed = readJsonFile(configPath);
+                if (isPlainObject(parsed)) config = parsed;
+            }
+        } catch {
+            // Report the failed input without exposing JSON contents or parser diagnostics.
+        }
+        if (config === null) {
+            throw new Error(
+                `Existing ${configName} configuration cannot be read as a JSON object. `
+                + 'Repair the existing configuration before retrying; its contents have been preserved.'
+            );
+        }
+        configs.set(configName, config);
+    }
+    return configs;
+}
+
 export function runInitConfigStage(
     options: RunInitConfigStageOptions
 ): InitConfigStageResult {
@@ -297,6 +335,7 @@ export function runInitConfigStage(
         tokenEconomyEnabled,
         dryRun
     } = options;
+    const existingConfigs = readExistingInitConfigs(targetRoot, templateRoot, liveRoot);
     const configMergeStatuses: Record<string, string> = {};
     let projectMemoryMaintenanceSummaryLine = buildProjectMemoryMaintenanceSummaryLine(
         buildDefaultWorkflowConfig().project_memory_maintenance
@@ -326,26 +365,18 @@ export function runInitConfigStage(
             );
             const hadExistingConfig = treatWorkflowConfigAsMissingBeforeRun
                 ? false
-                : pathExists(destConfigPath);
+                : (existingConfigs.get(configName) ?? null) !== null;
 
             if (configName === 'workflow-config') {
                 if (treatWorkflowConfigAsMissingBeforeRun || !workflowConfigExistedBeforeRun) {
                     workflowConfigReadStatus = 'missing';
                     existingConfig = null;
                 } else {
-                    const readResult = readWorkflowConfigForMerge(destConfigPath);
-                    workflowConfigReadStatus = readResult.status;
-                    existingConfig = readResult.config;
+                    existingConfig = existingConfigs.get(configName) ?? null;
+                    workflowConfigReadStatus = existingConfig === null ? 'missing' : 'present';
                 }
             } else if (hadExistingConfig) {
-                try {
-                    const parsedExistingConfig = readJsonFile(destConfigPath);
-                    existingConfig = isPlainObject(parsedExistingConfig)
-                        ? parsedExistingConfig
-                        : null;
-                } catch {
-                    existingConfig = null;
-                }
+                existingConfig = existingConfigs.get(configName) ?? null;
             }
 
             const replaceWithCanonicalTemplate = configName === 'garda.config';

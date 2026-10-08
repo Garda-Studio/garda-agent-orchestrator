@@ -922,37 +922,14 @@ describe('gates/workspace-snapshot-cache', () => {
         });
 
         it('returns null for current-version snapshots without changed file stats', () => {
+            fs.writeFileSync(path.join(repoRoot, 'file.ts'), 'export const a = 2;\n', 'utf8');
+            getWorkspaceSnapshotCached(repoRoot, 'git_auto', true, []);
+            const entry = readSnapshotCache(resolveSnapshotCachePath(repoRoot));
+            assert.ok(entry, 'the native producer must create a valid current-version entry');
+            const withoutStats = structuredClone(entry);
+            delete (withoutStats.snapshot as Partial<typeof withoutStats.snapshot>).changed_file_stats;
             const cachePath = path.join(tempDir, 'missing-stats.json');
-            fs.writeFileSync(cachePath, JSON.stringify({
-                cache_version: 6,
-                fingerprint: 'a'.repeat(64),
-                snapshot: {
-                    detection_source: 'git_auto',
-                    use_staged: false,
-                    include_untracked: true,
-                    changed_files: ['file.ts'],
-                    changed_files_count: 1,
-                    ignored_generated_runtime_files: [],
-                    ignored_generated_runtime_files_count: 0,
-                    additions_total: 1,
-                    deletions_total: 0,
-                    changed_lines_total: 1,
-                    changed_files_sha256: 'deadbeef',
-                    scope_content_sha256: 'feedface',
-                    scope_sha256: 'cafebabe'
-                },
-                params: {
-                    repo_root: '/repo',
-                    detection_source: 'git_auto',
-                    include_untracked: true,
-                    explicit_changed_files_hash: null
-                },
-                git_state: {
-                    head_sha: 'abc',
-                    index_mtime_ms: 12345,
-                    index_size: 678
-                }
-            }), 'utf8');
+            fs.writeFileSync(cachePath, JSON.stringify(withoutStats), 'utf8');
             assert.equal(readSnapshotCache(cachePath), null);
         });
     });
@@ -1224,7 +1201,7 @@ describe('gates/workspace-snapshot-cache', () => {
 
         it('ignores generated runtime artifacts from git-auto untracked scope', () => {
             const generatedRelativePaths = [
-                'mnt/wsl/projects/missing/runtime/task-events/T-504.jsonl',
+                'garda-agent-orchestrator/runtime/task-events/T-504.jsonl',
                 'runtime/.runtime-mutation-generation.anchor.json',
                 'runtime/.runtime-mutation-generation/head.json',
                 'runtime/.runtime-mutation-generation/state-a.json',
@@ -1250,6 +1227,7 @@ describe('gates/workspace-snapshot-cache', () => {
 
         it('prevents generated runtime filtering from hiding unrelated lock names and user-owned lookalikes', () => {
             const reviewableRelativePaths = [
+                'mnt/wsl/projects/missing/runtime/task-events/T-504.jsonl',
                 'runtime/.reviews-external.lock/owner.json',
                 'src/runtime/.reviews-index.lock/owner.json',
                 'src/runtime/.runtime-mutation-generation/state-a.json'

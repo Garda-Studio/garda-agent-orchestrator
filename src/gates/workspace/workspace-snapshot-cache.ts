@@ -14,7 +14,8 @@ import { getSafeWorktreePathState } from './worktree-path-state';
 import { normalizeGitChangeClassificationEvidence } from '../../core/git-change-classification';
 import { canonicalPathList, pathListSha256 } from '../shared/canonical-path-list';
 
-const CACHE_VERSION = 6;
+// Invalidate authenticated snapshots produced before runtime ownership was restricted to bundle roots.
+const CACHE_VERSION = 7;
 const CACHE_INTEGRITY_SCHEMA_VERSION = 3;
 const CACHE_RELATIVE_PATH = path.join('runtime', 'cache', 'workspace-snapshot.json');
 const CACHE_AUTH_KEY_RELATIVE_PATH = path.join('garda-agent-orchestrator', 'workspace-snapshot-cache.key');

@@ -940,6 +940,132 @@ describe('quality-checklist gate', () => {
         }
     });
 
+    it('rejects a failed atomic template replacement without advancing binding or event authority', (context) => {
+        const fixture = createGateFixture({ taskId: 'T-quality-atomic-template-failure' });
+        try {
+            const preflightPath = writeGateFixturePreflight(fixture);
+            const options = { repoRoot: fixture.repoRoot, taskId: fixture.taskId, preflightPath };
+            const initial = materializeQualityChecklistAnswersTemplate(options);
+            const answersPath = initial.answers_path;
+            initial.template.answers[0].status = 'PASS';
+            initial.template.answers[0].answer = 'Retain this authenticated rule answer after recovery.';
+            fs.writeFileSync(answersPath, JSON.stringify(initial.template, null, 2) + '\n', 'utf8');
+            const original = fs.readFileSync(answersPath, 'utf8');
+            const bindingPath = `${answersPath}.binding.json`;
+            const originalBinding = fs.readFileSync(bindingPath, 'utf8');
+            const timelinePath = path.join(fixture.orchestratorRoot, 'runtime', 'task-events', `${fixture.taskId}.jsonl`);
+            const originalTimeline = fs.readFileSync(timelinePath, 'utf8');
+            const originalDirectory = fs.readdirSync(path.dirname(answersPath)).sort();
+            const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+            preflight.changed_files = ['src/app.ts', 'src/refreshed.ts'];
+            fs.writeFileSync(preflightPath, JSON.stringify(preflight, null, 2) + '\n', 'utf8');
+            const filesystem = require('node:fs') as typeof fs;
+            const rename = filesystem.renameSync;
+            const failedReplace = context.mock.method(filesystem, 'renameSync', (from: fs.PathLike, to: fs.PathLike) => {
+                if (path.resolve(String(to)) === path.resolve(answersPath)) {
+                    throw Object.assign(new Error('Injected template publication failure'), { code: 'EIO' });
+                }
+                rename(from, to);
+            });
+
+            assert.throws(() => materializeQualityChecklistAnswersTemplate(options), /template publication failure/u);
+            assert.equal(fs.readFileSync(answersPath, 'utf8'), original);
+            assert.equal(fs.readFileSync(bindingPath, 'utf8'), originalBinding);
+            assert.equal(fs.readFileSync(timelinePath, 'utf8'), originalTimeline);
+            assert.deepEqual(fs.readdirSync(path.dirname(answersPath)).sort(), originalDirectory);
+
+            failedReplace.mock.restore();
+            const recovered = materializeQualityChecklistAnswersTemplate(options);
+            assert.equal(recovered.status, 'refreshed');
+            assert.equal(recovered.template.answers[0].answer, initial.template.answers[0].answer);
+            const binding = JSON.parse(fs.readFileSync(bindingPath, 'utf8')) as { preflight_sha256: string };
+            assert.equal(binding.preflight_sha256, recovered.template.preflight_sha256);
+        } finally {
+            context.mock.restoreAll();
+            fixture.cleanup();
+        }
+    });
+
+    it('rejects stale answer reuse after an atomic binding replacement fails', (context) => {
+        const fixture = createGateFixture({ taskId: 'T-quality-atomic-binding-failure' });
+        try {
+            const preflightPath = writeGateFixturePreflight(fixture);
+            const options = { repoRoot: fixture.repoRoot, taskId: fixture.taskId, preflightPath };
+            const initial = materializeQualityChecklistAnswersTemplate(options);
+            const answersPath = initial.answers_path;
+            initial.template.answers[0].status = 'PASS';
+            initial.template.answers[0].answer = 'Do not reuse without matching authenticated binding.';
+            fs.writeFileSync(answersPath, JSON.stringify(initial.template, null, 2) + '\n', 'utf8');
+            const bindingPath = `${answersPath}.binding.json`;
+            const originalBinding = fs.readFileSync(bindingPath, 'utf8');
+            const timelinePath = path.join(fixture.orchestratorRoot, 'runtime', 'task-events', `${fixture.taskId}.jsonl`);
+            const originalTimeline = fs.readFileSync(timelinePath, 'utf8');
+            const originalDirectory = fs.readdirSync(path.dirname(answersPath)).sort();
+            const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+            preflight.changed_files = ['src/app.ts', 'src/first-refresh.ts'];
+            fs.writeFileSync(preflightPath, JSON.stringify(preflight, null, 2) + '\n', 'utf8');
+            const filesystem = require('node:fs') as typeof fs;
+            const rename = filesystem.renameSync;
+            const failedReplace = context.mock.method(filesystem, 'renameSync', (from: fs.PathLike, to: fs.PathLike) => {
+                if (path.resolve(String(to)) === path.resolve(bindingPath)) {
+                    throw Object.assign(new Error('Injected binding publication failure'), { code: 'EIO' });
+                }
+                rename(from, to);
+            });
+
+            assert.throws(() => materializeQualityChecklistAnswersTemplate(options), /binding publication failure/u);
+            assert.equal(fs.readFileSync(bindingPath, 'utf8'), originalBinding);
+            assert.equal(fs.readFileSync(timelinePath, 'utf8'), originalTimeline);
+            assert.deepEqual(fs.readdirSync(path.dirname(answersPath)).sort(), originalDirectory);
+            const unboundBytes = fs.readFileSync(answersPath, 'utf8');
+            const unboundTemplate = JSON.parse(unboundBytes) as { preflight_sha256: string };
+            assert.notEqual(unboundTemplate.preflight_sha256, initial.template.preflight_sha256);
+
+            failedReplace.mock.restore();
+            preflight.changed_files = ['src/app.ts', 'src/second-refresh.ts'];
+            fs.writeFileSync(preflightPath, JSON.stringify(preflight, null, 2) + '\n', 'utf8');
+            const repaired = materializeQualityChecklistAnswersTemplate(options);
+            assert.equal(repaired.status, 'repair_created');
+            assert.equal(repaired.original_answers_path, answersPath);
+            assert.equal(fs.readFileSync(answersPath, 'utf8'), unboundBytes);
+            assert.equal(fs.readFileSync(bindingPath, 'utf8'), originalBinding);
+            assert.ok(repaired.template.answers.every((answer) => answer.status === '' && answer.answer === ''));
+        } finally {
+            context.mock.restoreAll();
+            fixture.cleanup();
+        }
+    });
+
+    it('rejects stale answer reuse when matching binding event evidence is missing', () => {
+        const fixture = createGateFixture({ taskId: 'T-quality-missing-binding-event' });
+        try {
+            const preflightPath = writeGateFixturePreflight(fixture);
+            const options = { repoRoot: fixture.repoRoot, taskId: fixture.taskId, preflightPath };
+            const initial = materializeQualityChecklistAnswersTemplate(options);
+            const answersPath = initial.answers_path;
+            initial.template.answers[0].status = 'PASS';
+            initial.template.answers[0].answer = 'Untrusted without the native task-event binding.';
+            fs.writeFileSync(answersPath, JSON.stringify(initial.template, null, 2) + '\n', 'utf8');
+            const original = fs.readFileSync(answersPath, 'utf8');
+            const bindingPath = `${answersPath}.binding.json`;
+            const originalBinding = fs.readFileSync(bindingPath, 'utf8');
+            const timelinePath = path.join(fixture.orchestratorRoot, 'runtime', 'task-events', `${fixture.taskId}.jsonl`);
+            fs.renameSync(timelinePath, `${timelinePath}.preserved`);
+            const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+            preflight.changed_files = ['src/app.ts', 'src/after-missing-event.ts'];
+            fs.writeFileSync(preflightPath, JSON.stringify(preflight, null, 2) + '\n', 'utf8');
+
+            const repaired = materializeQualityChecklistAnswersTemplate(options);
+            assert.equal(repaired.status, 'repair_created');
+            assert.equal(repaired.original_answers_path, answersPath);
+            assert.equal(fs.readFileSync(answersPath, 'utf8'), original);
+            assert.equal(fs.readFileSync(bindingPath, 'utf8'), originalBinding);
+            assert.ok(repaired.template.answers.every((answer) => answer.status === '' && answer.answer === ''));
+        } finally {
+            fixture.cleanup();
+        }
+    });
+
     it('preserves filled repair answers across repeated materialization and coherent preflight refresh', () => {
         const fixture = createGateFixture({ taskId: 'T-quality-repair-restart-preservation' });
         try {

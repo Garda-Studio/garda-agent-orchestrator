@@ -140,6 +140,13 @@ test('workflow-setting registry rejects duplicate ids, keys, and CLI flags, incl
     assert.throws(
         () => createWorkflowSettingRegistry([
             booleanSetting(),
+            booleanSetting({ key: 'other.enabled', cli: { flag: '--other-enabled' } })
+        ]),
+        /duplicate or case-drifted id/u
+    );
+    assert.throws(
+        () => createWorkflowSettingRegistry([
+            booleanSetting(),
             booleanSetting({ id: 'FULL-SUITE-ENABLED', key: 'other.enabled', cli: { flag: '--other-enabled' } })
         ]),
         /stable lowercase kebab-case/u
@@ -317,4 +324,82 @@ test('workflow-setting registry fails closed for invalid values and unsafe mater
             message
         );
     }
+});
+
+test('workflow-setting registry snapshots optional metadata without sharing nested option objects', () => {
+    const options = [
+        { value: 'true', label: 'On', description: 'Enable the existing guarded setting.' },
+        { value: 'false', label: 'Off', description: 'Disable the existing guarded setting.' }
+    ];
+    const definition = booleanSetting();
+    const ui = { ...definition.ui, options, placeholder: 'Choose a value', editable: false };
+    definition.ui = ui;
+    const registry = createWorkflowSettingRegistry([definition]);
+    const entry = registry.require(definition.id);
+
+    options[0].label = 'Changed outside the registry';
+    options.push({ value: 'later', label: 'Later', description: 'A later source mutation.' });
+    ui.placeholder = 'Changed after registration';
+    assert.deepEqual(entry.ui.options?.map(option => option.label), ['On', 'Off']);
+    assert.equal(entry.ui.placeholder, 'Choose a value');
+    assert.equal(entry.ui.editable, false);
+    assert.ok(Object.isFrozen(entry.ui.options));
+    assert.ok(Object.isFrozen(entry.ui.options?.[0]));
+    assert.equal(registry.validate(definition.id, false), false);
+    assert.deepEqual(registry.materialize(definition.id, false, { target: 'live' }), [
+        { path: 'full_suite_validation.enabled', value: false }
+    ]);
+});
+
+test('workflow-setting registry retains zero bounds and enum choices using the existing value validators', () => {
+    const integer = typedSetting('integer', 0, 'number', (value): value is number => Number.isSafeInteger(value));
+    integer.ui = { ...integer.ui, min: 0, max: 5 };
+    const enumeration = typedSetting('enum', 'balanced', 'select', (value): value is string => (
+        value === 'balanced' || value === 'strict'
+    ));
+    enumeration.ui = { ...enumeration.ui, options: [
+        { value: 'balanced', label: 'Balanced', description: 'Existing balanced value.' },
+        { value: 'strict', label: 'Strict', description: 'Existing strict value.' }
+    ] };
+    const registry = createWorkflowSettingRegistry([integer, enumeration]);
+
+    assert.equal(registry.require(integer.id).ui.min, 0);
+    assert.equal(registry.require(integer.id).ui.max, 5);
+    assert.equal(registry.validate(enumeration.id, 'strict'), 'strict');
+    assert.throws(() => registry.validate(enumeration.id, 'invented'), /Invalid value/u);
+});
+
+test('workflow-setting registry rejects malformed optional metadata and contradictory presentation ranges', () => {
+    const invalidUi = [
+        { options: null },
+        { options: new Array(1) },
+        { options: [{ value: 'yes', label: 'Yes', description: 'Not a Boolean wire value.' }] },
+        { options: [
+            { value: 'true', label: 'First', description: 'First choice.' },
+            { value: 'true', label: 'Duplicate', description: 'Duplicate choice.' }
+        ] },
+        { options: [{ value: 'true', label: '', description: 'Missing option label.' }] },
+        { options: [{ value: 'true', label: 'On', description: null }] },
+        { editable: 'true' },
+        { placeholder: 1 },
+        { min: 0 },
+        { max: Number.NaN }
+    ];
+    let rejectedCount = 0;
+    for (const metadata of invalidUi) {
+        const definition = booleanSetting();
+        definition.ui = { ...definition.ui, ...metadata } as unknown as typeof definition.ui;
+        assert.throws(() => createWorkflowSettingRegistry([definition]), /\.ui\./u);
+        rejectedCount += 1;
+    }
+    assert.equal(rejectedCount, invalidUi.length);
+
+    const integer = typedSetting('integer', 1, 'number', (value): value is number => Number.isSafeInteger(value));
+    assert.throws(() => createWorkflowSettingRegistry([{ ...integer, ui: { ...integer.ui, min: 5, max: 0 } }]), /min must not exceed/u);
+    assert.throws(() => createWorkflowSettingRegistry([{ ...integer, ui: { ...integer.ui, min: 2 } }]), /default_value must stay within/u);
+    assert.throws(() => createWorkflowSettingRegistry([{ ...integer, ui: { ...integer.ui, max: 0 } }]), /default_value must stay within/u);
+    const enumeration = typedSetting('enum', 'balanced', 'select', (value): value is string => typeof value === 'string');
+    assert.throws(() => createWorkflowSettingRegistry([{
+        ...enumeration, ui: { ...enumeration.ui, options: [{ value: 'strict', label: 'Strict', description: 'A different value.' }] }
+    }]), /default_value must appear in ui.options/u);
 });

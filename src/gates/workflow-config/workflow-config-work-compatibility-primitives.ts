@@ -24,7 +24,8 @@ export const COMPATIBILITY_TOP_LEVEL_KEYS = [
     'review_execution_policy',
     'scope_budget_guard',
     'task_reset',
-    'local_commit'
+    'local_commit',
+    'task_test_selection'
 ];
 const COMPATIBILITY_OPTIONAL_TOP_LEVEL_KEYS = [
     'compact',
@@ -35,7 +36,8 @@ const COMPATIBILITY_OPTIONAL_TOP_LEVEL_KEYS = [
     'review_delegation',
     'review_execution_policy',
     'task_reset',
-    'local_commit'
+    'local_commit',
+    'task_test_selection'
 ];
 export const COMPATIBILITY_ALLOWED_TOP_LEVEL_KEY_SETS = Array.from(
     { length: 1 << COMPATIBILITY_OPTIONAL_TOP_LEVEL_KEYS.length },
@@ -103,6 +105,7 @@ export const COMPATIBILITY_PROJECT_MEMORY_MAINTENANCE_KEYS = [
 ];
 export const COMPATIBILITY_TASK_RESET_KEYS = ['enabled'];
 export const COMPATIBILITY_LOCAL_COMMIT_KEYS = ['enabled'];
+export const COMPATIBILITY_TASK_TEST_SELECTION_KEYS = ['require_operator_confirmation'];
 export const COMPATIBILITY_AUTO_BACKUP_KEYS = ['enabled', 'interval_days', 'keep_latest'];
 export const COMPATIBILITY_OPTIONAL_QUALITY_CHECKS_KEYS = [
     'baseline_version',

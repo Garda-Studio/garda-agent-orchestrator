@@ -10,6 +10,7 @@ import {
 } from '../../../src/materialization/init';
 import { getProjectDiscovery } from '../../../src/materialization/project-discovery';
 import {
+    MANAGED_CONFIG_NAMES,
     mergeProfilesConfigWithTemplate,
     runInitConfigStage
 } from '../../../src/materialization/init/init-config-stage';
@@ -403,6 +404,65 @@ describe('init materialization stages', () => {
         }
     });
 
+    for (const name of MANAGED_CONFIG_NAMES) {
+        it(`preserves malformed existing ${name} and rejects before other config writes`, () => {
+            const workspace = createStageWorkspace(repoRoot);
+            try {
+                const liveConfigRoot = path.join(workspace.liveRoot, 'config');
+                fs.mkdirSync(liveConfigRoot, { recursive: true });
+                const configPath = path.join(liveConfigRoot, `${name}.json`);
+                const original = '{ "private_fixture": "retained-marker"';
+                fs.writeFileSync(configPath, original);
+                const before = fs.readdirSync(liveConfigRoot).sort();
+                assert.throws(() => runInitConfigStage({
+                    targetRoot: workspace.projectRoot,
+                    templateRoot: workspace.templateRoot,
+                    liveRoot: workspace.liveRoot,
+                    workflowConfigExistedBeforeRun: name === 'workflow-config',
+                    preserveLegacyWorkflowConfigOmission: false,
+                    discovery: getProjectDiscovery(workspace.projectRoot),
+                    preservedCompileGateCommand: null,
+                    tokenEconomyEnabled: true,
+                    dryRun: false
+                }), (error: unknown) => {
+                    assert.ok(error instanceof Error);
+                    assert.match(error.message, /existing.*config|config.*existing/i);
+                    assert.equal(error.message.includes('retained-marker'), false);
+                    return true;
+                });
+                assert.equal(fs.readFileSync(configPath, 'utf8'), original);
+                assert.deepEqual(fs.readdirSync(liveConfigRoot).sort(), before);
+            } finally {
+                fs.rmSync(workspace.projectRoot, { recursive: true, force: true });
+            }
+        });
+    }
+
+    it('rejects invalid existing workflow config even when startup flags describe it as absent', () => {
+        const workspace = createStageWorkspace(repoRoot);
+        try {
+            const configPath = path.join(workspace.liveRoot, 'config', 'workflow-config.json');
+            fs.mkdirSync(path.dirname(configPath), { recursive: true });
+            fs.writeFileSync(configPath, 'null');
+            for (const preserveLegacyWorkflowConfigOmission of [false, true]) {
+                assert.throws(() => runInitConfigStage({
+                    targetRoot: workspace.projectRoot,
+                    templateRoot: workspace.templateRoot,
+                    liveRoot: workspace.liveRoot,
+                    workflowConfigExistedBeforeRun: false,
+                    preserveLegacyWorkflowConfigOmission,
+                    discovery: getProjectDiscovery(workspace.projectRoot),
+                    preservedCompileGateCommand: null,
+                    tokenEconomyEnabled: true,
+                    dryRun: false
+                }), /existing.*config|config.*existing/i);
+                assert.equal(fs.readFileSync(configPath, 'utf8'), 'null');
+            }
+        } finally {
+            fs.rmSync(workspace.projectRoot, { recursive: true, force: true });
+        }
+    });
+
     it('rejects a hard-linked live config without changing its outside alias', () => {
         const workspace = createStageWorkspace(repoRoot);
         try {
@@ -424,6 +484,67 @@ describe('init materialization stages', () => {
                 dryRun: false
             }), /hard-linked/);
             assert.deepEqual(fs.readFileSync(outside), original);
+        } finally {
+            fs.rmSync(workspace.projectRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects unreadable existing profiles before writing any other config', (t) => {
+        const workspace = createStageWorkspace(repoRoot);
+        const configRoot = path.join(workspace.liveRoot, 'config');
+        const configPath = path.join(configRoot, 'profiles.json');
+        const original = '{"retained":true}';
+        fs.mkdirSync(configRoot, { recursive: true });
+        fs.writeFileSync(configPath, original);
+        const mutableFs = require('node:fs') as typeof fs;
+        const originalRead = mutableFs.readFileSync;
+        const readMock = t.mock.method(mutableFs, 'readFileSync', (...args: unknown[]) => {
+            if (String(args[0]) === configPath) {
+                throw Object.assign(new Error('fixture read denied'), { code: 'EACCES' });
+            }
+            return Reflect.apply(originalRead, mutableFs, args);
+        });
+        try {
+            assert.throws(() => runInitConfigStage({
+                targetRoot: workspace.projectRoot,
+                templateRoot: workspace.templateRoot,
+                liveRoot: workspace.liveRoot,
+                workflowConfigExistedBeforeRun: false,
+                preserveLegacyWorkflowConfigOmission: false,
+                discovery: getProjectDiscovery(workspace.projectRoot),
+                preservedCompileGateCommand: null,
+                tokenEconomyEnabled: true,
+                dryRun: false
+            }), /existing profiles configuration/i);
+            assert.deepEqual(fs.readdirSync(configRoot), ['profiles.json']);
+            readMock.mock.restore();
+            assert.equal(fs.readFileSync(configPath, 'utf8'), original);
+        } finally {
+            readMock.mock.restore();
+            fs.rmSync(workspace.projectRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects a non-object existing profiles input during dry-run and preserves it', () => {
+        const workspace = createStageWorkspace(repoRoot);
+        const configRoot = path.join(workspace.liveRoot, 'config');
+        const configPath = path.join(configRoot, 'profiles.json');
+        try {
+            fs.mkdirSync(configRoot, { recursive: true });
+            fs.writeFileSync(configPath, '[]');
+            assert.throws(() => runInitConfigStage({
+                targetRoot: workspace.projectRoot,
+                templateRoot: workspace.templateRoot,
+                liveRoot: workspace.liveRoot,
+                workflowConfigExistedBeforeRun: false,
+                preserveLegacyWorkflowConfigOmission: false,
+                discovery: getProjectDiscovery(workspace.projectRoot),
+                preservedCompileGateCommand: null,
+                tokenEconomyEnabled: true,
+                dryRun: true
+            }), /existing profiles configuration/i);
+            assert.equal(fs.readFileSync(configPath, 'utf8'), '[]');
+            assert.deepEqual(fs.readdirSync(configRoot), ['profiles.json']);
         } finally {
             fs.rmSync(workspace.projectRoot, { recursive: true, force: true });
         }

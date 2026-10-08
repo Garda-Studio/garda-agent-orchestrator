@@ -1,5 +1,8 @@
 # Changelog
 
+- Integrate accepted workflow configuration, no-op scope, quality inputs and materialization consistency fixes.
+
+
 - Integrate accepted generic event admission checks before timeline writes and terminal cleanup.
 
 

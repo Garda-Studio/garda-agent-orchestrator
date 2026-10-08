@@ -33,6 +33,17 @@ export interface WorkflowSettingUiMetadata {
     label: string;
     description: string;
     control: WorkflowSettingUiControl;
+    options?: readonly WorkflowSettingOption[];
+    min?: number;
+    max?: number;
+    placeholder?: string;
+    editable?: boolean;
+}
+
+export interface WorkflowSettingOption {
+    value: string;
+    label: string;
+    description: string;
 }
 
 export type WorkflowSettingUiControl = 'checkbox' | 'number' | 'select' | 'text' | 'text_list';
@@ -167,6 +178,51 @@ function isValueTypeCompatible(valueType: WorkflowSettingValueType, value: unkno
     }
 }
 
+function assertOptionalUiMetadata(entry: WorkflowSettingManifestEntry, label: string): void {
+    const ui = entry.ui;
+    if (ui.options !== undefined) {
+        if (!Array.isArray(ui.options)) throw new Error(`${label}.ui.options must be an array.`);
+        const values = new Set<string>();
+        for (let index = 0; index < ui.options.length; index += 1) {
+            const option = ui.options[index];
+            const subject = `${label}.ui.options[${index}]`;
+            const value = requireBoundedString(option?.value, `${subject}.value`, 160);
+            requireBoundedString(option?.label, `${subject}.label`, 120);
+            requireBoundedString(option?.description, `${subject}.description`, 1000);
+            if (values.has(value)) throw new Error(`${label}.ui.options contains duplicate value '${value}'.`);
+            values.add(value);
+        }
+        if (values.size > 0 && !['boolean', 'enum', 'enum_list'].includes(entry.value_type)) {
+            throw new Error(`${label}.ui.options is incompatible with value_type '${entry.value_type}'.`);
+        }
+        if (entry.value_type === 'boolean' && [...values].some(value => value !== 'true' && value !== 'false')) {
+            throw new Error(`${label}.ui.options boolean values must be true or false.`);
+        }
+        if (values.size > 0 && ['enum', 'enum_list'].includes(entry.value_type)) {
+            const defaults = Array.isArray(entry.default_value) ? entry.default_value : [entry.default_value];
+            if (defaults.some(value => !values.has(String(value)))) {
+                throw new Error(`${label}.default_value must appear in ui.options.`);
+            }
+        }
+    }
+    for (const field of ['min', 'max'] as const) {
+        if (ui[field] !== undefined && (entry.value_type !== 'integer' || !Number.isSafeInteger(ui[field]))) {
+            throw new Error(`${label}.ui.${field} requires a safe integer for an integer setting.`);
+        }
+    }
+    if (ui.min !== undefined && ui.max !== undefined && ui.min > ui.max) {
+        throw new Error(`${label}.ui.min must not exceed ui.max.`);
+    }
+    if (typeof entry.default_value === 'number' && (
+        (ui.min !== undefined && entry.default_value < ui.min)
+        || (ui.max !== undefined && entry.default_value > ui.max)
+    )) throw new Error(`${label}.default_value must stay within ui bounds.`);
+    if (ui.placeholder !== undefined) requireBoundedString(ui.placeholder, `${label}.ui.placeholder`, 1000);
+    if (ui.editable !== undefined && typeof ui.editable !== 'boolean') {
+        throw new Error(`${label}.ui.editable must be a boolean.`);
+    }
+}
+
 function assertEntry(entry: WorkflowSettingManifestEntry, index: number): void {
     const label = `workflow-setting manifest[${index}]`;
     const id = requireBoundedString(entry.id, `${label}.id`, 80);
@@ -219,6 +275,7 @@ function assertEntry(entry: WorkflowSettingManifestEntry, index: number): void {
     if (!UI_CONTROLS_BY_VALUE_TYPE[entry.value_type].includes(entry.ui.control)) {
         throw new Error(`${label}.ui.control is incompatible with value_type '${entry.value_type}'.`);
     }
+    assertOptionalUiMetadata(entry, label);
 }
 
 function requireValidValue(entry: WorkflowSettingManifestEntry, value: unknown): WorkflowSettingValue {
@@ -249,7 +306,14 @@ function freezeEntry(entry: WorkflowSettingManifestEntry): WorkflowSettingManife
         ...entry,
         owner: Object.freeze({ ...entry.owner }),
         cli: Object.freeze({ ...entry.cli }),
-        ui: Object.freeze({ ...entry.ui }),
+        ui: Object.freeze({
+            ...entry.ui,
+            ...(entry.ui.options !== undefined ? {
+                options: Object.freeze(entry.ui.options.map(option => Object.freeze({
+                    value: option.value, label: option.label, description: option.description
+                })))
+            } : {})
+        }),
         default_value: Array.isArray(entry.default_value)
             ? Object.freeze([...entry.default_value])
             : entry.default_value
