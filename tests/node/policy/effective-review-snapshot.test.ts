@@ -263,6 +263,122 @@ test('rejects rehashed security-intent snapshots that remove required review', (
         violation.includes("required profile lane 'security'")));
 });
 
+function buildProfileActivityFixture(
+    reviewId: string,
+    profileState: boolean | 'auto',
+    capabilityEnabled: boolean
+) {
+    const catalog = buildCatalog();
+    const capabilities = Object.fromEntries(catalog.review_types.map(definition => [
+        definition.id, definition.id === reviewId ? capabilityEnabled : true
+    ])) as ReviewCapabilitiesConfigMap;
+    const profilePolicy = resolveProfileReviewCatalogPolicy(
+        'balanced', { 'architecture-boundary': false, [reviewId]: profileState }, capabilities, catalog
+    );
+    const options = {
+        catalog, profilePolicy, profileSnapshotSha256: PROFILE_HASH,
+        legacyRequiredReviews: { [reviewId]: true },
+        scopeCategory: 'code', taskIntent: 'Validate profile activity',
+        changedFiles: ['src/handler.ts'], taskTriggers: {}
+    };
+    return { catalog, capabilities, profilePolicy, options, snapshot: buildEffectiveReviewSnapshot(options) };
+}
+
+test('validates required built-in lanes with disabled capabilities through frozen reconstruction', () => {
+    const builtInIds = buildCatalog().review_types.filter(definition => definition.built_in)
+        .map(definition => definition.id);
+    for (const id of ['test', ...builtInIds.filter(id => id !== 'test')]) {
+        const fixture = buildProfileActivityFixture(id, true, false);
+        const lane = fixture.snapshot.lanes.find(lane => lane.id === id);
+        assert.ok(lane);
+        assert.equal(lane.profile.active, true, id);
+        assert.equal(lane.profile.capability_enabled, false, id);
+        assert.equal(lane.selection, 'required', id);
+        assert.deepEqual(fixture.snapshot.required_review_ids, [id]);
+        assert.deepEqual(getEffectiveReviewSnapshotViolations(fixture.snapshot), [], id);
+        assert.doesNotThrow(() => assertEffectiveReviewSnapshotCurrent(
+            fixture.snapshot, fixture.catalog, PROFILE_HASH, fixture.profilePolicy
+        ), id);
+
+        const zeroDiff = buildEffectiveReviewSnapshot({ ...fixture.options, zeroDiffBaselineOnly: true });
+        assert.equal(zeroDiff.lanes.find(lane => lane.id === id)?.profile.active, true, id);
+        assert.equal(zeroDiff.lanes.find(lane => lane.id === id)?.selection, 'inactive', id);
+        assert.deepEqual(zeroDiff.required_review_ids, []);
+        assert.deepEqual(getEffectiveReviewSnapshotViolations(zeroDiff), [], id);
+        assert.doesNotThrow(() => assertEffectiveReviewSnapshotCurrent(
+            zeroDiff, fixture.catalog, PROFILE_HASH, fixture.profilePolicy
+        ), id);
+
+        assert.throws(() => buildEffectiveReviewSnapshot({
+            ...fixture.options, taskRequiredReviewIds: [id]
+        }), /capability-disabled/u, id);
+    }
+});
+
+test('preserves inactive built-in capability controls and rejects rehashed activity forgery', () => {
+    for (const definition of buildCatalog().review_types.filter(definition => definition.built_in)) {
+        for (const state of [false, 'auto'] as const) {
+            for (const capability of [false, true]) {
+                const fixture = buildProfileActivityFixture(definition.id, state, capability);
+                const lane = fixture.snapshot.lanes.find(lane => lane.id === definition.id);
+                assert.ok(lane);
+                const active = state === 'auto' && capability;
+                assert.equal(lane.profile.active, active);
+                assert.equal(lane.selection, active ? 'required' : 'inactive');
+                assert.deepEqual(getEffectiveReviewSnapshotViolations(fixture.snapshot), []);
+                assert.doesNotThrow(() => assertEffectiveReviewSnapshotCurrent(
+                    fixture.snapshot, fixture.catalog, PROFILE_HASH, fixture.profilePolicy
+                ));
+                if (active) continue;
+
+                const forged = JSON.parse(JSON.stringify(fixture.snapshot)) as Record<string, unknown>;
+                const forgedLane = (forged.lanes as Array<Record<string, unknown>>)
+                    .find(lane => lane.id === definition.id);
+                assert.ok(forgedLane);
+                (forgedLane.profile as Record<string, unknown>).active = true;
+                rehashSnapshot(forged);
+                assert.ok(getEffectiveReviewSnapshotViolations(forged).some(violation => (
+                    violation.includes(`lane '${definition.id}' profile activity is inconsistent`)
+                )));
+            }
+        }
+    }
+});
+
+test('rejects disabled custom requirements and forged built-in compatibility bindings', () => {
+    assert.throws(() => buildProfileActivityFixture('architecture-boundary', true, false),
+        /architecture-boundary.*required.*capability.*disabled/u);
+    const custom = buildProfileActivityFixture('architecture-boundary', true, true);
+    const forgedCustom = JSON.parse(JSON.stringify(custom.snapshot)) as Record<string, unknown>;
+    const customLane = (forgedCustom.lanes as Array<Record<string, unknown>>)
+        .find(lane => lane.id === 'architecture-boundary');
+    assert.ok(customLane);
+    (customLane.profile as Record<string, unknown>).capability_enabled = false;
+    rehashSnapshot(forgedCustom);
+    assert.ok(getEffectiveReviewSnapshotViolations(forgedCustom).some(violation => (
+        violation.includes("lane 'architecture-boundary' profile activity is inconsistent")
+    )));
+
+    const builtin = buildProfileActivityFixture('test', true, false);
+    const forgedBuiltin = JSON.parse(JSON.stringify(builtin.snapshot)) as typeof builtin.snapshot;
+    const builtinLane = forgedBuiltin.lanes.find(lane => lane.id === 'test');
+    assert.ok(builtinLane);
+    builtinLane.profile.built_in = false;
+    rehashSnapshot(forgedBuiltin as unknown as Record<string, unknown>);
+    assert.ok(getEffectiveReviewSnapshotViolations(forgedBuiltin).some(violation => (
+        violation.includes("lane 'test' definition binding is invalid")
+    )));
+    assert.throws(() => assertEffectiveReviewSnapshotCurrent(
+        forgedBuiltin, builtin.catalog, PROFILE_HASH, builtin.profilePolicy
+    ), /definition binding is invalid/u);
+    const changedPolicy = resolveProfileReviewCatalogPolicy(
+        'balanced', { 'architecture-boundary': false, test: false }, builtin.capabilities, builtin.catalog
+    );
+    assert.throws(() => assertEffectiveReviewSnapshotCurrent(
+        builtin.snapshot, builtin.catalog, PROFILE_HASH, changedPolicy
+    ), /profile policy does not match the frozen active profile/u);
+});
+
 test('effective review snapshot preserves built-in requirements and never triggers a disabled custom lane', () => {
     const snapshot = buildSnapshot(false, {
         taskIntent: 'Architecture change',

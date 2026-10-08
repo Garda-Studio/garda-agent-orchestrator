@@ -151,6 +151,41 @@ test('Maven resolves a single test class in the default project', (context) => {
     }
 });
 
+test('Maven preserves contained directory operands with trailing separators', (context) => {
+    const fixture = createMavenFixture(context);
+    for (const operand of [`${PROJECT}/`, `${PROJECT}///`, `./${PROJECT}/`, `././${PROJECT}//`]) {
+        for (const option of [`-f "${operand}"`, `--file="${operand}"`]) {
+            const command = `mvn -o ${option} -Dtest=ExampleTest test`;
+            const result = validateCommand(command, fixture);
+            assert.equal(result.valid, true, `${command}\n${result.violations.join('\n')}`);
+        }
+    }
+});
+
+test('Maven preserves explicit dot-slash operands for the repository root', (context) => {
+    const fixture = createMavenFixture(context, '');
+    for (const operand of ['.', './', '././', './././', './/', '././/', './//.//']) {
+        const command = `mvn -o -f "${operand}" -Dtest=ExampleTest test`;
+        const result = validateCommand(command, fixture);
+        assert.equal(result.valid, true, `${command}\n${result.violations.join('\n')}`);
+    }
+});
+
+test('Maven directory spelling preserves offline, containment and exact-target rejection', (context) => {
+    const fixture = createMavenFixture(context);
+    const rootFixture = createMavenFixture(context, '');
+    for (const operand of ['', '/', '///', '/./', '../', './../', './/../', `${PROJECT}/../`, 'C:/', '//server/share/']) {
+        assert.equal(validateCommand(`mvn -o -f "${operand}" -Dtest=ExampleTest test`, rootFixture).valid, false, operand);
+    }
+    for (const [project, operand] of [[fixture, `${PROJECT}/`], [rootFixture, './']] as const) {
+        assert.equal(validateCommand(`mvn -f "${operand}" -Dtest=ExampleTest test`, project).valid, false, operand);
+        assert.equal(validateCommand(`mvn -o -f "${operand}" -Dtest=MissingTest test`, project).valid, false, operand);
+    }
+    const linkedProject = path.join(fixture.repoRoot, 'linked-project');
+    fs.symlinkSync(path.join(fixture.repoRoot, PROJECT), linkedProject, process.platform === 'win32' ? 'junction' : 'dir');
+    assert.equal(validateCommand('mvn -o -f linked-project/ -Dtest=ExampleTest test', fixture).valid, false);
+});
+
 test('Maven requires explicit offline mode', (context) => {
     const fixture = createMavenFixture(context);
     assert.equal(validateCommand(`mvn -f "${fixture.pom}" -Dtest=ExampleTest test`, fixture).valid, false);
@@ -421,14 +456,16 @@ test('Maven failed and unavailable parser fixtures preserve diagnostics and auth
     }
 });
 
-async function assertNativeMavenIngestion(fixture: ReturnType<typeof createMavenFixture>, diagnostics: string, parserOnly: boolean) {
+async function assertNativeMavenIngestion(
+    fixture: ReturnType<typeof createMavenFixture>, diagnostics: string, parserOnly: boolean, projectOperand = fixture.pom
+) {
     const taskId = 'T-177-native-maven';
     const native = await seedPromptBoundReviewFixture({ repoRoot: fixture.repoRoot, taskId });
     attestReviewerInvocationForTest({
         repoRoot: fixture.repoRoot, taskId, reviewType: 'code', reviewContextPath: native.reviewContextPath,
         reviewerIdentity: native.reviewerIdentity
     });
-    const command = `${process.platform === 'win32' ? 'mvn.cmd' : 'mvn'} -o -f "${fixture.pom}" -Dtest=ExampleTest test`;
+    const command = `${process.platform === 'win32' ? 'mvn.cmd' : 'mvn'} -o -f "${projectOperand}" -Dtest=ExampleTest test`;
     const report = buildNoFindingsJsonReviewReport(native.reviewContextPath, taskId);
     report.validation_notes = [{
         id: 'N-001', topic: 'focused-self-validation',
@@ -464,6 +501,16 @@ async function assertNativeMavenIngestion(fixture: ReturnType<typeof createMaven
 
 test('native ingestion rejects Maven output flags and preserves corrected parser-only evidence', async (context) => {
     await assertNativeMavenIngestion(createMavenFixture(context, PROJECT, true), 'Parser fixture: ExampleTest selector maps to 1 Java file.', true);
+});
+
+test('native ingestion preserves a trailing directory operand without claiming Maven execution', async (context) => {
+    await assertNativeMavenIngestion(createMavenFixture(context, PROJECT, true),
+        'Parser-only fixture: the contained directory selects ExampleTest; Maven was not executed.', true, `${PROJECT}/`);
+});
+
+test('native ingestion preserves an explicit root dot-slash operand without claiming Maven execution', async (context) => {
+    await assertNativeMavenIngestion(createMavenFixture(context, '', true),
+        'Parser-only fixture: the repository root selects ExampleTest; Maven was not executed.', true, '././/');
 });
 
 function findLocalMavenExecutable(): string | undefined {

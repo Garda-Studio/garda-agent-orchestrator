@@ -545,6 +545,30 @@ test('reviewer session contract stays synced across rule-pack guidance files', (
     }
 });
 
+const GENERATED_HANDOFF_AUTHORITY_SNIPPETS = [
+    '## Generated Findings-Only Handoff',
+    'sole instruction and output-format authority',
+    'Never modify source files, control artifacts, or task state',
+    'never launch another agent',
+    'only permitted write is the exact `ReviewOutputPath`',
+    'exactly one findings-only JSON object',
+    'every coverage-ledger obligation',
+    'do not add verdict, pass/fail, status, downstream disposition, or remediation fields'
+] as const;
+
+function assertGeneratedHandoffAuthority(content: string, label: string): void {
+    for (const snippet of GENERATED_HANDOFF_AUTHORITY_SNIPPETS) {
+        const sentenceCaseSnippet = snippet.replace(/^do\b/u, 'Do');
+        assert.ok(content.includes(snippet) || content.includes(sentenceCaseSnippet),
+            `${label} must include findings-only handoff snippet: ${snippet}`);
+    }
+    assert.ok(
+        content.indexOf('## Generated Findings-Only Handoff') < content.indexOf('## Core Workflow')
+            || !content.includes('## Core Workflow'),
+        `${label} must establish the generated contract before workflow guidance`
+    );
+}
+
 test('reviewer skill templates make generated findings-only handoff authoritative', () => {
     const reviewerSkillPaths = [
         'template/skills/code-review/SKILL.md',
@@ -564,28 +588,28 @@ test('reviewer skill templates make generated findings-only handoff authoritativ
         'template/skill-packs/frontend-web/skills/frontend-accessibility/SKILL.md'
     ] as const;
 
-    const requiredSnippets = [
-        '## Generated Findings-Only Handoff',
-        'sole instruction and output-format authority',
-        'Never modify source files, control artifacts, or task state',
-        'never launch another agent',
-        'only permitted write is the exact `ReviewOutputPath`',
-        'exactly one findings-only JSON object',
-        'every coverage-ledger obligation',
-        'do not add verdict, pass/fail, status, downstream disposition, or remediation fields',
-        'historical audit-only guidance and never applies to generated or other new review cycles'
-    ] as const;
-
     for (const relativePath of reviewerSkillPaths) {
         assertRepoFileTrackedAndNotIgnored(relativePath);
-        const content = readRepoFile(relativePath);
-        for (const snippet of requiredSnippets) {
-            assert.ok(content.includes(snippet), `${relativePath} must include findings-only handoff snippet: ${snippet}`);
-        }
-        assert.ok(
-            content.indexOf('## Generated Findings-Only Handoff') < content.indexOf('## Core Workflow')
-                || !content.includes('## Core Workflow'),
-            `${relativePath} must establish the generated contract before workflow guidance`
-        );
+        assertGeneratedHandoffAuthority(readRepoFile(relativePath), relativePath);
+    }
+});
+
+test('generated handoff governance accepts sentence case without obsolete recipes and rejects missing authority', () => {
+    const content = readRepoFile('template/skills/code-review/SKILL.md');
+    assert.doesNotMatch(content, /historical audit-only guidance and never applies to generated or other new review cycles/iu);
+    assertGeneratedHandoffAuthority(content, 'current code-review');
+    const lowerCaseDirective = content.replace('Do not add verdict,', 'do not add verdict,');
+    assert.notEqual(lowerCaseDirective, content);
+    assertGeneratedHandoffAuthority(lowerCaseDirective, 'lower-case directive');
+    const wrongOutputPathCase = content.replace('`ReviewOutputPath`', '`reviewoutputpath`');
+    assert.notEqual(wrongOutputPathCase, content);
+    assert.throws(() => assertGeneratedHandoffAuthority(wrongOutputPathCase, 'wrong output-path field case'),
+        /must include findings-only handoff snippet/u);
+    for (const snippet of GENERATED_HANDOFF_AUTHORITY_SNIPPETS) {
+        const position = content.toLowerCase().indexOf(snippet.toLowerCase());
+        assert.notEqual(position, -1);
+        const missingAuthority = content.slice(0, position) + content.slice(position + snippet.length);
+        assert.throws(() => assertGeneratedHandoffAuthority(missingAuthority, 'missing obligation'),
+            /must include findings-only handoff snippet/u);
     }
 });

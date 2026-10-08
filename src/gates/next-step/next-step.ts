@@ -23,6 +23,7 @@ import {
     type FrozenReviewExecutionPolicyBinding
 } from '../../policy/effective-review-snapshot';
 import { isPlainRecord } from '../../core/records';
+import { resolveNextStepRequiredReviewTypes } from './next-step-required-review-lanes';
 import {
     readTaskQueueEntries,
     type TaskQueueEntry
@@ -454,18 +455,6 @@ import {
     type NextStepEffectController,
     type NextStepEffectPlan
 } from './next-step-effects';
-
-const REVIEW_PREPARATION_ORDER = Object.freeze([
-    'code',
-    'db',
-    'security',
-    'refactor',
-    'api',
-    'performance',
-    'infra',
-    'dependency',
-    'test'
-]);
 
 export type NextStepStatus = 'BLOCKED' | 'READY' | 'DONE' | 'DECOMPOSED' | 'SPLIT_REQUIRED';
 
@@ -1103,10 +1092,6 @@ function getGateStatus(summary: TaskAuditSummaryResult, gateName: string): GateO
 
 function isGatePassed(summary: TaskAuditSummaryResult, gateName: string): boolean {
     return getGateStatus(summary, gateName) === 'PASS';
-}
-
-function getRequiredReviewTypes(requiredReviews: Record<string, boolean>): string[] {
-    return REVIEW_PREPARATION_ORDER.filter((reviewType) => requiredReviews[reviewType]);
 }
 
 function hasZeroDiffNoReviewableScopeSuppression(
@@ -2086,7 +2071,7 @@ function getStaleArtifactClasses(text: string, nextGate: string): string[] {
 
 function getAffectedReviewLanes(text: string, review: NextStepReviewSummary): string[] {
     const lanes = new Set<string>();
-    for (const reviewType of REVIEW_PREPARATION_ORDER) {
+    for (const reviewType of review.required_reviews) {
         const quoted = new RegExp(`['"]${reviewType}['"]`, 'iu');
         const labelled = new RegExp(`\\b${reviewType}\\b(?=\\s+(?:review|lane|context|routing|receipt|PASS|evidence))`, 'iu');
         if (quoted.test(text) || labelled.test(text)) {
@@ -2099,12 +2084,12 @@ function getAffectedReviewLanes(text: string, review: NextStepReviewSummary): st
     for (const lane of review.blocked_review_lanes) {
         lanes.add(lane.review_type);
         for (const blocker of lane.blocked_by) {
-            if (REVIEW_PREPARATION_ORDER.includes(blocker)) {
+            if (review.required_reviews.includes(blocker)) {
                 lanes.add(blocker);
             }
         }
     }
-    return REVIEW_PREPARATION_ORDER.filter((reviewType) => lanes.has(reviewType));
+    return review.required_reviews.filter((reviewType) => lanes.has(reviewType));
 }
 
 function buildMinimalRecoveryChain(nextGate: string, commands: NextStepCommand[], text: string): string[] {
@@ -2766,7 +2751,7 @@ export function resolveNextStepDecisionRoute(
         ? formatFullSuiteTimeoutForecast(fullSuiteTimeoutForecast)
         : null;
     const fullSuiteNotRequiredForDocsOnly = isFullSuiteNotRequiredForDocsOnlyScope(preflight || {});
-    const requiredReviewTypes = getRequiredReviewTypes(summary.required_reviews);
+    const requiredReviewTypes = resolveNextStepRequiredReviewTypes(preflight);
     const fullSuiteNotRequiredForZeroDiffNoReviewableScope = hasZeroDiffNoReviewableScopeSuppression(preflight, requiredReviewTypes);
     const fullSuiteNotRequiredForCurrentScope = fullSuiteNotRequiredForDocsOnly || fullSuiteNotRequiredForZeroDiffNoReviewableScope;
     const semanticCycleResume = readSemanticCycleResumeRoutingState({

@@ -419,6 +419,22 @@ export function classifyReviewOutputCorrectionDiagnostics(
     });
 }
 
+function hasMatchingReviewOutputProvenance(
+    report: Record<string, unknown>,
+    bindings: ReviewOutputMechanicalBindings
+): boolean {
+    const taskId = typeof report.task_id === 'string' ? report.task_id.trim() : null;
+    const reviewType = typeof report.review_type === 'string' ? report.review_type.trim().toLowerCase() : null;
+    const contextSha256 = typeof report.review_context_sha256 === 'string'
+        ? normalizeSha256(report.review_context_sha256) : null;
+    const treeSha256 = typeof report.tree_state_sha256 === 'string'
+        ? normalizeSha256(report.tree_state_sha256) : null;
+    return Boolean(taskId) && taskId === bindings.taskId
+        && Boolean(reviewType) && reviewType === bindings.reviewType.trim().toLowerCase()
+        && contextSha256 !== null && contextSha256 === normalizeSha256(bindings.reviewContextSha256)
+        && treeSha256 !== null && treeSha256 === normalizeSha256(bindings.reviewTreeStateSha256);
+}
+
 export function normalizeReviewOutputMechanically(options: {
     content: string;
     diagnostics: readonly ReviewOutputCorrectionDiagnostic[];
@@ -439,6 +455,9 @@ export function normalizeReviewOutputMechanically(options: {
         return { normalized: false, content: options.content, fingerprint: null };
     }
     const originalFingerprint = computeReviewFindingsSemanticFingerprint(options.content);
+    if (!hasMatchingReviewOutputProvenance(parsed, options.bindings)) {
+        return { normalized: false, content: options.content, fingerprint: originalFingerprint };
+    }
     parsed.schema_version = 2;
     parsed.task_id = options.bindings.taskId;
     parsed.review_type = options.bindings.reviewType;

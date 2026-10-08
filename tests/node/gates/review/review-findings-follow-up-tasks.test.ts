@@ -6,6 +6,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import {
+    getReviewFindingsFollowUpTasksArtifactPath,
     materializeReviewFindingsFollowUpTasks
 } from '../../../../src/gates/review/review-findings-follow-up-tasks';
 import {
@@ -891,6 +892,73 @@ function addGroupedClosurePolicy(
 }
 
 describe('review findings follow-up task materialization', () => {
+    it('rejects an F10 alias when recovering the exact F1 parent link', () => {
+        const repoRoot = makeRepo();
+        seedGroupedPreflight(repoRoot);
+        const artifacts = seedReviewArtifacts(repoRoot);
+        const options = {
+            repoRoot,
+            taskId: TASK_ID,
+            reviewType: REVIEW_TYPE,
+            dispositionArtifactPath: artifacts.dispositionArtifactPath
+        };
+        const first = materializeReviewFindingsFollowUpTasks(options);
+        assert.equal(first.status, 'MATERIALIZED', first.output_lines.join('\n'));
+        assert.deepEqual(first.created_task_ids, [`${TASK_ID}-F1`]);
+        const artifactPath = getReviewFindingsFollowUpTasksArtifactPath(artifacts.dispositionArtifactPath);
+        assert.equal(first.artifact_path, normalizeForArtifact(artifactPath));
+        const taskPath = path.join(repoRoot, 'TASK.md');
+        fs.writeFileSync(taskPath, fs.readFileSync(taskPath, 'utf8').replace(
+            `Review follow-up tasks materialized: \`${TASK_ID}-F1\`;`,
+            `Review follow-up tasks materialized: \`${TASK_ID}-F10\`;`
+        ), 'utf8');
+        const sourceHashes = [artifacts.validationArtifactPath, artifacts.dispositionArtifactPath, artifacts.receiptPath]
+            .map(fileSha256);
+
+        const recovered = materializeReviewFindingsFollowUpTasks(options);
+
+        assert.equal(recovered.status, 'ALREADY_MATERIALIZED', recovered.output_lines.join('\n'));
+        assert.deepEqual(recovered.created_task_ids, []);
+        assert.deepEqual(recovered.reused_task_ids, [`${TASK_ID}-F1`]);
+        assert.ok(rowFor(repoRoot, TASK_ID)?.notes.includes(`\`${TASK_ID}-F1\``));
+        assert.ok(rowFor(repoRoot, TASK_ID)?.notes.includes(`\`${TASK_ID}-F10\``));
+        assert.deepEqual([artifacts.validationArtifactPath, artifacts.dispositionArtifactPath, artifacts.receiptPath]
+            .map(fileSha256), sourceHashes);
+        const scope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, rowFor(repoRoot, `${TASK_ID}-F1`)!);
+        assert.equal(scope.status, 'valid', scope.diagnostics.join('\n'));
+        const recoveredTaskBytes = fs.readFileSync(taskPath, 'utf8');
+        const repeated = materializeReviewFindingsFollowUpTasks(options);
+        assert.equal(repeated.status, 'ALREADY_MATERIALIZED', repeated.output_lines.join('\n'));
+        assert.equal(fs.readFileSync(taskPath, 'utf8'), recoveredTaskBytes);
+    });
+
+    it('excludes unrelated F-prefix and nested infrastructure rows from follow-up insertion', () => {
+        const taskId = 'T-9';
+        const repoRoot = makeRepo(taskId);
+        seedGroupedPreflightForTask(repoRoot, taskId, {
+            parent_profile: 'strict', profile: 'balanced', source: 'one_level_lighter',
+            configured_mode: 'one_level_lighter', diagnostics: []
+        });
+        const artifacts = seedReviewArtifacts(repoRoot, { taskId });
+        const taskPath = path.join(repoRoot, 'TASK.md');
+        const foreignIds = ['T-9-Future', 'T-9-1', 'T-9-F1-I1', 'T-90-F1'];
+        const foreignRows = foreignIds.map(id =>
+            `| ${id} | TODO | P2 | infrastructure | Independent work | Codex | 2026-07-13 | balanced | Preserve this row. |`
+        );
+        fs.appendFileSync(taskPath, `${foreignRows.join('\n')}\n`, 'utf8');
+
+        const result = materializeReviewFindingsFollowUpTasks({
+            repoRoot, taskId, reviewType: REVIEW_TYPE, dispositionArtifactPath: artifacts.dispositionArtifactPath
+        });
+
+        assert.equal(result.status, 'MATERIALIZED', result.output_lines.join('\n'));
+        assert.deepEqual(result.created_task_ids, ['T-9-F1']);
+        assert.deepEqual(taskRows(repoRoot).map(row => row.taskId), [taskId, 'T-9-F1', ...foreignIds]);
+        assert.deepEqual(foreignIds.map(id => rowFor(repoRoot, id)?.notes), foreignIds.map(() => 'Preserve this row.'));
+        assert.ok(rowFor(repoRoot, taskId)?.notes.includes('`T-9-F1`'));
+        assert.equal(rowFor(repoRoot, 'T-90-F1')?.notes, 'Preserve this row.');
+    });
+
     afterEach(() => {
         for (const tempRoot of tempRoots.splice(0)) {
             fs.rmSync(tempRoot, { recursive: true, force: true });

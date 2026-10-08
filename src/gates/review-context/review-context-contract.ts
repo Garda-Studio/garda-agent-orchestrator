@@ -795,8 +795,11 @@ export function getReviewContextContractViolations(
         }
     }
 
-    if (expectedLaneBinding && !expectedLaneBinding.built_in) {
-        if (JSON.stringify(reviewContext.review_lane) !== JSON.stringify(expectedLaneBinding)) {
+    const reviewContextSchemaVersion = Number(reviewContext.schema_version);
+    if (expectedLaneBinding && (!expectedLaneBinding.built_in || reviewContextSchemaVersion >= 4)) {
+        const laneLabel = expectedLaneBinding.built_in ? 'built-in' : 'custom';
+        if (!expectedLaneBinding.built_in
+            && JSON.stringify(reviewContext.review_lane) !== JSON.stringify(expectedLaneBinding)) {
             violations.push(
                 `Review context '${normalizedContextPath}' custom review_lane binding does not match ` +
                 `the immutable effective review snapshot for '${expectedReviewType}'.`
@@ -818,32 +821,32 @@ export function getReviewContextContractViolations(
         const selectedSkillId = normalizeOptionalString(ruleSelectedSkill?.skill_id);
         if (!selectedSkillId || !expectedLaneBinding.skill_ids.includes(selectedSkillId)) {
             violations.push(
-                `Review context '${normalizedContextPath}' custom selected_skill is not bound to ` +
+                `Review context '${normalizedContextPath}' ${laneLabel} selected_skill is not bound to ` +
                 `immutable lane skill_ids for '${expectedReviewType}'.`
             );
         }
         if (JSON.stringify(ruleSelectedSkill) !== JSON.stringify(roleSelectedSkill)) {
             violations.push(
-                `Review context '${normalizedContextPath}' custom selected_skill differs between ` +
+                `Review context '${normalizedContextPath}' ${laneLabel} selected_skill differs between ` +
                 `rule_context and reviewer_handoff.role_prompt.`
             );
         }
         if (JSON.stringify(ruleSelectedSkill?.candidate_skill_ids) !== JSON.stringify(expectedLaneBinding.skill_ids)) {
             violations.push(
-                `Review context '${normalizedContextPath}' custom selected_skill candidates do not match ` +
+                `Review context '${normalizedContextPath}' ${laneLabel} selected_skill candidates do not match ` +
                 `immutable lane skill_ids for '${expectedReviewType}'.`
             );
         }
         if (ruleSelectedSkill?.skill_entrypoint_exists !== true
             || !normalizeOptionalHash(ruleSelectedSkill?.skill_sha256)) {
             violations.push(
-                `Review context '${normalizedContextPath}' custom selected_skill artifact is missing ` +
+                `Review context '${normalizedContextPath}' ${laneLabel} selected_skill artifact is missing ` +
                 `an authenticated entrypoint hash for '${expectedReviewType}'.`
             );
         }
         if (!options.repoRoot) {
             violations.push(
-                `Review context '${normalizedContextPath}' custom selected_skill cannot be authenticated ` +
+                `Review context '${normalizedContextPath}' ${laneLabel} selected_skill cannot be authenticated ` +
                 `without the current repo root for '${expectedReviewType}'.`
             );
         } else {
@@ -854,13 +857,13 @@ export function getReviewContextContractViolations(
                 );
                 if (JSON.stringify(ruleSelectedSkill) !== JSON.stringify(expectedSelectedSkill)) {
                     violations.push(
-                        `Review context '${normalizedContextPath}' custom selected_skill path or content hash does not match ` +
+                        `Review context '${normalizedContextPath}' ${laneLabel} selected_skill path or content hash does not match ` +
                         `the current catalog skill entrypoint for '${expectedReviewType}'.`
                     );
                 }
             } catch (error) {
                 violations.push(
-                    `Review context '${normalizedContextPath}' custom selected_skill cannot be authenticated ` +
+                    `Review context '${normalizedContextPath}' ${laneLabel} selected_skill cannot be authenticated ` +
                     `for '${expectedReviewType}': ${String(error)}`
                 );
             }
@@ -905,7 +908,6 @@ export function getReviewContextContractViolations(
         }
     }
     const currentPreflightRequiresCoverage = options.expectedPreflightPayload?.review_coverage_contract_required === true;
-    const reviewContextSchemaVersion = Number(reviewContext.schema_version);
     if (currentPreflightRequiresCoverage
         && (!Number.isInteger(reviewContextSchemaVersion) || reviewContextSchemaVersion < 4)) {
         violations.push(

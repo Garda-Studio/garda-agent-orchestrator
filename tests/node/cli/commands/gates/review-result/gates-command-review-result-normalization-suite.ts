@@ -445,7 +445,105 @@ function rebindCompletedLaunchAttemptForTest(options: {
     );
 }
 
+async function recordJsonOutputViaTransportForTest(options: {
+    args: string[];
+    repoRoot: string;
+    transport: 'file' | 'stdin';
+    rawOutput: string;
+}): ReturnType<typeof runCliWithCapturedOutput> {
+    const handlers = gateReviewHandlers as { readReviewOutputFromStdin: () => Promise<string> };
+    const originalReader = handlers.readReviewOutputFromStdin;
+    if (options.transport === 'stdin') {
+        handlers.readReviewOutputFromStdin = async () => options.rawOutput;
+    }
+    try {
+        return await runCliWithCapturedOutput(options.args, { cwd: options.repoRoot });
+    } finally {
+        handlers.readReviewOutputFromStdin = originalReader;
+    }
+}
+
 describe('gates command review result - normalization', () => {
+
+    const provenanceCases: Array<{ name: string; field?: string; value?: unknown }> = [
+        { name: 'matching-formatting' },
+        ...Object.entries({
+            task_id: 'T-foreign',
+            review_type: 'test',
+            review_context_sha256: 'c'.repeat(64),
+            tree_state_sha256: 'd'.repeat(64)
+        }).flatMap(([field, value]) => [
+            { name: `${field}-foreign`, field, value },
+            { name: `${field}-missing`, field, value: undefined },
+            { name: `${field}-invalid`, field, value: null }
+        ])
+    ];
+    for (const transport of ['file', 'stdin'] as const) {
+        for (const scenario of provenanceCases) {
+            it(`record-review-result ${transport} mechanical correction: ${scenario.name}`, async () => {
+                const repoRoot = createTempRepo();
+                const taskId = `T-189-${transport}-${scenario.name.replace(/_/gu, '-')}`;
+                try {
+                    const fixture = await seedPromptBoundReviewFixture({ repoRoot, taskId });
+                    attestReviewerInvocationForTest({
+                        repoRoot, taskId, reviewType: 'code',
+                        reviewContextPath: fixture.reviewContextPath,
+                        reviewerIdentity: fixture.reviewerIdentity
+                    });
+                    const report = buildNoFindingsJsonReport(fixture.reviewContextPath, taskId);
+                    report.schema_version = 1;
+                    report.task_id = ` ${taskId} `;
+                    report.review_type = ' CODE ';
+                    for (const field of ['review_context_sha256', 'tree_state_sha256']) {
+                        report[field] = ` ${String(report[field]).toUpperCase()} `;
+                    }
+                    if (scenario.field) report[scenario.field] = scenario.value;
+                    const rawOutput = `${JSON.stringify(report, null, 2)}\n`;
+                    const outputPath = path.join(path.dirname(fixture.launchArtifactPath), 'review-output.md');
+                    if (transport === 'file') fs.writeFileSync(outputPath, rawOutput, 'utf8');
+                    rebindCompletedLaunchAttemptForTest({
+                        repoRoot, taskId, reviewType: 'code',
+                        reviewerIdentity: fixture.reviewerIdentity,
+                        reviewContextPath: fixture.reviewContextPath,
+                        launchArtifactPath: fixture.launchArtifactPath,
+                        reviewerLaunchAttemptId: `${transport}-${scenario.name}`,
+                        reviewOutputPath: outputPath, recordCompletion: true
+                    });
+                    const result = await recordJsonOutputViaTransportForTest({
+                        repoRoot, transport, rawOutput,
+                        args: [
+                            'gate', 'record-review-result', '--task-id', taskId,
+                            '--review-type', 'code', '--preflight-path', fixture.preflightPath,
+                            ...(transport === 'file' ? ['--review-output-path', outputPath] : ['--review-output-stdin']),
+                            '--repo-root', repoRoot, '--reviewer-execution-mode', 'delegated_subagent',
+                            '--reviewer-identity', fixture.reviewerIdentity
+                        ]
+                    });
+                    const receiptPath = path.join(fixture.reviewsRoot, `${taskId}-code-receipt.json`);
+                    const normalized = readTaskTimelineEvents(repoRoot, taskId)
+                        .some((event) => event.event_type === 'REVIEW_OUTPUT_CORRECTION_NORMALIZED');
+                    if (scenario.field) {
+                        assert.notEqual(result.exitCode, 0);
+                        assert.equal(fs.existsSync(receiptPath), false);
+                        assert.equal(normalized, false);
+                        const correction = JSON.parse(fs.readFileSync(
+                            path.join(fixture.reviewsRoot, `${taskId}-code-output-correction.json`), 'utf8'
+                        ));
+                        assert.equal(fs.readFileSync(correction.binding.original_output_path, 'utf8'), rawOutput);
+                    } else {
+                        assert.equal(result.exitCode, 0, result.errors.join('\n'));
+                        assert.equal(normalized, true);
+                        const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+                        assert.equal(receipt.review_materialization_fidelity, 'gate_mechanical_correction');
+                        assert.equal(receipt.review_findings_validation.accepted, true);
+                        assert.deepEqual(receipt.review_coverage.finding_ids, []);
+                    }
+                } finally {
+                    fs.rmSync(repoRoot, { recursive: true, force: true });
+                }
+            });
+        }
+    }
 
     it('record-review-result preserves multiple independent findings through normalization and receipt recording', async () => {
         const repoRoot = createTempRepo();

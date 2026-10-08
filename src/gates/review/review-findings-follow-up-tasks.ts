@@ -13,6 +13,7 @@ import { sha256RedactedJsonPayload } from '../../core/redaction';
 import { isPlainRecord } from '../../core/records';
 import {
     assertCanonicalTaskId,
+    buildExactTaskIdReferencePattern,
     isCanonicalTaskId,
     isReviewFindingsFollowUpTaskId
 } from '../../core/task-ids';
@@ -1575,7 +1576,7 @@ function isParentFollowUpTaskId(parentTaskId: string, taskId: string): boolean {
 }
 
 function appendParentFollowUpNote(existingNotes: string, childTaskIds: readonly string[], artifactPath: string): string {
-    const newTaskIds = childTaskIds.filter((taskId) => !existingNotes.includes(taskId));
+    const newTaskIds = childTaskIds.filter((taskId) => !buildExactTaskIdReferencePattern(taskId).test(existingNotes));
     const normalizedArtifactPath = normalizePath(artifactPath);
     const artifactAlreadyLinked = existingNotes.includes(`artifact \`${normalizedArtifactPath}\`.`);
     if (newTaskIds.length === 0 && artifactAlreadyLinked) {
@@ -1594,9 +1595,8 @@ function sourceParentNotes(notes: string): string {
 }
 
 function findInsertionLineIndex(parentRow: CanonicalActiveTaskQueueRow, rows: readonly CanonicalActiveTaskQueueRow[]): number {
-    const prefix = `${parentRow.taskId}-F`.toLowerCase();
     return rows.reduce((lineIndex, row) => {
-        if (row.taskId.toLowerCase().startsWith(prefix)) {
+        if (isParentFollowUpTaskId(parentRow.taskId, row.taskId)) {
             return Math.max(lineIndex, row.lineIndex);
         }
         return lineIndex;

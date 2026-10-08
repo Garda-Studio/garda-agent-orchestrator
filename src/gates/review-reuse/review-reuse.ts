@@ -209,7 +209,10 @@ export function computeReviewRuleContextReuseHash(
             skill_path: normalizePath(String(selectedSkill.skill_path || '').trim()) || null,
             skill_sha256: toLowerHash(selectedSkill.skill_sha256),
             skill_entrypoint_exists: selectedSkill.skill_entrypoint_exists === true,
-            candidate_skill_ids: toStringList(selectedSkill.candidate_skill_ids)
+            candidate_skill_ids: toStringList(selectedSkill.candidate_skill_ids),
+            ...(Object.keys(toRecord(selectedSkill.reference_binding)).length > 0
+                ? { required_reference_binding_sha256: stringSha256(JSON.stringify(selectedSkill.reference_binding)) }
+                : {})
         },
         ...(instructionContractSha256
             ? { instruction_contract_sha256: instructionContractSha256 }

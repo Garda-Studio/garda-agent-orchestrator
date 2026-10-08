@@ -33,8 +33,8 @@ const SHA_D = 'd'.repeat(64);
 function findingsOutput(overrides: Record<string, unknown> = {}): string {
     return `${JSON.stringify({
         schema_version: 1,
-        task_id: 'wrong-task',
-        review_type: 'wrong-lane',
+        task_id: 'T-1',
+        review_type: 'code',
         review_context_sha256: SHA_A,
         tree_state_sha256: SHA_B,
         validation_notes: [],
@@ -98,14 +98,17 @@ describe('review output correction contract', () => {
         }]), false);
     });
 
-    it('normalizes only mechanically derivable bindings without changing finding semantics', () => {
-        const content = findingsOutput();
+    it('repairs formatting for matching bindings without changing finding semantics', () => {
+        const content = findingsOutput({
+            task_id: ' T-1 ',
+            review_type: ' CODE ',
+            review_context_sha256: ` ${SHA_A.toUpperCase()} `,
+            tree_state_sha256: ` ${SHA_B.toUpperCase()} `
+        });
         const diagnostics = classifyReviewOutputCorrectionDiagnostics([
             "schema_version must be 2.",
-            "task_id 'wrong-task' does not match expected task 'T-1'.",
-            "review_type 'wrong-lane' does not match expected review 'code'.",
-            'review_context_sha256 does not match the current review context.',
-            'tree_state_sha256 does not match the current review tree state.'
+            'review_context_sha256 must be a SHA-256 hex string.',
+            'tree_state_sha256 must be a SHA-256 hex string.'
         ]);
         const before = computeReviewFindingsSemanticFingerprint(content);
         const normalized = normalizeReviewOutputMechanically({
@@ -114,8 +117,8 @@ describe('review output correction contract', () => {
             bindings: {
                 taskId: 'T-1',
                 reviewType: 'code',
-                reviewContextSha256: SHA_B,
-                reviewTreeStateSha256: SHA_C,
+                reviewContextSha256: SHA_A,
+                reviewTreeStateSha256: SHA_B,
                 coverageContractSha256: SHA_A,
                 reviewExecution: {
                     mode: 'FULL',
@@ -133,8 +136,63 @@ describe('review output correction contract', () => {
         assert.equal(parsed.schema_version, 2);
         assert.equal(parsed.task_id, 'T-1');
         assert.equal(parsed.review_type, 'code');
-        assert.equal(parsed.review_context_sha256, SHA_B);
-        assert.equal(parsed.tree_state_sha256, SHA_C);
+        assert.equal(parsed.review_context_sha256, SHA_A);
+        assert.equal(parsed.tree_state_sha256, SHA_B);
+    });
+
+    it('preserves foreign, missing and malformed provenance instead of manufacturing bindings', () => {
+        const bindings = {
+            taskId: 'T-1',
+            reviewType: 'code',
+            reviewContextSha256: SHA_A,
+            reviewTreeStateSha256: SHA_B
+        };
+        const foreignBindings = {
+            task_id: 'T-foreign',
+            review_type: 'test',
+            review_context_sha256: SHA_C,
+            tree_state_sha256: SHA_D
+        };
+        const diagnostics = classifyReviewOutputCorrectionDiagnostics(['schema_version must be 2.']);
+        const foreignContent = findingsOutput(foreignBindings);
+        const foreignResult = normalizeReviewOutputMechanically({ content: foreignContent, diagnostics, bindings });
+        assert.equal(foreignResult.normalized, false);
+        assert.equal(foreignResult.content, foreignContent);
+        for (const [field, foreignValue] of Object.entries(foreignBindings)) {
+            for (const value of [foreignValue, undefined, null, '', ' ', 1, {}, [foreignValue]]) {
+                const content = findingsOutput({ [field]: value });
+                const result = normalizeReviewOutputMechanically({ content, diagnostics, bindings });
+                assert.equal(result.normalized, false, `${field}: ${JSON.stringify(value)}`);
+                assert.equal(result.content, content);
+                assert.equal(result.fingerprint, computeReviewFindingsSemanticFingerprint(content));
+            }
+        }
+        for (const field of ['review_context_sha256', 'tree_state_sha256']) {
+            for (const value of ['g'.repeat(64), SHA_A.slice(1)]) {
+                const content = findingsOutput({ [field]: value });
+                const result = normalizeReviewOutputMechanically({ content, diagnostics, bindings });
+                assert.equal(result.normalized, false);
+                assert.equal(result.content, content);
+            }
+        }
+    });
+
+    it('does not derive missing provenance from the current review', () => {
+        const content = findingsOutput({
+            task_id: undefined, review_type: undefined,
+            review_context_sha256: undefined, tree_state_sha256: undefined
+        });
+        const result = normalizeReviewOutputMechanically({
+            content,
+            diagnostics: classifyReviewOutputCorrectionDiagnostics(['schema_version must be 2.']),
+            bindings: {
+                taskId: 'T-1', reviewType: 'code',
+                reviewContextSha256: SHA_A, reviewTreeStateSha256: SHA_B
+            }
+        });
+        assert.equal(result.normalized, false);
+        assert.equal(result.content, content);
+        assert.equal(result.fingerprint, computeReviewFindingsSemanticFingerprint(content));
     });
 
     it('does not gate-normalize semantic violations', () => {

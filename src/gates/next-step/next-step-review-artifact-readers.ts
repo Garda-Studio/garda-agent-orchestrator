@@ -26,9 +26,6 @@ import {
     resolvePathInsideRepo
 } from '../shared/helpers';
 import {
-    REVIEW_CONTRACTS
-} from '../required-reviews/required-reviews-check';
-import {
     buildReviewContextPreflightDiffExpectations,
     getReviewContextContractViolations
 } from '../review-context/review-context-contract';
@@ -116,17 +113,9 @@ import {
     withNextStepReviewEvidenceSnapshot
 } from './next-step-review-timeline-evidence';
 import { reviewCorrectionWasSuperseded } from './next-step-review-correction-supersession';
+import { resolveNextStepReviewVerdictAuthority } from './next-step-review-verdict-authority';
 
-const REVIEW_VERDICT_PASS_TOKENS: Record<string, string> = Object.freeze(Object.fromEntries(REVIEW_CONTRACTS));
 const REVIEW_FINDING_SEVERITIES = ['critical', 'high', 'medium', 'low'] as const;
-const REVIEW_VERDICT_FAIL_TOKENS: Record<string, string> = Object.freeze(
-    Object.fromEntries(Object.entries(REVIEW_VERDICT_PASS_TOKENS).map(([reviewType, passToken]) => {
-        if (reviewType === 'code') {
-            return [reviewType, 'CODE REVIEW FAILED'];
-        }
-        return [reviewType, passToken.replace(/\bPASSED\b/u, 'FAILED')];
-    }))
-);
 
 export interface ReviewArtifactState {
     reviewType: string;
@@ -1930,9 +1919,7 @@ export function readReviewArtifactState(
     const contextPath = path.join(reviewsRoot, `${taskId}-${reviewType}-review-context.json`);
     const artifactPath = path.join(reviewsRoot, `${taskId}-${reviewType}.md`);
     const receiptPath = path.join(reviewsRoot, `${taskId}-${reviewType}-receipt.json`);
-    const passToken = REVIEW_VERDICT_PASS_TOKENS[reviewType] || '';
-    const failToken = REVIEW_VERDICT_FAIL_TOKENS[reviewType] || '';
-    const violations: string[] = [];
+    const { passToken, failToken, violations } = resolveNextStepReviewVerdictAuthority(preflightPayload, reviewType);
     let contextPreflightBindingViolationIndex: number | null = null;
     const contextExists = fileExists(contextPath);
     let contextCurrent = false;

@@ -634,7 +634,8 @@ export function getEffectiveReviewSnapshotViolations(value: unknown): string[] {
                 (profile.state !== 'disabled' && profile.state !== 'auto' && profile.state !== 'required')) {
                 violations.push(`Effective review snapshot lane '${id || index}' profile binding is invalid.`);
             }
-            const expectedActive = profile.capability_enabled === true && profile.state !== 'disabled';
+            const expectedActive = profile.state !== 'disabled'
+                && (profile.capability_enabled === true || (profile.built_in === true && profile.state === 'required'));
             if (profile.active !== expectedActive) {
                 violations.push(`Effective review snapshot lane '${id || index}' profile activity is inconsistent.`);
             }

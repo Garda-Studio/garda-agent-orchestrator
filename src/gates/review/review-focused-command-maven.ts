@@ -233,7 +233,9 @@ export function resolveMavenFocusedTargets(
     isSafeRelativePath: (value: string) => boolean
 ): string[] {
     if (command.unsafeReason || !repoRoot) return [];
-    const project = command.project.replace(/\\/gu, '/').replace(/^(?:\.\/)+/u, '');
+    const projectOperand = command.project.replace(/\\/gu, '/');
+    const project = /^(?:\.\/+)+$/u.test(projectOperand)
+        ? '.' : projectOperand.replace(/^(?:\.\/)+/u, '').replace(/\/+$/u, '');
     if (project !== '.' && (!isSafeRelativePath(project) || /[:@*?\[\]{}$%~]/u.test(project))) return [];
     try {
         const projectRoot = resolveMavenProjectRoot({ ...command, project }, repoRoot);

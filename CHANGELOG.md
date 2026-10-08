@@ -1,5 +1,9 @@
 # Changelog
 
+- Integrate accepted review authority, frozen profile consistency, scoped skill
+  binding, correction and follow-up handling from the preserved C2 source snapshot.
+
+
 - Preserve authenticated completed-child quality scaffolds during parent recovery;
   reject forged or changed retained inputs and support coherent post-child recapture.
 

@@ -22,10 +22,11 @@
 
 ## Failure Modes
 
-- [ ] Every new inter-service or cross-module synchronous call has a timeout and retry budget.
-- [ ] Fallback or degradation path exists for every non-critical integration.
-- [ ] No synchronous call chain exceeds two hops without an async boundary.
-- [ ] Circuit-breaker or bulkhead configured where partial failure must not cascade.
+- [ ] Changed calls are classified as in-process work or network, database, or cross-process I/O across a real failure domain.
+- [ ] Local chains preserve input/output, errors, ordering, data ownership and actual resource-cost invariants; hop count alone cannot mandate an async boundary.
+- [ ] Remote calls respect an end-to-end deadline by propagating the remaining budget and cancellation; do not reset a full timeout at each hop.
+- [ ] Retries fit the remaining budget and use idempotent or explicitly safe operation semantics; fallback or degradation is defined where a non-critical remote dependency can fail.
+- [ ] Async boundaries, circuit-breaker or bulkhead protection follow actual latency, isolation and partial-failure risk rather than a fixed hop threshold.
 
 ## Deployment & Rollback
 

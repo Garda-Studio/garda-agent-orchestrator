@@ -14,6 +14,23 @@ import { buildDefaultWorkflowConfig } from './next-step-test-support';
 
 const TASK_ID = 'T-NEXT-1';
 
+describe('exact task identities in child links', () => {
+    it('keeps T-9 distinct from T-90 and F1 distinct from F10', () => {
+        const ids = ['T-9', 'T-90', 'T-PARENT-F1', 'T-PARENT-F10'];
+        assert.deepEqual(extractExplicitLinkedChildTaskIds('Child tasks: `T-90`, `T-PARENT-F10`.', ids),
+            ['T-90', 'T-PARENT-F10']);
+    });
+
+    it('keeps direct review follow-ups separate from numeric and nested infrastructure children', () => {
+        const ids = ['T-PARENT-F1', 'T-PARENT-F10', 'T-PARENT-Future', 'T-PARENT-1', 'T-PARENT-F1-I1'];
+        const mentions = ids.map(id => `\`${id}\``).join(', ');
+        assert.deepEqual(extractExplicitLinkedChildTaskIds(`Review follow-up tasks materialized: ${mentions}; artifact \`result.json\`.`,
+            ids, 'T-PARENT'), ['T-PARENT-F1', 'T-PARENT-F10']);
+        assert.deepEqual(extractExplicitLinkedChildTaskIds('Child tasks: `T-PARENT-1`, `T-PARENT-F1-I1`.', ids, 'T-PARENT'),
+            ['T-PARENT-1', 'T-PARENT-F1-I1']);
+    });
+});
+
 
 let tempRoots: string[] = [];
 
