@@ -585,6 +585,56 @@ describe('gates/doc-impact', () => {
             fs.rmSync(tmpDir, { recursive: true, force: true });
         });
 
+        it('rejects internal closeout aliases supplied directly as user-facing docs', () => {
+            const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'doc-impact-'));
+            try {
+                const preflightPath = createPreflight(tmpDir);
+                const internalChangelog = 'garda-agent-orchestrator/live/docs/changes/CHANGELOG.md';
+                const memoryFile = 'garda-agent-orchestrator/live/docs/project-memory/compact.md';
+                const aliases = [
+                    'TASK.md', ' ./TaSk.MD ', path.join(tmpDir, 'TASK.md'),
+                    internalChangelog, './' + internalChangelog,
+                    internalChangelog.replaceAll('/', '\\'), path.join(tmpDir, internalChangelog),
+                    'garda-agent-orchestrator/live/docs/changes/../changes/CHANGELOG.md',
+                    memoryFile, './' + memoryFile, path.join(tmpDir, memoryFile),
+                    'garda-agent-orchestrator/live/docs/PROJECT-MEMORY/compact.md',
+                    ...['TASK.md', internalChangelog, memoryFile].map(file => `../${path.basename(tmpDir)}/${file}`)
+                ];
+                const rejectedStatuses: string[] = [];
+                for (const docPath of aliases) {
+                    const result = assessDocImpact({
+                        preflightPath, taskId: 'T-001', repoRoot: tmpDir, decision: 'DOCS_UPDATED',
+                        docsUpdated: [docPath], rationale: 'Direct internal paths cannot supply user documentation.'
+                    });
+                    rejectedStatuses.push(result.status);
+                    assert.ok(result.violations.some((entry) => entry.includes('docs_updated is reserved')), docPath);
+                }
+                assert.deepEqual(rejectedStatuses, aliases.map(() => 'FAILED'));
+            } finally {
+                fs.rmSync(tmpDir, { recursive: true, force: true });
+            }
+        });
+
+        it('keeps similarly named ordinary docs outside the internal closeout contract', () => {
+            const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'doc-impact-'));
+            try {
+                const preflightPath = createPreflight(tmpDir);
+                const docsUpdated = ['docs/TASK.md', 'TASK.md.old',
+                    'garda-agent-orchestrator/live/docs/changes/CHANGELOG.md.old',
+                    'garda-agent-orchestrator/live/docs/project-memory-guide.md',
+                    `../${path.basename(tmpDir)}-other/TASK.md`,
+                    path.join(path.dirname(tmpDir), `${path.basename(tmpDir)}-other`, 'TASK.md')];
+                const result = assessDocImpact({
+                    preflightPath, taskId: 'T-001', repoRoot: tmpDir, decision: 'DOCS_UPDATED',
+                    docsUpdated, rationale: 'Only exact internal paths and memory descendants are reserved.'
+                });
+                assert.equal(result.status, 'PASSED');
+                assert.deepEqual(result.docs_updated, [...docsUpdated].sort());
+            } finally {
+                fs.rmSync(tmpDir, { recursive: true, force: true });
+            }
+        });
+
         it('normalizes decision to uppercase before validation', () => {
             const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'doc-impact-'));
             const preflightPath = createPreflight(tmpDir);

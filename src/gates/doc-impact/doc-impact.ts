@@ -2,6 +2,7 @@ import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { buildBundleRelativePath } from '../../core/constants';
+import { buildExactTaskIdReferencePattern } from '../../core/task-ids';
 import { assertValidTaskId } from '../../gate-runtime/task-events';
 import { fileSha256, normalizePath, parseBool, toStringArray } from '../shared/helpers';
 
@@ -114,34 +115,41 @@ export interface AssessDocImpactOptions {
     repoRoot?: string;
 }
 
-function normalizeDocImpactInputPath(input: string, repoRoot?: string): string {
-    const normalized = normalizePath(input);
-    if (!path.isAbsolute(normalized) || !repoRoot) {
+export function normalizeDocImpactInputPath(input: string, repoRoot?: string): string {
+    const inputPath = normalizePath(input);
+    if (!inputPath) return '';
+    const normalized = path.posix.normalize(inputPath);
+    if (!repoRoot) {
         return normalized;
     }
-    const relative = path.relative(path.resolve(repoRoot), normalized);
-    if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+    const relative = path.relative(path.resolve(repoRoot), path.resolve(repoRoot, normalized));
+    if (relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
         return normalizePath(relative);
     }
     return normalized;
 }
 
-function isInternalCloseoutEvidencePath(input: string, repoRoot?: string): boolean {
+export function getInternalCloseoutEvidenceKind(
+    input: string,
+    repoRoot?: string
+): 'task-queue' | 'internal-changelog' | 'project-memory' | null {
     const normalized = normalizeDocImpactInputPath(input, repoRoot).toLowerCase();
-    return normalized === 'task.md'
-        || normalized === INTERNAL_CHANGELOG_PATH.toLowerCase()
-        || normalized.startsWith(`${PROJECT_MEMORY_ROOT.toLowerCase()}/`);
+    if (normalized === TASK_QUEUE_FILENAME.toLowerCase()) return 'task-queue';
+    if (normalized === INTERNAL_CHANGELOG_PATH.toLowerCase()) return 'internal-changelog';
+    if (normalized.startsWith(`${PROJECT_MEMORY_ROOT.toLowerCase()}/`)) return 'project-memory';
+    return null;
 }
 
 function describeInternalCloseoutEvidencePath(input: string, repoRoot?: string): string {
     const normalized = normalizeDocImpactInputPath(input, repoRoot);
-    if (normalized === TASK_QUEUE_FILENAME) {
+    const kind = getInternalCloseoutEvidenceKind(input, repoRoot);
+    if (kind === 'task-queue') {
         return `${normalized} (task queue closeout evidence)`;
     }
-    if (normalized.toLowerCase() === INTERNAL_CHANGELOG_PATH.toLowerCase()) {
+    if (kind === 'internal-changelog') {
         return `${normalized} (use --internal-changelog-updated true)`;
     }
-    if (normalized.toLowerCase().startsWith(`${PROJECT_MEMORY_ROOT.toLowerCase()}/`)) {
+    if (kind === 'project-memory') {
         return `${normalized} (use --project-memory-updated true)`;
     }
     return normalized;
@@ -155,7 +163,7 @@ function readTaskScopedFileEvidence(filePath: string, taskId: string): { path: s
         return null;
     }
     const content = fs.readFileSync(filePath, 'utf8');
-    if (!content.trim() || (taskId && !content.includes(taskId))) {
+    if (!content.trim() || (taskId && !buildExactTaskIdReferencePattern(taskId).test(content))) {
         return null;
     }
     return {
@@ -271,7 +279,9 @@ export function assessDocImpact(options: AssessDocImpactOptions) {
     if (decision === 'DOCS_UPDATED' && !docsUpdated.length) {
         errors.push('Decision DOCS_UPDATED requires non-empty docs_updated list.');
     }
-    const internalCloseoutDocsUpdated = docsUpdated.filter((entry) => isInternalCloseoutEvidencePath(entry, options.repoRoot));
+    const internalCloseoutDocsUpdated = docsUpdated.filter((entry) => (
+        getInternalCloseoutEvidenceKind(entry, options.repoRoot) !== null
+    ));
     if (internalCloseoutDocsUpdated.length > 0) {
         errors.push(
             'docs_updated is reserved for user-facing documentation. Internal closeout evidence must use explicit fields: ' +

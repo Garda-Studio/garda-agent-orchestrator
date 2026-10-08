@@ -1,6 +1,10 @@
 import * as path from 'node:path';
 
 import {
+    getInternalCloseoutEvidenceKind,
+    normalizeDocImpactInputPath
+} from '../doc-impact/doc-impact';
+import {
     resolveBundleNameForTarget
 } from '../../core/constants';
 import {
@@ -538,10 +542,12 @@ function getDocImpactChangedFiles(
     repoRoot: string
 ): string[] {
     const classificationConfig = getClassificationConfig(repoRoot);
-    return getPreflightChangedFiles(preflight).filter((filePath) => (
-        isDocumentationLikePath(filePath, classificationConfig.ordinary_doc_paths)
-        && !isRuntimeCodeLikePath(filePath, classificationConfig.code_like_regexes, classificationConfig.runtime_roots)
-    ));
+    return getPreflightChangedFiles(preflight)
+        .map((filePath) => normalizeDocImpactInputPath(filePath, repoRoot))
+        .filter((filePath) => (
+            isDocumentationLikePath(filePath, classificationConfig.ordinary_doc_paths)
+            && !isRuntimeCodeLikePath(filePath, classificationConfig.code_like_regexes, classificationConfig.runtime_roots)
+        ));
 }
 
 function hasNonDocumentationPreflightScope(
@@ -582,6 +588,25 @@ export interface DocImpactCommandPlan {
     requiresProjectMemoryBeforeAssessment: boolean;
 }
 
+function buildInternalCloseoutFields(
+    changedFiles: string[],
+    repoRoot: string,
+    internalOnlyBehaviorChanged: boolean
+): string[] {
+    const evidenceKinds = new Set(changedFiles.map((filePath) => getInternalCloseoutEvidenceKind(filePath, repoRoot)));
+    const fields: string[] = [];
+    if (evidenceKinds.has('internal-changelog')) fields.push('--internal-changelog-updated true');
+    if (evidenceKinds.has('project-memory')) {
+        fields.push('--project-memory-updated true');
+    } else if (internalOnlyBehaviorChanged) {
+        const memoryImpact = routeProjectMemoryImpact(changedFiles);
+        fields.push(memoryImpact.affectedFileNames.length > 0
+            ? '--project-memory-updated true'
+            : '--project-memory-update-not-needed true');
+    }
+    return fields;
+}
+
 export function buildDocImpactCommandPlan(
     cliPrefix: string,
     taskId: string,
@@ -590,10 +615,14 @@ export function buildDocImpactCommandPlan(
     repoRoot: string,
     additionalDocsUpdated: string[] = []
 ): DocImpactCommandPlan {
+    const additionalPaths = additionalDocsUpdated
+        .map((entry) => normalizeDocImpactInputPath(entry, repoRoot)).filter(Boolean);
+    const changedFiles = [...getPreflightChangedFiles(preflight), ...additionalPaths]
+        .map((entry) => normalizeDocImpactInputPath(entry, repoRoot));
     const docsUpdated = [...new Set([
         ...getDocImpactChangedFiles(preflight, repoRoot),
-        ...additionalDocsUpdated.map((entry) => normalizePath(entry)).filter(Boolean)
-    ])].sort();
+        ...additionalPaths
+    ].filter((entry) => getInternalCloseoutEvidenceKind(entry, repoRoot) === null))].sort();
     const changelogUpdated = docsUpdated.some((filePath) => isChangelogPath(filePath));
     const behaviorChanged = shouldDefaultDocImpactBehaviorChanged(preflight, repoRoot, docsUpdated);
     const internalOnlyBehaviorChanged = shouldDefaultInternalOnlyBehaviorChanged(preflight, repoRoot, docsUpdated);
@@ -613,13 +642,8 @@ export function buildDocImpactCommandPlan(
         parts.push('--decision "NO_DOC_UPDATES"');
         parts.push(`--behavior-changed ${internalOnlyBehaviorChanged ? 'true' : 'false'}`);
         parts.push('--changelog-updated false');
-        if (internalOnlyBehaviorChanged) {
-            const memoryImpact = routeProjectMemoryImpact(getPreflightChangedFiles(preflight));
-            parts.push(memoryImpact.affectedFileNames.length > 0
-                ? '--project-memory-updated true'
-                : '--project-memory-update-not-needed true');
-        }
     }
+    parts.push(...buildInternalCloseoutFields(changedFiles, repoRoot, internalOnlyBehaviorChanged));
     if (requiresSensitiveScopeDocAcknowledgement(preflight)) {
         parts.push('--sensitive-scope-reviewed true');
     }
