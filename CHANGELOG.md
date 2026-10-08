@@ -1,5 +1,12 @@
 # Changelog
 
+- Preserve authenticated completed-child quality scaffolds during parent recovery;
+  reject forged or changed retained inputs and support coherent post-child recapture.
+
+
+- Acquire timeline evidence without blocking on a replaced FIFO, while retaining
+  descriptor identity checks and normal read-only capture behavior.
+
 - Preserve mandatory code review and explicit review intent for unfamiliar project
   sources, including mixed documentation changes and the frozen fast-profile code floor.
 

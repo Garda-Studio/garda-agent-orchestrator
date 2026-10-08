@@ -226,7 +226,7 @@ function normalizeAnswerStatus(value: unknown): QualityChecklistAnswerStatus | n
         : null;
 }
 
-function normalizeAnswerInput(input: unknown): QualityChecklistAnswer | null {
+export function normalizeQualityChecklistAnswerInput(input: unknown): QualityChecklistAnswer | null {
     if (!isRecord(input)) {
         return null;
     }
@@ -257,7 +257,7 @@ function normalizeAnswers(value: unknown): QualityChecklistAnswer[] {
         return [];
     }
     return source
-        .map((entry) => normalizeAnswerInput(entry))
+        .map((entry) => normalizeQualityChecklistAnswerInput(entry))
         .filter((entry): entry is QualityChecklistAnswer => entry !== null);
 }
 

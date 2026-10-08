@@ -39,6 +39,11 @@ const mutableChildProcess = require('node:child_process') as typeof childProcess
 };
 const tempRoots: string[] = [];
 
+function isTimelinePayloadReadMode(flags: fs.OpenMode): boolean {
+    return flags === 'r' || (typeof flags === 'number'
+        && (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR)) === 0);
+}
+
 function seedTimeline(taskId: string): { orchestratorRoot: string; eventsRoot: string; timelinePath: string } {
     const orchestratorRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-timeline-snapshot-'));
     tempRoots.push(orchestratorRoot);
@@ -81,7 +86,7 @@ test('reuses one immutable timeline payload read inside an invocation and releas
         flags: fs.OpenMode,
         mode?: fs.Mode
     ) => {
-        if (flags === 'r' && path.resolve(String(targetPath)) === path.resolve(timelinePath)) {
+        if (isTimelinePayloadReadMode(flags) && path.resolve(String(targetPath)) === path.resolve(timelinePath)) {
             descriptorOpenCount += 1;
         }
         return originalOpenSync(targetPath, flags, mode);
@@ -164,7 +169,7 @@ test('completes one authenticated payload capture across valid short read syscal
     let timelineReadDescriptors = 0;
 
     fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
-        if (flags === 'r' && path.resolve(String(targetPath)) === path.resolve(timelinePath)) {
+        if (isTimelinePayloadReadMode(flags) && path.resolve(String(targetPath)) === path.resolve(timelinePath)) {
             timelineReadDescriptors += 1;
         }
         return originalOpenSync(targetPath, flags, mode);
@@ -192,6 +197,142 @@ test('completes one authenticated payload capture across valid short read syscal
         fsModule.openSync = originalOpenSync;
         fsModule.readSync = originalReadSync;
     }
+});
+
+test('counts ordinary readonly captures without POSIX open bits', () => {
+    for (const shortenReads of [false, true]) {
+        const { eventsRoot, timelinePath } = seedTimeline('T-SNAPSHOT-READONLY-COUNTER');
+        const originalBytes = fs.readFileSync(timelinePath);
+        const fsModule = require('node:fs') as typeof fs;
+        const originalOpenSync = fsModule.openSync;
+        const originalReadSync = fsModule.readSync;
+        let captureCount = 0;
+        let readCount = 0;
+        fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+            // Observe the access mode supplied without POSIX-only acquisition bits.
+            // Actual native acquisition flags and filesystem authority stay intact.
+            const observedFlags = typeof flags === 'number'
+                ? flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR)
+                : flags;
+            if (path.resolve(String(targetPath)) === path.resolve(timelinePath)
+                && isTimelinePayloadReadMode(observedFlags)) {
+                captureCount += 1;
+            }
+            return originalOpenSync(targetPath, flags, mode);
+        }) as typeof fsModule.openSync;
+        fsModule.readSync = ((fileDescriptor: number, buffer: NodeJS.ArrayBufferView,
+            offset: number, length: number, position: number | null) => {
+            readCount += 1;
+            const transferredLength = shortenReads ? Math.max(1, Math.ceil(length / 2)) : length;
+            return originalReadSync(fileDescriptor, buffer, offset, transferredLength, position);
+        }) as typeof fsModule.readSync;
+        try {
+            withTaskTimelineReadSnapshot(eventsRoot, 'T-SNAPSHOT-READONLY-COUNTER', () => {
+                const first = readTaskTimelineFileSnapshot(timelinePath);
+                assert.equal(first.valid, true);
+                assert.equal(first.exists, true);
+                assert.deepEqual(first.content, originalBytes);
+                assert.match(first.sha256 || '', /^[0-9a-f]{64}$/);
+                assert.deepEqual(readTaskTimelineFileSnapshot(timelinePath).content, originalBytes);
+            });
+            assert.equal(captureCount, 1);
+            assert.ok(readCount >= (shortenReads ? 2 : 1));
+        } finally {
+            fsModule.openSync = originalOpenSync;
+            fsModule.readSync = originalReadSync;
+        }
+    }
+});
+
+test('requests nonblocking acquisition when the platform exposes that capability', () => {
+    const taskId = 'T-SNAPSHOT-NONBLOCKING-CAPABILITY';
+    const { eventsRoot, timelinePath } = seedTimeline(taskId);
+    const originalBytes = fs.readFileSync(timelinePath);
+    const fsModule = require('node:fs') as typeof fs;
+    const originalOpen = fsModule.openSync;
+    const simulated = fs.constants.O_NONBLOCK === undefined;
+    const nonblocking = fs.constants.O_NONBLOCK || 0x800;
+    // Windows lacks this capability; simulate the API contract, not a native FIFO result.
+    if (simulated) Object.defineProperty(fs.constants, 'O_NONBLOCK', { value: nonblocking, configurable: true });
+    let observed: fs.OpenMode | undefined;
+    fsModule.openSync = ((target: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+        if (path.resolve(String(target)) === path.resolve(timelinePath) && isTimelinePayloadReadMode(flags)) {
+            observed = flags;
+        }
+        return originalOpen(target, simulated && typeof flags === 'number' ? flags & ~nonblocking : flags, mode);
+    }) as typeof fsModule.openSync;
+    try {
+        const result = withTaskTimelineReadSnapshot(eventsRoot, taskId, () => readTaskTimelineFileSnapshot(timelinePath));
+        assert.equal(result.valid, true);
+        assert.deepEqual(result.content, originalBytes);
+        assert.equal(typeof observed, 'number', 'Descriptor acquisition must request the available nonblocking capability.');
+        assert.notEqual(Number(observed) & nonblocking, 0);
+    } finally {
+        fsModule.openSync = originalOpen;
+        if (simulated) Reflect.deleteProperty(fs.constants, 'O_NONBLOCK');
+    }
+});
+
+test('rejects writerless FIFO replacement at timeline descriptor acquisition without blocking', {
+    skip: process.platform === 'win32'
+}, () => {
+    const taskId = 'T-SNAPSHOT-FIFO-REPLACEMENT';
+    const { eventsRoot, timelinePath } = seedTimeline(taskId);
+    const originalBytes = fs.readFileSync(timelinePath);
+    const parentIdentity = fs.lstatSync(eventsRoot);
+    const modulePath = require.resolve('../../../src/gate-runtime/timeline/task-events');
+    const script = `
+        const fs = require('node:fs');
+        const path = require('node:path');
+        const cp = require('node:child_process');
+        const assert = require('node:assert/strict');
+        const native = require(process.argv[1]);
+        const eventsRoot = process.argv[2], taskId = process.argv[3], timelinePath = process.argv[4];
+        const originalOpen = fs.openSync;
+        const originalBytes = fs.readFileSync(timelinePath);
+        const parentBefore = fs.lstatSync(eventsRoot);
+        let replaced = false;
+        fs.openSync = (targetPath, flags, ...rest) => {
+            const readMode = flags === 'r' || (typeof flags === 'number'
+                && (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR)) === 0
+                && (flags & fs.constants.O_NONBLOCK) !== 0);
+            if (!replaced && readMode && path.resolve(String(targetPath)) === timelinePath) {
+                assert.equal(fs.lstatSync(timelinePath).isFile(), true);
+                fs.renameSync(timelinePath, timelinePath + '.original');
+                cp.execFileSync('mkfifo', [timelinePath], { timeout: 1000 });
+                replaced = true;
+                process.stdout.write('FIFO_AT_TIMELINE_DESCRIPTOR_ACQUISITION\\n');
+            }
+            return originalOpen(targetPath, flags, ...rest);
+        };
+        const result = native.withTaskTimelineReadSnapshot(eventsRoot, taskId,
+            () => native.readTaskTimelineFileSnapshot(timelinePath));
+        assert.equal(replaced, true);
+        assert.equal(result.active, true);
+        assert.equal(result.valid, false);
+        assert.equal(result.exists, false);
+        assert.equal(result.content, null);
+        assert.equal(result.sha256, null);
+        assert.equal(fs.lstatSync(timelinePath).isFIFO(), true);
+        assert.deepEqual(fs.readFileSync(timelinePath + '.original'), originalBytes);
+        const parentAfter = fs.lstatSync(eventsRoot);
+        assert.equal(parentAfter.dev, parentBefore.dev);
+        assert.equal(parentAfter.ino, parentBefore.ino);
+        process.stdout.write('FIFO_PROOF_REJECTED_WITH_ORIGINAL_BYTES_PRESERVED\\n');
+    `;
+    const child = childProcess.spawnSync(process.execPath, [
+        '-e', script, modulePath, eventsRoot, taskId, timelinePath
+    ], { timeout: 3000, killSignal: 'SIGKILL', maxBuffer: 32 * 1024, encoding: 'utf8' });
+
+    assert.equal(child.error, undefined, `${child.error?.message || ''}\n${child.stderr}\n${child.stdout}`);
+    assert.equal(child.status, 0, child.stderr);
+    assert.match(child.stdout, /FIFO_AT_TIMELINE_DESCRIPTOR_ACQUISITION/);
+    assert.match(child.stdout, /FIFO_PROOF_REJECTED_WITH_ORIGINAL_BYTES_PRESERVED/);
+    assert.equal(fs.lstatSync(timelinePath).isFIFO(), true);
+    assert.deepEqual(fs.readFileSync(`${timelinePath}.original`), originalBytes);
+    const parentAfter = fs.lstatSync(eventsRoot);
+    assert.equal(parentAfter.dev, parentIdentity.dev);
+    assert.equal(parentAfter.ino, parentIdentity.ino);
 });
 
 test('rejects bounded-tail evidence when the timeline changes during parsing', () => {

@@ -588,7 +588,9 @@ function captureTaskTimelineRead(snapshot: ActiveTaskTimelineReadSnapshot): Cach
         beforeRead = completePathFileIdentitySync(snapshot.timelinePath, beforeRead);
         // Descriptor acquisition authenticates identity but does not transfer timeline payload bytes.
         // Keep the full payload transfer below to exactly one read per capture.
-        fileDescriptor = fs.openSync(snapshot.timelinePath, 'r');
+        // Reject a final-file FIFO replacement without waiting for a writer.
+        fileDescriptor = fs.openSync(snapshot.timelinePath,
+            fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (fs.constants.O_NOFOLLOW || 0));
         const openedIdentityBeforeRead = fs.fstatSync(fileDescriptor);
         if (
             openedIdentityBeforeRead.size > MAX_TASK_TIMELINE_SNAPSHOT_BYTES

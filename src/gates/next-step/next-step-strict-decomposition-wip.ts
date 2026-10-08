@@ -10,6 +10,7 @@ import {
     readPreflightChangedFileScope
 } from '../full-suite/full-suite-repair-capture';
 import { safeReadJson } from '../task-audit/task-audit-summary-collectors';
+import { collectRetainedCompletedQualityInputs } from './next-step-retained-quality-inputs';
 import {
     captureAndSuspendSplitRequiredWip
 } from '../split-required/split-required-wip-capture';
@@ -65,10 +66,14 @@ function hasCurrentImplementationWip(repoRoot: string, taskId: string, preflight
             .filter(filePath => filePath !== TASK_QUEUE_FILENAME);
         const untrackedFiles = collectVisibleUntrackedFiles(repoRoot)
             .filter(filePath => filePath !== `${TASK_QUEUE_FILENAME}.garda-status-sync.lock/owner.json`);
-        return trackedFiles.length > 0
-            || untrackedFiles.length > 0
-            || collectCapturedUntrackedFiles(repoRoot, taskId, scope.allowed)
-                .some(filePath => !isRetainedIgnoredRuntimeEvidence(filePath));
+        if (trackedFiles.length > 0 || untrackedFiles.length > 0) return true;
+        const ignoredFiles = collectCapturedUntrackedFiles(repoRoot, taskId, scope.allowed)
+            .filter(filePath => !isRetainedIgnoredRuntimeEvidence(filePath));
+        if (!ignoredFiles.length) return false;
+        const retainedQualityInputs = collectRetainedCompletedQualityInputs(
+            repoRoot, taskId, ignoredFiles, scope.allowed
+        );
+        return ignoredFiles.some(filePath => !retainedQualityInputs.has(filePath));
     } catch {
         // An uncertain inventory must still go through guarded native capture.
         return true;

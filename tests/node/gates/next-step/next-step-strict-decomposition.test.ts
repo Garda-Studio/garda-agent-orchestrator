@@ -1,8 +1,9 @@
-import { describe, it, afterEach } from 'node:test';
+import { describe, it, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 import { formatNextStepText, resolveNextStep } from './next-step-test-support';
 import { buildRulePackArtifact } from './next-step-test-support';
@@ -34,6 +35,12 @@ import {
 } from '../../../../src/gates/split-required/split-required-wip-operations';
 import { captureAndSuspendSplitRequiredWip } from '../../../../src/gates/split-required/split-required-wip-capture';
 import { suspendStrictDecompositionWipIfRequired } from '../../../../src/gates/next-step/next-step-strict-decomposition-wip';
+import {
+    buildQualityChecklistArtifact,
+    materializeQualityChecklistAnswersTemplate
+} from '../../../../src/gates/quality-checklist';
+import { runQualityChecklistCommand } from '../../../../src/cli/commands/gate-flows/quality-checklist/quality-checklist-flow';
+import { appendTaskEvent } from '../../../../src/gate-runtime/task-events';
 import {
     initGitRepo,
     runGitFixtureCommand
@@ -840,8 +847,16 @@ describe('gates/next-step strict decomposition', () => {
         return profileSnapshot;
     }
 
-    function seedSuspendedParentAfterChildCommit(ignoredEvidencePath?: string) {
+    function seedSuspendedParentAfterChildCommit(
+        ignoredEvidencePath?: string, declaredPaths: string[] = [], qualityChecksEnabled = false
+    ) {
         const repoRoot = makeTempRepo();
+        if (qualityChecksEnabled) {
+            const configPath = path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config', 'workflow-config.json');
+            const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            config.optional_quality_checks.enabled = true;
+            writeJson(configPath, config);
+        }
         const childPath = path.join(repoRoot, 'src', 'child.ts');
         fs.writeFileSync(childPath, 'export const child = 1;\n');
         const profileSnapshot = seedVersion2BalancedSplit(repoRoot);
@@ -850,21 +865,25 @@ describe('gates/next-step strict decomposition', () => {
         const ignoredInput = 'garda-agent-orchestrator/runtime/tmp/shared-parent-input.txt';
         fs.mkdirSync(path.dirname(path.join(repoRoot, ignoredInput)), { recursive: true });
         fs.writeFileSync(path.join(repoRoot, ignoredInput), 'original ignored parent input\n');
+        for (const declaredPath of declaredPaths) {
+            fs.mkdirSync(path.dirname(path.join(repoRoot, declaredPath)), { recursive: true });
+            fs.writeFileSync(path.join(repoRoot, declaredPath), 'original declared implementation input\n');
+        }
         if (ignoredEvidencePath) {
             fs.mkdirSync(path.dirname(path.join(repoRoot, ignoredEvidencePath)), { recursive: true });
             fs.writeFileSync(path.join(repoRoot, ignoredEvidencePath), 'retained gate-owned evidence\n');
         }
         const preflightPath = writeFrozenPreflightScope(repoRoot, TASK_ID,
-            ['src/app.ts', ignoredInput, ...(ignoredEvidencePath ? [ignoredEvidencePath] : [])], profileSnapshot);
+            ['src/app.ts', ignoredInput, ...declaredPaths, ...(ignoredEvidencePath ? [ignoredEvidencePath] : [])], profileSnapshot);
         seedRulePack(repoRoot, TASK_ID, 'POST_PREFLIGHT',
             path.join(reviewsRoot(repoRoot), `${TASK_ID}-task-mode.json`), preflightPath);
-        if (ignoredEvidencePath) {
+        if (ignoredEvidencePath || qualityChecksEnabled) {
             const initialCapture = captureAndSuspendSplitRequiredWip({
                 repoRoot, taskId: TASK_ID, preflightPath, guardKind: 'strict_decomposition',
                 guardReason: 'Capture legacy parent scope while retaining gate-owned ignored evidence.'
             });
             assert.equal(initialCapture.status, 'CAPTURED', initialCapture.violations.join('\n'));
-            assert.equal(initialCapture.untracked_files.includes(ignoredEvidencePath), false);
+            if (ignoredEvidencePath) assert.equal(initialCapture.untracked_files.includes(ignoredEvidencePath), false);
             // Already-DECOMPOSED legacy status is fixture input, not transition authority.
             const queuePath = path.join(repoRoot, 'TASK.md');
             fs.writeFileSync(queuePath, fs.readFileSync(queuePath, 'utf8')
@@ -901,6 +920,321 @@ describe('gates/next-step strict decomposition', () => {
         assert.equal(runGitFixtureCommand(repoRoot, ['status', '--porcelain=v1', '--', 'src']).stdout.trim(), '');
         return { repoRoot, preflightPath, manifestPath, packageBytes, base, childCommit, childPath, ignoredInput, suspendedParentBytes };
     }
+
+    function seedCompletedQualityScaffolds(declaredInput = false, qualityChecksEnabled = true,
+        qualityWarning = false, rawAnswerNormalization = false) {
+        const fixture = seedSuspendedParentAfterChildCommit(undefined, declaredInput
+            ? [`garda-agent-orchestrator/runtime/tmp/${TASK_ID}-1-quality-checklist-answers.json`] : [], qualityChecksEnabled);
+        const { repoRoot, childPath } = fixture;
+        const extraTask = `${TASK_ID}-C3-I1`;
+        const queuePath = path.join(repoRoot, 'TASK.md');
+        fs.appendFileSync(queuePath,
+            `| ${extraTask} | DONE | P1 | workflow/repair | Completed source import fixture | test | 2026-10-07 | balanced | Linked repair for ${TASK_ID}. |\n`);
+        fs.writeFileSync(childPath, 'export const child = 3;\n');
+        runGitFixtureCommand(repoRoot, ['add', '--', 'src/child.ts']);
+        runGitFixtureCommand(repoRoot, ['commit', '-m', 'Real source import commit after accepted child']);
+        const acceptedHead = runGitFixtureCommand(repoRoot, ['rev-parse', 'HEAD']).stdout.trim();
+        assert.notEqual(acceptedHead, fixture.childCommit);
+        const scaffolds: Array<{ relativePath: string; bytes: Buffer }> = [];
+        for (const taskId of [`${TASK_ID}-1`, extraTask]) {
+            const profile = seedStartedTaskWithFrozenDecompositionPolicy(repoRoot, taskId, 'balanced', true);
+            const preflightPath = writeFrozenPreflightScope(repoRoot, taskId, ['src/child.ts'], profile);
+            const materialized = materializeQualityChecklistAnswersTemplate({ repoRoot, taskId, preflightPath });
+            assert.ok(materialized.status === 'created' || materialized.status === 'current');
+            const answersPath = materialized.answers_path;
+            const template = JSON.parse(fs.readFileSync(answersPath, 'utf8'));
+            template.answers = template.answers.map((answer: { rule_id: string }, index: number) => ({
+                ...answer, status: qualityWarning && index === 0 ? 'WARN' : 'PASS',
+                answer: 'Fixture assessment for the unchanged completed native input.',
+                evidence_files: [], actions_taken: [], actions_required: [],
+                ...(rawAnswerNormalization ? {
+                    rule_id: ` ${answer.rule_id.toUpperCase()} `,
+                    status: qualityWarning && index === 0 ? ' WARNED ' : ' PASSED ',
+                    answer: '  Fixture assessment for the unchanged completed native input.  ',
+                    evidence_files: [' src\\child.ts ', ' '],
+                    actions_taken: [' Inspected the unchanged completed input. ', ' '],
+                    actions_required: undefined
+                } : {})
+            }));
+            writeJson(answersPath, template);
+            const quality = runQualityChecklistCommand({ repoRoot, taskId, preflightPath, answersPath });
+            assert.equal(quality.exitCode, 0, quality.outputLines.join('\n'));
+            const artifact = buildQualityChecklistArtifact({ repoRoot, taskId, preflightPath, answers: template.answers });
+            assert.equal(artifact.status, qualityChecksEnabled
+                ? (qualityWarning ? 'WARN' : 'PASS') : 'SKIPPED_DISABLED');
+            const recordedArtifact = JSON.parse(fs.readFileSync(path.join(reviewsRoot(repoRoot),
+                `${taskId}-quality-checklist.json`), 'utf8'));
+            assert.equal(recordedArtifact.status, artifact.status);
+            const questionsPath = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'tmp',
+                `${taskId}-quality-checklist-questions.md`);
+            fs.writeFileSync(questionsPath, [
+                `# Active quality-checklist questions for ${taskId}`, '',
+                ...artifact.rules.filter(rule => rule.scope_applicability === 'active')
+                    .map(rule => `- ${rule.id}: ${String(rule.prompt || '').trim()}`)
+            ].join('\n') + '\n');
+            // Native producer artifacts and integrity events are fixture data, not production acceptance.
+            const bundleRoot = path.join(repoRoot, 'garda-agent-orchestrator');
+            appendTaskEvent(bundleRoot, taskId, 'COMPLETION_GATE_PASSED', 'PASS',
+                'Completed isolated fixture.', {}, { actor: 'gate' });
+            appendTaskEvent(bundleRoot, taskId, 'STATUS_CHANGED', 'INFO',
+                'Terminal isolated fixture.', { new_status: 'DONE' }, { actor: 'gate' });
+            for (const filePath of [answersPath, `${answersPath}.binding.json`, questionsPath]) {
+                scaffolds.push({ relativePath: path.relative(repoRoot, filePath).replace(/\\/g, '/'),
+                    bytes: fs.readFileSync(filePath) });
+            }
+        }
+        return { ...fixture, acceptedHead, scaffolds };
+    }
+
+    it('retains two completed native quality triplets after real child/import commits without original-HEAD recapture', () => {
+        const fixture = seedCompletedQualityScaffolds();
+        const { repoRoot, preflightPath, acceptedHead, packageBytes, scaffolds } = fixture;
+        const directCapture = captureAndSuspendSplitRequiredWip({
+            repoRoot, taskId: TASK_ID, preflightPath, guardKind: 'strict_decomposition',
+            guardReason: 'Deep identity must still reject original-HEAD recapture.'
+        });
+        assert.equal(directCapture.status, 'BLOCKED');
+        assert.ok(directCapture.violations.some(value => value.includes(`expected HEAD ${fixture.base}; found ${acceptedHead}`)));
+
+        const result = suspendStrictDecompositionWipIfRequired({ repoRoot, taskId: TASK_ID });
+        assert.equal(result.status, 'NOT_REQUIRED', result.violations.join('\n'));
+        const route = resolveNextStep({ repoRoot, taskId: TASK_ID });
+        assert.equal(route.status, 'DECOMPOSED', route.reason);
+        assert.equal(route.next_gate, 'child-task');
+        assert.equal(scaffolds.length, 6);
+        for (const saved of scaffolds) assert.deepEqual(fs.readFileSync(path.join(repoRoot, saved.relativePath)), saved.bytes);
+        for (const saved of packageBytes) assert.deepEqual(fs.readFileSync(saved.filePath), saved.bytes);
+        assert.equal(runGitFixtureCommand(repoRoot, ['rev-parse', 'HEAD']).stdout.trim(), acceptedHead);
+        assert.equal(runGitFixtureCommand(repoRoot, ['status', '--porcelain=v1', '--', 'src']).stdout.trim(), '');
+    });
+
+    it('retains consumed native warning inputs without creating a new gate PASS or changing saved WIP', () => {
+        const fixture = seedCompletedQualityScaffolds(false, true, true);
+        const result = suspendStrictDecompositionWipIfRequired({ repoRoot: fixture.repoRoot, taskId: TASK_ID });
+        assert.equal(result.status, 'NOT_REQUIRED', result.violations.join('\n'));
+        for (const saved of fixture.scaffolds) {
+            assert.deepEqual(fs.readFileSync(path.join(fixture.repoRoot, saved.relativePath)), saved.bytes);
+            if (saved.relativePath.endsWith('-answers.json')) {
+                assert.equal(JSON.parse(saved.bytes.toString('utf8')).answers[0].status, 'WARN');
+            }
+        }
+        for (const saved of fixture.packageBytes) assert.deepEqual(fs.readFileSync(saved.filePath), saved.bytes);
+    });
+
+    it('retains native-normalized raw PASS and WARN inputs after real HEAD advances but guards meaningful edits', () => {
+        for (const warning of [false, true]) {
+            const fixture = seedCompletedQualityScaffolds(false, true, warning, true);
+            const { repoRoot, packageBytes, scaffolds, preflightPath, childPath } = fixture;
+            const answersPath = path.join(repoRoot, scaffolds[0].relativePath);
+            const raw = JSON.parse(fs.readFileSync(answersPath, 'utf8'));
+            const consumed = JSON.parse(fs.readFileSync(path.join(reviewsRoot(repoRoot),
+                `${TASK_ID}-1-quality-checklist.json`), 'utf8')).answers[0];
+            assert.equal(raw.answers[0].status, warning ? ' WARNED ' : ' PASSED ');
+            assert.equal(consumed.status, warning ? 'WARN' : 'PASS');
+            assert.equal(consumed.answer, raw.answers[0].answer.trim());
+            assert.deepEqual(consumed.evidence_files, ['src/child.ts']);
+            assert.deepEqual(consumed.actions_required, []);
+            const consumedHead = runGitFixtureCommand(repoRoot, ['rev-parse', 'HEAD']).stdout.trim();
+            assert.equal(consumedHead, fixture.acceptedHead);
+            const consumedArtifacts = [`${TASK_ID}-1`, `${TASK_ID}-C3-I1`].map(taskId => {
+                const filePath = path.join(reviewsRoot(repoRoot), `${taskId}-quality-checklist.json`);
+                return { filePath, bytes: fs.readFileSync(filePath) };
+            });
+            fs.writeFileSync(childPath, 'export const child = 4;\n');
+            runGitFixtureCommand(repoRoot, ['add', '--', 'src/child.ts']);
+            runGitFixtureCommand(repoRoot, ['commit', '-m', 'Real child commit after native quality consumption']);
+            const laterChildHead = runGitFixtureCommand(repoRoot, ['rev-parse', 'HEAD']).stdout.trim();
+            assert.notEqual(laterChildHead, consumedHead);
+            fs.writeFileSync(childPath, 'export const child = 5;\n');
+            runGitFixtureCommand(repoRoot, ['add', '--', 'src/child.ts']);
+            runGitFixtureCommand(repoRoot, ['commit', '-m', 'Real source import after native quality consumption']);
+            const acceptedHead = runGitFixtureCommand(repoRoot, ['rev-parse', 'HEAD']).stdout.trim();
+            assert.notEqual(acceptedHead, laterChildHead);
+            const direct = captureAndSuspendSplitRequiredWip({ repoRoot, taskId: TASK_ID, preflightPath,
+                guardKind: 'strict_decomposition', guardReason: 'Deep HEAD guard must remain independent.' });
+            assert.equal(direct.status, 'BLOCKED');
+            assert.ok(direct.violations.some(value => value.includes(`expected HEAD ${fixture.base}; found ${acceptedHead}`)));
+            const retained = suspendStrictDecompositionWipIfRequired({ repoRoot, taskId: TASK_ID });
+            assert.equal(retained.status, 'NOT_REQUIRED', retained.violations.join('\n'));
+            const route = resolveNextStep({ repoRoot, taskId: TASK_ID });
+            assert.equal(route.status, 'DECOMPOSED', route.reason);
+            assert.equal(route.next_gate, 'child-task');
+            for (const saved of scaffolds) assert.deepEqual(fs.readFileSync(path.join(repoRoot, saved.relativePath)), saved.bytes);
+            for (const saved of packageBytes) assert.deepEqual(fs.readFileSync(saved.filePath), saved.bytes);
+            for (const saved of consumedArtifacts) assert.deepEqual(fs.readFileSync(saved.filePath), saved.bytes);
+            raw.answers[0].answer += ' Meaningful unconsumed user edit.';
+            writeJson(answersPath, raw);
+            const editedBytes = fs.readFileSync(answersPath);
+            const edited = suspendStrictDecompositionWipIfRequired({ repoRoot, taskId: TASK_ID });
+            assert.equal(edited.status, 'BLOCKED');
+            assert.ok(edited.violations.some(value => value.includes(`expected HEAD ${fixture.base}; found ${acceptedHead}`)));
+            assert.deepEqual(fs.readFileSync(answersPath), editedBytes);
+            for (const saved of packageBytes) assert.deepEqual(fs.readFileSync(saved.filePath), saved.bytes);
+            for (const saved of consumedArtifacts) assert.deepEqual(fs.readFileSync(saved.filePath), saved.bytes);
+            assert.equal(runGitFixtureCommand(repoRoot, ['rev-parse', 'HEAD']).stdout.trim(), acceptedHead);
+            assert.equal(runGitFixtureCommand(repoRoot, ['status', '--porcelain=v1', '--', 'src']).stdout.trim(), '');
+        }
+    });
+
+    it('rejects changed, unknown, active and unauthenticated quality inputs under the original-HEAD WIP guard', () => {
+        const kinds = ['answer-edit', 'question-edit', 'binding-edit', 'missing-timeline', 'reopened-task',
+            'duplicate-task', 'unknown-tmp', 'visible-source', 'declared-input', 'unknown-answer-field',
+            'forged-artifact', 'corrupt-timeline', 'reentry-after-done', 'missing-questions',
+            'symlink-input', 'hardlink-input', 'oversized-input', 'unconsumed-skipped-quality'];
+        const actualStates: Array<{ kind: string; status: string }> = [];
+        for (const kind of kinds) {
+            const fixture = seedCompletedQualityScaffolds(kind === 'declared-input', kind !== 'unconsumed-skipped-quality');
+            const { repoRoot, acceptedHead, packageBytes, scaffolds } = fixture;
+            const answersPath = path.join(repoRoot, scaffolds[0].relativePath);
+            let changedPath = answersPath;
+            if (kind === 'answer-edit') {
+                const template = JSON.parse(fs.readFileSync(answersPath, 'utf8'));
+                template.answers[0].answer = 'Unaccepted user work must remain intact.';
+                writeJson(answersPath, template);
+            } else if (kind === 'question-edit') {
+                changedPath = path.join(repoRoot, scaffolds[2].relativePath);
+                fs.appendFileSync(changedPath, 'Unaccepted user notes.\n');
+            } else if (kind === 'binding-edit') {
+                changedPath = `${answersPath}.binding.json`;
+                const binding = JSON.parse(fs.readFileSync(changedPath, 'utf8'));
+                binding.task_id = 'T-FOREIGN';
+                writeJson(changedPath, binding);
+            } else if (kind === 'missing-timeline') {
+                fs.unlinkSync(path.join(eventsRoot(repoRoot), `${TASK_ID}-1.jsonl`));
+            } else if (kind === 'reopened-task') {
+                const queuePath = path.join(repoRoot, 'TASK.md');
+                fs.writeFileSync(queuePath, fs.readFileSync(queuePath, 'utf8')
+                    .replace(`| ${TASK_ID}-1 | DONE |`, `| ${TASK_ID}-1 | IN_PROGRESS |`));
+            } else if (kind === 'duplicate-task') {
+                fs.appendFileSync(path.join(repoRoot, 'TASK.md'),
+                    `| ${TASK_ID}-1 | DONE | P1 | ambiguous | Duplicate fixture | test | 2026-10-07 | balanced | Uncertain ownership. |\n`);
+            } else if (kind === 'unknown-answer-field') {
+                const template = JSON.parse(fs.readFileSync(answersPath, 'utf8'));
+                template.answers[0].user_notes = 'Unaccepted implementation notes.';
+                writeJson(answersPath, template);
+            } else if (kind === 'forged-artifact') {
+                changedPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-1-quality-checklist.json`);
+                const artifact = JSON.parse(fs.readFileSync(changedPath, 'utf8'));
+                artifact.answers[0].answer = 'Forged consumed assessment.';
+                writeJson(changedPath, artifact);
+            } else if (kind === 'corrupt-timeline') {
+                changedPath = path.join(eventsRoot(repoRoot), `${TASK_ID}-1.jsonl`);
+                fs.appendFileSync(changedPath, '{"forged":"missing native integrity"}\n');
+            } else if (kind === 'reentry-after-done') {
+                appendTaskEvent(path.join(repoRoot, 'garda-agent-orchestrator'), `${TASK_ID}-1`,
+                    'TASK_MODE_ENTERED', 'INFO', 'Re-enter isolated fixture.', {}, { actor: 'gate' });
+            } else if (kind === 'missing-questions') {
+                fs.unlinkSync(path.join(repoRoot, scaffolds[2].relativePath));
+            } else if (kind === 'symlink-input' || kind === 'hardlink-input') {
+                const foreignRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-foreign-quality-'));
+                tempRoots.push(foreignRoot);
+                const foreignPath = path.join(foreignRoot, 'foreign-input.json');
+                fs.copyFileSync(answersPath, foreignPath);
+                fs.unlinkSync(answersPath);
+                if (kind === 'symlink-input') fs.symlinkSync(foreignPath, answersPath);
+                else fs.linkSync(foreignPath, answersPath);
+            } else if (kind === 'oversized-input') {
+                fs.writeFileSync(answersPath, ' '.repeat(256 * 1024 + 1));
+            } else if (kind === 'unknown-tmp' || kind === 'visible-source') {
+                changedPath = path.join(repoRoot, kind === 'unknown-tmp'
+                    ? `garda-agent-orchestrator/runtime/tmp/${TASK_ID}-draft.json` : 'unaccepted-source.ts');
+                fs.writeFileSync(changedPath, 'Unaccepted implementation work.\n');
+            }
+            const changedBytes = fs.readFileSync(changedPath);
+            const result = suspendStrictDecompositionWipIfRequired({ repoRoot, taskId: TASK_ID });
+            actualStates.push({ kind, status: result.status });
+            assert.equal(result.status, 'BLOCKED', kind);
+            assert.ok(result.violations.some(value => value.includes(`expected HEAD ${fixture.base}; found ${acceptedHead}`)), kind);
+            assert.deepEqual(fs.readFileSync(changedPath), changedBytes, kind);
+            for (const saved of packageBytes) assert.deepEqual(fs.readFileSync(saved.filePath), saved.bytes, kind);
+        }
+        assert.deepEqual(actualStates, kinds.map(kind => ({ kind, status: 'BLOCKED' })));
+    });
+
+    it('rejects replaced and growing quality files during bounded inventory inspection without losing WIP', () => {
+        const actualStates: Array<{ kind: string; mutated: boolean; status: string }> = [];
+        for (const kind of ['replaced', 'growing']) {
+            const fixture = seedCompletedQualityScaffolds();
+            const { repoRoot, packageBytes, scaffolds } = fixture;
+            const answersPath = path.join(repoRoot, scaffolds[0].relativePath);
+            let mutated = false;
+            const nativeFs = require('node:fs') as typeof fs;
+            const oldOpen = nativeFs.openSync;
+            const oldRead = nativeFs.readSync;
+            let answerDescriptor: number | null = null;
+            mock.method(nativeFs, 'openSync', (...args: Parameters<typeof fs.openSync>) => {
+                if (String(args[0]) === answersPath && !mutated && kind === 'replaced') {
+                    mutated = true;
+                    fs.renameSync(answersPath, `${answersPath}.original`);
+                    fs.writeFileSync(answersPath, scaffolds[0].bytes);
+                }
+                const descriptor = oldOpen(...args);
+                if (String(args[0]) === answersPath) answerDescriptor = descriptor;
+                return descriptor;
+            });
+            mock.method(nativeFs, 'readSync', (...args: Parameters<typeof fs.readSync>) => {
+                const count = oldRead(...args);
+                if (args[0] === answerDescriptor && !mutated && kind === 'growing') {
+                    mutated = true;
+                    fs.appendFileSync(answersPath, '\nUnaccepted user growth.\n');
+                }
+                return count;
+            });
+            let result;
+            try {
+                result = suspendStrictDecompositionWipIfRequired({ repoRoot, taskId: TASK_ID });
+            } finally {
+                mock.restoreAll();
+            }
+            actualStates.push({ kind, mutated, status: result.status });
+            assert.ok(result.violations.some(value => value.includes('checkout state identity mismatch')));
+            if (kind === 'replaced') {
+                assert.deepEqual(fs.readFileSync(`${answersPath}.original`), scaffolds[0].bytes);
+                assert.deepEqual(fs.readFileSync(answersPath), scaffolds[0].bytes);
+            } else {
+                assert.ok(fs.readFileSync(answersPath, 'utf8').endsWith('Unaccepted user growth.\n'));
+            }
+            for (const saved of packageBytes) assert.deepEqual(fs.readFileSync(saved.filePath), saved.bytes);
+        }
+        assert.deepEqual(actualStates, ['replaced', 'growing']
+            .map(kind => ({ kind, mutated: true, status: 'BLOCKED' })));
+    });
+
+    it('rejects a real quality-file-to-FIFO replacement without blocking inventory inspection', {
+        skip: process.platform === 'win32'
+    }, () => {
+        const fixture = seedCompletedQualityScaffolds();
+        const answersPath = path.join(fixture.repoRoot, fixture.scaffolds[0].relativePath);
+        const modulePath = require.resolve('../../../../src/gates/next-step/next-step-strict-decomposition-wip');
+        const script = `
+            const fs = require('node:fs'), cp = require('node:child_process');
+            const native = require(process.argv[1]);
+            const repoRoot = process.argv[2], answersPath = process.argv[3];
+            const open = fs.openSync;
+            let replaced = false;
+            fs.openSync = (...args) => {
+                if (String(args[0]) === answersPath && !replaced) {
+                    fs.renameSync(answersPath, answersPath + '.original');
+                    cp.execFileSync('mkfifo', [answersPath]);
+                    replaced = true;
+                }
+                return open(...args);
+            };
+            const result = native.suspendStrictDecompositionWipIfRequired({ repoRoot, taskId: process.argv[4] });
+            if (!replaced || result.status !== 'BLOCKED'
+                || !result.violations.some(v => v.includes('checkout state identity mismatch'))) process.exit(1);
+            process.stdout.write('QUALITY_FIFO_REPLACEMENT_REJECTED\\n');
+        `;
+        const child = spawnSync(process.execPath, ['-e', script, modulePath, fixture.repoRoot, answersPath, TASK_ID], {
+            timeout: 5000, killSignal: 'SIGKILL', maxBuffer: 32 * 1024, encoding: 'utf8'
+        });
+        assert.equal(child.error, undefined);
+        assert.equal(child.status, 0, child.stderr);
+        assert.ok(child.stdout.includes('QUALITY_FIFO_REPLACEMENT_REJECTED'));
+        assert.equal(fs.lstatSync(answersPath).isFIFO(), true);
+        assert.deepEqual(fs.readFileSync(`${answersPath}.original`), fixture.scaffolds[0].bytes);
+        for (const saved of fixture.packageBytes) assert.deepEqual(fs.readFileSync(saved.filePath), saved.bytes);
+    });
 
     it('rejects original-HEAD recapture and routes a suspended balanced parent after a real child commit without changing saved WIP', () => {
         const fixture = seedSuspendedParentAfterChildCommit();
