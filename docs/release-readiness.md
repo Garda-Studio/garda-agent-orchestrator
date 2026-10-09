@@ -89,15 +89,49 @@ freshness. An unfinished or failed latest run blocks validation instead of selec
 an older green result. Missing authenticated Actions access also blocks validation.
 The candidate manifest/digest, tag/version checks, pack-once staging, OIDC environment
 and npm staged approval remain independent guards. This source change grants no
-permission to execute CI or publish, and does not change the tag trigger/retry policy.
+permission to execute CI or publish. Manual operation selection and the bounded
+retry policy are separate requirements described below.
 
-## Publication history guard (not yet wired)
+## Explicit manual Publish
+
+`publish.yml` accepts only `workflow_dispatch`; pushing a `v*` tag does not start
+it. Select that tag as the workflow ref and supply its full lowercase commit SHA,
+the exact current repository, and `I authorize this selected run`. The unchanged
+manual selector rejects foreign identity and implicit publication. `job=validate`
+is the default; `job=stage-publish` explicitly requests validation and staging.
+Both use the fixed hosted `ubuntu-latest` / Node `24` target. No `all` operation
+or automatic staging fallback exists.
+
+Supply `security_run_id` for a completed, exact-commit manual Security run that
+actually executed both npm audit and OSV. Complete manual CI for the same commit
+is independently required. Validation packs once, smokes and verifies that
+tarball, then creates candidate-bound `security-evidence.json` through the live
+Security adapter before uploading the candidate. The staging job downloads only
+this run's artifact, re-verifies its expected name/digest and live Security record,
+then checks publication history immediately before `npm stage publish`.
+It never rebuilds the downloaded candidate. `npm-release` tag restrictions,
+OIDC Trusted Publishing and npm-side staged approval with maintainer 2FA remain
+separate boundaries; selecting staging does not make the package public.
+
+A later staging dispatch validates its own candidate again. An earlier
+validate-only artifact or saved green summary does not authorize that run.
+The same-tag, non-cancelling concurrency group covers both operations and retries.
+
+Local source and injected-provider tests establish the reviewed contracts only.
+No hosted execution, OIDC grant, npm staging or registry outcome is proved here.
+In particular, availability and exact shape of pending/skipped dependent jobs
+in GitHub's all-attempt metadata remain unverified. Missing staging records or
+uncertain execution timestamps fail closed; do not remove those guards to make
+a hosted run succeed. Obtain separate authorization before collecting actual
+hosted evidence or performing publication operations.
+
+## Publication history guard
 
 `scripts/release-publish-history-evidence.cjs` defines read-only `validate` and
-`stage-publish` history checks for the future manual Publish workflow. It is not
-called by the current tag-push workflow. Its reviewed Publish source binding must
-be refreshed in the separately reviewed wiring change; synthetic job fixtures are
-not evidence that a real manual publication run is available or accepted.
+`stage-publish` history checks called by the manual Publish workflow. Its complete
+reviewed Publish source binding, static readiness bindings and independent
+negative fixtures change together. Synthetic job fixtures are not evidence that
+a real manual publication run is available or accepted.
 
 The guard verifies the local reviewed workflow/selector and their authenticated
 contents at the candidate SHA, the live tag target, repository/workflow/run/attempt
@@ -124,7 +158,7 @@ The two checkpoints use `Check publication history before validation` and
 
 The guard rechecks current run identity, tag target and local source before returning.
 GitHub API reads do not provide an atomic lock or a reusable publication grant;
-the eventual caller must preserve same-tag non-cancelling serialization and run
+the caller preserves same-tag non-cancelling serialization and runs
 the check immediately in the corresponding job step. Candidate-byte verification,
 CI/security proof, tag/version checks, OIDC/environment restrictions and npm staged
 approval remain independent requirements. Missing authenticated `gh` access blocks

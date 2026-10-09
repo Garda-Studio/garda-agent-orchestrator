@@ -100,11 +100,51 @@ Release handoff archives are split by purpose. `npm run archive:source` writes a
 
 Direct `npm pack` and `npm pack --dry-run` are guarded by `prepack`, which runs the same clean-worktree preflight before package preparation and again after `build:publish-runtime`.
 
-### Tag-driven npm staged publishing
+### Manual npm staged publishing
 
-The npm release path is `.github/workflows/publish.yml`, triggered by `v*` tags. Its `validate` job runs on GitHub-hosted Ubuntu with Node 24. It checks tag/version parity, rejects a reused tag, and authenticates the latest manual CI run for the exact release commit through the reviewed complete-suite adapter. Saved success summaries and partial selections are insufficient: authorization, all 23 job identities and required steps, retained attempts and 24-hour freshness must pass. Read-only Actions access is supplied at step scope to both discovery and live verification. The job installs pinned npm CLI `11.15.0` and runs `npm run release:preflight`. It then packs one release candidate outside the checkout, records its file manifest and SHA-256, runs the full packaging smoke against that exact tarball through GARDA_RELEASE_CANDIDATE_PATH, rechecks its digest, and uploads the verified candidate artifact.
+The npm release path is `.github/workflows/publish.yml`, using only explicitly
+authorized `workflow_dispatch` on a release-tag ref. Tag push starts no workflow.
+The unchanged selector requires the exact repository, full run/tag SHA and
+`I authorize this selected run`. `validate` is the default operation;
+`stage-publish` explicitly selects validation and staging. The offered target is
+GitHub-hosted `ubuntu-latest` with Node `24`; every checkout uses the run SHA without
+persisted credentials. Same-tag concurrency covers both operations without cancellation.
 
-The dependent `publish` job targets the GitHub Environment `npm-release`, downloads that artifact from the same workflow run, rechecks the candidate manifest and tarball SHA-256 against the `validate` job outputs, and stages the downloaded tarball path with `npm stage publish`. It does not repack or rerun release proof. The environment should be restricted to selected release tags matching `v*`, and the same environment name must be configured on the npm Trusted Publisher entry. GitHub required reviewers are optional for this solo-maintainer flow; human approval is npm staged approval with maintainer 2FA after CI stages the package. The job uses npm Trusted Publishing through OIDC with `id-token: write` and no long-lived npm token. Trusted Publishing for public GitHub Actions packages generates npm provenance when the registry accepts and approves the staged publish.
+The `validate` job checks tag/version/ancestry, authenticates complete same-tag
+run/attempt history, and verifies the latest exact-commit manual CI run through the
+reviewed complete-suite adapter. Saved summaries and partial selections are insufficient:
+authorization, all 23 job identities and required steps, retained attempts and 24-hour
+freshness must pass. The job uses read-only Actions access, pinned npm CLI `11.15.0`
+and `npm run release:preflight`. It packs once outside the checkout, records the
+candidate manifest/digest, smokes that exact tarball through `GARDA_RELEASE_CANDIDATE_PATH`,
+and re-verifies its bytes. The required `security_run_id` identifies a completed
+exact-commit manual Security run with both npm audit and OSV; the live adapter creates
+candidate-bound Security evidence before upload.
+
+The explicitly selected dependent `publish` job targets `npm-release`, downloads only
+the same-run artifact, verifies the expected candidate name/digest and live Security
+proof again, checks history immediately before staging, and passes that exact tarball
+to `npm stage publish`. It does not repack. A later staging dispatch validates its own
+candidate instead of adopting an earlier validate-only artifact. The history guard
+allows at most three attempts across all same-tag run IDs with authenticated 24-hour
+history. A completed prior validation with `success`, `failure`, `cancelled` or
+`timed_out` and skipped, unexecuted staging permits another separately authorized
+dispatch within those limits. Started, failed, cancelled or uncertain prior staging
+and missing records fail closed.
+
+The environment must be restricted to selected release tags matching `v*`, with the
+same environment name on the npm Trusted Publisher entry. GitHub required reviewers
+are optional for the solo-maintainer flow; human approval is npm staged approval with
+maintainer 2FA. npm Trusted Publishing uses OIDC with staging-only `id-token: write`
+and no long-lived npm token. Registry acceptance, staged approval and public provenance
+must be verified before claiming a public release or attestation.
+
+This source contract and its local synthetic-provider tests do not establish hosted
+Actions execution, pending/skipped job metadata, Environment/OIDC grants or npm registry
+outcomes. Obtain separate authorization for those checks. Historical automatic-run
+proof remains source-qualified history, not current release evidence. See the
+[manual release runbook](run-methods.md#81-manual-npm-staged-publish) and
+[publication history guard](release-readiness.md#publication-history-guard).
 
 ### `npm run release:preflight`
 
@@ -114,7 +154,7 @@ Runs the final operator-facing release readiness gate before the expensive relea
 2. `npm run test:release-smoke`
 3. `npm run validate:release`
 
-`npm run validate:release-readiness` is a short checklist gate. It verifies static alignment for package scripts, shipped package files, production audit wiring, CI release validation, lifecycle update smoke wiring, runtime-state documentation, manifest validation guidance, security document package/manifest surface, the tag-driven npm Trusted Publishing workflow/docs, and the tracked `docs/release-readiness.md` checklist before the release is cut. `npm run test:release-smoke` then exercises high-signal runtime contracts for task id parsing, task-event append integrity, next-step startup routing, and status/doctor formatting. It intentionally does not replace `npm run validate:release`; the latter remains the build/test/pack/install proof and includes `npm run test:packaging` for package smoke coverage.
+`npm run validate:release-readiness` is a short checklist gate. It verifies static alignment for package scripts, shipped package files, production audit wiring, CI release validation, lifecycle update smoke wiring, runtime-state documentation, manifest validation guidance, security document package/manifest surface, the explicitly authorized manual npm Trusted Publishing workflow/docs, and the tracked `docs/release-readiness.md` checklist before the release is cut. Its offline result is `ReleaseDecision: NOT_EVALUATED`, not release approval or hosted proof. `npm run test:release-smoke` then exercises high-signal runtime contracts for task id parsing, task-event append integrity, next-step startup routing, and status/doctor formatting. It intentionally does not replace `npm run validate:release`; the latter remains the build/test/pack/install proof and includes `npm run test:packaging` for package smoke coverage.
 
 Copy-paste slow smoke command:
 

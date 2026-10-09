@@ -33,13 +33,14 @@ import {
     validateTrackedMarkdownLinks
 } from './release-metadata';
 
-const TRUSTED_RELEASE_TAG_HISTORY_STEP_SHA256 = 'dd86883aee9e6eef46c76a284d9a90431073efaecdd74adcce97f4e53223b470';
-const TRUSTED_RELEASE_CANDIDATE_PUBLISH_STEPS_SHA256 = '26b8e7c2f66cd01ae719d68cc3836566164362e429d62181dad7e4039fa8590f';
+const TRUSTED_RELEASE_TAG_HISTORY_STEP_SHA256 = '87dd07c1f458b17f2fe7d194cc65d578b968d6918e60ccaeb1aacd86e62997da';
+const TRUSTED_RELEASE_STAGE_HISTORY_STEP_SHA256 = '75f52bcb313ee93ca7cde236295b7c523c318d2f81c8af7e217482c3699dcbfa';
+const TRUSTED_RELEASE_CANDIDATE_PUBLISH_STEPS_SHA256 = 'e393b01872991994dd1f3f8c0845f5406ec8368fe30cb4d0531367aab5faca13';
 const TRUSTED_RELEASE_CI_PROOF_STEP_SHA256 = '6c179f18032c2487f7697a8cec81441bad618868deebf882f53f93fcd79d1c45';
-const TRUSTED_RELEASE_CANDIDATE_PACK_STEP_SHA256 = 'f62df6d8ca1b684eb8bfaede8763254ae4da5488464b053095d0b6891b27de39';
-const TRUSTED_RELEASE_PUBLISH_JOB_SHA256 = 'f9258da3a0dfa441cddcfc7f0be1c37338e6096900012accdf0d107b91646c2b';
+const TRUSTED_RELEASE_CANDIDATE_PACK_STEP_SHA256 = '71b6cc1a398455b0df7347d6e4f50f786da3574b385159db4c5195290a4b1eb6';
+const TRUSTED_RELEASE_PUBLISH_JOB_SHA256 = '867b3b86f96dbfe56aec55b8f8d01badef3e746786436fe3ab72fd4edf85fee9';
 // Bind all release jobs, workflow permissions, and immutable action pins.
-const TRUSTED_RELEASE_WORKFLOW_SHA256 = '48f688bc902041781ed07ed5eefcb2add08dbbc7dbacba6ec09d517a37c775af';
+const TRUSTED_RELEASE_WORKFLOW_SHA256 = '461495504bbb5a33b18bebebe6f7d85873b019b7ae94f35a49b58f5e493527aa';
 // Bind all manual workflow bytes, including executable scalar comments, while
 // permitting CRLF and canonical quoting of the exact reviewed action pins.
 const TRUSTED_SECRET_WORKFLOW_CONTRACT_SHA256 = '8bc27162b24d5f8ea37e9afcb72836ce798501d0c861867c81c5db0bdb96b0d7';
@@ -326,31 +327,6 @@ function workflowStructuralBlockContractSha256(block: string | null): string | n
         .map((line) => line.slice(baseIndent).trimEnd())
         .join('\n');
     return crypto.createHash('sha256').update(normalized).digest('hex');
-}
-
-function extractYamlListAfterKey(block: string | null, key: string): string[] {
-    if (block === null) {
-        return [];
-    }
-    const lines = block.split(/\r?\n/u);
-    const keyPattern = new RegExp(`^(\\s*)${key}:\\s*$`, 'u');
-    const keyIndex = lines.findIndex((line) => keyPattern.test(line));
-    if (keyIndex === -1) {
-        return [];
-    }
-    const keyIndent = keyPattern.exec(lines[keyIndex])![1].length;
-    const values: string[] = [];
-    for (const line of lines.slice(keyIndex + 1)) {
-        const indent = line.match(/^\s*/u)![0].length;
-        if (line.trim() && indent <= keyIndent) {
-            break;
-        }
-        const item = /^\s*-\s*(.+?)\s*$/u.exec(line);
-        if (item) {
-            values.push(item[1].replace(/^['"]|['"]$/gu, ''));
-        }
-    }
-    return values;
 }
 
 function getYamlDirectChildBlock(block: string | null, key: string): string | null {
@@ -744,13 +720,12 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
     const publishWorkflow = readWorkflowForReadiness(repoRoot, 'publish.yml');
     const publishWorkflowExactlyReviewed = workflowSourceContractSha256(publishSourceWorkflow)
         === TRUSTED_RELEASE_WORKFLOW_SHA256;
+    const authorizeJob = getWorkflowJobBlockUnderJobs(publishWorkflow, 'authorize');
     const validateJob = getWorkflowJobBlockUnderJobs(publishWorkflow, 'validate');
     const publishJob = getWorkflowJobBlockUnderJobs(publishWorkflow, 'publish');
     const onBlock = getYamlKeyBlock(publishWorkflow, 'on');
-    const pushTriggerBlock = getYamlDirectChildBlock(onBlock, 'push');
     const workflowEnv = getYamlKeyBlock(publishWorkflow, 'env');
     const workflowPermissions = getYamlKeyBlock(publishWorkflow, 'permissions');
-    const tagTriggers = extractYamlListAfterKey(pushTriggerBlock, 'tags');
     const validateCheckout = getWorkflowUseStepBlock(validateJob || '', 'actions/checkout@v7.0.0');
     const publishCheckout = getWorkflowUseStepBlock(publishJob || '', 'actions/checkout@v7.0.0');
     const validateSetupNode = getWorkflowUseStepBlock(validateJob || '', 'actions/setup-node@v6');
@@ -804,26 +779,28 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
     const publishDropsEphemeralTagRef = workflowRunScriptsIncludeAll(publishRunScripts, [
         'git update-ref -d "refs/tags/${GITHUB_REF_NAME}"'
     ]);
-    const validateRejectsWorkflowReruns = workflowRunScriptsIncludeAll(validateRunScripts, [
-        'github.run_attempt',
-        '!= "1"',
-        'exit 1'
-    ]);
-    const publishRejectsWorkflowReruns = workflowRunScriptsIncludeAll(publishRunScripts, [
-        'github.run_attempt',
-        '!= "1"',
-        'exit 1'
-    ]);
     const actionsHistoryReadable = blockHasNonCommentLine(workflowPermissions, 'actions: read');
     const historicalTagReuseStep = getWorkflowNamedStepBlock(
         validateJob || '',
-        'Reject previously used release tags'
+        'Check publication history before validation'
     );
-    const validateRejectsHistoricalTagReuse = workflowBlockContractSha256(historicalTagReuseStep)
+    const validateHistoryGuardBound = workflowBlockContractSha256(historicalTagReuseStep)
         === TRUSTED_RELEASE_TAG_HISTORY_STEP_SHA256;
+    const stageHistoryStep = getWorkflowNamedStepBlock(publishJob || '', 'Check publication history before staging');
+    const stageHistoryGuardBound = workflowStructuralBlockContractSha256(stageHistoryStep)
+        === TRUSTED_RELEASE_STAGE_HISTORY_STEP_SHA256;
     const fullTagHistoryAvailable = blockHasNonCommentLine(validateCheckoutWith, 'fetch-depth: 0')
         && blockHasNonCommentLine(publishCheckoutWith, 'fetch-depth: 0');
-    const tagDrivenOnly = tagTriggers.includes('v*') && !publishWorkflow.includes('workflow_dispatch:');
+    const manualDrivenOnly = getYamlDirectChildBlock(onBlock, 'workflow_dispatch') !== null
+        && ['push', 'pull_request', 'schedule', 'workflow_call', 'release']
+            .every(key => getYamlDirectChildBlock(onBlock, key) === null);
+    const manualSelectionBound = workflowJobHasExactRunLine(authorizeJob, 'node scripts/manual-workflow-authorization.cjs')
+        && blockHasNonCommentLine(authorizeJob, 'runs-on: ubuntu-latest')
+        && blockHasNonCommentLine(authorizeJob, 'MANUAL_WORKFLOW: publish')
+        && blockHasNonCommentLine(validateJob, 'needs: [authorize]')
+        && blockHasNonCommentLine(publishJob, 'needs: [authorize, validate]')
+        && crypto.createHash('sha256').update(readTextFileIfExists(path.join(repoRoot, 'scripts/manual-workflow-authorization.cjs')) || '')
+            .digest('hex') === TRUSTED_MANUAL_SELECTOR_SHA256;
     const nodeVersionPinned = yamlBlockHasScalarValue(workflowEnv, 'NODE_VERSION', ['24', '24.x']);
     const ciProofStep = getWorkflowNamedStepBlock(validateJob || '', 'Require successful CI for this release commit');
     const candidatePackStep = getWorkflowNamedStepBlock(validateJob || '', 'Pack and attest release candidate');
@@ -845,7 +822,8 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
         'npm pack --json --pack-destination "${CANDIDATE_DIR}"',
         'release-candidate.cjs create',
         'GARDA_RELEASE_CANDIDATE_PATH="${CANDIDATE_DIR}/${TARBALL_NAME}" npm run test:packaging',
-        'release-candidate.cjs verify'
+        'release-candidate.cjs verify',
+        'release-security-evidence.cjs attest'
     ]) && workflowRunScriptsIncludeExecutableMarkers(validateRunScripts, ['${GITHUB_OUTPUT}']) && blockHasNonCommentLine(validateUploadWith, 'name: release-candidate-${{ github.sha }}')
         && blockHasNonCommentLine(validateUploadWith, 'path: ${{ runner.temp }}/release-candidate/')
         && blockHasNonCommentLine(validateUploadWith, 'if-no-files-found: error')
@@ -854,6 +832,7 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
     const candidatePublishStepNames = [
         'Download validated release candidate',
         'Verify downloaded candidate',
+        'Check publication history before staging',
         'Stage the validated tarball with npm Trusted Publishing'
     ];
     const candidatePublishSteps = candidatePublishStepNames
@@ -865,7 +844,7 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
         && candidateStepPositions.slice(0, -1).every((position, index) =>
             (publishJob || '').slice(position + candidatePublishSteps[index]!.length, candidateStepPositions[index + 1]).trim() === '')
         && (publishJob || '').slice(
-            candidateStepPositions[2] + candidatePublishSteps[2]!.length
+            candidateStepPositions[candidateStepPositions.length - 1] + candidatePublishSteps[candidatePublishSteps.length - 1]!.length
         ).trim() === '';
     const candidatePublishStepsHash = workflowBlockContractSha256(candidatePublishSteps.every((block) => block !== null)
         ? candidatePublishSteps.join('\n') : null);
@@ -873,6 +852,8 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
         && candidateStepsAdjacent
         && candidatePublishStepsHash === TRUSTED_RELEASE_CANDIDATE_PUBLISH_STEPS_SHA256
         && workflowStructuralBlockContractSha256(publishJob) === TRUSTED_RELEASE_PUBLISH_JOB_SHA256
+        && workflowRunScriptsIncludeExecutableMarkers(publishRunScripts, ['release-security-evidence.cjs verify'])
+        && stageHistoryGuardBound
         && !workflowJobHasRunStep(publishJob, 'npm run release:preflight');
     const validateJobContract = validateJob !== null
         && blockHasNonCommentLine(validateJob, 'runs-on: ubuntu-latest')
@@ -882,9 +863,9 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
         && nodeVersionPinned
         && blockHasNonCommentLine(validateSetupWith, "node-version: ${{ env.NODE_VERSION }}")
         && blockHasNonCommentLine(validateSetupWith, 'package-manager-cache: false')
-        && validateRejectsWorkflowReruns
+        && manualSelectionBound
         && actionsHistoryReadable
-        && validateRejectsHistoricalTagReuse
+        && validateHistoryGuardBound
         && tagVersionGuard
         && validateDropsEphemeralTagRef
         && workflowJobHasRunStep(validateJob, 'npm ci --no-fund --no-audit')
@@ -895,7 +876,7 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
         && validateUploadArtifact !== null;
     const publishJobContract = publishJob !== null
         && blockHasNonCommentLine(publishJob, 'runs-on: ubuntu-latest')
-        && blockHasNonCommentLine(publishJob, 'needs: validate')
+        && blockHasNonCommentLine(publishJob, 'needs: [authorize, validate]')
         && blockHasNonCommentLine(publishJob, 'environment: npm-release')
         && blockHasNonCommentLine(publishPermissions, 'contents: read')
         && blockHasNonCommentLine(publishPermissions, 'id-token: write')
@@ -907,7 +888,8 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
         && blockHasNonCommentLine(publishSetupWith, 'registry-url: https://registry.npmjs.org')
         && blockHasNonCommentLine(publishSetupWith, 'package-manager-cache: false')
         && releaseNpmPinned
-        && publishRejectsWorkflowReruns
+        && manualSelectionBound
+        && stageHistoryGuardBound
         && publishSanityGuard
         && publishDropsEphemeralTagRef
         && publishUsesValidatedCandidate
@@ -920,20 +902,20 @@ function validateTrustedPublishWorkflowContract(repoRoot: string): { passed: boo
     const checks = [
         { passed: publishWorkflow !== '', detail: 'publish.yml present' },
         { passed: publishWorkflowExactlyReviewed, detail: 'publish workflow exactly matches the reviewed release path' },
-        { passed: tagDrivenOnly, detail: 'publish.yml is v*-tag driven without manual dispatch' },
+        { passed: manualDrivenOnly, detail: 'publish.yml accepts only manual dispatch' },
+        { passed: manualSelectionBound, detail: 'publish jobs require exact-SHA explicit operation authorization' },
         { passed: nodeVersionPinned, detail: 'publish workflow pins Node 24 for Trusted Publishing' },
         { passed: actionsHistoryReadable, detail: 'publish workflow has read-only access to provider workflow-run history' },
         { passed: fullTagHistoryAvailable, detail: 'publish jobs fetch release-tag history for changelog preservation checks' },
         { passed: tagVersionGuard, detail: 'validate job has fail-closed tag/version guard' },
-        { passed: validateRejectsWorkflowReruns, detail: 'validate job rejects repeated workflow attempts' },
-        { passed: validateRejectsHistoricalTagReuse, detail: 'validate job rejects release tags with a prior workflow run' },
+        { passed: validateHistoryGuardBound, detail: 'validate job binds bounded complete same-tag attempt history' },
         { passed: validateDropsEphemeralTagRef, detail: 'validate job removes its ephemeral local tag ref before release uniqueness proof' },
         { passed: ciCommitBound, detail: 'validate job requires successful CI for the exact release commit' },
         { passed: releaseNpmPinned, detail: 'release jobs pin npm CLI 11.15.0' },
         { passed: candidatePackAndUpload, detail: 'validate job packs, smokes, and uploads the digest-bound release candidate' },
         { passed: validateJobContract, detail: 'validate job checks tag/version, CI, release proof, and candidate tarball' },
         { passed: publishSanityGuard, detail: 'publish job has fail-closed package and npm CLI sanity guard' },
-        { passed: publishRejectsWorkflowReruns, detail: 'publish job rejects repeated workflow attempts' },
+        { passed: stageHistoryGuardBound, detail: 'publish job rejects started or uncertain staging history' },
         { passed: publishDropsEphemeralTagRef, detail: 'publish job removes its ephemeral local tag ref before release uniqueness proof' },
         { passed: publishUsesValidatedCandidate, detail: 'publish job verifies and stages the exact validated tarball without rebuilding' },
         { passed: publishJobContract, detail: 'publish job is npm-release environment bound and uses id-token OIDC staged publishing' },
@@ -955,6 +937,9 @@ function validateTrustedPublishDocsContract(repoRoot: string, version: string | 
 
     const checklistDocumentsTrustedPublishing = [
         `## ${targetVersion}`,
+        'Explicit manual Publish',
+        'stage-publish',
+        '`security_run_id`',
         'Trusted Publishing',
         '`publish.yml`',
         '`npm-release`',
@@ -978,8 +963,10 @@ function validateTrustedPublishDocsContract(repoRoot: string, version: string | 
         'Require two-factor authentication and disallow tokens',
         'npm stage publish'
     ].every((marker) => runMethods.includes(marker));
-    const platformDocsNameTagDrivenRelease = [
-        'Tag-driven npm staged publishing',
+    const platformDocsNameManualRelease = [
+        'Manual npm staged publishing',
+        'workflow_dispatch',
+        'stage-publish',
         '.github/workflows/publish.yml',
         'npm Trusted Publishing',
         'npm staged approval',
@@ -991,7 +978,7 @@ function validateTrustedPublishDocsContract(repoRoot: string, version: string | 
     const checks = [
         { passed: checklistDocumentsTrustedPublishing, detail: `docs/release-readiness.md records ${targetVersion} Trusted Publishing readiness` },
         { passed: runbookDocumentsOperatorSetup, detail: 'docs/run-methods.md documents GitHub Environment and npm Trusted Publisher setup' },
-        { passed: platformDocsNameTagDrivenRelease, detail: 'docs/node-platform-foundation.md names the tag-driven OIDC release path' }
+        { passed: platformDocsNameManualRelease, detail: 'docs/node-platform-foundation.md names the manual OIDC release path' }
     ];
 
     return {
@@ -1262,7 +1249,7 @@ function validateReleaseReadinessContracts(repoRoot: string): ReleaseReadinessRe
         checks,
         violations,
         'trusted-publish-workflow',
-        'npm Trusted Publishing workflow is tag-driven, stage-only, tokenless, and provenance-ready',
+        'npm Trusted Publishing workflow is manually authorized, stage-only, tokenless, and provenance-ready',
         trustedPublishWorkflow.passed,
         trustedPublishWorkflow.details
     );
@@ -1272,7 +1259,7 @@ function validateReleaseReadinessContracts(repoRoot: string): ReleaseReadinessRe
         checks,
         violations,
         'trusted-publish-docs',
-        'release docs document the tag-driven npm Trusted Publishing operator path',
+        'release docs document the manually authorized npm Trusted Publishing operator path',
         trustedPublishDocs.passed,
         trustedPublishDocs.details
     );
@@ -1318,7 +1305,7 @@ function validateReleaseReadinessContracts(repoRoot: string): ReleaseReadinessRe
         'Unused-symbol enforcement: quality includes typecheck:unused with --noUnusedLocals and --noUnusedParameters before lint, coverage, and production npm audit.',
         'Security/audit alignment: quality includes production npm audit and security/SBOM/threat-model docs are present in source, package files, and MANIFEST.',
         'Release-security baseline: readiness labels npm audit and gitleaks as blocking, OSV and SBOM as informational, and reports action-pinning plus update-source provenance policy without adding a duplicate security pipeline.',
-        'Trusted Publishing path: pushing the matching v* tag runs .github/workflows/publish.yml, validates the package before staging, then uses npm-release OIDC trusted publishing for tokenless npm stage publish; npm-side staged approval with 2FA makes the package public.',
+        'Trusted Publishing path: explicitly dispatch .github/workflows/publish.yml from the matching v* tag for validate or stage-publish at the exact SHA. Validation requires complete CI and candidate-bound Security proof; staging re-verifies Security and all-attempt history before npm-release OIDC npm stage publish. npm-side staged approval with 2FA makes the package public. Local source checks do not prove hosted execution.',
         `Post-publish verification: confirm npm latest, package integrity/provenance visibility, and npx --yes garda-agent-orchestrator@${version || '<version>'} --version.`
     ];
 

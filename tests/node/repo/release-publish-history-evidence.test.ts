@@ -93,7 +93,7 @@ function fixture(phase = 'validate') {
         fs.mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
         fs.copyFileSync(path.join(getRepoRoot(), relative), path.join(root, relative));
     }
-    // Synthetic proposed manual Publish jobs exercise the unwired guard; this is not hosted proof.
+    // Synthetic provider metadata exercises the manual source contract; this is not hosted proof.
     const current = run();
     const currentJobs = jobs(current, phase);
     const runs = [current];
@@ -571,6 +571,6 @@ test('publish guard rejects missing or malformed transport with fixed shell-free
         mutable.spawnSync = () => ({ status: 0, stdout: '{malformed', stderr: '', signal: null, pid: 1, output: [] });
         assert.throws(() => verifyPublishHistory(f.request, { root: f.root, now }), /unavailable|malformed/i);
         const raw = fs.readFileSync(path.join(f.root, sourceFiles[0]));
-        assert.equal(crypto.createHash('sha256').update(raw).digest('hex'), '48f688bc902041781ed07ed5eefcb2add08dbbc7dbacba6ec09d517a37c775af');
+        assert.equal(crypto.createHash('sha256').update(raw).digest('hex'), '461495504bbb5a33b18bebebe6f7d85873b019b7ae94f35a49b58f5e493527aa');
     } finally { mutable.spawnSync = saved; f.dispose(); }
 });

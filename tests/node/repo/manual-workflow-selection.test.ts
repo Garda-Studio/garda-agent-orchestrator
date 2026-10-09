@@ -94,6 +94,66 @@ test('manual selector rejects implicit publication and unsupported auxiliary run
     assert.throws(() => selectManualWorkflow(inputs({ MANUAL_WORKFLOW: 'security', MANUAL_JOB: 'osv', MANUAL_RUNTIME: '22.13.0' })), /runtime/);
 });
 
+test('manual Publish selection rejects implicit staging, foreign identity and unsupported execution targets', () => {
+    const publishInputs = (overrides: Record<string, string>) => inputs({
+        MANUAL_WORKFLOW: 'publish', MANUAL_JOB: 'validate', ...overrides
+    });
+    const selected = selectManualWorkflow(publishInputs({}));
+    assert.equal(selected.jobs.validate.enabled, true);
+    assert.equal(selected.jobs['stage-publish'].enabled, false);
+    assert.deepEqual(selected.jobs.validate.matrix.include, [{ os: 'ubuntu-latest', 'node-version': '24' }]);
+    const rejectedInputs: Array<Record<string, string>> = [
+        { MANUAL_AUTHORIZATION: '' }, { MANUAL_COMMIT: 'b'.repeat(40) },
+        { MANUAL_REPOSITORY: 'foreign/garda' }, { GITHUB_EVENT_NAME: 'push' },
+        { MANUAL_JOB: 'all' }, { MANUAL_JOB: 'publish' },
+        { MANUAL_OS: 'windows-latest' }, { MANUAL_RUNTIME: '22.13.0' }
+    ];
+    for (const overrides of rejectedInputs) {
+        assert.throws(() => selectManualWorkflow(publishInputs(overrides)));
+    }
+});
+
+test('manual Publish binds explicit operations and candidate evidence to fixed hosted jobs', () => {
+    const workflow = fs.readFileSync(path.join(getRepoRoot(), '.github/workflows/publish.yml'), 'utf8');
+    assert.match(workflow, /^ {2}workflow_dispatch:\n {4}inputs:/mu);
+    assert.doesNotMatch(workflow, /^ {2}(push|pull_request|schedule|workflow_call):/mu);
+    assert.match(workflow, /^ {8}default: validate$/mu);
+    assert.match(workflow, /^ {8}options: \[validate, stage-publish\]$/mu);
+    assert.match(workflow, /^ {8}options: \[ubuntu-latest\]$/mu);
+    assert.match(workflow, /^ {8}options: \['24'\]$/mu);
+    assert.ok(workflow.includes('group: publish-${{ github.ref }}'));
+    assert.match(workflow, /^ {2}cancel-in-progress: false$/mu);
+    const jobs = workflow.slice(workflow.indexOf('\njobs:\n')).split(/\n(?= {2}[a-z][a-z-]*:\n)/u);
+    const authorize = jobs.find(job => job.startsWith('  authorize:'));
+    const validate = jobs.find(job => job.startsWith('  validate:'));
+    const publish = jobs.find(job => job.startsWith('  publish:'));
+    assert.ok(authorize && validate && publish);
+    assert.ok(authorize.includes('name: Authorize publish selection'));
+    assert.ok(authorize.includes('MANUAL_WORKFLOW: publish'));
+    for (const [name, input] of Object.entries({ REPOSITORY: 'repository', COMMIT: 'commit',
+        AUTHORIZATION: 'authorization', JOB: 'job', OS: 'os', RUNTIME: 'runtime' })) {
+        assert.ok(authorize.includes('MANUAL_' + name + ': ${{ inputs.' + input + ' }}'));
+    }
+    assert.match(authorize, /^ {8}run: node scripts\/manual-workflow-authorization\.cjs$/mu);
+    assert.match(validate, /^ {4}needs: \[authorize\]$/mu);
+    assert.ok(validate.includes("fromJSON(needs.authorize.outputs.selection).jobs.validate.enabled"));
+    assert.match(publish, /^ {4}needs: \[authorize, validate\]$/mu);
+    assert.ok(publish.includes("needs.validate.result == 'success' && fromJSON(needs.authorize.outputs.selection).jobs['stage-publish'].enabled"));
+    for (const job of [authorize, validate, publish]) {
+        assert.match(job, /^ {4}runs-on: ubuntu-latest$/mu);
+        assert.ok(job.includes('ref: ${{ github.sha }}'));
+        assert.ok(job.includes('persist-credentials: false'));
+    }
+    assert.ok(validate.includes('node scripts/release-publish-history-evidence.cjs validate'));
+    assert.ok(publish.includes('node scripts/release-publish-history-evidence.cjs stage-publish'));
+    assert.ok(validate.includes('SECURITY_RUN_ID: ${{ inputs.security_run_id }}'));
+    assert.ok(validate.includes('node scripts/release-security-evidence.cjs attest'));
+    assert.ok(publish.includes('node scripts/release-security-evidence.cjs verify'));
+    assert.ok(publish.indexOf('release-security-evidence.cjs verify') < publish.indexOf('release-publish-history-evidence.cjs stage-publish'));
+    assert.ok(publish.indexOf('release-publish-history-evidence.cjs stage-publish') < publish.indexOf('npm stage publish'));
+    assert.doesNotMatch(workflow, /run:.*\$\{\{ inputs\.|NODE_AUTH_TOKEN|NPM_TOKEN|continue-on-error/u);
+});
+
 test('manual selector CLI emits one JSON output record and rejects malformed inputs before writing', () => {
     const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-manual-selection-'));
     try {

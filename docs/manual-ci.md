@@ -2,8 +2,8 @@
 
 The CI workflow accepts only `workflow_dispatch`. It validates the shared selector in
 `scripts/manual-workflow-authorization.cjs` before selected jobs run. The remaining
-workflows have their own wiring contracts. Security, Secret Scanning, SBOM and
-standalone Smoke also use the manual selector; publication wiring follows separately.
+workflows have their own wiring contracts. Security, Secret Scanning, SBOM,
+standalone Smoke and Publish also use the manual selector.
 
 The dispatch contract uses these inputs as data through step environment variables:
 
@@ -34,6 +34,24 @@ Publication has explicit `validate` and `stage-publish` operations. Validation d
 not select publication; staging also selects its validation prerequisite. Selection
 does not replace environment/OIDC, tag/version, candidate evidence, duplicate-publish
 guards or npm staged approval.
+
+For Publish, select the release tag as the dispatch ref and supply `repository`,
+its full lowercase `commit`, `authorization`, `job`, `os`, `runtime` and
+`security_run_id`. Repository, commit, authorization and Security run ID have no
+defaults. The offered target is fixed to `ubuntu-latest` and Node `24`;
+`job=validate` is the default and `job=stage-publish` explicitly requests staging.
+There is no `all` operation. Pushing a tag starts no Publish run. Authorization
+checks out the exact run SHA with persisted credentials disabled; both dependent
+jobs require its success and their explicit selection.
+
+`security_run_id` must identify a completed manual Security run for this exact
+commit that executed both required scans. Validation packs and smokes one candidate,
+then verifies its bytes and records candidate-bound Security evidence before upload.
+Staging downloads only that run's artifact, verifies the expected name/digest and
+live Security proof again, and checks publication history immediately before npm
+staging. A later staging dispatch validates its own candidate; it cannot consume
+an earlier validate-only artifact as authorization. Both operations share a
+same-tag concurrency group with cancellation disabled.
 
 The CLI appends one `selection=<JSON>` record to the runner-provided `GITHUB_OUTPUT`.
 Use `jobs.<id>.enabled` as a job condition before expanding that job's `matrix`.
@@ -79,17 +97,21 @@ filtering for success. `node scripts/release-candidate.cjs verify-ci <ci-run-id>
 <commit-sha> <owner/repo>` then fetches the current run, paginated full job history
 and retained attempts itself. A saved run summary, older green fallback or local
 fixture cannot authorize publication. Discovery and verification share step-level
-`GH_TOKEN`; token bytes are never written into candidate evidence. The tag trigger
-and publication retry guards remain unchanged until the separate publish-wiring work.
+`GH_TOKEN`; token bytes are never written into candidate evidence. Complete CI
+proof is required for either Publish operation; validate-only is not a cheaper
+substitute for candidate release validation.
 
-The standalone publication-history guard is also not wired into that workflow yet.
-Its future CLI is `node scripts/release-publish-history-evidence.cjs validate` or
-`stage-publish`, using the current manual tag runner's repository, full SHA, tag,
-run ID and attempt from GitHub environment data. It obtains authenticated GET
-evidence itself rather than accepting a saved summary. The reviewed whole-workflow
-binding must be updated with the final manual wiring before real use.
+The Publish workflow invokes `node scripts/release-publish-history-evidence.cjs
+validate` at `Check publication history before validation` and `stage-publish`
+at `Check publication history before staging`. The read-only guard uses the current
+manual tag runner's repository, full SHA, tag, run ID and attempt from GitHub
+environment data. It obtains authenticated GET evidence itself rather than
+accepting a saved summary, verifies the reviewed complete workflow/selector source
+and live tag target, and rechecks current identity before returning.
 
-Retries are limited to three total attempts across every same-tag run ID. Successful
+Retries are limited to three total attempts across every same-tag run ID; a new
+dispatch cannot reset that budget. Evidence must remain within 24-hour freshness.
+Successful
 authorization may be retained within a run, but every contributing attempt and its
 complete job history must be authenticated. Known validation-only failure with
 unexecuted, skipped staging may retry; any earlier executed/failed/cancelled or
@@ -97,9 +119,15 @@ uncertain stage history refuses restaging. The current staging check additionall
 requires successful validation and a queued npm step that has never started.
 Current validation also permits its own strictly unstarted queued stage job;
 queued stage history from an earlier run or attempt is rejected.
-See [publication history guard](release-readiness.md#publication-history-guard-not-yet-wired)
+See [publication history guard](release-readiness.md#publication-history-guard)
 for checkpoint names, freshness, source binding and serialization constraints.
 This read-only guard executes no workflow, rerun, artifact upload or publication.
+
+Current source-contract and synthetic-provider tests do not establish hosted
+Actions execution, pending/skipped dependent-job metadata, Environment/OIDC grants,
+npm staging or registry outcomes. Missing stage records and uncertain timestamps
+fail closed; obtain separately authorized hosted evidence before operational use.
+Historical automatic-run proof is source-qualified history, not current acceptance.
 
 Security accepts the same six dispatch inputs. Its default selects only `npm-audit`
 on `ubuntu-latest` with Node `24`; `osv` selects only the pinned reusable scanner and

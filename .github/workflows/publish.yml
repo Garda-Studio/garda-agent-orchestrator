@@ -1,12 +1,45 @@
-# Tag-driven npm release workflow for Garda Agent Orchestrator.
+# Explicitly authorized manual npm release workflow for Garda Agent Orchestrator.
 # The publish job uses npm Trusted Publishing/OIDC to stage the package.
 # The public release still requires npm staged approval with maintainer 2FA.
 name: Publish
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: Exact current owner/repository
+        required: true
+        type: string
+      commit:
+        description: Full lowercase SHA of the selected v* tag
+        required: true
+        type: string
+      authorization:
+        description: Type I authorize this selected run
+        required: true
+        type: string
+      job:
+        description: Validate only, or explicitly validate and stage this candidate
+        required: true
+        type: choice
+        default: validate
+        options: [validate, stage-publish]
+      os:
+        description: Fixed hosted Linux runner
+        required: true
+        type: choice
+        default: ubuntu-latest
+        options: [ubuntu-latest]
+      runtime:
+        description: Fixed Node runtime for Trusted Publishing
+        required: true
+        type: choice
+        default: '24'
+        options: ['24']
+      security_run_id:
+        description: Successful exact-commit Security run with npm audit and OSV
+        required: true
+        type: string
 
 concurrency:
   group: publish-${{ github.ref }}
@@ -20,15 +53,44 @@ env:
   NODE_VERSION: '24'
 
 jobs:
+  authorize:
+    name: Authorize publish selection
+    runs-on: ubuntu-latest
+    outputs:
+      selection: ${{ steps.selection.outputs.selection }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+      - name: Authorize selected jobs
+        id: selection
+        env:
+          MANUAL_WORKFLOW: publish
+          MANUAL_REPOSITORY: ${{ inputs.repository }}
+          MANUAL_COMMIT: ${{ inputs.commit }}
+          MANUAL_AUTHORIZATION: ${{ inputs.authorization }}
+          MANUAL_JOB: ${{ inputs.job }}
+          MANUAL_OS: ${{ inputs.os }}
+          MANUAL_RUNTIME: ${{ inputs.runtime }}
+        run: node scripts/manual-workflow-authorization.cjs
+
   validate:
     name: Validate release package
     runs-on: ubuntu-latest
+    needs: [authorize]
+    if: ${{ !cancelled() && needs.authorize.result == 'success' && fromJSON(needs.authorize.outputs.selection).jobs.validate.enabled }}
     outputs:
       tarball_sha256: ${{ steps.pack.outputs.tarball_sha256 }}
       tarball_name: ${{ steps.pack.outputs.tarball_name }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
           fetch-depth: 0
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -41,10 +103,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "${{ github.run_attempt }}" != "1" ]]; then
-            echo "Release workflow reruns are rejected; prepare a new version and tag instead." >&2
-            exit 1
-          fi
           if [[ "${GITHUB_REF_TYPE}" != "tag" || "${GITHUB_REF_NAME}" != v* ]]; then
             echo "Publish workflow must run from a v* tag." >&2
             exit 1
@@ -64,34 +122,13 @@ jobs:
 
           echo "Release tag v${TAG_VERSION} matches package.json, package-lock.json, package-lock root, and VERSION."
 
-      - name: Reject previously used release tags
+      - name: Check publication history before validation
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-
-          RUN_HISTORY_PATH="${RUNNER_TEMP}/publish-workflow-runs.json"
-          GH_TOKEN="${{ github.token }}" gh api --method GET \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/publish.yml/runs" \
-            -f event=push \
-            -f branch="${GITHUB_REF_NAME}" \
-            -f per_page=100 \
-            --paginate \
-            --slurp > "${RUN_HISTORY_PATH}"
-          node -e '
-            const fs = require("node:fs");
-            const pages = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-            const currentRunId = process.env.GITHUB_RUN_ID;
-            if (!Array.isArray(pages) || !currentRunId) {
-              throw new Error("GitHub workflow-run history is unavailable.");
-            }
-            const priorRuns = pages
-              .flatMap((page) => Array.isArray(page.workflow_runs) ? page.workflow_runs : [])
-              .filter((run) => String(run.id) !== currentRunId);
-            if (priorRuns.length > 0) {
-              console.error(`Release tag ${process.env.GITHUB_REF_NAME} already triggered workflow run(s): ${priorRuns.map((run) => run.id).join(", ")}`);
-              process.exit(1);
-            }
-          ' "${RUN_HISTORY_PATH}"
+          node scripts/release-publish-history-evidence.cjs validate
           git update-ref -d "refs/tags/${GITHUB_REF_NAME}"
 
       - name: Require successful CI for this release commit
@@ -122,6 +159,9 @@ jobs:
       - name: Pack and attest release candidate
         id: pack
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SECURITY_RUN_ID: ${{ inputs.security_run_id }}
         run: |
           set -euo pipefail
           CANDIDATE_DIR="${RUNNER_TEMP}/release-candidate"
@@ -137,6 +177,9 @@ jobs:
           TARBALL_SHA256="$(node -p "require(process.argv[1]).tarball_sha256" "${CANDIDATE_DIR}/candidate-manifest.json")"
           GARDA_RELEASE_CANDIDATE_PATH="${CANDIDATE_DIR}/${TARBALL_NAME}" npm run test:packaging
           node scripts/release-candidate.cjs verify "${CANDIDATE_DIR}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" "${TARBALL_SHA256}" "${TARBALL_NAME}"
+          node scripts/release-security-evidence.cjs attest \
+            "${CANDIDATE_DIR}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" \
+            "${TARBALL_SHA256}" "${TARBALL_NAME}" "${GITHUB_REPOSITORY}" "${SECURITY_RUN_ID}"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -148,7 +191,8 @@ jobs:
   publish:
     name: Stage package on npm
     runs-on: ubuntu-latest
-    needs: validate
+    needs: [authorize, validate]
+    if: ${{ !cancelled() && needs.authorize.result == 'success' && needs.validate.result == 'success' && fromJSON(needs.authorize.outputs.selection).jobs['stage-publish'].enabled }}
     environment: npm-release
     permissions:
       actions: read
@@ -157,6 +201,8 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
           fetch-depth: 0
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -176,10 +222,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "${{ github.run_attempt }}" != "1" ]]; then
-            echo "Release workflow reruns are rejected; prepare a new version and tag instead." >&2
-            exit 1
-          fi
           TAG_VERSION="${GITHUB_REF_NAME#v}"
           PACKAGE_NAME="$(node -p "require('./package.json').name")"
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
@@ -217,6 +259,7 @@ jobs:
       - name: Verify downloaded candidate
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           EXPECTED_SHA256: ${{ needs.validate.outputs.tarball_sha256 }}
           EXPECTED_NAME: ${{ needs.validate.outputs.tarball_name }}
         run: |
@@ -224,6 +267,17 @@ jobs:
           node scripts/release-candidate.cjs verify \
             "${RUNNER_TEMP}/release-candidate" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" \
             "${EXPECTED_SHA256}" "${EXPECTED_NAME}"
+          node scripts/release-security-evidence.cjs verify \
+            "${RUNNER_TEMP}/release-candidate" "${GITHUB_SHA}" "${GITHUB_REF_NAME}" \
+            "${EXPECTED_SHA256}" "${EXPECTED_NAME}" "${GITHUB_REPOSITORY}"
+
+      - name: Check publication history before staging
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node scripts/release-publish-history-evidence.cjs stage-publish
 
       - name: Stage the validated tarball with npm Trusted Publishing
         shell: bash

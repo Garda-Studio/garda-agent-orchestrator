@@ -7,8 +7,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { workflowContractSha256 } = require('./manual-ci-evidence.cjs');
 
-// Unwired until the separately reviewed manual Publish integration refreshes this source binding.
-const PUBLISH_SOURCE_SHA256 = '48f688bc902041781ed07ed5eefcb2add08dbbc7dbacba6ec09d517a37c775af';
+// Bind the complete explicitly authorized manual Publish workflow source.
+const PUBLISH_SOURCE_SHA256 = '461495504bbb5a33b18bebebe6f7d85873b019b7ae94f35a49b58f5e493527aa';
 const SELECTOR_SHA256 = 'cb34c3544940e746ad023a8fa4c9e6de4b789fec05e1cdef106bbb7c0da034a5';
 const WORKFLOW = '.github/workflows/publish.yml';
 const SELECTOR = 'scripts/manual-workflow-authorization.cjs';

@@ -161,6 +161,7 @@ function buildReleaseChecklist(openItem?: string): string {
         return `- [${status}] ${taskId} fixture release blocker`;
     });
     const trustedPublishItems = [
+        '- [x] Explicit manual Publish selects validate or stage-publish with `security_run_id`.',
         '- [x] Trusted Publishing workflow uses `publish.yml`.',
         '- [x] GitHub Environment `npm-release` gates publish.',
         '- [x] GitHub Environment `npm-release` is release-tag restricted.',
@@ -417,7 +418,9 @@ function createReadinessFixture(openChecklistItem?: string): string {
             'The cross-platform lifecycle smoke proves update runtime behavior.',
             'Full-suite optimization compatibility guardrails',
             'GARDA_NODE_FOUNDATION_TEST_SHARDS',
-            'Tag-driven npm staged publishing',
+            'Manual npm staged publishing',
+            'workflow_dispatch',
+            'stage-publish',
             '.github/workflows/publish.yml',
             'npm Trusted Publishing',
             'npm staged approval',
@@ -488,15 +491,44 @@ test('release readiness passes when package, CI, docs, security, and checklist c
         assert.match(output, /Readiness alignment:/);
         assert.match(output, /Unused-symbol enforcement: quality includes typecheck:unused/);
         assert.match(output, /security-ci: existing release-security CI checks are present and labelled blocking or informational/);
-        assert.match(output, /trusted-publish-workflow: npm Trusted Publishing workflow is tag-driven/);
-        assert.match(output, /trusted-publish-docs: release docs document the tag-driven npm Trusted Publishing operator path/);
+        assert.match(output, /trusted-publish-workflow: npm Trusted Publishing workflow is manually authorized/);
+        assert.match(output, /trusted-publish-docs: release docs document the manually authorized npm Trusted Publishing operator path/);
         assert.match(output, /Release-security baseline: readiness labels npm audit and gitleaks as blocking/);
-        assert.match(output, /Trusted Publishing path: pushing the matching v\* tag runs/);
+        assert.match(output, /Trusted Publishing path: explicitly dispatch/);
         assert.doesNotMatch(output, /Security\/audit proof:/);
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
 });
+
+for (const [name, before, after] of [
+    ['automatic tag push', '  workflow_dispatch:\n    inputs:', '  push:\n    inputs:'],
+    ['implicit staging', "jobs['stage-publish'].enabled", 'jobs.validate.enabled'],
+    ['missing authorization dependency', '    needs: [authorize]\n', '    needs: []\n'],
+    ['foreign checkout ref', '          ref: ${{ github.sha }}', '          ref: dev'],
+    ['masked validation history', 'node scripts/release-publish-history-evidence.cjs validate',
+        'node scripts/release-publish-history-evidence.cjs validate || true'],
+    ['masked staging history', 'node scripts/release-publish-history-evidence.cjs stage-publish',
+        'node scripts/release-publish-history-evidence.cjs stage-publish || true'],
+    ['missing candidate Security attestation', 'node scripts/release-security-evidence.cjs attest',
+        'echo scripts/release-security-evidence.cjs attest'],
+    ['missing live Security re-verification', 'node scripts/release-security-evidence.cjs verify',
+        'echo scripts/release-security-evidence.cjs verify'],
+    ['cancelling same-tag serialization', '  cancel-in-progress: false', '  cancel-in-progress: true']
+] as const) {
+    test(`release readiness rejects manual Publish ${name}`, () => {
+        const root = createReadinessFixture();
+        try {
+            const file = path.join(root, '.github/workflows/publish.yml');
+            const original = fs.readFileSync(file, 'utf8');
+            assert.ok(original.includes(before), 'negative fixture must change the intended contract');
+            writeFile(file, original.replace(before, after));
+            const result = validateReleaseReadiness(root);
+            assert.equal(result.checks.find(check => check.area === 'trusted-publish-workflow')?.passed, false);
+            assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    });
+}
 
 test('release readiness accepts the reviewed SHA-pinned Actions across security and publish workflows', () => {
     const repoRoot = createReadinessFixture();
@@ -990,30 +1022,21 @@ test('release readiness fails when tagged publish jobs keep the local release ta
     }
 });
 
-test('release readiness fails when tagged publish jobs allow workflow reruns', () => {
+test('release readiness fails when manual publish jobs omit their bounded retry guards', () => {
     const repoRoot = createReadinessFixture();
     try {
         const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
         writeFile(
             workflowPath,
-            fs.readFileSync(workflowPath, 'utf8').replaceAll(
-                [
-                    '          if [[ "${{ github.run_attempt }}" != "1" ]]; then',
-                    '            echo "Release workflow reruns are rejected; prepare a new version and tag instead." >&2',
-                    '            exit 1',
-                    '          fi',
-                    ''
-                ].join('\n'),
-                ''
-            )
+            fs.readFileSync(workflowPath, 'utf8').replaceAll('node scripts/release-publish-history-evidence.cjs', 'echo history-not-checked')
         );
 
         const result = validateReleaseReadiness(repoRoot);
         const output = formatReleaseReadinessResult(result);
 
         assert.equal(result.passed, false);
-        assert.match(output, /validate job rejects repeated workflow attempts=false/u);
-        assert.match(output, /publish job rejects repeated workflow attempts=false/u);
+        assert.match(output, /validate job binds bounded complete same-tag attempt history=false/u);
+        assert.match(output, /publish job rejects started or uncertain staging history=false/u);
         assert.ok(result.violations.some((violation) => violation.startsWith('trusted-publish-workflow:')));
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
@@ -1027,7 +1050,7 @@ test('release readiness fails when tagged publish validation omits prior-run his
         writeFile(
             workflowPath,
             fs.readFileSync(workflowPath, 'utf8').replace(
-                '          GH_TOKEN="${{ github.token }}" gh api --method GET \\\n',
+                '          node scripts/release-publish-history-evidence.cjs validate\n',
                 '          echo "workflow history omitted"\n'
             )
         );
@@ -1036,7 +1059,7 @@ test('release readiness fails when tagged publish validation omits prior-run his
         const output = formatReleaseReadinessResult(result);
 
         assert.equal(result.passed, false);
-        assert.match(output, /validate job rejects release tags with a prior workflow run=false/u);
+        assert.match(output, /validate job binds bounded complete same-tag attempt history=false/u);
         assert.ok(result.violations.some((violation) => violation.startsWith('trusted-publish-workflow:')));
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
@@ -1050,19 +1073,12 @@ test('release readiness rejects inert text containing every prior-run history ma
         writeFile(
             workflowPath,
             fs.readFileSync(workflowPath, 'utf8').replace(
-                /[ ]{6}- name: Reject previously used release tags\n[\s\S]+?(?=[ ]{6}- name: Install dependencies)/u,
+                /[ ]{6}- name: Check publication history before validation\n[\s\S]+?(?=[ ]{6}- name: Require successful CI)/u,
                 [
-                    '      - name: Reject previously used release tags',
+                    '      - name: Check publication history before validation',
                     '        shell: bash',
                     '        run: |',
-                    '          : \'GH_TOKEN="${{ github.token }}" gh api --method GET\'',
-                    '          : \'actions/workflows/publish.yml/runs\'',
-                    '          : \'-f event=push\'',
-                    '          : \'-f branch="${GITHUB_REF_NAME}"\'',
-                    '          : \'--paginate\'',
-                    '          : \'--slurp\'',
-                    '          : \'GITHUB_RUN_ID\'',
-                    '          : \'process.exit(1)\'',
+                    '          : \'node scripts/release-publish-history-evidence.cjs validate\'',
                     '          git update-ref -d "refs/tags/${GITHUB_REF_NAME}"',
                     ''
                 ].join('\n')
@@ -1073,7 +1089,7 @@ test('release readiness rejects inert text containing every prior-run history ma
         const output = formatReleaseReadinessResult(result);
 
         assert.equal(result.passed, false);
-        assert.match(output, /validate job rejects release tags with a prior workflow run=false/u);
+        assert.match(output, /validate job binds bounded complete same-tag attempt history=false/u);
         assert.ok(result.violations.some((violation) => violation.startsWith('trusted-publish-workflow:')));
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
@@ -1107,8 +1123,8 @@ test('release readiness fails when tagged publish jobs omit release-tag history'
         writeFile(
             workflowPath,
             fs.readFileSync(workflowPath, 'utf8').replaceAll(
-                '        with:\n          fetch-depth: 0\n',
-                ''
+                '          fetch-depth: 0\n',
+                '          fetch-depth: 1\n'
             )
         );
 
@@ -1138,15 +1154,15 @@ test('release readiness fails when trusted publish workflow falls back to npm to
     }
 });
 
-test('release readiness fails when trusted publish workflow allows manual dispatch', () => {
+test('release readiness fails when manual Publish also allows automatic tag push', () => {
     const repoRoot = createReadinessFixture();
     try {
         const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
         writeFile(
             workflowPath,
             fs.readFileSync(workflowPath, 'utf8').replace(
-                'on:\n  push:',
-                'on:\n  workflow_dispatch:\n  push:'
+                'on:\n  workflow_dispatch:',
+                'on:\n  push:\n    tags: [v*]\n  workflow_dispatch:'
             )
         );
 
@@ -1154,22 +1170,22 @@ test('release readiness fails when trusted publish workflow allows manual dispat
         const output = formatReleaseReadinessResult(result);
 
         assert.equal(result.passed, false);
-        assert.match(output, /publish\.yml is v\*-tag driven without manual dispatch=false/);
+        assert.match(output, /publish\.yml accepts only manual dispatch=false/);
         assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
 });
 
-test('release readiness fails when trusted publish tag trigger is not under push', () => {
+test('release readiness fails when manual Publish dispatch is replaced by a release event', () => {
     const repoRoot = createReadinessFixture();
     try {
         const workflowPath = path.join(repoRoot, '.github', 'workflows', 'publish.yml');
         writeFile(
             workflowPath,
             fs.readFileSync(workflowPath, 'utf8').replace(
-                'on:\n  push:\n    tags:',
-                'on:\n  release:\n    tags:'
+                'on:\n  workflow_dispatch:',
+                'on:\n  release:'
             )
         );
 
@@ -1177,7 +1193,7 @@ test('release readiness fails when trusted publish tag trigger is not under push
         const output = formatReleaseReadinessResult(result);
 
         assert.equal(result.passed, false);
-        assert.match(output, /publish\.yml is v\*-tag driven without manual dispatch=false/);
+        assert.match(output, /publish\.yml accepts only manual dispatch=false/);
         assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
@@ -1231,7 +1247,7 @@ test('release readiness fails when trusted publish validate job only echoes vers
         writeFile(
             workflowPath,
             fs.readFileSync(workflowPath, 'utf8').replace(
-                /[ ]{6}- name: Validate tag and package version\n[\s\S]+?(?=[ ]{6}- name: Reject previously used release tags)/u,
+                /[ ]{6}- name: Validate tag and package version\n[\s\S]+?(?=[ ]{6}- name: Check publication history before validation)/u,
                 [
                     '      - run: |',
                     '          echo "${GITHUB_REF_NAME}"',
@@ -1261,7 +1277,7 @@ test('release readiness fails when trusted publish validate guard markers are on
         writeFile(
             workflowPath,
             fs.readFileSync(workflowPath, 'utf8').replace(
-                /[ ]{6}- name: Validate tag and package version\n[\s\S]+?(?=[ ]{6}- name: Reject previously used release tags)/u,
+                /[ ]{6}- name: Validate tag and package version\n[\s\S]+?(?=[ ]{6}- name: Check publication history before validation)/u,
                 [
                     '      - name: Validate tag and package version',
                     '        shell: bash',
@@ -2478,7 +2494,7 @@ test('release readiness does not read local TASK.md as release blocker truth', (
         const output = formatReleaseReadinessResult(result);
 
         assert.equal(result.passed, true, output);
-        assert.match(output, /ReleaseChecklistItems: 27/);
+        assert.match(output, /ReleaseChecklistItems: 28/);
     } finally {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }

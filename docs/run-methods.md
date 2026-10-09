@@ -155,11 +155,14 @@ Full-suite gates pass both `GARDA_VALIDATION_TASK_ID` and `GARDA_VALIDATION_REPO
 
 Standalone failed runs, unfinished/crashed producers, foreign-host records, damaged manifests, unmarked historical failed runs, and old unregistered `coverage/tmp` or `.node-build/test-shard-logs` directories require ownership reconciliation; cleanup never guesses their task or follows links. Managed children are checked before deletion, including their POSIX process groups. Deliberately detached daemons that leave the managed process tree/group are outside this supervision contract and must use a caller-owned output directory. Coverage retains the existing unlimited outer test duration; normal per-test timeout and cancellation controls still apply.
 
-## 8.1 Tag-Driven npm Staged Publish
+## 8.1 Manual npm Staged Publish
 
-The primary npm release path is now tag-driven through `.github/workflows/publish.yml`, not a local `npm publish`.
+The npm release path is an explicitly authorized `workflow_dispatch` on
+`.github/workflows/publish.yml`. Pushing a `v*` tag does not start it. The default
+`validate` operation never stages a package; `stage-publish` explicitly selects
+validation and staging on the fixed hosted Ubuntu / Node 24 target.
 
-Before pushing `v1.4.2`, complete these repository and registry checks:
+Before an authorized release dispatch, complete these repository and registry checks:
 
 1. Run `npm run release:preflight` from a clean local worktree before creating the release tag. Local readiness fails if the target version tag already exists.
 2. Configure the GitHub repository Environment `npm-release` for release tags. Use selected deployment branches/tags so only tags matching `v*` can deploy to this environment. GitHub required reviewers are optional for the solo-maintainer flow and must not be treated as the release approval control when no second reviewer exists.
@@ -172,19 +175,47 @@ Before pushing `v1.4.2`, complete these repository and registry checks:
    - Allowed action: `npm stage publish`.
 4. Enable 2FA for the maintainer account and use npm staged publishing approval as the human release approval. `npm stage publish` runs non-interactively in CI with npm CLI `11.15.0+`; the staged package becomes public only after npm-side approval with 2FA through npmjs.com or the npm CLI.
 5. Keep old automation tokens disabled or unused during the first OIDC staged publish attempt, but do not remove the rollback path until the Trusted Publishing staging run succeeds.
-6. Push the matching tag only after package metadata, `VERSION`, changelog, and `docs/release-readiness.md` all name the same version.
+6. Prepare the matching tag only after package metadata, `VERSION`, changelog and
+   `docs/release-readiness.md` name the same version. Tag creation or push requires
+   its own operator authorization and does not authorize a workflow run.
+7. Obtain completed, exact-commit manual CI and Security proof. CI must cover the
+   complete suite; Security must actually execute both npm audit and OSV.
 
-The tag-triggered workflow checks out full tag history and first validates the
-GitHub tag against all version metadata. It then removes only the ephemeral
-local tag ref from its disposable checkout before rerunning the unchanged
-`release:preflight`. The preflight compares the complete released changelog
-tail with the prior release tag. There is no environment-variable bypass in
-release readiness: every invocation rejects an existing target tag. Before
-removing the local ref, the validate job uses read-only GitHub Actions API
-access to reject any different historical `publish.yml` run for the same tag;
-both jobs also reject `github.run_attempt` values above `1`. A rerun or a new
-run after deleting and recreating a consumed release tag therefore fails
-closed. Prepare a new version and tag instead.
+Select the release tag as the workflow ref (for the current version, `v1.4.4`) and
+supply these dispatch inputs:
+
+| Input | Value |
+| --- | --- |
+| `repository` | Exact current repository, `Shubchynskyi/garda-agent-orchestrator` |
+| `commit` | Full lowercase 40-character SHA matching that tag and the run SHA |
+| `authorization` | `I authorize this selected run` |
+| `job` | `validate` by default; `stage-publish` only with staging authorization |
+| `os` | `ubuntu-latest` |
+| `runtime` | `24` |
+| `security_run_id` | Positive run ID of the successful exact-commit full manual Security run |
+
+The unchanged selector rejects foreign identity, missing authorization, unsupported
+choices and implicit staging. Every checkout uses the run's exact SHA with persisted
+credentials disabled. The selected validation job fetches full tag history and
+checks the GitHub tag against all version metadata. It removes only the ephemeral
+local tag ref from its disposable checkout before the unchanged `release:preflight`,
+which compares the released changelog tail with the prior release tag. Local
+preflight always rejects an existing target tag; no environment-variable bypass exists.
+
+The same-tag concurrency group covers both operations and does not cancel an active
+run. `Check publication history before validation` and `Check publication history
+before staging` invoke the reviewed, read-only history guard. It authenticates the
+complete workflow/selector source, live tag, every run and retained attempt, complete
+job history and final current identity. Three attempts across all same-tag run IDs
+share one budget and 24-hour freshness; a new dispatch cannot reset it. Completed
+prior validation with `success`, `failure`, `cancelled` or `timed_out` and skipped,
+unexecuted staging permits another separately authorized dispatch within those
+limits. Any earlier started, completed, failed, cancelled or uncertain staging
+refuses restaging. Current staging
+requires successful validation and a queued npm step with null execution timestamps.
+Missing staging records fail closed, even if the provider's job count is complete.
+See [publication history guard](release-readiness.md#publication-history-guard)
+for the exact chronology and evidence requirements.
 
 The validate job selects the latest manual CI run for the exact release commit,
 without filtering out failed or unfinished runs. `release-candidate.cjs verify-ci`
@@ -196,11 +227,21 @@ blocks validation; it never falls back to an older green summary. The step-level
 `GH_TOKEN` authorizes discovery and verification with read-only Actions access.
 After `release:preflight`, it creates one candidate tarball,
 runs the full packaging smoke against that exact file via
-`GARDA_RELEASE_CANDIDATE_PATH`, rechecks its SHA-256, and uploads the
-candidate with its manifest. The dependent `publish` job downloads the artifact
-from the same workflow run, verifies the tarball against the validate job
-outputs, and passes that file path to `npm stage publish`. It does not repack
-or rerun the release proof. Both jobs pin npm CLI `11.15.0`.
+`GARDA_RELEASE_CANDIDATE_PATH`, rechecks its SHA-256, and authenticates the supplied
+Security run through the accepted live Security adapter. Candidate-bound
+`security-evidence.json` is recorded before the candidate and manifest are uploaded.
+The explicitly selected dependent `publish` job downloads only that same-run artifact,
+verifies the expected tarball name/digest and live Security evidence again, then runs
+the staging history check immediately before passing that exact file path to
+`npm stage publish`. It does not repack or rerun release proof. Both jobs pin npm CLI
+`11.15.0`. A later staging dispatch must validate its own candidate; an earlier
+validate-only artifact or saved green summary cannot authorize it.
+
+Local source and synthetic-provider validation do not prove hosted execution,
+pending/skipped dependent-job metadata, Environment/OIDC grants, npm staging or registry
+acceptance. Those remain unverified until separately authorized hosted checks succeed.
+Do not relax missing-history or candidate guards to obtain a green run. Historical
+automatic-run evidence remains source-qualified and does not satisfy current proof.
 
 After the GitHub Actions publish job completes, inspect the staged package on npm and approve it with maintainer 2FA. Do not claim the package is public until npm staged approval completes.
 
@@ -208,8 +249,8 @@ After npm staged approval completes, verify:
 
 ```text
 npm view garda-agent-orchestrator@latest version dist.integrity
-npm view garda-agent-orchestrator@1.4.2 version dist.integrity
-npx --yes garda-agent-orchestrator@1.4.2 --version
+npm view garda-agent-orchestrator@1.4.4 version dist.integrity
+npx --yes garda-agent-orchestrator@1.4.4 --version
 ```
 
 Also verify the package page or npm metadata shows provenance/attestation for the public package before claiming provenance in release notes. After that verification, set npm Publishing access to `Require two-factor authentication and disallow tokens`, then remove obsolete long-lived publish tokens from npm and GitHub secrets.

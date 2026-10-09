@@ -425,6 +425,13 @@
 - ships the current local agent orchestration runtime, gates, provider bridges, profiles, cleanup flows, and audit trail as the new baseline
 
 ### Unreleased — guarded decomposition profiles
+
+- Require separately authorized manual Publish validation or candidate staging
+  at an exact release-tag SHA on hosted Linux/Node 24. Wire complete same-tag
+  history guards before validation and staging, attest candidate-bound Security
+  before upload and reverify it before staging. Preserve full CI proof, pack-once
+  bytes/digests, npm-release OIDC and npm-side staged approval. Static source and
+  injected-provider coverage do not claim hosted CI, staging or registry proof.
 - Add version-2 work-package contracts bound to the frozen parent profile, including balanced native child routing, while preserving version-1 strict compatibility.
 
 - Route decomposed parents after a clean child source commit without recapturing
