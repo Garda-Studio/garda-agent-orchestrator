@@ -1,5 +1,8 @@
 # Changelog
 
+- Reject parser-normalized inline program URL data while preserving literal
+  source filenames and option values; parsing grants no execution authority.
+
 - Admit justified task-scoped test-command selection through the audited CLI
   with current task/worktree bindings and explicit contained test targets.
   Preserve opt-in fresh confirmation and all unrelated protected settings.
