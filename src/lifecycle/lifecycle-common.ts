@@ -465,29 +465,64 @@ export function getUpdateSentinelPath(bundleRoot: string): string {
     return path.join(bundleRoot, 'runtime', UPDATE_SENTINEL_FILE_NAME);
 }
 
+function unknownSentinelState(sentinelPath: string): Error {
+    return new Error(
+        `GARDA_LIFECYCLE_STATE_UNKNOWN: Lifecycle state unknown at '${sentinelPath}'. ` +
+        'Preserve the sentinel and inspect its contents and filesystem access before explicit recovery.'
+    );
+}
+
+function readLifecycleSentinel(
+    sentinelPath: string,
+    stringFields: readonly string[],
+    booleanFields: readonly string[] = [],
+    stringArrayFields: readonly string[] = []
+): JsonObject | null {
+    let contents: string;
+    try {
+        if (!fs.lstatSync(sentinelPath).isFile()) throw unknownSentinelState(sentinelPath);
+        contents = fs.readFileSync(sentinelPath, 'utf8');
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw unknownSentinelState(sentinelPath);
+    }
+
+    let value: unknown;
+    try {
+        value = JSON.parse(contents);
+    } catch {
+        throw unknownSentinelState(sentinelPath);
+    }
+    if (!isJsonObject(value)
+        || stringFields.some(field => value[field] !== undefined && typeof value[field] !== 'string')
+        || booleanFields.some(field => value[field] !== undefined && typeof value[field] !== 'boolean')
+        || stringArrayFields.some(field => value[field] !== undefined && (
+            !Array.isArray(value[field]) || !value[field].every(item => typeof item === 'string')
+        ))) {
+        throw unknownSentinelState(sentinelPath);
+    }
+    return value;
+}
+
 export function writeUpdateSentinel(bundleRoot: string, metadata: UpdateSentinelMetadata): string {
     const sentinelPath = getUpdateSentinelPath(bundleRoot);
+    readUpdateSentinel(bundleRoot);
     writeContainedFile(bundleRoot, sentinelPath, JSON.stringify(metadata, null, 2));
     return sentinelPath;
 }
 
 export function removeUpdateSentinel(bundleRoot: string): void {
     const sentinelPath = getUpdateSentinelPath(bundleRoot);
+    readUpdateSentinel(bundleRoot);
     removeContainedPath(bundleRoot, sentinelPath);
 }
 
 export function readUpdateSentinel(bundleRoot: string): UpdateSentinelMetadata | null {
     const sentinelPath = getUpdateSentinelPath(bundleRoot);
     assertNoLinkedPathComponents(bundleRoot, sentinelPath);
-    if (!fs.existsSync(sentinelPath)) {
-        return null;
-    }
-
-    try {
-        return JSON.parse(fs.readFileSync(sentinelPath, 'utf8')) as UpdateSentinelMetadata;
-    } catch {
-        return null;
-    }
+    return readLifecycleSentinel(sentinelPath, [
+        'startedAt', 'fromVersion', 'toVersion', 'phase', 'syncBackupRoot', 'syncBackupMetadataPath'
+    ], [], ['plannedSyncItems']) as UpdateSentinelMetadata | null;
 }
 
 export function getUninstallSentinelPath(targetRoot: string): string {
@@ -496,6 +531,7 @@ export function getUninstallSentinelPath(targetRoot: string): string {
 
 export function writeUninstallSentinel(targetRoot: string, metadata: UninstallSentinelMetadata): string {
     const sentinelPath = getUninstallSentinelPath(targetRoot);
+    readUninstallSentinel(targetRoot);
     writeContainedFile(targetRoot, sentinelPath, JSON.stringify(metadata, null, 2));
     return sentinelPath;
 }
@@ -503,16 +539,14 @@ export function writeUninstallSentinel(targetRoot: string, metadata: UninstallSe
 export function readUninstallSentinel(targetRoot: string): UninstallSentinelMetadata | null {
     const sentinelPath = getUninstallSentinelPath(targetRoot);
     bindContainedDestination(targetRoot, sentinelPath);
-    if (!fs.existsSync(sentinelPath)) return null;
-    try {
-        return JSON.parse(fs.readFileSync(sentinelPath, 'utf8')) as UninstallSentinelMetadata;
-    } catch {
-        return null;
-    }
+    return readLifecycleSentinel(sentinelPath, [
+        'startedAt', 'operation', 'rollbackSnapshotPath', 'timestamp'
+    ], ['skipBackups', 'keepPrimaryEntrypoint', 'keepTaskFile', 'keepRuntimeArtifacts']) as UninstallSentinelMetadata | null;
 }
 
 export function removeUninstallSentinel(targetRoot: string): void {
     const sentinelPath = getUninstallSentinelPath(targetRoot);
+    readUninstallSentinel(targetRoot);
     removeContainedPath(targetRoot, sentinelPath);
 }
 

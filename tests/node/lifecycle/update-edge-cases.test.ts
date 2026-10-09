@@ -462,15 +462,15 @@ describe('Update sentinel interruption detection', () => {
         }
     });
 
-    it('readUpdateSentinel returns null for corrupt sentinel JSON', () => {
+    it('readUpdateSentinel rejects unknown corrupt sentinel JSON', () => {
         const { bundleRoot, projectRoot } = setupUpdateWorkspace(repoRoot);
         try {
             const sentinelPath = getUpdateSentinelPath(bundleRoot);
             fs.mkdirSync(path.dirname(sentinelPath), { recursive: true });
             fs.writeFileSync(sentinelPath, '{corrupt json!!!', 'utf8');
 
-            const result = readUpdateSentinel(bundleRoot);
-            assert.equal(result, null, 'Corrupt sentinel should return null');
+            assert.throws(() => readUpdateSentinel(bundleRoot), /lifecycle.*state.*unknown|unknown.*sentinel/i);
+            assert.equal(fs.readFileSync(sentinelPath, 'utf8'), '{corrupt json!!!');
         } finally {
             removePathRecursive(projectRoot);
         }

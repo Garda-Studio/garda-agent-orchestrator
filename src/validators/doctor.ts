@@ -100,16 +100,35 @@ export interface PartialStateEvidence {
     passed: boolean;
     update_sentinel: UpdateSentinelMetadata | null;
     uninstall_sentinel: UninstallSentinelMetadata | null;
+    update_sentinel_state?: 'missing' | 'present' | 'unknown';
+    uninstall_sentinel_state?: 'missing' | 'present' | 'unknown';
     lifecycle_lock_exists: boolean;
     lifecycle_lock_owner: Record<string, unknown> | null;
     violations: string[];
+}
+
+function collectSentinelEvidence<T>(read: () => T | null, label: string, violations: string[]): {
+    metadata: T | null;
+    state: 'missing' | 'present' | 'unknown';
+} {
+    try {
+        const metadata = read();
+        return { metadata, state: metadata === null ? 'missing' : 'present' };
+    } catch {
+        violations.push(
+            `Lifecycle state unknown: ${label} sentinel cannot be safely read. ` +
+            'Preserve it and inspect its contents and filesystem access before explicit recovery.'
+        );
+        return { metadata: null, state: 'unknown' };
+    }
 }
 
 export function checkPartialState(targetRoot: string): PartialStateEvidence {
     const bundlePath = getBundlePath(targetRoot);
     const violations: string[] = [];
 
-    const updateSentinel = readUpdateSentinel(bundlePath);
+    const updateEvidence = collectSentinelEvidence(() => readUpdateSentinel(bundlePath), 'update', violations);
+    const updateSentinel = updateEvidence.metadata;
     if (updateSentinel) {
         const fromVer = updateSentinel.fromVersion || 'unknown';
         const toVer = updateSentinel.toVersion || 'unknown';
@@ -120,7 +139,8 @@ export function checkPartialState(targetRoot: string): PartialStateEvidence {
         );
     }
 
-    const uninstallSentinel = readUninstallSentinel(targetRoot);
+    const uninstallEvidence = collectSentinelEvidence(() => readUninstallSentinel(targetRoot), 'uninstall', violations);
+    const uninstallSentinel = uninstallEvidence.metadata;
     if (uninstallSentinel) {
         const operation = uninstallSentinel.operation || 'uninstall';
         const started = uninstallSentinel.startedAt || 'unknown';
@@ -152,6 +172,8 @@ export function checkPartialState(targetRoot: string): PartialStateEvidence {
         passed: violations.length === 0,
         update_sentinel: updateSentinel,
         uninstall_sentinel: uninstallSentinel,
+        update_sentinel_state: updateEvidence.state,
+        uninstall_sentinel_state: uninstallEvidence.state,
         lifecycle_lock_exists: lockExists,
         lifecycle_lock_owner: lockOwner,
         violations
