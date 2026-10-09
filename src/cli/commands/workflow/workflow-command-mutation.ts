@@ -11,6 +11,7 @@ import { resolveActiveTaskIds } from '../../../core/task-queue/active-task-state
 import { appendMandatoryTaskEvent, inspectTaskEventFile, readTaskTimelineJsonlEntries } from '../../../gate-runtime/task-events';
 import { normalizeWorkflowFileConfig } from './workflow-command-state';
 import { authenticateLocalCommitWorkflowAudit, localCommitReceiptPath } from '../../../core/auth/local-commit-availability';
+import type { TaskTestSelectionAuthority } from './workflow-command-task-test-selection';
 import type {
     WorkflowConfigMutationSource,
     WorkflowFileConfigData
@@ -21,6 +22,7 @@ export interface WorkflowConfigAuditWriteOptions {
     mutationSource?: WorkflowConfigMutationSource | null;
     targetRoot?: string | null;
     onAuditWritten?: (binding: WorkflowConfigAuditBinding) => void;
+    taskTestSelection?: TaskTestSelectionAuthority | null;
 }
 
 export interface WorkflowConfigAuditBinding {
@@ -163,13 +165,19 @@ export function writeWorkflowConfigAuditRecord(
         const entryHash = readAuditTaskEntryHash(bundleRoot, taskId);
         if (entryHash) taskEntryHashes[taskId] = entryHash;
     }
+    if (options.taskTestSelection && (activeTaskIds.length !== 1
+        || activeTaskIds[0] !== options.taskTestSelection.task_id
+        || taskEntryHashes[activeTaskIds[0]] !== options.taskTestSelection.task_mode_entry_sha256)) {
+        throw new Error('Task-scoped test selection audit cannot bind to a changed task cycle.');
+    }
     const permissionRequested = changedFields.includes('local_commit.enabled');
     const auditRecordByteOffset = permissionRequested && fs.existsSync(auditPath) ? fs.statSync(auditPath).size : 0;
     const record = authenticateLocalCommitWorkflowAudit(options.targetRoot || path.dirname(bundleRoot), {
         schema_version: 1,
         event_source: 'workflow-config-set',
         timestamp_utc: new Date().toISOString(),
-        actor: mutationSource === 'local-ui' ? 'local_ui' : 'operator_command',
+        actor: options.taskTestSelection ? 'task_selection_command' : mutationSource === 'local-ui' ? 'local_ui' : 'operator_command',
+        ...(options.taskTestSelection ? { task_test_selection_authority: options.taskTestSelection } : {}),
         command: 'workflow set',
         mutation_source: mutationSource,
         config_path: normalizeOutputPath(configPath),

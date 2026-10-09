@@ -93,6 +93,7 @@ export function normalizeWorkflowFileConfig(config: WorkflowFileConfigData): Wor
             config.project_memory_maintenance ?? defaultConfig.project_memory_maintenance
         ),
         task_reset: cloneTaskResetConfig(config.task_reset ?? defaultConfig.task_reset),
+        task_test_selection: { ...(config.task_test_selection ?? defaultConfig.task_test_selection) },
         auto_backup: cloneAutoBackupConfig(
             normalizeAutoBackupConfig(config.auto_backup ?? defaultConfig.auto_backup)
         ),

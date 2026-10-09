@@ -68,6 +68,21 @@ test('workflow transaction restores config and audit when manifest publication f
     }
 });
 
+test('opt-in test selection permission remains an ordinary atomic confirmed mutation', () => {
+    const { root, bundle, config } = fixture();
+    try {
+        handleSet({ ...options(root), taskResetEnabled: undefined, taskTestSelectionRequireOperatorConfirmation: 'true' });
+        const persisted = JSON.parse(fs.readFileSync(config, 'utf8'));
+        assert.equal(persisted.task_test_selection.require_operator_confirmation, true);
+        const audit = JSON.parse(fs.readFileSync(path.join(bundle, 'runtime/workflow-config-audit.jsonl'), 'utf8'));
+        assert.equal(audit.actor, 'operator_command');
+        assert.equal(audit.command_only_change, false);
+        assert.equal(audit.task_test_selection_authority, undefined);
+        assert.deepEqual(audit.changed_fields, ['task_test_selection.require_operator_confirmation']);
+        assert.equal(auditBindings(bundle).length, 1);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('workflow transaction retains pending cycle evidence when interrupted after commit', () => {
     const { root, bundle, config } = fixture();
     try {

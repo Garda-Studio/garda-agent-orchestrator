@@ -89,6 +89,31 @@ function defaultOptionalQualityCheckRuleIds(): string {
     return DEFAULT_OPTIONAL_QUALITY_CHECK_RULES.map((rule) => rule.id).join(', ');
 }
 
+test('workflow show defaults task selection to autonomous and set preserves an explicit confirmed choice', () => {
+    const bundleRoot = createBundleRoot();
+    try {
+        const shown = captureConsole(() => handleWorkflow(['show', '--bundle-root', bundleRoot], PACKAGE_JSON));
+        assert.ok(shown.result && shown.result.action === 'show');
+        assert.equal(shown.result.task_test_selection.require_operator_confirmation, false);
+        assert.match(shown.output, /Task-scoped test selection: autonomous audited selection/u);
+        assert.throws(() => handleWorkflow(['set', '--bundle-root', bundleRoot,
+            '--task-test-selection-require-operator-confirmation', 'true'], PACKAGE_JSON), /operator/i);
+        const confirmed = captureConsole(() => handleWorkflow(['set', '--bundle-root', bundleRoot,
+            '--task-test-selection-require-operator-confirmation', 'true', ...buildOperatorConfirmationArgs()], PACKAGE_JSON));
+        assert.ok(confirmed.result && confirmed.result.action === 'set');
+        assert.equal(confirmed.result.task_test_selection.require_operator_confirmation, true);
+        assert.deepEqual(confirmed.result.changed_fields, ['task_test_selection.require_operator_confirmation']);
+        const after = captureConsole(() => handleWorkflow(['show', '--bundle-root', bundleRoot], PACKAGE_JSON));
+        assert.match(after.output, /Task-scoped test selection: operator confirmation required/u);
+        const numericAlias = captureConsole(() => handleWorkflow(['set', '--bundle-root', bundleRoot,
+            '--task-test-selection-require-operator-confirmation', '1', ...buildOperatorConfirmationArgs()], PACKAGE_JSON));
+        assert.ok(numericAlias.result && numericAlias.result.action === 'set');
+        assert.equal(numericAlias.result.task_test_selection.require_operator_confirmation, true);
+        assert.throws(() => handleWorkflow(['set', '--bundle-root', bundleRoot,
+            '--task-test-selection-require-operator-confirmation', 'maybe', ...buildOperatorConfirmationArgs()], PACKAGE_JSON), /true|false/i);
+    } finally { fs.rmSync(bundleRoot, { recursive: true, force: true }); }
+});
+
 test('workflow set binds exact committed audit records to distinct native task entries', () => {
     const bundleRoot = createBundleRoot();
     const taskId = 'T-WORKFLOW-AUDIT-1';
@@ -1587,6 +1612,25 @@ test('workflow set reports NO_CHANGE when the requested value already matches', 
     } finally {
         fs.rmSync(bundleRoot, { recursive: true, force: true });
     }
+});
+
+test('workflow set reports unchanged quality-rule requests without writing config or audit', () => {
+    const bundleRoot = createBundleRoot();
+    const configPath = path.join(bundleRoot, 'live', 'config', 'workflow-config.json');
+    const before = fs.readFileSync(configPath);
+    try {
+        const { result } = captureConsole(() => handleWorkflow([
+            'set', '--bundle-root', bundleRoot,
+            '--optional-check-rule-id', 'code_simplification', '--optional-check-rule-enabled', 'true'
+        ], PACKAGE_JSON));
+        assert.ok(result && result.action === 'set');
+        assert.equal(result.status, 'NO_CHANGE');
+        assert.deepEqual(result.requested_fields, ['optional_quality_checks.rules']);
+        assert.deepEqual(result.changed_fields, []);
+        assert.deepEqual(result.noop_fields, ['optional_quality_checks.rules']);
+        assert.equal(result.audit_path, null);
+        assert.deepEqual(fs.readFileSync(configPath), before);
+    } finally { fs.rmSync(bundleRoot, { recursive: true, force: true }); }
 });
 
 test('workflow show keeps legacy compatibility mode when review_execution_policy is omitted', () => {

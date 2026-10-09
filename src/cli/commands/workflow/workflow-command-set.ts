@@ -80,6 +80,7 @@ import type {
     WorkflowFileConfigData,
     WorkflowSetResult
 } from './workflow-command-types';
+import { assertTaskTestSelectionCurrent, resolveTaskTestSelectionAuthority } from './workflow-command-task-test-selection';
 
 function resolveProtectedManifestRefreshRoot(roots: ReturnType<typeof resolveWorkflowRoots>): string {
     return isRecognizedBundleName(path.basename(roots.bundleRoot))
@@ -429,6 +430,15 @@ function handleSetLocked(
         nextFullSuiteValidation.command = command;
         changedFields.push('full_suite_validation.command');
     }
+    if (typeof options.taskTestSelectionRequireOperatorConfirmation === 'string') {
+        nextConfig.task_test_selection = {
+            require_operator_confirmation: parseBooleanText(
+                options.taskTestSelectionRequireOperatorConfirmation,
+                '--task-test-selection-require-operator-confirmation'
+            )
+        };
+        changedFields.push('task_test_selection.require_operator_confirmation');
+    }
     if (typeof options.compileGateCommand === 'string') {
         const command = options.compileGateCommand.trim();
         if (!command) {
@@ -769,7 +779,8 @@ function handleSetLocked(
         upsertOptionalCheckRule(nextOptionalQualityChecks.rules, options),
         options
     );
-    if (JSON.stringify(nextOptionalQualityChecks.rules) !== optionalRulesBefore) {
+    if (Object.entries(options).some(([key, value]) => key.startsWith('optionalCheckRule') && typeof value === 'string')
+        || JSON.stringify(nextOptionalQualityChecks.rules) !== optionalRulesBefore) {
         changedFields.push('optional_quality_checks.rules');
     }
     if (nextOptionalQualityChecks.baseline_version !== OPTIONAL_QUALITY_CHECKS_BASELINE_VERSION) {
@@ -847,6 +858,7 @@ function handleSetLocked(
     ];
     const actualChangedFieldSet = new Set(actualChangedFields);
     const noopFields = requestedFields.filter((field) => !actualChangedFieldSet.has(field));
+    const taskTestSelection = resolveTaskTestSelectionAuthority(options, roots, currentValidated, nextValidated, requestedFields);
 
     const taskResetAuditRepairRequested = !changed
         && requestedFields.includes('task_reset.enabled')
@@ -859,6 +871,7 @@ function handleSetLocked(
     const auditWriteOptions = {
         transaction,
         mutationSource: normalizeWorkflowConfigMutationSource(options.mutationSource),
+        taskTestSelection,
         targetRoot: roots.targetRoot,
         onAuditWritten: (binding: WorkflowConfigAuditBinding) => auditBindings.push(binding)
     };
@@ -866,9 +879,10 @@ function handleSetLocked(
         const safeSelfGuardHardening = requestedFields.length === 1
             && requestedFields[0] === 'orchestrator_work_policy.mode'
             && nextValidated.orchestrator_work_policy?.mode === 'deny_agent_entry';
-        if (!safeSelfGuardHardening) {
+        if (!safeSelfGuardHardening && (!taskTestSelection || taskTestSelection.require_operator_confirmation)) {
             requireWorkflowSetOperatorConfirmation(options);
         }
+        if (taskTestSelection) assertTaskTestSelectionCurrent(roots, taskTestSelection);
         if (workflowConfigChanged || localCommitAuditRequested) {
             const currentFileText = state.exists ? fs.readFileSync(roots.configPath, 'utf8') : '';
             if (workflowConfigChanged) writeWorkflowConfig(roots.configPath, nextValidated, transaction);
@@ -907,6 +921,7 @@ function handleSetLocked(
         protectedManifestPath = refreshWorkflowProtectedManifest(resolveProtectedManifestRefreshRoot(roots), transaction);
     }
 
+    if (taskTestSelection) assertTaskTestSelectionCurrent(roots, taskTestSelection);
     const result: WorkflowSetResult = {
         ...buildWorkflowShowResult(roots, {
             rawConfig: nextValidated,

@@ -30,6 +30,7 @@ export type WorkflowFileConfigData = {
     review_cycle_guard?: WorkflowConfigData['review_cycle_guard'];
     project_memory_maintenance?: WorkflowConfigData['project_memory_maintenance'];
     task_reset?: WorkflowConfigData['task_reset'];
+    task_test_selection?: WorkflowConfigData['task_test_selection'];
     local_commit?: WorkflowConfigData['local_commit'];
     auto_backup?: WorkflowConfigData['auto_backup'];
     optional_quality_checks?: WorkflowConfigData['optional_quality_checks'];
@@ -81,6 +82,7 @@ export interface WorkflowCommandResultBase {
     review_cycle_guard: ReviewCycleGuardConfig;
     project_memory_maintenance: ProjectMemoryMaintenanceConfig;
     task_reset: TaskResetConfig;
+    task_test_selection: WorkflowConfigData['task_test_selection'];
     local_commit: WorkflowConfigData['local_commit'];
     auto_backup: AutoBackupConfig;
     optional_quality_checks: OptionalQualityChecksConfig;
@@ -146,6 +148,10 @@ export const WORKFLOW_SET_DEFINITIONS = {
     '--compile-gate-command': { key: 'compileGateCommand', type: 'string' },
     '--full-suite-enabled': { key: 'fullSuiteEnabled', type: 'string' },
     '--full-suite-command': { key: 'fullSuiteCommand', type: 'string' },
+    '--task-test-selection-require-operator-confirmation': { key: 'taskTestSelectionRequireOperatorConfirmation', type: 'string' },
+    '--task-id': { key: 'taskId', type: 'string' },
+    '--reason': { key: 'taskTestSelectionReason', type: 'string' },
+    '--focused-required-test-path': { key: 'focusedRequiredTestPath', type: 'string[]' },
     '--full-suite-timeout-ms': { key: 'fullSuiteTimeoutMs', type: 'string' },
     '--full-suite-timeout-blocker': { key: 'fullSuiteTimeoutBlocker', type: 'string' },
     '--full-suite-timeout-retry-count': { key: 'fullSuiteTimeoutRetryCount', type: 'string' },

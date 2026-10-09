@@ -1,5 +1,10 @@
 # Changelog
 
+- Admit justified task-scoped test-command selection through the audited CLI
+  with current task/worktree bindings and explicit contained test targets.
+  Preserve opt-in fresh confirmation and all unrelated protected settings.
+
+
 - Guide reviewers to classify changed hunks against task intent, flag unexplained
   adjacent cleanup and preserve justified coupled fixes. Check directly related
   entrypoints for the same unresolved cause without adding proof gates.
