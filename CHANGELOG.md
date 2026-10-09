@@ -1,5 +1,10 @@
 # Changelog
 
+- Restrict snapshot rollback to trusted producer-supported destination units and
+  explicit custom init-answers input, rejecting forged records before preview
+  or safety creation and rechecking record selection before restore. Bind
+  snapshot/version safety recovery to the original captured record selection.
+
 - Add stable backup selection, filtered select-all, authoritative-refresh pruning and accessible EN/RU labels with English fallback.
 
 - Add guarded selected rollback-backup deletion with exact preview confirmation, final recovery-point acknowledgement, lifecycle locking and truthful partial failure counters.

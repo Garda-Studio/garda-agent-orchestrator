@@ -37,6 +37,7 @@ import { validatePathSourceTrust } from '../update/update-trust';
 import { formatManifestResult, validateManifest } from '../../validators/validate-manifest';
 import { formatVerifyResult, runVerify } from '../../validators/verify';
 import { assertNoLinkedPathComponents, verifyRestoredRollbackSnapshot } from './rollback-snapshot-integrity';
+import { assertSupportedSnapshotRollbackDestinations } from './rollback-destination-scope';
 import {
     withLifecycleRuntimeMutationGeneration,
     withLifecycleRuntimeMutationGenerationAsync
@@ -62,6 +63,7 @@ interface RunRollbackToVersionOptions extends RollbackLifecycleOptions {
 
 interface RunSnapshotRollbackOptions extends RollbackLifecycleOptions {
     snapshotPath?: string | null;
+    initAnswersPath?: string;
 }
 
 interface RunRollbackOptions extends RunSnapshotRollbackOptions {
@@ -262,6 +264,7 @@ async function runRollbackToVersionUnjournaled(options: RunRollbackToVersionOpti
 
     let safetySnapshotCreated = false;
     let safetySnapshotRecordCount = 0;
+    let capturedSafetySelection: string | null = null;
     let safetyRollbackStatus = 'NOT_NEEDED';
     let syncStatus = 'NOT_RUN';
     let installStatus = 'NOT_RUN';
@@ -354,6 +357,7 @@ async function runRollbackToVersionUnjournaled(options: RunRollbackToVersionOpti
                 normalizedTarget, safetySnapshotPath, rollbackItems
             );
             writeRollbackRecords(safetySnapshotPath, safetyRecords);
+            capturedSafetySelection = JSON.stringify(safetyRecords);
             safetySnapshotCreated = true;
             safetySnapshotRecordCount = safetyRecords.length;
         } else {
@@ -534,6 +538,10 @@ async function runRollbackToVersionUnjournaled(options: RunRollbackToVersionOpti
 
         try {
             const safetyRecords = readRollbackRecords(safetySnapshotPath);
+            assertSupportedSnapshotRollbackDestinations(normalizedTarget, safetyRecords, initAnswersResolvedPath);
+            if (JSON.stringify(safetyRecords) !== capturedSafetySelection) {
+                throw new Error('Safety rollback record selection changed before restore.');
+            }
             restoreRollbackSnapshot(normalizedTarget, safetySnapshotPath, safetyRecords);
             verifyRestoredRollbackSnapshot(normalizedTarget, safetySnapshotPath, safetyRecords);
             safetyRollbackStatus = 'SUCCESS';
@@ -618,6 +626,7 @@ function runSnapshotRollbackUnjournaled(options: RunSnapshotRollbackOptions) {
         targetRoot,
         bundleRoot,
         snapshotPath = null,
+        initAnswersPath,
         dryRun = false
     } = options;
 
@@ -639,6 +648,7 @@ function runSnapshotRollbackUnjournaled(options: RunSnapshotRollbackOptions) {
     }
 
     const rollbackRecords = readRollbackRecords(normalizedSnapshotPath);
+    assertSupportedSnapshotRollbackDestinations(normalizedTarget, rollbackRecords, initAnswersPath);
     const versionRelativePath = `${resolveBundleName()}/VERSION`;
     if (!rollbackRecords.some((record) => record.relativePath.replace(/\\/g, '/') === versionRelativePath
         && record.existed && record.pathType === 'file')) {
@@ -656,6 +666,7 @@ function runSnapshotRollbackUnjournaled(options: RunSnapshotRollbackOptions) {
 
     let safetySnapshotCreated = false;
     let safetySnapshotRecordCount = 0;
+    let capturedSafetySelection: string | null = null;
     let restoreStatus = 'NOT_RUN';
     let bundleRestoreStatus = 'FROM_SELECTED_SNAPSHOT';
     let safetyRollbackStatus = 'NOT_NEEDED';
@@ -668,13 +679,18 @@ function runSnapshotRollbackUnjournaled(options: RunSnapshotRollbackOptions) {
             rollbackRecords.map((record) => record.relativePath)
         );
         writeRollbackRecords(safetySnapshotPath, safetyRecords);
+        capturedSafetySelection = JSON.stringify(safetyRecords);
         safetySnapshotCreated = true;
         safetySnapshotRecordCount = safetyRecords.length;
     }
 
     try {
         if (!dryRun) {
-            readRollbackRecords(normalizedSnapshotPath);
+            const currentRecords = readRollbackRecords(normalizedSnapshotPath);
+            assertSupportedSnapshotRollbackDestinations(normalizedTarget, currentRecords, initAnswersPath);
+            if (JSON.stringify(currentRecords) !== JSON.stringify(rollbackRecords)) {
+                throw new Error('Snapshot rollback record selection changed before restore.');
+            }
             restoreRollbackSnapshot(normalizedTarget, normalizedSnapshotPath, rollbackRecords);
             verifyRestoredRollbackSnapshot(normalizedTarget, normalizedSnapshotPath, rollbackRecords);
             restoreStatus = 'SUCCESS';
@@ -697,6 +713,10 @@ function runSnapshotRollbackUnjournaled(options: RunSnapshotRollbackOptions) {
 
         try {
             const safetyRecords = readRollbackRecords(safetySnapshotPath);
+            assertSupportedSnapshotRollbackDestinations(normalizedTarget, safetyRecords, initAnswersPath);
+            if (JSON.stringify(safetyRecords) !== capturedSafetySelection) {
+                throw new Error('Safety rollback record selection changed before restore.');
+            }
             restoreRollbackSnapshot(normalizedTarget, safetySnapshotPath, safetyRecords);
             verifyRestoredRollbackSnapshot(normalizedTarget, safetySnapshotPath, safetyRecords);
             safetyRollbackStatus = 'SUCCESS';

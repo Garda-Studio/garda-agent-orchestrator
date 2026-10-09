@@ -5,13 +5,16 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 
 import { runCheckUpdate } from '../../../src/lifecycle/check-update';
-import { runUpdate } from '../../../src/lifecycle/update';
+import { getUpdateRollbackItems, runUpdate } from '../../../src/lifecycle/update';
 import {
     findSnapshotByVersion,
     runRollback,
     runRollbackToVersion
 } from '../../../src/lifecycle/rollback';
-import { removePathRecursive, writeRollbackRecords } from '../../../src/lifecycle/common';
+import {
+    createRollbackSnapshot, getRollbackRecordsPath, readRollbackRecords,
+    removePathRecursive, writeRollbackRecords
+} from '../../../src/lifecycle/common';
 import { registerTestCaseProgress } from '../test-case-progress';
 
 registerTestCaseProgress();
@@ -101,6 +104,211 @@ function injectBundleUpdate(bundleRoot: string, updateMarker: string, nextVersio
     fs.writeFileSync(canonicalRuleIndexPath, updatedTemplate, 'utf8');
 }
 
+
+function setupDestinationScopeWorkspace(answersRelative = 'garda-agent-orchestrator/runtime/init-answers.json') {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-rollback-scope-'));
+    const bundleRoot = path.join(projectRoot, 'garda-agent-orchestrator');
+    const versionPath = path.join(bundleRoot, 'VERSION');
+    const hookPath = path.join(projectRoot, '.git/hooks/pre-commit');
+    const answersPath = path.resolve(projectRoot, answersRelative);
+    const userSourcePath = path.join(projectRoot, 'user-source.txt');
+    const snapshotPath = path.join(bundleRoot, 'runtime/update-rollbacks/supported-history');
+    for (const file of [versionPath, hookPath, answersPath]) fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(versionPath, '1.0.0\n');
+    fs.writeFileSync(hookPath, 'supported historical hook\n');
+    fs.writeFileSync(answersPath, '{"SourceOfTruth":"Codex"}\n');
+    fs.writeFileSync(userSourcePath, 'unrelated user source\n');
+    const records = createRollbackSnapshot(projectRoot, snapshotPath, getUpdateRollbackItems(projectRoot, answersPath));
+    writeRollbackRecords(snapshotPath, records);
+    fs.writeFileSync(versionPath, '2.0.0\n');
+    fs.writeFileSync(hookPath, 'current hook\n');
+    fs.writeFileSync(answersPath, '{"SourceOfTruth":"Codex","Current":true}\n');
+    return { targetRoot: projectRoot, projectRoot, bundleRoot, snapshotPath, versionPath, hookPath, answersPath, userSourcePath, records };
+}
+
+function tamperSafetyRecoverySelection(bundleRoot: string, attack: string) {
+    const snapshotsRoot = path.join(bundleRoot, 'runtime/update-rollbacks');
+    const safetyPath = path.join(snapshotsRoot, fs.readdirSync(snapshotsRoot).find(name => name.startsWith('rollback-'))!);
+    const records = readRollbackRecords(safetyPath);
+    if (attack === 'forged-hook') {
+        const relativePath = '.git/hooks/post-checkout';
+        fs.mkdirSync(path.dirname(path.join(safetyPath, relativePath)), { recursive: true });
+        fs.writeFileSync(path.join(safetyPath, relativePath), 'forged recovery hook\n');
+        writeRollbackRecords(safetyPath, [...records, { relativePath, existed: true, pathType: 'file' }]);
+    } else if (attack === 'unrelated-delete') {
+        writeRollbackRecords(safetyPath, [...records, { relativePath: 'user-source.txt', existed: false, pathType: 'missing' }]);
+    } else {
+        writeRollbackRecords(safetyPath, records.filter(record => record.relativePath !== 'garda-agent-orchestrator/VERSION'));
+    }
+    assert.ok(readRollbackRecords(safetyPath).length > 0, 'Tampered safety metadata retains valid recomputed integrity');
+}
+
+describe('snapshot rollback destination authority', () => {
+    it('rejects forged safety snapshots and changed supported recovery selections in snapshot mode', async (context) => {
+        const preserved: Array<{ extraHook: boolean; userSource: string; version: string; hook: string }> = [];
+        for (const attack of ['forged-hook', 'unrelated-delete', 'supported-selection-drift']) {
+            const fixture = setupDestinationScopeWorkspace();
+            context.after(() => removePathRecursive(fixture.projectRoot));
+            const nativeFs = require('node:fs') as typeof fs;
+            const originalRead = nativeFs.readFileSync;
+            let reads = 0;
+            const mockedRead = context.mock.method(nativeFs, 'readFileSync', (...args: Parameters<typeof fs.readFileSync>) => {
+                if (String(args[0]) === getRollbackRecordsPath(fixture.snapshotPath) && ++reads === 2) {
+                    tamperSafetyRecoverySelection(fixture.bundleRoot, attack);
+                    writeRollbackRecords(fixture.snapshotPath, fixture.records.filter(record => record.relativePath !== 'AGENTS.md'));
+                }
+                return Reflect.apply(originalRead, nativeFs, args);
+            });
+            try {
+                const expected = attack === 'supported-selection-drift'
+                    ? /Safety rollback failed: Safety rollback record selection changed before restore/
+                    : /Safety rollback failed: Unsupported snapshot rollback destination/;
+                await assert.rejects(runRollback(fixture), expected);
+                assert.equal(reads, 2);
+                preserved.push({
+                    extraHook: fs.existsSync(path.join(fixture.projectRoot, '.git/hooks/post-checkout')),
+                    userSource: fs.readFileSync(fixture.userSourcePath, 'utf8'),
+                    version: fs.readFileSync(fixture.versionPath, 'utf8'),
+                    hook: fs.readFileSync(fixture.hookPath, 'utf8')
+                });
+            } finally {
+                mockedRead.mock.restore();
+            }
+        }
+        assert.deepEqual(preserved, Array(3).fill({
+            extraHook: false, userSource: 'unrelated user source\n', version: '2.0.0\n', hook: 'current hook\n'
+        }));
+    });
+
+    it('rejects forged additional hook destinations before applying a self-consistent snapshot', async (context) => {
+        const fixture = setupDestinationScopeWorkspace();
+        context.after(() => removePathRecursive(fixture.projectRoot));
+        const destination = '.git/hooks/post-checkout';
+        fs.writeFileSync(path.join(fixture.snapshotPath, destination), 'forged additional hook\n');
+        writeRollbackRecords(fixture.snapshotPath, [...fixture.records,
+            { relativePath: destination, existed: true, pathType: 'file' }]);
+        const snapshotsBefore = fs.readdirSync(path.dirname(fixture.snapshotPath));
+
+        assert.ok(readRollbackRecords(fixture.snapshotPath).some(record => record.relativePath === destination));
+        await assert.rejects(runRollback(fixture), /Unsupported snapshot rollback destination.*post-checkout/);
+        assert.equal(fs.existsSync(path.join(fixture.projectRoot, destination)), false);
+        assert.equal(fs.readFileSync(fixture.versionPath, 'utf8'), '2.0.0\n');
+        assert.equal(fs.readFileSync(fixture.hookPath, 'utf8'), 'current hook\n');
+        assert.equal(fs.readFileSync(fixture.userSourcePath, 'utf8'), 'unrelated user source\n');
+        assert.deepEqual(fs.readdirSync(path.dirname(fixture.snapshotPath)), snapshotsBefore);
+    });
+
+    it('rejects unsupported rollback destinations during dry-run', async (context) => {
+        const fixture = setupDestinationScopeWorkspace();
+        context.after(() => removePathRecursive(fixture.projectRoot));
+        fs.writeFileSync(path.join(fixture.snapshotPath, 'user-source.txt'), 'forged replacement\n');
+        writeRollbackRecords(fixture.snapshotPath, [...fixture.records,
+            { relativePath: 'user-source.txt', existed: true, pathType: 'file' }]);
+
+        await assert.rejects(runRollback({ ...fixture, dryRun: true }), /Unsupported snapshot rollback destination.*user-source/);
+        assert.equal(fs.readFileSync(fixture.userSourcePath, 'utf8'), 'unrelated user source\n');
+        assert.equal(fs.readFileSync(fixture.versionPath, 'utf8'), '2.0.0\n');
+        assert.deepEqual(fs.readdirSync(path.dirname(fixture.snapshotPath)), ['supported-history']);
+    });
+
+    it('rejects noncanonical destination aliases with recomputed integrity', async (context) => {
+        const fixture = setupDestinationScopeWorkspace();
+        context.after(() => removePathRecursive(fixture.projectRoot));
+        writeRollbackRecords(fixture.snapshotPath, [...fixture.records,
+            { relativePath: '.git/hooks/../hooks/pre-commit', existed: true, pathType: 'file' }]);
+
+        assert.ok(readRollbackRecords(fixture.snapshotPath).some(record => record.relativePath.includes('/../')));
+        await assert.rejects(runRollback(fixture), /Noncanonical snapshot rollback destination/);
+        assert.equal(fs.readFileSync(fixture.hookPath, 'utf8'), 'current hook\n');
+        assert.equal(fs.readFileSync(fixture.versionPath, 'utf8'), '2.0.0\n');
+    });
+
+    it('preserves legitimate pre-commit hook and historical supported destination records', async (context) => {
+        const fixture = setupDestinationScopeWorkspace();
+        context.after(() => removePathRecursive(fixture.projectRoot));
+        const result = await runRollback(fixture);
+
+        assert.equal(result.restoreStatus, 'SUCCESS');
+        assert.equal(fs.readFileSync(fixture.versionPath, 'utf8'), '1.0.0\n');
+        assert.equal(fs.readFileSync(fixture.hookPath, 'utf8'), 'supported historical hook\n');
+        assert.equal(fs.readFileSync(fixture.answersPath, 'utf8'), '{"SourceOfTruth":"Codex"}\n');
+        assert.equal(fs.readFileSync(fixture.userSourcePath, 'utf8'), 'unrelated user source\n');
+    });
+
+    it('preserves explicitly selected custom init-answer destination authority', async (context) => {
+        const fixture = setupDestinationScopeWorkspace('config/prior-answers.json');
+        context.after(() => removePathRecursive(fixture.projectRoot));
+        const result = await runRollback({ ...fixture, initAnswersPath: 'config/prior-answers.json' });
+
+        assert.equal(result.restoreStatus, 'SUCCESS');
+        assert.equal(fs.readFileSync(fixture.answersPath, 'utf8'), '{"SourceOfTruth":"Codex"}\n');
+        assert.equal(fs.readFileSync(fixture.userSourcePath, 'utf8'), 'unrelated user source\n');
+    });
+
+    it('preserves historical uninstall-only supported destination units', async (context) => {
+        const fixture = setupDestinationScopeWorkspace();
+        context.after(() => removePathRecursive(fixture.projectRoot));
+        fs.writeFileSync(path.join(fixture.snapshotPath, '.agentignore'), 'historical ignore\n');
+        writeRollbackRecords(fixture.snapshotPath, [...fixture.records,
+            { relativePath: '.agentignore', existed: true, pathType: 'file' }]);
+        fs.writeFileSync(path.join(fixture.projectRoot, '.agentignore'), 'current ignore\n');
+        const result = await runRollback(fixture);
+
+        assert.equal(result.restoreStatus, 'SUCCESS');
+        assert.equal(fs.readFileSync(path.join(fixture.projectRoot, '.agentignore'), 'utf8'), 'historical ignore\n');
+        assert.equal(fs.readFileSync(fixture.versionPath, 'utf8'), '1.0.0\n');
+        assert.equal(fs.readFileSync(fixture.userSourcePath, 'utf8'), 'unrelated user source\n');
+    });
+
+    it('rejects snapshot-provided custom answers without a matching trusted request path', async (context) => {
+        const fixture = setupDestinationScopeWorkspace('config/prior-answers.json');
+        context.after(() => removePathRecursive(fixture.projectRoot));
+
+        await assert.rejects(runRollback(fixture), /Unsupported snapshot rollback destination.*prior-answers/);
+        assert.equal(fs.readFileSync(fixture.answersPath, 'utf8'), '{"SourceOfTruth":"Codex","Current":true}\n');
+        assert.equal(fs.readFileSync(fixture.versionPath, 'utf8'), '2.0.0\n');
+    });
+
+    it('rejects an external trusted init-answers path before rollback mutation', async (context) => {
+        const fixture = setupDestinationScopeWorkspace();
+        context.after(() => removePathRecursive(fixture.projectRoot));
+        const externalPath = path.resolve(fixture.projectRoot, '..', 'outside-answers.json');
+
+        await assert.rejects(runRollback({ ...fixture, initAnswersPath: externalPath }), /Snapshot rollback init answers destination.*(?:outside|escapes)/);
+        assert.equal(fs.readFileSync(fixture.versionPath, 'utf8'), '2.0.0\n');
+        assert.deepEqual(fs.readdirSync(path.dirname(fixture.snapshotPath)), ['supported-history']);
+    });
+
+    it('rejects the workspace root as a custom init-answers destination', async (context) => {
+        const fixture = setupDestinationScopeWorkspace();
+        context.after(() => removePathRecursive(fixture.projectRoot));
+
+        await assert.rejects(runRollback({ ...fixture, initAnswersPath: '.' }), /Noncanonical snapshot rollback destination/);
+        assert.equal(fs.readFileSync(fixture.versionPath, 'utf8'), '2.0.0\n');
+        assert.equal(fs.readFileSync(fixture.userSourcePath, 'utf8'), 'unrelated user source\n');
+        assert.deepEqual(fs.readdirSync(path.dirname(fixture.snapshotPath)), ['supported-history']);
+    });
+
+    it('rejects a changed supported record selection before restore', async (context) => {
+        const fixture = setupDestinationScopeWorkspace();
+        context.after(() => removePathRecursive(fixture.projectRoot));
+        const nativeFs = require('node:fs') as typeof fs;
+        const originalRead = nativeFs.readFileSync;
+        let reads = 0;
+        context.mock.method(nativeFs, 'readFileSync', (...args: Parameters<typeof fs.readFileSync>) => {
+            if (String(args[0]) === getRollbackRecordsPath(fixture.snapshotPath) && ++reads === 2) {
+                writeRollbackRecords(fixture.snapshotPath, fixture.records.filter(record => record.relativePath !== 'AGENTS.md'));
+            }
+            return Reflect.apply(originalRead, nativeFs, args);
+        });
+
+        await assert.rejects(runRollback(fixture), /Snapshot rollback record selection changed before restore/);
+        assert.equal(reads, 2);
+        assert.equal(fs.readFileSync(fixture.versionPath, 'utf8'), '2.0.0\n');
+        assert.equal(fs.readFileSync(fixture.hookPath, 'utf8'), 'current hook\n');
+        assert.equal(fs.readFileSync(fixture.userSourcePath, 'utf8'), 'unrelated user source\n');
+    });
+});
 
 describe('runRollback (snapshot mode)', () => {
     const repoRoot = findRepoRoot();
@@ -552,6 +760,38 @@ describe('runRollback (snapshot mode)', () => {
 
 describe('runRollback (version mode)', () => {
     const repoRoot = findRepoRoot();
+
+    it('rejects forged safety snapshots and changed supported recovery selections in version mode', async (context) => {
+        const preserved: Array<{ extraHook: boolean; userSource: string; versionMatchesCapture: boolean }> = [];
+        for (const attack of ['forged-hook', 'unrelated-delete', 'supported-selection-drift']) {
+            const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
+            context.after(() => removePathRecursive(projectRoot));
+            const sourceRoot = path.join(projectRoot, 'local-source');
+            copyDirRecursive(bundleRoot, sourceRoot);
+            fs.writeFileSync(path.join(sourceRoot, 'VERSION'), '1.0.0\n');
+            const beforeVersion = fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8');
+            fs.writeFileSync(path.join(projectRoot, 'user-source.txt'), 'unrelated user source\n');
+            const expected = attack === 'supported-selection-drift'
+                ? /Safety rollback failed: Safety rollback record selection changed before restore/
+                : /Safety rollback failed: Unsupported snapshot rollback destination/;
+            await assert.rejects(runRollbackToVersion({
+                targetRoot: projectRoot, bundleRoot, targetVersion: '1.0.0', sourcePath: sourceRoot,
+                trustOverride: true, initAnswersPath: answersPath, skipVerify: true, skipManifestValidation: true,
+                installRunner: () => {
+                    tamperSafetyRecoverySelection(bundleRoot, attack);
+                    throw new Error('INJECTED_SAFETY_SELECTION_FAILURE');
+                }
+            }), expected);
+            preserved.push({
+                extraHook: fs.existsSync(path.join(projectRoot, '.git/hooks/post-checkout')),
+                userSource: fs.readFileSync(path.join(projectRoot, 'user-source.txt'), 'utf8'),
+                versionMatchesCapture: fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8') === beforeVersion
+            });
+        }
+        assert.deepEqual(preserved, Array(3).fill({
+            extraHook: false, userSource: 'unrelated user source\n', versionMatchesCapture: true
+        }));
+    });
 
     it('rolls back to a specific version via sourcePath', async () => {
         const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
