@@ -1,5 +1,13 @@
 # Changelog
 
+- Guide reviewers to classify changed hunks against task intent, flag unexplained
+  adjacent cleanup and preserve justified coupled fixes. Check directly related
+  entrypoints for the same unresolved cause without adding proof gates.
+
+- Bind grouped follow-up reused receipts to their authenticated original
+  invocation source tree while validating the current compile-cycle tree
+  separately. Preserve fresh receipt and strict reuse provenance guards.
+
 - Separate rejection-only interpreter option decoding and preserve literal file
   boundaries after Ruby require prefixes without granting execution authority.
 

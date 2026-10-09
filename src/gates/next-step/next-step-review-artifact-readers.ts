@@ -510,6 +510,11 @@ function reviewInvocationMatchesReceiptProvenance(options: {
     if (!provenance || provenance.attestation_type !== 'reviewer_invocation_attestation') {
         return false;
     }
+    const invocationTreeStateSha256 = options.fields.reusedExistingReview
+        ? options.fields.reusedFromReviewTreeStateSha256 : options.fields.reviewTreeStateSha256;
+    if (options.fields.reusedExistingReview && !invocationTreeStateSha256) {
+        return false;
+    }
     return options.events.some((event) => {
         if (String(event.event_type || '').trim().toUpperCase() !== 'REVIEWER_INVOCATION_ATTESTED') {
             return false;
@@ -541,8 +546,7 @@ function reviewInvocationMatchesReceiptProvenance(options: {
             ).trim() === options.fields.reviewerIdentity
             && normalizeSha256(details?.review_context_sha256 ?? details?.reviewContextSha256)
                 === provenance.review_context_sha256
-            && (!options.fields.reviewTreeStateSha256
-                || reviewTreeStateSha256 === options.fields.reviewTreeStateSha256)
+            && (!invocationTreeStateSha256 || reviewTreeStateSha256 === invocationTreeStateSha256)
             && normalizeSha256(details?.routing_event_sha256 ?? details?.routingEventSha256)
                 === provenance.routing_event_sha256
         );

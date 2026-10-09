@@ -127,6 +127,7 @@ function seedReviewArtifacts(repoRoot: string, options: {
     receiptPath?: string;
     includeFullSuiteValidation?: boolean;
     includeReuseScopeBindings?: boolean;
+    emptyFindings?: boolean;
 } = {}): SeededReviewArtifacts {
     const taskId = options.taskId || TASK_ID;
     const reviewType = options.reviewType || REVIEW_TYPE;
@@ -202,7 +203,7 @@ function seedReviewArtifacts(repoRoot: string, options: {
     }
 
     const findingsBySeverity = emptyFindingsBySeverity();
-    findingsBySeverity[followUpSeverity].push({
+    if (!options.emptyFindings) findingsBySeverity[followUpSeverity].push({
         id: 'F-001',
         severity: followUpSeverity,
         title: options.title || 'Persist follow-up evidence',
@@ -240,7 +241,7 @@ function seedReviewArtifacts(repoRoot: string, options: {
         violations: [],
         coverage_status: null,
         normalized_inventory: {
-            finding_count: options.includeFixNowFinding ? 2 : 1,
+            finding_count: Object.values(findingsBySeverity).reduce((count, findings) => count + findings.length, 0),
             residual_risk_count: 0,
             findings_by_severity: findingsBySeverity,
             residual_risks: []
@@ -248,9 +249,10 @@ function seedReviewArtifacts(repoRoot: string, options: {
         evidence_diagnostics: {
             validation_note_evidence_locations: [],
             coverage_evidence_locations: [],
-            finding_evidence_locations: ['src/gates/review/example.ts:10', 'tests/node/gates/review/example.test.ts:20'],
+            finding_evidence_locations: options.emptyFindings ? []
+                : ['src/gates/review/example.ts:10', 'tests/node/gates/review/example.test.ts:20'],
             residual_risk_evidence_locations: [],
-            total_evidence_locations: 2
+            total_evidence_locations: options.emptyFindings ? 0 : 2
         },
         bindings: {
             input: {
@@ -342,7 +344,13 @@ function seedReviewArtifacts(repoRoot: string, options: {
             review_follow_up_task_closure_policy_source: 'preflight_profile_policy_snapshot'
         });
     }
-    const dispositionArtifact = {
+    const dispositionArtifact = options.emptyFindings ? buildReviewFindingsDispositionArtifact({
+        taskId, reviewType, validationArtifact: validationArtifact as unknown as ReviewFindingsValidationArtifact,
+        validationArtifactPath, validationArtifactSha256,
+        policyResolution: resolveLockedReviewFindingPolicyFromReceiptDispositionEvidence({
+            review_findings_disposition: dispositionResult
+        })
+    }) : {
         schema_version: 1,
         artifact_type: 'review_findings_disposition',
         task_id: taskId,
@@ -443,13 +451,13 @@ function seedReviewArtifacts(repoRoot: string, options: {
             disposition_result_sha256: dispositionArtifact.disposition_result_sha256,
             policy_id: 'custom',
             policy_source: 'preflight_profile_policy_snapshot',
-            item_count: options.includeFixNowFinding ? 2 : 1,
-            fix_now_count: options.includeFixNowFinding ? 1 : 0,
-            follow_up_pending_count: 1,
-            ignored_count: 0,
-            blocking_count: options.includeFixNowFinding ? 1 : 0
+            item_count: dispositionArtifact.summary.item_count,
+            fix_now_count: dispositionArtifact.summary.fix_now_count,
+            follow_up_pending_count: dispositionArtifact.summary.follow_up_pending_count,
+            ignored_count: dispositionArtifact.summary.ignored_count,
+            blocking_count: dispositionArtifact.summary.blocking_count
         },
-        review_findings_disposition: dispositionResult,
+        review_findings_disposition: dispositionArtifact.disposition_result,
         review_output_contract: {
             schema_version: 1,
             format: 'findings_json',
@@ -632,7 +640,8 @@ function persistFollowUpReceiptEvent(
 }
 
 function restartGroupedCycleWithAcceptedReuse(
-    repoRoot: string, artifactsInput: SeededReviewArtifacts | SeededReviewArtifacts[]
+    repoRoot: string, artifactsInput: SeededReviewArtifacts | SeededReviewArtifacts[],
+    currentTreeStateSha256?: string
 ): number {
     const sourceArtifacts = Array.isArray(artifactsInput) ? artifactsInput : [artifactsInput];
     const reviewsRoot = path.dirname(sourceArtifacts[0].receiptPath);
@@ -649,13 +658,14 @@ function restartGroupedCycleWithAcceptedReuse(
     writeJson(compilePath, compileGate);
     const compileIntegrity = appendEvent(repoRoot, TASK_ID, 'COMPILE_GATE_PASSED', 'PASS', {}, currentTimestamp);
     for (const artifacts of sourceArtifacts) {
-        acceptGroupedReuseInCurrentCycle(repoRoot, artifacts, compileIntegrity.task_sequence);
+        acceptGroupedReuseInCurrentCycle(repoRoot, artifacts, compileIntegrity.task_sequence, currentTreeStateSha256);
     }
     return compileIntegrity.task_sequence;
 }
 
 function acceptGroupedReuseInCurrentCycle(
-    repoRoot: string, artifacts: SeededReviewArtifacts, compileTaskSequence: number
+    repoRoot: string, artifacts: SeededReviewArtifacts, compileTaskSequence: number,
+    currentTreeStateSha256?: string
 ): void {
     const reviewsRoot = path.dirname(artifacts.receiptPath);
     const preflightSha256 = fileSha256(path.join(reviewsRoot, `${TASK_ID}-preflight.json`));
@@ -666,6 +676,9 @@ function acceptGroupedReuseInCurrentCycle(
     const contextPath = path.join(reviewsRoot, `${TASK_ID}-${reviewType}-review-context.json`);
     const reviewContext = readJson(contextPath);
     reviewContext.preflight_sha256 = preflightSha256;
+    if (currentTreeStateSha256) {
+        (reviewContext.tree_state as Record<string, unknown>).tree_state_sha256 = currentTreeStateSha256;
+    }
     reviewContext.full_suite_validation = {
         ...(reviewContext.full_suite_validation as Record<string, unknown>),
         cycle_binding_valid: true,
@@ -677,6 +690,7 @@ function acceptGroupedReuseInCurrentCycle(
     writeJson(contextPath, reviewContext);
     const receipt: Record<string, unknown> = {
         ...historicalReceipt,
+        review_tree_state_sha256: currentTreeStateSha256 || historicalReceipt.review_tree_state_sha256,
         preflight_sha256: preflightSha256,
         review_context_sha256: fileSha256(contextPath),
         reused_existing_review: true,
@@ -723,7 +737,7 @@ function acceptGroupedReuseInCurrentCycle(
     assert.equal(strictReuse.valid, true, strictReuse.reason || undefined);
 }
 
-function seedPendingGroupedFollowUpForReuse(repoRoot: string): SeededReviewArtifacts {
+function seedPendingGroupedFollowUpForReuse(repoRoot: string, reviewType = REVIEW_TYPE): SeededReviewArtifacts {
     seedGroupedPreflight(repoRoot);
     const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
     const preflightPath = path.join(reviewsRoot, `${TASK_ID}-preflight.json`);
@@ -742,11 +756,11 @@ function seedPendingGroupedFollowUpForReuse(repoRoot: string): SeededReviewArtif
     const compileGate = readJson(compilePath);
     compileGate.preflight_hash_sha256 = fileSha256(preflightPath);
     writeJson(compilePath, compileGate);
-    const artifacts = seedReviewArtifacts(repoRoot, { includeReuseScopeBindings: true });
+    const artifacts = seedReviewArtifacts(repoRoot, { reviewType, includeReuseScopeBindings: true });
     const receipt = readJson(artifacts.receiptPath);
     persistFollowUpReceiptEvent(repoRoot, artifacts, receipt);
     const materialized = materializeReviewFindingsFollowUpTasks({
-        repoRoot, taskId: TASK_ID, reviewType: REVIEW_TYPE,
+        repoRoot, taskId: TASK_ID, reviewType,
         dispositionArtifactPath: artifacts.dispositionArtifactPath
     });
     assert.equal(materialized.status, 'MATERIALIZED', materialized.output_lines.join('\n'));
@@ -1000,6 +1014,91 @@ describe('review findings follow-up task materialization', () => {
         assert.equal(repeat.status, 'ALREADY_MATERIALIZED', repeat.output_lines.join('\n'));
         assert.deepEqual(repeat.reused_task_ids, [`${TASK_ID}-F1`]);
     });
+
+    it('rebinds grouped authenticated reuse after the current tree changes', () => {
+        const repoRoot = makeRepo();
+        const artifacts = seedPendingGroupedFollowUpForReuse(repoRoot);
+        const sourceReceipt = readJson(artifacts.receiptPath);
+        const originalValidation = fs.readFileSync(artifacts.validationArtifactPath);
+        const originalDisposition = fs.readFileSync(artifacts.dispositionArtifactPath);
+        const eventsRoot = path.join(repoRoot, 'garda-agent-orchestrator/runtime/task-events');
+        const invocationEvents = readTaskTimelineEventWindow(eventsRoot, TASK_ID).events
+            .filter((event) => event.event_type === 'REVIEWER_INVOCATION_ATTESTED');
+        const currentTree = textSha256('current cycle with unchanged reviewed source domain');
+        assert.notEqual(currentTree, sourceReceipt.review_tree_state_sha256);
+        restartGroupedCycleWithAcceptedReuse(repoRoot, artifacts, currentTree);
+        const receipt = readJson(artifacts.receiptPath);
+        assert.equal(receipt.review_tree_state_sha256, currentTree);
+        assert.equal(receipt.reused_from_review_tree_state_sha256, sourceReceipt.review_tree_state_sha256);
+        const restored = materializeReviewFindingsFollowUpTasks({
+            repoRoot, taskId: TASK_ID, reviewType: REVIEW_TYPE,
+            dispositionArtifactPath: artifacts.dispositionArtifactPath
+        });
+        assert.equal(restored.status, 'ALREADY_MATERIALIZED', restored.output_lines.join('\n'));
+        assert.deepEqual(restored.reused_task_ids, [`${TASK_ID}-F1`]);
+        assert.deepEqual(restored.created_task_ids, []);
+        const scope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, rowFor(repoRoot, `${TASK_ID}-F1`));
+        assert.equal(scope.status, 'valid', scope.diagnostics.join('\n'));
+        assert.equal(taskRows(repoRoot).filter((row) => row.taskId.startsWith(`${TASK_ID}-F`)).length, 1);
+        assert.deepEqual(fs.readFileSync(artifacts.validationArtifactPath), originalValidation);
+        assert.deepEqual(fs.readFileSync(artifacts.dispositionArtifactPath), originalDisposition);
+        assert.deepEqual(readTaskTimelineEventWindow(eventsRoot, TASK_ID).events
+            .filter((event) => event.event_type === 'REVIEWER_INVOCATION_ATTESTED'), invocationEvents);
+    });
+
+    it('routes a changed-tree test follow-up with authenticated empty code, api and security lanes', () => {
+        const repoRoot = makeRepo();
+        const testArtifacts = seedPendingGroupedFollowUpForReuse(repoRoot, 'test');
+        const emptyLanes = ['code', 'api', 'security'].map((reviewType) => {
+            const artifacts = seedReviewArtifacts(repoRoot, { reviewType, includeReuseScopeBindings: true, emptyFindings: true });
+            persistFollowUpReceiptEvent(repoRoot, artifacts, readJson(artifacts.receiptPath));
+            assert.equal(materializeReviewFindingsFollowUpTasks({
+                repoRoot, taskId: TASK_ID, reviewType, dispositionArtifactPath: artifacts.dispositionArtifactPath
+            }).status, 'NOT_REQUIRED');
+            return artifacts;
+        });
+        restartGroupedCycleWithAcceptedReuse(repoRoot, [testArtifacts, ...emptyLanes], textSha256('new grouped test-only cycle'));
+        const restored = materializeReviewFindingsFollowUpTasks({
+            repoRoot, taskId: TASK_ID, reviewType: 'test', dispositionArtifactPath: testArtifacts.dispositionArtifactPath
+        });
+        assert.equal(restored.status, 'ALREADY_MATERIALIZED', restored.output_lines.join('\n'));
+        assert.deepEqual(restored.created_task_ids, []);
+        assert.deepEqual(restored.reused_task_ids, [`${TASK_ID}-F1`]);
+        const scope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, rowFor(repoRoot, `${TASK_ID}-F1`));
+        assert.equal(scope.status, 'valid', scope.diagnostics.join('\n'));
+        assert.equal(taskRows(repoRoot).filter((row) => row.taskId.startsWith(`${TASK_ID}-F`)).length, 1);
+        for (const artifacts of emptyLanes) {
+            assert.equal((readJson(artifacts.dispositionArtifactPath).summary as Record<string, unknown>).item_count, 0);
+        }
+    });
+
+    for (const corruption of ['missing-source-tree', 'source-tree', 'identity', 'sequence', 'fresh-tree'] as const) {
+    it(`rejects ${corruption} evidence without mutating a grouped child`, () => {
+        const repoRoot = makeRepo();
+        const artifacts = seedPendingGroupedFollowUpForReuse(repoRoot);
+        if (corruption !== 'fresh-tree') {
+            restartGroupedCycleWithAcceptedReuse(repoRoot, artifacts, textSha256('changed current tree for negative reuse'));
+        }
+        const receipt = readJson(artifacts.receiptPath);
+        if (corruption === 'missing-source-tree') delete receipt.reused_from_review_tree_state_sha256;
+        else if (corruption === 'source-tree') receipt.reused_from_review_tree_state_sha256 = 'f'.repeat(64);
+        else if (corruption === 'identity') receipt.reviewer_identity = 'agent:another-reviewer';
+        else if (corruption === 'sequence') (receipt.reviewer_provenance as Record<string, unknown>).task_sequence = 99999;
+        else receipt.review_tree_state_sha256 = textSha256('fresh receipt with an unattested tree');
+        persistFollowUpReceiptEvent(repoRoot, artifacts, receipt);
+        const taskPath = path.join(repoRoot, 'TASK.md');
+        const queue = fs.readFileSync(taskPath);
+        const artifactPath = getReviewFindingsFollowUpTasksArtifactPath(artifacts.dispositionArtifactPath);
+        const canonicalBytes = fs.readFileSync(artifactPath);
+        const result = materializeReviewFindingsFollowUpTasks({
+            repoRoot, taskId: TASK_ID, reviewType: REVIEW_TYPE, dispositionArtifactPath: artifacts.dispositionArtifactPath
+        });
+        assert.equal(result.status, 'BLOCKED', result.output_lines.join('\n'));
+        assert.deepEqual(fs.readFileSync(taskPath), queue);
+        assert.deepEqual(fs.readFileSync(artifactPath), canonicalBytes);
+        assert.equal(resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, rowFor(repoRoot, `${TASK_ID}-F1`)).status, 'invalid');
+    });
+    }
 
     it('does not rebind an active grouped child after authenticated parent-cycle reuse', () => {
         const repoRoot = makeRepo();
