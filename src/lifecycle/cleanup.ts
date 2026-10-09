@@ -1,4 +1,7 @@
 export * from './cleanup/cleanup-types';
+export { previewTaskErasure } from './cleanup/task-erasure-preview';
+export type { TaskErasurePreview, TaskErasureFilePreview } from './cleanup/task-erasure-preview';
+export type { TaskErasureSelection, TaskErasureBlocker, TaskErasureReference } from './cleanup/task-erasure-selection';
 export * from './cleanup/cleanup-storage-policy';
 export * from './cleanup/cleanup-orchestration';
 export * from './cleanup/runtime-cleanup-ownership';

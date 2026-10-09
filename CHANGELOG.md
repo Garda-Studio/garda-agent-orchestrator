@@ -1,5 +1,10 @@
 # Changelog
 
+- Add immutable exact task-erasure base previews with canonical queue and surviving
+  reference checks, native runtime activity protection, bounded physical ownership
+  snapshots and a deterministic composition digest. Keep mutation authority and
+  full-erasure completion false pending internal recovery-copy and apply stages.
+
 - Restrict snapshot rollback to trusted producer-supported destination units and
   explicit custom init-answers input, rejecting forged records before preview
   or safety creation and rechecking record selection before restore. Bind
