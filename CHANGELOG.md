@@ -1,5 +1,14 @@
 # Changelog
 
+
+- Make full-suite run-marker admission exclusive and require the current issued
+  owner for atomic child updates and terminal cleanup; preserve foreign records
+  and existing native inspection/recovery (T-198).
+
+- Close full-suite marker descriptors before namespace mutations while retaining
+  issued capability, parent/generation/content checks and atomic publication.
+  Preserve replacements and retry behavior; actual Windows verification is pending (T-198-W1).
+
 - Cover final backup inventory refresh failures after successful selected removal,
   retaining exact removal accounting, non-zero CLI results and unrelated copies.
 

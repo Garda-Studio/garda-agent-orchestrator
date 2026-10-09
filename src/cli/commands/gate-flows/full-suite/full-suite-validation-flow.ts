@@ -428,15 +428,16 @@ export async function runFullSuiteValidationCommand(
     const maxAttempts = Math.max(1, 1 + timeoutRetryCount);
     const timeoutCleanupObservations: string[] = [];
     const timeoutAttempts: FullSuiteTimeoutAttemptEvidence[] = [];
+    // Failed admission must never enter another run's terminal cleanup.
+    const runMarkerOwner = writeFullSuiteValidationRunMarker({
+        repoRoot,
+        taskId,
+        command: config.command,
+        cwd: repoRoot,
+        timeoutMs: executionConfig.timeout_ms,
+        cycleBinding
+    });
     try {
-        writeFullSuiteValidationRunMarker({
-            repoRoot,
-            taskId,
-            command: config.command,
-            cwd: repoRoot,
-            timeoutMs: executionConfig.timeout_ms,
-            cycleBinding
-        });
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
             try {
                 const execution = await executeCommandAsync(config.command, {
@@ -447,7 +448,7 @@ export async function runFullSuiteValidationCommand(
                         [VALIDATION_TASK_ID_ENV]: taskId
                     },
                     timeoutMs: executionConfig.timeout_ms,
-                    onSpawn: (child) => updateFullSuiteValidationRunMarkerChildProcess(repoRoot, taskId, child)
+                    onSpawn: (child) => updateFullSuiteValidationRunMarkerChildProcess(repoRoot, taskId, child, runMarkerOwner)
                 });
                 commandExitCode = execution.exitCode;
                 timedOut = execution.timedOut;
@@ -679,6 +680,6 @@ export async function runFullSuiteValidationCommand(
             exitCode: result.status === 'FAILED' ? EXIT_GATE_FAILURE : 0
         };
     } finally {
-        clearFullSuiteValidationRunMarker(repoRoot, taskId);
+        clearFullSuiteValidationRunMarker(repoRoot, taskId, runMarkerOwner);
     }
 }

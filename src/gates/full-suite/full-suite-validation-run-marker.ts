@@ -4,7 +4,10 @@ import * as childProcess from 'node:child_process';
 
 import type { SpawnedProcessInfo } from '../../core/subprocess';
 import type { FullSuiteValidationCycleBinding } from './full-suite-validation';
+import { ensureContainedDirectory } from '../../core/contained-filesystem';
 import { fileSha256, joinOrchestratorPath, normalizePath, stringSha256 } from '../shared/helpers';
+import { issueFullSuiteRunMarkerOwner, updateOwnedFullSuiteRunMarker,
+    clearOwnedFullSuiteRunMarker } from './full-suite-validation-run-marker-owner';
 
 export interface FullSuiteValidationRunMarker {
     schema_version: 1;
@@ -88,7 +91,6 @@ export function resolveFullSuiteValidationRunMarkerPath(repoRoot: string, taskId
 export function writeFullSuiteValidationRunMarker(options: WriteRunMarkerOptions): FullSuiteValidationRunMarker {
     const markerPath = resolveFullSuiteValidationRunMarkerPath(options.repoRoot, options.taskId);
     return withFullSuiteValidationRunMarkerMutationLock(options.repoRoot, options.taskId, () => {
-        fs.mkdirSync(path.dirname(markerPath), { recursive: true });
         const now = new Date().toISOString();
         const marker: FullSuiteValidationRunMarker = {
             schema_version: 1,
@@ -109,7 +111,7 @@ export function writeFullSuiteValidationRunMarker(options: WriteRunMarkerOptions
             preflight_sha256: options.cycleBinding.preflight_sha256,
             cycle_binding: options.cycleBinding
         };
-        fs.writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`, 'utf8');
+        issueFullSuiteRunMarkerOwner(options.repoRoot, markerPath, marker, `${JSON.stringify(marker, null, 2)}\n`);
         return marker;
     });
 }
@@ -117,26 +119,28 @@ export function writeFullSuiteValidationRunMarker(options: WriteRunMarkerOptions
 export function updateFullSuiteValidationRunMarkerChildProcess(
     repoRoot: string,
     taskId: string,
-    child: SpawnedProcessInfo
+    child: SpawnedProcessInfo,
+    owner: FullSuiteValidationRunMarker
 ): void {
     const markerPath = resolveFullSuiteValidationRunMarkerPath(repoRoot, taskId);
     withFullSuiteValidationRunMarkerMutationLock(repoRoot, taskId, () => {
-        if (!fs.existsSync(markerPath)) {
-            return;
-        }
-        const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8')) as FullSuiteValidationRunMarker;
-        marker.updated_at_utc = new Date().toISOString();
-        marker.child_pid = child.pid;
-        marker.child_command = child.command;
-        marker.child_args = child.args.map(String);
-        marker.child_shell = child.shell;
-        fs.writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`, 'utf8');
+        updateOwnedFullSuiteRunMarker(repoRoot, markerPath, owner, (content) => {
+            const marker = JSON.parse(content) as FullSuiteValidationRunMarker;
+            marker.updated_at_utc = new Date().toISOString();
+            marker.child_pid = child.pid;
+            marker.child_command = child.command;
+            marker.child_args = child.args.map(String);
+            marker.child_shell = child.shell;
+            return `${JSON.stringify(marker, null, 2)}\n`;
+        });
     });
 }
 
-export function clearFullSuiteValidationRunMarker(repoRoot: string, taskId: string): void {
+export function clearFullSuiteValidationRunMarker(
+    repoRoot: string, taskId: string, owner: FullSuiteValidationRunMarker
+): void {
     withFullSuiteValidationRunMarkerMutationLock(repoRoot, taskId, () => {
-        fs.rmSync(resolveFullSuiteValidationRunMarkerPath(repoRoot, taskId), { force: true });
+        clearOwnedFullSuiteRunMarker(repoRoot, resolveFullSuiteValidationRunMarkerPath(repoRoot, taskId), owner);
     });
 }
 
@@ -177,7 +181,7 @@ function acquireRunMarkerMutationLock(
 ): FullSuiteValidationRunMarkerMutationLock {
     const markerPath = resolveFullSuiteValidationRunMarkerPath(repoRoot, taskId);
     const lockPath = `${markerPath}.mutation-lock`;
-    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    ensureContainedDirectory(repoRoot, path.dirname(lockPath));
     for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
             const fd = fs.openSync(lockPath, 'wx');
