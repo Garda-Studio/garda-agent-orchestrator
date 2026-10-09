@@ -84,10 +84,20 @@ describe('provider-registry: internal consistency', () => {
     it('Codex reviewer launch guidance names the real subagent handoff contract', () => {
         const codex = getProviderEntryById('Codex');
         assert.ok(codex);
-        assert.ok(codex.delegatedReviewerLaunchInstruction?.includes('multi_agent_v1.spawn_agent'));
-        assert.ok(codex.delegatedReviewerLaunchInstruction?.includes('fork_context=false'));
-        assert.ok(codex.delegatedReviewerLaunchInstruction?.includes('reviewer-facing CopyPasteReviewerLaunchPrompt or ReviewerLaunchInputArtifactPath'));
-        assert.ok(codex.delegatedReviewerLaunchInstruction?.includes('not ReviewerLaunchArtifactPath control metadata'));
+        const instruction = codex.delegatedReviewerLaunchInstruction;
+        assert.ok(instruction);
+        assert.match(instruction, /current Codex client's declared subagent tool and schema/);
+        assert.match(instruction, /when collaboration\.spawn_agent is exposed/);
+        assert.ok(instruction.includes('fork_turns="none"'));
+        assert.ok(instruction.includes('fork_context=false only if exposed'));
+        assert.doesNotMatch(instruction, /multi_agent_v1\.spawn_agent/);
+        assert.ok(instruction.includes('never infer launch capability from the provider label'));
+        assert.ok(instruction.includes('reviewer-facing CopyPasteReviewerLaunchPrompt or ReviewerLaunchInputArtifactPath'));
+        assert.ok(instruction.includes('not ReviewerLaunchArtifactPath control metadata'));
+        assert.ok(instruction.includes('if no fresh isolated launch is available, stop'));
+        assert.strictEqual(codex.id, 'Codex');
+        assert.strictEqual(codex.entrypointFile, 'AGENTS.md');
+        assert.strictEqual(codex.reviewerCapabilityTier, 'delegation_required');
     });
 
     it('registry entries are deeply frozen and immutable', () => {

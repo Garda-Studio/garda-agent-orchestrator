@@ -668,7 +668,7 @@ describe('buildProviderOrchestratorAgentContent', () => {
         assert.ok(result.includes(REVIEWER_FRESH_CONTEXT_LAUNCH_INSTRUCTION));
         assert.ok(result.includes(REVIEWER_SESSION_REUSE_BOUNDARY_INSTRUCTION));
         assert.ok(result.includes(REVIEWER_CLEANUP_AFTER_RECEIPT_INSTRUCTION));
-        assert.ok(result.includes('Codex (delegation-capable): launch clean-context reviewers via multi_agent_v1.spawn_agent with fork_context=false'));
+        assert.ok(result.includes('Codex (delegation-capable): use the current Codex client\'s declared subagent tool and schema'));
         assert.ok(result.includes('reviewer-facing CopyPasteReviewerLaunchPrompt or ReviewerLaunchInputArtifactPath'));
         assert.ok(result.includes('not ReviewerLaunchArtifactPath control metadata'));
     });
@@ -841,6 +841,27 @@ describe('buildSharedStartTaskWorkflowContent', () => {
         for (const ruleFileSnippet of TASK_ENTRY_RULE_FILE_SNIPPETS) {
             assert.ok(result.includes(ruleFileSnippet), ruleFileSnippet);
         }
+    });
+});
+
+describe('client-declared reviewer launch guidance', () => {
+    it('rejects stale universal Codex launch assumptions across generated surfaces', () => {
+        const surfaces = [
+            buildSharedStartTaskWorkflowContent('AGENTS.md'),
+            buildProviderOrchestratorAgentContent('GitHub Copilot', 'AGENTS.md', '.github/agents/orchestrator.md'),
+            buildProviderOrchestratorAgentContent('Antigravity', 'AGENTS.md', '.antigravity/agents/orchestrator.md')
+        ];
+        assert.ok(surfaces.every(content => content.includes('current client\'s declared tool schema')));
+        assert.ok(surfaces.every(content => content.includes('when collaboration.spawn_agent is exposed, use fork_turns="none"')));
+        assert.ok(surfaces.every(content => content.includes('another isolation parameter only when that tool declares it')));
+        assert.ok(surfaces.every(content => !content.includes('multi_agent_v1.spawn_agent')));
+        assert.ok(surfaces.every(content => !/Codex should use[^.]*fork_context=false/.test(content)));
+        assert.ok(surfaces.every(content => content.includes('exact generated CopyPasteReviewerLaunchPrompt or reviewer-facing ReviewerLaunchInputArtifactPath')));
+        assert.ok(surfaces.every(content => content.includes('not ReviewerLaunchArtifactPath control metadata')));
+        assert.ok(surfaces.every(content => content.includes('do not create, reserve, hold, or complete a reviewer before launch input exists')));
+        assert.ok(surfaces.every(content => content.includes('do not reuse an existing reviewer session')));
+        assert.ok(surfaces.every(content => content.includes('If the current provider session cannot launch a fresh delegated reviewer, stop')));
+        assert.ok(surfaces.every(content => content.includes('After the review receipt is persisted, close or release the reviewer sub-agent session')));
     });
 });
 

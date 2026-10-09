@@ -197,7 +197,7 @@ const PROVIDER_ENTRIES: readonly ProviderEntry[] = deepFreeze([
         reviewerLaunchLabel: 'Codex',
         entrypointFile: 'AGENTS.md',
         reviewerCapabilityTier: 'delegation_required',
-        delegatedReviewerLaunchInstruction: 'launch clean-context reviewers via multi_agent_v1.spawn_agent with fork_context=false, passing the reviewer-facing CopyPasteReviewerLaunchPrompt or ReviewerLaunchInputArtifactPath (not ReviewerLaunchArtifactPath control metadata).',
+        delegatedReviewerLaunchInstruction: 'use the current Codex client\'s declared subagent tool and schema; when collaboration.spawn_agent is exposed, launch a new reviewer with fork_turns="none". Other Codex surfaces must use their declared isolation option (fork_context=false only if exposed); never infer launch capability from the provider label. Pass the exact reviewer-facing CopyPasteReviewerLaunchPrompt or ReviewerLaunchInputArtifactPath (not ReviewerLaunchArtifactPath control metadata); if no fresh isolated launch is available, stop and report the blocker.',
         reviewOutputCorrectionCapabilities: {
             liveReviewerContinuation: true,
             apiConversationContinuation: false

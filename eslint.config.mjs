@@ -1,5 +1,6 @@
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
+import legacyExplicitAny from './.eslint/legacy-explicit-any.json' with { type: 'json' };
 
 const recommended = js.configs.recommended.rules;
 const hardeningRuleNames = [
@@ -71,6 +72,27 @@ export default [
       'no-undef': 'off',
       'no-unused-vars': 'off',
       '@typescript-eslint/no-unused-vars': 'off'
+    }
+  },
+  {
+    files: ['src/**/*.ts', 'tests/node/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-unused-vars': ['warn', {
+        vars: 'all',
+        varsIgnorePattern: '^_',
+        args: 'all',
+        argsIgnorePattern: '^_',
+        caughtErrors: 'all',
+        caughtErrorsIgnorePattern: '^_',
+        ignoreRestSiblings: true
+      }]
+    }
+  },
+  {
+    files: legacyExplicitAny.files,
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'warn'
     }
   }
 ];
