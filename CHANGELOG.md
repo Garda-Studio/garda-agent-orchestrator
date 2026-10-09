@@ -1,5 +1,10 @@
 # Changelog
 
+- Read hash-bound parent-audit proof records with contained ordinary-file
+  identity, nonblocking descriptor acquisition and finite byte bounds. Reject
+  stale, malformed or replaced inputs without granting aggregate acceptance
+  (T-241-2-C2-I1-4-2-1).
+
 - Treat unreadable or invalid update/uninstall sentinel metadata as unknown
   lifecycle state. Preserve unknown markers before lifecycle writes/removal and
   report explicit diagnostic states in doctor.
