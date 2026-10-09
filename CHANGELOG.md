@@ -4,8 +4,6 @@
   lifecycle state. Preserve unknown markers before lifecycle writes/removal and
   report explicit diagnostic states in doctor.
 
-- Added bounded owner-managed preservation of disputed ordinary lock directories outside runtime cleanup; original claims and failed partial captures remain intact (T-238-1-1).
-
 
 - Avoid repeated scans and rewrites of large aggregate-journal records with a
   bounded, file-generation-bound count cache under the existing aggregate lock.
