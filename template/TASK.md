@@ -27,3 +27,13 @@ Status cell format rule: keep canonical token, optionally prefixed by marker (fo
 |---|---|---|---|---|---|---|---|---|
 | T-001 | 🟩 DONE | P1 | process | Verify orchestrator operation, full rule set, and workflow gates | unassigned | {{DEPLOYMENT_DATE}} | default | Completed during full orchestrator setup: install, verify, preflight classification, and review-gate checks. |
 <!-- garda-agent-orchestrator:managed-end -->
+
+## Task Candidates
+
+Non-executable, operator-owned inbox for authorized non-blocking out-of-scope observations.
+Follow `80-task-workflow.md` section `Task Candidate Inbox` for capture and deduplication.
+Promotion requires an explicit operator decision and a new canonical TODO row with profile and required reviews; a candidate or task reference alone never authorizes execution.
+Keep mandatory findings and native follow-up obligations in their existing workflow.
+
+| Candidate | Source task | Observation | Evidence | Suggested scope | Severity | Operator decision |
+|---|---|---|---|---|---|---|

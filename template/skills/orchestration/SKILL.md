@@ -38,6 +38,12 @@ Default task navigator is `node garda-agent-orchestrator/bin/garda.js next-step 
 - Relevant rule files from `garda-agent-orchestrator/live/docs/agent-rules/`.
 - Token economy config: `garda-agent-orchestrator/live/config/token-economy.json`.
 
+## Task Candidate Capture
+
+- For authorized non-blocking out-of-scope observations, follow `80-task-workflow.md` section `Task Candidate Inbox`: use the separate `TASK.md` inbox and CAND identifiers, retain concrete source-qualified evidence, and deduplicate against active tasks and candidates.
+- Capture is data only: never promote or execute a candidate automatically. An explicit operator decision creates a new canonical TODO row with bounded scope, profile and required reviews; then follow the normal native gates.
+- Mandatory findings, `fix_now` obligations and required native follow-ups keep their existing workflow. Optional additional-issues report data can supply observation facts when available; no report or dashboard dependency is introduced.
+
 ## Requested Plan Preparation
 
 A leading `[plan]` token in TASK.md Notes or an explicit operator request asks the agent to investigate and prepare a ready structured plan before `enter-task-mode`. Preparation uses the existing `task plan` commands outside task execution; it is not a new navigator stage or gate.

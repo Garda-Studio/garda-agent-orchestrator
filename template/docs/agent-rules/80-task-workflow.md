@@ -28,6 +28,34 @@ Primary entry point: selected source-of-truth entrypoint for this workspace.
 - Path mode is assigned only by:
   `node garda-agent-orchestrator/bin/garda.js gate classify-change`.
 
+## Task Candidate Inbox
+
+- Use the operator-selected `## Task Candidates` section below the canonical Active Queue in `TASK.md`. It is a separate, non-executable inbox, not another task registry or lifecycle status.
+- Agents may capture authorized non-blocking out-of-scope observations with an unused `CAND-<number>` identifier. Record source task, concise observation, concrete evidence, suggested scope, severity and operator decision. Evidence should identify the actual source/executable version and a short command or path; keep the decision pending until an operator decides it.
+- Before capture, deduplicate against both the Active Queue and existing candidates. Update an existing candidate for new evidence about the same cause; preserve its identity and first observation instead of creating duplicate tasks.
+- Candidates never authorize execution or automatic promotion. A task reference in source task, evidence or suggested scope is provenance, not an executable task row. Do not run a candidate, add a scheduler, or interpret candidate decision labels as task lifecycle states.
+- Mandatory findings and `fix_now` obligations cannot be demoted into this inbox. Required `create_follow_up` items also retain their existing native materialization path. Keep blocking or in-scope defects in the current findings, WIP/recovery and linked repair workflow with its existing source ownership and gates.
+- Promotion requires an explicit operator decision and a new canonical `TODO` row in the Active Queue with an unused task ID, bounded scope, dependencies, profile and required reviews. Record the candidate link and actual operator decision separately; changing the candidate decision alone does not create an executable task. The promoted task must enter the normal native gates and satisfy its current effective review requirements.
+- Capture and promotion do not grant commit, CI, push, publication or access permissions. Preserve the actual authority and observation times; do not manufacture a new human reply, consent or PASS from a candidate or archived source record.
+- If a merged workspace has only historical inbox references, preserve its current queue and history. For authorized capture, append the separate non-executable inbox without replacing `TASK.md` from defaults or restoring archived task statuses. Existing operator-owned candidates remain preserved during normal template materialization.
+- Reuse optional additional-issues data from T-140 when it exists, but it is not a prerequisite. Keep a compact observation and evidence reference; do not introduce a second report generator, database or required dashboard panel.
+
+Promotion example: `CAND-001` remains provenance; only the separately approved `T-200` row becomes executable. These IDs and the decision are illustrative; choose unused IDs and the reviews required by the actual scope.
+
+Before the operator decision, the candidate table contains:
+
+```markdown
+| Candidate | Source task | Observation | Evidence | Suggested scope | Severity | Operator decision |
+|---|---|---|---|---|---|---|
+| CAND-001 | T-100 | Missing explanation | docs/example.md:12 | Clarify the bounded documentation section | low | pending |
+```
+
+After an explicit decision, keep `CAND-001` with its decision reference and add only this new row to the existing canonical Active Queue table:
+
+```markdown
+| T-200 | TODO | P2 | docs | Inspect candidate | operator | 2026-10-08 | balanced | Promoted from CAND-001 by explicit operator decision; required reviews: code, security, api, test. |
+```
+
 ## Depth Contract
 - Supported depth values: `1`, `2`, `3`.
 - Default depth: `2`.
