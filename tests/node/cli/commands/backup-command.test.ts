@@ -7,7 +7,7 @@ import * as path from 'node:path';
 const mutableFs = require('node:fs') as typeof fs;
 
 import { getLifecycleOperationLockPath, getRollbackRecordsPath } from '../../../../src/lifecycle/common';
-import { createBackupSnapshot, listBackups, type BackupDeletionPreview } from '../../../../src/lifecycle/backups';
+import { createBackupSnapshot, listBackups, type BackupDeletionPreview, type BackupDeletionResult } from '../../../../src/lifecycle/backups';
 import { runCliWithCapturedOutput } from './gate-test-helpers';
 
 function makeWorkspace(prefix: string): { targetRoot: string; bundleRoot: string } {
@@ -342,6 +342,60 @@ describe('backup delete CLI command', () => {
             assert.equal(listBackups(targetRoot).length, 2);
         } finally { fs.rmSync(targetRoot, { recursive: true, force: true }); }
     });
+
+    for (const json of [false, true]) {
+        it(`reports successful deletion and a failed inventory refresh with a non-zero exit in ${json ? 'JSON' : 'text'}`, async (t) => {
+            const { targetRoot, bundleRoot } = makeWorkspace('gao-cli-backup-delete-refresh-denied-');
+            const openDirectory = mutableFs.opendirSync;
+            try {
+                const ids = seedDeletionBackups(targetRoot, bundleRoot);
+                const inventory = listBackups(targetRoot);
+                const selected = inventory.find(backup => backup.id === ids[0])!;
+                const remaining = inventory.find(backup => backup.id === ids[1])!;
+                const untouched = new Map(fs.readdirSync(remaining.snapshotPath, { recursive: true, encoding: 'utf8' })
+                    .map(name => path.join(remaining.snapshotPath, name))
+                    .filter(file => fs.statSync(file).isFile())
+                    .map(file => [file, fs.readFileSync(file)] as const));
+                const preview = await previewDeletionCli(targetRoot, [ids[0]]);
+                assert.ok(preview.totalSizeBytes > 0);
+                let deniedRefreshes = 0;
+                const denial = t.mock.method(mutableFs, 'opendirSync', (...args: Parameters<typeof openDirectory>) => {
+                    if (String(args[0]) === path.dirname(selected.snapshotPath) && !fs.existsSync(selected.snapshotPath)) {
+                        deniedRefreshes += 1;
+                        throw Object.assign(new Error('final CLI inventory refresh denied'), { code: 'EACCES' });
+                    }
+                    return openDirectory(...args);
+                });
+                const result = await runCliWithCapturedOutput([
+                    'backup', 'delete', '--target-root', targetRoot, '--snapshot-id', ids[0],
+                    '--confirm', '--preview-token', preview.confirmationToken, ...(json ? ['--json'] : [])
+                ], { cwd: targetRoot });
+                denial.mock.restore();
+                assert.equal(deniedRefreshes, 1);
+                assert.notEqual(result.exitCode, 0);
+                if (json) {
+                    const output = JSON.parse(result.logs.join('\n')) as BackupDeletionResult;
+                    assert.equal(output.result, 'ERRORS');
+                    assert.deepEqual(output.removedIds, [ids[0]]);
+                    assert.equal(output.totalFreedBytes, preview.totalSizeBytes);
+                    assert.deepEqual(output.errors, []);
+                    assert.equal(output.inventoryRefreshed, false);
+                    assert.match(output.inventoryError!, /final CLI inventory refresh denied/u);
+                    assert.deepEqual(output.inventory, []);
+                } else {
+                    const output = combinedOutput(result);
+                    assert.match(output, /Status: ERRORS/u);
+                    assert.ok(output.includes(`RemovedIds: ${ids[0]}`));
+                    assert.ok(output.includes(`TotalFreedBytes: ${preview.totalSizeBytes}`));
+                    assert.match(output, /InventoryRefreshed: False/u);
+                    assert.match(output, /InventoryError: .*final CLI inventory refresh denied/u);
+                }
+                assert.equal(fs.existsSync(selected.snapshotPath), false);
+                assert.deepEqual(listBackups(targetRoot).map(backup => backup.id), [ids[1]]);
+                for (const [file, bytes] of untouched) assert.deepEqual(fs.readFileSync(file), bytes);
+            } finally { t.mock.restoreAll(); fs.rmSync(targetRoot, { recursive: true, force: true }); }
+        });
+    }
 
     it('returns truthful partial failure JSON and a non-zero exit when an owned unlink is denied', async (t) => {
         const { targetRoot, bundleRoot } = makeWorkspace('gao-cli-backup-delete-denied-');

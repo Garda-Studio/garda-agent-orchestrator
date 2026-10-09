@@ -1,5 +1,8 @@
 # Changelog
 
+- Cover final backup inventory refresh failures after successful selected removal,
+  retaining exact removal accounting, non-zero CLI results and unrelated copies.
+
 ## T-127-1-12 — deterministic typed workflow registry assembly
 
 - Compose the sixty existing typed compact/family settings through their canonical owners and retain original order, defaults and candidate behavior.

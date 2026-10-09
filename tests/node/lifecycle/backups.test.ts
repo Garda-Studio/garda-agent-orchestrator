@@ -470,6 +470,40 @@ describe('guarded selected backup deletion', () => {
         } finally { removePathRecursive(targetRoot); }
     });
 
+    it('preserves successful removal accounting and unrelated backups when the final inventory refresh fails', (t) => {
+        const { targetRoot, ids, snapshots } = deletionWorkspace();
+        const openDirectory = mutableFs.opendirSync;
+        try {
+            const untouched = new Map([...snapshotFiles(snapshots[1]), ...snapshotFiles(snapshots[2])]
+                .map(([file]) => [file, fs.readFileSync(file)] as const));
+            const preview = previewBackupDeletion({ targetRoot, snapshotIds: [ids[0]] });
+            assert.ok(preview.totalSizeBytes > 0);
+            let deniedRefreshes = 0;
+            const denial = t.mock.method(mutableFs, 'opendirSync', (...args: Parameters<typeof openDirectory>) => {
+                if (String(args[0]) === getBackupSnapshotsRoot(targetRoot) && !fs.existsSync(snapshots[0])) {
+                    deniedRefreshes += 1;
+                    throw Object.assign(new Error('final backup inventory refresh denied'), { code: 'EACCES' });
+                }
+                return openDirectory(...args);
+            });
+            const result = deleteSelectedBackups({ targetRoot, snapshotIds: preview.snapshotIds,
+                confirmationToken: preview.confirmationToken, confirm: true });
+            denial.mock.restore();
+            assert.equal(deniedRefreshes, 1);
+            assert.equal(result.result, 'ERRORS');
+            assert.deepEqual(result.requestedIds, [ids[0]]);
+            assert.deepEqual(result.removedIds, [ids[0]]);
+            assert.equal(result.totalFreedBytes, preview.totalSizeBytes);
+            assert.deepEqual(result.errors, []);
+            assert.equal(result.inventoryRefreshed, false);
+            assert.match(result.inventoryError!, /final backup inventory refresh denied/u);
+            assert.deepEqual(result.inventory, []);
+            assert.equal(fs.existsSync(snapshots[0]), false);
+            assert.deepEqual(listBackups(targetRoot).map(backup => backup.id).sort(), ids.slice(1));
+            for (const [file, bytes] of untouched) assert.deepEqual(fs.readFileSync(file), bytes);
+        } finally { t.mock.restoreAll(); removePathRecursive(targetRoot); }
+    });
+
     it('reports exact successful unlink bytes on permission failure and preserves unattempted and unselected snapshots', (t) => {
         const { targetRoot, ids, snapshots } = deletionWorkspace();
         const unlink = mutableFs.unlinkSync;
