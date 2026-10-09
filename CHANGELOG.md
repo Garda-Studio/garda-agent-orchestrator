@@ -1,5 +1,20 @@
 # Changelog
 
+- Add stable backup selection, filtered select-all, authoritative-refresh pruning and accessible EN/RU labels with English fallback.
+
+- Add guarded selected rollback-backup deletion with exact preview confirmation, final recovery-point acknowledgement, lifecycle locking and truthful partial failure counters.
+
+- Run confirmed UI reset/close actions with native one-action authority instead
+  of persistent reset-policy toggles; preserve interrupted OFF and later explicit ON.
+
+- Preserve same-process backup preview retries after a verified unchanged
+  nonrecursive permission denial, while retaining quarantine for identity drift
+  and uncertain removal effects.
+
+- Add authenticated local UI backup deletion preview and confirmation with server-bound IDs, final recovery-point acknowledgement and truthful partial results.
+
+- Confirm selected backup deletion with explicit recovery-loss acknowledgement, shared busy guards and truthful partial-result selection retention.
+
 - Move nine full-suite setting definitions into the typed core registry and
   preserve the complete report metadata contract through a read-only adapter.
   Delegate scalar admission to existing owners without changing workflow policy.

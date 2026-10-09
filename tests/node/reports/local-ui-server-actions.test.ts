@@ -903,9 +903,9 @@ test('local UI task actions support preview confirmation execution and audit', a
             confirmation_phrase: string;
         };
         assert.equal(disabledReset.status, 'previewed');
-        assert.match(disabledReset.command, /temporarily enable task_reset\.enabled/u);
+        assert.match(disabledReset.command, /confirmed native reset without changing permanent task-reset policy/u);
         assert.match(disabledReset.command, /gate task-reset --task-id T-100 --reopen --confirm --repo-root/u);
-        assert.match(disabledReset.command, /restore task_reset\.enabled=false/u);
+        assert.doesNotMatch(disabledReset.command, /workflow set|temporarily enable|restore task_reset/u);
         assert.equal(disabledReset.requires_confirmation, true);
         assert.equal(disabledReset.confirmation_phrase, 'RESET TASK');
         assert.deepEqual(executedCommands, []);
@@ -922,7 +922,7 @@ test('local UI task actions support preview confirmation execution and audit', a
             confirmation_phrase: string;
         };
         assert.equal(disabledDiscard.status, 'previewed');
-        assert.match(disabledDiscard.command, /temporarily enable task_reset\.enabled/u);
+        assert.match(disabledDiscard.command, /confirmed native reset without changing permanent task-reset policy/u);
         assert.match(disabledDiscard.command, /gate task-reset --task-id T-100 --to-status DONE --confirm --repo-root/u);
         assert.equal(disabledDiscard.confirmation_phrase, 'CLOSE WITHOUT EXECUTION');
         assert.deepEqual(executedCommands, []);
@@ -935,13 +935,13 @@ test('local UI task actions support preview confirmation execution and audit', a
         assert.equal(disabledResetExecuteResponse.status, 200);
         const disabledResetExecute = await disabledResetExecuteResponse.json() as { status: string; stdout: string };
         assert.equal(disabledResetExecute.status, 'executed');
-        assert.match(disabledResetExecute.stdout, /Task reset was enabled temporarily/u);
+        assert.doesNotMatch(disabledResetExecute.stdout, /enabled temporarily|restored to false/u);
         assert.match(disabledResetExecute.stdout, /Task reset completed/u);
-        assert.match(disabledResetExecute.stdout, /task_reset\.enabled was restored to false/u);
-        assert.equal(executedCommands.length, 3);
-        assert.match(executedCommands[0], /workflow set --task-reset-enabled true/u);
-        assert.match(executedCommands[1], /gate task-reset --task-id T-100 --reopen --confirm --repo-root/u);
-        assert.match(executedCommands[2], /workflow set --task-reset-enabled false/u);
+
+        assert.equal(executedCommands.length, 1);
+        assert.match(executedCommands[0], /gate task-reset --task-id T-100 --reopen --confirm --repo-root/u);
+        assert.match(executedCommands[0], /--one-action --operator-confirmed yes --operator-confirmed-at-utc/u);
+        assert.doesNotMatch(executedCommands[0], /workflow set/u);
 
         setTaskResetEnabled(repoRoot, true);
         const missingAuditResetResponse = await fetch(`${server.url}api/tasks/T-100/actions`, {
@@ -955,7 +955,7 @@ test('local UI task actions support preview confirmation execution and audit', a
             command: string;
         };
         assert.equal(missingAuditReset.status, 'previewed');
-        assert.match(missingAuditReset.command, /repair audited task-reset evidence/u);
+        assert.match(missingAuditReset.command, /confirmed native reset without changing permanent task-reset policy/u);
         assert.doesNotMatch(missingAuditReset.command, /restore task_reset\.enabled=false/u);
 
         const enablePreviewResponse = await fetch(`${server.url}api/tasks/T-100/actions`, {
@@ -974,11 +974,11 @@ test('local UI task actions support preview confirmation execution and audit', a
         assert.equal(missingAuditResetExecuteResponse.status, 200);
         const missingAuditResetExecute = await missingAuditResetExecuteResponse.json() as { status: string; stdout: string };
         assert.equal(missingAuditResetExecute.status, 'executed');
-        assert.match(missingAuditResetExecute.stdout, /Audited task-reset evidence repaired/u);
+        assert.doesNotMatch(missingAuditResetExecute.stdout, /evidence repaired/u);
         assert.match(missingAuditResetExecute.stdout, /Task reset completed/u);
-        assert.equal(executedCommands.length, 5);
-        assert.match(executedCommands[3], /workflow set --task-reset-enabled true/u);
-        assert.match(executedCommands[4], /gate task-reset --task-id T-100 --reopen --confirm --repo-root/u);
+        assert.equal(executedCommands.length, 2);
+        assert.match(executedCommands[1], /gate task-reset --task-id T-100 --reopen --confirm --repo-root/u);
+        assert.match(executedCommands[1], /--one-action/u);
 
         writeLocalUiTaskResetAuditRecord(repoRoot);
         const resetPreviewResponse = await fetch(`${server.url}api/tasks/T-100/actions`, {
@@ -1005,6 +1005,7 @@ test('local UI task actions support preview confirmation execution and audit', a
         });
         assert.equal(resetBlockedResponse.status, 409);
         assert.equal((await resetBlockedResponse.json() as { status: string }).status, 'confirmation_required');
+        assert.equal(executedCommands.length, 2, 'wrong reset confirmation must not issue one-action authority');
 
         const resetExecuteResponse = await fetch(`${server.url}api/tasks/T-100/actions`, {
             method: 'POST',
@@ -1015,8 +1016,8 @@ test('local UI task actions support preview confirmation execution and audit', a
         const resetExecute = await resetExecuteResponse.json() as { status: string; stdout: string };
         assert.equal(resetExecute.status, 'executed');
         assert.equal(resetExecute.stdout, 'Task reset completed.');
-        assert.equal(executedCommands.length, 6);
-        assert.match(executedCommands[5], /gate task-reset --task-id T-100 --reopen --confirm --repo-root/u);
+        assert.equal(executedCommands.length, 3);
+        assert.match(executedCommands[2], /gate task-reset --task-id T-100 --reopen --confirm --repo-root/u);
 
         const discardPreviewResponse = await fetch(`${server.url}api/tasks/T-100/actions`, {
             method: 'POST',
@@ -1044,8 +1045,10 @@ test('local UI task actions support preview confirmation execution and audit', a
         const discardExecute = await discardExecuteResponse.json() as { status: string; stdout: string };
         assert.equal(discardExecute.status, 'executed');
         assert.equal(discardExecute.stdout, 'Close without execution completed.');
-        assert.equal(executedCommands.length, 7);
-        assert.match(executedCommands[6], /gate task-reset --task-id T-100 --to-status DONE --confirm --repo-root/u);
+        assert.equal(executedCommands.length, 4);
+        assert.match(executedCommands[3], /gate task-reset --task-id T-100 --to-status DONE --confirm --repo-root/u);
+        assert.match(executedCommands[3], /--one-action --operator-confirmed yes --operator-confirmed-at-utc/u);
+        assert.doesNotMatch(executedCommands.join('\n'), /workflow set/u);
 
         const statsResponse = await fetch(`${server.url}api/tasks/T-100/actions`, {
             method: 'POST',
@@ -1056,8 +1059,8 @@ test('local UI task actions support preview confirmation execution and audit', a
         const stats = await statsResponse.json() as { status: string; stdout: string; audit_path: string };
         assert.equal(stats.status, 'executed');
         assert.equal(stats.stdout, 'task ok');
-        assert.equal(executedCommands.length, 8);
-        assert.match(executedCommands[7], /task T-100 stats --target-root/u);
+        assert.equal(executedCommands.length, 5);
+        assert.match(executedCommands[4], /task T-100 stats --target-root/u);
         const auditLines = fs.readFileSync(stats.audit_path, 'utf8').trim().split(/\r?\n/u);
         assert.match(auditLines[auditLines.length - 1], /"action_id":"T-100:task-stats"/u);
         assert.match(auditLines[auditLines.length - 1], /"status":"executed"/u);
@@ -1073,7 +1076,7 @@ test('local UI task actions support preview confirmation execution and audit', a
     }
 });
 
-test('local UI task reset one-shot restores disabled setting after reset failure', async () => {
+test('local UI task reset one-shot reports native reset failure without global toggles', async () => {
     const repoRoot = makeTempRepo();
     writeRepo(repoRoot);
     const executedCommands: string[] = [];
@@ -1114,20 +1117,20 @@ test('local UI task reset one-shot restores disabled setting after reset failure
         assert.equal(response.status, 500);
         const result = await response.json() as { status: string; stdout: string; stderr: string };
         assert.equal(result.status, 'executed');
-        assert.match(result.stdout, /Task reset was enabled temporarily/u);
-        assert.match(result.stdout, /task_reset\.enabled was restored to false/u);
+        assert.doesNotMatch(result.stdout, /enabled temporarily|restored to false/u);
+
         assert.match(result.stderr, /Reset task failed with exit code 7/u);
         assert.match(result.stderr, /reset failed details/u);
-        assert.equal(executedCommands.length, 3);
-        assert.match(executedCommands[0], /workflow set --task-reset-enabled true/u);
-        assert.match(executedCommands[1], /gate task-reset --task-id T-100 --reopen --confirm --repo-root/u);
-        assert.match(executedCommands[2], /workflow set --task-reset-enabled false/u);
+        assert.equal(executedCommands.length, 1);
+        assert.match(executedCommands[0], /gate task-reset --task-id T-100 --reopen --confirm --repo-root/u);
+        assert.match(executedCommands[0], /--one-action --operator-confirmed yes --operator-confirmed-at-utc/u);
+        assert.doesNotMatch(executedCommands[0], /workflow set/u);
     } finally {
         await cleanupLocalUiTestResources({ repoRoot, server });
     }
 });
 
-test('local UI task reset one-shot reports restore failure after close succeeds', async () => {
+test('local UI task reset one-shot reports native close failure without global toggles', async () => {
     const repoRoot = makeTempRepo();
     writeRepo(repoRoot);
     const executedCommands: string[] = [];
@@ -1137,12 +1140,12 @@ test('local UI task reset one-shot reports restore failure after close succeeds'
         actionsEnabled: true,
         actionRunner: async (action) => {
             executedCommands.push(action.command.display);
-            if (action.command.display.includes('--task-reset-enabled false')) {
+            if (action.command.display.includes('--one-action')) {
                 return {
                     exit_code: 9,
                     signal: null,
                     stdout: '',
-                    stderr: 'restore failed details'
+                    stderr: 'native admission failed details'
                 };
             }
             return {
@@ -1172,14 +1175,14 @@ test('local UI task reset one-shot reports restore failure after close succeeds'
         assert.equal(response.status, 500);
         const result = await response.json() as { status: string; stdout: string; stderr: string };
         assert.equal(result.status, 'executed');
-        assert.match(result.stdout, /Task reset was enabled temporarily/u);
-        assert.match(result.stdout, /Close without execution completed/u);
-        assert.match(result.stderr, /task_reset\.enabled restore failed with exit code 9/u);
-        assert.match(result.stderr, /restore failed details/u);
-        assert.equal(executedCommands.length, 3);
-        assert.match(executedCommands[0], /workflow set --task-reset-enabled true/u);
-        assert.match(executedCommands[1], /gate task-reset --task-id T-100 --to-status DONE --confirm --repo-root/u);
-        assert.match(executedCommands[2], /workflow set --task-reset-enabled false/u);
+        assert.doesNotMatch(result.stdout, /enabled temporarily|restored to false/u);
+        assert.doesNotMatch(result.stdout, /Close without execution completed/u);
+        assert.match(result.stderr, /Close without execution failed with exit code 9/u);
+        assert.match(result.stderr, /native admission failed details/u);
+        assert.equal(executedCommands.length, 1);
+        assert.match(executedCommands[0], /gate task-reset --task-id T-100 --to-status DONE --confirm --repo-root/u);
+        assert.match(executedCommands[0], /--one-action/u);
+        assert.doesNotMatch(executedCommands[0], /workflow set/u);
     } finally {
         await cleanupLocalUiTestResources({ repoRoot, server });
     }

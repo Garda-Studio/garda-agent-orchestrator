@@ -4,6 +4,8 @@ import type { UiActionDefinition } from './types';
 
 export const BACKUP_RESTORE_ACTION_ID_PREFIX = 'backup-restore:';
 export const MANUAL_BACKUP_CREATE_ACTION_ID = 'backup-create-manual';
+export const BACKUP_DELETE_SELECTED_ACTION_ID = 'backup-delete-selected';
+export const BACKUP_DELETE_CONFIRMATION_PHRASE = 'DELETE SELECTED BACKUPS';
 
 export function buildBackupRestoreActionId(backupId: string): string {
     return `${BACKUP_RESTORE_ACTION_ID_PREFIX}${backupId}`;

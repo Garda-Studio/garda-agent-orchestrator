@@ -1,5 +1,7 @@
 import type * as http from 'node:http';
 import { buildUiWorkspaceAndBackupActionDefinitions } from '../registry';
+import { BACKUP_DELETE_SELECTED_ACTION_ID } from '../backup-actions';
+import { handleBackupDeletionRequest } from './backup-deletion-http';
 import {
     isValidActionRequestBoundary,
     normalizeActionRequest,
@@ -23,7 +25,12 @@ export async function handleUiWorkspaceActionRequest(
         sendApiError(response, 403, 'UI action request failed origin, token, or content-type validation.', 'action_boundary_rejected');
         return;
     }
-    const payload = normalizeActionRequest(await readJsonBody(request));
+    const rawPayload = await readJsonBody(request);
+    const payload = normalizeActionRequest(rawPayload);
+    if (payload.action_id === BACKUP_DELETE_SELECTED_ACTION_ID) {
+        handleBackupDeletionRequest(response, repoRoot, rawPayload);
+        return;
+    }
     const actions = buildUiWorkspaceAndBackupActionDefinitions(repoRoot);
     await processUiActionRequest(response, repoRoot, payload, actions, options);
 }

@@ -357,6 +357,24 @@ export function assertBoundContainedRemovalTree(
     if (retained) assertRetainedTree(entries, retained);
 }
 
+function canRetryPermissionDeniedRemoval(
+    binding: ContainedDestination, before: fs.BigIntStats, error: unknown
+): boolean {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (code !== 'EACCES' && code !== 'EPERM') return false;
+    try {
+        assertContainedDestination(binding);
+        const after = lstatIdentityIfPresent(binding.path);
+        return after !== null && before.dev === after.dev && before.ino === after.ino
+            && before.mode === after.mode && before.birthtimeNs === after.birthtimeNs
+            && before.nlink === after.nlink && before.size === after.size
+            && before.mtimeNs === after.mtimeNs && before.ctimeNs === after.ctimeNs;
+    } catch {
+        // Failed reinspection cannot distinguish permission denial from identity drift.
+        return false;
+    }
+}
+
 export function removeBoundContainedPath(
     binding: ContainedDestination, recursive = false, onRemoved?: () => void
 ): void {
@@ -365,6 +383,7 @@ export function removeBoundContainedPath(
     }
     if (completedRemovals.has(binding)) return;
     assertRemovalNotAmbiguous(binding.path);
+    let recoverableDenial = false;
     try {
         assertContainedDestination(binding);
         const stat = lstatIfPresent(binding.path);
@@ -376,13 +395,19 @@ export function removeBoundContainedPath(
         const entries = recursive ? collectRemovalEntries(binding) : [{ binding, directory: stat.isDirectory() }];
         for (const entry of entries.reverse()) {
             assertContainedDestination(entry.binding);
-            if (entry.directory) fs.rmdirSync(entry.binding.path);
-            else fs.unlinkSync(entry.binding.path);
+            const before = recursive ? null : lstatIdentityIfPresent(entry.binding.path);
+            try {
+                if (entry.directory) fs.rmdirSync(entry.binding.path);
+                else fs.unlinkSync(entry.binding.path);
+            } catch (error: unknown) {
+                recoverableDenial = before !== null && canRetryPermissionDeniedRemoval(entry.binding, before, error);
+                throw error;
+            }
         }
         completedRemovals.add(binding);
         onRemoved?.();
     } catch (error: unknown) {
-        ambiguousRemovalPaths.add(removalKey(binding.path));
+        if (!recoverableDenial) ambiguousRemovalPaths.add(removalKey(binding.path));
         throw error;
     }
 }

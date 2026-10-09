@@ -7,6 +7,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import {
+    assertBoundContainedRemovalTree,
     bindContainedDestination,
     removeBoundContainedPath,
     removeContainedPath,
@@ -22,6 +23,130 @@ import {
 } from '../../../src/materialization/staged-side-effects';
 
 describe('contained lifecycle cleanup', () => {
+    for (const code of ['EACCES', 'EPERM']) {
+        it(`permits a fresh same-process owned unlink after unchanged ${code}`, (t) => {
+            const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-remove-denied-'));
+            const owned = path.join(root, 'owned');
+            const file = path.join(owned, 'file.txt');
+            const keep = path.join(owned, 'keep.txt');
+            try {
+                fs.mkdirSync(owned);
+                fs.writeFileSync(file, 'original');
+                fs.writeFileSync(keep, 'preserved');
+                const denial = Object.assign(new Error('recoverable permission denial'), { code });
+                const unlink = t.mock.method(fsNative, 'unlinkSync', () => { throw denial; });
+                let removals = 0;
+                assert.throws(() => removeBoundContainedPath(bindContainedDestination(root, file), false,
+                    () => { removals += 1; }), error => error === denial);
+                unlink.mock.restore();
+                assert.equal(removals, 0);
+                assert.equal(fs.readFileSync(file, 'utf8'), 'original');
+                assert.doesNotThrow(() => assertBoundContainedRemovalTree(bindContainedDestination(root, owned)));
+                removeBoundContainedPath(bindContainedDestination(root, file), false, () => { removals += 1; });
+                assert.equal(removals, 1);
+                assert.equal(fs.existsSync(file), false);
+                assert.equal(fs.readFileSync(keep, 'utf8'), 'preserved');
+            } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+        });
+    }
+
+    it('permits a fresh nonrecursive rmdir after an unchanged permission denial', (t) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-rmdir-denied-'));
+        const owned = path.join(root, 'owned');
+        try {
+            fs.mkdirSync(owned);
+            const denial = t.mock.method(fsNative, 'rmdirSync', () => {
+                throw Object.assign(new Error('directory permission denial'), { code: 'EACCES' });
+            });
+            assert.throws(() => removeBoundContainedPath(bindContainedDestination(root, owned)), /permission denial/);
+            denial.mock.restore();
+            assert.doesNotThrow(() => assertBoundContainedRemovalTree(bindContainedDestination(root, owned)));
+            removeBoundContainedPath(bindContainedDestination(root, owned));
+            assert.equal(fs.existsSync(owned), false);
+        } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+    });
+
+    for (const replacement of ['file', 'ancestor']) {
+        it(`quarantines an EACCES syscall that substitutes the ${replacement}`, (t) => {
+            const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-denial-substitution-'));
+            const owned = path.join(root, 'owned');
+            const file = path.join(owned, 'file.txt');
+            try {
+                fs.mkdirSync(owned);
+                fs.writeFileSync(file, 'original');
+                const bound = bindContainedDestination(root, file);
+                const denial = t.mock.method(fsNative, 'unlinkSync', () => {
+                    fs.renameSync(replacement === 'file' ? file : owned, path.join(root, 'preserved-original'));
+                    if (replacement === 'ancestor') fs.mkdirSync(owned);
+                    fs.writeFileSync(file, 'foreign');
+                    throw Object.assign(new Error('permission denial after substitution'), { code: 'EACCES' });
+                });
+                assert.throws(() => removeBoundContainedPath(bound), /permission denial/);
+                denial.mock.restore();
+                assert.throws(() => removeBoundContainedPath(bindContainedDestination(root, file)), /ambiguous previously rejected/);
+                assert.throws(() => assertBoundContainedRemovalTree(bindContainedDestination(root, owned)), /ambiguous previously rejected/);
+                assert.equal(fs.readFileSync(file, 'utf8'), 'foreign');
+            } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+        });
+    }
+
+    for (const failure of ['unknown-error', 'deleted-then-denied', 'callback-denial', 'reinspection-denial']) {
+        it(`preserves quarantine for ${failure} instead of trusting an errno label`, (t) => {
+            const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-denial-uncertain-'));
+            const owned = path.join(root, 'owned');
+            const file = path.join(owned, 'file.txt');
+            const unlink = fsNative.unlinkSync;
+            const lstat = fsNative.lstatSync;
+            let denied = false;
+            try {
+                fs.mkdirSync(owned);
+                fs.writeFileSync(file, 'original');
+                const bound = bindContainedDestination(root, file);
+                const permission = Object.assign(new Error('permission-labelled failure'), { code: 'EACCES' });
+                if (failure !== 'callback-denial') {
+                    t.mock.method(fsNative, 'unlinkSync', (candidate: fs.PathLike) => {
+                        if (failure === 'deleted-then-denied') unlink(candidate);
+                        denied = true;
+                        throw failure === 'unknown-error' ? Object.assign(new Error('unknown I/O'), { code: 'EIO' }) : permission;
+                    });
+                }
+                if (failure === 'reinspection-denial') {
+                    t.mock.method(fsNative, 'lstatSync', ((candidate: fs.PathLike, options?: unknown) => {
+                        if (denied && String(candidate) === file) throw permission;
+                        return lstat(candidate, options as never);
+                    }) as typeof fs.lstatSync);
+                }
+                assert.throws(() => removeBoundContainedPath(bound, false, () => { throw permission; }));
+                t.mock.restoreAll();
+                assert.throws(() => assertBoundContainedRemovalTree(bindContainedDestination(root, owned)), /ambiguous previously rejected/);
+                assert.equal(fs.existsSync(file), failure !== 'deleted-then-denied' && failure !== 'callback-denial');
+                if (fs.existsSync(file)) assert.equal(fs.readFileSync(file, 'utf8'), 'original');
+            } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+        });
+    }
+
+    it('keeps recursive partial permission failures quarantined', (t) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-recursive-denied-'));
+        const owned = path.join(root, 'owned');
+        const unlink = fsNative.unlinkSync;
+        try {
+            fs.mkdirSync(owned);
+            const first = path.join(owned, 'a.txt');
+            const second = path.join(owned, 'b.txt');
+            fs.writeFileSync(first, 'first');
+            fs.writeFileSync(second, 'second');
+            t.mock.method(fsNative, 'unlinkSync', (candidate: fs.PathLike) => {
+                if (String(candidate) === second) throw Object.assign(new Error('recursive permission denial'), { code: 'EACCES' });
+                unlink(candidate);
+            });
+            assert.throws(() => removeBoundContainedPath(bindContainedDestination(root, owned), true), /permission denial/);
+            t.mock.restoreAll();
+            assert.equal(fs.existsSync(first), false);
+            assert.equal(fs.readFileSync(second, 'utf8'), 'second');
+            assert.throws(() => assertBoundContainedRemovalTree(bindContainedDestination(root, owned)), /ambiguous previously rejected/);
+        } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+    });
+
     it('preserves a substituted final directory when removal was bound to the original', () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-remove-bound-'));
         try {

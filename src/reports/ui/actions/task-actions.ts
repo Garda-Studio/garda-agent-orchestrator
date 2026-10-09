@@ -22,7 +22,7 @@ export function buildUiTaskActionDefinitions(repoRoot: string, taskId: string): 
             TASK_RESET_REOPEN_ACTION_ID,
             'Task',
             'Reset task',
-            'Reset this task through the guarded task-reset gate and reopen it for a fresh lifecycle run. The local UI can temporarily prepare audited task-reset readiness for this action.',
+            'Reset this task through the guarded task-reset gate and reopen it for a fresh lifecycle run. The local UI uses confirmed one-action native authority without changing permanent reset policy.',
             ['gate', 'task-reset', '--task-id', taskId, '--reopen', '--confirm', '--repo-root', repoRoot],
             {
                 mutates: true,
@@ -34,7 +34,7 @@ export function buildUiTaskActionDefinitions(repoRoot: string, taskId: string): 
             TASK_RESET_CLOSE_ACTION_ID,
             'Task',
             'Close without execution',
-            'Close this task as DONE through the guarded task-reset gate after clearing runtime artifacts. The local UI can temporarily prepare audited task-reset readiness for this action.',
+            'Close this task as DONE through the guarded task-reset gate after clearing runtime artifacts. The local UI uses confirmed one-action native authority without changing permanent reset policy.',
             ['gate', 'task-reset', '--task-id', taskId, '--to-status', 'DONE', '--confirm', '--repo-root', repoRoot],
             {
                 mutates: true,

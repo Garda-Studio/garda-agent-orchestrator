@@ -15,6 +15,7 @@ import {
 } from '../ui-i18n';
 import { INSTRUCTIONS_REPORT_UI_TAB_CONTRACT } from './instructions-report-ui-tab';
 import { escapeJsonForScript } from '../../static-html/common';
+import { BACKUP_SELECTION_TEXT } from '../backup-selection-text';
 
 export interface DashboardClientPreludeOptions {
     actionToken: string;
@@ -31,6 +32,7 @@ const actionTextPacks = ${escapeJsonForScript(LOCAL_UI_ACTION_TEXT)};
 const initSettingTextPacks = ${escapeJsonForScript(LOCAL_UI_INIT_SETTING_TEXT)};
 const cleanupSettingTextPacks = ${escapeJsonForScript(LOCAL_UI_CLEANUP_SETTING_TEXT)};
 const backupsTabTextPacks = ${escapeJsonForScript(LOCAL_UI_BACKUPS_TAB_TEXT)};
+const backupSelectionTextPacks = ${escapeJsonForScript(BACKUP_SELECTION_TEXT)};
 const projectMemoryStatusTextPacks = ${escapeJsonForScript(LOCAL_UI_PROJECT_MEMORY_STATUS_TEXT)};
 const projectMemoryTextPacks = ${escapeJsonForScript(LOCAL_UI_PROJECT_MEMORY_TEXT)};
 const actionCategoryTextPacks = ${escapeJsonForScript(LOCAL_UI_ACTION_CATEGORY_TEXT)};
