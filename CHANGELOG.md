@@ -1,5 +1,53 @@
 # Changelog
 
+## T-127-1-12 — deterministic typed workflow registry assembly
+
+- Compose the sixty existing typed compact/family settings through their canonical owners and retain original order, defaults and candidate behavior.
+- Project the existing sixty-one-entry report catalog with unchanged compact presentation and external optional-skill policy ownership.
+- Add independent complete-contract and protected-boundary regression coverage; no CLI/schema/default/UI writer migration.
+
+## T-127-1-11 — Typed backup setting definitions
+
+- Move the three auto-backup definitions into a bounded typed core registry while preserving the report catalog contract.
+- Retain canonical OFF/1/10 defaults, existing presentation bounds and separate guarded backup/retention execution owners.
+- Cover typed admission, live/template candidates, permissive stored parsing and detached presentation without changing the independent catalog digest.
+
+## T-127-1-10 — Typed protected control setting definitions
+
+- Move task-reset, local-commit and self-guard definitions into a typed core family with unchanged report metadata and defaults.
+- Preserve guarded mutation owners and separate native authority; pure candidates do not publish reset, commit or protected-entry permission.
+- Cover canonical inputs, legacy parsing, immutable candidates, presentation isolation and the existing native authority consumers with affected checks.
+
+## T-127-1-9 — Typed project-memory setting definitions
+
+- Move seven existing project-memory definitions into a typed core family while retaining the complete report metadata contract.
+- Reuse canonical defaults and the existing workflow validator for pure single-field candidates; user-memory writes and consent authority remain external.
+- Cover primitives, enums, bounds, legacy parsing, immutable ownership and report/localization compatibility with affected checks.
+
+- Move six review-cycle setting definitions into the typed core registry.
+  Preserve defaults, normalization, report metadata and the shared description
+  export without changing guard evaluation, auto-split or operator authority.
+
+- Move the eleven remaining scope-budget control definitions into the typed core
+  registry. Preserve all fifteen controls, interleaved report order, defaults,
+  scalar bounds and existing normalization without expanding policy-write authority.
+
+- Move four legacy scope-budget maximum definitions into the typed core registry.
+  Preserve scalar bounds, defaults and report metadata through a read-only
+  adapter; retain warning/block normalization and guarded writers with their owners.
+
+- Move the review execution mode definition into the typed core registry and
+  preserve report metadata through a read-only adapter. Reuse canonical modes,
+  descriptions and normalization while retaining frozen-policy and writer owners.
+
+- Move the compile command definition into the typed core registry and preserve
+  report metadata through a read-only adapter. Reuse canonical normalization;
+  retain audited writes and compile-only execution admission with existing owners.
+
+- Move the two optional-quality scalar definitions into the typed core registry.
+  Preserve advisory semantics, owner cadence validation and the complete report
+  metadata contract through a read-only compatibility adapter.
+
 - Add immutable exact task-erasure base previews with canonical queue and surviving
   reference checks, native runtime activity protection, bounded physical ownership
   snapshots and a deterministic composition digest. Keep mutation authority and

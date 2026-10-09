@@ -26,8 +26,7 @@ const KNOWN_REVIEW_TYPE_LABELS: Readonly<Record<KnownReviewTypeId, string>> = Ob
     dependency: 'Dependency review'
 });
 
-export const EXCLUDED_REVIEW_TYPES_SETTING_DESCRIPTION =
-    'Multiple choice: checked review types are excluded from review-cycle guard counting.';
+export { EXCLUDED_REVIEW_TYPES_SETTING_DESCRIPTION } from '../core/workflow-settings/review-cycle';
 
 export const EXCLUDED_REVIEW_TYPE_LEGACY_OPTION_DESCRIPTION =
     'Unknown legacy review type preserved from the current config.';
