@@ -1,5 +1,8 @@
 # Changelog
 
+- Separate rejection-only interpreter option decoding and preserve literal file
+  boundaries after Ruby require prefixes without granting execution authority.
+
 - Add confirmed one-action native task-reset authority with workspace/task/action
   binding, authenticated one-time consumption and serialized reset admission.
   Preserve permanent OFF and later explicit audited enablement without global toggles.
