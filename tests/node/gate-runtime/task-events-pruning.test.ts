@@ -16,6 +16,12 @@ import {
     runConcurrentAppendWorker,
     runConcurrentPruneWorker
 } from './task-events-test-helpers';
+import {
+    appendAggregateEventSync,
+    appendAggregateEventAsync,
+    applyAggregateRetentionSync,
+    applyAggregateRetentionAsync
+} from '../../../src/gate-runtime/timeline/task-events-retention';
 
 
 test('appendTaskEvent preserves integrity under concurrent process writes', async () => {
@@ -647,6 +653,129 @@ test('pruneAggregateLog preserves valid JSON on each retained line', () => {
             assert.ok(obj.task_id, `Line ${i} must have task_id`);
         }
     } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+for (const mode of ['sync', 'async'] as const) {
+    test(`automatic aggregate ${mode} append bounds repeated pruning for large records at the cap`, async (t) => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-agg-batched-'));
+        const aggregate = path.join(tempDir, 'all-tasks.jsonl');
+        const lock = path.join(tempDir, '.all-tasks.lock');
+        const maxLines = 1000;
+        const appends = 64;
+        const payload = 'x'.repeat(2048);
+        const mutableFs = require('node:fs') as typeof fs;
+        try {
+            const seed = Array.from({ length: maxLines }, (_, index) => JSON.stringify({ task_id: 'T-BATCH', index, payload }));
+            fs.writeFileSync(aggregate, seed.join('\n') + '\n', 'utf8');
+            const initialBytes = fs.statSync(aggregate).size;
+            const reads = t.mock.method(mutableFs, 'readSync');
+            const replacements = t.mock.method(mutableFs, 'renameSync');
+            for (let index = maxLines; index < maxLines + appends; index += 1) {
+                const line = JSON.stringify({ task_id: 'T-BATCH', index, payload });
+                if (mode === 'sync') appendAggregateEventSync(aggregate, lock, line, maxLines);
+                else await appendAggregateEventAsync(aggregate, lock, line, maxLines);
+            }
+            const bytesRead = reads.mock.calls.reduce((sum, call) => sum + Number(call.result || 0), 0);
+            const pruneCount = replacements.mock.calls.filter(call => String(call.arguments[1]) === aggregate).length;
+            t.mock.restoreAll();
+            const retained = fs.readFileSync(aggregate, 'utf8').trim().split('\n').map(line => JSON.parse(line) as { index: number });
+            assert.ok(retained.length <= maxLines && retained.length >= maxLines * 0.99, 'retain the newest history within the cap and bounded headroom');
+            assert.deepEqual(retained.slice(-appends).map(row => row.index), Array.from({ length: appends }, (_, step) => maxLines + step));
+            assert.ok(pruneCount <= 8, `64 appends should not rewrite the entire aggregate each time (got ${pruneCount})`);
+            assert.ok(bytesRead <= initialBytes * 12, `bounded observed readSync work expected; got ${bytesRead} bytes for ${initialBytes}-byte history`);
+        } finally {
+            t.mock.restoreAll();
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+    });
+
+    test(`automatic aggregate ${mode} retention avoids rescanning unchanged large history at the cap`, async (t) => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-agg-retention-noop-'));
+        const aggregate = path.join(tempDir, 'all-tasks.jsonl');
+        const lock = path.join(tempDir, '.all-tasks.lock');
+        const mutableFs = require('node:fs') as typeof fs;
+        try {
+            const original = Array.from({ length: 1000 }, (_, index) => JSON.stringify({ task_id: 'T-NOOP', index, payload: 'x'.repeat(2048) })).join('\n') + '\n';
+            fs.writeFileSync(aggregate, original, 'utf8');
+            const reads = t.mock.method(mutableFs, 'readSync');
+            for (let attempt = 0; attempt < 64; attempt += 1) {
+                if (mode === 'sync') applyAggregateRetentionSync(aggregate, lock, 1000);
+                else await applyAggregateRetentionAsync(aggregate, lock, 1000);
+            }
+            const bytesRead = reads.mock.calls.reduce((sum, call) => sum + Number(call.result || 0), 0);
+            t.mock.restoreAll();
+            assert.equal(fs.readFileSync(aggregate, 'utf8'), original);
+            assert.ok(bytesRead <= Buffer.byteLength(original) * 2, `unchanged history should require one bounded scan, got ${bytesRead} bytes`);
+        } finally {
+            t.mock.restoreAll();
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+    });
+}
+
+for (const mutation of ['same-inode-rewrite', 'replacement'] as const) {
+    test(`automatic aggregate retention recounts a same-size ${mutation} and a decreased cap`, () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-agg-count-drift-'));
+        const aggregate = path.join(tempDir, 'all-tasks.jsonl');
+        const lock = path.join(tempDir, '.all-tasks.lock');
+        try {
+            const seed = Array.from({ length: 200 }, (_, index) => JSON.stringify({ task_id: 'T-DRIFT', index, payload: 'x'.repeat(2048) }));
+            fs.writeFileSync(aggregate, seed.join('\n') + '\n', 'utf8');
+            appendAggregateEventSync(aggregate, lock, JSON.stringify({ task_id: 'T-DRIFT', index: 200 }), 200);
+            const before = fs.statSync(aggregate);
+            const changed = Array.from({ length: 201 }, (_, index) => JSON.stringify({ task_id: 'T-DRIFT', index, payload: '' }));
+            const padding = before.size - Buffer.byteLength(changed.join('\n') + '\n');
+            assert.ok(padding > 0);
+            changed[200] = JSON.stringify({ task_id: 'T-DRIFT', index: 200, payload: 'x'.repeat(padding) });
+            const contents = changed.join('\n') + '\n';
+            assert.equal(Buffer.byteLength(contents), before.size);
+            if (mutation === 'replacement') {
+                fs.writeFileSync(`${aggregate}.replacement`, contents, 'utf8');
+                fs.renameSync(`${aggregate}.replacement`, aggregate);
+                assert.notEqual(fs.statSync(aggregate).ino, before.ino);
+            } else {
+                fs.writeFileSync(aggregate, contents, 'utf8');
+                assert.equal(fs.statSync(aggregate).ino, before.ino);
+            }
+            appendAggregateEventSync(aggregate, lock, JSON.stringify({ task_id: 'T-DRIFT', index: 201 }), 200);
+            let retained = fs.readFileSync(aggregate, 'utf8').trim().split('\n').map(line => JSON.parse(line) as { index: number });
+            assert.ok(retained.length <= 200, 'recount changed content rather than use stale advisory state');
+            assert.equal(retained.at(-1)?.index, 201);
+            applyAggregateRetentionSync(aggregate, lock, 50);
+            retained = fs.readFileSync(aggregate, 'utf8').trim().split('\n').map(line => JSON.parse(line) as { index: number });
+            assert.equal(retained.length, 50, 'a smaller configured cap takes effect immediately');
+            assert.equal(retained.at(-1)?.index, 201);
+        } finally {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+    });
+}
+
+test('automatic aggregate retention preserves a failed-prune append and retries after atomic replacement recovers', (t) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-agg-prune-retry-'));
+    const aggregate = path.join(tempDir, 'all-tasks.jsonl');
+    const lock = path.join(tempDir, '.all-tasks.lock');
+    const mutableFs = require('node:fs') as typeof fs;
+    try {
+        const seed = Array.from({ length: 200 }, (_, index) => JSON.stringify({ task_id: 'T-RETRY', index, payload: 'x'.repeat(2048) }));
+        fs.writeFileSync(aggregate, seed.join('\n') + '\n', 'utf8');
+        const rename = mutableFs.renameSync;
+        t.mock.method(mutableFs, 'renameSync', (source: fs.PathLike, destination: fs.PathLike) => {
+            if (String(destination) === aggregate) throw new Error('injected aggregate final rename failure');
+            return rename(source, destination);
+        });
+        const failed = appendAggregateEventSync(aggregate, lock, JSON.stringify({ task_id: 'T-RETRY', index: 200 }), 200);
+        assert.equal(failed.retention?.pruned, false);
+        assert.equal(fs.readFileSync(aggregate, 'utf8').trim().split('\n').length, 201);
+        t.mock.restoreAll();
+        appendAggregateEventSync(aggregate, lock, JSON.stringify({ task_id: 'T-RETRY', index: 201 }), 200);
+        const retained = fs.readFileSync(aggregate, 'utf8').trim().split('\n').map(line => JSON.parse(line) as { index: number });
+        assert.ok(retained.length <= 200);
+        assert.deepEqual(retained.slice(-2).map(row => row.index), [200, 201]);
+    } finally {
+        t.mock.restoreAll();
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
 });

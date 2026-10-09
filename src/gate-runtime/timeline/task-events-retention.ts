@@ -14,6 +14,9 @@ import {
 export const DEFAULT_AGGREGATE_MAX_LINES = 10000;
 export const AGGREGATE_BYTES_PER_LINE_ESTIMATE = 512;
 const AGGREGATE_PRUNE_CHUNK_SIZE = 64 * 1024;
+const AGGREGATE_COUNT_CACHE_LIMIT = 64;
+const AGGREGATE_PRUNE_HEADROOM_DIVISOR = 100;
+const AGGREGATE_PRUNE_HEADROOM_MAX_LINES = 100;
 
 export type AggregateAppendMode = 'lock_free' | 'locked' | 'locked_prune' | 'skipped_low_noise';
 
@@ -28,6 +31,24 @@ export interface AggregateRetentionApplyResult {
     retention?: AggregateRetentionResult;
     telemetry?: AcquireLockTelemetry;
 }
+
+interface AggregateFileSnapshot {
+    identity: string;
+    fingerprint: string;
+    size: number;
+}
+
+interface AggregateLineCount {
+    lines: number;
+    terminated: boolean;
+}
+
+interface AggregateCountCacheEntry extends AggregateLineCount {
+    maxLines: number;
+    snapshot: AggregateFileSnapshot;
+}
+
+const aggregateLineCounts = new Map<string, AggregateCountCacheEntry>();
 
 function parseAggregateTaskId(line: string): string | null {
     try {
@@ -122,14 +143,14 @@ function toNonNegativeInteger(value: unknown, fallback: number): number {
     return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
-function countLinesStreaming(filePath: string): number {
+function inspectAggregateLineCount(filePath: string): AggregateLineCount | null {
     let fd: number;
     try {
         const stat = fs.statSync(filePath);
-        if (!stat.isFile() || stat.size === 0) return 0;
+        if (!stat.isFile() || stat.size === 0) return { lines: 0, terminated: true };
         fd = fs.openSync(filePath, 'r');
     } catch {
-        return 0;
+        return null;
     }
     try {
         const buf = Buffer.alloc(AGGREGATE_PRUNE_CHUNK_SIZE);
@@ -150,10 +171,14 @@ function countLinesStreaming(filePath: string): number {
             position += bytesRead;
         }
         if (lineHasContent) count++;
-        return count;
+        return { lines: count, terminated: !lineHasContent };
     } finally {
         fs.closeSync(fd);
     }
+}
+
+function countLinesStreaming(filePath: string): number {
+    return inspectAggregateLineCount(filePath)?.lines ?? 0;
 }
 
 function pruneAggregateLogWithProtectedTasksStreaming(
@@ -353,6 +378,88 @@ export function pruneAggregateTaskRecordsLocked(
     return lockResult.result;
 }
 
+function readAggregateFileSnapshot(filePath: string): AggregateFileSnapshot | null {
+    try {
+        const stat = fs.lstatSync(filePath, { bigint: true });
+        if (!stat.isFile() || stat.nlink !== 1n || stat.ino <= 0n
+            || stat.birthtimeNs <= 0n || stat.mtimeNs <= 0n || stat.ctimeNs <= 0n) return null;
+        const identity = [stat.dev, stat.ino, stat.birthtimeNs].join(':');
+        return { identity, fingerprint: [identity, stat.mode, stat.nlink, stat.size, stat.mtimeNs, stat.ctimeNs].join(':'), size: Number(stat.size) };
+    } catch {
+        return null;
+    }
+}
+
+function readCachedAggregateCount(filePath: string, maxLines: number, snapshot: AggregateFileSnapshot | null): AggregateCountCacheEntry | undefined {
+    const cached = aggregateLineCounts.get(path.resolve(filePath));
+    return cached?.maxLines === maxLines && cached.snapshot.fingerprint === snapshot?.fingerprint ? cached : undefined;
+}
+
+function rememberAggregateCount(filePath: string, maxLines: number, count: AggregateLineCount, snapshot: AggregateFileSnapshot | null): void {
+    const key = path.resolve(filePath);
+    aggregateLineCounts.delete(key);
+    if (!snapshot || !count.terminated || count.lines <= 0) return;
+    aggregateLineCounts.set(key, { ...count, maxLines, snapshot });
+    if (aggregateLineCounts.size > AGGREGATE_COUNT_CACHE_LIMIT) {
+        const oldest = aggregateLineCounts.keys().next().value;
+        if (oldest) aggregateLineCounts.delete(oldest);
+    }
+}
+
+function isAggregateAboveSizeTrigger(filePath: string, maxLines: number): boolean {
+    if (maxLines <= 0) return false;
+    try {
+        return fs.statSync(filePath).size > maxLines * AGGREGATE_BYTES_PER_LINE_ESTIMATE;
+    } catch {
+        return false;
+    }
+}
+
+function applyAutomaticAggregateRetention(
+    filePath: string,
+    maxLines: number,
+    appendedCount?: AggregateCountCacheEntry
+): AggregateRetentionResult | null {
+    if (!isAggregateAboveSizeTrigger(filePath, maxLines)) return null;
+    const snapshot = readAggregateFileSnapshot(filePath);
+    if (!snapshot) {
+        aggregateLineCounts.delete(path.resolve(filePath));
+        return pruneAggregateLog(filePath, maxLines);
+    }
+    const cached = appendedCount?.snapshot.fingerprint === snapshot.fingerprint
+        ? appendedCount : readCachedAggregateCount(filePath, maxLines, snapshot);
+    const count = cached ?? inspectAggregateLineCount(filePath);
+    if (!count || readAggregateFileSnapshot(filePath)?.fingerprint !== snapshot.fingerprint) {
+        aggregateLineCounts.delete(path.resolve(filePath));
+        return pruneAggregateLog(filePath, maxLines);
+    }
+    if (count.lines <= maxLines) {
+        rememberAggregateCount(filePath, maxLines, count, snapshot);
+        return null;
+    }
+    const headroom = Math.min(AGGREGATE_PRUNE_HEADROOM_MAX_LINES, Math.floor(maxLines / AGGREGATE_PRUNE_HEADROOM_DIVISOR));
+    const result = pruneAggregateLog(filePath, maxLines - headroom, count.lines);
+    const after = readAggregateFileSnapshot(filePath);
+    const knownOutput = result.pruned
+        ? after?.identity !== snapshot.identity
+        : after?.fingerprint === snapshot.fingerprint;
+    rememberAggregateCount(filePath, maxLines, { lines: result.lines_after, terminated: count.terminated }, knownOutput ? after : null);
+    return result;
+}
+
+function appendAggregateLine(filePath: string, line: string, maxLines: number): AggregateRetentionResult | null {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const before = maxLines > 0 ? readAggregateFileSnapshot(filePath) : null;
+    const cached = readCachedAggregateCount(filePath, maxLines, before);
+    fs.appendFileSync(filePath, `${line}\n`, 'utf8');
+    const after = cached ? readAggregateFileSnapshot(filePath) : null;
+    const appendedCount = cached && before && after && after.identity === before.identity
+        && after.size === before.size + Buffer.byteLength(line, 'utf8') + 1
+        ? { ...cached, lines: cached.lines + line.split('\n').filter(part => part.length > 0).length, snapshot: after }
+        : undefined;
+    return applyAutomaticAggregateRetention(filePath, maxLines, appendedCount);
+}
+
 export function appendAggregateEventSync(
     allTasksPath: string,
     aggregateLockPath: string,
@@ -364,26 +471,7 @@ export function appendAggregateEventSync(
     const lockResult = withFilesystemLock(
         aggregateLockPath,
         lockOptions,
-        function (): AggregateRetentionResult | null {
-            fs.mkdirSync(path.dirname(allTasksPath), { recursive: true });
-            fs.appendFileSync(allTasksPath, `${line}\n`, 'utf8');
-
-            if (resolvedMaxLines <= 0) {
-                return null;
-            }
-
-            const aggregateSizeTrigger = resolvedMaxLines * AGGREGATE_BYTES_PER_LINE_ESTIMATE;
-            try {
-                const fileSize = fs.statSync(allTasksPath).size;
-                if (fileSize <= aggregateSizeTrigger) {
-                    return null;
-                }
-            } catch {
-                return null;
-            }
-
-            return pruneAggregateLog(allTasksPath, resolvedMaxLines);
-        }
+        () => appendAggregateLine(allTasksPath, line, resolvedMaxLines)
     );
 
     const retention = lockResult.result ?? undefined;
@@ -405,26 +493,7 @@ export async function appendAggregateEventAsync(
     const lockResult = await withFilesystemLockAsync(
         aggregateLockPath,
         lockOptions,
-        async function (): Promise<AggregateRetentionResult | null> {
-            fs.mkdirSync(path.dirname(allTasksPath), { recursive: true });
-            fs.appendFileSync(allTasksPath, `${line}\n`, 'utf8');
-
-            if (resolvedMaxLines <= 0) {
-                return null;
-            }
-
-            const aggregateSizeTrigger = resolvedMaxLines * AGGREGATE_BYTES_PER_LINE_ESTIMATE;
-            try {
-                const fileSize = fs.statSync(allTasksPath).size;
-                if (fileSize <= aggregateSizeTrigger) {
-                    return null;
-                }
-            } catch {
-                return null;
-            }
-
-            return pruneAggregateLog(allTasksPath, resolvedMaxLines);
-        }
+        async () => appendAggregateLine(allTasksPath, line, resolvedMaxLines)
     );
 
     const retention = lockResult.result ?? undefined;
@@ -446,22 +515,14 @@ export function applyAggregateRetentionSync(
         return { appendMode: 'lock_free' };
     }
 
-    const aggregateSizeTrigger = resolvedMaxLines * AGGREGATE_BYTES_PER_LINE_ESTIMATE;
-    try {
-        const fileSize = fs.statSync(allTasksPath).size;
-        if (fileSize <= aggregateSizeTrigger) {
-            return { appendMode: 'lock_free' };
-        }
-    } catch {
+    if (!isAggregateAboveSizeTrigger(allTasksPath, resolvedMaxLines)) {
         return { appendMode: 'lock_free' };
     }
 
-    const lockResult = withFilesystemLock(aggregateLockPath, lockOptions, function (): AggregateRetentionResult {
-        return pruneAggregateLog(allTasksPath, resolvedMaxLines);
-    });
+    const lockResult = withFilesystemLock(aggregateLockPath, lockOptions, () => applyAutomaticAggregateRetention(allTasksPath, resolvedMaxLines));
     return {
-        appendMode: 'locked_prune',
-        retention: lockResult.result,
+        appendMode: lockResult.result ? 'locked_prune' : 'locked',
+        retention: lockResult.result ?? undefined,
         telemetry: lockResult.telemetry
     };
 }
@@ -477,22 +538,14 @@ export async function applyAggregateRetentionAsync(
         return { appendMode: 'lock_free' };
     }
 
-    const aggregateSizeTrigger = resolvedMaxLines * AGGREGATE_BYTES_PER_LINE_ESTIMATE;
-    try {
-        const fileSize = fs.statSync(allTasksPath).size;
-        if (fileSize <= aggregateSizeTrigger) {
-            return { appendMode: 'lock_free' };
-        }
-    } catch {
+    if (!isAggregateAboveSizeTrigger(allTasksPath, resolvedMaxLines)) {
         return { appendMode: 'lock_free' };
     }
 
-    const lockResult = await withFilesystemLockAsync(aggregateLockPath, lockOptions, async function (): Promise<AggregateRetentionResult> {
-        return pruneAggregateLog(allTasksPath, resolvedMaxLines);
-    });
+    const lockResult = await withFilesystemLockAsync(aggregateLockPath, lockOptions, async () => applyAutomaticAggregateRetention(allTasksPath, resolvedMaxLines));
     return {
-        appendMode: 'locked_prune',
-        retention: lockResult.result,
+        appendMode: lockResult.result ? 'locked_prune' : 'locked',
+        retention: lockResult.result ?? undefined,
         telemetry: lockResult.telemetry
     };
 }

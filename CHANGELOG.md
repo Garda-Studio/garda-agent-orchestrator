@@ -1,5 +1,15 @@
 # Changelog
 
+- Avoid repeated scans and rewrites of large aggregate-journal records with a
+  bounded, file-generation-bound count cache under the existing aggregate lock.
+  Automatic pruning leaves at most 1%/100 lines of headroom; explicit protected
+  pruning, the configured upper cap and atomic replacement remain unchanged.
+
+
+- T-208: Recover known-dead review-catalog transaction owners with bounded guarded
+  retries; preserve live or indeterminate records and descriptor-bound replacement
+  markers during release and failed-publication cleanup.
+
 
 - Make full-suite run-marker admission exclusive and require the current issued
   owner for atomic child updates and terminal cleanup; preserve foreign records

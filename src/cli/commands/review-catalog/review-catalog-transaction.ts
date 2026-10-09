@@ -8,6 +8,10 @@ import { validateFreshOperatorConfirmation } from '../../../core/operator-confir
 import { resolveActiveTaskIds } from '../../../core/task-queue/active-task-state';
 import { writeProtectedControlPlaneManifest } from '../../../gates/protected-control-plane/protected-control-plane';
 import { sha256Text } from './review-catalog-state';
+import {
+    acquireReviewCatalogTransactionLock,
+    releaseReviewCatalogTransactionLock
+} from './review-catalog-transaction-lock';
 import type {
     ReviewCatalogManagedFileChange,
     ReviewCatalogManagementPlan,
@@ -158,51 +162,15 @@ function assertManagedChanges(bundleRoot: string, changes: readonly ReviewCatalo
     }
 }
 
-function acquireTransactionLock(bundleRoot: string): { lockPath: string; lockFd: number } {
-    const runtimeDir = path.join(bundleRoot, 'runtime');
-    ensureRealDirectoryInsideBundle(bundleRoot, runtimeDir, 'Review catalog runtime directory');
-    const lockPath = path.join(runtimeDir, 'review-catalog-management.lock');
-    let lockFd: number | null = null;
-    try {
-        lockFd = fs.openSync(lockPath, 'wx', 0o600);
-        fs.writeFileSync(lockFd, `${JSON.stringify({ pid: process.pid, timestamp_utc: new Date().toISOString() })}\n`, 'utf8');
-        fs.fsyncSync(lockFd);
-        return { lockPath, lockFd };
-    } catch (error: unknown) {
-        if (lockFd !== null) {
-            try {
-                fs.closeSync(lockFd);
-            } finally {
-                if (fs.existsSync(lockPath)) {
-                    const identity = fs.lstatSync(lockPath);
-                    if (identity.isFile() && !identity.isSymbolicLink() && identity.nlink === 1) {
-                        fs.unlinkSync(lockPath);
-                    }
-                }
-            }
-        }
-        if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-            throw new Error('Another review-catalog management transaction is active; concurrent mutation rejected.');
-        }
-        throw error;
-    }
-}
-
-function releaseTransactionLock(lockPath: string, lockFd: number): void {
-    fs.closeSync(lockFd);
-    const identity = fs.lstatSync(lockPath);
-    if (!identity.isFile() || identity.isSymbolicLink() || identity.nlink !== 1) {
-        throw new Error('Review catalog transaction lock changed before release.');
-    }
-    fs.unlinkSync(lockPath);
-}
-
 function runWithTransactionLock<T>(
     bundleRoot: string,
     combinedFailureMessage: string,
     operation: () => T
 ): T {
-    const { lockPath, lockFd } = acquireTransactionLock(bundleRoot);
+    const runtimeDir = path.join(bundleRoot, 'runtime');
+    ensureRealDirectoryInsideBundle(bundleRoot, runtimeDir, 'Review catalog runtime directory');
+    const lock = acquireReviewCatalogTransactionLock(bundleRoot,
+        path.join(runtimeDir, 'review-catalog-management.lock'));
     let outcome: { value: T } | null = null;
     let primaryError: unknown;
     let lockReleaseError: unknown;
@@ -215,14 +183,15 @@ function runWithTransactionLock<T>(
         hasPrimaryError = true;
     } finally {
         try {
-            releaseTransactionLock(lockPath, lockFd);
+            releaseReviewCatalogTransactionLock(lock);
         } catch (error: unknown) {
             lockReleaseError = error;
             hasLockReleaseError = true;
         }
     }
     if (hasPrimaryError && hasLockReleaseError) {
-        throw new AggregateError([primaryError, lockReleaseError], combinedFailureMessage);
+        const releaseDiagnostic = lockReleaseError instanceof Error ? ` ${lockReleaseError.message}` : '';
+        throw new AggregateError([primaryError, lockReleaseError], combinedFailureMessage + releaseDiagnostic);
     }
     if (hasPrimaryError) {
         throw primaryError;
