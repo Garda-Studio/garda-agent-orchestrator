@@ -1,15 +1,14 @@
 import {
-    FULL_SUITE_TIMEOUT_RETRY_COUNT_MAX,
-    FULL_SUITE_VALIDATION_PLACEMENTS,
     MAX_OPTIONAL_QUALITY_CHECKS_REVIEW_FAILURE_CADENCE_INTERVAL,
     PROJECT_MEMORY_MAINTENANCE_MODES,
     PROJECT_MEMORY_READ_STRATEGIES
 } from '../core/workflow-config';
+import { buildWorkflowSettingMetadata } from '../core/workflow-setting-metadata';
+import { FULL_SUITE_SETTING_REGISTRY } from '../core/workflow-settings/full-suite';
 import { COMPACT_SETTING_REGISTRY, compactSettingMinimum, compactSettingMaximum } from '../core/compact/setting-definitions';
 import { REVIEW_EXECUTION_POLICY_MODES, describeReviewExecutionPolicy } from '../core/review-execution-policy';
 import { SCOPE_BUDGET_GUARD_ACTIONS } from '../core/scope-budget-guard';
 import { REVIEW_CYCLE_GUARD_ACTIONS } from '../core/review-cycle-guard';
-import { OUT_OF_SCOPE_FAILURE_POLICIES } from '../gates/full-suite/full-suite-validation';
 import { CANONICAL_OPTIONAL_SKILL_SELECTION_POLICY_MODES } from '../runtime/optional-skill-selection';
 import { EXCLUDED_REVIEW_TYPES_SETTING_DESCRIPTION } from './review-type-setting-text';
 
@@ -49,58 +48,6 @@ function booleanOptions(onDescription: string, offDescription: string): Workflow
         }
     ];
 }
-
-const fullSuitePlacementOptions: WorkflowSettingOption[] = FULL_SUITE_VALIDATION_PLACEMENTS.map((placement) => {
-    switch (placement) {
-        case 'after_compile_before_reviews':
-            return {
-                value: placement,
-                label: 'After compile, before reviews',
-                description: 'Runs the full suite after compile passes and before reviewer work starts.'
-            };
-        case 'before_test_review':
-            return {
-                value: placement,
-                label: 'Before test review',
-                description: 'Runs the full suite immediately before the test-review lane needs its evidence.'
-            };
-        case 'before_completion':
-            return {
-                value: placement,
-                label: 'Before completion',
-                description: 'Defers the full suite until the final completion path.'
-            };
-        default:
-            return {
-                value: placement,
-                label: placement,
-                description: 'Full-suite placement mode.'
-            };
-    }
-});
-
-const outOfScopeFailurePolicyOptions: WorkflowSettingOption[] = OUT_OF_SCOPE_FAILURE_POLICIES.map((policy) => {
-    switch (policy) {
-        case 'AUDIT_AND_BLOCK':
-            return {
-                value: policy,
-                label: 'Audit and block',
-                description: 'Records the out-of-scope failure and stops the workflow until it is resolved.'
-            };
-        case 'AUDIT_AND_WARN':
-            return {
-                value: policy,
-                label: 'Audit and warn',
-                description: 'Records the out-of-scope failure but allows the workflow to continue with a warning.'
-            };
-        default:
-            return {
-                value: policy,
-                label: policy,
-                description: 'Out-of-scope failure policy.'
-            };
-    }
-});
 
 const reviewExecutionPolicyOptions: WorkflowSettingOption[] = REVIEW_EXECUTION_POLICY_MODES.map((mode) => ({
     value: mode,
@@ -225,6 +172,16 @@ const optionalSkillSelectionPolicyOptions: WorkflowSettingOption[] = [
     ...legacyOptionalSkillSelectionPolicyOptions
 ];
 
+const fullSuiteDefinitions = new Map(
+    buildWorkflowSettingMetadata(FULL_SUITE_SETTING_REGISTRY).map(definition => [definition.id, definition])
+);
+
+function fullSuiteDefinition(id: string): WorkflowSettingDefinition {
+    const definition = fullSuiteDefinitions.get(id);
+    if (!definition) throw new Error(`Unknown full-suite setting definition '${id}'.`);
+    return definition;
+}
+
 export const WORKFLOW_SETTING_DEFINITIONS: readonly WorkflowSettingDefinition[] = Object.freeze([
     ...COMPACT_SETTING_REGISTRY.entries.map((entry): WorkflowSettingDefinition => ({
         id: entry.id, key: entry.key, label: entry.ui.label, description: entry.ui.description, flag: entry.cli.flag,
@@ -232,18 +189,7 @@ export const WORKFLOW_SETTING_DEFINITIONS: readonly WorkflowSettingDefinition[] 
         options: entry.value_type === 'boolean' ? booleanOptions('Enabled for compact inspections.', 'Disabled for compact inspections.') : [],
         ...(entry.value_type === 'integer' ? { min: compactSettingMinimum(entry.id), max: compactSettingMaximum(entry.id) } : {})
     })),
-    {
-        id: 'full-suite-enabled',
-        key: 'full_suite_validation.enabled',
-        label: 'Mandatory full-suite validation',
-        description: 'Controls whether the configured full-suite test command is part of the task lifecycle.',
-        flag: '--full-suite-enabled',
-        value_type: 'boolean',
-        options: booleanOptions(
-            'The configured full-suite command is required in the task lifecycle.',
-            'The full-suite gate is skipped unless another workflow path requires it.'
-        )
-    },
+    fullSuiteDefinition('full-suite-enabled'),
     {
         id: 'optional-checks-enabled',
         key: 'optional_quality_checks.enabled',
@@ -286,90 +232,14 @@ export const WORKFLOW_SETTING_DEFINITIONS: readonly WorkflowSettingDefinition[] 
         options: [],
         placeholder: 'compile/build/type-check command'
     },
-    {
-        id: 'full-suite-command',
-        key: 'full_suite_validation.command',
-        label: 'Full-suite command',
-        description: 'Command the full-suite gate runs when mandatory full-suite validation is enabled. Local UI edits use the same audited `garda workflow set` path and require explicit confirmation.',
-        flag: '--full-suite-command',
-        value_type: 'string',
-        options: [],
-        placeholder: 'npm test'
-    },
-    {
-        id: 'full-suite-timeout-ms',
-        key: 'full_suite_validation.timeout_ms',
-        label: 'Full-suite timeout',
-        description: 'Maximum runtime for the full-suite command, in milliseconds.',
-        flag: '--full-suite-timeout-ms',
-        value_type: 'integer',
-        min: 1000,
-        max: 86_400_000,
-        options: []
-    },
-    {
-        id: 'full-suite-timeout-blocker',
-        key: 'full_suite_validation.timeout_blocker',
-        label: 'Full-suite timeout blocker',
-        description: 'Controls whether repeated full-suite timeouts block the task and propose a repair task, or continue as a final warning.',
-        flag: '--full-suite-timeout-blocker',
-        value_type: 'boolean',
-        options: booleanOptions(
-            'Repeated full-suite timeouts block task completion and propose a repair task.',
-            'Repeated full-suite timeouts are reported as a warning and do not block completion.'
-        )
-    },
-    {
-        id: 'full-suite-timeout-retry-count',
-        key: 'full_suite_validation.timeout_retry_count',
-        label: 'Full-suite timeout retries',
-        description: 'How many times the full-suite command is retried after a timeout before timeout policy is applied.',
-        flag: '--full-suite-timeout-retry-count',
-        value_type: 'integer',
-        min: 0,
-        max: FULL_SUITE_TIMEOUT_RETRY_COUNT_MAX,
-        options: []
-    },
-    {
-        id: 'full-suite-green-summary-max-lines',
-        key: 'full_suite_validation.green_summary_max_lines',
-        label: 'Green full-suite summary length',
-        description: 'How many successful full-suite output lines stay visible in compact task evidence.',
-        flag: '--full-suite-green-summary-max-lines',
-        value_type: 'integer',
-        min: 1,
-        max: 200,
-        options: []
-    },
-    {
-        id: 'full-suite-red-failure-chunk-lines',
-        key: 'full_suite_validation.red_failure_chunk_lines',
-        label: 'Failure output chunk length',
-        description: 'How many failing full-suite lines are kept per compact failure chunk.',
-        flag: '--full-suite-red-failure-chunk-lines',
-        value_type: 'integer',
-        min: 10,
-        max: 1000,
-        options: []
-    },
-    {
-        id: 'full-suite-out-of-scope-failure-policy',
-        key: 'full_suite_validation.out_of_scope_failure_policy',
-        label: 'Out-of-scope failure handling',
-        description: 'What the workflow does when full-suite output shows a failure outside the current task scope.',
-        flag: '--full-suite-out-of-scope-failure-policy',
-        value_type: 'enum',
-        options: outOfScopeFailurePolicyOptions
-    },
-    {
-        id: 'full-suite-placement',
-        key: 'full_suite_validation.placement',
-        label: 'Full-suite placement',
-        description: 'Where the mandatory full-suite gate runs in the task lifecycle.',
-        flag: '--full-suite-placement',
-        value_type: 'enum',
-        options: fullSuitePlacementOptions
-    },
+    fullSuiteDefinition('full-suite-command'),
+    fullSuiteDefinition('full-suite-timeout-ms'),
+    fullSuiteDefinition('full-suite-timeout-blocker'),
+    fullSuiteDefinition('full-suite-timeout-retry-count'),
+    fullSuiteDefinition('full-suite-green-summary-max-lines'),
+    fullSuiteDefinition('full-suite-red-failure-chunk-lines'),
+    fullSuiteDefinition('full-suite-out-of-scope-failure-policy'),
+    fullSuiteDefinition('full-suite-placement'),
     {
         id: 'review-execution-policy',
         key: 'review_execution_policy.mode',

@@ -1,5 +1,9 @@
 # Changelog
 
+- Move nine full-suite setting definitions into the typed core registry and
+  preserve the complete report metadata contract through a read-only adapter.
+  Delegate scalar admission to existing owners without changing workflow policy.
+
 - Reject parser-normalized inline program URL data while preserving literal
   source filenames and option values; parsing grants no execution authority.
 
