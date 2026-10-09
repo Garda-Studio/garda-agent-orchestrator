@@ -496,3 +496,60 @@
   already suspended WIP against the original HEAD. Inspect current tracked,
   visible and authorized ignored inputs, excluding exactly the evidence retained
   by native capture; retain native capture and restore guards.
+
+## T-191: Full-suite configuration failures
+
+- Reject unreadable, malformed, and invalid explicit full-suite configuration before it can disable the gate or emit success evidence. Preserve defaults for absent settings, supported scalar aliases, command trimming, and timeout/retry behavior.
+
+- T-203: Preserve malformed, non-object and unreadable existing managed configuration
+  during init and template synchronization. Validate managed inputs before configuration
+  writes, retain valid settings and unchanged workflow bytes, and report repair guidance
+  without exposing configuration contents.
+
+- T-172: Add native Git lifecycle regressions for executable and test changes under
+  documentation paths, preserving the accepted safe-document classifier and genuine
+  README-only reuse.
+
+- T-173: Preserve the mandatory code-review floor through effective policy snapshots
+  for full source scopes outside raw path triggers, fail closed for inactive required
+  lanes, and retain fast/documentation/test/no-diff compatibility.
+
+- T-174: Recognize generated runtime artifacts only within supported Garda runtime namespaces; retain user source under nested runtime/reviews paths across Git and explicit scopes.
+- Separate quality-checklist template persistence, authenticated binding and
+  repair materialization from policy assessment. Preserve public contracts and
+  native evidence checks; publish template and sidecar files through the existing
+  atomic writer and cover failed replacements and missing binding events.
+
+- Require a current authenticated zero-diff preflight before `record-no-op`
+  publishes success. Resolve omitted paths from native task history, reject
+  stale or foreign bindings and source drift before mutation, and preserve
+  existing artifacts and mandatory downstream gates.
+
+
+### Unreleased — guarded decomposition profiles
+- Add version-2 work-package contracts bound to the frozen parent profile, including balanced native child routing, while preserving version-1 strict compatibility.
+- Add the typed `task_test_selection.require_operator_confirmation` configuration
+  contract with an autonomous default, strict boolean validation and preserved
+  explicit choices on update. Selection admission remains a separate change.
+
+- Restore safe ignored workflow-config compatibility after the typed task-test
+  selection default. Preserve legacy omission and explicit prompt choices while
+  rejecting malformed permissions, unknown keys and unrelated policy weakening.
+
+- Add typed setting presentation metadata and a read-only legacy projection.
+  Snapshot option objects, preserve existing registry contracts and keep
+  catalog-backed and review-lane controls outside generic editing.
+
+
+
+- Route decomposed parents after a clean child source commit without recapturing
+  already suspended WIP against the original HEAD. Inspect current tracked,
+  visible and authorized ignored inputs, excluding exactly the evidence retained
+  by native capture; retain native capture and restore guards.
+
+- Keep unchanged completed native quality scaffolds out of parent implementation
+  WIP inventory while preserving user changes, provenance checks and the original
+  HEAD capture/restore identity guard.
+
+- Import the accepted parent-recapture and retained-quality-input dependencies
+  into the C5 workflow without replacing local settings, task evidence or memory.
