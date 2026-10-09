@@ -441,7 +441,7 @@ function classifyTaskPreview(
     const timelineSummary = readTimelineSummaryIndex(path.join(bundleRoot, 'runtime', 'task-events'))?.entries?.[taskId] ?? null;
     const timelineEvidence = scanTimelineEvidence(bundleRoot, taskId);
     const ageDays = candidateGroup.newestMtimeMs > 0
-        ? normalizeAgeDays(Date.now() - candidateGroup.newestMtimeMs)
+        ? normalizeAgeDays(Date.now() - Math.floor(candidateGroup.newestMtimeMs))
         : null;
     const ledgerStatus = readTaskHistoryLedgerScanStatus(bundleRoot, taskId);
 

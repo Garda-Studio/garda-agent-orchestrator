@@ -24,6 +24,8 @@ import {
     writeRuntimeRetentionPolicy,
     writeTaskQueue
 } from './cleanup-fixtures';
+import { mock } from 'node:test';
+import { buildRuntimeRetentionPreview } from '../../../src/lifecycle/runtime-policy/runtime-retention-policy';
 
 describe('buildDefaultRetentionPolicy', () => {
     it('returns sensible defaults', () => {
@@ -84,6 +86,59 @@ describe('runCleanup', () => {
             dryRun: false
         });
         assert.equal(result.result, 'SUCCESS');
+    });
+
+    function fractionalCompactArtifact(taskId: string, mtimeMs: number): string {
+        writeTaskQueue(tmpDir, [{ id: taskId, status: 'DONE' }]);
+        seedHealthyDoneTaskArtifacts({ bundleRoot, taskId, ageDays: 45 });
+        writeRuntimeRetentionPolicy(bundleRoot);
+        const configPath = path.join(bundleRoot, 'live', 'config', 'runtime-retention.json');
+        const policy = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        policy.healthy_done.compact_after_days = 0;
+        policy.healthy_done.require_ledger = false;
+        fs.writeFileSync(configPath, JSON.stringify(policy));
+        const artifact = path.join(runtimeDir, 'compact', taskId);
+        fs.mkdirSync(artifact, { recursive: true });
+        fs.writeFileSync(path.join(artifact, 'stdout.log'), 'fresh disposable output');
+        fs.utimesSync(artifact, mtimeMs / 1000, mtimeMs / 1000);
+        return artifact;
+    }
+
+    it('reports zero age for a fresh sub-millisecond filesystem timestamp', t => {
+        t.after(() => mock.restoreAll());
+        const observedMs = Date.parse('2026-10-07T12:00:00.000Z');
+        const artifact = fractionalCompactArtifact('T-PRECISION-1', observedMs + 0.75);
+        const actualMtime = fs.statSync(artifact).mtimeMs;
+        assert.ok(actualMtime > observedMs && actualMtime < observedMs + 1);
+        mock.method(Date, 'now', () => observedMs);
+        const preview = buildRuntimeRetentionPreview(tmpDir, bundleRoot, [{ path: artifact, category: 'compact' }]);
+        assert.equal(preview.tasks[0].age_days, 0);
+        assert.equal(preview.tasks[0].latest_artifact_mtime_ms, observedMs);
+        assert.equal(fs.readFileSync(path.join(artifact, 'stdout.log'), 'utf8'), 'fresh disposable output');
+    });
+
+    it('rejects premature retention of future artifacts at a zero-day threshold', t => {
+        t.after(() => mock.restoreAll());
+        const observedMs = Date.parse('2026-10-07T12:00:00.000Z');
+        const artifact = fractionalCompactArtifact('T-PRECISION-2', observedMs + 1.75);
+        mock.method(Date, 'now', () => observedMs);
+        const preview = buildRuntimeRetentionPreview(tmpDir, bundleRoot, [{ path: artifact, category: 'compact' }]);
+        assert.equal(preview.tasks[0].health_state, 'healthy_done');
+        assert.equal(preview.tasks[0].threshold_days, 0);
+        assert.equal(preview.tasks[0].age_days, -1);
+        assert.equal(preview.tasks[0].eligible_now, false);
+        assert.equal(fs.existsSync(artifact), true);
+    });
+
+    it('keeps day-boundary ages consistent with the published whole-millisecond timestamp', t => {
+        t.after(() => mock.restoreAll());
+        const observedMs = Date.parse('2026-10-07T12:00:00.000Z');
+        const artifact = fractionalCompactArtifact('T-PRECISION-3', observedMs - 86_400_000 + 0.75);
+        mock.method(Date, 'now', () => observedMs);
+        const preview = buildRuntimeRetentionPreview(tmpDir, bundleRoot, [{ path: artifact, category: 'compact' }]);
+        assert.equal(preview.tasks[0].latest_artifact_mtime_ms, observedMs - 86_400_000);
+        assert.equal(preview.tasks[0].age_days, 1);
+        assert.equal(fs.existsSync(artifact), true);
     });
 
     it('preserves active task review and task-event artifacts resolved from TASK.md', () => {

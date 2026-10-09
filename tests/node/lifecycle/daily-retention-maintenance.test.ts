@@ -21,6 +21,7 @@ function makeWorkspace(prefix: string): { targetRoot: string; bundleRoot: string
     const targetRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
     const bundleRoot = path.join(targetRoot, 'garda-agent-orchestrator');
     fs.mkdirSync(path.join(bundleRoot, 'runtime'), { recursive: true });
+    fs.writeFileSync(path.join(bundleRoot, 'VERSION'), '1.0.0\n');
     return {
         targetRoot,
         bundleRoot,
