@@ -1,0 +1,134 @@
+{
+  "kind": "INDEPENDENT_PROJECTION_OF_EXACT_DESKTOP_CATALOG_NOT_NATIVE_CAPABILITY_EVIDENCE",
+  "sourceRepository": "Shubchynskyi/garda-ai-desktop",
+  "sourcePath": "config/model-providers.json",
+  "sourceCommit": "245d71f5b16b899912b5be21a1aa9309a38425ed",
+  "sourceSha256": "3ddba0a985bb58d2c8ec7f755c4b381dde49e3971b95aebe572ca5e92a7c1bac",
+  "sourceSchemaVersion": 2,
+  "revision": "2026-09-29.1",
+  "cli": [
+    {
+      "id": "codex-cli",
+      "label": "Codex CLI",
+      "executable": "codex",
+      "unsupportedReason": null
+    },
+    {
+      "id": "claude-cli",
+      "label": "Claude Code CLI",
+      "executable": "claude",
+      "unsupportedReason": null
+    },
+    {
+      "id": "qwen-cli",
+      "label": "Qwen Code CLI",
+      "executable": "qwen",
+      "unsupportedReason": null
+    },
+    {
+      "id": "grok-cli",
+      "label": "Grok Build CLI",
+      "executable": "grok",
+      "unsupportedReason": null
+    },
+    {
+      "id": "opencode-cli",
+      "label": "OpenCode CLI",
+      "executable": "opencode",
+      "unsupportedReason": null
+    },
+    {
+      "id": "antigravity-cli",
+      "label": "Antigravity CLI",
+      "executable": "agy",
+      "unsupportedReason": null
+    },
+    {
+      "id": "kimi-cli",
+      "label": "Kimi Code CLI",
+      "executable": "kimi",
+      "unsupportedReason": null
+    },
+    {
+      "id": "codebuddy-cli",
+      "label": "CodeBuddy CLI",
+      "executable": "codebuddy",
+      "unsupportedReason": null
+    },
+    {
+      "id": "iflow-cli",
+      "label": "iFlow CLI",
+      "executable": "iflow",
+      "unsupportedReason": null
+    },
+    {
+      "id": "copilot-cli",
+      "label": "GitHub Copilot CLI",
+      "executable": "copilot",
+      "unsupportedReason": null
+    },
+    {
+      "id": "auggie-cli",
+      "label": "Augment Auggie CLI",
+      "executable": "auggie",
+      "unsupportedReason": "Managed execution requires a dedicated invocation and permission adapter; terminal MCP integration is supported."
+    },
+    {
+      "id": "cursor-cli",
+      "label": "Cursor Agent CLI",
+      "executable": "agent",
+      "unsupportedReason": "Managed execution requires a dedicated invocation and permission adapter; terminal MCP integration is supported."
+    },
+    {
+      "id": "junie-cli",
+      "label": "JetBrains Junie CLI",
+      "executable": "junie",
+      "unsupportedReason": "Managed execution requires a dedicated invocation and permission adapter; terminal MCP integration is supported."
+    },
+    {
+      "id": "kiro-cli",
+      "label": "Kiro CLI",
+      "executable": "kiro-cli",
+      "unsupportedReason": null
+    },
+    {
+      "id": "goose-cli",
+      "label": "Goose CLI",
+      "executable": "goose",
+      "unsupportedReason": null
+    },
+    {
+      "id": "cline-cli",
+      "label": "Cline CLI",
+      "executable": "cline",
+      "unsupportedReason": null
+    },
+    {
+      "id": "generic-cli",
+      "label": "Generic CLI agent",
+      "executable": "",
+      "unsupportedReason": null
+    }
+  ],
+  "modelApiIds": [
+    "lmstudio",
+    "ollama",
+    "openai",
+    "anthropic",
+    "gemini",
+    "openrouter",
+    "qwen",
+    "kimi",
+    "deepseek",
+    "zai",
+    "minimax",
+    "mistral",
+    "xai",
+    "groq",
+    "together",
+    "siliconflow",
+    "cerebras",
+    "openai-compatible",
+    "anthropic-compatible"
+  ]
+}

@@ -71,6 +71,13 @@ describe('provider-registry: internal consistency', () => {
         }
     });
 
+    it('marks only the historical DeepSeek model-provider identity as requiring a concrete host', () => {
+        assert.deepStrictEqual(getProviderEntries().filter((entry) => entry.requiresHostClient).map((entry) => entry.id), ['DeepSeek']);
+        assert.strictEqual(normalizeProviderId('deepseek-reasoner'), 'DeepSeek');
+        assert.strictEqual(getProviderEntrypointMap().DeepSeek, 'AGENTS.md');
+        assert.strictEqual(getReviewerCapabilityTier('DeepSeek'), 'delegation_required');
+    });
+
     it('delegation-required providers always expose launch metadata', () => {
         for (const entry of getProviderEntries().filter((provider) => provider.reviewerCapabilityTier === 'delegation_required')) {
             assert.ok(entry.reviewerLaunchLabel?.trim(), `${entry.id} is missing reviewerLaunchLabel`);

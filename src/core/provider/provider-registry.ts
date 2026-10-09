@@ -35,6 +35,8 @@ export interface ProviderEntry {
     readonly entrypointFile: string;
     /** Reviewer routing capability tier. */
     readonly reviewerCapabilityTier: ReviewerCapabilityTier;
+    /** Historical model-provider identities need an explicitly selected concrete client. */
+    readonly requiresHostClient?: boolean;
     /** Optional provider-specific delegated reviewer launch guidance. */
     readonly delegatedReviewerLaunchInstruction?: string;
     /** Provider-controller capabilities that remain available through reviewer-output validation. */
@@ -226,6 +228,7 @@ const PROVIDER_ENTRIES: readonly ProviderEntry[] = deepFreeze([
     {
         id: 'DeepSeek',
         displayLabel: 'DeepSeek',
+        requiresHostClient: true,
         reviewerLaunchLabel: 'DeepSeek',
         entrypointFile: 'AGENTS.md',
         reviewerCapabilityTier: 'delegation_required',
