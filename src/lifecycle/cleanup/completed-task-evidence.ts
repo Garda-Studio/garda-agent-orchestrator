@@ -15,6 +15,9 @@ import { buildTaskAuditSummary, type TaskAuditSummaryResult } from '../../gates/
 import {
     isLocalControlPlaneCommitPath, readPostDoneAuditedScopeFingerprint, resolveCommittableChangedFiles
 } from '../../gates/task-audit/task-audit-summary-drift';
+import {
+    computeSnapshotFingerprint, createWorkspaceSnapshotRequest, type WorkspaceSnapshotRequest
+} from '../../gates/workspace/workspace-snapshot-cache';
 
 const MAX_COMPACT_EVIDENCE_BYTES = 4 * 1024 * 1024;
 const GIT_EVIDENCE_TIMEOUT_MS = 60_000;
@@ -50,6 +53,13 @@ interface TerminalQueueSnapshot {
     hash: string;
     entries: ReadonlyMap<string, TaskQueueEntry>;
     duplicateIds: ReadonlySet<string>;
+}
+
+interface CompletedEvidenceBatch {
+    queue: TerminalQueueSnapshot;
+    workspace: WorkspaceSnapshotRequest;
+    hashes: Map<string, string>;
+    scopes: Array<{ audit: TaskAuditSummaryResult; scope: Record<string, unknown> }>;
 }
 
 function canonicalPath(value: string): string {
@@ -229,8 +239,10 @@ function readTerminalQueueSnapshot(repoRoot: string): TerminalQueueSnapshot {
     return { path: queuePath, hash, entries: parseTaskQueueEntriesFromContent(contents), duplicateIds };
 }
 
-function readAcceptedAudit(repoRoot: string, taskId: string, queue: TerminalQueueSnapshot): TaskAuditSummaryResult {
-    const audit = buildTaskAuditSummary({ repoRoot, taskId, taskQueueEntries: queue.entries });
+function readAcceptedAudit(repoRoot: string, taskId: string, batch: CompletedEvidenceBatch): TaskAuditSummaryResult {
+    const audit = buildTaskAuditSummary({
+        repoRoot, taskId, taskQueueEntries: batch.queue.entries, workspaceSnapshotRequest: batch.workspace
+    });
     if (audit.status !== 'PASS' || audit.integrity_status !== 'PASS'
         || audit.point_in_time_snapshot.status !== 'STABLE' || audit.final_closeout.status !== 'READY') {
         throw new Error(`Current native task audit does not accept closeout: ${audit.blockers.map(blocker => blocker.gate).join(', ') || audit.status}.`);
@@ -307,8 +319,8 @@ function verifyCommittedTaskFiles(repoRoot: string, head: string, audit: TaskAud
     if (batch.length > 0) verifyCommittedBlobBatch(repoRoot, batch);
 }
 
-function readCommittedTaskHead(repoRoot: string, audit: TaskAuditSummaryResult, hashes: Map<string, string>): string {
-    const changedFiles = resolveCommittableChangedFiles(repoRoot);
+function readCommittedTaskHead(repoRoot: string, audit: TaskAuditSummaryResult, hashes: Map<string, string>, workspace: WorkspaceSnapshotRequest): string {
+    const changedFiles = resolveCommittableChangedFiles(repoRoot, workspace);
     if (changedFiles === null || changedFiles.some(file => audit.changed_files.includes(file))) {
         throw new Error('Accepted task scope has not been committed unchanged.');
     }
@@ -318,12 +330,25 @@ function readCommittedTaskHead(repoRoot: string, audit: TaskAuditSummaryResult, 
     return head;
 }
 
-function inspectTaskWithQueue(options: CompletedTaskEvidenceOptions, repoRoot: string, queue: TerminalQueueSnapshot): CompletedTaskEvidence {
+function verifyEvidenceHashes(repoRoot: string, hashes: Map<string, string>, queuePath: string): void {
+    for (const [file, hash] of hashes) {
+        if (file === queuePath) continue;
+        if (hash === MISSING_FILE_BINDING) {
+            if (readContainedFileStat(repoRoot, file)) throw new Error('Accepted deletion changed during verification.');
+            continue;
+        }
+        assertEvidenceFile(repoRoot, file);
+        if (evidenceFileHash(file) !== hash) throw new Error('Completed evidence changed during verification.');
+    }
+}
+
+function inspectTaskWithQueue(options: CompletedTaskEvidenceOptions, repoRoot: string, batch: CompletedEvidenceBatch): CompletedTaskEvidence {
     const result: CompletedTaskEvidence = {
         eligible: false, reasons: [], task_id: options.taskId, repo_root: path.resolve(options.repoRoot),
         commit_sha: null, completion_event_sha256: null, evidence_sha256: null
     };
     try {
+        const queue = batch.queue;
         const taskId = assertCanonicalTaskId(options.taskId);
         const bundleRoot = path.join(repoRoot, resolveBundleName());
         if (queue.duplicateIds.has(taskId) || readTaskQueueStatusToken(queue.entries.get(taskId)?.status || '') !== 'DONE') {
@@ -333,27 +358,24 @@ function inspectTaskWithQueue(options: CompletedTaskEvidenceOptions, repoRoot: s
         assertEvidenceFile(repoRoot, timelinePath);
         const timelineHash = evidenceFileHash(timelinePath);
         const completionHash = currentCompletionHash(timelinePath);
-        const audit = readAcceptedAudit(repoRoot, taskId, queue);
+        const audit = readAcceptedAudit(repoRoot, taskId, batch);
         const closeout = verifyMaterializedCloseout(repoRoot, taskId, audit);
         const hashes = verifyCompactLedger(repoRoot, bundleRoot, taskId, audit, closeout.hash);
         hashes.set(queue.path, queue.hash);
         if (hashes.get(timelinePath) !== timelineHash) throw new Error('Completed timeline changed during verification.');
         if (options.requireCommittedScope !== false) {
-            result.commit_sha = readCommittedTaskHead(repoRoot, audit, hashes);
+            result.commit_sha = readCommittedTaskHead(repoRoot, audit, hashes, batch.workspace);
         }
-        for (const [file, hash] of hashes) {
-            if (file === queue.path) continue; // The shared canonical queue is revalidated once before batch publication.
-            if (hash === MISSING_FILE_BINDING) {
-                if (readContainedFileStat(repoRoot, file)) throw new Error('Accepted deletion changed during verification.');
-                continue;
-            }
-            assertEvidenceFile(repoRoot, file);
-            if (evidenceFileHash(file) !== hash) throw new Error('Completed evidence changed during verification.');
-        }
+        verifyEvidenceHashes(repoRoot, hashes, queue.path);
         if (result.commit_sha && runGit(repoRoot, ['rev-parse', '--verify', 'HEAD'], {
             timeoutMs: GIT_EVIDENCE_TIMEOUT_MS
         }).trim() !== result.commit_sha) throw new Error('Current commit changed during verification.');
         const acceptedScope = verifyAcceptedTaskScope(repoRoot, audit, closeout.scope);
+        for (const [file, hash] of hashes) {
+            if (batch.hashes.has(file) && batch.hashes.get(file) !== hash) throw new Error('Completed batch evidence changed between tasks.');
+            batch.hashes.set(file, hash);
+        }
+        batch.scopes.push({ audit, scope: closeout.scope });
         result.repo_root = repoRoot;
         result.completion_event_sha256 = completionHash;
         result.evidence_sha256 = createHash('sha256').update(JSON.stringify({
@@ -368,7 +390,7 @@ function inspectTaskWithQueue(options: CompletedTaskEvidenceOptions, repoRoot: s
     return result;
 }
 
-/** Shares only a private, invocation-owned queue snapshot; no caller-supplied success authority is accepted. */
+/** Shares private discovery only; fresh workspace and evidence checks precede batch publication. */
 export function inspectCompletedTaskEvidenceBatch(options: {
     repoRoot: string; taskIds: readonly string[]; requireCommittedScope?: boolean;
 }): ReadonlyMap<string, CompletedTaskEvidence> {
@@ -377,11 +399,22 @@ export function inspectCompletedTaskEvidenceBatch(options: {
     try {
         const repoRoot = fs.realpathSync.native(path.resolve(options.repoRoot));
         const queue = readTerminalQueueSnapshot(repoRoot);
+        const workspace = createWorkspaceSnapshotRequest(repoRoot);
+        const snapshot = JSON.stringify(workspace.read('git_auto', true, []));
+        const fingerprint = computeSnapshotFingerprint(repoRoot, 'git_auto', true, []).fingerprint;
+        const batch: CompletedEvidenceBatch = { queue, workspace, hashes: new Map(), scopes: [] };
         for (const taskId of new Set(options.taskIds)) {
-            results.set(taskId, inspectTaskWithQueue({ ...options, taskId }, repoRoot, queue));
+            results.set(taskId, inspectTaskWithQueue({ ...options, taskId }, repoRoot, batch));
         }
+        verifyEvidenceHashes(repoRoot, batch.hashes, queue.path);
+        for (const accepted of batch.scopes) verifyAcceptedTaskScope(repoRoot, accepted.audit, accepted.scope);
         assertEvidenceFile(repoRoot, queue.path);
         if (evidenceFileHash(queue.path) !== queue.hash) throw new Error('Task queue changed during completed evidence verification.');
+        const current = createWorkspaceSnapshotRequest(repoRoot).read('git_auto', true, []);
+        if (JSON.stringify(current) !== snapshot
+            || computeSnapshotFingerprint(repoRoot, 'git_auto', true, []).fingerprint !== fingerprint) {
+            throw new Error('Workspace changed during completed evidence verification.');
+        }
     } catch (error) {
         const reason = error instanceof Error ? error.message : 'Completed evidence is unavailable.';
         for (const taskId of new Set(options.taskIds)) results.set(taskId, {
