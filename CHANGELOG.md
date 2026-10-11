@@ -1,5 +1,44 @@
 # Changelog
 
+- Resume exact confirmed disposable payloads under native locks, with separate
+  historical, current-removal and pending-reconciliation counts and terminal repeats.
+
+
+- Continue exact disposable progress under native locks with bounded authenticated
+  resume attempts and separate counters for reconciled pending absence.
+
+
+- Validate exact remaining disposable payloads against native dependencies and
+  authenticated progress, retaining unresolved pending absence without counting it.
+
+
+- Inspect bounded authenticated disposable progress chains with exact signed
+  success and pending state, preserving metadata without granting absence authority.
+
+
+- Authenticate retained disposable owner and compact intent metadata after payload
+  removal, preserving signed creation anchors without granting recovery authority.
+
+
+- Remove exact confirmed disposable members after durable authenticated compact
+  intent and per-member progress, preserving remaining payload on authority drift.
+
+
+- Persist authenticated compact intent for exact sealed disposable retirement,
+  preserving payloads and native evidence through stale proof or storage errors.
+
+
+- Reject sparse disposable registration selections before publishing malformed
+  preview IDs; preserve owner, payload and compact evidence on invalid input.
+
+
+- Preview exact sealed disposable payloads only after authenticated committed
+  closeout, bounded dependency checks and compact retention proof.
+
+
+
+- T-186-2-1: add fresh workspace/task/native-run disposable producer registrations, authenticated separate ownership, bounded read-only inspection and producer-only idempotent sealing. Preserve interrupted roots and exclude both namespaces from generic purge; no payload removal is introduced.
+
 - Read hash-bound parent-audit proof records with contained ordinary-file
   identity, nonblocking descriptor acquisition and finite byte bounds. Reject
   stale, malformed or replaced inputs without granting aggregate acceptance

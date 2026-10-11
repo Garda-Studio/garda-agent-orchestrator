@@ -5,6 +5,18 @@ export type { TaskErasureSelection, TaskErasureBlocker, TaskErasureReference } f
 export * from './cleanup/cleanup-storage-policy';
 export * from './cleanup/cleanup-orchestration';
 export * from './cleanup/runtime-cleanup-ownership';
+export * from './cleanup/owned-disposable-artifact-contracts';
+export { registerOwnedDisposableArtifact, inspectOwnedDisposableArtifact, sealOwnedDisposableArtifact }
+    from './cleanup/owned-disposable-artifact-registration';
+export { previewOwnedDisposableArtifacts } from './cleanup/owned-disposable-artifact-preview';
+export type { OwnedDisposableArtifactPreviewSelection, OwnedDisposableArtifactPreview,
+    OwnedDisposableArtifactItemPreview, OwnedDisposableArtifactFilePreview } from './cleanup/owned-disposable-artifact-preview-contracts';
+export { prepareOwnedDisposableArtifactRetirement, inspectOwnedDisposableArtifactRetirement }
+    from './cleanup/owned-disposable-artifact-journal';
+export type { OwnedDisposableArtifactJournalSelection, OwnedDisposableArtifactJournalOptions,
+    OwnedDisposableArtifactJournalResult } from './cleanup/owned-disposable-artifact-journal';
+export { removeOwnedDisposableArtifacts } from './cleanup/owned-disposable-artifact-removal';
+export type { OwnedDisposableArtifactRemovalResult } from './cleanup/owned-disposable-artifact-removal';
 export { previewRetiredWipCleanup } from './cleanup/cleanup-wip-preview';
 export type { WipCleanupSelection, WipCleanupPackagePreview, RetiredWipCleanupPreview } from './cleanup/cleanup-wip-preview';
 export { removeRetiredWipPackages } from './cleanup/cleanup-wip-removal';

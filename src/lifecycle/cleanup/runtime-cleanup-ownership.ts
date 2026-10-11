@@ -3,6 +3,7 @@ import { isCanonicalTaskId, parseStructuredTaskArtifactTaskId } from '../../core
 
 const PROTECTED_GENERIC_SCRATCH_NAMES = new Set([
     'reviews', 'wip', 'scratch-writers', '.scratch-writers.lock', 'owner.json',
+    'owned-disposable', 'disposable-producers',
     'project-memory', 'task-events', 'task-ledger', 'manual-validation', 'plans', 'compact',
     'reviews-index.json', 'all-tasks.jsonl', 'metrics.jsonl', '.timeline-summary.json'
 ]);
@@ -127,6 +128,33 @@ export interface RuntimeCleanupStandardPaths {
 }
 
 export const RUNTIME_CLEANUP_OWNERSHIP_ENTRIES = Object.freeze([
+    {
+        id: 'owned-disposable-payloads',
+        location: 'runtime/owned-disposable/<task-id>/<native-run-id>/<registration-id>/',
+        ownership: 'mixed',
+        selectionUnit: 'mixed-directory',
+        taskLocator: 'Authenticated producer registration binds workspace, task, current native run and fresh root identity.',
+        taskPurgeMode: 'exclude-from-task-purge',
+        retentionMode: 'operator-managed',
+        sharedSideEffects: [],
+        notes: [
+            'The namespace may contain orphan or unverified roots; task-shaped names do not prove ownership.',
+            'Only the dedicated compact-first transaction may retire authenticated sealed eligible payloads; names and age grant no deletion authority.'
+        ],
+        examples: ['runtime/owned-disposable/T-001/<run-id>/<registration-id>/stdout.log']
+    },
+    {
+        id: 'disposable-producer-registrations',
+        location: 'runtime/disposable-producers/',
+        ownership: 'shared-generated',
+        selectionUnit: 'shared-directory',
+        taskLocator: 'Separate producer records and workspace-bound registration authority; never payload data.',
+        taskPurgeMode: 'exclude-from-task-purge',
+        retentionMode: 'operator-managed',
+        sharedSideEffects: [],
+        notes: ['Preserve registrations and authority during interruptions and ordinary retention or task purge.'],
+        examples: ['runtime/disposable-producers/T-001/<registration-id>.json']
+    },
     {
         id: 'wip-task-packages',
         location: 'runtime/wip/<task-id>/**',
