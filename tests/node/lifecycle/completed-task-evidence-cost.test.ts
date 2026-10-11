@@ -73,17 +73,27 @@ test('completed evidence shares workspace discovery within one batch of genuine 
     const childProcess = require('node:child_process') as typeof import('node:child_process');
     const originalExec = childProcess.execFileSync, originalSpawn = childProcess.spawnSync;
     let gitCalls = 0;
+    let headQueries = 0, numstatQueries = 0;
+    function recordGit(command: unknown, args: unknown): void {
+        if (command !== 'git') return;
+        gitCalls += 1;
+        const argumentsList = Array.isArray(args) ? args.map(String) : [];
+        if (argumentsList.includes('rev-parse')) headQueries += 1;
+        if (argumentsList.includes('--numstat')) numstatQueries += 1;
+    }
     t.mock.method(childProcess, 'execFileSync', (...args: Parameters<typeof childProcess.execFileSync>) => {
-        if (args[0] === 'git') gitCalls += 1;
+        recordGit(args[0], args[1]);
         return originalExec(...args);
     });
     t.mock.method(childProcess, 'spawnSync', (...args: Parameters<typeof childProcess.spawnSync>) => {
-        if (args[0] === 'git') gitCalls += 1;
+        recordGit(args[0], args[1]);
         return originalSpawn(...args);
     });
     const single = inspectCompletedTaskEvidenceBatch({ repoRoot: fixture.root, taskIds: TASK_IDS.slice(0, 1) });
     assert.ok([...single.values()].every(result => result.eligible), JSON.stringify([...single.values()]));
     const singleCalls = gitCalls;
+    assert.equal(headQueries, 2, 'fresh before/after fingerprints already bind HEAD for the whole batch');
+    assert.equal(numstatQueries, 0, 'a fresh canonical generation without changes has no diff statistics to discover');
     gitCalls = 0;
     const batch = inspectCompletedTaskEvidenceBatch({ repoRoot: fixture.root, taskIds: TASK_IDS });
     assert.deepEqual([...batch.keys()], TASK_IDS);
@@ -91,6 +101,9 @@ test('completed evidence shares workspace discovery within one batch of genuine 
     t.diagnostic(`Real Git processes: one task=${singleCalls}, three-task batch=${gitCalls}`);
     assert.ok(gitCalls <= singleCalls + 8 * (TASK_IDS.length - 1),
         `workspace discovery repeated across tasks: one=${singleCalls}, batch=${gitCalls}`);
+    fs.writeFileSync(path.join(fixture.root, 'example.txt'), 'changed after the previous successful proof\n');
+    const later = inspectCompletedTaskEvidenceBatch({ repoRoot: fixture.root, taskIds: TASK_IDS.slice(0, 1) });
+    assert.equal(later.get(TASK_IDS[0])!.eligible, false, 'a later operation must reconstruct current evidence');
 });
 
 for (const drift of ['HEAD', 'index', 'worktree', 'Git configuration'] as const) {

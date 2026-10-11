@@ -837,6 +837,11 @@ export function createWorkspaceSnapshotGitGeneration(repoRoot: string): Workspac
         readNumstat(useStaged: boolean): readonly string[] {
             const cached = numstatByTarget.get(useStaged);
             if (cached) return cached;
+            if (readClassificationSnapshot().classification.changes.length === 0) {
+                const empty = Object.freeze([] as string[]);
+                numstatByTarget.set(useStaged, empty);
+                return empty;
+            }
             const args = ['diff', '--numstat', '--diff-filter=ACDMRTUXB', useStaged ? '--cached' : 'HEAD'];
             const rows = Object.freeze(runWorkspaceSnapshotGitLines(
                 resolvedRepoRoot,

@@ -58,6 +58,7 @@ interface TerminalQueueSnapshot {
 interface CompletedEvidenceBatch {
     queue: TerminalQueueSnapshot;
     workspace: WorkspaceSnapshotRequest;
+    headSha: string | null;
     hashes: Map<string, string>;
     scopes: Array<{ audit: TaskAuditSummaryResult; scope: Record<string, unknown> }>;
 }
@@ -319,13 +320,13 @@ function verifyCommittedTaskFiles(repoRoot: string, head: string, audit: TaskAud
     if (batch.length > 0) verifyCommittedBlobBatch(repoRoot, batch);
 }
 
-function readCommittedTaskHead(repoRoot: string, audit: TaskAuditSummaryResult, hashes: Map<string, string>, workspace: WorkspaceSnapshotRequest): string {
-    const changedFiles = resolveCommittableChangedFiles(repoRoot, workspace);
+function readCommittedTaskHead(repoRoot: string, audit: TaskAuditSummaryResult, hashes: Map<string, string>, batch: CompletedEvidenceBatch): string {
+    const changedFiles = resolveCommittableChangedFiles(repoRoot, batch.workspace);
     if (changedFiles === null || changedFiles.some(file => audit.changed_files.includes(file))) {
         throw new Error('Accepted task scope has not been committed unchanged.');
     }
-    const head = runGit(repoRoot, ['rev-parse', '--verify', 'HEAD'], { timeoutMs: GIT_EVIDENCE_TIMEOUT_MS }).trim();
-    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(head)) throw new Error('Current commit identity is unavailable.');
+    const head = batch.headSha;
+    if (!head || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(head)) throw new Error('Current commit identity is unavailable.');
     verifyCommittedTaskFiles(repoRoot, head, audit, hashes);
     return head;
 }
@@ -364,12 +365,9 @@ function inspectTaskWithQueue(options: CompletedTaskEvidenceOptions, repoRoot: s
         hashes.set(queue.path, queue.hash);
         if (hashes.get(timelinePath) !== timelineHash) throw new Error('Completed timeline changed during verification.');
         if (options.requireCommittedScope !== false) {
-            result.commit_sha = readCommittedTaskHead(repoRoot, audit, hashes, batch.workspace);
+            result.commit_sha = readCommittedTaskHead(repoRoot, audit, hashes, batch);
         }
         verifyEvidenceHashes(repoRoot, hashes, queue.path);
-        if (result.commit_sha && runGit(repoRoot, ['rev-parse', '--verify', 'HEAD'], {
-            timeoutMs: GIT_EVIDENCE_TIMEOUT_MS
-        }).trim() !== result.commit_sha) throw new Error('Current commit changed during verification.');
         const acceptedScope = verifyAcceptedTaskScope(repoRoot, audit, closeout.scope);
         for (const [file, hash] of hashes) {
             if (batch.hashes.has(file) && batch.hashes.get(file) !== hash) throw new Error('Completed batch evidence changed between tasks.');
@@ -401,8 +399,8 @@ export function inspectCompletedTaskEvidenceBatch(options: {
         const queue = readTerminalQueueSnapshot(repoRoot);
         const workspace = createWorkspaceSnapshotRequest(repoRoot);
         const snapshot = JSON.stringify(workspace.read('git_auto', true, []));
-        const fingerprint = computeSnapshotFingerprint(repoRoot, 'git_auto', true, []).fingerprint;
-        const batch: CompletedEvidenceBatch = { queue, workspace, hashes: new Map(), scopes: [] };
+        const fingerprint = computeSnapshotFingerprint(repoRoot, 'git_auto', true, []);
+        const batch: CompletedEvidenceBatch = { queue, workspace, headSha: fingerprint.headSha, hashes: new Map(), scopes: [] };
         for (const taskId of new Set(options.taskIds)) {
             results.set(taskId, inspectTaskWithQueue({ ...options, taskId }, repoRoot, batch));
         }
@@ -412,7 +410,7 @@ export function inspectCompletedTaskEvidenceBatch(options: {
         if (evidenceFileHash(queue.path) !== queue.hash) throw new Error('Task queue changed during completed evidence verification.');
         const current = createWorkspaceSnapshotRequest(repoRoot).read('git_auto', true, []);
         if (JSON.stringify(current) !== snapshot
-            || computeSnapshotFingerprint(repoRoot, 'git_auto', true, []).fingerprint !== fingerprint) {
+            || computeSnapshotFingerprint(repoRoot, 'git_auto', true, []).fingerprint !== fingerprint.fingerprint) {
             throw new Error('Workspace changed during completed evidence verification.');
         }
     } catch (error) {
