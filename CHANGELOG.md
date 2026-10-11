@@ -1,5 +1,7 @@
 # Changelog
 
+- Freeze technology-neutral recipe, input and executable identities with bounded
+  contained reads and current audited configuration binding (T-242-2-2).
 - Validate versioned technology-neutral recipe declarations, literal target
   binding and test-role expected-red eligibility without execution activation
   (T-242-2-1-2).
