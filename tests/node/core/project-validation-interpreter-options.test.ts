@@ -17,6 +17,8 @@ const fileBoundaries: BoundaryCase[] = [
     ['python', ['-IW', 'javascript:debug', 'check.py'], 2, [1]],
     ['python', ['-Xsetting=javascript:debug', 'check.py'], 1, [0]],
     ['python', ['-Wonce', 'check.py'], 1, [0]],
+    ['python', ['-W=ignore', 'check.py', '-c'], 1, [0]],
+    ['python', ['-X=dev', 'check.py', '-c'], 1, [0]],
     ['python', ['-I', '-m', 'suite.cli', '-c'], 2, []],
     ['python', ['-mpackage.m', 'javascript:literal'], 0, []],
     ...['-Itest', '-MFile::Spec', '-mFile::Spec', '-Mlib=left,right', '-wItest', '-Ftext', '-i.bak'].map((flag): BoundaryCase =>

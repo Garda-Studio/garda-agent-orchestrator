@@ -79,12 +79,12 @@ export function parseValidationInterpreterPrefix(tool: string, argv: readonly st
         const registeredValue = Object.hasOwn(VALUE_OPTIONS, tool) && VALUE_OPTIONS[tool].includes(flag) && !(isShell && argument.includes('='));
         const programValue = tool === 'node' && ['-r', '--require', '--import', '--loader', '--experimental-loader'].includes(flag);
         if ((pythonValue || shellValue || registeredValue) && !argument.includes('=') && index + 1 >= argv.length) return conservative;
-        if ((pythonValue || shellValue || registeredValue) && !programValue) literalValueIndices.push(argument.includes('=') ? index : index + 1);
         if (tool === 'python' && /^-[bBdEiIOPqRsSuv]*[WX]./u.test(argument) || tool === 'zsh' && knownShellValue && shellOption[2] && !shellOption[2].startsWith('=')) {
             options.push(argument);
             literalValueIndices.push(index);
             continue;
         }
+        if ((pythonValue || shellValue || registeredValue) && !programValue) literalValueIndices.push(argument.includes('=') ? index : index + 1);
         if (isShell && /^-[A-Za-z]*[cs][A-Za-z]*$/u.test(argument)) return conservative;
         options.push(argument);
         if (pythonValue || shellValue || Object.hasOwn(VALUE_OPTIONS, tool) && VALUE_OPTIONS[tool].includes(argument)) { index++; continue; }
