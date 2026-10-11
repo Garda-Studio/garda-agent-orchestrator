@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -29,6 +30,10 @@ const mutableTaskEventIoWrite = require('../../../src/gate-runtime/timeline/task
     appendTaskEventLineAsync: typeof import('../../../src/gate-runtime/timeline/task-events-io-write').appendTaskEventLineAsync;
 };
 
+const mutableFilesystem = require('../../../src/core/filesystem') as {
+    writeFileAtomically: typeof import('../../../src/core/filesystem').writeFileAtomically;
+};
+
 function createTempRoot(prefix: string): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
@@ -43,6 +48,33 @@ function generationHeadPath(root: string): string {
 
 function generationAnchorPath(root: string): string {
     return path.join(root, 'runtime', '.runtime-mutation-generation.anchor.json');
+}
+
+function interruptJournalWrite(
+    root: string,
+    interruptionPoint: 'slot' | 'head' | 'anchor',
+    callback: () => unknown
+): void {
+    const head = JSON.parse(fs.readFileSync(generationHeadPath(root), 'utf8')) as { transition_sequence: number };
+    const nextSlot = (head.transition_sequence + 1) % 2 === 0 ? 'state-a.json' : 'state-b.json';
+    const targetPath = interruptionPoint === 'slot'
+        ? path.join(generationDirectory(root), nextSlot)
+        : interruptionPoint === 'head' ? generationHeadPath(root) : generationAnchorPath(root);
+    const originalWrite = mutableFilesystem.writeFileAtomically;
+    let interrupted = false;
+    mutableFilesystem.writeFileAtomically = (filePath, content, options) => {
+        if (path.resolve(filePath) === targetPath) {
+            interrupted = true;
+            throw new Error(`injected journal ${interruptionPoint} failure`);
+        }
+        return originalWrite(filePath, content, options);
+    };
+    try {
+        assert.throws(callback, /injected journal .* failure/);
+        assert.equal(interrupted, true);
+    } finally {
+        mutableFilesystem.writeFileAtomically = originalWrite;
+    }
 }
 
 function resolveGenerationModulePath(): string {
@@ -93,6 +125,176 @@ function runGenerationWorker(
         });
     });
 }
+
+function leaveExitedMutationOwner(root: string, count = 1): void {
+    const result = spawnSync(process.execPath, ['--eval', [
+        "const fs = require('node:fs');",
+        'const journal = require(process.argv[1]);',
+        'const root = process.argv[2];',
+        'for (let i = 0; i < Number(process.argv[3]); i++) journal.beginRuntimeMutationGeneration(root, "exited-owner");',
+        'fs.writeFileSync(root + "/canonical.txt", "persisted before exit\\n");'
+    ].join('\n'), resolveGenerationModulePath(), root, String(count)], { encoding: 'utf8', timeout: 10_000 });
+    assert.equal(result.status, 0, result.stderr || String(result.error));
+}
+
+function rewriteIntentOwner(root: string, rewrite: (intent: Record<string, unknown>) => void): void {
+    const head = JSON.parse(fs.readFileSync(generationHeadPath(root), 'utf8')) as Record<string, unknown>;
+    const statePath = path.join(generationDirectory(root), `state-${head.active_slot}.json`);
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as Record<string, unknown>;
+    const intents = state.active_mutations as Array<Record<string, unknown>>;
+    assert.equal(intents.length, 1);
+    rewrite(intents[0]);
+    const rehash = (record: Record<string, unknown>, field: string) => {
+        const { [field]: ignored, ...hashInput } = record;
+        record[field] = createHash('sha256').update(JSON.stringify(hashInput), 'utf8').digest('hex');
+    };
+    rehash(state, 'state_sha256');
+    head.state_sha256 = state.state_sha256;
+    rehash(head, 'head_sha256');
+    const anchor = JSON.parse(fs.readFileSync(generationAnchorPath(root), 'utf8')) as Record<string, unknown>;
+    anchor.state_sha256 = state.state_sha256; anchor.head_sha256 = head.head_sha256;
+    rehash(anchor, 'anchor_sha256');
+    for (const [target, value] of [[statePath, state], [generationHeadPath(root), head], [generationAnchorPath(root), anchor]] as const) {
+        fs.writeFileSync(target, `${JSON.stringify(value, null, 2)}\n`);
+    }
+}
+
+test('runtime mutation generation recovers an exited real owner only on locked write entry', { skip: process.platform !== 'linux' }, () => {
+    const root = createTempRoot('garda-runtime-orphan-');
+    try {
+        leaveExitedMutationOwner(root);
+        const beforeHead = fs.readFileSync(generationHeadPath(root));
+        assert.throws(() => readRuntimeMutationGeneration(root), (error: unknown) =>
+            error instanceof RuntimeMutationGenerationError && error.code === 'BUSY');
+        assert.deepEqual(fs.readFileSync(generationHeadPath(root)), beforeHead, 'reader must stay read-only');
+        let callbackCount = 0;
+        withRuntimeMutationGeneration(root, 'next-writer', () => { callbackCount += 1; });
+        assert.equal(callbackCount, 1);
+        assert.equal(fs.readFileSync(path.join(root, 'canonical.txt'), 'utf8'), 'persisted before exit\n');
+        assert.equal(readRuntimeMutationGeneration(root).generation, 2, 'recovery invalidates potentially changed canonical bytes');
+        assert.equal(readRuntimeMutationGeneration(root).transition_sequence, 4);
+        withRuntimeMutationGeneration(root, 'later-writer', () => undefined);
+        assert.equal(readRuntimeMutationGeneration(root).generation, 3, 'orphan is settled exactly once');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('runtime mutation generation preserves a live real owner until it settles', { skip: process.platform !== 'linux', timeout: 20_000 }, async () => {
+    const root = createTempRoot('garda-runtime-live-owner-');
+    const child = spawn(process.execPath, ['--eval', [
+        'const journal = require(process.argv[1]);',
+        'const ticket = journal.beginRuntimeMutationGeneration(process.argv[2], "live-owner");',
+        'process.stdout.write("ready\\n");',
+        'process.stdin.once("data", () => { journal.abortRuntimeMutationGeneration(ticket); process.stdin.destroy(); });'
+    ].join('\n'), resolveGenerationModulePath(), root], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const exited = new Promise<number | null>((resolve, reject) => {
+        child.once('error', reject); child.once('close', resolve);
+    });
+    try {
+        await new Promise<void>((resolve, reject) => {
+            child.stdout.once('data', () => resolve()); child.once('error', reject);
+            child.once('exit', () => reject(new Error('owner exited before ready')));
+        });
+        withRuntimeMutationGeneration(root, 'concurrent-writer', () => undefined);
+        assert.throws(() => readRuntimeMutationGeneration(root), (error: unknown) =>
+            error instanceof RuntimeMutationGenerationError && error.code === 'BUSY');
+        child.stdin.end('settle\n');
+        assert.equal(await exited, 0);
+        assert.equal(readRuntimeMutationGeneration(root).generation, 1);
+        assert.equal(readRuntimeMutationGeneration(root).transition_sequence, 4);
+    } finally {
+        if (child.exitCode === null) child.kill();
+        await exited;
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+for (const ownerKind of ['legacy', 'null', 'foreign-host', 'foreign-boot', 'foreign-namespace', 'foreign-time', 'legacy-clock', 'null-clock'] as const) {
+    test(`runtime mutation generation preserves ${ownerKind} ownership`, { skip: process.platform !== 'linux' }, () => {
+        const root = createTempRoot('garda-runtime-preserved-owner-');
+        try {
+            const ticket = beginRuntimeMutationGeneration(root, 'preserved-owner');
+            rewriteIntentOwner(root, (intent) => {
+                if (ownerKind === 'legacy') delete intent.owner;
+                else if (ownerKind === 'null') intent.owner = null;
+                else {
+                    const owner = intent.owner as Record<string, unknown>;
+                    if (ownerKind === 'foreign-host') owner.hostname = 'another-host';
+                    else if (ownerKind === 'foreign-boot') owner.boot_id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+                    else if (ownerKind === 'foreign-namespace') owner.pid_namespace = 'pid:[999999999]';
+                    else if (ownerKind === 'foreign-time') owner.time_namespace = 'time:[999999999]';
+                    else if (ownerKind === 'legacy-clock') delete owner.time_namespace;
+                    else owner.time_namespace = null;
+                }
+            });
+            withRuntimeMutationGeneration(root, 'next-writer', () => undefined);
+            assert.throws(() => readRuntimeMutationGeneration(root), (error: unknown) =>
+                error instanceof RuntimeMutationGenerationError && error.code === 'BUSY');
+            assert.equal(abortRuntimeMutationGeneration(ticket).generation, 1);
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    });
+}
+
+test('runtime mutation generation recognizes old generation even when its PID is now live', { skip: process.platform !== 'linux' || !fs.existsSync('/proc/self/ns/time') }, () => {
+    const root = createTempRoot('garda-runtime-reused-pid-');
+    try {
+        beginRuntimeMutationGeneration(root, 'old-process-generation');
+        rewriteIntentOwner(root, (intent) => {
+            const owner = intent.owner as Record<string, unknown>;
+            owner.start_time_ticks = `${owner.start_time_ticks}1`;
+        });
+        withRuntimeMutationGeneration(root, 'new-process-generation', () => undefined);
+        assert.equal(readRuntimeMutationGeneration(root).generation, 2);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('runtime mutation generation rejects malformed owner even with recomputed journal hashes', () => {
+    const root = createTempRoot('garda-runtime-forged-owner-');
+    try {
+        beginRuntimeMutationGeneration(root, 'malformed-owner');
+        rewriteIntentOwner(root, (intent) => { intent.owner = { pid: 123, hostname: 'unknown' }; });
+        assert.throws(() => beginRuntimeMutationGeneration(root, 'later-writer'), (error: unknown) =>
+            error instanceof RuntimeMutationGenerationError && error.code === 'CORRUPT');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+for (const interruptionPoint of ['slot', 'head', 'anchor'] as const) {
+    test(`runtime mutation generation retries orphan recovery after ${interruptionPoint} publication failure`, { skip: process.platform !== 'linux' }, () => {
+        const root = createTempRoot('garda-runtime-orphan-retry-');
+        try {
+            leaveExitedMutationOwner(root);
+            let callbacks = 0;
+            interruptJournalWrite(root, interruptionPoint, () => withRuntimeMutationGeneration(root, 'failed-entry', () => { callbacks += 1; }));
+            assert.equal(callbacks, 0);
+            withRuntimeMutationGeneration(root, 'recovered-entry', () => { callbacks += 1; });
+            assert.equal(callbacks, 1);
+            assert.equal(readRuntimeMutationGeneration(root).generation, 2);
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    });
+}
+
+test('runtime mutation generation serializes competing real recoverers and preserves every orphan settlement', { skip: process.platform !== 'linux' }, async () => {
+    const root = createTempRoot('garda-runtime-orphan-contention-');
+    try {
+        leaveExitedMutationOwner(root, 3);
+        const signalPath = path.join(root, 'start.signal');
+        const workers = Array.from({ length: 2 }, () => runGenerationWorker(resolveGenerationModulePath(), root, signalPath, 1));
+        fs.writeFileSync(signalPath, 'start\n');
+        await Promise.all(workers);
+        assert.equal(readRuntimeMutationGeneration(root).generation, 5);
+        assert.equal(readRuntimeMutationGeneration(root).transition_sequence, 10);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('runtime mutation generation rejects oversized owner-bearing state before publication', () => {
+    const root = createTempRoot('garda-runtime-capacity-');
+    try {
+        withRuntimeMutationGeneration(root, 'seed', () => undefined);
+        const before = readRuntimeMutationGeneration(root);
+        assert.throws(() => beginRuntimeMutationGeneration(root, 'x'.repeat(1024 * 1024)), (error: unknown) =>
+            error instanceof RuntimeMutationGenerationError && error.code === 'BUSY');
+        assert.deepEqual(readRuntimeMutationGeneration(root), before);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test('runtime mutation generation fails closed when missing and while a mutation is active', () => {
     const root = createTempRoot('garda-runtime-generation-state-');
@@ -162,6 +364,188 @@ test('runtime mutation generation recovers an interrupted BEGIN before head or a
         } finally {
             fs.rmSync(root, { recursive: true, force: true });
         }
+    }
+});
+
+for (const interruptionPoint of ['slot', 'head', 'anchor'] as const) {
+    test(`runtime mutation generation retries BEGIN after a ${interruptionPoint} write failure`, () => {
+        const root = createTempRoot(`garda-runtime-begin-${interruptionPoint}-`);
+        try {
+            withRuntimeMutationGeneration(root, 'seed', () => undefined);
+            const before = readRuntimeMutationGeneration(root);
+            interruptJournalWrite(root, interruptionPoint, () => beginRuntimeMutationGeneration(root, 'interrupted-begin'));
+            assert.deepEqual(readRuntimeMutationGeneration(root), before);
+            withRuntimeMutationGeneration(root, 'retry-begin', () => undefined);
+            const recovered = readRuntimeMutationGeneration(root);
+            assert.equal(recovered.generation, 2);
+            assert.equal(recovered.transition_sequence, 4);
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    for (const { transition, settle, expectedGeneration } of [
+        { transition: 'COMMIT', settle: commitRuntimeMutationGeneration, expectedGeneration: 2 },
+        { transition: 'ABORT', settle: abortRuntimeMutationGeneration, expectedGeneration: 1 }
+    ] as const) {
+        test(`runtime mutation generation retries ${transition} after a ${interruptionPoint} write failure`, () => {
+            const root = createTempRoot(`garda-runtime-${transition.toLowerCase()}-${interruptionPoint}-`);
+            try {
+                withRuntimeMutationGeneration(root, 'seed', () => undefined);
+                const ticket = beginRuntimeMutationGeneration(root, 'interrupted-settlement');
+                interruptJournalWrite(root, interruptionPoint, () => settle(ticket));
+                assert.throws(
+                    () => readRuntimeMutationGeneration(root),
+                    (error: unknown) => error instanceof RuntimeMutationGenerationError && error.code === 'BUSY'
+                );
+                const recovered = settle(ticket);
+                assert.equal(recovered.generation, expectedGeneration);
+                assert.equal(recovered.transition_sequence, 4);
+                assert.deepEqual(readRuntimeMutationGeneration(root), recovered);
+                assert.deepEqual(settle(ticket), recovered);
+                assert.throws(
+                    () => settle({ ...ticket, mutation_kind: 'different-kind' }),
+                    (error: unknown) => error instanceof RuntimeMutationGenerationError && error.code === 'CORRUPT'
+                );
+                const opposite = transition === 'COMMIT' ? abortRuntimeMutationGeneration : commitRuntimeMutationGeneration;
+                assert.throws(
+                    () => opposite(ticket),
+                    (error: unknown) => error instanceof RuntimeMutationGenerationError && error.code === 'CORRUPT'
+                );
+                assert.deepEqual(readRuntimeMutationGeneration(root), recovered);
+            } finally {
+                fs.rmSync(root, { recursive: true, force: true });
+            }
+        });
+    }
+}
+
+test('runtime mutation generation recovers anchor failure followed by retry head failure', (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.UTC(2026, 0, 1) });
+    try {
+        for (const transition of ['BEGIN', 'COMMIT', 'ABORT'] as const) {
+            const root = createTempRoot(`garda-runtime-mixed-${transition.toLowerCase()}-`);
+            try {
+                withRuntimeMutationGeneration(root, 'seed', () => undefined);
+                const before = readRuntimeMutationGeneration(root);
+                const ticket = transition === 'BEGIN' ? null : beginRuntimeMutationGeneration(root, 'pending');
+                const retry = () => ticket === null
+                    ? beginRuntimeMutationGeneration(root, 'retry-begin')
+                    : transition === 'COMMIT' ? commitRuntimeMutationGeneration(ticket) : abortRuntimeMutationGeneration(ticket);
+                interruptJournalWrite(root, 'anchor', retry);
+                const firstHead = JSON.parse(fs.readFileSync(generationHeadPath(root), 'utf8')) as {
+                    active_slot: 'a' | 'b'; state_sha256: string;
+                };
+                t.mock.timers.tick(1);
+                interruptJournalWrite(root, 'head', retry);
+                const replacement = JSON.parse(fs.readFileSync(
+                    path.join(generationDirectory(root), `state-${firstHead.active_slot}.json`), 'utf8'
+                )) as { state_sha256: string };
+                assert.notEqual(replacement.state_sha256, firstHead.state_sha256);
+                if (ticket === null) {
+                    assert.deepEqual(readRuntimeMutationGeneration(root), before);
+                    withRuntimeMutationGeneration(root, 'recovered-begin', () => undefined);
+                } else {
+                    assert.throws(
+                        () => readRuntimeMutationGeneration(root),
+                        (error: unknown) => error instanceof RuntimeMutationGenerationError && error.code === 'BUSY'
+                    );
+                    retry();
+                }
+                const recovered = readRuntimeMutationGeneration(root);
+                assert.equal(recovered.generation, transition === 'ABORT' ? 1 : 2);
+                assert.equal(recovered.transition_sequence, 4);
+            } finally {
+                fs.rmSync(root, { recursive: true, force: true });
+            }
+        }
+    } finally {
+        t.mock.timers.reset();
+    }
+});
+
+test('runtime mutation generation rejects an anchored head naming a different state hash', () => {
+    const root = createTempRoot('garda-runtime-inconsistent-anchored-head-');
+    try {
+        withRuntimeMutationGeneration(root, 'seed', () => undefined);
+        const head = JSON.parse(fs.readFileSync(generationHeadPath(root), 'utf8')) as {
+            state_sha256: string; head_sha256: string;
+        };
+        head.state_sha256 = '0'.repeat(64);
+        const { head_sha256: ignoredHeadHash, ...headHashInput } = head;
+        head.head_sha256 = createHash('sha256').update(JSON.stringify(headHashInput), 'utf8').digest('hex');
+        const anchor = JSON.parse(fs.readFileSync(generationAnchorPath(root), 'utf8')) as {
+            head_sha256: string; anchor_sha256: string;
+        };
+        anchor.head_sha256 = head.head_sha256;
+        const { anchor_sha256: ignoredAnchorHash, ...anchorHashInput } = anchor;
+        anchor.anchor_sha256 = createHash('sha256').update(JSON.stringify(anchorHashInput), 'utf8').digest('hex');
+        fs.writeFileSync(generationHeadPath(root), JSON.stringify(head), 'utf8');
+        fs.writeFileSync(generationAnchorPath(root), JSON.stringify(anchor), 'utf8');
+        assert.throws(
+            () => readRuntimeMutationGeneration(root),
+            (error: unknown) => error instanceof RuntimeMutationGenerationError && error.code === 'CORRUPT'
+        );
+        assert.throws(
+            () => beginRuntimeMutationGeneration(root, 'rejected'),
+            (error: unknown) => error instanceof RuntimeMutationGenerationError && error.code === 'CORRUPT'
+        );
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('runtime mutation generation rejects an unpublished settlement with a valid hash and a foreign ticket', () => {
+    const root = createTempRoot('garda-runtime-foreign-settlement-');
+    try {
+        withRuntimeMutationGeneration(root, 'seed', () => undefined);
+        const ticket = beginRuntimeMutationGeneration(root, 'pending');
+        interruptJournalWrite(root, 'head', () => commitRuntimeMutationGeneration(ticket));
+        const statePath = path.join(generationDirectory(root), 'state-a.json');
+        const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as {
+            transition: { mutation_id: string };
+            state_sha256: string;
+        };
+        state.transition.mutation_id = 'foreign-mutation';
+        const { state_sha256: ignoredHash, ...hashInput } = state;
+        state.state_sha256 = createHash('sha256').update(JSON.stringify(hashInput), 'utf8').digest('hex');
+        fs.writeFileSync(statePath, JSON.stringify(state), 'utf8');
+        assert.throws(
+            () => commitRuntimeMutationGeneration(ticket),
+            (error: unknown) => error instanceof RuntimeMutationGenerationError && error.code === 'CORRUPT'
+        );
+        assert.throws(
+            () => readRuntimeMutationGeneration(root),
+            (error: unknown) => error instanceof RuntimeMutationGenerationError && error.code === 'CORRUPT'
+        );
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('runtime mutation generation rejects foreign, opposite and stale settlement retries', () => {
+    const root = createTempRoot('garda-runtime-settlement-identity-');
+    try {
+        const ticket = beginRuntimeMutationGeneration(root, 'first');
+        const committed = commitRuntimeMutationGeneration(ticket);
+        assert.deepEqual(commitRuntimeMutationGeneration(ticket), committed);
+        assert.throws(
+            () => commitRuntimeMutationGeneration({ ...ticket, mutation_kind: 'foreign-kind' }),
+            (error: unknown) => error instanceof RuntimeMutationGenerationError && error.code === 'CORRUPT'
+        );
+        assert.throws(
+            () => abortRuntimeMutationGeneration(ticket),
+            (error: unknown) => error instanceof RuntimeMutationGenerationError && error.code === 'CORRUPT'
+        );
+        withRuntimeMutationGeneration(root, 'later', () => undefined);
+        const later = readRuntimeMutationGeneration(root);
+        assert.throws(
+            () => commitRuntimeMutationGeneration(ticket),
+            (error: unknown) => error instanceof RuntimeMutationGenerationError && error.code === 'CORRUPT'
+        );
+        assert.deepEqual(readRuntimeMutationGeneration(root), later);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
     }
 });
 

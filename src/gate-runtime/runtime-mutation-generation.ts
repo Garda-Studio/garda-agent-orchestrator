@@ -3,6 +3,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { writeFileAtomically } from '../core/filesystem';
+import {
+    captureRuntimeMutationOwnerIdentity,
+    createRuntimeMutationOwnerProbe,
+    parseRuntimeMutationOwnerIdentity,
+    type RuntimeMutationOwnerIdentity
+} from './runtime-mutation-owner';
 import { withFilesystemLock } from './timeline/task-events-locking';
 
 const JOURNAL_DIRECTORY_NAME = '.runtime-mutation-generation';
@@ -24,6 +30,7 @@ interface RuntimeMutationIntent {
     mutation_id: string;
     mutation_kind: string;
     started_at_utc: string;
+    owner?: RuntimeMutationOwnerIdentity | null;
 }
 
 interface RuntimeMutationTransition {
@@ -249,15 +256,24 @@ function parseMutationIntent(value: unknown, index: number): RuntimeMutationInte
     if (!isRecord(value)) {
         throw new RuntimeMutationGenerationError('CORRUPT', `active_mutations[${index}] must be an object.`);
     }
-    assertExactKeys(value, ['mutation_id', 'mutation_kind', 'started_at_utc'], `active_mutations[${index}]`);
+    const hasOwner = Object.prototype.hasOwnProperty.call(value, 'owner');
+    assertExactKeys(value, ['mutation_id', 'mutation_kind', 'started_at_utc', ...(hasOwner ? ['owner'] : [])], `active_mutations[${index}]`);
     assertNonEmptyString(value.mutation_id, `active_mutations[${index}].mutation_id`);
     assertNonEmptyString(value.mutation_kind, `active_mutations[${index}].mutation_kind`);
     assertNonEmptyString(value.started_at_utc, `active_mutations[${index}].started_at_utc`);
-    return {
+    const parsed: RuntimeMutationIntent = {
         mutation_id: value.mutation_id,
         mutation_kind: value.mutation_kind,
         started_at_utc: value.started_at_utc
     };
+    if (hasOwner) {
+        try {
+            parsed.owner = parseRuntimeMutationOwnerIdentity(value.owner);
+        } catch (error: unknown) {
+            throw new RuntimeMutationGenerationError('CORRUPT', `active_mutations[${index}].owner is invalid: ${String(error)}`);
+        }
+    }
+    return parsed;
 }
 
 function parseTransition(value: unknown): RuntimeMutationTransition {
@@ -463,10 +479,8 @@ function assertJournalSlotPairConsistency(
         assertValidTransition(other, current);
         return;
     }
-    if (
-        other.transition_sequence === current.transition_sequence + 1
-        && other.transition.type === 'BEGIN'
-    ) {
+    if (other.transition_sequence === current.transition_sequence + 1) {
+        // An unpublished transition is validated against the anchor's state, never adopted as authority.
         assertValidTransition(current, other);
         return;
     }
@@ -502,6 +516,9 @@ function resolveAnchorCommittedState(
     headState: RuntimeMutationGenerationState
 ): RuntimeMutationGenerationState {
     try {
+        if (headState.state_sha256 !== head.state_sha256) {
+            throw new RuntimeMutationGenerationError('CORRUPT', 'Runtime mutation generation head does not match the active state.');
+        }
         assertCurrentStateMatchesAnchor(paths, head, headState);
         return headState;
     } catch (error: unknown) {
@@ -517,8 +534,9 @@ function resolveAnchorCommittedState(
         if (
             anchorMatchesPrevious
             && headState.transition_sequence === previous.transition_sequence + 1
-            && headState.transition.type === 'BEGIN'
         ) {
+            // A retry can replace an unpublished slot before replacing its stale head.
+            // Only the exactly anchored previous state remains authoritative here.
             assertValidTransition(previous, headState);
             return previous;
         }
@@ -533,7 +551,7 @@ function readCurrentState(paths: RuntimeMutationGenerationPaths): RuntimeMutatio
         throw new RuntimeMutationGenerationError('CORRUPT', 'Runtime mutation generation head slot does not match its sequence.');
     }
     const headState = parseState(paths.slotPaths[head.active_slot]);
-    if (headState.transition_sequence !== head.transition_sequence || headState.state_sha256 !== head.state_sha256) {
+    if (headState.transition_sequence !== head.transition_sequence) {
         throw new RuntimeMutationGenerationError('CORRUPT', 'Runtime mutation generation head does not match the active state.');
     }
     const current = resolveAnchorCommittedState(paths, head, headState);
@@ -624,10 +642,14 @@ function persistState(paths: RuntimeMutationGenerationPaths, state: RuntimeMutat
     const slot = slotForSequence(state.transition_sequence);
     const statePath = paths.slotPaths[slot];
     const head = createHead(state);
+    const stateContents = serializeJson(state);
+    if (Buffer.byteLength(stateContents, 'utf8') > MAX_JOURNAL_FILE_BYTES) {
+        throw new RuntimeMutationGenerationError('BUSY', 'Runtime mutation generation has reached its bounded journal capacity.');
+    }
     assertSafeJournalWriteTarget(statePath);
     assertSafeJournalWriteTarget(paths.headPath);
     assertSafeJournalWriteTarget(paths.anchorPath);
-    writeFileAtomically(statePath, serializeJson(state), { encoding: 'utf8' });
+    writeFileAtomically(statePath, stateContents, { encoding: 'utf8' });
     writeFileAtomically(paths.headPath, serializeJson(head), { encoding: 'utf8' });
     writeFileAtomically(paths.anchorPath, serializeJson(createAnchor(state, head)), { encoding: 'utf8' });
 }
@@ -699,6 +721,27 @@ export function readRuntimeMutationGeneration(orchestratorRoot: string): Runtime
     return toSnapshot(state);
 }
 
+function recoverProvenDeadMutations(
+    paths: RuntimeMutationGenerationPaths,
+    initial: RuntimeMutationGenerationState
+): RuntimeMutationGenerationState {
+    if (initial.active_mutations.length === 0) return initial;
+    const inspectOwner = createRuntimeMutationOwnerProbe();
+    let previous = initial;
+    for (const intent of initial.active_mutations) {
+        if (inspectOwner(intent.owner ?? null) !== 'dead') continue;
+        // The owner may have persisted canonical bytes before exiting; invalidate derived caches.
+        const next = createTransitionState(previous, {
+            type: 'COMMIT',
+            mutation_id: intent.mutation_id,
+            mutation_kind: intent.mutation_kind
+        }, previous.active_mutations.filter((entry) => entry.mutation_id !== intent.mutation_id), previous.generation + 1);
+        persistState(paths, next);
+        previous = next;
+    }
+    return previous;
+}
+
 export function beginRuntimeMutationGeneration(
     orchestratorRoot: string,
     mutationKind: string
@@ -710,7 +753,7 @@ export function beginRuntimeMutationGeneration(
     const resolvedOrchestratorRoot = path.resolve(orchestratorRoot);
     const mutationId = crypto.randomUUID();
     withGenerationMutationLock(resolvedOrchestratorRoot, (paths) => {
-        const previous = loadOrInitializeState(paths);
+        const previous = recoverProvenDeadMutations(paths, loadOrInitializeState(paths));
         if (previous.active_mutations.length >= MAX_ACTIVE_MUTATIONS) {
             throw new RuntimeMutationGenerationError('BUSY', 'Runtime mutation generation has too many active mutations.');
         }
@@ -721,7 +764,8 @@ export function beginRuntimeMutationGeneration(
         }, [...previous.active_mutations, {
             mutation_id: mutationId,
             mutation_kind: normalizedMutationKind,
-            started_at_utc: new Date().toISOString()
+            started_at_utc: new Date().toISOString(),
+            owner: captureRuntimeMutationOwnerIdentity()
         }], previous.generation);
         persistState(paths, next);
     });
@@ -739,6 +783,15 @@ function settleRuntimeMutationGeneration(
     return withGenerationMutationLock(ticket.orchestrator_root, (paths) => {
         const previous = loadOrInitializeState(paths);
         const activeMutation = previous.active_mutations.find((entry) => entry.mutation_id === ticket.mutation_id);
+        if (
+            !activeMutation
+            && previous.transition.type === transitionType
+            && previous.transition.mutation_id === ticket.mutation_id
+            && previous.transition.mutation_kind === ticket.mutation_kind
+        ) {
+            // Only the latest anchor-committed settlement can acknowledge a repeated ticket.
+            return toSnapshot(previous);
+        }
         if (!activeMutation || activeMutation.mutation_kind !== ticket.mutation_kind) {
             throw new RuntimeMutationGenerationError('CORRUPT', `Runtime mutation ticket '${ticket.mutation_id}' is not active.`);
         }

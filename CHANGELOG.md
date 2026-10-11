@@ -1,5 +1,12 @@
 # Changelog
 
+- T-192: Recover interrupted BEGIN/COMMIT/ABORT journal publication against the
+  existing anchor; bound repeated settlement to the latest matching ticket and
+  retry lifecycle settlement once without rerunning persisted mutations.
+- T-193: Recover only proven-dead local mutation owners under the journal lock;
+  bind Linux host, boot, PID namespace and observer clock for generation, preserve unknown
+  owners, and advance generation for potentially persisted canonical writes.
+
 - Plan decomposed-parent audit obligations without issuing acceptance, clearing
   historical failures or waiving child source, suite, memory and WIP proof.
 - Publish fresh authenticated grouped follow-up lanes sequentially when another
