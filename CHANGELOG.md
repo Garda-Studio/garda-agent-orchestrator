@@ -1,5 +1,17 @@
 # Changelog
 
+- Plan decomposed-parent audit obligations without issuing acceptance, clearing
+  historical failures or waiving child source, suite, memory and WIP proof.
+- Publish fresh authenticated grouped follow-up lanes sequentially when another
+  fresh lane is still unpublished. Keep registered/reused evidence guards and
+  require the complete lane inventory before child scope admission.
+- Bind new intermediate validation attempts to before/after Git and ordinary
+  control-input observations, preserving actual command outcomes and withholding
+  composition eligibility for unavailable, changing or dirty source state.
+- Authenticate new eligible native intermediate-command composition records with
+  existing audited workspace authority; retain actual outcomes and earlier bytes
+  without granting aggregate acceptance (T-241-2-C2-I1-4-1).
+
 - Resume exact confirmed disposable payloads under native locks, with separate
   historical, current-removal and pending-reconciliation counts and terminal repeats.
 

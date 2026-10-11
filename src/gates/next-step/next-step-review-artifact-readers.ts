@@ -934,6 +934,7 @@ export function discoverGroupedFollowUpArtifactPaths(options: {
     childTaskId: string;
     snapshotHash: string;
     allowUnmaterializedReviewType?: string;
+    allowUnmaterializedFreshLanes?: boolean;
 }): { paths: string[]; diagnostics: string[] } {
     let entries: fs.Dirent[];
     try {
@@ -1026,9 +1027,10 @@ export function discoverGroupedFollowUpArtifactPaths(options: {
         }
         const deferredCount = sources.dispositionArtifact.summary.follow_up_pending_count;
         if (!artifactPath || !artifact) {
-            const freshIncomingLane = options.allowUnmaterializedReviewType === reviewType
+            const freshPendingLane = (options.allowUnmaterializedReviewType === reviewType
+                || options.allowUnmaterializedFreshLanes === true)
                 && !normalizeReviewReceiptEvidenceFields(receiptEvidence.receipt).reusedExistingReview;
-            if (!nativeNames.has(candidateName) && (deferredCount === 0 || freshIncomingLane)) continue;
+            if (!nativeNames.has(candidateName) && (deferredCount === 0 || freshPendingLane)) continue;
             diagnostics.push(`Native grouped ${reviewType} follow-up artifact is missing, unsafe, or unreadable despite authenticated lane obligations.`);
             continue;
         }

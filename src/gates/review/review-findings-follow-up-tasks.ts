@@ -1494,6 +1494,7 @@ function groupedRowHasCompleteRegistry(params: {
     parentNotes: string;
     row: CanonicalActiveTaskQueueRow;
     allowUnmaterializedReviewType?: string;
+    allowUnmaterializedFreshLanes?: boolean;
 }): boolean {
     const bindings = extractGroupedLaneBindings(params.row.notes);
     const lanePaths = [...bindings.values()].map((binding) => resolveReviewFollowUpEvidencePath(params.repoRoot, binding.artifactPath));
@@ -1505,7 +1506,8 @@ function groupedRowHasCompleteRegistry(params: {
         repoRoot: params.repoRoot, reviewsRoot: path.dirname(lanePaths[0] as string),
         parentTaskId: params.parentTaskId, childTaskId: params.row.taskId,
         snapshotHash: normalizeHash(params.row.notes.match(/review_follow_up_snapshot_sha256=([0-9a-f]{64})/iu)?.[1]) || '',
-        allowUnmaterializedReviewType: params.allowUnmaterializedReviewType
+        allowUnmaterializedReviewType: params.allowUnmaterializedReviewType,
+        allowUnmaterializedFreshLanes: params.allowUnmaterializedFreshLanes
     });
     return discovered.diagnostics.length === 0
         && JSON.stringify([...new Set([...parentPaths, ...discovered.paths])].sort()) === JSON.stringify(lanePaths.sort());
@@ -1735,7 +1737,8 @@ function materializeTaskQueueRows(params: {
                 if (currentGroupedRow && (!groupedRowHasCompleteRegistry({
                     repoRoot: params.repoRoot, parentTaskId: params.parentTaskId,
                     parentNotes: parentRow.notes, row: currentGroupedRow,
-                    allowUnmaterializedReviewType: params.reusedReview ? undefined : params.reviewType
+                    allowUnmaterializedReviewType: params.reusedReview ? undefined : params.reviewType,
+                    allowUnmaterializedFreshLanes: !params.reusedReview
                 }) || (params.reusedReview && !groupedRowMatchesAuthenticatedReuse({
                     repoRoot: params.repoRoot, parentTaskId: params.parentTaskId,
                     parentNotes: parentRow.notes, row: currentGroupedRow, context: params.materializationContext

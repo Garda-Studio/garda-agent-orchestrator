@@ -36,6 +36,41 @@ export interface TaskAuditSummaryOptions {
     workspaceSnapshotRequest?: WorkspaceSnapshotRequest;
 }
 
+export interface ParentAuditEventReference {
+    taskId: string;
+    sequence: number;
+    sha256: string;
+}
+
+export type DecomposedParentRequiredProof =
+    | 'authenticated-decomposition'
+    | 'source-qualified-child-acceptance'
+    | 'preserved-parent-wip'
+    | 'full-suite-composition'
+    | 'parent-memory-impact'
+    | 'historical-failure-resolution';
+
+export interface DecomposedParentAuditFacts {
+    taskId: string;
+    taskStatus: string | null;
+    childTaskIds: readonly string[];
+    completedChildTaskIds: readonly string[];
+    childGraphComplete: boolean;
+    decomposition: ParentAuditEventReference | null;
+    completion: ParentAuditEventReference | null;
+    historicalFailures: readonly string[];
+    fullSuiteRequired: boolean;
+    projectMemoryRequired: boolean | null;
+}
+
+export interface DecomposedParentAuditRequirements {
+    status: 'NOT_APPLICABLE' | 'BLOCKED' | 'REQUIRES_PROOF';
+    childTaskIds: string[];
+    requiredProofs: DecomposedParentRequiredProof[];
+    historicalFailures: string[];
+    violations: string[];
+}
+
 export interface FinalCloseoutArtifact {
     schema_version: 1;
     event_source: 'task-audit-summary';

@@ -3,6 +3,10 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { appendTaskEventAsync } from '../../../../gate-runtime/task-events-io';
 import { isPlainRecord } from '../../../../core/records';
+import { runGit } from '../../../../core/git-helpers';
+import { TASK_QUEUE_FILENAME } from '../../../../core/orchestration-constants';
+import { resolveWorkflowConfigPath } from '../../../../core/full-suite-validation-config';
+import { authenticateLocalCommitWorkflowAudit, resolveLocalCommitAvailability } from '../../../../core/auth/local-commit-availability';
 import {
     assertContainedDestination,
     assertExistingPathIdentity,
@@ -28,6 +32,8 @@ import { executeCommandAsync, splitCommandLine } from '../../../gate-cli/gates-s
 const ALLOWED_COMMAND_SOURCES = ['node-test', 'targeted-test', 'typecheck', 'validation'] as const;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_FAILURE_TAIL_LINES = 50;
+const SOURCE_INPUT_MAX_BYTES = 4 * 1024 * 1024;
+const SOURCE_GIT_OPTIONS = { timeoutMs: 5_000, maxBuffer: SOURCE_INPUT_MAX_BYTES };
 
 type IntermediateCommandSource = (typeof ALLOWED_COMMAND_SOURCES)[number];
 type IntermediateCommandStatus = 'PASSED' | 'FAILED' | 'EXPECTED_FAILURE' | 'UNEXPECTED_PASS';
@@ -70,6 +76,8 @@ interface IntermediateCommandResult {
 
 interface IntermediateCommandRecord {
     schema_version: 1;
+    event_source: 'native-intermediate-command';
+    generated_utc: string;
     task_id: string;
     command_source: IntermediateCommandSource;
     command: string;
@@ -87,6 +95,145 @@ interface IntermediateCommandRecord {
     preflight_sha256?: string;
     coverage_contract_sha256?: string;
     output_telemetry: ReturnType<typeof buildOutputTelemetry>;
+    source_composition: IntermediateSourceComposition;
+    local_commit_authentication?: Record<string, string>;
+    source_authentication_error?: string;
+}
+
+interface IntermediateCompositionAuthority {
+    stamp: string | null;
+    error?: string;
+}
+
+interface IntermediateSourceSnapshot {
+    repo_root: string;
+    source_head_sha: string;
+    source_tree_sha: string;
+    source_status_sha256: string;
+    clean_worktree: boolean;
+    task_queue_sha256: string | null;
+    workflow_config_sha256: string | null;
+}
+
+interface IntermediateSourceComposition {
+    schema_version: 1;
+    status: 'STABLE_CLEAN' | 'CHANGED_OR_DIRTY' | 'UNAVAILABLE';
+    before: IntermediateSourceSnapshot | null;
+    after: IntermediateSourceSnapshot | null;
+    unavailable_reasons: string[];
+}
+
+function readCompositionInputHash(repoRoot: string, filePath: string): string | null {
+    const binding = bindContainedDestination(repoRoot, filePath);
+    if (binding.missingAt) { assertContainedDestination(binding); return null; }
+    const descriptor = fs.openSync(filePath,
+        fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (fs.constants.O_NOFOLLOW || 0));
+    try {
+        const original = binding.existing[binding.existing.length - 1]!;
+        const stat = fs.fstatSync(descriptor, { bigint: true });
+        if (!stat.isFile() || stat.nlink !== 1n || stat.size > BigInt(SOURCE_INPUT_MAX_BYTES)
+            || stat.dev !== original.dev || stat.ino !== original.ino
+            || stat.mode !== original.mode || stat.birthtimeNs !== original.birthtimeNs) {
+            throw new Error('Source composition requires an ordinary bounded input with intact path identity.');
+        }
+        const bytes = Buffer.alloc(Number(stat.size) + 1);
+        let length = 0;
+        while (length < bytes.length) {
+            const count = fs.readSync(descriptor, bytes, length, bytes.length - length, null);
+            if (count === 0) break;
+            length += count;
+        }
+        const after = fs.fstatSync(descriptor, { bigint: true });
+        assertExistingPathIdentity(binding);
+        if (length !== Number(stat.size) || after.size !== stat.size
+            || after.ctimeNs !== stat.ctimeNs || after.mtimeNs !== stat.mtimeNs) {
+            throw new Error('Source composition input changed during its bounded read.');
+        }
+        return createHash('sha256').update(bytes.subarray(0, length)).digest('hex');
+    } finally { fs.closeSync(descriptor); }
+}
+
+function observeIntermediateSource(repoRoot: string): {
+    snapshot: IntermediateSourceSnapshot | null; error: string | null;
+} {
+    try {
+        const root = fs.realpathSync.native(repoRoot);
+        const git = (args: string[]) => runGit(repoRoot, args, SOURCE_GIT_OPTIONS);
+        const top = fs.realpathSync.native(git(['rev-parse', '--show-toplevel']).trim());
+        if (top !== root) throw new Error('Source composition Git root differs from the command workspace.');
+        const head = git(['rev-parse', '--verify', 'HEAD']).trim();
+        if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(head)) throw new Error('Source commit identity is unavailable.');
+        const tree = git(['rev-parse', '--verify', `${head}^{tree}`]).trim();
+        if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(tree)) throw new Error('Source tree identity is unavailable.');
+        const statusArgs = ['status', '--porcelain=v1', '--untracked-files=all', '-z'];
+        const status = git(statusArgs);
+        const snapshot = {
+            repo_root: root, source_head_sha: head, source_tree_sha: tree,
+            source_status_sha256: createHash('sha256').update(status).digest('hex'),
+            clean_worktree: status.length === 0,
+            task_queue_sha256: readCompositionInputHash(repoRoot, path.join(repoRoot, TASK_QUEUE_FILENAME)),
+            workflow_config_sha256: readCompositionInputHash(repoRoot, resolveWorkflowConfigPath(repoRoot))
+        };
+        if (git(['rev-parse', '--verify', 'HEAD']).trim() !== head || git(statusArgs) !== status) {
+            throw new Error('Source composition changed during snapshot observation.');
+        }
+        return { snapshot, error: null };
+    } catch (error: unknown) {
+        // Optional observation failure is explicit metadata, never a command-success or acceptance claim.
+        const reason = error instanceof Error ? error.message.split('\n')[0].slice(0, 240) : 'Source observation failed.';
+        return { snapshot: null, error: reason };
+    }
+}
+
+function bindIntermediateSourceComposition(
+    before: ReturnType<typeof observeIntermediateSource>, after: ReturnType<typeof observeIntermediateSource>
+): IntermediateSourceComposition {
+    const stable = before.snapshot?.clean_worktree === true && after.snapshot?.clean_worktree === true
+        && JSON.stringify(before.snapshot) === JSON.stringify(after.snapshot);
+    return {
+        schema_version: 1,
+        status: !before.snapshot || !after.snapshot ? 'UNAVAILABLE' : stable ? 'STABLE_CLEAN' : 'CHANGED_OR_DIRTY',
+        before: before.snapshot, after: after.snapshot,
+        unavailable_reasons: [before.error, after.error].filter((reason): reason is string => reason !== null)
+    };
+}
+
+function compositionAuthenticationError(error: unknown): string {
+    return error instanceof Error ? error.message.split('\n')[0].slice(0, 240) : 'Native composition authentication unavailable.';
+}
+
+function observeCompositionAuthority(repoRoot: string): IntermediateCompositionAuthority {
+    try {
+        if (!resolveLocalCommitAvailability(repoRoot).enabled) return { stamp: null };
+        const authentication = authenticateLocalCommitWorkflowAudit(repoRoot,
+            { event_source: 'native-intermediate-composition-authority', schema_version: 1 }, false).local_commit_authentication;
+        return { stamp: authentication ? JSON.stringify(authentication) : null };
+    } catch (error: unknown) {
+        return { stamp: null, error: compositionAuthenticationError(error) };
+    }
+}
+
+function authenticateSuccessfulCompositionRecord(
+    repoRoot: string, record: IntermediateCommandRecord, actualOutput: string, before: IntermediateCompositionAuthority
+): IntermediateCommandRecord {
+    if (record.status !== 'PASSED' || record.exit_code !== EXIT_SUCCESS || record.expected_failure === true
+        || record.timed_out !== false || record.cancelled !== false
+        || record.source_composition.status !== 'STABLE_CLEAN'
+        || record.output_artifact_sha256 !== createHash('sha256').update(actualOutput).digest('hex')
+        || record.output_artifact_size_bytes !== Buffer.byteLength(actualOutput)) return record;
+    if (!before.stamp) return before.error ? { ...record, source_authentication_error: before.error } : record;
+    try {
+        if (!resolveLocalCommitAvailability(repoRoot).enabled) return record;
+        const authenticated = authenticateLocalCommitWorkflowAudit(repoRoot, { ...record }, false);
+        const after = observeCompositionAuthority(repoRoot);
+        if (after.stamp !== before.stamp) {
+            return after.error ? { ...record, source_authentication_error: after.error } : record;
+        }
+        return authenticated;
+    } catch (error: unknown) {
+        // Optional proof authentication never changes the actual command outcome.
+        return { ...record, source_authentication_error: compositionAuthenticationError(error) };
+    }
 }
 
 function normalizeRequiredString(value: unknown, fieldName: string): string {
@@ -425,6 +572,7 @@ async function persistCommandEvent(
             output_telemetry: record.output_telemetry,
             exit_code: record.exit_code,
             duration_ms: record.duration_ms,
+            source_composition_sha256: createHash('sha256').update(JSON.stringify(record.source_composition)).digest('hex'),
             ...(expectedFailure ? {
                 expected_failure: true,
                 recorded_status: status,
@@ -485,6 +633,8 @@ export async function runIntermediateCommandCommand(
     );
     const reserved = reserveIntermediateArtifacts(repoRoot, artifacts);
     try {
+        const authorityBefore = observeCompositionAuthority(repoRoot);
+        const sourceBefore = observeIntermediateSource(repoRoot);
         const startedAt = Date.now();
         const result = await executeCommandAsync(command, {
             cwd: repoRoot,
@@ -492,8 +642,10 @@ export async function runIntermediateCommandCommand(
             signal: options.signal
         });
         const durationMs = Date.now() - startedAt;
+        const sourceComposition = bindIntermediateSourceComposition(sourceBefore, observeIntermediateSource(repoRoot));
         const rawLines = result.outputLines;
-        writeReservedIntermediateFile(reserved.output, `${rawLines.join('\n')}\n`);
+        const actualOutput = `${rawLines.join('\n')}\n`;
+        writeReservedIntermediateFile(reserved.output, actualOutput);
         const outputArtifactSha256 = gateHelpers.fileSha256(artifacts.outputPath);
         if (!outputArtifactSha256) {
             throw new Error(`Unable to hash intermediate command output artifact '${artifacts.outputPath}'.`);
@@ -528,18 +680,20 @@ export async function runIntermediateCommandCommand(
                     ? 'bounded_expected_failure_tail'
                     : 'bounded_failure_tail',
         });
-        const record: IntermediateCommandRecord = {
+        const record = authenticateSuccessfulCompositionRecord(repoRoot, {
             schema_version: 1,
+            event_source: 'native-intermediate-command',
+            generated_utc: new Date().toISOString(),
             task_id: taskId,
             command_source: commandSource,
             command,
             status,
             exit_code: result.exitCode,
+            timed_out: result.timedOut,
+            cancelled: result.cancelled,
             ...(expectFailure ? {
                 expected_failure: true as const,
                 test_scope_sha256: expectedFailureBinding!.testScopeSha256,
-                timed_out: result.timedOut,
-                cancelled: result.cancelled
             } : {}),
             duration_ms: durationMs,
             output_artifact: artifacts.outputPath,
@@ -549,7 +703,8 @@ export async function runIntermediateCommandCommand(
             ...(preflightSha256 ? { preflight_sha256: preflightSha256 } : {}),
             ...(coverageContractSha256 ? { coverage_contract_sha256: coverageContractSha256 } : {}),
             output_telemetry: telemetry,
-        };
+            source_composition: sourceComposition,
+        }, actualOutput, authorityBefore);
         writeReservedIntermediateFile(reserved.artifact, `${JSON.stringify(record, null, 2)}\n`);
         const artifactSha256 = gateHelpers.fileSha256(artifacts.artifactPath);
         if (!artifactSha256) {

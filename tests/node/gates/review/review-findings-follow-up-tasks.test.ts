@@ -737,7 +737,9 @@ function acceptGroupedReuseInCurrentCycle(
     assert.equal(strictReuse.valid, true, strictReuse.reason || undefined);
 }
 
-function seedPendingGroupedFollowUpForReuse(repoRoot: string, reviewType = REVIEW_TYPE): SeededReviewArtifacts {
+function seedPendingGroupedFollowUpForReuse(
+    repoRoot: string, reviewType = REVIEW_TYPE, additionalFreshLanes: string[] = []
+): SeededReviewArtifacts {
     seedGroupedPreflight(repoRoot);
     const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
     const preflightPath = path.join(reviewsRoot, `${TASK_ID}-preflight.json`);
@@ -759,6 +761,10 @@ function seedPendingGroupedFollowUpForReuse(repoRoot: string, reviewType = REVIE
     const artifacts = seedReviewArtifacts(repoRoot, { reviewType, includeReuseScopeBindings: true });
     const receipt = readJson(artifacts.receiptPath);
     persistFollowUpReceiptEvent(repoRoot, artifacts, receipt);
+    for (const lane of additionalFreshLanes) {
+        const pending = seedReviewArtifacts(repoRoot, { reviewType: lane, includeReuseScopeBindings: true });
+        persistFollowUpReceiptEvent(repoRoot, pending, readJson(pending.receiptPath));
+    }
     const materialized = materializeReviewFindingsFollowUpTasks({
         repoRoot, taskId: TASK_ID, reviewType,
         dispositionArtifactPath: artifacts.dispositionArtifactPath
@@ -767,7 +773,7 @@ function seedPendingGroupedFollowUpForReuse(repoRoot: string, reviewType = REVIE
     const child = rowFor(repoRoot, `${TASK_ID}-F1`);
     assert.ok(child);
     const scope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, child);
-    assert.equal(scope.status, 'valid', scope.diagnostics.join('\n'));
+    assert.equal(scope.status, additionalFreshLanes.length > 0 ? 'invalid' : 'valid', scope.diagnostics.join('\n'));
     return artifacts;
 }
 
@@ -1174,7 +1180,7 @@ describe('review findings follow-up task materialization', () => {
         assert.equal(taskRows(repoRoot).filter((row) => row.taskId.startsWith(`${TASK_ID}-F`)).length, 2);
     });
 
-    it('rejects a candidate child whose historical artifacts bind another child', () => {
+    it('rejects a foreign candidate child whose historical artifacts bind another child', () => {
         const repoRoot = makeRepo();
         const artifacts = seedPendingGroupedFollowUpForReuse(repoRoot);
         const taskPath = path.join(repoRoot, 'TASK.md');
@@ -1592,6 +1598,70 @@ describe('review findings follow-up task materialization', () => {
         const scope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, completeChild);
         assert.equal(scope.status, 'valid', scope.diagnostics.join('\n'));
         assert.equal(taskRows(repoRoot).filter((row) => row.taskId.startsWith(`${TASK_ID}-F`)).length, 1);
+    });
+
+    it('materializes three authenticated fresh deferred lanes without circular admission', () => {
+        const laneOrders = [
+            ['security', 'refactor', 'test'], ['security', 'test', 'refactor'],
+            ['refactor', 'security', 'test'], ['refactor', 'test', 'security'],
+            ['test', 'security', 'refactor'], ['test', 'refactor', 'security']
+        ];
+        for (const [first, second, third] of laneOrders) {
+            const repoRoot = makeRepo();
+            seedPendingGroupedFollowUpForReuse(repoRoot, first, [second, third]);
+            const childBefore = rowFor(repoRoot, `${TASK_ID}-F1`);
+            assert.ok(childBefore);
+            assert.equal(resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, childBefore).status, 'invalid');
+            for (const [index, lane] of [second, third].entries()) {
+                const published = materializeReviewFindingsFollowUpTasks({ repoRoot, taskId: TASK_ID, reviewType: lane });
+                assert.equal(published.status, 'ALREADY_MATERIALIZED', published.output_lines.join('\n'));
+                assert.deepEqual(published.reused_task_ids, [`${TASK_ID}-F1`]);
+                const child = rowFor(repoRoot, `${TASK_ID}-F1`);
+                assert.ok(child);
+                const scope = resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, child);
+                assert.equal(scope.status, index === 0 ? 'invalid' : 'valid', scope.diagnostics.join('\n'));
+                assert.equal(taskRows(repoRoot).filter(row => row.taskId.startsWith(`${TASK_ID}-F`)).length, 1);
+            }
+            for (const lane of [first, second, third]) {
+                assert.equal(readGroupedFollowUpState(repoRoot, lane).reviewFindingsFollowUpSatisfied, true);
+            }
+        }
+    });
+
+    it('rejects a missing registered fresh lane while another fresh lane is pending', () => {
+        const repoRoot = makeRepo();
+        const first = seedPendingGroupedFollowUpForReuse(repoRoot, 'security', ['refactor', 'test']);
+        const originalPath = first.dispositionArtifactPath.replace(/-findings-disposition\.json$/u, '-findings-follow-ups.json');
+        const originalBytes = fs.readFileSync(originalPath);
+        fs.unlinkSync(originalPath);
+        const taskPath = path.join(repoRoot, 'TASK.md');
+        const queue = fs.readFileSync(taskPath);
+        const blocked = materializeReviewFindingsFollowUpTasks({ repoRoot, taskId: TASK_ID, reviewType: 'refactor' });
+        assert.equal(blocked.status, 'BLOCKED', blocked.output_lines.join('\n'));
+        assert.deepEqual(fs.readFileSync(taskPath), queue);
+        assert.equal(fs.existsSync(originalPath), false);
+        fs.writeFileSync(originalPath, originalBytes);
+        const resumed = materializeReviewFindingsFollowUpTasks({ repoRoot, taskId: TASK_ID, reviewType: 'refactor' });
+        assert.equal(resumed.status, 'ALREADY_MATERIALIZED', resumed.output_lines.join('\n'));
+        assert.equal(resolveAuthenticatedGroupedReviewFollowUpScope(repoRoot, rowFor(repoRoot, `${TASK_ID}-F1`)).status, 'invalid');
+    });
+
+    it('rejects forged pending lane receipt provenance before extending the group', () => {
+        const repoRoot = makeRepo();
+        seedPendingGroupedFollowUpForReuse(repoRoot, 'security', ['refactor', 'test']);
+        const receiptPath = path.join(repoRoot, 'garda-agent-orchestrator/runtime/reviews', `${TASK_ID}-test-receipt.json`);
+        const originalBytes = fs.readFileSync(receiptPath);
+        const receipt = readJson(receiptPath);
+        receipt.review_output_sha256 = 'f'.repeat(64);
+        writeJson(receiptPath, receipt);
+        const taskPath = path.join(repoRoot, 'TASK.md');
+        const queue = fs.readFileSync(taskPath);
+        const blocked = materializeReviewFindingsFollowUpTasks({ repoRoot, taskId: TASK_ID, reviewType: 'refactor' });
+        assert.equal(blocked.status, 'BLOCKED', blocked.output_lines.join('\n'));
+        assert.deepEqual(fs.readFileSync(taskPath), queue);
+        fs.writeFileSync(receiptPath, originalBytes);
+        const resumed = materializeReviewFindingsFollowUpTasks({ repoRoot, taskId: TASK_ID, reviewType: 'refactor' });
+        assert.equal(resumed.status, 'ALREADY_MATERIALIZED', resumed.output_lines.join('\n'));
     });
 
     it('blocks a fresh high-severity lane relabeled as a deferred obligation', () => {
