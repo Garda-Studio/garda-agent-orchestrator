@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { revokeProtectedTaskContinuationForEvent } from '../../core/auth/protected-task-continuation';
 
 import {
     appendAggregateEventAsync,
@@ -114,6 +115,20 @@ function shouldEmitOnce(value: unknown): boolean {
     return value === true || String(value || '').trim().toLowerCase() === 'true';
 }
 
+function continuationAppendValidator(
+    repoRoot: string, paths: TaskEventPaths, event: TaskEvent, validate?: () => void
+): () => void {
+    return () => {
+        const result: unknown = validate?.();
+        if (result != null && (typeof result === 'object' || typeof result === 'function')
+            && typeof (result as { then?: unknown }).then === 'function') {
+            void Promise.resolve(result).catch(() => undefined);
+            throw new Error('Canonical append validator must complete synchronously; promise-returning validators are unsupported.');
+        }
+        revokeProtectedTaskContinuationForEvent(repoRoot, paths.eventsRoot, event.task_id, event.event_type, event.details);
+    };
+}
+
 function handleAppendFailure(result: AppendTaskEventResult, warning: string, passThru: boolean): AppendTaskEventResult | null {
     result.warnings.push(warning);
     process.stderr.write(`WARNING: ${warning}\n`);
@@ -200,7 +215,7 @@ export function appendTaskEvent(
         const taskLockResult = withFilesystemLock(paths.taskLockPath, lockOptions, function (): void {
             line = appendTaskEventLineSync(paths.taskFilePath, safeTaskId, event, emitOnce, () => {
                 taskEventPersisted = true;
-            }, options.expectedPreviousState, options.validateBeforeCanonicalAppend);
+            }, options.expectedPreviousState, continuationAppendValidator(repoRoot, paths, event, options.validateBeforeCanonicalAppend));
             if (line == null) {
                 if (mutationTicket) {
                     abortRuntimeMutationGeneration(mutationTicket);
@@ -305,7 +320,7 @@ export async function appendTaskEventAsync(
                     taskEventPersisted = true;
                 },
                 options.expectedPreviousState,
-                options.validateBeforeCanonicalAppend
+                continuationAppendValidator(repoRoot, paths, event, options.validateBeforeCanonicalAppend)
             );
             if (line == null) {
                 if (mutationTicket) {

@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { isVerifiedProtectedTaskContinuation, type ProtectedTaskContinuation } from '../../../../core/auth/protected-task-continuation';
 import {
     parseOperatorConfirmationYes,
     validateFreshOperatorConfirmation
@@ -72,6 +73,7 @@ export interface AssertTaskModeProtectedEntryAllowedOptions {
     workflowConfigWork: boolean;
     allowedDirtyWorkflowConfigFiles?: unknown;
     taskQueueMetadata: TaskQueueMetadataForProtectedEntry | null;
+    protectedContinuation?: ProtectedTaskContinuation | null;
 }
 
 function buildProtectedOperatorConfirmationCommandParts(): string[] {
@@ -326,7 +328,11 @@ export function assertTaskModeProtectedEntryAllowed(input: AssertTaskModeProtect
         );
     }
 
-    if (orchestratorWork || workflowConfigWork) {
+    const continuationVerified = isVerifiedProtectedTaskContinuation(input.protectedContinuation, {
+        repoRoot, taskId, plannedChangedFiles, orchestratorWork, workflowConfigWork,
+        taskSummary: String(options.taskSummary || ''), provider: String(options.provider || ''), routedTo: String(options.routedTo || '')
+    });
+    if ((orchestratorWork || workflowConfigWork) && !continuationVerified) {
         requireTaskModeOperatorConfirmation(
             options,
             workflowConfigWork ? '--orchestrator-work --workflow-config-work' : '--orchestrator-work'

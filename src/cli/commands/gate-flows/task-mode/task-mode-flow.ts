@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { resolveProtectedTaskContinuation, publishProtectedTaskContinuation } from '../../../../core/auth/protected-task-continuation';
 import {
     emitPlanCreatedEvent,
     emitProviderRoutingEvent,
@@ -384,11 +385,21 @@ function runEnterTaskModeWithOwnershipLock(
     const planSelection = selectTaskModePlan(repoRoot, taskId, String(options.planPath || '').trim(),
         preserveOwnershipBaseline ? previousTaskMode?.plan ?? null : undefined);
 
+    const equalFiles = (left: string[], right: string[]): boolean => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
+    const protectedContinuation = (upgradeExistingTaskMode || preserveOwnershipBaseline) && preservedScope && previousTaskMode
+        && ['IN_PROGRESS', 'IN_REVIEW'].includes(String(readTaskQueueStatus(repoRoot, taskId)))
+        && !String(options.operatorConfirmed || '').trim() && !String(options.operatorConfirmedAtUtc || '').trim()
+        && previousTaskMode.orchestrator_work === orchestratorWork && previousTaskMode.workflow_config_work === workflowConfigWork
+        && previousTaskMode.provider === routingDecision.provider && previousTaskMode.task_summary === String(options.taskSummary || '')
+        && previousTaskMode.routed_to === routingDecision.routedTo
+        && equalFiles(previousTaskMode.planned_changed_files, plannedChangedFiles)
+        ? resolveProtectedTaskContinuation({ repoRoot, taskId, artifactPath, currentConfigHashes: workflowConfigFileHashes }) : null;
+
     assertTaskModeProtectedEntryAllowed({
         repoRoot,
         orchestratorRoot,
         taskId,
-        options,
+        options: { ...options, provider: routingDecision.provider, routedTo: routingDecision.routedTo },
         plannedChangedFiles,
         protectedPlannedFiles,
         workflowConfigPlannedFiles,
@@ -398,7 +409,8 @@ function runEnterTaskModeWithOwnershipLock(
         workflowConfigWork,
         allowedDirtyWorkflowConfigFiles: scopeUpgrade?.allowedDirtyWorkflowConfigFiles
             || options.allowedDirtyWorkflowConfigFiles,
-        taskQueueMetadata
+        taskQueueMetadata,
+        protectedContinuation
     });
     const workflowConfigFileHashesForArtifact = normalizeWorkflowConfigFileHashes(options.workflowConfigFileHashesOverride)
         || normalizeWorkflowConfigFileHashes(preservedScope?.workflowConfigFileHashes)
@@ -654,6 +666,18 @@ function runEnterTaskModeWithOwnershipLock(
     if (previousStatus && previousStatus !== 'IN_PROGRESS') {
         emitStatusChangedEvent(orchestratorRoot, taskModeArtifact.task_id, previousStatus, 'IN_PROGRESS');
         syncTaskQueueStatus(repoRoot, taskModeArtifact.task_id, 'IN_PROGRESS');
+    }
+
+    try {
+        if (orchestratorWork || workflowConfigWork) publishProtectedTaskContinuation({ repoRoot, taskId, artifactPath,
+            currentConfigHashes: workflowConfigFileHashes, expectedArtifact: taskModeArtifact,
+            operatorConfirmed: options.operatorConfirmed, operatorConfirmedAtUtc: options.operatorConfirmedAtUtc,
+            previous: protectedContinuation });
+    } catch (error) {
+        removeArtifactIfExists(artifactPath);
+        appendMandatoryTaskEvent(orchestratorRoot, taskId, 'TASK_MODE_ENTRY_FAILED', 'FAIL',
+            'Protected authority publication failed; task-mode artifact was invalidated.', { reason: getErrorMessage(error) });
+        throw error;
     }
 
     if (routingDecision.provider && routingDecision.routedTo) {

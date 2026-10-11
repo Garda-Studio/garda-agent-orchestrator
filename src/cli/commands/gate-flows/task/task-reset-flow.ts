@@ -14,6 +14,7 @@ import {
     type CanonicalActiveTaskQueueRow
 } from '../../../../core/task-md-table';
 import { resolveTaskResetAvailability } from '../../../../core/task-reset-availability';
+import { revokeProtectedTaskContinuationForEvent } from '../../../../core/auth/protected-task-continuation';
 import {
     assertExistingPathIdentity, bindContainedDestination, readBoundedContainedDirectory
 } from '../../../../core/contained-filesystem';
@@ -757,50 +758,64 @@ function runTaskResetWithoutOneAction(options: RunTaskResetOptions, oneActionAut
         };
     }
 
-    // Write audit breadcrumb before any deletion
+    const protectedLockPath = path.join(resolveEventsRoot(repoRoot, undefined), `.${taskId}.lock`);
     const resetReportPath = path.join(reviewsRoot, `${taskId}-reset-report.json`);
-    const resetReport = {
-        timestamp_utc: new Date().toISOString(),
-        event_source: 'task-reset',
-        ...(oneActionAuthoritySha256 ? { reset_authorization: 'one_action',
-            one_action_authority_sha256: oneActionAuthoritySha256 } : {}),
-        task_id: taskId,
-        previous_status: scope.previousStatus,
-        target_status: targetStatus,
-        removed_artifacts: scope.artifacts.map((a) => gateHelpers.normalizePath(a.path)),
-        pending_follow_up_task_ids_planned_for_removal: targetStatus === 'TODO'
-            ? scope.pendingFollowUpTaskIds
-            : [],
-        removed_pending_follow_up_task_ids: [] as string[],
-        preserved_started_or_terminal_follow_up_task_ids: scope.preservedFollowUpTaskIds,
-        aggregate_lines_removed: scope.aggregateLineCount,
-        reset_by: 'operator'
-    };
-    fs.mkdirSync(reviewsRoot, { recursive: true });
-    writeFileAtomically(resetReportPath, JSON.stringify(resetReport, null, 2) + '\n', { encoding: 'utf8' });
+    const { syncResult, removedPendingFollowUpTaskIds } = withFilesystemLock(protectedLockPath, {}, () => {
+        // Runtime rollback after reset must not revive private protected-entry authority.
+        // Refused, prepared and dry-run resets return above without revoking admission.
+        revokeProtectedTaskContinuationForEvent(repoRoot, resolveEventsRoot(repoRoot, undefined), taskId,
+            targetStatus === 'DONE' ? 'TASK_DISCARDED' : 'TASK_RESET', {});
 
-    const removedPendingFollowUpTaskIds = targetStatus === 'TODO'
-        ? rollbackPendingReviewFollowUpRows(repoRoot, taskId, scope.pendingFollowUpTaskIds)
-        : [];
-    resetReport.removed_pending_follow_up_task_ids = removedPendingFollowUpTaskIds;
-    writeFileAtomically(resetReportPath, JSON.stringify(resetReport, null, 2) + '\n', { encoding: 'utf8' });
+        // Write audit breadcrumb before any deletion
+        const resetReport = {
+            timestamp_utc: new Date().toISOString(),
+            event_source: 'task-reset',
+            ...(oneActionAuthoritySha256 ? { reset_authorization: 'one_action',
+                one_action_authority_sha256: oneActionAuthoritySha256 } : {}),
+            task_id: taskId,
+            previous_status: scope.previousStatus,
+            target_status: targetStatus,
+            removed_artifacts: scope.artifacts.map((a) => gateHelpers.normalizePath(a.path)),
+            pending_follow_up_task_ids_planned_for_removal: targetStatus === 'TODO'
+                ? scope.pendingFollowUpTaskIds
+                : [],
+            removed_pending_follow_up_task_ids: [] as string[],
+            preserved_started_or_terminal_follow_up_task_ids: scope.preservedFollowUpTaskIds,
+            aggregate_lines_removed: scope.aggregateLineCount,
+            reset_by: 'operator'
+        };
+        fs.mkdirSync(reviewsRoot, { recursive: true });
+        writeFileAtomically(resetReportPath, JSON.stringify(resetReport, null, 2) + '\n', { encoding: 'utf8' });
 
-    // Delete per-task events file under task lock
-    withFilesystemLock(scope.taskLockPath, {}, () => {
-        deleteFileIfExists(scope.eventsPath);
-    });
+        const removedPendingFollowUpTaskIds = targetStatus === 'TODO'
+            ? rollbackPendingReviewFollowUpRows(repoRoot, taskId, scope.pendingFollowUpTaskIds)
+            : [];
+        resetReport.removed_pending_follow_up_task_ids = removedPendingFollowUpTaskIds;
+        writeFileAtomically(resetReportPath, JSON.stringify(resetReport, null, 2) + '\n', { encoding: 'utf8' });
 
-    // Delete review artifacts (KNOWN_SUFFIXES enumeration — reset-report excluded)
-    for (const artifact of scope.artifacts) {
-        if (artifact.type === 'review-artifact') {
-            deleteFileIfExists(artifact.path);
+        // Delete per-task events file under task lock
+        const sameTaskLock = process.platform === 'win32'
+            ? scope.taskLockPath.toLowerCase() === protectedLockPath.toLowerCase()
+            : scope.taskLockPath === protectedLockPath;
+        if (sameTaskLock) {
+            deleteFileIfExists(scope.eventsPath);
+        } else {
+            withFilesystemLock(scope.taskLockPath, {}, () => deleteFileIfExists(scope.eventsPath));
         }
-    }
 
-    // Delete review temp directory
-    for (const reviewTempDir of scope.reviewTempDirs) {
-        deleteDirectoryIfExists(reviewTempDir);
-    }
+        // Delete review artifacts (KNOWN_SUFFIXES enumeration — reset-report excluded)
+        for (const artifact of scope.artifacts) {
+            if (artifact.type === 'review-artifact') {
+                deleteFileIfExists(artifact.path);
+            }
+        }
+
+        // Delete review temp directory
+        for (const reviewTempDir of scope.reviewTempDirs) {
+            deleteDirectoryIfExists(reviewTempDir);
+        }
+        return { syncResult: syncTaskQueueStatusDetailed(repoRoot, taskId, targetStatus), removedPendingFollowUpTaskIds };
+    }).result;
 
     // Remove task lines from aggregate log under aggregate lock
     let aggregateLinesRemoved = 0;
@@ -819,8 +834,6 @@ function runTaskResetWithoutOneAction(options: RunTaskResetOptions, oneActionAut
     } catch {
         // Non-fatal: timeline reconciliation failure does not block reset
     }
-
-    const syncResult = syncTaskQueueStatusDetailed(repoRoot, taskId, targetStatus);
 
     const outputLines = buildOutputLines(
         'RESET_COMPLETE', taskId, scope.previousStatus,
