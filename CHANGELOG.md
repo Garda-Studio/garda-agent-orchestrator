@@ -1,5 +1,8 @@
 # Changelog
 
+- Validate versioned technology-neutral recipe declarations, literal target
+  binding and test-role expected-red eligibility without execution activation
+  (T-242-2-1-2).
 - T-251: keep test-only review routing when tests are accompanied by safe ordinary change documentation, preserving explicit code-review requests and complete scope coverage.
 - Cover retained URL characters at direct program and extracted option boundaries
   without changing production parsing (T-242-2-1-1-2-1-F1).
