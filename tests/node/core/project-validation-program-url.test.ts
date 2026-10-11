@@ -29,7 +29,8 @@ for (const input of ['--loader=data:code', '--loader= data:code', '--loader=\u00
 
 for (const input of ['scripts/check.js', './data:literal', 'scripts/check=data:literal',
     'scripts/check=javascript:literal', 'file:///tmp/check.any', 'https://example.invalid/check.any',
-    'custom-project:declaration', '', '\u0085data:literal', '\u00a0data:literal', '\uFEFFdata:literal']) {
+    'custom-project:declaration', '', '\u0085data:literal', '\u00a0data:literal', '\uFEFFdata:literal',
+    'da\u000bta:literal', 'java\u000bscript:literal']) {
     it(`keeps literal or other-scheme data unapproved ${JSON.stringify(input)}`, () => {
         assert.equal(rejectInlineValidationProgramUrl(input, true), undefined);
     });
@@ -42,7 +43,9 @@ for (const input of ['--loader=data:literal', '=javascript:literal', 'file=data:
 }
 
 for (const input of ['--loader=scripts/check=data:literal', '--loader=file:///tmp/check.any',
-    '--option=value=javascript:literal', 'scripts/check=data:literal']) {
+    '--option=value=javascript:literal', 'scripts/check=data:literal',
+    '--loader=\u00a0data:literal', '--import=\uFEFFjavascript:literal',
+    '--loader=da\u000bta:literal', '--import=java\u000bscript:literal']) {
     it(`preserves literal option values after their first assignment boundary ${JSON.stringify(input)}`, () => {
         assert.equal(rejectInlineValidationProgramUrl(input, false), undefined);
     });

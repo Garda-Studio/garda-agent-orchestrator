@@ -1,4 +1,6 @@
 # Changelog
+- Cover retained URL characters at direct program and extracted option boundaries
+  without changing production parsing (T-242-2-1-1-2-1-F1).
 - Record Python equals-form literal operand indices once while preserving source
   boundaries and caller arguments (T-242-2-1-1-1-F1).
 - Integrate accepted argument and URL inspection, preserve literal PowerShell File
