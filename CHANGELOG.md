@@ -1,4 +1,7 @@
 # Changelog
+- Integrate accepted argument and URL inspection, preserve literal PowerShell File
+  operands, and keep command data rejection separate from execution authority
+  (T-242-2-1-1-2-2).
 - Publish immutable authenticated source acceptance after genuine native commit
   audit and mandatory snapshot/namespace flushes (T-241-2-C2-I1-3). Use writable
   directory handles on Windows with verified local fixed NTFS and preserved
