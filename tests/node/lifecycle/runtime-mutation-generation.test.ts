@@ -6,10 +6,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { readRuntimeMutationGeneration } from '../../../src/gate-runtime/runtime-mutation-generation';
+import { readRuntimeMutationGeneration, RuntimeMutationGenerationError } from '../../../src/gate-runtime/runtime-mutation-generation';
 import {
     CANONICAL_RUNTIME_MUTATION_SUBTREES,
-    withLifecycleRuntimeMutationGenerationForPath
+    withLifecycleRuntimeMutationGenerationForPath,
+    withLifecycleRuntimeMutationGenerationForPathAsync
 } from '../../../src/lifecycle/runtime-mutation-generation';
 import {
     createRollbackSnapshot,
@@ -34,6 +35,37 @@ import {
     writeUpdateReport,
     type UpdateReportData
 } from '../../../src/lifecycle/update/update-reporting';
+import { seedHealthyDoneTaskArtifacts, writeTaskQueue } from './cleanup-fixtures';
+
+const mutableFilesystem = require('../../../src/core/filesystem') as {
+    writeFileAtomically: typeof import('../../../src/core/filesystem').writeFileAtomically;
+};
+
+function injectSettlementWriteFailures(
+    root: string,
+    interruptionPoint: 'slot' | 'head' | 'anchor',
+    failureCount: number
+): { restore: () => void; failures: () => number } {
+    const targetPath = interruptionPoint === 'anchor'
+        ? path.join(root, 'runtime', '.runtime-mutation-generation.anchor.json')
+        : path.join(root, 'runtime', '.runtime-mutation-generation', interruptionPoint === 'head' ? 'head.json' : 'state-a.json');
+    const originalWrite = mutableFilesystem.writeFileAtomically;
+    let failures = 0;
+    mutableFilesystem.writeFileAtomically = (filePath, content, options) => {
+        if (path.resolve(filePath) === targetPath && failures < failureCount) {
+            const record = JSON.parse(content.toString()) as { transition_sequence: number };
+            if (record.transition_sequence === 2) {
+                failures += 1;
+                throw new Error('injected lifecycle settlement write failure');
+            }
+        }
+        return originalWrite(filePath, content, options);
+    };
+    return {
+        restore: () => { mutableFilesystem.writeFileAtomically = originalWrite; },
+        failures: () => failures
+    };
+}
 
 interface WriterCoverageEdge {
     candidatePath: string;
@@ -155,10 +187,80 @@ const WRITER_COVERAGE_EDGES = Object.freeze({
         ownerPath: 'src/materialization/install/install-filesystem-stage.ts',
         edgeSourcePath: 'src/materialization/install/install-filesystem-stage.ts',
         edgeMarker: 'withLifecycleRuntimeMutationGenerationForPath('
+    },
+    disposableRegistration: {
+        candidatePath: 'src/lifecycle/cleanup/owned-disposable-artifact-registration.ts',
+        ownerPath: 'src/lifecycle/cleanup/owned-disposable-artifact-registration.ts',
+        edgeSourcePath: 'src/lifecycle/cleanup/owned-disposable-artifact-registration.ts',
+        edgeMarker: 'withLifecycleRuntimeMutationGeneration('
+    },
+    disposableJournal: {
+        candidatePath: 'src/lifecycle/cleanup/owned-disposable-artifact-journal.ts',
+        ownerPath: 'src/lifecycle/cleanup/owned-disposable-artifact-journal.ts',
+        edgeSourcePath: 'src/lifecycle/cleanup/owned-disposable-artifact-journal.ts',
+        edgeMarker: 'withLifecycleRuntimeMutationGeneration('
+    },
+    disposableRemoval: {
+        candidatePath: 'src/lifecycle/cleanup/owned-disposable-artifact-removal.ts',
+        ownerPath: 'src/lifecycle/cleanup/owned-disposable-artifact-journal.ts',
+        edgeSourcePath: 'src/lifecycle/cleanup/owned-disposable-artifact-removal.ts',
+        edgeMarker: 'withOwnedDisposableRetirementMutation('
+    },
+    disposableRecovery: {
+        candidatePath: 'src/lifecycle/cleanup/owned-disposable-artifact-recovery.ts',
+        ownerPath: 'src/lifecycle/cleanup/owned-disposable-artifact-journal.ts',
+        edgeSourcePath: 'src/lifecycle/cleanup/owned-disposable-artifact-recovery.ts',
+        edgeMarker: 'withOwnedDisposableRecoveryMutation('
+    },
+    disposableRecoveryStateMachine: {
+        candidatePath: 'src/lifecycle/cleanup/owned-disposable-artifact-recovery-mutation.ts',
+        ownerPath: 'src/lifecycle/cleanup/owned-disposable-artifact-journal.ts',
+        edgeSourcePath: 'src/lifecycle/cleanup/owned-disposable-artifact-journal.ts',
+        edgeMarker: 'createOwnedDisposableRecoveryMutation('
+    },
+    scratchRegistration: {
+        candidatePath: 'src/lifecycle/cleanup/scratch-writer-ownership.ts',
+        ownerPath: 'src/lifecycle/cleanup/scratch-writer-ownership.ts',
+        edgeSourcePath: 'src/lifecycle/cleanup/scratch-writer-ownership.ts',
+        edgeMarker: 'withLifecycleRuntimeMutationGeneration('
+    },
+    scratchRemoval: {
+        candidatePath: 'src/lifecycle/cleanup/cleanup-scratch-removal.ts',
+        ownerPath: 'src/lifecycle/cleanup/cleanup-scratch-removal.ts',
+        edgeSourcePath: 'src/lifecycle/cleanup/cleanup-scratch-removal.ts',
+        edgeMarker: 'withLifecycleRuntimeMutationGeneration('
     }
 } satisfies Record<string, WriterCoverageEdge>);
 
 const NON_CANONICAL_MUTATION_CAPABILITIES = Object.freeze({
+    'src/lifecycle/cleanup/owned-disposable-artifact-inventory.ts': {
+        sourceMarker: 'inventoryDisposableTree(',
+        boundary: 'read-only transitive bounded disposable inventory and owner proof reads; mutation entrypoints are classified separately'
+    },
+    'src/lifecycle/cleanup/owned-disposable-artifact-preview.ts': {
+        sourceMarker: 'inspectOwnedDisposableArtifact(',
+        boundary: 'read-only transitive disposable selection and owner preview reads; mutation entrypoints are classified separately'
+    },
+    'src/lifecycle/cleanup/owned-disposable-artifact-recovery-authority.ts': {
+        sourceMarker: 'inspectOwnedDisposableArtifactOwner(',
+        boundary: 'read-only transitive authenticated retained retirement authority reads; mutation entrypoints are classified separately'
+    },
+    'src/lifecycle/cleanup/owned-disposable-artifact-recovery-progress.ts': {
+        sourceMarker: 'readOwnedDisposableRetirementProgress(',
+        boundary: 'read-only transitive authenticated retirement progress reads; mutation entrypoints are classified separately'
+    },
+    'src/lifecycle/cleanup/owned-disposable-artifact-recovery-snapshot.ts': {
+        sourceMarker: 'readOwnedDisposableArtifactRecoveryProgress(',
+        boundary: 'read-only transitive bounded recovery snapshot reads; mutation entrypoints are classified separately'
+    },
+    'src/lifecycle/cleanup/task-erasure-preview.ts': {
+        sourceMarker: 'collectTaskRuntimePurgeInventory(',
+        boundary: 'read-only transitive task-erasure inventory preview without mutation; mutation entrypoints are classified separately'
+    },
+    'src/lifecycle/rollback/rollback-destination-scope.ts': {
+        sourceMarker: 'getUpdateRollbackItems(',
+        boundary: 'read-only transitive trusted rollback destination enumeration without publication; mutation entrypoints are classified separately'
+    },
     'src/lifecycle/agent-init.ts': {
         sourceMarker: 'writeJsonFile(',
         boundary: 'agent-init configuration artifacts outside the six toxin roots'
@@ -170,6 +272,22 @@ const NON_CANONICAL_MUTATION_CAPABILITIES = Object.freeze({
     'src/lifecycle/check-update/check-update-source.ts': {
         sourceMarker: 'mkdtempSync(',
         boundary: 'temporary acquired update source outside the six toxin roots'
+    },
+    'src/lifecycle/cleanup/cleanup-review-artifact-ownership.ts': {
+        sourceMarker: 'fs.constants.O_RDONLY',
+        boundary: 'read-only transitive artifact identity inspection; constants are not filesystem writes'
+    },
+    'src/lifecycle/cleanup/cleanup-runtime-retention.ts': {
+        sourceMarker: 'rebuildIndex(reviewsDir)',
+        boundary: 'read-only transitive index reconstruction and candidate collection; no writeIndex call'
+    },
+    'src/lifecycle/cleanup/cleanup-scratch-preview.ts': {
+        sourceMarker: 'inspectScratchWriter(locations)',
+        boundary: 'read-only transitive scratch ownership inspection; registration/removal owners are classified separately'
+    },
+    'src/lifecycle/cleanup/cleanup-wip-removal.ts': {
+        sourceMarker: 'removeRetiredWipPackages(',
+        boundary: 'authenticated retired runtime/wip package removal outside the six toxin roots; canonical timelines are locked and preserved'
     },
     'src/lifecycle/generic-utils.ts': {
         sourceMarker: 'copyPathRecursive(',
@@ -222,6 +340,10 @@ const NON_CANONICAL_MUTATION_CAPABILITIES = Object.freeze({
     'src/lifecycle/update-availability/update-availability-worker.ts': {
         sourceMarker: 'writeContainedFile(',
         boundary: 'runtime/update-availability scheduler ticket and lock outside the six toxin roots'
+    },
+    'src/materialization/install/commit-guard-hook-path.ts': {
+        sourceMarker: 'fs.fchmodSync(',
+        boundary: 'Git commit guard hook executable mode outside the six toxin roots'
     }
 } satisfies Record<string, NonCanonicalMutationCapability>);
 
@@ -250,7 +372,7 @@ const ROOT_WRITER_COVERAGE = Object.freeze({
 } as const);
 
 const JOURNAL_OWNER_PATTERN = /(?:withLifecycleRuntimeMutationGeneration(?:ForPath)?|beginRuntimeMutationGeneration)/u;
-const BOUNDED_MUTATION_SURFACE_SHA256 = '68bd77ba7ab3801a8feb675a9842e5f9a12390ebb02b29ab3a569f5d9f4e7a67';
+const BOUNDED_MUTATION_SURFACE_SHA256 = '7d3ed9683ccba65fb469c2379e9f80c67797e9d01e7bcd4bf8825c4dce8ed62d';
 const READ_ONLY_FS_OPERATIONS = new Set([
     'access', 'accessSync', 'close', 'closeSync', 'exists', 'existsSync',
     'fstat', 'fstatSync', 'lstat', 'lstatSync', 'open', 'opendir', 'opendirSync',
@@ -460,6 +582,132 @@ test('lifecycle runtime mutation wrapper covers every toxin subtree and rejects 
     }
 });
 
+test('lifecycle settlement retries one publication failure without rerunning the mutation', () => {
+    for (const interruptionPoint of ['slot', 'head', 'anchor'] as const) {
+        const root = createTempRoot(`garda-lifecycle-settle-${interruptionPoint}-`);
+        const injection = injectSettlementWriteFailures(root, interruptionPoint, 1);
+        try {
+            const targetPath = path.join(root, 'runtime', 'reviews', 'persisted.txt');
+            let calls = 0;
+            const result = withLifecycleRuntimeMutationGenerationForPath(targetPath, 'persisted-write', () => {
+                calls += 1;
+                fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+                fs.writeFileSync(targetPath, 'persisted\n', 'utf8');
+                return 'result';
+            });
+            assert.equal(result, 'result');
+            assert.equal(calls, 1);
+            assert.equal(injection.failures(), 1);
+            assert.equal(fs.readFileSync(targetPath, 'utf8'), 'persisted\n');
+            assert.equal(readRuntimeMutationGeneration(root).generation, 1);
+            assert.equal(readRuntimeMutationGeneration(root).transition_sequence, 2);
+        } finally {
+            injection.restore();
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    }
+});
+
+test('async lifecycle settlement preserves the operation error after recovering publication', async () => {
+    const root = createTempRoot('garda-lifecycle-async-settle-');
+    const injection = injectSettlementWriteFailures(root, 'anchor', 1);
+    const operationError = new Error('injected operation failure');
+    try {
+        const targetPath = path.join(root, 'runtime', 'reviews', 'partial.txt');
+        let calls = 0;
+        await assert.rejects(
+            withLifecycleRuntimeMutationGenerationForPathAsync(targetPath, 'partial-write', async () => {
+                calls += 1;
+                fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+                fs.writeFileSync(targetPath, 'partial\n', 'utf8');
+                throw operationError;
+            }),
+            (error: unknown) => error === operationError
+        );
+        assert.equal(calls, 1);
+        assert.equal(injection.failures(), 1);
+        assert.equal(fs.readFileSync(targetPath, 'utf8'), 'partial\n');
+        assert.equal(readRuntimeMutationGeneration(root).generation, 1);
+    } finally {
+        injection.restore();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('lifecycle settlement rejects repeated publication failure without losing BUSY state or operation errors', () => {
+    const root = createTempRoot('garda-lifecycle-settle-bounded-');
+    const injection = injectSettlementWriteFailures(root, 'head', 2);
+    const operationError = new Error('injected operation failure');
+    try {
+        const targetPath = path.join(root, 'runtime', 'reviews', 'partial.txt');
+        let observedError: unknown;
+        try {
+            withLifecycleRuntimeMutationGenerationForPath(targetPath, 'partial-write', () => {
+                fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+                fs.writeFileSync(targetPath, 'partial\n', 'utf8');
+                throw operationError;
+            });
+        } catch (error: unknown) {
+            observedError = error;
+        }
+        assert.ok(observedError instanceof AggregateError);
+        assert.equal(observedError.errors[0], operationError);
+        const settlementError: unknown = observedError.errors[1];
+        assert.ok(settlementError instanceof AggregateError);
+        assert.equal(settlementError.errors.length, 2);
+        assert.notEqual(settlementError.errors[0], settlementError.errors[1]);
+        assert.equal(injection.failures(), 2);
+        assert.throws(
+            () => readRuntimeMutationGeneration(root),
+            (error: unknown) => error instanceof RuntimeMutationGenerationError && error.code === 'BUSY'
+        );
+    } finally {
+        injection.restore();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('lifecycle settlement remains BUSY after anchor failure followed by retry head failure', (t) => {
+    const root = createTempRoot('garda-lifecycle-settle-mixed-');
+    const originalWrite = mutableFilesystem.writeFileAtomically;
+    let failures = 0;
+    t.mock.timers.enable({ apis: ['Date'], now: Date.UTC(2026, 0, 1) });
+    mutableFilesystem.writeFileAtomically = (filePath, content, options) => {
+        const target = failures === 0
+            ? path.join(root, 'runtime', '.runtime-mutation-generation.anchor.json')
+            : path.join(root, 'runtime', '.runtime-mutation-generation', 'head.json');
+        if (failures < 2 && path.resolve(filePath) === target) {
+            const record = JSON.parse(content.toString()) as { transition_sequence: number };
+            if (record.transition_sequence === 2) {
+                failures += 1;
+                t.mock.timers.tick(1);
+                throw new Error('injected mixed lifecycle settlement failure');
+            }
+        }
+        return originalWrite(filePath, content, options);
+    };
+    try {
+        let calls = 0;
+        const targetPath = path.join(root, 'runtime', 'reviews', 'persisted.txt');
+        assert.throws(() => withLifecycleRuntimeMutationGenerationForPath(targetPath, 'mixed-write', () => {
+            calls += 1;
+            fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+            fs.writeFileSync(targetPath, 'persisted\n', 'utf8');
+        }), (error: unknown) => error instanceof AggregateError && error.errors.length === 2);
+        assert.equal(calls, 1);
+        assert.equal(failures, 2);
+        assert.equal(fs.readFileSync(targetPath, 'utf8'), 'persisted\n');
+        assert.throws(
+            () => readRuntimeMutationGeneration(root),
+            (error: unknown) => error instanceof RuntimeMutationGenerationError && error.code === 'BUSY'
+        );
+    } finally {
+        mutableFilesystem.writeFileAtomically = originalWrite;
+        t.mock.timers.reset();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
 test('central lifecycle backup writers publish generation updates', () => {
     const targetRoot = createTempRoot('garda-lifecycle-generation-writers-');
     const orchestratorRoot = path.join(targetRoot, 'garda-agent-orchestrator');
@@ -664,9 +912,11 @@ test('confirmed purge, batch purge, GC, and install manifest mutations advance g
     const purgeTargetRoot = createTempRoot('garda-lifecycle-generation-task-purge-');
     try {
         const bundleRoot = path.join(purgeTargetRoot, 'garda-agent-orchestrator');
-        const eventPath = path.join(bundleRoot, 'runtime', 'task-events', 'T-9001.jsonl');
-        fs.mkdirSync(path.dirname(eventPath), { recursive: true });
-        fs.writeFileSync(eventPath, '{}\n', 'utf8');
+        const fixture = seedHealthyDoneTaskArtifacts({ bundleRoot, taskId: 'T-9001' });
+        const eventPath = fixture.timelinePath;
+        fs.writeFileSync(path.join(bundleRoot, 'VERSION'), '1.0.0\n', 'utf8');
+        writeTaskQueue(purgeTargetRoot, [{ id: 'T-9001', status: '🟩 DONE' }]);
+        const beforePurge = readRuntimeMutationGeneration(bundleRoot).generation;
 
         const result = runTaskRuntimePurge({
             targetRoot: purgeTargetRoot,
@@ -678,7 +928,7 @@ test('confirmed purge, batch purge, GC, and install manifest mutations advance g
 
         assert.ok(result.removed.length > 0);
         assert.equal(fs.existsSync(eventPath), false);
-        assert.ok(readRuntimeMutationGeneration(bundleRoot).generation > 0);
+        assert.ok(readRuntimeMutationGeneration(bundleRoot).generation > beforePurge);
     } finally {
         fs.rmSync(purgeTargetRoot, { recursive: true, force: true });
     }
@@ -686,11 +936,11 @@ test('confirmed purge, batch purge, GC, and install manifest mutations advance g
     const batchTargetRoot = createTempRoot('garda-lifecycle-generation-task-batch-purge-');
     try {
         const bundleRoot = path.join(batchTargetRoot, 'garda-agent-orchestrator');
-        const eventPath = path.join(bundleRoot, 'runtime', 'task-events', 'T-9002.jsonl');
-        fs.mkdirSync(path.dirname(eventPath), { recursive: true });
-        fs.writeFileSync(eventPath, '{}\n', 'utf8');
-        const oldTimestamp = new Date('2020-01-01T00:00:00.000Z');
-        fs.utimesSync(eventPath, oldTimestamp, oldTimestamp);
+        const fixture = seedHealthyDoneTaskArtifacts({ bundleRoot, taskId: 'T-9002', ageDays: 45 });
+        const eventPath = fixture.timelinePath;
+        fs.writeFileSync(path.join(bundleRoot, 'VERSION'), '1.0.0\n', 'utf8');
+        writeTaskQueue(batchTargetRoot, [{ id: 'T-9002', status: '🟩 DONE' }]);
+        const beforePurge = readRuntimeMutationGeneration(bundleRoot).generation;
 
         const result = runTaskRuntimeBatchPurge({
             targetRoot: batchTargetRoot,
@@ -699,12 +949,12 @@ test('confirmed purge, batch purge, GC, and install manifest mutations advance g
             activeTaskIds: [],
             eligibleOlderThanDays: 1,
             keepLatestTasks: 0,
-            now: new Date('2026-08-03T00:00:00.000Z')
+            now: new Date()
         });
 
         assert.ok(result.selectedTaskIds.includes('T-9002'));
         assert.equal(fs.existsSync(eventPath), false);
-        assert.ok(readRuntimeMutationGeneration(bundleRoot).generation > 0);
+        assert.ok(readRuntimeMutationGeneration(bundleRoot).generation > beforePurge);
     } finally {
         fs.rmSync(batchTargetRoot, { recursive: true, force: true });
     }
@@ -715,6 +965,7 @@ test('confirmed purge, batch purge, GC, and install manifest mutations advance g
         const backupPath = path.join(bundleRoot, 'runtime', 'backups', 'old', 'artifact.txt');
         fs.mkdirSync(path.dirname(backupPath), { recursive: true });
         fs.writeFileSync(backupPath, 'old\n', 'utf8');
+        fs.writeFileSync(path.join(bundleRoot, 'VERSION'), '1.0.0\n', 'utf8');
         const oldTimestamp = new Date('2020-01-01T00:00:00.000Z');
         fs.utimesSync(path.dirname(backupPath), oldTimestamp, oldTimestamp);
 

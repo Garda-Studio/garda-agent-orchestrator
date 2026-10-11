@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { redactHostname as redactHostnameValue, redactPath } from '../../core/redaction';
 import { resolveBundleName } from '../../core/constants';
 import { removeLockPathWithRetry, renameLockPathWithRetry } from '../../gate-runtime/task-events-locking';
+import { updateLockHeartbeatInPlace } from '../../gate-runtime/timeline/task-events-locking-metadata';
 
 type JsonObject = Record<string, unknown>;
 
@@ -174,7 +175,14 @@ function isForeignHostLifecycleStaleRecoveryEnabled(options: LifecycleLockOption
 function readLifecycleOperationLockMetadata(lockPath: string): LifecycleOperationLockMetadata {
     const ownerPath = path.join(lockPath, LIFECYCLE_OPERATION_LOCK_OWNER_FILE_NAME);
     try {
-        const raw = fs.readFileSync(ownerPath, 'utf8');
+        return parseLifecycleOperationLockMetadata(fs.readFileSync(ownerPath, 'utf8'));
+    } catch {
+        return parseLifecycleOperationLockMetadata('');
+    }
+}
+
+function parseLifecycleOperationLockMetadata(raw: string): LifecycleOperationLockMetadata {
+    try {
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         return {
             lock_id: typeof parsed.lock_id === 'string' && parsed.lock_id.trim() ? parsed.lock_id.trim() : null,
@@ -326,16 +334,16 @@ function writeLifecycleOperationLockMetadata(lockPath: string, targetRoot: strin
 }
 
 function writeLifecycleOperationLockHeartbeat(lockPath: string, lockId: string): void {
-    const metadata = readLifecycleOperationLockMetadata(lockPath);
-    if (!lifecycleLockMetadataMatchesLockId(metadata, lockId)) {
-        return;
-    }
     const ownerPath = path.join(lockPath, LIFECYCLE_OPERATION_LOCK_OWNER_FILE_NAME);
-    const payload: LifecycleOperationLockMetadata = {
-        ...metadata,
-        heartbeat_at_utc: new Date().toISOString()
-    };
-    fs.writeFileSync(ownerPath, JSON.stringify(payload, null, 2) + '\n', 'utf8');
+    updateLockHeartbeatInPlace(ownerPath, (rawContent) => {
+        const metadata = parseLifecycleOperationLockMetadata(rawContent);
+        if (!lifecycleLockMetadataMatchesLockId(metadata, lockId)) return null;
+        const payload: LifecycleOperationLockMetadata = {
+            ...metadata,
+            heartbeat_at_utc: new Date().toISOString()
+        };
+        return JSON.stringify(payload, null, 2) + '\n';
+    });
 }
 
 function startLifecycleLockHeartbeat(

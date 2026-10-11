@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+
+import { writeLockHeartbeat } from '../../../src/gate-runtime/timeline/task-events-locking-metadata';
 
 import {
     acquireFilesystemLock,
@@ -541,16 +543,217 @@ test('acquireFilesystemLockAsync refreshes heartbeat while lock is held', async 
         });
         const ownerPath = path.join(lockPath, 'owner.json');
         const initialOwner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
+        const initialIdentity = fs.statSync(ownerPath, { bigint: true });
         await new Promise((resolve) => setTimeout(resolve, 80));
         const refreshedOwner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
 
         assert.equal(refreshedOwner.lock_id, initialOwner.lock_id);
+        const refreshedIdentity = fs.statSync(ownerPath, { bigint: true });
+        assert.equal(refreshedIdentity.dev, initialIdentity.dev);
+        assert.equal(refreshedIdentity.ino, initialIdentity.ino);
         assert.ok(
             Date.parse(refreshedOwner.heartbeat_at_utc) > Date.parse(initialOwner.heartbeat_at_utc),
             'heartbeat should advance while async lock is held'
         );
         releaseFilesystemLock(handle);
     } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+    }
+});
+
+// Windows denies the pinned-directory replacement; the genuine race executes on Linux.
+test('heartbeat preserves a new owner after the stale lock is replaced by a competing process', { skip: process.platform === 'win32' }, (t) => {
+    const tmp = mkTmpDir();
+    const lockPath = path.join(tmp, '.heartbeat-replacement.lock');
+    const ownerPath = path.join(lockPath, 'owner.json');
+    const mutableFs = require('node:fs') as typeof fs;
+    const originalWriteFile = mutableFs.writeFileSync;
+    const originalWrite = mutableFs.writeSync;
+    let replacementBytes: Buffer | null = null;
+    let replacementIdentity: fs.BigIntStats | null = null;
+    try {
+        const { handle } = acquireFilesystemLock(lockPath);
+        assert.ok(handle.lockId);
+        const originalIdentity = fs.statSync(ownerPath, { bigint: true });
+        const replaceBeforeWrite = (target: unknown): void => {
+            if (replacementBytes !== null) return;
+            if (target !== ownerPath && (typeof target !== 'number'
+                || fs.fstatSync(target, { bigint: true }).ino !== originalIdentity.ino)) return;
+            const child = spawnSync(process.execPath, ['--eval', [
+                "const fs = require('node:fs');",
+                "const { acquireFilesystemLock } = require(process.argv[1]);",
+                "const lockPath = process.argv[2];",
+                "fs.renameSync(lockPath, lockPath + '.displaced');",
+                "const { handle } = acquireFilesystemLock(lockPath);",
+                "process.stdout.write(JSON.stringify({ pid: process.pid, lockId: handle.lockId }));"
+            ].join('\n'), require.resolve('../../../src/gate-runtime/task-events'), lockPath], {
+                encoding: 'utf8', timeout: 5000
+            });
+            assert.ifError(child.error);
+            assert.equal(child.status, 0, child.stderr);
+            const claimed = JSON.parse(child.stdout);
+            assert.notEqual(claimed.pid, process.pid);
+            replacementBytes = fs.readFileSync(ownerPath);
+            replacementIdentity = fs.statSync(ownerPath, { bigint: true });
+            assert.notEqual(replacementIdentity.ino, originalIdentity.ino);
+            assert.equal(JSON.parse(replacementBytes.toString('utf8')).lock_id, claimed.lockId);
+            console.log(JSON.stringify({ case: 'heartbeat-replacement', competingPid: claimed.pid,
+                originalInode: String(originalIdentity.ino), replacementInode: String(replacementIdentity.ino) }));
+        };
+        t.mock.method(mutableFs, 'writeFileSync', (...args: unknown[]) => {
+            replaceBeforeWrite(args[0]);
+            return Reflect.apply(originalWriteFile, mutableFs, args);
+        });
+        t.mock.method(mutableFs, 'writeSync', (...args: unknown[]) => {
+            replaceBeforeWrite(args[0]);
+            return Reflect.apply(originalWrite, mutableFs, args);
+        });
+        writeLockHeartbeat(lockPath, handle.lockId);
+        assert.ok(replacementBytes, 'the competing process must actually acquire a replacement');
+        assert.deepEqual(fs.readFileSync(ownerPath), replacementBytes, 'old heartbeat must preserve new owner bytes');
+        assert.equal(fs.statSync(ownerPath, { bigint: true }).ino, replacementIdentity!.ino);
+        writeLockHeartbeat(lockPath, handle.lockId);
+        releaseFilesystemLock(handle);
+        assert.deepEqual(fs.readFileSync(ownerPath), replacementBytes, 'old release must preserve the replacement');
+        // The competing process exited without release: recovery must still reclaim its dead claim.
+        const recovered = acquireFilesystemLock(lockPath);
+        assert.equal(recovered.telemetry.staleLockRecovered, true);
+        releaseFilesystemLock(recovered.handle);
+    } finally {
+        t.mock.restoreAll();
+        fs.rmSync(tmp, { recursive: true, force: true });
+    }
+});
+
+test('heartbeat handles partial descriptor writes and truncates the existing owner object', (t) => {
+    const tmp = mkTmpDir();
+    const lockPath = path.join(tmp, '.heartbeat-short-write.lock');
+    const ownerPath = path.join(lockPath, 'owner.json');
+    const mutableFs = require('node:fs') as typeof fs;
+    const originalWrite = mutableFs.writeSync;
+    let writes = 0;
+    try {
+        const { handle } = acquireFilesystemLock(lockPath);
+        assert.ok(handle.lockId);
+        const initialBytes = fs.readFileSync(ownerPath);
+        fs.appendFileSync(ownerPath, ' '.repeat(256));
+        const initialIdentity = fs.statSync(ownerPath, { bigint: true });
+        t.mock.method(mutableFs, 'writeSync', (...args: unknown[]) => {
+            writes += 1;
+            args[3] = Math.min(Number(args[3]), 7);
+            return Reflect.apply(originalWrite, mutableFs, args);
+        });
+        writeLockHeartbeat(lockPath, handle.lockId);
+        const refreshedBytes = fs.readFileSync(ownerPath);
+        const refreshedOwner = JSON.parse(refreshedBytes.toString('utf8'));
+        assert.ok(writes > 1, 'the entire payload must be written despite short writes');
+        assert.equal(refreshedOwner.lock_id, handle.lockId);
+        assert.equal(refreshedBytes.length, initialBytes.length, 'old trailing bytes must be truncated');
+        assert.equal(fs.statSync(ownerPath, { bigint: true }).ino, initialIdentity.ino);
+        releaseFilesystemLock(handle);
+    } finally {
+        t.mock.restoreAll();
+        fs.rmSync(tmp, { recursive: true, force: true });
+    }
+});
+
+test('heartbeat rejects a replaced owner file opened after identity observation even with matching metadata', (t) => {
+    const tmp = mkTmpDir();
+    const lockPath = path.join(tmp, '.heartbeat-open-race.lock');
+    const ownerPath = path.join(lockPath, 'owner.json');
+    const mutableFs = require('node:fs') as typeof fs;
+    const originalOpen = mutableFs.openSync;
+    try {
+        const { handle } = acquireFilesystemLock(lockPath);
+        assert.ok(handle.lockId);
+        const originalBytes = fs.readFileSync(ownerPath);
+        const originalIdentity = fs.statSync(ownerPath, { bigint: true });
+        let replaced = false;
+        const ownerMutations = (['writeSync', 'writeFileSync', 'ftruncateSync'] as const)
+            .map((method) => t.mock.method(mutableFs, method));
+        t.mock.method(mutableFs, 'openSync', (...args: unknown[]) => {
+            if (args[0] === ownerPath && !replaced) {
+                replaced = true;
+                fs.renameSync(ownerPath, ownerPath + '.displaced');
+                fs.writeFileSync(ownerPath, originalBytes);
+                ownerMutations.forEach((mutation) => mutation.mock.resetCalls());
+            }
+            return Reflect.apply(originalOpen, mutableFs, args);
+        });
+        writeLockHeartbeat(lockPath, handle.lockId);
+        assert.equal(replaced, true);
+        for (const mutation of ownerMutations) {
+            assert.equal(mutation.mock.callCount(), 0, 'replaced owner must not receive a write or truncation');
+        }
+        assert.notEqual(fs.statSync(ownerPath, { bigint: true }).ino, originalIdentity.ino);
+        assert.deepEqual(fs.readFileSync(ownerPath), originalBytes, 'matching JSON cannot authorize a new file object');
+    } finally {
+        t.mock.restoreAll();
+        fs.rmSync(tmp, { recursive: true, force: true });
+    }
+});
+
+test('heartbeat preserves missing, malformed, foreign and aliased owner records', (t) => {
+    const tmp = mkTmpDir();
+    const lockPath = path.join(tmp, '.heartbeat-unknown-owner.lock');
+    const ownerPath = path.join(lockPath, 'owner.json');
+    try {
+        const { handle } = acquireFilesystemLock(lockPath);
+        assert.ok(handle.lockId);
+        const originalBytes = fs.readFileSync(ownerPath);
+        for (const bytes of [Buffer.from('{invalid'), Buffer.from('{}'),
+            Buffer.from(JSON.stringify({ ...JSON.parse(originalBytes.toString('utf8')), lock_id: 'foreign-owner' }))]) {
+            fs.writeFileSync(ownerPath, bytes);
+            writeLockHeartbeat(lockPath, handle.lockId);
+            assert.deepEqual(fs.readFileSync(ownerPath), bytes);
+        }
+        fs.writeFileSync(ownerPath, originalBytes);
+        const alias = path.join(tmp, 'aliased-owner.json');
+        fs.linkSync(ownerPath, alias);
+        const mutableFs = require('node:fs') as typeof fs;
+        const ownerMutations = (['writeSync', 'writeFileSync', 'ftruncateSync'] as const)
+            .map((method) => t.mock.method(mutableFs, method));
+        writeLockHeartbeat(lockPath, handle.lockId);
+        for (const mutation of ownerMutations) {
+            assert.equal(mutation.mock.callCount(), 0, 'aliased owner must not receive a write or truncation');
+        }
+        assert.deepEqual(fs.readFileSync(alias), originalBytes, 'hard-link aliases must not be mutated');
+        fs.unlinkSync(ownerPath);
+        writeLockHeartbeat(lockPath, handle.lockId);
+        assert.equal(fs.existsSync(ownerPath), false, 'heartbeat must not recreate a missing owner');
+        if (process.platform !== 'win32') {
+            fs.symlinkSync(alias, ownerPath);
+            writeLockHeartbeat(lockPath, handle.lockId);
+            assert.equal(fs.lstatSync(ownerPath).isSymbolicLink(), true);
+            assert.deepEqual(fs.readFileSync(alias), originalBytes, 'symlink targets must not be mutated');
+        }
+    } finally {
+        t.mock.restoreAll();
+        fs.rmSync(tmp, { recursive: true, force: true });
+    }
+});
+
+test('heartbeat closes its descriptor when a write makes no progress', (t) => {
+    const tmp = mkTmpDir();
+    const lockPath = path.join(tmp, '.heartbeat-failed-write.lock');
+    const ownerPath = path.join(lockPath, 'owner.json');
+    const mutableFs = require('node:fs') as typeof fs;
+    const originalOpen = mutableFs.openSync;
+    let descriptor: number | undefined;
+    try {
+        const { handle } = acquireFilesystemLock(lockPath);
+        assert.ok(handle.lockId);
+        t.mock.method(mutableFs, 'openSync', (...args: unknown[]) => {
+            const opened = Reflect.apply(originalOpen, mutableFs, args);
+            if (args[0] === ownerPath) descriptor = opened;
+            return opened;
+        });
+        t.mock.method(mutableFs, 'writeSync', () => 0);
+        assert.throws(() => writeLockHeartbeat(lockPath, handle.lockId!), /write made no progress/);
+        assert.notEqual(descriptor, undefined);
+        assert.throws(() => fs.fstatSync(descriptor!), { code: 'EBADF' });
+    } finally {
+        t.mock.restoreAll();
         fs.rmSync(tmp, { recursive: true, force: true });
     }
 });

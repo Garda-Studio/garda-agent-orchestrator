@@ -1,5 +1,11 @@
 # Changelog
 
+- T-239: Pin timeline and lifecycle heartbeat validation and writes to the same
+  existing owner-file descriptor so a competing replacement keeps its identity
+  and bytes; preserve canonical lock layout and dead-owner recovery.
+- T-239-F1: Make copied-owner and hard-link heartbeat rejection tests require
+  zero write/truncation calls, independently of millisecond timestamp equality.
+
 - T-192: Recover interrupted BEGIN/COMMIT/ABORT journal publication against the
   existing anchor; bound repeated settlement to the latest matching ticket and
   retry lifecycle settlement once without rerunning persisted mutations.

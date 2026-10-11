@@ -4,7 +4,42 @@ import * as path from 'node:path';
 
 import { DEFAULT_LOCK_HEARTBEAT_INTERVAL_MS, FOREIGN_HOST_FILE_LOCK_STALE_RECOVERY_ENV } from './task-events-locking-types';
 import type { LockFreshness, LockInspectionResult, LockOptions, LockOwnerMetadata } from './task-events-locking-types';
-import { getErrorMessage, getLockOwnerCommand, parseBooleanLike, redactLockPath, toOptionalPositiveInteger } from './task-events-locking-support';
+import { getErrorCode, getErrorMessage, getLockOwnerCommand, parseBooleanLike, redactLockPath, toOptionalPositiveInteger } from './task-events-locking-support';
+
+export function updateLockHeartbeatInPlace(
+    metadataPath: string,
+    serializeHeartbeat: (rawContent: string) => string | null
+): void {
+    let descriptor: number | undefined;
+    try {
+        const observed = fs.lstatSync(metadataPath, { bigint: true });
+        if (!observed.isFile() || observed.ino <= 0n || observed.nlink !== 1n) return;
+        descriptor = fs.openSync(metadataPath,
+            fs.constants.O_RDWR | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+        const opened = fs.fstatSync(descriptor, { bigint: true });
+        if (!opened.isFile() || opened.nlink !== 1n || opened.dev !== observed.dev
+            || opened.ino !== observed.ino || opened.mode !== observed.mode
+            || opened.birthtimeNs !== observed.birthtimeNs) return;
+        const payload = serializeHeartbeat(fs.readFileSync(descriptor, 'utf8'));
+        if (payload !== null) writeHeartbeatPayload(descriptor, payload);
+    } catch (error: unknown) {
+        if (!['ENOENT', 'ENOTDIR', 'EISDIR', 'ELOOP'].includes(getErrorCode(error))) throw error;
+    } finally {
+        if (descriptor !== undefined) fs.closeSync(descriptor);
+    }
+}
+
+function writeHeartbeatPayload(descriptor: number, payload: string): void {
+    const bytes = Buffer.from(payload, 'utf8');
+    let offset = 0;
+    // readFileSync(fd) advances its offset; always write from position zero on the same object.
+    while (offset < bytes.length) {
+        const written = fs.writeSync(descriptor, bytes, offset, bytes.length - offset, offset);
+        if (written <= 0) throw new Error('Lock heartbeat write made no progress.');
+        offset += written;
+    }
+    fs.ftruncateSync(descriptor, bytes.length);
+}
 
 export function writeLockMetadata(lockPath: string, lockId: string, options: LockOptions | undefined): void {
     const metadataPath = path.join(lockPath, 'owner.json');
@@ -21,20 +56,20 @@ export function writeLockMetadata(lockPath: string, lockId: string, options: Loc
 }
 
 export function writeLockHeartbeat(lockPath: string, lockId: string): void {
-    const metadata = readLockMetadata(lockPath);
-    if (!lockMetadataMatchesLockId(metadata, lockId)) {
-        return;
-    }
     const metadataPath = path.join(lockPath, 'owner.json');
-    const payload = {
-        lock_id: metadata.lock_id,
-        pid: metadata.pid,
-        hostname: metadata.hostname,
-        created_at_utc: metadata.created_at_utc,
-        heartbeat_at_utc: new Date().toISOString(),
-        command: metadata.command
-    };
-    fs.writeFileSync(metadataPath, JSON.stringify(payload, null, 2) + '\n', 'utf8');
+    updateLockHeartbeatInPlace(metadataPath, (rawContent) => {
+        const metadata = parseLockMetadata(rawContent);
+        if (!lockMetadataMatchesLockId(metadata, lockId)) return null;
+        const payload = {
+            lock_id: metadata.lock_id,
+            pid: metadata.pid,
+            hostname: metadata.hostname,
+            created_at_utc: metadata.created_at_utc,
+            heartbeat_at_utc: new Date().toISOString(),
+            command: metadata.command
+        };
+        return JSON.stringify(payload, null, 2) + '\n';
+    });
 }
 
 export function lockMetadataMatchesLockId(metadata: LockOwnerMetadata, lockId: string): boolean {
@@ -102,6 +137,10 @@ export function readLockMetadata(lockPath: string): LockOwnerMetadata {
         };
     }
 
+    return parseLockMetadata(rawContent);
+}
+
+function parseLockMetadata(rawContent: string): LockOwnerMetadata {
     try {
         const parsed = JSON.parse(rawContent) as Record<string, unknown>;
         const lockIdValue = typeof parsed.lock_id === 'string' && parsed.lock_id.trim()

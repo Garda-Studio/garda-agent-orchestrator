@@ -16,12 +16,28 @@ export const CANONICAL_RUNTIME_MUTATION_SUBTREES = Object.freeze([
 
 export type CanonicalRuntimeMutationSubtree = typeof CANONICAL_RUNTIME_MUTATION_SUBTREES[number];
 
+function commitLifecycleMutationWithRetry(ticket: RuntimeMutationGenerationTicket): void {
+    try {
+        commitRuntimeMutationGeneration(ticket);
+    } catch (firstSettlementError: unknown) {
+        // Retry the same ticket once; the persisted operation must never execute again.
+        try {
+            commitRuntimeMutationGeneration(ticket);
+        } catch (retryError: unknown) {
+            throw new AggregateError(
+                [firstSettlementError, retryError],
+                `Lifecycle mutation '${ticket.mutation_kind}' generation settlement failed after one recovery retry.`
+            );
+        }
+    }
+}
+
 function settlePersistedLifecycleMutation(
     ticket: RuntimeMutationGenerationTicket,
     operationError?: unknown
 ): void {
     try {
-        commitRuntimeMutationGeneration(ticket);
+        commitLifecycleMutationWithRetry(ticket);
     } catch (settlementError: unknown) {
         if (operationError !== undefined) {
             throw new AggregateError(
