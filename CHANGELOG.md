@@ -1,4 +1,5 @@
 # Changelog
+- Added bounded owner-managed preservation of disputed ordinary lock directories outside runtime cleanup; original claims and failed partial captures remain intact (T-238-1-1).
 
 - T-239: Pin timeline and lifecycle heartbeat validation and writes to the same
   existing owner-file descriptor so a competing replacement keeps its identity
