@@ -1,4 +1,8 @@
 # Changelog
+- Publish immutable authenticated source acceptance after genuine native commit
+  audit and mandatory snapshot/namespace flushes (T-241-2-C2-I1-3). Use writable
+  directory handles on Windows with verified local fixed NTFS and preserved
+  identity, containment, authority and fail-closed publication checks.
 - Added bounded owner-managed preservation of disputed ordinary lock directories outside runtime cleanup; original claims and failed partial captures remain intact (T-238-1-1).
 
 - T-239: Pin timeline and lifecycle heartbeat validation and writes to the same

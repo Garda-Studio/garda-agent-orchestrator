@@ -2,6 +2,7 @@ import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 import { runHumanCommitCommand } from '../../../../../../src/cli/commands/gates';
 import { handleSet } from '../../../../../../src/cli/commands/workflow/workflow-command-set';
 import { buildDefaultWorkflowConfig } from '../../../../../../src/core/workflow-config';
@@ -10,11 +11,16 @@ import { getNodeHumanCommitCommand } from '../../../../../../src/materialization
 import { buildCommitGuardManagedBlock } from '../../../../../../src/materialization/content-builders';
 import { buildScopeContentFingerprint } from '../../../../../../src/gates/compile/compile-gate';
 import { createTempRepo, runGit } from '../../gate-test-helpers';
+import { authenticateLocalCommitWorkflowAudit } from '../../../../../../src/core/auth/local-commit-availability';
+import { inspectTaskEventFile } from '../../../../../../src/gate-runtime/task-events';
 
 const TASK_ID = 'T-COMMIT-1';
 const auditApi = require('../../../../../../src/gates/task-audit/task-audit-summary') as typeof import('../../../../../../src/gates/task-audit/task-audit-summary');
 const closeoutApi = require('../../../../../../src/gates/task-audit/task-audit-summary-closeout-sync') as typeof import('../../../../../../src/gates/task-audit/task-audit-summary-closeout-sync');
 const subprocessApi = require('../../../../../../src/core/process/subprocess') as typeof import('../../../../../../src/core/process/subprocess');
+const taskEventsApi = require('../../../../../../src/gate-runtime/timeline/task-events-io') as typeof import('../../../../../../src/gate-runtime/timeline/task-events-io');
+const filesystemApi = require('node:fs') as typeof import('node:fs');
+const localCommitApi = require('../../../../../../src/core/auth/local-commit-availability') as typeof import('../../../../../../src/core/auth/local-commit-availability');
 
 function installHook(root: string, name: string, script: string) {
     const hooks = path.join(root, '.git', 'hooks');
@@ -48,12 +54,334 @@ function auditFixture(t: TestContext, root: string, status: 'PASS' | 'BLOCKED' =
     const acceptedHash = buildScopeContentFingerprint(root, source, files);
     // Boundary tests mock the audit service, never its production evidence writer.
     // The task's native completion and post-commit flow provide integration acceptance.
-    const audit = t.mock.method(auditApi, 'buildTaskAuditSummary', () => ({ status: calls++ ? postStatus : status,
+    const audit = t.mock.method(auditApi, 'buildTaskAuditSummary', () => ({ task_id: TASK_ID, status: calls++ ? postStatus : status,
+        point_in_time_snapshot: { status: 'STABLE' },
         integrity_status: 'PASS', final_closeout: { implementation_summary: { changed_files: files,
             scope_content_sha256: acceptedHash, audited_scope_provenance: { use_staged: staged, detection_source: source } } } }));
     const synchronize = t.mock.method(closeoutApi, 'synchronizeFinalCloseoutArtifacts', (summary: unknown) => summary);
     return { audit, synchronize };
 }
+
+function sourceAcceptanceEvents(root: string) {
+    const file = path.join(root, 'garda-agent-orchestrator/runtime/task-events', TASK_ID+'.jsonl');
+    return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line))
+        .filter(event=>event.event_type==='TASK_SOURCE_COMMIT_ACCEPTED') : [];
+}
+
+test('native source acceptance binds a real commit and immutable authenticated audit without rewriting older proof', async (t) => {
+    const root = fixture();
+    try {
+        const parent = runGit(root, ['rev-parse', 'HEAD']).stdout.trim();
+        auditFixture(t, root);
+        assert.equal(await runHumanCommitCommand(['--task-id', TASK_ID, '-m', 'test: source acceptance'], { cwd: root }), 0);
+        const events = sourceAcceptanceEvents(root); assert.equal(events.length, 1);
+        const details = events[0].details, commit = runGit(root, ['rev-parse', 'HEAD']).stdout.trim();
+        assert.equal(details.commit_sha, commit); assert.equal(details.parent_commit_sha, parent);
+        assert.equal(details.tree_sha, runGit(root, ['rev-parse', 'HEAD^{tree}']).stdout.trim());
+        assert.equal(details.repo_root, fs.realpathSync.native(root));
+        const artifact = path.resolve(root, details.artifact_path), bytes = fs.readFileSync(artifact);
+        assert.equal(createHash('sha256').update(bytes).digest('hex'), details.artifact_sha256);
+        const proof = JSON.parse(bytes.toString()); assert.equal(proof.task_id, TASK_ID);
+        assert.equal(proof.commit_sha, commit); assert.equal(proof.post_commit_audit.status, 'PASS');
+        assert.equal(proof.post_commit_audit_sha256, createHash('sha256').update(JSON.stringify(proof.post_commit_audit)).digest('hex'));
+        assert.deepEqual(authenticateLocalCommitWorkflowAudit(root, proof, false).local_commit_authentication, proof.local_commit_authentication);
+        assert.equal(inspectTaskEventFile(path.join(root,'garda-agent-orchestrator/runtime/task-events',TASK_ID+'.jsonl'),TASK_ID).status,'PASS');
+        t.mock.restoreAll(); fs.writeFileSync(path.join(root,'accepted.txt'),'later accepted content\n');runGit(root,['add','accepted.txt']);auditFixture(t,root);
+        assert.equal(await runHumanCommitCommand(['--task-id',TASK_ID,'-m','test: later acceptance'],{cwd:root}),0);
+        assert.equal(sourceAcceptanceEvents(root).length,2);assert.deepEqual(fs.readFileSync(artifact),bytes);
+    } finally { t.mock.restoreAll(); fs.rmSync(root,{recursive:true,force:true}); }
+});
+
+test('source acceptance rejects an unsafe proof destination after preserving the real commit', async (t) => {
+    const root=fixture(), outside=fs.mkdtempSync(path.join(path.dirname(root), 'source-acceptance-outside-'));
+    try {
+        auditFixture(t,root);fs.mkdirSync(path.join(root,'garda-agent-orchestrator/runtime'),{recursive:true});
+        fs.symlinkSync(outside,path.join(root,'garda-agent-orchestrator/runtime/reviews'),'dir');
+        await assert.rejects(()=>runHumanCommitCommand(['--task-id',TASK_ID,'-m','test: unsafe proof'],{cwd:root}),/symlink|junction/);
+        assert.match(runGit(root,['log','--format=%s','-1']).stdout,/unsafe proof/);
+        assert.deepEqual(fs.readdirSync(outside),[]);assert.deepEqual(sourceAcceptanceEvents(root),[]);
+    } finally { t.mock.restoreAll();fs.rmSync(root,{recursive:true,force:true});fs.rmSync(outside,{recursive:true,force:true}); }
+});
+
+test('source acceptance flushes all containing directories with native handles before canonical publication', async (t) => {
+    const root = fixture(), sync = filesystemApi.fsyncSync, open = filesystemApi.openSync;
+    const append = taskEventsApi.appendMandatoryTaskEvent;
+    const flushed: Array<{ directory: boolean; dev: number; ino: number }> = [];
+    const directoryOpens: Array<{ path: string; flags: fs.OpenMode }> = [];
+    try {
+        auditFixture(t, root);
+        t.mock.method(filesystemApi, 'openSync', (file: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+            const descriptor = open(file, flags, mode);
+            if (fs.fstatSync(descriptor).isDirectory()) directoryOpens.push({ path: String(file), flags });
+            return descriptor;
+        });
+        t.mock.method(filesystemApi, 'fsyncSync', (descriptor: number) => {
+            const stat = fs.fstatSync(descriptor);
+            sync(descriptor);
+            flushed.push({ directory: stat.isDirectory(), dev: stat.dev, ino: stat.ino });
+        });
+        t.mock.method(taskEventsApi, 'appendMandatoryTaskEvent', (...args: Parameters<typeof append>) => {
+            if (args[2] === 'TASK_SOURCE_COMMIT_ACCEPTED') {
+                const details = args[5] as { artifact_path: string };
+                const snapshotPath = path.resolve(root, details.artifact_path), snapshot = fs.statSync(snapshotPath);
+                const fileBarrier = flushed.findIndex(item => !item.directory && item.dev === snapshot.dev && item.ino === snapshot.ino);
+                assert.ok(fileBarrier >= 0, 'The actual snapshot must be flushed first.');
+                const directories: string[] = [];
+                for (let directory = path.dirname(snapshotPath); ; directory = path.dirname(directory)) {
+                    directories.push(directory);
+                    if (directory === root) break;
+                }
+                assert.deepEqual(flushed.slice(fileBarrier + 1).filter(item => item.directory), directories.map(directory => {
+                    const stat = fs.statSync(directory);
+                    return { directory: true, dev: stat.dev, ino: stat.ino };
+                }), 'Every namespace directory must be flushed deepest-first before publication.');
+                for (const directory of directories) {
+                    const acquired = directoryOpens.filter(item => path.resolve(item.path) === directory).at(-1);
+                    assert.ok(acquired);
+                    assert.equal(Number(acquired.flags) & 3, process.platform === 'win32' ? fs.constants.O_RDWR : fs.constants.O_RDONLY);
+                }
+            }
+            return append(...args);
+        });
+        assert.equal(await runHumanCommitCommand(['--task-id', TASK_ID, '-m', 'test: durable source proof'], { cwd: root }), 0);
+        assert.equal(sourceAcceptanceEvents(root).length, 1);
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+function failedDirectoryBarrierFixture(t: TestContext, code: string) {
+    const root = fixture(), sync = filesystemApi.fsyncSync;
+    auditFixture(t, root);
+    t.mock.method(filesystemApi, 'fsyncSync', (descriptor: number) => {
+        if (fs.fstatSync(descriptor).isDirectory()) {
+            throw Object.assign(new Error('source proof directory barrier failed'), { code });
+        }
+        sync(descriptor);
+    });
+    return root;
+}
+
+test('source acceptance rejects a failed directory durability barrier', async (t) => {
+    const root = failedDirectoryBarrierFixture(t, 'EIO');
+    try {
+        await assert.rejects(() => runHumanCommitCommand(['--task-id', TASK_ID, '-m', 'test: failed source directory barrier'], { cwd: root }), /directory barrier/);
+        assert.match(runGit(root, ['log', '--format=%s', '-1']).stdout, /failed source directory barrier/);
+        assert.deepEqual(sourceAcceptanceEvents(root), []);
+        assert.ok(fs.readdirSync(path.join(root, 'garda-agent-orchestrator/runtime/reviews')).some(name => name.includes('-source-acceptance-')));
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('source acceptance rejects unsupported directory durability', async (t) => {
+    const root = failedDirectoryBarrierFixture(t, 'EINVAL');
+    try {
+        await assert.rejects(() => runHumanCommitCommand(['--task-id', TASK_ID, '-m', 'test: unsupported source directory barrier'], { cwd: root }), /directory barrier/);
+        assert.match(runGit(root, ['log', '--format=%s', '-1']).stdout, /unsupported source directory barrier/);
+        assert.deepEqual(sourceAcceptanceEvents(root), []);
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('source acceptance preserves the real commit and diagnostic snapshot after directory access denial', async (t) => {
+    const root = failedDirectoryBarrierFixture(t, 'EPERM');
+    try {
+        await assert.rejects(() => runHumanCommitCommand(['--task-id', TASK_ID, '-m', 'test: source access denied'], { cwd: root }), /directory barrier/);
+        assert.match(runGit(root, ['log', '--format=%s', '-1']).stdout, /source access denied/);
+        assert.deepEqual(sourceAcceptanceEvents(root), []);
+        assert.ok(fs.readdirSync(path.join(root, 'garda-agent-orchestrator/runtime/reviews')).some(name => name.includes('-source-acceptance-')));
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+for (const scenario of ['non-NTFS', 'network', 'not-ready', 'foreign-volume', 'invalid-output', 'unavailable', 'timeout'] as const) {
+    test(`source acceptance rejects Windows volume ${scenario} without claiming acceptance`, { skip: process.platform !== 'win32' }, async (t) => {
+        const root = fixture(), originalSpawn = subprocessApi.spawnSyncWithTimeout;
+        try {
+            auditFixture(t, root);
+            t.mock.method(subprocessApi, 'spawnSyncWithTimeout', (...args: Parameters<typeof originalSpawn>) => {
+                if (path.basename(args[0]).toLowerCase() !== 'powershell.exe' || !args[1].some(argument => argument.includes('DriveFormat'))) return originalSpawn(...args);
+                const assessment = { Name: path.parse(root).root, Format: 'NTFS', Type: 'Fixed', Ready: true };
+                if (scenario === 'non-NTFS') assessment.Format = 'exFAT';
+                if (scenario === 'network') assessment.Type = 'Network';
+                if (scenario === 'not-ready') assessment.Ready = false;
+                if (scenario === 'foreign-volume') assessment.Name = '\\\\foreign\\share\\';
+                const output = scenario === 'invalid-output' ? 'unreadable' : JSON.stringify(assessment);
+                return { pid: 0, output: [null, output, ''], stdout: output, stderr: '',
+                    status: scenario === 'unavailable' || scenario === 'timeout' ? null : 0,
+                    signal: null, timedOut: scenario === 'timeout',
+                    error: scenario === 'unavailable' ? new Error('inspector unavailable') : undefined };
+            });
+            await assert.rejects(() => runHumanCommitCommand(['--task-id', TASK_ID, '-m', 'test: unverified Windows volume'], { cwd: root }), /NTFS|volume inspection/);
+            assert.match(runGit(root, ['log', '--format=%s', '-1']).stdout, /unverified Windows volume/);
+            assert.deepEqual(sourceAcceptanceEvents(root), []);
+            assert.ok(fs.readdirSync(path.join(root, 'garda-agent-orchestrator/runtime/reviews')).some(name => name.includes('-source-acceptance-')));
+        } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+    });
+}
+
+test('source acceptance rejects key disappearance inside the final availability authentication window', async (t) => {
+    const root = fixture(), append = taskEventsApi.appendMandatoryTaskEvent;
+    const availability = localCommitApi.resolveLocalCommitAvailability;
+    let publishing = false, removed = false;
+    try {
+        auditFixture(t, root);
+        t.mock.method(taskEventsApi, 'appendMandatoryTaskEvent', (...args: Parameters<typeof append>) => {
+            if (args[2] === 'TASK_SOURCE_COMMIT_ACCEPTED') publishing = true;
+            return append(...args);
+        });
+        t.mock.method(localCommitApi, 'resolveLocalCommitAvailability', (...args: Parameters<typeof availability>) => {
+            const result = availability(...args);
+            if (publishing && result.enabled && !removed) {
+                fs.unlinkSync(path.join(root, '.git/garda-private/local-commit-key'));
+                removed = true;
+            }
+            return result;
+        });
+        await assert.rejects(() => runHumanCommitCommand(['--task-id', TASK_ID, '-m', 'test: disappeared authority'], { cwd: root }), /authority/);
+        assert.equal(removed, true);
+        assert.equal(fs.existsSync(path.join(root, '.git/garda-private/local-commit-key')), false);
+        assert.match(runGit(root, ['log', '--format=%s', '-1']).stdout, /disappeared authority/);
+        assert.deepEqual(sourceAcceptanceEvents(root), []);
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Windows source volume inspector ignores shadowed process search and system-root environment', { skip: process.platform !== 'win32' }, async (t) => {
+    const root = fixture(), originalSpawn = subprocessApi.spawnSyncWithTimeout;
+    const systemRoot = fs.realpathSync.native('\\\\?\\GLOBALROOT\\SystemRoot');
+    const expectedExecutable = path.join(systemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
+    let inspected = false;
+    try {
+        auditFixture(t, root);
+        t.mock.method(subprocessApi, 'spawnSyncWithTimeout', (...args: Parameters<typeof originalSpawn>) => {
+            if (path.basename(args[0]).toLowerCase() !== 'powershell.exe' || !args[1].some(argument => argument.includes('DriveFormat'))) return originalSpawn(...args);
+            inspected = true;
+            assert.equal(args[0], expectedExecutable);
+            assert.equal(args[2]?.cwd, systemRoot);
+            assert.deepEqual(args[2]?.env, { SystemRoot: systemRoot, WINDIR: systemRoot });
+            const names = ['SystemRoot', 'WINDIR', 'PATH', 'PSModulePath'] as const;
+            const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+            try {
+                for (const name of names) process.env[name] = path.join(root, 'shadowed-runtime');
+                return originalSpawn(...args);
+            } finally {
+                for (const name of names) {
+                    if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name];
+                }
+            }
+        });
+        assert.equal(await runHumanCommitCommand(['--task-id', TASK_ID, '-m', 'test: pinned volume inspector'], { cwd: root }), 0);
+        assert.equal(inspected, true);
+        assert.equal(sourceAcceptanceEvents(root).length, 1);
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Windows source volume inspector cannot execute a shadowed capability serializer module', { skip: process.platform !== 'win32' }, async (t) => {
+    const root = fixture(), originalSpawn = subprocessApi.spawnSyncWithTimeout;
+    const modules = path.join(root, 'shadowed-modules');
+    const module = path.join(modules, 'Microsoft.PowerShell.Utility');
+    const marker = path.join(root, 'shadowed-serializer-executed');
+    let inspected = false;
+    try {
+        auditFixture(t, root);
+        fs.mkdirSync(module, { recursive: true });
+        fs.writeFileSync(path.join(module, 'Microsoft.PowerShell.Utility.psm1'),
+            `function ConvertTo-Json { [System.IO.File]::WriteAllText('${marker.replaceAll("'", "''")}', 'executed'); 'unreadable' }\nExport-ModuleMember -Function ConvertTo-Json\n`);
+        t.mock.method(subprocessApi, 'spawnSyncWithTimeout', (...args: Parameters<typeof originalSpawn>) => {
+            if (path.basename(args[0]).toLowerCase() !== 'powershell.exe' || !args[1].some(argument => argument.includes('DriveFormat'))) return originalSpawn(...args);
+            inspected = true;
+            return originalSpawn(args[0], args[1], { ...args[2], env: { ...args[2]?.env, PSModulePath: modules } });
+        });
+        assert.equal(await runHumanCommitCommand(['--task-id', TASK_ID, '-m', 'test: isolated capability serializer'], { cwd: root }), 0);
+        assert.equal(inspected, true);
+        assert.equal(fs.existsSync(marker), false);
+        assert.equal(sourceAcceptanceEvents(root).length, 1);
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+function sourceProofFailureFixture(t: TestContext, failure: 'append' | 'mutated-snapshot' | 'replaced-snapshot') {
+    const root = fixture(), append = taskEventsApi.appendMandatoryTaskEvent;
+    auditFixture(t, root);
+    t.mock.method(taskEventsApi, 'appendMandatoryTaskEvent', (...args: Parameters<typeof append>) => {
+        if (args[2] === 'TASK_SOURCE_COMMIT_ACCEPTED') {
+            if (failure === 'append') throw new Error('source acceptance proof append failure');
+            const details = args[5] as { artifact_path: string };
+            const file = path.resolve(root, details.artifact_path);
+            if (failure === 'replaced-snapshot') {
+                const bytes = fs.readFileSync(file);
+                fs.renameSync(file, file+'.original');
+                fs.writeFileSync(file, bytes);
+            } else fs.writeFileSync(file, 'modified snapshot\n');
+        }
+        return append(...args);
+    });
+    return root;
+}
+
+test('source acceptance rejects missing canonical proof after failed append', async (t) => {
+    const root = sourceProofFailureFixture(t, 'append');
+    try {
+        await assert.rejects(() => runHumanCommitCommand(['--task-id', TASK_ID, '-m', 'test: failed proof'], { cwd: root }), /append failure/);
+        assert.match(runGit(root, ['log', '--format=%s', '-1']).stdout, /failed proof/);
+        assert.deepEqual(sourceAcceptanceEvents(root), []);
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('source acceptance rejects forged snapshot bytes before canonical append', async (t) => {
+    const root = sourceProofFailureFixture(t, 'mutated-snapshot');
+    try {
+        await assert.rejects(() => runHumanCommitCommand(['--task-id', TASK_ID, '-m', 'test: failed proof'], { cwd: root }), /snapshot|acceptance/);
+        assert.match(runGit(root, ['log', '--format=%s', '-1']).stdout, /failed proof/);
+        assert.deepEqual(sourceAcceptanceEvents(root), []);
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('source acceptance rejects stale snapshot identity despite identical replacement bytes', async (t) => {
+    const root = sourceProofFailureFixture(t, 'replaced-snapshot');
+    try {
+        await assert.rejects(() => runHumanCommitCommand(['--task-id', TASK_ID, '-m', 'test: failed proof'], { cwd: root }), /identity/);
+        assert.match(runGit(root, ['log', '--format=%s', '-1']).stdout, /failed proof/);
+        assert.deepEqual(sourceAcceptanceEvents(root), []);
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+function uncertainSourceAuditFixture(t: TestContext, failure: 'foreign-audit' | 'unstable-audit') {
+    const root = fixture();
+    const original = auditFixture(t, root).audit;
+    let calls = 0;
+    t.mock.method(auditApi, 'buildTaskAuditSummary', (options: Parameters<typeof auditApi.buildTaskAuditSummary>[0]) => {
+        const audit = original(options);
+        if (++calls > 1) {
+            if (failure === 'foreign-audit') audit.task_id = 'T-FOREIGN-COMMIT';
+            else audit.point_in_time_snapshot.status = 'FINALIZATION_IN_FLIGHT';
+        }
+        return audit;
+    });
+    return root;
+}
+
+test('source acceptance rejects foreign audit despite its PASS shape', async (t) => {
+    const root = uncertainSourceAuditFixture(t, 'foreign-audit');
+    try {
+        await assert.rejects(() => runHumanCommitCommand(['--task-id', TASK_ID, '-m', 'test: uncertain audit'], { cwd: root }), /task-qualified/);
+        assert.match(runGit(root, ['log', '--format=%s', '-1']).stdout, /uncertain audit/);
+        assert.deepEqual(sourceAcceptanceEvents(root), []);
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('source acceptance rejects an in-flight audit despite its PASS shape', async (t) => {
+    const root = uncertainSourceAuditFixture(t, 'unstable-audit');
+    try {
+        await assert.rejects(() => runHumanCommitCommand(['--task-id', TASK_ID, '-m', 'test: uncertain audit'], { cwd: root }), /stable/);
+        assert.match(runGit(root, ['log', '--format=%s', '-1']).stdout, /uncertain audit/);
+        assert.deepEqual(sourceAcceptanceEvents(root), []);
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('source acceptance rejects real HEAD drift in a post-commit hook',async(t)=>{
+    const root=fixture();
+    try {
+        auditFixture(t,root);installHook(root,'post-commit','git -c core.hooksPath=/dev/null commit --allow-empty -m unexpected-hook-commit');
+        await assert.rejects(()=>runHumanCommitCommand(['--task-id',TASK_ID,'-m','test: identity drift'],{cwd:root}),/identity|parent|tree/);
+        assert.equal(runGit(root,['log','--format=%s','-1']).stdout.trim(),'unexpected-hook-commit');
+        assert.deepEqual(sourceAcceptanceEvents(root),[]);
+    } finally { t.mock.restoreAll();fs.rmSync(root,{recursive:true,force:true}); }
+});
 
 test('authenticated ON supplies durable permission without another confirmation question', async (t) => {
     const root = fixture();
@@ -197,6 +525,7 @@ test('failed post-commit audit preserves the real commit and reports blocked acc
         auditFixture(t, root, 'PASS', 'BLOCKED');
         await assert.rejects(() => runHumanCommitCommand(['--task-id', TASK_ID, '-m', 'test: preserve failed acceptance'], { cwd: root }), /Post-commit task audit failed/);
         assert.match(runGit(root, ['log', '--format=%s', '-1']).stdout, /preserve failed acceptance/);
+        assert.deepEqual(sourceAcceptanceEvents(root), []);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -260,6 +589,7 @@ test('native commit audits a real commit after failed subprocess nonzero', async
         assert.notEqual(runGit(root, ['rev-parse', 'HEAD']).stdout, head);
         assert.equal(evidence.audit.mock.callCount(), 2);
         assert.equal(evidence.synchronize.mock.callCount(), 1);
+        assert.deepEqual(sourceAcceptanceEvents(root), []);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -270,6 +600,7 @@ test('native commit audits a real commit after failed subprocess timeout', async
         assert.notEqual(runGit(root, ['rev-parse', 'HEAD']).stdout, head);
         assert.equal(evidence.audit.mock.callCount(), 2);
         assert.equal(evidence.synchronize.mock.callCount(), 1);
+        assert.deepEqual(sourceAcceptanceEvents(root), []);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -280,6 +611,7 @@ test('native commit audits a real commit after failed subprocess throw', async (
         assert.notEqual(runGit(root, ['rev-parse', 'HEAD']).stdout, head);
         assert.equal(evidence.audit.mock.callCount(), 2);
         assert.equal(evidence.synchronize.mock.callCount(), 1);
+        assert.deepEqual(sourceAcceptanceEvents(root), []);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

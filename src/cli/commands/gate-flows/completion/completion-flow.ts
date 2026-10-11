@@ -14,6 +14,7 @@ import {
     validateFreshOperatorConfirmation
 } from '../../../../core/operator-confirmation';
 import {
+    appendMandatoryTaskEvent,
     appendTaskEvent,
     assertValidTaskId
 } from '../../../../gate-runtime/task-events';
@@ -38,8 +39,8 @@ import {
 } from '../../../gate-cli/gates-parser';
 import { requireResolvedPath } from '../../shared-command-utils';
 import { assertGenericTaskEventAdmission } from '../../../../gate-runtime/timeline/task-event-generic-admission';
-import { bindContainedDestination, ensureContainedDirectory } from '../../../../core/contained-filesystem';
-import { resolveLocalCommitAvailability } from '../../../../core/auth/local-commit-availability';
+import { assertContainedDestination, bindContainedDestination, ensureContainedDirectory } from '../../../../core/contained-filesystem';
+import { authenticateLocalCommitWorkflowAudit, resolveLocalCommitAvailability } from '../../../../core/auth/local-commit-availability';
 import { buildTaskAuditSummary, synchronizeFinalCloseoutArtifacts } from '../../../../gates/task-audit/task-audit-summary';
 import {
     resolveOrchestratorRoot,
@@ -47,6 +48,10 @@ import {
 } from '../compile/gate-flow-helpers';
 
 type CommandPolicyAudit = CommandCompactnessAudit;
+const MAX_SOURCE_ACCEPTANCE_SNAPSHOT_BYTES = 8 * 1024 * 1024;
+const SOURCE_ACCEPTANCE_VOLUME_INSPECTION_TIMEOUT_MS = 3_000;
+const MAX_SOURCE_ACCEPTANCE_VOLUME_OUTPUT_BYTES = 4_096;
+type NativeSourceAcceptance = { commit: string; tree: string; audit: ReturnType<typeof buildTaskAuditSummary> };
 
 export interface LogTaskEventCommandOptions {
     repoRoot?: string;
@@ -494,13 +499,10 @@ function createAcceptedNativeCommit(
     return prepared.git(['commit-tree', tree, ...(prepared.head ? ['-p', prepared.head] : []), ...signing, '-F', '-'], message).trim();
 }
 
-function finalizeNativeCommit(
-    invocation: ReturnType<typeof parseHumanCommitInvocation>, prepared: ReturnType<typeof prepareNativeCommit>,
+function assertPublishedNativeCommitIdentity(
+    prepared: ReturnType<typeof prepareNativeCommit>,
     acceptedTree: string | undefined, publishedCommit: string | undefined
 ): void {
-    const postCommitAudit = buildTaskAuditSummary({ taskId: invocation.taskId, repoRoot: invocation.cwd });
-    synchronizeFinalCloseoutArtifacts(postCommitAudit);
-    if (postCommitAudit.status !== 'PASS') throw new Error(`Post-commit task audit failed: ${postCommitAudit.status}. Preserve the commit for diagnosis.`);
     if (!acceptedTree || !publishedCommit || prepared.readHead() !== publishedCommit
         || prepared.git(['rev-parse', 'HEAD^{tree}']).trim() !== acceptedTree) {
         throw new Error('Local commit identity or tree changed; post-commit acceptance is blocked. Preserve the commit for diagnosis.');
@@ -511,12 +513,162 @@ function finalizeNativeCommit(
     if (!parentMatches) throw new Error('Local commit parent changed; post-commit acceptance is blocked.');
 }
 
+function finalizeNativeCommit(
+    invocation: ReturnType<typeof parseHumanCommitInvocation>, prepared: ReturnType<typeof prepareNativeCommit>,
+    acceptedTree: string | undefined, publishedCommit: string | undefined
+) {
+    const audit = buildTaskAuditSummary({ taskId: invocation.taskId, repoRoot: invocation.cwd });
+    synchronizeFinalCloseoutArtifacts(audit);
+    if (audit.status !== 'PASS') throw new Error(`Post-commit task audit failed: ${audit.status}. Preserve the commit for diagnosis.`);
+    assertPublishedNativeCommitIdentity(prepared, acceptedTree, publishedCommit);
+    return audit;
+}
+
+function buildNativeSourceAcceptanceSnapshot(
+    invocation: ReturnType<typeof parseHumanCommitInvocation>, prepared: ReturnType<typeof prepareNativeCommit>,
+    accepted: NativeSourceAcceptance
+) {
+    if (accepted.audit.task_id !== invocation.taskId || accepted.audit.point_in_time_snapshot?.status !== 'STABLE'
+        || !['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(accepted.audit.integrity_status)) {
+        throw new Error('Source acceptance requires a stable, task-qualified authenticated post-commit audit.');
+    }
+    const root = fs.realpathSync.native(invocation.cwd), orchestratorRoot = resolveOrchestratorRoot(root);
+    const artifactPath = path.join(orchestratorRoot, 'runtime', 'reviews', invocation.taskId+'-source-acceptance-'+accepted.commit+'.json');
+    const proof = authenticateLocalCommitWorkflowAudit(root, {
+        schema_version: 1, event_source: 'native-source-acceptance', task_id: invocation.taskId,
+        repo_root: root, accepted_at_utc: new Date().toISOString(), commit_sha: accepted.commit,
+        tree_sha: accepted.tree, parent_commit_sha: prepared.head,
+        post_commit_audit_sha256: createHash('sha256').update(JSON.stringify(accepted.audit)).digest('hex'),
+        post_commit_audit: accepted.audit
+    }, false);
+    if (!proof.local_commit_authentication) throw new Error('Source acceptance requires workspace-native authentication.');
+    const bytes = Buffer.from(JSON.stringify(proof, null, 2)+'\n');
+    if (bytes.length > MAX_SOURCE_ACCEPTANCE_SNAPSHOT_BYTES) throw new Error('Source acceptance snapshot exceeds its 8 MiB budget.');
+    return { root, orchestratorRoot, artifactPath, proof, bytes };
+}
+
+function bindWindowsSourceAcceptanceVolume(binding: ReturnType<typeof bindContainedDestination>) {
+    if (process.platform !== 'win32') return undefined;
+    const volumeRoot = path.parse(binding.root).root;
+    if (!/^[A-Za-z]:[\\/]$/u.test(volumeRoot)) {
+        throw new Error('Source acceptance requires a verified local NTFS volume on Windows.');
+    }
+    const volume = bindContainedDestination(volumeRoot, binding.path);
+    const volumeDevice = volume.existing[0].dev;
+    if (volume.existing.some(identity => identity.dev !== volumeDevice)) {
+        throw new Error('Source acceptance namespace crosses an unverified Windows volume.');
+    }
+    const drive = volumeRoot.slice(0, 2).toUpperCase();
+    const report = JSON.stringify({ Name: `${drive}\\`, Format: 'NTFS', Type: 'Fixed', Ready: true });
+    const systemRoot = fs.realpathSync.native('\\\\?\\GLOBALROOT\\SystemRoot');
+    const inspector = path.join(systemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
+    const result = spawnSyncWithTimeout(inspector, [
+        '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+        `$ErrorActionPreference='Stop'; $drive=[System.IO.DriveInfo]::new('${drive}\\'); `
+        + `if ($drive.IsReady -and $drive.DriveType -eq [System.IO.DriveType]::Fixed `
+        + `-and $drive.DriveFormat -ceq 'NTFS' -and $drive.Name -eq '${drive}\\') `
+        + `{ [Console]::Out.Write('${report}'); } else { exit 1; }`
+    ], {
+        encoding: 'utf8', windowsHide: true, timeoutMs: SOURCE_ACCEPTANCE_VOLUME_INSPECTION_TIMEOUT_MS,
+        maxBuffer: MAX_SOURCE_ACCEPTANCE_VOLUME_OUTPUT_BYTES,
+        cwd: systemRoot, env: { SystemRoot: systemRoot, WINDIR: systemRoot }
+    });
+    if (result.error || result.timedOut || result.status !== 0) {
+        throw new Error('Source acceptance NTFS volume inspection is unavailable.');
+    }
+    let assessment: unknown;
+    try { assessment = JSON.parse(result.stdout); }
+    catch { throw new Error('Source acceptance NTFS volume inspection is invalid.'); }
+    if (!isPlainObject(assessment) || assessment.Ready !== true || assessment.Type !== 'Fixed'
+        || assessment.Format !== 'NTFS' || typeof assessment.Name !== 'string'
+        || path.win32.normalize(assessment.Name).toUpperCase() !== path.win32.normalize(volumeRoot).toUpperCase()) {
+        throw new Error('Source acceptance requires a verified local NTFS volume on Windows.');
+    }
+    assertContainedDestination(volume);
+    assertContainedDestination(binding);
+    return volume;
+}
+
+function flushSourceAcceptanceDirectories(binding: ReturnType<typeof bindContainedDestination>): void {
+    const windowsVolume = bindWindowsSourceAcceptanceVolume(binding);
+    const access = process.platform === 'win32' ? fs.constants.O_RDWR : fs.constants.O_RDONLY;
+    const flags = access | (fs.constants.O_DIRECTORY ?? 0)
+        | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
+    for (const identity of binding.existing.slice(0, -1).reverse()) {
+        assertContainedDestination(binding);
+        if (windowsVolume) assertContainedDestination(windowsVolume);
+        const descriptor = fs.openSync(identity.path, flags);
+        try {
+            const stat = fs.fstatSync(descriptor, { bigint: true });
+            if (!stat.isDirectory() || stat.dev !== identity.dev || stat.ino !== identity.ino
+                || stat.birthtimeNs !== identity.birthtimeNs || stat.mode !== identity.mode) {
+                throw new Error('Source acceptance directory identity changed before its durability barrier.');
+            }
+            assertContainedDestination(binding);
+            fs.fsyncSync(descriptor);
+            assertContainedDestination(binding);
+            if (windowsVolume) assertContainedDestination(windowsVolume);
+        } finally { fs.closeSync(descriptor); }
+    }
+}
+
+function publishNativeSourceAcceptance(
+    invocation: ReturnType<typeof parseHumanCommitInvocation>, prepared: ReturnType<typeof prepareNativeCommit>,
+    accepted: NativeSourceAcceptance
+): void {
+    const { root, orchestratorRoot, artifactPath, proof, bytes } = buildNativeSourceAcceptanceSnapshot(invocation, prepared, accepted);
+    ensureContainedDirectory(root, path.dirname(artifactPath));
+    const destination = bindContainedDestination(root, artifactPath); assertContainedDestination(destination);
+    const descriptor = fs.openSync(artifactPath, 'wx+', 0o600);
+    try {
+        fs.writeFileSync(descriptor, bytes); fs.fsyncSync(descriptor);
+        const binding = bindContainedDestination(root, artifactPath);
+        const fileIdentity = binding.existing.at(-1);
+        if (binding.missingAt || fileIdentity?.path !== artifactPath) throw new Error('Source acceptance snapshot path disappeared.');
+        const validate = () => {
+            assertContainedDestination(binding);
+            const stat = fs.fstatSync(descriptor, { bigint: true }), observed = Buffer.alloc(bytes.length);
+            if (!stat.isFile() || stat.nlink !== 1n || stat.size !== BigInt(bytes.length)
+                || stat.dev !== fileIdentity.dev || stat.ino !== fileIdentity.ino
+                || stat.birthtimeNs !== fileIdentity.birthtimeNs || stat.mode !== fileIdentity.mode) {
+                throw new Error('Source acceptance snapshot changed before publication.');
+            }
+            for (let offset = 0; offset < observed.length;) {
+                const count = fs.readSync(descriptor, observed, offset, observed.length-offset, offset);
+                if (count === 0) throw new Error('Source acceptance snapshot was truncated.');
+                offset += count;
+            }
+            if (!observed.equals(bytes)) throw new Error('Source acceptance snapshot content changed before publication.');
+            assertContainedDestination(binding);
+            assertPublishedNativeCommitIdentity(prepared, accepted.tree, accepted.commit);
+            const unsignedProof = { ...proof };
+            delete unsignedProof.local_commit_authentication;
+            const authentication = resolveLocalCommitAvailability(root).enabled
+                ? authenticateLocalCommitWorkflowAudit(root, unsignedProof, false).local_commit_authentication : undefined;
+            if (!authentication || authentication.workspace_identity_sha256 !== proof.local_commit_authentication?.workspace_identity_sha256
+                || authentication.hmac_sha256 !== proof.local_commit_authentication?.hmac_sha256) {
+                throw new Error('Source acceptance workspace authority changed before publication.');
+            }
+        };
+        validate();
+        flushSourceAcceptanceDirectories(binding);
+        validate();
+        appendMandatoryTaskEvent(orchestratorRoot, invocation.taskId, 'TASK_SOURCE_COMMIT_ACCEPTED', 'PASS',
+            'Native source commit accepted after post-commit validation.', {
+                repo_root: root, commit_sha: accepted.commit, tree_sha: accepted.tree, parent_commit_sha: prepared.head,
+                artifact_path: gateHelpers.normalizePath(path.relative(root, artifactPath)),
+                artifact_sha256: createHash('sha256').update(bytes).digest('hex')
+            }, { validateBeforeCanonicalAppend: validate });
+    } finally { fs.closeSync(descriptor); }
+}
+
 export async function runHumanCommitCommand(gitArgs: unknown, options: HumanCommitOptions = {}): Promise<number> {
     const invocation = parseHumanCommitInvocation(gitArgs, options);
     const prepared = prepareNativeCommit(invocation.cwd);
     let accepted: ReturnType<typeof assertNativeCommitReadiness> | undefined;
     let publicationAttempted = false;
     let publishedCommit: string | undefined;
+    let postCommitHookSucceeded = false;
     try {
         accepted = assertNativeCommitReadiness(invocation, prepared);
         const messagePath = `${prepared.commitIndex}.message`;
@@ -533,10 +685,17 @@ export async function runHumanCommitCommand(gitArgs: unknown, options: HumanComm
         publicationAttempted = true;
         prepared.git(['update-ref', '-m', `commit: ${message.split('\n')[0]}`, 'HEAD', commit, prepared.head ?? '0'.repeat(commit.length)]);
         publishedCommit = commit;
-        return await runNativeCommitHook(invocation, prepared, 'post-commit');
+        const hookExit = await runNativeCommitHook(invocation, prepared, 'post-commit');
+        postCommitHookSucceeded = hookExit === 0;
+        return hookExit;
     } finally {
         try {
-            if (publicationAttempted || prepared.readHead() !== prepared.head) finalizeNativeCommit(invocation, prepared, accepted?.tree, publishedCommit);
+            if (publicationAttempted || prepared.readHead() !== prepared.head) {
+                const audit = finalizeNativeCommit(invocation, prepared, accepted?.tree, publishedCommit);
+                if (postCommitHookSucceeded && accepted && publishedCommit) {
+                    publishNativeSourceAcceptance(invocation, prepared, { commit: publishedCommit, tree: accepted.tree, audit });
+                }
+            }
         } finally {
             for (const suffix of ['', '.lock', '.message']) {
                 bindContainedDestination(invocation.cwd, `${prepared.commitIndex}${suffix}`);
