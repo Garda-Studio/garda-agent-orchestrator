@@ -28,7 +28,7 @@ interface ScopeCategoryOptions {
  * Categories:
  * - `code`: at least one code-like file under runtime roots
  * - `docs-only`: all files match documentation patterns
- * - `test-only`: all files match configured test-scope patterns
+ * - `test-only`: test-scope files, optionally accompanied by safe ordinary documentation
  * - `config-only`: all files match config/infra patterns (no code)
  * - `audit-only`: all files are orchestrator control-plane artifacts
  * - `mixed`: files from more than one category
@@ -46,6 +46,7 @@ export function classifyScopeCategory(
 
     let codeCount = 0;
     let docCount = 0;
+    let ordinaryDocCount = 0;
     let testCount = 0;
     let configCount = 0;
     let auditCount = 0;
@@ -97,6 +98,7 @@ export function classifyScopeCategory(
             dependency_trigger_regexes: options.dependencyTriggerRegexes || []
         })) {
             docCount++;
+            ordinaryDocCount++;
             continue;
         }
         if (isSecuritySensitiveDocumentationScopePath(file, {
@@ -142,8 +144,9 @@ export function classifyScopeCategory(
         return { category: 'docs-only', reasons };
     }
 
-    if (testCount === total) {
+    if (testCount > 0 && testCount + ordinaryDocCount === total) {
         reasons.push(`test_only_files=${testCount}`);
+        if (ordinaryDocCount > 0) reasons.push(`ordinary_doc_files=${ordinaryDocCount}`);
         return { category: 'test-only', reasons };
     }
 

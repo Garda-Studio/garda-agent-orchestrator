@@ -1,4 +1,6 @@
 # Changelog
+
+- T-251: keep test-only review routing when tests are accompanied by safe ordinary change documentation, preserving explicit code-review requests and complete scope coverage.
 - Cover retained URL characters at direct program and extracted option boundaries
   without changing production parsing (T-242-2-1-1-2-1-F1).
 - Record Python equals-form literal operand indices once while preserving source

@@ -132,6 +132,22 @@ describe('ordinary documentation file safety', () => {
         assert.throws(() => normalizeOrdinaryDocPathPatterns(['../docs/**']));
         assert.throws(() => normalizeOrdinaryDocPathPatterns(['docs/../notes/**']));
     });
+
+    it('does not treat tests with sensitive, protected or non-documentation files as test-only', () => {
+        for (const otherPath of [
+            'src/main.ts', 'docs/settings.json', 'docs/worker.unknown',
+            'docs/security.md', 'garda-agent-orchestrator/live/docs/agent-rules/00-core.md'
+        ]) {
+            const result = classifyChange({
+                normalizedFiles: ['tests/unit/example.test.ts', otherPath],
+                taskIntent: 'Update a test and another file',
+                changedLinesTotal: 5, additionsTotal: 5, deletionsTotal: 0, renameCount: 0,
+                detectionSource: 'explicit_changed_files', classificationConfig: config,
+                reviewCapabilities: defaultCapabilities
+            });
+            assert.notEqual(result.scope_category, 'test-only', otherPath);
+        }
+    });
 });
 
 function prepareNativePreflight(profile: string) {
@@ -164,6 +180,35 @@ function prepareNativePreflight(profile: string) {
 
 describe('native documentation safety decisions', () => {
     for (const profile of ['balanced', 'fast', 'strict']) {
+        it(`keeps tests with ordinary docs in the final ${profile} test-review scope`, () => {
+            const { repoRoot, taskId } = prepareNativePreflight(profile);
+            const changedFiles = ['tests/unit/example.test.ts', 'docs/changes/example.md', 'CHANGELOG.md'];
+            try {
+                for (const filePath of changedFiles) {
+                    const absolutePath = path.join(repoRoot, filePath);
+                    fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+                    fs.writeFileSync(absolutePath, 'changed file\n');
+                }
+                for (const forceCodeReview of [false, true]) {
+                    const result = runClassifyChangeCommand({
+                        repoRoot, taskId, changedFiles, forceCodeReview,
+                        taskIntent: 'Update tests and ordinary change documentation',
+                        outputPath: path.join(repoRoot, 'garda-agent-orchestrator/runtime/reviews', `${taskId}-preflight.json`),
+                        emitMetrics: false
+                    });
+                    const payload = JSON.parse(result.outputText);
+                    assert.equal(payload.scope_category, 'test-only');
+                    assert.deepEqual([...payload.changed_files].sort(), [...changedFiles].sort());
+                    assert.equal(payload.required_reviews.test, true);
+                    assert.equal(payload.required_reviews.code, forceCodeReview);
+                    assert.deepEqual(payload.effective_review_snapshot.required_reviews, payload.required_reviews);
+                    assert.deepEqual(payload.triggers.ordinary_doc_path_matched_files, ['docs/changes/example.md']);
+                }
+            } finally {
+                fs.rmSync(repoRoot, { recursive: true, force: true });
+            }
+        });
+
         it(`uses safe documentation classification in the final ${profile} review snapshot`, () => {
             const { repoRoot, taskId } = prepareNativePreflight(profile);
             try {
