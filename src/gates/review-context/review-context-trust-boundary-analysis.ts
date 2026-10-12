@@ -1,6 +1,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
+import { currentProjectValidationAuthority } from '../project-validation/authority';
+import { validationDigest } from '../../core/project-validation-identity';
+import { inspectQualityValidationPhases, type QualityValidationPhases } from '../quality-checklist/quality-checklist-validation-phases';
 
 import {
     forEachJsonlLine,
@@ -33,6 +36,7 @@ export interface ReviewContextTrustBoundaryAnalysis {
     binding_event_sha256: string | null;
     matrix_sha256: string | null;
     matrix: TrustBoundaryMatrixEntry[];
+    validation_phases?: QualityValidationPhases;
     violations: string[];
 }
 
@@ -142,12 +146,14 @@ function readQualityChecklistArtifactBinding(options: {
     };
 }
 
-export function readReviewContextTrustBoundaryAnalysis(options: {
+interface QualityAnalysisOptions {
     repoRoot: string;
     taskId: string | null;
     preflight: Record<string, unknown>;
     preflightSha256: string | null;
-}): ReviewContextTrustBoundaryAnalysis {
+}
+
+function readBoundQualityAnalysis(options: QualityAnalysisOptions, requireObservedExecution: boolean): ReviewContextTrustBoundaryAnalysis {
     const applicability = assessTrustBoundaryAnalysisApplicability(options.preflight);
     const base: ReviewContextTrustBoundaryAnalysisBase = {
         required: applicability.required,
@@ -158,7 +164,14 @@ export function readReviewContextTrustBoundaryAnalysis(options: {
         recorded_artifact_sha256: null,
         binding_event_sha256: null
     };
-    if (!applicability.required) {
+    let declared = false;
+    try { declared = currentProjectValidationAuthority(options.repoRoot, options.preflight) !== null; }
+    catch (error) { return invalidAnalysis({ ...base, required: true }, [`Declared validation authority rejected: ${String(error)}`]); }
+    if (declared) {
+        base.required = true;
+        base.applicability_reasons = [...base.applicability_reasons, 'declared-validation-contract'];
+    }
+    if (!base.required) {
         return {
             ...base,
             status: 'not_required',
@@ -257,16 +270,12 @@ export function readReviewContextTrustBoundaryAnalysis(options: {
     if (!expectedPreflightSha256 || artifactPreflightSha256 !== expectedPreflightSha256) {
         violations.push('Quality-checklist artifact is missing or stale for the current preflight hash.');
     }
-    const status = String(artifact.status || '').trim().toUpperCase();
-    if (status !== 'PASS' && status !== 'WARN') {
-        violations.push(`Quality-checklist artifact status '${status || '<missing>'}' is not reviewer-ready.`);
-    }
     const rule = Array.isArray(artifact.rules)
         ? artifact.rules.find((entry) => (
             isRecord(entry) && String(entry.id || '').trim().toLowerCase() === TRUST_BOUNDARY_ANALYSIS_RULE_ID
         ))
         : null;
-    if (!isRecord(rule) || rule.scope_applicability !== 'active') {
+    if (applicability.required && (!isRecord(rule) || rule.scope_applicability !== 'active')) {
         violations.push('Applicable trust-boundary rule is missing or not active in the quality-checklist artifact.');
     }
     const answer = Array.isArray(artifact.answers)
@@ -274,23 +283,48 @@ export function readReviewContextTrustBoundaryAnalysis(options: {
             isRecord(entry) && String(entry.rule_id || '').trim().toLowerCase() === TRUST_BOUNDARY_ANALYSIS_RULE_ID
         ))
         : null;
-    if (!isRecord(answer)) {
+    if (applicability.required && !isRecord(answer)) {
         violations.push('Applicable trust-boundary rule has no recorded answer.');
     }
-    const matrixAssessment = assessTrustBoundaryMatrix(answer?.trust_boundary_matrix, {
-        repoRoot: options.repoRoot
-    });
-    violations.push(...matrixAssessment.violations);
+    let validation: ReturnType<typeof inspectQualityValidationPhases> = null;
+    try {
+        validation = inspectQualityValidationPhases({ ...options, taskId: options.taskId,
+            matrixRequired: applicability.required, matrix: answer?.trust_boundary_matrix });
+    } catch (error) { violations.push(`Declared validation phases rejected: ${String(error)}`); }
+    const status = String(artifact.status || '').trim().toUpperCase();
+    if (declared) {
+        if (!validation || !isRecord(artifact.validation_phases)
+            || validationDigest(artifact.validation_phases) !== validationDigest(validation.phases))
+            violations.push('Quality-checklist validation phases are missing, changed or stale for the current canonical obligations.');
+        if (status !== 'PENDING_VALIDATION') violations.push('Declared validation phases require PENDING_VALIDATION quality evidence.');
+        if (validation && (validation.phases.structural !== 'BOUND' || validation.phases.execution === 'REJECTED'
+            || (requireObservedExecution && validation.phases.execution !== 'OBSERVED')))
+            violations.push('Declared validation phases require bound structure and genuine current execution before review.');
+    } else if (status !== 'PASS' && status !== 'WARN') {
+        violations.push(`Quality-checklist artifact status '${status || '<missing>'}' is not reviewer-ready.`);
+    }
+    const matrixAssessment = validation?.matrixAssessment ?? (applicability.required
+        ? assessTrustBoundaryMatrix(answer?.trust_boundary_matrix, { repoRoot: options.repoRoot }) : null);
+    violations.push(...(matrixAssessment?.violations ?? []));
     if (violations.length > 0) {
         return invalidAnalysis(hashedBoundBase, [...new Set(violations)]);
     }
     return {
         ...hashedBoundBase,
         status: 'current',
-        matrix_sha256: matrixAssessment.matrix_sha256,
-        matrix: matrixAssessment.matrix,
+        matrix_sha256: matrixAssessment?.matrix_sha256 ?? null,
+        matrix: matrixAssessment?.matrix ?? [],
+        ...(validation ? { validation_phases: validation.phases } : {}),
         violations: []
     };
+}
+
+export function readReviewContextTrustBoundaryAnalysis(options: QualityAnalysisOptions): ReviewContextTrustBoundaryAnalysis {
+    return readBoundQualityAnalysis(options, true);
+}
+
+export function readQualityValidationPhaseAnalysis(options: QualityAnalysisOptions): ReviewContextTrustBoundaryAnalysis {
+    return readBoundQualityAnalysis(options, false);
 }
 
 export function assertReviewContextTrustBoundaryAnalysisReady(
@@ -326,6 +360,13 @@ export function buildTrustBoundaryAnalysisMarkdown(
         lines.push('- Blocking matrix diagnostics:');
         for (const violation of analysis.violations) lines.push(`  - ${violation}`);
         return lines;
+    }
+    if (analysis.validation_phases) {
+        lines.push(`- Validation phases: structural=${analysis.validation_phases.structural}; execution=${analysis.validation_phases.execution}; semantic=${analysis.validation_phases.semantic}.`);
+        for (const execution of analysis.validation_phases.executions)
+            lines.push(`  - Recipe ${execution.recipe_id}: ${execution.execution}; attempt=${execution.attempt_id}; result=${execution.result_status}; sha256=${execution.result_sha256}.`);
+        for (const obligation of analysis.validation_phases.obligations)
+            lines.push(`  - Obligation ${obligation.id}: ${obligation.recipe_id}/${obligation.target_id}; source=${obligation.source_identity.path}; source_sha256=${obligation.source_identity.sha256}; selector=${obligation.selector}; ${analysis.validation_phases.semantic}.`);
     }
     for (const entry of analysis.matrix) {
         lines.push(`- ${entry.boundary_id} — ${entry.boundary}`);

@@ -1,5 +1,7 @@
 # Changelog
 
+- Require authentic current declared execution for review admission and retain exact pending semantic obligations, with separate bounded navigation inspection (T-242-6-2-1).
+
 - Add current bound validation phase obligations to recipe-selected quality evidence, retaining unknown semantics for independent review and preserving legacy template handling (T-242-6-1).
 
 - Separate declared boundary source identity from optional syntax diagnostics and pending independent semantic review (T-242-5).
