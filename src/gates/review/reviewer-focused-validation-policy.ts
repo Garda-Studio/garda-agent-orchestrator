@@ -28,6 +28,7 @@ export function hasReviewerInlineInterpreterOption(firstToken: string, tokens: r
 export function buildReviewerFocusedRunnerPolicyLines(): string[] {
     return [
         '- Use the project-configured focused runner and its existing configuration for one exact repository target. Do not create temporary runner scripts or substitute custom compilation, transpilation, dynamic module loading, or an in-memory runner for that configured invocation.',
+        '- For an admitted project recipe, use the exact authenticated executable/arguments and declared test role with the current task identity. A source input or filename extension cannot substitute for that declaration; a passed claim requires the current native PASSED result.',
         `- Never ${REVIEWER_INLINE_INTERPRETER_REASON}. Prohibited invocation examples: ${REVIEWER_INLINE_INTERPRETER_EXAMPLES.map((example) => `\`${example}\``).join(', ')}. This reviewer rule applies to every stack; these examples are not an exhaustive list of interpreters.`,
         '- Normal runtime compilation or transformation inside the configured test tool is permitted. This rule does not prohibit a configured TypeScript loader, Python assertion rewriting, or ordinary runtime compilation by the project toolchain.',
         '- The focused evidence handoff includes validator-compatible command hints only when an exact current authenticated command is available. Hints describe existing evidence, do not authorize automatic execution, and must not be used to duplicate current gate-owned validation.',

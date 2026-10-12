@@ -15,6 +15,7 @@ import {
     resolvePathInsideRepo
 } from '../shared/helpers';
 import { isFocusedIntermediateCommand } from '../shared/focused-intermediate-command-grammar';
+import { declaredValidationTestPaths, readFocusedRecipeEntry } from '../project-validation/focused';
 
 const INTERMEDIATE_COMMAND_SOURCES = new Set(['node-test', 'targeted-test', 'typecheck', 'validation']);
 const DEFAULT_MAX_ENTRIES = 8;
@@ -26,6 +27,7 @@ const DEFAULT_MAX_INTERMEDIATE_CANDIDATES_SCANNED = 128;
 export interface FocusedIntermediateEvidenceEntry {
     command_source: string;
     command: string;
+    recipe_context?: { cwd: string; environment: Record<string, string> };
     status: 'PASSED';
     exit_code: 0;
     preflight_path: string | null;
@@ -389,10 +391,14 @@ export function readTaskOwnedFocusedIntermediateEvidence(options: {
     if (latestTaskModeSequence == null) {
         appendWarning(warnings, 'focused intermediate evidence rejected: current task-mode sequence is missing');
     }
+    let declaredTests = new Set<string>();
+    try { declaredTests = declaredValidationTestPaths(options.repoRoot); } catch (error) {
+        appendWarning(warnings, `Declared test scope rejected: ${String(error)}`);
+    }
     const changedTestPaths = new Set(
         options.changedFiles
             .map((filePath) => normalizePath(filePath).replace(/^\.\/?/u, ''))
-            .filter(isFocusedReviewTestPath)
+            .filter(filePath => isFocusedReviewTestPath(filePath) || declaredTests.has(filePath))
     );
     const requiredTestPath = normalizePath(options.requiredTestPath || '').replace(/^\.\/?/u, '');
     const maxEntries = Number.isInteger(options.maxEntries) && Number(options.maxEntries) > 0
@@ -405,7 +411,7 @@ export function readTaskOwnedFocusedIntermediateEvidence(options: {
     let scanLimitReached = false;
     for (let index = events.length - 1; index >= 0; index -= 1) {
         const event = events[index];
-        if (String(event.event_type || '').trim() !== 'INTERMEDIATE_COMMAND_RUN') {
+        if (!['INTERMEDIATE_COMMAND_RUN', 'PROJECT_VALIDATION_RESULTS_EVALUATED'].includes(String(event.event_type || '').trim())) {
             continue;
         }
         if (candidateCount >= maxIntermediateCandidatesScanned) {
@@ -428,7 +434,9 @@ export function readTaskOwnedFocusedIntermediateEvidence(options: {
             appendWarning(warnings, `focused intermediate evidence candidate seq=${sequence ?? 'missing'} rejected: stale or foreign task/cycle binding`);
             continue;
         }
-        const bound = readBoundIntermediateCommandEvidence({
+        const bound = event.event_type === 'PROJECT_VALIDATION_RESULTS_EVALUATED'
+            ? readFocusedRecipeEntry({ repoRoot: options.repoRoot, taskId: options.taskId, event,
+                expectedPreflightSha256: options.expectedPreflightSha256 }) : readBoundIntermediateCommandEvidence({
             event,
             repoRoot: options.repoRoot,
             reviewsRoot: options.reviewsRoot,

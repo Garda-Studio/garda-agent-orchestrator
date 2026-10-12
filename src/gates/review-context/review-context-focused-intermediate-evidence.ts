@@ -95,7 +95,7 @@ export function buildFocusedIntermediateValidationEvidence(options: {
             coverage_contract_sha256: options.coverageContract.contract_sha256
         },
         entries: selection.entries,
-        reviewer_command_hints: buildReviewerFocusedCommandHints(selection.entries, options.repoRoot),
+        reviewer_command_hints: buildReviewerFocusedCommandHints(selection.entries, options.repoRoot, options.taskId),
         warnings: selection.warnings,
         candidate_count: selection.candidate_count,
         rejected_candidate_count: selection.rejected_candidate_count,
@@ -105,13 +105,14 @@ export function buildFocusedIntermediateValidationEvidence(options: {
 
 function buildReviewerFocusedCommandHints(
     entries: readonly FocusedIntermediateEvidenceEntry[],
-    repoRoot: string
+    repoRoot: string,
+    taskId: string | null
 ): ReviewerFocusedCommandHints {
     const commands: ReviewerFocusedCommandHints['commands'] = [];
     const seenCommands = new Set<string>();
     let rejectedCommandCount = 0;
     for (const entry of entries) {
-        const inspection = inspectReviewerFocusedValidationCommand(entry.command, repoRoot);
+        const inspection = inspectReviewerFocusedValidationCommand(entry.command, repoRoot, taskId ?? undefined);
         if (
             !inspection.syntax_supported
             || !inspection.target
@@ -153,6 +154,7 @@ export function buildFocusedIntermediateValidationEvidenceMarkdown(
         lines.push('- Eligible focused command evidence: none');
     }
     for (const entry of evidence.entries) {
+        if (entry.recipe_context) lines.push(`- Authenticated recipe context: ${JSON.stringify(entry.recipe_context)}`);
         lines.push(
             `- PASS ${entry.command_source}: ${entry.command}`,
             `  - Event: sequence=${entry.event_task_sequence}; timestamp=${entry.event_timestamp_utc}`,

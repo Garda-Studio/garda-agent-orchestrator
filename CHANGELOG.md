@@ -1,5 +1,7 @@
 # Changelog
 
+- Focused review evidence can consume exact admitted project recipes and current authenticated results using declared test roles (T-242-4-2).
+
 - Read current canonical recipe results through shared retained-attempt authentication without republishing or reclassifying producer outcomes (T-242-4-1).
 
 - Route admitted frozen recipes through the intermediate CLI, retain separate

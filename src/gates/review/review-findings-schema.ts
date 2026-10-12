@@ -1,5 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { splitCommandLine } from '../../core/command-line';
+import { inspectRecipeFocusedCommand } from '../project-validation/focused';
 import { parseFocusedCommandSyntax } from './review-focused-command-tokenizer';
 import { parseMavenFocusedCommand, resolveMavenFocusedTargets } from './review-focused-command-maven';
 
@@ -579,8 +581,12 @@ function validateFocusedValidationNoteCommand(
     if (!fields.command) {
         return;
     }
-    const commandInspection = inspectReviewerFocusedValidationCommand(fields.command, repoRoot);
+    const commandInspection = inspectReviewerFocusedValidationCommand(fields.command, repoRoot, expectedTaskId);
     violations.push(...commandInspection.violations);
+    if (commandInspection.syntax_supported && fields.commandOutcome === 'passed' && repoRoot && expectedTaskId) {
+        const recipe = inspectRecipeFocusedCommand(repoRoot, expectedTaskId, getFocusedCommandTokens(fields.command));
+        if (recipe && recipe.status !== 'PASSED') violations.push('Declared recipe PASS requires a current authenticated PASSED result.');
+    }
     if (
         commandInspection.target
         && fields.commandOutcome !== 'passed'
@@ -688,14 +694,15 @@ const MISSING_FOCUSED_VALIDATION_MARKER_PATTERN = new RegExp(
 );
 const MISSING_FOCUSED_VALIDATION_CLAIM_PATTERN =
     /\b(?:missing|absent|no)\s+(?:prior\s+)?focused\s+(?:(?:test|check|validation)\s+)?(?:execution|run|evidence)\b|\bfocused\s+(?:test|check|validation|execution)(?:\s+(?:execution|run|evidence))?\b.{0,48}\b(?:missing|absent|unavailable|prohibited|not\s+(?:run|executed))\b|\b(?:could\s+not|cannot|can't|unable\s+to)\s+(?:run|execute)\b.{0,48}\bfocused\s+(?:test|check|validation)\b/iu;
+const REVIEWER_FOCUSED_SCOPE_ESCAPE_PATTERN = /(?:^|[/\\])\.\.(?:[/\\]|$)|(?:^|[\s"'=])[a-z]:|(?:^|[\s"'=])\/(?!\/)/iu;
 const REVIEWER_UNSAFE_FOCUSED_COMMAND_PATTERNS: ReadonlyArray<{ pattern: RegExp; reason: string; unquotedOnly?: boolean }> = [
     {
         pattern: /^\s*(?:(?:curl|wget|ssh|scp|sftp|ftp|telnet|nc|netcat|invoke-webrequest|invoke-restmethod|iwr|irm)\b|git\s+(?:clone|fetch|pull|push)\b|(?:npm|pnpm|yarn|bun)\s+(?:install|add|update|publish)\b|pip\s+install\b)/iu,
-        reason: 'access network services or install/publish dependencies'
+        reason: 'access network services or install/publish dependencies',
     },
     {
         pattern: /^\s*(?:(?:rm|del|erase|cp|mv|tee|touch|mkdir|md|set-content|add-content|out-file|new-item|remove-item|copy-item|move-item|apply_patch)\b|git\s+(?:add|commit|checkout|switch|reset|restore|clean|stash)\b|sed\s+-i\b)|\brequire\([^)]*(?:node:)?fs[^)]*\)\s*\.\s*(?:promises\s*\.\s*)?(?:writefile|writefilesync|appendfile|appendfilesync|mkdir|mkdirsync|unlink|unlinksync|rm|rmsync|rename|renamesync)\b|(?<![=<>-])>{1,2}(?![=&])/iu,
-        reason: 'mutate source, control, or handoff artifacts'
+        reason: 'mutate source, control, or handoff artifacts',
     },
     {
         pattern: /(?:^|\s)(?:--fix|--write|--update|--update-snapshot|--update-snapshots|--updatesnapshot|--snapshot-update|--accept|--bless|--rewrite|--overwrite)(?:=|\s|$)|(?:^|\s)-(?:u|w)(?=\s|$)/iu,
@@ -706,7 +713,7 @@ const REVIEWER_UNSAFE_FOCUSED_COMMAND_PATTERNS: ReadonlyArray<{ pattern: RegExp;
         reason: 'use package-execution wrappers that may fetch dependencies implicitly'
     },
     {
-        pattern: /(?:^|[/\\])\.\.(?:[/\\]|$)|(?:^|[\s"'=])[a-z]:|(?:^|[\s"'=])\/(?!\/)/iu,
+        pattern: REVIEWER_FOCUSED_SCOPE_ESCAPE_PATTERN,
         reason: 'escape authenticated repository scope with absolute or traversal paths'
     },
     {
@@ -822,6 +829,10 @@ function getUnsafeFocusedCommandReason(command: string): string | null {
 }
 
 function getUnsafeFocusedCommandShellReason(command: string, scopedLoaders: ReadonlySet<string>): string | null {
+    const syntax = parseFocusedCommandSyntax(command);
+    const unsafe = REVIEWER_UNSAFE_FOCUSED_COMMAND_PATTERNS.find(({ pattern, unquotedOnly }) =>
+        pattern !== REVIEWER_FOCUSED_SCOPE_ESCAPE_PATTERN && pattern.test(unquotedOnly ? syntax.unquotedText : command));
+    if (unsafe) return unsafe.reason;
     let quote: string | null = null;
     for (let index = 0; index < command.length; index += 1) {
         const character = command[index];
@@ -1388,12 +1399,31 @@ function focusedCommandExecutesValidation(command: string, repoRoot?: string): b
         && focusedCommandHasConcreteTarget(command, repoRoot);
 }
 
-export function inspectReviewerFocusedValidationCommand(command: string, repoRoot?: string): {
+export function inspectReviewerFocusedValidationCommand(command: string, repoRoot?: string, taskId?: string): {
     syntax_supported: boolean;
     target: string | null;
     violations: string[];
 } {
     const violations: string[] = [];
+    if (repoRoot && taskId) {
+        let tokens: string[];
+        try { tokens = splitCommandLine(command); } catch (error) {
+            return { syntax_supported: false, target: null, violations: [String(error)] };
+        }
+        const recipe = inspectRecipeFocusedCommand(repoRoot, taskId, tokens);
+        if (recipe) {
+            const executable = path.basename(tokens[0] || '').replace(/\.(?:exe|cmd)$/iu, '');
+            const invocation = [executable, ...tokens.slice(1).filter(token => !token.startsWith('-'))]
+                .map(token => /^[\p{L}\p{N}_.:/\\-]+$/u.test(token) ? token : JSON.stringify(token)).join(' ');
+            const sideEffect = getUnsafeFocusedCommandReason(invocation);
+            const loaders = getFocusedNodeLoaderOperands([executable, ...tokens.slice(1)]);
+            const unsafe = getUnsafeFocusedCommandShellReason(command, new Set(loaders.map(({ value }) => value)))
+                || sideEffect
+                || getUnsafeFocusedCommandReason(command.replace(/^\s*(?:"(?:\\.|[^"])*"|'[^']*'|\S+)/u, executable));
+            const reasons = [...recipe.violations, ...(unsafe ? [`Reviewer focused self-validation must not ${unsafe}.`] : [])];
+            return { syntax_supported: reasons.length === 0, target: reasons.length === 0 ? recipe.target : null, violations: reasons };
+        }
+    }
     const unsafeReason = getUnsafeFocusedCommandReason(command);
     if (unsafeReason) {
         violations.push(`Reviewer focused self-validation must not ${unsafeReason}.`);
@@ -1409,8 +1439,12 @@ export function inspectReviewerFocusedValidationCommand(command: string, repoRoo
     };
 }
 
-function focusedCommandExecutesMarkerTarget(command: string, markerTarget: string, repoRoot?: string): boolean {
+function focusedCommandExecutesMarkerTarget(command: string, markerTarget: string, repoRoot?: string, taskId?: string): boolean {
     const normalizedTarget = normalizeFocusedTargetPath(markerTarget);
+    if (repoRoot && taskId && inspectRecipeFocusedCommand(repoRoot, taskId, getFocusedCommandTokens(command))) {
+        const inspection = inspectReviewerFocusedValidationCommand(command, repoRoot, taskId);
+        return inspection.syntax_supported && inspection.target === normalizedTarget;
+    }
     const parsedTargets = parseFocusedCommandTargets(command, repoRoot);
     if (
         parsedTargets.targets.length !== 1
@@ -1616,7 +1650,7 @@ function getFocusedTargetAttempts(
 ): FocusedTargetAttempts {
     const commandTargetAttempts = attemptNotes.filter((note) => (
         Boolean(note.command)
-        && focusedCommandExecutesMarkerTarget(note.command as string, markerTarget, repoRoot)
+        && focusedCommandExecutesMarkerTarget(note.command as string, markerTarget, repoRoot, expectedTaskId)
     ));
     return {
         commandTargetAttempts,
