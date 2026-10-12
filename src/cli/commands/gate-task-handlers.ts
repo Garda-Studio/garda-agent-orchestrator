@@ -364,6 +364,7 @@ export async function handleQualityChecklist(gateArgv: string[]): Promise<void> 
 export async function handleRunIntermediateCommand(gateArgv: string[]): Promise<void> {
     const defs = {
         '--task-id': { key: 'taskId', type: 'string' },
+        '--recipe-id': { key: 'recipeId', type: 'string' },
         '--command': { key: 'command', type: 'string' },
         '--command-source': { key: 'commandSource', type: 'string' },
         '--artifact-path': { key: 'artifactPath', type: 'string' },

@@ -28,6 +28,7 @@ import {
 } from '../../../../gates/shared/focused-intermediate-command-grammar';
 import { hasTestFirstExpectedRedDeclaration } from '../../../../gates/test-first/test-first-declaration';
 import { executeCommandAsync, splitCommandLine } from '../../../gate-cli/gates-subprocess';
+import { runRecipeCommand } from './recipe-command-flow';
 
 const ALLOWED_COMMAND_SOURCES = ['node-test', 'targeted-test', 'typecheck', 'validation'] as const;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -40,6 +41,7 @@ type IntermediateCommandStatus = 'PASSED' | 'FAILED' | 'EXPECTED_FAILURE' | 'UNE
 
 export interface RunIntermediateCommandOptions {
     taskId?: unknown;
+    recipeId?: unknown;
     command?: unknown;
     commandSource?: unknown;
     artifactPath?: unknown;
@@ -591,6 +593,7 @@ async function persistCommandEvent(
 export async function runIntermediateCommandCommand(
     options: RunIntermediateCommandOptions,
 ): Promise<IntermediateCommandResult> {
+    if (options.recipeId !== undefined) return runRecipeCommand(options);
     const repoRoot = path.resolve(normalizeOptionalString(options.repoRoot) ?? process.cwd());
     const taskId = normalizeRequiredString(options.taskId, '--task-id');
     const command = normalizeRequiredString(options.command, '--command');

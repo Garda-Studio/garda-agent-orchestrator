@@ -1,5 +1,8 @@
 # Changelog
 
+- Route admitted frozen recipes through the intermediate CLI, retain separate
+  authenticated target results and preserve legacy routes (T-242-3-3).
+
 - Execute admitted frozen argv recipes and retain bounded original source/output
   and genuine lifecycle facts without accepting test semantics (T-242-3-2).
 
