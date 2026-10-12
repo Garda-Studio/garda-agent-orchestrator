@@ -32,6 +32,7 @@ export interface SpawnedProcessInfo {
 }
 
 export interface SpawnStreamedResult {
+    terminationSignal?: NodeJS.Signals;
     sinkError?: string;
     exitCode: number;
     stdout: string;
@@ -1208,13 +1209,14 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
             finishCaptures.push(attachDecodedOutput(child.stderr, stderrCapture, opts.onStderr));
         }
 
-        child.once('close', async function (code: number | null) {
+        child.once('close', async function (code: number | null, terminationSignal: NodeJS.Signals | null) {
             await Promise.all(sinkReads);
             for (const finish of finishCaptures) finish();
             const stdout = stdoutCapture.finish();
             const stderr = stderrCapture.finish();
             settle({
                 exitCode: code == null ? 1 : code,
+                ...(terminationSignal ? { terminationSignal } : {}),
                 stdout: stdout.text,
                 stderr: stderr.text,
                 timedOut,

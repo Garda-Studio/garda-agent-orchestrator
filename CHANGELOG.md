@@ -1,5 +1,8 @@
 # Changelog
 
+- Preserve actual argv-child termination signals without changing legacy exit,
+  cancellation or cleanup behavior (T-242-3-1).
+
 - Admit technology-neutral recipe contracts through audited workflow mutation and
   freeze their current preflight authority while preserving standing grants (T-242-2-3).
 - Freeze technology-neutral recipe, input and executable identities with bounded
