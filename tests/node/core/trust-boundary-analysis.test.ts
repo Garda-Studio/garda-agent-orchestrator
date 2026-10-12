@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { readValidationFile } from '../../../src/core/project-validation-identity';
 
 import {
     assessTrustBoundaryAnalysisApplicability,
@@ -51,6 +52,80 @@ function namedTestBody(body: string): string {
 }
 
 describe('trust-boundary analysis contract', () => {
+    it('binds declared root Unicode and cross-language sources while keeping semantics pending', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-neutral-boundary-'));
+        try {
+            const cases = [
+                ['RootSuite', 'opaque source'], ['проверки/λ', 'opaque Unicode source'],
+                ['caseCamelCase.java', 'class CaseCamelCase {}'], ['snake_case.py', 'def test_case(): pass'],
+                ['JUnitCase.java', '@Test void opaqueCase() {}'], ['case_test.go', 'func TestCase() {}'],
+                ['cases.rs', '#[test] fn opaque_case() {}'], ['case.unknown', 'unknown grammar']
+            ];
+            const facts = cases.map(([file, source], index) => {
+                fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true }); fs.writeFileSync(path.join(root, file), source);
+                const matrix = buildMatrix('replaced'), caseId = `opaque-${index}`;
+                matrix[0].negative_paths[0].scenario = 'Source-bound obligation';
+                matrix[0].negative_paths[0].expected_behavior = 'Explicit intended behavior';
+                matrix[0].negative_paths[0].evidence_files = [`${file}#${caseId}`];
+                const options = { repoRoot: root, recipeTargets: [{ id: caseId, source: file, selector: '任意 case' }],
+                    sourceIdentities: [readValidationFile(root, file).identity] };
+                return assessTrustBoundaryMatrix(matrix, options) as ReturnType<typeof assessTrustBoundaryMatrix> & {
+                    structural_status?: string; semantic_status?: string;
+                    source_evidence?: Array<{ source_identity: unknown; syntax_status: string; case_id: string }>;
+                };
+            });
+            assert.deepEqual(facts.map(f => f.violations), cases.map(() => []));
+            assert.deepEqual(facts.map(f => f.structural_status), cases.map(() => 'BOUND'));
+            assert.deepEqual(facts.map(f => f.semantic_status), cases.map(() => 'PENDING_INDEPENDENT_REVIEW'));
+            assert.deepEqual(facts.map(f => f.source_evidence?.[0].syntax_status), cases.map(() => 'UNRESOLVED'));
+            assert.deepEqual(facts.map(f => f.source_evidence?.[0].case_id), cases.map((_, i) => `opaque-${i}`));
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    });
+
+    it('rejects missing foreign substituted and changed declared source identities', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-neutral-source-'));
+        try {
+            const file = 'case.unknown'; fs.writeFileSync(path.join(root, file), 'original source');
+            const identity = readValidationFile(root, file).identity, matrix = buildMatrix('replaced');
+            matrix[0].negative_paths[0].evidence_files = [`${file}#case-1`];
+            const options = { repoRoot: root, recipeTargets: [{ id: 'case-1', source: file, selector: 'opaque selector' }],
+                sourceIdentities: [identity] };
+            const missingOptions = { ...options, sourceIdentities: [] };
+            const missingBinding = assessTrustBoundaryMatrix(matrix, missingOptions);
+            const foreignOptions = { ...options, recipeTargets: [{ id: 'foreign', source: file, selector: 'opaque selector' }] };
+            const foreignTarget = assessTrustBoundaryMatrix(matrix, foreignOptions);
+            fs.writeFileSync(path.join(root, file), 'changed source');
+            const changed = assessTrustBoundaryMatrix(matrix, options);
+            fs.unlinkSync(path.join(root, file)); fs.writeFileSync(path.join(root, file), 'original source');
+            const substituted = assessTrustBoundaryMatrix(matrix, options);
+            fs.unlinkSync(path.join(root, file)); const missingFile = assessTrustBoundaryMatrix(matrix, options);
+            assert.deepEqual([missingBinding, foreignTarget, changed, substituted, missingFile].map(f => f.violations.length > 0),
+                [true, true, true, true, true]);
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    });
+
+    it('keeps optional JS rejection diagnostics for disabled inert and forged source without semantic completion', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-neutral-js-'));
+        try {
+            const file = 'RootSuite', name = 'declared case', matrix = buildMatrix('replaced');
+            matrix[0].negative_paths[0].evidence_files = [`${file}#opaque-case`];
+            const sources = ["test.skip('declared case', () => { assert.ok(true); });",
+                "test('declared case', () => {});", "const fake = `test('declared case', () => { assert.ok(true); });`;",
+                "test('declared case', () => { assert.ok(true); });"];
+            const facts = sources.map(source => {
+                fs.writeFileSync(path.join(root, file), source);
+                const options = { repoRoot: root, recipeTargets: [{ id: 'opaque-case', source: file, selector: name }],
+                    sourceIdentities: [readValidationFile(root, file).identity], syntaxAdapter: 'javascript-test' as const };
+                return assessTrustBoundaryMatrix(matrix, options) as ReturnType<typeof assessTrustBoundaryMatrix> & {
+                    semantic_status?: string; source_evidence?: Array<{ syntax_status: string }>;
+                };
+            });
+            assert.deepEqual(facts.map(f => f.source_evidence?.[0].syntax_status), ['REJECTED', 'REJECTED', 'REJECTED', 'ASSERTIVE_DECLARATION']);
+            assert.deepEqual(facts.map(f => f.structural_status), sources.map(() => 'BOUND'));
+            assert.deepEqual(facts.map(f => f.semantic_status), sources.map(() => 'PENDING_INDEPENDENT_REVIEW'));
+            assert.deepEqual(facts.map(f => f.violations.length > 0), [true, true, true, false]);
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    });
     it('recognizes direct assertions after regex quotes, classes, escaped delimiters and callback cleanup', () => {
         const bodies = [
             String.raw`const match = html.match(/const actionToken = "([^"]+)";/u);

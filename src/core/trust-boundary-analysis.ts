@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { maskTestEvidenceRegexLiterals } from './test-evidence-lexing';
+import type { ValidationFileIdentity, ValidationTarget } from './project-validation-contract';
 
 export const TRUST_BOUNDARY_ANALYSIS_RULE_ID = 'trust_boundary_adversarial_analysis';
 export const TRUST_BOUNDARY_ANALYSIS_RULE_TITLE = 'Trust-boundary and adversarial-path analysis';
@@ -18,6 +19,8 @@ export const TRUST_BOUNDARY_NEGATIVE_PATH_KINDS = Object.freeze([
 ] as const);
 
 export type TrustBoundaryNegativePathKind = typeof TRUST_BOUNDARY_NEGATIVE_PATH_KINDS[number];
+const MAX_DECLARED_BOUNDARY_REFERENCES = 128;
+const MAX_DECLARED_BOUNDARY_SOURCE_BYTES = 8 * 1024 * 1024;
 
 const ADVERSARIAL_SCENARIO_PATTERN =
     /\b(?:adversarial|invalid|malformed|forged|replaced|missing|foreign|stale|tamper(?:ed|ing)?|unauthori[sz]ed|denied|rejected|outside|escape|traversal|symlink|replay|toctou|race|duplicate|mismatch|untrusted|corrupt(?:ed|ion)?|fail(?:s|ed|ure)?|reject(?:s|ed)?|block(?:s|ed)?|prevent(?:s|ed)?)\b/i;
@@ -52,6 +55,16 @@ export interface TrustBoundaryMatrixAssessment {
     matrix: TrustBoundaryMatrixEntry[];
     matrix_sha256: string;
     violations: string[];
+    structural_status?: 'BOUND' | 'INVALID';
+    semantic_status?: 'PENDING_INDEPENDENT_REVIEW';
+    source_evidence?: TrustBoundarySourceEvidence[];
+}
+
+export interface TrustBoundarySourceEvidence {
+    source_identity: ValidationFileIdentity;
+    case_id: string;
+    selector: string;
+    syntax_status: 'UNRESOLVED' | 'REJECTED' | 'ASSERTIVE_DECLARATION';
 }
 
 export interface TrustBoundaryAnalysisApplicability {
@@ -61,6 +74,9 @@ export interface TrustBoundaryAnalysisApplicability {
 
 export interface TrustBoundaryMatrixAssessmentOptions {
     repoRoot?: string | null;
+    recipeTargets?: readonly ValidationTarget[];
+    sourceIdentities?: readonly ValidationFileIdentity[];
+    syntaxAdapter?: 'javascript-test';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -610,7 +626,8 @@ function normalizeNegativePath(
     value: unknown,
     boundaryIndex: number,
     pathIndex: number,
-    violations: string[]
+    violations: string[],
+    structuralOnly = false
 ): TrustBoundaryNegativePath | null {
     const label = `trust_boundary_matrix[${boundaryIndex}].negative_paths[${pathIndex}]`;
     if (!isRecord(value)) {
@@ -627,12 +644,12 @@ function normalizeNegativePath(
     }
     if (!scenario) {
         violations.push(`${label}.scenario must name the targeted adversarial path.`);
-    } else if (kind === 'other' && !ADVERSARIAL_SCENARIO_PATTERN.test(scenario)) {
+    } else if (!structuralOnly && kind === 'other' && !ADVERSARIAL_SCENARIO_PATTERN.test(scenario)) {
         violations.push(`${label}.scenario for kind 'other' must identify a concrete adversarial or failure path.`);
     }
     if (!expectedBehavior) {
         violations.push(`${label}.expected_behavior must state the fail-closed or recovery behavior.`);
-    } else if (!FAIL_CLOSED_BEHAVIOR_PATTERN.test(expectedBehavior)) {
+    } else if (!structuralOnly && !FAIL_CLOSED_BEHAVIOR_PATTERN.test(expectedBehavior)) {
         violations.push(`${label}.expected_behavior must state the fail-closed or recovery action.`);
     }
     if (evidenceFiles.length === 0) {
@@ -645,10 +662,10 @@ function normalizeNegativePath(
             violations.push(`${evidenceLabel} must use path#exact test name.`);
             continue;
         }
-        if (parsed.testName !== scenario) {
+        if (!structuralOnly && parsed.testName !== scenario) {
             violations.push(`${evidenceLabel} test name must exactly equal ${label}.scenario.`);
         }
-        if (kind !== 'other' && !parsed.testName.toLowerCase().includes(kind)) {
+        if (!structuralOnly && kind !== 'other' && !parsed.testName.toLowerCase().includes(kind)) {
             violations.push(`${evidenceLabel} test name must identify the '${kind}' adversarial path.`);
         }
     }
@@ -663,7 +680,8 @@ function normalizeNegativePath(
 function normalizeBoundaryEntry(
     value: unknown,
     index: number,
-    violations: string[]
+    violations: string[],
+    structuralOnly = false
 ): TrustBoundaryMatrixEntry | null {
     const label = `trust_boundary_matrix[${index}]`;
     if (!isRecord(value)) {
@@ -685,7 +703,7 @@ function normalizeBoundaryEntry(
         ? value.negative_paths ?? value.negativePaths
         : [];
     const negativePaths = (rawNegativePaths as unknown[])
-        .map((entry, pathIndex) => normalizeNegativePath(entry, index, pathIndex, violations))
+        .map((entry, pathIndex) => normalizeNegativePath(entry, index, pathIndex, violations, structuralOnly))
         .filter((entry): entry is TrustBoundaryNegativePath => entry !== null);
 
     if (!boundaryId) violations.push(`${label}.boundary_id is required.`);
@@ -773,17 +791,59 @@ function validateTrustBoundaryEvidenceFiles(
     }
 }
 
+function readDeclaredBoundarySources(matrix: readonly TrustBoundaryMatrixEntry[],
+    options: TrustBoundaryMatrixAssessmentOptions, violations: string[], syntaxViolations: string[]): TrustBoundarySourceEvidence[] {
+    const facts: TrustBoundarySourceEvidence[] = [];
+    if (!options.repoRoot || !Array.isArray(options.recipeTargets) || !Array.isArray(options.sourceIdentities)
+        || options.recipeTargets.length > MAX_DECLARED_BOUNDARY_REFERENCES
+        || options.sourceIdentities.length > MAX_DECLARED_BOUNDARY_REFERENCES) {
+        violations.push('Declared boundary evidence requires a repository root and bounded target/source identities.');
+        return facts;
+    }
+    if (options.syntaxAdapter !== undefined && options.syntaxAdapter !== 'javascript-test') {
+        violations.push('Unsupported optional boundary syntax adapter.'); return facts;
+    }
+    const references = [...new Set(matrix.flatMap(boundary => boundary.negative_paths.flatMap(negative => negative.evidence_files)))];
+    if (references.length > MAX_DECLARED_BOUNDARY_REFERENCES) { violations.push('Declared boundary evidence exceeds the reference bound.'); return facts; }
+    let remainingBytes = MAX_DECLARED_BOUNDARY_SOURCE_BYTES;
+    for (const reference of references) {
+        try {
+            const parsed = parseTestEvidenceReference(reference);
+            if (!parsed) throw new Error('Declared evidence requires source#opaque-case-id');
+            const targets = options.recipeTargets.filter(target => target.source === parsed.evidenceFile && target.id === parsed.testName);
+            const identities = options.sourceIdentities.filter(identity => identity.path === parsed.evidenceFile);
+            if (targets.length !== 1 || identities.length !== 1 || !normalizeText(targets[0].selector))
+                throw new Error('Declared evidence requires one exact target and bound source identity');
+            // Legacy detached syntax inspection does not require recipe identity infrastructure.
+            const { readValidationFile } = require('./project-validation-identity') as typeof import('./project-validation-identity');
+            const file = readValidationFile(options.repoRoot, parsed.evidenceFile, remainingBytes), expected = identities[0];
+            remainingBytes -= file.identity.size;
+            if (expected.sha256 !== file.identity.sha256 || expected.size !== file.identity.size || expected.identity !== file.identity.identity)
+                throw new Error('Declared boundary source identity changed');
+            const syntaxStatus = options.syntaxAdapter === 'javascript-test'
+                ? (declaresAssertiveNamedTestCase(file.bytes.toString('utf8'), targets[0].selector, parsed.evidenceFile)
+                    ? 'ASSERTIVE_DECLARATION' : 'REJECTED') : 'UNRESOLVED';
+            facts.push({ source_identity: file.identity, case_id: parsed.testName, selector: targets[0].selector,
+                syntax_status: syntaxStatus });
+            if (syntaxStatus === 'REJECTED') syntaxViolations.push(`Optional JS syntax rejects a disabled, inert or undeclared assertive case: ${reference}`);
+        } catch (error) { violations.push(`Declared boundary source rejected (${reference}): ${String(error)}`); }
+    }
+    return facts;
+}
+
 export function assessTrustBoundaryMatrix(
     value: unknown,
     options: TrustBoundaryMatrixAssessmentOptions = {}
 ): TrustBoundaryMatrixAssessment {
     const violations: string[] = [];
+    const syntaxViolations: string[] = [];
+    const structuralOnly = options.recipeTargets !== undefined || options.sourceIdentities !== undefined || options.syntaxAdapter !== undefined;
     const source = Array.isArray(value) ? value : [];
     if (!Array.isArray(value) || source.length === 0) {
         violations.push('trust_boundary_matrix must contain at least one named trust boundary.');
     }
     const matrix = source
-        .map((entry, index) => normalizeBoundaryEntry(entry, index, violations))
+        .map((entry, index) => normalizeBoundaryEntry(entry, index, violations, structuralOnly))
         .filter((entry): entry is TrustBoundaryMatrixEntry => entry !== null);
     const seenIds = new Set<string>();
     const seenNames = new Set<string>();
@@ -799,14 +859,17 @@ export function assessTrustBoundaryMatrix(
         seenIds.add(normalizedId);
         seenNames.add(normalizedName);
     }
-    if (options.repoRoot) {
+    const sourceEvidence = structuralOnly ? readDeclaredBoundarySources(matrix, options, violations, syntaxViolations) : undefined;
+    if (!structuralOnly && options.repoRoot) {
         validateTrustBoundaryEvidenceFiles(matrix, options.repoRoot, violations);
     }
     const canonicalMatrix = JSON.stringify(matrix);
     return {
         matrix,
         matrix_sha256: createHash('sha256').update(canonicalMatrix, 'utf8').digest('hex'),
-        violations: [...new Set(violations)]
+        violations: [...new Set([...violations, ...syntaxViolations])],
+        ...(structuralOnly ? { structural_status: violations.length ? 'INVALID' as const : 'BOUND' as const,
+            semantic_status: 'PENDING_INDEPENDENT_REVIEW' as const, source_evidence: sourceEvidence } : {})
     };
 }
 
