@@ -28,7 +28,7 @@ async function fixture(mode = 'passed', maxAttempts = 1, options: { selector?: s
         fs.mkdirSync(path.dirname(executable), { recursive: true }); fs.copyFileSync(process.execPath, executable);
         fs.appendFileSync(path.join(root, '.gitignore'), '\ntools/\n');
     }
-    fs.writeFileSync(path.join(root, 'other-driver'), 'unrelated helper');
+    fs.copyFileSync(path.join(root, driver), path.join(root, 'other-driver'));
     const recipe = { id: 'recipe', purpose: 'test',
         executable, argv: options.argv ?? ['driver', mode, { target: 'case' }], cwd,
         inputs: [{ path: 'src/app.ts', role: 'source' }, { path: 'specifications/case', role: 'test' }, { path: driver, role: 'helper' }],
@@ -49,9 +49,9 @@ async function fixture(mode = 'passed', maxAttempts = 1, options: { selector?: s
     const attempt = await executeValidationRecipe({ repoRoot: root, taskId, recipeId: 'recipe' });
     const result = await evaluateValidationAttempt({ repoRoot: root, taskId, attemptId: attempt.attempt_id });
     const command = [attempt.snapshot.tool.path, ...recipe.argv.map(argument => typeof argument === 'string' ? argument : selector)].map(token => JSON.stringify(token)).join(' ');
-    const selected = () => readTaskOwnedFocusedIntermediateEvidence({ repoRoot: root, reviewsRoot: path.join(bundle, 'runtime/reviews'),
+    const selected = (maxEntries?: number) => readTaskOwnedFocusedIntermediateEvidence({ repoRoot: root, reviewsRoot: path.join(bundle, 'runtime/reviews'),
         eventsRoot: path.join(bundle, 'runtime/task-events'), taskId, changedFiles: ['specifications/case'],
-        expectedPreflightSha256: attempt.snapshot.preflight_sha256 });
+        expectedPreflightSha256: attempt.snapshot.preflight_sha256, maxEntries });
     const inspect = inspectReviewerFocusedValidationCommand as (command: string, root?: string, task?: string) => ReturnType<typeof inspectReviewerFocusedValidationCommand>;
     return { root, bundle, attempt, result, command, selected, inspect: (value = command) => inspect(value, root, taskId), clean: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
@@ -123,6 +123,20 @@ it('rejects unrelated helper failures without rejecting the valid selected recip
     try {
         fs.appendFileSync(path.join(f.root, 'other-driver'), '\nchanged');
         assert.equal(f.inspect().syntax_supported, true); assert.equal(f.selected().entries.length, 1);
+    } finally { f.clean(); }
+});
+it('marks eligible recipe overflow and rejects altered surplus results', async () => {
+    const f = await fixture('passed', 1, { unrelatedRecipe: true });
+    try {
+        const other = await executeValidationRecipe({ repoRoot: f.root, taskId, recipeId: 'other' });
+        const result = await evaluateValidationAttempt({ repoRoot: f.root, taskId, attemptId: other.attempt_id });
+        assert.equal(result.status, 'PASSED');
+        const selection = f.selected(1);
+        assert.equal(selection.entries.length, 1); assert.equal(selection.candidate_count, 2);
+        assert.equal(selection.truncated, true);
+        fs.appendFileSync(path.join(f.root, f.result.result_path), ' ');
+        const altered = f.selected(1);
+        assert.equal(altered.truncated, false); assert.equal(altered.rejected_candidate_count, 1);
     } finally { f.clean(); }
 });
 it('rejects shell variable expansion in an otherwise authenticated executable path', async () => {

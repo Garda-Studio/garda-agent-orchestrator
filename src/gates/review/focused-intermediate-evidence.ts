@@ -466,7 +466,7 @@ export function readTaskOwnedFocusedIntermediateEvidence(options: {
         if (entries.length >= maxEntries) {
             for (let surplusIndex = index - 1; surplusIndex >= 0; surplusIndex -= 1) {
                 const surplusEvent = events[surplusIndex];
-                if (String(surplusEvent.event_type || '').trim() !== 'INTERMEDIATE_COMMAND_RUN') {
+                if (!['INTERMEDIATE_COMMAND_RUN', 'PROJECT_VALIDATION_RESULTS_EVALUATED'].includes(String(surplusEvent.event_type || '').trim())) {
                     continue;
                 }
                 if (candidateCount >= maxIntermediateCandidatesScanned) {
@@ -489,11 +489,16 @@ export function readTaskOwnedFocusedIntermediateEvidence(options: {
                     appendWarning(warnings, `focused intermediate evidence candidate seq=${surplusSequence ?? 'missing'} rejected: stale or foreign task/cycle binding`);
                     continue;
                 }
-                if (isCheapEligibleFocusedEvent({
-                    event: surplusEvent,
-                    changedTestPaths,
-                    requiredTestPath
-                })) {
+                let surplusEligible: boolean;
+                if (surplusEvent.event_type === 'PROJECT_VALIDATION_RESULTS_EVALUATED') {
+                    const { entry } = readFocusedRecipeEntry({ repoRoot: options.repoRoot, taskId: options.taskId,
+                        event: surplusEvent, expectedPreflightSha256: options.expectedPreflightSha256 });
+                    surplusEligible = !!entry && focusedPathsMatchScope({
+                        focusedTestPaths: entry.focused_test_paths, changedTestPaths, requiredTestPath });
+                } else {
+                    surplusEligible = isCheapEligibleFocusedEvent({ event: surplusEvent, changedTestPaths, requiredTestPath });
+                }
+                if (surplusEligible) {
                     eligibleCount += 1;
                 } else {
                     rejectedCandidateCount += 1;

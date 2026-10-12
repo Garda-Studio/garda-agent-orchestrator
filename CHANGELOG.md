@@ -1,5 +1,7 @@
 # Changelog
 
+- Count authenticated native recipe surplus in bounded focused review evidence and report omitted eligible results (T-242-4-2-F1).
+
 - Focused review evidence can consume exact admitted project recipes and current authenticated results using declared test roles (T-242-4-2).
 
 - Read current canonical recipe results through shared retained-attempt authentication without republishing or reclassifying producer outcomes (T-242-4-1).
