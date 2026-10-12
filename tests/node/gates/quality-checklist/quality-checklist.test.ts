@@ -27,6 +27,62 @@ import {
     createGateFixture,
     writeGateFixturePreflight
 } from '../../gate-fixtures';
+import { handleWorkflow } from '../../../../src/cli/commands/workflow-command';
+import { runClassifyChangeCommand } from '../../../../src/cli/commands/gates';
+import { executeValidationRecipe } from '../../../../src/gates/project-validation/execution';
+import { evaluateValidationAttempt } from '../../../../src/gates/project-validation/result-evaluation';
+import { createTempRepo, initializeGitRepo, loadTaskEntryRulePack, runEnterTaskMode, runHandshakeForTask, runShellSmokeForTask, seedInitAnswers, seedTaskQueue }
+    from '../../cli/commands/gates/preflight/gates-preflight-fixtures';
+import { removeTempRepoWithRetry } from '../../cli/commands/gate-test-repo-bootstrap';
+
+function declaredQualityFixture(mode = 'passed', targetlessMode?: string) {
+    const root = createTempRepo(), orchestratorRoot = path.join(root, 'garda-agent-orchestrator');
+    const fixture = { repoRoot: root, orchestratorRoot, reviewsRoot: path.join(orchestratorRoot, 'runtime/reviews'),
+        taskId: 'T-quality-phase', cleanup: () => removeTempRepoWithRetry(root) };
+    const configPath = path.join(fixture.orchestratorRoot, 'live/config/workflow-config.json');
+    fs.mkdirSync(path.dirname(configPath), { recursive: true }); fs.writeFileSync(configPath, JSON.stringify(buildDefaultWorkflowConfig()));
+    fs.mkdirSync(path.join(root, 'src/security'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'src/security/evidence.ts'), 'export const boundary = 1;\n');
+    fs.writeFileSync(path.join(root, 'RootSuite'), 'declared source with unknown syntax');
+    fs.writeFileSync(path.join(root, 'driver'), 'process.stdout.write(process.argv[2]==="opaque"?"unknown success":"TAP version 13\\n"+(process.argv[2]==="failed"?"not ok":"ok")+" 1 - declared case\\n1..1\\n");process.exitCode=process.argv[2]==="failed"?7:0;');
+    const recipe = { id: 'neutral', purpose: 'test', executable: process.execPath,
+        argv: ['driver', mode, { target: 'opaque-1' }], cwd: '.', environment: {},
+        inputs: [{ path: 'src/security/evidence.ts', role: 'source' }, { path: 'RootSuite', role: 'test' }, { path: 'driver', role: 'helper' }],
+        targets: [{ id: 'opaque-1', source: 'RootSuite', selector: 'declared case' }], timeout_ms: 5000,
+        max_attempts: 3, max_output_bytes: 1024, max_input_bytes: 65536, required_capabilities: [], result_format: 'tap' };
+    const recipes = targetlessMode === undefined ? [recipe] : [recipe,
+        { ...recipe, id: 'compile', purpose: 'compile', argv: ['driver', targetlessMode], targets: [] }];
+    fs.writeFileSync(path.join(root, 'recipes.json'), JSON.stringify({ schema_version: 1, recipes }));
+    seedInitAnswers(root); seedTaskQueue(root, fixture.taskId, 'TODO', 'default', 'Required reviews: code, security, test.', 'Security validation phase evidence');
+    initializeGitRepo(root);
+    handleWorkflow(['set', '--target-root', root, '--project-validation-contract', 'recipes.json', '--operator-confirmed', 'yes',
+        '--operator-confirmed-at-utc', new Date().toISOString()], { name: 'garda-agent-orchestrator', version: '1.0.0' });
+    runEnterTaskMode({ repoRoot: root, taskId: fixture.taskId, entryMode: 'EXPLICIT_TASK_EXECUTION', requestedDepth: 2,
+        taskSummary: 'Security validation phase evidence', provider: 'Codex' });
+    loadTaskEntryRulePack(root, fixture.taskId); runHandshakeForTask(root, fixture.taskId); runShellSmokeForTask(root, fixture.taskId);
+    fs.appendFileSync(path.join(root, 'src/security/evidence.ts'), '\nexport const phase = 1;\n');
+    fs.appendFileSync(path.join(root, 'RootSuite'), '\ncurrent declared source\n');
+    const preflightPath = path.join(fixture.reviewsRoot, `${fixture.taskId}-preflight.json`);
+    runClassifyChangeCommand({ repoRoot: root, taskId: fixture.taskId, taskIntent: 'Security validation phase evidence',
+        outputPath: preflightPath, changedFiles: ['src/security/evidence.ts', 'RootSuite'], emitMetrics: false });
+    const answer = buildTrustBoundaryAnswer(), matrix = answer.trust_boundary_matrix as Array<Record<string, unknown>>;
+    matrix[0].negative_paths = [{ kind: 'other', scenario: 'проверка', expected_behavior: 'Block invalid evidence.', evidence_files: ['RootSuite#opaque-1'] }];
+    const answers = buildQualityChecklistAnswersTemplate({ repoRoot: root, taskId: fixture.taskId, preflightPath }).answers
+        .map(entry => entry.rule_id === TRUST_BOUNDARY_ANALYSIS_RULE_ID ? answer : { ...entry, status: 'PASS', answer: 'Checked current scope.' });
+    return { ...fixture, artifact: () => buildQualityChecklistArtifact({ repoRoot: root, taskId: fixture.taskId, preflightPath, answers }),
+        execute: async (signal?: AbortSignal, recipeId = 'neutral') => {
+            const attempt = await executeValidationRecipe({ repoRoot: root, taskId: fixture.taskId, recipeId, signal });
+            return evaluateValidationAttempt({ repoRoot: root, taskId: fixture.taskId, attemptId: attempt.attempt_id });
+        } };
+}
+
+function declaredPhases(artifact: ReturnType<typeof buildQualityChecklistArtifact>) {
+    return (artifact as typeof artifact & { validation_phases?: {
+        structural: string; execution: string; semantic: string; sha256: string;
+        executions: Array<{ recipe_id: string; attempt_id: string | null; result_sha256: string | null }>;
+        obligations: Array<{ id: string; recipe_id: string; target_id: string; source_identity: { path: string; sha256: string }; result_status: string | null }>;
+    } }).validation_phases;
+}
 
 const UNIVERSAL_QUALITY_RULE_EXPECTATIONS = Object.freeze([
     Object.freeze({
@@ -230,6 +286,85 @@ function buildGenericActionRequiredAnswers(): Array<Record<string, unknown>> {
 }
 
 describe('quality-checklist gate', () => {
+    it('keeps declared source and absent execution pending without semantic completion', () => {
+        const f = declaredQualityFixture();
+        try {
+            const artifact = f.artifact(), phases = declaredPhases(artifact);
+            assert.equal(artifact.status, 'PENDING_VALIDATION');
+            assert.deepEqual([phases?.structural, phases?.execution, phases?.semantic], ['BOUND', 'PENDING', 'PENDING_INDEPENDENT_REVIEW']);
+            assert.equal(phases?.obligations.length, 1);
+            assert.equal(phases?.obligations[0].source_identity.path, 'RootSuite');
+            assert.equal(phases?.obligations[0].target_id, 'opaque-1');
+            assert.equal(phases?.obligations[0].source_identity.sha256, createHash('sha256').update(fs.readFileSync(path.join(f.repoRoot, 'RootSuite'))).digest('hex'));
+        } finally { f.cleanup(); }
+    });
+
+    it('records genuine execution observations while preserving failed and unknown result semantics', async () => {
+        const states: Array<[string | undefined, string | undefined, string | null | undefined]> = [];
+        for (const mode of ['passed', 'failed', 'opaque']) {
+            const f = declaredQualityFixture(mode);
+            try {
+                await f.execute(); const phases = declaredPhases(f.artifact());
+                states.push([phases?.execution, phases?.semantic, phases?.obligations[0].result_status]);
+            } finally { f.cleanup(); }
+        }
+        assert.deepEqual(states, [['OBSERVED', 'PENDING_INDEPENDENT_REVIEW', 'PASSED'],
+            ['REJECTED', 'PENDING_INDEPENDENT_REVIEW', 'FAILED'], ['OBSERVED', 'PENDING_INDEPENDENT_REVIEW', 'UNRESOLVED']]);
+    });
+
+    it('rejects tampered stale and superseded validation facts instead of closing semantic obligations', async () => {
+        const f = declaredQualityFixture();
+        try {
+            const result = await f.execute(), file = path.join(f.repoRoot, result.result_path), original = fs.readFileSync(file);
+            const sourceFile = path.join(f.repoRoot, 'RootSuite'), originalSource = fs.readFileSync(sourceFile);
+            const current = declaredPhases(f.artifact());
+            fs.appendFileSync(file, ' '); const tampered = declaredPhases(f.artifact()); fs.writeFileSync(file, original);
+            fs.appendFileSync(sourceFile, '\nchanged after validation\n');
+            const stale = f.artifact();
+            fs.writeFileSync(sourceFile, originalSource);
+            await f.execute(AbortSignal.abort()); const superseded = declaredPhases(f.artifact());
+            assert.deepEqual([current?.execution, tampered?.execution, superseded?.execution],
+                ['OBSERVED', 'REJECTED', 'REJECTED']);
+            assert.equal(stale.status, 'CONFIG_ERROR');
+            assert.equal(declaredPhases(stale), undefined);
+            assert.ok(stale.violations.some(violation => violation.startsWith('Project validation quality rejected:')));
+            assert.equal(current?.obligations[0].id, tampered?.obligations[0].id);
+            assert.notEqual(current?.sha256, tampered?.sha256);
+            assert.equal(superseded?.semantic, 'PENDING_INDEPENDENT_REVIEW');
+        } finally { f.cleanup(); }
+    });
+
+    it('rejects delayed evaluation of an earlier success after a newer cancelled attempt', async () => {
+        const f = declaredQualityFixture();
+        try {
+            const earlier = await executeValidationRecipe({ repoRoot: f.repoRoot, taskId: f.taskId, recipeId: 'neutral' });
+            await f.execute(AbortSignal.abort());
+            const cancelled = declaredPhases(f.artifact());
+            await evaluateValidationAttempt({ repoRoot: f.repoRoot, taskId: f.taskId, attemptId: earlier.attempt_id });
+            const delayed = declaredPhases(f.artifact());
+            assert.deepEqual([cancelled?.execution, delayed?.execution], ['REJECTED', 'REJECTED']);
+            assert.equal(delayed?.sha256, cancelled?.sha256);
+            assert.equal(delayed?.semantic, 'PENDING_INDEPENDENT_REVIEW');
+        } finally { f.cleanup(); }
+    });
+
+    it('retains targetless recipe execution and rejects a failed compile beside observed tests', async () => {
+        const states: Array<[string | undefined, string | undefined]> = [];
+        for (const mode of ['passed', 'failed']) {
+            const f = declaredQualityFixture('passed', mode);
+            try {
+                await f.execute(); const pending = declaredPhases(f.artifact());
+                await f.execute(undefined, 'compile'); const completed = declaredPhases(f.artifact());
+                states.push([pending?.execution, completed?.execution]);
+                assert.notEqual(pending?.sha256, completed?.sha256);
+                const compile = completed?.executions.find(recipe => recipe.recipe_id === 'compile');
+                assert.ok(compile?.attempt_id);
+                assert.match(compile?.result_sha256 ?? '', /^[a-f0-9]{64}$/u);
+                assert.equal(completed?.semantic, 'PENDING_INDEPENDENT_REVIEW');
+            } finally { f.cleanup(); }
+        }
+        assert.deepEqual(states, [['PENDING', 'OBSERVED'], ['PENDING', 'REJECTED']]);
+    });
     it('ships enabled universal baseline prompts and excludes project-local rule classes', () => {
         const rulesById = new Map(DEFAULT_OPTIONAL_QUALITY_CHECK_RULES.map((rule) => [rule.id, rule]));
 

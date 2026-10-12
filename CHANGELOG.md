@@ -1,5 +1,7 @@
 # Changelog
 
+- Add current bound validation phase obligations to recipe-selected quality evidence, retaining unknown semantics for independent review and preserving legacy template handling (T-242-6-1).
+
 - Separate declared boundary source identity from optional syntax diagnostics and pending independent semantic review (T-242-5).
 
 - Navigate expected-red through current admitted test recipes and authenticated native target results, preserving legacy routing (T-242-4-3).

@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { inspectQualityValidationPhases, type QualityValidationPhases } from './quality-checklist-validation-phases';
 
 import {
     formatOptionalQualityChecksRuleSetDiagnostics,
@@ -65,6 +66,7 @@ export {
 } from './quality-checklist-template-persistence';
 
 export const QUALITY_CHECKLIST_STATUSES = Object.freeze([
+    'PENDING_VALIDATION',
     'PASS',
     'WARN',
     'ACTION_REQUIRED',
@@ -124,6 +126,7 @@ export interface QualityChecklistChangedFileEvidence {
 }
 
 export interface QualityChecklistArtifact {
+    validation_phases?: QualityValidationPhases;
     schema_version: 1;
     timestamp_utc: string;
     event_source: 'quality-checklist';
@@ -460,7 +463,8 @@ function decideStatus(
     skippedByScopeRules: readonly QualityChecklistRuleArtifact[],
     answers: readonly QualityChecklistAnswer[],
     violations: string[],
-    rawAnswers: unknown
+    rawAnswers: unknown,
+    validation: ReturnType<typeof inspectQualityValidationPhases>
 ): QualityChecklistStatus {
     if (violations.length > 0) {
         return 'CONFIG_ERROR';
@@ -492,7 +496,7 @@ function decideStatus(
             }
         }
         if (rawTrustAnswers.length === 1) {
-            const assessment = assessTrustBoundaryMatrix(
+            const assessment = validation?.matrixAssessment ?? assessTrustBoundaryMatrix(
                 (rawTrustAnswers[0] as Record<string, unknown>).trust_boundary_matrix
                 ?? (rawTrustAnswers[0] as Record<string, unknown>).trustBoundaryMatrix,
                 { repoRoot }
@@ -532,6 +536,7 @@ function decideStatus(
 }
 
 function outcomeForStatus(status: QualityChecklistStatus): QualityChecklistArtifact['outcome'] {
+    if (status === 'PENDING_VALIDATION') return 'INFO';
     if (status === 'PASS') return 'PASS';
     if (status === 'WARN') return 'WARN';
     if (status === 'SKIPPED_DISABLED' || status === 'SKIPPED_CADENCE') return 'INFO';
@@ -560,6 +565,15 @@ export function buildQualityChecklistArtifact(options: BuildQualityChecklistOpti
     const answers = normalizeAnswers(options.answers);
     const explicitActionsTaken = toTextArray(options.actionsTaken);
     const explicitActionsRequired = toTextArray(options.actionsRequired);
+    const rawAnswers = isRecord(options.answers) ? options.answers.answers : options.answers;
+    const rawTrust = Array.isArray(rawAnswers) ? rawAnswers.find(answer => isRecord(answer)
+        && normalizeRuleId(answer.rule_id ?? answer.ruleId ?? answer.id) === TRUST_BOUNDARY_ANALYSIS_RULE_ID) : null;
+    let validation: ReturnType<typeof inspectQualityValidationPhases> = null;
+    try {
+        if (preflight.preflight) validation = inspectQualityValidationPhases({ repoRoot, taskId, preflight: preflight.preflight,
+            preflightSha256: preflight.sha256, matrixRequired: activeRules.some(rule => rule.id === TRUST_BOUNDARY_ANALYSIS_RULE_ID),
+            matrix: rawTrust?.trust_boundary_matrix ?? rawTrust?.trustBoundaryMatrix });
+    } catch (error) { violations.push(`Project validation quality rejected: ${String(error)}`); }
 
     let status: QualityChecklistStatus;
     if (violations.length > 0) {
@@ -567,7 +581,7 @@ export function buildQualityChecklistArtifact(options: BuildQualityChecklistOpti
     } else if (!config.enabled && !trustBoundaryRequired) {
         status = 'SKIPPED_DISABLED';
     } else {
-        status = decideStatus(repoRoot, activeRules, skippedByScopeRules, answers, violations, options.answers);
+        status = decideStatus(repoRoot, activeRules, skippedByScopeRules, answers, violations, options.answers, validation);
     }
 
     const actionsTaken = [
@@ -584,6 +598,7 @@ export function buildQualityChecklistArtifact(options: BuildQualityChecklistOpti
     if (status === 'CONFIG_ERROR' && config.ruleSetDiagnostic) {
         violations.unshift(config.ruleSetDiagnostic);
     }
+    if (validation && (status === 'PASS' || status === 'WARN' || status === 'SKIPPED_DISABLED')) status = 'PENDING_VALIDATION';
 
     return {
         schema_version: 1,
@@ -591,6 +606,7 @@ export function buildQualityChecklistArtifact(options: BuildQualityChecklistOpti
         event_source: 'quality-checklist',
         task_id: taskId,
         checklist_id: QUALITY_CHECKLIST_ID,
+        ...(validation ? { validation_phases: validation.phases } : {}),
         status,
         outcome: outcomeForStatus(status),
         workflow_config_path: normalizePath(config.workflowConfigPath),
@@ -899,6 +915,7 @@ export function materializeQualityChecklistAnswersTemplate(options: {
 
 export function formatQualityChecklistResult(artifact: QualityChecklistArtifact): string[] {
     const headline = {
+        PENDING_VALIDATION: 'QUALITY_CHECKLIST_STRUCTURAL_READY_VALIDATION_PENDING',
         PASS: 'QUALITY_CHECKLIST_PASSED',
         WARN: 'QUALITY_CHECKLIST_WARNED',
         ACTION_REQUIRED: 'QUALITY_CHECKLIST_ACTION_REQUIRED',
