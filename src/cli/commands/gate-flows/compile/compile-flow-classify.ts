@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { freezeProjectValidationAuthority } from '../../../../gates/project-validation/authority';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isPlainRecord } from '../../../../core/records';
@@ -458,6 +459,8 @@ export function runClassifyChangeCommand(options: ClassifyChangeCommandOptions):
         reviewExecutionPolicyMode: reviewExecutionPolicy.mode
     });
     (result as unknown as Record<string, unknown>).authorized_files = authorizedFiles;
+    const projectValidation = freezeProjectValidationAuthority(repoRoot);
+    if (projectValidation) (result as unknown as Record<string, unknown>).project_validation = projectValidation;
     result.changed_files = workspaceSnapshot.changed_files;
     const actualZeroDiffDetected = workspaceSnapshot.changed_files.length === 0;
     result.zero_diff_guard = {

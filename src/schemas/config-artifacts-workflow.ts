@@ -8,6 +8,7 @@ import {
 } from './shared';
 import { compactSettingsFromConfig, compactSettingsToConfig } from '../core/compact/setting-definitions';
 import { normalizeReviewExecutionPolicyMode } from '../core/review-execution-policy';
+import { parseApprovedValidationContract } from '../core/project-validation-identity';
 import {
     SCOPE_BUDGET_GUARD_ACTIONS,
     normalizeScopeBudgetGuardConfig
@@ -42,7 +43,7 @@ const VALID_WORKFLOW_FULL_SUITE_FAILURE_POLICIES = new Set(['AUDIT_AND_BLOCK', '
 
 export function validateWorkflowConfig(input: unknown): Record<string, unknown> {
     const raw = ensurePlainObject(input, 'workflow-config');
-    const knownKeyList = ['compact', 'compile_gate', 'full_suite_validation', 'review_execution_policy', 'review_delegation', 'scope_budget_guard', 'review_cycle_guard', 'project_memory_maintenance', 'task_reset', 'local_commit', 'task_test_selection', 'auto_backup', 'optional_quality_checks', 'orchestrator_work_policy'] as const;
+    const knownKeyList = ['compact', 'compile_gate', 'full_suite_validation', 'review_execution_policy', 'review_delegation', 'scope_budget_guard', 'review_cycle_guard', 'project_memory_maintenance', 'task_reset', 'local_commit', 'task_test_selection', 'auto_backup', 'optional_quality_checks', 'orchestrator_work_policy', 'project_validation'] as const;
     const knownKeys = new Set(knownKeyList);
     assertNoCaseMismatchedKnownKeys(
         raw,
@@ -51,6 +52,7 @@ export function validateWorkflowConfig(input: unknown): Record<string, unknown> 
     );
     assertNoLikelyTypoKeys(raw, knownKeyList, 'workflow-config');
     const normalized = cloneUnknownProperties(raw, knownKeys);
+    if (raw.project_validation !== undefined) normalized.project_validation = parseApprovedValidationContract(raw.project_validation);
     if (raw.local_commit !== undefined) normalized.local_commit = validateLocalCommitSection(raw.local_commit);
     if (raw.task_test_selection !== undefined) {
         normalized.task_test_selection = validateTaskTestSelectionSection(raw.task_test_selection);

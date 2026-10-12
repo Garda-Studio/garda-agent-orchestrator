@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { approveProjectValidationContract, readValidationFile, validationDigest } from '../../../core/project-validation-identity';
 import { applyCompactSettingOptions } from '../../../core/compact/setting-definitions';
 import { withWorkflowConfigTransaction } from './workflow-command-transaction';
 import type { RecoverableFileTransaction } from '../../../core/recoverable-file-transaction';
@@ -341,6 +342,14 @@ function handleSetLocked(
     ) as WorkflowConfigData['full_suite_validation'];
     const nextCompileGate = normalizeCompileGateConfig(nextConfig.compile_gate);
     const changedFields: string[] = [];
+    const projectValidationAdmissionRequested = typeof options.projectValidationContract === 'string';
+    if (projectValidationAdmissionRequested) {
+        const declarationPath = path.resolve(roots.targetRoot, options.projectValidationContract as string);
+        const relativePath = path.relative(roots.targetRoot, declarationPath).replace(/\\/gu, '/');
+        const declaration = readValidationFile(roots.targetRoot, relativePath, 8 * 1024 * 1024);
+        nextConfig.project_validation = approveProjectValidationContract(roots.targetRoot, JSON.parse(declaration.bytes.toString('utf8')));
+        changedFields.push('project_validation');
+    }
     const compactUpdate = applyCompactSettingOptions(nextConfig.compact, options);
     if (compactUpdate.changed.length) {
         nextConfig.compact = compactUpdate.config;
@@ -869,6 +878,7 @@ function handleSetLocked(
     let auditPath: string | null = null;
     let protectedManifestPath: string | null = null;
     const auditWriteOptions = {
+        ...(projectValidationAdmissionRequested ? { projectValidationAdmissionSha256: validationDigest(nextValidated.project_validation) } : {}),
         transaction,
         mutationSource: normalizeWorkflowConfigMutationSource(options.mutationSource),
         taskTestSelection,
@@ -883,13 +893,13 @@ function handleSetLocked(
             requireWorkflowSetOperatorConfirmation(options);
         }
         if (taskTestSelection) assertTaskTestSelectionCurrent(roots, taskTestSelection);
-        if (workflowConfigChanged || localCommitAuditRequested) {
+        if (workflowConfigChanged || localCommitAuditRequested || projectValidationAdmissionRequested) {
             const currentFileText = state.exists ? fs.readFileSync(roots.configPath, 'utf8') : '';
             if (workflowConfigChanged) writeWorkflowConfig(roots.configPath, nextValidated, transaction);
             auditPath = writeWorkflowConfigAuditRecord(
                 roots.bundleRoot,
                 roots.configPath,
-                [...new Set([...actualWorkflowConfigChangedFields, ...(localCommitAuditRequested ? ['local_commit.enabled'] : [])])],
+                [...new Set([...actualWorkflowConfigChangedFields, ...(localCommitAuditRequested ? ['local_commit.enabled'] : []), ...(projectValidationAdmissionRequested ? ['project_validation'] : [])])],
                 currentFileText,
                 workflowConfigChanged ? nextSerialized : currentFileText,
                 auditWriteOptions
@@ -907,13 +917,13 @@ function handleSetLocked(
             );
         }
         protectedManifestPath = refreshWorkflowProtectedManifest(resolveProtectedManifestRefreshRoot(roots), transaction);
-    } else if (taskResetAuditRepairRequested || localCommitAuditRequested) {
+    } else if (taskResetAuditRepairRequested || localCommitAuditRequested || projectValidationAdmissionRequested) {
         requireWorkflowSetOperatorConfirmation(options);
         const currentFileText = fs.readFileSync(roots.configPath, 'utf8');
         auditPath = writeWorkflowConfigAuditRecord(
             roots.bundleRoot,
             roots.configPath,
-            [...(taskResetAuditRepairRequested ? ['task_reset.enabled'] : []), ...(localCommitAuditRequested ? ['local_commit.enabled'] : [])],
+            [...(taskResetAuditRepairRequested ? ['task_reset.enabled'] : []), ...(localCommitAuditRequested ? ['local_commit.enabled'] : []), ...(projectValidationAdmissionRequested ? ['project_validation'] : [])],
             currentFileText,
             currentFileText,
             auditWriteOptions

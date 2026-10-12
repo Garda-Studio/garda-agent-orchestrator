@@ -1,5 +1,7 @@
 # Changelog
 
+- Admit technology-neutral recipe contracts through audited workflow mutation and
+  freeze their current preflight authority while preserving standing grants (T-242-2-3).
 - Freeze technology-neutral recipe, input and executable identities with bounded
   contained reads and current audited configuration binding (T-242-2-2).
 - Validate versioned technology-neutral recipe declarations, literal target

@@ -213,6 +213,7 @@ export const WORKFLOW_SET_DEFINITIONS = {
     '--optional-check-rule-delete': { key: 'optionalCheckRuleDelete', type: 'string' },
     '--optional-skill-selection-mode': { key: 'optionalSkillSelectionMode', type: 'string' },
     '--garda-self-guard': { key: 'gardaSelfGuard', type: 'string' },
+    '--project-validation-contract': { key: 'projectValidationContract', type: 'string' },
     '--mutation-source': { key: 'mutationSource', type: 'string' },
     '--operator-confirmed': { key: 'operatorConfirmed', type: 'string' },
     '--operator-confirmed-at-utc': { key: 'operatorConfirmedAtUtc', type: 'string' }

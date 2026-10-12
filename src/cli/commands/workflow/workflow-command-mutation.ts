@@ -18,6 +18,7 @@ import type {
 } from './workflow-command-types';
 
 export interface WorkflowConfigAuditWriteOptions {
+    projectValidationAdmissionSha256?: string;
     transaction?: RecoverableFileTransaction;
     mutationSource?: WorkflowConfigMutationSource | null;
     targetRoot?: string | null;
@@ -192,6 +193,8 @@ export function writeWorkflowConfigAuditRecord(
             : null,
         before_sha256: sha256Text(beforeText),
         after_sha256: sha256Text(afterText),
+        ...(options.projectValidationAdmissionSha256 && changedFields.includes('project_validation')
+            ? { project_validation_admission_sha256: options.projectValidationAdmissionSha256 } : {}),
         command_only_change: isCommandOnlyConfigChange(beforeText, afterText),
         ...(permissionRequested ? { local_commit_enabled: (JSON.parse(afterText) as WorkflowFileConfigData).local_commit?.enabled === true,
             audit_record_byte_offset: auditRecordByteOffset } : {})
