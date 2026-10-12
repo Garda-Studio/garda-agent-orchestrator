@@ -1,5 +1,7 @@
 # Changelog
 
+- Read current canonical recipe results through shared retained-attempt authentication without republishing or reclassifying producer outcomes (T-242-4-1).
+
 - Route admitted frozen recipes through the intermediate CLI, retain separate
   authenticated target results and preserve legacy routes (T-242-3-3).
 
