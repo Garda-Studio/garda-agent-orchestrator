@@ -1295,7 +1295,7 @@ test('workflow set rejects changed config without fresh operator confirmation ti
 
 test('workflow set rejects stale operator confirmation timestamps', () => {
     const bundleRoot = createBundleRoot();
-    const staleConfirmation = new Date(Date.now() - 11 * 60 * 1000).toISOString();
+    const staleConfirmation = new Date(Date.now() - OPERATOR_CONFIRMATION_MAX_AGE_MS - 60_000).toISOString();
 
     try {
         assert.throws(

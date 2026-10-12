@@ -1,4 +1,4 @@
-export const OPERATOR_CONFIRMATION_MAX_AGE_MS = 10 * 60 * 1000;
+export const OPERATOR_CONFIRMATION_MAX_AGE_MS = 1_000_000 * 60 * 1000;
 export const OPERATOR_CONFIRMATION_MAX_FUTURE_SKEW_MS = 60 * 1000;
 
 export interface OperatorConfirmationOptions {

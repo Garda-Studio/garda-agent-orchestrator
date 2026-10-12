@@ -49,6 +49,7 @@ import {
     writeWorkflowConfig
 } from './gates-review-cycle-fixtures';
 import { writeBudgetOutputFilters } from '../../gate-test-helpers';
+import { OPERATOR_CONFIRMATION_MAX_AGE_MS } from '../../../../../../src/core/operator-confirmation';
 import {
     handleCompleteReviewerLaunch,
     handlePrepareReviewerLaunch,
@@ -1307,7 +1308,7 @@ describe('cli/commands/gates – review-cycle restart suite', () => {
 
     it('rejects protected coherent-cycle restart with stale operator confirmation', async () => {
         const fixture = prepareProtectedCoherentRestartFixture('T-903a-restart-coherent-cycle-stale-approval');
-        const staleConfirmation = new Date(Date.now() - 11 * 60 * 1000).toISOString();
+        const staleConfirmation = new Date(Date.now() - OPERATOR_CONFIRMATION_MAX_AGE_MS - 60_000).toISOString();
 
         const restartResult = await runRestartCoherentCycleCommand({
             repoRoot: fixture.repoRoot,

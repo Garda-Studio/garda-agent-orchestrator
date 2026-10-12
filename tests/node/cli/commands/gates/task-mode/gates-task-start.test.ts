@@ -44,6 +44,7 @@ import {
     runCliMain
 } from '../../../../../../src/cli/main';
 import {
+    OPERATOR_CONFIRMATION_MAX_AGE_MS,
     OPERATOR_CONFIRMATION_MAX_FUTURE_SKEW_MS
 } from '../../../../../../src/core/operator-confirmation';
 
@@ -799,7 +800,7 @@ describe('cli/commands/gates — task-start', () => {
     it('rejects stale orchestrator-work operator confirmation timestamps', () => {
         const repoRoot = createTempRepo();
         const taskId = 'T-900planned-protected-stale-confirm';
-        const staleConfirmation = new Date(Date.now() - 11 * 60 * 1000).toISOString();
+        const staleConfirmation = new Date(Date.now() - OPERATOR_CONFIRMATION_MAX_AGE_MS - 60_000).toISOString();
         seedTaskQueue(repoRoot, taskId);
         seedInitAnswers(repoRoot);
         markAsSourceCheckout(repoRoot);
