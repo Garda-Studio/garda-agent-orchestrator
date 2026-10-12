@@ -11,6 +11,7 @@ import type {
 } from './next-step-split-required-latch';
 import {
     buildCommand,
+    quoteCommandValue,
     formatNextStepInlineList,
     formatNextStepInlineValue
 } from './next-step-command-formatters';
@@ -21,8 +22,30 @@ import {
     getActiveTaskLifecycleGateIds,
     resolveFirstActiveTaskLifecycleGate
 } from '../../runtime/task-lifecycle-phase-runtime';
+import type { NextStepQualityChecklistReadiness } from './next-step-quality-checklist-readiness';
 
 type ValidationRoute = NextStepDecisionRoutePayload;
+
+export function resolveDeclaredValidationDecisionRoute(options: {
+    readiness: NextStepQualityChecklistReadiness | null; cliPrefix: string; taskId: string;
+}): ValidationRoute | null {
+    const readiness = options.readiness;
+    if (readiness?.validationRejection) return { status: 'BLOCKED', nextGate: 'project-validation-evidence',
+        title: 'Resolve rejected declared validation evidence.', reason: readiness.validationRejection, commands: [] };
+    const phases = readiness?.ready && readiness.evidenceStatus === 'current' ? readiness.validationPhases : null;
+    if (!phases || phases.execution === 'OBSERVED') return null;
+    const pending = phases.executions.find(execution => execution.execution === 'PENDING' && execution.attempt_id)
+        ?? phases.executions.find(execution => execution.execution === 'PENDING');
+    if (!pending) return { status: 'BLOCKED', nextGate: 'project-validation-evidence',
+        title: 'Resolve declared validation evidence.', reason: 'No current pending execution can be selected.', commands: [] };
+    if (pending.attempt_id) return { status: 'BLOCKED', nextGate: 'await-project-validation',
+        title: 'Collect the existing declared validation attempt.',
+        reason: `Await and collect the existing attempt ${formatNextStepInlineValue(pending.attempt_id)} for recipe ${formatNextStepInlineValue(pending.recipe_id)} through its executing owner, then evaluate its retained result. Do not launch a duplicate execution.`,
+        commands: [] };
+    return { status: 'BLOCKED', nextGate: 'run-intermediate-command', title: 'Execute the admitted declared recipe.',
+        reason: `Structural evidence is bound; recipe ${formatNextStepInlineValue(pending.recipe_id)} still requires a genuine current execution. Independent semantic obligations remain pending.`,
+        commands: [buildCommand('Execute declared recipe', `${options.cliPrefix} gate run-intermediate-command --task-id ${quoteCommandValue(options.taskId)} --recipe-id ${quoteCommandValue(pending.recipe_id)} --repo-root "."`)] };
+}
 
 interface BaselineOnlyRoute {
     nextGate: string;
@@ -246,6 +269,7 @@ export function resolveReviewCycleGuardDecisionRoute(options: {
 
 export function resolveValidationDecisionRoute(options: {
     lifecycleGateIds?: readonly string[];
+    resolveDeclaredValidationRoute?: () => ValidationRoute | null;
     resolveQualityChecklistRoute: () => ValidationRoute | null;
     resolveBaselineOnlyPreImplementationRoute: () => BaselineOnlyRoute | null;
     resolveTestFirstExpectedFailureRoute?: () => TestFirstExpectedFailureRoute | null;
@@ -308,6 +332,8 @@ export function resolveValidationDecisionRoute(options: {
             commands: [buildCommand('Record audited no-op evidence', state.command)]
         };
     };
+    const declaredRoute = options.resolveDeclaredValidationRoute?.();
+    if (declaredRoute) return resolveBaselineRoute() ?? resolveTestFirstRoute() ?? declaredRoute;
     const route = resolveFirstActiveTaskLifecycleGate(gateIds, {
         'optional-quality-checklist': options.resolveQualityChecklistRoute,
         'compile-gate': () => (

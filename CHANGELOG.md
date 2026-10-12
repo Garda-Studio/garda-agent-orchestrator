@@ -1,5 +1,7 @@
 # Changelog
 
+- Navigate exact admitted recipe execution, existing-attempt collection and current quality refresh before review without waiving declared obligations or changing legacy validation placement (T-242-6-2-2).
+
 - Require authentic current declared execution for review admission and retain exact pending semantic obligations, with separate bounded navigation inspection (T-242-6-2-1).
 
 - Add current bound validation phase obligations to recipe-selected quality evidence, retaining unknown semantics for independent review and preserving legacy template handling (T-242-6-1).

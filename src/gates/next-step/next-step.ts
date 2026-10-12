@@ -343,6 +343,7 @@ import {
 import {
     resolveReviewCycleGuardDecisionRoute,
     resolveScopeBudgetGuardDecisionRoute,
+    resolveDeclaredValidationDecisionRoute,
     resolveValidationDecisionRoute,
     type NextStepGuardDecision
 } from './next-step-validation-routes';
@@ -4248,6 +4249,9 @@ export function resolveNextStepDecisionRoute(
         });
     };
     const validationDecisionRoute = resolveValidationDecisionRoute({
+        resolveDeclaredValidationRoute: () => resolveDeclaredValidationDecisionRoute({
+            readiness: qualityChecklistReadiness, cliPrefix, taskId
+        }),
         lifecycleGateIds: getActiveTaskLifecycleGateIds('validation', {
             changes_exist:
                 Array.isArray(preflight?.changed_files) && preflight.changed_files.length > 0,
@@ -4256,6 +4260,8 @@ export function resolveNextStepDecisionRoute(
                 fullSuiteConfig.enabled && fullSuiteConfig.placement === 'after_compile_before_reviews'
         }),
         resolveQualityChecklistRoute: () => qualityChecklistReadiness
+            && !(qualityChecklistReadiness.ready && qualityChecklistReadiness.evidenceStatus === 'current'
+                && qualityChecklistReadiness.validationPhases?.execution === 'OBSERVED')
             ? resolveNextStepQualityChecklistRoute({
                 enabled: qualityChecklistReadiness.enabled,
                 required: qualityChecklistReadiness.required,

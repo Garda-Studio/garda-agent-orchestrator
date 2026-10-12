@@ -48,6 +48,9 @@ import {
     TRUST_BOUNDARY_ANALYSIS_RULE_ID
 } from '../../core/trust-boundary-analysis';
 import { readTaskTimelineEventLikes } from './next-step-review-timeline-evidence';
+import { currentProjectValidationAuthority } from '../project-validation/authority';
+import { readQualityValidationPhaseAnalysis } from '../review-context/review-context-trust-boundary-analysis';
+import { inspectQualityValidationPhases, type QualityValidationPhases } from '../quality-checklist/quality-checklist-validation-phases';
 import {
     createNextStepEffectPlanner,
     NextStepEffectPlanStaleError,
@@ -55,9 +58,11 @@ import {
 } from './next-step-effects';
 
 export type NextStepQualityChecklistEvidenceStatus = 'disabled' | 'not_required' | 'missing' | 'invalid' | 'stale' | 'current';
-export type NextStepQualityChecklistEffect = 'disabled' | 'not_required' | 'missing' | 'invalid' | 'stale' | 'passed' | 'helped' | 'warned' | 'required_rework' | 'skipped_cadence';
+export type NextStepQualityChecklistEffect = 'disabled' | 'not_required' | 'missing' | 'invalid' | 'stale' | 'passed' | 'helped' | 'warned' | 'required_rework' | 'skipped_cadence' | 'validation_pending';
 
 export interface NextStepQualityChecklistReadiness {
+    validationPhases?: QualityValidationPhases;
+    validationRejection?: string;
     enabled: boolean;
     required: boolean;
     ready: boolean;
@@ -446,7 +451,7 @@ function buildTemplateMaterializationResult(
     };
 }
 
-function reviewFailureCadence(repoRoot: string, taskId: string, reviewFailureCadenceInterval: number): {
+function reviewFailureCadence(repoRoot: string, taskId: string, reviewFailureCadenceInterval: number, declaredRequired = false): {
     due: boolean;
     skip: boolean;
     failureCount: number;
@@ -462,7 +467,7 @@ function reviewFailureCadence(repoRoot: string, taskId: string, reviewFailureCad
         const details = isPlainRecord(event.details) ? event.details : {};
         if (String(event.event_type || '') === 'QUALITY_CHECKLIST_RECORDED') {
             const status = String(details.status || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
-            if (status === 'PASS' || status === 'WARN') checklistPasses.push(index);
+            if (status === 'PASS' || status === 'WARN' || (declaredRequired && status === 'PENDING_VALIDATION')) checklistPasses.push(index);
             return;
         }
         if (String(event.event_type || '') !== 'REVIEW_RECORDED') return;
@@ -665,17 +670,48 @@ export function readQualityChecklistReadiness(options: {
     const ruleSetDiagnosticSuffix = ruleSetDiagnostic ? ` ${ruleSetDiagnostic}` : '';
     const optionalQualityChecks = normalizeOptionalQualityChecksConfig(options.workflowConfig?.optional_quality_checks);
     const cadenceInterval = resolveOptionalQualityChecksReviewFailureCadenceInterval(options.workflowConfig?.optional_quality_checks);
+    let declaredRequired = false, authorityError: string | null = null;
+    try {
+        declaredRequired = !!(options.preflight && currentProjectValidationAuthority(options.repoRoot, options.preflight));
+    } catch (error) { declaredRequired = true; authorityError = String(error); }
     const buildReadiness = (
         readinessOptions: Parameters<typeof buildQualityChecklistReadiness>[0]
-    ): NextStepQualityChecklistReadiness => buildQualityChecklistReadiness({
-        ...readinessOptions,
-        reviewFailureCadenceInterval: cadenceInterval.value
-    });
+    ): NextStepQualityChecklistReadiness => {
+        const readiness = buildQualityChecklistReadiness({ ...readinessOptions, reviewFailureCadenceInterval: cadenceInterval.value });
+        if (!declaredRequired) return readiness;
+        const requiredReadiness = { ...readiness, enabled: true, required: true };
+        if (authorityError) return { ...requiredReadiness, ready: false, status: 'CONFIG_ERROR',
+            evidenceStatus: 'invalid', effect: 'invalid', reason: authorityError, validationRejection: authorityError };
+        if (!readiness.ready || readiness.evidenceStatus !== 'current'
+            || readiness.status === 'ACTION_REQUIRED' || readiness.status === 'CONFIG_ERROR') return requiredReadiness;
+        const analysis = readQualityValidationPhaseAnalysis({ repoRoot: options.repoRoot, taskId: options.taskId,
+            preflight: options.preflight!, preflightSha256: options.preflightSha256 });
+        if (analysis.status === 'current' && analysis.validation_phases) return { ...requiredReadiness,
+            validationPhases: analysis.validation_phases, effect: 'validation_pending',
+            reason: 'Current declared validation phases retain pending independent semantic obligations.' };
+        let rejection: string | undefined;
+        try {
+            const answer = Array.isArray(readinessOptions.artifact?.answers)
+                ? readinessOptions.artifact.answers.find(entry => isPlainRecord(entry)
+                    && entry.rule_id === TRUST_BOUNDARY_ANALYSIS_RULE_ID) : null;
+            const current = inspectQualityValidationPhases({ repoRoot: options.repoRoot, taskId: options.taskId,
+                preflight: options.preflight!, preflightSha256: options.preflightSha256,
+                matrixRequired: assessTrustBoundaryAnalysisApplicability(options.preflight).required,
+                matrix: answer?.trust_boundary_matrix });
+            if (current && (current.phases.structural !== 'BOUND' || current.phases.execution === 'REJECTED'))
+                rejection = current.phases.execution_diagnostics.join(' ') || 'Declared structural evidence is invalid.';
+        } catch (error) { rejection = String(error); }
+        const template = rejection ? null : materializePendingQualityChecklistAnswers(effectOptions);
+        return { ...requiredReadiness, ready: false, evidenceStatus: rejection ? 'invalid' : 'stale',
+            effect: rejection ? 'invalid' : 'stale', reason: analysis.violations.join(' '),
+            ...(rejection ? { validationRejection: rejection } : {}),
+            answersTemplatePath: template?.answersPath ?? readiness.answersTemplatePath };
+    };
     const changedFilesCount = preflightChangedFilesCount(options.preflight);
     const changedFiles = preflightChangedFiles(options.preflight);
     const scopeCategory = preflightScopeCategory(options.preflight);
     const trustBoundaryRequired = assessTrustBoundaryAnalysisApplicability(options.preflight).required;
-    const required = preflightHasChangedFiles(options.preflight) || trustBoundaryRequired;
+    const required = preflightHasChangedFiles(options.preflight) || trustBoundaryRequired || declaredRequired;
     const sourceCheckoutDefaultEnabled = !hasOptionalQualityChecksConfig && isOrchestratorSourceCheckout(options.repoRoot);
     const ordinaryChecksEnabled = (hasOptionalQualityChecksConfig || sourceCheckoutDefaultEnabled)
         && optionalQualityChecks.enabled;
@@ -695,7 +731,7 @@ export function readQualityChecklistReadiness(options: {
         .filter(isRuleEffectivelyActive)
         .length;
     const skippedByScopeRuleCount = enabledRuleCount - activeRuleCount;
-    const enabled = enabledRuleCount > 0;
+    const enabled = enabledRuleCount > 0 || declaredRequired;
     if (cadenceInterval.violation && required) {
         return buildReadiness({
             enabled,
@@ -757,8 +793,8 @@ export function readQualityChecklistReadiness(options: {
         || countArray(existingArtifact?.actions_required) > 0
         || !!ruleSetDiagnostic
         || !!cadenceInterval.violation;
-    const cadence = reviewFailureCadence(options.repoRoot, options.taskId, cadenceInterval.value);
-    if (cadence.skip && !forceChecklistRun && !trustBoundaryRequired) {
+    const cadence = reviewFailureCadence(options.repoRoot, options.taskId, cadenceInterval.value, declaredRequired);
+    if (cadence.skip && !forceChecklistRun && !trustBoundaryRequired && !declaredRequired) {
         const answersTemplatePath = resolveDefaultQualityChecklistAnswersTemplatePath(options.repoRoot, options.taskId);
         const templateMaterialization = fileExists(answersTemplatePath)
             ? materializePendingQualityChecklistAnswers(effectOptions)
@@ -1192,7 +1228,7 @@ export function readQualityChecklistReadiness(options: {
                         answers: assessment.template
                     }).status || '').trim().toUpperCase()
                     : '';
-                if (candidateStatus === 'PASS' || candidateStatus === 'WARN') {
+                if (candidateStatus === 'PASS' || candidateStatus === 'WARN' || candidateStatus === 'PENDING_VALIDATION') {
                     return buildReadiness({
                         enabled,
                         required,

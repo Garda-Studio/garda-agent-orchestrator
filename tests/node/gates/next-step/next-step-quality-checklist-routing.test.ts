@@ -30,6 +30,7 @@ import {
     runQualityChecklistCommand
 } from '../../../../src/cli/commands/gate-flows/quality-checklist/quality-checklist-flow';
 import {
+    buildQualityChecklistAnswersTemplate,
     assessQualityChecklistAnswersTemplateFile
 } from '../../../../src/gates/quality-checklist';
 import {
@@ -43,6 +44,165 @@ import {
     initializeGitRepo,
     runGit
 } from '../../cli/commands/gate-test-repo-bootstrap';
+import { removeTempRepoWithRetry } from '../../cli/commands/gate-test-repo-bootstrap';
+import { handleWorkflow } from '../../../../src/cli/commands/workflow-command';
+import { runBuildReviewContextCommand, runClassifyChangeCommand, runCompileGateCommand,
+    runFullSuiteValidationCommand, runLoadRulePackCommand } from '../../../../src/cli/commands/gates';
+import { executeValidationRecipe } from '../../../../src/gates/project-validation/execution';
+import { evaluateValidationAttempt } from '../../../../src/gates/project-validation/result-evaluation';
+import { readValidationEvents } from '../../../../src/gates/project-validation/attempt-evidence';
+import { createTempRepo, loadTaskEntryRulePack, runEnterTaskMode, runHandshakeForTask,
+    runShellSmokeForTask, seedInitAnswers, seedTaskQueue } from '../../cli/commands/gates/preflight/gates-preflight-fixtures';
+
+function declaredNavigationFixture(disabled = false, delayed = false, twoRecipes = false) {
+    const repoRoot = createTempRepo(), taskId = 'T-declared-navigation';
+    const bundle = path.join(repoRoot, 'garda-agent-orchestrator');
+    const configPath = path.join(bundle, 'live/config/workflow-config.json');
+    const config = buildDefaultWorkflowConfig(); config.optional_quality_checks.enabled = !disabled;
+    const nodeCommand = `"${process.execPath.replace(/\\/gu, '/')}"`;
+    config.compile_gate.command = `${nodeCommand} --check src/domain/catalog.ts`;
+    config.full_suite_validation.enabled = true;
+    config.full_suite_validation.placement = 'after_compile_before_reviews';
+    config.full_suite_validation.command = `${nodeCommand} --test RootSuite`;
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify(config));
+    const codeSkillPath = path.join(bundle, 'live/skills/code-review/SKILL.md');
+    fs.mkdirSync(path.dirname(codeSkillPath), { recursive: true });
+    fs.writeFileSync(codeSkillPath, '# Fixture Code Review\nInspect current fixture changes.\n');
+    fs.mkdirSync(path.join(repoRoot, 'src/domain'), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, 'src/domain/catalog.ts'), 'export const value = 1;\n');
+    fs.writeFileSync(path.join(repoRoot, 'RootSuite'), "require('node:test')('declared case', () => "
+        + "require('node:assert/strict').match(require('node:fs').readFileSync('src/domain/catalog.ts', 'utf8'), /changed = 1/));");
+    fs.writeFileSync(path.join(repoRoot, 'driver'), delayed
+        ? 'setTimeout(() => process.stdout.write("opaque output"), 1500);'
+        : 'process.stdout.write("opaque output");');
+    const manifest = { schema_version: 1, recipes: [{
+        id: 'neutral', purpose: 'test', executable: process.execPath, argv: ['driver', { target: 'opaque-1' }],
+        cwd: '.', environment: {}, inputs: [{ path: 'src/domain/catalog.ts', role: 'source' },
+            { path: 'RootSuite', role: 'test' }, { path: 'driver', role: 'helper' }],
+        targets: [{ id: 'opaque-1', source: 'RootSuite', selector: 'declared case' }],
+        timeout_ms: 5000, max_attempts: 3, max_output_bytes: 1024, max_input_bytes: 65536,
+        required_capabilities: [], result_format: 'tap'
+    }] };
+    if (twoRecipes) manifest.recipes.push({ ...manifest.recipes[0], id: 'second' });
+    fs.writeFileSync(path.join(repoRoot, 'recipes.json'), JSON.stringify(manifest));
+    seedInitAnswers(repoRoot); seedTaskQueue(repoRoot, taskId, 'TODO', 'default', '', 'Declared validation navigation');
+    fs.writeFileSync(path.join(repoRoot, '.gitignore'), 'TASK.md\ngarda-agent-orchestrator/runtime/\n');
+    initializeGitRepo(repoRoot);
+    handleWorkflow(['set', '--target-root', repoRoot, '--project-validation-contract', 'recipes.json',
+        '--operator-confirmed', 'yes', '--operator-confirmed-at-utc', new Date().toISOString()],
+    { name: 'garda-agent-orchestrator', version: '1.0.0' });
+    runEnterTaskMode({ repoRoot, taskId, entryMode: 'EXPLICIT_TASK_EXECUTION', requestedDepth: 2,
+        taskSummary: 'Declared validation navigation', provider: 'Codex' });
+    loadTaskEntryRulePack(repoRoot, taskId); runHandshakeForTask(repoRoot, taskId); runShellSmokeForTask(repoRoot, taskId);
+    fs.appendFileSync(path.join(repoRoot, 'src/domain/catalog.ts'), '\nexport const changed = 1;\n');
+    fs.appendFileSync(path.join(repoRoot, 'RootSuite'), '\n// current source');
+    const preflightPath = path.join(bundle, 'runtime/reviews', `${taskId}-preflight.json`);
+    runClassifyChangeCommand({ repoRoot, taskId, taskIntent: 'Declared validation navigation',
+        outputPath: preflightPath, changedFiles: ['src/domain/catalog.ts', 'RootSuite'], emitMetrics: false });
+    runLoadRulePackCommand({ repoRoot, taskId, stage: 'POST_PREFLIGHT', preflightPath,
+        loadedRuleFiles: ['00-core.md', '15-project-memory.md', '40-commands.md', '80-task-workflow.md', '90-skill-catalog.md'],
+        emitMetrics: false });
+    const answerTemplate = buildQualityChecklistAnswersTemplate({ repoRoot, taskId, preflightPath });
+    const answers = answerTemplate.answers
+        .map(answer => ({ ...answer, status: 'PASS', answer: 'Checked current declared scope.' }));
+    const answersPath = path.join(bundle, 'runtime/tmp', `${taskId}-quality-checklist-answers.json`);
+    fs.mkdirSync(path.dirname(answersPath), { recursive: true });
+    fs.writeFileSync(answersPath, JSON.stringify({ ...answerTemplate, answers }));
+    const starts = () => readValidationEvents(repoRoot, taskId).filter(e => e.event_type === 'PROJECT_VALIDATION_STARTED');
+    return { repoRoot, taskId, starts, cleanup: () => removeTempRepoWithRetry(repoRoot),
+        publish: () => runQualityChecklistCommand({ repoRoot, taskId, preflightPath, answersPath, emitMetrics: false }),
+        next: () => resolveNextStep({ repoRoot, taskId }),
+        compile: () => runCompileGateCommand({ repoRoot, taskId, preflightPath, emitMetrics: false }),
+        suite: () => runFullSuiteValidationCommand({ repoRoot, taskId, preflightPath }),
+        review: () => runBuildReviewContextCommand({ repoRoot, reviewType: 'code', depth: 2, preflightPath }),
+        execute: (signal?: AbortSignal, recipeId = 'neutral') => executeValidationRecipe({ repoRoot, taskId, recipeId, signal }),
+        evaluate: (attemptId: string) => evaluateValidationAttempt({ repoRoot, taskId, attemptId }) };
+}
+
+describe('declared validation phase navigation', () => {
+    it('rejects superseded cancelled execution and refreshes observed evidence before compile', async () => {
+        const f = declaredNavigationFixture();
+        try {
+            assert.equal(f.publish().exitCode, 0);
+            const pending = f.next();
+            assert.equal(pending.next_gate, 'run-intermediate-command', pending.reason);
+            assert.match(pending.commands[0].command, /--recipe-id "neutral"/u);
+            const attempt = await f.execute(); assert.equal((await f.evaluate(attempt.attempt_id)).status, 'UNRESOLVED');
+            const refresh = f.next();
+            assert.equal(refresh.next_gate, 'quality-checklist', refresh.reason);
+            assert.equal(refresh.commands.length, 1, refresh.reason);
+            assert.match(refresh.commands[0].command, /gate quality-checklist.*--answers-path/u);
+            assert.ok(refresh.commands.every(command => !command.command.includes('--recipe-id')));
+            f.publish(); assert.equal(f.next().next_gate, 'compile-gate', f.next().reason);
+            assert.equal(f.starts().length, 1);
+            const compiled = await f.compile(); assert.equal(compiled.exitCode, 0, compiled.outputLines.join('\n'));
+            assert.equal(f.next().next_gate, 'full-suite-validation', f.next().reason);
+            const suite = await f.suite(); assert.equal(suite.exitCode, 0, suite.outputText);
+            assert.equal(f.next().next_gate, 'build-review-context', f.next().reason);
+            const review = await f.review(); assert.ok(fs.existsSync(review.outputPath));
+            assert.equal(f.next().next_gate, 'record-review-routing', f.next().reason);
+            assert.equal(f.starts().length, 1);
+            const cancelled = new AbortController(); cancelled.abort();
+            const rejected = await f.execute(cancelled.signal); await f.evaluate(rejected.attempt_id); f.publish();
+            const blocked = f.next();
+            assert.equal(blocked.next_gate, 'project-validation-evidence', blocked.reason);
+            assert.equal(blocked.commands.length, 0);
+        } finally { await f.cleanup(); }
+    });
+
+    it('rejects a missing-execution waiver when optional quality checks are disabled', async () => {
+        const f = declaredNavigationFixture(true);
+        try {
+            f.publish(); const pending = f.next();
+            assert.equal(pending.next_gate, 'run-intermediate-command', pending.reason);
+            assert.match(pending.commands[0].command, /--recipe-id "neutral"/u);
+            assert.equal(f.starts().length, 0);
+        } finally { await f.cleanup(); }
+    });
+
+    it('rejects a cadence waiver after declared checklist answers and a review failure', async () => {
+        const f = declaredNavigationFixture();
+        try {
+            f.publish();
+            appendEvent(f.repoRoot, f.taskId, 'REVIEW_RECORDED', 'FAIL', {
+                review_type: 'code', verdict_token: 'CODE REVIEW FAILED'
+            });
+            const readiness = readCurrentQualityChecklistReadiness(f.repoRoot, f.taskId);
+            assert.equal(readiness.status, 'PENDING_VALIDATION', readiness.reason);
+            assert.equal(readiness.effect, 'validation_pending');
+            assert.equal(readiness.validationPhases?.execution, 'PENDING');
+            assert.equal(f.next().next_gate, 'run-intermediate-command', f.next().reason);
+            assert.equal(f.starts().length, 0);
+        } finally { await f.cleanup(); }
+    });
+
+    it('rejects duplicate execution while collecting an existing native attempt', async () => {
+        const f = declaredNavigationFixture(false, true, true);
+        let running: ReturnType<typeof f.execute> | undefined;
+        try {
+            f.publish(); running = f.execute(undefined, 'second');
+            for (let waits = 0; f.starts().length === 0 && waits < 100; waits += 1)
+                await new Promise(resolve => setTimeout(resolve, 10));
+            assert.equal(f.starts().length, 1);
+            const attemptId = String(f.starts()[0].details?.attempt_id);
+            f.publish(); const collecting = f.next();
+            assert.equal(collecting.next_gate, 'await-project-validation', collecting.reason);
+            assert.ok(collecting.reason.includes(attemptId));
+            assert.equal(collecting.commands.length, 0);
+            const attempt = await running; await f.evaluate(attempt.attempt_id);
+            assert.equal(f.next().next_gate, 'quality-checklist', f.next().reason);
+            f.publish(); const remaining = f.next();
+            assert.equal(remaining.next_gate, 'run-intermediate-command', remaining.reason);
+            assert.match(remaining.commands[0].command, /--recipe-id "neutral"/u);
+            assert.equal(f.starts().length, 1);
+            const first = await f.execute(); await f.evaluate(first.attempt_id);
+            assert.equal(f.next().next_gate, 'quality-checklist', f.next().reason);
+            f.publish(); assert.equal(f.next().next_gate, 'compile-gate', f.next().reason);
+            assert.equal(f.starts().length, 2);
+        } finally { if (running) await running; await f.cleanup(); }
+    });
+});
 
 type QualityChecklistStatus = 'PASS' | 'WARN' | 'ACTION_REQUIRED' | 'SKIPPED_DISABLED' | 'SKIPPED_CADENCE' | 'CONFIG_ERROR';
 type WorkflowConfig = ReturnType<typeof buildDefaultWorkflowConfig>;
@@ -77,12 +237,12 @@ function workflowConfigPath(repoRoot: string): string {
     return path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config', 'workflow-config.json');
 }
 
-function currentQualityChecklistReadinessOptions(repoRoot: string) {
-    const preflightPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-preflight.json`);
+function currentQualityChecklistReadinessOptions(repoRoot: string, taskId = TASK_ID) {
+    const preflightPath = path.join(reviewsRoot(repoRoot), `${taskId}-preflight.json`);
     return {
         repoRoot,
         reviewsRoot: reviewsRoot(repoRoot),
-        taskId: TASK_ID,
+        taskId,
         preflight: JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>,
         preflightPath,
         preflightSha256: fileSha256(preflightPath),
@@ -93,9 +253,9 @@ function currentQualityChecklistReadinessOptions(repoRoot: string) {
 }
 
 function readCurrentQualityChecklistReadiness(
-    repoRoot: string
+    repoRoot: string, taskId = TASK_ID
 ): ReturnType<typeof readQualityChecklistReadiness> {
-    const options = currentQualityChecklistReadinessOptions(repoRoot);
+    const options = currentQualityChecklistReadinessOptions(repoRoot, taskId);
     const planner = createNextStepEffectPlanner();
     const preview = readQualityChecklistReadiness({ ...options, effects: planner });
     const plan = planner.pendingPlan();
