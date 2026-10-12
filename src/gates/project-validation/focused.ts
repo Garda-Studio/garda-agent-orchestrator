@@ -1,9 +1,11 @@
 import { quoteCommandValue } from '../../core/command-quoting';
 import { isPlainRecord } from '../../core/records';
 import type { FrozenValidationRecipe } from '../../core/project-validation-contract';
-import { freezeValidationRecipe, readProjectValidationAuthority } from './authority';
+import { eligibleExpectedRedRecipes } from '../../core/project-validation-recipes';
+import { currentProjectValidationAuthority, freezeValidationRecipe, readProjectValidationAuthority } from './authority';
 import { readValidationEvents } from './attempt-evidence';
 import { readValidationResult } from './evidence';
+import { assertValidationExpectedRed } from './result-evaluation';
 import type { TaskAuditEvent } from '../task-audit/task-audit-summary-lifecycle';
 import type { FocusedIntermediateEvidenceEntry } from '../review/focused-intermediate-evidence';
 
@@ -21,6 +23,42 @@ function focusedTarget(snapshot: FrozenValidationRecipe): string {
 export function declaredValidationTestPaths(repoRoot: string): Set<string> {
     return new Set(readProjectValidationAuthority(repoRoot)?.approved.contract.recipes
         .flatMap(recipe => recipe.inputs.filter(input => input.role === 'test').map(input => input.path)) ?? []);
+}
+export function inspectRecipeExpectedRedRoute(options: {
+    repoRoot: string; taskId: string; preflight: Record<string, unknown>; preflightSha256: string | null;
+}): { recipeIds: string[]; expectedFailure: boolean; violation: string | null } | null {
+    try {
+        const authority = currentProjectValidationAuthority(options.repoRoot, options.preflight);
+        if (!authority) return null;
+        const recipes = eligibleExpectedRedRecipes(authority.approved.contract.recipes,
+            Array.isArray(options.preflight.changed_files) ? options.preflight.changed_files : []);
+        const events = readValidationEvents(options.repoRoot, options.taskId);
+        const cycleStart = events.map(event => event.event_type).lastIndexOf('TASK_MODE_ENTERED');
+        if (cycleStart < 0) throw new Error('Expected-red requires current task-mode evidence');
+        const recipeIds: string[] = []; let expectedFailure = false;
+        for (const recipe of recipes) {
+            assertValidationExpectedRed(options.repoRoot, options.taskId, recipe.id);
+            const snapshot = freezeValidationRecipe(options.repoRoot, options.taskId, recipe.id);
+            if (snapshot.preflight_sha256 !== options.preflightSha256) throw new Error('Expected-red preflight changed');
+            recipeIds.push(recipe.id);
+            const latest = events.slice(cycleStart + 1).reverse().find(event => event.details?.recipe_id === recipe.id
+                && ['PROJECT_VALIDATION_STARTED', 'PROJECT_VALIDATION_COMPLETED', 'PROJECT_VALIDATION_RESULTS_EVALUATED'].includes(event.event_type));
+            if (latest?.event_type !== 'PROJECT_VALIDATION_RESULTS_EVALUATED') continue;
+            try {
+                const { attempt, result } = readValidationResult({ repoRoot: options.repoRoot, taskId: options.taskId,
+                    attemptId: String(latest.details?.attempt_id) });
+                const current = latestRecipeAttemptEvent(options.repoRoot, options.taskId, recipe.id);
+                if (current?.event_type !== 'PROJECT_VALIDATION_RESULTS_EVALUATED'
+                    || current.details?.attempt_id !== attempt.attempt_id) continue;
+                expectedFailure ||= result.status === 'EXPECTED_FAILURE' && result.expected_failure === true
+                    && attempt.exit_code !== null && attempt.exit_code !== 0 && !attempt.timed_out && !attempt.cancelled
+                    && attempt.violations.length === 0;
+            } catch { /* Invalid retained results cannot advance the navigator. */ }
+        }
+        return { recipeIds, expectedFailure, violation: null };
+    } catch (error) {
+        return { recipeIds: [], expectedFailure: false, violation: String(error) };
+    }
 }
 function latestRecipeAttemptEvent(repoRoot: string, taskId: string, recipeId: string) {
     const events = readValidationEvents(repoRoot, taskId);

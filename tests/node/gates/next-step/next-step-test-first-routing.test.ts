@@ -12,6 +12,14 @@ import {
     isFocusedIntermediateCommand
 } from '../../../../src/gates/shared/focused-intermediate-command-grammar';
 import { hasTestFirstExpectedRedDeclaration } from '../../../../src/gates/test-first/test-first-declaration';
+import { buildDefaultWorkflowConfig } from '../../../../src/core/workflow-config';
+import { handleWorkflow } from '../../../../src/cli/commands/workflow-command';
+import { runClassifyChangeCommand } from '../../../../src/cli/commands/gates';
+import { executeValidationRecipe } from '../../../../src/gates/project-validation/execution';
+import { evaluateValidationAttempt } from '../../../../src/gates/project-validation/result-evaluation';
+import { initializeGitRepo, loadTaskEntryRulePack, runEnterTaskMode, runHandshakeForTask,
+    runShellSmokeForTask, createTempRepo as createRecipeTempRepo, seedInitAnswers as seedRecipeInit,
+    seedTaskQueue as seedRecipeTask } from '../../cli/commands/gates/preflight/gates-preflight-fixtures';
 import {
     createTempRepo,
     getOrchestratorRoot,
@@ -105,6 +113,37 @@ function resolveRoute(fixture: Fixture) {
     });
 }
 
+function buildRecipeFixture(mode = 'failed'): Fixture {
+    const repoRoot = createRecipeTempRepo(); tempRoots.push(repoRoot);
+    const bundle = getOrchestratorRoot(repoRoot), testPath = 'specifications/case';
+    fs.mkdirSync(path.join(bundle, 'live/config'), { recursive: true });
+    fs.writeFileSync(path.join(bundle, 'live/config/workflow-config.json'), JSON.stringify(buildDefaultWorkflowConfig()));
+    fs.copyFileSync(path.join(process.cwd(), 'template/config/profiles.json'), path.join(bundle, 'live/config/profiles.json'));
+    fs.writeFileSync(path.join(bundle, 'live/config/paths.json'), JSON.stringify({ triggers: { test: ['(^|/)specifications/'] } }));
+    fs.mkdirSync(path.join(repoRoot, 'specifications')); fs.writeFileSync(path.join(repoRoot, testPath), 'declared test');
+    fs.writeFileSync(path.join(repoRoot, 'driver'), 'process.stdout.write(process.argv[2]==="opaque"?"opaque":"TAP version 13\\n"+(process.argv[2]==="failed"?"not ok":"ok")+" 1 - declared case\\n1..1\\n");process.exitCode=process.argv[2]==="failed"?7:0;');
+    fs.writeFileSync(path.join(repoRoot, 'recipes.json'), JSON.stringify({ schema_version: 1, recipes: [{ id: 'declared',
+        purpose: 'test', executable: process.execPath, argv: ['driver', mode, { target: 'case' }], cwd: '.',
+        inputs: [{ path: 'src/app.ts', role: 'source' }, { path: testPath, role: 'test' }, { path: 'driver', role: 'helper' }],
+        targets: [{ id: 'case', source: testPath, selector: 'declared case' }], environment: {}, timeout_ms: 5000,
+        max_attempts: 2, max_output_bytes: 1024, max_input_bytes: 65536, required_capabilities: [], result_format: 'tap' }] }));
+    seedRecipeInit(repoRoot); seedRecipeTask(repoRoot, TASK_ID, 'TODO', 'default', 'Test-first: expected-red.', 'Declared recipe expected red');
+    initializeGitRepo(repoRoot);
+    handleWorkflow(['set', '--target-root', repoRoot, '--project-validation-contract', 'recipes.json', '--operator-confirmed', 'yes',
+        '--operator-confirmed-at-utc', new Date().toISOString()], { name: 'garda-agent-orchestrator', version: '1.0.0' });
+    runEnterTaskMode({ repoRoot, taskId: TASK_ID, entryMode: 'EXPLICIT_TASK_EXECUTION', requestedDepth: 2,
+        taskSummary: 'Expected-red declared recipe', provider: 'Codex' });
+    loadTaskEntryRulePack(repoRoot, TASK_ID); runHandshakeForTask(repoRoot, TASK_ID); runShellSmokeForTask(repoRoot, TASK_ID);
+    fs.appendFileSync(path.join(repoRoot, testPath), '\naffected test\n');
+    const preflightPath = path.join(bundle, `runtime/reviews/${TASK_ID}-preflight.json`);
+    runClassifyChangeCommand({ repoRoot, taskId: TASK_ID, taskIntent: 'Expected-red declared recipe',
+        outputPath: preflightPath, changedFiles: [testPath], emitMetrics: false });
+    return { repoRoot, reviewsRoot: path.join(bundle, 'runtime/reviews'), eventsRoot: path.join(bundle, 'runtime/task-events'),
+        preflightPath, preflight: JSON.parse(fs.readFileSync(preflightPath, 'utf8')),
+        taskEntry: { taskId: TASK_ID, status: 'IN_PROGRESS', area: 'workflow/test-first', title: 'Declared recipe expected red',
+            profile: 'balanced', notes: 'Test-first: expected-red.' } };
+}
+
 afterEach(() => {
     for (const repoRoot of tempRoots.splice(0)) {
         fs.rmSync(repoRoot, { recursive: true, force: true });
@@ -112,6 +151,51 @@ afterEach(() => {
 });
 
 describe('next-step test-first expected-red routing', () => {
+    it('routes extensionless declared recipe targets and rejects altered expected-failure evidence', async () => {
+        const fixture = buildRecipeFixture();
+        assert.equal(fixture.preflight.scope_category, 'test-only');
+        const before = resolveRoute(fixture);
+        assert.equal(before?.commands.length, 1);
+        assert.match(before?.commands[0].command || '', /--recipe-id "declared"/u);
+        assert.doesNotMatch(before?.commands[0].command || '', /--command-source/u);
+        const attempt = await executeValidationRecipe({ repoRoot: fixture.repoRoot, taskId: TASK_ID, recipeId: 'declared' });
+        const result = await evaluateValidationAttempt({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
+            attemptId: attempt.attempt_id, expectedFailure: true });
+        assert.equal(result.status, 'EXPECTED_FAILURE');
+        assert.equal(resolveRoute(fixture)?.nextGate, 'implementation');
+        fs.appendFileSync(path.join(fixture.repoRoot, result.result_path), ' ');
+        assert.equal(resolveRoute(fixture)?.nextGate, 'test-first-expected-failure');
+    });
+
+    it('rejects unexpected pass opaque output and superseded expected-red recipe results', async () => {
+        const routes: Array<string | undefined> = [];
+        for (const mode of ['passed', 'opaque', 'failed']) {
+            const fixture = buildRecipeFixture(mode);
+            const attempt = await executeValidationRecipe({ repoRoot: fixture.repoRoot, taskId: TASK_ID, recipeId: 'declared' });
+            const result = await evaluateValidationAttempt({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
+                attemptId: attempt.attempt_id, expectedFailure: true });
+            if (mode === 'failed') {
+                assert.equal(result.status, 'EXPECTED_FAILURE');
+                const controller = new AbortController(); controller.abort();
+                const later = await executeValidationRecipe({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
+                    recipeId: 'declared', signal: controller.signal });
+                assert.equal(later.cancelled, true);
+                const canceledResult = await evaluateValidationAttempt({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
+                    attemptId: later.attempt_id, expectedFailure: true });
+                assert.notEqual(canceledResult.status, 'EXPECTED_FAILURE');
+            } else assert.notEqual(result.status, 'EXPECTED_FAILURE');
+            routes.push(resolveRoute(fixture)?.nextGate);
+        }
+        assert.deepEqual(routes, ['test-first-expected-failure', 'test-first-expected-failure', 'test-first-expected-failure']);
+    });
+
+    it('rejects changed recipe identities without falling back to a guessed runner', () => {
+        const fixture = buildRecipeFixture();
+        fs.appendFileSync(path.join(fixture.repoRoot, 'driver'), '\n');
+        const route = resolveRoute(fixture);
+        assert.equal(route?.nextGate, 'test-first-expected-failure');
+        assert.deepEqual(route?.commands, []);
+    });
     it('requires the exact case-sensitive expected-red Notes marker', () => {
         assert.equal(hasTestFirstExpectedRedDeclaration({ notes: 'Test-first: expected-red.' }), true);
         assert.equal(hasTestFirstExpectedRedDeclaration({ notes: 'Prefix; Test-first: expected-red; suffix.' }), true);

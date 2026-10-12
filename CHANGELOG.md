@@ -1,5 +1,7 @@
 # Changelog
 
+- Navigate expected-red through current admitted test recipes and authenticated native target results, preserving legacy routing (T-242-4-3).
+
 - Count authenticated native recipe surplus in bounded focused review evidence and report omitted eligible results (T-242-4-2-F1).
 
 - Focused review evidence can consume exact admitted project recipes and current authenticated results using declared test roles (T-242-4-2).

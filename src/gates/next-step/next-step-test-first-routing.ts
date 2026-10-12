@@ -24,6 +24,7 @@ import {
     TEST_FIRST_EXPECTED_RED_MARKER
 } from '../test-first/test-first-declaration';
 import { readOrderedTaskEvents } from '../task-audit/task-audit-summary-lifecycle';
+import { inspectRecipeExpectedRedRoute } from '../project-validation/focused';
 import { buildCommand, quoteCommandValue } from './next-step-command-formatters';
 import type { NextStepCommand } from './next-step';
 import type { TaskQueueEntry } from './next-step-task-queue';
@@ -350,6 +351,22 @@ export function buildTestFirstExpectedFailureRoute(
     const currentChangedFiles = normalizeFileList(options.currentChangedFiles || preflightChangedFiles);
     if (!sameStringList(preflightChangedFiles, currentChangedFiles)) {
         return null;
+    }
+    const recipeRoute = inspectRecipeExpectedRedRoute({ repoRoot: options.repoRoot, taskId: options.taskId,
+        preflight: options.preflight, preflightSha256: fileSha256(options.preflightPath) });
+    if (recipeRoute) {
+        return {
+            nextGate: recipeRoute.expectedFailure ? 'implementation' : 'test-first-expected-failure',
+            title: recipeRoute.expectedFailure ? 'Implement the behavior proved red by the declared recipe.'
+                : 'Record genuine expected-red evidence from the admitted recipe.',
+            reason: recipeRoute.violation ?? (recipeRoute.expectedFailure
+                ? 'Current canonical EXPECTED_FAILURE evidence authenticates the declared target, task cycle and exact test-only preflight.'
+                : 'TASK.md declares expected red. Run the current admitted recipe; unexpected pass, unresolved output and superseded evidence cannot advance implementation.'),
+            commands: recipeRoute.expectedFailure || recipeRoute.recipeIds.length === 0 ? [] : [buildCommand(
+                'Record declared recipe expected-red failure', `${options.cliPrefix} gate run-intermediate-command`
+                + ` --task-id ${quoteCommandValue(options.taskId)} --recipe-id ${quoteCommandValue(recipeRoute.recipeIds[0])}`
+                + ' --expect-failure --repo-root "."')]
+        };
     }
     const testPaths = getRunnableChangedTestPaths(options.preflight);
     if (testPaths.length === 0) {
