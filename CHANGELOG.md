@@ -1,5 +1,8 @@
 # Changelog
 
+- Execute admitted frozen argv recipes and retain bounded original source/output
+  and genuine lifecycle facts without accepting test semantics (T-242-3-2).
+
 - Preserve actual argv-child termination signals without changing legacy exit,
   cancellation or cleanup behavior (T-242-3-1).
 

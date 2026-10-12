@@ -51,6 +51,8 @@ export interface ValidationAttempt {
     attempt_id: string;
     snapshot: FrozenValidationRecipe;
     started_at: string;
+    completed_at?: string;
+    termination_signal?: string | null;
     duration_ms: number;
     exit_code: number;
     timed_out: boolean;
