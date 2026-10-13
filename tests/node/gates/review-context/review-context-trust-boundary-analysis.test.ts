@@ -182,6 +182,29 @@ function writeCurrentArtifact(fixture: ReturnType<typeof createGateFixture>, pre
 }
 
 describe('review-context trust-boundary handoff', () => {
+    it('rejects missing or changed retained evidence and blocks DONE execution', async () => {
+        const f = declaredReviewFixture('domain', { unchangedTarget: true, preflightFilename: 'retained-custom.json', taskModeFilename: 'retained-mode.json' });
+        try {
+            await f.execute(); f.publish();
+            const current = { repoRoot: f.repoRoot, taskId: f.taskId, preflightPath: f.preflightPath, taskModePath: f.taskModePath };
+            const active = readValidationReviewObligations(current);
+            const retained = { ...current, inspection: 'retained_completed' as const };
+            // Model closed lifecycle metadata only; this fixture is not delegated review or native task acceptance evidence.
+            seedTaskQueue(f.repoRoot, f.taskId, 'DONE', 'default', '', 'Declared review evidence');
+            assert.throws(() => readValidationReviewObligations(retained));
+            appendMandatoryTaskEvent(f.orchestratorRoot, f.taskId, 'COMPLETION_GATE_PASSED', 'PASS',
+                'Closed-state inspection fixture.', { status: 'PASSED', outcome: 'PASS', preflight_path: f.preflightPath, violations: [] });
+            assert.deepEqual(readValidationReviewObligations(retained), active);
+            assert.equal(active.obligations[0].result_status, 'UNRESOLVED');
+            assert.throws(() => readValidationReviewObligations(current), /active native task/u);
+            await assert.rejects(executeValidationRecipe({ repoRoot: f.repoRoot, taskId: f.taskId, recipeId: 'neutral' }), /active native task/u);
+            await assert.rejects(evaluateValidationAttempt({ repoRoot: f.repoRoot, taskId: f.taskId,
+                attemptId: active.obligations[0].attempt_id! }), /active native task/u);
+            fs.appendFileSync(path.join(f.repoRoot, 'RootSuite'), '\nchanged after closure');
+            assert.throws(() => readValidationReviewObligations(retained));
+        } finally { await f.cleanup(); }
+    });
+
     it('legacy coverage inspection preserves pending declared evidence without claiming target closure', async () => {
         const f = declaredReviewFixture('domain');
         try {

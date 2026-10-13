@@ -12,7 +12,7 @@ import { resolveTaskProfileReviewTriggerPolicy } from '../../policy/task-profile
 import { bindContainedDestination, assertExistingPathIdentity } from '../../core/contained-filesystem';
 import { withFilesystemLockAsync } from '../../gate-runtime/timeline/task-events-locking';
 import { freezeValidationRecipe, validationPaths } from './authority';
-import { readValidationEvents, recordValidationEvent, writeValidationFact } from './attempt-evidence';
+import { readValidationEvents, recordValidationEvent, writeValidationFact, type ValidationEvidenceInspection } from './attempt-evidence';
 
 export function assertValidationExpectedRed(repoRoot: string, taskId: string, recipeId: string): void {
     readValidationEvents(repoRoot, taskId);
@@ -32,8 +32,9 @@ export function assertValidationExpectedRed(repoRoot: string, taskId: string, re
         || !hasTestFirstExpectedRedDeclaration(readTaskQueueEntries(repoRoot).get(taskId))) throw new Error('Expected-red requires current native test-only scope and TASK declaration');
     if (!eligibleExpectedRedRecipes([snapshot.recipe], preflight.changed_files as unknown[]).some(recipe => recipe.id === recipeId)) throw new Error('Expected-red recipe lacks changed declared test targets');
 }
-export function readValidationAttemptFacts(repoRoot: string, taskId: string, attemptId: string) {
-    const paths = validationPaths(repoRoot, taskId), events = readValidationEvents(repoRoot, taskId);
+export function readValidationAttemptFacts(repoRoot: string, taskId: string, attemptId: string,
+    inspection: ValidationEvidenceInspection = 'active') {
+    const paths = validationPaths(repoRoot, taskId), events = readValidationEvents(repoRoot, taskId, inspection);
     const completed = events.filter(event => event.event_type === 'PROJECT_VALIDATION_COMPLETED' && event.details?.attempt_id === attemptId);
     if (completed.length !== 1) throw new Error('Missing or ambiguous canonical completed attempt');
     const details = completed[0].details!, attemptPath = String(details.artifact_path);

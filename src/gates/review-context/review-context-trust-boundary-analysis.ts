@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { currentProjectValidationAuthority } from '../project-validation/authority';
 import { validationDigest } from '../../core/project-validation-identity';
 import { inspectQualityValidationPhases, type QualityValidationPhases } from '../quality-checklist/quality-checklist-validation-phases';
+import type { ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 
 import {
     forEachJsonlLine,
@@ -151,6 +152,7 @@ interface QualityAnalysisOptions {
     taskId: string | null;
     preflight: Record<string, unknown>;
     preflightSha256: string | null;
+    inspection?: ValidationEvidenceInspection;
 }
 
 function readBoundQualityAnalysis(options: QualityAnalysisOptions, requireObservedExecution: boolean): ReviewContextTrustBoundaryAnalysis {

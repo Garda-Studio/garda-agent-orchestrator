@@ -2,7 +2,7 @@ import type { FrozenValidationRecipe, ValidationFileIdentity } from '../../core/
 import { validationDigest } from '../../core/project-validation-identity';
 import { assessTrustBoundaryMatrix } from '../../core/trust-boundary-analysis';
 import { currentProjectValidationAuthority, freezeValidationRecipe } from '../project-validation/authority';
-import { readValidationEvents } from '../project-validation/attempt-evidence';
+import { readValidationEvents, type ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 import { readValidationResult } from '../project-validation/evidence';
 
 type ExecutionObservation = 'PENDING' | 'OBSERVED' | 'REJECTED';
@@ -23,14 +23,14 @@ export interface QualityValidationPhases {
 }
 
 function observeExecution(repoRoot: string, taskId: string, snapshot: FrozenValidationRecipe,
-    latest: ReturnType<typeof readValidationEvents>[number] | undefined) {
+    latest: ReturnType<typeof readValidationEvents>[number] | undefined, inspection?: ValidationEvidenceInspection) {
     const observation: Pick<QualityValidationObligation, 'execution' | 'attempt_id' | 'result_status' | 'result_sha256'> = {
         execution: 'PENDING', attempt_id: latest ? String(latest.details?.attempt_id) : null,
         result_status: null, result_sha256: null
     };
     if (latest?.event_type !== 'PROJECT_VALIDATION_RESULTS_EVALUATED') return { observation, diagnostic: null };
     try {
-        const { snapshot: recorded, attempt, result } = readValidationResult({ repoRoot, taskId, attemptId: observation.attempt_id! });
+        const { snapshot: recorded, attempt, result } = readValidationResult({ repoRoot, taskId, attemptId: observation.attempt_id!, inspection });
         if (recorded.snapshot_sha256 !== snapshot.snapshot_sha256) throw new Error('Foreign validation quality snapshot');
         observation.result_status = result.status; observation.result_sha256 = result.result_sha256;
         observation.execution = attempt.exit_code === 0 && !attempt.timed_out && !attempt.cancelled && !attempt.truncated
@@ -45,7 +45,7 @@ function observeExecution(repoRoot: string, taskId: string, snapshot: FrozenVali
 
 export function inspectQualityValidationPhases(options: {
     repoRoot: string; taskId: string; preflight: Record<string, unknown>;
-    preflightSha256: string | null; matrixRequired: boolean; matrix: unknown;
+    preflightSha256: string | null; matrixRequired: boolean; matrix: unknown; inspection?: ValidationEvidenceInspection;
 }) {
     const { repoRoot, taskId, preflight } = options;
     const authority = currentProjectValidationAuthority(repoRoot, preflight);
@@ -54,7 +54,7 @@ export function inspectQualityValidationPhases(options: {
     const snapshots = authority.approved.contract.recipes.map(recipe => freezeValidationRecipe(repoRoot, taskId, recipe.id));
     if (snapshots.some(snapshot => snapshot.preflight_sha256 !== options.preflightSha256))
         throw new Error('Validation quality preflight changed');
-    const events = readValidationEvents(repoRoot, taskId);
+    const events = readValidationEvents(repoRoot, taskId, options.inspection);
     const start = Math.max(events.map(event => event.event_type).lastIndexOf('TASK_MODE_ENTERED'),
         events.map(event => event.event_type).lastIndexOf('PREFLIGHT_CLASSIFIED'));
     if (start < 0) throw new Error('Validation quality has no current task cycle');
@@ -65,7 +65,7 @@ export function inspectQualityValidationPhases(options: {
         const started = recipeEvents.find(event => event.event_type === 'PROJECT_VALIDATION_STARTED');
         const latest = started && recipeEvents.find(event => event.details?.attempt_id === started.details?.attempt_id
             && ['PROJECT_VALIDATION_STARTED', 'PROJECT_VALIDATION_COMPLETED', 'PROJECT_VALIDATION_RESULTS_EVALUATED'].includes(event.event_type));
-        const { observation, diagnostic } = observeExecution(repoRoot, taskId, snapshot, latest);
+        const { observation, diagnostic } = observeExecution(repoRoot, taskId, snapshot, latest, options.inspection);
         executions.push({ recipe_id: snapshot.recipe.id, snapshot_sha256: snapshot.snapshot_sha256, ...observation });
         if (diagnostic) diagnostics.push(diagnostic);
         for (const target of snapshot.recipe.targets) {
@@ -82,7 +82,7 @@ export function inspectQualityValidationPhases(options: {
         repoRoot, recipeTargets: targets, sourceIdentities: sources
     }) : null;
     if (snapshots.some(snapshot => freezeValidationRecipe(repoRoot, taskId, snapshot.recipe.id).snapshot_sha256 !== snapshot.snapshot_sha256)
-        || validationDigest(readValidationEvents(repoRoot, taskId)) !== validationDigest(events))
+        || validationDigest(readValidationEvents(repoRoot, taskId, options.inspection)) !== validationDigest(events))
         throw new Error('Validation quality identities or timeline changed during inspection');
     const execution: ExecutionObservation = executions.some(recipe => recipe.execution === 'REJECTED') ? 'REJECTED'
         : executions.length > 0 && executions.every(recipe => recipe.execution === 'OBSERVED') ? 'OBSERVED' : 'PENDING';

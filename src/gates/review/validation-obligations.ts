@@ -5,6 +5,7 @@ import { validatePreflightForReview } from '../required-reviews/required-reviews
 import { assertReviewContextTrustBoundaryAnalysisReady, readReviewContextTrustBoundaryAnalysis } from '../review-context/review-context-trust-boundary-analysis';
 import type { QualityValidationObligation } from '../quality-checklist/quality-checklist-validation-phases';
 import { resolveCurrentNoOpPreflightPath } from '../task-mode/no-op';
+import type { ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 
 export interface ValidationReviewObligations {
     preflight_sha256: string;
@@ -15,6 +16,7 @@ export interface ValidationReviewObligations {
 
 export function readValidationReviewObligations(options: {
     repoRoot: string; taskId: string; preflightPath: string; taskModePath?: string;
+    inspection?: ValidationEvidenceInspection;
 }): ValidationReviewObligations {
     const preflightPath = resolveCurrentNoOpPreflightPath(options.repoRoot, options.taskId, options.preflightPath);
     const retained = readValidationFile(options.repoRoot,
@@ -25,7 +27,7 @@ export function readValidationReviewObligations(options: {
         || validationDigest(validated.preflight) !== validationDigest(JSON.parse(retained.bytes.toString('utf8'))))
         throw new Error('Declared validation preflight changed during projection.');
     const analysis = readReviewContextTrustBoundaryAnalysis({ repoRoot: options.repoRoot, taskId: options.taskId,
-        preflight: validated.preflight, preflightSha256: retained.identity.sha256 });
+        preflight: validated.preflight, preflightSha256: retained.identity.sha256, inspection: options.inspection });
     assertReviewContextTrustBoundaryAnalysisReady(analysis);
     const phases = analysis.validation_phases;
     return {

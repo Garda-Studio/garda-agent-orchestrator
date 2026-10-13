@@ -1,5 +1,9 @@
 # Changelog
 
+## T-242-7-3-2-1 — Retained completed validation inspection
+
+- Inspect exact retained declaration obligations after authenticated native completion, preserving source and artifact identities without authorizing DONE-task execution or closing unresolved semantics.
+
 ## T-242-7-3-1 — Canonical declared review context coverage
 
 - Bind exact declared targets into required semantic lane contexts and independent context validation.
