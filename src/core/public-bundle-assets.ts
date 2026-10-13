@@ -16,6 +16,8 @@ export const PUBLIC_BUNDLE_ASSETS = Object.freeze([
     'docs/database/sqlite-persistence.md',
     'docs/database/sqlite-query-adoption-evidence.md',
     'docs/orchestrator-work-and-isolation.md',
+    'docs/manual-ci.md',
+    'docs/provider-client-evidence.md',
     'docs/providers.md',
     'docs/secret-scanning.md',
     'docs/operator-consistency-runbook.md',

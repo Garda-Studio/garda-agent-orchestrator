@@ -22,6 +22,25 @@ the canonical filename but preserves unrelated user-owned files under
 
 ## Reviewer Output
 
+### Raw output preservation
+
+Path input must resolve inside the repository and remain in the task-owned review
+scratch area. External symlink/junction escapes and another task's scratch aliases
+are rejected. Canonical raw reviewer output is retained separately from the
+normalized artifact, with its source mtime, raw digest, artifact digest and fidelity
+classification.
+
+Path-mode output older than delegation-start evidence, or with ambiguous timing,
+is rejected with stdin recovery guidance. This metadata consistency check does
+not prove authorship. Rejected or empty replacement input preserves existing
+canonical raw output; stdin follows the same validation and receipt path.
+
+Supported legacy PASS normalization preserves narrative residual-risk text while
+classifying non-actionable notes. Actionable findings retain the existing
+findings/disposition contract. Raw-output fidelity still requires secret redaction
+and does not authorize saving credentials or accepting legacy output in a current
+findings-only context.
+
 ### Focused reviewer command policy
 
 Reviewer self-validation uses the project's configured runner for one exact

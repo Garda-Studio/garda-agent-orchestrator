@@ -100,6 +100,26 @@ Release handoff archives are split by purpose. `npm run archive:source` writes a
 
 Direct `npm pack` and `npm pack --dry-run` are guarded by `prepack`, which runs the same clean-worktree preflight before package preparation and again after `build:publish-runtime`.
 
+### Local test timing comparison
+
+Capture each complete quality run without an external timeout, from a prepared checkout, using the tracked command:
+
+```sh
+node scripts/node-foundation/check-test-wall-time-baseline.cjs capture <checkout> <new-log-path> <dependency-root>
+```
+
+The baseline evidence was captured with the local `quality-environment-runner.cjs` under the ignored runtime directory. The tracked `capture` mode preserves its environment fingerprint algorithm and records candidate scheduler-source and dependency-lock provenance. It records the full `npm run quality` output and appends one `NODE_FOUNDATION_QUALITY_ENVIRONMENT` marker with the command exit code, run timestamps, a fingerprint of OS, Node, CPU, memory and host, aggregate host CPU busy percentage, and source and dependency SHA-256 values. It checks both hashes again after the run, rejects invalid CPU telemetry, and refuses to overwrite an existing log. On success, it prints the post-run dependency tree SHA-256 and file count needed for the tracked config. The marker contains a hash of the host identity, not its raw name.
+
+Compare the three retained logs with:
+
+```sh
+node scripts/node-foundation/check-test-wall-time-baseline.cjs config/node-foundation-test-wall-time-baseline.json path/to/baseline-quality.log path/to/candidate-quality-1.log path/to/candidate-quality-2.log
+```
+
+The comparator checks all three log hashes before resolving log-derived checkout paths, requires dependency-bound schema 3 for both candidates, checks both candidate provenance hashes against the tracked config, then rechecks the checkout lock snapshot and hashes the current installed dependency tree and requires the measured candidate shard log checkout to match that dependency root and rejects any installed entry whose modification or metadata-change time is after the first candidate run began. It also checks baseline measurement; full `quality` and canonical `test` or guarded `coverage` banners; a top-level full-selection observed run followed by `NODE_FOUNDATION_TEST_OK`; three distinct shard run directories (legacy `.node-build/test-shard-logs/run-<pid>` or managed `garda-agent-orchestrator/runtime/validation-output/<UUID>/scratch`) and sequential capture times; matching hardware/runtime fingerprints; and candidate host CPU busy no more than 10 percentage points below baseline. The top-level shard marker must cover at least 535 files and duration telemetry for at least 500 files. It rejects a top-level partial-selection marker while allowing markers emitted by nested test fixtures. Both candidates must pass the 0.95 wall-time ratio; the output reports the slower one. A 64 MiB per-log limit bounds parsing.
+
+The fingerprint and CPU guard make the measurements more comparable; aggregate CPU busy does not identify every competing process or remove all load variation. The candidate source hash identifies the scheduler implementation. The in-run dependency digest identifies lockfile snapshots, and the post-run tree hash plus file and directory modification and metadata-change times provide additional evidence about installed executable and library content. That post-run check relies on filesystem timestamps; it is an inference about the earlier runs, not a content hash recorded during them. Package scripts, other test sources, other checkout files, and the global npm executable are outside these digests. The retained runs establish the observed wall time under the recorded conditions; they do not cryptographically authenticate every file that contributed to the workload. The measured threshold is evidence for these complete runs, not a hardware-controlled causal estimate. Keep the full exit codes, test totals, source commit, telemetry snapshot, and log hashes with any rebaseline. Earlier candidate logs without dependency markers remain historical context, not the tracked comparison candidates.
+
 ### Manual npm staged publishing
 
 The npm release path is `.github/workflows/publish.yml`, using only explicitly

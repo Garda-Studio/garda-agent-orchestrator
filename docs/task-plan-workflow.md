@@ -340,6 +340,21 @@ When no explicit JSON plan is supplied and canonical preparation is missing or d
 
 Invalid canonical preparation fails entry rather than becoming freeform. No configuration changes or no-plan waiver are needed for an ordinary task without a ready plan.
 
+## Resume Context
+
+`preprompt task` emits schema 3 with the current read-only navigator continuation and an advisory `context_selection`. It does not replay startup or post-implementation command batches. Run `context_selection.navigator_command` immediately before acting and after the action; an earlier brief does not authorize work after inputs change.
+
+| Current remaining work | Controller recipe and reload boundary |
+| --- | --- |
+| Implementation, failed review, unknown or stale evidence | Complete implementation context and selected implementation skills with required references. Keep the actual navigator blocker and approved scope. |
+| Test/review orchestration only | Phase sections for compile, suite, routing, fresh launch, evidence and receipts. A source or test fix first reloads `before_code_edit_read_set`. |
+| Documentation or memory closeout | Current impact, memory and approval instructions, required memory sources and affected documentation. Behavior changes first reload implementation context. |
+| Completion and report | Current completion, audit and generated-report protocol. Keep the canonical audit and verbatim final-report order; status or old PASS evidence is insufficient. |
+
+Every recipe retains canonical routing, core constraints, the current task row and Notes, frozen attached-plan criteria and required linked references. A missing named section requires reading the full source and implementation instructions. Historical `RULE_PACK_LOADED` records are lifecycle evidence, not knowledge in a fresh session. Actual implementation instructions must be read before edits, even when the preceding continuation selected a smaller recipe.
+
+Fresh required reviewers retain empty repository-rule read sets. They still receive the exact prepared launch input, resolved lane skill and references, generated context, scoped diff, upstream evidence and output contract. Isolation, one-shot launch, actual delegation-start evidence, receipt validation and session release remain mandatory. Provider bridge source templates apply the same resume contract to standard profiles and the compact router.
+
 ## Lifecycle Summary
 
 1. Prepare and save a requested JSON plan before task start, or keep an ordinary small-task brief.

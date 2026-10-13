@@ -35,7 +35,7 @@ requires a real current-session launch and authenticated receipts.
 
 The consumed client catalog matches exact Desktop revision `2026-09-29.1`:
 16 named CLI declarations plus one generic declaration, separate from 19 model
-APIs. [The independent catalog fixture](../tests/fixtures/providers/desktop-cli-catalog-2026-09-29.json)
+APIs. The repository-only fixture `tests/fixtures/providers/desktop-cli-catalog-2026-09-29.json`
 preserves its source commit/hash and original labels, executables and managed
 adapter restrictions. These declarations do not extend the materialization table
 above or prove runtime permission.

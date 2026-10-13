@@ -328,7 +328,7 @@ pack-once publishing and candidate-bound evidence remain separate release work.
 - [x] Product links use `https://garda-studio.com/products/cli`; repository and trusted Git update URLs use `Garda-Studio/garda-agent-orchestrator`.
 - [x] Update availability is advisory, uses the shared daily cache, keeps terminal notices in English, and includes the UI language catalogs and an explicit manual check.
 - [x] Package-surface growth was inspected before its explicit baseline refresh; production dependencies, install hooks and configured growth limits are unchanged.
-- [x] The local validation record and its limitations are documented in the source-only audit `docs/release-audit-1.4.4.md`. Static readiness does not certify a public release.
+- [x] Local validation records and their limitations are retained separately under `garda-agent-orchestrator/runtime/`. Static readiness does not certify a public release.
 
 The operator authorized local checks and a push to `dev` after implementation,
 independent reviews and those checks are complete. Tagging, publication, and live

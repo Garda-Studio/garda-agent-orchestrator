@@ -11,46 +11,16 @@ The current crowded source areas are:
 
 | Area | Current shape | Safe refactor direction |
 |---|---:|---|
-| `src/cli/commands` | 60 top-level files, plus owner directories such as `gate-flows/**`, `gate-review-handlers/**`, `workflow/**`, `profile/**`, `stats/**`, `workspace/**`, and `preprompt/**` | Group durable command families under owner directories and keep public command facades stable. |
+| `src/cli/commands` | Command facades and owner directories such as `gate-flows/**`, `gate-review-handlers/**`, `workflow/**`, `profile/**`, `stats/**`, `workspace/**`, and `preprompt/**` | Group durable command families under owner directories and keep public command facades stable. |
 | `src/gate-runtime` | Stable top-level compatibility facades plus `review/**` and `timeline/**` owner directories | Keep runtime implementations under the owner directories while preserving the flat materialized-bundle paths as compatibility-only re-exports. |
-| `src/lifecycle` | 37 top-level files, plus owner directories such as `agent-init/**`, `cleanup/**`, `lock/**`, `runtime-policy/**`, and `update/**` | Group by update/apply, rollback, cleanup/removal, locks, retention policy, and update-source checks. |
-| `src/validators` | 24 top-level files, plus owner directories such as `doctor/**`, `status/**`, and `workspace-layout/**` | Group by doctor/status/workspace/verify diagnostics only where imports can stay stable. |
-| `src/materialization` | 19 top-level files with init/install facades plus `install/**` phase helpers | Split scenario phases behind existing init/install facades before introducing directories. |
-| `src/core` | 29 top-level primitives plus `task-queue/**` owner internals | Split only clearly separable helpers; do not create a generic bucket for unrelated primitives. |
+| `src/lifecycle` | Lifecycle facades and owner directories such as `agent-init/**`, `cleanup/**`, `lock/**`, `runtime-policy/**`, and `update/**` | Group by update/apply, rollback, cleanup/removal, locks, retention policy, and update-source checks. |
+| `src/validators` | Validator facades and owner directories such as `doctor/**`, `status/**`, and `workspace-layout/**` | Group by doctor/status/workspace/verify diagnostics only where imports can stay stable. |
+| `src/materialization` | Init/install facades plus `install/**` phase helpers | Split scenario phases behind existing init/install facades before introducing directories. |
+| `src/core` | Core primitives plus `task-queue/**` owner internals | Split only clearly separable helpers; do not create a generic bucket for unrelated primitives. |
 
 `src/gates/next-step/next-step.ts` remains a separate facade-extraction track and
 is not part of this layout block except for tiny import fixes caused by a moved
 facade.
-
-## Release 1.3.0 Code-Health Audit
-
-The 2026-08-04 release audit scanned the maintained `src`, `tests`, `scripts`,
-and `bin` trees with Garda's report-only large-module diagnostic and separately
-measured TypeScript declarations with the compiler AST.
-
-- The repository scan covered 1,541 files and 575,471 lines. The largest source
-  file was `src/gates/next-step/next-step.ts` at 4,442 lines; the largest test
-  file was 3,798 lines.
-- The maintained `src` and `scripts` trees contain 18 classes. The largest is
-  the internal SQLite `OpenCatalog` resource owner at 238 lines; the next is the
-  96-line `CommandPhaseTracker`. There are no oversized class hierarchies or
-  release-blocking god classes.
-- Large functional coordinators do remain. The largest measured bodies are
-  `resolveNextStepDecisionRoute` (2,148 lines), reviewer-launch preparation
-  (1,419 lines), review-skill evidence validation (830 lines), and compile
-  classification (818 lines).
-- The dedicated next-step budget remains report-only: the 4,442-line public
-  coordinator is within its 4,500-line compatibility budget, while nine helper
-  modules exceed the 700-line helper signal. The largest are reviewer-launch
-  evidence (1,318 lines) and review-artifact readers (1,220 lines).
-
-These functional hotspots are real refactor debt, but they are not release
-metadata or packaging defects. Splitting them during release preparation would
-cross review, recovery, task-state, and evidence-trust boundaries and would
-materially increase regression risk. Release 1.3.0 therefore keeps their public
-facades stable. Future extractions should follow the validation map below,
-split one responsibility at a time, and preserve byte-compatible CLI, artifact,
-and reviewer-trust contracts.
 
 ## Compatibility Boundaries
 

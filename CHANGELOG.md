@@ -2,6 +2,11 @@
 
 ## 1.4.4
 
+### Documentation and package links
+
+- Ship the existing provider-client evidence and manual CI-selection guides with the npm package and public bundle. Keep the catalog fixture as a repository-only reference.
+- Remove obsolete audit reports and captured measurement snapshots from the documentation tree; retain current resume, review-output and timing guidance in the maintained guides.
+
 - Remove blocking explicit-any annotations and an unused binding from integrated
   recovery test fixtures, preserving malformed-input checks and lint enforcement
   (T-079).

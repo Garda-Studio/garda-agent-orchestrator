@@ -115,10 +115,12 @@ Kept inside bundle:
 - docs/database/sqlite-persistence.md
 - docs/database/sqlite-query-adoption-evidence.md
 - docs/findings-contracts.md
+- docs/manual-ci.md
 - docs/node-platform-foundation.md
 - docs/node-runtime-contract.md
 - docs/operator-consistency-runbook.md
 - docs/orchestrator-work-and-isolation.md
+- docs/provider-client-evidence.md
 - docs/providers.md
 - docs/release-readiness.md
 - docs/run-methods.md
