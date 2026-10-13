@@ -1,5 +1,7 @@
 # Changelog
 
+## 1.4.4
+
 - Remove blocking explicit-any annotations and an unused binding from integrated
   recovery test fixtures, preserving malformed-input checks and lint enforcement
   (T-079).
@@ -11,27 +13,27 @@
 - Bound coverage evidence obligation lookups and reuse the ordinary path set
   without widening validation-source or reviewer evidence domains (T-242-7-3-1-F1).
 
-## T-242-9-2 — Project validation activation guidance
+### T-242-9-2 — Project validation activation guidance
 
 - Documented audited version-one validation declarations, existing recipe-ID execution and independent semantic closure; added CLI help and governed template guidance without changing project defaults or historical authority.
 
-## T-242-9-1 — Technology-neutral activation qualification
+### T-242-9-1 — Technology-neutral activation qualification
 
 - Qualify real admitted custom-driver validation across unfamiliar and package-local layouts, preserving Unicode targets, unresolved output, required independent semantics and current source bindings.
 
-## T-242-8 — Declared validation terminal closure
+### T-242-8 — Declared validation terminal closure
 
 - Require current passed execution and exact independent semantic coverage at review, completion and retained audit boundaries; keep unresolved results, skipped lanes and open declared obligations incomplete.
 
-## T-242-7-3-2-2 — Declared coverage consumers
+### T-242-7-3-2-2 — Declared coverage consumers
 
 - Bind exact canonical validation targets during review reuse, focused recovery and passive completed-task audit; preserve custom preflight identity and validation targets when ordinary file coverage is narrowed.
 
-## T-242-7-3-2-1 — Retained completed validation inspection
+### T-242-7-3-2-1 — Retained completed validation inspection
 
 - Inspect exact retained declaration obligations after authenticated native completion, preserving source and artifact identities without authorizing DONE-task execution or closing unresolved semantics.
 
-## T-242-7-3-1 — Canonical declared review context coverage
+### T-242-7-3-1 — Canonical declared review context coverage
 
 - Bind exact declared targets into required semantic lane contexts and independent context validation.
 - Limit unchanged target-source citations to their owning validation coverage entry; preserve ordinary evidence domains and unresolved execution semantics.
@@ -182,25 +184,25 @@
 - Cover final backup inventory refresh failures after successful selected removal,
   retaining exact removal accounting, non-zero CLI results and unrelated copies.
 
-## T-127-1-12 — deterministic typed workflow registry assembly
+### T-127-1-12 — deterministic typed workflow registry assembly
 
 - Compose the sixty existing typed compact/family settings through their canonical owners and retain original order, defaults and candidate behavior.
 - Project the existing sixty-one-entry report catalog with unchanged compact presentation and external optional-skill policy ownership.
 - Add independent complete-contract and protected-boundary regression coverage; no CLI/schema/default/UI writer migration.
 
-## T-127-1-11 — Typed backup setting definitions
+### T-127-1-11 — Typed backup setting definitions
 
 - Move the three auto-backup definitions into a bounded typed core registry while preserving the report catalog contract.
 - Retain canonical OFF/1/10 defaults, existing presentation bounds and separate guarded backup/retention execution owners.
 - Cover typed admission, live/template candidates, permissive stored parsing and detached presentation without changing the independent catalog digest.
 
-## T-127-1-10 — Typed protected control setting definitions
+### T-127-1-10 — Typed protected control setting definitions
 
 - Move task-reset, local-commit and self-guard definitions into a typed core family with unchanged report metadata and defaults.
 - Preserve guarded mutation owners and separate native authority; pure candidates do not publish reset, commit or protected-entry permission.
 - Cover canonical inputs, legacy parsing, immutable candidates, presentation isolation and the existing native authority consumers with affected checks.
 
-## T-127-1-9 — Typed project-memory setting definitions
+### T-127-1-9 — Typed project-memory setting definitions
 
 - Move seven existing project-memory definitions into a typed core family while retaining the complete report metadata contract.
 - Reuse canonical defaults and the existing workflow validator for pure single-field candidates; user-memory writes and consent authority remain external.
@@ -354,8 +356,6 @@
   retain user hook backups and safe writes, honor workspace-local hooks paths,
   and create executable hooks on POSIX.
 
-## 1.4.4
-
 ### Legacy Review Verdicts
 
 - Reject conflicting legacy PASS/FAIL outcomes and token examples before they can be treated as review authority. Preserve unambiguous canonical verdicts, supported code-review aliases and the modern findings-only JSON contract.
@@ -480,6 +480,78 @@
 
 - Added daily update notices with the installed and available versions and an explicit update command after task completion and at UI startup, plus a manual UI check translated into every supported language.
 - Safer updates and releases through stronger update and rollback handling, runtime and filesystem checks, and package validation.
+
+### Unreleased — guarded decomposition profiles
+
+- Require separately authorized manual Publish validation or candidate staging
+  at an exact release-tag SHA on hosted Linux/Node 24. Wire complete same-tag
+  history guards before validation and staging, attest candidate-bound Security
+  before upload and reverify it before staging. Preserve full CI proof, pack-once
+  bytes/digests, npm-release OIDC and npm-side staged approval. Static source and
+  injected-provider coverage do not claim hosted CI, staging or registry proof.
+- Add version-2 work-package contracts bound to the frozen parent profile, including balanced native child routing, while preserving version-1 strict compatibility.
+
+- Route decomposed parents after a clean child source commit without recapturing
+  already suspended WIP against the original HEAD. Inspect current tracked,
+  visible and authorized ignored inputs, excluding exactly the evidence retained
+  by native capture; retain native capture and restore guards.
+
+### T-191: Full-suite configuration failures
+
+- Reject unreadable, malformed, and invalid explicit full-suite configuration before it can disable the gate or emit success evidence. Preserve defaults for absent settings, supported scalar aliases, command trimming, and timeout/retry behavior.
+
+- T-203: Preserve malformed, non-object and unreadable existing managed configuration
+  during init and template synchronization. Validate managed inputs before configuration
+  writes, retain valid settings and unchanged workflow bytes, and report repair guidance
+  without exposing configuration contents.
+
+- T-172: Add native Git lifecycle regressions for executable and test changes under
+  documentation paths, preserving the accepted safe-document classifier and genuine
+  README-only reuse.
+
+- T-173: Preserve the mandatory code-review floor through effective policy snapshots
+  for full source scopes outside raw path triggers, fail closed for inactive required
+  lanes, and retain fast/documentation/test/no-diff compatibility.
+
+- T-174: Recognize generated runtime artifacts only within supported Garda runtime namespaces; retain user source under nested runtime/reviews paths across Git and explicit scopes.
+- Separate quality-checklist template persistence, authenticated binding and
+  repair materialization from policy assessment. Preserve public contracts and
+  native evidence checks; publish template and sidecar files through the existing
+  atomic writer and cover failed replacements and missing binding events.
+
+- Require a current authenticated zero-diff preflight before `record-no-op`
+  publishes success. Resolve omitted paths from native task history, reject
+  stale or foreign bindings and source drift before mutation, and preserve
+  existing artifacts and mandatory downstream gates.
+
+
+### Unreleased — guarded decomposition profiles
+- Add version-2 work-package contracts bound to the frozen parent profile, including balanced native child routing, while preserving version-1 strict compatibility.
+- Add the typed `task_test_selection.require_operator_confirmation` configuration
+  contract with an autonomous default, strict boolean validation and preserved
+  explicit choices on update. Selection admission remains a separate change.
+
+- Restore safe ignored workflow-config compatibility after the typed task-test
+  selection default. Preserve legacy omission and explicit prompt choices while
+  rejecting malformed permissions, unknown keys and unrelated policy weakening.
+
+- Add typed setting presentation metadata and a read-only legacy projection.
+  Snapshot option objects, preserve existing registry contracts and keep
+  catalog-backed and review-lane controls outside generic editing.
+
+
+
+- Route decomposed parents after a clean child source commit without recapturing
+  already suspended WIP against the original HEAD. Inspect current tracked,
+  visible and authorized ignored inputs, excluding exactly the evidence retained
+  by native capture; retain native capture and restore guards.
+
+- Keep unchanged completed native quality scaffolds out of parent implementation
+  WIP inventory while preserving user changes, provenance checks and the original
+  HEAD capture/restore identity guard.
+
+- Import the accepted parent-recapture and retained-quality-input dependencies
+  into the C5 workflow without replacing local settings, task evidence or memory.
 
 ## 1.4.3
 
@@ -663,75 +735,3 @@
 - renamed the public project line to Garda and reset the visible release history
 - aligned the package version and workspace version files to `1.0.0`
 - ships the current local agent orchestration runtime, gates, provider bridges, profiles, cleanup flows, and audit trail as the new baseline
-
-### Unreleased — guarded decomposition profiles
-
-- Require separately authorized manual Publish validation or candidate staging
-  at an exact release-tag SHA on hosted Linux/Node 24. Wire complete same-tag
-  history guards before validation and staging, attest candidate-bound Security
-  before upload and reverify it before staging. Preserve full CI proof, pack-once
-  bytes/digests, npm-release OIDC and npm-side staged approval. Static source and
-  injected-provider coverage do not claim hosted CI, staging or registry proof.
-- Add version-2 work-package contracts bound to the frozen parent profile, including balanced native child routing, while preserving version-1 strict compatibility.
-
-- Route decomposed parents after a clean child source commit without recapturing
-  already suspended WIP against the original HEAD. Inspect current tracked,
-  visible and authorized ignored inputs, excluding exactly the evidence retained
-  by native capture; retain native capture and restore guards.
-
-## T-191: Full-suite configuration failures
-
-- Reject unreadable, malformed, and invalid explicit full-suite configuration before it can disable the gate or emit success evidence. Preserve defaults for absent settings, supported scalar aliases, command trimming, and timeout/retry behavior.
-
-- T-203: Preserve malformed, non-object and unreadable existing managed configuration
-  during init and template synchronization. Validate managed inputs before configuration
-  writes, retain valid settings and unchanged workflow bytes, and report repair guidance
-  without exposing configuration contents.
-
-- T-172: Add native Git lifecycle regressions for executable and test changes under
-  documentation paths, preserving the accepted safe-document classifier and genuine
-  README-only reuse.
-
-- T-173: Preserve the mandatory code-review floor through effective policy snapshots
-  for full source scopes outside raw path triggers, fail closed for inactive required
-  lanes, and retain fast/documentation/test/no-diff compatibility.
-
-- T-174: Recognize generated runtime artifacts only within supported Garda runtime namespaces; retain user source under nested runtime/reviews paths across Git and explicit scopes.
-- Separate quality-checklist template persistence, authenticated binding and
-  repair materialization from policy assessment. Preserve public contracts and
-  native evidence checks; publish template and sidecar files through the existing
-  atomic writer and cover failed replacements and missing binding events.
-
-- Require a current authenticated zero-diff preflight before `record-no-op`
-  publishes success. Resolve omitted paths from native task history, reject
-  stale or foreign bindings and source drift before mutation, and preserve
-  existing artifacts and mandatory downstream gates.
-
-
-### Unreleased — guarded decomposition profiles
-- Add version-2 work-package contracts bound to the frozen parent profile, including balanced native child routing, while preserving version-1 strict compatibility.
-- Add the typed `task_test_selection.require_operator_confirmation` configuration
-  contract with an autonomous default, strict boolean validation and preserved
-  explicit choices on update. Selection admission remains a separate change.
-
-- Restore safe ignored workflow-config compatibility after the typed task-test
-  selection default. Preserve legacy omission and explicit prompt choices while
-  rejecting malformed permissions, unknown keys and unrelated policy weakening.
-
-- Add typed setting presentation metadata and a read-only legacy projection.
-  Snapshot option objects, preserve existing registry contracts and keep
-  catalog-backed and review-lane controls outside generic editing.
-
-
-
-- Route decomposed parents after a clean child source commit without recapturing
-  already suspended WIP against the original HEAD. Inspect current tracked,
-  visible and authorized ignored inputs, excluding exactly the evidence retained
-  by native capture; retain native capture and restore guards.
-
-- Keep unchanged completed native quality scaffolds out of parent implementation
-  WIP inventory while preserving user changes, provenance checks and the original
-  HEAD capture/restore identity guard.
-
-- Import the accepted parent-recapture and retained-quality-input dependencies
-  into the C5 workflow without replacing local settings, task evidence or memory.
