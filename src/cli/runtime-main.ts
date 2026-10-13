@@ -1,9 +1,6 @@
-import {
-    applyNoColorFlag,
-    extractGlobalFlags,
-    normalizePathValue,
-    readPackageJson
-} from './commands/cli-helpers';
+import { normalizePathValue, readPackageJson } from './commands/cli-bundle-helpers';
+import { extractGlobalFlags } from './commands/cli-parsing';
+import { applyNoColorFlag } from './commands/cli-colors';
 import {
     assertRuntimeRestartNotRequired,
     getCommandName,
@@ -65,7 +62,7 @@ export async function runCliRuntimeMain(
         return;
     }
     if (effectiveArgv[0] === '--help' || effectiveArgv[0] === '-h') {
-        const { printHelp } = await import('./commands/cli-helpers');
+        const { printHelp } = await import('./commands/cli-help-output');
         printHelp(packageJson);
         return;
     }

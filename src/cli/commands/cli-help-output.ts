@@ -7,7 +7,7 @@ import {
     PRODUCT_ACRONYM_EXPANSION,
     PRODUCT_NAME
 } from '../../core/constants';
-import { buildDefaultRetentionPolicy, RETENTION_POLICY_DEFAULTS } from '../../lifecycle/cleanup';
+import { buildDefaultRetentionPolicy, RETENTION_POLICY_DEFAULTS } from '../../lifecycle/cleanup/cleanup-defaults';
 import { formatLocalUiLanguageCliChoices } from '../../reports/ui/ui-i18n';
 import { bold, cyan, dim, green, padRight, red, yellow } from './cli-colors';
 import { COMMAND_SUMMARY } from './cli-constants';

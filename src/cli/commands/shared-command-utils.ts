@@ -9,7 +9,8 @@ import { compareVersionStrings } from '../../lifecycle/generic-utils';
 import { type CheckUpdateRunnerOptions } from '../../lifecycle/check-update';
 import { captureLifecycleLockHandoff } from '../../lifecycle/lock/lifecycle-lock-handoff';
 import { isPathInsideRoot } from '../../core/paths';
-import { cyan, getBundlePath, green, yellow } from './cli-helpers';
+import { getBundlePath } from './cli-bundle-helpers';
+import { cyan, green, yellow } from './cli-colors';
 
 export type ParsedOptionValue = string | boolean | string[] | undefined;
 export type ParsedOptionsRecord = Record<string, ParsedOptionValue>;
