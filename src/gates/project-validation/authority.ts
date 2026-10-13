@@ -4,6 +4,7 @@ import { bindContainedDestination } from '../../core/contained-filesystem';
 import { parseApprovedValidationContract, readValidationFile, readValidationInputs, readValidationTool, validationDigest } from '../../core/project-validation-identity';
 import { validationRelativePath } from '../../core/project-validation-recipes';
 import type { ApprovedValidationContract, FrozenValidationRecipe } from '../../core/project-validation-contract';
+import { resolveCurrentNoOpPreflightPath } from '../task-mode/no-op';
 
 const MAXIMUM_CONTROL_BYTES = 8 * 1024 * 1024;
 
@@ -48,7 +49,12 @@ export function currentProjectValidationAuthority(repoRoot: string, preflight: R
 }
 export function freezeValidationRecipe(repoRoot: string, taskId: string, recipeId: string): FrozenValidationRecipe {
     const paths = validationPaths(repoRoot, taskId);
-    const file = readValidationFile(repoRoot, paths.preflight, MAXIMUM_CONTROL_BYTES);
+    // Standalone freezing grants no execution authority. Existing native timelines
+    // must select their actual current classification rather than a default name.
+    const preflightPath = bindContainedDestination(repoRoot, path.resolve(repoRoot, paths.timeline)).missingAt
+        ? paths.preflight
+        : path.relative(path.resolve(repoRoot), resolveCurrentNoOpPreflightPath(repoRoot, taskId)).replace(/\\/gu, '/');
+    const file = readValidationFile(repoRoot, preflightPath, MAXIMUM_CONTROL_BYTES);
     const preflight = JSON.parse(file.bytes.toString('utf8')) as Record<string, unknown>;
     if (preflight.task_id !== taskId) throw new Error('Foreign validation preflight');
     const authority = currentProjectValidationAuthority(repoRoot, preflight);

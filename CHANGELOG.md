@@ -1,5 +1,7 @@
 # Changelog
 
+- Project authentic declared validation targets from current canonical phases and require capable mandatory frozen semantic review lanes, preserving opaque results and undeclared projects (T-242-7-2).
+
 - Bind exact declared validation targets, source identities and observed attempts into deterministic coverage contracts without closing pending semantics or widening other evidence domains (T-242-7-1).
 
 - Navigate exact admitted recipe execution, existing-attempt collection and current quality refresh before review without waiving declared obligations or changing legacy validation placement (T-242-6-2-2).

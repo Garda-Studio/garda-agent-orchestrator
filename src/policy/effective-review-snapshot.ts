@@ -100,6 +100,16 @@ export interface EffectiveReviewSnapshot {
     snapshot_sha256: string;
 }
 
+export function resolveValidationSemanticReviewLanes(snapshot: EffectiveReviewSnapshot): Array<'code' | 'test'> {
+    const violations = getEffectiveReviewSnapshotViolations(snapshot);
+    if (violations.length > 0) throw new Error(`Validation semantic review snapshot is invalid: ${violations.join(' ')}`);
+    const lanes = snapshot.lanes.filter(lane => lane.definition.built_in
+        && (lane.id === 'code' || lane.id === 'test') && lane.selection === 'required');
+    if (lanes.length === 0 || lanes.some(lane => !lane.profile.capability_enabled))
+        throw new Error('Declared validation requires capable mandatory code or test review lanes.');
+    return lanes.map(lane => lane.id as 'code' | 'test').sort();
+}
+
 export interface BuildEffectiveReviewSnapshotOptions {
     catalog: NormalizedReviewCatalog;
     profilePolicy: ResolvedProfileReviewCatalogPolicy;

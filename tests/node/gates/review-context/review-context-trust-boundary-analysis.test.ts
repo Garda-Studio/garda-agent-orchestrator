@@ -37,12 +37,13 @@ import { handleWorkflow } from '../../../../src/cli/commands/workflow-command';
 import { runClassifyChangeCommand } from '../../../../src/cli/commands/gates';
 import { executeValidationRecipe } from '../../../../src/gates/project-validation/execution';
 import { evaluateValidationAttempt } from '../../../../src/gates/project-validation/result-evaluation';
+import { readValidationReviewObligations } from '../../../../src/gates/review/validation-obligations';
 import type { QualityValidationPhases } from '../../../../src/gates/quality-checklist/quality-checklist-validation-phases';
 import { createTempRepo, initializeGitRepo, loadTaskEntryRulePack, runEnterTaskMode, runHandshakeForTask,
     runShellSmokeForTask, seedInitAnswers, seedTaskQueue } from '../../cli/commands/gates/preflight/gates-preflight-fixtures';
 import { removeTempRepoWithRetry } from '../../cli/commands/gate-test-repo-bootstrap';
 
-function declaredReviewFixture(scope = 'security') {
+function declaredReviewFixture(scope = 'security', options: { declared?: boolean; preflightFilename?: string } = {}) {
     const repoRoot = createTempRepo(), taskId = 'T-declared-review';
     const orchestratorRoot = path.join(repoRoot, 'garda-agent-orchestrator');
     const configPath = path.join(orchestratorRoot, 'live/config/workflow-config.json');
@@ -62,7 +63,7 @@ function declaredReviewFixture(scope = 'security') {
     }] }));
     seedInitAnswers(repoRoot); seedTaskQueue(repoRoot, taskId, 'TODO', 'default', '', 'Declared review evidence');
     initializeGitRepo(repoRoot);
-    handleWorkflow(['set', '--target-root', repoRoot, '--project-validation-contract', 'recipes.json',
+    if (options.declared !== false) handleWorkflow(['set', '--target-root', repoRoot, '--project-validation-contract', 'recipes.json',
         '--operator-confirmed', 'yes', '--operator-confirmed-at-utc', new Date().toISOString()],
     { name: 'garda-agent-orchestrator', version: '1.0.0' });
     runEnterTaskMode({ repoRoot, taskId, entryMode: 'EXPLICIT_TASK_EXECUTION', requestedDepth: 2,
@@ -70,7 +71,7 @@ function declaredReviewFixture(scope = 'security') {
     loadTaskEntryRulePack(repoRoot, taskId); runHandshakeForTask(repoRoot, taskId); runShellSmokeForTask(repoRoot, taskId);
     fs.appendFileSync(path.join(repoRoot, source), '\nexport const changed = 1;\n');
     fs.appendFileSync(path.join(repoRoot, 'RootSuite'), '\ncurrent source\n');
-    const preflightPath = path.join(orchestratorRoot, 'runtime/reviews', `${taskId}-preflight.json`);
+    const preflightPath = path.join(orchestratorRoot, 'runtime/reviews', options.preflightFilename ?? `${taskId}-preflight.json`);
     runClassifyChangeCommand({ repoRoot, taskId, taskIntent: 'Declared review evidence',
         outputPath: preflightPath, changedFiles: [source, 'RootSuite'], emitMetrics: false });
     const trust = buildAnswers().find(answer => answer.rule_id === TRUST_BOUNDARY_ANALYSIS_RULE_ID)!;
@@ -81,7 +82,7 @@ function declaredReviewFixture(scope = 'security') {
         .map(answer => answer.rule_id === TRUST_BOUNDARY_ANALYSIS_RULE_ID ? trust
             : { ...answer, status: 'PASS', answer: 'Checked current scope.' });
     const artifactPath = resolveDefaultQualityChecklistArtifactPath(repoRoot, taskId);
-    return { repoRoot, taskId, orchestratorRoot, artifactPath,
+    return { repoRoot, taskId, orchestratorRoot, artifactPath, preflightPath,
         cleanup: () => removeTempRepoWithRetry(repoRoot),
         publish: () => runQualityChecklistCommand({ repoRoot, taskId, preflightPath, answersJson: JSON.stringify(answers), emitMetrics: false }),
         read: () => readReviewContextTrustBoundaryAnalysis({ repoRoot, taskId,
@@ -176,6 +177,49 @@ function writeCurrentArtifact(fixture: ReturnType<typeof createGateFixture>, pre
 }
 
 describe('review-context trust-boundary handoff', () => {
+    it('projects authentic declared targets and rejects stale or superseded evidence without promoting opaque results', async () => {
+        const f = declaredReviewFixture('domain', { preflightFilename: 'custom-current-preflight.json' });
+        try {
+            const projection = readValidationReviewObligations;
+            f.publish();
+            assert.throws(() => projection(f), /required trust-boundary analysis/u);
+            await f.execute(); f.publish();
+            const defaultPath = path.join(f.orchestratorRoot, 'runtime/reviews', `${f.taskId}-preflight.json`);
+            fs.writeFileSync(defaultPath, JSON.stringify({ task_id: 'foreign' }));
+            const result = projection(f);
+            assert.deepEqual(result.obligations, f.phases().obligations);
+            assert.equal(result.preflight_sha256, fileSha256(f.preflightPath));
+            assert.equal(result.validation_phases_sha256, f.phases().sha256);
+            assert.ok(result.semantic_review_lanes.length > 0);
+            assert.equal(result.obligations[0].source_identity.path, 'RootSuite');
+            assert.equal(result.obligations[0].result_status, 'UNRESOLVED');
+            assert.equal(f.phases().semantic, 'PENDING_INDEPENDENT_REVIEW');
+            assert.throws(() => projection({ ...f, preflightPath: defaultPath }), /latest native classification/u);
+            const quality = fs.readFileSync(f.artifactPath);
+            fs.appendFileSync(f.artifactPath, ' ');
+            assert.throws(() => projection(f), /required trust-boundary analysis/u);
+            fs.writeFileSync(f.artifactPath, quality);
+            const original = fs.readFileSync(f.preflightPath);
+            const preflight = JSON.parse(original.toString());
+            preflight.required_reviews.test = !preflight.required_reviews.test;
+            fs.writeFileSync(f.preflightPath, JSON.stringify(preflight));
+            assert.throws(() => projection(f), /preflight/u);
+            fs.writeFileSync(f.preflightPath, original);
+            const controller = new AbortController(); controller.abort();
+            await f.execute(controller.signal);
+            assert.throws(() => projection(f), /required trust-boundary analysis/u);
+        } finally { await f.cleanup(); }
+    });
+
+    it('preserves an empty validation projection for a current project without declarations', async () => {
+        const f = declaredReviewFixture('domain', { declared: false });
+        try {
+            f.publish();
+            assert.deepEqual(readValidationReviewObligations(f), { preflight_sha256: fileSha256(f.preflightPath),
+                validation_phases_sha256: null, semantic_review_lanes: [], obligations: [] });
+        } finally { await f.cleanup(); }
+    });
+
     it('admits observed declared execution with exact pending semantics and rejects superseded evidence', async () => {
         const f = declaredReviewFixture();
         try {

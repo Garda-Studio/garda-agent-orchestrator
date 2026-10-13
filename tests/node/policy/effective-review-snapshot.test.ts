@@ -14,7 +14,8 @@ import {
     collectKnownReviewSkillIds,
     deriveReviewPackageHints,
     getEffectiveReviewSnapshotViolations,
-    resolveEffectiveReviewTaskIntent
+    resolveEffectiveReviewTaskIntent,
+    resolveValidationSemanticReviewLanes
 } from '../../../src/policy/effective-review-snapshot';
 import { resolveProfileReviewCatalogPolicy } from '../../../src/policy/profile-review-catalog-policy';
 import { buildTaskProfilePolicySnapshot } from '../../../src/policy/task-profile-policy-snapshot';
@@ -283,6 +284,19 @@ function buildProfileActivityFixture(
     };
     return { catalog, capabilities, profilePolicy, options, snapshot: buildEffectiveReviewSnapshot(options) };
 }
+
+test('declared validation rejects missing or incapable mandatory semantic review lanes', () => {
+    const resolve = resolveValidationSemanticReviewLanes;
+    assert.deepEqual(resolve(buildSnapshot(false, { legacyRequiredReviews: { code: true, test: true } })), ['code', 'test']);
+    assert.deepEqual(resolve(buildProfileActivityFixture('test', true, true).snapshot), ['test']);
+    assert.throws(() => resolve(buildProfileActivityFixture('test', true, false).snapshot), /capable.*mandatory/u);
+    assert.throws(() => resolve(buildSnapshot(false, { legacyRequiredReviews: {} })), /capable.*mandatory/u);
+    const explicit = buildProfileActivityFixture('test', false, true);
+    assert.deepEqual(resolve(buildEffectiveReviewSnapshot({ ...explicit.options, taskRequiredReviewIds: ['test'] })), ['test']);
+    const forged = JSON.parse(JSON.stringify(explicit.snapshot));
+    forged.required_reviews.test = true;
+    assert.throws(() => resolve(forged), /snapshot/u);
+});
 
 test('validates required built-in lanes with disabled capabilities through frozen reconstruction', () => {
     const builtInIds = buildCatalog().review_types.filter(definition => definition.built_in)

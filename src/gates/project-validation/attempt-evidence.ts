@@ -34,7 +34,7 @@ export function readValidationEvents(repoRoot: string, taskId: string): Validati
     const paths = validationPaths(repoRoot, taskId);
     const status = readTaskQueueStatusToken(readTaskQueueEntries(repoRoot).get(taskId)?.status ?? null);
     if (status !== 'IN_PROGRESS' && status !== 'IN_REVIEW') throw new Error('Validation requires an active native task');
-    resolveNativePreflightPath(repoRoot, taskId, path.join(repoRoot, paths.preflight));
+    const preflightPath = resolveNativePreflightPath(repoRoot, taskId);
     const timeline = readValidationFile(repoRoot, paths.timeline, MAXIMUM_CONTROL_BYTES);
     const inspection = inspectTaskEventFile(path.join(repoRoot, paths.timeline), taskId);
     if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(inspection.status)) throw new Error('Validation timeline integrity failed');
@@ -42,7 +42,8 @@ export function readValidationEvents(repoRoot: string, taskId: string): Validati
     if (lines.length > MAXIMUM_EVENTS) throw new Error('Validation timeline exceeds event bound');
     const events = lines.map(line => JSON.parse(line) as ValidationEvent);
     const classified = events.filter(event => event.event_type === 'PREFLIGHT_CLASSIFIED').at(-1)?.details;
-    const preflight = JSON.parse(readValidationFile(repoRoot, paths.preflight, MAXIMUM_CONTROL_BYTES).bytes.toString('utf8')) as Record<string, unknown>;
+    const preflight = JSON.parse(readValidationFile(repoRoot,
+        path.relative(path.resolve(repoRoot), preflightPath).replace(/\\/gu, '/'), MAXIMUM_CONTROL_BYTES).bytes.toString('utf8')) as Record<string, unknown>;
     const metrics = preflight.metrics as Record<string, unknown> | undefined;
     if (preflight.task_id !== taskId || !Array.isArray(preflight.changed_files) || !metrics || !classified
         || metrics.scope_sha256 !== classified.scope_sha256 || metrics.scope_content_sha256 !== classified.scope_content_sha256
