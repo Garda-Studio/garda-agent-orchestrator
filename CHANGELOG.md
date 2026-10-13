@@ -1,5 +1,9 @@
 # Changelog
 
+## T-242-8 — Declared validation terminal closure
+
+- Require current passed execution and exact independent semantic coverage at review, completion and retained audit boundaries; keep unresolved results, skipped lanes and open declared obligations incomplete.
+
 ## T-242-7-3-2-2 — Declared coverage consumers
 
 - Bind exact canonical validation targets during review reuse, focused recovery and passive completed-task audit; preserve custom preflight identity and validation targets when ordinary file coverage is narrowed.

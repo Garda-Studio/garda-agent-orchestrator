@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { getValidationTerminalViolations } from '../review/validation-terminal';
 import {
     buildReviewCoverageContract,
     getReviewCoverageContractViolations,
@@ -39,6 +40,7 @@ export interface ReviewCoverageAuditEntry {
 }
 
 export interface ReviewCoverageAuditSummary {
+    validation_violations?: string[];
     status: 'COMPLETE' | 'INCOMPLETE' | 'NOT_REQUIRED';
     entries: ReviewCoverageAuditEntry[];
     omitted_obligation_ids: string[];
@@ -327,11 +329,18 @@ export function buildReviewCoverageAuditSummary(options: {
             receipt_path: receiptPath
         });
     }
+    const validationViolations = getValidationTerminalViolations({ repoRoot, taskId: options.taskId, preflight, preflightPath,
+        requiredReviews: options.requiredReviews,
+        inspection: preflight?.project_validation && readTaskQueueStatusToken(readTaskQueueEntries(repoRoot).get(options.taskId)?.status ?? null) === 'DONE' ? 'retained_completed' : 'active',
+        artifacts: Object.fromEntries((preflight?.project_validation ? Object.keys(options.requiredReviews) : []).map(lane => [lane, {
+            content: JSON.stringify(safeReadJson(path.join(options.reviewsRoot, `${options.taskId}-${lane}.md`))),
+            receipt: safeReadJson(path.join(options.reviewsRoot, `${options.taskId}-${lane}-receipt.json`))
+        }])) });
     const incomplete = entries.filter((entry) => entry.status === 'INCOMPLETE');
     const omitted = [...new Set(incomplete.flatMap((entry) =>
         entry.omitted_obligation_ids.map((id) => `${entry.review_type}:${id}`)
     ))].sort();
-    const status = entries.length === 0
+    const status = validationViolations.length > 0 ? 'INCOMPLETE' : entries.length === 0
         ? 'NOT_REQUIRED'
         : incomplete.length > 0 ? 'INCOMPLETE' : 'COMPLETE';
     const totals = entries.reduce((acc, entry) => ({
@@ -346,6 +355,7 @@ export function buildReviewCoverageAuditSummary(options: {
     }, { full_count: 0, delta_count: 0, legacy_unknown_count: 0 });
     return {
         status,
+        validation_violations: validationViolations,
         entries,
         omitted_obligation_ids: omitted,
         review_execution_modes: executionModes,
@@ -353,6 +363,6 @@ export function buildReviewCoverageAuditSummary(options: {
             `Review coverage: status=${status}; obligations=${totals.completed}/${totals.required}; ` +
             `modes=FULL:${executionModes.full_count},DELTA:${executionModes.delta_count},legacy_unknown:${executionModes.legacy_unknown_count}; ` +
             `incomplete_reviews=${incomplete.map((entry) => entry.review_type).join(',') || 'none'}; ` +
-            `omitted=${omitted.join(',') || 'none'}`
+            `omitted=${omitted.join(',') || 'none'}` + (validationViolations.length ? `; ${validationViolations.join(' | ')}` : '')
     };
 }

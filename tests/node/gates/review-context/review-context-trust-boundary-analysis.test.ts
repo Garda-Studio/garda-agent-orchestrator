@@ -45,10 +45,14 @@ import { buildAuthoritativeReviewCoverageContract } from '../../../../src/gates/
 import { getReusedReviewCoverageContractViolations } from '../../../../src/gates/review-reuse/review-reuse-materialization';
 import { buildFocusedRecoveryCoverageContractSha256 } from '../../../../src/gates/next-step/next-step';
 import { buildReviewCoverageAuditSummary } from '../../../../src/gates/task-audit/task-audit-summary-review-coverage';
+import { checkRequiredReviews, validatePreflightForReview } from '../../../../src/gates/required-reviews/required-reviews-check';
+import { collectRequiredReviewEvidence } from '../../../../src/gates/completion/completion-required-review-evidence';
+import { getValidationTerminalViolations } from '../../../../src/gates/review/validation-terminal';
 import { writeSchema4ReviewPackage } from '../review/review-execution-lineage-test-fixture';
 import { buildReviewRemediationBaselineArtifact } from '../../../../src/gates/review-remediation/review-remediation-baseline';
 import { buildReviewRemediationDeltaBase } from '../../../../src/gates/review-remediation/review-remediation-delta-contract';
 import { classifyReviewRemediationDelta } from '../../../../src/gates/review-remediation/review-remediation-delta';
+import { buildReviewRemediationReviewContract } from '../../../../src/gates/review-remediation/review-remediation-review-contract';
 import { resolveAuthoritativeReviewRemediationDecision } from '../../../../src/gates/review-remediation/review-remediation-recovery-routing';
 import { bindAuthoritativeRemediationDecisionToPreflight, buildAuthenticatedRemediationReviewExecution } from '../../../../src/cli/commands/gate-flows/review-context/review-context-flow';
 import { buildReviewFindingsDispositionArtifact } from '../../../../src/gates/review/review-findings-disposition-artifact';
@@ -60,7 +64,7 @@ import { createTempRepo, initializeGitRepo, loadTaskEntryRulePack, runEnterTaskM
     runShellSmokeForTask, seedInitAnswers, seedTaskQueue } from '../../cli/commands/gates/preflight/gates-preflight-fixtures';
 import { removeTempRepoWithRetry } from '../../cli/commands/gate-test-repo-bootstrap';
 
-function declaredReviewFixture(scope = 'security', options: { declared?: boolean; preflightFilename?: string; unchangedTarget?: boolean; taskModeFilename?: string; extraTest?: boolean } = {}) {
+function declaredReviewFixture(scope = 'security', options: { declared?: boolean; preflightFilename?: string; unchangedTarget?: boolean; taskModeFilename?: string; extraTest?: boolean; passing?: boolean } = {}) {
     const repoRoot = createTempRepo(), taskId = 'T-declared-review';
     const orchestratorRoot = path.join(repoRoot, 'garda-agent-orchestrator');
     const configPath = path.join(orchestratorRoot, 'live/config/workflow-config.json');
@@ -72,7 +76,8 @@ function declaredReviewFixture(scope = 'security', options: { declared?: boolean
     fs.mkdirSync(path.dirname(path.join(repoRoot, source)), { recursive: true });
     fs.writeFileSync(path.join(repoRoot, source), 'export const evidence = 1;\n');
     fs.writeFileSync(path.join(repoRoot, 'RootSuite'), 'unknown project syntax');
-    fs.writeFileSync(path.join(repoRoot, 'driver'), 'process.stdout.write("opaque observed output");');
+    fs.writeFileSync(path.join(repoRoot, 'driver'), `process.stdout.write(${JSON.stringify(options.passing
+        ? 'TAP version 13\n1..1\nok 1 - declared case\n' : 'opaque observed output')});`);
     const extraTest = 'tests/delta.test.ts';
     if (options.extraTest) {
         fs.mkdirSync(path.dirname(path.join(repoRoot, extraTest)), { recursive: true });
@@ -205,8 +210,78 @@ function writeCurrentArtifact(fixture: ReturnType<typeof createGateFixture>, pre
 }
 
 describe('review-context trust-boundary handoff', () => {
-    it('rejects omitted or altered declared obligations through authenticated DELTA audit', async () => {
+    it('rejects skipped lanes open findings risks and changed sources after accepted terminal coverage', async () => {
+        const f = declaredReviewFixture('domain', { unchangedTarget: true, extraTest: true, passing: true });
+        try {
+            const result = await f.execute(); assert.equal(result.status, 'PASSED'); f.publish();
+            const preflight = JSON.parse(fs.readFileSync(f.preflightPath, 'utf8'));
+            const reviewsRoot = path.join(f.orchestratorRoot, 'runtime/reviews');
+            const requiredReviews = { code: true, test: true };
+            const targets = readValidationReviewObligations({ ...f }).obligations;
+            const artifacts: Record<string, { content: string; receipt: unknown }> = {};
+            // Authenticated schema-4 packages are isolated unit evidence, not actual delegated reviews.
+            for (const reviewType of ['code', 'test']) {
+                const scope = buildAuthoritativeReviewCoverageContract({ reviewType, preflight, repoRoot: f.repoRoot });
+                const pkg = writeSchema4ReviewPackage({ ...f, reviewsRoot, reviewType, preflight,
+                    reviewExecution: buildReviewRemediationReviewContract({ taskId: f.taskId, reviewType,
+                        preflightSha256: fileSha256(f.preflightPath)!, fullReviewScope: scope.changedFiles }),
+                    coverageContract: buildReviewCoverageContract({ reviewType, changedFiles: scope.changedFiles,
+                        categoryIds: scope.categoryIds, validationObligations: targets }) });
+                artifacts[reviewType] = { content: fs.readFileSync(pkg.artifactPath, 'utf8'), receipt: pkg.receipt };
+            }
+            const options = { ...f, preflight, requiredReviews, artifacts };
+            assert.deepEqual(getValidationTerminalViolations(options), []);
+            // Policy-only reuse fixture: caller-owned native reuse authentication is not claimed here.
+            const reused = structuredClone(artifacts), receipt = reused.code.receipt as Record<string, unknown>;
+            receipt.reused_existing_review = true;
+            receipt.review_output_contract = { coverage_contract_sha256: JSON.parse(reused.code.content).coverage_ledger.coverage_contract_sha256 };
+            receipt.review_coverage = { ...(receipt.review_coverage as Record<string, unknown>), contract_sha256: 'b'.repeat(64) };
+            assert.deepEqual(getValidationTerminalViolations({ ...options, artifacts: reused }), []);
+            const audit = buildReviewCoverageAuditSummary({ reviewsRoot, taskId: f.taskId, requiredReviews });
+            assert.equal(audit.status, 'COMPLETE', JSON.stringify(audit));
+            assert.ok(getValidationTerminalViolations({ ...options, skipReviews: ['code'] }).some(v => /cannot be omitted or skipped/u.test(v)));
+            const report = JSON.parse(artifacts.test.content);
+            const target = report.coverage_ledger.entries.find((entry: { obligation_id: string }) => entry.obligation_id.startsWith('VALIDATION-'));
+            target.finding_ids = ['F-001'];
+            const open = { ...artifacts, test: { ...artifacts.test, content: JSON.stringify(report) } };
+            assert.ok(getValidationTerminalViolations({ ...options, artifacts: open }).some(v => /finding disposal is not closure/u.test(v)));
+            target.finding_ids = [];
+            report.residual_risks = [{ id: 'R-001', evidence: [{ location: 'RootSuite:1', observation: 'Unresolved declared behavior.' }] }];
+            assert.ok(getValidationTerminalViolations({ ...options, artifacts: {
+                ...artifacts, test: { ...artifacts.test, content: JSON.stringify(report) }
+            } }).some(v => /follow-up is not closure/u.test(v)));
+            fs.appendFileSync(path.join(f.repoRoot, 'RootSuite'), '\nchanged source');
+            assert.ok(getValidationTerminalViolations(options).some(v => /terminal rejected/iu.test(v)));
+        } finally { await f.cleanup(); }
+    });
+
+    it('rejects unresolved declared results at review completion and retained audit boundaries', async () => {
         const f = declaredReviewFixture('domain', { unchangedTarget: true, extraTest: true });
+        try {
+            await f.execute(); f.publish();
+            const preflight = JSON.parse(fs.readFileSync(f.preflightPath, 'utf8'));
+            const reviewsRoot = path.join(f.orchestratorRoot, 'runtime/reviews');
+            const required = { code: true, test: true };
+            const review = checkRequiredReviews({ validatedPreflight: validatePreflightForReview(f.preflightPath, f.taskId, f.taskModePath),
+                preflightPayload: preflight, repoRoot: f.repoRoot, sourceOfTruth: 'Codex', taskModePath: f.taskModePath });
+            assert.ok(review.violations.some(error => /declared validation terminal.*UNRESOLVED/iu.test(error)));
+            const errors: string[] = [];
+            collectRequiredReviewEvidence({ reviewsRoot, taskId: f.taskId, preflight, preflightPath: f.preflightPath,
+                preflightSha256: fileSha256(f.preflightPath)!, reviewEvidencePath: path.join(reviewsRoot, 'absent-gate.json'),
+                requiredReviews: required, scopeCategory: preflight.scope_category, orderedEvents: [], errors });
+            assert.ok(errors.some(error => /declared validation terminal.*UNRESOLVED/iu.test(error)));
+            // Retained lifecycle metadata is unit evidence, not real task acceptance.
+            seedTaskQueue(f.repoRoot, f.taskId, 'DONE', 'default', '', 'Declared terminal unit fixture');
+            appendMandatoryTaskEvent(f.orchestratorRoot, f.taskId, 'COMPLETION_GATE_PASSED', 'PASS', 'Retained terminal unit fixture.',
+                { status: 'PASSED', outcome: 'PASS', preflight_path: f.preflightPath, violations: [] });
+            const audit = buildReviewCoverageAuditSummary({ reviewsRoot, taskId: f.taskId, requiredReviews: required });
+            assert.equal(audit.status, 'INCOMPLETE');
+            assert.match(audit.visible_summary_line, /declared validation terminal.*UNRESOLVED/iu);
+        } finally { await f.cleanup(); }
+    });
+
+    it('rejects omitted or altered declared obligations through authenticated DELTA audit', async () => {
+        const f = declaredReviewFixture('domain', { unchangedTarget: true, extraTest: true, passing: true });
         const reviewType = 'test', deltaFile = 'tests/delta.test.ts';
         const reviewsRoot = path.join(f.orchestratorRoot, 'runtime/reviews');
         const write = (p: string, value: unknown) => fs.writeFileSync(p, `${JSON.stringify(value, null, 2)}\n`);
@@ -279,11 +354,17 @@ describe('review-context trust-boundary handoff', () => {
                 preflight: current.preflight, reviewExecution, evidenceFile: deltaFile,
                 coverageContract: buildReviewCoverageContract({ reviewType, changedFiles: [deltaFile],
                     categoryIds: current.scope.categoryIds, validationObligations: targets }) });
-            const audit = () => buildReviewCoverageAuditSummary({ reviewsRoot, taskId: f.taskId, requiredReviews: { test: true } });
+            const codeScope = buildAuthoritativeReviewCoverageContract({ reviewType: 'code', preflight: current.preflight, repoRoot: f.repoRoot });
+            writeSchema4ReviewPackage({ ...f, reviewsRoot, reviewType: 'code', preflight: current.preflight,
+                reviewExecution: buildReviewRemediationReviewContract({ taskId: f.taskId, reviewType: 'code',
+                    preflightSha256, fullReviewScope: codeScope.changedFiles }),
+                coverageContract: buildReviewCoverageContract({ reviewType: 'code', changedFiles: codeScope.changedFiles,
+                    categoryIds: codeScope.categoryIds, validationObligations: current.targets }) });
+            const audit = () => buildReviewCoverageAuditSummary({ reviewsRoot, taskId: f.taskId, requiredReviews: { code: true, test: true } });
             publish(current.targets);
-            const valid = audit(); assert.equal(valid.status, 'COMPLETE', JSON.stringify(valid.entries[0].violations));
+            const valid = audit(); assert.equal(valid.status, 'COMPLETE', JSON.stringify(valid));
             assert.equal(valid.review_execution_modes.delta_count, 1);
-            assert.equal(valid.entries[0].obligation_count, buildReviewCoverageContract({ reviewType, changedFiles: [deltaFile],
+            assert.equal(valid.entries.find(entry => entry.review_type === 'test')!.obligation_count, buildReviewCoverageContract({ reviewType, changedFiles: [deltaFile],
                 categoryIds: current.scope.categoryIds, validationObligations: current.targets }).obligation_count);
             assert.ok(!current.preflight.changed_files.includes('RootSuite'));
             for (const mutation of ['omitted', 'altered']) {
@@ -291,7 +372,7 @@ describe('review-context trust-boundary handoff', () => {
                 if (mutation === 'omitted') targets.length = 0; else targets[0].attempt_id = 'foreign';
                 publish(targets);
                 const rejected = audit(); assert.equal(rejected.status, 'INCOMPLETE');
-                assert.ok(rejected.entries[0].violations.some(v => /does not match.*current-scope/iu.test(v)), mutation);
+                assert.ok(rejected.entries.find(entry => entry.review_type === 'test')!.violations.some(v => /does not match.*current-scope/iu.test(v)), mutation);
             }
         } finally { await f.cleanup(); }
     });

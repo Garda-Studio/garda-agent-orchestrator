@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { getValidationTerminalViolations } from '../review/validation-terminal';
 
 import { isPlainRecord } from '../../core/records';
 import type { ReviewReceipt } from '../../gate-runtime/review-context';
@@ -349,6 +350,8 @@ export function collectRequiredReviewEvidence(input: {
                 input.errors.push(...findingsEvidence.violations);
             }
         }
+        input.errors.push(...getValidationTerminalViolations({ repoRoot, taskId: input.taskId, preflight: input.preflight,
+            preflightPath: input.preflightPath, requiredReviews: input.requiredReviews, artifacts: reviewArtifacts }));
         const receiptReviewTrustSummary = readReviewTrustSummary(
             requiredReviewBooleans,
             input.reviewsRoot,

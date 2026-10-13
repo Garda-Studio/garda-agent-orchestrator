@@ -1,5 +1,6 @@
 // Extracted from required-reviews-check.ts; keep behavior changes in the facade tests.
 import * as path from 'node:path';
+import { getValidationTerminalViolations } from '../review/validation-terminal';
 import { getReviewArtifactFindingsEvidence } from '../completion';
 import { normalizePath } from '../shared/helpers';
 import { getNoOpEvidence } from '../task-mode/no-op';
@@ -418,6 +419,11 @@ export function checkRequiredReviews(options: CheckRequiredReviewsOptions) {
         };
     }
 
+    if (resolvedTaskId) errors.push(...getValidationTerminalViolations({
+        repoRoot: options.repoRoot || path.resolve(validatedPreflight.preflight_path, '../../../..'),
+        taskId: resolvedTaskId, preflight: preflightPayload, preflightPath: validatedPreflight.preflight_path,
+        requiredReviews, skipReviews, artifacts: reviewArtifacts
+    }));
     const status = errors.length > 0 ? 'FAILED' : 'PASSED';
     const outcome = errors.length > 0 ? 'FAIL' : 'PASS';
 
