@@ -2,6 +2,13 @@
 
 ## 1.4.4
 
+### T-259-1 — Language-independent boundary source bindings
+
+- Bind explicit source/case references without requiring project declaration,
+  language grammar, English labels or conventional test directories. Preserve
+  contained file identities, bounded unique-source reads and unresolved execution
+  and semantics; ordinary workflow activation remains in dependent T-259 work.
+
 ### Documentation and package links
 
 - Ship the existing provider-client evidence and manual CI-selection guides with the npm package and public bundle. Keep the catalog fixture as a repository-only reference.

@@ -314,7 +314,8 @@ assert.equal(value, expected);`
         try {
             const requireFromTest = createRequire(__filename);
             const compiledCore = path.dirname(requireFromTest.resolve('../../../src/core/trust-boundary-analysis'));
-            for (const filename of ['trust-boundary-analysis.js', 'test-evidence-lexing.js', 'vendor-typescript.js']) {
+            for (const filename of ['trust-boundary-analysis.js', 'trust-boundary-source-evidence.js',
+                'test-evidence-lexing.js', 'vendor-typescript.js']) {
                 fs.copyFileSync(path.join(compiledCore, filename), path.join(repoRoot, filename));
             }
             fs.mkdirSync(path.join(repoRoot, 'tests'));

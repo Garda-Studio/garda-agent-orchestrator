@@ -3,6 +3,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { maskTestEvidenceRegexLiterals } from './test-evidence-lexing';
 import type { ValidationFileIdentity, ValidationTarget } from './project-validation-contract';
+import {
+    MAX_BOUNDARY_SOURCE_REFERENCES as MAX_DECLARED_BOUNDARY_REFERENCES,
+    MAX_BOUNDARY_SOURCE_BYTES as MAX_DECLARED_BOUNDARY_SOURCE_BYTES,
+    readBoundarySourceEvidence
+} from './trust-boundary-source-evidence';
 
 export const TRUST_BOUNDARY_ANALYSIS_RULE_ID = 'trust_boundary_adversarial_analysis';
 export const TRUST_BOUNDARY_ANALYSIS_RULE_TITLE = 'Trust-boundary and adversarial-path analysis';
@@ -19,8 +24,6 @@ export const TRUST_BOUNDARY_NEGATIVE_PATH_KINDS = Object.freeze([
 ] as const);
 
 export type TrustBoundaryNegativePathKind = typeof TRUST_BOUNDARY_NEGATIVE_PATH_KINDS[number];
-const MAX_DECLARED_BOUNDARY_REFERENCES = 128;
-const MAX_DECLARED_BOUNDARY_SOURCE_BYTES = 8 * 1024 * 1024;
 
 const ADVERSARIAL_SCENARIO_PATTERN =
     /\b(?:adversarial|invalid|malformed|forged|replaced|missing|foreign|stale|tamper(?:ed|ing)?|unauthori[sz]ed|denied|rejected|outside|escape|traversal|symlink|replay|toctou|race|duplicate|mismatch|untrusted|corrupt(?:ed|ion)?|fail(?:s|ed|ure)?|reject(?:s|ed)?|block(?:s|ed)?|prevent(?:s|ed)?)\b/i;
@@ -831,13 +834,8 @@ function readDeclaredBoundarySources(matrix: readonly TrustBoundaryMatrixEntry[]
     return facts;
 }
 
-export function assessTrustBoundaryMatrix(
-    value: unknown,
-    options: TrustBoundaryMatrixAssessmentOptions = {}
-): TrustBoundaryMatrixAssessment {
+function normalizeTrustBoundaryMatrix(value: unknown, structuralOnly: boolean) {
     const violations: string[] = [];
-    const syntaxViolations: string[] = [];
-    const structuralOnly = options.recipeTargets !== undefined || options.sourceIdentities !== undefined || options.syntaxAdapter !== undefined;
     const source = Array.isArray(value) ? value : [];
     if (!Array.isArray(value) || source.length === 0) {
         violations.push('trust_boundary_matrix must contain at least one named trust boundary.');
@@ -859,17 +857,52 @@ export function assessTrustBoundaryMatrix(
         seenIds.add(normalizedId);
         seenNames.add(normalizedName);
     }
-    const sourceEvidence = structuralOnly ? readDeclaredBoundarySources(matrix, options, violations, syntaxViolations) : undefined;
-    if (!structuralOnly && options.repoRoot) {
-        validateTrustBoundaryEvidenceFiles(matrix, options.repoRoot, violations);
-    }
     const canonicalMatrix = JSON.stringify(matrix);
     return {
         matrix,
         matrix_sha256: createHash('sha256').update(canonicalMatrix, 'utf8').digest('hex'),
+        violations
+    };
+}
+
+export function assessTrustBoundaryMatrix(
+    value: unknown,
+    options: TrustBoundaryMatrixAssessmentOptions = {}
+): TrustBoundaryMatrixAssessment {
+    const syntaxViolations: string[] = [];
+    const structuralOnly = options.recipeTargets !== undefined || options.sourceIdentities !== undefined || options.syntaxAdapter !== undefined;
+    const assessment = normalizeTrustBoundaryMatrix(value, structuralOnly);
+    const { matrix, violations } = assessment;
+    const sourceEvidence = structuralOnly ? readDeclaredBoundarySources(matrix, options, violations, syntaxViolations) : undefined;
+    if (!structuralOnly && options.repoRoot) {
+        validateTrustBoundaryEvidenceFiles(matrix, options.repoRoot, violations);
+    }
+    return {
+        ...assessment,
         violations: [...new Set([...violations, ...syntaxViolations])],
         ...(structuralOnly ? { structural_status: violations.length ? 'INVALID' as const : 'BOUND' as const,
             semantic_status: 'PENDING_INDEPENDENT_REVIEW' as const, source_evidence: sourceEvidence } : {})
+    };
+}
+
+export function assessBoundTrustBoundaryMatrix(value: unknown, options: {
+    repoRoot: string; expectedSources?: readonly ValidationFileIdentity[];
+}): TrustBoundaryMatrixAssessment & { source_bindings_sha256: string } {
+    const assessment = normalizeTrustBoundaryMatrix(value, true);
+    const references = [...new Set(assessment.matrix.flatMap(entry => entry.negative_paths
+        .flatMap(negative => negative.evidence_files)))].flatMap(reference => {
+        const parsed = parseTestEvidenceReference(reference);
+        return parsed ? [{ filePath: parsed.evidenceFile, caseId: parsed.testName }] : [];
+    });
+    const { sourceEvidence, violations } = readBoundarySourceEvidence({ ...options, references });
+    const allViolations = [...new Set([...assessment.violations, ...violations])];
+    return {
+        ...assessment, violations: allViolations,
+        structural_status: allViolations.length ? 'INVALID' : 'BOUND',
+        semantic_status: 'PENDING_INDEPENDENT_REVIEW', source_evidence: sourceEvidence,
+        source_bindings_sha256: createHash('sha256').update(JSON.stringify({
+            matrix_sha256: assessment.matrix_sha256, source_evidence: sourceEvidence
+        })).digest('hex')
     };
 }
 
