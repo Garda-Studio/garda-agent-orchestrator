@@ -350,10 +350,17 @@ function getOriginCoverageContractViolations(
         return ['origin_coverage_contract has invalid shape.'];
     }
     const obligations = value.obligations as ReviewCoverageContract['obligations'];
+    const validationObligations = obligations.filter((entry) => entry.kind === 'validation');
+    if (validationObligations.some((entry) => !isRecord(entry.validation_binding)
+        || typeof entry.validation_binding.id !== 'string'
+        || !isRecord(entry.validation_binding.source_identity))) {
+        return ['origin_coverage_contract has invalid validation binding.'];
+    }
     const violations = getReviewCoverageContractViolations(value, {
         reviewType,
         changedFiles: obligations.filter((entry) => entry.kind === 'file').map((entry) => entry.target),
-        categoryIds: obligations.filter((entry) => entry.kind === 'category').map((entry) => entry.target)
+        categoryIds: obligations.filter((entry) => entry.kind === 'category').map((entry) => entry.target),
+        validationObligations: validationObligations.map((entry) => entry.validation_binding!)
     });
     if (!normalizeHash(expectedSha256) || value.contract_sha256 !== normalizeHash(expectedSha256)) {
         violations.push('origin_coverage_contract does not match the authenticated findings-validation coverage hash.');

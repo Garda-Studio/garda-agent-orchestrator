@@ -8,18 +8,21 @@ import {
     getFindingsBySeverity
 } from '../completion/completion-verdict-markdown';
 import { normalizePath } from '../shared/helpers';
+import type { QualityValidationObligation } from '../quality-checklist/quality-checklist-validation-phases';
 import { parseSplitCheckpointDetectionSource } from '../split-required/split-checkpoint-scope';
 import {
     formatReviewEvidenceDomainViolation,
     normalizeReviewEvidenceDomainPaths
 } from './review-evidence-domain';
 
-export type ReviewCoverageObligationKind = 'file' | 'boundary' | 'category';
+export type ReviewCoverageObligationKind = 'file' | 'boundary' | 'category' | 'validation';
 
 export interface ReviewCoverageObligation {
     id: string;
     kind: ReviewCoverageObligationKind;
     target: string;
+    source?: string;
+    validation_binding?: QualityValidationObligation;
     expected_finding_ids?: string[];
 }
 
@@ -150,6 +153,7 @@ export function buildReviewCoverageContract(options: {
     reviewType: string;
     changedFiles: readonly string[];
     categoryIds?: readonly string[];
+    validationObligations?: readonly QualityValidationObligation[];
 }): ReviewCoverageContract {
     const reviewType = String(options.reviewType || '').trim().toLowerCase();
     const changedFiles = normalizeChangedFiles(options.changedFiles);
@@ -173,10 +177,27 @@ export function buildReviewCoverageContract(options: {
         kind: 'category',
         target: category
     }));
-    const obligations = [...fileObligations, ...boundaryObligations, ...categoryObligations];
+    const validationObligations = [...(options.validationObligations || [])]
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map((binding): ReviewCoverageObligation => ({
+            id: `VALIDATION-${binding.id.toUpperCase()}`,
+            kind: 'validation',
+            target: `${binding.recipe_id}/${binding.target_id}: ${binding.selector}`,
+            source: binding.source_identity.path,
+            validation_binding: {
+                id: binding.id, recipe_id: binding.recipe_id, target_id: binding.target_id,
+                selector: binding.selector,
+                source_identity: { path: binding.source_identity.path, sha256: binding.source_identity.sha256,
+                    size: binding.source_identity.size, identity: binding.source_identity.identity },
+                snapshot_sha256: binding.snapshot_sha256, execution: binding.execution,
+                attempt_id: binding.attempt_id, result_status: binding.result_status,
+                result_sha256: binding.result_sha256
+            }
+        }));
+    const obligations = [...fileObligations, ...boundaryObligations, ...categoryObligations, ...validationObligations];
     const payload = contractPayload({
         reviewType,
-        required: changedFiles.length > 0,
+        required: changedFiles.length > 0 || validationObligations.length > 0,
         obligations
     });
     return {
@@ -191,6 +212,7 @@ export function getReviewCoverageContractViolations(
         reviewType: string;
         changedFiles: readonly string[];
         categoryIds?: readonly string[];
+        validationObligations?: readonly QualityValidationObligation[];
     }
 ): string[] {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -791,20 +813,25 @@ export function validateReviewCoverageLedger(
         if (entry.evidence.length === 0) {
             violations.push(`Coverage obligation '${entry.id}' has no concrete evidence.`);
         }
-        let hasTargetFileEvidence = obligation.kind !== 'file';
+        const targetSource = obligation.kind === 'file' ? obligation.target
+            : obligation.kind === 'validation' ? obligation.source : undefined;
+        const admissiblePaths = normalizeReviewEvidenceDomainPaths([
+            ...changedFiles, ...(obligation.kind === 'validation' && targetSource ? [targetSource] : [])
+        ]);
+        let hasTargetFileEvidence = !targetSource;
         for (const evidence of entry.evidence) {
             const location = parseReviewEvidenceLocation(evidence.location);
-            if (!location || !changedFiles.includes(location.filePath)) {
+            if (!location || !admissiblePaths.includes(location.filePath)) {
                 violations.push(formatReviewEvidenceDomainViolation({
                     subject: `Coverage obligation '${entry.id}' evidence`,
                     location: evidence.location,
                     reviewType: contract.review_type,
-                    admissiblePaths: changedFiles
+                    admissiblePaths
                 }));
-            } else if (obligation.kind === 'file' && location.filePath === obligation.target) {
+            } else if (targetSource && location.filePath === normalizePath(targetSource)) {
                 hasTargetFileEvidence = true;
             }
-            if (location && changedFiles.includes(location.filePath) && options.repoRoot) {
+            if (location && admissiblePaths.includes(location.filePath) && options.repoRoot) {
                 const lineEvidence = getChangedFileLineCount(location.filePath);
                 if (lineEvidence == null) {
                     violations.push(
@@ -823,8 +850,8 @@ export function validateReviewCoverageLedger(
         }
         if (!hasTargetFileEvidence) {
             violations.push(
-                `File coverage obligation '${entry.id}' must cite its own target '${obligation.target}:line'; `
-                + 'a different admissible review-domain path cannot satisfy a FILE-* obligation.'
+                `${obligation.kind === 'file' ? 'File' : 'Validation'} coverage obligation '${entry.id}' must cite its own target '${targetSource}:line'; `
+                + 'a different admissible review-domain path cannot satisfy this target obligation.'
             );
         }
         const invalidFindingIds = entry.finding_ids.filter((id) => !FINDING_ID_PATTERN.test(id));
@@ -874,7 +901,8 @@ export function buildReviewCoverageLedgerTemplateLines(contract: ReviewCoverageC
     return contract.obligations.map((obligation) => `- ${JSON.stringify({
         id: obligation.id,
         evidence: [{
-            location: `${obligation.kind === 'file' ? obligation.target : defaultLocation}:<line>`,
+            location: `${obligation.kind === 'file' ? obligation.target
+                : obligation.kind === 'validation' ? obligation.source : defaultLocation}:<line>`,
             observation: `<concrete observation for ${obligation.kind} ${obligation.target}>`
         }],
         result: '<finding|no-finding>',
