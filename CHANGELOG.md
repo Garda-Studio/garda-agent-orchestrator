@@ -1,5 +1,9 @@
 # Changelog
 
+## T-242-9-2 — Project validation activation guidance
+
+- Documented audited version-one validation declarations, existing recipe-ID execution and independent semantic closure; added CLI help and governed template guidance without changing project defaults or historical authority.
+
 ## T-242-9-1 — Technology-neutral activation qualification
 
 - Qualify real admitted custom-driver validation across unfamiliar and package-local layouts, preserving Unicode targets, unresolved output, required independent semantics and current source bindings.

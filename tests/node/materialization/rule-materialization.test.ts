@@ -10,6 +10,7 @@ import {
     CONTEXT_RULE_FILES,
     GENERATED_RULE_FILES,
     selectRuleSource,
+    selectRuleSources,
     applyContextDefaults,
     applyAssistantDefaults,
     generateProjectMemorySummary,
@@ -20,6 +21,7 @@ import {
     PROJECT_MEMORY_MAP_READ_GUIDANCE,
     PROJECT_MEMORY_MAP_WRITE_CONTRACT
 } from '../../../src/core/project-memory';
+import { parseProjectValidationContract } from '../../../src/core/project-validation-recipes';
 
 function findRepoRoot() {
     let current = __dirname;
@@ -33,6 +35,31 @@ function findRepoRoot() {
 }
 
 describe('review catalog materialization contracts', () => {
+    it('publishes a parseable v1 declaration and offers governed recipe safety guidance', () => {
+        const repoRoot = findRepoRoot();
+        const guide = fs.readFileSync(path.join(repoRoot, 'docs/project-validation-recipes.md'), 'utf8');
+        const example = guide.match(/```json\r?\n([\s\S]*?)\r?\n```/u);
+        assert.ok(example, 'guide must contain the complete declaration shape');
+        const contract = parseProjectValidationContract(JSON.parse(example[1]));
+        const recipe = contract.recipes[0];
+        assert.equal(recipe.purpose, 'test');
+        assert.equal(recipe.result_format, 'tap');
+        assert.equal(recipe.max_attempts, 1);
+        assert.ok(recipe.inputs.some(input => input.role === 'source'));
+        assert.ok(recipe.inputs.some(input => input.role === 'test'));
+        assert.equal(recipe.targets[0].selector, 'прибавление一');
+        const source = selectRuleSources('70-security.md', {
+            targetRoot: repoRoot,
+            templateRuleRoot: path.join(repoRoot, 'template/docs/agent-rules'),
+            liveRuleRoot: path.join(repoRoot, 'live/docs/agent-rules')
+        }).find(candidate => candidate.origin === 'template');
+        assert.equal(source?.origin, 'template');
+        const rule = fs.readFileSync(source!.path, 'utf8');
+        assert.ok(rule.includes('## Project Validation Recipes'));
+        assert.ok(rule.includes('UNRESOLVED'));
+        assert.ok(rule.includes('independent semantic review'));
+    });
+
     it('keeps canonical task, skill, and provider guidance compact and legacy-compatible', () => {
         const repoRoot = findRepoRoot();
         const taskWorkflow = fs.readFileSync(

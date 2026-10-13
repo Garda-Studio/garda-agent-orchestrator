@@ -482,6 +482,24 @@ describe('cli/commands/gates command help and syntax remediation', () => {
         assert.ok(combinedOutput.includes('test-only preflight'));
     });
 
+    it('advertises recipe execution without raw command or budget overrides', async () => {
+        const result = await runCliWithCapturedOutput(
+            ['gate', 'run-intermediate-command', '--help'],
+            { cwd: getSourceCheckoutNestedCwd() }
+        );
+        assert.equal(result.exitCode, 0);
+        const output = stripAnsi(result.logs.join('\n'));
+        const recipeExample = output.split('\n').find(line => line.includes('--recipe-id'));
+        assert.ok(recipeExample, 'help must expose the admitted recipe route');
+        const tokens = splitCommandLine(recipeExample.trim());
+        assert.ok(tokens.includes('<admitted-recipe-id>'));
+        assert.ok(tokens.includes('--task-id'));
+        assert.ok(tokens.includes('--repo-root'));
+        for (const forbidden of ['--command', '--command-source', '--timeout-ms', '--preflight-path']) {
+            assert.equal(tokens.includes(forbidden), false);
+        }
+    });
+
     it('quality-checklist help does not advertise a partial default-rule answer set', async () => {
         const result = await runCliWithCapturedOutput(['gate', 'quality-checklist', '--help'], { cwd: getSourceCheckoutNestedCwd() });
         assert.equal(result.exitCode, 0);

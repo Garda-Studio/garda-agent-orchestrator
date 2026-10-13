@@ -44,3 +44,12 @@ Primary entry point: selected source-of-truth entrypoint for this workspace.
 - Emit security-relevant audit logs (auth failures, privilege changes, payment/webhook rejects).
 - Avoid sensitive payload logging; log correlation ids and security decision outcomes.
 - Document incident-impacting security changes in changelog/release notes.
+
+## Project Validation Recipes
+- Admit optional declarations through audited `workflow set --project-validation-contract`; a JSON file alone grants no authority.
+- Use declared executable identities, literal argv, cwd, input roles, exact case selectors and bounded resources; never infer a runner from file extensions or project manifests.
+- Run the admitted recipe through `gate run-intermediate-command --recipe-id`; do not add raw command, timeout or artifact overrides.
+- Local hashes do not attest offline or write-confinement capabilities; unsupported enforcing capabilities block execution.
+- Preserve structure, actual execution, canonical result and independent semantic review as separate phases. Opaque or unsupported output stays UNRESOLVED even after exit code zero.
+- Require current PASSED results and exact target coverage from every frozen capable mandatory semantic lane before terminal closure; missing review, source drift or open declared findings remain incomplete.
+- Keep existing grants, budgets, user settings, queues and memory. Historical or foreign receipts do not become current acceptance, and absence of declarations retains the legacy route.
