@@ -2763,6 +2763,80 @@ test('validateReviewFindingsReport rejects per-obligation coverage and finding r
     )));
 });
 
+test('coverage evidence validation bounds obligation reads and shared path insertions linearly', () => {
+    const cases = [32, 64].map((fileCount) => {
+        const changedFiles = Array.from({ length: fileCount }, (_, index) => `src/cost-${index}.ts`);
+        const contract = buildReviewCoverageContract({ reviewType: 'code', changedFiles, categoryIds: ['schema'] });
+        const execution = buildReviewRemediationReviewContract({
+            taskId: 'T-979-1', reviewType: 'code', preflightSha256: CONTRACT_HASH, fullReviewScope: changedFiles
+        });
+        return {
+            report: {
+                ...validReport(),
+                validation_notes: [{
+                    id: 'N-001', topic: 'schema-shape', note: 'Inspected the concrete coverage evidence domain.',
+                    evidence: [evidence(`${changedFiles[0]}:1`)]
+                }],
+                coverage_ledger: {
+                    coverage_contract_sha256: contract.contract_sha256,
+                    entries: contract.obligations.map((obligation) => ({
+                        obligation_id: obligation.id,
+                        evidence: [evidence(`${obligation.kind === 'file' ? obligation.target : changedFiles[0]}:1`)],
+                        finding_ids: []
+                    }))
+                },
+                review_execution: { ...validReport().review_execution as object, contract_sha256: execution.contract_sha256 }
+            },
+            options: {
+                ...validationOptions, expectedCoverageContract: contract,
+                expectedCoverageObligationIds: contract.obligations.map((obligation) => obligation.id),
+                expectedChangedFilePaths: changedFiles, expectedReviewExecutionContract: execution
+            }
+        };
+    });
+    // Isolate collection instrumentation from this process and other tests.
+    const output = execFileSync(process.execPath, ['-e', String.raw`
+        const fs = require('node:fs');
+        const { validateReviewFindingsReport } = require(process.argv[1]);
+        const cases = JSON.parse(fs.readFileSync(0, 'utf8'));
+        const NativeSet = global.Set;
+        const results = cases.map(({ report, options }) => {
+            let obligationReads = 0;
+            let pathInsertions = 0;
+            options.expectedCoverageContract.obligations = new Proxy(options.expectedCoverageContract.obligations, {
+                get(target, property, receiver) {
+                    if (typeof property === 'string' && /^\d+$/u.test(property)) obligationReads++;
+                    return Reflect.get(target, property, receiver);
+                }
+            });
+            global.Set = class extends NativeSet {
+                add(value) {
+                    if (typeof value === 'string' && value.startsWith('src/cost-')) pathInsertions++;
+                    return super.add(value);
+                }
+            };
+            try {
+                const result = validateReviewFindingsReport(report, options);
+                return { valid: result.valid, violations: result.violations, obligationReads, pathInsertions };
+            } finally {
+                global.Set = NativeSet;
+            }
+        });
+        process.stdout.write(JSON.stringify(results));
+    `, require.resolve('../../../../src/gates/review/review-findings-schema')], {
+        input: JSON.stringify(cases), encoding: 'utf8'
+    });
+    const results = JSON.parse(output) as {
+        valid: boolean; violations: string[]; obligationReads: number; pathInsertions: number;
+    }[];
+    for (const [index, result] of results.entries()) {
+        assert.equal(result.valid, true, result.violations.join('\n'));
+        const contract = cases[index].options.expectedCoverageContract;
+        assert.ok(result.obligationReads <= contract.obligation_count * 2, JSON.stringify(result));
+        assert.ok(result.pathInsertions <= cases[index].options.expectedChangedFilePaths.length * 8, JSON.stringify(result));
+    }
+});
+
 test('validateReviewFindingsContract returns one deterministic violation set for malformed findings and coverage', () => {
     const contract = buildReviewCoverageContract({
         reviewType: 'code',

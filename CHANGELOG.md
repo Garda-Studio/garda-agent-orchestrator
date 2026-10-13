@@ -1,5 +1,8 @@
 # Changelog
 
+- Bound coverage evidence obligation lookups and reuse the ordinary path set
+  without widening validation-source or reviewer evidence domains (T-242-7-3-1-F1).
+
 ## T-242-9-2 — Project validation activation guidance
 
 - Documented audited version-one validation declarations, existing recipe-ID execution and independent semantic closure; added CLI help and governed template guidance without changing project defaults or historical authority.

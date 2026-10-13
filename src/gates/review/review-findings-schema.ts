@@ -1913,14 +1913,20 @@ function validateConcreteReviewEvidenceLocations(
         );
     }
     if (reportParts.coverageLedger) {
+        const obligationsById = new Map<string, ReviewCoverageContract['obligations'][number]>();
+        for (const obligation of lineValidationOptions.coverageContract?.obligations || []) {
+            if (!obligationsById.has(obligation.id)) {
+                obligationsById.set(obligation.id, obligation);
+            }
+        }
         for (const [entryIndex, entry] of reportParts.coverageLedger.entries.entries()) {
-            const obligation = lineValidationOptions.coverageContract?.obligations.find(item => item.id === entry.obligation_id);
+            const obligation = obligationsById.get(entry.obligation_id);
             const entryPaths = obligation?.kind === 'validation' && obligation.source
                 ? normalizeReviewEvidenceDomainPaths([...admissiblePaths, obligation.source]) : admissiblePaths;
             validateEvidenceLocations(
                 entry.evidence,
                 `coverage_ledger.entries[${entryIndex}]`,
-                new Set(entryPaths),
+                entryPaths === admissiblePaths ? changedFiles : new Set(entryPaths),
                 expectedReviewType,
                 entryPaths,
                 getChangedFileLineCount,
