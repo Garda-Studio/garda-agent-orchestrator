@@ -85,6 +85,44 @@ test('stale owner cannot mutate or clear a later run marker', () => {
     } finally { value.clear(current); }
 });
 
+test('successive native runs update and clear their own published marker generations', () => {
+    const value = fixture();
+    for (let run = 0; run < 2; run++) {
+        const owner = write(value.options);
+        try {
+            value.update(owner);
+            assert.equal(JSON.parse(fs.readFileSync(value.file, 'utf8')).child_pid, value.child.pid);
+        } finally { value.clear(owner); }
+        assert.equal(fs.existsSync(value.file), false);
+    }
+});
+
+test('post-publication object or content replacement cannot acquire the issued lease', () => {
+    const nativeFs: typeof fs = require('node:fs'), originalRename = nativeFs.renameSync;
+    const expected: string[] = [], preserved: string[] = [];
+    for (const drift of ['object', 'content']) {
+        const value = fixture(), owner = write(value.options);
+        let replacement = '', publicationSeen = false;
+        const renameMock = mock.method(nativeFs, 'renameSync', (...args: unknown[]) => {
+            const result = Reflect.apply(originalRename, nativeFs, args);
+            if (String(args[1]) === value.file) {
+                publicationSeen = true;
+                replacement = fs.readFileSync(value.file, 'utf8');
+                if (drift === 'object') originalRename(value.file, value.file + '.published');
+                else replacement = replacement.replace('fixture command', 'foreign command');
+                fs.writeFileSync(value.file, replacement);
+            }
+            return result;
+        });
+        try { assert.throws(() => value.update(owner), REJECTED); }
+        finally { renameMock.mock.restore(); }
+        assert.equal(publicationSeen, true);
+        assert.throws(() => value.clear(owner), REJECTED);
+        expected.push(replacement); preserved.push(fs.readFileSync(value.file, 'utf8'));
+    }
+    assert.deepEqual(preserved, expected);
+});
+
 test('replay of pre-update bytes cannot authorize the current issued owner', () => {
     const value = fixture(), owner = write(value.options), original = fs.readFileSync(value.file, 'utf8');
     value.update(owner); fs.writeFileSync(value.file, original);

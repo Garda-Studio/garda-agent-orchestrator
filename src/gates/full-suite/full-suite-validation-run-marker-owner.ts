@@ -90,6 +90,19 @@ export function issueFullSuiteRunMarkerOwner(root: string, file: string, owner: 
     ensureContainedDirectory(root, path.dirname(file));
     leases.set(owner, openLease(root, file, content));
 }
+function bindPublishedLease(previous: MarkerLease, next: MarkerLease, file: string): MarkerLease {
+    assertContainedDestination(next.parent);
+    const published = lstatFileIdentitySync(file, { bigint: true });
+    // Windows can retain the destination's creation time across our same-name rename.
+    const retainedCreationTime = process.platform === 'win32'
+        && published.birthtimeNs === previous.identity.birthtimeNs;
+    if (published.dev !== next.identity.dev || published.ino !== next.identity.ino
+        || published.mode !== next.identity.mode
+        || (published.birthtimeNs !== next.identity.birthtimeNs && !retainedCreationTime)) throw changed();
+    const lease = { ...next, file: path.resolve(file), identity: published };
+    assertContent(lease);
+    return lease;
+}
 export function updateOwnedFullSuiteRunMarker(
     root: string, file: string, owner: object, update: (content: string) => string
 ): void {
@@ -100,9 +113,8 @@ export function updateOwnedFullSuiteRunMarker(
     try {
         assertContent(current); assertContent(next);
         fs.renameSync(tempPath, file);
-        next.file = path.resolve(file);
-        leases.set(owner, next); committed = true;
-        assertContent(next);
+        committed = true;
+        leases.set(owner, bindPublishedLease(current, next, file));
     } finally {
         if (!committed) {
             assertContent(next); fs.unlinkSync(tempPath);

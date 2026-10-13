@@ -1,5 +1,9 @@
 # Changelog
 
+- Preserve full-suite marker ownership across Windows same-name creation-time
+  retention, authenticating the published object and exact bytes before issuing
+  its lease (T-198).
+
 - Bound coverage evidence obligation lookups and reuse the ordinary path set
   without widening validation-source or reviewer evidence domains (T-242-7-3-1-F1).
 
