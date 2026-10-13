@@ -94,6 +94,9 @@ export function writeSchema4ReviewPackage(options: {
     preflight: Record<string, unknown>;
     mediumFindings?: readonly string[];
     residualRisks?: readonly string[];
+    coverageContract?: ReturnType<typeof buildReviewCoverageContract>;
+    reviewExecution?: ReturnType<typeof buildReviewRemediationReviewContract>;
+    evidenceFile?: string;
 }): Schema4ReviewPackage {
     const changedFiles = Array.isArray(options.preflight.changed_files)
         ? options.preflight.changed_files.map(String)
@@ -108,13 +111,16 @@ export function writeSchema4ReviewPackage(options: {
         })
         : { tree_state_sha256: 'b'.repeat(64) };
     const treeStateSha256 = treeState.tree_state_sha256;
-    const evidenceFile = changedFiles[0] || 'src/example.ts';
+    const evidenceFile = options.evidenceFile ?? (changedFiles[0] || 'src/example.ts');
     const preflightSha256 = fileSha256(options.preflightPath);
-    const coverageContract = buildReviewCoverageContract({
+    const coverageContract = options.coverageContract ?? buildReviewCoverageContract({
         reviewType: options.reviewType,
         changedFiles
     });
-    const reviewExecution = buildReviewRemediationReviewContract({
+    const findingObligationId = (options.coverageContract
+        ? coverageContract.obligations.find(obligation => obligation.kind === 'file' && obligation.target === evidenceFile)
+        : undefined)?.id ?? coverageContract.obligations[0]?.id;
+    const reviewExecution = options.reviewExecution ?? buildReviewRemediationReviewContract({
         taskId: options.taskId,
         reviewType: options.reviewType,
         preflightSha256,
@@ -180,13 +186,16 @@ export function writeSchema4ReviewPackage(options: {
         }],
         coverage_ledger: {
             coverage_contract_sha256: coverageContract.contract_sha256,
-            entries: coverageContract.obligations.map((obligation, index) => ({
+            entries: coverageContract.obligations.map(obligation => ({
                 obligation_id: obligation.id,
                 evidence: [{
-                    location: `${evidenceFile}:1`,
+                    location: `${options.coverageContract
+                        ? obligation.kind === 'validation' ? obligation.source
+                            : obligation.kind === 'file' ? obligation.target : evidenceFile
+                        : evidenceFile}:1`,
                     observation: `Execution lineage was checked for ${obligation.id}.`
                 }],
-                finding_ids: index === 0
+                finding_ids: obligation.id === findingObligationId
                     ? (options.mediumFindings || []).map((_, findingIndex) =>
                         `F-${String(findingIndex + 1).padStart(3, '0')}`)
                     : []
@@ -195,8 +204,8 @@ export function writeSchema4ReviewPackage(options: {
         review_execution: {
             mode: reviewExecution.mode,
             contract_sha256: reviewExecution.contract_sha256,
-            covered_delta_targets: [],
-            inspected_prior_finding_ids: []
+            covered_delta_targets: [...(reviewExecution.delta?.required_delta_targets ?? [])],
+            inspected_prior_finding_ids: [...reviewExecution.finding_reconciliation.baseline_finding_ids]
         },
         findings: {
             critical: [],
@@ -209,8 +218,8 @@ export function writeSchema4ReviewPackage(options: {
                     location: `${evidenceFile}:1`,
                     observation: 'The finding remains active for locked-policy disposition.'
                 }],
-                coverage_obligation_ids: coverageContract.obligations.length > 0
-                    ? [coverageContract.obligations[0].id]
+                coverage_obligation_ids: findingObligationId
+                    ? [findingObligationId]
                     : []
             })),
             low: []

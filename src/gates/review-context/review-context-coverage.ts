@@ -10,6 +10,7 @@ import { readValidationFile, validationDigest } from '../../core/project-validat
 import { readValidationReviewObligations } from '../review/validation-obligations';
 import { resolveCurrentNoOpPreflightPath } from '../task-mode/no-op';
 import { getTaskModeEvidence } from '../task-mode/task-mode';
+import type { ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 
 export interface AuthoritativeReviewCoverageScope {
     changedFiles: string[];
@@ -58,6 +59,7 @@ export function buildAuthoritativeReviewCoverageContract(options: {
 
 export function resolveAuthoritativeReviewValidationObligations(options: {
     reviewType: string; preflight: Record<string, unknown>; repoRoot: string; preflightPath?: string; taskModePath?: string;
+    inspection?: ValidationEvidenceInspection;
 }) {
     if (!currentProjectValidationAuthority(options.repoRoot, options.preflight)) return undefined;
     const taskId = String(options.preflight.task_id ?? '');
@@ -75,4 +77,12 @@ export function resolveAuthoritativeReviewValidationObligations(options: {
         || validationDigest(JSON.parse(retained.bytes.toString('utf8'))) !== validationDigest(options.preflight))
         throw new Error('Declared review coverage preflight differs from current canonical projection.');
     return projection.semantic_review_lanes.some(lane => lane === options.reviewType) ? projection.obligations : undefined;
+}
+
+export function buildDeclaredReviewCoverageContract(options: Parameters<typeof resolveAuthoritativeReviewValidationObligations>[0]) {
+    const scope = resolveAuthoritativeReviewCoverageScope(options);
+    const validationObligations = resolveAuthoritativeReviewValidationObligations(options);
+    return { ...scope, validationObligations, contract: buildReviewCoverageContract({
+        reviewType: options.reviewType, changedFiles: scope.changedFiles, categoryIds: scope.categoryIds, validationObligations
+    }) };
 }

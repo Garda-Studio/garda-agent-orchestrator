@@ -146,7 +146,7 @@ test('review coverage audit accepts a current contract whose ledger is not requi
     const taskId = 'T-979-coverage-not-required';
     const contract = buildReviewCoverageContract({ reviewType: 'code', changedFiles: [] });
     fs.writeFileSync(path.join(reviewsRoot, `${taskId}-preflight.json`), JSON.stringify({
-        changed_files: ['tests/example.test.ts']
+        changed_files: []
     }), 'utf8');
     fs.writeFileSync(path.join(reviewsRoot, `${taskId}-code-review-context.json`), JSON.stringify({
         schema_version: 3,

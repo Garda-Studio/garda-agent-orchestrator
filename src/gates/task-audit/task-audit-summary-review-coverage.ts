@@ -4,7 +4,10 @@ import {
     getReviewCoverageContractViolations,
     getReviewCoverageValidationSummaryContractViolations
 } from '../review/review-coverage-ledger';
-import { buildAuthoritativeReviewCoverageContract } from '../review-context/review-context-coverage';
+import { buildAuthoritativeReviewCoverageContract, buildDeclaredReviewCoverageContract } from '../review-context/review-context-coverage';
+import { resolveCurrentNoOpPreflightPath } from '../task-mode/no-op';
+import { readTaskQueueEntries } from '../../core/task-queue-read';
+import { readTaskQueueStatusToken } from '../../core/task-queue/task-queue-status';
 import { buildReviewContextPreflightDiffExpectations } from '../review-context/review-context-contract';
 import { getReviewReceiptExecutionEvidenceContractViolations } from '../review/review-evidence-contract';
 import { validateReviewFindingsValidationArtifactForReceipt } from '../review/review-findings-validation-artifact';
@@ -106,7 +109,10 @@ export function buildReviewCoverageAuditSummary(options: {
 }): ReviewCoverageAuditSummary {
     const entries: ReviewCoverageAuditEntry[] = [];
     const repoRoot = path.resolve(options.reviewsRoot, '..', '..', '..');
-    const preflightPath = path.join(options.reviewsRoot, `${options.taskId}-preflight.json`);
+    let preflightPath = path.join(options.reviewsRoot, `${options.taskId}-preflight.json`);
+    let preflightResolutionError: unknown;
+    try { preflightPath = resolveCurrentNoOpPreflightPath(repoRoot, options.taskId); }
+    catch (error) { preflightResolutionError = error; }
     const preflight = safeReadJson(preflightPath);
     const preflightSha256 = safeReviewArtifactFileSha256(preflightPath);
     for (const reviewType of Object.keys(options.requiredReviews).filter((key) => options.requiredReviews[key]).sort()) {
@@ -155,11 +161,25 @@ export function buildReviewCoverageAuditSummary(options: {
         const contract = context?.coverage_contract && typeof context.coverage_contract === 'object' && !Array.isArray(context.coverage_contract)
             ? context.coverage_contract as Record<string, unknown>
             : null;
-        const authoritativeCoverage = preflight
+        let authoritativeCoverage = preflight
             ? buildAuthoritativeReviewCoverageContract({ reviewType, preflight, repoRoot })
             : null;
-        const authoritativeCoverageChangedFiles = authoritativeCoverage?.changedFiles || [];
         const violations: string[] = [];
+        let validationObligations: Parameters<typeof buildReviewCoverageContract>[0]['validationObligations'];
+        if (preflight) {
+            try {
+                const declared = buildDeclaredReviewCoverageContract({ reviewType, preflight, repoRoot, preflightPath,
+                    inspection: preflight.project_validation
+                        && readTaskQueueStatusToken(readTaskQueueEntries(repoRoot).get(options.taskId)?.status ?? null) === 'DONE'
+                        ? 'retained_completed' : 'active' });
+                if (declared.validationObligations && preflightResolutionError) throw preflightResolutionError;
+                authoritativeCoverage = declared;
+                validationObligations = declared.validationObligations;
+            } catch (error) {
+                violations.push(`Declared review coverage rejected: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
+        const authoritativeCoverageChangedFiles = authoritativeCoverage?.changedFiles || [];
         let authenticatedReviewExecution: ReviewRemediationReviewContract | null = null;
         if (context && preflight && preflightSha256 && contextSchemaVersion >= 4) {
             const reviewExecution = context.review_execution
@@ -218,7 +238,8 @@ export function buildReviewCoverageAuditSummary(options: {
         const authoritativeContract = buildReviewCoverageContract({
             reviewType,
             changedFiles: coverageChangedFiles,
-            categoryIds: authoritativeCoverage?.categoryIds
+            categoryIds: authoritativeCoverage?.categoryIds,
+            validationObligations
         });
         const coverage = receipt?.review_coverage && typeof receipt.review_coverage === 'object' && !Array.isArray(receipt.review_coverage)
             ? receipt.review_coverage as Record<string, unknown>
@@ -276,7 +297,8 @@ export function buildReviewCoverageAuditSummary(options: {
             violations.push(...getReviewCoverageContractViolations(contract, {
                 reviewType,
                 changedFiles: coverageChangedFiles,
-                categoryIds: authoritativeCoverage?.categoryIds
+                categoryIds: authoritativeCoverage?.categoryIds,
+                validationObligations
             }));
         }
         if (!context || !Number.isInteger(contextSchemaVersion) || contextSchemaVersion < 3) {

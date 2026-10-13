@@ -84,7 +84,7 @@ import {
     sameRepairChildScopes,
     validateRepairChildChangedFiles
 } from '../full-suite/full-suite-repair-child-scope';
-import { buildAuthoritativeReviewCoverageContract } from '../review-context/review-context-coverage';
+import { buildDeclaredReviewCoverageContract } from '../review-context/review-context-coverage';
 import {
     readRecoverableFullSuiteValidationRunMarker,
     resolveFullSuiteValidationRunMarkerPath
@@ -2134,8 +2134,9 @@ export function buildFocusedRecoveryCoverageContractSha256(options: {
     reviewType: string;
     preflight: Record<string, unknown>;
     repoRoot: string;
+    preflightPath?: string;
 }): string {
-    return buildAuthoritativeReviewCoverageContract(options).contract.contract_sha256;
+    return buildDeclaredReviewCoverageContract(options).contract.contract_sha256;
 }
 
 function getCurrentWorkspaceRefreshChangedFiles(
@@ -4661,7 +4662,8 @@ export function resolveNextStepDecisionRoute(
                 ? buildFocusedRecoveryCoverageContractSha256({
                     reviewType,
                     preflight: preflight as Record<string, unknown>,
-                    repoRoot
+                    repoRoot,
+                    preflightPath
                 })
                 : null;
             const focusedIntermediateEvidence = state.failureKind === 'missing-focused-validation-evidence'

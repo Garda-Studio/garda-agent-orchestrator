@@ -1,5 +1,9 @@
 # Changelog
 
+## T-242-7-3-2-2 — Declared coverage consumers
+
+- Bind exact canonical validation targets during review reuse, focused recovery and passive completed-task audit; preserve custom preflight identity and validation targets when ordinary file coverage is narrowed.
+
 ## T-242-7-3-2-1 — Retained completed validation inspection
 
 - Inspect exact retained declaration obligations after authenticated native completion, preserving source and artifact identities without authorizing DONE-task execution or closing unresolved semantics.

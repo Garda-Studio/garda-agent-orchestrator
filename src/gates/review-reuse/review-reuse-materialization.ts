@@ -36,7 +36,7 @@ import {
     validateReviewCoverageLedger,
     type ReviewCoverageContract
 } from '../review/review-coverage-ledger';
-import { resolveAuthoritativeReviewCoverageScope } from '../review-context/review-context-coverage';
+import { buildDeclaredReviewCoverageContract } from '../review-context/review-context-coverage';
 import {
     type JsonReviewFindingsArtifactValidation
 } from '../review/review-findings-artifact-verdict';
@@ -121,17 +121,17 @@ export function getReusedReviewCoverageContractViolations(options: {
     preflight: Record<string, unknown>;
     repoRoot: string;
     coverageContract: unknown;
+    preflightPath?: string;
 }): string[] {
-    const authoritativeCoverage = resolveAuthoritativeReviewCoverageScope({
-        reviewType: options.reviewType,
-        preflight: options.preflight,
-        repoRoot: options.repoRoot
-    });
-    return getReviewCoverageContractViolations(options.coverageContract, {
-        reviewType: options.reviewType,
-        changedFiles: authoritativeCoverage.changedFiles,
-        categoryIds: authoritativeCoverage.categoryIds
-    });
+    try {
+        const authoritativeCoverage = buildDeclaredReviewCoverageContract(options);
+        return getReviewCoverageContractViolations(options.coverageContract, {
+            reviewType: options.reviewType, changedFiles: authoritativeCoverage.changedFiles,
+            categoryIds: authoritativeCoverage.categoryIds, validationObligations: authoritativeCoverage.validationObligations
+        });
+    } catch (error) {
+        return [`Declared reused review coverage rejected: ${error instanceof Error ? error.message : String(error)}`];
+    }
 }
 
 interface ReusedReviewFindingsDispositionEvidence {
@@ -364,6 +364,7 @@ async function materializeReusedReviewEvidenceUnderContextLock(
             reviewType: options.reviewType,
             preflight: options.preflightPayload,
             repoRoot: options.repoRoot,
+            preflightPath: options.preflightPath ?? undefined,
             coverageContract: currentReviewContext.coverage_contract
         });
         if (coverageContractViolations.length > 0) {
