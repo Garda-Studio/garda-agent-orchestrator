@@ -21,6 +21,12 @@ const rawFs = require('node:fs') as typeof fs;
 const JOURNAL_KEYS = ['schema_version', 'kind', 'status', 'prepared_at_utc', 'journal_creation_identity', 'intent'];
 const OWNER_KEYS = ['schema_version', 'kind', 'registration_id', 'workspace_identity', 'task_id', 'run_id', 'category',
     'payload_relative_path', 'root_creation_identity', 'pid', 'hostname', 'producer_instance_id', 'registered_at_utc', 'sealed_at_utc'];
+type IntentFixtureRecord = Record<string, unknown> & {
+    intent: Record<string, unknown> & {
+        file_count: number;
+        roots: Array<Record<string, unknown> & { inventory: Array<Record<string, unknown>> }>;
+    };
+};
 
 function ownedFixture(t: TestContext, emptyPayload = false) {
     const f = fixture(t), owned = f.produce();
@@ -41,15 +47,15 @@ function ownedFixture(t: TestContext, emptyPayload = false) {
     const payloadFiles = [path.join(owned.payloadPath, 'alpha.txt'), path.join(owned.payloadPath, 'nested', 'bytes.bin')];
     const payloadHashes = () => payloadFiles.map(computeFileSha256);
     // Only test-fixture metadata is re-signed to exercise authenticated malformed/legacy records; no workspace receipts.
-    function resign(file: string, keys: string[], domain: string, change: (record: any) => void) {
-        const record = JSON.parse(fs.readFileSync(file, 'utf8')); change(record);
+    function resign(file: string, keys: string[], domain: string, change: (record: Record<string, unknown>) => void) {
+        const record: Record<string, unknown> = JSON.parse(fs.readFileSync(file, 'utf8')); change(record);
         const unsigned = Object.fromEntries(keys.map(name => [name, record[name]]));
         record.authentication_sha256 = createHmac('sha256', fs.readFileSync(key))
             .update(JSON.stringify({ domain, record: unsigned })).digest('hex');
         fs.writeFileSync(file, JSON.stringify(record) + '\n');
     }
-    const resignIntent = (change: (record: any) => void, domain = 'garda.owned-disposable-retirement-intent.v1') =>
-        resign(journal, JOURNAL_KEYS, domain, change);
+    const resignIntent = (change: (record: IntentFixtureRecord) => void, domain = 'garda.owned-disposable-retirement-intent.v1') =>
+        resign(journal, JOURNAL_KEYS, domain, record => change(record as IntentFixtureRecord));
     const read = () => readOwnedDisposableArtifactRecoveryAuthority(selection);
     const apply = () => removeOwnedDisposableArtifacts({ ...selection, confirmed: true });
     return { ...f, owned, selection, prepared, journal, key, authorityFiles, authorityHashes, payloadFiles, payloadHashes,

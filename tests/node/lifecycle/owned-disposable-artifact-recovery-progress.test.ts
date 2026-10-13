@@ -13,6 +13,7 @@ import { fixture, taskId } from './owned-disposable-artifact-fixtures';
 const rawFs = require('node:fs') as typeof fs;
 const DOMAIN = 'garda.owned-disposable-retirement-progress.v1';
 const KEYS = ['schema_version', 'kind', 'prepared_at_utc', 'journal_creation_identity', 'progress'];
+type ProgressFixtureRecord = Record<string, unknown> & { progress: Record<string, unknown> };
 
 function ownedFixture(t: TestContext) {
     const f = fixture(t), owned = f.produce(), preview = f.preview(owned.registrationId);
@@ -30,8 +31,8 @@ function ownedFixture(t: TestContext) {
     const framePaths = () => fs.readdirSync(directory).sort().map(name => path.join(directory, name));
     const hashes = (files: readonly string[]) => files.map(computeFileSha256);
     // Fixture-only re-signing exercises authenticated semantic corruption; no production workspace evidence is modified.
-    function resign(file: string, change: (record: any) => void, domain = DOMAIN) {
-        const record = JSON.parse(fs.readFileSync(file, 'utf8')); change(record);
+    function resign(file: string, change: (record: ProgressFixtureRecord) => void, domain = DOMAIN) {
+        const record = JSON.parse(fs.readFileSync(file, 'utf8')) as ProgressFixtureRecord; change(record);
         const unsigned = Object.fromEntries(KEYS.map(name => [name, record[name]]));
         record.authentication_sha256 = createHmac('sha256', fs.readFileSync(key))
             .update(JSON.stringify({ domain, record: unsigned })).digest('hex');
@@ -134,16 +135,16 @@ test('two registrations use the actual producer files-then-deepest-directories o
 });
 
 const corruptions = [
-    ['sequence', (r: any) => { r.progress.sequence = 1; }, /schema|chain/u],
-    ['previous hash', (r: any) => { r.progress.previous_sha256 = '0'.repeat(64); }, /schema|chain/u],
-    ['intent hash', (r: any) => { r.progress.intent_sha256 = '0'.repeat(64); }, /schema|chain/u],
-    ['ownership digest', (r: any) => { r.progress.ownership_digest = '0'.repeat(64); }, /schema|chain/u],
-    ['order policy', (r: any) => { r.progress.order = 'wrong-order'; }, /schema|chain/u],
-    ['member order', (r: any) => { r.progress.member_path = 'foreign/payload'; }, /pending|order/u],
-    ['success counters', (r: any) => { r.progress.removed_bytes = 3; }, /counters/u],
-    ['unknown field', (r: any) => { r.progress.caller_proof = true; }, /schema/u],
-    ['early finish', (r: any) => { r.progress.event = 'FINISHED'; r.progress.member_path = null; }, /before exact completion/u],
-    ['unmatched removal', (r: any) => { r.progress.event = 'REMOVED'; r.progress.parent_identity = '0'.repeat(64); }, /pending/u]
+    ['sequence', (r: ProgressFixtureRecord) => { r.progress.sequence = 1; }, /schema|chain/u],
+    ['previous hash', (r: ProgressFixtureRecord) => { r.progress.previous_sha256 = '0'.repeat(64); }, /schema|chain/u],
+    ['intent hash', (r: ProgressFixtureRecord) => { r.progress.intent_sha256 = '0'.repeat(64); }, /schema|chain/u],
+    ['ownership digest', (r: ProgressFixtureRecord) => { r.progress.ownership_digest = '0'.repeat(64); }, /schema|chain/u],
+    ['order policy', (r: ProgressFixtureRecord) => { r.progress.order = 'wrong-order'; }, /schema|chain/u],
+    ['member order', (r: ProgressFixtureRecord) => { r.progress.member_path = 'foreign/payload'; }, /pending|order/u],
+    ['success counters', (r: ProgressFixtureRecord) => { r.progress.removed_bytes = 3; }, /counters/u],
+    ['unknown field', (r: ProgressFixtureRecord) => { r.progress.caller_proof = true; }, /schema/u],
+    ['early finish', (r: ProgressFixtureRecord) => { r.progress.event = 'FINISHED'; r.progress.member_path = null; }, /before exact completion/u],
+    ['unmatched removal', (r: ProgressFixtureRecord) => { r.progress.event = 'REMOVED'; r.progress.parent_identity = '0'.repeat(64); }, /pending/u]
 ] as const;
 for (const [label, change, pattern] of corruptions) test(`authenticated progress rejects ${label} without changing retained bytes`, t => {
     const f = ownedFixture(t);
@@ -242,7 +243,7 @@ test('identical private key replacement during actual progress read rejects the 
     const f = ownedFixture(t), frames = f.finish(), open = rawFs.openSync, parked = f.key + '.parked';
     let injected = false;
     const before = f.hashes([...f.authorityFiles, ...frames]);
-    t.mock.method(rawFs, 'openSync', (file: fs.PathLike, flags: any, mode?: fs.Mode) => {
+    t.mock.method(rawFs, 'openSync', (file: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
         if (String(file) === frames[0] && !injected) {
             injected = true; fs.renameSync(f.key, parked); fs.writeFileSync(f.key, fs.readFileSync(parked), { mode: 0o600 });
         }
@@ -258,14 +259,14 @@ test('identical private key replacement during actual progress read rejects the 
 test('a progress directory appearing during an absent-directory read is rejected before metadata returns', t => {
     const f = ownedFixture(t), open = rawFs.openSync, lstat = rawFs.lstatSync;
     let absenceObserved = false, injected = false;
-    t.mock.method(rawFs, 'lstatSync', (file: fs.PathLike, options?: any) => {
-        try { return lstat(file, options); }
+    t.mock.method(rawFs, 'lstatSync', (file: fs.PathLike, options?: fs.StatOptions) => {
+        try { return Reflect.apply(lstat, rawFs, [file, options]); }
         catch (error) {
             if (String(file) === f.directory && (error as NodeJS.ErrnoException).code === 'ENOENT') absenceObserved = true;
             throw error;
         }
     });
-    t.mock.method(rawFs, 'openSync', (file: fs.PathLike, flags: any, mode?: fs.Mode) => {
+    t.mock.method(rawFs, 'openSync', (file: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
         if (String(file) === f.journal && absenceObserved && !injected) { injected = true; fs.mkdirSync(f.directory); }
         return open(file, flags, mode);
     });

@@ -217,7 +217,7 @@ test('rejects symlink replacement of a remaining member without following or cha
 
 test('rejects caller supplied snapshot authority and preserves every actual input', t => {
     const f = ownedFixture(t), before = f.hashes();
-    assert.throws(() => readOwnedDisposableArtifactRecoverySnapshot({ ...f.selection, snapshot: {} } as any), /declared|selection/u);
+    assert.throws(() => readOwnedDisposableArtifactRecoverySnapshot({ ...f.selection, snapshot: {} } as never), /declared|selection/u);
     assert.deepEqual(f.hashes(), before);
 });
 
@@ -285,7 +285,7 @@ test('rejects selected raw hash references even after actual payload removal and
     const f = ownedFixture(t); f.finish();
     const file = path.join(f.reviews, `${taskId}-raw.json`);
     fs.writeFileSync(file, JSON.stringify({ raw_sha256: JSON.parse(fs.readFileSync(f.journal, 'utf8')).intent.roots[0].inventory
-        .find((entry: any) => !entry.directory).sha256 }));
+        .find((entry: { directory: boolean }) => !entry.directory).sha256 }));
     const before = computeFileSha256(file), retained = f.hashes();
     assert.throws(f.read, /references selected raw bytes/u);
     assert.equal(computeFileSha256(file), before); assert.deepEqual(f.hashes(), retained);
@@ -309,8 +309,8 @@ test('rejects copied identical progress bytes in a new ordinary object and prese
 test('rejects surviving payload mutation during bounded inventory before publishing a snapshot', t => {
     const f = ownedFixture(t), open = rawFs.openSync;
     let injected = false;
-    t.mock.method(rawFs, 'openSync', (candidate: fs.PathLike, ...args: any[]) => {
-        const descriptor = (open as any)(candidate, ...args);
+    t.mock.method(rawFs, 'openSync', (candidate: fs.PathLike, ...args: unknown[]) => {
+        const descriptor = Reflect.apply(open, rawFs, [candidate, ...args]);
         if (!injected && String(candidate) === f.binary) { injected = true; fs.writeFileSync(f.alpha, 'changed'); }
         return descriptor;
     });
@@ -322,8 +322,8 @@ test('rejects dependency drift during the final native metadata recheck and pres
     const f = ownedFixture(t, 1, true), open = rawFs.openSync;
     assert.equal(f.read().remaining_bytes, 7);
     let payloadRead = false, injected = false;
-    t.mock.method(rawFs, 'openSync', (candidate: fs.PathLike, ...args: any[]) => {
-        const descriptor = (open as any)(candidate, ...args);
+    t.mock.method(rawFs, 'openSync', (candidate: fs.PathLike, ...args: unknown[]) => {
+        const descriptor = Reflect.apply(open, rawFs, [candidate, ...args]);
         if (String(candidate) === f.alpha) payloadRead = true;
         if (payloadRead && !injected && String(candidate) === f.journal) { injected = true; fs.appendFileSync(f.dependency, '\n'); }
         return descriptor;

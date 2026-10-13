@@ -55,7 +55,7 @@ test('rejects a forged copy after manifest publication', { skip: typeof process.
 });
 
 test('verified preservation retains original identity and stays outside cleanup candidates', { skip: typeof process.getuid !== 'function' }, t => {
-    const { parent, project, runtime, claimed, owner } = fixture(t);
+    const { parent, project, runtime, claimed } = fixture(t);
     const original = fs.statSync(claimed, { bigint: true }), names = ['data.bin', 'empty', 'owner.json'];
     fs.writeFileSync(path.join(claimed, 'data.bin'), Buffer.from([0, 255, 10])); fs.writeFileSync(path.join(claimed, 'empty'), '');
     const members = names.map(name => ({ name, bytes: fs.readFileSync(path.join(claimed, name)), state: fs.statSync(path.join(claimed, name), { bigint: true }) }));

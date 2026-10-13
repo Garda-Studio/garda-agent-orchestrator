@@ -1,5 +1,9 @@
 # Changelog
 
+- Remove blocking explicit-any annotations and an unused binding from integrated
+  recovery test fixtures, preserving malformed-input checks and lint enforcement
+  (T-079).
+
 - Preserve full-suite marker ownership across Windows same-name creation-time
   retention, authenticating the published object and exact bytes before issuing
   its lease (T-198).
