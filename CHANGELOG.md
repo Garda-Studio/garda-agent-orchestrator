@@ -1,5 +1,9 @@
 # Changelog
 
+## T-242-9-1 — Technology-neutral activation qualification
+
+- Qualify real admitted custom-driver validation across unfamiliar and package-local layouts, preserving Unicode targets, unresolved output, required independent semantics and current source bindings.
+
 ## T-242-8 — Declared validation terminal closure
 
 - Require current passed execution and exact independent semantic coverage at review, completion and retained audit boundaries; keep unresolved results, skipped lanes and open declared obligations incomplete.
