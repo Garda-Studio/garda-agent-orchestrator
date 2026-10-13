@@ -47,7 +47,7 @@ function buildCoverageLedgerEntries(contract: ReviewCoverageContract): Array<Rec
         obligation_id: obligation.id,
         evidence: [
             {
-                location: `${obligation.kind === 'file' ? obligation.target : defaultLocation}:<line>`,
+                location: `${obligation.kind === 'file' ? obligation.target : obligation.kind === 'validation' ? obligation.source : defaultLocation}:<line>`,
                 observation: `<concrete observation for ${obligation.kind} obligation ${obligation.target}>`
             }
         ],
@@ -143,7 +143,9 @@ export function buildReviewerFindingsPromptContractMarkdown(options: ReviewerFin
                 'Current task, context, tree, coverage and execution bindings remain mandatory; an empty result does not accept any source implementation.'
             ]
             : ['Fill every coverage_ledger.entries item with concrete path:line evidence. Use an empty finding_ids array only when that obligation exposed no issue.']),
-        ...buildReviewEvidenceDomainContractLines(options.reviewType, evidenceDomainPaths),
+        ...buildReviewEvidenceDomainContractLines(options.reviewType, evidenceDomainPaths,
+            options.coverageContract.obligations.filter(entry => entry.kind === 'validation')
+                .map(entry => ({ id: entry.id, source: entry.source! }))),
         'For each active finding, use exactly one F-### id, include concrete evidence, and reference every related coverage obligation id.',
         ...(!emptyReviewScope ? [
             'Active finding object shape: {"id":"F-001","title":"<short defect title>","description":"<observed defect impact only>","evidence":[{"location":"<changed-file>:<line>","observation":"<concrete observation>"}],"coverage_obligation_ids":["<obligation-id>"]}.'

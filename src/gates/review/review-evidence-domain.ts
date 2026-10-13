@@ -24,7 +24,8 @@ export function formatReviewEvidenceDomainViolation(options: {
 
 export function buildReviewEvidenceDomainContractLines(
     reviewType: string,
-    admissiblePaths: readonly string[]
+    admissiblePaths: readonly string[],
+    validationBindings: readonly { id: string; source: string }[] = []
 ): string[] {
     const paths = normalizeReviewEvidenceDomainPaths(admissiblePaths);
     const renderedPaths = paths.length > 0 ? paths.join(', ') : 'none';
@@ -38,7 +39,9 @@ export function buildReviewEvidenceDomainContractLines(
     }
     return [
         `Evidence location domain for ${normalizeReviewType(reviewType)} review: ${renderedPaths}.`,
-        '- Every evidence location in validation_notes, coverage_ledger, findings, and residual_risks must use path:line from that exact domain.',
+        '- Every evidence location in validation_notes, coverage_ledger, findings, and residual_risks must use path:line from that exact domain.'
+            + (validationBindings.length ? ' Only the listed owning validation coverage entries have their explicit source exception below.' : ''),
+        ...validationBindings.map(binding => `- Validation coverage ${binding.id} must cite its own bound source ${binding.source}:line; this exception grants no location authority to other entries, notes, findings or residual risks.`),
         '- Supporting artifacts may inform observations but are not admissible location evidence; do not cite review context, manifests, receipts, compile logs, full-suite artifacts, or manual-validation logs as evidence locations.',
         '- Every FILE-* coverage obligation must cite its own target path:line. Boundary and category obligations may cite any path in the evidence location domain.'
     ];

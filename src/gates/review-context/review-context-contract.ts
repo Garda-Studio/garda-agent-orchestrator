@@ -4,6 +4,7 @@ import { fileSha256, normalizePath, parseBool } from '../shared/helpers';
 import { isPlainRecord } from '../../core/records';
 import { getReviewCoverageContractViolations } from '../review/review-coverage-ledger';
 import { resolveReviewCoverageChangedFiles } from './review-coverage-scope';
+import { resolveAuthoritativeReviewValidationObligations } from './review-context-coverage';
 import {
     isCustomReviewLaneInSnapshot,
     resolveReviewContextLaneBinding,
@@ -984,12 +985,23 @@ export function getReviewContextContractViolations(
         if (unexpectedCoverageFiles.length > 0) {
             violations.push(`Review coverage scope contains files outside the current preflight: ${unexpectedCoverageFiles.join(', ')}.`);
         }
+        let validationObligations;
+        if (options.repoRoot && options.expectedPreflightPayload) {
+            try {
+                validationObligations = resolveAuthoritativeReviewValidationObligations({
+                    repoRoot: options.repoRoot, preflight: options.expectedPreflightPayload,
+                    reviewType: expectedReviewType, preflightPath: expectedPreflightPath ?? undefined });
+            } catch (error) {
+                violations.push(`Declared review coverage rejected: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
         violations.push(...getReviewCoverageContractViolations(reviewContext.coverage_contract, {
             reviewType: expectedReviewType,
             changedFiles: expectedCoverageChangedFiles,
             categoryIds: expectedLaneBinding && !expectedLaneBinding.built_in
                 ? expectedLaneBinding.coverage_category_ids
-                : undefined
+                : undefined,
+            validationObligations
         }));
     }
 

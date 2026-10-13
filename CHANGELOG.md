@@ -1,5 +1,10 @@
 # Changelog
 
+## T-242-7-3-1 — Canonical declared review context coverage
+
+- Bind exact declared targets into required semantic lane contexts and independent context validation.
+- Limit unchanged target-source citations to their owning validation coverage entry; preserve ordinary evidence domains and unresolved execution semantics.
+
 - Project authentic declared validation targets from current canonical phases and require capable mandatory frozen semantic review lanes, preserving opaque results and undeclared projects (T-242-7-2).
 
 - Bind exact declared validation targets, source identities and observed attempts into deterministic coverage contracts without closing pending semantics or widening other evidence domains (T-242-7-1).

@@ -38,12 +38,16 @@ import { runClassifyChangeCommand } from '../../../../src/cli/commands/gates';
 import { executeValidationRecipe } from '../../../../src/gates/project-validation/execution';
 import { evaluateValidationAttempt } from '../../../../src/gates/project-validation/result-evaluation';
 import { readValidationReviewObligations } from '../../../../src/gates/review/validation-obligations';
+import { buildReviewContext, getRulePack } from '../../../../src/gates/review-context/build-review-context';
+import { getReviewContextContractViolations, buildReviewContextPreflightDiffExpectations } from '../../../../src/gates/review-context/review-context-contract';
+import { buildReviewCoverageContract } from '../../../../src/gates/review/review-coverage-ledger';
+import { buildAuthoritativeReviewCoverageContract } from '../../../../src/gates/review-context/review-context-coverage';
 import type { QualityValidationPhases } from '../../../../src/gates/quality-checklist/quality-checklist-validation-phases';
 import { createTempRepo, initializeGitRepo, loadTaskEntryRulePack, runEnterTaskMode, runHandshakeForTask,
     runShellSmokeForTask, seedInitAnswers, seedTaskQueue } from '../../cli/commands/gates/preflight/gates-preflight-fixtures';
 import { removeTempRepoWithRetry } from '../../cli/commands/gate-test-repo-bootstrap';
 
-function declaredReviewFixture(scope = 'security', options: { declared?: boolean; preflightFilename?: string } = {}) {
+function declaredReviewFixture(scope = 'security', options: { declared?: boolean; preflightFilename?: string; unchangedTarget?: boolean; taskModeFilename?: string } = {}) {
     const repoRoot = createTempRepo(), taskId = 'T-declared-review';
     const orchestratorRoot = path.join(repoRoot, 'garda-agent-orchestrator');
     const configPath = path.join(orchestratorRoot, 'live/config/workflow-config.json');
@@ -66,14 +70,15 @@ function declaredReviewFixture(scope = 'security', options: { declared?: boolean
     if (options.declared !== false) handleWorkflow(['set', '--target-root', repoRoot, '--project-validation-contract', 'recipes.json',
         '--operator-confirmed', 'yes', '--operator-confirmed-at-utc', new Date().toISOString()],
     { name: 'garda-agent-orchestrator', version: '1.0.0' });
+    const taskModePath = path.join(orchestratorRoot, 'runtime/reviews', options.taskModeFilename ?? `${taskId}-task-mode.json`);
     runEnterTaskMode({ repoRoot, taskId, entryMode: 'EXPLICIT_TASK_EXECUTION', requestedDepth: 2,
-        taskSummary: 'Declared review evidence', provider: 'Codex' });
-    loadTaskEntryRulePack(repoRoot, taskId); runHandshakeForTask(repoRoot, taskId); runShellSmokeForTask(repoRoot, taskId);
+        artifactPath: taskModePath, taskSummary: 'Declared review evidence', provider: 'Codex' });
+    loadTaskEntryRulePack(repoRoot, taskId, taskModePath); runHandshakeForTask(repoRoot, taskId); runShellSmokeForTask(repoRoot, taskId);
     fs.appendFileSync(path.join(repoRoot, source), '\nexport const changed = 1;\n');
-    fs.appendFileSync(path.join(repoRoot, 'RootSuite'), '\ncurrent source\n');
+    if (!options.unchangedTarget) fs.appendFileSync(path.join(repoRoot, 'RootSuite'), '\ncurrent source\n');
     const preflightPath = path.join(orchestratorRoot, 'runtime/reviews', options.preflightFilename ?? `${taskId}-preflight.json`);
-    runClassifyChangeCommand({ repoRoot, taskId, taskIntent: 'Declared review evidence',
-        outputPath: preflightPath, changedFiles: [source, 'RootSuite'], emitMetrics: false });
+    runClassifyChangeCommand({ repoRoot, taskId, taskModePath, taskIntent: 'Declared review evidence',
+        outputPath: preflightPath, changedFiles: options.unchangedTarget ? [source] : [source, 'RootSuite'], emitMetrics: false });
     const trust = buildAnswers().find(answer => answer.rule_id === TRUST_BOUNDARY_ANALYSIS_RULE_ID)!;
     const matrix = trust.trust_boundary_matrix as Array<Record<string, unknown>>;
     matrix[0].negative_paths = [{ kind: 'other', scenario: 'declared case', expected_behavior: 'Reject invalid evidence.',
@@ -82,7 +87,7 @@ function declaredReviewFixture(scope = 'security', options: { declared?: boolean
         .map(answer => answer.rule_id === TRUST_BOUNDARY_ANALYSIS_RULE_ID ? trust
             : { ...answer, status: 'PASS', answer: 'Checked current scope.' });
     const artifactPath = resolveDefaultQualityChecklistArtifactPath(repoRoot, taskId);
-    return { repoRoot, taskId, orchestratorRoot, artifactPath, preflightPath,
+    return { repoRoot, taskId, orchestratorRoot, artifactPath, preflightPath, taskModePath,
         cleanup: () => removeTempRepoWithRetry(repoRoot),
         publish: () => runQualityChecklistCommand({ repoRoot, taskId, preflightPath, answersJson: JSON.stringify(answers), emitMetrics: false }),
         read: () => readReviewContextTrustBoundaryAnalysis({ repoRoot, taskId,
@@ -177,6 +182,56 @@ function writeCurrentArtifact(fixture: ReturnType<typeof createGateFixture>, pre
 }
 
 describe('review-context trust-boundary handoff', () => {
+    it('legacy coverage inspection preserves pending declared evidence without claiming target closure', async () => {
+        const f = declaredReviewFixture('domain');
+        try {
+            const preflight = JSON.parse(fs.readFileSync(f.preflightPath, 'utf8'));
+            const coverage = buildAuthoritativeReviewCoverageContract({ reviewType: 'code', preflight, repoRoot: f.repoRoot });
+            assert.equal(coverage.contract.obligations.some(entry => entry.kind === 'validation'), false);
+        } finally { await f.cleanup(); }
+    });
+
+    it('binds native declared context coverage and rejects missing or stale targets on a custom preflight', async () => {
+        const f = declaredReviewFixture('domain', { unchangedTarget: true, preflightFilename: 'current-custom.json', taskModeFilename: 'current-mode.json' });
+        try {
+            await f.execute(); f.publish();
+            fs.writeFileSync(path.join(f.orchestratorRoot, 'runtime/reviews', `${f.taskId}-task-mode.json`), JSON.stringify({ task_id: 'foreign', profile_policy_snapshot_required: true }));
+            const preflight = JSON.parse(fs.readFileSync(f.preflightPath, 'utf8'));
+            const lane = preflight.effective_review_snapshot.lanes.find((entry: { id: string }) => entry.id === 'code');
+            for (const rule of getRulePack('code').full) {
+                const target = path.join(f.orchestratorRoot, 'live/docs/agent-rules', rule);
+                fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, `# ${rule}\n`);
+            }
+            for (const id of lane.definition.skill_ids) {
+                const target = path.join(f.orchestratorRoot, 'live/skills', id, 'SKILL.md');
+                fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, `# ${id}\nFixture review skill.\n`);
+            }
+            const contextPath = path.join(f.orchestratorRoot, 'runtime/reviews', `${f.taskId}-code-review-context.json`);
+            const context = buildReviewContext({ repoRoot: f.repoRoot, reviewType: 'code', depth: 2,
+                preflightPath: f.preflightPath, taskModePath: f.taskModePath, outputPath: contextPath, scopedDiffMetadataPath: '',
+                tokenEconomyConfigPath: '', tokenEconomyConfigData: { enabled: false } });
+            const bindings = context.coverage_contract.obligations.filter(entry => entry.kind === 'validation');
+            assert.deepEqual(bindings.map(entry => entry.validation_binding), f.phases().obligations);
+            assert.equal(bindings[0].source, 'RootSuite');
+            assert.ok(!context.coverage_scope.changed_files.includes('RootSuite'));
+            const inspect = (candidate: typeof context) => getReviewContextContractViolations({
+                contextPath, reviewContext: candidate, expectedTaskId: f.taskId, expectedReviewType: 'code',
+                expectedPreflightPath: f.preflightPath, expectedPreflightSha256: fileSha256(f.preflightPath),
+                expectedPreflightPayload: preflight, repoRoot: f.repoRoot,
+                ...buildReviewContextPreflightDiffExpectations(preflight, 'code') });
+            assert.deepEqual(inspect(context), []);
+            for (const mutation of ['omitted', 'stale']) {
+                const altered = structuredClone(context);
+                const targets = structuredClone(f.phases().obligations);
+                if (mutation === 'omitted') targets.length = 0;
+                else targets[0].attempt_id = 'borrowed';
+                altered.coverage_contract = buildReviewCoverageContract({ reviewType: 'code',
+                    changedFiles: context.coverage_scope.changed_files, validationObligations: targets });
+                assert.ok(inspect(altered).some(violation => /coverage contract/u.test(violation)), mutation);
+            }
+        } finally { await f.cleanup(); }
+    });
+
     it('projects authentic declared targets and rejects stale or superseded evidence without promoting opaque results', async () => {
         const f = declaredReviewFixture('domain', { preflightFilename: 'custom-current-preflight.json' });
         try {

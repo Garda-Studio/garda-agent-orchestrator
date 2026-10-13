@@ -9,6 +9,9 @@ import { buildReviewFindingsValidationArtifact } from '../../../../src/gates/rev
 import { buildReviewFindingsDispositionArtifact } from '../../../../src/gates/review/review-findings-disposition-artifact';
 import { resolveLockedReviewFindingPolicyFromPreflight } from '../../../../src/gates/review/review-finding-disposition';
 import { buildReviewRemediationBaselineArtifact } from '../../../../src/gates/review-remediation/review-remediation-baseline';
+import { validateReviewFindingsReport } from '../../../../src/gates/review/review-findings-schema';
+import { buildReviewerFindingsOutputTemplateJson } from '../../../../src/gates/review/reviewer-findings-prompt-contract';
+import { buildReviewRemediationReviewContract } from '../../../../src/gates/review-remediation/review-remediation-review-contract';
 
 // Unit input for the contract builder; this is not native execution or review evidence.
 const obligation: QualityValidationObligation = {
@@ -72,6 +75,33 @@ test('declared target closure rejects an omitted or duplicated exact obligation'
     assert.ok(entry);
     duplicate.coverage_ledger.entries.push(entry);
     assert.equal(validateReviewCoverageLedger(JSON.stringify(duplicate), contract).status, 'FAIL');
+});
+
+test('findings closure rejects foreign citations while permitting its unchanged declared target source', () => {
+    const contract = contractFor(obligation), taskId = 'T-UNIT-DECLARED-CLOSURE', hash = 'e'.repeat(64);
+    const execution = buildReviewRemediationReviewContract({ taskId, reviewType: 'test', preflightSha256: hash,
+        fullReviewScope: ['src/domain/catalog.ts'] });
+    const template = JSON.parse(buildReviewerFindingsOutputTemplateJson({ taskId, reviewType: 'test',
+        reviewContextSha256: hash, treeStateSha256: hash, coverageContract: contract, reviewExecutionContract: execution }));
+    const validationEntry = template.coverage_ledger.entries.find((entry: { obligation_id: string }) => entry.obligation_id.startsWith('VALIDATION-'));
+    assert.equal(validationEntry.evidence[0].location, 'RootSuite:<line>');
+    template.validation_notes[0] = { id: 'N-001', topic: 'complete-scope-sweep', note: 'Inspected exact declared target and assigned source.',
+        evidence: [{ location: 'src/domain/catalog.ts:1', observation: 'Assigned source remains bound.' }] };
+    template.coverage_ledger.entries = outputFor(contract).coverage_ledger.entries;
+    template.reviewer_notes = ['In-memory schema fixture; no delegated review or receipt.'];
+    const inspect = (report: typeof template) => validateReviewFindingsReport(report, { expectedTaskId: taskId,
+        expectedReviewType: 'test', expectedCoverageContract: contract,
+        expectedCoverageObligationIds: contract.obligations.map(entry => entry.id),
+        expectedChangedFilePaths: ['src/domain/catalog.ts'], expectedReviewContextSha256: hash,
+        expectedTreeStateSha256: hash, expectedReviewExecutionContract: execution });
+    assert.equal(inspect(template).valid, true);
+    const widened = structuredClone(template); widened.validation_notes[0].evidence[0].location = 'RootSuite:1';
+    assert.equal(inspect(widened).valid, false);
+    const wrongEntry = structuredClone(template); wrongEntry.coverage_ledger.entries[0].evidence[0].location = 'RootSuite:1';
+    assert.equal(inspect(wrongEntry).valid, false);
+    const omitted = structuredClone(template); omitted.coverage_ledger.entries = omitted.coverage_ledger.entries.filter(
+        (entry: { obligation_id: string }) => !entry.obligation_id.startsWith('VALIDATION-'));
+    assert.equal(validateReviewCoverageLedger(JSON.stringify(omitted), contract).status, 'FAIL');
 });
 
 // Synthetic in-memory constructor input only: no native launch, receipt or file is published.

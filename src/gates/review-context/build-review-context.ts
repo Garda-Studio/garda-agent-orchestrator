@@ -65,6 +65,7 @@ import {
     readReviewContextTrustBoundaryAnalysis
 } from './review-context-trust-boundary-analysis';
 import { buildReviewCoverageContract } from '../review/review-coverage-ledger';
+import { resolveAuthoritativeReviewValidationObligations } from './review-context-coverage';
 import { buildReviewerTerminalContractLines } from '../review/reviewer-execution-contract';
 import { resolveReviewCoverageChangedFiles } from './review-coverage-scope';
 import {
@@ -332,7 +333,9 @@ export function buildReviewContext(options: BuildReviewContextOptions) {
     const coverageContract = buildReviewCoverageContract({
         reviewType,
         changedFiles: coverageChangedFiles,
-        categoryIds: customReviewLaneBinding?.coverage_category_ids
+        categoryIds: customReviewLaneBinding?.coverage_category_ids,
+        validationObligations: resolveAuthoritativeReviewValidationObligations({ reviewType, preflight, repoRoot, preflightPath,
+            taskModePath: options.taskModePath || taskModeEvidence?.evidence_path || undefined })
     });
     if (parseSplitCheckpointDetectionSource(preflight.detection_source)) {
         resolveAuthenticatedSplitCheckpointPreflightScope(

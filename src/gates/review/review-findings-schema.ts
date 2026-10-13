@@ -1889,7 +1889,7 @@ function validateConcreteReviewEvidenceLocations(
     },
     expectedChangedFilePaths: readonly string[] | undefined,
     expectedReviewType: string,
-    lineValidationOptions: { repoRoot?: string; evidenceSnapshotCommit?: string },
+    lineValidationOptions: { repoRoot?: string; evidenceSnapshotCommit?: string; coverageContract?: ReviewCoverageContract },
     violations: string[]
 ): void {
     if (!expectedChangedFilePaths) {
@@ -1914,12 +1914,15 @@ function validateConcreteReviewEvidenceLocations(
     }
     if (reportParts.coverageLedger) {
         for (const [entryIndex, entry] of reportParts.coverageLedger.entries.entries()) {
+            const obligation = lineValidationOptions.coverageContract?.obligations.find(item => item.id === entry.obligation_id);
+            const entryPaths = obligation?.kind === 'validation' && obligation.source
+                ? normalizeReviewEvidenceDomainPaths([...admissiblePaths, obligation.source]) : admissiblePaths;
             validateEvidenceLocations(
                 entry.evidence,
                 `coverage_ledger.entries[${entryIndex}]`,
-                changedFiles,
+                new Set(entryPaths),
                 expectedReviewType,
-                admissiblePaths,
+                entryPaths,
                 getChangedFileLineCount,
                 violations
             );
@@ -2241,7 +2244,8 @@ export function validateReviewFindingsReport(
         expectedReviewType,
         {
             repoRoot: options.repoRoot,
-            evidenceSnapshotCommit: options.evidenceSnapshotCommit
+            evidenceSnapshotCommit: options.evidenceSnapshotCommit,
+            coverageContract: options.expectedCoverageContract
         },
         violations
     );
