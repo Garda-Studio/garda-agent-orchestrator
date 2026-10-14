@@ -9,6 +9,7 @@ import {
 } from '../completion/completion-verdict-markdown';
 import { normalizePath } from '../shared/helpers';
 import type { QualityValidationObligation } from '../quality-checklist/quality-checklist-validation-phases';
+import { getNativeCaseResolutionViolations } from './native-case-semantics';
 import { parseSplitCheckpointDetectionSource } from '../split-required/split-checkpoint-scope';
 import {
     formatReviewEvidenceDomainViolation,
@@ -64,6 +65,7 @@ interface ReviewCoverageLedgerEntry {
     evidence: ReviewCoverageEvidenceEntry[];
     result: 'finding' | 'no-finding' | null;
     finding_ids: string[];
+    case_resolution?: unknown;
 }
 
 const FINDING_ID_PATTERN = /^F-\d{3}$/u;
@@ -191,7 +193,8 @@ export function buildReviewCoverageContract(options: {
                     size: binding.source_identity.size, identity: binding.source_identity.identity },
                 snapshot_sha256: binding.snapshot_sha256, execution: binding.execution,
                 attempt_id: binding.attempt_id, result_status: binding.result_status,
-                result_sha256: binding.result_sha256
+                result_sha256: binding.result_sha256,
+                ...(binding.case_execution ? { case_execution: { ...binding.case_execution } } : {})
             }
         }));
     const obligations = [...fileObligations, ...boundaryObligations, ...categoryObligations, ...validationObligations];
@@ -442,7 +445,8 @@ function parseJsonCoverageLedgerEntries(reviewContent: string): {
             id: entryId,
             evidence,
             result: findingIds.length > 0 ? 'finding' : 'no-finding',
-            finding_ids: findingIds
+            finding_ids: findingIds,
+            ...(record.case_resolution !== undefined ? { case_resolution: record.case_resolution } : {})
         });
     });
     return { entries, violations };
@@ -782,6 +786,11 @@ export function validateReviewCoverageLedger(
     const parsed = parseCoverageLedgerEntries(reviewContent);
     const findingEvidence = collectFindingIds(reviewContent);
     const violations = [...parsed.violations, ...findingEvidence.violations];
+    violations.push(...getNativeCaseResolutionViolations({
+        obligations: contract.obligations.flatMap(item => item.validation_binding ? [item.validation_binding] : []),
+        entries: parsed.entries.map(item => ({ obligation_id: item.id, case_resolution: item.case_resolution })),
+        repoRoot: options.repoRoot
+    }));
     const expectedById = new Map(contract.obligations.map((entry) => [entry.id, entry]));
     const counts = new Map<string, number>();
     for (const entry of parsed.entries) {

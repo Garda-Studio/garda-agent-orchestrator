@@ -1,5 +1,11 @@
 # Changelog
 
+## Independent native case semantics
+
+- Bind selected source cases to actual current native command/output records without a required report format.
+- Require independent case outcomes and exact retained quotations; unresolved, skipped, changed or replayed evidence cannot close required cases.
+- Share retained source/output reads within a resolution batch. Ordinary universal workflow activation remains the linked consumer step.
+
 ## Universal native execution evidence
 
 - Authenticate current native project commands independently of familiar runner names, with source-content observations before and after execution.

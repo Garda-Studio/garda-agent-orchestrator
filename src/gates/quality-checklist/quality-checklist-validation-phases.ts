@@ -4,6 +4,7 @@ import { assessTrustBoundaryMatrix } from '../../core/trust-boundary-analysis';
 import { currentProjectValidationAuthority, freezeValidationRecipe } from '../project-validation/authority';
 import { readValidationEvents, type ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 import { readValidationResult } from '../project-validation/evidence';
+import type { NativeCaseExecution } from '../review/native-case-semantics';
 
 type ExecutionObservation = 'PENDING' | 'OBSERVED' | 'REJECTED';
 export interface QualityValidationObligation {
@@ -11,6 +12,7 @@ export interface QualityValidationObligation {
     source_identity: ValidationFileIdentity; snapshot_sha256: string;
     execution: ExecutionObservation; attempt_id: string | null;
     result_status: string | null; result_sha256: string | null;
+    case_execution?: NativeCaseExecution;
 }
 export type QualityRecipeExecution = Pick<QualityValidationObligation,
     'recipe_id' | 'snapshot_sha256' | 'execution' | 'attempt_id' | 'result_status' | 'result_sha256'>;

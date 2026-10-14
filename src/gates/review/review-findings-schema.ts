@@ -4,6 +4,7 @@ import { splitCommandLine } from '../../core/command-line';
 import { inspectRecipeFocusedCommand } from '../project-validation/focused';
 import { parseFocusedCommandSyntax } from './review-focused-command-tokenizer';
 import { parseMavenFocusedCommand, resolveMavenFocusedTargets } from './review-focused-command-maven';
+import { getNativeCaseResolutionViolations, type NativeCaseResolution } from './native-case-semantics';
 
 import {
     hasReviewerInlineInterpreterOption,
@@ -82,7 +83,7 @@ const VALIDATION_NOTE_KEYS = new Set([
     'finding_ids'
 ]);
 const COVERAGE_LEDGER_KEYS = new Set(['coverage_contract_sha256', 'entries']);
-const COVERAGE_ENTRY_KEYS = new Set(['obligation_id', 'evidence', 'finding_ids']);
+const COVERAGE_ENTRY_KEYS = new Set(['obligation_id', 'evidence', 'finding_ids', 'case_resolution']);
 const REVIEW_EXECUTION_KEYS = new Set([
     'mode',
     'contract_sha256',
@@ -117,6 +118,7 @@ export interface ReviewFindingsCoverageLedgerEntry {
     obligation_id: string;
     evidence: ReviewFindingsEvidence[];
     finding_ids: string[];
+    case_resolution?: NativeCaseResolution;
 }
 
 export interface ReviewFindingsCoverageLedger {
@@ -280,7 +282,20 @@ export const reviewFindingsReportJsonSchema = {
                 finding_ids: {
                     type: 'array',
                     items: { type: 'string', pattern: '^F-\\d{3}$' }
-                }
+                },
+                case_resolution: { $ref: '#/definitions/case_resolution' }
+            }
+        },
+        case_resolution: {
+            type: 'object', additionalProperties: false,
+            required: ['binding_sha256', 'execution_sha256', 'output_sha256', 'outcome', 'evidence_quote', 'reasoning'],
+            properties: {
+                binding_sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+                execution_sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+                output_sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+                outcome: { type: 'string', enum: ['PASSED', 'FAILED', 'SKIPPED', 'UNRESOLVED'] },
+                evidence_quote: { type: 'string', maxLength: 4096 },
+                reasoning: { type: 'string', minLength: 1, maxLength: 8192 }
             }
         },
         review_execution: {
@@ -393,20 +408,30 @@ function pushUnknownKeyViolations(
     }
 }
 
-function collectForbiddenDecisionKeys(value: unknown, path: string, violations: string[]): void {
+function collectForbiddenDecisionKeys(value: unknown, path: string, violations: string[],
+    nativeOutcomePaths: ReadonlySet<string>): void {
     if (Array.isArray(value)) {
-        value.forEach((entry, index) => collectForbiddenDecisionKeys(entry, `${path}[${index}]`, violations));
+        value.forEach((entry, index) => collectForbiddenDecisionKeys(entry, `${path}[${index}]`, violations, nativeOutcomePaths));
         return;
     }
     if (!isRecord(value)) {
         return;
     }
     for (const [key, nestedValue] of Object.entries(value)) {
-        if (REVIEW_FINDINGS_FORBIDDEN_DECISION_KEYS.has(key.toLowerCase())) {
+        if (REVIEW_FINDINGS_FORBIDDEN_DECISION_KEYS.has(key.toLowerCase())
+            && !(key === 'outcome' && nativeOutcomePaths.has(`${path}.${key}`))) {
             violations.push(`${path}.${key} is a reviewer-owned verdict/remediation decision field and is forbidden.`);
         }
-        collectForbiddenDecisionKeys(nestedValue, `${path}.${key}`, violations);
+        collectForbiddenDecisionKeys(nestedValue, `${path}.${key}`, violations, nativeOutcomePaths);
     }
+}
+
+function nativeCaseOutcomePaths(value: unknown, nativeIds: ReadonlySet<string>): ReadonlySet<string> {
+    const entries = isRecord(value) && isRecord(value.coverage_ledger) && Array.isArray(value.coverage_ledger.entries)
+        ? value.coverage_ledger.entries : [];
+    return new Set(entries.flatMap((entry, index) => isRecord(entry) && typeof entry.obligation_id === 'string'
+        && nativeIds.has(entry.obligation_id)
+        ? [`$.coverage_ledger.entries[${index}].case_resolution.outcome`] : []));
 }
 
 function parseEvidenceArray(
@@ -1787,7 +1812,8 @@ function parseCoverageLedger(value: unknown, violations: string[]): ReviewFindin
             entries.push({
                 obligation_id: obligationId,
                 evidence,
-                finding_ids: findingIds
+                finding_ids: findingIds,
+                ...(entry.case_resolution !== undefined ? { case_resolution: entry.case_resolution as NativeCaseResolution } : {})
             });
         }
     });
@@ -2145,7 +2171,10 @@ export function validateReviewFindingsReport(
     options: ReviewFindingsValidationOptions
 ): ReviewFindingsValidationResult {
     const violations: string[] = [];
-    collectForbiddenDecisionKeys(value, '$', violations);
+    const nativeBindings = options.expectedCoverageContract?.obligations.flatMap(item =>
+        item.validation_binding?.case_execution ? [item.validation_binding] : []) ?? [];
+    const nativeIds = new Set(nativeBindings.map(binding => `VALIDATION-${binding.id.toUpperCase()}`));
+    collectForbiddenDecisionKeys(value, '$', violations, nativeCaseOutcomePaths(value, nativeIds));
     if (!isRecord(value)) {
         return {
             valid: false,
@@ -2202,6 +2231,12 @@ export function validateReviewFindingsReport(
     if (options.expectedCoverageContract && coverageLedger
         && coverageLedger.coverage_contract_sha256 !== options.expectedCoverageContract.contract_sha256) {
         violations.push('coverage_ledger.coverage_contract_sha256 does not match the authenticated coverage contract.');
+    }
+    if (coverageLedger) {
+        for (const entry of coverageLedger.entries) if (entry.case_resolution !== undefined && !nativeIds.has(entry.obligation_id))
+            violations.push(`${entry.obligation_id}: case resolution lacks an authenticated native case obligation.`);
+        violations.push(...getNativeCaseResolutionViolations({ obligations: nativeBindings,
+            entries: coverageLedger.entries, repoRoot: options.repoRoot }));
     }
     const reviewExecution = parseReviewExecutionDeclaration(value.review_execution, violations);
     const expectedReviewExecutionContract = options.expectedReviewExecutionContract;

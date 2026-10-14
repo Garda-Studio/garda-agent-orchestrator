@@ -95,7 +95,21 @@
         "finding_ids": {
           "type": "array",
           "items": { "type": "string", "pattern": "^F-\\d{3}$" }
-        }
+        },
+        "case_resolution": { "$ref": "#/definitions/case_resolution" }
+      }
+    },
+    "case_resolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binding_sha256","execution_sha256","output_sha256","outcome","evidence_quote","reasoning"],
+      "properties": {
+        "binding_sha256": {"type":"string","pattern":"^[a-f0-9]{64}$"},
+        "execution_sha256": {"type":"string","pattern":"^[a-f0-9]{64}$"},
+        "output_sha256": {"type":"string","pattern":"^[a-f0-9]{64}$"},
+        "outcome": {"type":"string","enum":["PASSED","FAILED","SKIPPED","UNRESOLVED"]},
+        "evidence_quote": {"type":"string","maxLength":4096},
+        "reasoning": {"type":"string","minLength":1,"maxLength":8192}
       }
     },
     "review_execution": {

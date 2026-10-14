@@ -12,6 +12,8 @@ import { buildReviewRemediationBaselineArtifact } from '../../../../src/gates/re
 import { validateReviewFindingsReport } from '../../../../src/gates/review/review-findings-schema';
 import { buildReviewerFindingsOutputTemplateJson } from '../../../../src/gates/review/reviewer-findings-prompt-contract';
 import { buildReviewRemediationReviewContract } from '../../../../src/gates/review-remediation/review-remediation-review-contract';
+import { getNativeCaseResolutionViolations } from '../../../../src/gates/review/native-case-semantics';
+import { MAX_BOUNDARY_SOURCE_REFERENCES } from '../../../../src/core/trust-boundary-source-evidence';
 
 // Unit input for the contract builder; this is not native execution or review evidence.
 const obligation: QualityValidationObligation = {
@@ -25,6 +27,41 @@ function contractFor(binding: QualityValidationObligation) {
     return buildReviewCoverageContract({ reviewType: 'test', changedFiles: ['src/domain/catalog.ts'],
         validationObligations: [binding] });
 }
+
+// Constructor data only: these unit bindings are not native process or reviewer receipts.
+function nativeCaseBinding() {
+    return { ...obligation, case_execution: {
+        record_path: 'unit/attempt.json', record_sha256: '1'.repeat(64),
+        output_path: 'unit/output.log', output_sha256: '2'.repeat(64), output_size_bytes: 71,
+        output_encoding: 'utf8' as const, event_task_sequence: 9, scope_content_sha256: '3'.repeat(64)
+    } };
+}
+
+test('rejects altered native output identity while preserving exact case execution coverage', () => {
+    const binding = nativeCaseBinding(), contract = contractFor(binding);
+    assert.deepEqual(contract.obligations.find(entry => entry.kind === 'validation')!.validation_binding, binding);
+    const changedOutput = { ...binding, case_execution: {
+        ...binding.case_execution, output_sha256: '4'.repeat(64)
+    } };
+    assert.notEqual(contractFor(changedOutput).contract_sha256, contract.contract_sha256);
+});
+
+test('rejects missing independent case resolution despite complete source coverage', () => {
+    const contract = contractFor(nativeCaseBinding()), taskId = 'T-UNIT-NATIVE-SEMANTICS', hash = 'e'.repeat(64);
+    const execution = buildReviewRemediationReviewContract({ taskId, reviewType: 'test', preflightSha256: hash,
+        fullReviewScope: ['src/domain/catalog.ts'] });
+    const report = JSON.parse(buildReviewerFindingsOutputTemplateJson({ taskId, reviewType: 'test',
+        reviewContextSha256: hash, treeStateSha256: hash, coverageContract: contract, reviewExecutionContract: execution }));
+    report.validation_notes[0] = { id: 'N-001', topic: 'complete-scope-sweep', note: 'Unit report with source coverage only.',
+        evidence: [{ location: 'src/domain/catalog.ts:1', observation: 'Unit assigned source inspected.' }] };
+    report.coverage_ledger.entries = outputFor(contract).coverage_ledger.entries;
+    report.reviewer_notes = ['Unit schema input, not a delegated review.'];
+    const result = validateReviewFindingsReport(report, { expectedTaskId: taskId, expectedReviewType: 'test',
+        expectedCoverageContract: contract, expectedCoverageObligationIds: contract.obligations.map(entry => entry.id),
+        expectedChangedFilePaths: ['src/domain/catalog.ts'], expectedReviewContextSha256: hash,
+        expectedTreeStateSha256: hash, expectedReviewExecutionContract: execution });
+    assert.equal(result.valid, false, 'Source coverage alone cannot resolve actual selected-case results.');
+});
 
 test('frozen coverage requires every exact declared target without conventional source names', () => {
     const contract = contractFor(obligation);
@@ -56,6 +93,21 @@ function outputFor(contract: ReturnType<typeof contractFor>, validationLocation 
         }], finding_ids: []
     })) }, findings: { critical: [], high: [], medium: [], low: [] } };
 }
+
+test('native case limits preserve complete existing declared-target coverage', () => {
+    // Constructor compatibility only, not task execution or reviewer acceptance.
+    const bindings = Array.from({ length: MAX_BOUNDARY_SOURCE_REFERENCES + 1 }, (_, index) => ({ ...obligation,
+        id: sha256RedactedJsonPayload({ index }), target_id: `case-${index}` }));
+    const contract = buildReviewCoverageContract({ reviewType: 'test', changedFiles: ['src/domain/catalog.ts'],
+        validationObligations: bindings });
+    const result = validateReviewCoverageLedger(JSON.stringify(outputFor(contract)), contract);
+    assert.equal(result.status, 'PASS', JSON.stringify(result));
+    const mixed = getNativeCaseResolutionViolations({ obligations: [...bindings, nativeCaseBinding()], entries: [] });
+    assert.ok(mixed.some(item => item.includes('missing or malformed')));
+    assert.equal(mixed.some(item => item.includes('exceed their bound')), false);
+    assert.ok(getNativeCaseResolutionViolations({ obligations: bindings.map(item => ({ ...nativeCaseBinding(), id: item.id })),
+        entries: [] }).some(item => item.includes('exceed their bound')));
+});
 
 test('declared target closure rejects foreign source evidence without expanding other obligation domains', () => {
     const contract = contractFor(obligation);

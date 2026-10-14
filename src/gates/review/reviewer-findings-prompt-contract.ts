@@ -13,6 +13,7 @@ import {
 } from './reviewer-execution-contract';
 import type { ReviewRemediationReviewContract } from '../review-remediation/review-remediation-review-contract';
 import { buildReviewRemediationReviewContract } from '../review-remediation/review-remediation-review-contract';
+import { validationDigest } from '../../core/project-validation-identity';
 
 export interface ReviewerFindingsPromptContractOptions {
     taskId: string;
@@ -51,7 +52,14 @@ function buildCoverageLedgerEntries(contract: ReviewCoverageContract): Array<Rec
                 observation: `<concrete observation for ${obligation.kind} obligation ${obligation.target}>`
             }
         ],
-        finding_ids: []
+        finding_ids: [],
+        ...(obligation.validation_binding?.case_execution ? { case_resolution: {
+            binding_sha256: validationDigest(obligation.validation_binding),
+            execution_sha256: obligation.validation_binding.case_execution.record_sha256,
+            output_sha256: obligation.validation_binding.case_execution.output_sha256,
+            outcome: 'UNRESOLVED', evidence_quote: '',
+            reasoning: '<resolve this exact source case against the retained actual command output; explain observed execution and outcome>'
+        } } : {})
     }));
 }
 
@@ -146,6 +154,11 @@ export function buildReviewerFindingsPromptContractMarkdown(options: ReviewerFin
         ...buildReviewEvidenceDomainContractLines(options.reviewType, evidenceDomainPaths,
             options.coverageContract.obligations.filter(entry => entry.kind === 'validation')
                 .map(entry => ({ id: entry.id, source: entry.source! }))),
+        ...(options.coverageContract.obligations.some(entry => entry.validation_binding?.case_execution) ? [
+            'For each native case obligation, fill case_resolution with the exact generated source/execution/output bindings. Inspect its actual source and retained output; quote the concrete output supporting this specific case and explain the mapping and assertion outcome.',
+            'Case outcome is PASSED, FAILED, SKIPPED or UNRESOLVED. Unknown syntax and report formats require independent interpretation, not a guessed parser. Exit zero, a source hash, generic success text or no findings is not case success. Leave missing, zero-case or unsupported evidence UNRESOLVED. SKIPPED never closes a required case.',
+            'Do not rewrite frozen bindings or fabricate output quotations. Case outcome records execution semantics only; do not supply a task/review verdict or policy disposition.'
+        ] : []),
         'For each active finding, use exactly one F-### id, include concrete evidence, and reference every related coverage obligation id.',
         ...(!emptyReviewScope ? [
             'Active finding object shape: {"id":"F-001","title":"<short defect title>","description":"<observed defect impact only>","evidence":[{"location":"<changed-file>:<line>","observation":"<concrete observation>"}],"coverage_obligation_ids":["<obligation-id>"]}.'

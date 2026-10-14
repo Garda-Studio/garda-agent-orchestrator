@@ -11,6 +11,8 @@ import { readValidationReviewObligations } from '../review/validation-obligation
 import { resolveCurrentNoOpPreflightPath } from '../task-mode/no-op';
 import { getTaskModeEvidence } from '../task-mode/task-mode';
 import type { ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
+import type { TrustBoundarySourceEvidence } from '../../core/trust-boundary-analysis';
+import { readNativeCaseObligations } from '../review/native-case-semantics';
 
 export interface AuthoritativeReviewCoverageScope {
     changedFiles: string[];
@@ -82,6 +84,25 @@ export function resolveAuthoritativeReviewValidationObligations(options: {
 export function buildDeclaredReviewCoverageContract(options: Parameters<typeof resolveAuthoritativeReviewValidationObligations>[0]) {
     const scope = resolveAuthoritativeReviewCoverageScope(options);
     const validationObligations = resolveAuthoritativeReviewValidationObligations(options);
+    return { ...scope, validationObligations, contract: buildReviewCoverageContract({
+        reviewType: options.reviewType, changedFiles: scope.changedFiles, categoryIds: scope.categoryIds, validationObligations
+    }) };
+}
+
+/** Common native contract primitive. Ordinary routing is activated by the linked consumer package. */
+export function buildNativeCaseReviewCoverageContract(options: {
+    reviewType: string; preflight: Record<string, unknown>; repoRoot: string; preflightPath: string;
+    preflightSha256: string; sources: readonly TrustBoundarySourceEvidence[]; inspection?: ValidationEvidenceInspection;
+}) {
+    const relative = path.relative(path.resolve(options.repoRoot),
+        path.resolve(options.repoRoot, options.preflightPath)).replace(/\\/gu, '/');
+    const retained = readValidationFile(options.repoRoot, relative);
+    if (retained.identity.sha256 !== options.preflightSha256
+        || validationDigest(JSON.parse(retained.bytes.toString('utf8'))) !== validationDigest(options.preflight))
+        throw new Error('Native case coverage preflight differs from actual retained classification.');
+    const scope = resolveAuthoritativeReviewCoverageScope(options);
+    const validationObligations = readNativeCaseObligations({ ...options, taskId: String(options.preflight.task_id),
+        scopeContentSha256: String((options.preflight.metrics as Record<string, unknown>)?.scope_content_sha256) });
     return { ...scope, validationObligations, contract: buildReviewCoverageContract({
         reviewType: options.reviewType, changedFiles: scope.changedFiles, categoryIds: scope.categoryIds, validationObligations
     }) };

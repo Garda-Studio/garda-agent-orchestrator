@@ -4,10 +4,13 @@ import { resolveValidationSemanticReviewLanes, type EffectiveReviewSnapshot } fr
 import { resolveAuthoritativeReviewValidationObligations } from '../review-context/review-context-coverage';
 import { parseReviewEvidenceLocation } from './review-coverage-ledger';
 import { toPlainRecord } from '../shared/helpers';
+import { getNativeCaseResolutionViolations } from './native-case-semantics';
+import type { QualityValidationObligation } from '../quality-checklist/quality-checklist-validation-phases';
 
 interface TerminalReviewArtifact { content: string; receipt?: unknown }
 
-function semanticViolations(lane: string, ids: string[], sources: Set<string>, artifact?: TerminalReviewArtifact): string[] {
+function semanticViolations(lane: string, ids: string[], sources: Set<string>, artifact: TerminalReviewArtifact | undefined,
+    repoRoot: string, targets: QualityValidationObligation[]): string[] {
     const prefix = `Declared validation terminal ${lane}`;
     let report: Record<string, unknown> | null;
     try { report = toPlainRecord(JSON.parse(artifact?.content ?? '')); }
@@ -21,6 +24,9 @@ function semanticViolations(lane: string, ids: string[], sources: Set<string>, a
         return [`${prefix}: independent semantic coverage is not accepted.`];
     const entries = Array.isArray(ledger?.entries) ? ledger.entries.map(toPlainRecord) : [];
     const errors: string[] = [];
+    errors.push(...getNativeCaseResolutionViolations({ repoRoot, obligations: targets,
+        entries: entries.map(entry => ({ obligation_id: String(entry?.obligation_id ?? ''),
+            case_resolution: entry?.case_resolution })), requirePassed: true }));
     for (const id of ids) {
         const matches = entries.filter(entry => entry?.obligation_id === id);
         const findingIds = matches[0]?.finding_ids;
@@ -50,14 +56,14 @@ export function getValidationTerminalViolations(options: {
         const targets = resolveAuthoritativeReviewValidationObligations({ ...options, preflight: options.preflight,
             reviewType: lanes[0] });
         if (!targets?.length) throw new Error('Canonical declared obligations are unavailable.');
-        const errors = targets.filter(target => target.execution !== 'OBSERVED' || target.result_status !== 'PASSED')
+        const errors = targets.filter(target => target.execution !== 'OBSERVED' || (!target.case_execution && target.result_status !== 'PASSED'))
             .map(target => `Declared validation terminal: ${target.recipe_id}/${target.target_id} execution ${target.execution}, result ${target.result_status ?? 'PENDING'} is not closed.`);
         const ids = targets.map(target => `VALIDATION-${target.id.toUpperCase()}`);
         const sources = new Set(targets.map(target => target.source_identity.path));
         for (const lane of lanes) {
             if (options.requiredReviews[lane] !== true || options.skipReviews?.includes(lane))
                 errors.push(`Declared validation terminal ${lane}: frozen semantic review lane cannot be omitted or skipped.`);
-            errors.push(...semanticViolations(lane, ids, sources, options.artifacts[lane]));
+            errors.push(...semanticViolations(lane, ids, sources, options.artifacts[lane], options.repoRoot, targets));
         }
         return errors;
     } catch (error) {
