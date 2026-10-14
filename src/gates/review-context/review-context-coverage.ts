@@ -12,6 +12,7 @@ import { resolveCurrentNoOpPreflightPath } from '../task-mode/no-op';
 import { getTaskModeEvidence } from '../task-mode/task-mode';
 import type { ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 import type { TrustBoundarySourceEvidence } from '../../core/trust-boundary-analysis';
+import { assessTrustBoundaryAnalysisApplicability } from '../../core/trust-boundary-analysis';
 import { readNativeCaseObligations } from '../review/native-case-semantics';
 
 export interface AuthoritativeReviewCoverageScope {
@@ -63,7 +64,8 @@ export function resolveAuthoritativeReviewValidationObligations(options: {
     reviewType: string; preflight: Record<string, unknown>; repoRoot: string; preflightPath?: string; taskModePath?: string;
     inspection?: ValidationEvidenceInspection;
 }) {
-    if (!currentProjectValidationAuthority(options.repoRoot, options.preflight)) return undefined;
+    if (!currentProjectValidationAuthority(options.repoRoot, options.preflight)
+        && !assessTrustBoundaryAnalysisApplicability(options.preflight).required) return undefined;
     const taskId = String(options.preflight.task_id ?? '');
     const preflightPath = resolveCurrentNoOpPreflightPath(options.repoRoot, taskId, options.preflightPath);
     let mode = getTaskModeEvidence(options.repoRoot, taskId, options.taskModePath ?? '');

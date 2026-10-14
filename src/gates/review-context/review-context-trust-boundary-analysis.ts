@@ -13,7 +13,7 @@ import {
 
 import {
     assessTrustBoundaryAnalysisApplicability,
-    assessTrustBoundaryMatrix,
+    assessBoundTrustBoundaryMatrix,
     TRUST_BOUNDARY_ANALYSIS_RULE_ID,
     type TrustBoundaryMatrixEntry
 } from '../../core/trust-boundary-analysis';
@@ -294,7 +294,7 @@ function readBoundQualityAnalysis(options: QualityAnalysisOptions, requireObserv
             matrixRequired: applicability.required, matrix: answer?.trust_boundary_matrix });
     } catch (error) { violations.push(`Declared validation phases rejected: ${String(error)}`); }
     const status = String(artifact.status || '').trim().toUpperCase();
-    if (declared) {
+    if (declared || validation) {
         if (!validation || !isRecord(artifact.validation_phases)
             || validationDigest(artifact.validation_phases) !== validationDigest(validation.phases))
             violations.push('Quality-checklist validation phases are missing, changed or stale for the current canonical obligations.');
@@ -306,7 +306,7 @@ function readBoundQualityAnalysis(options: QualityAnalysisOptions, requireObserv
         violations.push(`Quality-checklist artifact status '${status || '<missing>'}' is not reviewer-ready.`);
     }
     const matrixAssessment = validation?.matrixAssessment ?? (applicability.required
-        ? assessTrustBoundaryMatrix(answer?.trust_boundary_matrix, { repoRoot: options.repoRoot }) : null);
+        ? assessBoundTrustBoundaryMatrix(answer?.trust_boundary_matrix, { repoRoot: options.repoRoot }) : null);
     violations.push(...(matrixAssessment?.violations ?? []));
     if (violations.length > 0) {
         return invalidAnalysis(hashedBoundBase, [...new Set(violations)]);

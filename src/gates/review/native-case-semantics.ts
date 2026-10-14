@@ -13,6 +13,12 @@ const MAX_QUOTE_CHARS = 4096;
 const MAX_REASON_CHARS = 8192;
 const HASH = /^[a-f0-9]{64}$/u;
 
+export class NativeCaseExecutionUnavailableError extends Error {
+    constructor(readonly violations: readonly string[]) {
+        super(`Native case execution is unavailable: ${violations.join(' ')}`);
+    }
+}
+
 export interface NativeCaseExecution {
     record_path: string; record_sha256: string; output_path: string; output_sha256: string;
     output_size_bytes: number; output_encoding: 'utf8' | 'base64-streams';
@@ -39,7 +45,12 @@ export function readNativeCaseObligations(options: {
         expectedScopeContentSha256: options.scopeContentSha256, maxTimelineBytes: MAX_CONTROL_BYTES,
         maxTimelineEvents: 10_000 });
     const latest = proof.entries.find(entry => entry.command_source !== 'typecheck');
-    if (!latest) throw new Error(`Native case execution is unavailable: ${proof.warnings.join(' ')}`);
+    if (!latest) throw new NativeCaseExecutionUnavailableError(proof.warnings);
+    const latestRun = timeline.bytes.toString('utf8').split(/\r?\n/u).filter(Boolean).map(line => JSON.parse(line))
+        .reverse().find(event => event.event_type === 'INTERMEDIATE_COMMAND_RUN'
+            && event.details?.command_source !== 'typecheck' && event.details?.preflight_sha256 === options.preflightSha256);
+    if (latestRun && latestRun.integrity?.task_sequence !== latest.event_task_sequence)
+        throw new NativeCaseExecutionUnavailableError(['The latest current command is not an authenticated successful execution.']);
     const sources = readBoundarySourceEvidence({ repoRoot: options.repoRoot,
         references: options.sources.map(source => ({ filePath: source.source_identity.path, caseId: source.case_id })),
         expectedSources: [...new Map(options.sources.map(source => [source.source_identity.path, source.source_identity])).values()] });
@@ -67,6 +78,13 @@ export function readNativeCaseObligations(options: {
     return obligations;
 }
 
+function withinCharacterLimit(value: string, maximum: number): boolean {
+    const characters = value[Symbol.iterator]();
+    let count = 0;
+    while (!characters.next().done) if (++count > maximum) return false;
+    return true;
+}
+
 function resolutionShape(value: unknown): value is NativeCaseResolution {
     if (!isPlainRecord(value) || Object.keys(value).some(key => !['binding_sha256', 'execution_sha256',
         'output_sha256', 'outcome', 'evidence_quote', 'reasoning'].includes(key))) return false;
@@ -74,8 +92,8 @@ function resolutionShape(value: unknown): value is NativeCaseResolution {
         typeof value[key] === 'string' && HASH.test(value[key] as string))
         && typeof value.outcome === 'string'
         && ['PASSED', 'FAILED', 'SKIPPED', 'UNRESOLVED'].includes(value.outcome)
-        && typeof value.evidence_quote === 'string' && value.evidence_quote.length <= MAX_QUOTE_CHARS
-        && typeof value.reasoning === 'string' && !!value.reasoning.trim() && value.reasoning.length <= MAX_REASON_CHARS;
+        && typeof value.evidence_quote === 'string' && withinCharacterLimit(value.evidence_quote, MAX_QUOTE_CHARS)
+        && typeof value.reasoning === 'string' && !!value.reasoning.trim() && withinCharacterLimit(value.reasoning, MAX_REASON_CHARS);
 }
 
 function retainedOutput(repoRoot: string, execution: NativeCaseExecution): { text: string; relative: string } {

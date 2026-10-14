@@ -1,5 +1,14 @@
 # Changelog
 
+## Ordinary universal validation activation
+
+- Extend the existing source/execution/independent-case/terminal chain to ordinary task-owned commands without requiring a project declaration.
+- Bind opaque source selectors and localized scenarios to current native execution evidence; preserve configured commands, permissions and unresolved semantics.
+- Count supplementary Unicode characters once within the published quotation and reasoning limits.
+- Preserve authenticated targetless compiler facts without inventing case obligations; failed execution still blocks their validation phase.
+- Reject matrix-selected cases missing from a declared command's targets, including a second case in an already bound source file.
+- Preserve ordinary semantic reports in active and retained completed-task audits without requiring a project declaration.
+
 - Route authenticated split-required parents before stale scope refresh after
   native WIP suspension, preserving the original preflight, captured source and
   gate-owned child/ownership transition.

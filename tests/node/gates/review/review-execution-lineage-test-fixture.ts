@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { buildReviewReceipt, type ReviewReceipt } from '../../../../src/gate-runtime/review-context';
 import { sha256RedactedJsonPayload } from '../../../../src/core/redaction';
 import { buildReviewCoverageContract } from '../../../../src/gates/review/review-coverage-ledger';
+import type { NativeCaseResolution } from '../../../../src/gates/review/native-case-semantics';
 import { resolveReviewContextExecutionEvidenceBindings } from '../../../../src/gates/review/review-evidence-contract';
 import {
     buildReviewFindingsValidationArtifact,
@@ -95,6 +96,7 @@ export function writeSchema4ReviewPackage(options: {
     mediumFindings?: readonly string[];
     residualRisks?: readonly string[];
     coverageContract?: ReturnType<typeof buildReviewCoverageContract>;
+    caseResolutions?: Record<string, NativeCaseResolution>;
     reviewExecution?: ReturnType<typeof buildReviewRemediationReviewContract>;
     evidenceFile?: string;
 }): Schema4ReviewPackage {
@@ -188,6 +190,8 @@ export function writeSchema4ReviewPackage(options: {
             coverage_contract_sha256: coverageContract.contract_sha256,
             entries: coverageContract.obligations.map(obligation => ({
                 obligation_id: obligation.id,
+                ...(options.caseResolutions?.[obligation.id]
+                    ? { case_resolution: options.caseResolutions[obligation.id] } : {}),
                 evidence: [{
                     location: `${options.coverageContract
                         ? obligation.kind === 'validation' ? obligation.source

@@ -672,7 +672,8 @@ export function readQualityChecklistReadiness(options: {
     const cadenceInterval = resolveOptionalQualityChecksReviewFailureCadenceInterval(options.workflowConfig?.optional_quality_checks);
     let declaredRequired = false, authorityError: string | null = null;
     try {
-        declaredRequired = !!(options.preflight && currentProjectValidationAuthority(options.repoRoot, options.preflight));
+        declaredRequired = !!(options.preflight && (currentProjectValidationAuthority(options.repoRoot, options.preflight)
+            || assessTrustBoundaryAnalysisApplicability(options.preflight).required));
     } catch (error) { declaredRequired = true; authorityError = String(error); }
     const buildReadiness = (
         readinessOptions: Parameters<typeof buildQualityChecklistReadiness>[0]

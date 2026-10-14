@@ -15,6 +15,7 @@ import {
 import {
     assessTrustBoundaryAnalysisApplicability,
     assessTrustBoundaryMatrix,
+    assessBoundTrustBoundaryMatrix,
     buildTrustBoundaryMatrixScaffold,
     TRUST_BOUNDARY_ANALYSIS_RULE_ID,
     type TrustBoundaryMatrixEntry
@@ -496,7 +497,7 @@ function decideStatus(
             }
         }
         if (rawTrustAnswers.length === 1) {
-            const assessment = validation?.matrixAssessment ?? assessTrustBoundaryMatrix(
+            const assessment = validation?.matrixAssessment ?? assessBoundTrustBoundaryMatrix(
                 (rawTrustAnswers[0] as Record<string, unknown>).trust_boundary_matrix
                 ?? (rawTrustAnswers[0] as Record<string, unknown>).trustBoundaryMatrix,
                 { repoRoot }

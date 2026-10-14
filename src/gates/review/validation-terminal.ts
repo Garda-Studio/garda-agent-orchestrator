@@ -6,6 +6,7 @@ import { parseReviewEvidenceLocation } from './review-coverage-ledger';
 import { toPlainRecord } from '../shared/helpers';
 import { getNativeCaseResolutionViolations } from './native-case-semantics';
 import type { QualityValidationObligation } from '../quality-checklist/quality-checklist-validation-phases';
+import { assessTrustBoundaryAnalysisApplicability } from '../../core/trust-boundary-analysis';
 
 interface TerminalReviewArtifact { content: string; receipt?: unknown }
 
@@ -50,12 +51,16 @@ export function getValidationTerminalViolations(options: {
     try {
         if (!options.preflight) return readProjectValidationAuthority(options.repoRoot)
             ? ['Declared validation terminal: current preflight is missing.'] : [];
-        if (!currentProjectValidationAuthority(options.repoRoot, options.preflight)) return [];
+        if (!currentProjectValidationAuthority(options.repoRoot, options.preflight)
+            && !assessTrustBoundaryAnalysisApplicability(options.preflight).required) return [];
         if (options.preflight.task_id !== options.taskId) throw new Error('Foreign terminal task identity.');
         const lanes = resolveValidationSemanticReviewLanes(options.preflight.effective_review_snapshot as EffectiveReviewSnapshot);
         const targets = resolveAuthoritativeReviewValidationObligations({ ...options, preflight: options.preflight,
             reviewType: lanes[0] });
-        if (!targets?.length) throw new Error('Canonical declared obligations are unavailable.');
+        if (!targets) throw new Error('Canonical declared obligations are unavailable.');
+        // The authenticated phase reader already requires current observed execution.
+        // Targetless compile/typecheck facts add no case-semantic obligations.
+        if (targets.length === 0) return [];
         const errors = targets.filter(target => target.execution !== 'OBSERVED' || (!target.case_execution && target.result_status !== 'PASSED'))
             .map(target => `Declared validation terminal: ${target.recipe_id}/${target.target_id} execution ${target.execution}, result ${target.result_status ?? 'PENDING'} is not closed.`);
         const ids = targets.map(target => `VALIDATION-${target.id.toUpperCase()}`);

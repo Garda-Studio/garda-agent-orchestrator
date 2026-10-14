@@ -115,7 +115,7 @@ function declaredReviewFixture(scope = 'security', options: { declared?: boolean
         .map(answer => answer.rule_id === TRUST_BOUNDARY_ANALYSIS_RULE_ID ? trust
             : { ...answer, status: 'PASS', answer: 'Checked current scope.' });
     const artifactPath = resolveDefaultQualityChecklistArtifactPath(repoRoot, taskId);
-    return { repoRoot, taskId, orchestratorRoot, artifactPath, preflightPath, taskModePath, refresh,
+    return { repoRoot, taskId, orchestratorRoot, artifactPath, preflightPath, taskModePath, refresh, matrix,
         cleanup: () => removeTempRepoWithRetry(repoRoot),
         publish: () => runQualityChecklistCommand({ repoRoot, taskId, preflightPath, answersJson: JSON.stringify(answers), emitMetrics: false }),
         read: () => readReviewContextTrustBoundaryAnalysis({ repoRoot, taskId,
@@ -210,6 +210,30 @@ function writeCurrentArtifact(fixture: ReturnType<typeof createGateFixture>, pre
 }
 
 describe('review-context trust-boundary handoff', () => {
+    it('rejects matrix-only declared case even when its source and another case are current', async () => {
+        const f = declaredReviewFixture('security', { passing: true });
+        try {
+            assert.equal((await f.execute()).status, 'PASSED');
+            assert.equal(f.publish().exitCode, 0);
+            assert.equal(f.read().status, 'current');
+            const original = f.matrix[0].negative_paths;
+            assert.ok(Array.isArray(original));
+            f.matrix[0].negative_paths = [...original, {
+                kind: 'other', scenario: 'A second selected case must not disappear.',
+                expected_behavior: 'Reject closure without an execution binding for the second case.',
+                evidence_files: ['RootSuite#matrix-only-2']
+            }];
+            const rejected = f.publish();
+            assert.notEqual(rejected.exitCode, 0, 'The same source identity cannot authorize an undeclared selected case.');
+            assert.ok(rejected.outputLines.some(line => line.includes('declared validation target')),
+                rejected.outputLines.join('\n'));
+            assert.equal(f.read().status, 'invalid');
+            f.matrix[0].negative_paths = original;
+            assert.equal(f.publish().exitCode, 0);
+            assert.equal(f.read().status, 'current');
+        } finally { await f.cleanup(); }
+    });
+
     it('rejects skipped lanes open findings risks and changed sources after accepted terminal coverage', async () => {
         const f = declaredReviewFixture('domain', { unchangedTarget: true, extraTest: true, passing: true });
         try {
@@ -259,24 +283,33 @@ describe('review-context trust-boundary handoff', () => {
         const f = declaredReviewFixture('domain', { unchangedTarget: true, extraTest: true });
         try {
             await f.execute(); f.publish();
+            assert.equal(f.phases().obligations[0].result_status, 'UNRESOLVED');
+            assert.ok(f.phases().obligations[0].case_execution);
+            const missingSemantics = (messages: string[]) => {
+                for (const lane of ['code', 'test']) assert.ok(messages.some(message => message.includes(
+                    `Declared validation terminal ${lane}: independent semantic report is missing or unreadable.`
+                )), messages.join('\n'));
+            };
             const preflight = JSON.parse(fs.readFileSync(f.preflightPath, 'utf8'));
             const reviewsRoot = path.join(f.orchestratorRoot, 'runtime/reviews');
             const required = { code: true, test: true };
             const review = checkRequiredReviews({ validatedPreflight: validatePreflightForReview(f.preflightPath, f.taskId, f.taskModePath),
                 preflightPayload: preflight, repoRoot: f.repoRoot, sourceOfTruth: 'Codex', taskModePath: f.taskModePath });
-            assert.ok(review.violations.some(error => /declared validation terminal.*UNRESOLVED/iu.test(error)));
+            missingSemantics(review.violations);
             const errors: string[] = [];
             collectRequiredReviewEvidence({ reviewsRoot, taskId: f.taskId, preflight, preflightPath: f.preflightPath,
                 preflightSha256: fileSha256(f.preflightPath)!, reviewEvidencePath: path.join(reviewsRoot, 'absent-gate.json'),
                 requiredReviews: required, scopeCategory: preflight.scope_category, orderedEvents: [], errors });
-            assert.ok(errors.some(error => /declared validation terminal.*UNRESOLVED/iu.test(error)));
+            missingSemantics(errors);
             // Retained lifecycle metadata is unit evidence, not real task acceptance.
             seedTaskQueue(f.repoRoot, f.taskId, 'DONE', 'default', '', 'Declared terminal unit fixture');
             appendMandatoryTaskEvent(f.orchestratorRoot, f.taskId, 'COMPLETION_GATE_PASSED', 'PASS', 'Retained terminal unit fixture.',
                 { status: 'PASSED', outcome: 'PASS', preflight_path: f.preflightPath, violations: [] });
             const audit = buildReviewCoverageAuditSummary({ reviewsRoot, taskId: f.taskId, requiredReviews: required });
             assert.equal(audit.status, 'INCOMPLETE');
-            assert.match(audit.visible_summary_line, /declared validation terminal.*UNRESOLVED/iu);
+            for (const lane of ['code', 'test']) assert.ok(audit.visible_summary_line.includes(
+                `Declared validation terminal ${lane}: independent semantic coverage is not accepted.`
+            ));
         } finally { await f.cleanup(); }
     });
 
@@ -603,20 +636,11 @@ describe('review-context trust-boundary handoff', () => {
             assert.equal(f.read().status, 'invalid');
         } finally { await f.cleanup(); }
     });
-    it('renders the authenticated current matrix into reviewer prompt content', () => {
-        const fixture = createGateFixture({ taskId: 'T-review-trust-boundary' });
+    it('renders the authenticated current matrix into reviewer prompt content', async () => {
+        const fixture = declaredReviewFixture('security', { passing: true });
         try {
-            const preflightPath = writeGateFixturePreflight(fixture, {
-                changed_files: ['src/gates/review/review-findings-schema.ts'],
-                triggers: { security: true }
-            });
-            writeCurrentArtifact(fixture, preflightPath);
-            const analysis = readReviewContextTrustBoundaryAnalysis({
-                repoRoot: fixture.repoRoot,
-                taskId: fixture.taskId,
-                preflight: JSON.parse(fs.readFileSync(preflightPath, 'utf8')),
-                preflightSha256: fileSha256(preflightPath)
-            });
+            await fixture.execute(); fixture.publish();
+            const analysis = fixture.read();
 
             assert.equal(analysis.status, 'current');
             assert.equal(analysis.artifact_sha256, analysis.recorded_artifact_sha256);
@@ -625,10 +649,10 @@ describe('review-context trust-boundary handoff', () => {
             const promptSection = buildTrustBoundaryAnalysisMarkdown(analysis).join('\n');
             assert.match(promptSection, /Trust-Boundary Analysis/u);
             assert.match(promptSection, /Mutable reviewer output to authenticated receipt/u);
-            assert.match(promptSection, /\[foreign\]/u);
+            assert.match(promptSection, /\[other\]/u);
             assert.match(promptSection, /verify every listed boundary and negative path/u);
         } finally {
-            fixture.cleanup();
+            await fixture.cleanup();
         }
     });
 
@@ -677,14 +701,11 @@ describe('review-context trust-boundary handoff', () => {
         assert.equal(scenarios.length, 4);
     });
 
-    it('hashes and parses one immutable artifact byte snapshot', () => {
-        const fixture = createGateFixture({ taskId: 'T-review-trust-snapshot' });
+    it('hashes and parses one immutable artifact byte snapshot', async () => {
+        const fixture = declaredReviewFixture('security', { passing: true });
         try {
-            const preflightPath = writeGateFixturePreflight(fixture, {
-                changed_files: ['src/gates/review/review-findings-schema.ts'],
-                triggers: { security: true }
-            });
-            const artifactPath = writeCurrentArtifact(fixture, preflightPath);
+            await fixture.execute(); fixture.publish();
+            const { preflightPath, artifactPath } = fixture;
             const originalReadFileSync = fs.readFileSync;
             let artifactReadCount = 0;
             const readMock = mock.method(fs, 'readFileSync', (
@@ -719,7 +740,7 @@ describe('review-context trust-boundary handoff', () => {
                 mock.restoreAll();
             }
         } finally {
-            fixture.cleanup();
+            await fixture.cleanup();
         }
     });
 

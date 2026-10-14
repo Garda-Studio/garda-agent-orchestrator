@@ -38,6 +38,13 @@ export function resolveDeclaredValidationDecisionRoute(options: {
         ?? phases.executions.find(execution => execution.execution === 'PENDING');
     if (!pending) return { status: 'BLOCKED', nextGate: 'project-validation-evidence',
         title: 'Resolve declared validation evidence.', reason: 'No current pending execution can be selected.', commands: [] };
+    if (phases.execution_kind === 'task-command') return {
+        status: 'BLOCKED', nextGate: 'run-intermediate-command', title: 'Execute the current project check.',
+        reason: 'Structural source/case references are bound. Run the explicit project check through gate run-intermediate-command '
+            + 'with --command-source targeted-test and the actual focused --command; retain its current output. '
+            + 'No runner or command is inferred from the source language. Independent per-case resolution remains required.',
+        commands: []
+    };
     if (pending.attempt_id) return { status: 'BLOCKED', nextGate: 'await-project-validation',
         title: 'Collect the existing declared validation attempt.',
         reason: `Await and collect the existing attempt ${formatNextStepInlineValue(pending.attempt_id)} for recipe ${formatNextStepInlineValue(pending.recipe_id)} through its executing owner, then evaluate its retained result. Do not launch a duplicate execution.`,

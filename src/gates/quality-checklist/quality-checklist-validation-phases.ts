@@ -1,10 +1,14 @@
 import type { FrozenValidationRecipe, ValidationFileIdentity } from '../../core/project-validation-contract';
 import { validationDigest } from '../../core/project-validation-identity';
-import { assessTrustBoundaryMatrix } from '../../core/trust-boundary-analysis';
+import { assessBoundTrustBoundaryMatrix, assessTrustBoundaryMatrix } from '../../core/trust-boundary-analysis';
 import { currentProjectValidationAuthority, freezeValidationRecipe } from '../project-validation/authority';
 import { readValidationEvents, type ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 import { readValidationResult } from '../project-validation/evidence';
 import type { NativeCaseExecution } from '../review/native-case-semantics';
+import { NativeCaseExecutionUnavailableError, readNativeCaseObligations } from '../review/native-case-semantics';
+import { readValidationEventSnapshot } from '../project-validation/attempt-evidence';
+import { readValidationFile } from '../../core/project-validation-identity';
+import * as path from 'node:path';
 
 type ExecutionObservation = 'PENDING' | 'OBSERVED' | 'REJECTED';
 export interface QualityValidationObligation {
@@ -22,15 +26,63 @@ export interface QualityValidationPhases {
     semantic: 'PENDING_INDEPENDENT_REVIEW'; matrix_sha256: string | null;
     obligations: QualityValidationObligation[]; executions: QualityRecipeExecution[];
     execution_diagnostics: string[]; sha256: string;
+    execution_kind?: 'task-command';
+}
+
+interface QualityValidationPhaseInspectionOptions {
+    repoRoot: string; taskId: string; preflight: Record<string, unknown>;
+    preflightSha256: string | null; matrixRequired: boolean; matrix: unknown; inspection?: ValidationEvidenceInspection;
+}
+
+function inspectNativePhases(options: QualityValidationPhaseInspectionOptions) {
+    const native = readValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection);
+    const relative = path.relative(path.resolve(options.repoRoot), native.preflight_path).replace(/\\/gu, '/');
+    const retained = readValidationFile(options.repoRoot, relative);
+    if (native.preflight_sha256 !== options.preflightSha256
+        || validationDigest(JSON.parse(retained.bytes.toString('utf8'))) !== validationDigest(options.preflight))
+        throw new Error('Native quality phases differ from the current canonical preflight.');
+    const matrixAssessment = assessBoundTrustBoundaryMatrix(options.matrix, { repoRoot: options.repoRoot });
+    const sources = matrixAssessment.source_evidence ?? [];
+    let obligations: QualityValidationObligation[] = sources.map(source => {
+        const binding = { task_id: options.taskId, preflight_sha256: native.preflight_sha256,
+            source_identity: source.source_identity, case_id: source.case_id };
+        return { id: validationDigest(binding), recipe_id: 'native-task-command', target_id: source.case_id,
+            selector: source.selector, source_identity: source.source_identity, snapshot_sha256: native.preflight_sha256,
+            execution: 'PENDING', attempt_id: null, result_status: null, result_sha256: null };
+    });
+    let execution: ExecutionObservation = matrixAssessment.structural_status === 'BOUND' ? 'PENDING' : 'REJECTED';
+    const diagnostics = [...matrixAssessment.violations];
+    if (execution !== 'REJECTED') {
+        try {
+            obligations = readNativeCaseObligations({ ...options, preflightPath: native.preflight_path,
+                preflightSha256: native.preflight_sha256, scopeContentSha256: native.scope_content_sha256, sources });
+            if (obligations.length > 0) execution = 'OBSERVED';
+        } catch (error) {
+            if (!(error instanceof NativeCaseExecutionUnavailableError) || error.violations.length > 0) {
+                execution = 'REJECTED'; diagnostics.push(String(error));
+            }
+        }
+    }
+    const first = obligations[0];
+    const executions: QualityRecipeExecution[] = [{ recipe_id: 'native-task-command', snapshot_sha256: native.preflight_sha256,
+        execution, attempt_id: first?.attempt_id ?? null, result_status: first?.result_status ?? null,
+        result_sha256: first?.result_sha256 ?? null }];
+    const payload = { schema_version: 1 as const, task_id: options.taskId, preflight_sha256: native.preflight_sha256,
+        authority_sha256: matrixAssessment.source_bindings_sha256, structural: matrixAssessment.structural_status!, execution,
+        semantic: 'PENDING_INDEPENDENT_REVIEW' as const, matrix_sha256: matrixAssessment.matrix_sha256,
+        obligations, executions, execution_diagnostics: diagnostics, execution_kind: 'task-command' as const };
+    return { matrixAssessment, phases: { ...payload, sha256: validationDigest(payload) } satisfies QualityValidationPhases };
 }
 
 function observeExecution(repoRoot: string, taskId: string, snapshot: FrozenValidationRecipe,
-    latest: ReturnType<typeof readValidationEvents>[number] | undefined, inspection?: ValidationEvidenceInspection) {
+    latest: ReturnType<typeof readValidationEvents>[number] | undefined, scopeContentSha256: string,
+    inspection?: ValidationEvidenceInspection) {
     const observation: Pick<QualityValidationObligation, 'execution' | 'attempt_id' | 'result_status' | 'result_sha256'> = {
         execution: 'PENDING', attempt_id: latest ? String(latest.details?.attempt_id) : null,
         result_status: null, result_sha256: null
     };
-    if (latest?.event_type !== 'PROJECT_VALIDATION_RESULTS_EVALUATED') return { observation, diagnostic: null };
+    let caseExecution: NativeCaseExecution | undefined;
+    if (latest?.event_type !== 'PROJECT_VALIDATION_RESULTS_EVALUATED') return { observation, caseExecution, diagnostic: null };
     try {
         const { snapshot: recorded, attempt, result } = readValidationResult({ repoRoot, taskId, attemptId: observation.attempt_id!, inspection });
         if (recorded.snapshot_sha256 !== snapshot.snapshot_sha256) throw new Error('Foreign validation quality snapshot');
@@ -38,20 +90,25 @@ function observeExecution(repoRoot: string, taskId: string, snapshot: FrozenVali
         observation.execution = attempt.exit_code === 0 && !attempt.timed_out && !attempt.cancelled && !attempt.truncated
             && !attempt.termination_signal && attempt.violations.length === 0
             && ['PASSED', 'UNRESOLVED'].includes(result.status) ? 'OBSERVED' : 'REJECTED';
-        return { observation, diagnostic: observation.execution === 'REJECTED' ? `Recipe ${snapshot.recipe.id} retained ${result.status}.` : null };
+        if (observation.execution === 'OBSERVED' && result.status === 'UNRESOLVED') {
+            const sequence = latest.integrity?.task_sequence;
+            if (!Number.isSafeInteger(sequence) || Number(sequence) < 1) throw new Error('Recipe case evidence lacks native event sequence.');
+            caseExecution = { record_path: result.attempt_path, record_sha256: result.attempt_sha256,
+                output_path: attempt.output_path, output_sha256: attempt.output_sha256,
+                output_size_bytes: attempt.output_bytes, output_encoding: 'base64-streams',
+                event_task_sequence: Number(sequence), scope_content_sha256: scopeContentSha256 };
+        }
+        return { observation, caseExecution, diagnostic: observation.execution === 'REJECTED' ? `Recipe ${snapshot.recipe.id} retained ${result.status}.` : null };
     } catch (error) {
         observation.execution = 'REJECTED';
-        return { observation, diagnostic: `Recipe ${snapshot.recipe.id} evidence rejected: ${String(error)}` };
+        return { observation, caseExecution: undefined, diagnostic: `Recipe ${snapshot.recipe.id} evidence rejected: ${String(error)}` };
     }
 }
 
-export function inspectQualityValidationPhases(options: {
-    repoRoot: string; taskId: string; preflight: Record<string, unknown>;
-    preflightSha256: string | null; matrixRequired: boolean; matrix: unknown; inspection?: ValidationEvidenceInspection;
-}) {
+export function inspectQualityValidationPhases(options: QualityValidationPhaseInspectionOptions) {
     const { repoRoot, taskId, preflight } = options;
     const authority = currentProjectValidationAuthority(repoRoot, preflight);
-    if (!authority) return null;
+    if (!authority) return options.matrixRequired ? inspectNativePhases(options) : null;
     if (preflight.task_id !== taskId) throw new Error('Foreign validation quality preflight');
     const snapshots = authority.approved.contract.recipes.map(recipe => freezeValidationRecipe(repoRoot, taskId, recipe.id));
     if (snapshots.some(snapshot => snapshot.preflight_sha256 !== options.preflightSha256))
@@ -67,7 +124,8 @@ export function inspectQualityValidationPhases(options: {
         const started = recipeEvents.find(event => event.event_type === 'PROJECT_VALIDATION_STARTED');
         const latest = started && recipeEvents.find(event => event.details?.attempt_id === started.details?.attempt_id
             && ['PROJECT_VALIDATION_STARTED', 'PROJECT_VALIDATION_COMPLETED', 'PROJECT_VALIDATION_RESULTS_EVALUATED'].includes(event.event_type));
-        const { observation, diagnostic } = observeExecution(repoRoot, taskId, snapshot, latest, options.inspection);
+        const { observation, caseExecution, diagnostic } = observeExecution(repoRoot, taskId, snapshot, latest,
+            String((preflight.metrics as Record<string, unknown>)?.scope_content_sha256 ?? ''), options.inspection);
         executions.push({ recipe_id: snapshot.recipe.id, snapshot_sha256: snapshot.snapshot_sha256, ...observation });
         if (diagnostic) diagnostics.push(diagnostic);
         for (const target of snapshot.recipe.targets) {
@@ -75,14 +133,25 @@ export function inspectQualityValidationPhases(options: {
             if (!source) throw new Error('Declared validation target lacks a captured source');
             const binding = { recipe_id: snapshot.recipe.id, target_id: target.id, selector: target.selector,
                 source_identity: source, snapshot_sha256: snapshot.snapshot_sha256 };
-            obligations.push({ id: validationDigest(binding), ...binding, ...observation });
+            obligations.push({ id: validationDigest({ ...binding, ...(caseExecution ? { case_execution: caseExecution } : {}) }),
+                ...binding, ...observation, ...(caseExecution ? { case_execution: caseExecution } : {}) });
         }
     }
-    const targets = [...new Map(snapshots.flatMap(snapshot => snapshot.recipe.targets).map(target => [JSON.stringify(target), target])).values()];
     const sources = [...new Map(obligations.map(obligation => [JSON.stringify(obligation.source_identity), obligation.source_identity])).values()];
-    const matrixAssessment = options.matrixRequired ? assessTrustBoundaryMatrix(options.matrix, {
-        repoRoot, recipeTargets: targets, sourceIdentities: sources
+    const referencedPaths = new Set(assessTrustBoundaryMatrix(options.matrix).matrix.flatMap(boundary =>
+        boundary.negative_paths.flatMap(negative => negative.evidence_files
+            .map(reference => reference.slice(0, reference.indexOf('#'))))));
+    const matrixAssessment = options.matrixRequired ? assessBoundTrustBoundaryMatrix(options.matrix, {
+        repoRoot, expectedSources: sources.filter(source => referencedPaths.has(source.path))
     }) : null;
+    if (matrixAssessment) {
+        for (const source of matrixAssessment.source_evidence ?? []) {
+            if (!obligations.some(target => target.source_identity.path === source.source_identity.path
+                && target.target_id === source.case_id))
+                matrixAssessment.violations.push(`Matrix-selected case ${source.source_identity.path}#${source.case_id} has no declared validation target.`);
+        }
+        if (matrixAssessment.violations.length) matrixAssessment.structural_status = 'INVALID';
+    }
     if (snapshots.some(snapshot => freezeValidationRecipe(repoRoot, taskId, snapshot.recipe.id).snapshot_sha256 !== snapshot.snapshot_sha256)
         || validationDigest(readValidationEvents(repoRoot, taskId, options.inspection)) !== validationDigest(events))
         throw new Error('Validation quality identities or timeline changed during inspection');

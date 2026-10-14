@@ -117,6 +117,9 @@ export function buildReviewCoverageAuditSummary(options: {
     catch (error) { preflightResolutionError = error; }
     const preflight = safeReadJson(preflightPath);
     const preflightSha256 = safeReviewArtifactFileSha256(preflightPath);
+    const inspection = preflight
+        && readTaskQueueStatusToken(readTaskQueueEntries(repoRoot).get(options.taskId)?.status ?? null) === 'DONE'
+        ? 'retained_completed' : 'active';
     for (const reviewType of Object.keys(options.requiredReviews).filter((key) => options.requiredReviews[key]).sort()) {
         const contextPath = path.join(options.reviewsRoot, `${options.taskId}-${reviewType}-review-context.json`);
         const receiptPath = path.join(options.reviewsRoot, `${options.taskId}-${reviewType}-receipt.json`);
@@ -171,9 +174,7 @@ export function buildReviewCoverageAuditSummary(options: {
         if (preflight) {
             try {
                 const declared = buildDeclaredReviewCoverageContract({ reviewType, preflight, repoRoot, preflightPath,
-                    inspection: preflight.project_validation
-                        && readTaskQueueStatusToken(readTaskQueueEntries(repoRoot).get(options.taskId)?.status ?? null) === 'DONE'
-                        ? 'retained_completed' : 'active' });
+                    inspection });
                 if (declared.validationObligations && preflightResolutionError) throw preflightResolutionError;
                 authoritativeCoverage = declared;
                 validationObligations = declared.validationObligations;
@@ -331,8 +332,8 @@ export function buildReviewCoverageAuditSummary(options: {
     }
     const validationViolations = getValidationTerminalViolations({ repoRoot, taskId: options.taskId, preflight, preflightPath,
         requiredReviews: options.requiredReviews,
-        inspection: preflight?.project_validation && readTaskQueueStatusToken(readTaskQueueEntries(repoRoot).get(options.taskId)?.status ?? null) === 'DONE' ? 'retained_completed' : 'active',
-        artifacts: Object.fromEntries((preflight?.project_validation ? Object.keys(options.requiredReviews) : []).map(lane => [lane, {
+        inspection,
+        artifacts: Object.fromEntries(Object.keys(options.requiredReviews).map(lane => [lane, {
             content: JSON.stringify(safeReadJson(path.join(options.reviewsRoot, `${options.taskId}-${lane}.md`))),
             receipt: safeReadJson(path.join(options.reviewsRoot, `${options.taskId}-${lane}-receipt.json`))
         }])) });

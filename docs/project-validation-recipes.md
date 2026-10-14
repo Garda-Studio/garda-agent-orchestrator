@@ -1,8 +1,20 @@
 # Project Validation Recipes
 
-Garda can validate a project through an explicit version-one declaration instead of guessing commands from its language, file extensions or root manifests. Existing projects without a declaration retain their configured command route. Admission is opt-in and does not configure compile/full-suite defaults or install tooling.
+Garda uses the same source, execution and independent case-resolution mechanism in ordinary projects. A project declaration is optional command metadata, not an opt-in universal mode. Existing projects keep their configured commands, permissions and tooling after an update. Mandatory source admission does not require JavaScript syntax, English case names or conventional test directories.
+
+## Ordinary project checks
+
+Where a trust-boundary matrix is required, cite each actual contained source as `path#case selector`. The selector is an opaque project identity; the scenario and expected behavior may use the project's language. Source identities are captured before execution. A bound reference does not prove that an assertion exists or that it ran.
+
+Run the actual focused project command through the task-owned `gate run-intermediate-command --command-source targeted-test --command "<actual project command>"` route selected by `next-step`. Garda retains current preflight/source and process/output identities. Use the project's actual configured command, never a guessed `npm test` command. Known runner suggestions are conveniences; unfamiliar runners remain eligible through an explicit bounded invocation.
+
+Current independent code/test reviewers receive each selected case's source, execution record and retained output. They must resolve its behavior with an exact quotation from that output. Missing cases, skipped cases, zero-case output and unresolved semantics cannot close selected obligations merely because the process exited zero. Compile-only and documentation-only work retain their own gates and do not acquire fabricated test results.
+
+Active and completed-task audits inspect those same bound reports with or without a project declaration. Native DONE selects read-only retained inspection with current completion provenance; it does not authorize execution or waive source and report integrity.
 
 ## Declare the existing project command
+
+For a declared command, matrix references use `path#target-id`; the declaration binds that ID to the command's opaque selector. Every required matrix reference must correspond to a declared target. Reusing a source file does not add execution coverage for another case.
 
 Save a declaration inside the repository. The following is a complete shape example: replace the executable placeholder with the absolute path of an already installed regular-file executable, and replace the input paths and target with the actual project files and exact case selector. This example is not an executable authorization.
 
@@ -65,7 +77,7 @@ Recipe mode accepts task/root, recipe ID and an eligible expected-red request. I
 
 1. **Structure:** bind the admitted declaration, current task/preflight, roles, executable and source identities. Bound structure is not executed behavior.
 2. **Execution:** retain the actual process exit, timing, bounded output and immutable source archive. Execution success is not semantic acceptance.
-3. **Result:** reconstruct the canonical attempt and output. The current `tap` adapter requires exact declared cases and checks host failure, missing/duplicate cases and unsupported output. `opaque` output or targetless exit-only facts remain UNRESOLVED; exit code zero alone cannot produce PASSED.
+3. **Result:** reconstruct the canonical attempt and output. The optional `tap` adapter recognizes exact declared cases and checks host failure, missing/duplicate cases and unsupported output. Opaque successful execution retains UNRESOLVED machine status until independent per-case semantics are resolved; exit code zero alone cannot produce PASSED. Targetless compile/typecheck facts do not become test outcomes.
 4. **Independent semantics:** current frozen capable mandatory code/test lanes receive exact target/source/attempt/result obligations. Genuine findings reports must cover their own canonical targets. Missing reports, mismatched identities, current source drift, unresolved results or open declared findings/risks prevent terminal closure. Existing receipt/context authentication and required review floors still apply.
 
 Unsupported declaration versions fail before settings replacement. Old receipts remain historical evidence; they are not promoted to current semantic acceptance. Read-only inspection of genuine retained DONE evidence grants no new execution or publication authority. Preserve existing queues, user memory, settings and original snapshots during supported updates; do not import foreign grants or WIP identity.
