@@ -12,6 +12,10 @@ import { readTaskQueueStatusToken } from '../../core/task-queue/task-queue-statu
 import { buildReviewContextPreflightDiffExpectations } from '../review-context/review-context-contract';
 import { getReviewReceiptExecutionEvidenceContractViolations } from '../review/review-evidence-contract';
 import { validateReviewFindingsValidationArtifactForReceipt } from '../review/review-findings-validation-artifact';
+import { reviewFindingsValidationArtifactHasActiveFindings } from '../review/review-findings-validation-artifact';
+import { validateReviewFindingsDispositionEvidence } from '../review/review-findings-disposition-evidence';
+import { resolveLockedReviewFindingPolicyFromPreflight,
+    resolveLockedReviewFindingPolicyFromReceiptDispositionEvidence } from '../review/review-finding-disposition';
 import { resolvePersistedRemediationReviewExecutionAuthority } from '../review-remediation/review-remediation-execution-authority';
 import {
     getReviewRemediationReviewContractViolations,
@@ -110,6 +114,7 @@ export function buildReviewCoverageAuditSummary(options: {
     orderedEvents?: readonly Record<string, unknown>[];
 }): ReviewCoverageAuditSummary {
     const entries: ReviewCoverageAuditEntry[] = [];
+    const dispositionEvidence: Record<string, ReturnType<typeof validateReviewFindingsDispositionEvidence> | null> = {};
     const repoRoot = path.resolve(options.reviewsRoot, '..', '..', '..');
     let preflightPath = path.join(options.reviewsRoot, `${options.taskId}-preflight.json`);
     let preflightResolutionError: unknown;
@@ -293,6 +298,23 @@ export function buildReviewCoverageAuditSummary(options: {
                 preferSnapshot: true
             });
             violations.push(...validationArtifact.violations.map((violation) => `findings validation: ${violation}`));
+            if (validationArtifact.valid && validationArtifact.artifact && validationArtifact.reference
+                && validationArtifact.artifact_sha256 && reviewFindingsValidationArtifactHasActiveFindings(validationArtifact.artifact)) {
+                const findingsDisposition = validateReviewFindingsDispositionEvidence({
+                    repoRoot, receipt, receiptPath, reviewArtifactPath, expectedTaskId: options.taskId,
+                    expectedReviewType: reviewType, validationArtifact: validationArtifact.artifact,
+                    validationArtifactPath: validationArtifact.reference.artifact_path,
+                    validationArtifactSha256: validationArtifact.artifact_sha256,
+                    policyResolution: reusedExistingReview
+                        ? resolveLockedReviewFindingPolicyFromReceiptDispositionEvidence(receipt)
+                        : resolveLockedReviewFindingPolicyFromPreflight(preflight),
+                    expectedReceiptPath: reusedExistingReview ? stringValue(receipt.reused_from_receipt_path) : null,
+                    expectedReceiptSha256: reusedExistingReview ? stringValue(receipt.reused_from_receipt_sha256) : null,
+                    preferSnapshot: true
+                });
+                dispositionEvidence[reviewType] = findingsDisposition;
+                violations.push(...findingsDisposition.violations.map(violation => `findings disposition: ${violation}`));
+            }
         }
         if (!preflight) {
             violations.push('current preflight is missing or unreadable for authoritative coverage reconstruction');
@@ -332,7 +354,7 @@ export function buildReviewCoverageAuditSummary(options: {
     }
     const validationViolations = getValidationTerminalViolations({ repoRoot, taskId: options.taskId, preflight, preflightPath,
         requiredReviews: options.requiredReviews,
-        inspection,
+        inspection, dispositionEvidence,
         artifacts: Object.fromEntries(Object.keys(options.requiredReviews).map(lane => [lane, {
             content: JSON.stringify(safeReadJson(path.join(options.reviewsRoot, `${options.taskId}-${lane}.md`))),
             receipt: safeReadJson(path.join(options.reviewsRoot, `${options.taskId}-${lane}-receipt.json`))

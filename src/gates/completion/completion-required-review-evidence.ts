@@ -134,6 +134,7 @@ export function collectRequiredReviewEvidence(input: {
     reviewGateTrustSummary: ReturnType<typeof readReviewTrustSummaryFromReviewGate>;
 } {
     const reviewArtifacts: Record<string, CompletionReviewArtifactEvidence> = {};
+    const dispositionEvidence: Record<string, ReturnType<typeof validateReviewFindingsDispositionEvidence> | null> = {};
     const {
         receiptReviewTrustSummary,
         reviewGateTrustSummary
@@ -313,7 +314,7 @@ export function collectRequiredReviewEvidence(input: {
                         && validationArtifact.reference
                         && validationArtifact.artifact_sha256
                     ) {
-                        const dispositionEvidence = validateReviewFindingsDispositionEvidence({
+                        const findingsDisposition = validateReviewFindingsDispositionEvidence({
                             repoRoot,
                             receipt: receipt as unknown as Record<string, unknown>,
                             receiptPath,
@@ -332,7 +333,8 @@ export function collectRequiredReviewEvidence(input: {
                                 : null,
                             preferSnapshot: reusedExistingReview
                         });
-                        input.errors.push(...dispositionEvidence.violations);
+                        dispositionEvidence[reviewKey] = findingsDisposition;
+                        input.errors.push(...findingsDisposition.violations);
                     }
                 }
             } else {
@@ -351,7 +353,7 @@ export function collectRequiredReviewEvidence(input: {
             }
         }
         input.errors.push(...getValidationTerminalViolations({ repoRoot, taskId: input.taskId, preflight: input.preflight,
-            preflightPath: input.preflightPath, requiredReviews: input.requiredReviews, artifacts: reviewArtifacts }));
+            preflightPath: input.preflightPath, requiredReviews: input.requiredReviews, artifacts: reviewArtifacts, dispositionEvidence }));
         const receiptReviewTrustSummary = readReviewTrustSummary(
             requiredReviewBooleans,
             input.reviewsRoot,

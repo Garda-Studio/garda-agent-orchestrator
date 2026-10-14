@@ -1,5 +1,10 @@
 # Changelog
 
+## Frozen review disposition and semantic closure
+
+- Preserve a PASSED selected case when its linked finding or residual risk has an authenticated, satisfied nonblocking disposition under the frozen policy.
+- Forward the existing canonical disposition checks through required-review, completion and retained audit readers; missing follow-up evidence, fix-now obligations and FAILED or UNRESOLVED cases remain blocking.
+
 ## Ordinary universal validation activation
 
 - Extend the existing source/execution/independent-case/terminal chain to ordinary task-owned commands without requiring a project declaration.

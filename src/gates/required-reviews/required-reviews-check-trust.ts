@@ -89,6 +89,7 @@ export interface ReviewArtifactGateEligibilityResult {
     reviewerRoutingPolicy: Record<string, unknown> | null;
     trivialReview: boolean;
     findingsEvidence: ReturnType<typeof getReviewArtifactFindingsEvidence> | null;
+    findingsDisposition: ReturnType<typeof validateReviewFindingsDispositionEvidence> | null;
     violations: string[];
 }
 
@@ -182,6 +183,7 @@ export function validateReviewArtifactGateEligibility(options: {
     let reusedFromReviewTreeStateSha256: string | null = null;
     let trivialReview = false;
     let findingsEvidence: ReturnType<typeof getReviewArtifactFindingsEvidence> | null = null;
+    let findingsDisposition: ReturnType<typeof validateReviewFindingsDispositionEvidence> | null = null;
     let laneDomainPreflightBindingAllowed = false;
     const requiresFindingsOnlyArtifact = reviewContextRequiresFindingsOnlyArtifact(reviewContext);
     const preflightPayload = resolvePreflightPayloadForReviewValidation({
@@ -529,6 +531,7 @@ export function validateReviewArtifactGateEligibility(options: {
                                     preferSnapshot: reusedExistingReview
                                 });
                                 errors.push(...dispositionEvidence.violations);
+                                findingsDisposition = dispositionEvidence;
                             }
                         }
                     }
@@ -861,6 +864,7 @@ export function validateReviewArtifactGateEligibility(options: {
         reviewerRoutingPolicy: routingPolicySummary,
         trivialReview,
         findingsEvidence,
+        findingsDisposition,
         violations: errors
     };
 }

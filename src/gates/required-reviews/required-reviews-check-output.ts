@@ -348,6 +348,7 @@ export function checkRequiredReviews(options: CheckRequiredReviewsOptions) {
     }
 
     const reviewChecks: Record<string, unknown> = {};
+    const dispositionEvidence: Record<string, ReturnType<typeof validateReviewArtifactGateEligibility>['findingsDisposition']> = {};
     const treeStateFreshnessCache = options.repoRoot
         ? createReviewTreeStateFreshnessCache()
         : null;
@@ -398,6 +399,7 @@ export function checkRequiredReviews(options: CheckRequiredReviewsOptions) {
             routingPolicySummary = validation.reviewerRoutingPolicy;
             trivialReview = validation.trivialReview;
             findingsEvidence = validation.findingsEvidence;
+            dispositionEvidence[reviewKey] = validation.findingsDisposition;
             errors.push(...validation.violations);
         }
 
@@ -422,7 +424,7 @@ export function checkRequiredReviews(options: CheckRequiredReviewsOptions) {
     if (resolvedTaskId) errors.push(...getValidationTerminalViolations({
         repoRoot: options.repoRoot || path.resolve(validatedPreflight.preflight_path, '../../../..'),
         taskId: resolvedTaskId, preflight: preflightPayload, preflightPath: validatedPreflight.preflight_path,
-        requiredReviews, skipReviews, artifacts: reviewArtifacts
+        requiredReviews, skipReviews, artifacts: reviewArtifacts, dispositionEvidence
     }));
     const status = errors.length > 0 ? 'FAILED' : 'PASSED';
     const outcome = errors.length > 0 ? 'FAIL' : 'PASS';

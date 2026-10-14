@@ -21,6 +21,9 @@ import { buildReviewRemediationReviewContract } from '../../../../src/gates/revi
 import type { ReviewDependencyTimelineEvent } from '../../../../src/gates/review/review-dependencies';
 import type { RuntimeReviewerIdentity } from '../../../../src/gates/review/reviewer-routing';
 import { buildReviewTreeState } from '../../../../src/gates/review/review-tree-state';
+import { buildReviewFindingsDispositionArtifact, getReviewFindingsDispositionArtifactPath,
+    getReviewFindingsDispositionArtifactSnapshotPath } from '../../../../src/gates/review/review-findings-disposition-artifact';
+import { resolveLockedReviewFindingPolicyFromPreflight } from '../../../../src/gates/review/review-finding-disposition';
 
 function writeJson(filePath: string, value: unknown): void {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -94,6 +97,9 @@ export function writeSchema4ReviewPackage(options: {
     preflightPath: string;
     preflight: Record<string, unknown>;
     mediumFindings?: readonly string[];
+    lowFindings?: readonly string[];
+    findingObligationId?: string;
+    withDispositionEvidence?: boolean;
     residualRisks?: readonly string[];
     coverageContract?: ReturnType<typeof buildReviewCoverageContract>;
     caseResolutions?: Record<string, NativeCaseResolution>;
@@ -119,7 +125,7 @@ export function writeSchema4ReviewPackage(options: {
         reviewType: options.reviewType,
         changedFiles
     });
-    const findingObligationId = (options.coverageContract
+    const findingObligationId = options.findingObligationId ?? (options.coverageContract
         ? coverageContract.obligations.find(obligation => obligation.kind === 'file' && obligation.target === evidenceFile)
         : undefined)?.id ?? coverageContract.obligations[0]?.id;
     const reviewExecution = options.reviewExecution ?? buildReviewRemediationReviewContract({
@@ -200,7 +206,7 @@ export function writeSchema4ReviewPackage(options: {
                     observation: `Execution lineage was checked for ${obligation.id}.`
                 }],
                 finding_ids: obligation.id === findingObligationId
-                    ? (options.mediumFindings || []).map((_, findingIndex) =>
+                    ? [...(options.mediumFindings || []), ...(options.lowFindings || [])].map((_, findingIndex) =>
                         `F-${String(findingIndex + 1).padStart(3, '0')}`)
                     : []
             }))
@@ -226,7 +232,12 @@ export function writeSchema4ReviewPackage(options: {
                     ? [findingObligationId]
                     : []
             })),
-            low: []
+            low: (options.lowFindings || []).map((description, index) => ({
+                id: `F-${String((options.mediumFindings?.length ?? 0) + index + 1).padStart(3, '0')}`,
+                title: `Low execution-lineage finding ${index + 1}`, description,
+                evidence: [{ location: `${evidenceFile}:1`, observation: 'The frozen nonblocking finding remains recorded.' }],
+                coverage_obligation_ids: findingObligationId ? [findingObligationId] : []
+            }))
         },
         residual_risks: (options.residualRisks || []).map((description, index) => ({
             id: `R-${String(index + 1).padStart(3, '0')}`,
@@ -363,6 +374,23 @@ export function writeSchema4ReviewPackage(options: {
         reviewer_provenance_event_sha256: invocationEventSha256
     };
     const receiptPath = path.join(options.reviewsRoot, `${options.taskId}-${options.reviewType}-receipt.json`);
+    if (options.withDispositionEvidence) {
+        const disposition = buildReviewFindingsDispositionArtifact({ taskId: options.taskId, reviewType: options.reviewType,
+            validationArtifact, validationArtifactPath, validationArtifactSha256,
+            policyResolution: resolveLockedReviewFindingPolicyFromPreflight(options.preflight) });
+        const dispositionPath = getReviewFindingsDispositionArtifactPath(artifactPath);
+        writeJson(dispositionPath, disposition);
+        const dispositionHash = fileSha256(dispositionPath);
+        const snapshotPath = getReviewFindingsDispositionArtifactSnapshotPath(dispositionPath, dispositionHash);
+        fs.copyFileSync(dispositionPath, snapshotPath);
+        receipt.review_findings_disposition = disposition.disposition_result;
+        receipt.review_findings_disposition_artifact = { artifact_path: dispositionPath.replace(/\\/gu, '/'),
+            artifact_sha256: dispositionHash, snapshot_path: snapshotPath.replace(/\\/gu, '/'), snapshot_sha256: dispositionHash,
+            disposition_result_sha256: disposition.disposition_result_sha256, policy_id: disposition.policy.policy_id,
+            policy_source: disposition.policy.policy_source, ...disposition.summary };
+        Object.assign(receipt.review_output_contract as Record<string, unknown>, {
+            disposition_artifact_sha256: dispositionHash, disposition_result_sha256: disposition.disposition_result_sha256 });
+    }
     writeJson(receiptPath, receipt);
     return {
         artifactPath,
