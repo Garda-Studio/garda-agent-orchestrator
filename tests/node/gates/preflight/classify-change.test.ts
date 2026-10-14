@@ -17,6 +17,15 @@ import {
 import { defaultCapabilities, makeConfig } from './classify-change-test-support';
 
 describe('gates/classify-change', () => {
+    it('rejects protected path downgrades while accepting explicit test roles for unconventional sources', () => {
+        const source = 'custom/Оплата.case';
+        const options = { declaredTestPaths: [source] };
+        assert.equal(classifyScopeCategory([source], [], [], options).category, 'test-only');
+        assert.notEqual(classifyScopeCategory([source], [], [], {
+            ...options, protectedControlPlaneRoots: ['custom/'] }).category, 'test-only');
+        assert.equal(classifyScopeCategory([source], [], []).category, 'code');
+    });
+
     describe('getDefaultClassificationConfig', () => {
         it('returns valid default config with triggers', () => {
             const config = getDefaultClassificationConfig('/repo');
@@ -59,6 +68,76 @@ describe('gates/classify-change', () => {
     });
 
     describe('classifyChange', () => {
+        it('does not suppress declared tests through UI localization companion heuristics', () => {
+            const test = 'src/reports/ui/lang-packs/garda-ui-ru.json';
+            const driver = 'src/reports/ui/dashboard-client-quality-gate.ts';
+            for (const files of [[test], [driver, test]]) {
+                const result = classifyChange({
+                    normalizedFiles: files, declaredTestPaths: [test], changedLinesTotal: 24,
+                    changedFileStats: Object.fromEntries(files.map(file => [file,
+                        { additions: 8, deletions: 4, changed_lines: 12 }])),
+                    classificationConfig: makeConfig(), reviewCapabilities: defaultCapabilities
+                });
+                assert.equal(result.scope_category, files.length === 1 ? 'test-only' : 'mixed');
+                assert.equal(result.triggers.test, true);
+                assert.equal(result.required_reviews.test, true);
+                assert.equal(result.triggers.ui_i18n_review_trigger_suppressed, false);
+            }
+        });
+
+        it('does not suppress explicit tests through ordinary documentation or configuration heuristics', () => {
+            for (const source of ['docs/checkout.md', 'custom/checkout.json', 'custom/checkout.yaml']) {
+                const options = {
+                    normalizedFiles: [source], declaredTestPaths: [source], changedLinesTotal: 20,
+                    classificationConfig: makeConfig({ test_trigger_regexes: [] }),
+                    reviewCapabilities: defaultCapabilities
+                };
+                const result = classifyChange(options);
+                assert.equal(result.scope_category, 'test-only');
+                assert.equal(result.triggers.test, true);
+                assert.equal(result.required_reviews.test, true);
+                assert.equal(result.required_reviews.code, false);
+                assert.equal(classifyChange({ ...options, declaredTestPaths: [] }).scope_category,
+                    source.endsWith('.md') ? 'docs-only' : 'config-only');
+                for (const protectedSource of ['AGENTS.md', 'tsconfig.json']) {
+                    const protectedResult = classifyChange({ ...options,
+                        normalizedFiles: [protectedSource], declaredTestPaths: [protectedSource],
+                        classificationConfig: makeConfig({ test_trigger_regexes: [],
+                            protected_control_plane_roots: [protectedSource] }) });
+                    assert.notEqual(protectedResult.scope_category, 'test-only');
+                    assert.equal(protectedResult.triggers.test, false);
+                }
+            }
+        });
+
+        it('requires test review for explicit unconventional test roles alone and with runtime changes', () => {
+            const declaredTest = 'custom/Оплата.case';
+            for (const files of [[declaredTest], ['src/main.ts', declaredTest]]) {
+                const result = classifyChange({
+                    normalizedFiles: files,
+                    declaredTestPaths: [declaredTest],
+                    changedLinesTotal: 20,
+                    classificationConfig: makeConfig({ test_trigger_regexes: [] }),
+                    reviewCapabilities: defaultCapabilities
+                });
+                assert.equal(result.scope_category, files.length === 1 ? 'test-only' : 'mixed');
+                assert.equal(result.triggers.test, true);
+                assert.equal(result.required_reviews.test, true);
+                assert.equal(result.required_reviews.code, files.length > 1);
+            }
+            const protectedResult = classifyChange({
+                normalizedFiles: [declaredTest],
+                declaredTestPaths: [declaredTest],
+                changedLinesTotal: 20,
+                classificationConfig: makeConfig({
+                    test_trigger_regexes: [], protected_control_plane_roots: ['custom/']
+                }),
+                reviewCapabilities: defaultCapabilities
+            });
+            assert.notEqual(protectedResult.scope_category, 'test-only');
+            assert.equal(protectedResult.triggers.test, false);
+        });
+
         it('requires code review for unfamiliar code without inventing runtime detection', () => {
             const result = classifyChange({
                 normalizedFiles: ['project/implementation.custom'],

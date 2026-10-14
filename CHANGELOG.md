@@ -1,5 +1,11 @@
 # Changelog
 
+## Universal native execution evidence
+
+- Authenticate current native project commands independently of familiar runner names, with source-content observations before and after execution.
+- Preserve pending case semantics, round-trip focused Maven/Gradle selectors, and consume audited test roles without weakening protected path classification.
+- Share timeline/preflight/scope capture within an observation; ordinary universal workflow activation remains a dependent step.
+
 ## 1.4.4
 
 ### T-259-1 — Language-independent boundary source bindings

@@ -29,6 +29,7 @@ import {
 import { hasTestFirstExpectedRedDeclaration } from '../../../../gates/test-first/test-first-declaration';
 import { executeCommandAsync, splitCommandLine } from '../../../gate-cli/gates-subprocess';
 import { runRecipeCommand } from './recipe-command-flow';
+import { isLiteralIntermediateInvocation, observeNativeIntermediateScope } from './intermediate-command-scope';
 
 const ALLOWED_COMMAND_SOURCES = ['node-test', 'targeted-test', 'typecheck', 'validation'] as const;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -100,6 +101,9 @@ interface IntermediateCommandRecord {
     source_composition: IntermediateSourceComposition;
     local_commit_authentication?: Record<string, string>;
     source_authentication_error?: string;
+    scope_content_sha256_before?: string;
+    scope_content_sha256_after?: string | null;
+    scope_observation_error?: string;
 }
 
 interface IntermediateCompositionAuthority {
@@ -571,6 +575,10 @@ async function persistCommandEvent(
             ...(record.preflight_path ? { preflight_path: record.preflight_path } : {}),
             ...(record.preflight_sha256 ? { preflight_sha256: record.preflight_sha256 } : {}),
             ...(record.coverage_contract_sha256 ? { coverage_contract_sha256: record.coverage_contract_sha256 } : {}),
+            ...(record.scope_content_sha256_before ? {
+                scope_content_sha256_before: record.scope_content_sha256_before,
+                scope_content_sha256_after: record.scope_content_sha256_after
+            } : {}),
             output_telemetry: record.output_telemetry,
             exit_code: record.exit_code,
             duration_ms: record.duration_ms,
@@ -618,7 +626,15 @@ export async function runIntermediateCommandCommand(
         ?? (preflightPath ? gateHelpers.fileSha256(preflightPath) ?? undefined : undefined);
     const coverageContractSha256 = normalizeOptionalSha256(options.coverageContractSha256, '--coverage-contract-sha256');
 
-    if (!isAllowedIntermediateCommand(command, commandSource)) {
+    const nativeScopeBefore = observeNativeIntermediateScope(repoRoot, taskId, preflightPath);
+    if (nativeScopeBefore.preflight_sha256 && preflightSha256 !== nativeScopeBefore.preflight_sha256) {
+        return { exitCode: EXIT_GATE_FAILURE,
+            outputLines: formatRejectedLines('Requested preflight digest differs from the observed native document.',
+                commandSource, command) };
+    }
+    const conventionalInvocation = isAllowedIntermediateCommand(command, commandSource);
+    if (!conventionalInvocation && (!nativeScopeBefore.scope_content_sha256
+        || !isLiteralIntermediateInvocation(command))) {
         const message = 'Command is not eligible for auditable intermediate compaction for the selected source.';
         return {
             exitCode: EXIT_GATE_FAILURE,
@@ -645,6 +661,8 @@ export async function runIntermediateCommandCommand(
             signal: options.signal
         });
         const durationMs = Date.now() - startedAt;
+        const nativeScopeAfter = nativeScopeBefore.scope_content_sha256
+            ? observeNativeIntermediateScope(repoRoot, taskId, preflightPath) : null;
         const sourceComposition = bindIntermediateSourceComposition(sourceBefore, observeIntermediateSource(repoRoot));
         const rawLines = result.outputLines;
         const actualOutput = `${rawLines.join('\n')}\n`;
@@ -707,6 +725,12 @@ export async function runIntermediateCommandCommand(
             ...(coverageContractSha256 ? { coverage_contract_sha256: coverageContractSha256 } : {}),
             output_telemetry: telemetry,
             source_composition: sourceComposition,
+            ...(nativeScopeBefore.scope_content_sha256 ? {
+                scope_content_sha256_before: nativeScopeBefore.scope_content_sha256,
+                scope_content_sha256_after: nativeScopeAfter?.preflight_sha256 === nativeScopeBefore.preflight_sha256
+                    ? nativeScopeAfter.scope_content_sha256 : null,
+                ...(nativeScopeAfter?.error ? { scope_observation_error: nativeScopeAfter.error } : {})
+            } : {}),
         }, actualOutput, authorityBefore);
         writeReservedIntermediateFile(reserved.artifact, `${JSON.stringify(record, null, 2)}\n`);
         const artifactSha256 = gateHelpers.fileSha256(artifacts.artifactPath);

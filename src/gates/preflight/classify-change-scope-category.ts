@@ -12,6 +12,7 @@ import {
 export type ScopeCategory = 'code' | 'docs-only' | 'test-only' | 'config-only' | 'audit-only' | 'mixed' | 'empty';
 
 interface ScopeCategoryOptions {
+    declaredTestPaths?: readonly string[];
     ordinaryDocPaths?: string[];
     protectedControlPlaneRoots?: string[];
     testTriggerRegexes?: string[];
@@ -53,7 +54,8 @@ export function classifyScopeCategory(
 
     for (const file of normalizedFiles) {
         const isCode = isRuntimeCodeLikePath(file, codeLikeRegexes, runtimeRoots);
-        const isTest = matchAnyRegex(file, options.testTriggerRegexes || [], {
+        const isDeclaredTest = options.declaredTestPaths?.includes(file);
+        const isTest = isDeclaredTest || matchAnyRegex(file, options.testTriggerRegexes || [], {
             skipInvalidRegex: true,
             caseInsensitive: true
         });
@@ -80,6 +82,10 @@ export function classifyScopeCategory(
         }
         if (isAudit || isProtectedControlPlane) {
             auditCount++;
+            continue;
+        }
+        if (isDeclaredTest) {
+            testCount++;
             continue;
         }
         if (isConfig) {

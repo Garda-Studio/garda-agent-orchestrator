@@ -254,13 +254,17 @@ export function classifyChange(options: ClassifyChangeOptions): ClassifyChangeRe
         caseInsensitive: true
     });
 
-    const uiI18nCompanionScope = analyzeUiI18nCompanionScope({
+    const detectedUiI18nScope = analyzeUiI18nCompanionScope({
         normalizedFiles,
         classificationConfig,
         changedFileStats: options.changedFileStats,
         maxDriverFiles: fastPathMaxFiles,
         maxDriverChangedLines: fastPathMaxChangedLines
     });
+    const uiI18nCompanionScope = normalizedFiles.some(file => options.declaredTestPaths?.includes(file))
+        ? { ...detectedUiI18nScope, eligible: false, reviewTriggerSuppressionEligible: false,
+            reason: 'explicit_test_scope' }
+        : detectedUiI18nScope;
     const reviewTriggerFiles = uiI18nCompanionScope.reviewTriggerSuppressionEligible
         ? uiI18nCompanionScope.reviewTriggerFiles
         : normalizedFiles;
@@ -290,6 +294,7 @@ export function classifyChange(options: ClassifyChangeOptions): ClassifyChangeRe
         : changedLinesTotal;
 
     const scopeCategoryOptions = {
+        declaredTestPaths: options.declaredTestPaths,
         ordinaryDocPaths: classificationConfig.ordinary_doc_paths,
         protectedControlPlaneRoots: classificationConfig.protected_control_plane_roots,
         testTriggerRegexes: classificationConfig.test_trigger_regexes,
@@ -300,6 +305,10 @@ export function classifyChange(options: ClassifyChangeOptions): ClassifyChangeRe
         dependencyTriggerRegexes: classificationConfig.dependency_trigger_regexes
     };
     const rawScopeClassification = classifyScopeCategory(normalizedFiles, codeLike, runtimeRoots, scopeCategoryOptions);
+    const testTriggered = pathTriggers.testTriggered || reviewTriggerFiles.some((file) => (
+        options.declaredTestPaths?.includes(file)
+        && classifyScopeCategory([file], codeLike, runtimeRoots, scopeCategoryOptions).category === 'test-only'
+    ));
     const reviewableCodeChanged = reviewTriggerFiles.some((file) => (
         classifyScopeCategory([file], codeLike, runtimeRoots, scopeCategoryOptions).category === 'code'
     ));
@@ -376,7 +385,7 @@ export function classifyChange(options: ClassifyChangeOptions): ClassifyChangeRe
         securityTriggered,
         refactorTriggered,
         apiTriggered,
-        testTriggered: pathTriggers.testTriggered,
+        testTriggered,
         performanceTriggered,
         infraTriggered: pathTriggers.infraTriggered,
         dependencyTriggered: pathTriggers.dependencyTriggered,
@@ -434,7 +443,7 @@ export function classifyChange(options: ClassifyChangeOptions): ClassifyChangeRe
             api_intent: apiIntentTriggered,
             api_path_changed_files: pathTriggers.apiTriggeredFiles,
             api_test_only_suppressed_files: testOnlyDomainReviewSuppressed ? pathTriggers.apiTriggeredFiles : [],
-            test: pathTriggers.testTriggered,
+            test: testTriggered,
             performance: performanceTriggered,
             performance_intent: performanceIntentTriggered,
             infra: pathTriggers.infraTriggered,

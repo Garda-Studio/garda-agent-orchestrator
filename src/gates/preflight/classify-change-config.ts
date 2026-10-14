@@ -84,6 +84,7 @@ interface MatchConfiguredRootOptions {
 }
 
 export interface ClassifyChangeOptions {
+    declaredTestPaths?: readonly string[];
     normalizedFiles?: string[];
     repoRoot?: string;
     isSourceCheckout?: boolean;

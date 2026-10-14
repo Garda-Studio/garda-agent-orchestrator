@@ -3,6 +3,7 @@ import * as path from 'node:path';
 
 import { splitCommandLine } from '../../cli/gate-cli/gates-subprocess';
 import { isPlainRecord } from '../../core/records';
+import { readValidationFile } from '../../core/project-validation-identity';
 import { inspectTaskEventFile } from '../../gate-runtime/task-events';
 import {
     readOrderedTaskEvents,
@@ -14,12 +15,15 @@ import {
     normalizePath,
     resolvePathInsideRepo
 } from '../shared/helpers';
-import { isFocusedIntermediateCommand } from '../shared/focused-intermediate-command-grammar';
+import { getChangedTestPathsTargetedByCommandTokens, isFocusedIntermediateCommand } from '../shared/focused-intermediate-command-grammar';
 import { declaredValidationTestPaths, readFocusedRecipeEntry } from '../project-validation/focused';
+import { readValidationEventSnapshot, type ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
+import { validationPaths } from '../project-validation/authority';
 
 const INTERMEDIATE_COMMAND_SOURCES = new Set(['node-test', 'targeted-test', 'typecheck', 'validation']);
 const DEFAULT_MAX_ENTRIES = 8;
 const MAX_WARNINGS = 16;
+const MAX_NATIVE_PREFLIGHT_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_TIMELINE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_MAX_TIMELINE_EVENTS = 1024;
 const DEFAULT_MAX_INTERMEDIATE_CANDIDATES_SCANNED = 128;
@@ -41,6 +45,7 @@ export interface FocusedIntermediateEvidenceEntry {
     output_artifact_sha256: string;
     output_artifact_size_bytes: number;
     focused_test_paths: string[];
+    scope_content_sha256?: string;
 }
 
 export interface FocusedIntermediateEvidenceSelection {
@@ -77,11 +82,11 @@ export function isFocusedReviewTestPath(filePath: string): boolean {
         || /\.(?:test|spec)\.[cm]?[jt]sx?$/iu.test(normalizedPath);
 }
 
-function focusedTestPathsFromCommand(command: string): string[] {
+function focusedTestPathsFromCommand(command: string, candidates: readonly string[] = []): string[] {
     return [...new Set(
-        splitCommandLine(command)
+        [...getChangedTestPathsTargetedByCommandTokens(splitCommandLine(command), candidates), ...splitCommandLine(command)
             .map((token) => normalizePath(token).replace(/^\.\/?/u, ''))
-            .filter(isFocusedReviewTestPath)
+            .filter(isFocusedReviewTestPath)]
     )].sort();
 }
 
@@ -110,7 +115,7 @@ function isCheapEligibleFocusedEvent(options: {
     ) {
         return false;
     }
-    const focusedTestPaths = focusedTestPathsFromCommand(command);
+    const focusedTestPaths = focusedTestPathsFromCommand(command, [...options.changedTestPaths]);
     return focusedTestPaths.length > 0
         && focusedPathsMatchScope({
             focusedTestPaths,
@@ -162,6 +167,9 @@ function readBoundIntermediateCommandEvidence(options: {
     expectedPreflightPath?: string | null;
     expectedPreflightSha256?: string | null;
     expectedCoverageContractSha256?: string | null;
+    expectedScopeContentSha256?: string;
+    candidateTestPaths?: readonly string[];
+    executionOnly?: boolean;
 }): BoundIntermediateCommandEvidence {
     const details = isPlainRecord(options.event.details) ? options.event.details : {};
     const commandSource = String(details.command_source || '').trim();
@@ -211,6 +219,13 @@ function readBoundIntermediateCommandEvidence(options: {
     const expectedPreflightPath = normalizePath(options.expectedPreflightPath || '');
     const expectedPreflightSha256 = String(options.expectedPreflightSha256 || '').trim().toLowerCase();
     const expectedCoverageContractSha256 = String(options.expectedCoverageContractSha256 || '').trim().toLowerCase();
+    const expectedScope = options.expectedScopeContentSha256;
+    if (expectedScope && (!isSha256Hex(expectedScope)
+        || record.timed_out !== false || record.cancelled !== false || record.expected_failure === true
+        || record.scope_content_sha256_before !== expectedScope || record.scope_content_sha256_after !== expectedScope
+        || details.scope_content_sha256_before !== expectedScope || details.scope_content_sha256_after !== expectedScope)) {
+        return { entry: null, violation: 'native execution source-content binding differs from the current scope' };
+    }
     const malformedHashBinding = [
         { label: 'event preflight_sha256', value: eventPreflightSha256 },
         { label: 'event coverage_contract_sha256', value: eventCoverageContractSha256 },
@@ -273,11 +288,11 @@ function readBoundIntermediateCommandEvidence(options: {
     } catch {
         return { entry: null, violation: 'output artifact is unavailable' };
     }
-    if (!isFocusedIntermediateCommand(commandSource, splitCommandLine(command))) {
+    if (!options.executionOnly && !isFocusedIntermediateCommand(commandSource, splitCommandLine(command))) {
         return { entry: null, violation: 'command is not an allowed focused test invocation' };
     }
-    const focusedTestPaths = focusedTestPathsFromCommand(command);
-    if (focusedTestPaths.length === 0) {
+    const focusedTestPaths = options.executionOnly ? [] : focusedTestPathsFromCommand(command, options.candidateTestPaths);
+    if (!options.executionOnly && focusedTestPaths.length === 0) {
         return { entry: null, violation: 'focused command does not name a concrete test path' };
     }
     return {
@@ -296,7 +311,8 @@ function readBoundIntermediateCommandEvidence(options: {
             output_artifact_path: normalizePath(outputArtifactPath),
             output_artifact_sha256: recordOutputArtifactSha256,
             output_artifact_size_bytes: recordOutputArtifactSizeBytes,
-            focused_test_paths: focusedTestPaths
+            focused_test_paths: focusedTestPaths,
+            ...(expectedScope ? { scope_content_sha256: expectedScope } : {})
         },
         violation: null
     };
@@ -308,7 +324,7 @@ function appendWarning(warnings: string[], warning: string): void {
     }
 }
 
-export function readTaskOwnedFocusedIntermediateEvidence(options: {
+interface IntermediateEvidenceOptions {
     repoRoot: string;
     reviewsRoot: string;
     eventsRoot: string;
@@ -324,7 +340,10 @@ export function readTaskOwnedFocusedIntermediateEvidence(options: {
     expectedPreflightPath?: string | null;
     expectedPreflightSha256?: string | null;
     expectedCoverageContractSha256?: string | null;
-}): FocusedIntermediateEvidenceSelection {
+    expectedScopeContentSha256?: string;
+}
+
+function readIntermediateEvidence(options: IntermediateEvidenceOptions, executionOnly: boolean): FocusedIntermediateEvidenceSelection {
     const timelinePath = path.join(options.eventsRoot, `${options.taskId}.jsonl`);
     const maxTimelineBytes = Number.isInteger(options.maxTimelineBytes) && Number(options.maxTimelineBytes) > 0
         ? Number(options.maxTimelineBytes)
@@ -392,7 +411,7 @@ export function readTaskOwnedFocusedIntermediateEvidence(options: {
         appendWarning(warnings, 'focused intermediate evidence rejected: current task-mode sequence is missing');
     }
     let declaredTests = new Set<string>();
-    try { declaredTests = declaredValidationTestPaths(options.repoRoot); } catch (error) {
+    try { if (!executionOnly) declaredTests = declaredValidationTestPaths(options.repoRoot); } catch (error) {
         appendWarning(warnings, `Declared test scope rejected: ${String(error)}`);
     }
     const changedTestPaths = new Set(
@@ -414,6 +433,7 @@ export function readTaskOwnedFocusedIntermediateEvidence(options: {
         if (!['INTERMEDIATE_COMMAND_RUN', 'PROJECT_VALIDATION_RESULTS_EVALUATED'].includes(String(event.event_type || '').trim())) {
             continue;
         }
+        if (executionOnly && event.event_type !== 'INTERMEDIATE_COMMAND_RUN') continue;
         if (candidateCount >= maxIntermediateCandidatesScanned) {
             scanLimitReached = true;
             appendWarning(warnings, `focused intermediate evidence scan stopped after ${maxIntermediateCandidatesScanned} intermediate candidates`);
@@ -443,14 +463,16 @@ export function readTaskOwnedFocusedIntermediateEvidence(options: {
             taskId: options.taskId,
             expectedPreflightPath: options.expectedPreflightPath,
             expectedPreflightSha256: options.expectedPreflightSha256,
-            expectedCoverageContractSha256: options.expectedCoverageContractSha256
+            expectedCoverageContractSha256: options.expectedCoverageContractSha256,
+            expectedScopeContentSha256: options.expectedScopeContentSha256,
+            candidateTestPaths: [...changedTestPaths], executionOnly
         });
         if (!bound.entry) {
             rejectedCandidateCount += 1;
             appendWarning(warnings, `focused intermediate evidence candidate seq=${sequence} rejected: ${bound.violation || 'invalid evidence'}`);
             continue;
         }
-        if (!focusedPathsMatchScope({
+        if (!executionOnly && !focusedPathsMatchScope({
             focusedTestPaths: bound.entry.focused_test_paths,
             changedTestPaths,
             requiredTestPath
@@ -469,6 +491,7 @@ export function readTaskOwnedFocusedIntermediateEvidence(options: {
                 if (!['INTERMEDIATE_COMMAND_RUN', 'PROJECT_VALIDATION_RESULTS_EVALUATED'].includes(String(surplusEvent.event_type || '').trim())) {
                     continue;
                 }
+                if (executionOnly && surplusEvent.event_type !== 'INTERMEDIATE_COMMAND_RUN') continue;
                 if (candidateCount >= maxIntermediateCandidatesScanned) {
                     scanLimitReached = true;
                     appendWarning(warnings, `focused intermediate evidence surplus scan stopped after ${maxIntermediateCandidatesScanned} intermediate candidates`);
@@ -490,7 +513,9 @@ export function readTaskOwnedFocusedIntermediateEvidence(options: {
                     continue;
                 }
                 let surplusEligible: boolean;
-                if (surplusEvent.event_type === 'PROJECT_VALIDATION_RESULTS_EVALUATED') {
+                if (executionOnly) {
+                    surplusEligible = isPassedIntermediateCommandEvent(surplusEvent);
+                } else if (surplusEvent.event_type === 'PROJECT_VALIDATION_RESULTS_EVALUATED') {
                     const { entry } = readFocusedRecipeEntry({ repoRoot: options.repoRoot, taskId: options.taskId,
                         event: surplusEvent, expectedPreflightSha256: options.expectedPreflightSha256 });
                     surplusEligible = !!entry && focusedPathsMatchScope({
@@ -515,4 +540,45 @@ export function readTaskOwnedFocusedIntermediateEvidence(options: {
         rejected_candidate_count: rejectedCandidateCount,
         truncated: scanLimitReached || eligibleCount > entries.length
     };
+}
+
+export function readTaskOwnedFocusedIntermediateEvidence(options: IntermediateEvidenceOptions): FocusedIntermediateEvidenceSelection {
+    return readIntermediateEvidence(options, false);
+}
+
+export type NativeIntermediateExecutionEntry = Omit<FocusedIntermediateEvidenceEntry, 'status' | 'focused_test_paths'> & {
+    process_status: 'PASSED'; execution: 'OBSERVED'; semantic_status: 'PENDING_INDEPENDENT_REVIEW';
+};
+export function readTaskOwnedIntermediateExecutionEvidence(options: Omit<IntermediateEvidenceOptions, 'changedFiles'> & {
+    expectedPreflightPath: string; expectedPreflightSha256: string; expectedScopeContentSha256: string;
+    inspection?: ValidationEvidenceInspection;
+}): Omit<FocusedIntermediateEvidenceSelection, 'entries'> & { entries: NativeIntermediateExecutionEntry[] } {
+    const rejected = (warning: string) => ({ entries: [], warnings: [warning],
+        latest_task_mode_sequence: null, candidate_count: 0, rejected_candidate_count: 0, truncated: false });
+    if (!options.expectedPreflightPath || !isSha256Hex(options.expectedPreflightSha256)
+        || !isSha256Hex(options.expectedScopeContentSha256)) {
+        return rejected('Native execution requires current preflight and source-content bindings.');
+    }
+    try {
+        const snapshot = readValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection);
+        const timeline = validationPaths(options.repoRoot, options.taskId).timeline;
+        if (path.resolve(options.repoRoot, options.expectedPreflightPath) !== path.resolve(snapshot.preflight_path)
+            || options.expectedPreflightSha256 !== snapshot.preflight_sha256
+            || options.expectedScopeContentSha256 !== snapshot.scope_content_sha256
+            || path.resolve(options.eventsRoot, `${options.taskId}.jsonl`) !== path.resolve(options.repoRoot, timeline)) {
+            return rejected('Native execution requires the current canonical preflight and source-content binding.');
+        }
+        const relative = normalizePath(path.relative(path.resolve(options.repoRoot),
+            snapshot.preflight_path));
+        const result = readIntermediateEvidence({ ...options, changedFiles: [], minimumTaskSequenceExclusive:
+            Math.max(options.minimumTaskSequenceExclusive ?? 0, snapshot.preflight_sequence) }, true);
+        if (readValidationFile(options.repoRoot, relative, MAX_NATIVE_PREFLIGHT_BYTES).identity.sha256
+            !== snapshot.preflight_sha256 || readValidationFile(options.repoRoot, timeline, MAX_NATIVE_PREFLIGHT_BYTES).identity.sha256
+            !== snapshot.timeline_sha256) return rejected('Native execution canonical binding changed during evidence inspection.');
+        return { ...result, entries: result.entries.map(({ status, focused_test_paths: _paths, ...entry }) => ({
+            ...entry, process_status: status, execution: 'OBSERVED', semantic_status: 'PENDING_INDEPENDENT_REVIEW'
+        })) };
+    } catch (error) {
+        return rejected(`Native execution preflight/source-content binding rejected: ${String(error).split(/\r?\n/u)[0].slice(0, 512)}`);
+    }
 }

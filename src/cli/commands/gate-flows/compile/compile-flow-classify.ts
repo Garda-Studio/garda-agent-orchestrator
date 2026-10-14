@@ -1,5 +1,5 @@
 import * as fs from 'node:fs';
-import { freezeProjectValidationAuthority } from '../../../../gates/project-validation/authority';
+import { freezeProjectValidationAdmission } from '../../../../gates/project-validation/authority';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isPlainRecord } from '../../../../core/records';
@@ -438,7 +438,9 @@ export function runClassifyChangeCommand(options: ClassifyChangeCommandOptions):
     const reviewCapabilities = getReviewCapabilities(repoRoot);
     const reviewExecutionPolicy = loadReviewExecutionPolicyConfig(repoRoot);
     const isSourceCheckout = gateHelpers.isOrchestratorSourceCheckout(repoRoot);
+    const projectValidationAdmission = freezeProjectValidationAdmission(repoRoot);
     const result: ClassifyChangeResult = classifyChange({
+        declaredTestPaths: projectValidationAdmission.declared_test_paths,
         normalizedFiles: authorizedFiles,
         repoRoot,
         isSourceCheckout,
@@ -459,7 +461,7 @@ export function runClassifyChangeCommand(options: ClassifyChangeCommandOptions):
         reviewExecutionPolicyMode: reviewExecutionPolicy.mode
     });
     (result as unknown as Record<string, unknown>).authorized_files = authorizedFiles;
-    const projectValidation = freezeProjectValidationAuthority(repoRoot);
+    const projectValidation = projectValidationAdmission.binding;
     if (projectValidation) (result as unknown as Record<string, unknown>).project_validation = projectValidation;
     result.changed_files = workspaceSnapshot.changed_files;
     const actualZeroDiffDetected = workspaceSnapshot.changed_files.length === 0;

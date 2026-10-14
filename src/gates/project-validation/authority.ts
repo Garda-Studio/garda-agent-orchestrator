@@ -37,8 +37,15 @@ export function readProjectValidationAuthority(repoRoot: string): { approved: Ap
     return { approved, sha256: file.identity.sha256 };
 }
 export function freezeProjectValidationAuthority(repoRoot: string): Record<string, string> | undefined {
+    return freezeProjectValidationAdmission(repoRoot).binding;
+}
+export function freezeProjectValidationAdmission(repoRoot: string): {
+    binding: Record<string, string> | undefined; declared_test_paths: string[];
+} {
     const authority = readProjectValidationAuthority(repoRoot);
-    return authority ? { authority_sha256: authority.sha256, contract_sha256: validationDigest(authority.approved) } : undefined;
+    return { binding: authority ? { authority_sha256: authority.sha256, contract_sha256: validationDigest(authority.approved) } : undefined,
+        declared_test_paths: authority ? [...new Set(authority.approved.contract.recipes.flatMap(recipe =>
+            recipe.inputs.filter(input => input.role === 'test').map(input => input.path)))].sort() : [] };
 }
 export function currentProjectValidationAuthority(repoRoot: string, preflight: Record<string, unknown>): ReturnType<typeof readProjectValidationAuthority> {
     const authority = readProjectValidationAuthority(repoRoot);

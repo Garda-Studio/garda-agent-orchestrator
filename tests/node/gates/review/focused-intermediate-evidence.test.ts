@@ -7,6 +7,10 @@ import * as path from 'node:path';
 
 import { appendTaskEvent } from '../../../../src/gate-runtime/task-events';
 import { readTaskOwnedFocusedIntermediateEvidence } from '../../../../src/gates/review/focused-intermediate-evidence';
+import * as intermediateEvidence from '../../../../src/gates/review/focused-intermediate-evidence';
+import { runClassifyChangeCommand } from '../../../../src/cli/commands/gates';
+import { createTempRepo, initializeGitRepo, loadTaskEntryRulePack, runEnterTaskMode,
+    runHandshakeForTask, runShellSmokeForTask, seedInitAnswers, seedTaskQueue } from '../../cli/commands/gates/preflight/gates-preflight-fixtures';
 
 const TASK_ID = 'T-979-4';
 const TEST_PATH = 'tests/node/gates/review/focused-intermediate-evidence.test.ts';
@@ -25,6 +29,27 @@ function makeFixture(): { repoRoot: string; bundleRoot: string; reviewsRoot: str
     return { repoRoot, bundleRoot, reviewsRoot, eventsRoot };
 }
 
+function nativeFixture() {
+    const repoRoot = createTempRepo();
+    seedTaskQueue(repoRoot, TASK_ID); seedInitAnswers(repoRoot); initializeGitRepo(repoRoot);
+    const entry = runEnterTaskMode({ repoRoot, taskId: TASK_ID, entryMode: 'EXPLICIT_TASK_EXECUTION',
+        requestedDepth: 2, taskSummary: 'Native execution evidence', provider: 'Codex' });
+    assert.equal(entry.exitCode, 0, entry.outputLines.join('\n'));
+    loadTaskEntryRulePack(repoRoot, TASK_ID);
+    runHandshakeForTask(repoRoot, TASK_ID); runShellSmokeForTask(repoRoot, TASK_ID);
+    fs.mkdirSync(path.join(repoRoot, 'custom'));
+    fs.writeFileSync(path.join(repoRoot, 'custom/source.case'), 'opaque test source\n');
+    const bundleRoot = path.join(repoRoot, 'garda-agent-orchestrator');
+    const reviewsRoot = path.join(bundleRoot, 'runtime/reviews');
+    const eventsRoot = path.join(bundleRoot, 'runtime/task-events');
+    const preflightPath = path.join(reviewsRoot, 'preflight.json').replace(/\\/g, '/');
+    const classified = runClassifyChangeCommand({ repoRoot, taskId: TASK_ID, taskIntent: 'Native execution evidence',
+        changedFiles: ['custom/source.case'], outputPath: preflightPath });
+    assert.ok(fs.existsSync(preflightPath), classified.outputText);
+    const scopeContentSha256 = JSON.parse(fs.readFileSync(preflightPath, 'utf8')).metrics.scope_content_sha256 as string;
+    return { repoRoot, bundleRoot, reviewsRoot, eventsRoot, preflightPath, preflightSha256: sha256(preflightPath), scopeContentSha256 };
+}
+
 function appendEvidence(options: {
     bundleRoot: string;
     reviewsRoot: string;
@@ -39,6 +64,8 @@ function appendEvidence(options: {
     preflightSha256?: string;
     coverageContractSha256?: string;
     eventPreflightSha256?: string;
+    scopeContentSha256?: string;
+    afterScopeContentSha256?: string;
 }): void {
     const taskId = options.taskId ?? TASK_ID;
     const command = options.command
@@ -57,12 +84,18 @@ function appendEvidence(options: {
         command,
         status,
         exit_code: status === 'PASSED' ? 0 : 1,
+        timed_out: false,
+        cancelled: false,
         output_artifact: outputPath,
         output_artifact_sha256: outputSha256,
         output_artifact_size_bytes: outputSize,
         ...(options.preflightPath ? { preflight_path: options.preflightPath } : {}),
         ...(options.preflightSha256 ? { preflight_sha256: options.preflightSha256 } : {}),
-        ...(options.coverageContractSha256 ? { coverage_contract_sha256: options.coverageContractSha256 } : {})
+        ...(options.coverageContractSha256 ? { coverage_contract_sha256: options.coverageContractSha256 } : {}),
+        ...(options.scopeContentSha256 ? {
+            scope_content_sha256_before: options.scopeContentSha256,
+            scope_content_sha256_after: options.afterScopeContentSha256 ?? options.scopeContentSha256
+        } : {})
     }), 'utf8');
     const eventDetails: Record<string, unknown> = {
         command_source: 'targeted-test',
@@ -81,6 +114,10 @@ function appendEvidence(options: {
     if (options.coverageContractSha256) {
         eventDetails.coverage_contract_sha256 = options.coverageContractSha256;
     }
+    if (options.scopeContentSha256) {
+        eventDetails.scope_content_sha256_before = options.scopeContentSha256;
+        eventDetails.scope_content_sha256_after = options.afterScopeContentSha256 ?? options.scopeContentSha256;
+    }
     if (!options.omitEventOutputArtifactPath) {
         eventDetails.output_artifact_path = outputPath;
     }
@@ -94,6 +131,77 @@ function appendEvidence(options: {
 }
 
 describe('task-owned focused intermediate evidence', () => {
+    it('round-trips Maven and Gradle selectors without requiring a literal test filename in argv', () => {
+        const fixture = makeFixture();
+        const source = 'component/src/test/java/shop/CheckoutTest.java';
+        try {
+            appendTaskEvent(fixture.bundleRoot, TASK_ID, 'TASK_MODE_ENTERED', 'PASS', 'Current cycle.', {});
+            appendEvidence({ ...fixture, command: 'mvn -q -Dtest=shop.CheckoutTest test' });
+            appendEvidence({ ...fixture, command: 'gradle test --tests shop.CheckoutTest --console=plain' });
+            const result = readTaskOwnedFocusedIntermediateEvidence({ ...fixture, taskId: TASK_ID, changedFiles: [source] });
+            assert.equal(result.entries.length, 2);
+            assert.ok(result.entries.every(entry => entry.focused_test_paths.includes(source)));
+        } finally { fs.rmSync(fixture.repoRoot, { recursive: true, force: true }); }
+    });
+
+    it('keeps unrelated JVM selectors outside the supplied source scope', () => {
+        const fixture = makeFixture();
+        try {
+            appendTaskEvent(fixture.bundleRoot, TASK_ID, 'TASK_MODE_ENTERED', 'PASS', 'Current cycle.', {});
+            appendEvidence({ ...fixture, command: 'mvn -q -Dtest=shop.OtherTest test' });
+            const result = readTaskOwnedFocusedIntermediateEvidence({ ...fixture, taskId: TASK_ID,
+                changedFiles: ['component/src/test/java/shop/CheckoutTest.java'] });
+            assert.equal(result.entries.length, 0);
+        } finally { fs.rmSync(fixture.repoRoot, { recursive: true, force: true }); }
+    });
+
+    it('authenticates an opaque native command as process evidence without claiming case success', () => {
+        const fixture = nativeFixture();
+        const { preflightPath, preflightSha256, scopeContentSha256 } = fixture;
+        try {
+            appendEvidence({ ...fixture, command: 'unfamiliar-runner --select "Оплата::rejectsEmpty"',
+                preflightPath, preflightSha256, scopeContentSha256 });
+            const read = (intermediateEvidence as unknown as { readTaskOwnedIntermediateExecutionEvidence:
+                (options: Record<string, unknown>) => { entries: Array<Record<string, unknown>> } }).readTaskOwnedIntermediateExecutionEvidence;
+            const result = read({ ...fixture, taskId: TASK_ID, expectedPreflightPath: preflightPath,
+                expectedPreflightSha256: preflightSha256, expectedScopeContentSha256: scopeContentSha256 });
+            assert.equal(result.entries.length, 1);
+            assert.equal(result.entries[0].execution, 'OBSERVED');
+            assert.equal(result.entries[0].semantic_status, 'PENDING_INDEPENDENT_REVIEW');
+            assert.equal(result.entries[0].cases, undefined);
+        } finally { fs.rmSync(fixture.repoRoot, { recursive: true, force: true }); }
+    });
+
+    it('rejects altered output and changed native source scope for opaque command evidence', () => {
+        const fixture = nativeFixture();
+        const { preflightPath, preflightSha256, scopeContentSha256 } = fixture;
+        try {
+            appendEvidence({ ...fixture, command: 'custom-runner --case selected', preflightPath,
+                preflightSha256, scopeContentSha256, mutateOutput: true });
+            appendEvidence({ ...fixture, command: 'custom-runner --case selected', preflightPath,
+                preflightSha256, scopeContentSha256, afterScopeContentSha256: 'c'.repeat(64) });
+            const read = (intermediateEvidence as unknown as { readTaskOwnedIntermediateExecutionEvidence:
+                (options: Record<string, unknown>) => { entries: unknown[] } }).readTaskOwnedIntermediateExecutionEvidence;
+            assert.equal(read({ ...fixture, taskId: TASK_ID, expectedPreflightPath: preflightPath,
+                expectedPreflightSha256: preflightSha256, expectedScopeContentSha256: scopeContentSha256 }).entries.length, 0);
+        } finally { fs.rmSync(fixture.repoRoot, { recursive: true, force: true }); }
+    });
+
+    it('rejects a fabricated preflight digest despite matching record and expected bindings', () => {
+        const fixture = nativeFixture();
+        const { preflightPath, scopeContentSha256 } = fixture;
+        const fabricatedHash = 'a'.repeat(64);
+        try {
+            appendEvidence({ ...fixture, command: 'custom-runner --case selected', preflightPath,
+                preflightSha256: fabricatedHash, scopeContentSha256 });
+            const result = intermediateEvidence.readTaskOwnedIntermediateExecutionEvidence({ ...fixture,
+                taskId: TASK_ID, expectedPreflightPath: preflightPath,
+                expectedPreflightSha256: fabricatedHash, expectedScopeContentSha256: scopeContentSha256 });
+            assert.equal(result.entries.length, 0);
+            assert.ok(result.warnings.some(warning => /preflight/iu.test(warning)));
+        } finally { fs.rmSync(fixture.repoRoot, { recursive: true, force: true }); }
+    });
+
     it('selects only current-cycle, PASS, scope-matched evidence with bounded metadata', () => {
         const fixture = makeFixture();
         try {
