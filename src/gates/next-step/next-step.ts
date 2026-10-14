@@ -440,6 +440,7 @@ import {
     buildStrictDecompositionDecisionRequirement,
     resolveStrictDecompositionContinuationRoute
 } from './next-step-strict-decomposition-routing';
+import { getStrictDecompositionDecisionEvidence } from '../task-mode/strict-decomposition-decision';
 import {
     createNextStepResolutionContext,
     type NextStepOptions,
@@ -3641,6 +3642,15 @@ export function resolveNextStepDecisionRoute(
             finalReport: strictRoute.finalReport
         };
     };
+
+    // Native WIP suspension necessarily makes the old parent scope stale. An
+    // authenticated split decision owns continuation before any scope refresh.
+    const retainedSplit = getStrictDecompositionDecisionEvidence(repoRoot, taskId, '',
+        strictDecompositionRequirement.taskSummary, strictDecompositionRequirement.taskProfile);
+    if (retainedSplit.evidence_status === 'PASS' && retainedSplit.decision === 'split-required') {
+        const splitRoute = buildStrictDecompositionContinuationBlock();
+        if (splitRoute) return buildDecisionRouteResult(splitRoute);
+    }
 
     const classifyDecisionRoute = resolveClassifyDecisionRoute({
         preflightExists: Boolean(preflight),

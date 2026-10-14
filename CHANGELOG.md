@@ -1,5 +1,9 @@
 # Changelog
 
+- Route authenticated split-required parents before stale scope refresh after
+  native WIP suspension, preserving the original preflight, captured source and
+  gate-owned child/ownership transition.
+
 ## Independent native case semantics
 
 - Bind selected source cases to actual current native command/output records without a required report format.

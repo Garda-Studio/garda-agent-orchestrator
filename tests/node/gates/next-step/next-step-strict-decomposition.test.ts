@@ -847,6 +847,34 @@ describe('gates/next-step strict decomposition', () => {
         return profileSnapshot;
     }
 
+    it('routes suspended parent with newly linked children before stale preflight refresh', () => {
+        const repoRoot = makeTempRepo();
+        const profile = seedVersion2BalancedSplit(repoRoot);
+        const queuePath = path.join(repoRoot, 'TASK.md');
+        const linkedQueue = fs.readFileSync(queuePath, 'utf8');
+        fs.writeFileSync(queuePath, linkedQueue.split('\n').filter(line =>
+            !line.startsWith(`| ${TASK_ID}-1 |`) && !line.startsWith(`| ${TASK_ID}-2 |`)).join('\n'));
+        fs.writeFileSync(path.join(repoRoot, 'src/app.ts'), 'export const value = 2;\n');
+        const preflightPath = writeFrozenPreflightScope(repoRoot, TASK_ID, ['src/app.ts'], profile);
+        seedRulePack(repoRoot, TASK_ID, 'POST_PREFLIGHT',
+            path.join(reviewsRoot(repoRoot), `${TASK_ID}-task-mode.json`), preflightPath);
+        const originalPreflight = fs.readFileSync(preflightPath);
+        const capture = captureAndSuspendSplitRequiredWip({ repoRoot, taskId: TASK_ID, preflightPath,
+            guardKind: 'strict_decomposition', guardReason: 'Preserve the real implemented parent before linking children.' });
+        assert.equal(capture.status, 'CAPTURED', capture.violations.join('\n'));
+        assert.equal(runGitFixtureCommand(repoRoot, ['status', '--porcelain=v1', '--', 'src']).stdout.trim(), '');
+        fs.writeFileSync(queuePath, linkedQueue);
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        assert.equal(result.next_gate, 'child-task', result.reason);
+        assert.equal(result.status, 'DECOMPOSED');
+        assert.ok(result.commands[0].command.includes(`next-step "${TASK_ID}-1"`));
+        assert.deepEqual(fs.readFileSync(preflightPath), originalPreflight);
+        assert.equal(listSplitRequiredWip({ repoRoot, taskId: TASK_ID }).manifests.length, 1);
+        // Git may restore its configured CRLF checkout on Windows; clean source
+        // and exact unchanged control-artifact bytes are checked above.
+        assert.equal(fs.readFileSync(path.join(repoRoot, 'src/app.ts'), 'utf8').replace(/\r\n/gu, '\n'), 'export const value = 1;\n');
+    });
+
     function seedSuspendedParentAfterChildCommit(
         ignoredEvidencePath?: string, declaredPaths: string[] = [], qualityChecksEnabled = false
     ) {
