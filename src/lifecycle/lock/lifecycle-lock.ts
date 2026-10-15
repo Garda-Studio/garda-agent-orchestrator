@@ -576,7 +576,7 @@ function lifecycleLockMetadataMatchesCandidate(
 function restoreMismatchedLifecycleLockClaim(claimedPath: string, originalPath: string, normalizedTarget: string): never {
     try {
         const preserved = preserveDisputedLockDirectory(normalizedTarget, claimedPath);
-        throw new Error(`Verified disputed copy retained at ${preserved.capturePath}; canonical publication refused`);
+        throw new Error(`Verified disputed copy retained at ${redactPath(preserved.capturePath, normalizedTarget)}; canonical publication refused`);
     } catch (error: unknown) {
         process.stderr.write(
             `WARNING: LIFECYCLE_LOCK_CONFLICT: lock=${redactPath(originalPath, normalizedTarget)}; claimed=${redactPath(claimedPath, normalizedTarget)}; message=${error instanceof Error ? error.message : String(error)}\n`
@@ -602,7 +602,6 @@ function reclaimStaleLifecycleOperationLock(
         || !claimedInspection.staleReason
         || !lifecycleLockMetadataMatchesCandidate(inspection.metadata, claimedInspection.metadata)) {
         restoreMismatchedLifecycleLockClaim(tempPath, lockPath, normalizedTarget);
-        return false;
     }
 
     removeLockPathWithRetry(tempPath, 'lifecycle_lock_stale_cleanup');
@@ -626,7 +625,6 @@ function claimLifecycleLockForRelease(lockPath: string, lockId: string, normaliz
     }
 
     restoreMismatchedLifecycleLockClaim(releasingPath, lockPath, normalizedTarget);
-    return null;
 }
 
 function releaseLifecycleOperationLockPath(lockPath: string, lockId: string, normalizedTarget: string): void {

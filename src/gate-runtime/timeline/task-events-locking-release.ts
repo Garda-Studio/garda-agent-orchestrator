@@ -303,7 +303,7 @@ export function restoreMismatchedClaimedLock(claimedPath: string, originalPath: 
         if (!projectRoot) throw new Error('Explicit project root is unavailable; preservation copy refused');
         const preserved = preserveDisputedLockDirectory(projectRoot, claimedPath);
         // Verified copying supplies custody only; it never authorizes canonical publication.
-        throw new Error(`Verified disputed copy retained at ${preserved.capturePath}; canonical publication refused`);
+        throw new Error(`Verified disputed copy retained at ${redactLockPath(preserved.capturePath)}; canonical publication refused`);
     } catch (error: unknown) {
         const diagnostic = [
             `lock=${redactLockPath(originalPath)}`,

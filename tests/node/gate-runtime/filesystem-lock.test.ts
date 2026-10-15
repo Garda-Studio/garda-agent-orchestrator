@@ -1561,15 +1561,19 @@ test('releaseFilesystemLock does not remove replacement lock after stale reclaim
 });
 
 test('releaseFilesystemLock retains claimed replacement without canonical republish', () => {
-    const tmp = mkTmpDir();
+    const parent = fs.mkdtempSync(path.join(os.homedir(), '.garda-lock-diagnostic-test-'));
+    const tmp = path.join(parent, 'project');
+    fs.mkdirSync(tmp);
     const lockPath = path.join(tmp, '.test-release-owner-window.lock');
     const realFs = require('node:fs');
     const originalRenameSync = realFs.renameSync;
+    const originalStderrWrite = process.stderr.write;
     let interceptedReleaseClaim = false;
+    let stderrOutput = '';
     const replacement: { path: string; stat?: fs.BigIntStats; bytes?: Buffer } = { path: '' };
 
     try {
-        const { handle } = acquireFilesystemLock(lockPath);
+        const { handle } = acquireFilesystemLock(lockPath, { projectRoot: tmp });
         const ownerPath = path.join(lockPath, 'owner.json');
         const initialOwner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
         const replacementLockId = 'replacement-owner-during-release';
@@ -1595,7 +1599,19 @@ test('releaseFilesystemLock retains claimed replacement without canonical republ
             return originalRenameSync.apply(realFs, args as [fs.PathLike, fs.PathLike]);
         };
 
-        assert.throws(() => releaseFilesystemLock(handle), /Disputed lock ownership conflict; canonical publication refused/);
+        (process.stderr as unknown as { write: (...args: unknown[]) => boolean }).write = function (chunk: unknown): boolean {
+            stderrOutput += String(chunk);
+            return true;
+        };
+        assert.throws(() => releaseFilesystemLock(handle), (error: unknown) => {
+            assert.ok(error instanceof Error);
+            assert.match(error.message, /Disputed lock ownership conflict; canonical publication refused/);
+            if (process.platform !== 'win32') {
+                assert.match(error.message, /Verified disputed copy retained at/);
+                assert.ok(!error.message.replace(/\\/g, '/').includes(os.homedir().replace(/\\/g, '/')));
+            }
+            return true;
+        });
 
         assert.equal(interceptedReleaseClaim, true, 'release claim race window should be exercised');
         assert.equal(fs.existsSync(lockPath), false, 'a pre-claim replacement stays in the disputed claim');
@@ -1606,10 +1622,16 @@ test('releaseFilesystemLock retains claimed replacement without canonical republ
         const retainedBytes = fs.readFileSync(path.join(replacement.path, 'owner.json'));
         assert.deepEqual(retainedBytes, replacement.bytes);
         assert.equal(JSON.parse(retainedBytes.toString('utf8')).lock_id, replacementLockId);
+        if (process.platform !== 'win32') {
+            assert.ok(!stderrOutput.replace(/\\/g, '/').includes(os.homedir().replace(/\\/g, '/')));
+            assert.equal(fs.readdirSync(path.join(parent, 'garda-recovery-preserved', 'lock-claims')).length, 1);
+        }
     } finally {
         realFs.renameSync = originalRenameSync;
-        fs.rmSync(tmp, { recursive: true, force: true });
+        (process.stderr as unknown as { write: typeof process.stderr.write }).write = originalStderrWrite;
+        fs.rmSync(parent, { recursive: true, force: true });
     }
+    assert.equal(fs.existsSync(parent), false, 'fixture-owned capture and project are both cleaned');
 });
 
 test('releaseFilesystemLock preserves claimed and canonical owners on conflict', () => {

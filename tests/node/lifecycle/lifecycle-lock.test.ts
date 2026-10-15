@@ -1301,13 +1301,21 @@ test('withLifecycleOperationLock retries transient EPERM while claiming release 
 });
 
 test('withLifecycleOperationLock does not remove replacement lock when old release loses ownership race', () => {
-    const tmp = mkTmpDir();
+    const parent = fs.mkdtempSync(path.join(os.homedir(), '.garda-lifecycle-diagnostic-test-'));
+    const tmp = path.join(parent, 'project');
+    fs.mkdirSync(tmp);
     const realFs = require('node:fs');
     const originalRenameSync = realFs.renameSync;
+    const originalStderrWrite = process.stderr.write;
     let interceptedRelease = false;
+    let stderrOutput = '';
     const replacement: { path: string; stat?: fs.BigIntStats; bytes?: Buffer } = { path: '' };
     try {
         const lockPath = getLifecycleOperationLockPath(tmp);
+        (process.stderr as unknown as { write: (...args: unknown[]) => boolean }).write = function (chunk: unknown): boolean {
+            stderrOutput += String(chunk);
+            return true;
+        };
         assert.throws(() => withLifecycleOperationLock(tmp, 'old-owner', () => {
             realFs.renameSync = function (...args: unknown[]) {
                 const fromPath = typeof args[0] === 'string' ? path.resolve(args[0]) : '';
@@ -1336,7 +1344,15 @@ test('withLifecycleOperationLock does not remove replacement lock when old relea
                 return originalRenameSync.apply(realFs, args as [fs.PathLike, fs.PathLike]);
             };
             return 'ok';
-        }), /Disputed lifecycle lock ownership conflict; canonical publication refused/);
+        }), (error: unknown) => {
+            assert.ok(error instanceof Error);
+            assert.match(error.message, /Disputed lifecycle lock ownership conflict; canonical publication refused/);
+            if (process.platform !== 'win32') {
+                assert.match(error.message, /Verified disputed copy retained at/);
+                assert.ok(!error.message.replace(/\\/g, '/').includes(os.homedir().replace(/\\/g, '/')));
+            }
+            return true;
+        });
 
         assert.equal(interceptedRelease, true);
         assert.equal(fs.existsSync(lockPath), false, 'a pre-claim replacement remains in the disputed claim');
@@ -1349,10 +1365,16 @@ test('withLifecycleOperationLock does not remove replacement lock when old relea
         const owner = JSON.parse(retainedBytes.toString('utf8'));
         assert.equal(owner.lock_id, 'replacement-lock-id');
         assert.equal(owner.operation, 'replacement-owner');
+        if (process.platform !== 'win32') {
+            assert.ok(!stderrOutput.replace(/\\/g, '/').includes(os.homedir().replace(/\\/g, '/')));
+            assert.equal(fs.readdirSync(path.join(parent, 'garda-recovery-preserved', 'lock-claims')).length, 1);
+        }
     } finally {
         realFs.renameSync = originalRenameSync;
-        fs.rmSync(tmp, { recursive: true, force: true });
+        (process.stderr as unknown as { write: typeof process.stderr.write }).write = originalStderrWrite;
+        fs.rmSync(parent, { recursive: true, force: true });
     }
+    assert.equal(fs.existsSync(parent), false, 'fixture-owned capture and project are both cleaned');
 });
 
 
