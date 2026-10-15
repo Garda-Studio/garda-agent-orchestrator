@@ -23,13 +23,12 @@ import {
 import { EXIT_GATE_FAILURE, EXIT_SUCCESS } from '../../../exit-codes';
 import * as gateHelpers from '../../../../gates/shared/helpers';
 import {
-    getChangedTestPathsTargetedByCommandTokens,
     isFocusedIntermediateCommand
 } from '../../../../gates/shared/focused-intermediate-command-grammar';
 import { hasTestFirstExpectedRedDeclaration } from '../../../../gates/test-first/test-first-declaration';
 import { executeCommandAsync, splitCommandLine } from '../../../gate-cli/gates-subprocess';
 import { runRecipeCommand } from './recipe-command-flow';
-import { isLiteralIntermediateInvocation, observeNativeIntermediateScope } from './intermediate-command-scope';
+import { getCurrentIntermediateTestTargets, hasReportedFailedTestCase, isLiteralIntermediateInvocation, observeNativeIntermediateScope } from './intermediate-command-scope';
 
 const ALLOWED_COMMAND_SOURCES = ['node-test', 'targeted-test', 'typecheck', 'validation'] as const;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -366,8 +365,8 @@ function readExpectedFailurePreflightBinding(options: {
             .map((entry) => gateHelpers.normalizePath(String(entry || '').trim()).replace(/^\.\/?/u, ''))
             .filter(Boolean)
     );
-    const focusedTestPaths = getChangedTestPathsTargetedByCommandTokens(
-        splitCommandLine(options.command),
+    const focusedTestPaths = getCurrentIntermediateTestTargets(
+        options.repoRoot, options.command,
         [...changedFiles]
     );
     if (focusedTestPaths.length === 0) {
@@ -627,6 +626,11 @@ export async function runIntermediateCommandCommand(
     const coverageContractSha256 = normalizeOptionalSha256(options.coverageContractSha256, '--coverage-contract-sha256');
 
     const nativeScopeBefore = observeNativeIntermediateScope(repoRoot, taskId, preflightPath);
+    if (expectFailure && (!nativeScopeBefore.scope_content_sha256
+        || nativeScopeBefore.scope_content_sha256 !== expectedFailureBinding!.testScopeSha256)) {
+        return { exitCode: EXIT_GATE_FAILURE, outputLines: formatRejectedLines(
+            nativeScopeBefore.error || 'Expected-red requires the current authenticated native test scope.', commandSource, command) };
+    }
     if (nativeScopeBefore.preflight_sha256 && preflightSha256 !== nativeScopeBefore.preflight_sha256) {
         return { exitCode: EXIT_GATE_FAILURE,
             outputLines: formatRejectedLines('Requested preflight digest differs from the observed native document.',
@@ -678,7 +682,7 @@ export async function runIntermediateCommandCommand(
                 ? 'FAILED'
                 : result.exitCode === EXIT_SUCCESS
                     ? 'UNEXPECTED_PASS'
-                    : 'EXPECTED_FAILURE'
+                    : hasReportedFailedTestCase(actualOutput) ? 'EXPECTED_FAILURE' : 'FAILED'
             : result.exitCode === EXIT_SUCCESS
                 ? 'PASSED'
                 : 'FAILED';

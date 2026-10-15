@@ -12,6 +12,7 @@ import { resolveTaskProfileReviewTriggerPolicy } from '../../policy/task-profile
 import { bindContainedDestination, assertExistingPathIdentity } from '../../core/contained-filesystem';
 import { withFilesystemLockAsync } from '../../gate-runtime/timeline/task-events-locking';
 import { freezeValidationRecipe, validationPaths } from './authority';
+import { declaredValidationTestPaths } from './focused';
 import { readValidationEvents, recordValidationEvent, writeValidationFact, type ValidationEvidenceInspection } from './attempt-evidence';
 
 export function assertValidationExpectedRed(repoRoot: string, taskId: string, recipeId: string): void {
@@ -25,6 +26,7 @@ export function assertValidationExpectedRed(repoRoot: string, taskId: string, re
         ? resolveTaskProfileReviewTriggerPolicy(taskMode.profile_policy_snapshot) : undefined;
     const config = getClassificationConfig(repoRoot, { reviewTriggerPolicy }), changedFiles = preflight.changed_files as string[];
     const category = classifyScopeCategory(changedFiles, config.code_like_regexes, config.runtime_roots, { testTriggerRegexes: config.test_trigger_regexes,
+        declaredTestPaths: [...declaredValidationTestPaths(repoRoot)],
         protectedControlPlaneRoots: config.protected_control_plane_roots, ordinaryDocPaths: config.ordinary_doc_paths,
         sqlOrMigrationRegexes: config.sql_or_migration_regexes, dbTriggerRegexes: config.db_trigger_regexes,
         securityTriggerRegexes: config.security_trigger_regexes, apiTriggerRegexes: config.api_trigger_regexes, dependencyTriggerRegexes: config.dependency_trigger_regexes });

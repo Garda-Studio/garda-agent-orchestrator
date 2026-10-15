@@ -1,5 +1,6 @@
 import { cloneJsonValue, isPlainObject } from './config-merge';
 import {
+    LEGACY_TRUST_BOUNDARY_ANALYSIS_RULE_PROMPT,
     TRUST_BOUNDARY_ANALYSIS_RULE_ID,
     TRUST_BOUNDARY_ANALYSIS_RULE_PROMPT,
     TRUST_BOUNDARY_ANALYSIS_RULE_TITLE,
@@ -540,7 +541,8 @@ function mergeOptionalQualityCheckRulesWithBaseline(
         if (baselineRule) {
             if (!mergedRuleIds.has(existingRule.id)) {
                 const canonicalRule = cloneJsonValue(baselineRule) as OptionalQualityCheckRule;
-                const preservedRule = staleBaselineVersion
+                const preserveTrustRule = existingRule.id === TRUST_BOUNDARY_ANALYSIS_RULE_ID;
+                const preservedRule = staleBaselineVersion && !preserveTrustRule
                     ? {
                         ...canonicalRule,
                         enabled: existingRule.enabled !== false
@@ -550,7 +552,8 @@ function mergeOptionalQualityCheckRulesWithBaseline(
                         ...cloneJsonValue(existingRule),
                         id: existingRule.id,
                         title: existingRule.title,
-                        prompt: existingRule.prompt,
+                        prompt: preserveTrustRule && existingRule.prompt === LEGACY_TRUST_BOUNDARY_ANALYSIS_RULE_PROMPT
+                            ? TRUST_BOUNDARY_ANALYSIS_RULE_PROMPT : existingRule.prompt,
                         enabled: existingRule.enabled !== false
                     };
                 mergedRules.push(applyRuleScopeFilters(preservedRule, existingRule));

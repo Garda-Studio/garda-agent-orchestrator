@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { runIntermediateCommandCommand } from '../../../../src/cli/commands/gates';
-import { appendTaskEventAsync } from '../../../../src/gate-runtime/task-events-io';
+import { hasReportedFailedTestCase } from '../../../../src/cli/commands/gate-flows/command-run/intermediate-command-scope';
 import { buildTestFirstExpectedFailureRoute } from '../../../../src/gates/next-step/next-step-test-first-routing';
 import { resolveValidationDecisionRoute } from '../../../../src/gates/next-step/next-step-validation-routes';
 import {
@@ -113,15 +113,23 @@ function resolveRoute(fixture: Fixture) {
     });
 }
 
-function buildRecipeFixture(mode = 'failed'): Fixture {
+function buildRecipeFixture(mode = 'failed', testPath = 'specifications/case', withRecipe = true): Fixture {
     const repoRoot = createRecipeTempRepo(); tempRoots.push(repoRoot);
-    const bundle = getOrchestratorRoot(repoRoot), testPath = 'specifications/case';
+    const bundle = getOrchestratorRoot(repoRoot);
     fs.mkdirSync(path.join(bundle, 'live/config'), { recursive: true });
     fs.writeFileSync(path.join(bundle, 'live/config/workflow-config.json'), JSON.stringify(buildDefaultWorkflowConfig()));
     fs.copyFileSync(path.join(process.cwd(), 'template/config/profiles.json'), path.join(bundle, 'live/config/profiles.json'));
-    fs.writeFileSync(path.join(bundle, 'live/config/paths.json'), JSON.stringify({ triggers: { test: ['(^|/)specifications/'] } }));
-    fs.mkdirSync(path.join(repoRoot, 'specifications')); fs.writeFileSync(path.join(repoRoot, testPath), 'declared test');
+    fs.writeFileSync(path.join(bundle, 'live/config/paths.json'), JSON.stringify({ triggers: { test: [withRecipe ? '(^|/)specifications/' : `(^|/)${path.dirname(testPath).replace(/\\/g, '/')}/`] } }));
+    fs.mkdirSync(path.dirname(path.join(repoRoot, testPath)), {recursive: true});
+    fs.writeFileSync(path.join(repoRoot, testPath), 'declared test');
     fs.writeFileSync(path.join(repoRoot, 'driver'), 'process.stdout.write(process.argv[2]==="opaque"?"opaque":"TAP version 13\\n"+(process.argv[2]==="failed"?"not ok":"ok")+" 1 - declared case\\n1..1\\n");process.exitCode=process.argv[2]==="failed"?7:0;');
+    if (!withRecipe) {
+        fs.writeFileSync(path.join(repoRoot, 'assertless-checker'), 'require("node:fs").readFileSync(process.argv[2],"utf8");process.exitCode=1;');
+        fs.writeFileSync(path.join(repoRoot, 'opaque-checker'), 'const source=require("node:fs").readFileSync(process.argv.at(-1),"utf8");let failed=false;try{require("node:assert/strict").equal(source.trim(),"ready");}catch(error){failed=true;process.stderr.write(error.stack+"\\n");}process.stdout.write("TAP version 13\\n"+(failed?"not ok":"ok")+" 1 - source readiness\\n1..1\\n");process.exitCode=failed?7:0;');
+        const wrapper = path.join(repoRoot, 'scripts/node-foundation/build-scripts.cjs');
+        fs.mkdirSync(path.dirname(wrapper), {recursive:true});
+        fs.writeFileSync(wrapper, 'require("../../opaque-checker");');
+    }
     fs.writeFileSync(path.join(repoRoot, 'recipes.json'), JSON.stringify({ schema_version: 1, recipes: [{ id: 'declared',
         purpose: 'test', executable: process.execPath, argv: ['driver', mode, { target: 'case' }], cwd: '.',
         inputs: [{ path: 'src/app.ts', role: 'source' }, { path: testPath, role: 'test' }, { path: 'driver', role: 'helper' }],
@@ -129,7 +137,7 @@ function buildRecipeFixture(mode = 'failed'): Fixture {
         max_attempts: 2, max_output_bytes: 1024, max_input_bytes: 65536, required_capabilities: [], result_format: 'tap' }] }));
     seedRecipeInit(repoRoot); seedRecipeTask(repoRoot, TASK_ID, 'TODO', 'default', 'Test-first: expected-red.', 'Declared recipe expected red');
     initializeGitRepo(repoRoot);
-    handleWorkflow(['set', '--target-root', repoRoot, '--project-validation-contract', 'recipes.json', '--operator-confirmed', 'yes',
+    if (withRecipe) handleWorkflow(['set', '--target-root', repoRoot, '--project-validation-contract', 'recipes.json', '--operator-confirmed', 'yes',
         '--operator-confirmed-at-utc', new Date().toISOString()], { name: 'garda-agent-orchestrator', version: '1.0.0' });
     runEnterTaskMode({ repoRoot, taskId: TASK_ID, entryMode: 'EXPLICIT_TASK_EXECUTION', requestedDepth: 2,
         taskSummary: 'Expected-red declared recipe', provider: 'Codex' });
@@ -151,6 +159,54 @@ afterEach(() => {
 });
 
 describe('next-step test-first expected-red routing', () => {
+    it('rejects TAP bailout records after the complete failed-case prefix', () => {
+        const result = 'not ok 1 - source readiness';
+        assert.equal(hasReportedFailedTestCase(`TAP version 13\n${result}\n1..1\n`), true);
+        assert.equal(hasReportedFailedTestCase(`TAP version 13\n${result}\n1..1\nAssertionError: source is not ready\n    at checker\n`), true);
+        for (const report of [`${result}\n1..1`, `1..1\n${result}`]) {
+            assert.equal(hasReportedFailedTestCase(`TAP version 13\n${report}\nBail out! runner aborted\n`), false);
+        }
+    });
+
+    it('uses the authenticated explicit test role for expected red outside conventional source layouts', async () => {
+        const fixture = buildRecipeFixture('failed', 'modules/safety/checkcase.custom');
+        assert.equal(fixture.preflight.scope_category, 'test-only');
+        const pending = resolveRoute(fixture);
+        assert.equal(pending?.nextGate, 'test-first-expected-failure');
+        assert.match(pending?.commands[0]?.command || '', /--recipe-id ["']declared["']/u);
+        const attempt = await executeValidationRecipe({repoRoot: fixture.repoRoot, taskId: TASK_ID, recipeId: 'declared'});
+        const result = await evaluateValidationAttempt({repoRoot: fixture.repoRoot, taskId: TASK_ID, attemptId: attempt.attempt_id, expectedFailure: true});
+        assert.equal(result.status, 'EXPECTED_FAILURE');
+        assert.equal(resolveRoute(fixture)?.nextGate, 'implementation');
+    });
+
+    it('accepts actual current native expected-red command facts without a known runner grammar and rejects modified output', async () => {
+        const testPath = 'modules/safety/checkcase.custom';
+        const fixture = buildRecipeFixture('failed', testPath, false);
+        const command = `"${process.execPath}" opaque-checker "${testPath}"`;
+        const run = await runIntermediateCommandCommand({repoRoot: fixture.repoRoot, taskId: TASK_ID,
+            commandSource: 'targeted-test', command, preflightPath: fixture.preflightPath, expectFailure: true});
+        assert.equal(run.exitCode, 0);
+        const route = resolveRoute(fixture);
+        assert.equal(route?.nextGate, 'implementation');
+        const event = readTaskTimelineEvents(fixture.repoRoot, TASK_ID)
+            .find(item => item.event_type === 'TEST_FIRST_EXPECTED_FAILURE_RECORDED');
+        assert.ok(event);
+        fs.appendFileSync(String((event.details as Record<string, unknown>).output_artifact_path), 'modified output');
+        assert.equal(resolveRoute(fixture)?.nextGate, 'test-first-expected-failure');
+    });
+    for (const failure of ['missing runner', 'assertless process'] as const) {
+        it(`does not mistake ${failure} failure for a reported failed test case`, async () => {
+            const fixture = buildRecipeFixture('failed', TEST_PATH, false);
+            const program = failure === 'missing runner' ? 'missing-runner.cjs' : 'assertless-checker';
+            const run = await runIntermediateCommandCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
+                commandSource: 'targeted-test', command: `"${process.execPath}" ${program} ${TEST_PATH}`,
+                preflightPath: fixture.preflightPath, expectFailure: true });
+            assert.notEqual(run.exitCode, 0, 'A failed process alone cannot establish a failed test case.');
+            assert.equal(resolveRoute(fixture)?.nextGate, 'test-first-expected-failure');
+        });
+    }
+
     it('routes extensionless declared recipe targets and rejects altered expected-failure evidence', async () => {
         const fixture = buildRecipeFixture();
         assert.equal(fixture.preflight.scope_category, 'test-only');
@@ -251,20 +307,19 @@ describe('next-step test-first expected-red routing', () => {
         assert.deepEqual(evaluated, ['baseline', 'expected-red']);
     });
 
-    it('prints one guarded expected-failure command before compile', () => {
+    it('requires the actual reporter-capable project command instead of guessing a runner', () => {
         const fixture = buildFixture();
 
         const route = resolveRoute(fixture);
 
         assert.equal(route?.nextGate, 'test-first-expected-failure');
-        assert.equal(route?.commands.length, 1);
-        assert.match(route?.commands[0].command || '', /run-intermediate-command/u);
-        assert.match(route?.commands[0].command || '', /--expect-failure/u);
-        assert.match(route?.commands[0].command || '', /expected-red\.test\.ts/u);
-        assert.match(route?.reason || '', /current scope is test-only/u);
+        assert.deepEqual(route?.commands, []);
+        assert.match(route?.reason || '', /actual project --command/u);
+        assert.match(route?.reason || '', /complete TAP 13\/14 report/u);
+        assert.match(route?.reason || '', /admitted recipe/u);
     });
 
-    it('prints a bounded Maven selector for a changed Java test-only scope', () => {
+    it('does not suggest a default Maven command whose output cannot establish expected red', () => {
         const javaTestPath = 'service/src/test/java/com/example/ExpectedBehaviorTest.java';
         const fixture = buildFixture({ changedFiles: [javaTestPath] });
         fs.mkdirSync(path.join(fixture.repoRoot, 'service', 'src', 'test', 'java', 'com', 'example'), {
@@ -276,9 +331,9 @@ describe('next-step test-first expected-red routing', () => {
         const route = resolveRoute(fixture);
 
         assert.equal(route?.nextGate, 'test-first-expected-failure');
-        assert.equal(route?.commands.length, 1);
-        assert.match(route?.commands[0].command || '', /mvn -q -Dtest=com\.example\.ExpectedBehaviorTest test/u);
-        assert.match(route?.commands[0].command || '', /--expect-failure/u);
+        assert.deepEqual(route?.commands, []);
+        assert.match(route?.reason || '', /complete TAP 13\/14 report/u);
+        assert.match(route?.reason || '', /admitted recipe/u);
     });
 
     it('authenticates bounded focused targets for every supported project runner family', () => {
@@ -317,15 +372,7 @@ describe('next-step test-first expected-red routing', () => {
     });
 
     it('routes authenticated bounded expected-red evidence to implementation', async () => {
-        const fixture = buildFixture();
-        await appendTaskEventAsync(
-            getOrchestratorRoot(fixture.repoRoot),
-            TASK_ID,
-            'TASK_MODE_ENTERED',
-            'PASS',
-            'Task mode entered.',
-            {}
-        );
+        const fixture = buildRecipeFixture('failed', TEST_PATH, false);
         const runResult = await runIntermediateCommandCommand({
             repoRoot: fixture.repoRoot,
             taskId: TASK_ID,
@@ -344,15 +391,7 @@ describe('next-step test-first expected-red routing', () => {
     });
 
     it('rejects modified output evidence and asks to record expected-red again', async () => {
-        const fixture = buildFixture();
-        await appendTaskEventAsync(
-            getOrchestratorRoot(fixture.repoRoot),
-            TASK_ID,
-            'TASK_MODE_ENTERED',
-            'PASS',
-            'Task mode entered.',
-            {}
-        );
+        const fixture = buildRecipeFixture('failed', TEST_PATH, false);
         await runIntermediateCommandCommand({
             repoRoot: fixture.repoRoot,
             taskId: TASK_ID,
@@ -369,7 +408,7 @@ describe('next-step test-first expected-red routing', () => {
         const route = resolveRoute(fixture);
 
         assert.equal(route?.nextGate, 'test-first-expected-failure');
-        assert.equal(route?.commands.length, 1);
+        assert.deepEqual(route?.commands, []);
     });
 
     it('keeps undeclared and non-test-only scopes on the ordinary fail-closed path', () => {

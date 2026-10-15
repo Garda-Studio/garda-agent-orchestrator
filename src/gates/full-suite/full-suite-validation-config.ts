@@ -340,7 +340,7 @@ export function buildFullSuitePerformanceGuidance(command: string): FullSuitePer
         optimized: mode !== 'standard',
         mandatory_boundary: 'mandatory full-suite evidence; not a smoke, fast, or release-smoke substitute',
         optimized_command: mode !== 'standard' && trimmedCommand ? trimmedCommand : null,
-        fallback_command: trimmedCommand && trimmedCommand !== 'npm test' ? 'npm test' : null
+        fallback_command: null
     };
 }
 

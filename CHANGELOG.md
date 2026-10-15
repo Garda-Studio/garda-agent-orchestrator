@@ -1,5 +1,13 @@
 # Changelog
 
+## Universal expected-red admission and update guidance
+
+- Use authenticated test roles and current native command/source/output evidence for expected red, including literal test inputs outside known runner grammars.
+- Keep optional runner hints limited to source association; expected-red navigation uses admitted recipes or explicit reporter guidance without guessing technology-specific commands.
+- Require a reported failed test case for native expected red; reject startup errors, assertless exits and aborted reports, and parse the exact integrity-bound retained output bytes without truncating the report.
+- Replace the exact obsolete built-in trust-boundary prompt during normal load/update while preserving custom human guidance and rule choices.
+- Preserve configured full-suite commands without inventing an npm fallback.
+
 ## Frozen review disposition and semantic closure
 
 - Preserve a PASSED selected case when its linked finding or residual risk has an authenticated, satisfied nonblocking disposition under the frozen policy.

@@ -11,8 +11,10 @@ import {
 
 export const TRUST_BOUNDARY_ANALYSIS_RULE_ID = 'trust_boundary_adversarial_analysis';
 export const TRUST_BOUNDARY_ANALYSIS_RULE_TITLE = 'Trust-boundary and adversarial-path analysis';
-export const TRUST_BOUNDARY_ANALYSIS_RULE_PROMPT =
+export const LEGACY_TRUST_BOUNDARY_ANALYSIS_RULE_PROMPT =
     'For security, authorization, protected-control-plane, recovery, evidence, or artifact-trust changes, provide a compact trust_boundary_matrix. Name every trust boundary and record its authority source, mutable inputs, immutable or integrity-bound evidence, canonical reconstruction, TOCTOU or replay behavior, and targeted negative paths with test evidence. Every negative-path evidence_files entry must use path#exact test name, scenario must equal that declared test name, and the named test callback must contain a direct assertion statement outside conditional control flow or a nested callback. Happy-path evidence alone is not sufficient.';
+export const TRUST_BOUNDARY_ANALYSIS_RULE_PROMPT =
+    'For security, authorization, protected-control-plane, recovery, evidence, or artifact-trust changes, provide a compact trust_boundary_matrix. Name every trust boundary and record its authority source, mutable inputs, immutable or integrity-bound evidence, canonical reconstruction, TOCTOU or replay behavior, and targeted negative paths with test evidence. Cite each negative-path source as path#case selector (or path#target-id for a declared command). Selectors are opaque project identities; scenarios and expected behavior may use the project language. Bind the actual contained source, current native execution and output to independent per-case semantic review. A source reference or successful process exit alone does not prove an assertion exists or ran. Happy-path evidence alone is not sufficient.';
 
 export const TRUST_BOUNDARY_NEGATIVE_PATH_KINDS = Object.freeze([
     'forged',

@@ -7,8 +7,12 @@ import { createHash } from 'node:crypto';
 
 import { EXIT_GATE_FAILURE } from '../../../../../../src/cli/exit-codes';
 import {
+    runClassifyChangeCommand,
     runIntermediateCommandCommand
 } from '../../../../../../src/cli/commands/gates';
+import { buildDefaultWorkflowConfig } from '../../../../../../src/core/workflow-config';
+import { initializeGitRepo, loadTaskEntryRulePack, runEnterTaskMode, runHandshakeForTask,
+    runShellSmokeForTask } from '../preflight/gates-preflight-fixtures';
 
 import {
     createTempRepo,
@@ -29,6 +33,9 @@ function seedNodeFoundationFocusedWrapperFixture(repoRoot: string): void {
         [
             "if (process.argv[2] !== 'test.js') process.exit(2);",
             "console.log('node-foundation focused wrapper executed');",
+            'const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;',
+            "const result = require('node:child_process').spawnSync(process.execPath, ['--test', '--test-reporter=tap', process.argv[3]], { stdio: 'inherit', env });",
+            'process.exitCode = result.status ?? 1;',
             ''
         ].join('\n'),
         'utf8'
@@ -48,15 +55,19 @@ function seedExpectedRedPreflight(repoRoot: string, taskId: string): string {
         'reviews',
         `${taskId}-preflight.json`
     );
-    fs.mkdirSync(path.dirname(preflightPath), { recursive: true });
-    fs.writeFileSync(preflightPath, `${JSON.stringify({
-        task_id: taskId,
-        scope_category: 'test-only',
-        changed_files: ['tests/node/gates/focused-command.test.ts'],
-        metrics: {
-            scope_content_sha256: 'a'.repeat(64)
-        }
-    }, null, 2)}\n`, 'utf8');
+    const configPath = path.join(getOrchestratorRoot(repoRoot), 'live/config/workflow-config.json');
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify(buildDefaultWorkflowConfig()));
+    initializeGitRepo(repoRoot);
+    runEnterTaskMode({ repoRoot, taskId, entryMode: 'EXPLICIT_TASK_EXECUTION', requestedDepth: 2,
+        taskSummary: 'Expected-red wrapper owning fixture', provider: 'Codex' });
+    loadTaskEntryRulePack(repoRoot, taskId);
+    runHandshakeForTask(repoRoot, taskId);
+    runShellSmokeForTask(repoRoot, taskId);
+    fs.appendFileSync(path.join(repoRoot, 'tests/node/gates/focused-command.test.ts'), '// changed test input\n');
+    runClassifyChangeCommand({ repoRoot, taskId, taskIntent: 'Expected-red wrapper owning fixture',
+        changedFiles: ['tests/node/gates/focused-command.test.ts'], outputPath: preflightPath, emitMetrics: false });
+    assert.equal(JSON.parse(fs.readFileSync(preflightPath, 'utf8')).scope_category, 'test-only');
     return preflightPath;
 }
 
@@ -260,12 +271,10 @@ describe('cli/commands/gates intermediate command wrapper', () => {
             seedTaskQueue(repoRoot, taskId);
             seedInitAnswers(repoRoot);
             seedNodeFoundationFocusedWrapperFixture(repoRoot);
+            fs.writeFileSync(path.join(repoRoot, 'tests/node/gates/focused-command.test.ts'),
+                "const { test } = require('node:test'); const assert = require('node:assert/strict');\n"
+                + "test('expected-red assertion', () => assert.equal(1, 2));\n");
             const preflightPath = seedExpectedRedPreflight(repoRoot, taskId);
-            fs.appendFileSync(
-                path.join(repoRoot, 'scripts', 'node-foundation', 'build-scripts.cjs'),
-                'process.exitCode = 1;\n',
-                'utf8'
-            );
 
             const result = await runIntermediateCommandCommand({
                 repoRoot,
@@ -277,7 +286,7 @@ describe('cli/commands/gates intermediate command wrapper', () => {
                 timeoutMs: 60_000
             });
 
-            assert.equal(result.exitCode, 0);
+            assert.equal(result.exitCode, 0, result.outputLines.join('\n'));
             assert.match(result.outputLines.join('\n'), /TEST_FIRST_EXPECTED_FAILURE_RECORDED/u);
             const event = readTaskTimelineEvents(repoRoot, taskId)
                 .find((candidate) => candidate.event_type === 'TEST_FIRST_EXPECTED_FAILURE_RECORDED');
@@ -287,7 +296,8 @@ describe('cli/commands/gates intermediate command wrapper', () => {
             assert.equal(details.expected_failure, true);
             assert.equal(details.recorded_status, 'EXPECTED_FAILURE');
             assert.equal(details.exit_code, 1);
-            assert.equal(details.test_scope_sha256, 'a'.repeat(64));
+            const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8'));
+            assert.equal(details.test_scope_sha256, preflight.metrics.scope_content_sha256);
             const artifact = JSON.parse(fs.readFileSync(String(details.artifact_path), 'utf8')) as Record<string, unknown>;
             assert.equal(artifact.status, 'EXPECTED_FAILURE');
             assert.equal(artifact.exit_code, 1);
@@ -449,12 +459,12 @@ describe('cli/commands/gates intermediate command wrapper', () => {
                 seedTaskQueue(repoRoot, taskId);
                 seedInitAnswers(repoRoot);
                 seedNodeFoundationFocusedWrapperFixture(repoRoot);
-                const preflightPath = seedExpectedRedPreflight(repoRoot, taskId);
                 fs.writeFileSync(
                     path.join(repoRoot, 'scripts', 'node-foundation', 'build-scripts.cjs'),
                     'setInterval(() => {}, 1_000);\n',
                     'utf8'
                 );
+                const preflightPath = seedExpectedRedPreflight(repoRoot, taskId);
                 const abortController = new AbortController();
                 const abortTimer = interruption === 'cancelled'
                     ? setTimeout(() => abortController.abort(), 100)

@@ -1,18 +1,10 @@
 import * as fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 
-import { splitCommandLine } from '../../cli/gate-cli/gates-subprocess';
+import { getCurrentIntermediateTestTargets, hasReportedFailedTestCase, observeNativeIntermediateScope } from '../../cli/commands/gate-flows/command-run/intermediate-command-scope';
 import { isPlainRecord } from '../../core/records';
 import { inspectTaskEventFile } from '../../gate-runtime/task-events';
-import {
-    getChangedTestPathsTargetedByCommandTokens,
-    getDotnetFocusedClassTarget,
-    getGoFocusedPackageTarget,
-    getJvmFocusedTestSelector,
-    getRustFocusedIntegrationTarget,
-    isSafeFocusedTestPath,
-    isFocusedIntermediateCommand
-} from '../shared/focused-intermediate-command-grammar';
 import {
     fileSha256,
     isPathRealpathInsideRoot,
@@ -66,100 +58,6 @@ function sameStringList(left: readonly string[], right: readonly string[]): bool
     return left.length === right.length && left.every((entry, index) => entry === right[index]);
 }
 
-function getRunnableChangedTestPaths(preflight: Record<string, unknown>): string[] {
-    return normalizeFileList(Array.isArray(preflight.changed_files) ? preflight.changed_files : [])
-        .filter(isSafeFocusedTestPath);
-}
-
-function hasRootFile(repoRoot: string, names: readonly string[]): boolean {
-    return names.some((name) => fs.existsSync(path.join(repoRoot, name)));
-}
-
-function hasRootFileExtension(repoRoot: string, extensions: readonly string[]): boolean {
-    try {
-        return fs.readdirSync(repoRoot, { withFileTypes: true })
-            .some((entry) => entry.isFile() && extensions.includes(path.extname(entry.name).toLowerCase()));
-    } catch {
-        return false;
-    }
-}
-
-function resolveJvmTool(repoRoot: string, kind: 'maven' | 'gradle'): string {
-    const windows = process.platform === 'win32';
-    if (kind === 'maven') {
-        if (windows && fs.existsSync(path.join(repoRoot, 'mvnw.cmd'))) return '.\\mvnw.cmd';
-        if (fs.existsSync(path.join(repoRoot, 'mvnw'))) return './mvnw';
-        if (fs.existsSync(path.join(repoRoot, 'mvnw.cmd'))) return '.\\mvnw.cmd';
-        return 'mvn';
-    }
-    if (windows && fs.existsSync(path.join(repoRoot, 'gradlew.bat'))) return '.\\gradlew.bat';
-    if (fs.existsSync(path.join(repoRoot, 'gradlew'))) return './gradlew';
-    if (fs.existsSync(path.join(repoRoot, 'gradlew.bat'))) return '.\\gradlew.bat';
-    return 'gradle';
-}
-
-function buildFocusedTestCommand(repoRoot: string, testPaths: readonly string[]): {
-    commandSource: 'node-test' | 'targeted-test';
-    command: string;
-} | null {
-    for (const testPath of testPaths) {
-        const quotedPath = quoteCommandValue(testPath);
-        if (/\.(?:test|spec)\.(?:c|m)?[jt]sx?$/iu.test(testPath)) {
-            if (fs.existsSync(path.join(repoRoot, 'scripts', 'node-foundation', 'build-scripts.cjs'))) {
-                return {
-                    commandSource: 'targeted-test',
-                    command: `node scripts/node-foundation/build-scripts.cjs test.js ${quotedPath}`
-                };
-            }
-            if (fs.existsSync(path.join(repoRoot, 'package.json'))) {
-                return { commandSource: 'targeted-test', command: `npm test -- ${quotedPath}` };
-            }
-            return { commandSource: 'node-test', command: `node --test ${quotedPath}` };
-        }
-        if (/\.py$/iu.test(testPath) && hasRootFile(repoRoot, ['pyproject.toml', 'requirements.txt', 'requirements-dev.txt'])) {
-            return { commandSource: 'targeted-test', command: `pytest ${quotedPath}` };
-        }
-        const jvmSelector = getJvmFocusedTestSelector(testPath);
-        if (jvmSelector && fs.existsSync(path.join(repoRoot, 'pom.xml'))) {
-            return {
-                commandSource: 'targeted-test',
-                command: `${resolveJvmTool(repoRoot, 'maven')} -q -Dtest=${jvmSelector} test`
-            };
-        }
-        if (jvmSelector && hasRootFile(repoRoot, ['build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts'])) {
-            return {
-                commandSource: 'targeted-test',
-                command: `${resolveJvmTool(repoRoot, 'gradle')} test --tests ${jvmSelector} --console=plain`
-            };
-        }
-        const goTarget = getGoFocusedPackageTarget(testPath);
-        if (goTarget && fs.existsSync(path.join(repoRoot, 'go.mod'))) {
-            return { commandSource: 'targeted-test', command: `go test ${goTarget}` };
-        }
-        const rustTarget = getRustFocusedIntegrationTarget(testPath);
-        if (rustTarget && fs.existsSync(path.join(repoRoot, 'Cargo.toml'))) {
-            return { commandSource: 'targeted-test', command: `cargo test --test ${rustTarget}` };
-        }
-        const dotnetTarget = getDotnetFocusedClassTarget(testPath);
-        if (dotnetTarget && hasRootFileExtension(repoRoot, ['.sln', '.csproj', '.fsproj'])) {
-            return {
-                commandSource: 'targeted-test',
-                command: `dotnet test --filter FullyQualifiedName~${dotnetTarget} --verbosity quiet`
-            };
-        }
-        if (/\.rb$/iu.test(testPath) && fs.existsSync(path.join(repoRoot, 'Gemfile'))) {
-            return { commandSource: 'targeted-test', command: `bundle exec rspec ${quotedPath}` };
-        }
-        if (/\.php$/iu.test(testPath) && fs.existsSync(path.join(repoRoot, 'composer.json'))) {
-            const phpUnit = fs.existsSync(path.join(repoRoot, 'vendor', 'bin', 'phpunit'))
-                ? 'vendor/bin/phpunit'
-                : 'phpunit';
-            return { commandSource: 'targeted-test', command: `${phpUnit} ${quotedPath}` };
-        }
-    }
-    return null;
-}
-
 function resolveRequiredReviewArtifact(
     artifactPathText: string,
     repoRoot: string,
@@ -195,6 +93,8 @@ function hasCurrentExpectedFailureEvidence(options: TestFirstExpectedFailureRout
     if (!preflightSha256 || !/^[0-9a-f]{64}$/u.test(testScopeSha256)) {
         return false;
     }
+    const nativeScope = observeNativeIntermediateScope(options.repoRoot, options.taskId, options.preflightPath);
+    if (nativeScope.preflight_sha256 !== preflightSha256 || nativeScope.scope_content_sha256 !== testScopeSha256) return false;
     const timelinePath = path.join(options.eventsRoot, `${options.taskId}.jsonl`);
     try {
         const timelineStat = fs.statSync(timelinePath);
@@ -294,7 +194,11 @@ function hasCurrentExpectedFailureEvidence(options: TestFirstExpectedFailureRout
             || String(details.command_source || '').trim() !== commandSource
             || String(details.command || '').trim() !== command
             || details.exit_code !== record.exit_code
-            || !isFocusedIntermediateCommand(commandSource, splitCommandLine(command))
+            || !['node-test', 'targeted-test'].includes(commandSource)
+            || record.scope_content_sha256_before !== testScopeSha256
+            || record.scope_content_sha256_after !== testScopeSha256
+            || details.scope_content_sha256_before !== testScopeSha256
+            || details.scope_content_sha256_after !== testScopeSha256
             || !outputArtifactPath
             || !/^[0-9a-f]{64}$/u.test(outputArtifactSha256)
             || typeof outputArtifactSizeBytes !== 'number'
@@ -303,18 +207,19 @@ function hasCurrentExpectedFailureEvidence(options: TestFirstExpectedFailureRout
         ) {
             continue;
         }
-        const commandTokens = splitCommandLine(command);
-        const focusedTestPaths = getChangedTestPathsTargetedByCommandTokens(
-            commandTokens,
+        const focusedTestPaths = getCurrentIntermediateTestTargets(
+            options.repoRoot, command,
             [...changedFiles]
         );
         if (!focusedTestPaths.some((testPath) => changedFiles.has(testPath))) {
             continue;
         }
         try {
+            const output = fs.readFileSync(outputArtifactPath);
             if (
-                fs.statSync(outputArtifactPath).size !== outputArtifactSizeBytes
-                || fileSha256(outputArtifactPath) !== outputArtifactSha256
+                output.length !== outputArtifactSizeBytes
+                || createHash('sha256').update(output).digest('hex') !== outputArtifactSha256
+                || !hasReportedFailedTestCase(output.toString('utf8'))
                 || String(details.output_artifact_sha256 || '').trim().toLowerCase() !== outputArtifactSha256
                 || details.output_artifact_size_bytes !== outputArtifactSizeBytes
                 || resolveRequiredReviewArtifact(
@@ -368,14 +273,15 @@ export function buildTestFirstExpectedFailureRoute(
                 + ' --expect-failure --repo-root "."')]
         };
     }
-    const testPaths = getRunnableChangedTestPaths(options.preflight);
+    // Source names do not establish a runnable command or its result reporter.
+    const testPaths = normalizeFileList(Array.isArray(options.preflight.changed_files) ? options.preflight.changed_files : []);
     if (testPaths.length === 0) {
         return {
             nextGate: 'test-first-expected-failure',
             title: 'A runnable changed test is required for expected-red evidence.',
             reason:
-                `TASK.md declares ${TEST_FIRST_EXPECTED_RED_MARKER}, but the current test-only preflight does not include a supported concrete test file. `
-                + 'Add the focused test file or remove the marker; compile and full-suite remain fail-closed.',
+                `TASK.md declares ${TEST_FIRST_EXPECTED_RED_MARKER}, but the current test-only preflight has no concrete changed source. `
+                + 'Materialize and classify the intended test; compile and full-suite remain fail-closed.',
             commands: []
         };
     }
@@ -389,32 +295,15 @@ export function buildTestFirstExpectedFailureRoute(
             commands: []
         };
     }
-    const focusedCommand = buildFocusedTestCommand(options.repoRoot, testPaths);
-    if (!focusedCommand) {
-        return {
-            nextGate: 'test-first-expected-failure',
-            title: 'A runnable changed test is required for expected-red evidence.',
-            reason:
-                `TASK.md declares ${TEST_FIRST_EXPECTED_RED_MARKER}, but Garda cannot derive a bounded focused command for the current changed test and detected project runner. `
-                + 'Add a supported runnable test or remove the marker; compile and full-suite remain fail-closed.',
-            commands: []
-        };
-    }
-    const command = [
-        `${options.cliPrefix} gate run-intermediate-command`,
-        `--task-id ${quoteCommandValue(options.taskId)}`,
-        `--command-source ${quoteCommandValue(focusedCommand.commandSource)}`,
-        `--command ${quoteCommandValue(focusedCommand.command)}`,
-        '--expect-failure',
-        `--preflight-path ${quoteCommandValue(options.preflightCommandPath)}`,
-        '--repo-root "."'
-    ].join(' ');
     return {
         nextGate: 'test-first-expected-failure',
-        title: 'Record the bounded expected-red test failure.',
+        title: 'Select the actual focused command and failed-case reporter.',
         reason:
-            `TASK.md explicitly declares ${TEST_FIRST_EXPECTED_RED_MARKER} and the current scope is test-only. `
-            + 'Run the focused changed test through the guarded expected-failure mode before implementation; an unexpected pass, timeout, cancellation, unrelated test, or stale evidence fails closed.',
-        commands: [buildCommand('Record bounded expected-red failure', command)]
+            `TASK.md declares ${TEST_FIRST_EXPECTED_RED_MARKER}. No command or reporter is inferred from source names or build manifests. `
+            + 'Use gate run-intermediate-command with --command-source targeted-test, the actual project --command, '
+            + '--expect-failure and the current --preflight-path. The command must emit a complete TAP 13/14 report with an actual failed case. '
+            + 'Alternatively, declare the actual project command, target association and supported result format through an admitted recipe. '
+            + 'Process failure alone cannot advance implementation; current source and retained output authentication remain required.',
+        commands: []
     };
 }

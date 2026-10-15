@@ -239,7 +239,9 @@ describe('gates/full-suite-validation', () => {
             });
             const text = formatFullSuiteValidationResult(result);
 
-            assert.ok(text.includes('PerformanceMode: mode=optimized_sharded; optimized=true; boundary=mandatory_full_suite_not_smoke_or_fast; optimized_command="npm run test:sharded"; fallback_command="npm test"'));
+            assert.ok(text.includes('PerformanceMode: mode=optimized_sharded; optimized=true; boundary=mandatory_full_suite_not_smoke_or_fast; optimized_command="npm run test:sharded"'));
+
+            assert.doesNotMatch(text, /fallback_command=/u);
         });
 
         it('formatFullSuiteValidationResult includes duration history comparison evidence', () => {
@@ -338,7 +340,9 @@ describe('gates/full-suite-validation', () => {
             });
             const text = formatFullSuiteValidationResult(result);
 
-            assert.ok(text.includes('PerformanceMode: mode=optimized_reuse_aware; optimized=true; boundary=mandatory_full_suite_not_smoke_or_fast; optimized_command="npm run build-prep && npm test"; fallback_command="npm test"'));
+            assert.ok(text.includes('PerformanceMode: mode=optimized_reuse_aware; optimized=true; boundary=mandatory_full_suite_not_smoke_or_fast; optimized_command="npm run build-prep && npm test"'));
+
+            assert.doesNotMatch(text, /fallback_command=/u);
         });
 
         it('formatFullSuiteValidationResult labels sharded reuse-aware full-suite commands as mandatory evidence', () => {
@@ -355,7 +359,9 @@ describe('gates/full-suite-validation', () => {
             });
             const text = formatFullSuiteValidationResult(result);
 
-            assert.ok(text.includes('PerformanceMode: mode=optimized_sharded_reuse_aware; optimized=true; boundary=mandatory_full_suite_not_smoke_or_fast; optimized_command="npm run build-prep && npm run test:sharded"; fallback_command="npm test"'));
+            assert.ok(text.includes('PerformanceMode: mode=optimized_sharded_reuse_aware; optimized=true; boundary=mandatory_full_suite_not_smoke_or_fast; optimized_command="npm run build-prep && npm run test:sharded"'));
+
+            assert.doesNotMatch(text, /fallback_command=/u);
         });
 
         it('formatFullSuiteValidationResult surfaces slowest known tests from sharded runner output', () => {

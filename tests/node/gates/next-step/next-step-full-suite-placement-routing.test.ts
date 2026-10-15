@@ -303,7 +303,8 @@ describe('gates/next-step', () => {
         assert.ok(!result.commands[0].command.includes('build-review-context'));
 
         assert.ok(text.includes('FullSuite: enabled=true; placement=after_compile_before_reviews;'));
-        assert.ok(text.includes('FullSuitePerformance: mode=optimized_sharded; optimized=true; boundary=mandatory_full_suite_not_smoke_or_fast; optimized_command="npm run test:sharded"; fallback_command="npm test"'));
+        assert.ok(text.includes('FullSuitePerformance: mode=optimized_sharded; optimized=true; boundary=mandatory_full_suite_not_smoke_or_fast; optimized_command="npm run test:sharded"'));
+        assert.doesNotMatch(text, /fallback_command=/u);
 
     });
 
