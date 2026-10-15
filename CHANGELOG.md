@@ -1,5 +1,9 @@
 # Changelog
 
+- T-238-1-2-2: restore native competing-owner process regressions for synchronous
+  and asynchronous timeline/lifecycle conflicts, with explicit copy-custody and
+  platform boundaries.
+
 - T-238-1-2-1: retain disputed timeline/lifecycle lock owners and report explicit
   conflicts without canonical republish; preserve physical identity, owner bytes
   and async queue progress, with bounded copy custody only when supported.
