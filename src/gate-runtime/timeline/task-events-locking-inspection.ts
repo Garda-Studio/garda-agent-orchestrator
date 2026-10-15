@@ -175,8 +175,7 @@ export function tryRemoveStaleLock(lockPath: string, staleMs: number, options: L
     if (!claimedInspection.exists
         || !claimedInspection.staleReason
         || !lockMetadataMatchesCandidate(inspection.metadata, claimedInspection.metadata)) {
-        restoreMismatchedClaimedLock(tempPath, lockPath);
-        return { removed: false, inspection: claimedInspection.exists ? claimedInspection : inspection };
+        restoreMismatchedClaimedLock(tempPath, lockPath, options.projectRoot);
     }
 
     removeLockPath(tempPath);

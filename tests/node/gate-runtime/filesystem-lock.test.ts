@@ -1560,12 +1560,13 @@ test('releaseFilesystemLock does not remove replacement lock after stale reclaim
     }
 });
 
-test('releaseFilesystemLock restores replacement lock if owner changes during release claim', () => {
+test('releaseFilesystemLock retains claimed replacement without canonical republish', () => {
     const tmp = mkTmpDir();
     const lockPath = path.join(tmp, '.test-release-owner-window.lock');
     const realFs = require('node:fs');
     const originalRenameSync = realFs.renameSync;
     let interceptedReleaseClaim = false;
+    const replacement: { path: string; stat?: fs.BigIntStats; bytes?: Buffer } = { path: '' };
 
     try {
         const { handle } = acquireFilesystemLock(lockPath);
@@ -1587,23 +1588,31 @@ test('releaseFilesystemLock restores replacement lock if owner changes during re
                 && toPath.startsWith(path.resolve(`${lockPath}.releasing`))) {
                 interceptedReleaseClaim = true;
                 fs.writeFileSync(ownerPath, JSON.stringify(replacementOwner, null, 2) + '\n', 'utf8');
+                replacement.path = toPath;
+                replacement.stat = fs.statSync(lockPath, { bigint: true });
+                replacement.bytes = fs.readFileSync(ownerPath);
             }
             return originalRenameSync.apply(realFs, args as [fs.PathLike, fs.PathLike]);
         };
 
-        releaseFilesystemLock(handle);
+        assert.throws(() => releaseFilesystemLock(handle), /Disputed lock ownership conflict; canonical publication refused/);
 
         assert.equal(interceptedReleaseClaim, true, 'release claim race window should be exercised');
-        assert.ok(fs.existsSync(lockPath), 'replacement lock should be restored to the canonical lock path');
-        const restoredOwner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
-        assert.equal(restoredOwner.lock_id, replacementLockId);
+        assert.equal(fs.existsSync(lockPath), false, 'a pre-claim replacement stays in the disputed claim');
+        assert.ok(replacement.stat);
+        const retained = fs.statSync(replacement.path, { bigint: true });
+        assert.deepEqual([retained.dev, retained.ino, retained.mode, retained.birthtimeNs, retained.uid, retained.gid],
+            [replacement.stat.dev, replacement.stat.ino, replacement.stat.mode, replacement.stat.birthtimeNs, replacement.stat.uid, replacement.stat.gid]);
+        const retainedBytes = fs.readFileSync(path.join(replacement.path, 'owner.json'));
+        assert.deepEqual(retainedBytes, replacement.bytes);
+        assert.equal(JSON.parse(retainedBytes.toString('utf8')).lock_id, replacementLockId);
     } finally {
         realFs.renameSync = originalRenameSync;
         fs.rmSync(tmp, { recursive: true, force: true });
     }
 });
 
-test('releaseFilesystemLock reports a claimed owner mismatch that cannot be restored', () => {
+test('releaseFilesystemLock preserves claimed and canonical owners on conflict', () => {
     const tmp = mkTmpDir();
     const lockPath = path.join(tmp, '.test-release-owner-restore-failure.lock');
     const realFs = require('node:fs');
@@ -1611,6 +1620,8 @@ test('releaseFilesystemLock reports a claimed owner mismatch that cannot be rest
     const originalStderrWrite = process.stderr.write;
     let retainedReleasingPath = '';
     let stderrOutput = '';
+    const claimed: { stat?: fs.BigIntStats; bytes?: Buffer } = {};
+    const canonical: { stat?: fs.BigIntStats; bytes?: Buffer } = {};
 
     try {
         const { handle } = acquireFilesystemLock(lockPath);
@@ -1629,6 +1640,8 @@ test('releaseFilesystemLock reports a claimed owner mismatch that cannot be rest
             if (fromPath === path.resolve(lockPath)
                 && toPath.startsWith(path.resolve(`${lockPath}.releasing-`))) {
                 fs.writeFileSync(ownerPath, JSON.stringify(changedOwner, null, 2) + '\n', 'utf8');
+                claimed.stat = fs.statSync(lockPath, { bigint: true });
+                claimed.bytes = fs.readFileSync(ownerPath);
                 const result = originalRenameSync.apply(realFs, args as [fs.PathLike, fs.PathLike]);
                 retainedReleasingPath = toPath;
                 fs.mkdirSync(lockPath);
@@ -1636,6 +1649,8 @@ test('releaseFilesystemLock reports a claimed owner mismatch that cannot be rest
                     ...changedOwner,
                     lock_id: 'canonical-replacement-owner'
                 }, null, 2) + '\n', 'utf8');
+                canonical.stat = fs.statSync(lockPath, { bigint: true });
+                canonical.bytes = fs.readFileSync(path.join(lockPath, 'owner.json'));
                 return result;
             }
             return originalRenameSync.apply(realFs, args as [fs.PathLike, fs.PathLike]);
@@ -1647,11 +1662,18 @@ test('releaseFilesystemLock reports a claimed owner mismatch that cannot be rest
 
         assert.throws(
             () => releaseFilesystemLock(handle),
-            /Failed to restore claimed lock:.*Canonical lock path is already occupied/
+            /Disputed lock ownership conflict; canonical publication refused/
         );
         assert.ok(fs.existsSync(lockPath), 'canonical replacement lock must survive');
         assert.ok(retainedReleasingPath && fs.existsSync(retainedReleasingPath), 'unrestored claim must remain inspectable');
-        assert.match(stderrOutput, /LOCK_RELEASE_RESTORE_FAILED/);
+        for (const [retainedPath, expected] of [[retainedReleasingPath, claimed], [lockPath, canonical]] as const) {
+            assert.ok(expected.stat);
+            const retained = fs.statSync(retainedPath, { bigint: true });
+            assert.deepEqual([retained.dev, retained.ino, retained.mode, retained.birthtimeNs, retained.uid, retained.gid],
+                [expected.stat.dev, expected.stat.ino, expected.stat.mode, expected.stat.birthtimeNs, expected.stat.uid, expected.stat.gid]);
+            assert.deepEqual(fs.readFileSync(path.join(retainedPath, 'owner.json')), expected.bytes);
+        }
+        assert.match(stderrOutput, /LOCK_RELEASE_CONFLICT/);
     } finally {
         realFs.renameSync = originalRenameSync;
         (process.stderr as unknown as { write: typeof process.stderr.write }).write = originalStderrWrite;

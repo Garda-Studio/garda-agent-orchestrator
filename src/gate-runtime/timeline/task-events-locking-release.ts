@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { preserveDisputedLockDirectory } from './lock-recovery-preservation';
 
 import { DEFAULT_LOCK_RELEASE_RETRIES, DEFAULT_LOCK_RELEASE_RETRY_MS, MAX_LOCK_RELEASE_RETRY_MS, TRANSIENT_LOCK_ACQUIRE_ERROR_CODES, TRANSIENT_LOCK_RELEASE_ERROR_CODES } from './task-events-locking-types';
 import type { LockOwnerMetadata } from './task-events-locking-types';
@@ -297,12 +298,12 @@ export function lockMetadataMatchesCandidate(before: LockOwnerMetadata, after: L
         && before.created_at_utc === after.created_at_utc;
 }
 
-export function restoreMismatchedClaimedLock(claimedPath: string, originalPath: string): void {
+export function restoreMismatchedClaimedLock(claimedPath: string, originalPath: string, projectRoot?: string): never {
     try {
-        if (fs.existsSync(originalPath)) {
-            throw new Error('Canonical lock path is already occupied');
-        }
-        fs.renameSync(claimedPath, originalPath);
+        if (!projectRoot) throw new Error('Explicit project root is unavailable; preservation copy refused');
+        const preserved = preserveDisputedLockDirectory(projectRoot, claimedPath);
+        // Verified copying supplies custody only; it never authorizes canonical publication.
+        throw new Error(`Verified disputed copy retained at ${preserved.capturePath}; canonical publication refused`);
     } catch (error: unknown) {
         const diagnostic = [
             `lock=${redactLockPath(originalPath)}`,
@@ -310,12 +311,12 @@ export function restoreMismatchedClaimedLock(claimedPath: string, originalPath: 
             `code=${getErrorCode(error) || 'UNKNOWN'}`,
             `message=${getErrorMessage(error)}`
         ].join('; ');
-        process.stderr.write(`WARNING: LOCK_RELEASE_RESTORE_FAILED: ${diagnostic}\n`);
-        throw new Error(`Failed to restore claimed lock: ${diagnostic}`);
+        process.stderr.write(`WARNING: LOCK_RELEASE_CONFLICT: ${diagnostic}\n`);
+        throw new Error(`Disputed lock ownership conflict; canonical publication refused: ${diagnostic}`);
     }
 }
 
-export function claimOwnedLockForRelease(lockPath: string, lockId: string): string | null {
+export function claimOwnedLockForRelease(lockPath: string, lockId: string, projectRoot?: string): string | null {
     if (!lockMetadataMatchesLockId(readLockMetadata(lockPath), lockId)) return null;
     createLockReleaseIntent(lockPath, lockId);
     let releasingPath: string | null;
@@ -336,6 +337,5 @@ export function claimOwnedLockForRelease(lockPath: string, lockId: string): stri
         return releasingPath;
     }
 
-    restoreMismatchedClaimedLock(releasingPath, lockPath);
-    return null;
+    restoreMismatchedClaimedLock(releasingPath, lockPath, projectRoot);
 }

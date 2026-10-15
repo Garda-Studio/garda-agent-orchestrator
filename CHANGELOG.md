@@ -1,5 +1,9 @@
 # Changelog
 
+- T-238-1-2-1: retain disputed timeline/lifecycle lock owners and report explicit
+  conflicts without canonical republish; preserve physical identity, owner bytes
+  and async queue progress, with bounded copy custody only when supported.
+
 - Authenticate task-qualified child SOURCE records against current workspace
   authority, intact native timelines, sealed audits and immutable Git provenance;
   preserve independent parent obligations (T-241-2-C2-I1-4-2-2-2).

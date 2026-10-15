@@ -1305,9 +1305,10 @@ test('withLifecycleOperationLock does not remove replacement lock when old relea
     const realFs = require('node:fs');
     const originalRenameSync = realFs.renameSync;
     let interceptedRelease = false;
+    const replacement: { path: string; stat?: fs.BigIntStats; bytes?: Buffer } = { path: '' };
     try {
         const lockPath = getLifecycleOperationLockPath(tmp);
-        const result = withLifecycleOperationLock(tmp, 'old-owner', () => {
+        assert.throws(() => withLifecycleOperationLock(tmp, 'old-owner', () => {
             realFs.renameSync = function (...args: unknown[]) {
                 const fromPath = typeof args[0] === 'string' ? path.resolve(args[0]) : '';
                 const toPath = typeof args[1] === 'string' ? path.resolve(args[1]) : '';
@@ -1328,16 +1329,24 @@ test('withLifecycleOperationLock does not remove replacement lock when old relea
                         command: 'replacement-owner',
                         target_root: path.resolve(tmp)
                     }, null, 2) + '\n', 'utf8');
+                    replacement.path = toPath;
+                    replacement.stat = fs.statSync(lockPath, { bigint: true });
+                    replacement.bytes = fs.readFileSync(path.join(lockPath, 'owner.json'));
                 }
                 return originalRenameSync.apply(realFs, args as [fs.PathLike, fs.PathLike]);
             };
             return 'ok';
-        });
+        }), /Disputed lifecycle lock ownership conflict; canonical publication refused/);
 
-        assert.equal(result, 'ok');
         assert.equal(interceptedRelease, true);
-        assert.ok(fs.existsSync(lockPath), 'replacement lock must survive old owner release');
-        const owner = JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8'));
+        assert.equal(fs.existsSync(lockPath), false, 'a pre-claim replacement remains in the disputed claim');
+        assert.ok(replacement.stat);
+        const retained = fs.statSync(replacement.path, { bigint: true });
+        assert.deepEqual([retained.dev, retained.ino, retained.mode, retained.birthtimeNs, retained.uid, retained.gid],
+            [replacement.stat.dev, replacement.stat.ino, replacement.stat.mode, replacement.stat.birthtimeNs, replacement.stat.uid, replacement.stat.gid]);
+        const retainedBytes = fs.readFileSync(path.join(replacement.path, 'owner.json'));
+        assert.deepEqual(retainedBytes, replacement.bytes);
+        const owner = JSON.parse(retainedBytes.toString('utf8'));
         assert.equal(owner.lock_id, 'replacement-lock-id');
         assert.equal(owner.operation, 'replacement-owner');
     } finally {
@@ -1346,6 +1355,40 @@ test('withLifecycleOperationLock does not remove replacement lock when old relea
     }
 });
 
+
+test('withLifecycleOperationLockAsync advances queue after release conflict', async () => {
+    const tmp = mkTmpDir();
+    const realFs = require('node:fs');
+    const originalRenameSync = realFs.renameSync;
+    const lockPath = getLifecycleOperationLockPath(tmp);
+    let claimedPath = '';
+    try {
+        await assert.rejects(withLifecycleOperationLockAsync(tmp, 'old-async-owner', async () => {
+            realFs.renameSync = function (...args: unknown[]) {
+                const from = typeof args[0] === 'string' ? path.resolve(args[0]) : '';
+                const to = typeof args[1] === 'string' ? path.resolve(args[1]) : '';
+                if (!claimedPath && from === path.resolve(lockPath)
+                    && to.startsWith(path.resolve(`${lockPath}.releasing`))) {
+                    const ownerPath = path.join(lockPath, 'owner.json');
+                    const owner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
+                    fs.writeFileSync(ownerPath, JSON.stringify({ ...owner, lock_id: 'replacement-async-owner' }));
+                    claimedPath = to;
+                }
+                return originalRenameSync.apply(realFs, args as [fs.PathLike, fs.PathLike]);
+            };
+        }), /Disputed lifecycle lock ownership conflict; canonical publication refused/);
+        realFs.renameSync = originalRenameSync;
+        assert.ok(claimedPath && fs.existsSync(claimedPath));
+        assert.equal(JSON.parse(fs.readFileSync(path.join(claimedPath, 'owner.json'), 'utf8')).lock_id,
+            'replacement-async-owner');
+        assert.equal(await withLifecycleOperationLockAsync(tmp, 'after-conflict', async () => 'next',
+            { queueTimeoutMs: 1000 }), 'next');
+        assert.ok(fs.existsSync(claimedPath), 'later queue progress must retain the disputed owner');
+    } finally {
+        realFs.renameSync = originalRenameSync;
+        fs.rmSync(tmp, { recursive: true, force: true });
+    }
+});
 
 test('getLastLifecycleLockTelemetry returns telemetry after sync lock', () => {
     const tmp = mkTmpDir();

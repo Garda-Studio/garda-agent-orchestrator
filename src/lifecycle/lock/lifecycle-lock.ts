@@ -7,6 +7,7 @@ import { redactHostname as redactHostnameValue, redactPath } from '../../core/re
 import { resolveBundleName } from '../../core/constants';
 import { removeLockPathWithRetry, renameLockPathWithRetry } from '../../gate-runtime/task-events-locking';
 import { updateLockHeartbeatInPlace } from '../../gate-runtime/timeline/task-events-locking-metadata';
+import { preserveDisputedLockDirectory } from '../../gate-runtime/timeline/lock-recovery-preservation';
 
 type JsonObject = Record<string, unknown>;
 
@@ -572,15 +573,15 @@ function lifecycleLockMetadataMatchesCandidate(
         && before.target_root === after.target_root;
 }
 
-function restoreMismatchedLifecycleLockClaim(claimedPath: string, originalPath: string, normalizedTarget: string): void {
+function restoreMismatchedLifecycleLockClaim(claimedPath: string, originalPath: string, normalizedTarget: string): never {
     try {
-        if (!fs.existsSync(originalPath)) {
-            fs.renameSync(claimedPath, originalPath);
-        }
+        const preserved = preserveDisputedLockDirectory(normalizedTarget, claimedPath);
+        throw new Error(`Verified disputed copy retained at ${preserved.capturePath}; canonical publication refused`);
     } catch (error: unknown) {
         process.stderr.write(
-            `WARNING: LIFECYCLE_LOCK_RESTORE_FAILED: lock=${redactPath(originalPath, normalizedTarget)}; claimed=${redactPath(claimedPath, normalizedTarget)}; message=${error instanceof Error ? error.message : String(error)}\n`
+            `WARNING: LIFECYCLE_LOCK_CONFLICT: lock=${redactPath(originalPath, normalizedTarget)}; claimed=${redactPath(claimedPath, normalizedTarget)}; message=${error instanceof Error ? error.message : String(error)}\n`
         );
+        throw new Error(`Disputed lifecycle lock ownership conflict; canonical publication refused: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 
@@ -765,9 +766,10 @@ export async function withLifecycleOperationLockAsync<T>(
         lastLifecycleLockTelemetry = { ...lockResult.telemetry, queueWaitMs };
         return await runWithinLifecycleAsyncContext(normalizedTarget, callback);
     } finally {
-        if (release) {
-            release();
+        try {
+            if (release) release();
+        } finally {
+            removeLifecycleAsyncQueueEntry(normalizedTarget, queueState, queueEntry);
         }
-        removeLifecycleAsyncQueueEntry(normalizedTarget, queueState, queueEntry);
     }
 }

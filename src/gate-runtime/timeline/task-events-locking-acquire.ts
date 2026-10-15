@@ -10,6 +10,7 @@ import { claimOwnedLockForRelease, isRetryableLockAcquireError, removeLockPath, 
 import { formatLockDiagnostic, inspectLock, tryRemoveStaleLock } from './task-events-locking-inspection';
 
 export function acquireFilesystemLock(lockPath: string, options: LockOptions = {}): { handle: LockHandle; telemetry: AcquireLockTelemetry } {
+    const projectRoot = options.projectRoot ? path.resolve(options.projectRoot) : undefined;
     const timeoutMs = toPositiveInteger(options.timeoutMs, DEFAULT_LOCK_TIMEOUT_MS);
     const retryMs = toPositiveInteger(options.retryMs, DEFAULT_LOCK_RETRY_MS);
     const staleMs = toPositiveInteger(options.staleMs, DEFAULT_LOCK_STALE_MS);
@@ -36,7 +37,7 @@ export function acquireFilesystemLock(lockPath: string, options: LockOptions = {
             }
             const elapsedMs = Date.now() - startedAt;
             return {
-                handle: { lockPath, lockId },
+                handle: { lockPath, lockId, ...(projectRoot ? { projectRoot } : {}) },
                 telemetry: {
                     retries,
                     elapsedMs,
@@ -61,7 +62,7 @@ export function acquireFilesystemLock(lockPath: string, options: LockOptions = {
                 if (activeReleaseIntentLockId) {
                     releaseIntentLockId = activeReleaseIntentLockId;
                 } else {
-                    const staleAttempt = tryRemoveStaleLock(lockPath, staleMs, options);
+                    const staleAttempt = tryRemoveStaleLock(lockPath, staleMs, { ...options, projectRoot });
                     lastInspection = staleAttempt.inspection;
                     releaseIntentLockId = lastInspection.metadata.lock_id;
                     if (staleAttempt.removed) {
@@ -127,6 +128,7 @@ export function acquireFilesystemLock(lockPath: string, options: LockOptions = {
 }
 
 export async function acquireFilesystemLockAsync(lockPath: string, options: LockOptions = {}): Promise<{ handle: LockHandle; telemetry: AcquireLockTelemetry }> {
+    const projectRoot = options.projectRoot ? path.resolve(options.projectRoot) : undefined;
     const timeoutMs = toPositiveInteger(options.timeoutMs, DEFAULT_LOCK_TIMEOUT_MS);
     const retryMs = toPositiveInteger(options.retryMs, DEFAULT_LOCK_RETRY_MS);
     const staleMs = toPositiveInteger(options.staleMs, DEFAULT_LOCK_STALE_MS);
@@ -160,7 +162,7 @@ export async function acquireFilesystemLockAsync(lockPath: string, options: Lock
             }
             const heartbeatTimer = startLockHeartbeat(lockPath, lockId, options);
             return {
-                handle: { lockPath, lockId, heartbeatTimer },
+                handle: { lockPath, lockId, heartbeatTimer, ...(projectRoot ? { projectRoot } : {}) },
                 telemetry: {
                     retries,
                     elapsedMs,
@@ -185,7 +187,7 @@ export async function acquireFilesystemLockAsync(lockPath: string, options: Lock
                 if (activeReleaseIntentLockId) {
                     releaseIntentLockId = activeReleaseIntentLockId;
                 } else {
-                    const staleAttempt = tryRemoveStaleLock(lockPath, staleMs, options);
+                    const staleAttempt = tryRemoveStaleLock(lockPath, staleMs, { ...options, projectRoot });
                     lastInspection = staleAttempt.inspection;
                     releaseIntentLockId = lastInspection.metadata.lock_id;
                     if (staleAttempt.removed) {
@@ -261,7 +263,7 @@ export function releaseFilesystemLock(lockHandle: LockHandle | null): void {
     if (lockHandle.heartbeatTimer) {
         clearInterval(lockHandle.heartbeatTimer);
     }
-    const claimedPath = claimOwnedLockForRelease(lockHandle.lockPath, lockHandle.lockId);
+    const claimedPath = claimOwnedLockForRelease(lockHandle.lockPath, lockHandle.lockId, lockHandle.projectRoot);
     if (!claimedPath) {
         return;
     }
