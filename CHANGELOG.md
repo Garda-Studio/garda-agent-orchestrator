@@ -1,5 +1,8 @@
 # Changelog
 
+- Include the existing manual-CI and provider-evidence documents in the readiness
+  fixture so packaging preconditions do not mask manual-workflow checks (T-209).
+
 - Preserve authenticated controller identity for rejected-review correction and
   scope historical correction failures to a hash-bound evidence-only review
   restart with current independent reviews, without replaying unchanged compile.

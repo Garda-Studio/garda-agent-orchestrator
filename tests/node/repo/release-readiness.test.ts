@@ -131,10 +131,12 @@ function buildPackageJson(): string {
             'docs/database/sqlite-persistence.md',
             'docs/database/sqlite-query-adoption-evidence.md',
             'docs/findings-contracts.md',
+            'docs/manual-ci.md',
             'docs/node-runtime-contract.md',
             'docs/node-platform-foundation.md',
             'docs/operator-consistency-runbook.md',
             'docs/orchestrator-work-and-isolation.md',
+            'docs/provider-client-evidence.md',
             'docs/providers.md',
             'docs/release-readiness.md',
             'docs/secret-scanning.md',
@@ -349,10 +351,12 @@ function createReadinessFixture(openChecklistItem?: string): string {
             '- docs/database/sqlite-persistence.md',
             '- docs/database/sqlite-query-adoption-evidence.md',
             '- docs/findings-contracts.md',
+            '- docs/manual-ci.md',
             '- docs/node-platform-foundation.md',
             '- docs/node-runtime-contract.md',
             '- docs/operator-consistency-runbook.md',
             '- docs/orchestrator-work-and-isolation.md',
+            '- docs/provider-client-evidence.md',
             '- docs/providers.md',
             '- docs/release-readiness.md',
             '- docs/work-example.md',
@@ -377,8 +381,10 @@ function createReadinessFixture(openChecklistItem?: string): string {
     writeFile(path.join(repoRoot, 'docs', 'database', 'sqlite-persistence.md'), '# SQLite Persistence\n');
     writeFile(path.join(repoRoot, 'docs', 'database', 'sqlite-query-adoption-evidence.md'), '# SQLite Query Adoption Evidence\n');
     writeFile(path.join(repoRoot, 'docs', 'findings-contracts.md'), '# Findings Contracts\n');
+    writeFile(path.join(repoRoot, 'docs', 'manual-ci.md'), '# Manual CI\n');
     writeFile(path.join(repoRoot, 'docs', 'node-runtime-contract.md'), '# Node Runtime Contract\n');
     writeFile(path.join(repoRoot, 'docs', 'orchestrator-work-and-isolation.md'), '# Orchestrator Work And Isolation\n');
+    writeFile(path.join(repoRoot, 'docs', 'provider-client-evidence.md'), '# Provider Client Evidence\n');
     writeFile(path.join(repoRoot, 'docs', 'providers.md'), '# Providers\n');
     writeFile(path.join(repoRoot, 'docs', 'secret-scanning.md'), '# Secret Scanning\n');
     writeFile(path.join(repoRoot, 'docs', 'work-example.md'), '# Work Example\n');
