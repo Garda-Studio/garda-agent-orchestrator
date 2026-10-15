@@ -13,6 +13,31 @@ import { recoveryCrashWorkerPath } from './fixtures/disposable-recovery-crash-wo
 
 type Phase = 'pending' | 'unlinked' | 'before-finished';
 
+test('crash readiness hides empty and partial marker bytes until publication', t => {
+    const worker = require('./fixtures/disposable-recovery-crash-worker') as object;
+    const publishCrashMarker = Reflect.get(worker, 'publishCrashMarker') as
+        ((marker: string, phase: string) => void) | undefined;
+    assert.ok(typeof publishCrashMarker === 'function', 'Crash readiness requires an atomic marker publisher.');
+    const sync = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-disposable-marker-'));
+    t.after(() => fs.rmSync(sync, { recursive: true, force: true }));
+    const marker = path.join(sync, 'paused.json');
+    const rawFs = require('node:fs') as typeof fs, originalWrite = rawFs.writeFileSync;
+    t.mock.method(rawFs, 'writeFileSync', ((...args: Parameters<typeof fs.writeFileSync>) => {
+        const [file, data, options] = args;
+        originalWrite(file, '', options);
+        assert.equal(fs.existsSync(marker), false, 'creating the file must not announce readiness');
+        assert.throws(() => JSON.parse(fs.readFileSync(file, 'utf8')), SyntaxError);
+        originalWrite(file, '{"pid":');
+        assert.equal(fs.existsSync(marker), false, 'partial JSON must not announce readiness');
+        assert.throws(() => JSON.parse(fs.readFileSync(file, 'utf8')), SyntaxError);
+        originalWrite(file, data);
+        assert.equal(fs.existsSync(marker), false, 'ready path must wait for complete publication');
+    }) as typeof fs.writeFileSync);
+    publishCrashMarker(marker, 'pending');
+    assert.deepEqual(JSON.parse(fs.readFileSync(marker, 'utf8')), { pid: process.pid, phase: 'pending' });
+    assert.deepEqual(fs.readdirSync(sync), ['paused.json']);
+});
+
 async function stopAt(t: TestContext, f: ReturnType<typeof recoveryFixture>, phase: Phase) {
     const sync = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-disposable-crash-'));
     t.after(() => fs.rmSync(sync, { recursive: true, force: true }));

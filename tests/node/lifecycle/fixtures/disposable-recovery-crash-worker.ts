@@ -6,6 +6,12 @@ import { readOwnedDisposableArtifactRecoverySnapshot } from '../../../../src/lif
 
 export const recoveryCrashWorkerPath = __filename;
 
+export function publishCrashMarker(marker: string, phase: string): void {
+    const pending = `${marker}.pending`;
+    fs.writeFileSync(pending, JSON.stringify({ pid: process.pid, phase }) + '\n', { flag: 'wx' });
+    fs.renameSync(pending, marker);
+}
+
 function runCrashWorker(): void {
     const [optionsFile, marker, phase, payload] = process.argv.slice(2);
     const options = JSON.parse(fs.readFileSync(optionsFile, 'utf8')) as OwnedDisposableArtifactJournalOptions;
@@ -14,7 +20,7 @@ function runCrashWorker(): void {
     const rawFs = require('node:fs') as typeof fs;
     const originalUnlink = rawFs.unlinkSync, originalOpen = rawFs.openSync;
     function pause(): never {
-        fs.writeFileSync(marker, JSON.stringify({ pid: process.pid, phase }) + '\n');
+        publishCrashMarker(marker, phase);
         const waiter = new Int32Array(new SharedArrayBuffer(4));
         for (;;) Atomics.wait(waiter, 0, 0);
     }

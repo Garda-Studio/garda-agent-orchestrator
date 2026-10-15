@@ -1,5 +1,9 @@
 # Changelog
 
+- Publish disposable-recovery crash readiness markers only after their complete
+  JSON record has been written, preserving accepted worker initialization guards
+  and native platform-specific recovery assertions.
+
 ## Shared recipe inspection evidence
 
 - Reuse current native task, staged-scope and retained recipe observations inside one read-only inspection batch.
