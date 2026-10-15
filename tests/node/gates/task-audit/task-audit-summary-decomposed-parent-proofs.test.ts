@@ -4,11 +4,139 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { deflateSync, inflateSync } from 'node:zlib';
 
 const fs: typeof import('node:fs') = require('node:fs');
 const modulePath = '../../../../src/gates/task-audit/task-audit-summary-decomposed-parent-proofs';
 const roots: string[] = [];
 const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+
+type GitSource = { commitSha: string; treeSha: string; parentCommitSha: string | null };
+function gitValidator(): (root: string, source: GitSource) => void {
+    const validate = require(modulePath).validateNativeChildGitSource;
+    assert.equal(typeof validate, 'function', 'bounded native Git source validator must exist');
+    return validate;
+}
+function proofGit(root: string, args: string[], input?: string): string {
+    const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', timeout: 10000, input });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+}
+function gitFixture() {
+    const f = fixture();
+    proofGit(f.root, ['init']);
+    proofGit(f.root, ['config', 'user.name', 'Proof Test']);
+    proofGit(f.root, ['config', 'user.email', 'proof@example.invalid']);
+    proofGit(f.root, ['add', 'proofs/record.json']);
+    proofGit(f.root, ['commit', '-m', 'baseline']);
+    const parentCommitSha = proofGit(f.root, ['rev-parse', 'HEAD']);
+    proofGit(f.root, ['commit', '--allow-empty', '-m', 'accepted source']);
+    const source = { commitSha: proofGit(f.root, ['rev-parse', 'HEAD']),
+        treeSha: proofGit(f.root, ['rev-parse', 'HEAD^{tree}']), parentCommitSha };
+    return { ...f, source };
+}
+
+describe('native child Git source provenance', () => {
+    it('validates real root, accepted parent/tree and later ancestry with one raw object batch', () => {
+        const validate = gitValidator(), f = gitFixture();
+        validate(f.root, f.source);
+        validate(f.root, { ...f.source, commitSha: f.source.parentCommitSha!, parentCommitSha: null });
+        for (let i = 0; i < 4; i++) proofGit(f.root, ['commit', '--allow-empty', '-m', 'later']);
+        const api = require('node:child_process'), original = api.execFileSync;
+        let batches = 0, commands = 0;
+        mock.method(api, 'execFileSync', (...args: unknown[]) => {
+            if (args[0] === 'git') {
+                commands++;
+                if ((args[1] as string[]).includes('--batch')) batches++;
+            }
+            return Reflect.apply(original, api, args);
+        });
+        validate(f.root, f.source);
+        assert.equal(batches, 1, 'commit and tree content use one batch');
+        assert.ok(commands <= 7, `Git process count must stay bounded, observed ${commands}`);
+    });
+
+    it('rejects foreign root, wrong tree/parent and a commit outside the current lineage', () => {
+        const validate = gitValidator(), f = gitFixture();
+        assert.throws(() => validate(path.join(f.root, 'proofs'), f.source), /root/iu);
+        assert.throws(() => validate(f.root, { ...f.source, treeSha: '0'.repeat(40) }));
+        assert.throws(() => validate(f.root, { ...f.source, parentCommitSha: null }), /parent/iu);
+        assert.throws(() => validate(f.root, { ...f.source, commitSha: '--help' }), /identity/iu);
+        proofGit(f.root, ['checkout', '--orphan', 'unrelated']);
+        proofGit(f.root, ['commit', '--allow-empty', '-m', 'unrelated root']);
+        assert.throws(() => validate(f.root, f.source));
+    });
+
+    it('rejects inherited Git repository overrides in isolated child environments', () => {
+        gitValidator();
+        const f = gitFixture();
+        for (const [key, value] of [['GIT_DIR', path.join(f.root, '.git')], ['GIT_WORK_TREE', f.root],
+            ['GIT_CONFIG_COUNT', '0'], ['GIT_OBJECT_DIRECTORY', path.join(f.root, '.git/objects')]]) {
+            const script = `const a=require('node:assert/strict'); const m=require(process.argv[1]);
+                a.throws(()=>m.validateNativeChildGitSource(process.argv[2],JSON.parse(process.argv[3])),/environment/iu);`;
+            const result = spawnSync(process.execPath, ['-e', script, require.resolve(modulePath), f.root,
+                JSON.stringify(f.source)], { encoding: 'utf8', timeout: 10000, env: { ...process.env, [key!]: value } });
+            assert.equal(result.status, 0, `${key}: ${result.stderr}`);
+        }
+    });
+
+    it('rejects a graft that makes an unrelated HEAD appear descended from accepted source', () => {
+        const validate = gitValidator(), f = gitFixture();
+        proofGit(f.root, ['checkout', '--orphan', 'unrelated']);
+        proofGit(f.root, ['commit', '--allow-empty', '-m', 'unrelated root']);
+        fs.writeFileSync(path.join(f.root, '.git/info/grafts'),
+            `${proofGit(f.root, ['rev-parse', 'HEAD'])} ${f.source.commitSha}\n`);
+        assert.throws(() => validate(f.root, f.source), /graft|ancestry|parent/iu);
+    });
+
+    for (const type of ['commit', 'tree'] as const) it(`rejects replaced raw ${type} bytes and missing objects`, () => {
+        const validate = gitValidator(), f = gitFixture();
+        const sha = type === 'commit' ? f.source.commitSha : f.source.treeSha;
+        const file = path.join(f.root, '.git/objects', sha.slice(0, 2), sha.slice(2));
+        const original = fs.readFileSync(file), bytes = inflateSync(original);
+        bytes[bytes.length - 1] = bytes[bytes.length - 1]! ^ 1;
+        fs.chmodSync(file, 0o600);
+        fs.writeFileSync(file, deflateSync(bytes));
+        assert.throws(() => validate(f.root, f.source), /Git|object|identity/iu);
+        fs.writeFileSync(file, original);
+        fs.renameSync(file, file + '.held');
+        assert.throws(() => validate(f.root, f.source));
+        fs.renameSync(file + '.held', file);
+        validate(f.root, f.source);
+    });
+
+    it('rejects incomplete or oversized raw batch frames', () => {
+        const validate = gitValidator(), f = gitFixture();
+        const api = require('node:child_process'), original = api.execFileSync;
+        for (const output of [Buffer.from(`${f.source.commitSha} commit 8388609\n`),
+            Buffer.from(`${f.source.commitSha} commit 5\nabc`)]) {
+            const stub = mock.method(api, 'execFileSync', (...args: unknown[]) =>
+                (args[1] as string[]).includes('--batch') ? output : Reflect.apply(original, api, args));
+            assert.throws(() => validate(f.root, f.source), /bounded|object|frame/iu);
+            stub.mock.restore();
+        }
+    });
+
+    it('rejects an incomplete ancestry projection despite a successful ancestor probe', () => {
+        const validate = gitValidator(), f = gitFixture();
+        proofGit(f.root, ['commit', '--allow-empty', '-m', 'later']);
+        const api = require('node:child_process'), original = api.execFileSync;
+        mock.method(api, 'execFileSync', (...args: unknown[]) =>
+            (args[1] as string[]).includes('rev-list') ? '' : Reflect.apply(original, api, args));
+        assert.throws(() => validate(f.root, f.source), /ancestry/iu);
+    });
+
+    it('rejects a late parent header that native Git does not treat as ancestry', () => {
+        const validate = gitValidator(), f = gitFixture();
+        const bytes = `tree ${f.source.treeSha}\nauthor Proof <proof@example.invalid> 1 +0000\n`
+            + `committer Proof <proof@example.invalid> 1 +0000\nparent ${f.source.commitSha}\n\nlate parent\n`;
+        const commitSha = proofGit(f.root, ['hash-object', '--literally', '-w', '-t', 'commit', '--stdin'], bytes);
+        proofGit(f.root, ['update-ref', 'HEAD', commitSha]);
+        assert.equal(proofGit(f.root, ['rev-list', '--parents', '-1', 'HEAD']), commitSha,
+            'native Git must actually see a root rather than the late parent claim');
+        assert.throws(() => validate(f.root, { ...f.source, commitSha, parentCommitSha: f.source.commitSha }), /parent|header/iu);
+    });
+});
 
 function reader(): (repoRoot: string, artifactPath: string, expectedSha256: string) => Record<string, unknown> {
     let loaded: Record<string, unknown> = {};

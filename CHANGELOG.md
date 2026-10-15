@@ -1,5 +1,7 @@
 # Changelog
 
+- Added bounded Git-only corroboration for native child source commit, parent and raw tree identity; batch object reads reject inherited repository overrides, grafts and altered object bytes without granting parent audit acceptance.
+
 - Publish disposable-recovery crash readiness markers only after their complete
   JSON record has been written, preserving accepted worker initialization guards
   and native platform-specific recovery assertions.
