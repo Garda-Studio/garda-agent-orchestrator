@@ -1,5 +1,8 @@
 # Changelog
 
+- Verify native command composition proofs against exact final source, original
+  command/coverage and retained output without granting parent acceptance.
+
 - Include the existing manual-CI and provider-evidence documents in the readiness
   fixture so packaging preconditions do not mask manual-workflow checks (T-209).
 

@@ -7,6 +7,8 @@ import { isPlainRecord } from '../../core/records';
 import { runGit, runGitBinary } from '../../core/git-helpers';
 import { isCanonicalTaskId } from '../../core/task-ids';
 import { joinOrchestratorPath } from '../../core/orchestrator-paths';
+import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
+import { resolveWorkflowConfigPath } from '../../core/full-suite-validation-config';
 import { authenticateLocalCommitWorkflowAudit, resolveLocalCommitAvailability } from '../../core/auth/local-commit-availability';
 import { inspectTaskEventFile, withTaskTimelineReadSnapshot } from '../../gate-runtime/task-events';
 import {
@@ -232,11 +234,10 @@ export function validateNativeChildGitSource(repoRoot: string, source: NativeChi
     }
 }
 
-// Byte fidelity is not native source acceptance or aggregate audit authority.
-export function readParentAuditProofRecord(
-    repoRoot: string, artifactPath: string, expectedSha256: string
-): Record<string, unknown> {
-    if (typeof expectedSha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(expectedSha256)) {
+function readParentAuditProofBytes(
+    repoRoot: string, artifactPath: string, expectedSha256?: string
+): Buffer {
+    if (expectedSha256 !== undefined && (typeof expectedSha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(expectedSha256))) {
         throw new Error('Parent-audit proof requires an exact SHA256 evidence binding.');
     }
     const binding = bindContainedDestination(repoRoot, artifactPath);
@@ -269,12 +270,159 @@ export function readParentAuditProofRecord(
             throw new Error('Parent-audit proof changed during its bounded read.');
         }
         const content = bytes.subarray(0, length);
-        if (createHash('sha256').update(content).digest('hex') !== expectedSha256) {
+        if (expectedSha256 !== undefined && createHash('sha256').update(content).digest('hex') !== expectedSha256) {
             throw new Error('Parent-audit proof bytes do not match their evidence binding.');
         }
-        const record: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(content));
-        if (!isPlainRecord(record)) throw new Error('Parent-audit proof must contain a JSON record.');
         assertContainedDestination(binding);
-        return record;
+        return content;
     } finally { fs.closeSync(descriptor); }
+}
+
+// Byte fidelity is not native source acceptance or aggregate audit authority.
+export function readParentAuditProofRecord(
+    repoRoot: string, artifactPath: string, expectedSha256: string
+): Record<string, unknown> {
+    if (typeof expectedSha256 !== 'string' || !SHA256_PATTERN.test(expectedSha256)) {
+        throw new Error('Parent-audit proof requires an exact SHA256 evidence binding.');
+    }
+    const bytes = readParentAuditProofBytes(repoRoot, artifactPath, expectedSha256);
+    const record: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    if (!isPlainRecord(record)) throw new Error('Parent-audit proof must contain a JSON record.');
+    return record;
+}
+
+export interface NativeSourceCompositionRequest {
+    taskId: string;
+    artifactPath: string;
+    artifactSha256: string;
+    command: string;
+    coverageContractSha256: string | null;
+    source: NativeChildGitSource;
+}
+
+function compositionReviewPath(root: string, input: unknown): string {
+    if (typeof input !== 'string' || !input) throw new Error('Composition evidence path is missing.');
+    const file = path.resolve(root, input);
+    const relative = path.relative(joinOrchestratorPath(root, 'runtime/reviews'), file);
+    if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
+        throw new Error('Composition evidence must belong to the native reviews root.');
+    }
+    return file;
+}
+
+function currentCompositionSource(root: string, source: NativeChildGitSource): Record<string, unknown> {
+    const [head, tree] = runGit(root, ['--no-replace-objects', 'rev-parse', 'HEAD', 'HEAD^{tree}'], SOURCE_GIT_OPTIONS)
+        .trim().split(/\r?\n/u);
+    const status = runGit(root, ['--no-replace-objects', 'status', '--porcelain=v1', '--untracked-files=all', '-z'], SOURCE_GIT_OPTIONS);
+    const tracked = runGit(root, ['--no-replace-objects', 'ls-files', '--cached', '-v', '-z'],
+        { ...SOURCE_GIT_OPTIONS, maxBuffer: MAX_PROOF_INPUT_BYTES });
+    if (head !== source.commitSha || tree !== source.treeSha || status !== ''
+        || tracked.split('\0').filter(Boolean).some(entry => !entry.startsWith('H '))) {
+        throw new Error('Composition proof requires the exact clean final Git source.');
+    }
+    const hash = (file: string) => createHash('sha256').update(readParentAuditProofBytes(root, file)).digest('hex');
+    return { repo_root: root, source_head_sha: head, source_tree_sha: tree,
+        source_status_sha256: createHash('sha256').update(status).digest('hex'), clean_worktree: true,
+        task_queue_sha256: hash(path.join(root, TASK_QUEUE_FILENAME)),
+        workflow_config_sha256: hash(resolveWorkflowConfigPath(root)) };
+}
+
+function currentCompositionEvent(root: string, file: string, request: NativeSourceCompositionRequest): {
+    details: Record<string, unknown>; cycleUtc: string; eventUtc: string; previousCommandUtc: string | null;
+} {
+    let selected: Readonly<Record<string, unknown>> | undefined, selectedLine = 0, cycleLine = 0;
+    let proofReferences = 0, cycleUtc = '', previousCommandUtc: string | null = null;
+    const inspection = inspectTaskEventFile(file, request.taskId, { onIntegrityEvent: (event, line) => {
+        if (['TASK_MODE_ENTERED', 'PREFLIGHT_CLASSIFIED'].includes(String(event.event_type))) {
+            cycleLine = line; cycleUtc = String(event.timestamp_utc);
+        }
+        if (event.event_type === 'INTERMEDIATE_COMMAND_RUN' && isPlainRecord(event.details)
+            && (event.details.artifact_sha256 === request.artifactSha256
+                || path.resolve(root, String(event.details.artifact_path)) === path.resolve(root, request.artifactPath))) {
+            proofReferences++;
+        }
+        if (event.event_type === 'INTERMEDIATE_COMMAND_RUN' && isPlainRecord(event.details)
+            && event.details.command === request.command) {
+            if (selected) previousCommandUtc = String(selected.timestamp_utc);
+            selected = event; selectedLine = line;
+        }
+    } });
+    if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(inspection.status) || inspection.violations.length
+        || !selected || selected.schema_version !== 2 || selected.task_id !== request.taskId
+        || !['PASS', 'PASSED'].includes(String(selected.outcome)) || cycleLine === 0 || selectedLine <= cycleLine
+        || proofReferences !== 1 || !isPlainRecord(selected.details) || selected.details.exit_code !== 0
+        || selected.details.artifact_sha256 !== request.artifactSha256
+        || path.resolve(root, String(selected.details.artifact_path)) !== path.resolve(root, request.artifactPath)) {
+        throw new Error('Composition proof lacks the latest current-cycle native successful command event.');
+    }
+    return { details: selected.details, cycleUtc, eventUtc: String(selected.timestamp_utc), previousCommandUtc };
+}
+
+function validateCompositionRecord(record: Record<string, unknown>, native: ReturnType<typeof currentCompositionEvent>,
+    request: NativeSourceCompositionRequest, source: Record<string, unknown>): void {
+    const event = native.details, generated = Date.parse(String(record.generated_utc));
+    const cycle = Date.parse(native.cycleUtc), occurred = Date.parse(native.eventUtc);
+    const previous = native.previousCommandUtc === null ? null : Date.parse(native.previousCommandUtc);
+    const composition = record.source_composition;
+    const before = isPlainRecord(composition) && isPlainRecord(composition.before) ? composition.before : null;
+    const after = isPlainRecord(composition) && isPlainRecord(composition.after) ? composition.after : null;
+    if (![generated, cycle, occurred].every(Number.isFinite) || generated < cycle || generated > occurred
+        || (previous !== null && (!Number.isFinite(previous) || generated <= previous))
+        || record.schema_version !== 1 || record.event_source !== 'native-intermediate-command'
+        || record.task_id !== request.taskId || record.command !== request.command || record.status !== 'PASSED'
+        || record.exit_code !== 0 || record.timed_out !== false || record.cancelled !== false || record.expected_failure === true
+        || !['node-test', 'targeted-test', 'typecheck', 'validation'].includes(String(record.command_source))
+        || !Number.isFinite(record.duration_ms) || Number(record.duration_ms) < 0
+        || (record.coverage_contract_sha256 ?? null) !== request.coverageContractSha256
+        || (event.coverage_contract_sha256 ?? null) !== request.coverageContractSha256
+        || !isPlainRecord(composition) || composition.schema_version !== 1 || composition.status !== 'STABLE_CLEAN'
+        || !before || !after
+        || Object.entries(source).some(([key, value]) => before[key] !== value || after[key] !== value)
+        || event.source_composition_sha256 !== createHash('sha256').update(JSON.stringify(composition)).digest('hex')) {
+        throw new Error('Native composition task, command, coverage, success or final-source binding is invalid.');
+    }
+    for (const [recordKey, eventKey] of [['output_artifact', 'output_artifact_path'],
+        ['output_artifact_sha256', 'output_artifact_sha256'], ['output_artifact_size_bytes', 'output_artifact_size_bytes'],
+        ['command_source', 'command_source'], ['preflight_path', 'preflight_path'], ['preflight_sha256', 'preflight_sha256']]) {
+        if (record[recordKey] !== event[eventKey]) throw new Error('Native composition command/output event binding differs.');
+    }
+}
+
+/** The caller supplies the original required command/coverage; this proves execution, not parent acceptance. */
+export function readNativeSourceCompositionProof(repoRoot: string, request: NativeSourceCompositionRequest): {
+    taskId: string; command: string; processStatus: 'PASSED'; outputSha256: string;
+} {
+    if (!isCanonicalTaskId(request.taskId) || typeof request.command !== 'string' || !request.command.trim()
+        || (request.coverageContractSha256 !== null && !SHA256_PATTERN.test(request.coverageContractSha256))) {
+        throw new Error('Composition proof requires exact task, original command and coverage identity.');
+    }
+    const root = fs.realpathSync.native(repoRoot), eventsRoot = joinOrchestratorPath(root, 'runtime/task-events');
+    validateNativeChildGitSource(root, request.source);
+    return withTaskTimelineReadSnapshot(eventsRoot, request.taskId, () => {
+        const timeline = path.join(eventsRoot, request.taskId + '.jsonl');
+        const timelineHash = captureTaskTimelineReadSnapshotSha256(timeline);
+        const event = currentCompositionEvent(root, timeline, request);
+        const file = compositionReviewPath(root, request.artifactPath);
+        const identity = bindContainedDestination(root, file);
+        const record = readParentAuditProofRecord(root, file, request.artifactSha256);
+        const source = currentCompositionSource(root, request.source);
+        validateCompositionRecord(record, event, request, source);
+        assertNativeSourceAuthentication(root, record);
+        const output = compositionReviewPath(root, record.output_artifact);
+        const outputIdentity = bindContainedDestination(root, output);
+        const outputHash = String(record.output_artifact_sha256);
+        const bytes = readParentAuditProofBytes(root, output, outputHash);
+        if (bytes.length !== record.output_artifact_size_bytes) throw new Error('Composition output size differs.');
+        assertNativeSourceAuthentication(root, record);
+        readParentAuditProofRecord(root, file, request.artifactSha256);
+        readParentAuditProofBytes(root, output, outputHash);
+        if (JSON.stringify(currentCompositionSource(root, request.source)) !== JSON.stringify(source)) {
+            throw new Error('Composition source changed during proof consumption.');
+        }
+        assertNativeSourceAuthentication(root, record);
+        assertContainedDestination(identity);
+        assertContainedDestination(outputIdentity);
+        assertTaskTimelineReadSnapshotCurrent(timeline, timelineHash);
+        return { taskId: request.taskId, command: request.command, processStatus: 'PASSED', outputSha256: outputHash };
+    });
 }

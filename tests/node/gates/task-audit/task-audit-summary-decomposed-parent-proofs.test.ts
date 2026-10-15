@@ -5,8 +5,8 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { deflateSync, inflateSync } from 'node:zlib';
-import { createTempRepo } from '../../cli/commands/gate-test-helpers';
-import { runHumanCommitCommand } from '../../../../src/cli/commands/gates';
+import { createTempRepo, seedTaskQueue } from '../../cli/commands/gate-test-helpers';
+import { runHumanCommitCommand, runIntermediateCommandCommand } from '../../../../src/cli/commands/gates';
 import { handleSet } from '../../../../src/cli/commands/workflow/workflow-command-set';
 import { buildDefaultWorkflowConfig } from '../../../../src/core/workflow-config';
 import { buildScopeContentFingerprint } from '../../../../src/gates/compile/compile-gate';
@@ -18,6 +18,169 @@ const roots: string[] = [];
 const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 const childTaskId = 'T-PROOF-2';
 const authApi = require('../../../../src/core/auth/local-commit-availability') as typeof import('../../../../src/core/auth/local-commit-availability');
+
+function compositionReader(): (root: string, options: Record<string, unknown>) => Record<string, unknown> {
+    const read = require(modulePath).readNativeSourceCompositionProof;
+    assert.equal(typeof read, 'function', 'native composition-proof reader must exist');
+    return read;
+}
+
+async function compositionFixture(grant = true) {
+    const root = createTempRepo(); roots.push(root);
+    const taskId = 'T-COMPOSITION-1', bundle = path.join(root, 'garda-agent-orchestrator');
+    seedTaskQueue(root, taskId);
+    fs.writeFileSync(path.join(root, '.gitignore'), 'garda-agent-orchestrator/\nTASK.md\nattempt.txt\n');
+    const script = 'scripts/node-foundation/build-scripts.cjs', target = 'tests/node/composition.test.ts';
+    fs.mkdirSync(path.dirname(path.join(root, script)), { recursive: true });
+    fs.mkdirSync(path.dirname(path.join(root, target)), { recursive: true });
+    fs.writeFileSync(path.join(root, target), 'export {};\n');
+    fs.writeFileSync(path.join(root, script), [
+        "const fs=require('node:fs'); const later=fs.existsSync('attempt.txt');",
+        "fs.writeFileSync('attempt.txt','1'); console.log('actual composition output'); process.exitCode=later?7:0;"
+    ].join('\n'));
+    proofGit(root, ['init']);
+    proofGit(root, ['config', 'user.name', 'Composition Tests']);
+    proofGit(root, ['config', 'user.email', 'composition@example.invalid']);
+    proofGit(root, ['add', '.']); proofGit(root, ['commit', '-m', 'composition source']);
+    const config = path.join(bundle, 'live/config/workflow-config.json');
+    fs.mkdirSync(path.dirname(config), { recursive: true });
+    fs.writeFileSync(config, JSON.stringify(buildDefaultWorkflowConfig()) + '\n');
+    if (grant) handleSet({ targetRoot: root, localCommitEnabled: 'true', json: true,
+        operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() });
+    appendMandatoryTaskEvent(bundle, taskId, 'TASK_MODE_ENTERED', 'PASS', 'Isolated composition fixture.', {});
+    const command = `node ${script} test.js ${target}`;
+    const run = () => runIntermediateCommandCommand({ repoRoot: root, taskId, command, commandSource: 'targeted-test',
+        coverageContractSha256: 'a'.repeat(64), timeoutMs: 10000 });
+    assert.equal((await run()).exitCode, 0);
+    const eventFile = path.join(bundle, 'runtime/task-events', taskId + '.jsonl');
+    const events = fs.readFileSync(eventFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    const event = [...events].reverse().find((item: Record<string, unknown>) => item.event_type === 'INTERMEDIATE_COMMAND_RUN');
+    const file = event.details.artifact_path as string, bytes = fs.readFileSync(file);
+    const options = { taskId, command, artifactPath: file, artifactSha256: digest(bytes),
+        coverageContractSha256: 'a'.repeat(64), source: { commitSha: proofGit(root, ['rev-parse', 'HEAD']),
+            treeSha: proofGit(root, ['rev-parse', 'HEAD^{tree}']), parentCommitSha: null } };
+    return { root, bundle, taskId, script, run, eventFile, events, event, file, bytes, options,
+        output: String(JSON.parse(bytes.toString()).output_artifact) };
+}
+
+function alterCompositionFixture(f: Awaited<ReturnType<typeof compositionFixture>>,
+    change: (record: Record<string, unknown>) => void, sign = true) {
+    let record = JSON.parse(f.bytes.toString()); change(record);
+    if (sign) record = authApi.authenticateLocalCommitWorkflowAudit(f.root, record, false);
+    const bytes = Buffer.from(JSON.stringify(record, null, 2) + '\n');
+    fs.writeFileSync(f.file, bytes); f.options.artifactSha256 = digest(bytes);
+    f.event.details.artifact_sha256 = digest(bytes);
+    f.event.details.source_composition_sha256 = digest(Buffer.from(JSON.stringify(record.source_composition)));
+    f.event.integrity.event_sha256 = buildEventIntegrityHash(f.event);
+    fs.writeFileSync(f.eventFile, f.events.map((event: unknown) => JSON.stringify(event)).join('\n') + '\n');
+}
+
+describe('native final-source composition proof', () => {
+    it('verifies actual current signed source and output without granting parent acceptance', async () => {
+        const read = compositionReader(), f = await compositionFixture();
+        const timeline = fs.readFileSync(f.eventFile), result = read(f.root, f.options);
+        assert.equal(result.taskId, f.taskId); assert.equal(result.command, f.options.command);
+        assert.equal(result.processStatus, 'PASSED'); assert.equal('parentPass' in result, false);
+        assert.equal(result.outputSha256, digest(fs.readFileSync(f.output)));
+        assert.deepEqual(fs.readFileSync(f.eventFile), timeline); assert.deepEqual(fs.readFileSync(f.file), f.bytes);
+        assert.equal(proofGit(f.root, ['status', '--porcelain']), '');
+    });
+
+    const invalid: Array<[string, (record: any) => void]> = [
+        ['foreign task', p => { p.task_id = 'T-FOREIGN-1'; }],
+        ['changed command', p => { p.command = 'node different.cjs'; }],
+        ['changed coverage', p => { p.coverage_contract_sha256 = 'b'.repeat(64); }],
+        ['failed', p => { p.status = 'FAILED'; p.exit_code = 7; }],
+        ['cancelled', p => { p.cancelled = true; }],
+        ['timed out', p => { p.timed_out = true; }],
+        ['expected red', p => { p.expected_failure = true; }],
+        ['unavailable source', p => { p.source_composition.status = 'UNAVAILABLE'; }],
+        ['dirty source', p => { p.source_composition.before.clean_worktree = false; }],
+        ['foreign source', p => { p.source_composition.before.repo_root = path.dirname(p.source_composition.before.repo_root); }],
+        ['changed source', p => { p.source_composition.after.source_tree_sha = '0'.repeat(40); }],
+        ['unsigned record', p => { delete p.local_commit_authentication; }]
+    ];
+    for (const [name, change] of invalid) it('rejects ' + name + ' without rewriting evidence', async () => {
+        const read = compositionReader(), f = await compositionFixture();
+        alterCompositionFixture(f, change, name !== 'unsigned record');
+        const bytes = fs.readFileSync(f.file);
+        assert.throws(() => read(f.root, f.options)); assert.deepEqual(fs.readFileSync(f.file), bytes);
+    });
+
+    it('rejects old unsigned attempts after later authority without retroactive signing', async () => {
+        const read = compositionReader(), f = await compositionFixture(false);
+        handleSet({ targetRoot: f.root, localCommitEnabled: 'true', json: true,
+            operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() });
+        assert.throws(() => read(f.root, f.options)); assert.deepEqual(fs.readFileSync(f.file), f.bytes);
+    });
+
+    it('rejects missing or changed output, dirty current source and changed final commit', async () => {
+        const read = compositionReader(), f = await compositionFixture(), output = fs.readFileSync(f.output);
+        fs.appendFileSync(f.output, 'changed'); assert.throws(() => read(f.root, f.options));
+        fs.unlinkSync(f.output); assert.throws(() => read(f.root, f.options)); fs.writeFileSync(f.output, output);
+        fs.appendFileSync(path.join(f.root, f.script), '\n'); assert.throws(() => read(f.root, f.options));
+        proofGit(f.root, ['checkout', '--', f.script]);
+        proofGit(f.root, ['commit', '--allow-empty', '-m', 'later final source']);
+        assert.throws(() => read(f.root, f.options));
+    });
+
+    it('rejects a later actual failed invocation and a new task cycle', async () => {
+        const read = compositionReader(), f = await compositionFixture();
+        assert.equal((await f.run()).exitCode, 7); assert.throws(() => read(f.root, f.options));
+        appendMandatoryTaskEvent(f.bundle, f.taskId, 'TASK_MODE_ENTERED', 'PASS', 'Later isolated cycle.', {});
+        assert.throws(() => read(f.root, f.options));
+    });
+
+    describe('security review regressions', () => {
+        for (const flag of ['--assume-unchanged', '--skip-worktree']) it('rejects source hidden by ' + flag, async () => {
+            const read = compositionReader(), f = await compositionFixture();
+            proofGit(f.root, ['update-index', flag, '--', f.script]);
+            fs.appendFileSync(path.join(f.root, f.script), '\n// hidden source change\n');
+            assert.equal(proofGit(f.root, ['status', '--porcelain']), '', 'Git must actually conceal this tracked edit');
+            assert.throws(() => read(f.root, f.options));
+            assert.deepEqual(fs.readFileSync(f.file), f.bytes);
+        });
+
+        it('rejects reserialized signed success after a later real failure', async () => {
+            const read = compositionReader(), f = await compositionFixture();
+            assert.equal(read(f.root, f.options).processStatus, 'PASSED');
+            assert.equal((await f.run()).exitCode, 7);
+            const bytes = Buffer.from(JSON.stringify(JSON.parse(f.bytes.toString())) + '\n');
+            const file = path.join(path.dirname(f.file), 'reserialized-success.json');
+            fs.writeFileSync(file, bytes, { flag: 'wx' });
+            f.options.artifactPath = file; f.options.artifactSha256 = digest(bytes);
+            assert.notEqual(f.options.artifactSha256, digest(f.bytes));
+            appendMandatoryTaskEvent(f.bundle, f.taskId, 'INTERMEDIATE_COMMAND_RUN', 'PASSED',
+                'Adversarial reserialization fixture; no new execution or signing.',
+                { ...f.event.details, artifact_path: file, artifact_sha256: digest(bytes) });
+            assert.throws(() => read(f.root, f.options));
+            assert.deepEqual(fs.readFileSync(f.file), f.bytes); assert.deepEqual(fs.readFileSync(file), bytes);
+        });
+
+        for (const later of ['failed invocation', 'new cycle']) it('rejects replayed success after ' + later, async () => {
+            const read = compositionReader(), f = await compositionFixture();
+            if (later === 'failed invocation') assert.equal((await f.run()).exitCode, 7);
+            else appendMandatoryTaskEvent(f.bundle, f.taskId, 'TASK_MODE_ENTERED', 'PASS', 'Later isolated cycle.', {});
+            appendMandatoryTaskEvent(f.bundle, f.taskId, 'INTERMEDIATE_COMMAND_RUN', 'PASSED',
+                'Adversarial replay fixture; no command execution.', f.event.details);
+            assert.throws(() => read(f.root, f.options));
+            assert.deepEqual(fs.readFileSync(f.file), f.bytes);
+        });
+    });
+
+    it('rejects output and timeline mutation during native authentication', async () => {
+        const read = compositionReader(), authenticate = authApi.authenticateLocalCommitWorkflowAudit;
+        for (const mutation of ['output', 'timeline']) {
+            const f = await compositionFixture(); let changed = false;
+            const stub = mock.method(authApi, 'authenticateLocalCommitWorkflowAudit', (...args: Parameters<typeof authenticate>) => {
+                const result = authenticate(...args);
+                if (!changed) { changed = true; fs.appendFileSync(mutation === 'output' ? f.output : f.eventFile, ' '); }
+                return result;
+            });
+            assert.throws(() => read(f.root, f.options)); stub.mock.restore();
+        }
+    });
+});
 
 function childReader(): (root: string, taskId: string) => Record<string, unknown> {
     const read = require(modulePath).readNativeChildSourceAcceptance;
