@@ -20,7 +20,7 @@ function rejectedCorrectionDetails(taskId = TASK_ID, reviewType = 'code'): Recor
     };
 }
 
-function seedCurrentReview(repoRoot: string, oldDetails = rejectedCorrectionDetails()) {
+function seedCurrentReview(repoRoot: string, oldDetails = rejectedCorrectionDetails(), restart?: 'bound' | 'wrong_compile') {
     const reviewsDir = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
     const eventsDir = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events');
     fs.mkdirSync(reviewsDir, { recursive: true });
@@ -36,13 +36,39 @@ function seedCurrentReview(repoRoot: string, oldDetails = rejectedCorrectionDeta
     const fixture = writeCurrentIndependentReviewFixture({
         reviewsDir, taskId: TASK_ID, preflightSha256, reviewerIdentity, provenance: null
     });
+    const correction = { event_type: 'REVIEW_OUTPUT_CORRECTION_REQUIRED', details: oldDetails };
+    const compile = { event_type: 'COMPILE_GATE_PASSED', details: {
+        preflight_path: preflightPath, preflight_hash_sha256: preflightSha256
+    } };
     const events = writeIntegrityEventSequence(eventsDir, TASK_ID, [
-        { event_type: 'TASK_MODE_ENTERED' },
-        { event_type: 'REVIEW_OUTPUT_CORRECTION_REQUIRED', details: oldDetails },
-        { event_type: 'COMPILE_GATE_PASSED', details: {
-            preflight_path: preflightPath, preflight_hash_sha256: preflightSha256
-        } }
+        { event_type: 'TASK_MODE_ENTERED' }, ...(restart ? [compile, correction] : [correction, compile])
     ]);
+    const compileEvent = events[restart ? 1 : 2];
+    let restartEvent: Record<string, unknown> | null = null;
+    if (restart) {
+        const compilePath = path.join(reviewsDir, `${TASK_ID}-compile-gate.json`);
+        writeArtifact(reviewsDir, TASK_ID, '-compile-gate.json', {
+            task_id: TASK_ID, status: 'PASSED', timestamp_utc: compileEvent.timestamp_utc,
+            preflight_path: preflightPath, preflight_hash_sha256: preflightSha256
+        });
+        const restartDetails = {
+            task_id: TASK_ID, event_type: 'REVIEW_CYCLE_RESTARTED', status: 'PASSED',
+            restart_event_schema_version: 1, detection_source: 'review_evidence_only',
+            restart_reason: 'failed_delegated_reviewer_evidence_only',
+            preflight_path: preflightPath, preflight_sha256: preflightSha256,
+            compile_evidence_path: compilePath,
+            compile_evidence_sha256: restart === 'bound' ? computeFileSha256(compilePath) : 'f'.repeat(64),
+            affected_files_count: 0, detected_changed_files_count: 0, invalidated_review_types: ['code']
+        };
+        const restartPath = path.join(reviewsDir, `${TASK_ID}-review-cycle-restart.json`);
+        writeArtifact(reviewsDir, TASK_ID, '-review-cycle-restart.json', restartDetails);
+        restartEvent = appendIntegrityEvent(eventsDir, TASK_ID, {
+            event_type: 'REVIEW_CYCLE_RESTARTED', details: {
+                ...restartDetails, restart_artifact_path: restartPath,
+                restart_artifact_sha256: computeFileSha256(restartPath)
+            }
+        });
+    }
     const invocationEvent = appendIntegrityEvent(eventsDir, TASK_ID, {
         event_type: 'REVIEWER_INVOCATION_ATTESTED', details: {
             task_id: TASK_ID, review_type: 'code', reviewer_execution_mode: 'delegated_subagent',
@@ -66,7 +92,7 @@ function seedCurrentReview(repoRoot: string, oldDetails = rejectedCorrectionDeta
         details: buildReviewRecordedTelemetryDetails(reviewsDir, TASK_ID, 'code')
     });
     appendIntegrityEvent(eventsDir, TASK_ID, { event_type: 'REVIEW_GATE_PASSED' });
-    return { reviewsDir, eventsDir, receiptPath, compileEvent: events[2] };
+    return { reviewsDir, eventsDir, receiptPath, compileEvent, restartEvent };
 }
 
 describe('task audit correction history belongs to its review cycle', () => {
@@ -74,10 +100,10 @@ describe('task audit correction history belongs to its review cycle', () => {
     afterEach(() => {
         for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
     });
-    function fixture(oldDetails?: Record<string, unknown>) {
+    function fixture(oldDetails?: Record<string, unknown>, restart?: 'bound' | 'wrong_compile') {
         const repoRoot = makeTempDir();
         roots.push(repoRoot);
-        return { repoRoot, ...seedCurrentReview(repoRoot, oldDetails) };
+        return { repoRoot, ...seedCurrentReview(repoRoot, oldDetails, restart) };
     }
     function audit(value: ReturnType<typeof fixture>) {
         return buildTaskAuditSummary({
@@ -113,6 +139,27 @@ describe('task audit correction history belongs to its review cycle', () => {
         assert.equal(result.review_findings_audit?.remaining_blocker_count, 1);
         assert.deepEqual(result.review_findings_audit?.correction_transports?.map((entry) => entry.audit_scope),
             ['SUPERSEDED_CYCLE', 'CURRENT']);
+    });
+
+    it('supersedes a rejected correction after an authenticated evidence-only restart reusing compile', () => {
+        const value = fixture(undefined, 'bound');
+        const result = audit(value);
+        assert.equal(result.integrity_status, 'PASS');
+        assert.equal(result.final_closeout.review_integrity_attestation?.status, 'INDEPENDENT_REVIEW_ATTESTED');
+        assert.equal(result.review_findings_audit?.status, 'CLEAR');
+        assert.equal(result.review_findings_audit?.correction_transports?.[0]?.audit_scope, 'SUPERSEDED_CYCLE');
+        assert.equal(result.review_findings_audit?.correction_transports?.[0]?.evidence_valid, false);
+        appendIntegrityEvent(value.eventsDir, TASK_ID, {
+            event_type: 'REVIEW_OUTPUT_CORRECTION_REQUIRED', details: rejectedCorrectionDetails()
+        });
+        assert.equal(audit(value).review_findings_audit?.status, 'BLOCKED');
+    });
+
+    it('does not use a restart bound to another compile to supersede correction evidence', () => {
+        const value = fixture(undefined, 'wrong_compile');
+        const result = audit(value);
+        assert.equal(result.review_findings_audit?.status, 'BLOCKED');
+        assert.equal(result.review_findings_audit?.correction_transports?.[0]?.audit_scope, 'CURRENT');
     });
 
     for (const owner of ['foreign-task', 'unreviewed-lane']) {

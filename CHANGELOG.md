@@ -1,5 +1,9 @@
 # Changelog
 
+- Preserve authenticated controller identity for rejected-review correction and
+  scope historical correction failures to a hash-bound evidence-only review
+  restart with current independent reviews, without replaying unchanged compile.
+
 - T-266: apply existing path redactors to successful disputed-lock copy
   diagnostics, remove unreachable lifecycle returns, and clean replacement-owner
   fixture captures through their creator-owned parent.

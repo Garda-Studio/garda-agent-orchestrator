@@ -1013,7 +1013,9 @@ function resolveAuthenticatedReviewOutputCorrectionCapabilities(options: {
     const providerInvocationId = getArtifactStringField(
         launchArtifact,
         'provider_invocation_id',
-        'providerInvocationId'
+        'providerInvocationId',
+        'controller_invocation_id',
+        'controllerInvocationId'
     );
     const invocationProviderInvocationId = getArtifactStringField(
         options.invocationDetails,

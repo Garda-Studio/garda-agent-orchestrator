@@ -32,10 +32,11 @@ import {
 import { normalizePath } from '../shared/helpers';
 import type { ReviewAttemptSummary } from './task-audit-summary-review-attempts';
 import type { FinalCloseoutReviewIntegrityAttestation } from './task-audit-summary-review-integrity';
-import type { TaskCycleBindingSnapshot } from '../task-events-summary/task-events-summary-cycle-binding';
+import { normalizeTaskCycleScopeBinding, type TaskCycleBindingSnapshot } from '../task-events-summary/task-events-summary-cycle-binding';
 import {
     collectKnownRequiredReviewTypes,
     isPlainRecord,
+    isSafeCanonicalArtifactPath,
     safeReadJson
 } from './task-audit-summary-review-common';
 
@@ -95,6 +96,7 @@ export interface ReviewOutputCorrectionTransportAudit {
     event_sha256?: string | null;
     audit_scope?: 'CURRENT' | 'SUPERSEDED_CYCLE';
     superseded_by_compile_event_sha256?: string | null;
+    superseded_by_restart_event_sha256?: string | null;
     timestamp_utc: string | null;
     event_type: string;
     review_type: string;
@@ -132,6 +134,8 @@ function correctionAuditEventBinding(event: ReviewReuseTelemetryEventLike): {
 }
 
 function scopeCorrectionTransports(options: {
+    repoRoot: string;
+    reviewsRoot: string;
     taskId: string;
     transports: ReviewOutputCorrectionTransportAudit[];
     timelineEvents: readonly ReviewReuseTelemetryEventLike[];
@@ -167,17 +171,68 @@ function scopeCorrectionTransports(options: {
         const hash = stringValue(integrity.event_sha256);
         if (hash) eventHashCounts.set(hash, (eventHashCounts.get(hash) || 0) + 1);
     }
+    const restartedLanes = new Map<string, { sequence: number; sha256: string }>();
+    const restartPath = path.join(options.reviewsRoot, `${options.taskId}-review-cycle-restart.json`);
+    const compilePath = path.join(options.reviewsRoot, `${options.taskId}-compile-gate.json`);
+    if (hasBoundCompile && eventHashCounts.get(compileSha256 || '') === 1
+        && isSafeCanonicalArtifactPath(restartPath, options.reviewsRoot)
+        && isSafeCanonicalArtifactPath(compilePath, options.reviewsRoot)) {
+        const restart = safeReadJson(restartPath);
+        const compileArtifact = safeReadJson(compilePath);
+        const restartHash = readReviewArtifactFileSha256(restartPath);
+        const compileHash = readReviewArtifactFileSha256(compilePath);
+        if (isPlainRecord(restart) && isPlainRecord(compileArtifact) && isSha256(restartHash)
+            && isSha256(compileHash) && restart.task_id === options.taskId
+            && restart.status === 'PASSED' && restart.restart_event_schema_version === 1
+            && restart.detection_source === 'review_evidence_only'
+            && restart.restart_reason === 'failed_delegated_reviewer_evidence_only'
+            && restart.affected_files_count === 0 && restart.detected_changed_files_count === 0
+            && restart.preflight_sha256 === options.currentPreflightSha256
+            && restart.compile_evidence_sha256 === compileHash
+            && compileArtifact.status === 'PASSED'
+            && JSON.stringify(normalizeTaskCycleScopeBinding(compileArtifact))
+                === JSON.stringify(options.currentCycle?.scope_binding ?? null)
+            && compileArtifact.preflight_hash_sha256 === options.currentPreflightSha256
+            && normalizePath(path.resolve(options.repoRoot, String(restart.compile_evidence_path || '')))
+                === normalizePath(path.resolve(compilePath))) {
+            for (const event of options.timelineEvents) {
+                const binding = correctionAuditEventBinding(event);
+                const details = isPlainRecord(event.details) ? event.details : {};
+                if (!isPlainRecord(event) || event.event_type !== 'REVIEW_CYCLE_RESTARTED' || event.task_id !== options.taskId
+                    || binding.task_id !== options.taskId || typeof binding.task_sequence !== 'number'
+                    || binding.task_sequence <= compileSequence || !isSha256(binding.event_sha256)
+                    || eventHashCounts.get(binding.event_sha256) !== 1
+                    || details.restart_artifact_sha256 !== restartHash
+                    || normalizePath(path.resolve(options.repoRoot, String(details.restart_artifact_path || '')))
+                        !== normalizePath(path.resolve(restartPath))
+                    || ['status', 'detection_source', 'restart_reason', 'preflight_sha256',
+                        'compile_evidence_sha256', 'affected_files_count', 'detected_changed_files_count',
+                        'invalidated_review_types'].some(key => JSON.stringify(details[key]) !== JSON.stringify(restart[key]))) continue;
+                for (const lane of options.requiredReviewTypes) {
+                    if (!Array.isArray(restart.invalidated_review_types) || !restart.invalidated_review_types.includes(lane)) continue;
+                    const receiptPath = path.join(options.reviewsRoot, `${options.taskId}-${lane}-receipt.json`);
+                    const receipt = isSafeCanonicalArtifactPath(receiptPath, options.reviewsRoot) ? safeReadJson(receiptPath) : null;
+                    const provenance = isPlainRecord(receipt?.reviewer_provenance) ? receipt.reviewer_provenance : {};
+                    if (typeof provenance.task_sequence === 'number' && provenance.task_sequence > binding.task_sequence) {
+                        restartedLanes.set(lane, { sequence: binding.task_sequence, sha256: binding.event_sha256 });
+                    }
+                }
+            }
+        }
+    }
     return options.transports.map((entry) => {
+        const restart = restartedLanes.get(entry.review_type);
         const superseded = hasBoundCompile && eventHashCounts.get(compileSha256 || '') === 1
             && entry.task_id === options.taskId && typeof entry.task_sequence === 'number'
-            && entry.task_sequence < compileSequence
+            && entry.task_sequence < (restart?.sequence ?? compileSequence)
             && isSha256(entry.event_sha256 || null) && eventHashCounts.get(entry.event_sha256 || '') === 1
             && attestation?.required_review_types.includes(entry.review_type)
             && options.requiredReviewTypes.includes(entry.review_type);
         return {
             ...entry,
             audit_scope: superseded ? 'SUPERSEDED_CYCLE' : 'CURRENT',
-            superseded_by_compile_event_sha256: superseded ? compileSha256 : null
+            superseded_by_compile_event_sha256: superseded ? compileSha256 : null,
+            superseded_by_restart_event_sha256: superseded && restart ? restart.sha256 : null
         };
     });
 }
