@@ -5,11 +5,79 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { deflateSync, inflateSync } from 'node:zlib';
+import { createTempRepo } from '../../cli/commands/gate-test-helpers';
+import { runHumanCommitCommand } from '../../../../src/cli/commands/gates';
+import { handleSet } from '../../../../src/cli/commands/workflow/workflow-command-set';
+import { buildDefaultWorkflowConfig } from '../../../../src/core/workflow-config';
+import { buildScopeContentFingerprint } from '../../../../src/gates/compile/compile-gate';
+import { appendMandatoryTaskEvent, buildEventIntegrityHash } from '../../../../src/gate-runtime/task-events';
 
 const fs: typeof import('node:fs') = require('node:fs');
 const modulePath = '../../../../src/gates/task-audit/task-audit-summary-decomposed-parent-proofs';
 const roots: string[] = [];
 const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+const childTaskId = 'T-PROOF-2';
+const authApi = require('../../../../src/core/auth/local-commit-availability') as typeof import('../../../../src/core/auth/local-commit-availability');
+
+function childReader(): (root: string, taskId: string) => Record<string, unknown> {
+    const read = require(modulePath).readNativeChildSourceAcceptance;
+    assert.equal(typeof read, 'function', 'native child source-proof reader must exist');
+    return read;
+}
+
+async function acceptedChildFixture() {
+    const root = createTempRepo();
+    roots.push(root);
+    proofGit(root, ['init']);
+    proofGit(root, ['config', 'user.name', 'Garda Proof Tests']);
+    proofGit(root, ['config', 'user.email', 'proof-tests@example.invalid']);
+    fs.writeFileSync(path.join(root, '.gitignore'), 'garda-agent-orchestrator/\n');
+    proofGit(root, ['add', '.gitignore']);
+    proofGit(root, ['commit', '-m', 'proof baseline']);
+    const config = path.join(root, 'garda-agent-orchestrator/live/config/workflow-config.json');
+    fs.mkdirSync(path.dirname(config), { recursive: true });
+    fs.writeFileSync(config, JSON.stringify(buildDefaultWorkflowConfig(), null, 2) + '\n');
+    // Isolated publication fixture only: no approval or PASS for this real workspace.
+    handleSet({ targetRoot: root, localCommitEnabled: 'true', json: true,
+        operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() });
+    fs.writeFileSync(path.join(root, 'accepted.txt'), 'child source\n');
+    proofGit(root, ['add', 'accepted.txt']);
+    const scope = buildScopeContentFingerprint(root, 'explicit_changed_files', ['accepted.txt']);
+    const auditApi = require('../../../../src/gates/task-audit/task-audit-summary');
+    const closeoutApi = require('../../../../src/gates/task-audit/task-audit-summary-closeout-sync');
+    // Only the audit service is mocked; native commit, signing and publication execute.
+    mock.method(auditApi, 'buildTaskAuditSummary', () => ({ task_id: childTaskId,
+        status: 'PASS', integrity_status: 'PASS', blockers: [], point_in_time_snapshot: { status: 'STABLE' },
+        final_closeout: { implementation_summary: { changed_files: ['accepted.txt'],
+            scope_content_sha256: scope, audited_scope_provenance: { use_staged: false, detection_source: 'explicit_changed_files' } } } }));
+    mock.method(closeoutApi, 'synchronizeFinalCloseoutArtifacts', (value: unknown) => value);
+    assert.equal(await runHumanCommitCommand(['--task-id', childTaskId, '-m', 'test: accepted child'], { cwd: root }), 0);
+    mock.restoreAll();
+    const eventFile = path.join(root, 'garda-agent-orchestrator/runtime/task-events', childTaskId + '.jsonl');
+    const events = fs.readFileSync(eventFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    assert.equal(events.length, 1);
+    const event = events[0];
+    assert.equal(event.event_type, 'TASK_SOURCE_COMMIT_ACCEPTED');
+    const file = path.resolve(root, event.details.artifact_path);
+    return { root, eventFile, event, file, bytes: fs.readFileSync(file), commit: event.details.commit_sha as string };
+}
+
+function rewriteAdversarialFixture(
+    fixture: Awaited<ReturnType<typeof acceptedChildFixture>>,
+    alter: (proof: Record<string, unknown>) => void, resign = true
+) {
+    let proof = JSON.parse(fixture.bytes.toString()) as Record<string, unknown>;
+    alter(proof);
+    if (resign) proof = authApi.authenticateLocalCommitWorkflowAudit(fixture.root, proof, false);
+    const bytes = Buffer.from(JSON.stringify(proof, null, 2) + '\n');
+    fs.writeFileSync(fixture.file, bytes);
+    const event = fixture.event;
+    for (const key of ['repo_root', 'tree_sha', 'parent_commit_sha']) event.details[key] = proof[key];
+    event.details.artifact_sha256 = digest(bytes);
+    event.integrity.event_sha256 = buildEventIntegrityHash(event);
+    // Adversarial fixture reconstruction, never a real task timeline modification.
+    fs.writeFileSync(fixture.eventFile, JSON.stringify(event) + '\n');
+}
 
 type GitSource = { commitSha: string; treeSha: string; parentCommitSha: string | null };
 function gitValidator(): (root: string, source: GitSource) => void {
@@ -35,6 +103,155 @@ function gitFixture() {
         treeSha: proofGit(f.root, ['rev-parse', 'HEAD^{tree}']), parentCommitSha };
     return { ...f, source };
 }
+
+describe('forward-only native child source acceptance', () => {
+    it('corroborates a real native publication and later ancestry without changing proof or history', async () => {
+        const read = childReader(), f = await acceptedChildFixture();
+        const status = proofGit(f.root, ['status', '--porcelain']), timeline = fs.readFileSync(f.eventFile);
+        const result = read(f.root, childTaskId);
+        assert.equal(result.taskId, childTaskId);
+        assert.equal(result.commitSha, f.commit);
+        assert.equal(result.treeSha, proofGit(f.root, ['rev-parse', 'HEAD^{tree}']));
+        assert.deepEqual(fs.readFileSync(f.file), f.bytes);
+        assert.deepEqual(fs.readFileSync(f.eventFile), timeline);
+        assert.equal(proofGit(f.root, ['status', '--porcelain']), status);
+        assert.equal('parentPass' in result, false);
+        proofGit(f.root, ['commit', '--allow-empty', '-m', 'later task']);
+        assert.equal(read(f.root, childTaskId).commitSha, f.commit);
+    });
+
+    it('rejects missing or legacy evidence, wrong task and changed proof bytes', async () => {
+        const read = childReader(), f = await acceptedChildFixture();
+        assert.throws(() => read(f.root, 'T-MISSING-1'));
+        assert.throws(() => read(f.root, '../T-PROOF-2'), /canonical/iu);
+        fs.appendFileSync(f.file, ' ');
+        assert.throws(() => read(f.root, childTaskId), /binding/iu);
+        fs.writeFileSync(f.file, f.bytes);
+        fs.renameSync(f.eventFile, f.eventFile + '.preserved');
+        assert.throws(() => read(f.root, childTaskId));
+        assert.deepEqual(fs.readFileSync(f.file), f.bytes);
+    });
+
+    const invalidProofs: Array<[string, (proof: Record<string, unknown>) => void, RegExp]> = [
+        ['wrong task', p => { p.task_id = 'T-FOREIGN-1'; }, /task|identity/iu],
+        ['foreign workspace', p => { p.repo_root = path.dirname(String(p.repo_root)); }, /workspace|identity/iu],
+        ['wrong Git tree', p => { p.tree_sha = '0'.repeat(40); }, /Git|tree/iu],
+        ['wrong Git parent', p => { p.parent_commit_sha = '0'.repeat(40); }, /Git|parent/iu],
+        ['corrupt audit digest', p => { p.post_commit_audit_sha256 = '0'.repeat(64); }, /audit/iu],
+        ['blocked child audit', p => {
+            p.post_commit_audit = { ...(p.post_commit_audit as Record<string, unknown>), status: 'BLOCKED' };
+            p.post_commit_audit_sha256 = digest(Buffer.from(JSON.stringify(p.post_commit_audit)));
+        }, /audit/iu],
+        ['legacy unsigned producer', p => { p.event_source = 'legacy-claimed-acceptance'; }, /native|source/iu]
+    ];
+    for (const [name, alter, reason] of invalidProofs) it('rejects consistently rebound proof with ' + name, async () => {
+        const read = childReader(), f = await acceptedChildFixture();
+        rewriteAdversarialFixture(f, alter);
+        assert.throws(() => read(f.root, childTaskId), reason);
+    });
+
+    it('rejects forged signature and genuinely revoked workspace authority', async () => {
+        const read = childReader(), f = await acceptedChildFixture();
+        rewriteAdversarialFixture(f, p => { p.accepted_at_utc = '2000-01-01T00:00:00.000Z'; }, false);
+        assert.throws(() => read(f.root, childTaskId), /authentication/iu);
+        fs.writeFileSync(f.file, f.bytes);
+        handleSet({ targetRoot: f.root, localCommitEnabled: 'false', json: true,
+            operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() });
+        assert.throws(() => read(f.root, childTaskId), /authority|authentication/iu);
+    });
+
+    it('rejects uncorrelated paths and corrupt or duplicate SOURCE events', async () => {
+        const read = childReader(), f = await acceptedChildFixture(), original = fs.readFileSync(f.eventFile);
+        f.event.details.artifact_path = f.event.details.artifact_path.replace(childTaskId, 'T-FOREIGN-1');
+        f.event.integrity.event_sha256 = buildEventIntegrityHash(f.event);
+        fs.writeFileSync(f.eventFile, JSON.stringify(f.event) + '\n');
+        assert.throws(() => read(f.root, childTaskId), /path/iu);
+        fs.writeFileSync(f.eventFile, original);
+        appendMandatoryTaskEvent(path.join(f.root, 'garda-agent-orchestrator'), childTaskId,
+            'TASK_SOURCE_COMMIT_ACCEPTED', 'PASS', 'Duplicate isolated SOURCE fixture.', JSON.parse(original.toString()).details);
+        assert.throws(() => read(f.root, childTaskId), /timeline|ambiguous/iu);
+        fs.writeFileSync(f.eventFile, original.toString().replace('Native source commit', 'Changed source commit'));
+        assert.throws(() => read(f.root, childTaskId), /timeline/iu);
+    });
+
+    it('rejects unrelated ancestry, grafts and inherited Git selection through the complete reader', async () => {
+        const read = childReader(), f = await acceptedChildFixture();
+        proofGit(f.root, ['checkout', '--orphan', 'unrelated']);
+        proofGit(f.root, ['commit', '--allow-empty', '-m', 'unrelated source']);
+        assert.throws(() => read(f.root, childTaskId), /ancestry|Git/iu);
+        fs.writeFileSync(path.join(f.root, '.git/info/grafts'), `${proofGit(f.root, ['rev-parse', 'HEAD'])} ${f.commit}\n`);
+        assert.throws(() => read(f.root, childTaskId), /graft/iu);
+        const script = `const a=require('node:assert/strict'),r=require(process.argv[1]).readNativeChildSourceAcceptance;
+            a.throws(()=>r(process.argv[2],process.argv[3]),/environment/iu);`;
+        const result = spawnSync(process.execPath, ['-e', script, require.resolve(modulePath), f.root, childTaskId],
+            { timeout: 10000, encoding: 'utf8', env: { ...process.env, GIT_DIR: path.join(f.root, '.git') } });
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(fs.readFileSync(f.file), f.bytes);
+    });
+
+    for (const type of ['commit', 'tree'] as const) it(`rejects replaced raw ${type} through the complete reader`, async () => {
+        const read = childReader(), f = await acceptedChildFixture();
+        const sha = type === 'commit' ? f.commit : f.event.details.tree_sha;
+        const file = path.join(f.root, '.git/objects', sha.slice(0, 2), sha.slice(2));
+        const bytes = inflateSync(fs.readFileSync(file));
+        bytes[bytes.length - 1] = bytes[bytes.length - 1]! ^ 1;
+        fs.chmodSync(file, 0o600);
+        fs.writeFileSync(file, deflateSync(bytes));
+        assert.throws(() => read(f.root, childTaskId), /Git|object|identity/iu);
+        assert.deepEqual(fs.readFileSync(f.file), f.bytes);
+    });
+
+    it('rejects stale acceptance after genuine native cycle entry', async () => {
+        const read = childReader(), f = await acceptedChildFixture();
+        appendMandatoryTaskEvent(path.join(f.root, 'garda-agent-orchestrator'), childTaskId,
+            'TASK_MODE_ENTERED', 'INFO', 'Isolated subsequent cycle fixture.', {});
+        assert.throws(() => read(f.root, childTaskId), /cycle|stale/iu);
+        assert.deepEqual(fs.readFileSync(f.file), f.bytes);
+    });
+
+    it('rejects timeline append replacement and truncation during source authentication', async () => {
+        const read = childReader(), authenticate = authApi.authenticateLocalCommitWorkflowAudit;
+        for (const mutation of ['append', 'replace', 'truncate']) {
+            const f = await acceptedChildFixture(), original = fs.readFileSync(f.eventFile);
+            let changed = false;
+            const stub = mock.method(authApi, 'authenticateLocalCommitWorkflowAudit', (...args: Parameters<typeof authenticate>) => {
+                const result = authenticate(...args);
+                if (!changed) {
+                    changed = true;
+                    if (mutation === 'append') appendMandatoryTaskEvent(path.join(f.root, 'garda-agent-orchestrator'),
+                        childTaskId, 'TASK_MODE_ENTERED', 'INFO', 'Concurrent isolated child cycle.', {});
+                    else if (mutation === 'replace') {
+                        fs.renameSync(f.eventFile, f.eventFile + '.original');
+                        fs.writeFileSync(f.eventFile, original);
+                    } else fs.truncateSync(f.eventFile, 0);
+                }
+                return result;
+            });
+            assert.throws(() => read(f.root, childTaskId), /timeline|snapshot|cycle/iu, mutation);
+            assert.equal(changed, true);
+            assert.deepEqual(fs.readFileSync(f.file), f.bytes);
+            stub.mock.restore();
+        }
+    });
+
+    it('rejects mutation during authentication and HEAD drift rather than returning stale proof', async () => {
+        const read = childReader(), f = await acceptedChildFixture();
+        const authenticate = authApi.authenticateLocalCommitWorkflowAudit;
+        for (const mutate of [() => fs.appendFileSync(f.file, ' '),
+            () => proofGit(f.root, ['commit', '--allow-empty', '-m', 'concurrent HEAD'])]) {
+            let changed = false;
+            const stub = mock.method(authApi, 'authenticateLocalCommitWorkflowAudit', (...args: Parameters<typeof authenticate>) => {
+                const result = authenticate(...args);
+                if (!changed) { changed = true; mutate(); }
+                return result;
+            });
+            assert.throws(() => read(f.root, childTaskId), /proof|binding|HEAD|identity/iu);
+            assert.equal(changed, true);
+            stub.mock.restore();
+            fs.writeFileSync(f.file, f.bytes);
+        }
+    });
+});
 
 describe('native child Git source provenance', () => {
     it('validates real root, accepted parent/tree and later ancestry with one raw object batch', () => {

@@ -1,19 +1,142 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { TextDecoder } from 'node:util';
 import { bindContainedDestination, assertContainedDestination } from '../../core/contained-filesystem';
 import { isPlainRecord } from '../../core/records';
 import { runGit, runGitBinary } from '../../core/git-helpers';
+import { isCanonicalTaskId } from '../../core/task-ids';
+import { joinOrchestratorPath } from '../../core/orchestrator-paths';
+import { authenticateLocalCommitWorkflowAudit, resolveLocalCommitAvailability } from '../../core/auth/local-commit-availability';
+import { inspectTaskEventFile, withTaskTimelineReadSnapshot } from '../../gate-runtime/task-events';
+import {
+    captureTaskTimelineReadSnapshotSha256, assertTaskTimelineReadSnapshotCurrent
+} from '../../gate-runtime/timeline/task-timeline-read-snapshot';
 
 const MAX_PROOF_INPUT_BYTES = 8 * 1024 * 1024;
 const GIT_OBJECT_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
 const SOURCE_GIT_OPTIONS = { maxBuffer: 64 * 1024, timeoutMs: 10000 };
+const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const SOURCE_CYCLE_BOUNDARIES = new Set([
+    'TASK_MODE_ENTERED', 'PREFLIGHT_CLASSIFIED', 'COMPILE_GATE_PASSED', 'COMPLETION_GATE_PASSED'
+]);
 
 export interface NativeChildGitSource {
     commitSha: string;
     treeSha: string;
     parentCommitSha: string | null;
+}
+
+export interface NativeChildSourceAcceptance extends NativeChildGitSource {
+    taskId: string;
+    artifactPath: string;
+    artifactSha256: string;
+    postCommitAudit: Record<string, unknown>;
+}
+
+function assertNativeSourceAuthentication(root: string, proof: Record<string, unknown>): void {
+    if (!resolveLocalCommitAvailability(root).enabled) {
+        throw new Error('Native child source acceptance requires current audited workspace authority.');
+    }
+    const expected = authenticateLocalCommitWorkflowAudit(root, proof, false);
+    const actual = proof.local_commit_authentication, authentication = expected.local_commit_authentication;
+    if (expected === proof || !isPlainRecord(actual) || !isPlainRecord(authentication)
+        || actual.workspace_identity_sha256 !== authentication.workspace_identity_sha256
+        || typeof actual.hmac_sha256 !== 'string' || !SHA256_PATTERN.test(actual.hmac_sha256)
+        || typeof authentication.hmac_sha256 !== 'string' || !SHA256_PATTERN.test(authentication.hmac_sha256)
+        || !timingSafeEqual(Buffer.from(actual.hmac_sha256, 'hex'), Buffer.from(authentication.hmac_sha256, 'hex'))) {
+        throw new Error('Native child source acceptance authentication is invalid or foreign.');
+    }
+}
+
+function readCurrentNativeSourceEvent(file: string, taskId: string): Record<string, unknown> {
+    let selected: Readonly<Record<string, unknown>> | undefined, sourceLine = 0, cycleLine = 0;
+    const commits = new Set<unknown>();
+    let duplicate = false;
+    const inspection = inspectTaskEventFile(file, taskId, { onIntegrityEvent: (event, line) => {
+        if (SOURCE_CYCLE_BOUNDARIES.has(String(event.event_type))) cycleLine = line;
+        if (event.event_type !== 'TASK_SOURCE_COMMIT_ACCEPTED') return;
+        const commit = isPlainRecord(event.details) ? event.details.commit_sha : undefined;
+        if (commits.has(commit)) duplicate = true;
+        commits.add(commit);
+        selected = event; sourceLine = line;
+    } });
+    if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(inspection.status) || inspection.violations.length
+        || !selected || selected.schema_version !== 2 || selected.outcome !== 'PASS'
+        || selected.task_id !== taskId || !isPlainRecord(selected.details) || duplicate) {
+        throw new Error('Native child source acceptance requires an intact, unambiguous task timeline.');
+    }
+    if (cycleLine > sourceLine) throw new Error('Native child source acceptance is stale for the current child cycle.');
+    return selected.details;
+}
+
+function sourceProofPath(root: string, taskId: string, event: Record<string, unknown>): string {
+    if (event.repo_root !== root || typeof event.commit_sha !== 'string' || !GIT_OBJECT_PATTERN.test(event.commit_sha)
+        || typeof event.artifact_sha256 !== 'string' || !SHA256_PATTERN.test(event.artifact_sha256)) {
+        throw new Error('Native child source event has invalid workspace or Git identity.');
+    }
+    const file = joinOrchestratorPath(root, `runtime/reviews/${taskId}-source-acceptance-${event.commit_sha}.json`);
+    if (event.artifact_path !== path.relative(root, file).replace(/\\/gu, '/')) {
+        throw new Error('Native child source proof must use its exact task-qualified artifact path.');
+    }
+    return file;
+}
+
+function validateNativeSourceRecord(
+    root: string, taskId: string, event: Record<string, unknown>, proof: Record<string, unknown>
+): Record<string, unknown> {
+    if (proof.schema_version !== 1 || proof.event_source !== 'native-source-acceptance') {
+        throw new Error('Child source proof is not a native source-acceptance record.');
+    }
+    if (proof.task_id !== taskId || proof.repo_root !== root) {
+        throw new Error('Native child source proof has a foreign task or workspace identity.');
+    }
+    for (const field of ['commit_sha', 'tree_sha', 'parent_commit_sha']) {
+        if (proof[field] !== event[field] || (field === 'parent_commit_sha' && proof[field] === null ? false
+            : typeof proof[field] !== 'string' || !GIT_OBJECT_PATTERN.test(proof[field] as string))) {
+            throw new Error(`Native child source proof has inconsistent Git ${field} identity.`);
+        }
+    }
+    const audit = proof.post_commit_audit;
+    if (!isPlainRecord(audit) || audit.task_id !== taskId || audit.status !== 'PASS'
+        || !['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(String(audit.integrity_status))
+        || !Array.isArray(audit.blockers) || audit.blockers.length !== 0
+        || !isPlainRecord(audit.point_in_time_snapshot) || audit.point_in_time_snapshot.status !== 'STABLE'
+        || createHash('sha256').update(JSON.stringify(audit)).digest('hex') !== proof.post_commit_audit_sha256) {
+        throw new Error('Native child source proof requires its exact stable, task-qualified PASS audit.');
+    }
+    return audit;
+}
+
+/** Child source corroboration does not discharge parent graph, memory, WIP or suite obligations. */
+export function readNativeChildSourceAcceptance(repoRoot: string, taskId: string): NativeChildSourceAcceptance {
+    if (!isCanonicalTaskId(taskId)) throw new Error('Native child source acceptance requires an exact canonical task ID.');
+    const root = fs.realpathSync.native(repoRoot), eventsRoot = joinOrchestratorPath(root, 'runtime/task-events');
+    if (!resolveLocalCommitAvailability(root).enabled) {
+        throw new Error('Native child source acceptance requires current audited workspace authority.');
+    }
+    const head = runGit(root, ['--no-replace-objects', 'rev-parse', 'HEAD'], SOURCE_GIT_OPTIONS).trim();
+    return withTaskTimelineReadSnapshot(eventsRoot, taskId, () => {
+        const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
+        const timelineSha256 = captureTaskTimelineReadSnapshotSha256(timelinePath);
+        const event = readCurrentNativeSourceEvent(timelinePath, taskId);
+        const file = sourceProofPath(root, taskId, event), hash = event.artifact_sha256 as string;
+        const identity = bindContainedDestination(root, file);
+        const proof = readParentAuditProofRecord(root, file, hash);
+        const audit = validateNativeSourceRecord(root, taskId, event, proof);
+        const source = { commitSha: event.commit_sha as string, treeSha: event.tree_sha as string,
+            parentCommitSha: event.parent_commit_sha as string | null };
+        assertNativeSourceAuthentication(root, proof);
+        validateNativeChildGitSource(root, source);
+        assertNativeSourceAuthentication(root, proof);
+        readParentAuditProofRecord(root, file, hash);
+        assertContainedDestination(identity);
+        if (runGit(root, ['--no-replace-objects', 'rev-parse', 'HEAD'], SOURCE_GIT_OPTIONS).trim() !== head) {
+            throw new Error('Native child source HEAD identity changed during proof consumption.');
+        }
+        assertTaskTimelineReadSnapshotCurrent(timelinePath, timelineSha256);
+        return { taskId, ...source, artifactPath: event.artifact_path as string, artifactSha256: hash, postCommitAudit: audit };
+    });
 }
 
 function readRawSourceObjects(root: string, requests: Array<{ sha: string; type: 'commit' | 'tree' }>): Buffer[] {

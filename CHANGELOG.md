@@ -1,5 +1,9 @@
 # Changelog
 
+- Authenticate task-qualified child SOURCE records against current workspace
+  authority, intact native timelines, sealed audits and immutable Git provenance;
+  preserve independent parent obligations (T-241-2-C2-I1-4-2-2-2).
+
 - Added bounded Git-only corroboration for native child source commit, parent and raw tree identity; batch object reads reject inherited repository overrides, grafts and altered object bytes without granting parent audit acceptance.
 
 - Publish disposable-recovery crash readiness markers only after their complete
