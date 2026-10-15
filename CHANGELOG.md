@@ -1,5 +1,8 @@
 # Changelog
 
+- T-265: preserve canonical empty staged no-op fingerprints so repeated final
+  audit accepts the unchanged completed scope without weakening drift checks.
+
 - T-238-1-2-2: restore native competing-owner process regressions for synchronous
   and asynchronous timeline/lifecycle conflicts, with explicit copy-custody and
   platform boundaries.

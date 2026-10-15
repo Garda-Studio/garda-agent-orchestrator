@@ -440,7 +440,9 @@ export function buildFinalCloseoutArtifact(input: BuildFinalCloseoutArtifactInpu
         closeoutExtraSnapshot
     });
     const stagedAuditedScope = auditedScopeProvenance?.use_staged === true;
-    const implementationChangedFilesSha256 = closeoutScopeSnapshot?.changed_files_sha256 ?? null;
+    const emptyStagedAuditedScope = stagedAuditedScope && input.changedFiles.length === 0;
+    const implementationChangedFilesSha256 = closeoutScopeSnapshot?.changed_files_sha256
+        ?? (emptyStagedAuditedScope ? pathListSha256([]) : null);
     // Preserve reviewed index identity separately from the complete post-commit worktree binding.
     const implementationScopeContentSha256 = stagedAuditedScope
         ? auditedScopeProvenance.scope_content_sha256
@@ -536,7 +538,9 @@ export function buildFinalCloseoutArtifact(input: BuildFinalCloseoutArtifactInpu
             changed_files_sha256: implementationChangedFilesSha256,
             scope_content_sha256: implementationScopeContentSha256,
             ...(stagedAuditedScope ? {
-                worktree_scope_content_sha256: closeoutScopeSnapshot?.scope_content_sha256 ?? null
+                worktree_scope_content_sha256: closeoutScopeSnapshot?.scope_content_sha256
+                    ?? (emptyStagedAuditedScope
+                        ? buildScopeContentFingerprint(input.repoRoot, 'explicit_changed_files', []) : null)
             } : {}),
             scope_sha256: implementationScopeSha256,
             domain_scope_fingerprints: implementationDomainScopeFingerprints,

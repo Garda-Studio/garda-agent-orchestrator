@@ -35,11 +35,14 @@ import {
     seedReviewGatePass,
     seedDocImpactPass,
     seedCompletionPass,
+    seedPostPreflightRulePack,
     seedFullSuiteValidation,
     materializeFinalCloseout,
     seedCompletedTaskWithIndependentCodeReview,
     seedSourceCheckoutRuntime
 } from './next-step-completion-fixtures';
+
+const disabledLocalCommitNotice = 'Local commit permission is disabled. Enable it through an explicitly approved audited workflow set before committing.';
 
 function bindProtectedDirtyBaseline(
     preflightPath: string,
@@ -307,7 +310,7 @@ describe('gates/next-step', () => {
         assert.equal(result.final_report?.final_user_report_body, finalUserReportBody);
         assert.equal(result.final_report?.final_user_report_sha256, sha256Text(finalUserReportBody));
 
-        assert.ok((result.final_report?.commit_command_suggestion || '').startsWith('git commit -m "'));
+        assert.match(result.final_report?.commit_command_suggestion || '', /^node .+ gate human-commit /u);
 
         assert.match(result.reason, /canonical final closeout is materialized/i);
 
@@ -331,9 +334,9 @@ describe('gates/next-step', () => {
 
         assert.ok(text.includes('2. verbatim Garda final user report'));
 
-        assert.ok(text.includes('3. git commit -m "'));
+        assert.ok(text.includes(`3. ${result.final_report?.commit_command_suggestion}`));
 
-        assert.ok(text.includes('4. Do you want me to commit now? (yes/no)'));
+        assert.ok(text.includes(`4. ${disabledLocalCommitNotice}`));
 
         assert.ok(text.includes('Commands:'));
 
@@ -682,6 +685,46 @@ describe('gates/next-step', () => {
         ), null);
     });
 
+    it('keeps an authenticated empty staged no-op ready across repeated final audit', () => {
+        const repoRoot = makeTempRepo();
+        initGitRepo(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        const preflightPath = writeStagedPreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8'));
+        preflight.scope_category = 'empty';
+        preflight.zero_diff_guard = {
+            zero_diff_detected: true,
+            status: 'BASELINE_ONLY',
+            completion_requires_audited_no_op: true
+        };
+        preflight.profile_guardrails = { zero_diff_no_reviewable_scope: true };
+        writeJson(preflightPath, preflight);
+        seedPostPreflightRulePack(repoRoot, TASK_ID, preflightPath);
+        seedStagedCompilePass(repoRoot, TASK_ID);
+        writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+        seedNoOpRecordedEvent(repoRoot, TASK_ID, preflightPath);
+        seedReviewGatePass(repoRoot, TASK_ID);
+        seedDocImpactPass(repoRoot, TASK_ID);
+        seedCompletionPass(repoRoot, TASK_ID);
+        const initial = buildTaskAuditSummary({ taskId: TASK_ID, repoRoot });
+        assert.equal(initial.status, 'PASS', JSON.stringify(initial.blockers));
+        synchronizeFinalCloseoutArtifacts(initial);
+
+        const closeoutPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-final-closeout.json`);
+        const original = fs.readFileSync(closeoutPath);
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            const audit = buildTaskAuditSummary({ taskId: TASK_ID, repoRoot });
+            assert.equal(audit.status, 'PASS', JSON.stringify(audit.blockers));
+            assert.equal(resolveNextStep({ taskId: TASK_ID, repoRoot }).status, 'DONE');
+            assert.deepEqual(fs.readFileSync(closeoutPath), original);
+        }
+        const closeout = JSON.parse(original.toString('utf8'));
+        assert.deepEqual(closeout.implementation_summary.changed_files, []);
+        assert.equal(closeout.implementation_summary.changed_files_sha256, sha256Text(''));
+        assert.equal(closeout.implementation_summary.worktree_scope_content_sha256, sha256Text(''));
+        assert.equal(getNoOpEvidence(repoRoot, TASK_ID, '', preflightPath).evidence_status, 'PASS');
+    });
+
     it('blocks an audited no-op closeout without a matching current no-op event', () => {
         const repoRoot = makeTempRepo();
         initGitRepo(repoRoot);
@@ -1025,11 +1068,11 @@ describe('gates/next-step', () => {
 
         assert.equal(result.final_report?.required_order[1], 'verbatim Garda final user report');
 
-        assert.ok(result.final_report?.required_order[2].startsWith('git commit -m "'));
+        assert.equal(result.final_report?.required_order[2], result.final_report?.commit_command_suggestion);
 
-        assert.equal(result.final_report?.required_order[3], 'Do you want me to commit now? (yes/no)');
+        assert.equal(result.final_report?.required_order[3], disabledLocalCommitNotice);
 
-        assert.ok((result.final_report?.commit_command_suggestion || '').startsWith('git commit -m "'));
+        assert.match(result.final_report?.commit_command_suggestion || '', /^node .+ gate human-commit /u);
 
         assert.match(result.reason, /canonical final closeout is materialized/i);
 
@@ -1039,9 +1082,9 @@ describe('gates/next-step', () => {
 
         assert.ok(text.includes('2. verbatim Garda final user report'));
 
-        assert.ok(text.includes('3. git commit -m "'));
+        assert.ok(text.includes(`3. ${result.final_report?.commit_command_suggestion}`));
 
-        assert.ok(text.includes('4. Do you want me to commit now? (yes/no)'));
+        assert.ok(text.includes(`4. ${disabledLocalCommitNotice}`));
 
         assert.ok(text.includes('Commands:'));
 
