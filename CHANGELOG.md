@@ -1,5 +1,10 @@
 # Changelog
 
+## Shared recipe inspection evidence
+
+- Reuse current native task, staged-scope and retained recipe observations inside one read-only inspection batch.
+- Recheck every recipe and the current native timeline before returning results; preserve standalone validation and reject changed or expired evidence.
+
 ## Universal expected-red admission and update guidance
 
 - Use authenticated test roles and current native command/source/output evidence for expected red, including literal test inputs outside known runner grammars.

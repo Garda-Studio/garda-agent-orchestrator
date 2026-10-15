@@ -1,8 +1,9 @@
 import type { FrozenValidationRecipe, ValidationFileIdentity } from '../../core/project-validation-contract';
 import { validationDigest } from '../../core/project-validation-identity';
 import { assessBoundTrustBoundaryMatrix, assessTrustBoundaryMatrix } from '../../core/trust-boundary-analysis';
-import { currentProjectValidationAuthority, freezeValidationRecipe } from '../project-validation/authority';
-import { readValidationEvents, type ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
+import { currentProjectValidationAuthority } from '../project-validation/authority';
+import { readValidationEvents, readValidationRecipeSnapshot, withValidationEvidenceBatch,
+    type ValidationEvidenceBatch, type ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 import { readValidationResult } from '../project-validation/evidence';
 import type { NativeCaseExecution } from '../review/native-case-semantics';
 import { NativeCaseExecutionUnavailableError, readNativeCaseObligations } from '../review/native-case-semantics';
@@ -74,9 +75,12 @@ function inspectNativePhases(options: QualityValidationPhaseInspectionOptions) {
     return { matrixAssessment, phases: { ...payload, sha256: validationDigest(payload) } satisfies QualityValidationPhases };
 }
 
-function observeExecution(repoRoot: string, taskId: string, snapshot: FrozenValidationRecipe,
-    latest: ReturnType<typeof readValidationEvents>[number] | undefined, scopeContentSha256: string,
-    inspection?: ValidationEvidenceInspection) {
+function observeExecution(options: {
+    repoRoot: string; taskId: string; snapshot: FrozenValidationRecipe;
+    latest: ReturnType<typeof readValidationEvents>[number] | undefined; scopeContentSha256: string;
+    inspection?: ValidationEvidenceInspection; batch: ValidationEvidenceBatch;
+}) {
+    const { repoRoot, taskId, snapshot, latest, scopeContentSha256, inspection, batch } = options;
     const observation: Pick<QualityValidationObligation, 'execution' | 'attempt_id' | 'result_status' | 'result_sha256'> = {
         execution: 'PENDING', attempt_id: latest ? String(latest.details?.attempt_id) : null,
         result_status: null, result_sha256: null
@@ -84,7 +88,8 @@ function observeExecution(repoRoot: string, taskId: string, snapshot: FrozenVali
     let caseExecution: NativeCaseExecution | undefined;
     if (latest?.event_type !== 'PROJECT_VALIDATION_RESULTS_EVALUATED') return { observation, caseExecution, diagnostic: null };
     try {
-        const { snapshot: recorded, attempt, result } = readValidationResult({ repoRoot, taskId, attemptId: observation.attempt_id!, inspection });
+        const { snapshot: recorded, attempt, result } = readValidationResult({ repoRoot, taskId,
+            attemptId: observation.attempt_id!, inspection, batch });
         if (recorded.snapshot_sha256 !== snapshot.snapshot_sha256) throw new Error('Foreign validation quality snapshot');
         observation.result_status = result.status; observation.result_sha256 = result.result_sha256;
         observation.execution = attempt.exit_code === 0 && !attempt.timed_out && !attempt.cancelled && !attempt.truncated
@@ -105,15 +110,14 @@ function observeExecution(repoRoot: string, taskId: string, snapshot: FrozenVali
     }
 }
 
-export function inspectQualityValidationPhases(options: QualityValidationPhaseInspectionOptions) {
+function inspectDeclaredPhases(options: QualityValidationPhaseInspectionOptions,
+    authority: NonNullable<ReturnType<typeof currentProjectValidationAuthority>>, batch: ValidationEvidenceBatch) {
     const { repoRoot, taskId, preflight } = options;
-    const authority = currentProjectValidationAuthority(repoRoot, preflight);
-    if (!authority) return options.matrixRequired ? inspectNativePhases(options) : null;
-    if (preflight.task_id !== taskId) throw new Error('Foreign validation quality preflight');
-    const snapshots = authority.approved.contract.recipes.map(recipe => freezeValidationRecipe(repoRoot, taskId, recipe.id));
+    const snapshots = authority.approved.contract.recipes.map(recipe =>
+        readValidationRecipeSnapshot(repoRoot, taskId, recipe.id, options.inspection, batch));
     if (snapshots.some(snapshot => snapshot.preflight_sha256 !== options.preflightSha256))
         throw new Error('Validation quality preflight changed');
-    const events = readValidationEvents(repoRoot, taskId, options.inspection);
+    const events = readValidationEvents(repoRoot, taskId, options.inspection, batch);
     const start = Math.max(events.map(event => event.event_type).lastIndexOf('TASK_MODE_ENTERED'),
         events.map(event => event.event_type).lastIndexOf('PREFLIGHT_CLASSIFIED'));
     if (start < 0) throw new Error('Validation quality has no current task cycle');
@@ -124,8 +128,9 @@ export function inspectQualityValidationPhases(options: QualityValidationPhaseIn
         const started = recipeEvents.find(event => event.event_type === 'PROJECT_VALIDATION_STARTED');
         const latest = started && recipeEvents.find(event => event.details?.attempt_id === started.details?.attempt_id
             && ['PROJECT_VALIDATION_STARTED', 'PROJECT_VALIDATION_COMPLETED', 'PROJECT_VALIDATION_RESULTS_EVALUATED'].includes(event.event_type));
-        const { observation, caseExecution, diagnostic } = observeExecution(repoRoot, taskId, snapshot, latest,
-            String((preflight.metrics as Record<string, unknown>)?.scope_content_sha256 ?? ''), options.inspection);
+        const { observation, caseExecution, diagnostic } = observeExecution({ repoRoot, taskId, snapshot, latest,
+            scopeContentSha256: String((preflight.metrics as Record<string, unknown>)?.scope_content_sha256 ?? ''),
+            inspection: options.inspection, batch });
         executions.push({ recipe_id: snapshot.recipe.id, snapshot_sha256: snapshot.snapshot_sha256, ...observation });
         if (diagnostic) diagnostics.push(diagnostic);
         for (const target of snapshot.recipe.targets) {
@@ -152,9 +157,6 @@ export function inspectQualityValidationPhases(options: QualityValidationPhaseIn
         }
         if (matrixAssessment.violations.length) matrixAssessment.structural_status = 'INVALID';
     }
-    if (snapshots.some(snapshot => freezeValidationRecipe(repoRoot, taskId, snapshot.recipe.id).snapshot_sha256 !== snapshot.snapshot_sha256)
-        || validationDigest(readValidationEvents(repoRoot, taskId, options.inspection)) !== validationDigest(events))
-        throw new Error('Validation quality identities or timeline changed during inspection');
     const execution: ExecutionObservation = executions.some(recipe => recipe.execution === 'REJECTED') ? 'REJECTED'
         : executions.length > 0 && executions.every(recipe => recipe.execution === 'OBSERVED') ? 'OBSERVED' : 'PENDING';
     const payload = { schema_version: 1 as const, task_id: taskId, preflight_sha256: options.preflightSha256!,
@@ -162,4 +164,12 @@ export function inspectQualityValidationPhases(options: QualityValidationPhaseIn
         execution, semantic: 'PENDING_INDEPENDENT_REVIEW' as const, matrix_sha256: matrixAssessment?.matrix_sha256 ?? null,
         obligations, executions, execution_diagnostics: diagnostics };
     return { matrixAssessment, phases: { ...payload, sha256: validationDigest(payload) } satisfies QualityValidationPhases };
+}
+
+export function inspectQualityValidationPhases(options: QualityValidationPhaseInspectionOptions) {
+    const authority = currentProjectValidationAuthority(options.repoRoot, options.preflight);
+    if (!authority) return options.matrixRequired ? inspectNativePhases(options) : null;
+    if (options.preflight.task_id !== options.taskId) throw new Error('Foreign validation quality preflight');
+    return withValidationEvidenceBatch({ ...options, recipeIds: authority.approved.contract.recipes.map(recipe => recipe.id) },
+        batch => inspectDeclaredPhases(options, authority, batch));
 }

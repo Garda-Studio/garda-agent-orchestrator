@@ -13,7 +13,8 @@ import { bindContainedDestination, assertExistingPathIdentity } from '../../core
 import { withFilesystemLockAsync } from '../../gate-runtime/timeline/task-events-locking';
 import { freezeValidationRecipe, validationPaths } from './authority';
 import { declaredValidationTestPaths } from './focused';
-import { readValidationEvents, recordValidationEvent, writeValidationFact, type ValidationEvidenceInspection } from './attempt-evidence';
+import { readValidationEvents, readValidationRecipeSnapshot, recordValidationEvent, writeValidationFact,
+    type ValidationEvidenceBatch, type ValidationEvidenceInspection } from './attempt-evidence';
 
 export function assertValidationExpectedRed(repoRoot: string, taskId: string, recipeId: string): void {
     readValidationEvents(repoRoot, taskId);
@@ -35,15 +36,15 @@ export function assertValidationExpectedRed(repoRoot: string, taskId: string, re
     if (!eligibleExpectedRedRecipes([snapshot.recipe], preflight.changed_files as unknown[]).some(recipe => recipe.id === recipeId)) throw new Error('Expected-red recipe lacks changed declared test targets');
 }
 export function readValidationAttemptFacts(repoRoot: string, taskId: string, attemptId: string,
-    inspection: ValidationEvidenceInspection = 'active') {
-    const paths = validationPaths(repoRoot, taskId), events = readValidationEvents(repoRoot, taskId, inspection);
+    inspection: ValidationEvidenceInspection = 'active', batch?: ValidationEvidenceBatch) {
+    const paths = validationPaths(repoRoot, taskId), events = readValidationEvents(repoRoot, taskId, inspection, batch);
     const completed = events.filter(event => event.event_type === 'PROJECT_VALIDATION_COMPLETED' && event.details?.attempt_id === attemptId);
     if (completed.length !== 1) throw new Error('Missing or ambiguous canonical completed attempt');
     const details = completed[0].details!, attemptPath = String(details.artifact_path);
     const file = readValidationFile(repoRoot, attemptPath);
     if (file.identity.sha256 !== details.artifact_sha256) throw new Error('Retained attempt digest changed');
     const attempt = JSON.parse(file.bytes.toString('utf8')) as ValidationAttempt;
-    const snapshot = freezeValidationRecipe(repoRoot, taskId, String(details.recipe_id));
+    const snapshot = readValidationRecipeSnapshot(repoRoot, taskId, String(details.recipe_id), inspection, batch);
     if (attempt.schema_version !== 1 || attempt.attempt_id !== attemptId || attempt.snapshot.task_id !== taskId
         || attempt.snapshot.snapshot_sha256 !== snapshot.snapshot_sha256 || details.snapshot_sha256 !== snapshot.snapshot_sha256
         || attempt.cases !== null || attempt.expected_failure !== false) throw new Error('Foreign or stale execution facts');

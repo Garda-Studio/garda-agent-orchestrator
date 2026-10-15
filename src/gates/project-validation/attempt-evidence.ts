@@ -10,12 +10,61 @@ import { appendTaskEventAsync } from '../../gate-runtime/task-events-io';
 import { resolveCurrentNoOpPreflightPath as resolveNativePreflightPath } from '../task-mode/no-op';
 import { pathListSha256 } from '../shared/canonical-path-list';
 import { buildScopeContentFingerprint } from '../compile/compile-gate';
-import { validationPaths } from './authority';
+import { freezeValidationRecipe, validationPaths } from './authority';
+import type { FrozenValidationRecipe } from '../../core/project-validation-contract';
 
 const MAXIMUM_CONTROL_BYTES = 8 * 1024 * 1024;
 const MAXIMUM_EVENTS = 10_000;
 type ValidationEvent = { event_type: string; details?: Record<string, unknown>; integrity?: { task_sequence?: number } };
 export type ValidationEvidenceInspection = 'active' | 'retained_completed';
+
+declare const batchIdentity: unique symbol;
+export type ValidationEvidenceBatch = { readonly [batchIdentity]: true };
+interface ValidationEvidenceBatchState {
+    repoRoot: string; taskId: string; inspection: ValidationEvidenceInspection;
+    events: ValidationEvent[]; recipes: Map<string, FrozenValidationRecipe>;
+}
+const activeBatches = new WeakMap<ValidationEvidenceBatch, ValidationEvidenceBatchState>();
+
+function readBatchState(repoRoot: string, taskId: string, inspection: ValidationEvidenceInspection,
+    batch: ValidationEvidenceBatch): ValidationEvidenceBatchState {
+    const state = activeBatches.get(batch);
+    if (!state || state.repoRoot !== path.resolve(repoRoot) || state.taskId !== taskId || state.inspection !== inspection)
+        throw new Error('Validation evidence batch is inactive or belongs to another task inspection');
+    return state;
+}
+
+export function readValidationRecipeSnapshot(repoRoot: string, taskId: string, recipeId: string,
+    inspection: ValidationEvidenceInspection = 'active', batch?: ValidationEvidenceBatch): FrozenValidationRecipe {
+    if (!batch) return freezeValidationRecipe(repoRoot, taskId, recipeId);
+    const recipe = readBatchState(repoRoot, taskId, inspection, batch).recipes.get(recipeId);
+    if (!recipe) throw new Error('Recipe is outside the current validation evidence batch');
+    return recipe;
+}
+
+export function withValidationEvidenceBatch<T>(options: {
+    repoRoot: string; taskId: string; recipeIds: readonly string[]; inspection?: ValidationEvidenceInspection;
+}, inspect: (batch: ValidationEvidenceBatch) => T): T {
+    const { repoRoot, taskId } = options, inspection = options.inspection ?? 'active';
+    const observation = readValidationEventSnapshot(repoRoot, taskId, inspection);
+    const observationSha256 = validationDigest(observation);
+    const recipes = new Map(options.recipeIds.map(id => [id, freezeValidationRecipe(repoRoot, taskId, id)]));
+    const recipeHashes = new Map([...recipes].map(([id, recipe]) => [id, recipe.snapshot_sha256]));
+    const batch = Object.freeze({}) as ValidationEvidenceBatch;
+    activeBatches.set(batch, { repoRoot: path.resolve(repoRoot), taskId, inspection, events: observation.events, recipes });
+    try {
+        const result = inspect(batch);
+        if (result && typeof (result as { then?: unknown }).then === 'function')
+            throw new Error('Validation evidence batch requires synchronous read-only inspection');
+        for (const [id, hash] of recipeHashes) {
+            if (freezeValidationRecipe(repoRoot, taskId, id).snapshot_sha256 !== hash)
+                throw new Error('Validation recipe or source identities changed during batch inspection');
+        }
+        if (validationDigest(readValidationEventSnapshot(repoRoot, taskId, inspection)) !== observationSha256)
+            throw new Error('Validation timeline or scope changed during batch inspection');
+        return result;
+    } finally { activeBatches.delete(batch); }
+}
 
 export function classifiedContentFingerprint(repoRoot: string, source: string, files: string[]): string | null {
     const staged = ['git_staged_only', 'git_staged_plus_untracked'].includes(source)
@@ -86,7 +135,8 @@ export function readValidationEventSnapshot(repoRoot: string, taskId: string,
 }
 
 export function readValidationEvents(repoRoot: string, taskId: string,
-    inspection: ValidationEvidenceInspection = 'active'): ValidationEvent[] {
+    inspection: ValidationEvidenceInspection = 'active', batch?: ValidationEvidenceBatch): ValidationEvent[] {
+    if (batch) return readBatchState(repoRoot, taskId, inspection, batch).events;
     return readValidationEventSnapshot(repoRoot, taskId, inspection).events;
 }
 

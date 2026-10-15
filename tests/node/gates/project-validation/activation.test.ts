@@ -53,7 +53,7 @@ it('keeps an actual opaque successful process unresolved at the terminal boundar
         const projected = readValidationReviewObligations(f);
         assert.equal(projected.obligations[0].execution, 'OBSERVED');
         assert.equal(projected.obligations[0].result_status, 'UNRESOLVED');
-        assert.ok(terminal(f).some(error => /UNRESOLVED/u.test(error)));
+        assert.ok(terminal(f).some(error => /independent semantic report is missing or unreadable/u.test(error)));
     } finally { await f.cleanup(); }
 });
 

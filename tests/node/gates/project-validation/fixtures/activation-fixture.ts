@@ -11,7 +11,7 @@ import { createTempRepo, initializeGitRepo, loadTaskEntryRulePack, runEnterTaskM
     runShellSmokeForTask, seedInitAnswers, seedTaskQueue } from '../../../cli/commands/gates/preflight/gates-preflight-fixtures';
 import { removeTempRepoWithRetry } from '../../../cli/commands/gate-test-repo-bootstrap';
 
-export function activationFixture(layout: { prefix: string; packageCwd: boolean }, resultFormat: 'tap' | 'opaque' = 'tap') {
+export function activationFixture(layout: { prefix: string; packageCwd: boolean }, resultFormat: 'tap' | 'opaque' = 'tap', recipeCount = 1) {
     const repoRoot = createTempRepo(), taskId = 'T-qualification';
     const bundle = path.join(repoRoot, 'garda-agent-orchestrator');
     const configPath = path.join(bundle, 'live/config/workflow-config.json');
@@ -40,6 +40,9 @@ export function activationFixture(layout: { prefix: string; packageCwd: boolean 
         inputs: [{ path: source, role: 'source' }, { path: target, role: 'test' }, { path: driver, role: 'helper' }],
         targets: [{ id: 'proof', source: target, selector }], required_capabilities: [], result_format: resultFormat,
         timeout_ms: 5000, max_attempts: 1, max_output_bytes: 2048, max_input_bytes: 65536 }] };
+    declaration.recipes = Array.from({ length: recipeCount }, (_, index) => ({
+        ...declaration.recipes[0], id: index === 0 ? 'declared' : `extra-${index}`
+    }));
     const declarationPath = path.join(repoRoot, 'recipes.json');
     fs.writeFileSync(declarationPath, JSON.stringify(declaration));
     seedInitAnswers(repoRoot);

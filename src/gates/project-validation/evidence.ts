@@ -1,15 +1,15 @@
 import { readValidationFile, validationDigest } from '../../core/project-validation-identity';
 import { isPlainRecord } from '../../core/records';
 import { freezeValidationRecipe } from './authority';
-import { readValidationEvents, type ValidationEvidenceInspection } from './attempt-evidence';
+import { readValidationEvents, type ValidationEvidenceBatch, type ValidationEvidenceInspection } from './attempt-evidence';
 import { readValidationAttemptFacts, type evaluateValidationAttempt } from './result-evaluation';
 
 type ValidationResult = Awaited<ReturnType<typeof evaluateValidationAttempt>>;
 
 export function readValidationResult(options: { repoRoot: string; taskId: string; attemptId: string;
-    inspection?: ValidationEvidenceInspection }) {
+    inspection?: ValidationEvidenceInspection; batch?: ValidationEvidenceBatch }) {
     const { repoRoot, taskId, attemptId } = options;
-    const facts = readValidationAttemptFacts(repoRoot, taskId, attemptId, options.inspection), { snapshot, attempt } = facts;
+    const facts = readValidationAttemptFacts(repoRoot, taskId, attemptId, options.inspection, options.batch), { snapshot, attempt } = facts;
     const evaluated = facts.events.filter(event => event.event_type === 'PROJECT_VALIDATION_RESULTS_EVALUATED' && event.details?.attempt_id === attemptId);
     if (evaluated.length !== 1) throw new Error('Missing or ambiguous canonical validation result');
     const details = evaluated[0].details!, resultPath = `${facts.directory}/result.json`;
@@ -26,8 +26,9 @@ export function readValidationResult(options: { repoRoot: string; taskId: string
         || typeof record.expected_failure !== 'boolean'
         || !['PASSED', 'FAILED', 'EXPECTED_FAILURE', 'UNEXPECTED_PASS', 'UNRESOLVED'].includes(String(record.status)))
         throw new Error('Foreign or stale validation result binding');
-    if (freezeValidationRecipe(repoRoot, taskId, snapshot.recipe.id).snapshot_sha256 !== snapshot.snapshot_sha256
-        || validationDigest(readValidationEvents(repoRoot, taskId, options.inspection)) !== validationDigest(facts.events))
+    // A live batch owner revalidates every recipe and the native timeline before returning the combined result.
+    if (!options.batch && (freezeValidationRecipe(repoRoot, taskId, snapshot.recipe.id).snapshot_sha256 !== snapshot.snapshot_sha256
+        || validationDigest(readValidationEvents(repoRoot, taskId, options.inspection)) !== validationDigest(facts.events)))
         throw new Error('Validation identities or timeline changed during result inspection');
     return { snapshot, attempt, result: { ...record, result_path: resultPath, result_sha256: file.identity.sha256 } as ValidationResult };
 }
