@@ -1,5 +1,9 @@
 # Changelog
 
+- Preserve content-addressed native correction package versions before canonical
+  state advances, so retained audit can verify accepted corrections without
+  fixture-created snapshots; missing or altered historical evidence still blocks.
+
 - Verify native command composition proofs against exact final source, original
   command/coverage and retained output without granting parent acceptance.
 

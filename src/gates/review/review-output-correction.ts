@@ -1074,6 +1074,30 @@ function assertPathInsideRepo(repoRoot: string, targetPath: string, label: strin
     return target;
 }
 
+function persistVersionedCorrectionPackage(
+    artifactPath: string,
+    artifact: ReviewOutputCorrectionArtifact
+): void {
+    if (!Number.isSafeInteger(artifact.recovery.correction_attempt) || artifact.recovery.correction_attempt < 1) {
+        throw new Error('Correction package attempt must be a positive safe integer.');
+    }
+    const contents = `${JSON.stringify(artifact, null, 2)}\n`;
+    const packageSha256 = computeRawReviewOutputSha256(contents);
+    const snapshotPath = path.join(
+        path.dirname(artifactPath),
+        `${path.basename(artifactPath, '.json')}-attempt-${artifact.recovery.correction_attempt}-${packageSha256}.json`
+    );
+    try {
+        fs.writeFileSync(snapshotPath, contents, { encoding: 'utf8', flag: 'wx' });
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        if (fileSha256(snapshotPath) !== packageSha256) {
+            throw new Error('Retained correction package snapshot does not match its content-addressed identity.');
+        }
+    }
+    writeFileAtomically(artifactPath, contents, { encoding: 'utf8' });
+}
+
 export function persistReviewOutputCorrection(options: {
     repoRoot: string;
     reviewArtifactPath: string;
@@ -1171,7 +1195,7 @@ export function persistReviewOutputCorrection(options: {
         };
     }
     const artifact = withArtifactSha256(artifactWithoutHash);
-    writeFileAtomically(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, { encoding: 'utf8' });
+    persistVersionedCorrectionPackage(artifactPath, artifact);
     const preparedLaunchArtifactPath = writePreparedCorrectionOnlyLaunchArtifact({
         artifactPath,
         correctionLaunchArtifactPath,
@@ -1225,7 +1249,7 @@ export function persistReviewOutputCorrectionTransportSelection(options: {
         attestationSource: options.attestationSource,
         now: options.now
     });
-    writeFileAtomically(artifactPath, `${JSON.stringify(updated, null, 2)}\n`, { encoding: 'utf8' });
+    persistVersionedCorrectionPackage(artifactPath, updated);
     const updatedFileSha256 = fileSha256(artifactPath) || '';
     if (!/^[0-9a-f]{64}$/u.test(updatedFileSha256)) {
         throw new Error('Correction transport selection could not hash the updated correction package.');

@@ -223,7 +223,7 @@ function writeSelectedCorrectionFixture(options: {
         `${options.taskId}-${options.reviewType}-output-correction-attempt-${options.correctionAttempt || 1}`
             + `-${selectedFileSha256}.json`
     );
-    fs.copyFileSync(artifactPath, snapshotPath);
+    if (!options.persistInitial) fs.copyFileSync(artifactPath, snapshotPath);
     return {
         artifactPath,
         artifactSha256: selected.artifact_sha256 || '',
@@ -354,6 +354,116 @@ describe('gates/task-audit-summary review correction transport', () => {
         for (const tempRoot of tempRoots.splice(0)) {
             fs.rmSync(tempRoot, { recursive: true, force: true });
         }
+    });
+
+    it('rejects malformed loaded attempts before snapshot publication', () => {
+        const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-correction-attempt-containment-'));
+        const repoRoot = path.join(ownedRoot, 'repo');
+        const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+        fs.mkdirSync(reviewsRoot, { recursive: true });
+        tempRoots.push(ownedRoot);
+        const persisted = writeSelectedCorrectionFixture({
+            repoRoot, persistInitial: true, reviewsRoot, taskId: 'T-CORRECTION-ATTEMPT', reviewType: 'code',
+            reviewerIdentity: 'agent:original-reviewer', providerId: 'Codex', providerInvocationId: '/root/original-reviewer',
+            reviewerInvocationEventSha256: '8'.repeat(64), sessionAvailability: 'stateless', selectTransport: false,
+            capabilities: { live_reviewer_continuation: false, api_conversation_continuation: false, correction_only_invocation: true }
+        });
+        const initial = readReviewOutputCorrectionArtifact(persisted.artifactPath).artifact!;
+        const malformed: Record<string, unknown> = {
+            ...initial, recovery: { ...initial.recovery, correction_attempt: '/../../../../../outside' }
+        };
+        delete malformed.artifact_sha256;
+        malformed.artifact_sha256 = sha256RedactedJsonPayload(malformed);
+        fs.writeFileSync(persisted.artifactPath, `${JSON.stringify(malformed, null, 2)}\n`);
+        const loaded = readReviewOutputCorrectionArtifact(persisted.artifactPath);
+        assert.deepEqual(loaded.violations, []);
+        assert.ok(loaded.artifact);
+        const originalBytes = fs.readFileSync(persisted.artifactPath);
+        const filesBefore = fs.readdirSync(reviewsRoot).sort();
+        assert.throws(() => persistReviewOutputCorrectionTransportSelection({
+            repoRoot, artifactPath: persisted.artifactPath, artifact: loaded.artifact!,
+            sessionAvailability: 'stateless', reviewerIdentity: 'agent:original-reviewer',
+            providerInvocationId: '/root/original-reviewer',
+            attestationSource: REVIEW_OUTPUT_CORRECTION_FAIL_CLOSED_ATTESTATION_SOURCE
+        }), /positive safe integer/u);
+        assert.deepEqual(fs.readFileSync(persisted.artifactPath), originalBytes);
+        assert.deepEqual(fs.readdirSync(reviewsRoot).sort(), filesBefore);
+        assert.deepEqual(fs.readdirSync(ownedRoot), ['repo']);
+    });
+
+    it('audits accepted native correction packages without fixture-created snapshots', () => {
+        const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-native-correction-versions-'));
+        const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'reviews');
+        fs.mkdirSync(reviewsRoot, { recursive: true });
+        tempRoots.push(repoRoot);
+        const taskId = 'T-NATIVE-CORRECTION-VERSIONS', reviewerIdentity = 'agent:original-reviewer';
+        const capabilities = { live_reviewer_continuation: false, api_conversation_continuation: false, correction_only_invocation: true };
+        const persisted = writeSelectedCorrectionFixture({
+            repoRoot, persistInitial: true, reviewsRoot, taskId, reviewType: 'code', reviewerIdentity,
+            providerId: 'Codex', providerInvocationId: '/root/original-reviewer',
+            reviewerInvocationEventSha256: '8'.repeat(64), capabilities, sessionAvailability: 'stateless'
+        });
+        const selectedBytes = fs.readFileSync(persisted.artifactPath);
+        const selected = readReviewOutputCorrectionArtifact(persisted.artifactPath).artifact!;
+        const accepted = buildReviewOutputCorrectionCorrectionOnlyAcceptance({
+            artifactPath: persisted.artifactPath, artifact: selected,
+            reviewerIdentity: 'agent:correction-reviewer', providerInvocationId: '/root/correction-reviewer',
+            providerInvocationEventSha256: 'a'.repeat(64), providerResponseEventSha256: 'b'.repeat(64),
+            providerResponseSha256: 'c'.repeat(64), attestationSource: 'codex_collaboration_spawn_agent',
+            reason: 'Isolated fixture correction response.', now: '2026-08-21T00:02:00.000Z'
+        });
+        fs.writeFileSync(persisted.artifactPath, `${JSON.stringify(accepted, null, 2)}\n`, 'utf8');
+        const binding = {
+            task_id: taskId, review_type: 'code', correction_attempt: 1, reviewer_identity: reviewerIdentity,
+            reviewer_attempt_id: 'attempt-1', reviewer_invocation_event_sha256: '8'.repeat(64),
+            provider_id: 'Codex', provider_invocation_id: '/root/original-reviewer',
+            provider_capabilities_sha256: computeReviewOutputCorrectionProviderCapabilitiesSha256({ providerId: 'Codex', capabilities }),
+            session_availability: 'stateless'
+        };
+        const response = {
+            ...binding, correction_producer_identity: 'agent:correction-reviewer',
+            provider_invocation_id: '/root/correction-reviewer', attestation_source: 'codex_collaboration_spawn_agent',
+            corrected_output_sha256: 'c'.repeat(64), provider_response_event_sha256: 'b'.repeat(64),
+            selected_transport: 'correction_only_invocation', correction_package_sha256: persisted.selectedFileSha256
+        };
+        const timelineEvents = [
+            reviewerInvocationEvent({ taskId, reviewType: 'code', reviewerIdentity, providerId: 'Codex',
+                providerInvocationId: '/root/original-reviewer', eventSha256: '8'.repeat(64) }),
+            correctionEvent('REVIEW_OUTPUT_CORRECTION_REQUIRED', {
+                ...binding, correction_package_sha256: persisted.previousFileSha256
+            }),
+            correctionEvent('REVIEW_OUTPUT_CORRECTION_ONLY_INVOCATION', {
+                ...binding, previous_correction_package_sha256: persisted.previousFileSha256,
+                correction_package_sha256: persisted.selectedFileSha256, correction_artifact_path: persisted.artifactPath,
+                correction_artifact_sha256: persisted.artifactSha256, provider_capabilities: capabilities,
+                availability_attestation_source: REVIEW_OUTPUT_CORRECTION_FAIL_CLOSED_ATTESTATION_SOURCE,
+                availability_evidence_type: 'fail_closed_no_provider_session_receipt'
+            }),
+            correctionEvent('REVIEW_OUTPUT_CORRECTION_INVOCATION_ATTESTED', {
+                ...response, original_reviewer_identity: reviewerIdentity
+            }),
+            correctionEvent('REVIEW_OUTPUT_CORRECTION_ACCEPTED', {
+                ...response, correction_artifact_path: persisted.artifactPath, correction_artifact_sha256: accepted.artifact_sha256,
+                original_output_sha256: accepted.binding.original_output_sha256,
+                findings_semantic_fingerprint: accepted.binding.findings_semantic_fingerprint
+            })
+        ];
+        const audit = () => buildReviewFindingsAuditSummary({ repoRoot, reviewsRoot, taskId,
+            requiredReviews: CORRECTION_REQUIRED_REVIEWS, currentPreflight: null, timelineEvents, reviewAttemptSummary: null });
+        const summary = audit();
+        assert.equal(summary?.status, 'CLEAR', JSON.stringify(summary?.correction_transports));
+        assert.ok(summary?.correction_transports?.every(entry => entry.evidence_valid));
+        assert.deepEqual(fs.readFileSync(persisted.snapshotPath), selectedBytes);
+        const originalSnapshot = path.join(reviewsRoot, `${taskId}-code-output-correction-attempt-1-${persisted.previousFileSha256}.json`);
+        assert.equal(fileSha256(originalSnapshot), persisted.previousFileSha256);
+        const acceptedBytes = fs.readFileSync(persisted.artifactPath);
+        fs.writeFileSync(persisted.snapshotPath, '{}\n');
+        assert.equal(audit()?.status, 'BLOCKED');
+        fs.writeFileSync(persisted.snapshotPath, selectedBytes);
+        assert.equal(audit()?.status, 'CLEAR');
+        fs.unlinkSync(persisted.snapshotPath);
+        assert.equal(audit()?.status, 'BLOCKED');
+        assert.deepEqual(fs.readFileSync(persisted.artifactPath), acceptedBytes);
     });
 
     it('binds legacy attempts to the original provider invocation without overriding explicit attempt evidence', () => {
