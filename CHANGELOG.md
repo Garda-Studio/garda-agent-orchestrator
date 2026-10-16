@@ -1,5 +1,7 @@
 # Changelog
 
+- Synchronize the tracked start-task router with canonical schema-driven reviewer launch guidance, preserving fresh isolated reviews and their evidence requirements.
+
 - T-279: Load parity/help rendering from its focused owner during command dispatch, preserving banner and status helper exports on cold ordinary CLI startup.
 
 - T-278: Type parent-audit test fixtures and native reader callbacks without explicit any, preserving the existing assertions and negative-case behavior.
