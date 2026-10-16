@@ -101,6 +101,17 @@ describe('native original parent obligation qualification', () => {
         assert.deepEqual([...result.qualifiedProofs].sort(), [...facts.requirements.requiredProofs].sort());
         assert.equal('parentPass' in result, false); assert.deepEqual(fs.readFileSync(timeline), before);
     });
+    it('qualifies the normalized native memory artifact path without changing evidence', () => {
+        const normalized = memoryFile.replace(/\\/gu, '/');
+        mock.method(memoryApi, 'getProjectMemoryImpactLifecycleEvidence', () => ({
+            required: true, evidence_status: 'CURRENT', artifact_path: normalized
+        }));
+        const before = fs.readFileSync(timeline), bytes = fs.readFileSync(memoryFile);
+        const result = reader()(root, task);
+        assert.equal(result.status, 'QUALIFIED'); assert.deepEqual(result.violations, []);
+        assert.deepEqual(fs.readFileSync(timeline), before);
+        assert.deepEqual(fs.readFileSync(memoryFile), bytes);
+    });
     it('preserves missing and rejected original proof boundaries', () => {
         const read = reader();
         mock.method(memoryApi, 'getProjectMemoryImpactLifecycleEvidence', () => ({ evidence_status: 'MISSING' }));

@@ -32,9 +32,10 @@ function sequence(event: Event): number {
 }
 
 function readMemoryRecord(root: string, file: string): Record<string, unknown> {
-    const bytes = readTransactionBytes(root, file);
+    const nativePath = path.resolve(root, file);
+    const bytes = readTransactionBytes(root, nativePath);
     if (!bytes) throw new Error('Original parent memory artifact is missing.');
-    return readParentAuditProofRecord(root, file, createHash('sha256').update(bytes).digest('hex'));
+    return readParentAuditProofRecord(root, nativePath, createHash('sha256').update(bytes).digest('hex'));
 }
 
 function readCleanOriginalPolicy(root: string, taskId: string, original: Event[]) {

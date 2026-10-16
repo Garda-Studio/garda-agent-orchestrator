@@ -1,5 +1,8 @@
 # Changelog
 
+- Resolve native parent memory evidence paths before strict file reads so Windows
+  forward separators do not reject valid unchanged artifacts.
+
 - Qualify recorded clean pre-implementation parent scope and its frozen suite
   declaration while retaining actual post-child command, memory and source proof
   requirements; do not invent historical WIP captures or test executions.
