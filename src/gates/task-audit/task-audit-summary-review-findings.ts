@@ -557,6 +557,7 @@ interface IndexedCorrectionEvent {
     eventIndex: number;
     timestampUtc: string | null;
     details: Record<string, unknown>;
+    nativeInvocationBindingValid?: boolean;
 }
 
 type CorrectionTransportSelection = Exclude<
@@ -686,6 +687,65 @@ function hasCorrectionSelection(
     return false;
 }
 
+function isNativeCorrectionLaunchBound(
+    launch: IndexedCorrectionEvent,
+    details: Record<string, unknown>,
+    selected: Record<string, unknown>
+): boolean {
+    const input = launch.details;
+    return input.task_id === selected.task_id && input.review_type === selected.review_type
+        && input.reviewer_execution_mode === 'delegated_subagent'
+        && input.invocation_role === 'review_output_correction'
+        && input.reviewer_identity === details.correction_producer_identity
+        && input.provider_invocation_id === details.provider_invocation_id
+        && input.reviewer_launch_attempt_id === details.provider_invocation_id
+        && input.launch_input_mode === 'review_output_correction_artifact'
+        && input.launch_input_sha256 === selected.correction_package_sha256
+        && input.correction_artifact_sha256 === selected.correction_package_sha256
+        && input.original_reviewer_invocation_event_sha256 === selected.reviewer_invocation_event_sha256
+        && isSha256(stringValue(input.reviewer_launch_artifact_sha256))
+        && input.correction_launch_artifact_sha256 === input.reviewer_launch_artifact_sha256
+        && input.reviewer_launch_attestation_source === details.attestation_source
+        && isProviderOwnedReviewOutputCorrectionSessionAttestationSource(stringValue(details.attestation_source) || '');
+}
+
+function bindNativeCorrectionInvocation(options: {
+    event: IndexedCorrectionEvent;
+    eventSha256: string | null;
+    selection: IndexedCorrectionTransportEvent | undefined;
+    reviewerInvocations: ReadonlyMap<string, readonly IndexedCorrectionEvent[]>;
+}): Record<string, unknown> | null {
+    const { event, eventSha256, selection, reviewerInvocations } = options;
+    const details = event.details, selected = selection?.details;
+    const launchHash = stringValue(details.provider_invocation_event_sha256);
+    const launches = launchHash ? reviewerInvocations.get(launchHash) || [] : [];
+    const launch = launches.length === 1 ? launches[0] : null;
+    if (!selection || !selected || !launch || !isSha256(eventSha256)
+        || selection.transport !== 'correction_only_invocation'
+        || launch.eventIndex <= selection.eventIndex || launch.eventIndex >= event.eventIndex
+        || details.task_id !== selected.task_id || details.review_type !== selected.review_type
+        || details.original_reviewer_identity !== selected.reviewer_identity
+        || details.reviewer_identity !== details.correction_producer_identity
+        || details.reviewer_attempt_id !== selected.reviewer_attempt_id
+        || details.correction_attempt !== selected.correction_attempt
+        || details.launch_input_mode !== 'review_output_correction_artifact_path'
+        || details.launch_input_sha256 !== selected.correction_package_sha256
+        || details.correction_package_sha256 !== selected.correction_package_sha256
+        || details.correction_artifact_sha256 !== selected.correction_artifact_sha256
+        || details.availability_evidence_type !== 'provider_native_response_receipt'
+        || details.availability_attestation_source !== details.attestation_source
+        || !isSha256(stringValue(details.availability_provider_response_sha256))
+        || !isNativeCorrectionLaunchBound(launch, details, selected)) return null;
+    const derived = {
+        reviewer_invocation_event_sha256: selected.reviewer_invocation_event_sha256,
+        corrected_output_sha256: details.availability_provider_response_sha256,
+        provider_response_event_sha256: eventSha256
+    };
+    if (Object.entries(derived).some(([key, value]) =>
+        Object.prototype.hasOwnProperty.call(details, key) && details[key] !== value)) return null;
+    return { ...details, ...derived };
+}
+
 function collectCorrectionTransportEvents(
     events: readonly ReviewReuseTelemetryEventLike[],
     options: {
@@ -747,9 +807,18 @@ function collectCorrectionTransportEvents(
                 options.workMetrics.evidence_events_windowed += 1;
             }
         } else if (eventType === 'REVIEW_OUTPUT_CORRECTION_INVOCATION_ATTESTED') {
-            correctionInvocationAttestations.push(indexedEvent);
+            const nativeDetails = details.state === eventType
+                ? bindNativeCorrectionInvocation({ event: indexedEvent,
+                    eventSha256: reviewerInvocationEventSha256,
+                    selection: activeSelectionIndex === undefined ? undefined : selectionEventsByIndex.get(activeSelectionIndex),
+                    reviewerInvocations: reviewerInvocationsBySha256 })
+                : null;
+            const attestationEvent = details.state === eventType
+                ? { ...indexedEvent, details: nativeDetails || details, nativeInvocationBindingValid: nativeDetails !== null }
+                : indexedEvent;
+            correctionInvocationAttestations.push(attestationEvent);
             if (activeEvidenceWindow) {
-                activeEvidenceWindow.invocationAttestations.push(indexedEvent);
+                activeEvidenceWindow.invocationAttestations.push(attestationEvent);
                 options.workMetrics.evidence_events_windowed += 1;
             }
         } else if (eventType === 'REVIEW_OUTPUT_CORRECTION_REQUIRED') {
@@ -1118,6 +1187,7 @@ interface CorrectionArtifactChainValidationOptions {
     correctionPackageSha256: string | null;
     details: Record<string, unknown>;
     artifactCache: CorrectionArtifactCache;
+    nativeSelection?: boolean;
 }
 
 interface CorrectionArtifactChainValidationResult {
@@ -1173,8 +1243,12 @@ function validateHistoricalCorrectionArtifactChain(
         `${options.taskId}-${options.reviewType}-output-correction-attempt-${options.correctionAttempt}`
             + `-${options.correctionPackageSha256}.json`
     );
-    const snapshotPath = stringValue(options.details.correction_artifact_snapshot_path);
-    const snapshotSha256 = stringValue(options.details.correction_artifact_snapshot_sha256);
+    const snapshotPath = options.nativeSelection
+        && !Object.prototype.hasOwnProperty.call(options.details, 'correction_artifact_snapshot_path')
+        ? expectedSnapshotPath : stringValue(options.details.correction_artifact_snapshot_path);
+    const snapshotSha256 = options.nativeSelection
+        && !Object.prototype.hasOwnProperty.call(options.details, 'correction_artifact_snapshot_sha256')
+        ? options.correctionPackageSha256 : stringValue(options.details.correction_artifact_snapshot_sha256);
     const resolvedSnapshotPath = snapshotPath ? path.resolve(options.repoRoot, snapshotPath) : null;
     if (
         !resolvedSnapshotPath
@@ -1240,7 +1314,11 @@ function validateHistoricalCorrectionArtifactChain(
 function validateHistoricalCorrectionTransport(
     options: HistoricalCorrectionTransportValidationOptions
 ): string[] {
-    const artifactValidation = validateHistoricalCorrectionArtifactChain(options);
+    const artifactValidation = validateHistoricalCorrectionArtifactChain({
+        ...options,
+        nativeSelection: options.invocationAttestations.length === 1
+            && options.invocationAttestations[0].nativeInvocationBindingValid === true
+    });
     const violations = artifactValidation.violations;
     const snapshot = artifactValidation.artifact;
     const eventArtifactPath = artifactValidation.eventArtifactPath;
@@ -1307,8 +1385,8 @@ function validateHistoricalCorrectionTransport(
         && stringValue(invocation.reviewer_invocation_event_sha256)
             === stringValue(options.details.reviewer_invocation_event_sha256)
         && !!stringValue(invocation.correction_producer_identity)
-        && stringValue(invocation.provider_invocation_id)
-            === stringValue(options.details.provider_invocation_id)
+        && (invocationAttestation.nativeInvocationBindingValid === true
+            || stringValue(invocation.provider_invocation_id) === stringValue(options.details.provider_invocation_id))
         && isProviderOwnedReviewOutputCorrectionSessionAttestationSource(
             stringValue(invocation.attestation_source) || ''
         )
@@ -1324,7 +1402,7 @@ function validateHistoricalCorrectionTransport(
         && typeof invocation.correction_attempt === 'number'
         && invocation.correction_attempt === options.correctionAttempt
     );
-    if (!invocationMatches) {
+    if (invocationAttestation.nativeInvocationBindingValid === false || !invocationMatches) {
         violations.push('Historical correction transport is not bound to its provider invocation attestation.');
         return violations;
     }
@@ -1536,8 +1614,9 @@ function validatePersistedCorrectionTransport(
             ? filterCorrectionEvents(
                 options.invocationAttestations,
                 options.artifactCache.workMetrics,
-                ({ details: invocation }) => (
-                    stringValue(invocation.task_id) === options.taskId
+                ({ details: invocation, nativeInvocationBindingValid }) => (
+                    nativeInvocationBindingValid !== false
+                    && stringValue(invocation.task_id) === options.taskId
                     && stringValue(invocation.review_type) === options.reviewType
                     && stringValue(invocation.original_reviewer_identity)
                         === persisted.binding.reviewer_identity

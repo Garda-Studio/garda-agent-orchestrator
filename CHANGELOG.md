@@ -1,5 +1,9 @@
 # Changelog
 
+- Audit native correction invocation telemetry against the actual correction
+  launch and response-event identity; retain original package bindings and reject
+  conflicting aliases, missing launches, altered digests and reversed ordering.
+
 - Preserve content-addressed native correction package versions before canonical
   state advances, so retained audit can verify accepted corrections without
   fixture-created snapshots; missing or altered historical evidence still blocks.

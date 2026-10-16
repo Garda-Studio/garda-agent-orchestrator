@@ -453,6 +453,70 @@ describe('gates/task-audit-summary review correction transport', () => {
         const summary = audit();
         assert.equal(summary?.status, 'CLEAR', JSON.stringify(summary?.correction_transports));
         assert.ok(summary?.correction_transports?.every(entry => entry.evidence_valid));
+        const nativeInvocation = {
+            ...correctionEvent('REVIEW_OUTPUT_CORRECTION_INVOCATION_ATTESTED', {
+                task_id: taskId, review_type: 'code', reviewer_identity: 'agent:correction-reviewer',
+                original_reviewer_identity: reviewerIdentity, correction_producer_identity: 'agent:correction-reviewer',
+                reviewer_attempt_id: 'attempt-1', provider_invocation_id: '/root/correction-reviewer',
+                provider_invocation_event_sha256: 'a'.repeat(64), attestation_source: 'codex_collaboration_spawn_agent',
+                availability_attestation_source: 'codex_collaboration_spawn_agent',
+                availability_evidence_type: 'provider_native_response_receipt',
+                availability_provider_response_sha256: 'c'.repeat(64),
+                launch_input_mode: 'review_output_correction_artifact_path', launch_input_sha256: persisted.selectedFileSha256,
+                correction_artifact_path: persisted.artifactPath, correction_artifact_sha256: persisted.artifactSha256,
+                correction_package_sha256: persisted.selectedFileSha256, correction_attempt: 1,
+                validation_artifact_sha256: selected.binding.validation_artifact_sha256,
+                selected_transport: 'correction_only_invocation', provider_id: 'Codex',
+                provider_capabilities_sha256: binding.provider_capabilities_sha256, session_availability: 'stateless',
+                state: 'REVIEW_OUTPUT_CORRECTION_INVOCATION_ATTESTED', fork_context: false
+            }),
+            integrity: { task_sequence: 5, prev_event_sha256: 'a'.repeat(64), event_sha256: 'b'.repeat(64) }
+        };
+        const correctionLaunch = reviewerInvocationEvent({ taskId, reviewType: 'code',
+            reviewerIdentity: 'agent:correction-reviewer', providerId: 'Codex',
+            providerInvocationId: '/root/correction-reviewer', eventSha256: 'a'.repeat(64) });
+        delete correctionLaunch.details.execution_provider;
+        Object.assign(correctionLaunch.details, {
+            invocation_role: 'review_output_correction', reviewer_launch_attempt_id: '/root/correction-reviewer',
+            launch_input_mode: 'review_output_correction_artifact', launch_input_sha256: persisted.selectedFileSha256,
+            correction_artifact_sha256: persisted.selectedFileSha256,
+            original_reviewer_invocation_event_sha256: binding.reviewer_invocation_event_sha256,
+            correction_launch_artifact_sha256: correctionLaunch.details.reviewer_launch_artifact_sha256
+        });
+        const nativeTimeline = [...timelineEvents.slice(0, 3), correctionLaunch, nativeInvocation, timelineEvents[4]];
+        const nativeAudit = (events = nativeTimeline) => buildReviewFindingsAuditSummary({ repoRoot, reviewsRoot, taskId,
+            requiredReviews: CORRECTION_REQUIRED_REVIEWS, currentPreflight: null, timelineEvents: events, reviewAttemptSummary: null });
+        assert.equal(nativeAudit()?.status, 'CLEAR');
+        for (const changed of [
+            { launch_input_sha256: 'd'.repeat(64) },
+            { provider_invocation_event_sha256: 'd'.repeat(64) },
+            { availability_provider_response_sha256: 'd'.repeat(64) },
+            { original_reviewer_identity: 'agent:foreign-reviewer' },
+            { reviewer_invocation_event_sha256: 'd'.repeat(64) },
+            { corrected_output_sha256: 'd'.repeat(64) },
+            { provider_response_event_sha256: 'd'.repeat(64) }
+        ]) {
+            assert.equal(nativeAudit([...nativeTimeline.slice(0, 4),
+                { ...nativeInvocation, details: { ...nativeInvocation.details, ...changed } }, nativeTimeline[5]])?.status, 'BLOCKED');
+        }
+        assert.equal(nativeAudit(nativeTimeline.filter(event => event !== correctionLaunch))?.status, 'BLOCKED');
+        assert.equal(nativeAudit([...nativeTimeline.slice(0, 3), nativeInvocation, correctionLaunch, nativeTimeline[5]])?.status, 'BLOCKED');
+        for (const changed of [{ launch_input_sha256: 'd'.repeat(64) }, { correction_artifact_sha256: 'd'.repeat(64) }]) {
+            assert.equal(nativeAudit([...nativeTimeline.slice(0, 3),
+                { ...correctionLaunch, details: { ...correctionLaunch.details, ...changed } }, ...nativeTimeline.slice(4)])?.status, 'BLOCKED');
+        }
+        const nextPackage = 'e'.repeat(64);
+        const historical = nativeAudit([...nativeTimeline.slice(0, 5),
+            correctionEvent('REVIEW_OUTPUT_CORRECTION_REQUIRED', {
+                ...binding, correction_attempt: 2, correction_package_sha256: nextPackage,
+                correction_artifact_path: persisted.artifactPath
+            }),
+            correctionEvent('REVIEW_OUTPUT_CORRECTION_ONLY_INVOCATION', {
+                ...timelineEvents[2].details, correction_attempt: 2, previous_correction_package_sha256: nextPackage
+            })]);
+        assert.equal(historical?.correction_transports?.find(entry =>
+            entry.transport === 'correction_only_invocation' && entry.correction_attempt === 1)?.evidence_valid, true);
+        assert.equal(historical?.status, 'BLOCKED'); // The later pending correction is not accepted.
         assert.deepEqual(fs.readFileSync(persisted.snapshotPath), selectedBytes);
         const originalSnapshot = path.join(reviewsRoot, `${taskId}-code-output-correction-attempt-1-${persisted.previousFileSha256}.json`);
         assert.equal(fileSha256(originalSnapshot), persisted.previousFileSha256);
