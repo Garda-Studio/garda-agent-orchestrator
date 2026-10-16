@@ -1,5 +1,7 @@
 # Changelog
 
+- T-278: Type parent-audit test fixtures and native reader callbacks without explicit any, preserving the existing assertions and negative-case behavior.
+
 - T-277: Align the status performance-guidance regression with the accepted absent-fallback contract, retaining the configured optimized command and rejecting invented fallback guidance. Runtime behavior is unchanged.
 
 - T-276: Derive the legacy human-commit expiration regression fixture from the active confirmation-age policy instead of the former ten-minute limit. Runtime confirmation and task-bound commit requirements are unchanged.

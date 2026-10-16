@@ -19,9 +19,15 @@ const gitApi = require('../../../../src/core/git-helpers');
 const taskModeApi = require('../../../../src/gates/task-mode/task-mode-evidence');
 const task = 'T-PARENT-OBLIGATION-1', command = 'node --test original.test.js', hash = 'a'.repeat(64);
 type CommandIdentity = { command: string; coverage: string | null };
+type ParentObligationReader = typeof import('../../../../src/gates/task-audit/task-audit-summary-parent-obligation-proofs').readNativeParentObligationProofs;
+type ParentFactsFixture = {
+    facts: Omit<Parameters<typeof deriveDecomposedParentAuditRequirements>[0], 'historicalFailures'> & { historicalFailures: string[] };
+    requirements: Pick<ReturnType<typeof deriveDecomposedParentAuditRequirements>, 'status' | 'requiredProofs' | 'violations'>;
+    childSources: { taskId: string }[];
+};
 
-function reader(): (root: string, id: string) => any {
-    let api: any;
+function reader(): ParentObligationReader {
+    let api: { readNativeParentObligationProofs: ParentObligationReader };
     try { api = require('../../../../src/gates/task-audit/task-audit-summary-parent-obligation-proofs'); }
     catch (error) { assert.fail('Native parent obligation proof reader must exist: ' + String(error)); }
     assert.equal(typeof api.readNativeParentObligationProofs, 'function');
@@ -30,7 +36,7 @@ function reader(): (root: string, id: string) => any {
 
 describe('native original parent obligation qualification', () => {
     let root: string, bundle: string, reviews: string, timeline: string, memoryFile: string, manifestFile: string;
-    let facts: any, memory: any, manifest: any, calls: string[];
+    let facts: ParentFactsFixture | null, memory: Record<string, unknown>, manifest: Record<string, unknown>, calls: string[];
     let signedCommands: CommandIdentity[], requests: CommandIdentity[];
     const add = (type: string, details: object = {}, outcome: 'INFO' | 'PASS' | 'PASSED' | 'FAIL' | 'BLOCKED' = 'INFO') =>
         appendMandatoryTaskEvent(bundle, task, type, outcome, 'Isolated original-parent proof fixture.', details, { actor: 'orchestrator' });
@@ -48,8 +54,8 @@ describe('native original parent obligation qualification', () => {
         for (const name of new Set(identities.map(identity => identity.command))) {
             if (name !== command) add('INTERMEDIATE_COMMAND_RUN', { command: name, artifact_path: path.join(reviews, 'second-command.json'), artifact_sha256: hash }, 'PASSED');
         }
-        facts.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
-        facts.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
+        facts!.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
+        facts!.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
     };
     beforeEach(() => {
         root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-parent-obligations-'));
@@ -81,7 +87,8 @@ describe('native original parent obligation qualification', () => {
         signedCommands = [{ command, coverage: hash }]; requests = [];
         // Existing suites own signed Git, graph, WIP and memory authenticity; these mocks isolate their new composition.
         mock.method(parentApi, 'readNativeDecomposedParentFacts', () => { calls.push('facts'); return facts; });
-        mock.method(commandApi, 'readNativeSourceCompositionProof', (_root: string, request: any) => {
+        mock.method(commandApi, 'readNativeSourceCompositionProof', (_root: string,
+            request: Parameters<typeof import('../../../../src/gates/task-audit/task-audit-summary-decomposed-parent-proofs').readNativeSourceCompositionProof>[1]) => {
             calls.push('command'); assert.equal(request.taskId, task);
             const identity = { command: request.command, coverage: request.coverageContractSha256 }; requests.push(identity);
             if (!signedCommands.some(signed => signed.command === identity.command && signed.coverage === identity.coverage)) {
@@ -98,10 +105,10 @@ describe('native original parent obligation qualification', () => {
     afterEach(() => { mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); });
 
     it('qualifies all original obligations without granting parent audit acceptance', () => {
-        const before = fs.readFileSync(timeline), result = reader()(root, task);
+        const before = fs.readFileSync(timeline), result = reader()(root, task)!;
         assert.equal(result.status, 'QUALIFIED'); assert.deepEqual(result.violations, []);
         assert.deepEqual(calls, ['facts', 'command']);
-        assert.deepEqual([...result.qualifiedProofs].sort(), [...facts.requirements.requiredProofs].sort());
+        assert.deepEqual([...result.qualifiedProofs].sort(), [...facts!.requirements.requiredProofs].sort());
         assert.equal('parentPass' in result, false); assert.deepEqual(fs.readFileSync(timeline), before);
     });
     it('qualifies the normalized native memory artifact path without changing evidence', () => {
@@ -110,7 +117,7 @@ describe('native original parent obligation qualification', () => {
             required: true, evidence_status: 'CURRENT', artifact_path: normalized
         }));
         const before = fs.readFileSync(timeline), bytes = fs.readFileSync(memoryFile);
-        const result = reader()(root, task);
+        const result = reader()(root, task)!;
         assert.equal(result.status, 'QUALIFIED'); assert.deepEqual(result.violations, []);
         assert.deepEqual(fs.readFileSync(timeline), before);
         assert.deepEqual(fs.readFileSync(memoryFile), bytes);
@@ -118,76 +125,76 @@ describe('native original parent obligation qualification', () => {
     it('preserves missing and rejected original proof boundaries', () => {
         const read = reader();
         mock.method(memoryApi, 'getProjectMemoryImpactLifecycleEvidence', () => ({ evidence_status: 'MISSING' }));
-        assert.match(read(root, task).violations.join(' '), /memory/iu);
+        assert.match(read(root, task)!.violations.join(' '), /memory/iu);
         mock.method(memoryApi, 'getProjectMemoryImpactLifecycleEvidence', () => ({ evidence_status: 'CURRENT', artifact_path: memoryFile }));
         mock.method(commandApi, 'readNativeSourceCompositionProof', () => { throw Error('Foreign or stale native command proof.'); });
-        assert.match(read(root, task).violations.join(' '), /Foreign or stale/u);
+        assert.match(read(root, task)!.violations.join(' '), /Foreign or stale/u);
         mock.method(wipApi, 'readAuthenticatedSplitRequiredWipManifestSnapshot', () => { throw Error('Corrupt retained WIP.'); });
-        assert.match(read(root, task).violations.join(' '), /Corrupt retained WIP/u);
+        assert.match(read(root, task)!.violations.join(' '), /Corrupt retained WIP/u);
     });
     it('does not qualify absent original inputs or clear unrelated historical failures', () => {
         const read = reader();
-        facts.facts.historicalFailures.push('required-reviews-check');
-        facts.requirements = deriveDecomposedParentAuditRequirements(facts.facts);
-        assert.match(read(root, task).violations.join(' '), /required-reviews-check/u);
+        facts!.facts.historicalFailures.push('required-reviews-check');
+        facts!.requirements = deriveDecomposedParentAuditRequirements(facts!.facts);
+        assert.match(read(root, task)!.violations.join(' '), /required-reviews-check/u);
         fs.unlinkSync(path.join(reviews, task + '-preflight.json'));
-        assert.match(read(root, task).violations.join(' '), /preflight/iu);
+        assert.match(read(root, task)!.violations.join(' '), /preflight/iu);
     });
     it('requires original command coverage and a successful post-completion command', () => {
         const read = reader();
         const second = { command: 'node --test second.test.js', coverage: 'b'.repeat(64) };
         signedCommands.push(second);
         originalCommands([{ command, coverage: hash }, second, { command, coverage: hash }]);
-        assert.equal(read(root, task).status, 'QUALIFIED');
+        assert.equal(read(root, task)!.status, 'QUALIFIED');
         assert.deepEqual(requests, [{ command, coverage: hash }, second]);
         signedCommands.pop(); requests = [];
-        const uncovered = read(root, task);
+        const uncovered = read(root, task)!;
         assert.equal(uncovered.status, 'BLOCKED'); assert.match(uncovered.violations.join(' '), /coverage/u);
         assert.deepEqual(requests, [{ command, coverage: hash }, second]);
         add('INTERMEDIATE_COMMAND_RUN', { command, artifact_path: 'missing.json', artifact_sha256: hash }, 'FAIL');
-        const failed = read(root, task);
+        const failed = read(root, task)!;
         assert.equal(failed.status, 'BLOCKED'); assert.match(failed.violations.join(' '), /command/iu);
         const events = entries(); fs.unlinkSync(timeline);
         for (const e of events.filter(e => e.event_type !== 'FULL_SUITE_VALIDATION_FAILED')) add(e.event_type, e.details, e.outcome);
-        facts.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
-        facts.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
-        assert.match(read(root, task).violations.join(' '), /original.*command/iu);
+        facts!.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
+        facts!.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
+        assert.match(read(root, task)!.violations.join(' '), /original.*command/iu);
     });
     it('preserves nullable coverage and rejects missing or mismatched original proof identities', () => {
         const read = reader();
         for (const signedCoverage of [null, 'b'.repeat(64)]) {
             signedCommands = [{ command, coverage: signedCoverage }]; requests = [];
-            const result = read(root, task);
+            const result = read(root, task)!;
             assert.equal(result.status, 'BLOCKED'); assert.match(result.violations.join(' '), /coverage/u);
             assert.deepEqual(requests, [{ command, coverage: hash }]);
         }
         originalCommands([{ command, coverage: null }]); requests = [];
-        assert.equal(read(root, task).status, 'BLOCKED');
+        assert.equal(read(root, task)!.status, 'BLOCKED');
         assert.deepEqual(requests, [{ command, coverage: null }]);
         signedCommands = [{ command, coverage: null }];
-        assert.equal(read(root, task).status, 'QUALIFIED');
+        assert.equal(read(root, task)!.status, 'QUALIFIED');
         originalCommands([{ command, coverage: null }, { command, coverage: hash }]); requests = [];
-        const distinctCoverage = read(root, task);
+        const distinctCoverage = read(root, task)!;
         assert.equal(distinctCoverage.status, 'BLOCKED'); assert.match(distinctCoverage.violations.join(' '), /coverage/u);
         assert.deepEqual(requests, [{ command, coverage: null }, { command, coverage: hash }]);
     });
     it('rejects changed memory, WIP identity, input bytes and corrupt timelines', () => {
         const read = reader();
         fs.writeFileSync(memoryFile, JSON.stringify({ ...memory, task_id: 'T-FOREIGN' }));
-        assert.match(read(root, task).violations.join(' '), /memory/iu);
-        manifest.task_id = 'T-FOREIGN'; assert.match(read(root, task).violations.join(' '), /WIP/u);
+        assert.match(read(root, task)!.violations.join(' '), /memory/iu);
+        manifest.task_id = 'T-FOREIGN'; assert.match(read(root, task)!.violations.join(' '), /WIP/u);
         mock.method(memoryApi, 'getProjectMemoryImpactLifecycleEvidence', () => {
             fs.writeFileSync(path.join(root, 'TASK.md'), 'Changed queue');
             return { evidence_status: 'CURRENT', artifact_path: memoryFile };
         });
-        assert.match(read(root, task).violations.join(' '), /changed/iu);
+        assert.match(read(root, task)!.violations.join(' '), /changed/iu);
         fs.writeFileSync(timeline, fs.readFileSync(timeline, 'utf8').replace(command, 'changed-command'));
-        assert.match(read(root, task).violations.join(' '), /timeline/iu);
+        assert.match(read(root, task)!.violations.join(' '), /timeline/iu);
     });
     it('retains ordinary leaf applicability and rejects an incomplete native graph', () => {
         const read = reader(); facts = null; assert.equal(read(root, task), null);
-        facts = { facts: {}, childSources: [], requirements: { status: 'BLOCKED', violations: ['Missing child source.'], requiredProofs: [] } };
-        assert.deepEqual(read(root, task).violations, ['Missing child source.']);
+        facts = { facts: {} as ParentFactsFixture['facts'], childSources: [], requirements: { status: 'BLOCKED', violations: ['Missing child source.'], requiredProofs: [] } };
+        assert.deepEqual(read(root, task)!.violations, ['Missing child source.']);
         assert.equal(calls.includes('command'), false);
     });
 
@@ -199,10 +206,10 @@ describe('native original parent obligation qualification', () => {
         for (const event of prior.filter(event => !['FULL_SUITE_VALIDATION_FAILED', 'SPLIT_REQUIRED_WIP_CAPTURED'].includes(event.event_type))) {
             add(event.event_type, event.details, event.outcome);
         }
-        facts.facts.historicalFailures = [];
-        facts.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
-        facts.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
-        facts.requirements = deriveDecomposedParentAuditRequirements(facts.facts);
+        facts!.facts.historicalFailures = [];
+        facts!.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
+        facts!.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
+        facts!.requirements = deriveDecomposedParentAuditRequirements(facts!.facts);
         const configPath = path.join(bundle, 'live/config/workflow-config.json');
         fs.mkdirSync(path.dirname(configPath), { recursive: true });
         fs.writeFileSync(configPath, JSON.stringify({ full_suite_validation: { enabled: true, command } }));
@@ -218,13 +225,13 @@ describe('native original parent obligation qualification', () => {
 
     it('qualifies a native clean split before implementation without inventing capture or execution history', () => {
         cleanOriginal(); const before = fs.readFileSync(timeline);
-        const result = reader()(root, task);
+        const result = reader()(root, task)!;
         assert.equal(result.status, 'QUALIFIED'); assert.deepEqual(result.violations, []);
         assert.deepEqual(requests, [{ command, coverage: null }]);
         assert.deepEqual(fs.readFileSync(timeline), before);
         assert.equal(entries().some(event => ['SPLIT_REQUIRED_WIP_CAPTURED', 'FULL_SUITE_VALIDATION_PASSED'].includes(event.event_type)), false);
         add('INTERMEDIATE_COMMAND_RUN', { command, artifact_path: 'failed.json', artifact_sha256: hash }, 'FAIL');
-        assert.equal(reader()(root, task).status, 'BLOCKED');
+        assert.equal(reader()(root, task)!.status, 'BLOCKED');
     });
 
     it('keeps missing WIP blocked for an original dirty entry or started implementation', () => {
@@ -239,9 +246,9 @@ describe('native original parent obligation qualification', () => {
                 }
                 add(event.event_type, details, event.outcome);
             }
-            facts.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
-            facts.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
-            const result = reader()(root, task);
+            facts!.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
+            facts!.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
+            const result = reader()(root, task)!;
             assert.equal(result.status, 'BLOCKED'); assert.match(result.violations.join(' '), /WIP|clean|original/iu);
         }
     });
@@ -250,16 +257,16 @@ describe('native original parent obligation qualification', () => {
         const { configPath, mode } = cleanOriginal(); const read = reader();
         const original = fs.readFileSync(configPath);
         fs.writeFileSync(configPath, JSON.stringify({ full_suite_validation: { enabled: true, command: 'changed-command' } }));
-        assert.equal(read(root, task).status, 'BLOCKED'); assert.deepEqual(requests, []);
+        assert.equal(read(root, task)!.status, 'BLOCKED'); assert.deepEqual(requests, []);
         fs.writeFileSync(configPath, original);
         mode.timeline_profile_policy_snapshot_hash = 'b'.repeat(64);
-        assert.equal(read(root, task).status, 'BLOCKED'); assert.deepEqual(requests, []);
+        assert.equal(read(root, task)!.status, 'BLOCKED'); assert.deepEqual(requests, []);
         mode.timeline_profile_policy_snapshot_hash = hash;
         signedCommands = [{ command, coverage: hash }];
-        assert.equal(read(root, task).status, 'BLOCKED');
+        assert.equal(read(root, task)!.status, 'BLOCKED');
         assert.deepEqual(requests, [{ command, coverage: null }]);
         signedCommands = [{ command, coverage: null }];
-        assert.equal(read(root, task).status, 'QUALIFIED');
+        assert.equal(read(root, task)!.status, 'QUALIFIED');
     });
 
     const preflightlessOriginal = () => {
@@ -281,18 +288,19 @@ describe('native original parent obligation qualification', () => {
                 add('SHELL_SMOKE_PREFLIGHT_RECORDED', { artifact_hash: smokeHash, passed: true }, 'PASS');
             }
         }
-        facts.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
-        facts.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
+        facts!.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
+        facts!.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
         return { ...context, smokeFile, smoke };
     };
 
     it('qualifies the native clean split before preflight with separate explicit memory and command proofs', () => {
         preflightlessOriginal();
-        mock.method(memoryApi, 'getProjectMemoryImpactLifecycleEvidence', (input: any) => {
+        mock.method(memoryApi, 'getProjectMemoryImpactLifecycleEvidence', (
+            input: Parameters<typeof import('../../../../src/gates/project-memory-impact/project-memory-impact').getProjectMemoryImpactLifecycleEvidence>[0]) => {
             assert.deepEqual(input.changedFiles, []);
             return { required: true, evidence_status: 'CURRENT', artifact_path: memoryFile };
         });
-        const before = fs.readFileSync(timeline), result = reader()(root, task);
+        const before = fs.readFileSync(timeline), result = reader()(root, task)!;
         assert.equal(result.status, 'QUALIFIED'); assert.deepEqual(result.violations, []);
         assert.deepEqual(requests, [{ command, coverage: null }]);
         assert.deepEqual(fs.readFileSync(timeline), before);
@@ -302,25 +310,25 @@ describe('native original parent obligation qualification', () => {
     it('keeps a preflightless original blocked for missing, changed, dirty or stale smoke evidence', () => {
         const { smokeFile, smoke } = preflightlessOriginal(), original = entries();
         const read = reader(), bytes = fs.readFileSync(smokeFile);
-        fs.unlinkSync(smokeFile); assert.equal(read(root, task).status, 'BLOCKED');
+        fs.unlinkSync(smokeFile); assert.equal(read(root, task)!.status, 'BLOCKED');
         fs.writeFileSync(smokeFile, JSON.stringify({ ...smoke, git_change_classification: { effective_dirty: true } }));
-        assert.equal(read(root, task).status, 'BLOCKED');
+        assert.equal(read(root, task)!.status, 'BLOCKED');
         const dirtyHash = createHash('sha256').update(fs.readFileSync(smokeFile)).digest('hex');
         fs.unlinkSync(timeline);
         for (const event of original) add(event.event_type, event.event_type === 'SHELL_SMOKE_PREFLIGHT_RECORDED'
             ? { ...event.details, artifact_hash: dirtyHash } : event.details, event.outcome);
-        facts.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
-        facts.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
-        assert.equal(read(root, task).status, 'BLOCKED');
+        facts!.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
+        facts!.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
+        assert.equal(read(root, task)!.status, 'BLOCKED');
         fs.writeFileSync(smokeFile, bytes);
         fs.unlinkSync(timeline);
         for (const event of original) {
             if (event.event_type === 'STRICT_DECOMPOSITION_DECISION_RECORDED') add('HANDSHAKE_DIAGNOSTICS_RECORDED', {}, 'PASS');
             add(event.event_type, event.details, event.outcome);
         }
-        facts.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
-        facts.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
-        assert.equal(read(root, task).status, 'BLOCKED');
+        facts!.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
+        facts!.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
+        assert.equal(read(root, task)!.status, 'BLOCKED');
     });
 
     it('validates an explicit empty scope through the real memory owner without treating missing preflight as empty', () => {

@@ -7,7 +7,7 @@ const nativeParentApi = require('../../../../src/gates/task-audit/task-audit-sum
 const nativeChildApi = require('../../../../src/gates/task-audit/task-audit-summary-decomposed-parent-proofs');
 const parentObligationApi = require('../../../../src/gates/task-audit/task-audit-summary-parent-obligation-proofs');
 
-function nativeParentReader(): (root: string, taskId: string) => any {
+function nativeParentReader(): typeof import('../../../../src/gates/task-audit/task-audit-summary-lifecycle').readNativeDecomposedParentFacts {
     assert.equal(typeof nativeParentApi.readNativeDecomposedParentFacts, 'function', 'native parent fact reader must exist');
     return nativeParentApi.readNativeDecomposedParentFacts;
 }
@@ -60,7 +60,7 @@ describe('gates/task-audit-summary', () => {
         const requiredProofs = ['authenticated-decomposition', 'source-qualified-child-acceptance', 'preserved-parent-wip',
             'full-suite-composition', 'parent-memory-impact', 'historical-failure-resolution'];
         // The accepted resolver owns real signed source and original proof qualification; this fixture checks its audit consumer.
-        const proof: any = { status: 'QUALIFIED', qualifiedProofs: requiredProofs, violations: [], native: {
+        const proof = { status: 'QUALIFIED', qualifiedProofs: requiredProofs, violations: [] as string[], native: {
             facts: { taskId: TASK_ID, taskStatus: 'DONE', childTaskIds: [child], historicalFailures: ['full-suite-validation'],
                 decomposition: { taskId: TASK_ID, sequence: split.task_sequence, sha256: split.event_sha256 },
                 completion: { taskId: TASK_ID, sequence: completion.task_sequence, sha256: completion.event_sha256 } },
@@ -162,12 +162,12 @@ describe('gates/task-audit-summary', () => {
                 artifactPath: id + '-source.json', artifactSha256: 'c'.repeat(64), postCommitAudit: {} };
         });
         const timeline = fs.readFileSync(path.join(eventsDir, TASK_ID + '.jsonl'));
-        const result = read(tmpDir, TASK_ID);
+        const result = read(tmpDir, TASK_ID)!;
         assert.equal(result.requirements.status, 'REQUIRES_PROOF');
         assert.deepEqual(result.facts.childTaskIds, children);
         assert.deepEqual(calls, children);
         assert.equal(result.childSources.length, 2);
-        assert.ok(result.facts.completion.sequence > result.facts.decomposition.sequence);
+        assert.ok(result.facts.completion!.sequence > result.facts.decomposition!.sequence);
         assert.ok(result.requirements.requiredProofs.includes('full-suite-composition'));
         assert.ok(result.requirements.requiredProofs.includes('parent-memory-impact'));
         assert.ok(result.requirements.requiredProofs.includes('preserved-parent-wip'));
@@ -179,30 +179,30 @@ describe('gates/task-audit-summary', () => {
         add('FULL_SUITE_VALIDATION_PASSED', {}, 'PASS');
         add('FULL_SUITE_VALIDATION_SKIPPED');
         add('DECOMPOSED_PARENT_COMPLETED', { previous_status: 'DECOMPOSED', new_status: 'DONE', reason: 'explicit_children_done' });
-        const skippedLater = read(tmpDir, TASK_ID);
+        const skippedLater = read(tmpDir, TASK_ID)!;
         assert.equal(skippedLater.requirements.status, 'REQUIRES_PROOF');
         assert.ok(skippedLater.requirements.requiredProofs.includes('full-suite-composition'), 'a later skip cannot erase an original parent suite obligation');
         fs.writeFileSync(path.join(eventsDir, TASK_ID + '.jsonl'), timeline);
         queue([children[0]]);
-        assert.equal(read(tmpDir, TASK_ID).requirements.status, 'BLOCKED');
+        assert.equal(read(tmpDir, TASK_ID)!.requirements.status, 'BLOCKED');
         queue(children);
         fs.unlinkSync(path.join(eventsDir, TASK_ID + '.jsonl'));
         add('STRICT_DECOMPOSITION_DECISION_RECORDED', decomposition);
         add('DECOMPOSED_PARENT_COMPLETED', { previous_status: 'DECOMPOSED', new_status: 'DONE', reason: 'changed' });
         calls.length = 0;
-        const invalidCompletion = read(tmpDir, TASK_ID);
+        const invalidCompletion = read(tmpDir, TASK_ID)!;
         assert.equal(invalidCompletion.requirements.status, 'BLOCKED');
         assert.match(invalidCompletion.requirements.violations.join(' '), /Native decomposition, completion and explicit child graph do not match/u);
         assert.equal(calls.length, 0);
         fs.writeFileSync(path.join(eventsDir, TASK_ID + '.jsonl'), timeline.toString().replace('explicit_children_done', 'changed'));
         calls.length = 0;
-        assert.equal(read(tmpDir, TASK_ID).requirements.status, 'BLOCKED');
+        assert.equal(read(tmpDir, TASK_ID)!.requirements.status, 'BLOCKED');
         assert.equal(calls.length, 0);
         fs.writeFileSync(path.join(eventsDir, TASK_ID + '.jsonl'), timeline);
         mock.method(nativeChildApi, 'readNativeChildSourceAcceptance', () => { throw new Error('Missing native source acceptance.'); });
-        assert.match(read(tmpDir, TASK_ID).requirements.violations.join(' '), /Missing native source acceptance/u);
+        assert.match(read(tmpDir, TASK_ID)!.requirements.violations.join(' '), /Missing native source acceptance/u);
         queue([], 'ordinary leaf');
-        assert.equal(read(tmpDir, TASK_ID).requirements.status, 'BLOCKED');
+        assert.equal(read(tmpDir, TASK_ID)!.requirements.status, 'BLOCKED');
         fs.unlinkSync(path.join(eventsDir, TASK_ID + '.jsonl'));
         assert.equal(read(tmpDir, TASK_ID), null);
         const followUps = [TASK_ID + '-F1'];

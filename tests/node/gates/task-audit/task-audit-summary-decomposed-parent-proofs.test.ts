@@ -19,6 +19,14 @@ const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex
 const childTaskId = 'T-PROOF-2';
 const authApi = require('../../../../src/core/auth/local-commit-availability') as typeof import('../../../../src/core/auth/local-commit-availability');
 
+type MutableCompositionRecord = Record<string, unknown> & {
+    source_composition: {
+        status: string;
+        before: { clean_worktree: boolean; repo_root: string };
+        after: { source_tree_sha: string };
+    };
+};
+
 function compositionReader(): (root: string, options: Record<string, unknown>) => Record<string, unknown> {
     const read = require(modulePath).readNativeSourceCompositionProof;
     assert.equal(typeof read, 'function', 'native composition-proof reader must exist');
@@ -64,7 +72,7 @@ async function compositionFixture(grant = true) {
 }
 
 function alterCompositionFixture(f: Awaited<ReturnType<typeof compositionFixture>>,
-    change: (record: Record<string, unknown>) => void, sign = true) {
+    change: (record: MutableCompositionRecord) => void, sign = true) {
     let record = JSON.parse(f.bytes.toString()); change(record);
     if (sign) record = authApi.authenticateLocalCommitWorkflowAudit(f.root, record, false);
     const bytes = Buffer.from(JSON.stringify(record, null, 2) + '\n');
@@ -86,7 +94,7 @@ describe('native final-source composition proof', () => {
         assert.equal(proofGit(f.root, ['status', '--porcelain']), '');
     });
 
-    const invalid: Array<[string, (record: any) => void]> = [
+    const invalid: Array<[string, (record: MutableCompositionRecord) => void]> = [
         ['foreign task', p => { p.task_id = 'T-FOREIGN-1'; }],
         ['changed command', p => { p.command = 'node different.cjs'; }],
         ['changed coverage', p => { p.coverage_contract_sha256 = 'b'.repeat(64); }],

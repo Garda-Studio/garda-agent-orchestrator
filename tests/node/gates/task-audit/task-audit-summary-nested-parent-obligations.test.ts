@@ -98,7 +98,8 @@ describe('native nested parent obligations', () => {
             return { taskId: id, commitSha: head, treeSha: 'c'.repeat(40), parentCommitSha: null,
                 artifactPath: sourcePath(id), artifactSha256: sourceHashes.get(id), postCommitAudit: {} };
         });
-        mock.method(sourceApi, 'readNativeSourceCompositionProof', (_root: string, request: any) => {
+        mock.method(sourceApi, 'readNativeSourceCompositionProof', (_root: string,
+            request: Parameters<typeof import('../../../../src/gates/task-audit/task-audit-summary-decomposed-parent-proofs').readNativeSourceCompositionProof>[1]) => {
             assert.equal(request.command, command); assert.equal(request.coverageContractSha256, null);
             assert.equal(digest(path.resolve(root, request.artifactPath)), request.artifactSha256, 'Native command proof artifact changed');
             commandReads.push(request.taskId); if (request.taskId === parent) beforeRootCommand();
@@ -109,7 +110,8 @@ describe('native nested parent obligations', () => {
             timeline_profile_policy_snapshot_hash: hash,
             profile_policy_snapshot: { snapshot_hash: hash, config_hashes: { workflow_config: frozenHash } }
         }));
-        mock.method(memoryApi, 'getProjectMemoryImpactLifecycleEvidence', (input: any) => {
+        mock.method(memoryApi, 'getProjectMemoryImpactLifecycleEvidence', (
+            input: Parameters<typeof import('../../../../src/gates/project-memory-impact/project-memory-impact').getProjectMemoryImpactLifecycleEvidence>[0]) => {
             if (input.taskId === parent && commandReads.includes(parent)) duringRootMemory();
             return { required: true, evidence_status: 'CURRENT', artifact_path: memoryPath(input.taskId).replace(/\\/gu, '/') };
         });
