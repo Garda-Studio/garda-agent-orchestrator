@@ -1,4 +1,5 @@
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
+import { isTaskQueueDecomposedStatus } from '../../core/active-task-state';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -132,6 +133,9 @@ export type {
 
 const NO_COMMIT_REQUIRED_MESSAGE = 'No commit required: no committable changes are present.';
 const NO_COMMIT_CONFIRMATION_MESSAGE = 'No commit confirmation required.';
+const AGGREGATE_STARTUP_GATES = new Set([
+    'enter-task-mode', 'load-rule-pack', 'handshake-diagnostics', 'shell-smoke-preflight'
+]);
 
 function buildNativeAggregateAudit(options: TaskAuditSummaryOptions, events: Readonly<Record<string, unknown>>[],
     taskMetadata: ReturnType<typeof readTaskQueueMetadata>): TaskAuditSummaryResult | null {
@@ -145,6 +149,7 @@ function buildNativeAggregateAudit(options: TaskAuditSummaryOptions, events: Rea
     const blockers: TaskAuditSummaryResult['blockers'] = [];
     try { proof = readNativeParentObligationProofs(repoRoot, taskId); }
     catch (error: unknown) { blockers.push({ gate: 'decomposed-parent-obligations', reason: error instanceof Error ? error.message : String(error) }); }
+    if (!parentMarker && proof && !isTaskQueueDecomposedStatus(proof.native.facts.taskStatus)) return null;
     if (!proof && blockers.length === 0) return null;
     blockers.push(...(proof?.violations || []).map(reason => ({ gate: 'decomposed-parent-obligations', reason })));
     if (eventsRoot !== resolveEventsRoot(repoRoot) || reviewsRoot !== resolveReviewsRoot(repoRoot)) {
@@ -169,6 +174,11 @@ function buildNativeAggregateAudit(options: TaskAuditSummaryOptions, events: Rea
     } : { status: 'STABLE', gate: null, message: null, recommended_action: null, lock_path: null };
     const status = blockers.length ? 'BLOCKED' : inFlight ? 'INCOMPLETE' : 'PASS';
     const generated = new Date().toISOString(), ready = status === 'PASS';
+    const entryIndex = events.map(event => event.event_type).lastIndexOf('TASK_MODE_ENTERED');
+    const startup = buildLifecycleGateOutcomes(
+        getLifecycleGates(false, false).filter(gate => AGGREGATE_STARTUP_GATES.has(gate.gate)),
+        entryIndex < 0 ? [] : events.slice(entryIndex), null, repoRoot
+    );
     const contract: FinalReportContract = { status: ready ? 'READY' : 'NOT_READY',
         blocker: ready ? null : blockers.map(blocker => blocker.reason).join(' ') || point.message,
         required_order: ['short agent-authored summary of what changed', 'verbatim Garda final user report'],
@@ -185,8 +195,8 @@ function buildNativeAggregateAudit(options: TaskAuditSummaryOptions, events: Rea
         first_event_utc: typeof events[0]?.timestamp_utc === 'string' ? events[0].timestamp_utc : null,
         last_event_utc: typeof events.at(-1)?.timestamp_utc === 'string' ? String(events.at(-1)!.timestamp_utc) : null,
         integrity_status: inspection.status,
-        gates: (proof?.native.requirements.requiredProofs || []).map(name => ({ gate: 'decomposed-parent:' + name,
-            status: proof!.qualifiedProofs.includes(name) ? 'PASS' : 'MISSING' })),
+        gates: [...startup.gates, ...(proof?.native.requirements.requiredProofs || []).map(name => ({ gate: 'decomposed-parent:' + name,
+            status: proof!.qualifiedProofs.includes(name) ? 'PASS' as const : 'MISSING' as const }))],
         changed_files: [], changed_files_count: 0, changed_lines_total: 0, required_reviews: {},
         scope_category: 'decomposed-parent', profile_review_decisions: null, evidence, blockers,
         point_in_time_snapshot: point, final_report_contract: contract,

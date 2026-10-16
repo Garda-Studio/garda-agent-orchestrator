@@ -1,5 +1,7 @@
 # Changelog
 
+- T-273: Preserve current-entry startup observations in native aggregate audits so split continuation does not incorrectly request another task-mode entry. Incomplete parent proofs remain blocked, earlier-cycle startup events are not reused, and corrupt ordinary task history retains its ordinary diagnostic path.
+
 - Qualify recorded clean native splits made before preflight using their bound
   shell-smoke evidence, retaining current command and explicit memory-scope
   proofs without creating historical preflight or WIP artifacts.
