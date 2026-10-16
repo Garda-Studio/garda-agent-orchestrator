@@ -1,5 +1,7 @@
 # Changelog
 
+- Align repository release tests with the declared bundled parser and manually selected CI matrices, retaining stale-file rejection, OS/runtime coverage and step-specific upload assertions.
+
 - Synchronize the tracked start-task router with canonical schema-driven reviewer launch guidance, preserving fresh isolated reviews and their evidence requirements.
 
 - T-279: Load parity/help rendering from its focused owner during command dispatch, preserving banner and status helper exports on cold ordinary CLI startup.

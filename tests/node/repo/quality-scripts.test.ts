@@ -5,6 +5,16 @@ import * as path from 'node:path';
 
 import { getRepoRoot } from '../../../scripts/node-foundation/build';
 
+interface SelectedCiJob {
+    enabled: boolean;
+    matrix: { include: Array<{ os: string; 'node-version': string }> };
+}
+
+const { AUTHORIZATION_PHRASE, selectManualWorkflow } = require(path.join(getRepoRoot(), 'scripts/manual-workflow-authorization.cjs')) as {
+    AUTHORIZATION_PHRASE: string;
+    selectManualWorkflow: (env: Record<string, string>) => { jobs: Record<string, SelectedCiJob> };
+};
+
 function readPackageJson(): Record<string, unknown> {
     const packageJsonPath = path.join(getRepoRoot(), 'package.json');
     return JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')) as Record<string, unknown>;
@@ -60,29 +70,26 @@ function assertCoverageUpload(job: string): void {
     assert.match(step, /^ {10}if-no-files-found: warn$/mu);
 }
 
-function extractYamlListAfterKey(block: string, key: string): string[] {
-    const lines = block.split(/\r?\n/);
-    const keyPattern = new RegExp(`^(\\s*)${key}:\\s*$`, 'u');
-    const keyIndex = lines.findIndex((line) => keyPattern.test(line));
-    assert.notEqual(keyIndex, -1, `Expected YAML key '${key}'`);
-    const keyIndent = keyPattern.exec(lines[keyIndex])![1].length;
-    const values: string[] = [];
-    for (const line of lines.slice(keyIndex + 1)) {
-        const indent = line.match(/^\s*/u)![0].length;
-        if (line.trim() && indent <= keyIndent) {
-            break;
-        }
-        const item = /^\s*-\s*(.+?)\s*$/u.exec(line);
-        if (item) {
-            values.push(item[1].replace(/^['"]|['"]$/gu, ''));
-        }
-    }
-    return values;
-}
-
-function assertJobMatrixValues(raw: string, jobId: string, key: string, expectedValues: string[]): string {
+function assertJobMatrix(raw: string, jobId: string, expectedOperatingSystems: string[]): string {
     const jobBlock = getWorkflowJobBlock(raw, jobId);
-    assert.deepEqual(extractYamlListAfterKey(jobBlock, key), expectedValues);
+    const selectionId = jobId === 'validate-release' ? 'release' : jobId;
+    const lines = jobBlock.split(/\r?\n/u);
+    const strategyStart = lines.indexOf('    strategy:');
+    assert.notEqual(strategyStart, -1, 'Job must define an active strategy');
+    const strategyEnd = lines.findIndex((line, index) => index > strategyStart && /^ {4}\S/u.test(line));
+    const strategy = lines.slice(strategyStart + 1, strategyEnd === -1 ? undefined : strategyEnd);
+    assert.ok(strategy.includes(`      matrix: \${{ fromJSON(needs.authorize.outputs.selection).jobs['${selectionId}'].matrix }}`),
+        'Active strategy.matrix must use the authorized job selection');
+    const commit = 'a'.repeat(40);
+    const selection = selectManualWorkflow({
+        MANUAL_WORKFLOW: 'ci', GITHUB_EVENT_NAME: 'workflow_dispatch',
+        GITHUB_REPOSITORY: 'example/garda', MANUAL_REPOSITORY: 'example/garda',
+        GITHUB_SHA: commit, MANUAL_COMMIT: commit, MANUAL_AUTHORIZATION: AUTHORIZATION_PHRASE,
+        MANUAL_JOB: selectionId, MANUAL_OS: 'all', MANUAL_RUNTIME: 'all'
+    });
+    assert.equal(selection.jobs[selectionId].enabled, true);
+    assert.deepEqual(selection.jobs[selectionId].matrix.include,
+        expectedOperatingSystems.flatMap(os => ['22.13.0', '24'].map(runtime => ({ os, 'node-version': runtime }))));
     return jobBlock;
 }
 
@@ -176,11 +183,10 @@ test('quality script dependencies and eslint config are present', () => {
 
 test('release validation CI covers Windows quality:fast script execution', () => {
     const ciWorkflow = readTextRepoFile('.github/workflows/ci.yml');
-    const releaseJob = assertJobMatrixValues(ciWorkflow, 'validate-release', 'node-version', ['22.13.0', '24']);
+    const releaseJob = assertJobMatrix(ciWorkflow, 'validate-release', ['ubuntu-latest', 'windows-latest']);
 
     assert.match(releaseJob, /name:\s*Release Validation \/ \$\{\{ matrix\.os \}\} \/ Node \$\{\{ matrix\.node-version \}\}/);
     assert.match(releaseJob, /runs-on:\s*\$\{\{ matrix\.os \}\}/);
-    assert.deepEqual(extractYamlListAfterKey(releaseJob, 'os'), ['ubuntu-latest', 'windows-latest']);
     assert.match(releaseJob, /run:\s*npm run validate:release:fast/);
     assertCoverageUpload(releaseJob);
 });
@@ -198,27 +204,37 @@ test('coverage upload assertions reject a pin or condition present only in anoth
     }
 });
 
+test('CI matrix assertions reject a commented former binding beside a different active matrix', () => {
+    const workflow = readTextRepoFile('.github/workflows/ci.yml');
+    const binding = "      matrix: ${{ fromJSON(needs.authorize.outputs.selection).jobs['release'].matrix }}";
+    const invalidWorkflow = workflow.replace(binding,
+        `${binding.replace("jobs['release']", "jobs['smoke']")}\n      # ${binding.trim()}`);
+    assert.notEqual(invalidWorkflow, workflow, 'The fixture must replace the real release matrix');
+    assert.throws(() => assertJobMatrix(invalidWorkflow, 'validate-release', ['ubuntu-latest', 'windows-latest']),
+        /Active strategy\.matrix/u);
+});
+
 test('CI defines focused test shard jobs covering unit, gates, CLI, lifecycle, and bin on supported Node lines', () => {
     const ciWorkflow = readTextRepoFile('.github/workflows/ci.yml');
 
-    const testUnitJob = assertJobMatrixValues(ciWorkflow, 'test-unit', 'node-version', ['22.13.0', '24']);
+    const testUnitJob = assertJobMatrix(ciWorkflow, 'test-unit', ['ubuntu-latest']);
     assert.match(testUnitJob, /name:\s*Unit Tests \/ Node \$\{\{ matrix\.node-version \}\}/);
-    assert.match(testUnitJob, /runs-on:\s*ubuntu-latest/);
+    assert.match(testUnitJob, /runs-on:\s*\$\{\{ matrix\.os \}\}/);
     assert.match(testUnitJob, /FORCE_COLOR:\s+'1'/);
     assert.match(testUnitJob, /run:\s*npm run test:unit/);
 
-    const testGatesJob = assertJobMatrixValues(ciWorkflow, 'test-gates', 'node-version', ['22.13.0', '24']);
+    const testGatesJob = assertJobMatrix(ciWorkflow, 'test-gates', ['ubuntu-latest']);
     assert.match(testGatesJob, /GARDA_NODE_FOUNDATION_TEST_SHARDS:\s*'2'/);
     assert.match(testGatesJob, /run:\s*npm run test:gates/);
 
-    const testCliJob = assertJobMatrixValues(ciWorkflow, 'test-cli', 'node-version', ['22.13.0', '24']);
+    const testCliJob = assertJobMatrix(ciWorkflow, 'test-cli', ['ubuntu-latest']);
     assert.match(testCliJob, /GARDA_NODE_FOUNDATION_TEST_SHARDS:\s*'2'/);
     assert.match(testCliJob, /run:\s*npm run test:cli/);
 
-    const testLifecycleJob = assertJobMatrixValues(ciWorkflow, 'test-lifecycle', 'node-version', ['22.13.0', '24']);
+    const testLifecycleJob = assertJobMatrix(ciWorkflow, 'test-lifecycle', ['ubuntu-latest']);
     assert.match(testLifecycleJob, /run:\s*npm run test:lifecycle/);
 
-    const testBinJob = assertJobMatrixValues(ciWorkflow, 'test-bin', 'node-version', ['22.13.0', '24']);
+    const testBinJob = assertJobMatrix(ciWorkflow, 'test-bin', ['ubuntu-latest']);
     assert.match(testBinJob, /run:\s*npm run test:bin/);
 });
 
