@@ -1,5 +1,7 @@
 # Changelog
 
+- T-277: Align the status performance-guidance regression with the accepted absent-fallback contract, retaining the configured optimized command and rejecting invented fallback guidance. Runtime behavior is unchanged.
+
 - T-276: Derive the legacy human-commit expiration regression fixture from the active confirmation-age policy instead of the former ten-minute limit. Runtime confirmation and task-bound commit requirements are unchanged.
 
 - T-275: Accept truthful empty-scope observations in authenticated FULL remediation reviews. Context, tree, execution and coverage bindings remain required; supporting artifacts do not become source evidence and nonempty reviews retain concrete coverage requirements.

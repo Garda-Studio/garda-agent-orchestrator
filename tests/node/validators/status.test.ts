@@ -1448,7 +1448,8 @@ test('formatStatusSnapshot prints mandatory full-suite performance guidance when
 
         assert.ok(output.includes('MandatoryFullSuite: enabled'));
         assert.ok(output.includes('MandatoryFullSuiteCommand: npm run test:sharded'));
-        assert.ok(output.includes('MandatoryFullSuitePerformance: mode=optimized_sharded; optimized=true; boundary=mandatory_full_suite_not_smoke_or_fast; optimized_command="npm run test:sharded"; fallback_command="npm test"'));
+        assert.ok(output.includes('MandatoryFullSuitePerformance: mode=optimized_sharded; optimized=true; boundary=mandatory_full_suite_not_smoke_or_fast; optimized_command="npm run test:sharded"'));
+        assert.ok(!output.includes('fallback_command='));
     } finally {
         cleanupStatusTempDir(tmpDir);
     }
