@@ -5,6 +5,7 @@ import {
     os,
     path,
     buildReviewContext,
+    writeCurrentPreflightFixture,
     getRulePack,
     getWorkspaceSnapshot,
     buildChangedFileFingerprintEntries,
@@ -13,7 +14,7 @@ import {
 } from './build-review-context-fixtures';
 
 describe('gates/build-review-context scope safety and diff bounds', () => {
-        it('does not require scoped diff metadata for true docs-only review contexts', () => {
+        it('does not require scoped diff metadata for true docs-only review contexts', async () => {
             const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-build-review-context-docs-only-scoped-'));
             const orchestratorRoot = path.join(repoRoot, 'garda-agent-orchestrator');
             const reviewsRoot = path.join(orchestratorRoot, 'runtime', 'reviews');
@@ -55,6 +56,7 @@ describe('gates/build-review-context scope safety and diff bounds', () => {
                 budget_forecast: { token_economy_active_for_depth: true },
                 risk_aware_depth: { compression: { scoped_diffs: true } }
             }, null, 2), 'utf8');
+            await writeCurrentPreflightFixture(repoRoot, preflightPath);
 
             const result = buildReviewContext({
                 reviewType: 'security',
@@ -197,7 +199,7 @@ describe('gates/build-review-context scope safety and diff bounds', () => {
             fs.rmSync(repoRoot, { recursive: true, force: true });
         });
 
-        it('invalidates shared diff cache when staged baseline trust triggers change without file diff changes', () => {
+        it('invalidates shared diff cache when staged baseline trust triggers change without file diff changes', async () => {
             const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-build-review-context-staged-trust-cache-'));
             const orchestratorRoot = path.join(repoRoot, 'garda-agent-orchestrator');
             const reviewsRoot = path.join(orchestratorRoot, 'runtime', 'reviews');
@@ -242,6 +244,7 @@ describe('gates/build-review-context scope safety and diff bounds', () => {
                 }
             };
             fs.writeFileSync(preflightPath, JSON.stringify(preflight, null, 2), 'utf8');
+            await writeCurrentPreflightFixture(repoRoot, preflightPath);
 
             const codeScopedDiffPath = path.join(reviewsRoot, 'T-901-staged-trust-cache-code-scoped.json');
             const codeReviewContextPath = path.join(reviewsRoot, 'T-901-staged-trust-cache-code-review-context.json');
@@ -283,6 +286,7 @@ describe('gates/build-review-context scope safety and diff bounds', () => {
                     dirty_workspace_staged_baseline_trust_input_sha256: 'b'.repeat(64)
                 }
             }, null, 2), 'utf8');
+            await writeCurrentPreflightFixture(repoRoot, preflightPath);
             const refreshedResult = buildReviewContext({
                 reviewType: 'refactor',
                 depth: 2,
@@ -431,7 +435,7 @@ describe('gates/build-review-context scope safety and diff bounds', () => {
             }
         });
 
-        it('rejects untracked symlinks that resolve outside the repo before building reviewer prompt artifacts', (t) => {
+        it('rejects untracked symlinks that resolve outside the repo before building reviewer prompt artifacts', async (t) => {
             const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-build-review-context-untracked-symlink-'));
             const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-build-review-context-outside-'));
             const orchestratorRoot = path.join(repoRoot, 'garda-agent-orchestrator');
@@ -442,6 +446,8 @@ describe('gates/build-review-context scope safety and diff bounds', () => {
             fs.mkdirSync(path.join(orchestratorRoot, 'live', 'config'), { recursive: true });
             fs.mkdirSync(path.join(repoRoot, 'src'), { recursive: true });
             runGit(repoRoot, ['init']);
+            runGit(repoRoot, ['-c', 'user.name=Garda Tests', '-c', 'user.email=garda-tests@example.com',
+                'commit', '--allow-empty', '-m', 'baseline']);
             for (const ruleFile of getRulePack('code').full) {
                 fs.writeFileSync(path.join(rulesRoot, ruleFile), `# ${ruleFile}\n`, 'utf8');
             }
@@ -477,6 +483,7 @@ describe('gates/build-review-context scope safety and diff bounds', () => {
                 required_reviews: { code: true },
                 triggers: { runtime_changed: true, runtime_code_changed: true }
             }, null, 2), 'utf8');
+            await writeCurrentPreflightFixture(repoRoot, preflightPath);
 
             assert.throws(() => buildReviewContext({
                 reviewType: 'code',
@@ -491,7 +498,7 @@ describe('gates/build-review-context scope safety and diff bounds', () => {
             fs.rmSync(outsideRoot, { recursive: true, force: true });
         });
 
-        it('rejects untracked files under symlinked directories before building reviewer prompt artifacts', (t) => {
+        it('rejects untracked files under symlinked directories before building reviewer prompt artifacts', async (t) => {
             const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-build-review-context-untracked-dir-symlink-'));
             const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-build-review-context-outside-dir-'));
             const orchestratorRoot = path.join(repoRoot, 'garda-agent-orchestrator');
@@ -540,6 +547,7 @@ describe('gates/build-review-context scope safety and diff bounds', () => {
                 required_reviews: { code: true },
                 triggers: { runtime_changed: true, runtime_code_changed: true }
             }, null, 2), 'utf8');
+            await writeCurrentPreflightFixture(repoRoot, preflightPath);
 
             const snapshotBeforeExternalChange = getWorkspaceSnapshot(
                 repoRoot,

@@ -16,7 +16,10 @@ import {
     resolveDefaultQualityChecklistArtifactPath
 } from '../../../../src/gates/quality-checklist';
 import { buildReviewContext as buildReviewContextImplementation, getRulePack, toNonNegativeInt, resolveContextOutputPath, resolveScopedDiffMetadataPath } from '../../../../src/gates/review-context/build-review-context';
-import { getWorkspaceSnapshot } from '../../../../src/gates/compile/compile-gate';
+import { buildScopeContentFingerprint, getWorkspaceSnapshot } from '../../../../src/gates/compile/compile-gate';
+import { pathListSha256 } from '../../../../src/gates/shared/canonical-path-list';
+import { runIntermediateCommandCommand } from '../../../../src/cli/commands/gate-flows/command-run/command-run-flow';
+import { inspectQualityValidationPhases } from '../../../../src/gates/quality-checklist/quality-checklist-validation-phases';
 import { buildChangedFileFingerprintEntries } from '../../../../src/gates/review-context/review-context-diff';
 import { buildReviewTreeState } from '../../../../src/gates/review/review-tree-state';
 import {
@@ -29,11 +32,13 @@ import { buildTaskModeArtifact, getTaskModeEvidence, resolveTaskModeArtifactPath
 import { resolveReviewerRoutingPolicy, resolveRuntimeReviewerIdentity } from '../../../../src/gates/review/reviewer-routing';
 import { REVIEW_CONTRACTS } from '../../../../src/gates/required-reviews/required-reviews-check';
 import { serializeTaskPlan, validateTaskPlan } from '../../../../src/schemas/task-plan';
-import { normalizeReviewCatalog } from '../../../../src/core/review-catalog';
+import { normalizeReviewCatalog, readReviewCatalogConfigFile } from '../../../../src/core/review-catalog';
 import { BUILT_IN_REVIEW_TYPE_IDS } from '../../../../src/core/review-catalog';
-import type { ReviewCapabilitiesConfigMap } from '../../../../src/core/review-capabilities';
-import { resolveProfileReviewCatalogPolicy } from '../../../../src/policy/profile-review-catalog-policy';
+import { readReviewCapabilitiesConfigFile, type ReviewCapabilitiesConfigMap } from '../../../../src/core/review-capabilities';
+import { resolveLegacyCompatibilityReviewCatalogBinding, resolveProfileReviewCatalogPolicy } from '../../../../src/policy/profile-review-catalog-policy';
 import { buildEffectiveReviewSnapshot } from '../../../../src/policy/effective-review-snapshot';
+import { loadReviewExecutionPolicyConfig } from '../../../../src/core/review-execution-policy';
+import { loadFullSuiteValidationConfig } from '../../../../src/core/full-suite-validation-config';
 
 export const assert: typeof assertModule = assertModule;
 export const crypto: typeof cryptoModule = cryptoModule;
@@ -66,7 +71,7 @@ export {
 };
 
 function seedApplicableTrustBoundaryAnalysisFixture(
-    options: Parameters<typeof buildReviewContextImplementation>[0]
+    options: Pick<Parameters<typeof buildReviewContextImplementation>[0], 'repoRoot' | 'preflightPath'>
 ): void {
     const repoRoot = pathModule.resolve(options.repoRoot || '.');
     const preflightPath = pathModule.resolve(String(options.preflightPath || ''));
@@ -78,6 +83,12 @@ function seedApplicableTrustBoundaryAnalysisFixture(
     const taskId = String(preflight.task_id || '').trim();
     const preflightSha256 = sha256Text(fsModule.readFileSync(preflightPath, 'utf8'));
     const artifactPath = resolveDefaultQualityChecklistArtifactPath(repoRoot, taskId);
+    if (fsModule.existsSync(artifactPath)) {
+        const prepared = JSON.parse(fsModule.readFileSync(artifactPath, 'utf8')) as Record<string, unknown>;
+        if (prepared.preflight_sha256 === preflightSha256 && prepared.validation_phases) {
+            return;
+        }
+    }
     const artifact = {
         task_id: taskId,
         checklist_id: QUALITY_CHECKLIST_ID,
@@ -124,6 +135,12 @@ function seedApplicableTrustBoundaryAnalysisFixture(
             'utf8'
         );
     }
+    writeQualityAnalysisFixture(repoRoot, preflightPath, artifact);
+}
+
+function writeQualityAnalysisFixture(repoRoot: string, preflightPath: string, artifact: Record<string, unknown>): void {
+    const taskId = String(artifact.task_id);
+    const artifactPath = resolveDefaultQualityChecklistArtifactPath(repoRoot, taskId);
     const artifactText = `${JSON.stringify(artifact, null, 2)}\n`;
     if (fsModule.existsSync(artifactPath) && fsModule.readFileSync(artifactPath, 'utf8') === artifactText) {
         return;
@@ -141,23 +158,17 @@ function seedApplicableTrustBoundaryAnalysisFixture(
         {
             artifact_path: artifactPath.replace(/\\/gu, '/'),
             artifact_hash: artifactSha256,
-            status: 'PASS',
+            status: artifact.status,
             outcome: 'PASS',
             checklist_id: QUALITY_CHECKLIST_ID,
             preflight_path: preflightPath.replace(/\\/gu, '/'),
-            preflight_sha256: preflightSha256
+            preflight_sha256: artifact.preflight_sha256
         },
         { actor: 'gate' }
     );
 }
 
-export function buildReviewContext(
-    options: Parameters<typeof buildReviewContextImplementation>[0]
-): ReturnType<typeof buildReviewContextImplementation> {
-    seedApplicableTrustBoundaryAnalysisFixture(options);
-    const preflight = options.preflightPayload
-        ? cloneJson(options.preflightPayload)
-        : JSON.parse(fsModule.readFileSync(options.preflightPath, 'utf8')) as Record<string, unknown>;
+function normalizeReviewPreflightFixture(preflight: Record<string, unknown>, repoRoot?: string): Record<string, unknown> {
     if (preflight.effective_review_snapshot === undefined) {
         const requiredReviews = preflight.required_reviews
             && typeof preflight.required_reviews === 'object'
@@ -180,14 +191,16 @@ export function buildReviewContext(
                 focus_tags: ['security']
             }
         }));
-        const catalog = normalizeReviewCatalog(
+        const configRoot = repoRoot ? pathModule.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config') : null;
+        const catalog = configRoot ? readReviewCatalogConfigFile(pathModule.join(configRoot, 'review-catalog.json')) : normalizeReviewCatalog(
             { version: 1, custom_review_types: customReviewTypes },
             { knownSkillIds: ['security-review'] }
         );
-        const capabilities = Object.fromEntries(
+        const capabilities = configRoot ? readReviewCapabilitiesConfigFile(pathModule.join(configRoot, 'review-capabilities.json')) : Object.fromEntries(
             catalog.review_types.map((definition) => [definition.id, true])
         ) as ReviewCapabilitiesConfigMap;
-        const profilePolicy = resolveProfileReviewCatalogPolicy(
+        const compatibility = configRoot ? resolveLegacyCompatibilityReviewCatalogBinding(capabilities, catalog) : null;
+        const profilePolicy = compatibility?.profile_policy ?? resolveProfileReviewCatalogPolicy(
             'balanced',
             Object.fromEntries(customReviewIds.map((reviewType) => [reviewType, true])),
             capabilities,
@@ -196,7 +209,7 @@ export function buildReviewContext(
         const snapshot = buildEffectiveReviewSnapshot({
             catalog,
             profilePolicy,
-            profileSnapshotSha256: 'a'.repeat(64),
+            profileSnapshotSha256: compatibility?.profile_snapshot_sha256 ?? 'a'.repeat(64),
             legacyRequiredReviews: requiredReviews,
             scopeCategory: String(preflight.scope_category || 'code'),
             taskIntent: String(preflight.task_intent || preflight.task_id || 'review-context fixture'),
@@ -208,11 +221,97 @@ export function buildReviewContext(
                 && !Array.isArray(preflight.triggers)
                 ? preflight.triggers as Record<string, boolean>
                 : {},
-            zeroDiffBaselineOnly: false
+            zeroDiffBaselineOnly: false,
+            ...(repoRoot ? {
+                reviewExecutionPolicyMode: loadReviewExecutionPolicyConfig(repoRoot).mode,
+                reviewDependencyGraph: null,
+                fullSuiteValidation: loadFullSuiteValidationConfig(repoRoot),
+                includeDependencyGraph: true
+            } : {})
         });
         preflight.effective_review_snapshot = snapshot;
         preflight.required_reviews = snapshot.required_reviews;
     }
+    return preflight;
+}
+
+export async function writeCurrentPreflightFixture(repoRoot: string, preflightPath: string): Promise<void> {
+    const payload = JSON.parse(fsModule.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+    const taskId = String(payload.task_id);
+    const mode = getTaskModeEvidence(repoRoot, taskId);
+    assertModule.equal(mode.evidence_status, 'PASS', 'Current preflight fixture needs a valid task-mode artifact');
+    assertModule.ok(mode.evidence_path);
+    assertModule.equal(mode.profile_policy_snapshot, null, 'Selected fixtures use native compatibility profile binding');
+    const applicable = assessTrustBoundaryAnalysisApplicability(payload).required;
+    if (applicable) payload.required_reviews = { ...(payload.required_reviews as Record<string, boolean>), test: true };
+    const preflight = normalizeReviewPreflightFixture(payload, repoRoot);
+    const orchestratorRoot = pathModule.join(repoRoot, 'garda-agent-orchestrator');
+    fsModule.writeFileSync(pathModule.join(repoRoot, 'TASK.md'), [
+        '| ID | Status | Priority | Area | Title | Assignee | Updated | Profile | Notes |',
+        '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+        `| ${taskId} | IN_PROGRESS | P1 | tests | Review-context fixture | unassigned | 2026-10-17 | default | Test input only |`,
+        ''
+    ].join('\n'), 'utf8');
+    seedApplicableTrustBoundaryAnalysisFixture({ repoRoot, preflightPath });
+    const evidenceRelative = 'tests/node/gates/review-context/review-context-trust-boundary-analysis.test.ts';
+    if (applicable) {
+        fsModule.writeFileSync(pathModule.join(repoRoot, evidenceRelative), [
+            "const test = require('node:test');",
+            "const assert = require('node:assert/strict');",
+            "const { createHash } = require('node:crypto');",
+            "test('rejects replaced trust-boundary evidence', () => {",
+            "    const digest = value => createHash('sha256').update(value).digest('hex');",
+            "    assert.throws(() => assert.equal(digest('replacement'), digest('original')));",
+            '});',
+            ''
+        ].join('\n'), 'utf8');
+    }
+    const files = preflight.changed_files as string[];
+    const source = String(preflight.detection_source);
+    const snapshot = getWorkspaceSnapshot(repoRoot, source, true, files);
+    preflight.metrics = {
+        ...(preflight.metrics as Record<string, unknown> | undefined),
+        changed_files_sha256: pathListSha256(files),
+        scope_content_sha256: buildScopeContentFingerprint(repoRoot, source, files),
+        scope_sha256: snapshot.scope_sha256
+    };
+    fsModule.writeFileSync(preflightPath, `${JSON.stringify(preflight, null, 2)}\n`, 'utf8');
+    if (!mode.timeline_artifact_path) {
+        appendTaskEvent(orchestratorRoot, taskId, 'TASK_MODE_ENTERED', 'PASS', 'Explicit current review-context fixture entry.', {
+            artifact_path: mode.evidence_path,
+            canonical_source_of_truth: mode.canonical_source_of_truth,
+            execution_provider_source: mode.execution_provider_source,
+            runtime_identity_status: mode.runtime_identity_status
+        });
+    }
+    appendTaskEvent(orchestratorRoot, taskId, 'PREFLIGHT_CLASSIFIED', 'INFO', 'Explicit current review-context fixture classification.', {
+        output_path: preflightPath.replace(/\\/gu, '/'),
+        effective_review_snapshot: preflight.effective_review_snapshot,
+        ...(preflight.metrics as Record<string, unknown>)
+    });
+    if (!applicable) return;
+    const execution = await runIntermediateCommandCommand({ repoRoot, taskId, preflightPath,
+        commandSource: 'targeted-test', command: `node --experimental-strip-types --test --test-reporter=tap ${evidenceRelative}` });
+    assertModule.equal(execution.exitCode, 0, execution.outputLines.join('\n'));
+    const artifactPath = resolveDefaultQualityChecklistArtifactPath(repoRoot, taskId);
+    const artifact = JSON.parse(fsModule.readFileSync(artifactPath, 'utf8')) as Record<string, unknown>;
+    const answers = artifact.answers as Array<{ trust_boundary_matrix: unknown }>;
+    const preflightSha256 = sha256Text(fsModule.readFileSync(preflightPath, 'utf8'));
+    const validation = inspectQualityValidationPhases({ repoRoot, taskId, preflight, preflightSha256,
+        matrixRequired: true, matrix: answers[0].trust_boundary_matrix });
+    assertModule.equal(validation?.phases.structural, 'BOUND');
+    assertModule.equal(validation?.phases.execution, 'OBSERVED', JSON.stringify(validation?.phases.execution_diagnostics));
+    writeQualityAnalysisFixture(repoRoot, preflightPath, { ...artifact, preflight_sha256: preflightSha256,
+        status: 'PENDING_VALIDATION', validation_phases: validation.phases });
+}
+
+export function buildReviewContext(
+    options: Parameters<typeof buildReviewContextImplementation>[0]
+): ReturnType<typeof buildReviewContextImplementation> {
+    seedApplicableTrustBoundaryAnalysisFixture(options);
+    const preflight = normalizeReviewPreflightFixture(options.preflightPayload
+        ? cloneJson(options.preflightPayload)
+        : JSON.parse(fsModule.readFileSync(options.preflightPath, 'utf8')) as Record<string, unknown>);
     const snapshot = preflight.effective_review_snapshot as {
         lanes?: Array<{ id?: string; definition?: { skill_ids?: string[] } }>;
     };

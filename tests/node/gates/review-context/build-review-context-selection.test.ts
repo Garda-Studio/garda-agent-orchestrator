@@ -6,6 +6,7 @@ import {
     path,
     appendTaskEvent,
     buildReviewContext,
+    writeCurrentPreflightFixture,
     getRulePack,
     buildTaskModeArtifact,
     resolveTaskModeArtifactPath,
@@ -15,7 +16,7 @@ import {
 } from './build-review-context-fixtures';
 
 describe('gates/build-review-context excerpt selection and runtime identity', () => {
-        it('prioritizes gate implementation diff sections in API review prompt excerpts', () => {
+        it('prioritizes gate implementation diff sections in API review prompt excerpts', async () => {
             const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-build-review-context-api-priority-'));
             const orchestratorRoot = path.join(repoRoot, 'garda-agent-orchestrator');
             const reviewsRoot = path.join(orchestratorRoot, 'runtime', 'reviews');
@@ -83,6 +84,7 @@ describe('gates/build-review-context excerpt selection and runtime identity', ()
                 required_reviews: { api: true },
                 triggers: { runtime_changed: true, runtime_code_changed: true, api: true }
             }, null, 2), 'utf8');
+            await writeCurrentPreflightFixture(repoRoot, preflightPath);
 
             const result = buildReviewContext({
                 reviewType: 'api',
@@ -442,6 +444,16 @@ describe('gates/build-review-context excerpt selection and runtime identity', ()
                     plan_summary: 'Preserve the approved plan from a custom task-mode artifact path'
                 }
             }), null, 2), 'utf8');
+            const customTaskMode = JSON.parse(fs.readFileSync(customTaskModePath, 'utf8'));
+            appendTaskEvent(orchestratorRoot, 'T-901-plan', 'TASK_MODE_ENTERED', 'PASS', 'Custom-path plan fixture entry.', {
+                artifact_path: customTaskModePath.replace(/\\/gu, '/'),
+                canonical_source_of_truth: customTaskMode.canonical_source_of_truth,
+                execution_provider_source: customTaskMode.execution_provider_source,
+                runtime_identity_status: customTaskMode.runtime_identity_status,
+                plan_guided: true,
+                plan_path: customTaskMode.plan.plan_path,
+                plan_sha256: customTaskMode.plan.plan_sha256
+            });
 
             fs.writeFileSync(path.join(orchestratorRoot, 'live', 'config', 'token-economy.json'), JSON.stringify({
                 enabled: false

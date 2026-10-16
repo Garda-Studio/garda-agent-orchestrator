@@ -7,6 +7,7 @@ import {
     os,
     path,
     buildReviewContext,
+    writeCurrentPreflightFixture,
     getRulePack,
     getWorkspaceSnapshot,
     buildChangedFileFingerprintEntries,
@@ -1450,7 +1451,7 @@ describe('gates/build-review-context prompt artifacts and scoped hashes', () => 
             fs.rmSync(repoRoot, { recursive: true, force: true });
         });
 
-        it('includes task-owned ignored file content for explicit changed-file review contexts', () => {
+        it('includes task-owned ignored file content for explicit changed-file review contexts', async () => {
             const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-build-review-context-explicit-ignored-'));
             const orchestratorRoot = path.join(repoRoot, 'garda-agent-orchestrator');
             const reviewsRoot = path.join(orchestratorRoot, 'runtime', 'reviews');
@@ -1497,6 +1498,7 @@ describe('gates/build-review-context prompt artifacts and scoped hashes', () => 
                     protected_control_plane_changed: true
                 }
             }, null, 2), 'utf8');
+            await writeCurrentPreflightFixture(repoRoot, preflightPath);
 
             const result = buildReviewContext({
                 reviewType: 'code',
@@ -1711,7 +1713,7 @@ describe('gates/build-review-context prompt artifacts and scoped hashes', () => 
             fs.rmSync(repoRoot, { recursive: true, force: true });
         });
 
-        it('rejects required scoped reviews when preflight expects metadata even if live config changed', () => {
+        it('rejects required scoped reviews when preflight expects metadata even if live config changed', async () => {
             const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-build-review-context-missing-scoped-'));
             const orchestratorRoot = path.join(repoRoot, 'garda-agent-orchestrator');
             const reviewsRoot = path.join(orchestratorRoot, 'runtime', 'reviews');
@@ -1753,6 +1755,7 @@ describe('gates/build-review-context prompt artifacts and scoped hashes', () => 
                 budget_forecast: { token_economy_active_for_depth: true },
                 risk_aware_depth: { compression: { scoped_diffs: true } }
             }, null, 2), 'utf8');
+            await writeCurrentPreflightFixture(repoRoot, preflightPath);
 
             assert.throws(
                 () => buildReviewContext({
@@ -1769,7 +1772,7 @@ describe('gates/build-review-context prompt artifacts and scoped hashes', () => 
             fs.rmSync(repoRoot, { recursive: true, force: true });
         });
 
-        it('binds scoped diff metadata hashes into review-context validation and reuse hashing', () => {
+        it('binds scoped diff metadata hashes into review-context validation and reuse hashing', async () => {
             const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-build-review-context-scoped-binding-'));
             const orchestratorRoot = path.join(repoRoot, 'garda-agent-orchestrator');
             const reviewsRoot = path.join(orchestratorRoot, 'runtime', 'reviews');
@@ -1817,6 +1820,7 @@ describe('gates/build-review-context prompt artifacts and scoped hashes', () => 
                 budget_forecast: { token_economy_active_for_depth: true },
                 risk_aware_depth: { compression: { scoped_diffs: true } }
             }, null, 2), 'utf8');
+            await writeCurrentPreflightFixture(repoRoot, preflightPath);
             const preflightSha256 = sha256Text(fs.readFileSync(preflightPath, 'utf8'));
             const scopedDiffOutputPath = path.join(reviewsRoot, 'T-901-scoped-binding-security-scoped.diff');
             const scopedDiffMetadataPath = path.join(reviewsRoot, 'T-901-scoped-binding-security-scoped.json');
