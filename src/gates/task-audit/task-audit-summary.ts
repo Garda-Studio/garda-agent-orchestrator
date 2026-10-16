@@ -149,7 +149,8 @@ function buildNativeAggregateAudit(options: TaskAuditSummaryOptions, events: Rea
     const blockers: TaskAuditSummaryResult['blockers'] = [];
     try { proof = readNativeParentObligationProofs(repoRoot, taskId); }
     catch (error: unknown) { blockers.push({ gate: 'decomposed-parent-obligations', reason: error instanceof Error ? error.message : String(error) }); }
-    if (!parentMarker && proof && !isTaskQueueDecomposedStatus(proof.native.facts.taskStatus)) return null;
+    const canonicalParentMarker = Boolean(proof?.native.facts.decomposition || proof?.native.facts.completion);
+    if (!parentMarker && !canonicalParentMarker && proof && !isTaskQueueDecomposedStatus(proof.native.facts.taskStatus)) return null;
     if (!proof && blockers.length === 0) return null;
     blockers.push(...(proof?.violations || []).map(reason => ({ gate: 'decomposed-parent-obligations', reason })));
     if (eventsRoot !== resolveEventsRoot(repoRoot) || reviewsRoot !== resolveReviewsRoot(repoRoot)) {

@@ -52,15 +52,18 @@ describe('gates/task-audit-summary', () => {
             `| ${child} | DONE | P1 | audit | child | test | 2026-10-16 | balanced | Parent: ${TASK_ID}. |`
         ].join('\n') + '\n');
         const bundle = path.join(tmpDir, 'garda-agent-orchestrator');
-        appendMandatoryTaskEvent(bundle, TASK_ID, 'STRICT_DECOMPOSITION_DECISION_RECORDED', 'INFO', 'Native aggregate caller fixture.', { decision: 'split-required' });
-        appendMandatoryTaskEvent(bundle, TASK_ID, 'DECOMPOSED_PARENT_COMPLETED', 'INFO', 'Native aggregate caller fixture.', {
+        const split = appendMandatoryTaskEvent(bundle, TASK_ID, 'STRICT_DECOMPOSITION_DECISION_RECORDED', 'INFO', 'Native aggregate caller fixture.', { decision: 'split-required' }).integrity;
+        const completion = appendMandatoryTaskEvent(bundle, TASK_ID, 'DECOMPOSED_PARENT_COMPLETED', 'INFO', 'Native aggregate caller fixture.', {
             previous_status: 'DECOMPOSED', new_status: 'DONE', reason: 'explicit_children_done'
-        });
+        }).integrity;
+        assert.ok(split && completion);
         const requiredProofs = ['authenticated-decomposition', 'source-qualified-child-acceptance', 'preserved-parent-wip',
             'full-suite-composition', 'parent-memory-impact', 'historical-failure-resolution'];
         // The accepted resolver owns real signed source and original proof qualification; this fixture checks its audit consumer.
         const proof: any = { status: 'QUALIFIED', qualifiedProofs: requiredProofs, violations: [], native: {
-            facts: { taskId: TASK_ID, taskStatus: 'DONE', childTaskIds: [child], historicalFailures: ['full-suite-validation'] },
+            facts: { taskId: TASK_ID, taskStatus: 'DONE', childTaskIds: [child], historicalFailures: ['full-suite-validation'],
+                decomposition: { taskId: TASK_ID, sequence: split.task_sequence, sha256: split.event_sha256 },
+                completion: { taskId: TASK_ID, sequence: completion.task_sequence, sha256: completion.event_sha256 } },
             requirements: { status: 'REQUIRES_PROOF', requiredProofs, violations: [] },
             childSources: [{ taskId: child, artifactPath: path.join(reviewsDir, child + '-source.json'), artifactSha256: 'a'.repeat(64) }]
         } };
@@ -80,8 +83,10 @@ describe('gates/task-audit-summary', () => {
         assert.deepEqual(fs.readFileSync(path.join(eventsDir, TASK_ID + '.jsonl')), timeline);
     });
 
-    it('rejects alternate event and review roots for a qualified native aggregate', () => {
-        aggregateProof();
+    for (const status of ['QUALIFIED', 'BLOCKED'] as const) it(`rejects alternate event and review roots for ${status === 'QUALIFIED' ? 'a qualified' : 'an unqualified'} native aggregate`, () => {
+        const proof = aggregateProof();
+        proof.status = status;
+        if (status === 'BLOCKED') proof.violations = ['Original command coverage is unqualified.'];
         for (const root of ['eventsRoot', 'reviewsRoot'] as const) {
             const alternate = path.join(tmpDir, 'alternate-' + root);
             fs.mkdirSync(alternate);

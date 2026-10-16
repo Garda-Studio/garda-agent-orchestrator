@@ -1,5 +1,7 @@
 # Changelog
 
+- T-274: Retain canonical native parent identity when caller-supplied audit roots omit its events. Both qualified and unqualified aggregate parents keep the existing canonical-root rejection; ordinary corrupt-history diagnostics and original proof requirements remain unchanged.
+
 - T-273: Preserve current-entry startup observations in native aggregate audits so split continuation does not incorrectly request another task-mode entry. Incomplete parent proofs remain blocked, earlier-cycle startup events are not reused, and corrupt ordinary task history retains its ordinary diagnostic path.
 
 - Qualify recorded clean native splits made before preflight using their bound
