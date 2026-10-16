@@ -8,7 +8,7 @@ import { EXIT_VALIDATION_FAILURE } from '../exit-codes';
 import {
     buildParityBlockedCommandText,
     buildParityWarningCommandText
-} from './cli-format-output';
+} from './cli-help-output';
 import { isFailedValidationResult } from './shared-command-utils';
 import { PackageJsonLike, printHelp } from './cli-helpers';
 import {

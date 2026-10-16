@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
@@ -75,3 +76,15 @@ for (const argv of [['--version'], ['--offline', '--no-color', '-v'], ['--help']
         t.diagnostic(`CLI_STARTUP modules=${evidence.moduleCount} gates=${evidence.gateModuleCount} duration_ms=${durationMs}`);
     });
 }
+
+test('CLI cold status startup preserves banner and status helper exports', () => {
+    const targetRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-cold-status-'));
+    try {
+        const { stdout, evidence } = inspectStartup(['--no-color', 'status', '--target-root', targetRoot]);
+        assert.match(stdout, /Workspace status/u);
+        assert.match(stdout, /Not installed/u);
+        assert.equal(evidence.commandDispatchLoaded, true, 'Ordinary status must execute command-dispatch');
+    } finally {
+        fs.rmSync(targetRoot, { recursive: true, force: true });
+    }
+});
