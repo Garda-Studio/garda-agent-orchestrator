@@ -1,5 +1,9 @@
 # Changelog
 
+- Qualify original decomposed-parent command, memory and suspended-WIP proofs
+  through existing native readers; retain missing contracts and unresolved
+  historical failures as blockers without granting aggregate acceptance.
+
 - Select decomposed-parent audit requirements from intact native graph and child
   source evidence, retaining original suite, memory, WIP and historical failure
   obligations without granting aggregate parent acceptance.
