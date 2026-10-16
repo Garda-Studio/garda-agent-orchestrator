@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 import { appendMandatoryTaskEvent } from '../../../../src/gate-runtime/task-events';
 import { deriveDecomposedParentAuditRequirements } from '../../../../src/gates/task-audit/task-audit-summary-decomposed-parent';
 
@@ -12,6 +13,7 @@ const memoryApi = require('../../../../src/gates/project-memory-impact/project-m
 const wipApi = require('../../../../src/gates/split-required/split-required-wip-runtime-handoff-contracts');
 const wipFilesApi = require('../../../../src/gates/split-required/split-required-wip-restore-plan');
 const gitApi = require('../../../../src/core/git-helpers');
+const taskModeApi = require('../../../../src/gates/task-mode/task-mode-evidence');
 const task = 'T-PARENT-OBLIGATION-1', command = 'node --test original.test.js', hash = 'a'.repeat(64);
 type CommandIdentity = { command: string; coverage: string | null };
 
@@ -173,5 +175,76 @@ describe('native original parent obligation qualification', () => {
         facts = { facts: {}, childSources: [], requirements: { status: 'BLOCKED', violations: ['Missing child source.'], requiredProofs: [] } };
         assert.deepEqual(read(root, task).violations, ['Missing child source.']);
         assert.equal(calls.includes('command'), false);
+    });
+
+    const cleanOriginal = () => {
+        const prior = entries(); fs.unlinkSync(timeline);
+        add('TASK_MODE_ENTERED', { dirty_workspace_baseline_count: 0, profile_policy_snapshot_hash: hash }, 'PASS');
+        add('PREFLIGHT_CLASSIFIED', { changed_files_count: 0, changed_lines_total: 0,
+            zero_diff_guard: { zero_diff_detected: true, status: 'BASELINE_ONLY' } });
+        for (const event of prior.filter(event => !['FULL_SUITE_VALIDATION_FAILED', 'SPLIT_REQUIRED_WIP_CAPTURED'].includes(event.event_type))) {
+            add(event.event_type, event.details, event.outcome);
+        }
+        facts.facts.historicalFailures = [];
+        facts.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
+        facts.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
+        facts.requirements = deriveDecomposedParentAuditRequirements(facts.facts);
+        const configPath = path.join(bundle, 'live/config/workflow-config.json');
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        fs.writeFileSync(configPath, JSON.stringify({ full_suite_validation: { enabled: true, command } }));
+        const frozenHash = createHash('sha256').update(fs.readFileSync(configPath)).digest('hex');
+        // The existing task-mode reader owns snapshot validation; these tests exercise its qualified result consumer.
+        const mode = { evidence_status: 'PASS', evidence_task_id: task,
+            timeline_profile_policy_snapshot_hash: hash, profile_policy_snapshot_status: 'PASS',
+            profile_policy_snapshot: { snapshot_hash: hash, config_hashes: { workflow_config: frozenHash } } };
+        mock.method(taskModeApi, 'getTaskModeEvidence', () => mode);
+        signedCommands = [{ command, coverage: null }];
+        return { configPath, mode };
+    };
+
+    it('qualifies a native clean split before implementation without inventing capture or execution history', () => {
+        cleanOriginal(); const before = fs.readFileSync(timeline);
+        const result = reader()(root, task);
+        assert.equal(result.status, 'QUALIFIED'); assert.deepEqual(result.violations, []);
+        assert.deepEqual(requests, [{ command, coverage: null }]);
+        assert.deepEqual(fs.readFileSync(timeline), before);
+        assert.equal(entries().some(event => ['SPLIT_REQUIRED_WIP_CAPTURED', 'FULL_SUITE_VALIDATION_PASSED'].includes(event.event_type)), false);
+        add('INTERMEDIATE_COMMAND_RUN', { command, artifact_path: 'failed.json', artifact_sha256: hash }, 'FAIL');
+        assert.equal(reader()(root, task).status, 'BLOCKED');
+    });
+
+    it('keeps missing WIP blocked for an original dirty entry or started implementation', () => {
+        cleanOriginal(); const nativeEvents = entries();
+        for (const mutation of ['dirty-entry', 'implementation-started']) {
+            fs.unlinkSync(timeline);
+            for (const event of nativeEvents) {
+                const details = mutation === 'dirty-entry' && event.event_type === 'TASK_MODE_ENTERED'
+                    ? { ...event.details, dirty_workspace_baseline_count: 1 } : event.details;
+                if (mutation === 'implementation-started' && event.event_type === 'STRICT_DECOMPOSITION_DECISION_RECORDED') {
+                    add('IMPLEMENTATION_STARTED', {}, 'PASS');
+                }
+                add(event.event_type, details, event.outcome);
+            }
+            facts.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
+            facts.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
+            const result = reader()(root, task);
+            assert.equal(result.status, 'BLOCKED'); assert.match(result.violations.join(' '), /WIP|clean|original/iu);
+        }
+    });
+
+    it('requires the original frozen declaration and separate current command coverage proof', () => {
+        const { configPath, mode } = cleanOriginal(); const read = reader();
+        const original = fs.readFileSync(configPath);
+        fs.writeFileSync(configPath, JSON.stringify({ full_suite_validation: { enabled: true, command: 'changed-command' } }));
+        assert.equal(read(root, task).status, 'BLOCKED'); assert.deepEqual(requests, []);
+        fs.writeFileSync(configPath, original);
+        mode.timeline_profile_policy_snapshot_hash = 'b'.repeat(64);
+        assert.equal(read(root, task).status, 'BLOCKED'); assert.deepEqual(requests, []);
+        mode.timeline_profile_policy_snapshot_hash = hash;
+        signedCommands = [{ command, coverage: hash }];
+        assert.equal(read(root, task).status, 'BLOCKED');
+        assert.deepEqual(requests, [{ command, coverage: null }]);
+        signedCommands = [{ command, coverage: null }];
+        assert.equal(read(root, task).status, 'QUALIFIED');
     });
 });

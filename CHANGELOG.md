@@ -1,5 +1,9 @@
 # Changelog
 
+- Qualify recorded clean pre-implementation parent scope and its frozen suite
+  declaration while retaining actual post-child command, memory and source proof
+  requirements; do not invent historical WIP captures or test executions.
+
 - Apply verified native original-parent obligations in the real aggregate audit,
   preserving exact blockers, child source provenance and completion finality
   without inventing direct parent reviews or changing ordinary leaf audits.
