@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { runHumanCommitCommand } from '../../../../../../src/cli/commands/gates';
 import { handleSet } from '../../../../../../src/cli/commands/workflow/workflow-command-set';
 import { buildDefaultWorkflowConfig } from '../../../../../../src/core/workflow-config';
+import { OPERATOR_CONFIRMATION_MAX_AGE_MS } from '../../../../../../src/core/operator-confirmation';
 import { buildGateHelpText } from '../../../../../../src/cli/commands/gate-command-help';
 import { getNodeHumanCommitCommand } from '../../../../../../src/materialization/command-constants';
 import { buildCommitGuardManagedBlock } from '../../../../../../src/materialization/content-builders';
@@ -726,5 +727,5 @@ test('native surfaces advertise task-bound commit authority and no repeated conf
 
 test('legacy timestamp arguments cannot forge fresh confirmation', async () => {
     await assert.rejects(() => runHumanCommitCommand(['--operator-confirmed', 'yes', '--operator-confirmed-at-utc', 'not-a-time', '-m', 'test: invalid']), /valid ISO-8601/);
-    await assert.rejects(() => runHumanCommitCommand(['--operator-confirmed', 'yes', '--operator-confirmed-at-utc', new Date(Date.now() - 11 * 60_000).toISOString(), '-m', 'test: stale']), /confirmation is stale/);
+    await assert.rejects(() => runHumanCommitCommand(['--operator-confirmed', 'yes', '--operator-confirmed-at-utc', new Date(Date.now() - OPERATOR_CONFIRMATION_MAX_AGE_MS - 60_000).toISOString(), '-m', 'test: stale']), /confirmation is stale/);
 });

@@ -1,5 +1,7 @@
 # Changelog
 
+- T-276: Derive the legacy human-commit expiration regression fixture from the active confirmation-age policy instead of the former ten-minute limit. Runtime confirmation and task-bound commit requirements are unchanged.
+
 - T-275: Accept truthful empty-scope observations in authenticated FULL remediation reviews. Context, tree, execution and coverage bindings remain required; supporting artifacts do not become source evidence and nonempty reviews retain concrete coverage requirements.
 
 - T-274: Retain canonical native parent identity when caller-supplied audit roots omit its events. Both qualified and unqualified aggregate parents keep the existing canonical-root rejection; ordinary corrupt-history diagnostics and original proof requirements remain unchanged.
