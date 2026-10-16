@@ -1,5 +1,15 @@
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { appendMandatoryTaskEvent } from '../../../../src/gate-runtime/task-events';
+import { buildStrictDecompositionDecisionArtifact } from '../../../../src/gates/task-mode/strict-decomposition-decision';
+
+const nativeParentApi = require('../../../../src/gates/task-audit/task-audit-summary-lifecycle');
+const nativeChildApi = require('../../../../src/gates/task-audit/task-audit-summary-decomposed-parent-proofs');
+
+function nativeParentReader(): (root: string, taskId: string) => any {
+    assert.equal(typeof nativeParentApi.readNativeDecomposedParentFacts, 'function', 'native parent fact reader must exist');
+    return nativeParentApi.readNativeDecomposedParentFacts;
+}
 
 import {
     fs,
@@ -28,7 +38,100 @@ describe('gates/task-audit-summary', () => {
     });
 
     afterEach(() => {
+        mock.restoreAll();
         fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('selects native parent facts without granting aggregate acceptance', () => {
+        const read = nativeParentReader(), children = [TASK_ID + '-1', TASK_ID + '-2'];
+        const queue = (ids: string[], notes = 'child tasks: ' + children.join(', ')) => {
+            fs.writeFileSync(path.join(tmpDir, 'TASK.md'), [
+                '## Active Queue',
+                '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+                '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+                `| ${TASK_ID} | DONE | P1 | audit | parent audit | test | 2026-10-16 | balanced | ${notes} |`,
+                ...ids.map(id => `| ${id} | DONE | P1 | audit | child | test | 2026-10-16 | balanced | Parent: ${TASK_ID}. |`)
+            ].join('\n') + '\n');
+        };
+        queue(children);
+        const artifact = buildStrictDecompositionDecisionArtifact({ taskId: TASK_ID, decision: 'split-required',
+            taskProfile: 'balanced', taskSummary: 'parent audit', reason: 'Two bounded native consumer scopes.',
+            scopeRisk: 'Source and audit evidence must remain bound.', expectedReviewTypes: ['none'],
+            atomicityConstraints: ['Native source selection precedes audit consumption.'], proposedChildTaskIds: children,
+            workPackageContract: { schema_version: 2, finding_obligations: [], work_packages: children.map((id, i) => ({
+                task_id: id, profile: 'balanced', root_cause_area: 'native-parent-part-' + i,
+                objective: 'Validate a bounded native parent audit component.', scope_obligations: ['Only its bounded current source scope.'],
+                validation_contract: ['Current native validation remains required.'], finding_obligation_ids: [], required_review_types: []
+            })) } });
+        const artifactPath = path.join(reviewsDir, TASK_ID + '-strict-decomposition-decision.json');
+        fs.writeFileSync(artifactPath, JSON.stringify(artifact));
+        const bundle = path.join(tmpDir, 'garda-agent-orchestrator');
+        const decomposition = { artifact_path: artifactPath.replace(/\\/gu, '/'), decision: artifact.decision,
+            task_profile: artifact.task_profile, task_summary_sha256: artifact.task_summary_sha256,
+            proposed_child_task_ids: children, work_package_contract_sha256: artifact.work_package_contract_sha256 };
+        const add = (type: string, details: object = {}, outcome: 'INFO' | 'PASS' | 'FAIL' = 'INFO') =>
+            appendMandatoryTaskEvent(bundle, TASK_ID, type, outcome, 'Isolated native parent fixture.', details, { actor: 'orchestrator' });
+        add('STRICT_DECOMPOSITION_DECISION_RECORDED', decomposition);
+        add('FULL_SUITE_VALIDATION_FAILED', {}, 'FAIL');
+        add('DECOMPOSED_PARENT_COMPLETED', { previous_status: 'DECOMPOSED', new_status: 'DONE', reason: 'explicit_children_done' });
+        const calls: string[] = [];
+        // This unit checks selection; the existing proof-reader suite owns real signed Git acceptance.
+        mock.method(nativeChildApi, 'readNativeChildSourceAcceptance', (_root: string, id: string) => {
+            calls.push(id);
+            return { taskId: id, commitSha: 'a'.repeat(40), treeSha: 'b'.repeat(40), parentCommitSha: null,
+                artifactPath: id + '-source.json', artifactSha256: 'c'.repeat(64), postCommitAudit: {} };
+        });
+        const timeline = fs.readFileSync(path.join(eventsDir, TASK_ID + '.jsonl'));
+        const result = read(tmpDir, TASK_ID);
+        assert.equal(result.requirements.status, 'REQUIRES_PROOF');
+        assert.deepEqual(result.facts.childTaskIds, children);
+        assert.deepEqual(calls, children);
+        assert.equal(result.childSources.length, 2);
+        assert.ok(result.facts.completion.sequence > result.facts.decomposition.sequence);
+        assert.ok(result.requirements.requiredProofs.includes('full-suite-composition'));
+        assert.ok(result.requirements.requiredProofs.includes('parent-memory-impact'));
+        assert.ok(result.requirements.requiredProofs.includes('preserved-parent-wip'));
+        assert.ok(result.requirements.historicalFailures.includes('full-suite-validation'));
+        assert.equal('parentPass' in result, false);
+        assert.deepEqual(fs.readFileSync(path.join(eventsDir, TASK_ID + '.jsonl')), timeline);
+        fs.unlinkSync(path.join(eventsDir, TASK_ID + '.jsonl'));
+        add('STRICT_DECOMPOSITION_DECISION_RECORDED', decomposition);
+        add('FULL_SUITE_VALIDATION_PASSED', {}, 'PASS');
+        add('FULL_SUITE_VALIDATION_SKIPPED');
+        add('DECOMPOSED_PARENT_COMPLETED', { previous_status: 'DECOMPOSED', new_status: 'DONE', reason: 'explicit_children_done' });
+        const skippedLater = read(tmpDir, TASK_ID);
+        assert.equal(skippedLater.requirements.status, 'REQUIRES_PROOF');
+        assert.ok(skippedLater.requirements.requiredProofs.includes('full-suite-composition'), 'a later skip cannot erase an original parent suite obligation');
+        fs.writeFileSync(path.join(eventsDir, TASK_ID + '.jsonl'), timeline);
+        queue([children[0]]);
+        assert.equal(read(tmpDir, TASK_ID).requirements.status, 'BLOCKED');
+        queue(children);
+        fs.unlinkSync(path.join(eventsDir, TASK_ID + '.jsonl'));
+        add('STRICT_DECOMPOSITION_DECISION_RECORDED', decomposition);
+        add('DECOMPOSED_PARENT_COMPLETED', { previous_status: 'DECOMPOSED', new_status: 'DONE', reason: 'changed' });
+        calls.length = 0;
+        const invalidCompletion = read(tmpDir, TASK_ID);
+        assert.equal(invalidCompletion.requirements.status, 'BLOCKED');
+        assert.match(invalidCompletion.requirements.violations.join(' '), /Native decomposition, completion and explicit child graph do not match/u);
+        assert.equal(calls.length, 0);
+        fs.writeFileSync(path.join(eventsDir, TASK_ID + '.jsonl'), timeline.toString().replace('explicit_children_done', 'changed'));
+        calls.length = 0;
+        assert.equal(read(tmpDir, TASK_ID).requirements.status, 'BLOCKED');
+        assert.equal(calls.length, 0);
+        fs.writeFileSync(path.join(eventsDir, TASK_ID + '.jsonl'), timeline);
+        mock.method(nativeChildApi, 'readNativeChildSourceAcceptance', () => { throw new Error('Missing native source acceptance.'); });
+        assert.match(read(tmpDir, TASK_ID).requirements.violations.join(' '), /Missing native source acceptance/u);
+        queue([], 'ordinary leaf');
+        assert.equal(read(tmpDir, TASK_ID).requirements.status, 'BLOCKED');
+        fs.unlinkSync(path.join(eventsDir, TASK_ID + '.jsonl'));
+        assert.equal(read(tmpDir, TASK_ID), null);
+        const followUps = [TASK_ID + '-F1'];
+        queue(followUps, 'Review follow-up tasks materialized: ' + followUps.join(', '));
+        assert.equal(read(tmpDir, TASK_ID), null, 'follow-up links alone do not turn an ordinary completed leaf into a native decomposed parent');
+        add('STRICT_DECOMPOSITION_DECISION_RECORDED', decomposition);
+        const splitOnly = fs.readFileSync(path.join(eventsDir, TASK_ID + '.jsonl'), 'utf8');
+        fs.writeFileSync(path.join(eventsDir, TASK_ID + '.jsonl'), splitOnly.replace('split-required', 'atomic'));
+        assert.equal(read(tmpDir, TASK_ID)?.requirements.status, 'BLOCKED', 'corrupt split-only history must not take the ordinary leaf branch');
     });
 
     describe('buildTaskAuditSummary', () => {

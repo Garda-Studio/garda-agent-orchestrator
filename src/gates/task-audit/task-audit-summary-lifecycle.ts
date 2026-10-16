@@ -1,5 +1,19 @@
-import { readTaskTimelineJsonlEntries } from '../../gate-runtime/task-events';
+import * as path from 'node:path';
+import { assertValidTaskId, inspectTaskEventFile, readTaskTimelineJsonlEntries, withTaskTimelineReadSnapshot } from '../../gate-runtime/task-events';
+import { parseTaskQueueEntriesFromContent } from '../../core/task-queue-read';
+import { isTaskQueueDecomposedStatus, isTaskQueueDoneStatus } from '../../core/active-task-state';
+import { isPlainRecord } from '../../core/records';
+import { joinOrchestratorPath } from '../../core/orchestrator-paths';
+import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
+import { readTransactionBytes } from '../../core/file-transaction-journal';
+import { extractExplicitLinkedChildTaskIds } from '../next-step/next-step-task-queue';
+import { getStrictDecompositionDecisionEvidence } from '../task-mode/strict-decomposition-decision';
+import { deriveDecomposedParentAuditRequirements } from './task-audit-summary-decomposed-parent';
+import { readNativeChildSourceAcceptance, type NativeChildSourceAcceptance } from './task-audit-summary-decomposed-parent-proofs';
+import type { DecomposedParentAuditFacts, DecomposedParentAuditRequirements, ParentAuditEventReference } from './task-audit-summary-types';
 import {
+    captureTaskTimelineReadSnapshotSha256,
+    assertTaskTimelineReadSnapshotCurrent,
     createTaskTimelineMemoizationKey,
     memoizeTaskTimelineSnapshot,
     type TaskTimelineDeepReadonly
@@ -531,4 +545,99 @@ export function buildLifecycleGateOutcomes(
     }
 
     return { gates, blockers };
+}
+
+export interface NativeDecomposedParentFacts {
+    facts: DecomposedParentAuditFacts;
+    requirements: DecomposedParentAuditRequirements;
+    childSources: NativeChildSourceAcceptance[];
+}
+
+function readNativeParentInput(root: string, file: string): Buffer {
+    const bytes = readTransactionBytes(root, file);
+    if (!bytes) throw new Error('Native parent input is missing.');
+    return bytes;
+}
+
+function nativeParentReference(event: TaskAuditEvent | undefined, taskId: string): ParentAuditEventReference | null {
+    if (!event || event.schema_version !== 2 || event.event_source !== 'task-events'
+        || event.task_id !== taskId || !isPlainRecord(event.integrity)) return null;
+    const sequence = event.integrity.task_sequence, sha256 = event.integrity.event_sha256;
+    return Number.isSafeInteger(sequence) && Number(sequence) > 0
+        && typeof sha256 === 'string' && /^[a-f0-9]{64}$/u.test(sha256)
+        ? { taskId, sequence: Number(sequence), sha256 } : null;
+}
+
+/** Read-only selection: requirements and child source facts never grant parent acceptance. */
+export function readNativeDecomposedParentFacts(repoRoot: string, taskId: string): NativeDecomposedParentFacts | null {
+    const root = path.resolve(repoRoot), id = assertValidTaskId(taskId);
+    const queuePath = path.join(root, TASK_QUEUE_FILENAME), queueBytes = readNativeParentInput(root, queuePath);
+    const entries = parseTaskQueueEntriesFromContent(queueBytes.toString('utf8')), parent = entries.get(id);
+    if (!parent) throw new Error('Native parent task is missing from the canonical queue.');
+    const children = extractExplicitLinkedChildTaskIds(parent.notes, entries.keys(), id);
+    const eventsRoot = joinOrchestratorPath(root, 'runtime/task-events'), timeline = path.join(eventsRoot, id + '.jsonl');
+    return withTaskTimelineReadSnapshot(eventsRoot, id, () => {
+        const events = readTaskTimelineJsonlEntries(timeline).map(entry => entry.record).filter(isPlainRecord);
+        const decomposition = [...events].reverse().find(event => event.event_type === 'STRICT_DECOMPOSITION_DECISION_RECORDED');
+        const completion = [...events].reverse().find(event => event.event_type === 'DECOMPOSED_PARENT_COMPLETED');
+        const hasSplit = events.some(event => event.event_type === 'STRICT_DECOMPOSITION_DECISION_RECORDED'
+            && isPlainRecord(event.details) && event.details.decision === 'split-required');
+        const inspection = inspectTaskEventFile(timeline, id);
+        const nativeTimelineIntact = ['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(inspection.status) && inspection.violations.length === 0;
+        const ordinaryTimeline = nativeTimelineIntact || ['MISSING', 'EMPTY', 'LEGACY_ONLY'].includes(inspection.status);
+        if (!hasSplit && !completion && !isTaskQueueDecomposedStatus(parent.status) && ordinaryTimeline) return null;
+        const failedGates = new Map(BASE_LIFECYCLE_GATES.flatMap(gate => gate.fail_events.map(type => [type, gate.gate] as const)));
+        failedGates.set('FULL_SUITE_VALIDATION_FAILED', 'full-suite-validation');
+        failedGates.set(PROJECT_MEMORY_IMPACT_BLOCKED_EVENT, 'project-memory-impact');
+        const facts: DecomposedParentAuditFacts = {
+            taskId: id, taskStatus: parent.status, childTaskIds: children,
+            completedChildTaskIds: children.filter(child => isTaskQueueDoneStatus(entries.get(child)?.status ?? null)),
+            childGraphComplete: false, decomposition: nativeParentReference(decomposition, id),
+            completion: nativeParentReference(completion, id),
+            historicalFailures: [...new Set(events.filter(event => event.outcome === 'FAIL')
+                .map(event => failedGates.get(String(event.event_type)) || String(event.event_type)))],
+            fullSuiteRequired: events.some(event => ['FULL_SUITE_VALIDATION_PASSED', 'FULL_SUITE_VALIDATION_WARNED', 'FULL_SUITE_VALIDATION_FAILED'].includes(String(event.event_type)))
+                || resolveFullSuiteValidationRequirementForOrderedTaskEvents(events.map(event => String(event.event_type)), true).required,
+            projectMemoryRequired: null
+        };
+        const result: NativeDecomposedParentFacts = { facts, requirements: deriveDecomposedParentAuditRequirements(facts), childSources: [] };
+        try {
+            const snapshot = captureTaskTimelineReadSnapshotSha256(timeline);
+            if (!nativeTimelineIntact) {
+                throw new Error('Native parent timeline is not intact.');
+            }
+            const artifactPath = joinOrchestratorPath(root, 'runtime/reviews/' + id + '-strict-decomposition-decision.json');
+            const artifactBytes = readNativeParentInput(root, artifactPath);
+            const decision = getStrictDecompositionDecisionEvidence(root, id, artifactPath, parent.title || '', parent.profile || '');
+            const details = decomposition?.details, done = completion?.details;
+            const proposed = decision.proposed_child_task_ids;
+            if (decision.evidence_status !== 'PASS' || decision.decision !== 'split-required'
+                || !facts.decomposition || !facts.completion || facts.completion.sequence <= facts.decomposition.sequence
+                || !isPlainRecord(details) || !isPlainRecord(done)
+                || path.resolve(root, String(details.artifact_path)) !== path.resolve(artifactPath)
+                || details.decision !== decision.decision || details.task_profile !== decision.task_profile
+                || details.task_summary_sha256 !== decision.task_summary_sha256
+                || details.work_package_contract_sha256 !== decision.work_package_contract_sha256
+                || JSON.stringify(details.proposed_child_task_ids) !== JSON.stringify(proposed)
+                || proposed.length !== children.length || children.some(child => !proposed.includes(child))
+                || !['INFO', 'PASS'].includes(String(completion?.outcome)) || !['INFO', 'PASS'].includes(String(decomposition?.outcome))
+                || done.previous_status !== 'DECOMPOSED' || done.new_status !== 'DONE' || done.reason !== 'explicit_children_done') {
+                throw new Error('Native decomposition, completion and explicit child graph do not match.');
+            }
+            const laterEntry = events.some(event => ['TASK_MODE_ENTERED', 'TASK_RESET', 'TASK_DISCARDED'].includes(String(event.event_type))
+                && Number(isPlainRecord(event.integrity) ? event.integrity.task_sequence : 0) > facts.completion!.sequence);
+            if (laterEntry) throw new Error('Native parent completion is stale for its current cycle.');
+            facts.childGraphComplete = children.every(child => entries.has(child) && isTaskQueueDoneStatus(entries.get(child)?.status ?? null));
+            result.requirements = deriveDecomposedParentAuditRequirements(facts);
+            if (result.requirements.status !== 'REQUIRES_PROOF') return result;
+            for (const child of children) result.childSources.push(readNativeChildSourceAcceptance(root, child));
+            if (!readNativeParentInput(root, artifactPath).equals(artifactBytes)
+                || !readNativeParentInput(root, queuePath).equals(queueBytes)) throw new Error('Canonical parent inputs changed during selection.');
+            assertTaskTimelineReadSnapshotCurrent(timeline, snapshot);
+        } catch (error: unknown) {
+            result.requirements.status = 'BLOCKED';
+            result.requirements.violations.push(error instanceof Error ? error.message : String(error));
+        }
+        return result;
+    });
 }

@@ -1,5 +1,9 @@
 # Changelog
 
+- Select decomposed-parent audit requirements from intact native graph and child
+  source evidence, retaining original suite, memory, WIP and historical failure
+  obligations without granting aggregate parent acceptance.
+
 - Audit native correction invocation telemetry against the actual correction
   launch and response-event identity; retain original package bindings and reject
   conflicting aliases, missing launches, altered digests and reversed ordering.
