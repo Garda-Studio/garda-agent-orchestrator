@@ -5,6 +5,7 @@ import { buildStrictDecompositionDecisionArtifact } from '../../../../src/gates/
 
 const nativeParentApi = require('../../../../src/gates/task-audit/task-audit-summary-lifecycle');
 const nativeChildApi = require('../../../../src/gates/task-audit/task-audit-summary-decomposed-parent-proofs');
+const parentObligationApi = require('../../../../src/gates/task-audit/task-audit-summary-parent-obligation-proofs');
 
 function nativeParentReader(): (root: string, taskId: string) => any {
     assert.equal(typeof nativeParentApi.readNativeDecomposedParentFacts, 'function', 'native parent fact reader must exist');
@@ -40,6 +41,80 @@ describe('gates/task-audit-summary', () => {
     afterEach(() => {
         mock.restoreAll();
         fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    function aggregateProof() {
+        const child = TASK_ID + '-1';
+        fs.writeFileSync(path.join(tmpDir, 'TASK.md'), [
+            '## Active Queue', '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+            '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+            `| ${TASK_ID} | DONE | P1 | audit | parent | test | 2026-10-16 | balanced | child tasks: ${child} |`,
+            `| ${child} | DONE | P1 | audit | child | test | 2026-10-16 | balanced | Parent: ${TASK_ID}. |`
+        ].join('\n') + '\n');
+        const bundle = path.join(tmpDir, 'garda-agent-orchestrator');
+        appendMandatoryTaskEvent(bundle, TASK_ID, 'STRICT_DECOMPOSITION_DECISION_RECORDED', 'INFO', 'Native aggregate caller fixture.', { decision: 'split-required' });
+        appendMandatoryTaskEvent(bundle, TASK_ID, 'DECOMPOSED_PARENT_COMPLETED', 'INFO', 'Native aggregate caller fixture.', {
+            previous_status: 'DECOMPOSED', new_status: 'DONE', reason: 'explicit_children_done'
+        });
+        const requiredProofs = ['authenticated-decomposition', 'source-qualified-child-acceptance', 'preserved-parent-wip',
+            'full-suite-composition', 'parent-memory-impact', 'historical-failure-resolution'];
+        // The accepted resolver owns real signed source and original proof qualification; this fixture checks its audit consumer.
+        const proof: any = { status: 'QUALIFIED', qualifiedProofs: requiredProofs, violations: [], native: {
+            facts: { taskId: TASK_ID, taskStatus: 'DONE', childTaskIds: [child], historicalFailures: ['full-suite-validation'] },
+            requirements: { status: 'REQUIRES_PROOF', requiredProofs, violations: [] },
+            childSources: [{ taskId: child, artifactPath: path.join(reviewsDir, child + '-source.json'), artifactSha256: 'a'.repeat(64) }]
+        } };
+        mock.method(parentObligationApi, 'readNativeParentObligationProofs', () => proof);
+        return proof;
+    }
+
+    it('audits a qualified native aggregate without inventing direct parent reviews', () => {
+        aggregateProof();
+        const timeline = fs.readFileSync(path.join(eventsDir, TASK_ID + '.jsonl'));
+        const result = buildTaskAuditSummary({ taskId: TASK_ID, repoRoot: tmpDir });
+        assert.equal(result.status, 'PASS'); assert.equal(result.final_report_contract.status, 'READY');
+        assert.equal(result.final_closeout.implementation_summary.path_mode, 'DECOMPOSED_PARENT');
+        assert.deepEqual(result.final_closeout.implementation_summary.review_verdicts, {});
+        assert.ok(result.gates.some(gate => gate.gate === 'decomposed-parent:preserved-parent-wip' && gate.status === 'PASS'));
+        assert.ok(result.evidence.some(item => item.kind === 'child-source:' + TASK_ID + '-1'));
+        assert.deepEqual(fs.readFileSync(path.join(eventsDir, TASK_ID + '.jsonl')), timeline);
+    });
+
+    it('rejects alternate event and review roots for a qualified native aggregate', () => {
+        aggregateProof();
+        for (const root of ['eventsRoot', 'reviewsRoot'] as const) {
+            const alternate = path.join(tmpDir, 'alternate-' + root);
+            fs.mkdirSync(alternate);
+            const result = buildTaskAuditSummary({ taskId: TASK_ID, repoRoot: tmpDir, [root]: alternate });
+            assert.equal(result.status, 'BLOCKED', root);
+            assert.equal(result.final_report_contract.status, 'NOT_READY', root);
+            assert.ok(result.blockers.some(blocker => blocker.gate === 'decomposed-parent-obligations'
+                && blocker.reason === 'Native aggregate proof requires canonical event and review roots.'), root);
+        }
+    });
+
+    it('retains exact unqualified original obligations in the aggregate audit', () => {
+        const proof = aggregateProof(); proof.status = 'BLOCKED';
+        for (const reason of ['Missing native child source.', 'Original command coverage differs.', 'Original WIP is unqualified.',
+            'Original memory is stale.', 'Unresolved original historical failure.']) {
+            proof.violations = [reason];
+            const result = buildTaskAuditSummary({ taskId: TASK_ID, repoRoot: tmpDir });
+            assert.equal(result.status, 'BLOCKED'); assert.equal(result.final_report_contract.status, 'NOT_READY');
+            assert.ok(result.blockers.some(blocker => blocker.reason === reason));
+        }
+    });
+
+    it('preserves completion finality and timeline integrity for qualified aggregates', () => {
+        aggregateProof();
+        writeActiveCompletionLock(reviewsDir, TASK_ID);
+        const inFlight = buildTaskAuditSummary({ taskId: TASK_ID, repoRoot: tmpDir });
+        assert.equal(inFlight.status, 'INCOMPLETE');
+        assert.equal(inFlight.point_in_time_snapshot.status, 'FINALIZATION_IN_FLIGHT');
+        assert.equal(inFlight.final_report_contract.status, 'NOT_READY');
+        const timeline = path.join(eventsDir, TASK_ID + '.jsonl');
+        fs.writeFileSync(timeline, fs.readFileSync(timeline, 'utf8').replace('explicit_children_done', 'changed'));
+        const corrupt = buildTaskAuditSummary({ taskId: TASK_ID, repoRoot: tmpDir });
+        assert.equal(corrupt.status, 'BLOCKED'); assert.ok(corrupt.blockers.some(blocker => blocker.gate === 'integrity'));
     });
 
     it('selects native parent facts without granting aggregate acceptance', () => {

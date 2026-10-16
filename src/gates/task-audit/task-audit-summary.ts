@@ -1,6 +1,8 @@
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
+import { readNativeParentObligationProofs } from './task-audit-summary-parent-obligation-proofs';
 import {
     assertValidTaskId,
     inspectTaskEventFile,
@@ -130,6 +132,81 @@ export type {
 
 const NO_COMMIT_REQUIRED_MESSAGE = 'No commit required: no committable changes are present.';
 const NO_COMMIT_CONFIRMATION_MESSAGE = 'No commit confirmation required.';
+
+function buildNativeAggregateAudit(options: TaskAuditSummaryOptions, events: Readonly<Record<string, unknown>>[],
+    taskMetadata: ReturnType<typeof readTaskQueueMetadata>): TaskAuditSummaryResult | null {
+    const repoRoot = path.resolve(options.repoRoot), taskId = options.taskId;
+    const eventsRoot = resolveEventsRoot(repoRoot, options.eventsRoot), reviewsRoot = resolveReviewsRoot(repoRoot, options.reviewsRoot);
+    const parentMarker = events.some(event => event.event_type === 'DECOMPOSED_PARENT_COMPLETED'
+        || (event.event_type === 'STRICT_DECOMPOSITION_DECISION_RECORDED'
+            && (event.details as Record<string, unknown> | undefined)?.decision === 'split-required'));
+    if (!taskMetadata && !parentMarker) return null;
+    let proof: ReturnType<typeof readNativeParentObligationProofs> = null;
+    const blockers: TaskAuditSummaryResult['blockers'] = [];
+    try { proof = readNativeParentObligationProofs(repoRoot, taskId); }
+    catch (error: unknown) { blockers.push({ gate: 'decomposed-parent-obligations', reason: error instanceof Error ? error.message : String(error) }); }
+    if (!proof && blockers.length === 0) return null;
+    blockers.push(...(proof?.violations || []).map(reason => ({ gate: 'decomposed-parent-obligations', reason })));
+    if (eventsRoot !== resolveEventsRoot(repoRoot) || reviewsRoot !== resolveReviewsRoot(repoRoot)) {
+        blockers.push({ gate: 'decomposed-parent-obligations', reason: 'Native aggregate proof requires canonical event and review roots.' });
+    }
+    const timeline = path.join(eventsRoot, taskId + '.jsonl'), inspection = inspectTaskEventFile(timeline, taskId);
+    if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(inspection.status) || inspection.violations.length) {
+        blockers.push({ gate: 'integrity', reason: 'Native aggregate timeline integrity is ' + inspection.status + '.' });
+    }
+    if (proof?.status !== 'QUALIFIED' && blockers.length === 0) {
+        blockers.push({ gate: 'decomposed-parent-obligations', reason: 'Original native parent obligations are not qualified.' });
+    }
+    const reviewIntegrity = buildReviewIntegrityAttestation({ requiredReviews: {}, reviewsRoot, taskId,
+        scopeCategory: 'decomposed-parent', reviewTrustSummary: null, repoRoot, timelineEvents: events });
+    const lock = options.ignoreActiveCompletionFinalizationLock ? null : inspectCompletionGateFinalizationLock(reviewsRoot, taskId);
+    const inFlight = Boolean(lock?.active || lock?.stale);
+    const point: PointInTimeSnapshot = inFlight && lock ? {
+        status: 'FINALIZATION_IN_FLIGHT', gate: 'completion-gate', message: lock.remediation, recommended_action: lock.remediation,
+        lock_path: toPosix(lock.lock_path), owner_pid: lock.owner_pid, owner_hostname: lock.owner_hostname,
+        owner_created_at_utc: lock.owner_created_at_utc, owner_alive: lock.owner_alive, owner_metadata_status: lock.owner_metadata_status,
+        stale_reason: lock.stale_reason, subsystem_scope_note: lock.subsystem_scope_note, acquisition_policy: lock.acquisition_policy
+    } : { status: 'STABLE', gate: null, message: null, recommended_action: null, lock_path: null };
+    const status = blockers.length ? 'BLOCKED' : inFlight ? 'INCOMPLETE' : 'PASS';
+    const generated = new Date().toISOString(), ready = status === 'PASS';
+    const contract: FinalReportContract = { status: ready ? 'READY' : 'NOT_READY',
+        blocker: ready ? null : blockers.map(blocker => blocker.reason).join(' ') || point.message,
+        required_order: ['short agent-authored summary of what changed', 'verbatim Garda final user report'],
+        implementation_summary_requirements: ['native aggregate proof and child source provenance'],
+        commit_command_template: 'No commit command required.', commit_command_suggestion: NO_COMMIT_REQUIRED_MESSAGE,
+        commit_question: NO_COMMIT_CONFIRMATION_MESSAGE };
+    const evidence: EvidenceArtifact[] = (proof?.native.childSources || []).map(source => ({
+        kind: 'child-source:' + source.taskId, path: source.artifactPath, exists: true, sha256: source.artifactSha256
+    }));
+    if (fs.existsSync(timeline)) evidence.push({ kind: 'native-parent-timeline', path: timeline, exists: true,
+        sha256: createHash('sha256').update(fs.readFileSync(timeline)).digest('hex') });
+    return {
+        task_id: taskId, generated_utc: generated, status, events_count: events.length,
+        first_event_utc: typeof events[0]?.timestamp_utc === 'string' ? events[0].timestamp_utc : null,
+        last_event_utc: typeof events.at(-1)?.timestamp_utc === 'string' ? String(events.at(-1)!.timestamp_utc) : null,
+        integrity_status: inspection.status,
+        gates: (proof?.native.requirements.requiredProofs || []).map(name => ({ gate: 'decomposed-parent:' + name,
+            status: proof!.qualifiedProofs.includes(name) ? 'PASS' : 'MISSING' })),
+        changed_files: [], changed_files_count: 0, changed_lines_total: 0, required_reviews: {},
+        scope_category: 'decomposed-parent', profile_review_decisions: null, evidence, blockers,
+        point_in_time_snapshot: point, final_report_contract: contract,
+        final_closeout: {
+            schema_version: 1, event_source: 'task-audit-summary', task_id: taskId, generated_utc: generated,
+            audit_status: status, status: contract.status, blocker: contract.blocker, artifact_state: ready ? 'PENDING' : 'NOT_READY',
+            artifact_paths: { json: path.join(reviewsRoot, taskId + '-final-closeout.json'),
+                markdown: path.join(reviewsRoot, taskId + '-final-closeout.md'), final_user_report: path.join(reviewsRoot, taskId + '-final-user-report.md') },
+            implementation_summary: { requested_depth: null, effective_depth: null, path_mode: 'DECOMPOSED_PARENT',
+                review_verdicts: {}, docs_updated: false, changed_files_count: 0, changed_lines_total: 0,
+                scope_category: 'decomposed-parent', active_profile: taskMetadata?.profile || null },
+            review_integrity_attestation: reviewIntegrity,
+            workflow: { mandatory_full_suite_enabled: proof?.native.requirements.requiredProofs.includes('full-suite-composition') === true,
+                visible_summary_line: 'Native original command composition and child SOURCE acceptance; no direct parent review execution is claimed.' },
+            docs: { decision: 'AGGREGATE_SOURCE_PROVENANCE', behavior_changed: false, changelog_updated: false, docs_updated: [] },
+            token_economy: null, commit_command_template: contract.commit_command_template,
+            commit_command_suggestion: contract.commit_command_suggestion, commit_question: contract.commit_question
+        }
+    };
+}
 
 function filterCommitCandidatesToTaskOwnedPreflightScope(
     repoRoot: string,
@@ -322,6 +399,8 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): Ta
         .map((entry) => entry.record)
         .filter((entry): entry is Readonly<Record<string, unknown>> => entry !== null)
         .map((entry) => ({ ...entry }));
+    const aggregate = buildNativeAggregateAudit(options, fileOrderedEvents, taskMetadata);
+    if (aggregate) return aggregate;
     const resolvedCompileCycle = resolveTaskCycleBindingSnapshot(safeTaskId, events, repoRoot, reviewsRoot);
     const preflightForLifecycle = safeReadJson(path.join(reviewsRoot, `${safeTaskId}-preflight.json`));
     const noOpEvidenceForLifecycle = getNoOpEvidence(

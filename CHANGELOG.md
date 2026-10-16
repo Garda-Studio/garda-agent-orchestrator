@@ -1,5 +1,9 @@
 # Changelog
 
+- Apply verified native original-parent obligations in the real aggregate audit,
+  preserving exact blockers, child source provenance and completion finality
+  without inventing direct parent reviews or changing ordinary leaf audits.
+
 - Qualify original decomposed-parent command, memory and suspended-WIP proofs
   through existing native readers; retain missing contracts and unresolved
   historical failures as blockers without granting aggregate acceptance.
