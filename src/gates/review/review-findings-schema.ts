@@ -2160,7 +2160,7 @@ function hasAuthenticatedEmptyReviewScope(options: ReviewFindingsValidationOptio
         && options.expectedCoverageContract?.review_type === options.expectedReviewType.trim().toLowerCase()
         && options.expectedCoverageObligationIds?.length === 0
         && options.expectedChangedFilePaths?.length === 0
-        && execution?.source === 'initial_full'
+        && (execution?.source === 'initial_full' || execution?.source === 'remediation_full')
         && execution.mode === 'FULL'
         && Array.isArray(execution.full_review_scope)
         && execution.full_review_scope.length === 0;

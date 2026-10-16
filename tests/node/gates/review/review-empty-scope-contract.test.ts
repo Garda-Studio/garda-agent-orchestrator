@@ -18,19 +18,39 @@ import {
 import {
     buildReviewRemediationReviewContract
 } from '../../../../src/gates/review-remediation/review-remediation-review-contract';
+import { resolveAuthoritativeReviewRemediationDecision } from '../../../../src/gates/review-remediation/review-remediation-recovery-routing';
+import { bindAuthoritativeRemediationDecisionToPreflight } from '../../../../src/cli/commands/gate-flows/review-context/review-context-flow';
 
 const TASK_ID = 'T-969-3';
 const CONTEXT_HASH = 'a'.repeat(64);
 const TREE_HASH = 'b'.repeat(64);
 const PREFLIGHT_HASH = 'c'.repeat(64);
 
-function createReviewFixture(changedFiles: string[] = [], reviewType = 'code') {
+function createReviewFixture(changedFiles: string[] = [], reviewType = 'code', remediation = false) {
     const coverageContract = buildReviewCoverageContract({ reviewType, changedFiles });
+    const classification = {
+        source: 'runtime_fix' as const,
+        classification: {
+            category: 'review_evidence_only',
+            reason: 'Fresh review evidence is required without a source change.',
+            blocked_before_reuse: false,
+            invalidated_review_types: [reviewType]
+        }
+    };
+    const decision = remediation ? resolveAuthoritativeReviewRemediationDecision({
+        taskId: TASK_ID, currentReviewType: reviewType, classification,
+        requiredReviews: { [reviewType]: true }, reviewExecutionPolicyMode: 'strict_sequential'
+    }) : null;
+    if (decision) assert.equal(decision.status, 'READY', decision.blocked_reasons.join('\n'));
     const reviewExecutionContract = buildReviewRemediationReviewContract({
         taskId: TASK_ID,
         reviewType,
         preflightSha256: PREFLIGHT_HASH,
-        fullReviewScope: changedFiles
+        fullReviewScope: changedFiles,
+        ...(decision ? {
+            authoritativeDecision: bindAuthoritativeRemediationDecisionToPreflight(decision, PREFLIGHT_HASH),
+            classification
+        } : {})
     });
     const templateOptions = {
         taskId: TASK_ID,
@@ -91,6 +111,30 @@ test('authenticated empty scope accepts an observation without invented location
     assert.equal(result.coverage_validation?.required, false);
     assert.equal(result.coverage_validation?.obligation_count, 0);
     assert.equal(result.coverage_validation?.completed_obligation_count, 0);
+});
+
+test('authenticated empty remediation FULL scope accepts an observation without invented location evidence', () => {
+    const fixture = createReviewFixture([], 'code', true);
+    assert.equal(fixture.reviewExecutionContract.source, 'remediation_full');
+    assert.equal(fixture.reviewExecutionContract.mode, 'FULL');
+    const result = fixture.validate();
+    assert.equal(result.valid, true, result.violations.join('\n'));
+    assert.deepEqual(result.report?.validation_notes[0].evidence, []);
+    assert.equal(result.coverage_validation?.obligation_count, 0);
+    assert.equal(result.coverage_validation?.completed_obligation_count, 0);
+});
+
+test('empty remediation FULL retains context bindings and rejects supporting artifacts as source evidence', () => {
+    const fixture = createReviewFixture([], 'code', true);
+    assert.equal(fixture.validate({ expectedReviewContextSha256: 'd'.repeat(64) }).valid, false);
+    assert.equal(fixture.validate({ expectedTreeStateSha256: 'd'.repeat(64) }).valid, false);
+    fixture.report.validation_notes[0].evidence = [{
+        location: 'garda-agent-orchestrator/runtime/reviews/T-969-3-compile-gate.json:1',
+        observation: 'A supporting record is not a source location in this empty domain.'
+    }];
+    const result = fixture.validate();
+    assert.equal(result.valid, false);
+    assert.ok(result.violations.some(entry => entry.includes('outside the code review evidence domain')));
 });
 
 test('empty scope handoff provides a truthful template and no changed-file placeholders', () => {
