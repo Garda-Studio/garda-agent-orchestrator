@@ -6,10 +6,13 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { appendMandatoryTaskEvent } from '../../../../src/gate-runtime/task-events';
 import { deriveDecomposedParentAuditRequirements } from '../../../../src/gates/task-audit/task-audit-summary-decomposed-parent';
+import { PROJECT_MEMORY_REQUIRED_FILE_NAMES } from '../../../../src/core/project-memory';
+import { buildDefaultWorkflowConfig } from '../../../../src/core/workflow-config';
 
 const parentApi = require('../../../../src/gates/task-audit/task-audit-summary-lifecycle');
 const commandApi = require('../../../../src/gates/task-audit/task-audit-summary-decomposed-parent-proofs');
 const memoryApi = require('../../../../src/gates/project-memory-impact/project-memory-impact');
+const nativeMemoryReader = memoryApi.getProjectMemoryImpactLifecycleEvidence;
 const wipApi = require('../../../../src/gates/split-required/split-required-wip-runtime-handoff-contracts');
 const wipFilesApi = require('../../../../src/gates/split-required/split-required-wip-restore-plan');
 const gitApi = require('../../../../src/core/git-helpers');
@@ -257,5 +260,85 @@ describe('native original parent obligation qualification', () => {
         assert.deepEqual(requests, [{ command, coverage: null }]);
         signedCommands = [{ command, coverage: null }];
         assert.equal(read(root, task).status, 'QUALIFIED');
+    });
+
+    const preflightlessOriginal = () => {
+        const context = cleanOriginal(), original = entries(); fs.unlinkSync(timeline);
+        fs.unlinkSync(path.join(reviews, task + '-preflight.json'));
+        const smokeFile = path.join(reviews, task + '-shell-smoke.json');
+        const smoke = { schema_version: 1, event_source: 'shell-smoke-preflight', task_id: task,
+            status: 'PASSED', outcome: 'PASS', git_change_classification: {
+                effective_dirty: false, effective_changed_files: [], staged_files: [], unstaged_files: [], untracked_files: []
+            } };
+        fs.writeFileSync(smokeFile, JSON.stringify(smoke));
+        const smokeHash = createHash('sha256').update(fs.readFileSync(smokeFile)).digest('hex');
+        memory = { ...memory, preflight_hash_sha256: null, changed_files_source: 'explicit', changed_files: [] };
+        fs.writeFileSync(memoryFile, JSON.stringify(memory));
+        for (const event of original.filter(event => event.event_type !== 'PREFLIGHT_CLASSIFIED')) {
+            add(event.event_type, event.event_type === 'PROJECT_MEMORY_IMPACT_ASSESSED' ? memory : event.details, event.outcome);
+            if (event.event_type === 'TASK_MODE_ENTERED') {
+                add('HANDSHAKE_DIAGNOSTICS_RECORDED', {}, 'PASS');
+                add('SHELL_SMOKE_PREFLIGHT_RECORDED', { artifact_hash: smokeHash, passed: true }, 'PASS');
+            }
+        }
+        facts.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
+        facts.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
+        return { ...context, smokeFile, smoke };
+    };
+
+    it('qualifies the native clean split before preflight with separate explicit memory and command proofs', () => {
+        preflightlessOriginal();
+        mock.method(memoryApi, 'getProjectMemoryImpactLifecycleEvidence', (input: any) => {
+            assert.deepEqual(input.changedFiles, []);
+            return { required: true, evidence_status: 'CURRENT', artifact_path: memoryFile };
+        });
+        const before = fs.readFileSync(timeline), result = reader()(root, task);
+        assert.equal(result.status, 'QUALIFIED'); assert.deepEqual(result.violations, []);
+        assert.deepEqual(requests, [{ command, coverage: null }]);
+        assert.deepEqual(fs.readFileSync(timeline), before);
+        assert.equal(fs.existsSync(path.join(reviews, task + '-preflight.json')), false);
+    });
+
+    it('keeps a preflightless original blocked for missing, changed, dirty or stale smoke evidence', () => {
+        const { smokeFile, smoke } = preflightlessOriginal(), original = entries();
+        const read = reader(), bytes = fs.readFileSync(smokeFile);
+        fs.unlinkSync(smokeFile); assert.equal(read(root, task).status, 'BLOCKED');
+        fs.writeFileSync(smokeFile, JSON.stringify({ ...smoke, git_change_classification: { effective_dirty: true } }));
+        assert.equal(read(root, task).status, 'BLOCKED');
+        const dirtyHash = createHash('sha256').update(fs.readFileSync(smokeFile)).digest('hex');
+        fs.unlinkSync(timeline);
+        for (const event of original) add(event.event_type, event.event_type === 'SHELL_SMOKE_PREFLIGHT_RECORDED'
+            ? { ...event.details, artifact_hash: dirtyHash } : event.details, event.outcome);
+        facts.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
+        facts.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
+        assert.equal(read(root, task).status, 'BLOCKED');
+        fs.writeFileSync(smokeFile, bytes);
+        fs.unlinkSync(timeline);
+        for (const event of original) {
+            if (event.event_type === 'STRICT_DECOMPOSITION_DECISION_RECORDED') add('HANDSHAKE_DIAGNOSTICS_RECORDED', {}, 'PASS');
+            add(event.event_type, event.details, event.outcome);
+        }
+        facts.facts.decomposition = reference('STRICT_DECOMPOSITION_DECISION_RECORDED');
+        facts.facts.completion = reference('DECOMPOSED_PARENT_COMPLETED');
+        assert.equal(read(root, task).status, 'BLOCKED');
+    });
+
+    it('validates an explicit empty scope through the real memory owner without treating missing preflight as empty', () => {
+        const memoryRoot = path.join(bundle, 'live/docs/project-memory'); fs.mkdirSync(memoryRoot, { recursive: true });
+        for (const name of PROJECT_MEMORY_REQUIRED_FILE_NAMES) {
+            fs.writeFileSync(path.join(memoryRoot, name), `# ${name}\n\nDurable project contract for ${name}.\n`);
+        }
+        const config = buildDefaultWorkflowConfig();
+        config.project_memory_maintenance.enabled = true;
+        config.project_memory_maintenance.mode = 'check';
+        config.project_memory_maintenance.run_before_final_closeout = true;
+        fs.mkdirSync(path.join(bundle, 'live/config'), { recursive: true });
+        fs.writeFileSync(path.join(bundle, 'live/config/workflow-config.json'), JSON.stringify(config));
+        const preflightPath = path.join(reviews, 'absent-original-preflight.json');
+        const assessed = memoryApi.assessProjectMemoryImpact({ repoRoot: root, taskId: task, preflightPath, changedFiles: [] });
+        assert.equal(assessed.artifact.status, 'NO_UPDATE_NEEDED');
+        fs.writeFileSync(assessed.artifactPath, JSON.stringify(assessed.artifact));
+        assert.equal(nativeMemoryReader({ repoRoot: root, taskId: task, preflightPath, changedFiles: [] }).evidence_status, 'CURRENT');
+        assert.notEqual(nativeMemoryReader({ repoRoot: root, taskId: task, preflightPath }).evidence_status, 'CURRENT');
     });
 });

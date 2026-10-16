@@ -1,5 +1,9 @@
 # Changelog
 
+- Qualify recorded clean native splits made before preflight using their bound
+  shell-smoke evidence, retaining current command and explicit memory-scope
+  proofs without creating historical preflight or WIP artifacts.
+
 - Qualify genuine nested parent children through their own native obligations
   and stable completion, preserving actual descendant source identities and
   rechecking subtree evidence without fabricating an aggregate source commit.

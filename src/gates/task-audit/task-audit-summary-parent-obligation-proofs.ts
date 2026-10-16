@@ -17,6 +17,7 @@ import { readNativeDecomposedParentFacts, type NativeDecomposedParentFacts } fro
 import { readNativeChildSourceAcceptance, readNativeSourceCompositionProof, readParentAuditProofRecord } from './task-audit-summary-decomposed-parent-proofs';
 import { getTaskModeEvidence } from '../task-mode/task-mode-evidence';
 import { inspectCompletionGateFinalizationLock } from '../locks/finalization-lock';
+import { getShellSmokeEvidence } from '../diagnostics/shell-smoke-preflight';
 import type { DecomposedParentRequiredProof } from './task-audit-summary-types';
 
 type Event = Readonly<Record<string, unknown>>;
@@ -39,18 +40,43 @@ function readMemoryRecord(root: string, file: string): Record<string, unknown> {
     return readParentAuditProofRecord(root, nativePath, createHash('sha256').update(bytes).digest('hex'));
 }
 
+function qualifyCleanOriginalSmoke(root: string, taskId: string, original: Event[], entrySequence: number): void {
+    const event = [...original].reverse().find(item => item.event_type === 'SHELL_SMOKE_PREFLIGHT_RECORDED');
+    const details = event?.details;
+    const evidence = getShellSmokeEvidence(root, taskId, {
+        timelinePath: joinOrchestratorPath(root, 'runtime/task-events/' + taskId + '.jsonl')
+    });
+    if (!event || event.outcome !== 'PASS' || sequence(event) <= entrySequence
+        || !isPlainRecord(details) || typeof details.artifact_hash !== 'string'
+        || evidence.evidence_status !== 'PASS' || evidence.violations.length
+        || !evidence.evidence_path || evidence.evidence_hash !== details.artifact_hash) {
+        throw new Error('Original clean split requires authenticated current-cycle native shell-smoke evidence.');
+    }
+    const smoke = readParentAuditProofRecord(root, path.resolve(root, evidence.evidence_path), details.artifact_hash);
+    const classification = smoke.git_change_classification;
+    if (!isPlainRecord(classification) || classification.effective_dirty !== false
+        || ['effective_changed_files', 'staged_files', 'unstaged_files', 'untracked_files'].some(key =>
+            !Array.isArray(classification[key]) || classification[key].length !== 0)) {
+        throw new Error('Original split shell-smoke does not record a clean pre-implementation scope.');
+    }
+}
+
 function readCleanOriginalPolicy(root: string, taskId: string, original: Event[]) {
     const entry = [...original].reverse().find(event => event.event_type === 'TASK_MODE_ENTERED');
     const preflight = [...original].reverse().find(event => event.event_type === 'PREFLIGHT_CLASSIFIED');
     const details = preflight?.details, entered = entry?.details;
-    if (!entry || entry.outcome !== 'PASS' || !preflight || sequence(entry) >= sequence(preflight)
+    if (!entry || entry.outcome !== 'PASS'
         || !isPlainRecord(entered) || entered.dirty_workspace_baseline_count !== 0
-        || !isPlainRecord(details) || details.changed_files_count !== 0 || details.changed_lines_total !== 0
-        || !isPlainRecord(details.zero_diff_guard) || details.zero_diff_guard.zero_diff_detected !== true
-        || details.zero_diff_guard.status !== 'BASELINE_ONLY'
         || original.some(event => event.event_type === 'IMPLEMENTATION_STARTED')) {
         throw new Error('Original parent WIP requires a capture or verified native clean pre-implementation scope.');
     }
+    if (preflight && (sequence(entry) >= sequence(preflight)
+        || !isPlainRecord(details) || details.changed_files_count !== 0 || details.changed_lines_total !== 0
+        || !isPlainRecord(details.zero_diff_guard) || details.zero_diff_guard.zero_diff_detected !== true
+        || details.zero_diff_guard.status !== 'BASELINE_ONLY')) {
+        throw new Error('Original parent WIP requires a capture or verified native clean pre-implementation scope.');
+    }
+    if (!preflight) qualifyCleanOriginalSmoke(root, taskId, original, sequence(entry));
     const mode = getTaskModeEvidence(root, taskId);
     if (mode.evidence_status !== 'PASS' || mode.evidence_task_id !== taskId
         || mode.profile_policy_snapshot_status !== 'PASS' || !mode.profile_policy_snapshot
@@ -99,10 +125,22 @@ function qualifyWip(root: string, taskId: string, original: Event[]): void {
     }
 }
 
-function qualifyMemory(root: string, taskId: string, events: Event[], completionSequence: number): () => void {
+function qualifyMemory(root: string, taskId: string, events: Event[], completionSequence: number, original: Event[]): () => void {
     const preflight = joinOrchestratorPath(root, 'runtime/reviews/' + taskId + '-preflight.json');
-    if (!readTransactionBytes(root, preflight)) throw new Error('Original parent preflight is missing for memory qualification.');
-    const evidence = getProjectMemoryImpactLifecycleEvidence({ repoRoot: root, taskId, preflightPath: preflight });
+    let changedFiles: string[] | undefined;
+    if (!readTransactionBytes(root, preflight)) {
+        if (original.some(event => event.event_type === 'PREFLIGHT_CLASSIFIED')) {
+            throw new Error('Original parent preflight is missing for memory qualification.');
+        }
+        try { readCleanOriginalPolicy(root, taskId, original); }
+        catch (error: unknown) {
+            throw new Error('Original parent preflight is missing for memory qualification: '
+                + (error instanceof Error ? error.message : String(error)));
+        }
+        changedFiles = [];
+    }
+    const input = { repoRoot: root, taskId, preflightPath: preflight, changedFiles };
+    const evidence = getProjectMemoryImpactLifecycleEvidence(input);
     const event = [...events].reverse().find(item => item.event_type === 'PROJECT_MEMORY_IMPACT_ASSESSED');
     if (evidence.evidence_status !== 'CURRENT' || !event || event.outcome !== 'PASS' || sequence(event) <= completionSequence) {
         throw new Error('Original parent memory evidence is missing, stale or not natively assessed after child completion.');
@@ -110,7 +148,7 @@ function qualifyMemory(root: string, taskId: string, events: Event[], completion
     const record = readMemoryRecord(root, evidence.artifact_path);
     if (record.task_id !== taskId || !isDeepStrictEqual(record, event.details)) throw new Error('Native parent memory artifact and event differ.');
     const assertCurrent = () => {
-        const current = getProjectMemoryImpactLifecycleEvidence({ repoRoot: root, taskId, preflightPath: preflight });
+        const current = getProjectMemoryImpactLifecycleEvidence(input);
         if (current.evidence_status !== 'CURRENT' || !isDeepStrictEqual(current, evidence)
             || !isDeepStrictEqual(readMemoryRecord(root, evidence.artifact_path), record)) {
             throw new Error('Original parent memory changed during qualification.');
@@ -206,12 +244,15 @@ function readParentObligations(repoRoot: string, taskId: string, scope: ParentRe
             const additional = needsDeclaration || !original.some(event => event.event_type === 'SPLIT_REQUIRED_WIP_CAPTURED')
                 ? [joinOrchestratorPath(root, 'runtime/reviews/' + id + '-task-mode.json')] : [];
             if (needsDeclaration) additional.push(resolveWorkflowConfigPath(root));
+            if (!original.some(event => event.event_type === 'PREFLIGHT_CLASSIFIED')) {
+                additional.push(joinOrchestratorPath(root, 'runtime/reviews/' + id + '-shell-smoke.json'));
+            }
             for (const file of additional) { files.push(file); inputs.push(readTransactionBytes(root, file)); }
             result.qualifiedProofs.push('authenticated-decomposition', 'source-qualified-child-acceptance');
             qualify('preserved-parent-wip', () => qualifyWip(root, id, original));
             if (native.requirements.requiredProofs.includes('full-suite-composition')) qualify('full-suite-composition', () => qualifyCommands(root, id, original, events, completion));
             if (native.requirements.requiredProofs.includes('parent-memory-impact')) qualify('parent-memory-impact', () => {
-                scope.rechecks.push(qualifyMemory(root, id, events, completion));
+                scope.rechecks.push(qualifyMemory(root, id, events, completion, original));
             });
             if (native.requirements.requiredProofs.includes('historical-failure-resolution')) qualify('historical-failure-resolution', () => {
                 for (const failure of native.requirements.historicalFailures) {

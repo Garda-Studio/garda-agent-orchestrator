@@ -60,6 +60,7 @@ export function getProjectMemoryImpactLifecycleEvidence(input: {
     repoRoot: string;
     taskId: string;
     preflightPath?: string | null;
+    changedFiles?: string[];
     artifactPath?: string | null;
     updateArtifactPath?: string | null;
 }): ProjectMemoryImpactLifecycleEvidence {
@@ -101,6 +102,7 @@ export function getProjectMemoryImpactLifecycleEvidence(input: {
         repoRoot: runtime.repoRoot,
         taskId: runtime.taskId,
         preflightPath: runtime.preflightPath,
+        changedFiles: input.changedFiles,
         artifactPath: runtime.artifactPath,
         updateArtifactPath: runtime.updateArtifactPath
     }).artifact;
