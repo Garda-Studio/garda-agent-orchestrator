@@ -1,5 +1,9 @@
 # Changelog
 
+- Qualify genuine nested parent children through their own native obligations
+  and stable completion, preserving actual descendant source identities and
+  rechecking subtree evidence without fabricating an aggregate source commit.
+
 - Resolve native parent memory evidence paths before strict file reads so Windows
   forward separators do not reject valid unchanged artifacts.
 

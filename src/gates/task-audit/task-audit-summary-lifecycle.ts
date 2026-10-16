@@ -569,7 +569,9 @@ function nativeParentReference(event: TaskAuditEvent | undefined, taskId: string
 }
 
 /** Read-only selection: requirements and child source facts never grant parent acceptance. */
-export function readNativeDecomposedParentFacts(repoRoot: string, taskId: string): NativeDecomposedParentFacts | null {
+export function readNativeDecomposedParentFacts(repoRoot: string, taskId: string,
+    observeChildSources?: (childTaskId: string) => readonly NativeChildSourceAcceptance[]
+): NativeDecomposedParentFacts | null {
     const root = path.resolve(repoRoot), id = assertValidTaskId(taskId);
     const queuePath = path.join(root, TASK_QUEUE_FILENAME), queueBytes = readNativeParentInput(root, queuePath);
     const entries = parseTaskQueueEntriesFromContent(queueBytes.toString('utf8')), parent = entries.get(id);
@@ -630,7 +632,8 @@ export function readNativeDecomposedParentFacts(repoRoot: string, taskId: string
             facts.childGraphComplete = children.every(child => entries.has(child) && isTaskQueueDoneStatus(entries.get(child)?.status ?? null));
             result.requirements = deriveDecomposedParentAuditRequirements(facts);
             if (result.requirements.status !== 'REQUIRES_PROOF') return result;
-            for (const child of children) result.childSources.push(readNativeChildSourceAcceptance(root, child));
+            for (const child of children) result.childSources.push(...(observeChildSources
+                ? observeChildSources(child) : [readNativeChildSourceAcceptance(root, child)]));
             if (!readNativeParentInput(root, artifactPath).equals(artifactBytes)
                 || !readNativeParentInput(root, queuePath).equals(queueBytes)) throw new Error('Canonical parent inputs changed during selection.');
             assertTaskTimelineReadSnapshotCurrent(timeline, snapshot);

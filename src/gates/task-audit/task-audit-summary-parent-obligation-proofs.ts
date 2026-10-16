@@ -14,8 +14,9 @@ import { readAuthenticatedSplitRequiredWipManifestSnapshot } from '../split-requ
 import { resolveWipRoot } from '../split-required/split-required-wip-contracts';
 import { validateAdvancedManifestBlobs, validateManifestFileReferences } from '../split-required/split-required-wip-restore-plan';
 import { readNativeDecomposedParentFacts, type NativeDecomposedParentFacts } from './task-audit-summary-lifecycle';
-import { readNativeSourceCompositionProof, readParentAuditProofRecord } from './task-audit-summary-decomposed-parent-proofs';
+import { readNativeChildSourceAcceptance, readNativeSourceCompositionProof, readParentAuditProofRecord } from './task-audit-summary-decomposed-parent-proofs';
 import { getTaskModeEvidence } from '../task-mode/task-mode-evidence';
+import { inspectCompletionGateFinalizationLock } from '../locks/finalization-lock';
 import type { DecomposedParentRequiredProof } from './task-audit-summary-types';
 
 type Event = Readonly<Record<string, unknown>>;
@@ -98,7 +99,7 @@ function qualifyWip(root: string, taskId: string, original: Event[]): void {
     }
 }
 
-function qualifyMemory(root: string, taskId: string, events: Event[], completionSequence: number): void {
+function qualifyMemory(root: string, taskId: string, events: Event[], completionSequence: number): () => void {
     const preflight = joinOrchestratorPath(root, 'runtime/reviews/' + taskId + '-preflight.json');
     if (!readTransactionBytes(root, preflight)) throw new Error('Original parent preflight is missing for memory qualification.');
     const evidence = getProjectMemoryImpactLifecycleEvidence({ repoRoot: root, taskId, preflightPath: preflight });
@@ -108,11 +109,15 @@ function qualifyMemory(root: string, taskId: string, events: Event[], completion
     }
     const record = readMemoryRecord(root, evidence.artifact_path);
     if (record.task_id !== taskId || !isDeepStrictEqual(record, event.details)) throw new Error('Native parent memory artifact and event differ.');
-    const current = getProjectMemoryImpactLifecycleEvidence({ repoRoot: root, taskId, preflightPath: preflight });
-    if (current.evidence_status !== 'CURRENT' || !isDeepStrictEqual(current, evidence)
-        || !isDeepStrictEqual(readMemoryRecord(root, evidence.artifact_path), record)) {
-        throw new Error('Original parent memory changed during qualification.');
-    }
+    const assertCurrent = () => {
+        const current = getProjectMemoryImpactLifecycleEvidence({ repoRoot: root, taskId, preflightPath: preflight });
+        if (current.evidence_status !== 'CURRENT' || !isDeepStrictEqual(current, evidence)
+            || !isDeepStrictEqual(readMemoryRecord(root, evidence.artifact_path), record)) {
+            throw new Error('Original parent memory changed during qualification.');
+        }
+    };
+    assertCurrent();
+    return assertCurrent;
 }
 
 function qualifyCommands(root: string, taskId: string, original: Event[], events: Event[], completionSequence: number): void {
@@ -141,16 +146,50 @@ function qualifyCommands(root: string, taskId: string, original: Event[], events
     }
 }
 
-/** Qualified observations are not parent acceptance and never mutate original evidence. */
-export function readNativeParentObligationProofs(repoRoot: string, taskId: string): NativeParentObligationProofs | null {
+interface ParentReadScope {
+    rootTaskId: string;
+    sourceEpoch: string | null;
+    rechecks: Array<() => void>;
+    proofRechecks: Array<() => void>;
+}
+
+function readSourceEpoch(root: string): string {
+    return runGit(root, ['--no-replace-objects', 'show', '--no-patch', '--format=%H%n%T%n%P', 'HEAD'],
+        { timeoutMs: 10000, maxBuffer: 4096 }).trim();
+}
+
+function assertNestedFinalized(root: string, taskId: string): void {
+    const lock = inspectCompletionGateFinalizationLock(joinOrchestratorPath(root, 'runtime/reviews'), taskId);
+    if (lock?.active || lock?.stale) throw new Error('Nested parent completion finalization is unresolved: ' + taskId);
+}
+
+function readParentObligations(repoRoot: string, taskId: string, scope: ParentReadScope): NativeParentObligationProofs | null {
     const root = path.resolve(repoRoot), id = assertValidTaskId(taskId), eventsRoot = joinOrchestratorPath(root, 'runtime/task-events');
     return withTaskTimelineReadSnapshot(eventsRoot, id, () => {
         const files = [path.join(root, TASK_QUEUE_FILENAME), ...['strict-decomposition-decision', 'preflight'].map(kind => joinOrchestratorPath(root, 'runtime/reviews/' + id + '-' + kind + '.json'))];
         const inputs = files.map(file => readTransactionBytes(root, file));
-        const native = readNativeDecomposedParentFacts(root, id);
+        const native = readNativeDecomposedParentFacts(root, id, child => {
+            scope.sourceEpoch ??= readSourceEpoch(root);
+            // Native strict decisions already require parent-derived child IDs.
+            const nested = readParentObligations(root, child, scope);
+            if (!nested) {
+                const source = readNativeChildSourceAcceptance(root, child), observed = JSON.stringify(source);
+                scope.proofRechecks.push(() => {
+                    if (JSON.stringify(readNativeChildSourceAcceptance(root, child)) !== observed) {
+                        throw new Error('Native child SOURCE proof changed during qualification: ' + child);
+                    }
+                });
+                return [source];
+            }
+            if (nested.status !== 'QUALIFIED') throw new Error('Nested parent ' + child + ': ' + nested.violations.join(' | '));
+            assertNestedFinalized(root, child);
+            scope.rechecks.push(() => assertNestedFinalized(root, child));
+            return nested.native.childSources;
+        });
         if (!native) return null;
         const result: NativeParentObligationProofs = { status: 'BLOCKED', native, qualifiedProofs: [], violations: [...native.requirements.violations] };
         if (native.requirements.status !== 'REQUIRES_PROOF') return result;
+        scope.sourceEpoch ??= readSourceEpoch(root);
         const qualify = (proof: DecomposedParentRequiredProof, action: () => void) => {
             try { action(); result.qualifiedProofs.push(proof); }
             catch (error: unknown) { result.violations.push(error instanceof Error ? error.message : String(error)); }
@@ -171,19 +210,48 @@ export function readNativeParentObligationProofs(repoRoot: string, taskId: strin
             result.qualifiedProofs.push('authenticated-decomposition', 'source-qualified-child-acceptance');
             qualify('preserved-parent-wip', () => qualifyWip(root, id, original));
             if (native.requirements.requiredProofs.includes('full-suite-composition')) qualify('full-suite-composition', () => qualifyCommands(root, id, original, events, completion));
-            if (native.requirements.requiredProofs.includes('parent-memory-impact')) qualify('parent-memory-impact', () => qualifyMemory(root, id, events, completion));
+            if (native.requirements.requiredProofs.includes('parent-memory-impact')) qualify('parent-memory-impact', () => {
+                scope.rechecks.push(qualifyMemory(root, id, events, completion));
+            });
             if (native.requirements.requiredProofs.includes('historical-failure-resolution')) qualify('historical-failure-resolution', () => {
                 for (const failure of native.requirements.historicalFailures) {
                     const proof = failure === 'full-suite-validation' ? 'full-suite-composition' : failure === 'project-memory-impact' ? 'parent-memory-impact' : null;
                     if (!proof || !result.qualifiedProofs.includes(proof)) throw new Error('Unresolved original historical failure: ' + failure);
                 }
             });
-            files.forEach((file, i) => {
-                if (!isDeepStrictEqual(readTransactionBytes(root, file), inputs[i])) throw new Error('Original parent inputs changed during qualification.');
+            if (id !== scope.rootTaskId) scope.proofRechecks.push(() => {
+                qualifyWip(root, id, original);
+                if (native.requirements.requiredProofs.includes('full-suite-composition')) {
+                    qualifyCommands(root, id, original, events, completion);
+                }
             });
-            assertTaskTimelineReadSnapshotCurrent(timeline, snapshot);
+            const assertCurrent = () => {
+                files.forEach((file, i) => {
+                    if (!isDeepStrictEqual(readTransactionBytes(root, file), inputs[i])) throw new Error('Original parent inputs changed during qualification.');
+                });
+                assertTaskTimelineReadSnapshotCurrent(timeline, snapshot);
+            };
+            assertCurrent();
+            scope.rechecks.push(() => withTaskTimelineReadSnapshot(eventsRoot, id, assertCurrent));
             if (result.violations.length === 0 && native.requirements.requiredProofs.every(proof => result.qualifiedProofs.includes(proof))) result.status = 'QUALIFIED';
         } catch (error: unknown) { result.violations.push(error instanceof Error ? error.message : String(error)); }
         return result;
     });
+}
+
+/** Qualified observations are not parent acceptance and never mutate original evidence. */
+export function readNativeParentObligationProofs(repoRoot: string, taskId: string): NativeParentObligationProofs | null {
+    const root = path.resolve(repoRoot), id = assertValidTaskId(taskId);
+    const scope: ParentReadScope = { rootTaskId: id, sourceEpoch: null, rechecks: [], proofRechecks: [] };
+    const proof = readParentObligations(root, id, scope);
+    if (proof?.status === 'QUALIFIED') {
+        try {
+            scope.rechecks.forEach(check => check());
+            scope.proofRechecks.forEach(check => check());
+            if (readSourceEpoch(root) !== scope.sourceEpoch) throw new Error('Native parent source epoch changed during qualification.');
+        } catch (error: unknown) {
+            proof.status = 'BLOCKED'; proof.violations.push(error instanceof Error ? error.message : String(error));
+        }
+    }
+    return proof;
 }
