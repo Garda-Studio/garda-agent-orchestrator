@@ -63,6 +63,55 @@ interface CompletedEvidenceBatch {
     scopes: Array<{ audit: TaskAuditSummaryResult; scope: Record<string, unknown> }>;
 }
 
+interface CompletedEvidenceReadSnapshot {
+    repoRoot: string;
+    entries: Map<string, { options: CompletedTaskEvidenceOptions; proof: CompletedTaskEvidence }>;
+}
+
+let activeCompletedEvidenceReadSnapshot: CompletedEvidenceReadSnapshot | null = null;
+
+function copyCompletedEvidence(proof: CompletedTaskEvidence): CompletedTaskEvidence {
+    return { ...proof, reasons: [...proof.reasons] };
+}
+
+function assertCompletedEvidenceReadCurrent(snapshot: CompletedEvidenceReadSnapshot, repoRoot: string): void {
+    if (canonicalPath(fs.realpathSync.native(repoRoot)) !== snapshot.repoRoot) {
+        throw new Error('Completed evidence read snapshot repository route changed.');
+    }
+    for (const requireCommittedScope of [true, false]) {
+        const entries = [...snapshot.entries.values()].filter(entry =>
+            (entry.options.requireCommittedScope !== false) === requireCommittedScope);
+        const current = inspectCompletedTaskEvidenceBatch({ repoRoot, requireCommittedScope,
+            taskIds: entries.map(entry => entry.options.taskId) });
+        for (const entry of entries) {
+            if (JSON.stringify(current.get(entry.options.taskId)) !== JSON.stringify(entry.proof)) {
+                throw new Error('Completed evidence changed before read snapshot publication.');
+            }
+        }
+    }
+}
+
+/** Pure synchronous reads only. Full native proofs are reconstructed before the result can escape;
+ * callers must keep effects outside this boundary and revalidate under their mutation locks. */
+export function withCompletedTaskEvidenceReadSnapshot<T>(repoRoot: string, read: () => T): T {
+    const resolvedRoot = path.resolve(repoRoot), root = canonicalPath(fs.realpathSync.native(resolvedRoot));
+    if (activeCompletedEvidenceReadSnapshot?.repoRoot === root) return read();
+    const previous = activeCompletedEvidenceReadSnapshot;
+    const snapshot: CompletedEvidenceReadSnapshot = { repoRoot: root, entries: new Map() };
+    let result: T;
+    try {
+        activeCompletedEvidenceReadSnapshot = snapshot;
+        result = read();
+        if (result && typeof (result as { then?: unknown }).then === 'function') {
+            throw new Error('Completed evidence read snapshots require a synchronous read.');
+        }
+    } finally {
+        activeCompletedEvidenceReadSnapshot = previous;
+    }
+    assertCompletedEvidenceReadCurrent(snapshot, resolvedRoot);
+    return result;
+}
+
 function canonicalPath(value: string): string {
     const resolved = path.resolve(value);
     return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
@@ -425,5 +474,18 @@ export function inspectCompletedTaskEvidenceBatch(options: {
 
 /** A read-only proof; removal must revalidate this binding under its mutation locks. */
 export function inspectCompletedTaskEvidence(options: CompletedTaskEvidenceOptions): CompletedTaskEvidence {
-    return inspectCompletedTaskEvidenceBatch({ ...options, taskIds: [options.taskId] }).get(options.taskId)!;
+    const snapshot = activeCompletedEvidenceReadSnapshot;
+    const fresh = () => inspectCompletedTaskEvidenceBatch({ ...options, taskIds: [options.taskId] }).get(options.taskId)!;
+    if (!snapshot) return fresh();
+    let root: string;
+    try { root = canonicalPath(fs.realpathSync.native(path.resolve(options.repoRoot))); }
+    catch { return fresh(); }
+    const key = JSON.stringify([options.taskId, options.requireCommittedScope !== false]);
+    if (snapshot?.repoRoot === root) {
+        const existing = snapshot.entries.get(key);
+        if (existing) return copyCompletedEvidence(existing.proof);
+    }
+    const proof = fresh();
+    if (snapshot?.repoRoot === root) snapshot.entries.set(key, { options: { ...options }, proof: copyCompletedEvidence(proof) });
+    return proof;
 }

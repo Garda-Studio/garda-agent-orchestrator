@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { withCompletedTaskEvidenceReadSnapshot } from './completed-task-evidence';
 import { assertContainedDestination, bindContainedDestination, type ContainedDestination } from '../../core/contained-filesystem';
 import { lstatFileIdentitySync } from '../../core/file-stat';
 import { assertDisposableAuthorityCurrent, assertDisposableInventoryCurrent, inspectDisposableAuthority,
@@ -129,7 +130,7 @@ function assertRemainingCurrent(progress: OwnedDisposableRecoveryProgress, roots
 }
 
 // Selection-only, read-only proof. Mutation must reconstruct it under the native lifecycle and producer locks.
-export function readOwnedDisposableArtifactRecoverySnapshot(options: OwnedDisposableArtifactJournalSelection): OwnedDisposableRecoverySnapshot {
+function readRecoverySnapshot(options: OwnedDisposableArtifactJournalSelection): OwnedDisposableRecoverySnapshot {
     const progress = readOwnedDisposableArtifactRecoveryProgress(options), dependencies = nativeDependencies(progress);
     const removed = new Set(progress.order.slice(0, progress.retired_member_count).map(view => view.path));
     const pending = pendingAbsence(progress), budget = { entries: LIMITS.entries, bytes: LIMITS.treeBytes, metadataBytes: LIMITS.metadataBytes };
@@ -141,4 +142,8 @@ export function readOwnedDisposableArtifactRecoverySnapshot(options: OwnedDispos
     return { kind: 'owned_disposable_retirement_recovery_snapshot', progress, dependencies, roots, parents,
         remaining_file_count: remaining.length, remaining_bytes: remaining.reduce((sum, entry) => sum + entry.view.bytes, 0),
         pending_absent_path: pending, absence_authorized: false };
+}
+
+export function readOwnedDisposableArtifactRecoverySnapshot(options: OwnedDisposableArtifactJournalSelection): OwnedDisposableRecoverySnapshot {
+    return withCompletedTaskEvidenceReadSnapshot(options.targetRoot, () => readRecoverySnapshot(options));
 }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { inspectCompletedTaskEvidenceBatch } from '../../../src/lifecycle/cleanup/completed-task-evidence';
+import { inspectCompletedTaskEvidence, inspectCompletedTaskEvidenceBatch } from '../../../src/lifecycle/cleanup/completed-task-evidence';
 import {
     buildTaskAuditSummary, computeFileSha256, getWorkspaceSnapshot, makeTempDir,
     synchronizeFinalCloseoutArtifacts, writeArtifact, writeIntegrityEventSequence,
@@ -14,6 +14,14 @@ import { writeTaskQueue, writeTimelineSummary } from './cleanup-fixtures';
 
 const TASK_IDS = ['T-COST-1', 'T-COST-2', 'T-COST-3'];
 const ACCEPTED_CONTENT = 'accepted completed content\n';
+
+function completedReadSnapshot<T>(root: string, read: () => T): T {
+    const runtime = require('../../../src/lifecycle/cleanup/completed-task-evidence') as {
+        withCompletedTaskEvidenceReadSnapshot?: <V>(repoRoot: string, callback: () => V) => V;
+    };
+    // Before the repair, each nested consumer performs its ordinary independent read.
+    return runtime.withCompletedTaskEvidenceReadSnapshot ? runtime.withCompletedTaskEvidenceReadSnapshot(root, read) : read();
+}
 
 function committedFixture(t: TestContext, taskIds: readonly string[]) {
     const root = makeTempDir();
@@ -136,5 +144,52 @@ for (const drift of ['HEAD', 'index', 'worktree', 'Git configuration'] as const)
         assert.equal(changed, true, 'real mutation must happen after the first task proof');
         assert.equal(results.size, taskIds.length);
         assert.ok([...results.values()].every(result => !result.eligible), JSON.stringify([...results.values()]));
+    });
+}
+
+test('completed recovery read snapshot bounds real Git discovery across nested reads and expires after publication', t => {
+    const fixture = committedFixture(t, TASK_IDS.slice(0, 1)), taskId = TASK_IDS[0];
+    const childProcess = require('node:child_process') as typeof import('node:child_process');
+    let calls = 0;
+    for (const method of ['spawnSync', 'execFileSync'] as const) {
+        const original = childProcess[method];
+        t.mock.method(childProcess, method, (...args: unknown[]) => {
+            if (path.basename(String(args[0])).replace(/\.exe$/u, '') === 'git') calls += 1;
+            return Reflect.apply(original, childProcess, args);
+        });
+    }
+    assert.equal(inspectCompletedTaskEvidence({ repoRoot: fixture.root, taskId }).eligible, true);
+    const ordinaryCalls = calls; calls = 0;
+    const result = completedReadSnapshot(fixture.root, () => {
+        for (let index = 0; index < 8; index += 1) {
+            const current = inspectCompletedTaskEvidence({ repoRoot: fixture.root, taskId });
+            assert.equal(current.eligible, true, current.reasons.join());
+            current.eligible = false; current.reasons.push('caller mutation must not corrupt the private snapshot');
+        }
+        return 'read-only result';
+    });
+    assert.equal(result, 'read-only result');
+    t.diagnostic(`Real Git calls: independent proof=${ordinaryCalls}, eight nested reads plus publication=${calls}`);
+    assert.ok(calls <= ordinaryCalls * 2, `nested completed proof discovery repeated: ${calls} > ${ordinaryCalls * 2}`);
+    fs.writeFileSync(path.join(fixture.root, 'example.txt'), 'changed after the completed read operation\n');
+    assert.equal(inspectCompletedTaskEvidence({ repoRoot: fixture.root, taskId }).eligible, false);
+});
+
+for (const drift of ['queue', 'compact evidence', 'worktree'] as const) {
+    test(`completed recovery read snapshot rejects ${drift} drift before result publication`, t => {
+        const fixture = committedFixture(t, TASK_IDS.slice(0, 1)), taskId = TASK_IDS[0];
+        let firstProofRead = false;
+        assert.throws(() => completedReadSnapshot(fixture.root, () => {
+            assert.equal(inspectCompletedTaskEvidence({ repoRoot: fixture.root, taskId }).eligible, true);
+            firstProofRead = true;
+            if (drift === 'queue') writeTaskQueue(fixture.root, [{ id: taskId, status: 'IN_PROGRESS' }]);
+            else if (drift === 'compact evidence') {
+                const closeout = path.join(fixture.bundleRoot, 'runtime', 'reviews', `${taskId}-final-closeout.json`);
+                fs.appendFileSync(closeout, '\n');
+            } else fs.writeFileSync(path.join(fixture.root, 'example.txt'), 'concurrent accepted-content mutation\n');
+            return 'must not escape';
+        }), /Completed evidence changed before read snapshot publication/u);
+        assert.equal(firstProofRead, true, 'the real mutation follows a genuinely eligible proof');
+        assert.equal(inspectCompletedTaskEvidence({ repoRoot: fixture.root, taskId }).eligible, false);
     });
 }
