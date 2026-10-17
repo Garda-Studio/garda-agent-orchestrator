@@ -60,7 +60,7 @@ function declaredNavigationFixture(disabled = false, delayed = false, twoRecipes
     const configPath = path.join(bundle, 'live/config/workflow-config.json');
     const config = buildDefaultWorkflowConfig(); config.optional_quality_checks.enabled = !disabled;
     const nodeCommand = `"${process.execPath.replace(/\\/gu, '/')}"`;
-    config.compile_gate.command = `${nodeCommand} --check src/domain/catalog.ts`;
+    config.compile_gate.command = `${nodeCommand} --experimental-strip-types --check src/domain/catalog.ts`;
     config.full_suite_validation.enabled = true;
     config.full_suite_validation.placement = 'after_compile_before_reviews';
     config.full_suite_validation.command = `${nodeCommand} --test RootSuite`;

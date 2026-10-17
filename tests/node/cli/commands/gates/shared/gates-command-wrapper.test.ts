@@ -34,7 +34,7 @@ function seedNodeFoundationFocusedWrapperFixture(repoRoot: string): void {
             "if (process.argv[2] !== 'test.js') process.exit(2);",
             "console.log('node-foundation focused wrapper executed');",
             'const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;',
-            "const result = require('node:child_process').spawnSync(process.execPath, ['--test', '--test-reporter=tap', process.argv[3]], { stdio: 'inherit', env });",
+            "const result = require('node:child_process').spawnSync(process.execPath, ['--experimental-strip-types', '--test', '--test-reporter=tap', process.argv[3]], { stdio: 'inherit', env });",
             'process.exitCode = result.status ?? 1;',
             ''
         ].join('\n'),
