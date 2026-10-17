@@ -1,5 +1,7 @@
 # Changelog
 
+- Limit path-option inventory checks to declared Garda and delegated command options, excluding internal Git arguments without weakening path policy coverage.
+
 - Align lifecycle test fixtures with reserved public event admission while retaining native cleanup ownership, command audit and reviewer rerouting checks.
 
 - Preserve limit-only scope neutrality in the review-reuse fixture while binding current native validation and requiring fresh semantic review coverage.

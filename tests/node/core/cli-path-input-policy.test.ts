@@ -18,6 +18,13 @@ import { COMPACT_CLI_OPTIONS } from '../../../src/core/compact/setting-definitio
 
 const OPTION_PATTERN = /['"](--[a-z0-9-]*(?:path|file|dir|root)[a-z0-9-]*|--chdir)['"]/gu;
 
+function collectDeclaredPathFlags(content: string): string[] {
+    return [...content.matchAll(OPTION_PATTERN)]
+        .filter((match) => /^\s*:/u.test(content.slice(match.index + match[0].length)))
+        .map((match) => match[1])
+        .filter(isPathShapedCliFlag);
+}
+
 function collectTypeScriptFiles(directoryPath: string): string[] {
     const result: string[] = [];
     for (const entry of fs.readdirSync(directoryPath, { withFileTypes: true })) {
@@ -36,11 +43,18 @@ function collectPathShapedCliFlags(repoRoot: string): string[] {
     for (const sourceRoot of ['src/cli', 'src/bin']) {
         for (const filePath of collectTypeScriptFiles(path.join(repoRoot, sourceRoot))) {
             const content = fs.readFileSync(filePath, 'utf8');
-            for (const match of content.matchAll(OPTION_PATTERN)) {
-                if (isPathShapedCliFlag(match[1])) {
-                    flags.add(match[1]);
-                }
+            for (const flagName of collectDeclaredPathFlags(content)) {
+                flags.add(flagName);
             }
+        }
+    }
+    const delegatedContract = fs.readFileSync(path.join(repoRoot,
+        'src/cli/commands/gate-flows/full-suite/full-suite-command-contract.ts'), 'utf8');
+    const envOptions = delegatedContract.match(/^const ENV_OPTIONS_WITH_VALUE\s*=\s*new Set\(\[([\s\S]*?)\]\);/mu);
+    assert.ok(envOptions, 'The delegated env option declaration must remain available to the inventory.');
+    for (const match of envOptions[1].matchAll(OPTION_PATTERN)) {
+        if (isPathShapedCliFlag(match[1])) {
+            flags.add(match[1]);
         }
     }
     for (const flagName of Object.keys(COMPACT_CLI_OPTIONS)) {
@@ -92,6 +106,17 @@ test('every path-shaped CLI flag has an explicit policy classification', () => {
     const unclassifiedFlags = discoveredFlags.filter((flagName) => !getCliPathInputPolicy(flagName));
     assert.deepEqual(unclassifiedFlags, []);
     assert.deepEqual(Object.keys(CLI_PATH_INPUT_POLICIES).sort(), discoveredFlags);
+});
+
+test('path flag inventory ignores Git argv but retains unclassified Garda option declarations', () => {
+    const content = [
+        "git(['rev-parse', '--git-path', 'index']);",
+        "prepared.git(['--literal-pathspecs', 'ls-files']);",
+        "const options = { '--repo-root': { key: 'repoRoot' }, '--unclassified-artifact-path': { key: 'artifact' } };"
+    ].join('\n');
+    const flags = collectDeclaredPathFlags(content).sort();
+    assert.deepEqual(flags, ['--repo-root', '--unclassified-artifact-path']);
+    assert.deepEqual(flags.filter((flagName) => !getCliPathInputPolicy(flagName)), ['--unclassified-artifact-path']);
 });
 
 test('workspace-contained inputs allow an in-root existing path and missing descendant', () => {
