@@ -5,7 +5,6 @@ import {
     fs,
     os,
     path,
-    runLogTaskEventCommand,
     runCliMainWithHandling,
     appendTaskEvent,
     createTempRepo,
@@ -33,6 +32,7 @@ import {
     buildNoFindingsJsonReviewReport,
     seedPromptBoundReviewFixture
 } from './gates-command-review-result-fixtures';
+import { cleanupTerminalReviewTempOutputs } from '../../../../../../src/cli/gate-cli/gates-artifacts';
 
 describe('gates command review receipt - safety', () => {
 
@@ -975,15 +975,9 @@ describe('gates command review receipt - safety', () => {
         assert.equal(events.filter((event) => event.event_type === 'REVIEWER_DELEGATION_ROUTED').length, 1);
         assert.equal(events.some((event) => event.event_type === 'REVIEW_RECORDED'), false);
 
-        const cleanupResult = runLogTaskEventCommand({
-            repoRoot,
-            taskId,
-            eventType: 'TASK_BLOCKED',
-            outcome: 'BLOCKED'
-        });
-        const cleanupPayload = JSON.parse(cleanupResult.outputText);
-        assert.equal(cleanupResult.exitCode, 0);
-        assert.equal(cleanupPayload.terminal_review_temp_cleanup.deleted_paths.includes(reviewOutputPath.replace(/\\/g, '/')), true);
+        const cleanupResult = cleanupTerminalReviewTempOutputs(repoRoot, taskId);
+        assert.deepEqual(cleanupResult.errors, []);
+        assert.equal(cleanupResult.deleted_paths.includes(reviewOutputPath.replace(/\\/g, '/')), true);
         assert.equal(fs.existsSync(reviewOutputPath), false);
 
         fs.rmSync(repoRoot, { recursive: true, force: true });

@@ -233,14 +233,14 @@ test('migrated public handlers preserve representative output, positional, raw-a
 
         const logged = await captureHandler(() => handleLogTaskEvent([
             '--task-id', 'T-900',
-            '--event-type', 'IMPLEMENTATION_STARTED',
+            '--event-type', 'HANDLER_PARITY_NOTE',
             '--outcome', 'PASS',
             '--message', 'Handler parity event.',
             '--repo-root', repoRoot
         ]), 5);
         const loggedResult = JSON.parse(logged.output) as Record<string, unknown>;
         assert.equal(loggedResult.task_id, 'T-900');
-        assert.equal(loggedResult.event_type, 'IMPLEMENTATION_STARTED');
+        assert.equal(loggedResult.event_type, 'HANDLER_PARITY_NOTE');
         assert.equal(logged.exitCode, 5);
 
         const eventsSummary = await captureHandler(() => handleTaskEventsSummary([
@@ -266,7 +266,7 @@ test('migrated public handlers preserve representative output, positional, raw-a
 
         await assert.rejects(
             captureHandler(() => handleHumanCommit(['-m', 'test: handler parity'])),
-            /Do you want me to commit now/
+            /Native local commits require --task-id for completed, audited task scope/u
         );
         await assert.rejects(
             handleFullSuiteValidation(['--unexpected']),

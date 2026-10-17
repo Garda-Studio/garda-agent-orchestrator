@@ -30,6 +30,7 @@ import {
     writePreflight
 } from './gates-command-review-launch-fixtures';
 import { createPartitionedTestRegistrar } from '../../gate-test-partition';
+import { cleanupTerminalReviewTempOutputs } from '../../../../../../src/cli/gate-cli/gates-artifacts';
 
 const it = createPartitionedTestRegistrar(
     nodeIt,
@@ -703,11 +704,8 @@ describe('cli/commands/gates review launch routing', () => {
             appendTaskEvent(getOrchestratorRoot(repoRoot), taskId, 'REVIEW_PHASE_STARTED', 'INFO', 'Rebuild code context after restart.', {
                 task_id: taskId, review_type: 'code'
             }, { actor: 'orchestrator' });
-            const cleanup = await runCliWithCapturedOutput([
-                'gate', 'log-task-event', '--task-id', taskId, '--event-type', 'TASK_BLOCKED',
-                '--outcome', 'BLOCKED', '--message', 'Pause before recovery.', '--actor', 'orchestrator', '--repo-root', repoRoot
-            ], { cwd: repoRoot });
-            assert.equal(cleanup.exitCode, 0, cleanup.errors.join('\n'));
+            const cleanup = cleanupTerminalReviewTempOutputs(repoRoot, taskId);
+            assert.deepEqual(cleanup.errors, []);
             assert.equal(fs.existsSync(fixture.launchArtifactPath), false);
             if (resultState === 'corrupt-integrity') {
                 const timelinePath = path.join(getOrchestratorRoot(repoRoot), 'runtime', 'task-events', `${taskId}.jsonl`);

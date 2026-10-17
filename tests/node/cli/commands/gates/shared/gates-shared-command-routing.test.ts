@@ -10,6 +10,7 @@ import {
     runLogTaskEventCommand,
     runRequiredReviewsCheckCommand} from '../../../../../../src/cli/commands/gates';
 import { appendTaskEvent } from '../../../../../../src/gate-runtime/task-events';
+import { cleanupTerminalCompileLogs, cleanupTerminalReviewTempOutputs } from '../../../../../../src/cli/gate-cli/gates-artifacts';
 import { writeOptionalSkillSelectionArtifact } from '../../../../../../src/runtime/optional-skill-selection';
 
 import {
@@ -572,7 +573,7 @@ describe('cli/commands/gates', () => {
         removeTempRepoWithRetry(repoRoot);
     });
 
-    it('logs terminal task events with reviewer scratch cleanup and command audit', () => {
+    it('keeps terminal cleanup and command audit separate from public reserved-event admission', () => {
         for (const eventType of ['TASK_DONE', 'TASK_BLOCKED'] as const) {
             const repoRoot = createTempRepo();
             const taskId = `T-904-${eventType.toLowerCase().replace(/_/gu, '-')}`;
@@ -626,11 +627,26 @@ describe('cli/commands/gates', () => {
                 compile_output_path: `garda-agent-orchestrator/runtime/reviews/${taskId}-compile-output.log`
             }, null, 2), 'utf8');
 
-            const result = runLogTaskEventCommand({
+            const eventsPath = path.join(getOrchestratorRoot(repoRoot), 'runtime', 'task-events', `${taskId}.jsonl`);
+            assert.equal(fs.existsSync(eventsPath), false);
+            assert.throws(() => runLogTaskEventCommand({
                 repoRoot,
                 taskId,
                 eventType,
-                outcome: eventType === 'TASK_DONE' ? 'PASS' : 'BLOCKED',
+                outcome: eventType === 'TASK_DONE' ? 'PASS' : 'BLOCKED'
+            }), /reserved and cannot be emitted via log-task-event/u);
+            assert.equal(fs.existsSync(eventsPath), false);
+            for (const retainedPath of [compileOutputPath, stagedReviewOutputPath, foreignReviewOutputPath,
+                activeForeignReviewOutputPath, staleForeignReviewOutputPath, unattributedStaleReviewOutputPath,
+                reviewTypeSegmentOutputPath]) {
+                assert.equal(fs.existsSync(retainedPath), true);
+            }
+
+            const result = runLogTaskEventCommand({
+                repoRoot,
+                taskId,
+                eventType: 'CLEANUP_AUDIT_NOTE',
+                outcome: 'INFO',
                 detailsJson: JSON.stringify({
                     command: 'docker logs api',
                     command_mode: 'scan'
@@ -640,18 +656,23 @@ describe('cli/commands/gates', () => {
             const payload = JSON.parse(result.outputText);
             assert.equal(result.exitCode, 0);
             assert.equal(payload.status, 'TASK_EVENT_LOGGED');
+            assert.equal(payload.event_type, 'CLEANUP_AUDIT_NOTE');
             assert.equal(payload.command_policy_audit.warning_count > 0, true);
-            assert.equal(payload.terminal_log_cleanup.deleted_paths.length, 1);
+            const compileCleanup = cleanupTerminalCompileLogs(repoRoot, taskId);
+            const reviewCleanup = cleanupTerminalReviewTempOutputs(repoRoot, taskId);
+            assert.deepEqual(compileCleanup.errors, []);
+            assert.deepEqual(reviewCleanup.errors, []);
+            assert.equal(compileCleanup.deleted_paths.length, 1);
             assert.deepEqual(
-                payload.terminal_review_temp_cleanup.deleted_paths,
+                reviewCleanup.deleted_paths,
                 [
                     stagedReviewOutputPath.replace(/\\/g, '/'),
                     staleForeignReviewOutputPath.replace(/\\/g, '/')
                 ].sort()
             );
-            assert.equal(payload.terminal_review_temp_cleanup.stale_deleted_paths.length, 1);
+            assert.equal(reviewCleanup.stale_deleted_paths.length, 1);
             assert.deepEqual(
-                payload.terminal_review_temp_cleanup.retained_paths,
+                reviewCleanup.retained_paths,
                 [
                     activeForeignReviewOutputPath.replace(/\\/g, '/'),
                     foreignReviewOutputPath.replace(/\\/g, '/'),
