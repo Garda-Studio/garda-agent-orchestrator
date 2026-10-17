@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { loadFullSuiteValidationConfig } from '../../../../src/core/full-suite-validation-config';
 import * as fx from './next-step-review-cycle-fixtures';
 
 const {
@@ -105,6 +106,8 @@ describe('gates/next-step review cycle guard config', () => {
         assert.equal(result.next_gate, 'workflow-config-validation');
         assert.ok(result.reason.includes('workflow-config.scope_budget_guard.action'));
         assert.ok(result.commands[0].command.includes('workflow validate'));
+        assert.equal(result.full_suite_validation.config_source, 'effective_workflow_config');
+        assert.equal(result.full_suite_validation.command, 'npm test');
         assert.equal(preflightPath.endsWith(`${TASK_ID}-preflight.json`), true);
     });
 
@@ -123,6 +126,42 @@ describe('gates/next-step review cycle guard config', () => {
         assert.equal(result.next_gate, 'workflow-config-validation');
         assert.ok(result.reason.includes('must be a JSON object'));
         assert.ok(result.commands[0].command.includes('workflow validate'));
+        assert.equal(result.status, 'BLOCKED');
+        assert.equal(result.audit_status, 'INCOMPLETE');
+        assert.equal(result.full_suite_validation.config_source, 'unavailable_workflow_config');
+        assert.equal(result.full_suite_validation.enabled, null);
+        assert.equal(result.full_suite_validation.command, null);
+        assert.equal(result.full_suite_validation.placement, null);
+        assert.equal(result.full_suite_validation.config_path, null);
+        assert.deepEqual(result.review.launchable_review_types, []);
+        assert.match(fx.formatNextStepText(result), /FullSuite: unavailable/);
+        assert.throws(() => loadFullSuiteValidationConfig(repoRoot), /must be a JSON object/);
+        assert.deepEqual(JSON.parse(fs.readFileSync(path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config', 'workflow-config.json'), 'utf8')), ['not-a-workflow-config']);
+    });
+
+    it('blocks next-step when present workflow config contains invalid JSON', () => {
+        const repoRoot = makeTempRepo();
+        seedStartedTask(repoRoot, TASK_ID);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+        const configPath = path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config', 'workflow-config.json');
+        const original = '{"full_suite_validation":';
+        fs.writeFileSync(configPath, original, 'utf8');
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+
+        assert.equal(result.status, 'BLOCKED');
+        assert.equal(result.next_gate, 'workflow-config-validation');
+        assert.match(result.reason, /not valid JSON/);
+        assert.equal(result.commands.length, 1);
+        assert.match(result.commands[0].command, /workflow validate/);
+        assert.equal(result.audit_status, 'INCOMPLETE');
+        assert.equal(result.full_suite_validation.config_source, 'unavailable_workflow_config');
+        assert.equal(result.full_suite_validation.enabled, null);
+        assert.equal(result.full_suite_validation.command, null);
+        assert.deepEqual(result.review.launchable_review_types, []);
+        assert.match(fx.formatNextStepText(result), /FullSuite: unavailable/);
+        assert.throws(() => loadFullSuiteValidationConfig(repoRoot), /invalid JSON/);
+        assert.equal(fs.readFileSync(configPath, 'utf8'), original);
     });
 
     it('keeps legacy next-step defaults when workflow config is missing unrelated sections', () => {

@@ -234,7 +234,11 @@ export function formatNextStepText(result: NextStepResult): string {
         lines.push(`MarkdownWorkingPlanPath: ${result.markdown_working_plan.working_plan_path}`);
         lines.push(`MarkdownWorkingPlanSha256: ${result.markdown_working_plan.working_plan_sha256}`);
     }
-    lines.push(`FullSuite: enabled=${result.full_suite_validation.enabled}; placement=${result.full_suite_validation.placement}; command="${result.full_suite_validation.command}"; config=${result.full_suite_validation.config_path}`);
+    if (result.full_suite_validation.config_source === 'unavailable_workflow_config') {
+        lines.push(`FullSuite: unavailable; ${result.full_suite_validation.note}`);
+    } else {
+        lines.push(`FullSuite: enabled=${result.full_suite_validation.enabled}; placement=${result.full_suite_validation.placement}; command="${result.full_suite_validation.command}"; config=${result.full_suite_validation.config_path}`);
+    }
     if (result.full_suite_validation.performance_guidance_note) {
         lines.push(`FullSuitePerformance: ${result.full_suite_validation.performance_guidance_note}`);
     }

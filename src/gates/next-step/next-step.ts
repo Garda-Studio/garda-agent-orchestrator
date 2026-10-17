@@ -475,17 +475,24 @@ export interface NextStepArtifactState {
     exists: boolean;
 }
 
-export interface NextStepFullSuiteSummary {
+export type NextStepFullSuiteSummary = {
+    note: string;
+    recommended_timeout_seconds?: number | null;
+    timeout_forecast_note?: string | null;
+    performance_guidance_note?: string | null;
+} & ({
     enabled: boolean;
     command: string;
     placement: FullSuiteValidationPlacement;
     config_path: string;
     config_source: 'effective_workflow_config';
-    note: string;
-    recommended_timeout_seconds?: number | null;
-    timeout_forecast_note?: string | null;
-    performance_guidance_note?: string | null;
-}
+} | {
+    enabled: null;
+    command: null;
+    placement: null;
+    config_path: null;
+    config_source: 'unavailable_workflow_config';
+});
 
 export interface NextStepReviewSummary {
     required_reviews: string[];
@@ -2664,7 +2671,6 @@ export function resolveNextStepDecisionRoute(
             workflowConfigRecord
         );
     } catch (error: unknown) {
-        const fallbackFullSuiteConfig = loadFullSuiteValidationConfig(repoRoot);
         const coreArtifacts = artifactState(repoRoot, buildNextStepCoreArtifactSpecs(readinessArtifacts));
         return buildResult({
             taskId,
@@ -2682,11 +2688,11 @@ export function resolveNextStepDecisionRoute(
             missingArtifacts: coreArtifacts.missing,
             presentArtifacts: coreArtifacts.present,
             fullSuite: {
-                enabled: fallbackFullSuiteConfig.enabled,
-                command: fallbackFullSuiteConfig.command,
-                placement: fallbackFullSuiteConfig.placement,
-                config_path: toRepoDisplayPath(repoRoot, resolveWorkflowConfigPath(repoRoot)),
-                config_source: 'effective_workflow_config',
+                enabled: null,
+                command: null,
+                placement: null,
+                config_path: null,
+                config_source: 'unavailable_workflow_config',
                 note: 'Full-suite validation is unavailable until workflow config validation passes.'
             },
             review: {
