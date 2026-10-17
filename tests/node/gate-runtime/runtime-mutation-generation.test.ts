@@ -159,6 +159,46 @@ function rewriteIntentOwner(root: string, rewrite: (intent: Record<string, unkno
     }
 }
 
+function assertLegacyMutationSlotsReadable(root: string): void {
+    // The e240215 updater accepts exactly these intent keys in both journal slots.
+    for (const slot of ['a', 'b']) {
+        const state = JSON.parse(fs.readFileSync(path.join(generationDirectory(root), `state-${slot}.json`), 'utf8'));
+        for (const intent of state.active_mutations) {
+            assert.deepEqual(Object.keys(intent).sort(), ['mutation_id', 'mutation_kind', 'started_at_utc']);
+        }
+    }
+}
+
+test('legacy updater parent remains readable through nested new-runtime journal writes', () => {
+    const root = createTempRoot('garda-runtime-legacy-update-');
+    try {
+        const parent = beginRuntimeMutationGeneration(root, 'lifecycle-bundle-update-apply');
+        rewriteIntentOwner(root, (intent) => { delete intent.owner; });
+        assertLegacyMutationSlotsReadable(root);
+
+        const child = beginRuntimeMutationGeneration(root, 'lifecycle-update-report-write');
+        assertLegacyMutationSlotsReadable(root);
+        assert.throws(() => readRuntimeMutationGeneration(root), (error: unknown) =>
+            error instanceof RuntimeMutationGenerationError && error.code === 'BUSY');
+        commitRuntimeMutationGeneration(child);
+        assertLegacyMutationSlotsReadable(root);
+        assert.throws(() => readRuntimeMutationGeneration(root), (error: unknown) =>
+            error instanceof RuntimeMutationGenerationError && error.code === 'BUSY');
+
+        commitRuntimeMutationGeneration(parent);
+        assertLegacyMutationSlotsReadable(root);
+        assert.equal(readRuntimeMutationGeneration(root).generation, 2);
+
+        const modern = beginRuntimeMutationGeneration(root, 'post-upgrade-write');
+        const head = JSON.parse(fs.readFileSync(generationHeadPath(root), 'utf8'));
+        const state = JSON.parse(fs.readFileSync(path.join(generationDirectory(root), `state-${head.active_slot}.json`), 'utf8'));
+        assert.equal(state.active_mutations[0].mutation_id, modern.mutation_id);
+        assert.equal(Object.hasOwn(state.active_mutations[0], 'owner'), true);
+        commitRuntimeMutationGeneration(modern);
+        assert.equal(readRuntimeMutationGeneration(root).generation, 3);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('runtime mutation generation recovers an exited real owner only on locked write entry', { skip: process.platform !== 'linux' }, () => {
     const root = createTempRoot('garda-runtime-orphan-');
     try {

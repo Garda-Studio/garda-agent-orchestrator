@@ -757,6 +757,8 @@ export function beginRuntimeMutationGeneration(
         if (previous.active_mutations.length >= MAX_ACTIVE_MUTATIONS) {
             throw new RuntimeMutationGenerationError('BUSY', 'Runtime mutation generation has too many active mutations.');
         }
+        // A legacy parent must still be able to read both slots when its new-runtime child returns.
+        const legacyWriterActive = previous.active_mutations.some((intent) => !Object.prototype.hasOwnProperty.call(intent, 'owner'));
         const next = createTransitionState(previous, {
             type: 'BEGIN',
             mutation_id: mutationId,
@@ -765,7 +767,7 @@ export function beginRuntimeMutationGeneration(
             mutation_id: mutationId,
             mutation_kind: normalizedMutationKind,
             started_at_utc: new Date().toISOString(),
-            owner: captureRuntimeMutationOwnerIdentity()
+            ...(legacyWriterActive ? {} : { owner: captureRuntimeMutationOwnerIdentity() })
         }], previous.generation);
         persistState(paths, next);
     });
