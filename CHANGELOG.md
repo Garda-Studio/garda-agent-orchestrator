@@ -1,5 +1,7 @@
 # Changelog
 
+- Bind current reviewer skills in selected finding disposition and materialized follow-up validation fixtures.
+
 - Align selected reviewer launch guidance assertions with current Codex fresh isolated reviewer instructions.
 
 - Give selected closeout attestation fixtures explicit task identities and ordinary code scope, keeping protected terminal validation separate.

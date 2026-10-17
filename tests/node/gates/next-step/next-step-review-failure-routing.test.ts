@@ -1911,7 +1911,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
     });
 
     it('routes fix_now findings-only review evidence to implementation remediation', () => {
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true });
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, security: true }, {
             reviewFindingPolicy: {
@@ -1927,7 +1927,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
             }
         });
         seedCompilePass(repoRoot, TASK_ID);
-        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code');
+        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code', { currentSkillBinding: true });
 
         const state = readReviewArtifactState(
             reviewsRoot(repoRoot),
@@ -1954,7 +1954,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
 
     it('routes forbid-child closure findings to current-task remediation instead of descendant materialization', () => {
         const taskId = `${TASK_ID}-F1`;
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true });
         seedStartedTask(repoRoot, taskId);
         writePreflight(repoRoot, taskId, { ...ALL_REVIEW_FLAGS, code: true, security: true }, {
             reviewFindingPolicy: {
@@ -1981,7 +1981,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
             }
         });
         seedCompilePass(repoRoot, taskId);
-        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, taskId, 'code');
+        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, taskId, 'code', { currentSkillBinding: true });
 
         const preflightPath = path.join(reviewsRoot(repoRoot), `${taskId}-preflight.json`);
         const state = readReviewArtifactState(
@@ -2005,7 +2005,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
 
     it('routes skip-low closure findings as explicitly ignored without blockers or follow-ups', () => {
         const taskId = `${TASK_ID}-F1`;
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true });
         seedStartedTask(repoRoot, taskId);
         writePreflight(repoRoot, taskId, { ...ALL_REVIEW_FLAGS, code: true, security: true }, {
             reviewFindingPolicy: {
@@ -2032,7 +2032,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
             }
         });
         seedCompilePass(repoRoot, taskId);
-        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, taskId, 'code', {
+        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, taskId, 'code', { currentSkillBinding: true,
             findingSeverity: 'low'
         });
 
@@ -2300,7 +2300,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
     });
 
     it('rejects stale materialized follow-up artifacts without current TASK.md fingerprint rows', () => {
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true });
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, security: true }, {
             reviewFindingPolicy: {
@@ -2316,7 +2316,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
             }
         });
         seedCompilePass(repoRoot, TASK_ID);
-        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code');
+        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code', { currentSkillBinding: true });
         const receipt = JSON.parse(
             fs.readFileSync(path.join(reviewsRoot(repoRoot), `${TASK_ID}-code-receipt.json`), 'utf8')
         ) as Record<string, unknown>;
@@ -2391,7 +2391,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
     });
 
     it('rejects materialized follow-up artifacts that point to unrelated task rows', () => {
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true });
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, security: true }, {
             reviewFindingPolicy: {
@@ -2407,7 +2407,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
             }
         });
         seedCompilePass(repoRoot, TASK_ID);
-        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code');
+        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code', { currentSkillBinding: true });
         const receipt = JSON.parse(
             fs.readFileSync(path.join(reviewsRoot(repoRoot), `${TASK_ID}-code-receipt.json`), 'utf8')
         ) as Record<string, unknown>;
@@ -2492,7 +2492,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
     });
 
     it('rejects materialized follow-up artifacts whose fingerprint is not derived from the current disposition item', () => {
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true });
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, security: true }, {
             reviewFindingPolicy: {
@@ -2508,7 +2508,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
             }
         });
         seedCompilePass(repoRoot, TASK_ID);
-        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code');
+        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code', { currentSkillBinding: true });
         const receipt = JSON.parse(
             fs.readFileSync(path.join(reviewsRoot(repoRoot), `${TASK_ID}-code-receipt.json`), 'utf8')
         ) as Record<string, unknown>;
@@ -2594,7 +2594,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
     });
 
     it('rejects incomplete materialized follow-up artifacts that omit accepted follow-up obligations', () => {
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true });
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, security: true }, {
             reviewFindingPolicy: {
@@ -2610,7 +2610,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
             }
         });
         seedCompilePass(repoRoot, TASK_ID);
-        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code', { followUpFindingCount: 2 });
+        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code', { currentSkillBinding: true, followUpFindingCount: 2 });
         const receipt = JSON.parse(
             fs.readFileSync(path.join(reviewsRoot(repoRoot), `${TASK_ID}-code-receipt.json`), 'utf8')
         ) as Record<string, unknown>;
@@ -2696,7 +2696,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
     });
 
     it('rejects duplicated materialized follow-up items that reuse one task row for multiple obligations', () => {
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true });
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, security: true }, {
             reviewFindingPolicy: {
@@ -2712,7 +2712,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
             }
         });
         seedCompilePass(repoRoot, TASK_ID);
-        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code', { followUpFindingCount: 2 });
+        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code', { currentSkillBinding: true, followUpFindingCount: 2 });
         const receipt = JSON.parse(
             fs.readFileSync(path.join(reviewsRoot(repoRoot), `${TASK_ID}-code-receipt.json`), 'utf8')
         ) as Record<string, unknown>;
