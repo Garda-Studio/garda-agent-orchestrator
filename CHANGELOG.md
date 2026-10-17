@@ -1,5 +1,7 @@
 # Changelog
 
+- Refresh the Windows package surface baseline and lifecycle audited-source digest from verified accepted composition, preserving growth allowances, writer ownership checks and platform qualifications.
+
 - Share completed-task proofs only during one synchronous, read-only recovery snapshot; reconstruct full native evidence before returning and keep mutation-time checks and independent operations fresh.
 
 - Reconcile the audited lifecycle writer seal, local UI rejection text and plan-entry regression fixtures with accepted source contracts, retaining ownership and authorization checks.
