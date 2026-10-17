@@ -279,7 +279,7 @@ describe('gates/task-audit-summary', () => {
             describe('positive closeout states', () => {
                 it('marks final closeout ready when current mandatory reviews are independently attested', () => {
                     writeWorkflowConfig(tmpDir, false);
-                    writePreflight(reviewsDir, TASK_ID, { mode: 'FULL_PATH', changed_files: ['src/gates/task-audit-summary.ts'], metrics: { changed_lines_total: 18 }, required_reviews: { code: true } });
+                    writePreflight(reviewsDir, TASK_ID, { task_id: TASK_ID, mode: 'FULL_PATH', changed_files: ['src/reviewed-feature.ts'], metrics: { changed_lines_total: 18 }, required_reviews: { code: true } });
                     const preflightSha256 = computeFileSha256(path.join(reviewsDir, `${TASK_ID}-preflight.json`));
                     const reviewerIdentity = 'agent:code-reviewer';
                     const fixture = writeCurrentIndependentReviewFixture({ reviewsDir, taskId: TASK_ID, preflightSha256, reviewerIdentity, provenance: null });
@@ -314,7 +314,7 @@ describe('gates/task-audit-summary', () => {
 
                 it('keeps final closeout ready when planned review routing is rebound to the resolved reviewer identity', () => {
                     writeWorkflowConfig(tmpDir, false);
-                    writePreflight(reviewsDir, TASK_ID, { mode: 'FULL_PATH', changed_files: ['src/gates/task-audit-summary.ts'], metrics: { changed_lines_total: 18 }, required_reviews: { code: true } });
+                    writePreflight(reviewsDir, TASK_ID, { task_id: TASK_ID, mode: 'FULL_PATH', changed_files: ['src/reviewed-feature.ts'], metrics: { changed_lines_total: 18 }, required_reviews: { code: true } });
                     const preflightSha256 = computeFileSha256(path.join(reviewsDir, `${TASK_ID}-preflight.json`));
                     const plannedReviewerIdentity = `agent:pending:${TASK_ID}-code`;
                     const resolvedReviewerIdentity = 'agent:resolved-code-reviewer';
@@ -396,9 +396,10 @@ describe('gates/task-audit-summary', () => {
 
                 it('keeps mandatory review attested when closeout-only docs are added after review', () => {
                     writeWorkflowConfig(tmpDir, false);
-                    const implementationFile = 'src/gates/task-audit-summary.ts';
+                    const implementationFile = 'src/reviewed-feature.ts';
                     const closeoutDoc = 'CHANGELOG.md';
                     const reviewedPreflight = {
+                        task_id: TASK_ID,
                         mode: 'FULL_PATH',
                         changed_files: [implementationFile],
                         metrics: { changed_lines_total: 18 },
@@ -451,7 +452,7 @@ describe('gates/task-audit-summary', () => {
                     writeArtifact(reviewsDir, TASK_ID, '-code-receipt.json', receipt);
                     appendIntegrityEvent(eventsDir, TASK_ID, { event_type: 'REVIEW_RECORDED', details: buildReviewRecordedTelemetryDetails(reviewsDir, TASK_ID, 'code') });
                     appendIntegrityEvent(eventsDir, TASK_ID, { event_type: 'REVIEW_GATE_PASSED' });
-                    writePreflight(reviewsDir, TASK_ID, {
+                    writePreflight(reviewsDir, TASK_ID, { task_id: TASK_ID,
                         mode: 'FULL_PATH',
                         changed_files: [implementationFile, closeoutDoc],
                         metrics: { changed_lines_total: 19 },

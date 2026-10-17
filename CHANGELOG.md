@@ -1,5 +1,7 @@
 # Changelog
 
+- Give selected closeout attestation fixtures explicit task identities and ordinary code scope, keeping protected terminal validation separate.
+
 - Bind current reviewer skill identities in selected coherent restart and accepted follow-up routing fixtures.
 
 - Build current canonical reviewer skill context in selected completion trust and project-memory fixtures.
