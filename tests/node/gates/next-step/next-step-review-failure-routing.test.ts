@@ -917,11 +917,13 @@ function writeJsonFocusedValidationReviewEvidence(
     requiredTestPath: string,
     options: {
         markerField?: 'title' | 'description';
+        currentSkillBinding?: boolean;
     } = {}
 ): void {
     writeReviewEvidence(repoRoot, taskId, reviewType, {
         verdict: 'fail',
-        contextSchemaVersion: 4
+        contextSchemaVersion: 4,
+        currentSkillBinding: options.currentSkillBinding
     });
     const reviewContextPath = path.join(reviewsRoot(repoRoot), `${taskId}-${reviewType}-review-context.json`);
     const artifactPath = path.join(reviewsRoot(repoRoot), `${taskId}-${reviewType}.md`);
@@ -2960,7 +2962,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
 
     it('proceeds to required reviews when findings-only JSON contains only evidence-only F-000', async () => {
         for (const markerField of ['title', 'description'] as const) {
-            const repoRoot = makeTempRepo();
+            const repoRoot = makeTempRepo({ currentSkillBinding: true });
             const requiredTestPath = 'tests/node/gates/focused-evidence.test.ts';
             seedStartedTask(repoRoot, TASK_ID);
             seedRunnableFocusedIntermediateCommand(repoRoot);
@@ -2968,7 +2970,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
                 changedFiles: [requiredTestPath]
             });
             seedCompilePass(repoRoot, TASK_ID, '2026-04-28T00:00:20.000Z', [requiredTestPath]);
-            writeJsonFocusedValidationReviewEvidence(repoRoot, TASK_ID, 'code', requiredTestPath, { markerField });
+            writeJsonFocusedValidationReviewEvidence(repoRoot, TASK_ID, 'code', requiredTestPath, { markerField, currentSkillBinding: true });
 
             const commandResult = await runIntermediateCommandCommand({
                 repoRoot,
@@ -3971,22 +3973,25 @@ describe('gates/next-step', { concurrency: 2 }, () => {
     });
 
     it('does not treat non-verdict fail-token mentions as failed review verdicts', () => {
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true });
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, test: true });
         seedCompilePass(repoRoot, TASK_ID);
         writeReviewEvidence(repoRoot, TASK_ID, 'code', {
+            currentSkillBinding: true,
             body: [
                 '## Reviewer Notes',
                 'Historical note:',
+                '```text',
                 'REVIEW FAILED',
+                '```',
                 ''
             ].join('\n')
         });
 
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
 
-        assert.equal(result.next_gate, 'build-review-context');
+        assert.equal(result.next_gate, 'build-review-context', result.reason);
         assert.equal(result.review.next_review_type, 'test', result.reason);
         assert.ok(result.commands[0].command.includes('--review-type "test"'));
     });

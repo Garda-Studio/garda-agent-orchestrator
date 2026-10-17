@@ -1,5 +1,7 @@
 # Changelog
 
+- Prepare current reviewer skill evidence in focused-validation routing fixtures and explicitly quote historical non-verdict tokens.
+
 - Reuse the current task queue snapshot throughout review coverage and follow-up validation in each next-step decision.
 
 - Prepare selected multi-lane reviewer fixture skills before task and review snapshots.
