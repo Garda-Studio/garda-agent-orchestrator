@@ -236,7 +236,9 @@ function installTimelineReadProbe(timelinePath: string): TimelineReadProbe {
             );
         } else if (path.resolve(String(targetPath)) === resolvedTimelinePath) {
             allTimelineDescriptors.add(fileDescriptor);
-            if (recording && flags === 'r') {
+            const readOnly = flags === 'r' || (typeof flags === 'number'
+                && (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR)) === fs.constants.O_RDONLY);
+            if (recording && readOnly) {
                 metrics.descriptorOpenCount += 1;
                 trackedDescriptors.add(fileDescriptor);
             }
@@ -369,50 +371,75 @@ function installBufferAllocationProbe(fullPayloadThreshold: number): BufferAlloc
     const originalConcat = bufferModule.concat;
     const originalFrom = bufferModule.from;
     const originalToString = bufferPrototype.toString;
+    const originalSubarray = bufferPrototype.subarray;
+    const originalSlice = bufferPrototype.slice;
+    const observedAllocations = new WeakSet<Buffer>();
     let fullPayloadAllocations = 0;
     const fullPayloadAllocationSizes: number[] = [];
     let fullPayloadConcats = 0;
     let fullPayloadStringConversions = 0;
 
     bufferModule.alloc = ((size: number, fill?: string | number | Uint8Array, encoding?: BufferEncoding) => {
+        const result = originalAlloc(size, fill as string, encoding);
         if (size >= fullPayloadThreshold) {
             fullPayloadAllocations += 1;
             fullPayloadAllocationSizes.push(size);
+            observedAllocations.add(result);
         }
-        return originalAlloc(size, fill as string, encoding);
+        return result;
     }) as typeof Buffer.alloc;
 
     bufferModule.allocUnsafe = ((size: number) => {
+        const result = originalAllocUnsafe(size);
         if (size >= fullPayloadThreshold) {
             fullPayloadAllocations += 1;
             fullPayloadAllocationSizes.push(size);
+            observedAllocations.add(result);
         }
-        return originalAllocUnsafe(size);
+        return result;
     }) as typeof Buffer.allocUnsafe;
     bufferModule.allocUnsafeSlow = ((size: number) => {
+        const result = originalAllocUnsafeSlow(size);
         if (size >= fullPayloadThreshold) {
             fullPayloadAllocations += 1;
             fullPayloadAllocationSizes.push(size);
+            observedAllocations.add(result);
         }
-        return originalAllocUnsafeSlow(size);
+        return result;
     }) as typeof Buffer.allocUnsafeSlow;
     bufferModule.concat = ((list: readonly Uint8Array[], totalLength?: number) => {
         const resolvedLength = totalLength ?? list.reduce((total, entry) => total + entry.byteLength, 0);
+        const result = originalConcat(list, totalLength);
         if (resolvedLength >= fullPayloadThreshold) {
             fullPayloadConcats += 1;
+            observedAllocations.add(result);
         }
-        return originalConcat(list, totalLength);
+        return result;
     }) as typeof Buffer.concat;
     bufferModule.from = ((...args: unknown[]) => {
         const result = Reflect.apply(originalFrom, bufferModule, args) as Buffer;
         if (result.byteLength >= fullPayloadThreshold) {
             fullPayloadAllocations += 1;
             fullPayloadAllocationSizes.push(result.byteLength);
+            observedAllocations.add(result);
         }
         return result;
     }) as typeof Buffer.from;
+    const observeView = (source: Buffer, view: Buffer): Buffer => {
+        if (observedAllocations.has(source) && view.byteLength >= fullPayloadThreshold) {
+            observedAllocations.add(view);
+        }
+        return view;
+    };
+    bufferPrototype.subarray = function (this: Buffer, start?: number, end?: number) {
+        return observeView(this, originalSubarray.call(this, start, end));
+    } as typeof Buffer.prototype.subarray;
+    bufferPrototype.slice = function (this: Buffer, start?: number, end?: number) {
+        return observeView(this, originalSlice.call(this, start, end));
+    } as typeof Buffer.prototype.slice;
     bufferPrototype.toString = function (this: Buffer, ...args: unknown[]) {
-        if (this.byteLength >= fullPayloadThreshold) {
+        // Native Windows ACL subprocess output is not a measured payload allocation.
+        if (observedAllocations.has(this)) {
             fullPayloadStringConversions += 1;
         }
         return Reflect.apply(originalToString, this, args) as string;
@@ -430,9 +457,28 @@ function installBufferAllocationProbe(fullPayloadThreshold: number): BufferAlloc
             bufferModule.concat = originalConcat;
             bufferModule.from = originalFrom;
             bufferPrototype.toString = originalToString;
+            bufferPrototype.subarray = originalSubarray;
+            bufferPrototype.slice = originalSlice;
         }
     };
 }
+
+test('payload conversion probe counts full buffer views and excludes unrelated native buffers', () => {
+    const unrelated = Buffer.alloc(64);
+    const probe = installBufferAllocationProbe(64);
+    try {
+        const payload = Buffer.alloc(64);
+        payload.toString();
+        payload.subarray().toString();
+        payload.slice().toString();
+        unrelated.toString();
+        payload.subarray(0, 32).toString();
+        assert.equal(probe.fullPayloadAllocationCount(), 1);
+        assert.equal(probe.fullPayloadStringConversionCount(), 3);
+    } finally {
+        probe.restore();
+    }
+});
 
 function createHeapUsageProbe(): HeapUsageProbe {
     // This private function is never constructed. queryObjects completes a

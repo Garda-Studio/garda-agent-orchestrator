@@ -1,5 +1,7 @@
 # Changelog
 
+- Count numeric read-only timeline opens and conversions of measured payload allocations, excluding unrelated native ACL output while preserving all performance budgets.
+
 - Compare changed historical review coverage obligations directly without assuming their count must differ.
 
 - Bind security quality-checklist fixtures to native declared validation, preserving matrix rejection and mandatory checks when optional rules are disabled.
