@@ -206,15 +206,17 @@ function getSharedRepoTemplateRoot(): string {
     }
 }
 
-function makeTempRepo(options: { currentSkillBinding?: boolean } = {}): string {
+function makeTempRepo(options: { currentSkillBinding?: boolean; currentSkillIds?: readonly string[] } = {}): string {
     const templateRoot = getSharedRepoTemplateRoot();
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-next-step-'));
     try {
         fs.cpSync(templateRoot, repoRoot, { recursive: true });
         if (options.currentSkillBinding) {
-            const skillPath = path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'skills', 'code-review', 'SKILL.md');
-            fs.mkdirSync(path.dirname(skillPath), { recursive: true });
-            fs.writeFileSync(skillPath, '# code-review fixture\n', 'utf8');
+            for (const skillId of options.currentSkillIds ?? ['code-review']) {
+                const skillPath = path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'skills', skillId, 'SKILL.md');
+                fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+                fs.writeFileSync(skillPath, `# ${skillId} fixture\n`, 'utf8');
+            }
             initGitRepo(repoRoot, { gitignoreContent: null, initialCommitMessage: 'current reviewer skill fixture baseline' });
         }
         tempRoots.push(repoRoot);
@@ -1668,7 +1670,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
     });
 
     it('preserves passed upstream reviews while correcting a rejected downstream report', () => {
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true, currentSkillIds: ['code-review', 'security-review', 'refactor-review'] });
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(repoRoot, TASK_ID, {
             ...ALL_REVIEW_FLAGS,
@@ -1677,13 +1679,13 @@ describe('gates/next-step', { concurrency: 2 }, () => {
             refactor: true
         });
         seedCompilePass(repoRoot, TASK_ID);
-        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code', {
+        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code', { currentSkillBinding: true,
             followUpFindingCount: 0
         });
-        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'security', {
+        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'security', { currentSkillBinding: true,
             followUpFindingCount: 0
         });
-        writeRejectedFindingsValidationReviewEvidence(repoRoot, TASK_ID, 'refactor');
+        writeRejectedFindingsValidationReviewEvidence(repoRoot, TASK_ID, 'refactor', { currentSkillBinding: true });
 
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
 
@@ -2143,7 +2145,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
     });
 
     it('defers grouped follow-up materialization until every required review lane is satisfied', () => {
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true, currentSkillIds: ['code-review', 'security-review'] });
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, security: true }, {
             reviewFindingPolicy: {
@@ -2163,7 +2165,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
             }
         });
         seedCompilePass(repoRoot, TASK_ID);
-        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code');
+        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code', { currentSkillBinding: true });
 
         const beforeFinalLane = resolveNextStep({ taskId: TASK_ID, repoRoot });
 
@@ -2175,7 +2177,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
         );
         assert.equal(beforeFinalLane.review.next_review_type, 'security');
 
-        writeReviewEvidence(repoRoot, TASK_ID, 'security');
+        writeReviewEvidence(repoRoot, TASK_ID, 'security', { currentSkillBinding: true });
         const afterFinalLane = resolveNextStep({ taskId: TASK_ID, repoRoot });
 
         assert.equal(afterFinalLane.status, 'BLOCKED');

@@ -1,5 +1,7 @@
 # Changelog
 
+- Prepare selected multi-lane reviewer fixture skills before task and review snapshots.
+
 - Prepare current reviewer skill evidence in selected rejected-report correction fixtures.
 
 - Bind current reviewer skills in selected finding disposition and materialized follow-up validation fixtures.
