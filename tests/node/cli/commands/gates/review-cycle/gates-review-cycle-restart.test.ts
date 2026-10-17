@@ -1,5 +1,7 @@
 import {
     EXIT_GATE_FAILURE,
+    TRUST_BOUNDARY_FIXTURE_EVIDENCE_PATH,
+    writeCurrentReviewCycleValidationSource,
     appendTaskEvent,
     assert,
     buildDefaultRemediationImpactAnalysis,
@@ -22,6 +24,8 @@ import {
     path,
     readTaskTimelineEvents,
     runBuildReviewContextCommand,
+    prepareCurrentReviewCycleValidation,
+    buildCurrentReviewCycleCaseResolutions,
     runCompileGateCommand,
     runCompletionGate,
     runEnterTaskMode,
@@ -2030,6 +2034,7 @@ describe('cli/commands/gates – review-cycle restart suite', () => {
         fs.mkdirSync(path.join(repoRoot, 'tests'), { recursive: true });
         fs.writeFileSync(path.join(repoRoot, 'tests', 'app.test.ts'), 'it("works", () => {});\n', 'utf8');
         const { commandsPath, outputFiltersPath } = writeSimpleCompileCommandsFile(repoRoot, 'restart-review-cycle-code-only');
+        writeCurrentReviewCycleValidationSource(repoRoot);
 
         runEnterTaskMode({
             repoRoot,
@@ -2039,7 +2044,8 @@ describe('cli/commands/gates – review-cycle restart suite', () => {
                 'commands-restart-review-cycle-code-only.md',
                 'garda-agent-orchestrator/live/config/review-capabilities.json',
                 'src/app.ts',
-                'tests/app.test.ts'
+                'tests/app.test.ts',
+                TRUST_BOUNDARY_FIXTURE_EVIDENCE_PATH
             ]
         });
         loadTaskEntryRulePack(repoRoot, taskId);
@@ -2049,16 +2055,11 @@ describe('cli/commands/gates – review-cycle restart suite', () => {
             repoRoot,
             taskId,
             'Restart only the review cycle after a failed code review',
-            ['src/app.ts', 'tests/app.test.ts']
+            ['src/app.ts', 'tests/app.test.ts', TRUST_BOUNDARY_FIXTURE_EVIDENCE_PATH]
         );
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
 
-        runPassingTrustBoundaryQualityChecklist({
-            repoRoot,
-            taskId,
-            preflightPath,
-            evidenceFiles: ['src/app.ts', 'tests/app.test.ts']
-        });
 
         const compileResult = await runCompileGateCommand({
             repoRoot,
@@ -2190,12 +2191,7 @@ describe('cli/commands/gates – review-cycle restart suite', () => {
         assert.match(output, /PendingReviewTypes: code, security, refactor, test/);
         assert.match(output, /PendingReason: Review context cannot be built because required trust-boundary analysis is/);
 
-        runPassingTrustBoundaryQualityChecklist({
-            repoRoot,
-            taskId,
-            preflightPath,
-            evidenceFiles: ['src/app.ts', 'tests/app.test.ts']
-        });
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         const refreshedContextResult = await runBuildReviewContextCommand({
             repoRoot,
             reviewType: 'code',
@@ -3038,6 +3034,7 @@ describe('cli/commands/gates – review-cycle restart suite', () => {
         const repoRoot = createTempRepo();
         const taskId = 'T-903b-restart-review-cycle-after-review-gate';
         seedRemediationRepoBase(repoRoot);
+        writeCurrentReviewCycleValidationSource(repoRoot);
         initializeGitRepo(repoRoot);
         seedTaskQueue(repoRoot, taskId);
         seedInitAnswers(repoRoot, 'Codex');
@@ -3064,6 +3061,7 @@ describe('cli/commands/gates – review-cycle restart suite', () => {
             'Restart the review cycle after a prior review gate already closed the last cycle',
             ['src/app.ts']
         );
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
 
         const compileResult = await runCompileGateCommand({
@@ -3076,12 +3074,6 @@ describe('cli/commands/gates – review-cycle restart suite', () => {
         });
         assert.equal(compileResult.exitCode, 0);
 
-        runPassingTrustBoundaryQualityChecklist({
-            repoRoot,
-            taskId,
-            preflightPath,
-            evidenceFiles: ['src/app.ts']
-        });
 
         const codeReviewContextPath = path.join(getReviewsRoot(repoRoot), `${taskId}-code-review-context.json`);
         seedReusableReviewEvidence(
@@ -3091,7 +3083,8 @@ describe('cli/commands/gates – review-cycle restart suite', () => {
             'REVIEW PASSED',
             preflightPath,
             codeReviewContextPath,
-            'agent:code-reviewer'
+            'agent:code-reviewer',
+            { caseResolutions: buildCurrentReviewCycleCaseResolutions(repoRoot, taskId) }
         );
         seedReusableReviewEvidence(
             repoRoot,
@@ -3100,7 +3093,8 @@ describe('cli/commands/gates – review-cycle restart suite', () => {
             'SECURITY REVIEW PASSED',
             preflightPath,
             path.join(getReviewsRoot(repoRoot), `${taskId}-security-review-context.json`),
-            'agent:security-reviewer'
+            'agent:security-reviewer',
+            { caseResolutions: buildCurrentReviewCycleCaseResolutions(repoRoot, taskId) }
         );
         seedReusableReviewEvidence(
             repoRoot,
@@ -3109,7 +3103,8 @@ describe('cli/commands/gates – review-cycle restart suite', () => {
             'REFACTOR REVIEW PASSED',
             preflightPath,
             path.join(getReviewsRoot(repoRoot), `${taskId}-refactor-review-context.json`),
-            'agent:refactor-reviewer'
+            'agent:refactor-reviewer',
+            { caseResolutions: buildCurrentReviewCycleCaseResolutions(repoRoot, taskId) }
         );
 
         const reviewGateResult = runRequiredReviewsCheckCommand({

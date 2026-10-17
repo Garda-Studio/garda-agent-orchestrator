@@ -480,11 +480,7 @@ function seedTrustBoundaryChecklistIfRequired(repoRoot: string, taskId: string):
     );
 }
 
-async function prepareCurrentReviewCycleValidation(
-    repoRoot: string,
-    taskId: string,
-    preflightPath: string
-): Promise<void> {
+function writeCurrentReviewCycleValidationSource(repoRoot: string): void {
     fs.writeFileSync(path.join(repoRoot, TRUST_BOUNDARY_FIXTURE_EVIDENCE_PATH), [
         "const test = require('node:test');",
         "const assert = require('node:assert/strict');",
@@ -494,6 +490,14 @@ async function prepareCurrentReviewCycleValidation(
         "    assert.throws(() => assert.equal(digest('replacement'), digest('original')));",
         '});', ''
     ].join('\n'), 'utf8');
+}
+
+async function prepareCurrentReviewCycleValidation(
+    repoRoot: string,
+    taskId: string,
+    preflightPath: string
+): Promise<void> {
+    writeCurrentReviewCycleValidationSource(repoRoot);
     const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
     const files = preflight.changed_files as string[];
     const source = String(preflight.detection_source);
@@ -507,7 +511,11 @@ async function prepareCurrentReviewCycleValidation(
     preflight.metrics = metrics;
     fs.writeFileSync(preflightPath, `${JSON.stringify(preflight, null, 2)}\n`, 'utf8');
     appendTaskEvent(getOrchestratorRoot(repoRoot), taskId, 'PREFLIGHT_CLASSIFIED', 'INFO',
-        'Current selected review-cycle fixture preflight.', { output_path: normalizePath(preflightPath), ...metrics });
+        'Current selected review-cycle fixture preflight.', {
+            output_path: normalizePath(preflightPath),
+            ...metrics,
+            effective_review_snapshot: preflight.effective_review_snapshot
+        });
     writeCompilePassEvidence(repoRoot, taskId, preflightPath);
     const testContext = process.env.NODE_TEST_CONTEXT;
     let execution: Awaited<ReturnType<typeof runIntermediateCommandCommand>>;
@@ -709,6 +717,8 @@ export {
     readTaskTimelineEvents,
     prepareCurrentReviewCycleValidation,
     buildCurrentReviewCycleCaseResolutions,
+    TRUST_BOUNDARY_FIXTURE_EVIDENCE_PATH,
+    writeCurrentReviewCycleValidationSource,
     runEnterTaskMode,
     runExplicitPreflight,
     runGit,

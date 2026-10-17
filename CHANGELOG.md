@@ -1,5 +1,7 @@
 # Changelog
 
+- Prepare selected review-restart fixtures with current executed validation evidence while retaining recovery routing and cycle-order assertions.
+
 - Prepare selected review-cycle fixtures with current native execution and declared-validation phases, preserving restart, telemetry and reuse assertions.
 
 - Limit path-option inventory checks to declared Garda and delegated command options, excluding internal Git arguments without weakening path policy coverage.
