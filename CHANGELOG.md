@@ -1,5 +1,7 @@
 # Changelog
 
+- Prepare active task, native check and bound quality evidence in sensitive documentation-navigation fixtures while retaining their original documentation decisions.
+
 - Count numeric read-only timeline opens and conversions of measured payload allocations, excluding unrelated native ACL output while preserving all performance budgets.
 
 - Compare changed historical review coverage obligations directly without assuming their count must differ.

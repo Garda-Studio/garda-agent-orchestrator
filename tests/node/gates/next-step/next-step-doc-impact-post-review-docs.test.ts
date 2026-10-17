@@ -20,6 +20,8 @@ import {
     seedPostPreflightRulePack,
     writePreflight,
     seedCompilePass,
+    prepareSensitiveValidationFixture,
+    recordSensitiveValidationFixture,
     writeGitAutoPreflight,
     seedGitAutoCompilePass,
     stageFiles,
@@ -347,18 +349,20 @@ describe('gates/next-step', () => {
         );
     });
 
-    it('infers internal-only behavior evidence for OAuth token runtime scope', () => {
+    it('infers internal-only behavior evidence for OAuth token runtime scope', async () => {
         const repoRoot = makeTempRepo();
         fs.mkdirSync(path.join(repoRoot, 'src', 'auth'), { recursive: true });
         fs.writeFileSync(path.join(repoRoot, 'src', 'auth', 'oauth-token.ts'), 'export const refreshToken = true;\n', 'utf8');
+        prepareSensitiveValidationFixture(repoRoot, TASK_ID);
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(
             repoRoot,
             TASK_ID,
             { ...ALL_REVIEW_FLAGS, code: true },
-            { changedFiles: ['src/auth/oauth-token.ts'] }
+            { changedFiles: ['src/auth/oauth-token.ts'], nativeValidation: true }
         );
         seedCompilePass(repoRoot, TASK_ID);
+        await recordSensitiveValidationFixture(repoRoot, TASK_ID);
         writeReviewEvidence(repoRoot, TASK_ID, 'code');
         seedReviewGatePass(repoRoot, TASK_ID);
 
@@ -464,10 +468,11 @@ describe('gates/next-step', () => {
         assert.ok(result.commands[0].command.includes('--changelog-updated true'));
     });
 
-    it('includes sensitive-scope acknowledgement in doc-impact command when required', () => {
+    it('includes sensitive-scope acknowledgement in doc-impact command when required', async () => {
         const repoRoot = makeTempRepo();
+        prepareSensitiveValidationFixture(repoRoot, TASK_ID);
         seedStartedTask(repoRoot, TASK_ID);
-        const preflightPath = writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+        const preflightPath = writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true }, { nativeValidation: true });
         const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
         preflight.triggers = {
             security: true
@@ -475,12 +480,13 @@ describe('gates/next-step', () => {
         writeJson(preflightPath, preflight);
         seedPostPreflightRulePack(repoRoot, TASK_ID, preflightPath);
         seedCompilePass(repoRoot, TASK_ID);
+        await recordSensitiveValidationFixture(repoRoot, TASK_ID);
         writeReviewEvidence(repoRoot, TASK_ID, 'code');
         seedReviewGatePass(repoRoot, TASK_ID);
 
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
 
-        assert.equal(result.next_gate, 'doc-impact-gate');
+        assert.equal(result.next_gate, 'doc-impact-gate', result.reason);
         assert.ok(!result.commands[0].command.includes('<'));
         assert.ok(result.commands[0].command.includes('--sensitive-scope-reviewed true'));
     });

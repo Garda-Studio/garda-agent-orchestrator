@@ -5,8 +5,13 @@ import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import assert from 'node:assert/strict';
+import { runIntermediateCommandCommand } from '../../../../src/cli/commands/gate-flows/command-run/command-run-flow';
+import { runQualityChecklistCommand } from '../../../../src/cli/commands/gate-flows/quality-checklist/quality-checklist-flow';
+import { buildQualityChecklistAnswersTemplate } from '../../../../src/gates/quality-checklist';
+import { TRUST_BOUNDARY_ANALYSIS_RULE_ID } from '../../../../src/core/trust-boundary-analysis';
 
-import { getProviderRuntimeEnvironmentKeys } from './next-step-test-support';
+import { bindFixtureEffectiveReviewSnapshot, getProviderRuntimeEnvironmentKeys } from './next-step-test-support';
 import {
     type FullSuiteValidationConfig
 } from './next-step-test-support';
@@ -513,10 +518,11 @@ export function writePreflight(
         reviewPolicyMode?: string;
         changedFiles?: string[];
         includeDomainScopeFingerprints?: boolean;
+        nativeValidation?: boolean;
     } = {}
 ): string {
     const preflightPath = path.join(reviewsRoot(repoRoot), `${taskId}-preflight.json`);
-    const changedFiles = options.changedFiles || ['src/app.ts'];
+    const changedFiles = [...(options.changedFiles || ['src/app.ts']), ...(options.nativeValidation ? ['tests/native-evidence.case'] : [])];
     const snapshot = getWorkspaceSnapshot(repoRoot, 'explicit_changed_files', true, changedFiles);
     const domainScopeFingerprints = options.includeDomainScopeFingerprints
         ? buildDomainScopeFingerprints({
@@ -546,13 +552,56 @@ export function writePreflight(
             visible_summary_line: `Review execution policy: ${reviewPolicyMode}`
         }
     });
+    if (options.nativeValidation) {
+        bindFixtureEffectiveReviewSnapshot(repoRoot, taskId, 'code', preflightPath, '', { ensureSkillEntrypoints: false });
+    }
+    const boundPreflight = options.nativeValidation ? JSON.parse(fs.readFileSync(preflightPath, 'utf8')) : null;
     appendEvent(repoRoot, taskId, 'PREFLIGHT_CLASSIFIED', 'INFO', {
-        output_path: normalizeForTimeline(preflightPath)
+        output_path: normalizeForTimeline(preflightPath),
+        ...(options.nativeValidation ? { scope_sha256: snapshot.scope_sha256,
+            scope_content_sha256: snapshot.scope_content_sha256,
+            effective_review_snapshot: boundPreflight.effective_review_snapshot } : {})
     });
     if (options.seedPostPreflight !== false) {
         seedPostPreflightRulePack(repoRoot, taskId, preflightPath);
     }
     return preflightPath;
+}
+
+export function prepareSensitiveValidationFixture(repoRoot: string, taskId: string): void {
+    const queuePath = path.join(repoRoot, 'TASK.md');
+    const queue = fs.readFileSync(queuePath, 'utf8');
+    const activeQueue = queue.replace(`| ${taskId} | TODO |`, `| ${taskId} | IN_PROGRESS |`);
+    assert.notEqual(activeQueue, queue, 'Disposable navigation fixture must start with its TODO row.');
+    fs.writeFileSync(queuePath, activeQueue);
+    fs.mkdirSync(path.join(repoRoot, 'tests'), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, 'tests/native-evidence.case'), [
+        "const assert = require('node:assert/strict');",
+        "assert.throws(() => JSON.parse('{'), SyntaxError);",
+        "console.log('TAP version 13\\nok 1 - rejects-malformed-json\\n1..1');", ''
+    ].join('\n'));
+}
+
+export async function recordSensitiveValidationFixture(repoRoot: string, taskId: string): Promise<void> {
+    const preflightPath = path.join(reviewsRoot(repoRoot), `${taskId}-preflight.json`);
+    const execution = await runIntermediateCommandCommand({ repoRoot, taskId, preflightPath,
+        commandSource: 'targeted-test', command: 'node tests/native-evidence.case' });
+    assert.equal(execution.exitCode, 0, execution.outputLines.join('\n'));
+    const template = buildQualityChecklistAnswersTemplate({ repoRoot, taskId, preflightPath });
+    const answers = template.answers.map(answer => ({ ...answer, status: 'PASS', answer: 'Checked disposable navigation fixture.',
+        ...(answer.rule_id === TRUST_BOUNDARY_ANALYSIS_RULE_ID ? { trust_boundary_matrix: [{
+            boundary_id: 'TB-fixture', boundary: 'Retained check output to navigation readiness',
+            authority_source: 'Current native task and canonical preflight', mutable_inputs: ['check source and output'],
+            integrity_evidence: ['current source hash', 'native execution output hash'],
+            canonical_reconstruction: 'Read the current native check and its contained source.',
+            toctou_replay: 'Reject stale preflight and execution identities.',
+            negative_paths: [{ kind: 'other', scenario: 'rejects-malformed-json',
+                expected_behavior: 'Reject malformed JSON.', evidence_files: ['tests/native-evidence.case#rejects-malformed-json'] }]
+        }] } : {}) }));
+    const answersPath = path.join(reviewsRoot(repoRoot), `${taskId}-fixture-quality-answers.json`);
+    writeJson(answersPath, { ...template, answers });
+    const quality = runQualityChecklistCommand({ repoRoot, taskId, preflightPath, answersPath });
+    assert.equal(quality.exitCode, 0, quality.outputLines.join('\n'));
 }
 
 export function seedCompilePass(repoRoot: string, taskId: string, timestampUtc?: string): void {
