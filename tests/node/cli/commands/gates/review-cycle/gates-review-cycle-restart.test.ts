@@ -62,26 +62,12 @@ import {
     handleRecordReviewRouting
 } from '../../../../../../src/cli/commands/gate-review-handlers';
 import { buildEventIntegrityHash } from '../../../../../../src/gate-runtime/task-events-helpers';
-import {
-    runFullSuiteValidationCommand,
-    runQualityChecklistCommand
-} from '../../../../../../src/cli/commands/gates';
+import { runFullSuiteValidationCommand } from '../../../../../../src/cli/commands/gates';
 import { buildTaskProfilePolicySnapshot } from '../../../../../../src/policy/task-profile-policy-snapshot';
 import { resolveNextStep } from '../../../../gates/next-step/next-step-test-support';
 
 describe('cli/commands/gates – review-cycle restart suite', () => {
     const OPTIONAL_SKILL_HEADLINES_PATH = 'garda-agent-orchestrator/live/config/skills-headlines.json';
-    const TRUST_BOUNDARY_QUALITY_RULE_IDS = [
-        'code_simplification',
-        'project_style_fit',
-        'unnecessary_abstraction',
-        'size_growth',
-        'hardcoded_values_contracts',
-        'duplicated_logic_contracts',
-        'test_verification_scope',
-        'trust_boundary_adversarial_analysis'
-    ];
-
     function seedRemediationRepoBase(repoRoot: string): void {
         seedRemediationRepoBaseWithoutProfiles(repoRoot);
         fs.mkdirSync(path.join(repoRoot, 'tests'), { recursive: true });
@@ -90,50 +76,6 @@ describe('cli/commands/gates – review-cycle restart suite', () => {
             'it("rejects stale review recovery evidence", () => { assert.equal(true, true); });\n',
             'utf8'
         );
-    }
-
-    function runPassingTrustBoundaryQualityChecklist(options: {
-        repoRoot: string;
-        taskId: string;
-        preflightPath: string;
-        evidenceFiles: string[];
-    }): void {
-        const result = runQualityChecklistCommand({
-            repoRoot: options.repoRoot,
-            taskId: options.taskId,
-            preflightPath: options.preflightPath,
-            answersJson: JSON.stringify(TRUST_BOUNDARY_QUALITY_RULE_IDS.map((ruleId) => ({
-                rule_id: ruleId,
-                status: 'PASS',
-                answer: `Reviewed ${ruleId} for the focused restart-recovery fixture; no action is required.`,
-                evidence_files: options.evidenceFiles,
-                actions_taken: [],
-                actions_required: [],
-                ...(ruleId === 'trust_boundary_adversarial_analysis'
-                    ? {
-                        trust_boundary_matrix: [{
-                            boundary_id: 'review-recovery-evidence',
-                            boundary: 'Review recovery evidence',
-                            authority_source: 'Gate-owned task timeline and authenticated preflight',
-                            mutable_inputs: ['Reviewer output', 'Remediation impact analysis'],
-                            integrity_evidence: ['Preflight hash', 'Quality-checklist timeline binding'],
-                            canonical_reconstruction: 'Recompute current preflight and checklist hashes from repository state.',
-                            toctou_replay: 'Reject stale or replayed evidence before review-context preparation.',
-                            negative_paths: [{
-                                kind: 'stale',
-                                scenario: 'rejects stale review recovery evidence',
-                                expected_behavior: 'Reject stale review recovery evidence before preparing review contexts.',
-                                evidence_files: [
-                                    'tests/trust-boundary-recovery.test.ts#rejects stale review recovery evidence'
-                                ]
-                            }]
-                        }]
-                    }
-                    : {})
-            }))),
-            emitMetrics: false
-        });
-        assert.equal(result.exitCode, 0, result.outputLines.join('\n'));
     }
 
     function copyWorkflowConfig(repoRoot: string, sourcePath: string, targetRelativePath: string): void {
