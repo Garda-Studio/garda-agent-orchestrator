@@ -1,5 +1,7 @@
 # Changelog
 
+- Prepare selected DELTA and reuse fixtures with current validation evidence, and verify code reuse is refused when coverage and rule bindings change.
+
 - Prepare current executed validation evidence for ignored-changelog remediation fixtures while preserving target approval and refusal checks.
 
 - Prepare selected review-restart fixtures with current executed validation evidence while retaining recovery routing and cycle-order assertions.

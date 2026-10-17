@@ -1557,6 +1557,7 @@ export function writeReceiptBackedReviewArtifact(
         preserveExistingReviewContext?: boolean;
         rawArtifactContent?: boolean;
         residualRisk?: boolean;
+        caseResolutions?: Readonly<Record<string, unknown>>;
     } = {}
 ): void {
     const reviewsRoot = getReviewsRoot(repoRoot);
@@ -1612,7 +1613,8 @@ export function writeReceiptBackedReviewArtifact(
             verdict,
             findingDescription: explicitContent || undefined,
             findingSeverity: options.findingSeverity,
-            residualRisk: options.residualRisk
+            residualRisk: options.residualRisk,
+            caseResolutions: options.caseResolutions
         });
     }
     fs.writeFileSync(artifactPath, content, 'utf8');
