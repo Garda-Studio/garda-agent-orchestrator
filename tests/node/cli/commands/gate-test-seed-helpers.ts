@@ -1411,6 +1411,7 @@ function buildFixtureFindingsReport(options: {
     findingSeverity: 'critical' | 'high' | 'medium' | 'low' | null;
     findingDescription?: string;
     residualRisk?: boolean;
+    caseResolutions?: Readonly<Record<string, unknown>>;
 }): Record<string, unknown> {
     const defaultEvidenceFile = options.coverageContract.obligations.find((entry) => entry.kind === 'file')?.target
         || 'src/app.ts';
@@ -1453,14 +1454,23 @@ function buildFixtureFindingsReport(options: {
         coverage_ledger: {
             coverage_contract_sha256: options.coverageContract.contract_sha256,
             entries: options.coverageContract.required
-                ? options.coverageContract.obligations.map((obligation) => ({
-                    obligation_id: obligation.id,
-                    evidence: [{
-                        location: `${obligation.kind === 'file' ? obligation.target : defaultEvidenceFile}:1`,
-                        observation: `Concrete fixture evidence covers ${obligation.kind} ${obligation.target} for receipt-backed review behavior.`
-                    }],
-                    finding_ids: findingIds
-                }))
+                ? options.coverageContract.obligations.map((obligation) => {
+                    const resolution = options.caseResolutions?.[obligation.id];
+                    let evidenceFile = obligation.kind === 'file' ? obligation.target : defaultEvidenceFile;
+                    if (obligation.kind === 'validation' && resolution !== undefined) {
+                        assert.ok(obligation.validation_binding);
+                        evidenceFile = obligation.validation_binding.source_identity.path;
+                    }
+                    return {
+                        obligation_id: obligation.id,
+                        evidence: [{
+                            location: `${evidenceFile}:1`,
+                            observation: `Concrete fixture evidence covers ${obligation.kind} ${obligation.target} for receipt-backed review behavior.`
+                        }],
+                        finding_ids: findingIds,
+                        ...(resolution !== undefined ? { case_resolution: resolution } : {})
+                    };
+                })
                 : []
         },
         review_execution: options.reviewExecution,
@@ -1486,6 +1496,7 @@ function buildFixtureFindingsContent(options: {
     findingDescription?: string;
     findingSeverity?: 'critical' | 'high' | 'medium' | 'low' | null;
     residualRisk?: boolean;
+    caseResolutions?: Readonly<Record<string, unknown>>;
 }): string {
     const report = buildFixtureFindingsReport({
         taskId: options.taskId,
@@ -1498,7 +1509,8 @@ function buildFixtureFindingsContent(options: {
         findingSeverity: options.findingSeverity === undefined
             ? (/\bFAILED\b/u.test(options.verdict) ? 'high' : null)
             : options.findingSeverity,
-        residualRisk: options.residualRisk
+        residualRisk: options.residualRisk,
+        caseResolutions: options.caseResolutions
     });
     return `${JSON.stringify(report, null, 2)}\n`;
 }
@@ -1849,6 +1861,7 @@ export function seedReusableReviewEvidence(
     reviewContextPath: string,
     reviewerIdentity = 'agent:test-reviewer',
     options: {
+        caseResolutions?: Readonly<Record<string, unknown>>;
         legacyReviewContextIdentity?: boolean;
         legacyReviewContextSourceOfTruth?: string;
         taskModePath?: string | null;
@@ -1937,7 +1950,8 @@ export function seedReusableReviewEvidence(
             reviewTreeStateSha256,
             coverageContract,
             reviewExecution: reviewExecution.declaration,
-            verdict
+            verdict,
+            caseResolutions: options.caseResolutions
         })
         : [
             '# Review',

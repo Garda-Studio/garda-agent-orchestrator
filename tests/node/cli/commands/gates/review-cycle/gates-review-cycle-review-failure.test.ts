@@ -19,6 +19,8 @@ import {
     readTimelineEventsSummary,
     resolveRuntimeReviewerIdentity,
     runBuildReviewContextCommand,
+    prepareCurrentReviewCycleValidation,
+    buildCurrentReviewCycleCaseResolutions,
     runCompileGateCommand,
     runEnterTaskMode,
     runExplicitPreflight,
@@ -42,7 +44,7 @@ import { readDependencyTimelineEvents } from '../../../../../../src/cli/commands
 import { readReviewDependencyTimelineEvents } from '../../../../../../src/gates/required-reviews/required-reviews-check-dependencies';
 
 describe('cli/commands/gates – review-cycle review failure suite', () => {
-    it('runBuildReviewContextCommand reuses supplied task-mode evidence and runtime identity without rereading the artifact', { concurrency: false }, async (t) => {
+    it('runBuildReviewContextCommand reuses supplied task-mode evidence only while persisted identity is current', { concurrency: false }, async (t) => {
         const repoRoot = createTempRepo(t);
         const taskId = 'T-903b-restart-review-cycle-task-mode-cache';
         seedRemediationRepoBase(repoRoot);
@@ -73,6 +75,7 @@ describe('cli/commands/gates – review-cycle review failure suite', () => {
             'Reuse supplied task-mode evidence during build-review-context command execution',
             ['src/app.ts']
         );
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
 
         const compileResult = await runCompileGateCommand({
@@ -93,9 +96,7 @@ describe('cli/commands/gates – review-cycle review failure suite', () => {
             taskModeEvidence,
             allowLegacyFallback: true
         });
-        fs.rmSync(taskModeArtifactPath, { force: true });
-
-        const buildResult = await runBuildReviewContextCommand({
+        const buildOptions = {
             repoRoot,
             reviewType: 'code',
             depth: '2',
@@ -103,11 +104,19 @@ describe('cli/commands/gates – review-cycle review failure suite', () => {
             taskModePath: String(taskModeEvidence.evidence_path || ''),
             taskModeEvidence,
             runtimeReviewerIdentity
-        });
+        };
+        const buildResult = await runBuildReviewContextCommand(buildOptions);
 
-        assert.equal(fs.existsSync(taskModeArtifactPath), false);
+        assert.equal(fs.existsSync(taskModeArtifactPath), true);
         assert.ok(buildResult.outputLines.some((line) => line.startsWith('OutputPath: ')));
         assert.equal(buildResult.reusedReviewEvidence, false);
+
+        fs.rmSync(taskModeArtifactPath, { force: true });
+        await assert.rejects(
+            () => runBuildReviewContextCommand(buildOptions),
+            /Declared review coverage task-mode identity rejected: EVIDENCE_FILE_MISSING/u
+        );
+        assert.equal(fs.existsSync(taskModeArtifactPath), false);
     });
 
     it('runBuildReviewContextCommand preserves the public key-value output contract', { concurrency: false }, async (t) => {
@@ -135,6 +144,7 @@ describe('cli/commands/gates – review-cycle review failure suite', () => {
             'Preserve build-review-context output formatting contract',
             ['src/app.ts']
         );
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
 
         const compileResult = await runCompileGateCommand({
@@ -200,6 +210,7 @@ describe('cli/commands/gates – review-cycle review failure suite', () => {
             'Fail closed when review-context telemetry cannot be appended',
             ['src/app.ts']
         );
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
 
         const compileResult = await runCompileGateCommand({
@@ -262,6 +273,7 @@ describe('cli/commands/gates – review-cycle review failure suite', () => {
             'Reuse supplied timeline summary when recycling current-cycle code review evidence',
             ['src/app.ts']
         );
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
 
         const compileResult = await runCompileGateCommand({
@@ -281,7 +293,9 @@ describe('cli/commands/gates – review-cycle review failure suite', () => {
             'code',
             'REVIEW PASSED',
             preflightPath,
-            reviewContextPath
+            reviewContextPath,
+            undefined,
+            { caseResolutions: buildCurrentReviewCycleCaseResolutions(repoRoot, taskId) }
         );
         const refreshedCompileResult = await runCompileGateCommand({
             repoRoot,

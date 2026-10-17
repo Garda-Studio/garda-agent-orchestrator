@@ -42,6 +42,11 @@ import { resolveRuntimeReviewerIdentity } from '../../../../../../src/gates/revi
 import { getTaskModeEvidence } from '../../../../../../src/gates/task-mode';
 import { getCurrentWorkflowConfigFileHashes } from '../../../../../../src/gates/workflow-config/workflow-config-work';
 import { appendTaskEvent } from '../../../../../../src/gate-runtime/task-events';
+import { buildScopeContentFingerprint, getWorkspaceSnapshot } from '../../../../../../src/gates/compile/compile-gate';
+import { pathListSha256 } from '../../../../../../src/gates/shared/canonical-path-list';
+import { inspectQualityValidationPhases, type QualityValidationPhases, type QualityValidationObligation } from '../../../../../../src/gates/quality-checklist/quality-checklist-validation-phases';
+import { runIntermediateCommandCommand } from '../../../../../../src/cli/commands/gate-flows/command-run/command-run-flow';
+import { readValidationFile, validationDigest } from '../../../../../../src/core/project-validation-identity';
 import { withFilesystemLockAsync } from '../../../../../../src/gate-runtime/task-events-locking';
 import { ensureSkillsHeadlinesCurrent } from '../../../../../../src/runtime/skill-headlines';
 import { writeOptionalSkillSelectionArtifact } from '../../../../../../src/runtime/optional-skill-selection';
@@ -475,6 +480,119 @@ function seedTrustBoundaryChecklistIfRequired(repoRoot: string, taskId: string):
     );
 }
 
+async function prepareCurrentReviewCycleValidation(
+    repoRoot: string,
+    taskId: string,
+    preflightPath: string
+): Promise<void> {
+    fs.writeFileSync(path.join(repoRoot, TRUST_BOUNDARY_FIXTURE_EVIDENCE_PATH), [
+        "const test = require('node:test');",
+        "const assert = require('node:assert/strict');",
+        "const { createHash } = require('node:crypto');",
+        "test('rejects replaced trust-boundary evidence', () => {",
+        "    const digest = value => createHash('sha256').update(value).digest('hex');",
+        "    assert.throws(() => assert.equal(digest('replacement'), digest('original')));",
+        '});', ''
+    ].join('\n'), 'utf8');
+    const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+    const files = preflight.changed_files as string[];
+    const source = String(preflight.detection_source);
+    const snapshot = getWorkspaceSnapshot(repoRoot, source, true, files);
+    const metrics = {
+        ...(preflight.metrics as Record<string, unknown>),
+        changed_files_sha256: pathListSha256(files),
+        scope_content_sha256: buildScopeContentFingerprint(repoRoot, source, files),
+        scope_sha256: snapshot.scope_sha256
+    };
+    preflight.metrics = metrics;
+    fs.writeFileSync(preflightPath, `${JSON.stringify(preflight, null, 2)}\n`, 'utf8');
+    appendTaskEvent(getOrchestratorRoot(repoRoot), taskId, 'PREFLIGHT_CLASSIFIED', 'INFO',
+        'Current selected review-cycle fixture preflight.', { output_path: normalizePath(preflightPath), ...metrics });
+    writeCompilePassEvidence(repoRoot, taskId, preflightPath);
+    const testContext = process.env.NODE_TEST_CONTEXT;
+    let execution: Awaited<ReturnType<typeof runIntermediateCommandCommand>>;
+    try {
+        delete process.env.NODE_TEST_CONTEXT;
+        execution = await runIntermediateCommandCommand({
+            repoRoot,
+            taskId,
+            preflightPath,
+            commandSource: 'targeted-test',
+            command: `node --experimental-strip-types --test --test-reporter=tap ${TRUST_BOUNDARY_FIXTURE_EVIDENCE_PATH}`
+        });
+    } finally {
+        if (testContext === undefined) delete process.env.NODE_TEST_CONTEXT;
+        else process.env.NODE_TEST_CONTEXT = testContext;
+    }
+    assert.equal(execution.exitCode, 0, execution.outputLines.join('\n'));
+    seedQualityChecklistIfRequired(repoRoot, taskId);
+    const artifactPath = resolveDefaultQualityChecklistArtifactPath(repoRoot, taskId);
+    const artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8')) as Record<string, unknown>;
+    const answers = artifact.answers as Array<{ trust_boundary_matrix: unknown }>;
+    const preflightSha256 = fileSha256(preflightPath);
+    assert.ok(preflightSha256);
+    const validation = inspectQualityValidationPhases({
+        repoRoot,
+        taskId,
+        preflight,
+        preflightSha256,
+        matrixRequired: true,
+        matrix: answers[0].trust_boundary_matrix
+    });
+    assert.equal(validation?.phases.structural, 'BOUND');
+    assert.equal(validation?.phases.execution, 'OBSERVED', JSON.stringify(validation?.phases.execution_diagnostics));
+    assert.equal(validation.phases.obligations.length, 1);
+    readPassedReviewCycleFixtureQuote(repoRoot, validation.phases.obligations[0]);
+    artifact.status = 'PENDING_VALIDATION';
+    artifact.validation_phases = validation.phases;
+    fs.writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
+    appendTaskEvent(getOrchestratorRoot(repoRoot), taskId, 'QUALITY_CHECKLIST_RECORDED', 'PASS',
+        'Selected fixture validation phases bound to actual execution.', {
+            artifact_path: normalizePath(artifactPath),
+            artifact_hash: fileSha256(artifactPath),
+            status: 'PASS',
+            outcome: 'PASS',
+            checklist_id: QUALITY_CHECKLIST_ID,
+            preflight_path: normalizePath(path.resolve(preflightPath)),
+            preflight_sha256: preflightSha256
+        }, { actor: 'gate' });
+}
+
+function readPassedReviewCycleFixtureQuote(repoRoot: string, binding: QualityValidationObligation): string {
+    assert.equal(binding.execution, 'OBSERVED');
+    const execution = binding.case_execution;
+    assert.ok(execution);
+    const outputPath = normalizePath(path.relative(path.resolve(repoRoot), path.resolve(repoRoot, execution.output_path)));
+    const output = readValidationFile(repoRoot, outputPath);
+    assert.equal(output.identity.sha256, execution.output_sha256);
+    const quote = output.bytes.toString('utf8').split(/\r?\n/u).find(line =>
+        line.includes(binding.selector) && /^(?:ok \d+ -|✔)/u.test(line.trim()));
+    assert.ok(quote, `The actual fixture output must identify its passed case: ${output.bytes.toString('utf8').slice(0, 1500)}`);
+    return quote;
+}
+
+function buildCurrentReviewCycleCaseResolutions(repoRoot: string, taskId: string): Readonly<Record<string, unknown>> {
+    const artifactPath = resolveDefaultQualityChecklistArtifactPath(repoRoot, taskId);
+    const artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8')) as { validation_phases: QualityValidationPhases };
+    const bindings = artifact.validation_phases.obligations;
+    assert.equal(bindings.length, 1);
+    const binding = bindings[0];
+    const quote = readPassedReviewCycleFixtureQuote(repoRoot, binding);
+    const execution = binding.case_execution;
+    assert.ok(execution);
+    // Modeled reviewer input for this temporary fixture; actual root reviews remain separate.
+    return {
+        [`VALIDATION-${binding.id.toUpperCase()}`]: {
+            binding_sha256: validationDigest(binding),
+            execution_sha256: execution.record_sha256,
+            output_sha256: execution.output_sha256,
+            outcome: 'PASSED',
+            evidence_quote: quote,
+            reasoning: 'The actual retained Node test output marks the selected temporary case as passed after its digest replacement assertion executed.'
+        }
+    };
+}
+
 function seedQualityChecklistIfRequired(repoRoot: string, taskId: string): void {
     seedTrustBoundaryChecklistIfRequired(repoRoot, taskId);
     const preflightPath = path.join(getReviewsRoot(repoRoot), `${taskId}-preflight.json`);
@@ -589,6 +707,8 @@ export {
     loadTaskEntryRulePack,
     prepareReviewDiffFixture,
     readTaskTimelineEvents,
+    prepareCurrentReviewCycleValidation,
+    buildCurrentReviewCycleCaseResolutions,
     runEnterTaskMode,
     runExplicitPreflight,
     runGit,

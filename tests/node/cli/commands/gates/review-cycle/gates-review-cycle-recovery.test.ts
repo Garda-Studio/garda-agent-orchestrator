@@ -12,6 +12,7 @@ import {
     path,
     readTaskTimelineEvents,
     runBuildReviewContextCommand,
+    prepareCurrentReviewCycleValidation,
     runCompileGateCommand,
     runCompletionGate,
     runEnterTaskMode,
@@ -125,6 +126,7 @@ describe('cli/commands/gates – review-cycle recovery suite', () => {
             'Surface a narrow review-cycle recovery command from completion diagnostics',
             ['src/app.ts']
         );
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
 
         const compileResult = await runCompileGateCommand({
@@ -192,6 +194,7 @@ describe('cli/commands/gates – review-cycle recovery suite', () => {
             'Keep restart-review-cycle usable after completion diagnostics surface it as the recovery command',
             ['src/app.ts', 'tests/app.test.ts']
         );
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
 
         const compileResult = await runCompileGateCommand({
@@ -310,6 +313,7 @@ describe('cli/commands/gates – review-cycle recovery suite', () => {
             'Reject restart-review-cycle when a fresh task-mode cycle did not reload task-entry rules',
             ['src/app.ts', 'tests/app.test.ts']
         );
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
 
         const compileResult = await runCompileGateCommand({
@@ -390,6 +394,7 @@ describe('cli/commands/gates – review-cycle recovery suite', () => {
             'Keep restart-review-cycle usable when a fresh task-mode cycle reloads task-entry rules',
             ['src/app.ts', 'tests/app.test.ts']
         );
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
 
         const compileResult = await runCompileGateCommand({

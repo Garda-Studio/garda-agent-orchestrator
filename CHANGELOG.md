@@ -1,5 +1,7 @@
 # Changelog
 
+- Prepare selected review-cycle fixtures with current native execution and declared-validation phases, preserving restart, telemetry and reuse assertions.
+
 - Limit path-option inventory checks to declared Garda and delegated command options, excluding internal Git arguments without weakening path policy coverage.
 
 - Align lifecycle test fixtures with reserved public event admission while retaining native cleanup ownership, command audit and reviewer rerouting checks.
