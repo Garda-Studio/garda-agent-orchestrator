@@ -1,5 +1,7 @@
 # Changelog
 
+- Build current canonical reviewer skill context in selected completion trust and project-memory fixtures.
+
 - Align closeout test expectations with task-bound guarded commit guidance and explicit disabled local-commit permission messaging.
 
 - Prepare current validation and positive receipt evidence before the protected completion recovery fixture checks operator placeholders.

@@ -462,9 +462,7 @@ describe('gates/completion review trust', () => {
                 repoRoot,
                 taskId,
                 'code',
-                'REVIEW PASSED',
-                undefined,
-                { allowLegacyManualReviewContext: true }
+                'REVIEW PASSED'
             );
 
             const reviewsRoot = getReviewsRoot(repoRoot);
@@ -564,9 +562,7 @@ describe('gates/completion review trust', () => {
                 repoRoot,
                 taskId,
                 'code',
-                'REVIEW PASSED',
-                undefined,
-                { allowLegacyManualReviewContext: true }
+                'REVIEW PASSED'
             );
 
             const reviewsRoot = getReviewsRoot(repoRoot);
@@ -768,9 +764,7 @@ describe('gates/completion review trust', () => {
                 repoRoot,
                 taskId,
                 'test',
-                'REVIEW PASSED',
-                undefined,
-                { allowLegacyManualReviewContext: true }
+                'REVIEW PASSED'
             );
 
             const reviewsRoot = getReviewsRoot(repoRoot);
@@ -869,9 +863,7 @@ describe('gates/completion review trust', () => {
                 repoRoot,
                 taskId,
                 'test',
-                'REVIEW PASSED',
-                undefined,
-                { allowLegacyManualReviewContext: true }
+                'REVIEW PASSED'
             );
 
             const reviewsRoot = getReviewsRoot(repoRoot);
