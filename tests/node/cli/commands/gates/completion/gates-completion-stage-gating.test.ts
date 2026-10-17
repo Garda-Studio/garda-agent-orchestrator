@@ -2,7 +2,13 @@ import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { writeBudgetOutputFilters } from '../../gate-test-helpers';
+import { writeBudgetOutputFilters, writeReceiptBackedReviewArtifact } from '../../gate-test-helpers';
+import {
+    buildCurrentReviewCycleCaseResolutions,
+    prepareCurrentReviewCycleValidation,
+    TRUST_BOUNDARY_FIXTURE_EVIDENCE_PATH,
+    writeCurrentReviewCycleValidationSource
+} from '../review-cycle/gates-review-cycle-fixtures';
 
 import {
     runCompileGateCommand,
@@ -427,6 +433,8 @@ describe('cli/commands/gates', () => {
             'export const protectedCompletionFixture = true;\n',
             'utf8'
         );
+        fs.mkdirSync(path.dirname(path.join(repoRoot, TRUST_BOUNDARY_FIXTURE_EVIDENCE_PATH)), { recursive: true });
+        writeCurrentReviewCycleValidationSource(repoRoot);
         initializeGitRepo(repoRoot);
         seedTaskQueue(repoRoot, taskId);
         seedInitAnswers(repoRoot);
@@ -460,6 +468,7 @@ describe('cli/commands/gates', () => {
         runHandshakeForTask(repoRoot, taskId);
         runShellSmokeForTask(repoRoot, taskId);
         loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         writeCompilePassEvidence(repoRoot, taskId, preflightPath);
         appendTaskEvent(
             getOrchestratorRoot(repoRoot),
@@ -489,7 +498,9 @@ describe('cli/commands/gates', () => {
                 trigger_reason: 'review_skill'
             }
         );
-        writeCleanReviewArtifact(repoRoot, taskId, 'code', 'REVIEW PASSED');
+        writeReceiptBackedReviewArtifact(repoRoot, taskId, 'code', 'REVIEW PASSED', undefined, {
+            caseResolutions: buildCurrentReviewCycleCaseResolutions(repoRoot, taskId)
+        });
         const reviewResult = runRequiredReviewsCheckCommand({
             repoRoot,
             taskId,

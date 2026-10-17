@@ -1,5 +1,7 @@
 # Changelog
 
+- Prepare current validation and positive receipt evidence before the protected completion recovery fixture checks operator placeholders.
+
 - Prepare selected DELTA and reuse fixtures with current validation evidence, and verify code reuse is refused when coverage and rule bindings change.
 
 - Prepare current executed validation evidence for ignored-changelog remediation fixtures while preserving target approval and refusal checks.
