@@ -391,6 +391,12 @@ describe('full local lifecycle', () => {
             const liveVersion = readJson(path.join(bundleRoot, 'live', 'version.json'));
             assert.equal(liveVersion.Version, '1.0.9');
 
+            const taskBeforeUninstall = fs.readFileSync(path.join(workspaceRoot, 'TASK.md'), 'utf8');
+            const managedTaskEnd = taskBeforeUninstall.indexOf(MANAGED_END);
+            assert.notEqual(managedTaskEnd, -1);
+            const retainedTaskContent = taskBeforeUninstall.slice(managedTaskEnd + MANAGED_END.length).trimStart();
+            assert.ok(retainedTaskContent.startsWith('## Task Candidates\n'));
+
             const uninstallResult = runUninstall({
                 targetRoot: workspaceRoot,
                 bundleRoot,
@@ -425,6 +431,12 @@ describe('full local lifecycle', () => {
                         'Redundant wildcard entry must not be present');
                     assert.ok(restoredContent.includes('# Backup artifacts created by Garda Agent Orchestrator uninstall'),
                         'Explanatory comment for uninstall backups must be present');
+                } else if (relativePath === 'TASK.md') {
+                    const restoredContent = fs.readFileSync(restoredPath, 'utf8');
+                    assert.equal(restoredContent, retainedTaskContent);
+                    assert.ok(restoredContent.endsWith(originalContent));
+                    assert.ok(!restoredContent.includes(MANAGED_START));
+                    assert.ok(!restoredContent.includes(MANAGED_END));
                 } else {
                     assert.equal(fs.readFileSync(restoredPath, 'utf8'), originalContent);
                 }

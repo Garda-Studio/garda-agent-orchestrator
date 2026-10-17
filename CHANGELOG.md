@@ -1,5 +1,7 @@
 # Changelog
 
+- Verify that full lifecycle uninstall preserves the unmanaged task candidate inbox and exact original user task content while removing the managed queue.
+
 - Prepare active task, native check and bound quality evidence in sensitive documentation-navigation fixtures while retaining their original documentation decisions.
 
 - Count numeric read-only timeline opens and conversions of measured payload allocations, excluding unrelated native ACL output while preserving all performance budgets.
