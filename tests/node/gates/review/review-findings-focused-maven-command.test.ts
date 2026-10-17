@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import test, { type TestContext } from 'node:test';
+import { stripVTControlCharacters } from 'node:util';
 
 import { REVIEW_FINDINGS_SCHEMA_VERSION, validateReviewFindingsReport } from '../../../../src/gates/review/review-findings-schema';
 import { buildReviewRemediationReviewContract } from '../../../../src/gates/review-remediation/review-remediation-review-contract';
@@ -519,6 +520,20 @@ function findLocalMavenExecutable(): string | undefined {
         .find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
 }
 
+function missingOfflineMavenArtifact(diagnostics: string): string | undefined {
+    return stripVTControlCharacters(diagnostics).match(
+        /^\[ERROR\] Plugin [^\r\n]+ could not be resolved:\r?\n\[ERROR\][ \t]+Cannot access [^\r\n]+ in offline mode and the artifact (\S+) has not been downloaded from it before\./mu
+    )?.[1];
+}
+
+test('offline Maven prerequisites distinguish missing cache from ordinary build failures', () => {
+    const missingCache = '[ERROR] Plugin org.apache.maven.plugins:maven-resources-plugin:3.3.1 or one of its dependencies could not be resolved:\n'
+        + '[ERROR] \tCannot access central (https://repo.maven.apache.org/maven2) in offline mode and the artifact org.apache.maven.plugins:maven-resources-plugin:jar:3.3.1 has not been downloaded from it before.\n';
+    assert.equal(missingOfflineMavenArtifact(missingCache), 'org.apache.maven.plugins:maven-resources-plugin:jar:3.3.1');
+    assert.equal(missingOfflineMavenArtifact('[ERROR] COMPILATION ERROR: cannot find symbol\n'), undefined);
+    assert.equal(missingOfflineMavenArtifact('[ERROR] There are test failures.\n'), undefined);
+});
+
 test('available local Maven executes one Java test offline and its actual output survives native ingestion', async (context) => {
     const executable = findLocalMavenExecutable();
     if (!executable) {
@@ -544,6 +559,11 @@ test('available local Maven executes one Java test offline and its actual output
         })
         : spawnSync(executable, commandArguments, { cwd: fixture.repoRoot, encoding: 'utf8', timeout: 60000 });
     const diagnostics = `${execution.stdout || ''}${execution.stderr || ''}`;
+    const missingArtifact = execution.status === 1 && !execution.error ? missingOfflineMavenArtifact(diagnostics) : undefined;
+    if (missingArtifact) {
+        context.skip(`Offline Maven cache lacks ${missingArtifact}; the Java test was not executed.`);
+        return;
+    }
     assert.equal(execution.status, 0, `${execution.error || ''}\n${diagnostics}`);
     assert.match(diagnostics, /Tests run: 1, Failures: 0, Errors: 0/u);
     assert.doesNotMatch(diagnostics, /Running example\.UnselectedTest/u);
