@@ -1406,7 +1406,7 @@ describe('gates/next-step', () => {
         assert.ok(result.reason.includes('launch artifact=missing or stale'));
         assert.ok(result.reason.includes('invocation=blocked until launch artifact'));
         assert.ok(result.reason.includes('ProviderLaunchTarget:'));
-        assert.ok(result.reason.includes('launch clean-context reviewers'));
+        assert.ok(result.reason.includes('launch a new reviewer with fork_turns="none"'));
         assert.ok(result.reason.includes('launch one clean-context delegated reviewer with the exact CopyPasteReviewerLaunchPrompt or reviewer-facing ReviewerLaunchInputArtifactPath'));
         assertNoDefaultReviewerReservationGuidance(`${result.reason}\n${result.commands.map((entry) => entry.command).join('\n')}`);
         assert.equal(result.commands[0].label, 'Prepare delegated reviewer launch metadata');
@@ -1517,7 +1517,7 @@ describe('gates/next-step', () => {
         assert.ok(result.reason.includes('this is expected behavior in this repository'));
         assert.ok(result.reason.includes('record-reviewer-delegation-started'));
         assert.ok(result.reason.includes('ProviderLaunchTarget:'));
-        assert.ok(result.reason.includes('launch clean-context reviewers'));
+        assert.ok(result.reason.includes('launch a new reviewer with fork_turns="none"'));
         assert.ok(result.reason.includes('launch artifact=prepared'));
         assert.ok(result.reason.includes('invocation=blocked until launch completion'));
         assertNoDefaultReviewerReservationGuidance(`${result.reason}\n${result.commands.map((entry) => entry.command).join('\n')}`);

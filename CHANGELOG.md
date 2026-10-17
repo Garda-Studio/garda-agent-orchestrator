@@ -1,5 +1,7 @@
 # Changelog
 
+- Align selected reviewer launch guidance assertions with current Codex fresh isolated reviewer instructions.
+
 - Give selected closeout attestation fixtures explicit task identities and ordinary code scope, keeping protected terminal validation separate.
 
 - Bind current reviewer skill identities in selected coherent restart and accepted follow-up routing fixtures.
