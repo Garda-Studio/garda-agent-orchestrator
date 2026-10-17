@@ -1073,11 +1073,13 @@ function writeRejectedFindingsValidationReviewEvidence(
     options: {
         preserveStaleReceipt?: boolean;
         apiCorrectionProviderInvocationId?: string;
+        currentSkillBinding?: boolean;
     } = {}
 ): void {
     writeReviewEvidence(repoRoot, taskId, reviewType, {
         verdict: 'pass',
-        contextSchemaVersion: 4
+        contextSchemaVersion: 4,
+        currentSkillBinding: options.currentSkillBinding
     });
     const reviewContextPath = path.join(reviewsRoot(repoRoot), `${taskId}-${reviewType}-review-context.json`);
     const artifactPath = path.join(reviewsRoot(repoRoot), `${taskId}-${reviewType}.md`);
@@ -1580,11 +1582,11 @@ describe('gates/next-step', { concurrency: 2 }, () => {
     });
 
     it('routes rejected findings validation back to review result correction instead of implementation remediation', () => {
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true });
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, security: true });
         seedCompilePass(repoRoot, TASK_ID);
-        writeRejectedFindingsValidationReviewEvidence(repoRoot, TASK_ID, 'code');
+        writeRejectedFindingsValidationReviewEvidence(repoRoot, TASK_ID, 'code', { currentSkillBinding: true });
 
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
 
@@ -1604,11 +1606,11 @@ describe('gates/next-step', { concurrency: 2 }, () => {
     });
 
     it('routes current rejected validation to correction when an older receipt still exists', () => {
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true });
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, security: true });
         seedCompilePass(repoRoot, TASK_ID);
-        writeRejectedFindingsValidationReviewEvidence(repoRoot, TASK_ID, 'code', {
+        writeRejectedFindingsValidationReviewEvidence(repoRoot, TASK_ID, 'code', { currentSkillBinding: true,
             preserveStaleReceipt: true
         });
 
@@ -1622,11 +1624,11 @@ describe('gates/next-step', { concurrency: 2 }, () => {
     });
 
     it('rejects a correction transport provider invocation that is not bound to the authenticated reviewer event', () => {
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true });
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, security: true });
         seedCompilePass(repoRoot, TASK_ID);
-        writeRejectedFindingsValidationReviewEvidence(repoRoot, TASK_ID, 'code', {
+        writeRejectedFindingsValidationReviewEvidence(repoRoot, TASK_ID, 'code', { currentSkillBinding: true,
             apiCorrectionProviderInvocationId: 'forged-provider-invocation'
         });
 
@@ -1647,11 +1649,11 @@ describe('gates/next-step', { concurrency: 2 }, () => {
     });
 
     it('routes an authenticated correction transport through the bound reviewer invocation', () => {
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true });
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, security: true });
         seedCompilePass(repoRoot, TASK_ID);
-        writeRejectedFindingsValidationReviewEvidence(repoRoot, TASK_ID, 'code', {
+        writeRejectedFindingsValidationReviewEvidence(repoRoot, TASK_ID, 'code', { currentSkillBinding: true,
             apiCorrectionProviderInvocationId: 'test-code-invocation'
         });
 
@@ -1695,11 +1697,11 @@ describe('gates/next-step', { concurrency: 2 }, () => {
     });
 
     it('routes terminalized findings validation failure back to correction when the completed attempt is authenticated', () => {
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true });
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, security: true });
         seedCompilePass(repoRoot, TASK_ID);
-        writeRejectedFindingsValidationReviewEvidence(repoRoot, TASK_ID, 'code');
+        writeRejectedFindingsValidationReviewEvidence(repoRoot, TASK_ID, 'code', { currentSkillBinding: true });
         const launchArtifactPath = path.join(
             repoRoot,
             'garda-agent-orchestrator',
