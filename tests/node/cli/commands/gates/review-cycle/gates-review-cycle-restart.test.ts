@@ -413,9 +413,7 @@ describe('cli/commands/gates – review-cycle restart suite', () => {
             }
         );
 
-        writeReceiptBackedReviewArtifact(repoRoot, taskId, 'code', 'REVIEW PASSED', undefined, {
-            allowLegacyManualReviewContext: true
-        });
+        writeReceiptBackedReviewArtifact(repoRoot, taskId, 'code', 'REVIEW PASSED');
 
         const firstReviewResult = runRequiredReviewsCheckCommand({
             repoRoot,

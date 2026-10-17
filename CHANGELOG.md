@@ -1,5 +1,7 @@
 # Changelog
 
+- Bind current reviewer skill identities in selected coherent restart and accepted follow-up routing fixtures.
+
 - Build current canonical reviewer skill context in selected completion trust and project-memory fixtures.
 
 - Align closeout test expectations with task-bound guarded commit guidance and explicit disabled local-commit permission messaging.

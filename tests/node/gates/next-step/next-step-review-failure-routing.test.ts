@@ -26,6 +26,9 @@ import {
     seedAuthenticatedReviewerLaunchFixture
 } from './next-step-reviewer-launch-fixtures';
 import { runIntermediateCommandCommand } from '../../../../src/cli/commands/gates';
+import { bindFixtureEffectiveReviewSnapshot } from '../../cli/commands/gate-test-helpers';
+import { resolveReviewContextLaneBinding } from '../../../../src/gates/review-context/review-context-lane';
+import { resolveCatalogReviewSkillBinding } from '../../../../src/gates/review-context/review-context-skill-binding';
 import {
     buildReviewCoverageContract,
     type ReviewCoverageContract
@@ -203,11 +206,17 @@ function getSharedRepoTemplateRoot(): string {
     }
 }
 
-function makeTempRepo(): string {
+function makeTempRepo(options: { currentSkillBinding?: boolean } = {}): string {
     const templateRoot = getSharedRepoTemplateRoot();
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-next-step-'));
     try {
         fs.cpSync(templateRoot, repoRoot, { recursive: true });
+        if (options.currentSkillBinding) {
+            const skillPath = path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'skills', 'code-review', 'SKILL.md');
+            fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+            fs.writeFileSync(skillPath, '# code-review fixture\n', 'utf8');
+            initGitRepo(repoRoot, { gitignoreContent: null, initialCommitMessage: 'current reviewer skill fixture baseline' });
+        }
         tempRoots.push(repoRoot);
         return repoRoot;
     } catch (error) {
@@ -640,6 +649,18 @@ function buildReviewContextScopeFixture(repoRoot: string, taskId: string, review
     };
 }
 
+function buildCurrentReviewSkillContext(repoRoot: string, taskId: string, reviewType: string) {
+    const preflightPath = path.join(reviewsRoot(repoRoot), `${taskId}-preflight.json`);
+    bindFixtureEffectiveReviewSnapshot(repoRoot, taskId, reviewType, preflightPath, '');
+    const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+    const lane = resolveReviewContextLaneBinding(preflight, reviewType);
+    const selectedSkill = resolveCatalogReviewSkillBinding(lane.skill_ids, repoRoot);
+    return {
+        rule_context: { selected_skill: selectedSkill },
+        reviewer_handoff: { role_prompt: { selected_skill: selectedSkill } }
+    };
+}
+
 function writeReviewEvidence(
     repoRoot: string,
     taskId: string,
@@ -649,6 +670,7 @@ function writeReviewEvidence(
         body?: string;
         contextSchemaVersion?: number;
         includeLaunchArtifact?: boolean;
+        currentSkillBinding?: boolean;
     } = {}
 ): void {
     const reviewContextPath = path.join(reviewsRoot(repoRoot), `${taskId}-${reviewType}-review-context.json`);
@@ -685,6 +707,7 @@ function writeReviewEvidence(
         preflight_sha256: fileSha256(preflightPath),
         ...reviewContextScope,
         coverage_contract: coverageContract,
+        ...(options.currentSkillBinding ? buildCurrentReviewSkillContext(repoRoot, taskId, reviewType) : {}),
         ...(Number(options.contextSchemaVersion || 0) >= 4
             ? { review_execution: reviewExecution }
             : {}),
@@ -1183,11 +1206,13 @@ function writeAcceptedFindingsDispositionReviewEvidence(
     options: {
         findingSeverity?: 'medium' | 'low';
         followUpFindingCount?: number;
+        currentSkillBinding?: boolean;
     } = {}
 ): void {
     writeReviewEvidence(repoRoot, taskId, reviewType, {
         verdict: 'pass',
-        contextSchemaVersion: 4
+        contextSchemaVersion: 4,
+        currentSkillBinding: options.currentSkillBinding
     });
     const reviewContextPath = path.join(reviewsRoot(repoRoot), `${taskId}-${reviewType}-review-context.json`);
     const artifactPath = path.join(reviewsRoot(repoRoot), `${taskId}-${reviewType}.md`);
@@ -2034,7 +2059,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
     });
 
     it('routes accepted create_follow_up dispositions to follow-up task materialization before downstream reviews', () => {
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true });
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, security: true }, {
             reviewFindingPolicy: {
@@ -2050,7 +2075,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
             }
         });
         seedCompilePass(repoRoot, TASK_ID);
-        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code');
+        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code', { currentSkillBinding: true });
 
         const state = readReviewArtifactState(
             reviewsRoot(repoRoot),
@@ -2161,7 +2186,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
     });
 
     it('continues to downstream reviews after valid materialized follow-up tasks satisfy accepted dispositions', () => {
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true });
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, security: true }, {
             reviewFindingPolicy: {
@@ -2177,7 +2202,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
             }
         });
         seedCompilePass(repoRoot, TASK_ID);
-        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code');
+        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code', { currentSkillBinding: true });
         const receipt = JSON.parse(
             fs.readFileSync(path.join(reviewsRoot(repoRoot), `${TASK_ID}-code-receipt.json`), 'utf8')
         ) as Record<string, unknown>;
