@@ -1,5 +1,7 @@
 # Changelog
 
+- Load Russian backup-selection labels from a JSON language pack, preserving existing labels, English fallback and deletion warnings.
+
 - Check focused self-validation instructions in the bound reviewer role prompt while preserving full-suite handoff evidence assertions.
 
 - Return blocked workflow-config navigation without rereading rejected configuration. Invalid config responses explicitly mark full-suite settings unavailable with null values; valid configuration responses and strict validation remain unchanged.

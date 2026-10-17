@@ -1,3 +1,5 @@
+import ru from './backup-selection-text/lang/ru.json';
+
 /** Selection labels reuse the dashboard's English fallback for other locales. */
 export const BACKUP_SELECTION_TEXT = {
     en: {
@@ -12,16 +14,5 @@ export const BACKUP_SELECTION_TEXT = {
         selected: { label: 'Selected backups' }, bytes: { label: 'bytes' },
         unknownSize: { label: 'Size unavailable' }, unavailable: { label: 'Backup inventory unavailable; selection retained.' }
     },
-    ru: {
-        preview: { label: 'Предпросмотр удаления выбранных копий' }, confirm: { label: 'Удалить подтверждённые копии' }, cancel: { label: 'Отмена' },
-        irreversible: { label: 'Удаление необратимо. Точки восстановления будут потеряны.' }, finalPoint: { label: 'Подтверждаю потерю последней точки восстановления.' },
-        phrase: { label: 'Введите точную фразу:' }, lost: { label: 'Потеряно точек восстановления' }, remaining: { label: 'Осталось точек восстановления' },
-        removed: { label: 'Удалённые ID' }, retained: { label: 'Сохранённые ID' }, stale: { label: 'Список изменился; запросите новый предпросмотр.' },
-        rejected: { label: 'Предпросмотр удаления отклонён.' }, uncertain: { label: 'Результат удаления или список неизвестен; обновите перед новым действием.' },
-        select: { label: 'Выбрать резервную копию' }, filter: { label: 'Фильтр копий по ID' },
-        sort: { label: 'Сортировка копий' }, newest: { label: 'Сначала новые' }, id: { label: 'ID' },
-        all: { label: 'Выбрать все копии по фильтру' }, clear: { label: 'Снять выбор' },
-        selected: { label: 'Выбрано копий' }, bytes: { label: 'байт' },
-        unknownSize: { label: 'Размер недоступен' }, unavailable: { label: 'Список копий недоступен; выбор сохранён.' }
-    }
+    ru
 };

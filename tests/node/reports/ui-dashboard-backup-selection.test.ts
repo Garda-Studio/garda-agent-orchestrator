@@ -134,6 +134,9 @@ test('failed inventory preserves selected IDs and rejects select-all; authoritat
 
 test('EN/RU selection labels have key parity and other languages use English fallback with escaped keyboard labels', () => {
     assert.deepEqual(Object.keys(BACKUP_SELECTION_TEXT.en).sort(), Object.keys(BACKUP_SELECTION_TEXT.ru).sort());
+    assert.equal(BACKUP_SELECTION_TEXT.ru.irreversible.label, 'Удаление необратимо. Точки восстановления будут потеряны.');
+    assert.equal(BACKUP_SELECTION_TEXT.ru.finalPoint.label, 'Подтверждаю потерю последней точки восстановления.');
+    assert.equal(BACKUP_SELECTION_TEXT.ru.uncertain.label, 'Результат удаления или список неизвестен; обновите перед новым действием.');
     for (const language of ['en', 'ru', 'fr']) {
         const c = client(language); c.render([{ ...rows[0], id: '<script>"' }]);
         assert.match(c.table.innerHTML, /<label><input type="checkbox"/);
