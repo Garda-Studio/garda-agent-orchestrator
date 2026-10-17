@@ -1110,7 +1110,8 @@ async function resumeReviewReuseAfterChecklist(
     taskId: string,
     preflightPath: string,
     reviewTypes: string[],
-    currentValidation = false
+    currentValidation = false,
+    completeCurrentCodeReview = false
 ): Promise<{ reusedReviewTypes: string[]; launchRequiredReviewTypes: string[]; reuseDiagnostics?: string[] }> {
     if (currentValidation) await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
     else seedQualityChecklistIfRequired(repoRoot, taskId);
@@ -1138,6 +1139,18 @@ async function resumeReviewReuseAfterChecklist(
             reusedReviewTypes.push(reviewType);
         } else {
             launchRequiredReviewTypes.push(reviewType);
+            if (completeCurrentCodeReview && reviewType === 'code') {
+                seedReusableReviewEvidence(
+                    repoRoot,
+                    taskId,
+                    reviewType,
+                    'REVIEW PASSED',
+                    preflightPath,
+                    path.join(getReviewsRoot(repoRoot), `${taskId}-code-review-context.json`),
+                    'agent:current-code-reviewer',
+                    { caseResolutions: buildCurrentReviewCycleCaseResolutions(repoRoot, taskId) }
+                );
+            }
         }
     }
     return { reusedReviewTypes, launchRequiredReviewTypes, ...(currentValidation ? { reuseDiagnostics } : {}) };
@@ -2238,6 +2251,7 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
         const testFile = 'tests/node/gates/quality-checklist/quality-checklist.test.ts';
         const changedFiles = [sourceFile, performanceFile, testFile];
         seedRemediationRepoBase(repoRoot);
+        writeCurrentReviewCycleValidationSource(repoRoot);
         writeReviewCapabilitiesConfig(repoRoot);
         writeProfilesConfig(repoRoot);
         const { commandsPath, outputFiltersPath } = writeSimpleCompileCommandsFile(repoRoot, 'existing-test-remediation-reuse');
@@ -2267,6 +2281,7 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
             'Restart review cycle after failed test review edits existing test coverage only',
             changedFiles
         );
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
         const compileResult = await seedBaselineCompileGatePass({
             repoRoot,
@@ -2286,7 +2301,8 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
                 `${reviewType.toUpperCase()} REVIEW PASSED`,
                 preflightPath,
                 path.join(getReviewsRoot(repoRoot), `${taskId}-${reviewType}-review-context.json`),
-                `agent:${reviewType}-reviewer`
+                `agent:${reviewType}-reviewer`,
+                { caseResolutions: buildCurrentReviewCycleCaseResolutions(repoRoot, taskId) }
             );
         }
 
@@ -2320,7 +2336,9 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
             repoRoot,
             taskId,
             preflightPath,
-            ['code', 'security', 'refactor', 'api', 'performance']
+            ['code', 'security', 'refactor', 'api', 'performance'],
+            true,
+            true
         );
 
         const remediationArtifact = JSON.parse(fs.readFileSync(
@@ -2366,10 +2384,10 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
         );
         assert.deepEqual(
             [...resumedReuse.reusedReviewTypes].sort(),
-            expectedPreservedReviews,
+            expectedPreservedReviews.filter(reviewType => reviewType !== 'code'),
             restartResult.outputLines.join('\n')
         );
-        assert.deepEqual(resumedReuse.launchRequiredReviewTypes, []);
+        assert.deepEqual(resumedReuse.launchRequiredReviewTypes, ['code']);
 
         const codeReviewContextPath = path.join(
             getReviewsRoot(repoRoot),
@@ -2398,15 +2416,13 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
             outputPath: codeReviewContextPath
         });
         const codeRebuildOutput = codeRebuildAfterEvidenceRestart.outputLines.join('\n');
-        assert.equal(codeRebuildAfterEvidenceRestart.reusedReviewEvidence, true, codeRebuildOutput);
+        assert.equal(codeRebuildAfterEvidenceRestart.reusedReviewEvidence, false, codeRebuildOutput);
         assert.ok(
-            codeRebuildAfterEvidenceRestart.outputLines.includes('CurrentPassReviewEvidence: rejected'),
+            codeRebuildAfterEvidenceRestart.outputLines.includes('CurrentPassReviewEvidence: True'),
             codeRebuildOutput
         );
         assert.ok(
-            codeRebuildAfterEvidenceRestart.outputLines.some((line) => (
-                line.includes('review_execution validation authority is required')
-            )),
+            codeRebuildAfterEvidenceRestart.outputLines.includes('ReviewReuseEvidence: FRESH'),
             codeRebuildOutput
         );
         assert.ok(
@@ -2415,13 +2431,13 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
         );
         assert.equal(
             codeRebuildAfterEvidenceRestart.outputLines.some((line) => line.includes('review context rebuild skipped')),
-            false,
+            true,
             codeRebuildOutput
         );
-        assert.notEqual(
+        assert.equal(
             fileSha256(codeReviewContextPath),
             codeContextBeforeEvidenceRestartSha256,
-            'a newer review-evidence-only restart must rematerialize the preserved code-review context'
+            'test evidence restart preserves the genuine current code-review context'
         );
 
         fs.rmSync(repoRoot, { recursive: true, force: true });
@@ -2437,6 +2453,7 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
         const testFile = 'tests/app.test.ts';
         const changedFiles = [sourceFile, dbFile, infraFile, dependencyFile, testFile];
         seedRemediationRepoBase(repoRoot);
+        writeCurrentReviewCycleValidationSource(repoRoot);
         writeReviewCapabilitiesConfig(repoRoot, { infra: true });
         writeProfilesConfig(repoRoot);
         const { commandsPath, outputFiltersPath } = writeSimpleCompileCommandsFile(repoRoot, 'all-supported-lanes-test-remediation');
@@ -2468,6 +2485,7 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
             'Restart review cycle preserves every supported code-dependent lane after test-only remediation',
             changedFiles
         );
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
         const compileResult = await seedBaselineCompileGatePass({
             repoRoot,
@@ -2499,7 +2517,8 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
                 verdict,
                 preflightPath,
                 path.join(getReviewsRoot(repoRoot), `${taskId}-${reviewType}-review-context.json`),
-                `agent:${reviewType}-reviewer`
+                `agent:${reviewType}-reviewer`,
+                { caseResolutions: buildCurrentReviewCycleCaseResolutions(repoRoot, taskId) }
             );
         }
 
@@ -2533,7 +2552,9 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
             repoRoot,
             taskId,
             preflightPath,
-            ['code', 'security', 'refactor', 'db', 'dependency', 'infra']
+            ['code', 'security', 'refactor', 'db', 'dependency', 'infra'],
+            true,
+            true
         );
 
         const remediationArtifact = JSON.parse(fs.readFileSync(
@@ -2554,10 +2575,10 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
         assert.equal(evidence.semantic_scope_source, 'impact_analysis_files');
         assert.deepEqual(
             [...resumedReuse.reusedReviewTypes].sort(),
-            expectedPreservedReviews,
+            expectedPreservedReviews.filter(reviewType => reviewType !== 'code'),
             restartResult.outputLines.join('\n')
         );
-        assert.deepEqual(resumedReuse.launchRequiredReviewTypes, []);
+        assert.deepEqual(resumedReuse.launchRequiredReviewTypes, ['code']);
 
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });
@@ -2570,6 +2591,7 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
         const testFile = 'tests/node/gates/next-step/next-step-quality-checklist-routing.test.ts';
         const changedFiles = [sourceFile, performanceFile, testFile];
         seedRemediationRepoBase(repoRoot);
+        writeCurrentReviewCycleValidationSource(repoRoot);
         writeReviewCapabilitiesConfig(repoRoot);
         writeProfilesConfig(repoRoot);
         const { commandsPath, outputFiltersPath } = writeSimpleCompileCommandsFile(repoRoot, 'negated-runtime-test-remediation');
@@ -2599,6 +2621,7 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
             'Restart review cycle after failed test review with unchanged product files',
             changedFiles
         );
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
         const compileResult = await seedBaselineCompileGatePass({
             repoRoot,
@@ -2625,7 +2648,8 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
                 verdict,
                 preflightPath,
                 path.join(getReviewsRoot(repoRoot), `${taskId}-${reviewType}-review-context.json`),
-                `agent:${reviewType}-reviewer`
+                `agent:${reviewType}-reviewer`,
+                { caseResolutions: buildCurrentReviewCycleCaseResolutions(repoRoot, taskId) }
             );
         }
 
@@ -2659,7 +2683,9 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
             repoRoot,
             taskId,
             preflightPath,
-            ['code', 'security', 'refactor', 'api', 'performance']
+            ['code', 'security', 'refactor', 'api', 'performance'],
+            true,
+            true
         );
 
         const remediationArtifact = JSON.parse(fs.readFileSync(
@@ -2681,9 +2707,9 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
         assert.equal(evidence.test_refactor_trigger_reason, null);
         assert.deepEqual(
             [...resumedReuse.reusedReviewTypes].sort(),
-            expectedPreservedReviews
+            expectedPreservedReviews.filter(reviewType => reviewType !== 'code')
         );
-        assert.deepEqual(resumedReuse.launchRequiredReviewTypes, []);
+        assert.deepEqual(resumedReuse.launchRequiredReviewTypes, ['code']);
 
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });
@@ -2695,6 +2721,7 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
         const testFile = 'tests/app.test.ts';
         const changedFiles = [sourceFile, testFile];
         seedRemediationRepoBase(repoRoot);
+        writeCurrentReviewCycleValidationSource(repoRoot);
         writeReviewCapabilitiesConfig(repoRoot);
         writeProfilesConfig(repoRoot);
         const { commandsPath, outputFiltersPath } = writeSimpleCompileCommandsFile(repoRoot, 'large-test-remediation-refactor');
@@ -2721,6 +2748,7 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
             'Restart review cycle after large test-only remediation',
             changedFiles
         );
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
         const compileResult = await seedBaselineCompileGatePass({
             repoRoot,
@@ -2744,7 +2772,8 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
                 verdict,
                 preflightPath,
                 path.join(getReviewsRoot(repoRoot), `${taskId}-${reviewType}-review-context.json`),
-                `agent:${reviewType}-reviewer`
+                `agent:${reviewType}-reviewer`,
+                { caseResolutions: buildCurrentReviewCycleCaseResolutions(repoRoot, taskId) }
             );
         }
 
@@ -2778,7 +2807,8 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
             repoRoot,
             taskId,
             preflightPath,
-            ['code', 'security', 'refactor']
+            ['code', 'security', 'refactor'],
+            true
         );
 
         const remediationArtifact = JSON.parse(fs.readFileSync(
@@ -2798,11 +2828,11 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
         assert.ok(Number(evidence.test_refactor_changed_lines_total) > 20);
         assert.deepEqual(
             [...resumedReuse.reusedReviewTypes].sort(),
-            ['code', 'security']
+            ['security']
         );
         assert.deepEqual(
             [...resumedReuse.launchRequiredReviewTypes].sort(),
-            ['refactor']
+            ['code', 'refactor']
         );
 
         fs.rmSync(repoRoot, { recursive: true, force: true });
@@ -2964,22 +2994,6 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
         });
         assert.equal(compileResult.exitCode, 0);
 
-        for (const [reviewType, verdict] of [
-            ['code', 'REVIEW PASSED'],
-            ['refactor', 'REFACTOR REVIEW PASSED'],
-            ['security', 'SECURITY REVIEW PASSED']
-        ] as Array<[string, string]>) {
-            seedReusableReviewEvidence(
-                repoRoot,
-                taskId,
-                reviewType,
-                verdict,
-                preflightPath,
-                path.join(getReviewsRoot(repoRoot), `${taskId}-${reviewType}-review-context.json`),
-                `agent:${reviewType}-reviewer`
-            );
-        }
-
         fs.writeFileSync(path.join(repoRoot, testFile), 'export const fixture = 2;\n', 'utf8');
 
         const restartResult = await runRestartReviewCycleCommand({
@@ -3017,6 +3031,7 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
         const testFile = 'tests/node/reports/ui-dashboard-assets.test.ts';
         const changedFiles = [sourceFile, testFile];
         seedRemediationRepoBase(repoRoot);
+        writeCurrentReviewCycleValidationSource(repoRoot);
         markAsSourceCheckout(repoRoot);
         writeReviewCapabilitiesConfig(repoRoot);
         writeProfilesConfig(repoRoot);
@@ -3056,6 +3071,7 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
             'Restart failed test review after test-only remediation with protected historical scope',
             changedFiles
         );
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
         const compileResult = await seedBaselineCompileGatePass({
             repoRoot,
@@ -3080,7 +3096,8 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
                 verdict,
                 preflightPath,
                 path.join(getReviewsRoot(repoRoot), `${taskId}-${reviewType}-review-context.json`),
-                `agent:${reviewType}-reviewer`
+                `agent:${reviewType}-reviewer`,
+                { caseResolutions: buildCurrentReviewCycleCaseResolutions(repoRoot, taskId) }
             );
         }
 
