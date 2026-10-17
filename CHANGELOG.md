@@ -1,5 +1,7 @@
 # Changelog
 
+- Align closeout test expectations with task-bound guarded commit guidance and explicit disabled local-commit permission messaging.
+
 - Prepare current validation and positive receipt evidence before the protected completion recovery fixture checks operator placeholders.
 
 - Prepare selected DELTA and reuse fixtures with current validation evidence, and verify code reuse is refused when coverage and rule bindings change.
