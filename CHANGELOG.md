@@ -1,5 +1,7 @@
 # Changelog
 
+- Assert setup refusal and exact byte preservation for invalid existing workflow configuration, retaining missing-config defaults coverage.
+
 - Attach a valid task plan before protected restart metadata fixture entry, preserving its native timeline binding.
 
 - Prepare current reviewer skill evidence in focused-validation routing fixtures and explicitly quote historical non-verdict tokens.

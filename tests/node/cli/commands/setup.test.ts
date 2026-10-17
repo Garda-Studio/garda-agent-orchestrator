@@ -1023,7 +1023,7 @@ test('handleSetup reports workflow-config template fallback when preserved refre
     }
 });
 
-test('handleSetup reports workflow-config template fallback when preserved refresh finds invalid JSON', async (context) => {
+test('handleSetup preserves workflow-config and rejects refresh with invalid JSON', async (context) => {
     const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-workflow-config-invalid-diagnostic-'));
@@ -1040,30 +1040,24 @@ test('handleSetup reports workflow-config template fallback when preserved refre
             );
         });
 
-        fs.writeFileSync(workflowConfigPath, '{"full_suite_validation":', 'utf8');
+        const original = '{"full_suite_validation":';
+        fs.writeFileSync(workflowConfigPath, original, 'utf8');
 
-        const refreshOutput = await captureConsoleLogs(async () => {
+        await assert.rejects(() => captureConsoleLogs(async () => {
             await handleSetup(
                 ['--target-root', workspaceRoot, '--no-prompt', '--skip-verify', '--skip-manifest-validation', '--preserve-agent-state'],
                 packageJson,
                 repoRoot
             );
-        });
+        }), /Existing workflow-config configuration cannot be read as a JSON object/);
 
-        const workflowConfig = JSON.parse(fs.readFileSync(workflowConfigPath, 'utf8'));
-        assert.equal(workflowConfig.full_suite_validation.enabled, false);
-        const initReport = readInitReport(workspaceRoot);
-        const refreshText = refreshOutput.join('\n');
-        assert.ok(refreshText.includes(`WorkflowConfigMerge: live_config_invalid_json_template_applied path=${DEFAULT_BUNDLE_NAME}/live/config/workflow-config.json full_suite_validation.enabled=false`));
-        assert.ok(initReport.includes('Workflow config merge status: live_config_invalid_json_template_applied'));
-        assert.ok(initReport.includes(`path=${DEFAULT_BUNDLE_NAME}/live/config/workflow-config.json`));
-        assert.ok(initReport.includes('full_suite_validation.enabled=false'));
+        assert.equal(fs.readFileSync(workflowConfigPath, 'utf8'), original);
     } finally {
         fs.rmSync(workspaceRoot, { recursive: true, force: true });
     }
 });
 
-test('handleSetup reports workflow-config template fallback when preserved refresh finds a non-object config', async (context) => {
+test('handleSetup preserves workflow-config and rejects refresh with a non-object config', async (context) => {
     const repoRoot = createBundleSourceFixture(context);
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-setup-workflow-config-non-object-diagnostic-'));
@@ -1080,24 +1074,18 @@ test('handleSetup reports workflow-config template fallback when preserved refre
             );
         });
 
-        fs.writeFileSync(workflowConfigPath, '[]', 'utf8');
+        const original = '[]';
+        fs.writeFileSync(workflowConfigPath, original, 'utf8');
 
-        const refreshOutput = await captureConsoleLogs(async () => {
+        await assert.rejects(() => captureConsoleLogs(async () => {
             await handleSetup(
                 ['--target-root', workspaceRoot, '--no-prompt', '--skip-verify', '--skip-manifest-validation', '--preserve-agent-state'],
                 packageJson,
                 repoRoot
             );
-        });
+        }), /Existing workflow-config configuration cannot be read as a JSON object/);
 
-        const workflowConfig = JSON.parse(fs.readFileSync(workflowConfigPath, 'utf8'));
-        assert.equal(workflowConfig.full_suite_validation.enabled, false);
-        const initReport = readInitReport(workspaceRoot);
-        const refreshText = refreshOutput.join('\n');
-        assert.ok(refreshText.includes(`WorkflowConfigMerge: live_config_non_object_template_applied path=${DEFAULT_BUNDLE_NAME}/live/config/workflow-config.json full_suite_validation.enabled=false`));
-        assert.ok(initReport.includes('Workflow config merge status: live_config_non_object_template_applied'));
-        assert.ok(initReport.includes(`path=${DEFAULT_BUNDLE_NAME}/live/config/workflow-config.json`));
-        assert.ok(initReport.includes('full_suite_validation.enabled=false'));
+        assert.equal(fs.readFileSync(workflowConfigPath, 'utf8'), original);
     } finally {
         fs.rmSync(workspaceRoot, { recursive: true, force: true });
     }
