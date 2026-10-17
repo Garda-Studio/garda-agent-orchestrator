@@ -267,9 +267,14 @@ import {
             assert.ok(promptArtifactText.includes('follow the focused-self-validation contract in this handoff'));
             assert.ok(promptArtifactText.includes('never invoke Garda or write task-owned validation logs'));
             assert.equal(promptArtifactText.includes('gate run-intermediate-command'), false);
-            assert.ok(promptArtifactText.includes('Missing prior focused execution evidence is not by itself a finding or residual risk'));
-            assert.ok(promptArtifactText.includes('execute the smallest safe relevant local test or validation command yourself'));
-            assert.ok(promptArtifactText.includes('Record the exact attempted command, command_outcome'));
+            const rolePrompt = result.reviewer_handoff.role_prompt;
+            const rolePromptText = fs.readFileSync(rolePrompt.artifact_path, 'utf8');
+            assert.ok(promptArtifactText.includes(`Role prompt artifact: ${rolePrompt.artifact_path.replace(/\\/g, '/')}`));
+            assert.equal(rolePrompt.artifact_sha256, sha256Text(rolePromptText));
+            assert.ok(rolePromptText.includes('Missing prior focused execution evidence is not by itself a finding or residual risk'));
+            assert.ok(rolePromptText.includes('execute the smallest safe relevant local test or validation command yourself'));
+            assert.ok(rolePromptText.includes('Record the exact attempted command, command_outcome'));
+            assert.ok(rolePromptText.includes('must not invoke Garda'));
             assert.ok(!promptArtifactText.includes('## Commands Run'));
             assert.ok(promptArtifactText.includes('- # pass 91'));
             fs.rmSync(repoRoot, { recursive: true, force: true });
