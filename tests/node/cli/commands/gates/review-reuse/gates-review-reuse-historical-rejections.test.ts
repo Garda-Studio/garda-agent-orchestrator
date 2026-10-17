@@ -796,7 +796,7 @@ describe('cli/commands/gates - historical review reuse rejections', () => {
         const currentCoverage = currentContext.coverage_contract as Record<string, unknown>;
 
         assert.notEqual(historicalCoverage.contract_sha256, currentCoverage.contract_sha256);
-        assert.notEqual(historicalCoverage.obligation_count, currentCoverage.obligation_count);
+        assert.notDeepEqual(historicalCoverage.obligations, currentCoverage.obligations);
         assert.equal(build.reusedReviewEvidence, false);
         assert.ok(build.outputLines.some((line) => line.includes(
             'reused review coverage contract does not match the current review context'

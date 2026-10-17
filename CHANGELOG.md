@@ -1,5 +1,7 @@
 # Changelog
 
+- Compare changed historical review coverage obligations directly without assuming their count must differ.
+
 - Bind security quality-checklist fixtures to native declared validation, preserving matrix rejection and mandatory checks when optional rules are disabled.
 
 - Derive expired-consent test timestamps from the accepted confirmation maximum age while preserving guard and prior-artifact checks.
