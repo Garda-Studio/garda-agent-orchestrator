@@ -35,12 +35,14 @@ import { createTempRepo, initializeGitRepo, loadTaskEntryRulePack, runEnterTaskM
     from '../../cli/commands/gates/preflight/gates-preflight-fixtures';
 import { removeTempRepoWithRetry } from '../../cli/commands/gate-test-repo-bootstrap';
 
-function declaredQualityFixture(mode = 'passed', targetlessMode?: string) {
+function declaredQualityFixture(mode = 'passed', targetlessMode?: string, optionalChecksEnabled = true) {
     const root = createTempRepo(), orchestratorRoot = path.join(root, 'garda-agent-orchestrator');
     const fixture = { repoRoot: root, orchestratorRoot, reviewsRoot: path.join(orchestratorRoot, 'runtime/reviews'),
         taskId: 'T-quality-phase', cleanup: () => removeTempRepoWithRetry(root) };
     const configPath = path.join(fixture.orchestratorRoot, 'live/config/workflow-config.json');
-    fs.mkdirSync(path.dirname(configPath), { recursive: true }); fs.writeFileSync(configPath, JSON.stringify(buildDefaultWorkflowConfig()));
+    const config = buildDefaultWorkflowConfig();
+    config.optional_quality_checks.enabled = optionalChecksEnabled;
+    fs.mkdirSync(path.dirname(configPath), { recursive: true }); fs.writeFileSync(configPath, JSON.stringify(config));
     fs.mkdirSync(path.join(root, 'src/security'), { recursive: true });
     fs.writeFileSync(path.join(root, 'src/security/evidence.ts'), 'export const boundary = 1;\n');
     fs.writeFileSync(path.join(root, 'RootSuite'), 'declared source with unknown syntax');
@@ -69,7 +71,8 @@ function declaredQualityFixture(mode = 'passed', targetlessMode?: string) {
     matrix[0].negative_paths = [{ kind: 'other', scenario: 'проверка', expected_behavior: 'Block invalid evidence.', evidence_files: ['RootSuite#opaque-1'] }];
     const answers = buildQualityChecklistAnswersTemplate({ repoRoot: root, taskId: fixture.taskId, preflightPath }).answers
         .map(entry => entry.rule_id === TRUST_BOUNDARY_ANALYSIS_RULE_ID ? answer : { ...entry, status: 'PASS', answer: 'Checked current scope.' });
-    return { ...fixture, artifact: () => buildQualityChecklistArtifact({ repoRoot: root, taskId: fixture.taskId, preflightPath, answers }),
+    return { ...fixture, answers,
+        artifact: (currentAnswers = answers) => buildQualityChecklistArtifact({ repoRoot: root, taskId: fixture.taskId, preflightPath, answers: currentAnswers }),
         execute: async (signal?: AbortSignal, recipeId = 'neutral') => {
             const attempt = await executeValidationRecipe({ repoRoot: root, taskId: fixture.taskId, recipeId, signal });
             return evaluateValidationAttempt({ repoRoot: root, taskId: fixture.taskId, attemptId: attempt.attempt_id });
@@ -243,23 +246,6 @@ function buildTrustBoundaryAnswer(): Record<string, unknown> {
             }]
         }]
     };
-}
-
-function seedTrustBoundaryEvidenceFile(fixture: ReturnType<typeof createGateFixture>): void {
-    const evidencePath = path.join(
-        fixture.repoRoot,
-        'tests',
-        'node',
-        'gates',
-        'quality-checklist',
-        'quality-checklist.test.ts'
-    );
-    fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
-    fs.writeFileSync(
-        evidencePath,
-        "test('rejects stale trust-boundary evidence', () => { assert.equal(true, true); });\n",
-        'utf8'
-    );
 }
 
 function buildGenericActionRequiredAnswers(): Array<Record<string, unknown>> {
@@ -2694,27 +2680,23 @@ describe('quality-checklist gate', () => {
     });
 
     it('rejects forged and missing trust-boundary matrix evidence for security-sensitive preflight', () => {
-        const fixture = createGateFixture({ taskId: 'T-quality-trust-boundary' });
+        const fixture = declaredQualityFixture();
         try {
-            seedTrustBoundaryEvidenceFile(fixture);
-            const preflightPath = writeGateFixturePreflight(fixture, {
-                changed_files: ['src/gates/review/review-findings-schema.ts'],
-                triggers: { security: true }
-            });
-            const complete = buildQualityChecklistArtifact({
-                repoRoot: fixture.repoRoot,
-                taskId: fixture.taskId,
-                preflightPath,
-                answers: [...buildPassAnswers(), buildTrustBoundaryAnswer()]
-            });
-            assert.equal(complete.status, 'PASS');
+            const otherAnswers = fixture.answers.filter(answer => answer.rule_id !== TRUST_BOUNDARY_ANALYSIS_RULE_ID);
+            const trustAnswer = fixture.answers.find(answer => answer.rule_id === TRUST_BOUNDARY_ANALYSIS_RULE_ID)!;
+            const complete = fixture.artifact();
+            assert.equal(complete.status, 'PENDING_VALIDATION', JSON.stringify(complete.violations));
+            assert.deepEqual(
+                [declaredPhases(complete)?.structural, declaredPhases(complete)?.execution, declaredPhases(complete)?.semantic],
+                ['BOUND', 'PENDING', 'PENDING_INDEPENDENT_REVIEW']
+            );
             assert.equal(
                 complete.rules.find((rule) => rule.id === TRUST_BOUNDARY_ANALYSIS_RULE_ID)?.scope_applicability,
                 'active'
             );
 
             const incompleteAnswer = {
-                ...buildTrustBoundaryAnswer(),
+                ...trustAnswer,
                 trust_boundary_matrix: [{
                     boundary_id: 'TB-001',
                     boundary: 'Reviewer output receipt',
@@ -2726,55 +2708,35 @@ describe('quality-checklist gate', () => {
                     negative_paths: []
                 }]
             };
-            const incomplete = buildQualityChecklistArtifact({
-                repoRoot: fixture.repoRoot,
-                taskId: fixture.taskId,
-                preflightPath,
-                answers: [...buildPassAnswers(), incompleteAnswer]
-            });
+            const incomplete = fixture.artifact([...otherAnswers, incompleteAnswer]);
             assert.equal(incomplete.status, 'CONFIG_ERROR');
             assert.ok(incomplete.violations.some((violation) => violation.includes('negative_paths')));
 
-            const missing = buildQualityChecklistArtifact({
-                repoRoot: fixture.repoRoot,
-                taskId: fixture.taskId,
-                preflightPath,
-                answers: buildPassAnswers()
-            });
+            const missing = fixture.artifact(otherAnswers);
             assert.equal(missing.status, 'CONFIG_ERROR');
             assert.ok(missing.violations.some((violation) => violation.includes(TRUST_BOUNDARY_ANALYSIS_RULE_ID)));
 
-            const malformedDuplicate = buildQualityChecklistArtifact({
-                repoRoot: fixture.repoRoot,
-                taskId: fixture.taskId,
-                preflightPath,
-                answers: [
-                    ...buildPassAnswers(),
+            const malformedDuplicate = fixture.artifact([
+                    ...otherAnswers,
                     {
                         rule_id: TRUST_BOUNDARY_ANALYSIS_RULE_ID,
                         status: 'PASS',
                         answer: 'Claims trust-boundary coverage without a matrix.'
                     },
                     { rule_id: TRUST_BOUNDARY_ANALYSIS_RULE_ID }
-                ]
-            });
+                ]);
             assert.equal(malformedDuplicate.status, 'CONFIG_ERROR');
             assert.ok(malformedDuplicate.violations.some((violation) => violation.includes('Duplicate answer')));
 
             for (const evidenceFile of ['tests/node/missing.test.ts', 'src/app.ts']) {
-                const unsupportedEvidence = buildTrustBoundaryAnswer();
+                const unsupportedEvidence = structuredClone(trustAnswer);
                 const matrix = unsupportedEvidence.trust_boundary_matrix as Array<Record<string, unknown>>;
                 const negativePaths = matrix[0].negative_paths as Array<Record<string, unknown>>;
                 negativePaths[0].evidence_files = [`${evidenceFile}#rejects stale trust-boundary evidence`];
-                const invalidEvidence = buildQualityChecklistArtifact({
-                    repoRoot: fixture.repoRoot,
-                    taskId: fixture.taskId,
-                    preflightPath,
-                    answers: [...buildPassAnswers(), unsupportedEvidence]
-                });
+                const invalidEvidence = fixture.artifact([...otherAnswers, unsupportedEvidence]);
                 assert.equal(invalidEvidence.status, 'CONFIG_ERROR', evidenceFile);
                 assert.ok(
-                    invalidEvidence.violations.some((violation) => violation.includes('test file')),
+                    invalidEvidence.violations.some((violation) => violation.includes(evidenceFile)),
                     evidenceFile
                 );
             }
@@ -2784,26 +2746,14 @@ describe('quality-checklist gate', () => {
     });
 
     it('keeps the trust-boundary rule mandatory when optional checks are disabled', () => {
-        const fixture = createGateFixture({ taskId: 'T-quality-trust-boundary-disabled' });
+        const fixture = declaredQualityFixture('passed', undefined, false);
         try {
-            seedTrustBoundaryEvidenceFile(fixture);
-            const workflowConfigPath = path.join(fixture.orchestratorRoot, 'live', 'config', 'workflow-config.json');
-            const workflowConfig = buildDefaultWorkflowConfig();
-            workflowConfig.optional_quality_checks.enabled = false;
-            fs.writeFileSync(workflowConfigPath, `${JSON.stringify(workflowConfig, null, 2)}\n`, 'utf8');
-            const preflightPath = writeGateFixturePreflight(fixture, {
-                changed_files: ['src/gates/review/review-findings-schema.ts'],
-                triggers: { security: true }
-            });
-
-            const artifact = buildQualityChecklistArtifact({
-                repoRoot: fixture.repoRoot,
-                taskId: fixture.taskId,
-                preflightPath,
-                answers: [buildTrustBoundaryAnswer()]
-            });
-
-            assert.equal(artifact.status, 'PASS');
+            const artifact = fixture.artifact();
+            assert.equal(artifact.status, 'PENDING_VALIDATION', JSON.stringify(artifact.violations));
+            assert.deepEqual(
+                [declaredPhases(artifact)?.structural, declaredPhases(artifact)?.execution, declaredPhases(artifact)?.semantic],
+                ['BOUND', 'PENDING', 'PENDING_INDEPENDENT_REVIEW']
+            );
             assert.equal(artifact.active_rule_count, 1);
             assert.equal(artifact.answers[0].rule_id, TRUST_BOUNDARY_ANALYSIS_RULE_ID);
         } finally {
