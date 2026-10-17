@@ -66,6 +66,12 @@ import {
     QUALITY_CHECKLIST_ID,
     resolveDefaultQualityChecklistArtifactPath
 } from '../../../../../../src/gates/quality-checklist';
+import { buildScopeContentFingerprint, getWorkspaceSnapshot } from '../../../../../../src/gates/compile/compile-gate';
+import { pathListSha256 } from '../../../../../../src/gates/shared/canonical-path-list';
+import { inspectQualityValidationPhases } from '../../../../../../src/gates/quality-checklist/quality-checklist-validation-phases';
+import { runIntermediateCommandCommand } from '../../../../../../src/cli/commands/gate-flows/command-run/command-run-flow';
+import type { ReviewCoverageContract } from '../../../../../../src/gates/review/review-coverage-ledger';
+import { buildDeclaredReviewCoverageContract } from '../../../../../../src/gates/review-context/review-context-coverage';
 
 function sha256File(filePath: string): string {
     const crypto = require('node:crypto');
@@ -94,18 +100,43 @@ function seedBalancedTaskQueue(repoRoot: string, taskId: string): void {
     );
 }
 
-function seedTrustBoundaryChecklist(repoRoot: string, taskId: string, preflightPath: string): void {
+async function seedTrustBoundaryChecklist(repoRoot: string, taskId: string, preflightPath: string): Promise<void> {
     const artifactPath = resolveDefaultQualityChecklistArtifactPath(repoRoot, taskId);
-    const preflightSha256 = sha256File(preflightPath);
     const evidenceRelativePath = 'tests/node/gates/review-context/review-context-trust-boundary-analysis.test.ts';
     const evidencePath = path.join(repoRoot, evidenceRelativePath);
     fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
     fs.writeFileSync(
         evidencePath,
-        "test('rejects replaced trust-boundary evidence', () => { assert.equal(true, true); });\n",
+        [
+            "const test = require('node:test');",
+            "const assert = require('node:assert/strict');",
+            "const { createHash } = require('node:crypto');",
+            "test('rejects replaced trust-boundary evidence', () => {",
+            "    const digest = value => createHash('sha256').update(value).digest('hex');",
+            "    assert.throws(() => assert.equal(digest('replacement'), digest('original')));",
+            '});', ''
+        ].join('\n'),
         'utf8'
     );
-    const artifactText = `${JSON.stringify({
+    const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+    const files = preflight.changed_files as string[];
+    const source = String(preflight.detection_source);
+    const snapshot = getWorkspaceSnapshot(repoRoot, source, true, files);
+    const metrics = { ...(preflight.metrics as Record<string, unknown>),
+        changed_files_sha256: pathListSha256(files),
+        scope_content_sha256: buildScopeContentFingerprint(repoRoot, source, files),
+        scope_sha256: snapshot.scope_sha256 };
+    preflight.metrics = metrics;
+    fs.writeFileSync(preflightPath, `${JSON.stringify(preflight, null, 2)}\n`, 'utf8');
+    appendTaskEvent(getOrchestratorRoot(repoRoot), taskId, 'PREFLIGHT_CLASSIFIED', 'INFO',
+        'Current review-reuse fixture preflight.', { output_path: preflightPath.replace(/\\/gu, '/'), ...metrics });
+    writeCompilePassEvidence(repoRoot, taskId, preflightPath);
+    const execution = await runIntermediateCommandCommand({ repoRoot, taskId, preflightPath,
+        commandSource: 'targeted-test',
+        command: `node --experimental-strip-types --test --test-reporter=tap ${evidenceRelativePath}` });
+    assert.equal(execution.exitCode, 0, execution.outputLines.join('\n'));
+    const preflightSha256 = sha256File(preflightPath);
+    const artifact = {
         task_id: taskId,
         checklist_id: QUALITY_CHECKLIST_ID,
         preflight_sha256: preflightSha256,
@@ -134,7 +165,13 @@ function seedTrustBoundaryChecklist(repoRoot: string, taskId: string, preflightP
                 }]
             }]
         }]
-    }, null, 2)}\n`;
+    };
+    const validation = inspectQualityValidationPhases({ repoRoot, taskId, preflight, preflightSha256,
+        matrixRequired: true, matrix: artifact.answers[0].trust_boundary_matrix });
+    assert.equal(validation?.phases.structural, 'BOUND');
+    assert.equal(validation?.phases.execution, 'OBSERVED', JSON.stringify(validation?.phases.execution_diagnostics));
+    const artifactText = `${JSON.stringify({ ...artifact, status: 'PENDING_VALIDATION',
+        validation_phases: validation.phases }, null, 2)}\n`;
     fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
     fs.writeFileSync(artifactPath, artifactText, 'utf8');
     appendTaskEvent(
@@ -1520,12 +1557,14 @@ describe('cli/commands/gates - review reuse upstream reuse', () => {
             metrics: { changed_lines_total: 3 },
             required_reviews: requiredReviews
         }, `${taskId}-prior-preflight.json`);
+        await seedTrustBoundaryChecklist(repoRoot, taskId, priorPreflightPath);
         const reviewTypes = [
             ['code', 'REVIEW PASSED', 'agent:code-reviewer'],
             ['security', 'SECURITY REVIEW PASSED', 'agent:security-reviewer'],
             ['refactor', 'REFACTOR REVIEW PASSED', 'agent:refactor-reviewer'],
             ['test', 'TEST REVIEW PASSED', 'agent:test-reviewer']
         ] as const;
+        const priorCoverage = new Map<string, string>();
         for (const [reviewType, verdict, reviewerIdentity] of reviewTypes) {
             seedReusableReviewEvidence(
                 repoRoot,
@@ -1536,6 +1575,10 @@ describe('cli/commands/gates - review reuse upstream reuse', () => {
                 path.join(reviewsRoot, `${taskId}-${reviewType}-review-context.json`),
                 reviewerIdentity
             );
+            const context = JSON.parse(fs.readFileSync(path.join(reviewsRoot, `${taskId}-${reviewType}-review-context.json`), 'utf8')) as {
+                coverage_contract: ReviewCoverageContract;
+            };
+            priorCoverage.set(reviewType, context.coverage_contract.contract_sha256);
         }
 
         const workflowConfig = JSON.parse(fs.readFileSync(workflowConfigPath, 'utf8')) as Record<string, any>;
@@ -1549,10 +1592,25 @@ describe('cli/commands/gates - review reuse upstream reuse', () => {
             triggers: { changed_workflow_config_files: [workflowConfigRelativePath] },
             required_reviews: requiredReviews
         });
-        writeCompilePassEvidence(repoRoot, taskId, preflightPath);
-        seedTrustBoundaryChecklist(repoRoot, taskId, preflightPath);
+        await seedTrustBoundaryChecklist(repoRoot, taskId, preflightPath);
 
+        const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
+        const currentPreflightSha256 = sha256File(preflightPath);
+        const assertCurrentSemanticCoverage = (reviewType: string, contract: ReviewCoverageContract): void => {
+            assert.notEqual(contract.contract_sha256, priorCoverage.get(reviewType));
+            const validation = contract.obligations.filter(entry => entry.kind === 'validation');
+            assert.ok(validation.length > 0);
+            assert.ok(validation.every(entry => entry.validation_binding?.snapshot_sha256 === currentPreflightSha256));
+        };
         for (const [reviewType] of reviewTypes) {
+            if (reviewType === 'test') {
+                await assert.rejects(() => runBuildReviewContextCommand({ repoRoot, reviewType, depth: 2, preflightPath,
+                    outputPath: path.join(reviewsRoot, `${taskId}-${reviewType}-review-context.json`) }),
+                /ReviewType 'test' is blocked until upstream reviews pass for the current cycle: code/u);
+                const { contract } = buildDeclaredReviewCoverageContract({ reviewType, repoRoot, preflight, preflightPath });
+                assertCurrentSemanticCoverage(reviewType, contract);
+                continue;
+            }
             const build = await runBuildReviewContextCommand({
                 repoRoot,
                 reviewType,
@@ -1560,11 +1618,17 @@ describe('cli/commands/gates - review reuse upstream reuse', () => {
                 preflightPath,
                 outputPath: path.join(reviewsRoot, `${taskId}-${reviewType}-review-context.json`)
             });
-            assert.equal(build.reusedReviewEvidence, true, `${reviewType} review should be reused`);
-            assert.ok(build.outputLines.includes('ReviewReuseDecision: accepted'));
+            const context = JSON.parse(fs.readFileSync(path.join(reviewsRoot, `${taskId}-${reviewType}-review-context.json`), 'utf8')) as {
+                coverage_contract: ReviewCoverageContract;
+            };
+            const semantic = reviewType === 'code';
+            assert.equal(build.reusedReviewEvidence, !semantic, `${reviewType}: ${build.outputLines.join('\n')}`);
+            assert.ok(build.outputLines.includes(`ReviewReuseDecision: ${semantic ? 'rejected' : 'accepted'}`));
+            if (semantic) {
+                assertCurrentSemanticCoverage(reviewType, context.coverage_contract);
+            }
         }
 
-        const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
         const codeScopeFingerprint = computeReviewReuseCodeScopeFingerprint('security', preflight, repoRoot);
         const reviewScopeFingerprint = computeReviewRelevantScopeFingerprint(preflight, repoRoot);
         assert.deepEqual(codeScopeFingerprint.review_reuse_neutral_config_files, [workflowConfigRelativePath]);

@@ -1,5 +1,7 @@
 # Changelog
 
+- Preserve limit-only scope neutrality in the review-reuse fixture while binding current native validation and requiring fresh semantic review coverage.
+
 - Prepare selected review-context regression fixtures with canonical current-cycle preflight and custom-path plan-entry evidence while preserving production identity and scope checks.
 
 - Align repository release tests with the declared bundled parser and manually selected CI matrices, retaining stale-file rejection, OS/runtime coverage and step-specific upload assertions.
