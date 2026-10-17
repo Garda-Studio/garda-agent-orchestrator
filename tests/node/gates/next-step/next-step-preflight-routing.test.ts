@@ -1127,7 +1127,9 @@ describe('gates/next-step preflight routing', () => {
                 plan_summary: 'Create ignored generated file'
             }
         }));
-        appendEvent(repoRoot, TASK_ID, 'TASK_MODE_ENTERED');
+        appendEvent(repoRoot, TASK_ID, 'TASK_MODE_ENTERED', 'PASS', {
+            plan_guided: true, plan_path: planRelativePath, plan_sha256: planSha256
+        });
         seedRulePack(repoRoot, TASK_ID, 'TASK_ENTRY');
         seedHandshake(repoRoot, TASK_ID);
         seedShellSmoke(repoRoot, TASK_ID);
@@ -1147,21 +1149,24 @@ describe('gates/next-step preflight routing', () => {
                 planTaskId: 'T-NEXT-OTHER',
                 status: 'approved',
                 taskModeSha256: 'computed',
-                expectedDiagnostic: /Attached task plan ignored: plan task_id 'T-NEXT-OTHER' does not match active task 'T-NEXT-1'\./u
+                expectedGate: 'task-plan-integrity',
+                expectedDiagnostic: /frozen attached JSON task plan is attachment_invalid/u
             },
             {
                 name: 'draft plan',
                 planTaskId: TASK_ID,
                 status: 'draft',
                 taskModeSha256: 'computed',
-                expectedDiagnostic: /Attached task plan ignored: plan status is 'draft', not approved\./u
+                expectedGate: 'task-plan-integrity',
+                expectedDiagnostic: /frozen attached JSON task plan is attachment_invalid/u
             },
             {
                 name: 'missing task-mode sha',
                 planTaskId: TASK_ID,
                 status: 'approved',
                 taskModeSha256: '',
-                expectedDiagnostic: /Attached task plan ignored: task-mode plan_sha256 is missing\./u
+                expectedGate: 'load-rule-pack',
+                expectedDiagnostic: /task-mode evidence is missing or invalid for the same task/u
             }
         ] as const;
         for (const testCase of cases) {
@@ -1204,7 +1209,9 @@ describe('gates/next-step preflight routing', () => {
                 taskModeArtifact.plan.plan_sha256 = testCase.taskModeSha256;
             }
             writeJson(path.join(reviewsRoot(repoRoot), `${TASK_ID}-task-mode.json`), taskModeArtifact);
-            appendEvent(repoRoot, TASK_ID, 'TASK_MODE_ENTERED');
+            appendEvent(repoRoot, TASK_ID, 'TASK_MODE_ENTERED', 'PASS', {
+                plan_guided: true, plan_path: planRelativePath, plan_sha256: taskModeArtifact.plan?.plan_sha256
+            });
             seedRulePack(repoRoot, TASK_ID, 'TASK_ENTRY');
             seedHandshake(repoRoot, TASK_ID);
             seedShellSmoke(repoRoot, TASK_ID);
@@ -1212,9 +1219,11 @@ describe('gates/next-step preflight routing', () => {
 
             const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
 
-            assert.equal(result.next_gate, 'implementation', testCase.name);
-            assert.equal(result.commands.length, 0);
-            assert.match(result.reason, /No authorized structured planned files are available/u);
+            assert.equal(result.status, 'BLOCKED', testCase.name);
+            assert.equal(result.next_gate, testCase.expectedGate, testCase.name);
+            if (testCase.expectedGate === 'task-plan-integrity') {
+                assert.equal(result.commands.length, 0);
+            }
             assert.match(result.reason, testCase.expectedDiagnostic);
             assert.doesNotMatch(result.reason, /Structured planned files: "ignored-plan\/generated\.ts"/u);
         }

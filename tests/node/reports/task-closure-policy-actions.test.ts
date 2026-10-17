@@ -335,7 +335,7 @@ test('local UI task action route enforces the guarded preview and execute contra
         });
         assert.equal(rejectedResponse.status, 403);
         assert.deepEqual(await rejectedResponse.json(), {
-            error: 'UI action request failed origin, token, or content-type validation.',
+            error: 'Request rejected by local UI boundary.',
             code: 'action_boundary_rejected'
         });
     } finally {
