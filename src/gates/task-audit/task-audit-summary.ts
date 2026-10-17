@@ -694,7 +694,8 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): Ta
             reviewsRoot,
             taskId: safeTaskId,
             requiredReviews,
-            orderedEvents: events
+            orderedEvents: events,
+            taskQueueEntries: options.taskQueueEntries
         });
         return {
             evidence,

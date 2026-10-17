@@ -2245,7 +2245,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
     });
 
     it('reads TASK.md once per next-step evaluation across review lanes with multiple follow-up fingerprints', () => {
-        const repoRoot = makeTempRepo();
+        const repoRoot = makeTempRepo({ currentSkillBinding: true, currentSkillIds: ['code-review', 'security-review'] });
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, security: true }, {
             reviewFindingPolicy: {
@@ -2261,8 +2261,8 @@ describe('gates/next-step', { concurrency: 2 }, () => {
             }
         });
         seedCompilePass(repoRoot, TASK_ID);
-        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code', { followUpFindingCount: 3 });
-        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'security', { followUpFindingCount: 2 });
+        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'code', { currentSkillBinding: true, followUpFindingCount: 3 });
+        writeAcceptedFindingsDispositionReviewEvidence(repoRoot, TASK_ID, 'security', { currentSkillBinding: true, followUpFindingCount: 2 });
         const materializedByLane = (['code', 'security'] as const).map((reviewType) => {
             const receiptPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-${reviewType}-receipt.json`);
             const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8')) as Record<string, unknown>;

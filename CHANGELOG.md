@@ -1,5 +1,7 @@
 # Changelog
 
+- Reuse the current task queue snapshot throughout review coverage and follow-up validation in each next-step decision.
+
 - Prepare selected multi-lane reviewer fixture skills before task and review snapshots.
 
 - Prepare current reviewer skill evidence in selected rejected-report correction fixtures.

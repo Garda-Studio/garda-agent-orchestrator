@@ -7,7 +7,7 @@ import {
 } from '../review/review-coverage-ledger';
 import { buildAuthoritativeReviewCoverageContract, buildDeclaredReviewCoverageContract } from '../review-context/review-context-coverage';
 import { resolveCurrentNoOpPreflightPath } from '../task-mode/no-op';
-import { readTaskQueueEntries } from '../../core/task-queue-read';
+import { readTaskQueueEntries, type TaskQueueEntry } from '../../core/task-queue-read';
 import { readTaskQueueStatusToken } from '../../core/task-queue/task-queue-status';
 import { buildReviewContextPreflightDiffExpectations } from '../review-context/review-context-contract';
 import { getReviewReceiptExecutionEvidenceContractViolations } from '../review/review-evidence-contract';
@@ -112,6 +112,7 @@ export function buildReviewCoverageAuditSummary(options: {
     taskId: string;
     requiredReviews: Record<string, boolean>;
     orderedEvents?: readonly Record<string, unknown>[];
+    taskQueueEntries?: ReadonlyMap<string, TaskQueueEntry>;
 }): ReviewCoverageAuditSummary {
     const entries: ReviewCoverageAuditEntry[] = [];
     const dispositionEvidence: Record<string, ReturnType<typeof validateReviewFindingsDispositionEvidence> | null> = {};
@@ -122,8 +123,14 @@ export function buildReviewCoverageAuditSummary(options: {
     catch (error) { preflightResolutionError = error; }
     const preflight = safeReadJson(preflightPath);
     const preflightSha256 = safeReviewArtifactFileSha256(preflightPath);
+    const taskQueueEntries = preflight
+        ? options.taskQueueEntries ?? readTaskQueueEntries(repoRoot)
+        : null;
+    const taskQueueRows = taskQueueEntries
+        ? [...taskQueueEntries.values()].map(({ taskId, notes }) => ({ taskId, notes }))
+        : undefined;
     const inspection = preflight
-        && readTaskQueueStatusToken(readTaskQueueEntries(repoRoot).get(options.taskId)?.status ?? null) === 'DONE'
+        && readTaskQueueStatusToken(taskQueueEntries?.get(options.taskId)?.status ?? null) === 'DONE'
         ? 'retained_completed' : 'active';
     for (const reviewType of Object.keys(options.requiredReviews).filter((key) => options.requiredReviews[key]).sort()) {
         const contextPath = path.join(options.reviewsRoot, `${options.taskId}-${reviewType}-review-context.json`);
@@ -310,7 +317,8 @@ export function buildReviewCoverageAuditSummary(options: {
                         : resolveLockedReviewFindingPolicyFromPreflight(preflight),
                     expectedReceiptPath: reusedExistingReview ? stringValue(receipt.reused_from_receipt_path) : null,
                     expectedReceiptSha256: reusedExistingReview ? stringValue(receipt.reused_from_receipt_sha256) : null,
-                    preferSnapshot: true
+                    preferSnapshot: true,
+                    taskQueueRows
                 });
                 dispositionEvidence[reviewType] = findingsDisposition;
                 violations.push(...findingsDisposition.violations.map(violation => `findings disposition: ${violation}`));
