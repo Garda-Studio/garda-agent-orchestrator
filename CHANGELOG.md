@@ -1,5 +1,7 @@
 # Changelog
 
+- Prepare current executed validation evidence for ignored-changelog remediation fixtures while preserving target approval and refusal checks.
+
 - Prepare selected review-restart fixtures with current executed validation evidence while retaining recovery routing and cycle-order assertions.
 
 - Prepare selected review-cycle fixtures with current native execution and declared-validation phases, preserving restart, telemetry and reuse assertions.

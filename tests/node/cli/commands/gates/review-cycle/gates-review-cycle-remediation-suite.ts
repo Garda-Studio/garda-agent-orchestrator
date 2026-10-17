@@ -18,6 +18,8 @@ import {
     prepareScopedDiffFixture,
     readTaskTimelineEvents,
     runBuildReviewContextCommand,
+    prepareCurrentReviewCycleValidation,
+    writeCurrentReviewCycleValidationSource,
     runEnterTaskMode,
     runExplicitPreflight,
     runGit,
@@ -856,6 +858,7 @@ function getIgnoredChangelogTemplate(changelogPath: string): IgnoredChangelogTem
     }
     const repoRoot = createTempRepo();
     seedRemediationRepoBase(repoRoot);
+    writeCurrentReviewCycleValidationSource(repoRoot);
     appendIgnoredChangelogRule(repoRoot, changelogPath);
     writeReviewCapabilitiesConfig(repoRoot);
     writeRepoFile(repoRoot, 'src/app.ts', 'export const value = 0;\n');
@@ -3658,6 +3661,7 @@ describe('cli/commands/gates – ignored changelog remediation binding', {
         writeRepoFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
         writeRepoFile(repoRoot, IGNORED_CHANGELOG_PATH, '# Changelog\n\n- Added the failed-review release note.\n');
         prepareScopedDiffFixture(repoRoot, preflightPath, 'code');
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         writeFailedIgnoredChangelogReviewRequest(repoRoot, taskId);
         const restartResult = await runRestartReviewCycleCommand({
             repoRoot,
@@ -3716,6 +3720,7 @@ describe('cli/commands/gates – ignored changelog remediation binding', {
             writeRepoFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
             writeRepoFile(repoRoot, IGNORED_CHANGELOG_PATH, '# Changelog\n\n- Foreign review must not approve this note.\n');
             prepareScopedDiffFixture(repoRoot, preflightPath, 'code');
+            await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
             writeFailedIgnoredChangelogReviewRequest(repoRoot, taskId);
             replaceReceiptBoundReviewIdentity(repoRoot, taskId, foreignIdentity.mutate(taskId));
 
@@ -3752,6 +3757,7 @@ describe('cli/commands/gates – ignored changelog remediation binding', {
         writeRepoFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
         writeRepoFile(repoRoot, IGNORED_CHANGELOG_PATH, '# Changelog\n\n- Added the path-first failed-review release note.\n');
         prepareScopedDiffFixture(repoRoot, preflightPath, 'code');
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         writeFailedIgnoredChangelogPathFirstReviewRequest(repoRoot, taskId);
         const restartResult = await runRestartReviewCycleCommand({
             repoRoot,
@@ -3793,6 +3799,7 @@ describe('cli/commands/gates – ignored changelog remediation binding', {
         writeRepoFile(repoRoot, ROOT_IGNORED_CHANGELOG_PATH, '# Changelog\n\n- Added the root ignored release note.\n');
         writeRepoFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
         prepareScopedDiffFixture(repoRoot, preflightPath, 'code');
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         writeFailedIgnoredChangelogPathFirstReviewRequest(repoRoot, taskId, ROOT_IGNORED_CHANGELOG_PATH);
         writeRepoFile(repoRoot, 'src/app.ts', 'export const value = 1;\n');
         const restartResult = await runRestartReviewCycleCommand({
@@ -3838,6 +3845,7 @@ describe('cli/commands/gates – ignored changelog remediation binding', {
 
         writeRepoFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
         prepareScopedDiffFixture(repoRoot, preflightPath, 'code');
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         writeFailedSourceOnlyReviewRequest(repoRoot, taskId);
         writeRepoFile(repoRoot, 'src/app.ts', 'export const value = 1;\n');
         writeRepoFile(repoRoot, IGNORED_CHANGELOG_PATH, '# Changelog\n\n- Added the task-plan approved release note.\n');
@@ -4039,6 +4047,7 @@ describe('cli/commands/gates – ignored changelog remediation guards', {
 
         writeRepoFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
         writeRepoFile(repoRoot, IGNORED_CHANGELOG_PATH, '# Changelog\n\n- Diagnostic-only ignored release note.\n');
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         writeReceiptBackedReviewArtifact(repoRoot, taskId, 'code', 'CODE REVIEW FAILED', [
             '# Code Review',
             '',
@@ -4092,6 +4101,7 @@ describe('cli/commands/gates – ignored changelog remediation guards', {
         writeRepoFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
         writeRepoFile(repoRoot, IGNORED_CHANGELOG_PATH, '# Changelog\n\n- Example-only ignored release note.\n');
         prepareScopedDiffFixture(repoRoot, preflightPath, 'code');
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         writeFailedIgnoredChangelogExampleOnlyReviewRequest(repoRoot, taskId);
         const restartResult = await runRestartReviewCycleCommandRaw({
             repoRoot,
@@ -4130,6 +4140,7 @@ describe('cli/commands/gates – ignored changelog remediation guards', {
 
         writeRepoFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
         writeRepoFile(repoRoot, IGNORED_CHANGELOG_PATH, '# Changelog\n\n- Negated ignored release note.\n');
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         writeReceiptBackedReviewArtifact(repoRoot, taskId, 'code', 'CODE REVIEW FAILED', [
             '# Code Review',
             '',
@@ -4182,6 +4193,7 @@ describe('cli/commands/gates – ignored changelog remediation guards', {
 
         writeRepoFile(repoRoot, 'src/app.ts', 'export const value = 2;\n');
         prepareScopedDiffFixture(repoRoot, preflightPath, 'code');
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         writeFailedSourceOnlyReviewRequest(repoRoot, taskId);
         writeRepoFile(repoRoot, 'src/app.ts', 'export const value = 1;\n');
         writeRepoFile(repoRoot, IGNORED_CHANGELOG_PATH, '# Changelog\n\n- Updated with guarded hash evidence.\n');
@@ -4335,6 +4347,7 @@ describe('cli/commands/gates – ignored changelog remediation guards', {
 
         writeRepoFile(repoRoot, 'src/app.ts', 'export const value = 3;\n');
         writeRepoFile(repoRoot, IGNORED_CHANGELOG_PATH, '# Changelog\n\n- Documented the source remediation.\n');
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         writeFailedIgnoredChangelogReviewRequest(repoRoot, taskId);
         const restartResult = await runRestartReviewCycleCommand({
             repoRoot,
@@ -4386,6 +4399,7 @@ describe('cli/commands/gates – ignored changelog remediation guards', {
         void outputFiltersPath;
         writeRepoFile(repoRoot, IGNORED_CHANGELOG_PATH, '# Changelog\n\n- Added reviewer-requested note.\n');
         prepareScopedDiffFixture(repoRoot, preflightPath, 'code');
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         writeFailedIgnoredChangelogPathFirstReviewRequest(repoRoot, taskId);
         writeRepoFile(repoRoot, 'tests/remediation-only.test.ts', 'it("covers remediation", () => {});\n');
 
@@ -4409,6 +4423,7 @@ describe('cli/commands/gates – ignored changelog remediation guards', {
         void outputFiltersPath;
         writeRepoFile(repoRoot, IGNORED_CHANGELOG_PATH, '# Changelog\n\n- Example-only reviewer note.\n');
         prepareScopedDiffFixture(repoRoot, preflightPath, 'code');
+        await prepareCurrentReviewCycleValidation(repoRoot, taskId, preflightPath);
         writeFailedIgnoredChangelogExampleOnlyReviewRequest(repoRoot, taskId);
         writeRepoFile(repoRoot, 'tests/remediation-only.test.ts', 'it("covers remediation", () => {});\n');
 
