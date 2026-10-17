@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as childProcess from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { parseOptions } from '../../../../src/cli/commands/cli-parsing';
 
@@ -54,10 +56,15 @@ test('boolean values and subsequent normal options retain their existing behavio
 });
 
 test('the public CLI diagnoses missing task values before executing a gate', () => {
-    const result = childProcess.spawnSync(process.execPath, [
-        path.resolve('bin/garda.js'), 'gate', 'log-task-event', '--task-id', '--repo-root', '.'
-    ], { cwd: path.resolve('.'), encoding: 'utf8', timeout: 15000, windowsHide: true });
-    assert.equal(result.error, undefined);
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr + result.stdout, /--task-id requires a value before --repo-root/);
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-cli-parsing-'));
+    try {
+        const result = childProcess.spawnSync(process.execPath, [
+            path.resolve('bin/garda.js'), 'gate', 'log-task-event', '--task-id', '--repo-root', repoRoot
+        ], { cwd: repoRoot, encoding: 'utf8', timeout: 15000, windowsHide: true });
+        assert.equal(result.error, undefined);
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr + result.stdout, /--task-id requires a value before --repo-root/);
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
 });

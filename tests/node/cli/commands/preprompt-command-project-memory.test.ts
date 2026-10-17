@@ -84,7 +84,9 @@ function seedProjectMemoryAgentInitState(
 test('preprompt task --json returns read-only startup context for a queued task', async () => {
     const repoRoot = createTempRepo();
     const taskId = 'T-137';
+    const previousProvider = process.env.GARDA_EXECUTION_PROVIDER;
     try {
+        process.env.GARDA_EXECUTION_PROVIDER = 'Codex';
         seedTaskQueue(repoRoot, taskId, '🟦 TODO');
         seedInitAnswers(repoRoot, 'Codex');
 
@@ -116,6 +118,8 @@ test('preprompt task --json returns read-only startup context for a queued task'
         assert.equal(continuation.next_gate, 'enter-task-mode');
         assert.equal(continuation.revalidate_before_action, true);
     } finally {
+        if (previousProvider === undefined) delete process.env.GARDA_EXECUTION_PROVIDER;
+        else process.env.GARDA_EXECUTION_PROVIDER = previousProvider;
         fs.rmSync(repoRoot, { recursive: true, force: true });
     }
 });

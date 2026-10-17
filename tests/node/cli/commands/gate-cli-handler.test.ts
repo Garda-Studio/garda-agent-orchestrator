@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { buildDefaultWorkflowConfig } from '../../../../src/core/workflow-config';
+import { handleSet } from '../../../../src/cli/commands/workflow/workflow-command-set';
+import { initializeGitRepo } from './gate-test-helpers';
 
 import {
     runGateCliHandler
@@ -264,8 +267,14 @@ test('migrated public handlers preserve representative output, positional, raw-a
         assert.equal((JSON.parse(auditSummary.output) as Record<string, unknown>).task_id, 'T-900');
         assert.ok(auditSummary.exitCode >= 0);
 
+        initializeGitRepo(repoRoot);
+        const configPath = path.join(repoRoot, 'garda-agent-orchestrator/live/config/workflow-config.json');
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        fs.writeFileSync(configPath, JSON.stringify(buildDefaultWorkflowConfig(), null, 2) + '\n');
+        handleSet({ targetRoot: repoRoot, localCommitEnabled: 'true', json: true,
+            operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() });
         await assert.rejects(
-            captureHandler(() => handleHumanCommit(['-m', 'test: handler parity'])),
+            captureHandler(() => handleHumanCommit(['--repo-root', repoRoot, '-m', 'test: handler parity'])),
             /Native local commits require --task-id for completed, audited task scope/u
         );
         await assert.rejects(

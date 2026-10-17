@@ -11,7 +11,7 @@ import { resolveNextStep } from '../../../../src/gates/next-step/next-step';
 import { resolveCanonicalTaskPlanPath } from '../../../../src/core/task-plan-read';
 import { serializeTaskPlan, validateTaskPlan } from '../../../../src/schemas/task-plan';
 import { runEnterTaskModeCommand } from '../../../../src/cli/commands/gate-flows/task-mode/task-mode-flow';
-import { buildSharedStartTaskWorkflowContent } from '../../../../src/materialization/content-builders';
+import { buildCanonicalManagedBlock, buildSharedStartTaskWorkflowContent } from '../../../../src/materialization/content-builders';
 import { resolveNextStep as settleFixtureEffects } from '../../gates/next-step/next-step-test-support';
 import {
     TASK_ID, ALL_REVIEW_FLAGS, makeTempRepo, reviewsRoot, seedStartedTask,
@@ -59,7 +59,8 @@ function snapshotInputs(repoRoot: string): Record<string, string> {
 
 function seedInstructionCorpus(repoRoot: string): void {
     const bundleRoot = path.join(repoRoot, 'garda-agent-orchestrator');
-    fs.copyFileSync(path.join(SOURCE_ROOT, 'AGENTS.md'), path.join(repoRoot, 'AGENTS.md'));
+    fs.writeFileSync(path.join(repoRoot, 'AGENTS.md'), buildCanonicalManagedBlock('AGENTS.md',
+        fs.readFileSync(path.join(SOURCE_ROOT, 'template/entrypoints/canonical-rule-index.md'), 'utf8')));
     for (const name of RULE_FILES) {
         fs.copyFileSync(path.join(SOURCE_ROOT, 'template/docs/agent-rules', name),
             path.join(bundleRoot, 'live/docs/agent-rules', name));
