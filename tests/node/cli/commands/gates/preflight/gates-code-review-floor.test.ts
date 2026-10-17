@@ -8,6 +8,7 @@ import {
     writeBudgetOutputFilters
 } from '../../gate-test-helpers';
 import { buildDefaultWorkflowConfig } from '../../../../../../src/core/workflow-config';
+import { buildSharedStartTaskWorkflowContent } from '../../../../../../src/materialization/content-builders';
 import {
     runClassifyChangeCommand, runCompileGateCommand, runFullSuiteValidationCommand,
     runHandshakeDiagnosticsCommand, runShellSmokePreflightCommand
@@ -56,7 +57,7 @@ function classifyFixture(t: TestContext, profile: Profile, changes: Record<strin
     writeFile(repoRoot, 'AGENTS.md', '# Controlled native floor fixture\n');
     writeFile(repoRoot, 'VERSION', fs.readFileSync(path.join(SOURCE_ROOT, 'VERSION')));
     writeFile(repoRoot, '.agents/workflows/start-task.md',
-        fs.readFileSync(path.join(SOURCE_ROOT, '.agents/workflows/start-task.md')));
+        buildSharedStartTaskWorkflowContent('AGENTS.md'));
     writeFile(repoRoot, 'garda-agent-orchestrator/bin/garda.js', [
         "if (process.argv.length !== 3 || process.argv[2] !== '--version') throw new Error('Read-only fixture launcher');",
         `require(${JSON.stringify(path.join(SOURCE_ROOT, '.node-build/src/cli/main.js'))})`

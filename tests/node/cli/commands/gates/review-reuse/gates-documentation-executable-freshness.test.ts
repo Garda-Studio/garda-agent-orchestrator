@@ -8,6 +8,7 @@ import {
 } from './gates-review-reuse-fixtures';
 import { writeBalancedProfilesConfig, writeBudgetOutputFilters } from '../../gate-test-helpers';
 import { buildDefaultWorkflowConfig } from '../../../../../../src/core/workflow-config';
+import { buildSharedStartTaskWorkflowContent } from '../../../../../../src/materialization/content-builders';
 import {
     runBuildReviewContextCommand, runClassifyChangeCommand,
     runCompileGateCommand, runFullSuiteValidationCommand,
@@ -64,7 +65,7 @@ async function exerciseFreshness(
     writeFile(repoRoot, '.gitignore', 'garda-agent-orchestrator/runtime/\nTASK.md\n');
     writeFile(repoRoot, 'VERSION', fs.readFileSync(path.join(SOURCE_ROOT, 'VERSION'), 'utf8'));
     writeFile(repoRoot, '.agents/workflows/start-task.md',
-        fs.readFileSync(path.join(SOURCE_ROOT, '.agents', 'workflows', 'start-task.md'), 'utf8'));
+        buildSharedStartTaskWorkflowContent('AGENTS.md'));
     // Shell smoke invokes the actual built Garda CLI for its read-only version probe.
     writeFile(repoRoot, 'garda-agent-orchestrator/bin/garda.js', [
         "if (process.argv.length !== 3 || process.argv[2] !== '--version') throw new Error('Read-only fixture launcher');",
