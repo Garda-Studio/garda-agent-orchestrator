@@ -68,8 +68,8 @@ export function fixture(t: TestContext) {
     function produceBare(nested: boolean) {
         const owned = produce(), before = buildOwnedDisposableArtifactSnapshot({ ...options, registrationIds: [owned.registrationId] });
         const repository = nested ? path.join(owned.payloadPath, 'cached-data') : owned.payloadPath;
-        execFileSync('git', ['init', '--bare', '--template=', repository], { stdio: 'ignore' });
-        const isBare = () => execFileSync('git', ['-C', repository, 'rev-parse', '--is-bare-repository'], { encoding: 'utf8' }).trim();
+        execFileSync('git', ['-c', 'core.longpaths=true', 'init', '--bare', '--template=', repository], { stdio: 'ignore' });
+        const isBare = () => execFileSync('git', ['-c', 'core.longpaths=true', '-C', repository, 'rev-parse', '--is-bare-repository'], { encoding: 'utf8' }).trim();
         const protectedFiles = [path.join(repository, 'HEAD'), path.join(repository, 'config'),
             path.join(owned.payloadPath, 'alpha.txt'), path.join(owned.payloadPath, 'nested', 'bytes.bin'),
             path.join(runtime, 'task-ledger', `${taskId}.json`)];

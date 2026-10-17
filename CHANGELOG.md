@@ -1,5 +1,7 @@
 # Changelog
 
+- Enable long paths only for bare Git fixture invocations so nested disposable-repository protection tests run on Windows.
+
 - Load Russian backup-selection labels from a JSON language pack, preserving existing labels, English fallback and deletion warnings.
 
 - Check focused self-validation instructions in the bound reviewer role prompt while preserving full-suite handoff evidence assertions.
