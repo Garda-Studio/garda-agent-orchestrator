@@ -1,5 +1,7 @@
 # Changelog
 
+- Derive expired-consent test timestamps from the accepted confirmation maximum age while preserving guard and prior-artifact checks.
+
 - Enable long paths only for bare Git fixture invocations so nested disposable-repository protection tests run on Windows.
 
 - Load Russian backup-selection labels from a JSON language pack, preserving existing labels, English fallback and deletion warnings.

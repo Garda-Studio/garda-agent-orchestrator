@@ -12,6 +12,7 @@ import { EXIT_GATE_FAILURE } from '../../../../src/cli/exit-codes';
 import { getTaskModeEvidence } from '../../../../src/gates/task-mode/task-mode';
 import { serializeTaskPlan, validateTaskPlan } from '../../../../src/schemas/task-plan';
 import { withTaskPlanMutationLock } from '../../../../src/core/task-plan-save';
+import { OPERATOR_CONFIRMATION_MAX_AGE_MS } from '../../../../src/core/operator-confirmation';
 import { captureDirtyWorkspaceBaseline, deriveProtectedDirtyWorkspaceScope, detectProtectedDirtyWorkspaceDrift } from '../../../../src/gates/workspace/dirty-worktree-protection';
 import { buildEnterTaskModeCommand } from '../../../../src/gates/next-step/next-step-lifecycle-command-builders';
 import { resolveNextStepStartupRoute } from '../../../../src/gates/next-step/next-step-startup-routing';
@@ -145,7 +146,7 @@ test('task entry rejects missing or stale consent, wrong owner IDs, and missing 
     assert.throws(() => runEnterTaskMode({ ...options, allowedActiveTasks: ['T-999'] }), /Ask the operator/u);
     assert.throws(() => runEnterTaskMode({ ...options, operatorConfirmed: 'no' }), /exact value "yes"/u);
     assert.throws(() => runEnterTaskMode({ ...options, operatorConfirmedAtUtc: '' }), /fresh operator approval/u);
-    assert.throws(() => runEnterTaskMode({ ...options, operatorConfirmedAtUtc: new Date(Date.now() - 11 * 60_000).toISOString() }), /stale/u);
+    assert.throws(() => runEnterTaskMode({ ...options, operatorConfirmedAtUtc: new Date(Date.now() - OPERATOR_CONFIRMATION_MAX_AGE_MS - 60_000).toISOString() }), /stale/u);
     assert.throws(() => runEnterTaskMode({ ...options, plannedChangedFiles: [] }), /explicit --planned-changed-file/u);
     assert.equal(fs.existsSync(path.join(repoRoot, 'garda-agent-orchestrator/runtime/reviews/T-103-task-mode.json')), false);
 });
@@ -241,7 +242,7 @@ test('task-mode re-entry rejects stale approval for changed scope and preserves 
     const original = fs.readFileSync(modePath, 'utf8');
     const changed = { ...options, allowedActiveTasks: undefined, plannedChangedFiles: ['src/second.ts', 'src/extra.ts'] };
     assert.throws(() => runEnterTaskMode({ ...changed, operatorConfirmed: 'no' }), /exact value "yes"/u);
-    assert.throws(() => runEnterTaskMode({ ...changed, operatorConfirmedAtUtc: new Date(Date.now() - 11 * 60_000).toISOString() }), /stale/u);
+    assert.throws(() => runEnterTaskMode({ ...changed, operatorConfirmedAtUtc: new Date(Date.now() - OPERATOR_CONFIRMATION_MAX_AGE_MS - 60_000).toISOString() }), /stale/u);
     assert.equal(fs.readFileSync(modePath, 'utf8'), original);
     assert.doesNotThrow(() => assertSingleActiveImplementationOwner(repoRoot, 'T-103', 'compile gate'));
     assert.equal(runEnterTaskMode({ ...changed, operatorConfirmedAtUtc: new Date().toISOString() }).exitCode, 0);
