@@ -41,6 +41,7 @@ import { appendTaskEvent } from '../../../../../../src/gate-runtime/task-events'
 import { resolveReviewerRoutingPolicy } from '../../../../../../src/gates/review/reviewer-routing';
 import { buildDefaultWorkflowConfig } from '../../../../../../src/core/workflow-config';
 import { computeProtectedSnapshotDigest, writeProtectedControlPlaneManifest } from '../../../../../../src/gates/shared/helpers';
+import { serializeTaskPlan, validateTaskPlan } from '../../../../../../src/schemas/task-plan';
 
 const TEST_COMPILE_GATE_COMMAND = 'node -e "console.log(\'build ok\')"';
 
@@ -1742,7 +1743,15 @@ describe('cli/commands/gates', () => {
 
         seedTaskQueue(repoRoot, taskId);
         seedInitAnswers(repoRoot);
-        fs.writeFileSync(planPath, JSON.stringify({ ok: true }, null, 2), 'utf8');
+        fs.writeFileSync(planPath, serializeTaskPlan(validateTaskPlan({
+            schema_version: 1,
+            task_id: taskId,
+            status: 'approved',
+            goal: 'Preserve exact rerun metadata',
+            scope_files: [protectedFile],
+            risk_level: 'medium',
+            steps: [{ id: 'verify', title: 'Verify protected entry remediation' }]
+        })), 'utf8');
 
         const taskModeResult = runEnterTaskMode({
             repoRoot,
@@ -1750,7 +1759,8 @@ describe('cli/commands/gates', () => {
             taskSummary: 'Preserve exact rerun metadata',
             requestedDepth: 2,
             effectiveDepth: 3,
-            actor: 'review-operator'
+            actor: 'review-operator',
+            planPath
         });
         assert.equal(taskModeResult.exitCode, 0);
         assert.equal(loadTaskEntryRulePack(repoRoot, taskId).exitCode, 0);
@@ -1759,12 +1769,7 @@ describe('cli/commands/gates', () => {
 
         const taskModePath = path.join(getReviewsRoot(repoRoot), `${taskId}-task-mode.json`);
         const taskModeArtifact = JSON.parse(fs.readFileSync(taskModePath, 'utf8')) as Record<string, unknown>;
-        taskModeArtifact.plan = {
-            plan_path: normalizedPlanPath,
-            plan_sha256: 'test-plan-sha256',
-            plan_summary: 'Preserve exact rerun metadata'
-        };
-        fs.writeFileSync(taskModePath, JSON.stringify(taskModeArtifact, null, 2), 'utf8');
+        assert.equal((taskModeArtifact.plan as Record<string, unknown>).plan_path, normalizedPlanPath);
 
         const preflightPath = path.join(getReviewsRoot(repoRoot), `${taskId}-preflight.json`);
         let error: Error | null = null;
@@ -1782,7 +1787,7 @@ describe('cli/commands/gates', () => {
         }
 
         assert.ok(error);
-        assert.ok(error.message.includes('--effective-depth "3"'));
+        assert.ok(error.message.includes('--effective-depth "3"'), error.message);
         assert.equal(error.message.includes('--actor "review-operator"'), false);
         assert.equal(error.message.includes(`--plan-path "${normalizedPlanPath}"`), false);
 

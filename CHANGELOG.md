@@ -1,5 +1,7 @@
 # Changelog
 
+- Attach a valid task plan before protected restart metadata fixture entry, preserving its native timeline binding.
+
 - Prepare current reviewer skill evidence in focused-validation routing fixtures and explicitly quote historical non-verdict tokens.
 
 - Reuse the current task queue snapshot throughout review coverage and follow-up validation in each next-step decision.
