@@ -108,6 +108,7 @@
         "execution_sha256": {"type":"string","pattern":"^[a-f0-9]{64}$"},
         "output_sha256": {"type":"string","pattern":"^[a-f0-9]{64}$"},
         "outcome": {"type":"string","enum":["PASSED","FAILED","SKIPPED","UNRESOLVED"]},
+        "failure_kind": {"type":"string","enum":["ASSERTION","PROCESS","DEPENDENCY","UNKNOWN"]},
         "evidence_quote": {"type":"string","maxLength":4096},
         "reasoning": {"type":"string","minLength":1,"maxLength":8192}
       }
