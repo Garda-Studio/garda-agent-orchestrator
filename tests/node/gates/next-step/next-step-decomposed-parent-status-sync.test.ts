@@ -167,9 +167,9 @@ describe('gates/next-step decomposed parent status sync', () => {
         const result = resolveNextStep({ taskId: 'T-322', repoRoot });
         const taskMd = fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8');
 
-        assert.equal(result.status, 'DONE');
-        assert.equal(result.next_gate, null);
-        assert.equal(result.commands.length, 0);
+        assert.equal(result.status, 'DECOMPOSED');
+        assert.equal(result.next_gate, 'task-audit-summary');
+        assert.equal(result.commands.length, 1);
         assert.ok(result.reason.includes('transitioned completed parent task(s) to DONE: T-413, T-409, T-322'));
         assert.ok(taskMd.includes('| T-322 | 🟩 DONE |'));
         assert.match(taskMd, /\| T-409\s+\| 🟩 DONE \| P1\s+\| workflow\/task-queue-formatting-nested \| Nested parent\s+\|/u);
@@ -199,8 +199,8 @@ describe('gates/next-step decomposed parent status sync', () => {
         const taskMd = fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8');
         const [upperQueue, lowerSummary] = taskMd.split('## Блок очереди');
 
-        assert.equal(result.status, 'DONE');
-        assert.equal(result.next_gate, null);
+        assert.equal(result.status, 'DECOMPOSED');
+        assert.equal(result.next_gate, 'task-audit-summary');
         assert.match(upperQueue, /\| T-980\s+\| 🟩 DONE \| P1\s+\| workflow\s+\| Parent\s+\| gpt-5\.5 \| 2026-05-06 \| strict\s+\| Execute child tasks `T-981` through normal gates; preserve escaped \\| pipe\. \|/u);
         assert.match(upperQueue, /\| T-981\s+\| 🟩 DONE \| P1\s+\| workflow\/task-queue-formatting \| Child with longer area \| gpt-5\.5 \| 2026-05-06 \| strict\s+\| Complete\.\s+\|/u);
         assert.doesNotMatch(upperQueue, /^\|---\|---\|---\|---\|---\|---\|---\|---\|---\|$/mu);
@@ -342,8 +342,8 @@ describe('gates/next-step decomposed parent status sync', () => {
         const result = resolveNextStep({ taskId: 'T-408', repoRoot });
         const taskMd = fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8');
 
-        assert.equal(result.status, 'DONE');
-        assert.equal(result.next_gate, null);
+        assert.equal(result.status, 'DECOMPOSED');
+        assert.equal(result.next_gate, 'task-audit-summary');
         assert.ok(!result.reason.includes('next-step'));
         assert.ok(!result.reason.includes('DECOMPOSED`'));
         assert.ok(taskMd.includes('| T-408 | 🟩 DONE |'));

@@ -276,6 +276,18 @@ function gitFixture() {
 }
 
 describe('forward-only native child source acceptance', () => {
+    it('distinguishes missing source acceptance from an invalid timeline without accepting no-op claims', async () => {
+        const read = childReader(), f = await acceptedChildFixture();
+        fs.renameSync(f.eventFile, f.eventFile + '.preserved');
+        appendMandatoryTaskEvent(path.join(f.root, 'garda-agent-orchestrator'), childTaskId,
+            'NO_OP_RECORDED', 'PASS', 'Isolated completed no-op fixture.', {});
+        const timeline = fs.readFileSync(f.eventFile);
+        assert.throws(() => read(f.root, childTaskId), /T-PROOF-2.*missing.*TASK_SOURCE_COMMIT_ACCEPTED/);
+        assert.deepEqual(fs.readFileSync(f.eventFile), timeline);
+        fs.appendFileSync(f.eventFile, 'not-json\n');
+        assert.throws(() => read(f.root, childTaskId), /intact.*timeline/);
+    });
+
     it('corroborates a real native publication and later ancestry without changing proof or history', async () => {
         const read = childReader(), f = await acceptedChildFixture();
         const status = proofGit(f.root, ['status', '--porcelain']), timeline = fs.readFileSync(f.eventFile);

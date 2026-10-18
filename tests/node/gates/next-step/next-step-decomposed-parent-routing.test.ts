@@ -761,9 +761,9 @@ describe('gates/next-step decomposed parent routing', () => {
         assert.ok(nestedResult.reason.includes('T-409 -> T-415'));
         assert.equal(nestedResult.reason.includes('T-410'), false);
 
-        assert.equal(completedNestedResult.status, 'DONE');
-        assert.equal(completedNestedResult.next_gate, null);
-        assert.equal(completedNestedResult.commands.length, 0);
+        assert.equal(completedNestedResult.status, 'DECOMPOSED');
+        assert.equal(completedNestedResult.next_gate, 'task-audit-summary');
+        assert.equal(completedNestedResult.commands.length, 1);
         assert.ok(completedNestedResult.reason.includes('transitioned completed parent task(s) to DONE: T-413'));
         assert.equal(completedNestedResult.reason.includes('T-410'), false);
         assert.ok(fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8').includes('| T-413 | 🟩 DONE |'));
@@ -788,9 +788,9 @@ describe('gates/next-step decomposed parent routing', () => {
 
         const result = resolveNextStep({ taskId: 'T-409', repoRoot });
 
-        assert.equal(result.status, 'DONE');
-        assert.equal(result.next_gate, null);
-        assert.equal(result.commands.length, 0);
+        assert.equal(result.status, 'DECOMPOSED');
+        assert.equal(result.next_gate, 'task-audit-summary');
+        assert.equal(result.commands.length, 1);
         assert.ok(result.reason.includes('transitioned completed parent task(s) to DONE: T-409'));
         assert.equal(result.reason.includes('T-410'), false);
         assert.ok(fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8').includes('| T-409 | 🟩 DONE |'));
@@ -840,14 +840,14 @@ describe('gates/next-step decomposed parent routing', () => {
 
         const result = resolveNextStep({ taskId: 'T-600', repoRoot });
 
-        assert.equal(result.status, 'DONE');
-        assert.equal(result.next_gate, null);
-        assert.equal(result.commands.length, 0);
+        assert.equal(result.status, 'DECOMPOSED');
+        assert.equal(result.next_gate, 'task-audit-summary');
+        assert.equal(result.commands.length, 1);
         assert.ok(result.reason.includes('transitioned completed parent task(s) to DONE: T-600'));
         assert.ok(fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8').includes('| T-600 | 🟩 DONE |'));
     });
 
-    it('keeps gate-owned decomposed parent auto-DONE terminal-clean on repeated next-step calls', () => {
+    it('keeps aggregate acceptance visible after gate-owned child completion on repeated next-step calls', () => {
         const repoRoot = makeTempRepo();
         fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
             '# TASK.md',
@@ -863,13 +863,15 @@ describe('gates/next-step decomposed parent routing', () => {
         const firstResult = resolveNextStep({ taskId: 'T-603', repoRoot });
         const secondResult = resolveNextStep({ taskId: 'T-603', repoRoot });
 
-        assert.equal(firstResult.status, 'DONE');
+        assert.equal(firstResult.status, 'DECOMPOSED');
+        assert.equal(firstResult.next_gate, 'task-audit-summary');
+        assert.match(firstResult.commands[0]?.command || '', /gate task-audit-summary --task-id "T-603"/);
         assert.ok(firstResult.reason.includes('transitioned completed parent task(s) to DONE: T-603'));
-        assert.equal(secondResult.status, 'DONE');
-        assert.equal(secondResult.next_gate, null);
+        assert.equal(secondResult.status, 'BLOCKED');
+        assert.equal(secondResult.next_gate, 'decomposed-parent-obligations');
         assert.equal(secondResult.commands.length, 0);
-        assert.ok(secondResult.reason.includes('Treat this task as terminal'));
-        assert.doesNotMatch(secondResult.reason, /current lifecycle evidence is not terminal-clean/);
+        assert.match(secondResult.reason, /Current parent decomposition reference is missing or invalid/);
+        assert.doesNotMatch(secondResult.reason, /Treat this task as terminal/);
         assert.notEqual(secondResult.next_gate, 'task-reset');
     });
 

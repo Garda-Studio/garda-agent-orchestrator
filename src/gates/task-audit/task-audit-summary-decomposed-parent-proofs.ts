@@ -63,10 +63,15 @@ function readCurrentNativeSourceEvent(file: string, taskId: string): Record<stri
         commits.add(commit);
         selected = event; sourceLine = line;
     } });
-    if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(inspection.status) || inspection.violations.length
-        || !selected || selected.schema_version !== 2 || selected.outcome !== 'PASS'
+    if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(inspection.status) || inspection.violations.length) {
+        throw new Error(`Native child ${taskId} source acceptance requires an intact task timeline.`);
+    }
+    if (!selected) {
+        throw new Error(`Native child ${taskId} is missing TASK_SOURCE_COMMIT_ACCEPTED evidence; an audited no-op alone does not prove source acceptance.`);
+    }
+    if (selected.schema_version !== 2 || selected.outcome !== 'PASS'
         || selected.task_id !== taskId || !isPlainRecord(selected.details) || duplicate) {
-        throw new Error('Native child source acceptance requires an intact, unambiguous task timeline.');
+        throw new Error(`Native child ${taskId} source acceptance has invalid or ambiguous TASK_SOURCE_COMMIT_ACCEPTED evidence.`);
     }
     if (cycleLine > sourceLine) throw new Error('Native child source acceptance is stale for the current child cycle.');
     return selected.details;

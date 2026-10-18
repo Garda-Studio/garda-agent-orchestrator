@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { appendMandatoryTaskEvent } from '../../../../src/gate-runtime/task-events';
 
 import {
     resolveClassifyDecisionRoute,
@@ -123,6 +124,38 @@ test('resolveTaskQueueTerminalDecisionRoute preserves DONE conflict routing thro
     assert.equal(route.nextGate, 'task-reset');
     assert.equal(route.commands[0]?.label, 'Preview explicit operator reopen');
     assert.match(route.reason, /completion-gate: missing or not passed/);
+});
+
+test('aggregate completion keeps every audit blocker visible and preserves accepted terminal evidence', () => {
+    const runtime = makeTempRuntime();
+    try {
+        const bundle = path.dirname(path.dirname(runtime.eventsRoot));
+        appendMandatoryTaskEvent(bundle, 'T-1', 'STATUS_CHANGED', 'INFO', 'Isolated fixture.', {
+            previous_status: 'DECOMPOSED', new_status: 'DONE', reason: 'decomposed_explicit_children_done'
+        });
+        appendMandatoryTaskEvent(bundle, 'T-1', 'DECOMPOSED_PARENT_COMPLETED', 'INFO', 'Isolated fixture.', {
+            previous_status: 'DECOMPOSED', new_status: 'DONE', reason: 'explicit_children_done'
+        });
+        const options = {
+            ...runtime, taskId: 'T-1', cliPrefix: 'node bin/garda.js', taskEntries: new Map(),
+            taskEntry: { taskId: 'T-1', status: 'DONE', area: 'workflow', title: 'Aggregate', profile: 'balanced', notes: '' },
+            completionGatePassed: false, latestCompletionCurrent: false,
+            finalReportContractReady: true, finalReportContractBlocker: null,
+            summaryBlockers: [] as string[], filteredMissingArtifacts: [], corePresentArtifacts: []
+        };
+        assert.equal(resolveTaskQueueTerminalDecisionRoute(options)?.status, 'DONE');
+        for (const blocker of ['decomposed-parent-obligations: missing source', 'integrity: invalid timeline', 'finalization: in flight']) {
+            const route = resolveTaskQueueTerminalDecisionRoute({ ...options, summaryBlockers: [blocker] });
+            assert.equal(route?.status, 'BLOCKED');
+            assert.equal(route?.nextGate, 'decomposed-parent-obligations');
+            assert.ok(route?.reason.includes(blocker));
+            assert.deepEqual(route?.commands, []);
+        }
+        const notReady = resolveTaskQueueTerminalDecisionRoute({ ...options,
+            finalReportContractReady: false, finalReportContractBlocker: 'parent finalization is pending' });
+        assert.equal(notReady?.status, 'BLOCKED');
+        assert.match(notReady?.reason || '', /parent finalization is pending/);
+    } finally { fs.rmSync(runtime.repoRoot, { recursive: true, force: true }); }
 });
 
 test('resolveTaskQueueTerminalDecisionRoute keeps an operator terminal discard DONE without completion evidence', () => {

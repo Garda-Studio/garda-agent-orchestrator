@@ -775,6 +775,23 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
         };
     }
 
+    if ((doneStatusHasCompletedClearedLatchEvidence || doneStatusHasGateOwnedDecomposedParentCompletionEvidence)
+        && !doneStatusHasTerminalDiscardEvidence
+        && (options.summaryBlockers.length > 0 || !options.finalReportContractReady)) {
+        return {
+            status: 'BLOCKED',
+            nextGate: 'decomposed-parent-obligations',
+            title: 'Decomposed parent still requires aggregate acceptance.',
+            reason: 'Child completion synchronized the parent queue status, but its native aggregate audit is not accepted: '
+                + (options.summaryBlockers.join('; ') || options.finalReportContractBlocker || 'canonical final closeout is not ready')
+                + ' Preserve the child history and resolve these original parent obligations; do not restart the parent leaf lifecycle or manufacture source evidence.',
+            commands: [],
+            missingArtifacts: options.filteredMissingArtifacts,
+            presentArtifacts: options.corePresentArtifacts,
+            finalReport: null
+        };
+    }
+
     if (
         isTaskQueueDoneStatus(taskQueueStatus)
         && options.completionGatePassed
@@ -925,6 +942,10 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
             hasLinkedChildren: completionState?.hasLinkedChildren || false,
             missingChildTaskIds: completionState?.missingChildTaskIds || [],
             complete: completionState?.complete || false,
+            auditCommand: buildCommand(
+                'Inspect native aggregate acceptance',
+                `${options.cliPrefix} gate task-audit-summary --task-id "${options.taskId}" --as-json --repo-root "."`
+            ),
             statusSyncResult: syncResult
                 ? {
                     outcome: syncResult.outcome,

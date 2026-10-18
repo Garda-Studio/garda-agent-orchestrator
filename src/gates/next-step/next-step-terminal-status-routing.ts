@@ -247,6 +247,7 @@ export function resolveDecomposedParentTerminalRoute(options: {
     hasLinkedChildren: boolean;
     missingChildTaskIds: readonly string[];
     complete: boolean;
+    auditCommand: TerminalRoutingCommand;
     statusSyncResult: TerminalStatusSyncSummary | null;
 }): TerminalStatusRoute {
     if (options.childRoute && options.continueChildCommand) {
@@ -292,14 +293,15 @@ export function resolveDecomposedParentTerminalRoute(options: {
         }
         const completedChain = (options.statusSyncResult?.taskIds || []).join(', ');
         return {
-            status: 'DONE',
-            nextGate: null,
-            title: 'Decomposed parent completed because all explicit children are DONE.',
+            status: 'DECOMPOSED',
+            nextGate: 'task-audit-summary',
+            title: 'Child tasks are complete; verify original parent acceptance.',
             reason:
                 `${options.decomposedReason} Every explicit child task, including nested decomposed children, is DONE. ` +
                 `The gate-owned status sync transitioned completed parent task(s) to DONE: ${completedChain}. ` +
-                'Do not run stale parent classify, compile, review, full-suite, or completion gates unless an operator explicitly reopens the task.',
-            commands: []
+                'This queue transition does not establish original parent acceptance. Run the native aggregate audit to verify child source provenance, original command composition, preserved WIP and memory obligations. ' +
+                'Do not run stale parent classify, compile, review, full-suite, or completion gates.',
+            commands: [options.auditCommand]
         };
     }
 
