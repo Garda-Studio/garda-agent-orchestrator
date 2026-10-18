@@ -3412,10 +3412,10 @@ export function resolveNextStepDecisionRoute(
         return buildDecisionRouteResult(taskQueueTerminalDecision);
     }
 
-    let completedCloseoutDecisionRoute: NextStepDecisionRoutePayload | null = null;
+    let auditedNoOpRebindRoute: NextStepDecisionRoutePayload | null = null;
     if (currentNoOpEvidence?.evidence_status === 'PASS') {
         if (!currentNoOpEventSha256) {
-            completedCloseoutDecisionRoute = {
+            auditedNoOpRebindRoute = {
                 status: 'BLOCKED',
                 nextGate: 'record-no-op',
                 title: 'Record current audited no-op event.',
@@ -3428,7 +3428,8 @@ export function resolveNextStepDecisionRoute(
         }
     }
 
-    if (!completedCloseoutDecisionRoute
+    let completedCloseoutDecisionRoute: NextStepDecisionRoutePayload | null = null;
+    if (!auditedNoOpRebindRoute
         && isGatePassed(summary, 'completion-gate')
         && isLatestCompletionCurrent(eventsRoot, taskId)) {
         const hasFinalCloseoutArtifact = fs.existsSync(readinessArtifacts.paths.finalCloseoutJsonPath)
@@ -3570,7 +3571,7 @@ export function resolveNextStepDecisionRoute(
     });
     const unapprovedActiveTaskOwners = findUnapprovedActiveImplementationOwners(repoRoot, taskId, taskEntries);
     let startupRoute = resolveStartupDecisionRoute({
-        enterTaskModePassed: isGatePassed(summary, 'enter-task-mode'),
+        enterTaskModePassed: !!taskMode && isGatePassed(summary, 'enter-task-mode'),
         unapprovedActiveTaskOwners,
         protectedManifestRecovery: readTaskModeProtectedManifestRecoveryRoute(repoRoot, eventsRoot, taskId, cliPrefix),
         failedPublicationRecovery: readFailedTaskModePublicationRecoveryRoute(repoRoot, eventsRoot, taskId, cliPrefix, reviewsRoot, taskModePath),
@@ -4268,7 +4269,7 @@ export function resolveNextStepDecisionRoute(
             unresolvedRunMarkerPath: unresolvedFullSuiteRunMarkerPath
         });
     };
-    const validationDecisionRoute = resolveValidationDecisionRoute({
+    const validationDecisionRoute = auditedNoOpRebindRoute ?? resolveValidationDecisionRoute({
         resolveDeclaredValidationRoute: () => resolveDeclaredValidationDecisionRoute({
             readiness: qualityChecklistReadiness, cliPrefix, taskId
         }),

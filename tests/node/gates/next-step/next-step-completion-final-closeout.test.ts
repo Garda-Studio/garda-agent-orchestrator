@@ -767,6 +767,7 @@ describe('gates/next-step', () => {
         };
         preflight.profile_guardrails = { zero_diff_no_reviewable_scope: true };
         writeJson(preflightPath, preflight);
+        seedPostPreflightRulePack(repoRoot, TASK_ID, preflightPath);
         writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
         const artifactPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-no-op.json`);
         const artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8')) as Record<string, unknown>;

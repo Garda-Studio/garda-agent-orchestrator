@@ -518,6 +518,47 @@ describe('gates/next-step', () => {
         );
     });
 
+    for (const recovery of ['failed publication', 'missing task entry', 'startup rules'] as const) {
+        it(`restores ${recovery} before rebinding an old no-op`, () => {
+            const repoRoot = makeTempRepo();
+            initGitRepo(repoRoot);
+            seedStartedTask(repoRoot, TASK_ID, 'Audit-only: verify zero-diff closeout');
+            const preflightPath = writeGitAutoPreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+            const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8'));
+            preflight.scope_category = 'empty';
+            preflight.zero_diff_guard = {
+                zero_diff_detected: true,
+                status: 'BASELINE_ONLY',
+                completion_requires_audited_no_op: true
+            };
+            preflight.profile_guardrails = { zero_diff_no_reviewable_scope: true };
+            writeJson(preflightPath, preflight);
+            seedPostPreflightRulePack(repoRoot, TASK_ID, preflightPath);
+            writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+            seedHashBoundNoOpEvent(repoRoot, preflightPath);
+            const taskModePath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-task-mode.json`);
+            appendEvent(repoRoot, TASK_ID, 'TASK_MODE_ENTERED', 'PASS', { artifact_path: taskModePath });
+            if (recovery !== 'startup rules') {
+                fs.unlinkSync(taskModePath);
+            }
+            if (recovery === 'failed publication') {
+                appendEvent(repoRoot, TASK_ID, 'TASK_MODE_ENTRY_FAILED', 'FAIL', {
+                    reason: 'Protected authority publication failed; task-mode artifact was invalidated.'
+                });
+            }
+
+            const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+
+            const expectedGate = recovery === 'failed publication'
+                ? 'task-reset' : recovery === 'missing task entry' ? 'enter-task-mode' : 'load-rule-pack';
+            assert.equal(result.next_gate, expectedGate, result.reason);
+            assert.ok(!result.commands[0].command.includes('gate record-no-op'));
+            if (recovery === 'failed publication') {
+                assert.ok(result.commands[0].command.includes('--dry-run'));
+            }
+        });
+    }
+
     it('routes stale zero-diff no-op evidence back to record-no-op', () => {
         const repoRoot = makeTempRepo();
         initGitRepo(repoRoot);
