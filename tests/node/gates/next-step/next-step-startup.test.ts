@@ -23,6 +23,7 @@ import { writeBalancedTestProfilesConfig } from './next-step-test-support';
 import { buildDomainScopeFingerprints } from './next-step-test-support';
 import { createNextStepResolutionContext } from '../../../../src/gates/next-step/next-step-resolution-context';
 import { resolveNextStepFromCliOptions } from '../../../../src/gates/next-step/next-step';
+import { readFailedTaskModePublicationRecoveryRoute } from '../../../../src/gates/next-step/next-step-startup-routing';
 
 const TASK_ID = 'T-NEXT-1';
 const EXPECTED_LOOP_LINE = 'Loop: run the Navigator first, rerun it after every suggested command, and follow only the single Commands entry it prints.';
@@ -479,6 +480,106 @@ afterEach(() => {
 });
 
 describe('gates/next-step startup routing', () => {
+    it('previews explicit reset after failed publication removes the frozen task-mode artifact', () => {
+        const repoRoot = makeTempRepo();
+        seedStartedTask(repoRoot, TASK_ID);
+        appendEvent(repoRoot, TASK_ID, 'TASK_MODE_ENTERED', 'PASS', {
+            artifact_path: path.join(reviewsRoot(repoRoot), `${TASK_ID}-task-mode.json`)
+        });
+        appendEvent(repoRoot, TASK_ID, 'TASK_MODE_ENTRY_FAILED', 'FAIL', { reason: 'EPERM: private authority publication denied' });
+        fs.unlinkSync(path.join(reviewsRoot(repoRoot), `${TASK_ID}-task-mode.json`));
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+
+        assert.equal(result.next_gate, 'task-reset');
+        assert.match(result.reason, /missing frozen policy snapshot/);
+        assert.match(result.reason, /EPERM: private authority publication denied/);
+        assert.equal(result.commands[0].command,
+            `node bin/garda.js gate task-reset --task-id "${TASK_ID}" --reopen --dry-run --repo-root "."`);
+        assert.equal(fs.existsSync(path.join(reviewsRoot(repoRoot), `${TASK_ID}-task-mode.json`)), false);
+        assert.equal(fs.readFileSync(path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`), 'utf8').includes('TASK_MODE_ENTRY_FAILED'), true);
+    });
+
+    it('does not reset a missing task-mode artifact without a current publication failure', () => {
+        const repoRoot = makeTempRepo();
+        seedStartedTask(repoRoot, TASK_ID);
+        fs.unlinkSync(path.join(reviewsRoot(repoRoot), `${TASK_ID}-task-mode.json`));
+
+        assert.notEqual(resolveNextStep({ taskId: TASK_ID, repoRoot }).next_gate, 'task-reset');
+    });
+
+    it('ignores an older failed publication after successful re-entry', () => {
+        const repoRoot = makeTempRepo();
+        seedStartedTask(repoRoot, TASK_ID);
+        appendEvent(repoRoot, TASK_ID, 'TASK_MODE_ENTRY_FAILED', 'FAIL', { reason: 'old publication failure' });
+        seedStartedTask(repoRoot, TASK_ID);
+
+        assert.notEqual(resolveNextStep({ taskId: TASK_ID, repoRoot }).next_gate, 'task-reset');
+    });
+
+    it('does not revive a failed cycle after a newer entry loses its artifact', () => {
+        const repoRoot = makeTempRepo();
+        seedStartedTask(repoRoot, TASK_ID);
+        appendEvent(repoRoot, TASK_ID, 'TASK_MODE_ENTRY_FAILED', 'FAIL', { reason: 'old failure' });
+        seedStartedTask(repoRoot, TASK_ID);
+        fs.unlinkSync(path.join(reviewsRoot(repoRoot), `${TASK_ID}-task-mode.json`));
+
+        assert.notEqual(resolveNextStep({ taskId: TASK_ID, repoRoot }).next_gate, 'task-reset');
+    });
+
+    it('does not offer canonical reset for alternate event stores or altered failure history', () => {
+        const repoRoot = makeTempRepo();
+        seedStartedTask(repoRoot, TASK_ID);
+        const taskModePath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-task-mode.json`);
+        appendEvent(repoRoot, TASK_ID, 'TASK_MODE_ENTERED', 'PASS', { artifact_path: taskModePath });
+        appendEvent(repoRoot, TASK_ID, 'TASK_MODE_ENTRY_FAILED', 'FAIL', { reason: 'current failure' });
+        fs.unlinkSync(taskModePath);
+        const alternateEvents = path.join(repoRoot, 'alternate-events');
+        fs.mkdirSync(alternateEvents);
+        const timelinePath = path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`);
+        fs.copyFileSync(timelinePath, path.join(alternateEvents, `${TASK_ID}.jsonl`));
+
+        assert.equal(readFailedTaskModePublicationRecoveryRoute(repoRoot, alternateEvents, TASK_ID,
+            'node bin/garda.js', reviewsRoot(repoRoot), taskModePath), null);
+        fs.writeFileSync(timelinePath, fs.readFileSync(timelinePath, 'utf8').replace('current failure', 'altered failure'));
+        assert.equal(readFailedTaskModePublicationRecoveryRoute(repoRoot, eventsRoot(repoRoot), TASK_ID,
+            'node bin/garda.js', reviewsRoot(repoRoot), taskModePath), null);
+    });
+
+    it('does not offer canonical reset when alternate review storage selects the native task-mode path', () => {
+        const repoRoot = makeTempRepo();
+        seedStartedTask(repoRoot, TASK_ID);
+        const taskModePath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-task-mode.json`);
+        appendEvent(repoRoot, TASK_ID, 'TASK_MODE_ENTERED', 'PASS', { artifact_path: taskModePath });
+        appendEvent(repoRoot, TASK_ID, 'TASK_MODE_ENTRY_FAILED', 'FAIL', { reason: 'current failure' });
+        fs.unlinkSync(taskModePath);
+        const alternateReviews = path.join(repoRoot, 'alternate-reviews');
+        fs.mkdirSync(alternateReviews);
+
+        assert.notEqual(resolveNextStep({ taskId: TASK_ID, repoRoot, reviewsRoot: alternateReviews }).next_gate, 'task-reset');
+    });
+
+    it('rejects unverified legacy failures while preserving integrity-bound recovery after a legacy prefix', () => {
+        const repoRoot = makeTempRepo();
+        const taskModePath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-task-mode.json`);
+        const timelinePath = path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`);
+        const legacy = (event_type: string, outcome: string, details: Record<string, unknown>) => JSON.stringify({
+            task_id: TASK_ID, event_type, outcome, details, timestamp_utc: new Date().toISOString()
+        });
+        fs.writeFileSync(timelinePath, [
+            legacy('TASK_MODE_ENTERED', 'PASS', { artifact_path: taskModePath }),
+            legacy('TASK_MODE_ENTRY_FAILED', 'FAIL', { reason: 'unverified failure' }), ''
+        ].join('\n'));
+        appendEvent(repoRoot, TASK_ID, 'DIAGNOSTIC_RECORDED', 'PASS');
+        assert.equal(readFailedTaskModePublicationRecoveryRoute(repoRoot, eventsRoot(repoRoot), TASK_ID,
+            'node bin/garda.js', reviewsRoot(repoRoot), taskModePath), null);
+
+        appendEvent(repoRoot, TASK_ID, 'TASK_MODE_ENTERED', 'PASS', { artifact_path: taskModePath });
+        appendEvent(repoRoot, TASK_ID, 'TASK_MODE_ENTRY_FAILED', 'FAIL', { reason: 'verified current failure' });
+        assert.match(readFailedTaskModePublicationRecoveryRoute(repoRoot, eventsRoot(repoRoot), TASK_ID,
+            'node bin/garda.js', reviewsRoot(repoRoot), taskModePath)?.command || '', /task-reset.*--dry-run/);
+    });
+
     it('loads resolution context before routing a fresh task at enter-task-mode', () => {
         const repoRoot = makeTempRepo();
         const context = createNextStepResolutionContext({ taskId: TASK_ID, repoRoot });

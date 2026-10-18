@@ -169,7 +169,7 @@ import {
 import {
     selectTaskEntryRulePackFileNames
 } from '../rule-pack/rule-pack-selection';
-import { readTaskModeProtectedManifestRecoveryRoute } from './next-step-startup-routing';
+import { readFailedTaskModePublicationRecoveryRoute, readTaskModeProtectedManifestRecoveryRoute } from './next-step-startup-routing';
 import { hasAuthenticatedZeroDiffAuditScope } from './next-step-preflight-workspace-readiness';
 import {
     readCompileReadiness,
@@ -3571,6 +3571,7 @@ export function resolveNextStepDecisionRoute(
         enterTaskModePassed: isGatePassed(summary, 'enter-task-mode'),
         unapprovedActiveTaskOwners,
         protectedManifestRecovery: readTaskModeProtectedManifestRecoveryRoute(repoRoot, eventsRoot, taskId, cliPrefix),
+        failedPublicationRecovery: readFailedTaskModePublicationRecoveryRoute(repoRoot, eventsRoot, taskId, cliPrefix, reviewsRoot, taskModePath),
         defaultExecutionProvider,
         enterTaskModeCommand: buildEnterTaskModeCommand(
             repoRoot, cliPrefix, taskId, taskEntry, defaultExecutionProvider, taskMode, unapprovedActiveTaskOwners

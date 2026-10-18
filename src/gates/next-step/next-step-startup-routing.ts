@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { resolveBundleRootForTarget } from '../../core/constants';
+import { isPlainRecord } from '../../core/records';
 import { inspectTaskEventFile, readTaskTimelineJsonlEntries } from '../../gate-runtime/task-events';
 import { evaluateProtectedControlPlaneManifest, normalizePath } from '../shared/helpers';
 import type {
@@ -152,6 +153,34 @@ export function readTaskModeProtectedManifestRecoveryRoute(
     };
 }
 
+export function readFailedTaskModePublicationRecoveryRoute(
+    repoRoot: string, eventsRoot: string, taskId: string, cliPrefix: string, reviewsRoot: string, taskModePath: string
+): { reason: string; command: string } | null {
+    const runtimeRoot = path.join(resolveBundleRootForTarget(repoRoot), 'runtime');
+    const canonicalTaskModePath = path.join(runtimeRoot, 'reviews', `${taskId}-task-mode.json`);
+    if (path.resolve(eventsRoot) !== path.resolve(runtimeRoot, 'task-events')
+        || path.resolve(reviewsRoot) !== path.resolve(runtimeRoot, 'reviews')
+        || path.resolve(taskModePath) !== path.resolve(canonicalTaskModePath) || fs.existsSync(taskModePath)) return null;
+    const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
+    const inspection = inspectTaskEventFile(timelinePath, taskId);
+    if (inspection.status !== 'PASS' && inspection.status !== 'PASS_WITH_LEGACY_PREFIX') return null;
+    const events = readTaskTimelineJsonlEntries(timelinePath).map(entry => entry.record).reverse();
+    const entryIndex = events.findIndex(event => event?.event_type === 'TASK_MODE_ENTERED' && event.outcome === 'PASS');
+    const entryDetails = events[entryIndex]?.details;
+    if (entryIndex < 0 || !isPlainRecord(events[entryIndex]?.integrity) || !isPlainRecord(entryDetails)
+        || path.resolve(String(entryDetails.artifact_path || '')) !== path.resolve(taskModePath)) return null;
+    const failure = events.slice(0, entryIndex).find(event => event?.event_type === 'TASK_MODE_ENTRY_FAILED' && event.outcome === 'FAIL');
+    if (!failure || !isPlainRecord(failure.integrity)) return null;
+    const failureDetails = isPlainRecord(failure.details) ? failure.details : null;
+    return {
+        reason: 'Task-mode publication failed after TASK_MODE_ENTERED and invalidated its artifact. '
+            + `Failure: ${formatFailureReason(failureDetails?.reason)}. `
+            + 'Startup gates and ordinary re-entry cannot recover the missing frozen policy snapshot. '
+            + 'Preserve the task evidence and source work, preview the explicit operator reset, then reopen and enter the task again.',
+        command: `${cliPrefix} gate task-reset --task-id ${quoteCommandValue(taskId)} --reopen --dry-run --repo-root "."`
+    };
+}
+
 export interface NextStepStartupCycleReadiness {
     ready: boolean;
     nextGate: string | null;
@@ -182,6 +211,7 @@ export interface NextStepStartupRouteOptions {
     shellSmokePreflightPassed: boolean;
     shellSmokePreflightCommand: string;
     protectedManifestRecovery?: { recovered: boolean; reason: string; command: string } | null;
+    failedPublicationRecovery?: { reason: string; command: string } | null;
 }
 
 function commandForStartupCycleGate(
@@ -224,6 +254,15 @@ export function resolveNextStepStartupRoute(
                 + 'After confirmation, use the task-mode command below with an explicit planned file scope; '
                 + 'the approval is recorded for this task and reused by later gates.',
             commands: [buildCommand('Enter task mode after operator confirmation', options.enterTaskModeCommand)]
+        };
+    }
+    if (options.failedPublicationRecovery) {
+        return {
+            status: 'BLOCKED',
+            nextGate: 'task-reset',
+            title: 'Preview recovery of failed task-mode publication.',
+            reason: options.failedPublicationRecovery.reason,
+            commands: [buildCommand('Preview task reset after preserving evidence', options.failedPublicationRecovery.command)]
         };
     }
     if (!options.enterTaskModePassed) {
