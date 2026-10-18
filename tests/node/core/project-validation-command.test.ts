@@ -51,7 +51,7 @@ const inlinePrograms: Command[] = [
     ['perl', ['-Itest', '-e', 'print 1']], ['perl', ['-MFile::Spec', '-e', 'print 1']],
     ['deno', ['eval', 'code']], ['deno', ['run', '--unknown', 'value', 'javascript:code']],
     ['bun', ['--eval=code']], ['bun', ['repl', '-e', 'code']], ['bun', ['run', '--print', 'code']], ['node', ['data:text/javascript,code']],
-    ['node', ['--loader=javascript:code', 'scripts/check.js']], ['check.cmd', []], ['check.BAT', []],
+    ['node', ['--loader=javascript:code', 'scripts/check.js']],
     ['node', ['--import', 'data:text/javascript,code', 'scripts/check.js']],
     ['node', ['--import=javascript:code', 'scripts/check.js']],
     ['node', ['\u0000java\nscript:code']], ['node', ['--import=\tdata:text/javascript,code', 'scripts/check.js']]
@@ -63,6 +63,7 @@ for (const [tool, argv] of inlinePrograms) {
 }
 
 const literalCommands: Command[] = [
+    ['check.cmd', []], ['check.BAT', []], ['proof-driver', ['--scenario', 'javascript:literal']],
     ['C:\\tools\\node.exe', ['scripts/check.js', '--eval=literal']],
     ['/usr/bin/node', ['scripts/check.js', '--eval=literal']],
     ['node', ['scripts/check.js', '--eval=literal']],

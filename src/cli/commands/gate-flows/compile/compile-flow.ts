@@ -1,5 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { inspectValidationCommand } from '../../../../core/validation-command-contract';
+import { redactSecretText } from '../../../../core/redaction';
 import {
     EXIT_GATE_FAILURE
 } from '../../../exit-codes';
@@ -13,6 +15,7 @@ import {
 import type { CommandCompactnessAudit } from '../../../../gates/task-events-summary/task-events-summary';
 import {
     getCompileCommandProfile,
+    getCompileCommandContractHints,
     getPreflightContext,
     getWorkspaceSnapshot,
     validateCompileGateCommand
@@ -172,6 +175,9 @@ export async function runCompileGateCommand(options: CompileGateCommandOptions):
     let exceptionMessage: string | null = null;
     let selectedCommandProfile: CompileCommandProfile | null = null;
     let selectedCommandIndex = 0;
+    let selectedInvocationIndex: number | null = null;
+    let selectedInvocationExecutable: string | null = null;
+    let invocationExecutions: Awaited<ReturnType<typeof executeCompileCommands>>['invocationExecutions'] = [];
     let budgetTokensForOutputFilters: number | null = null;
     const compileOutputLines: string[] = [];
     const compileOutputChunks: string[] = [];
@@ -417,6 +423,9 @@ export async function runCompileGateCommand(options: CompileGateCommandOptions):
             errorCount = compileExecution.errorCount;
             selectedCommandProfile = compileExecution.selectedCommandProfile;
             selectedCommandIndex = compileExecution.selectedCommandIndex;
+            selectedInvocationIndex = compileExecution.selectedInvocationIndex;
+            selectedInvocationExecutable = compileExecution.selectedInvocationExecutable;
+            invocationExecutions = compileExecution.invocationExecutions;
             if (compileExecution.exceptionMessage) {
                 exitCode = compileExecution.exitCode;
                 exceptionMessage = compileExecution.exceptionMessage;
@@ -557,11 +566,19 @@ export async function runCompileGateCommand(options: CompileGateCommandOptions):
         compile_output_retention: compileOutputRetention,
         output_filters_path: normalizeOptionalPath(outputFiltersPath),
         command_kind: effectiveProfile.kind,
+        command_descriptors: compileCommands.map(command => inspectValidationCommand(command, 'compile', { allowConjunction: true }).descriptor),
+        command_admission_hints: compileCommands.map(command => getCompileCommandContractHints(command)),
         command_filter_strategy: effectiveProfile.strategy,
         command_profile_label: effectiveProfile.label,
         selected_output_profile: selectedOutputProfile,
         selected_budget_tier: filteredOutput.budget_tier ?? null,
         selected_command_index: selectedCommandIndex,
+        selected_invocation_index: selectedInvocationIndex,
+        selected_invocation_executable: selectedInvocationExecutable,
+        invocation_executions: invocationExecutions.map(invocation => ({ command_index: invocation.commandIndex,
+            invocation_index: invocation.invocationIndex, executable: invocation.executable, argv: invocation.argv,
+            exit_code: invocation.exitCode, execution_error: invocation.executionError ?? null,
+            timed_out: invocation.timedOut, cancelled: invocation.cancelled })),
         compile_output_lines: compileOutputLines.length,
         compile_output_warning_lines: warningCount,
         compile_output_error_lines: errorCount,
@@ -598,6 +615,9 @@ export async function runCompileGateCommand(options: CompileGateCommandOptions):
         ];
         if (compileOutputPath) {
             outputLines.push(`CompileOutputPath: ${gateHelpers.normalizePath(compileOutputPath)}`);
+        }
+        if (selectedInvocationExecutable && selectedInvocationIndex !== null) {
+            outputLines.push(`CompileInvocation: command=${selectedCommandIndex}; invocation=${selectedInvocationIndex}; executable=${redactSecretText(JSON.stringify(selectedInvocationExecutable))}`);
         }
         outputLines.push(formatCompileOutputRetentionLine(compileOutputRetention));
         if (filteredOutput.lines.length > 0) {

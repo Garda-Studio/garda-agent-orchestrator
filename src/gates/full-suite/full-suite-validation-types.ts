@@ -132,6 +132,7 @@ export interface FullSuiteTimeoutPolicyEvidence {
 }
 
 export interface FullSuiteCommandProvenance {
+    command_descriptor?: import('../../core/validation-command-contract').ValidationCommandDescriptor;
     schema_version: 1;
     source: 'workflow_config.full_suite_validation.command';
     execution_mode: 'DIRECT_ARGV';

@@ -2,6 +2,13 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { UNCONFIGURED_COMPILE_GATE_COMMAND } from '../../core/constants';
 import { parseCommandChain, splitCommandLine } from '../../core/command-line';
+import {
+    PACKAGE_MANAGER_EXECUTABLES, PACKAGE_MANAGER_VALUE_OPTIONS, NPM_VALUE_OPTIONS, PNPM_EXEC_VALUE_OPTIONS,
+    skipValidationCommandOptions as skipCompileCommandOptions,
+    parseValidationRunnerCommandText as parsePackageRunnerCommand,
+    resolveValidationCommandDispatch as compileCommandParts
+} from '../../core/validation-command-dispatch';
+import { inspectValidationCommand, type ValidationCommandPurpose } from '../../core/validation-command-contract';
 import { countFileLines, stringSha256, normalizePath, joinOrchestratorPath } from '../shared/helpers';
 import { canonicalPathList, pathListSha256 } from '../shared/canonical-path-list';
 import { DEFAULT_GIT_TIMEOUT_MS, spawnSyncWithTimeout } from '../../core/subprocess';
@@ -91,18 +98,20 @@ export function getCompileCommandProfile(command: string) {
 }
 
 export interface CompileCommandContractOptions {
+    purpose?: ValidationCommandPurpose;
     fullSuiteCommand?: string | null;
     allowFullTestCompileCommand?: boolean;
     allowFullTestCompileCommandReason?: string | null;
     allowUnconfiguredSentinel?: boolean;
 }
 
-function normalizeCompileCommandForContract(command: string): string {
-    return String(command || '')
-        .trim()
-        .replace(/\\/g, '/')
-        .replace(/\s+/g, ' ')
-        .toLowerCase();
+export function getCompileInvocationProfile(tokens: readonly string[]) {
+    return getCompileCommandProfile(compileProfileCommand(tokens.map(token => token.replace(/\\/gu, '/').toLowerCase()), tokens));
+}
+
+function literalInvocationIdentity(tokens: readonly string[]): string {
+    return JSON.stringify(tokens.map((token, index) => index === 0 && process.platform === 'win32'
+        ? path.win32.normalize(token).toLowerCase() : token));
 }
 
 function isMavenExecutableToken(token: string): boolean {
@@ -115,22 +124,6 @@ function isGradleExecutableToken(token: string): boolean {
     return ['gradle', 'gradle.bat', 'gradlew', 'gradlew.bat'].includes(normalized);
 }
 
-const COMPILE_COMMAND_WRAPPERS = new Set(['npx', 'bunx', 'pnpx', 'pnx', 'corepack', 'env', 'nice', 'time', 'busybox', 'toybox']);
-const PACKAGE_MANAGER_EXECUTABLES = new Set(['npm', 'pnpm', 'yarn', 'bun']);
-const TEST_SUBCOMMAND_EXECUTABLES = new Set(['playwright', 'cypress', 'go', 'cargo', 'dotnet']);
-const PACKAGE_MANAGER_VALUE_OPTIONS = new Set([
-    '--prefix', '--cwd', '--dir', '--filter', '-F', '--workspace', '-w', '--package', '-p', '-c', '-C',
-    '--cache', '--registry', '--userconfig', '--node-options'
-]);
-const NPM_VALUE_OPTIONS = new Set([
-    ...[...PACKAGE_MANAGER_VALUE_OPTIONS].filter((option) => !['-p', '-C', '-F'].includes(option)),
-    '--call', '--script-shell', '--loglevel'
-]);
-const NPX_VALUE_OPTIONS = new Set([...NPM_VALUE_OPTIONS, '-p', '--shell']);
-const NPM_CALL_SHORT_OPTION = /^-[fglyp]*c$/u;
-const PNPM_EXEC_VALUE_OPTIONS = new Set([
-    ...[...PACKAGE_MANAGER_VALUE_OPTIONS].filter((option) => !['-c', '-p', '-w'].includes(option)), '--allow-build'
-]);
 const MAVEN_VALUE_OPTIONS = new Set([
     '-f', '--file', '-s', '--settings', '-gs', '--global-settings', '-t', '--toolchains',
     '-gt', '--global-toolchains', '-l', '--log-file', '-P', '--activate-profiles', '-pl', '--projects',
@@ -143,206 +136,7 @@ const GRADLE_VALUE_OPTIONS = new Set([
     '--configuration-cache-problems', '--configuration-cache-max-problems',
     '-F', '--dependency-verification', '-M', '--write-verification-metadata'
 ]);
-const WRAPPER_VALUE_OPTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
-    npx: NPX_VALUE_OPTIONS,
-    bunx: new Set([...PACKAGE_MANAGER_VALUE_OPTIONS].filter((option) => option !== '-c')),
-    pnpx: PNPM_EXEC_VALUE_OPTIONS,
-    pnx: PNPM_EXEC_VALUE_OPTIONS,
-    env: new Set(['-u', '--unset', '-C', '--chdir', '-a', '--argv0']),
-    nice: new Set(['-n', '--adjustment']),
-    time: new Set(['-f', '--format', '-o', '--output'])
-};
-
-const SHELL_BUILTIN_DISPATCHERS = new Set(['exec', 'command', 'eval', 'source', '.']);
-const POSIX_SHELL_EXECUTABLES = new Set(['sh', 'bash', 'dash', 'ash', 'ksh', 'zsh', 'fish', 'csh', 'tcsh', 'nu', 'xonsh']);
-const POWERSHELL_VALUE_OPTIONS = new Set([
-    '-executionpolicy', '-ex', '-ep', '-inputformat', '-inp', '-if', '-outputformat', '-o', '-of',
-    '-workingdirectory', '-wd', '-configurationname', '-config', '-configurationfile', '-custompipename',
-    '-settingsfile', '-version', '-v'
-]);
-const WSL_VALUE_OPTIONS = new Set([
-    '-d', '--distribution', '--distribution-id', '-u', '--user', '--cd', '--shell-type'
-]);
-
-function wslDelegatedTokens(tokens: readonly string[], start: number): string[] {
-    for (let index = start; index < tokens.length; index += 1) {
-        const option = tokens[index];
-        if (option === '--exec' || option === '-e') {
-            const delegated = tokens.slice(index + 1);
-            if (delegated[0] && delegated[0] !== '~') return delegated;
-            break;
-        }
-        if (WSL_VALUE_OPTIONS.has(option)) {
-            if (!tokens[++index]) break;
-        } else if (option !== '--system') {
-            break;
-        }
-    }
-    throw new Error('Unsupported WSL execution boundary. Use wsl --exec <program> <args> '
-        + 'with supported host options as separate values, or a trusted wrapper script.');
-}
-
-function rejectCompileCommandDispatch(executable: string): never {
-    throw new Error(`Unsupported executable command dispatch through '${executable}'. `
-        + 'Native shell command text and env split-string execution require a trusted wrapper script for compile-gate.');
-}
-
-function skipProcessWrapperOptions(tokens: readonly string[], start: number, executable: string): number {
-    const valueOptions = WRAPPER_VALUE_OPTIONS[executable];
-    let index = start;
-    while (index < tokens.length && tokens[index].startsWith('-')) {
-        const token = tokens[index++];
-        if (token === '--') return index;
-        if (token.startsWith('--')) {
-            const option = token.split('=')[0];
-            if (executable === 'env' && '--split-string'.startsWith(option)) rejectCompileCommandDispatch(executable);
-            if (!token.includes('=') && [...valueOptions].some((valueOption) =>
-                valueOption.startsWith('--') && valueOption.startsWith(option))) index += 1;
-            continue;
-        }
-        for (let cursor = 1; cursor < token.length; cursor += 1) {
-            const option = token[cursor];
-            if (executable === 'env' && option === 'S') rejectCompileCommandDispatch(executable);
-            if (valueOptions.has('-' + option)) {
-                if (cursor === token.length - 1) index += 1;
-                break; // The remainder is an attached operand, not more short options.
-            }
-        }
-    }
-    return index;
-}
-
-function validateCompileCommandDispatch(executable: string, rawArgs: readonly string[]): void {
-    if (SHELL_BUILTIN_DISPATCHERS.has(executable)) rejectCompileCommandDispatch(executable);
-    if (executable === 'cmd') {
-        if (rawArgs.some((arg) => /^\/[ck]/iu.test(arg))) rejectCompileCommandDispatch(executable);
-        return;
-    }
-    const powershell = executable === 'powershell' || executable === 'pwsh';
-    if (!powershell && !POSIX_SHELL_EXECUTABLES.has(executable)) return;
-    for (let index = 0; index < rawArgs.length; index += 1) {
-        const rawOption = rawArgs[index];
-        const option = powershell ? rawOption.toLowerCase().replace(/^\//u, '-') : rawOption;
-        if (option === '--' || (powershell && ['-file', '-f'].includes(option))) return;
-        if (!option.startsWith('-')) return; // The wrapper file owns all following argument data.
-        if (powershell) {
-            if (['-c', '-cwa', '-e', '-ec'].includes(option)
-                || '-command'.startsWith(option) || '-commandwithargs'.startsWith(option)
-                || '-encodedcommand'.startsWith(option)) rejectCompileCommandDispatch(executable);
-            if ([...POWERSHELL_VALUE_OPTIONS].some((valueOption) => valueOption.startsWith(option))) index += 1;
-        } else {
-            if (/^-[^-]*c/u.test(option) || /^--commands?(?:=|$)/u.test(option)
-                || (executable === 'fish' && (/^-[^-]*C/u.test(option) || /^--init-command(?:=|$)/u.test(option)))) {
-                rejectCompileCommandDispatch(executable);
-            }
-            if (/^-[^-]*[oO]$/u.test(option) || ['--rcfile', '--init-file'].includes(option)) index += 1;
-        }
-    }
-}
-
-function skipCompileCommandOptions(tokens: readonly string[], start: number, valueOptions?: ReadonlySet<string>): number {
-    let index = start;
-    while (index < tokens.length && tokens[index].startsWith('-')) {
-        if (tokens[index] === '--') return index + 1;
-        const takesValue = valueOptions?.has(tokens[index])
-            || (valueOptions?.has('--call') && NPM_CALL_SHORT_OPTION.test(tokens[index]));
-        index += takesValue ? 2 : 1;
-    }
-    return index;
-}
-
-function npmCallCommand(tokens: readonly string[], start: number, npx: boolean): string | undefined {
-    let command: string | undefined;
-    const valueOptions = npx ? NPX_VALUE_OPTIONS : NPM_VALUE_OPTIONS;
-    for (let index = start; index < tokens.length; index += 1) {
-        const token = tokens[index];
-        if (token === '--' || (npx && !token.startsWith('-'))) break;
-        const equals = token.indexOf('=');
-        const option = equals < 0 ? token : token.slice(0, equals);
-        if (option === '--call' || NPM_CALL_SHORT_OPTION.test(option)) {
-            command = equals < 0 ? tokens[++index] : token.slice(equals + 1);
-        } else if (equals < 0 && valueOptions.has(option)) {
-            index += 1;
-        }
-    }
-    return command || undefined;
-}
-
-function pnpmShellCommand(tokens: readonly string[], start: number, commandIndex: number, optionsEnd = commandIndex): string | undefined {
-    let shellMode = false;
-    for (let index = start; index < optionsEnd; index += 1) {
-        const token = tokens[index];
-        if (token === '--') break;
-        if (PNPM_EXEC_VALUE_OPTIONS.has(token)) index += 1;
-        else if (token === '--shell-mode' || token === '--shell-mode=true' || /^-[rs]*c[rs]*$/u.test(token)) shellMode = true;
-        else if (token === '--shell-mode=false' || token === '--no-shell-mode') shellMode = false;
-    }
-    return shellMode ? tokens.slice(commandIndex).join(' ') : undefined;
-}
-
-function parsePackageRunnerCommand(commandText: string): string[][] {
-    // Native shell quote, escape and expansion rules differ from direct argv.
-    // Keep an explicit portable subset; direct argv operands retain their literals.
-    let withinDoubleQuotes = false;
-    let atWordStart = true;
-    for (const character of commandText) {
-        if (character === '"') withinDoubleQuotes = !withinDoubleQuotes;
-        if ("$`%!^\\*?[]{}~'\r\n".includes(character)
-            || (!withinDoubleQuotes && ('()'.includes(character) || (character === '#' && atWordStart)))) {
-            throw new Error('Unsupported executable command-string syntax ' + JSON.stringify(character)
-                + '. Shell expansion, native escaping, single-quote syntax, unquoted grouping and shell comments require a trusted wrapper script.');
-        }
-        atWordStart = !withinDoubleQuotes && ' \t&'.includes(character);
-    }
-    return parseCommandChain(commandText);
-}
-
-function compileCommandParts(tokens: readonly string[], rawTokens: readonly string[] = tokens): {
-    executableIndex: number; executableIndexes: number[]; executable: string; args: string[]; rawArgs: string[];
-    commandText?: string; delegatedTokens?: string[]
-} {
-    let executableIndex = 0;
-    const executableIndexes: number[] = [];
-    while (executableIndex < tokens.length) {
-        executableIndexes.push(executableIndex);
-        const executableToken = path.posix.basename(tokens[executableIndex]).replace(/\.(?:cmd|exe)$/u, '');
-        const executable = executableToken === 'yarnpkg' ? 'yarn' : executableToken === 'pn' ? 'pnpm' : executableToken;
-        let argumentIndex = executableIndex + 1;
-        validateCompileCommandDispatch(executable, rawTokens.slice(argumentIndex));
-        if (executable === 'wsl') {
-            return { executableIndex, executableIndexes, executable, args: [], rawArgs: [],
-                delegatedTokens: wslDelegatedTokens(rawTokens, argumentIndex) };
-        } else if (PACKAGE_MANAGER_EXECUTABLES.has(executable)) {
-            const valueOptions = executable === 'npm' ? NPM_VALUE_OPTIONS
-                : executable === 'pnpm' ? PNPM_EXEC_VALUE_OPTIONS : PACKAGE_MANAGER_VALUE_OPTIONS;
-            argumentIndex = skipCompileCommandOptions(rawTokens, argumentIndex, valueOptions);
-            const delegatesExecutable = ['exec', 'dlx'].includes(tokens[argumentIndex])
-                || (['npm', 'bun'].includes(executable) && tokens[argumentIndex] === 'x');
-            if (!delegatesExecutable) {
-                return { executableIndex, executableIndexes, executable, args: tokens.slice(argumentIndex), rawArgs: rawTokens.slice(argumentIndex) };
-            }
-            const delegatedIndex = skipCompileCommandOptions(rawTokens, argumentIndex + 1,
-                executable === 'pnpm' ? PNPM_EXEC_VALUE_OPTIONS : valueOptions);
-            const commandText = executable === 'npm' ? npmCallCommand(rawTokens, executableIndex + 1, false)
-                : executable === 'pnpm' ? pnpmShellCommand(rawTokens, executableIndex + 1, delegatedIndex,
-                    tokens[argumentIndex] === 'exec' ? argumentIndex : delegatedIndex) : undefined;
-            if (commandText !== undefined) return { executableIndex: tokens.length, executableIndexes, executable: '', args: [], rawArgs: [], commandText };
-            executableIndex = delegatedIndex;
-        } else if (COMPILE_COMMAND_WRAPPERS.has(executable)) {
-            argumentIndex = ['env', 'nice', 'time'].includes(executable) ? skipProcessWrapperOptions(rawTokens, argumentIndex, executable)
-                : skipCompileCommandOptions(rawTokens, argumentIndex, WRAPPER_VALUE_OPTIONS[executable]);
-            const commandText = executable === 'npx' ? npmCallCommand(rawTokens, executableIndex + 1, true)
-                : ['pnpx', 'pnx'].includes(executable) ? pnpmShellCommand(rawTokens, executableIndex + 1, argumentIndex) : undefined;
-            if (commandText !== undefined) return { executableIndex: tokens.length, executableIndexes, executable: '', args: [], rawArgs: [], commandText };
-            while (executable === 'env' && /^[a-z_][a-z0-9_]*=/u.test(tokens[argumentIndex] || '')) argumentIndex += 1;
-            executableIndex = argumentIndex;
-        } else {
-            return { executableIndex, executableIndexes, executable, args: tokens.slice(argumentIndex), rawArgs: rawTokens.slice(argumentIndex) };
-        }
-    }
-    return { executableIndex, executableIndexes, executable: '', args: [], rawArgs: [] };
-}
-
+const TEST_SUBCOMMAND_EXECUTABLES = new Set(['playwright', 'cypress', 'go', 'cargo', 'dotnet']);
 function findCompileToolExecutableIndex(
     tokens: readonly string[], matches: (token: string) => boolean, rawTokens: readonly string[] = tokens
 ): number {
@@ -486,28 +280,27 @@ function getGradleLifecycleViolation(tokens: readonly string[], rawTokens: reado
     return null;
 }
 
-export function getCompileCommandContractViolations(
+function assessCompileCommandContract(
     command: string,
     options: CompileCommandContractOptions = {}
-): string[] {
+): { hints: string[]; matchesConfiguredSuite: boolean } {
     const trimmedCommand = String(command || '').trim();
-    if (!trimmedCommand) return [];
+    if (!trimmedCommand) return { hints: [], matchesConfiguredSuite: false };
     const commands = parseCommandChain(command);
     const violations: string[] = [];
-    const configuredFullSuiteCommand = normalizeCompileCommandForContract(options.fullSuiteCommand || '');
-    const configuredFullSuiteTokens = splitCommandLine(options.fullSuiteCommand || '')
-        .map((token) => token.replace(/\\/g, '/').toLowerCase());
-    if (configuredFullSuiteCommand && normalizeCompileCommandForContract(trimmedCommand) === configuredFullSuiteCommand) {
-        violations.push('matches the configured full-suite validation command');
-    }
+    let matchesConfiguredSuite = false;
+    const configuredFullSuiteTokens = splitCommandLine(options.fullSuiteCommand || '');
+    const configuredFullSuiteIdentity = literalInvocationIdentity(configuredFullSuiteTokens);
     for (const commandTokens of commands) {
         const tokens = commandTokens.map((token) => token.replace(/\\/g, '/').toLowerCase());
-        if (configuredFullSuiteTokens.length && JSON.stringify(tokens) === JSON.stringify(configuredFullSuiteTokens)) {
+        if (configuredFullSuiteTokens.length && literalInvocationIdentity(commandTokens) === configuredFullSuiteIdentity) {
+            matchesConfiguredSuite = true;
             violations.push('matches the configured full-suite validation command');
         }
         const { executableIndexes, commandText, delegatedTokens } = compileCommandParts(tokens, commandTokens);
         if (configuredFullSuiteTokens.length && executableIndexes.some((index) => index > 0
-            && JSON.stringify(tokens.slice(index)) === JSON.stringify(configuredFullSuiteTokens))) {
+            && literalInvocationIdentity(commandTokens.slice(index)) === configuredFullSuiteIdentity)) {
+            matchesConfiguredSuite = true;
             violations.push('matches the configured full-suite validation command');
         }
         if (delegatedTokens) {
@@ -530,8 +323,15 @@ export function getCompileCommandContractViolations(
         const gradleViolation = getGradleLifecycleViolation(tokens, commandTokens);
         if (gradleViolation) violations.push(gradleViolation);
     }
-    return [...new Set(violations)];
+    return { hints: [...new Set(violations)], matchesConfiguredSuite };
 }
+
+export function getCompileCommandContractHints(command: string, options: CompileCommandContractOptions = {}): string[] {
+    return assessCompileCommandContract(command, options).hints;
+}
+
+/** @deprecated Legacy diagnostic name; these hints never authorize or reject execution. */
+export const getCompileCommandContractViolations = getCompileCommandContractHints;
 
 function compileProfileCommand(tokens: readonly string[], rawTokens: readonly string[]): string {
     const { executable, args, rawArgs } = compileCommandParts(tokens, rawTokens);
@@ -579,7 +379,10 @@ function validateCompileCommandContract(
     rulePath: string,
     options: CompileCommandContractOptions
 ): void {
-    const violations = getCompileCommandContractViolations(command, options);
+    const assessment = assessCompileCommandContract(command, options);
+    const violations: string[] = assessment.matchesConfiguredSuite
+        ? ['matches the configured full-suite validation command'] : [];
+    if (options.purpose && options.purpose !== 'compile') violations.push('declared purpose is not compile');
     if (violations.length === 0) {
         return;
     }
@@ -612,13 +415,8 @@ export function validateCompileGateCommand(
     if (/^\s*<[^>]+>\s*$/.test(trimmedCommand)) {
         throw new Error(`Compile command placeholder is unresolved in ${sourceLabel}: ${trimmedCommand}`);
     }
-    if (/\borg\.apache\.maven\.wrapper\.mavenwrappermain\b/i.test(trimmedCommand)) {
-        throw new Error(
-            `Compile command anti-pattern detected in ${sourceLabel}: ` +
-            "use wrapper entrypoint script (for example './mvnw' or '.\\mvnw.cmd') instead of MavenWrapperMain class invocation."
-        );
-    }
-    parseCommandChain(command);
+    const admission = inspectValidationCommand(command, 'compile', { allowConjunction: true });
+    if (!admission.supported) throw new Error(`Invalid compile command in ${sourceLabel}: ${admission.violation}`);
     validateCompileCommandContract(trimmedCommand, sourceLabel, options);
 }
 

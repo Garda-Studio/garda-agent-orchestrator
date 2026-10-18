@@ -307,6 +307,7 @@ test('workflow set updates compile-gate command and validates full-suite separat
             'set',
             '--bundle-root', bundleRoot,
             '--compile-gate-command', 'npm run typecheck',
+            '--full-suite-command', 'npm test',
             ...buildOperatorConfirmationArgs()
         ], PACKAGE_JSON));
         assert.ok(result && result.action === 'set');
@@ -342,6 +343,11 @@ test('workflow set updates compile-gate command and validates full-suite separat
             ], PACKAGE_JSON),
             /matches the configured full-suite validation command/i
         );
+        const neutral = captureConsole(() => handleWorkflow([
+            'set', '--bundle-root', bundleRoot, '--compile-gate-command', 'gradle build',
+            ...buildOperatorConfirmationArgs()
+        ], PACKAGE_JSON));
+        assert.equal(neutral.result?.compile_gate.command, 'gradle build');
     } finally {
         fs.rmSync(bundleRoot, { recursive: true, force: true });
     }

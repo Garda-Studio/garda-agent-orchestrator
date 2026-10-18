@@ -21,6 +21,7 @@ const COMMAND_CHAIN_OUTPUT_MAX_BYTES = 40 * 1024 * 1024;
 type CommandChainOutput = ReturnType<typeof createOutputCapture>;
 
 export interface ExecuteCommandOptions {
+    captureInvocations?: boolean;
     cwd?: string;
     envPath?: string;
     env?: Record<string, string | undefined>;
@@ -30,8 +31,20 @@ export interface ExecuteCommandOptions {
 }
 
 export interface AsyncCommandExecutionResult {
+    invocations?: CommandInvocationExecution[];
+    invocationOutput?: string;
     exitCode: number;
     outputLines: string[];
+    timedOut: boolean;
+    cancelled: boolean;
+}
+
+export interface CommandInvocationExecution {
+    invocationIndex: number;
+    executable: string;
+    argv: string[];
+    exitCode: number | null;
+    executionError?: string;
     timedOut: boolean;
     cancelled: boolean;
 }
@@ -290,6 +303,36 @@ function finishCommandChainOutput(output: CommandChainOutput): string[] {
     return redactOutputLines(splitOutputLines(output.finish().text));
 }
 
+function createInvocationCapture(enabled: boolean, timeoutMs: number, total: number) {
+    const output = enabled ? createOutputCapture(COMMAND_CHAIN_OUTPUT_MAX_BYTES) : null;
+    const invocations: CommandInvocationExecution[] = [];
+    return {
+        record(tokens: string[], index: number, result: AsyncCommandExecutionResult): void {
+            if (!output) return;
+            invocations.push({ invocationIndex: index, executable: tokens[0], argv: tokens.slice(1),
+                exitCode: result.exitCode, timedOut: result.timedOut, cancelled: result.cancelled });
+            output.append(`==== INVOCATION ${index}/${total} ====\nARGV: ${redactSecretText(JSON.stringify(tokens))}\n`);
+            appendCommandChainOutput(output, result, timeoutMs);
+            output.append(`EXIT_CODE: ${result.exitCode}\n`);
+        },
+        recordError(tokens: string[], index: number, message: string): void {
+            if (!output) return;
+            // No child exit was observed: retain the attempted segment without inventing one.
+            invocations.push({ invocationIndex: index, executable: tokens[0], argv: tokens.slice(1),
+                exitCode: null, executionError: message, timedOut: false, cancelled: false });
+            output.append(`==== INVOCATION ${index}/${total} ====\nARGV: ${redactSecretText(JSON.stringify(tokens))}\n`);
+            output.append(`EXECUTION_ERROR: ${message}\n`);
+        },
+        finish(result: AsyncCommandExecutionResult): AsyncCommandExecutionResult {
+            if (output && (result.timedOut || result.cancelled)
+                && !invocations.some(invocation => invocation.timedOut || invocation.cancelled)) {
+                output.append(result.cancelled ? 'Process was cancelled.\n' : `Process timed out after ${timeoutMs} ms.\n`);
+            }
+            return output ? { ...result, invocations, invocationOutput: redactSecretText(output.finish().text) } : result;
+        }
+    };
+}
+
 export async function executeCommandAsync(
     commandText: string,
     options: ExecuteCommandOptions = {}
@@ -298,17 +341,29 @@ export async function executeCommandAsync(
     const timeoutMs = typeof options.timeoutMs === 'number' ? options.timeoutMs : DEFAULT_SUBPROCESS_TIMEOUT_MS;
     const deadline = commandChainDeadline(timeoutMs);
     const output = createOutputCapture(COMMAND_CHAIN_OUTPUT_MAX_BYTES);
-    for (const tokens of commands) {
+    const capture = createInvocationCapture(options.captureInvocations === true, timeoutMs, commands.length);
+    for (const [index, tokens] of commands.entries()) {
         const interruption = getCommandChainInterruption(options, deadline, timeoutMs, output);
-        if (interruption) return interruption;
-        const result = await executeCommandSegmentAsync(tokens, {
-            ...options,
-            timeoutMs: remainingChainTimeout(deadline)
-        });
+        if (interruption) return capture.finish(interruption);
+        let result: AsyncCommandExecutionResult;
+        try {
+            result = await executeCommandSegmentAsync(tokens, {
+                ...options,
+                timeoutMs: remainingChainTimeout(deadline)
+            });
+        } catch (error) {
+            if (options.captureInvocations !== true) throw error;
+            const message = redactSecretText(error instanceof Error ? error.message : String(error));
+            capture.recordError(tokens, index + 1, message);
+            const failure = { exitCode: EXIT_GENERAL_FAILURE, outputLines: [message], timedOut: false, cancelled: false };
+            appendCommandChainOutput(output, failure, timeoutMs);
+            return capture.finish({ ...failure, outputLines: finishCommandChainOutput(output) });
+        }
+        capture.record(tokens, index + 1, result);
         appendCommandChainOutput(output, result, timeoutMs);
-        if (result.exitCode !== 0 || result.timedOut || result.cancelled) return { ...result, outputLines: finishCommandChainOutput(output) };
+        if (result.exitCode !== 0 || result.timedOut || result.cancelled) return capture.finish({ ...result, outputLines: finishCommandChainOutput(output) });
     }
-    return { exitCode: 0, outputLines: finishCommandChainOutput(output), timedOut: false, cancelled: false };
+    return capture.finish({ exitCode: 0, outputLines: finishCommandChainOutput(output), timedOut: false, cancelled: false });
 }
 
 export function executeCommand(commandText: string, options: ExecuteCommandOptions = {}): SyncCommandExecutionResult {

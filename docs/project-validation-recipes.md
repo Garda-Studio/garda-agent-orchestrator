@@ -8,6 +8,16 @@ Updating an existing project replaces the exact historical built-in trust-bounda
 
 ## Ordinary project checks
 
+Existing compile, suite and intermediate commands share a bounded literal-invocation projection. The compile slot declares `compile`, the suite slot declares `test`, and intermediate commands retain their declared test, typecheck or validation purpose. The descriptor records executable and argv; it grants no execution permission or semantic PASS. Current task, preflight, source, output and existing authorization checks remain mandatory.
+
+Configured source-file runners, including PowerShell `-File`, shell scripts and Windows wrapper files, follow the same argument boundary as package-manager wrappers. Inline programs, unsupported shell dispatch, malformed quoting and shell-dependent control syntax remain rejected. Compile retains its existing explicit sequential `&&` support; suite and intermediate commands use one direct invocation. Platform batch execution retains its expansion and escaping restrictions.
+
+Interpreter options must leave an unambiguous file operand. Unknown option prefixes cannot establish a file boundary; use a direct source-file invocation or a trusted wrapper. Arguments after the file operand remain literal data.
+
+Known builder names and lifecycle phases are diagnostic hints rather than evidence of purpose or task-graph behavior. Keep a real compile command separate from the configured suite; exact suite identity and explicitly incompatible purposes remain blocked unless the existing approved mixed-command exception applies. Command evidence retains purpose and literal invocations. Compile chain diagnostics identify the actual executed segment, its exit status and its bounded, redacted output; an unexecuted segment has no fabricated execution record.
+
+If an attempted segment fails without an observed process exit, its evidence retains `execution_error` and `exit_code: null`, along with the preceding segments' output. Later unattempted segments remain absent.
+
 Where a trust-boundary matrix is required, cite each actual contained source as `path#case selector`. The selector is an opaque project identity; the scenario and expected behavior may use the project's language. Source identities are captured before execution. A bound reference does not prove that an assertion exists or that it ran.
 
 Run the actual focused project command through the task-owned `gate run-intermediate-command --command-source targeted-test --command "<actual project command>"` route selected by `next-step`. Garda retains current preflight/source and process/output identities. Use the project's actual configured command, never a guessed `npm test` command. For expected red, the navigator selects an admitted recipe when present; otherwise it explains the native TAP report requirement without guessing a runner or reporter from filenames or build manifests. Commands using another supported result format can declare it through a recipe. Unfamiliar runners remain eligible through an explicit bounded invocation.

@@ -1,13 +1,11 @@
 import * as path from 'node:path';
 import { parseCommandChain } from '../../../../core/command-line';
-import { rejectInlineValidationProgram } from '../../../../core/project-validation-command';
+import { inspectValidationCommand } from '../../../../core/validation-command-contract';
 import { parseValidationTap } from '../../../../core/project-validation-results';
 import { validationDigest } from '../../../../core/project-validation-identity';
 import { readValidationEventSnapshot } from '../../../../gates/project-validation/attempt-evidence';
 import { getChangedTestPathsTargetedByCommandTokens } from '../../../../gates/shared/focused-intermediate-command-grammar';
 
-const MAXIMUM_COMMAND_BYTES = 64 * 1024;
-const MAXIMUM_ARGUMENTS = 256;
 const MAXIMUM_REPORTED_CASES = 1024;
 type ReportedCase = ReturnType<typeof parseValidationTap>[number];
 interface CaseNode { item: ReportedCase; children: CaseNode[] }
@@ -23,14 +21,7 @@ function finishReportGroup(group: ReportGroup): CaseNode[] {
 }
 
 export function isLiteralIntermediateInvocation(command: string): boolean {
-    try {
-        if (Buffer.byteLength(command) > MAXIMUM_COMMAND_BYTES) return false;
-        const chain = parseCommandChain(command);
-        if (chain.length !== 1 || chain[0].length > MAXIMUM_ARGUMENTS) return false;
-        const [executable, ...argv] = chain[0];
-        rejectInlineValidationProgram(executable, argv);
-        return true;
-    } catch { return false; }
+    return command.trim().length > 0 && inspectValidationCommand(command, 'validation').supported;
 }
 
 /** Target association is input metadata, not permission or proof of test execution. */

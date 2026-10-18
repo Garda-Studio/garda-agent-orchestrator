@@ -6,6 +6,21 @@ import {
 } from '../../../../src/cli/commands/gate-flows/full-suite/full-suite-command-contract';
 
 describe('full-suite command contract', () => {
+    it('admits literal configured source-file runners and wrappers without a package-manager prerequisite', () => {
+        for (const command of [
+            'pwsh -NoProfile -File tools/suite.ps1',
+            'bash tools/suite.sh --scenario refund',
+            './mvnw.cmd test',
+            '.\\gradlew.bat test',
+            'tools/suite.cmd --scenario refund',
+            'tools/suite.sh --scenario refund',
+            'npm run suite',
+            'proof-driver --scenario refund'
+        ]) {
+            assert.equal(validateFullSuiteCommandContract(command).supported, true, command);
+        }
+    });
+
     it('rejects syntax that the shared executor cannot parse before execution', () => {
         assert.equal(validateFullSuiteCommandContract('MODE=build node build.js').supported, false);
         for (const command of ['MODE=build node build.js', 'node build.js "unterminated', 'node build.js \u0000']) {
@@ -38,7 +53,7 @@ describe('full-suite command contract', () => {
         assert.equal(result.supported, false);
         assert.equal(result.provenance.validation_status, 'REJECTED');
         assert.equal(result.provenance.rejection_reason, 'SHELL_CONTROL_OPERATOR');
-        assert.match(result.violation || '', /wrapper npm script/);
+        assert.match(result.violation || '', /trusted wrapper/);
     });
 
     it('rejects other POSIX and Windows-style unquoted shell control operators', () => {
@@ -52,13 +67,13 @@ describe('full-suite command contract', () => {
             assert.equal(result.supported, false, command);
             assert.equal(result.provenance.validation_status, 'REJECTED');
             assert.equal(result.provenance.rejection_reason, 'SHELL_CONTROL_OPERATOR');
-            assert.match(result.violation || '', /wrapper npm script/);
+            assert.match(result.violation || '', /trusted wrapper/);
         }
     });
 
     it('preserves shell-like text inside ordinary quoted arguments', () => {
         const result = validateFullSuiteCommandContract(
-            'node -e "console.log(\'quoted && literal | text > value\')"'
+            'node scripts/check-output.js "console.log(\'quoted && literal | text > value\')"'
         );
         const shellNamedArgumentResult = validateFullSuiteCommandContract(
             'node scripts/check-output.js sh'
@@ -88,7 +103,9 @@ describe('full-suite command contract', () => {
             execution_mode: 'DIRECT_ARGV',
             validation_status: 'PASSED',
             rejection_reason: null,
-            detected_syntax: null
+            detected_syntax: null,
+            command_descriptor: { schema_version: 1, purpose: 'test', invocations: [{ executable: 'node',
+                argv: ['scripts/check-output.js', "console.log('quoted && literal | text > value')"] }] }
         });
     });
 
@@ -133,10 +150,10 @@ describe('full-suite command contract', () => {
         assert.equal(powershellAliasResult.supported, false);
         assert.equal(powershellCommandWithArgsResult.supported, false);
         assert.equal(wrappedShellResult.supported, false);
-        assert.equal(shellScriptResult.supported, false);
-        assert.equal(powershellScriptResult.supported, false);
-        assert.equal(windowsBatchResult.supported, false);
-        assert.equal(directShellScriptResult.supported, false);
+        assert.equal(shellScriptResult.supported, true);
+        assert.equal(powershellScriptResult.supported, true);
+        assert.equal(windowsBatchResult.supported, true);
+        assert.equal(directShellScriptResult.supported, true);
         assert.equal(powershellAliasResult.provenance.rejection_reason, 'SHELL_INTERPRETER');
         assert.match(cmdResult.violation || '', /outside the direct argv execution contract/);
     });
@@ -164,9 +181,7 @@ describe('full-suite command contract', () => {
             'busybox.exe ash -c "node first.js"',
             'toybox sh -c "node first.js"',
             'env busybox sh -c "node first.js"',
-            'busybox env sh -c "node first.js"',
-            './full-suite.fish --strict',
-            './full-suite.command --strict'
+            'busybox env sh -c "node first.js"'
         ]) {
             const result = validateFullSuiteCommandContract(command);
             assert.equal(result.supported, false, command);
@@ -253,13 +268,13 @@ describe('full-suite command contract', () => {
         assert.equal(directResult.provenance.rejection_reason, 'SHELL_INTERPRETER');
     });
 
-    it('handles long multiplexer chains without recursive tail copies', () => {
+    it('bounds oversized multiplexer chains before dispatch inspection', () => {
         const wrappers = Array.from({ length: 10_000 }, () => 'busybox').join(' ');
         const result = validateFullSuiteCommandContract(`${wrappers} sh -c "node first.js"`);
 
         assert.equal(result.supported, false);
-        assert.equal(result.provenance.rejection_reason, 'SHELL_INTERPRETER');
-        assert.equal(result.provenance.detected_syntax, 'sh');
+        assert.equal(result.provenance.rejection_reason, 'INVALID_ARGUMENT_SYNTAX');
+        assert.match(result.violation || '', /bounds/);
     });
 
     it('rejects invalid quoting before subprocess launch', () => {

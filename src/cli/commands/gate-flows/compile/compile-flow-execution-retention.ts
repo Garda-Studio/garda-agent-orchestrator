@@ -3,6 +3,7 @@ import {
 } from '../../../../core/subprocess';
 import {
     getCompileCommandProfile,
+    getCompileInvocationProfile,
     getOutputStats
 } from '../../../../gates/compile/compile-gate';
 import {
@@ -22,7 +23,8 @@ import {
     type FilterProfileResult
 } from '../../../../gate-runtime/output-filters';
 import {
-    executeCommandAsync
+    executeCommandAsync,
+    type CommandInvocationExecution
 } from '../../../gate-cli/gates-subprocess';
 import {
     formatCompileOutputEntry,
@@ -32,6 +34,9 @@ import {
 type CompileCommandProfile = ReturnType<typeof getCompileCommandProfile>;
 
 export interface CompileCommandExecutionSummary {
+    invocationExecutions: Array<CommandInvocationExecution & { commandIndex: number }>;
+    selectedInvocationIndex: number | null;
+    selectedInvocationExecutable: string | null;
     commandAudits: CommandCompactnessAudit[];
     errorCount: number;
     exceptionMessage: string | null;
@@ -69,15 +74,24 @@ export async function executeCompileCommands(params: {
     let exceptionMessage: string | null = null;
     let selectedCommandProfile: CompileCommandProfile | null = null;
     let selectedCommandIndex = 0;
+    let selectedInvocationIndex: number | null = null;
+    let selectedInvocationExecutable: string | null = null;
+    const invocationExecutions: CompileCommandExecutionSummary['invocationExecutions'] = [];
     const timeoutMs = params.timeoutMs ?? DEFAULT_COMPILE_TIMEOUT_MS;
 
     for (let index = 0; index < params.commands.length; index += 1) {
         const compileCommand = params.commands[index];
-        const commandProfile = getCompileCommandProfile(compileCommand);
         const execution = await executeCommandAsync(compileCommand, {
             cwd: params.repoRoot,
-            timeoutMs
+            timeoutMs,
+            captureInvocations: true
         });
+        const invocations = execution.invocations || [];
+        invocationExecutions.push(...invocations.map(invocation => ({ commandIndex: index + 1, ...invocation })));
+        const selected = execution.exitCode === 0 ? invocations[0]
+            : invocations.find(invocation => invocation.exitCode !== 0 || invocation.timedOut || invocation.cancelled);
+        const commandProfile = selected ? getCompileInvocationProfile([selected.executable, ...selected.argv])
+            : getCompileCommandProfile(compileCommand);
         const stats = getOutputStats(execution.outputLines);
         commandAudits.push(auditGateCommand(compileCommand, 'compile-gate'));
 
@@ -85,7 +99,8 @@ export async function executeCompileCommands(params: {
         warningCount += stats.warningLines;
         errorCount += stats.errorLines;
         outputChunks.push(
-            formatCompileOutputEntry(index + 1, params.commands.length, compileCommand, execution.outputLines)
+            formatCompileOutputEntry(index + 1, params.commands.length, compileCommand,
+                execution.invocationOutput?.split(/\r?\n/u) || execution.outputLines)
         );
 
         if (execution.exitCode !== 0) {
@@ -93,16 +108,23 @@ export async function executeCompileCommands(params: {
             exceptionMessage = `Compile command #${index + 1} exited with code ${execution.exitCode}.`;
             selectedCommandProfile = commandProfile;
             selectedCommandIndex = index + 1;
+            selectedInvocationIndex = selected?.invocationIndex ?? null;
+            selectedInvocationExecutable = selected?.executable ?? null;
             break;
         }
 
         if (index === 0) {
             selectedCommandProfile = commandProfile;
             selectedCommandIndex = 1;
+            selectedInvocationIndex = selected?.invocationIndex ?? null;
+            selectedInvocationExecutable = selected?.executable ?? null;
         }
     }
 
     return {
+        invocationExecutions,
+        selectedInvocationIndex,
+        selectedInvocationExecutable,
         commandAudits,
         errorCount,
         exceptionMessage,

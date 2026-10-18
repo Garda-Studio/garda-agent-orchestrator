@@ -47,6 +47,11 @@ it('round-trips actual custom project execution through the native proof reader 
     const result = await runIntermediateCommandCommand({ repoRoot: f.repoRoot, taskId: TASK_ID,
         commandSource: 'targeted-test', command: `node ${RUNNER} --select rejectsEmptyPayment`, preflightPath: f.preflightPath });
     assert.equal(result.exitCode, 0, result.outputLines.join('\n'));
+    const recordPath = result.outputLines.find(line => line.startsWith('ArtifactPath: '))?.slice('ArtifactPath: '.length);
+    assert.ok(recordPath);
+    const record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+    assert.deepEqual(record.command_descriptor, { schema_version: 1, purpose: 'test',
+        invocations: [{ executable: 'node', argv: [RUNNER, '--select', 'rejectsEmptyPayment'] }] });
     const proof = f.read();
     assert.equal(proof.entries.length, 1, proof.warnings.join('\n'));
     assert.match(fs.readFileSync(proof.entries[0].output_artifact_path, 'utf8'), /observed:rejectsEmptyPayment/u);

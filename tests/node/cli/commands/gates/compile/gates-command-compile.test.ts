@@ -62,6 +62,14 @@ function assertCompileFailureIncludesNextStepHint(outputLines: string[]): void {
     assert.ok(outputLines.some((line) => line.includes('NextStep: run') && line.includes('next-step')));
 }
 
+function writeCompileFixture(repoRoot: string, source: string): string {
+    const relative = 'garda-agent-orchestrator/runtime/compile-fixture.cjs';
+    const filename = path.join(repoRoot, relative);
+    fs.mkdirSync(path.dirname(filename), { recursive: true });
+    fs.writeFileSync(filename, source + '\n', 'utf8');
+    return `node ${relative}`;
+}
+
 function writeWorkflowConfig(repoRoot: string, overrides: Record<string, unknown>): void {
     const configPath = path.join(getOrchestratorRoot(repoRoot), 'live', 'config', 'workflow-config.json');
     const config = {
@@ -78,7 +86,7 @@ function seedInitAnswers(repoRoot: string, sourceOfTruth?: string): void {
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, JSON.stringify({
         compile_gate: {
-            command: 'node -e "console.log(\'build ok\')"'
+            command: writeCompileFixture(repoRoot, "console.log('build ok')")
         },
         project_memory_maintenance: {
             enabled: false
@@ -207,7 +215,7 @@ describe('cli/commands/gates compile and post-preflight', () => {
         seedInitAnswers(repoRoot);
         writeWorkflowConfig(repoRoot, {
             compile_gate: {
-                command: 'node -e "console.log(\'workflow config build ok\')"'
+                command: writeCompileFixture(repoRoot, "console.log('workflow config build ok')")
             }
         });
         const preflightPath = writePreflight(repoRoot, taskId);
@@ -243,7 +251,7 @@ describe('cli/commands/gates compile and post-preflight', () => {
         assert.equal(result.exitCode, 0);
         assert.equal(evidence.status, 'PASSED');
         assert.equal(evidence.compile_command_source, 'workflow_config');
-        assert.equal(evidence.compile_commands[0], 'node -e "console.log(\'workflow config build ok\')"');
+        assert.equal(evidence.compile_commands[0], 'node garda-agent-orchestrator/runtime/compile-fixture.cjs');
         assert.equal(evidence.commands_path, null);
         assert.match(evidence.workflow_config_path, /workflow-config\.json$/);
 
@@ -360,14 +368,14 @@ describe('cli/commands/gates compile and post-preflight', () => {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });
 
-    it('fails compile gate before execution when command is a full-suite test command', async () => {
+    it('retains compile purpose and exact argv in actual command execution evidence', async () => {
         const repoRoot = createTempRepo();
         const taskId = 'T-901-compile-contract';
         seedTaskQueue(repoRoot, taskId);
         seedInitAnswers(repoRoot);
         writeWorkflowConfig(repoRoot, {
             compile_gate: {
-                command: 'npm test'
+                command: 'node --version'
             }
         });
         const preflightPath = writePreflight(repoRoot, taskId);
@@ -375,7 +383,7 @@ describe('cli/commands/gates compile and post-preflight', () => {
         fs.writeFileSync(commandsPath, [
             '### Compile Gate (Mandatory)',
             '```bash',
-            'npm test',
+            'node --version',
             '```'
         ].join('\n'), 'utf8');
 
@@ -398,13 +406,14 @@ describe('cli/commands/gates compile and post-preflight', () => {
             emitMetrics: false
         });
 
-        assert.equal(result.exitCode, EXIT_GATE_FAILURE);
-        assert.equal(result.outputLines[0], 'COMPILE_GATE_FAILED');
-        assert.ok(result.outputLines.some((line) => /must not run the full test suite/i.test(line)));
+        assert.equal(result.exitCode, 0);
+        assert.equal(result.outputLines[0], 'COMPILE_GATE_PASSED');
         const evidencePath = path.join(getReviewsRoot(repoRoot), `${taskId}-compile-gate.json`);
         const evidence = JSON.parse(fs.readFileSync(evidencePath, 'utf8'));
-        assert.equal(evidence.status, 'FAILED');
-        assert.deepEqual(evidence.compile_commands, []);
+        assert.equal(evidence.status, 'PASSED');
+        assert.deepEqual(evidence.compile_commands, ['node --version']);
+        assert.deepEqual(evidence.command_descriptors, [{ schema_version: 1, purpose: 'compile',
+            invocations: [{ executable: 'node', argv: ['--version'] }] }]);
 
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });
@@ -715,7 +724,7 @@ describe('cli/commands/gates compile and post-preflight', () => {
         seedInitAnswers(repoRoot);
         writeWorkflowConfig(repoRoot, {
             compile_gate: {
-                command: 'node -e "console.error(\'compile failed detail\'); process.exit(2)"'
+                command: writeCompileFixture(repoRoot, "console.error('compile failed detail'); process.exit(2)")
             }
         });
         const preflightPath = writePreflight(repoRoot, taskId);
@@ -770,7 +779,7 @@ describe('cli/commands/gates compile and post-preflight', () => {
         seedInitAnswers(repoRoot);
         writeWorkflowConfig(repoRoot, {
             compile_gate: {
-                command: 'node -e "console.error(\'org.testcontainers.containers.ContainerFetchException: Could not find a valid Docker environment\'); process.exit(2)"'
+                command: writeCompileFixture(repoRoot, "console.error('org.testcontainers.containers.ContainerFetchException: Could not find a valid Docker environment'); process.exit(2)")
             }
         });
         const preflightPath = writePreflight(repoRoot, taskId);
@@ -844,7 +853,7 @@ describe('cli/commands/gates compile and post-preflight', () => {
                 seedInitAnswers(repoRoot);
                 writeWorkflowConfig(repoRoot, {
                     compile_gate: {
-                        command: `node -e "console.error('${testCase.message}'); process.exit(2)"`
+                        command: writeCompileFixture(repoRoot, `console.error(${JSON.stringify(testCase.message)}); process.exit(2)`)
                     }
                 });
                 const preflightPath = writePreflight(repoRoot, testCase.taskId);
@@ -896,7 +905,7 @@ describe('cli/commands/gates compile and post-preflight', () => {
         seedInitAnswers(repoRoot);
         writeWorkflowConfig(repoRoot, {
             compile_gate: {
-                command: 'node -e "console.error(\'src/app.ts(1,1): error TS1005: expected\'); process.exit(2)"'
+                command: writeCompileFixture(repoRoot, "console.error('src/app.ts(1,1): error TS1005: expected'); process.exit(2)")
             }
         });
         const preflightPath = writePreflight(repoRoot, taskId);

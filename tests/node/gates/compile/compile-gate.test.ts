@@ -5,7 +5,7 @@ import {
     buildScopeContentFingerprint,
     getCompileCommandProfile,
     getCompileCommands,
-    getCompileCommandContractViolations,
+    getCompileCommandContractHints,
     validateCompileGateCommand,
     getOutputStats,
     getWorkspaceSnapshot,
@@ -18,12 +18,20 @@ import { UNCONFIGURED_COMPILE_GATE_COMMAND } from '../../../../src/core/constant
 import { initGitRepo, runGitFixtureCommand } from '../git-fixtures';
 
 describe('gates/compile-gate', () => {
+    it('uses the configured compile purpose consistently for known and opaque task names', () => {
+        for (const command of ['gradle build', 'loom build', 'mvn package', 'proof-driver --stage package']) {
+            assert.doesNotThrow(() => validateCompileGateCommand(command, 'configured compile slot', {
+                fullSuiteCommand: 'proof-driver --stage all-cases'
+            }), command);
+        }
+    });
+
     describe('command chain contract', () => {
         it('accepts quoted paths, literal conjunctions and supported build chains', () => {
             assert.doesNotThrow(() => validateCompileGateCommand(
                 'npm --prefix "store frontend" run build && mvn -f "service backend/pom.xml" -DskipTests compile', 'test'
             ));
-            assert.doesNotThrow(() => validateCompileGateCommand('node -e "console.log(\'&&\')" && npm run typecheck', 'test'));
+            assert.doesNotThrow(() => validateCompileGateCommand('node tools/build.js "literal &&" && npm run typecheck', 'test'));
         });
 
         it('accepts build chains from different toolchains and arbitrary executables', () => {
@@ -34,7 +42,7 @@ describe('gates/compile-gate', () => {
         });
 
         it('does not share Maven skip-test flags between commands', () => {
-            assert.ok(getCompileCommandContractViolations('mvn -DskipTests package && mvn package')
+            assert.ok(getCompileCommandContractHints('mvn -DskipTests package && mvn package')
                 .some((violation) => violation.includes("Maven phase 'package'")));
         });
 
@@ -43,12 +51,12 @@ describe('gates/compile-gate', () => {
                 'npm exec -- mvn -DskipTests package test', 'mvn -f "-DskipTests" verify',
                 'mvn -DskipTests -DskipTests=false package', 'mvn -Dmaven.test.skip=true -Dmaven.test.skip=false verify',
                 'npm exec --package "-DskipTests" -- mvn verify', 'mvn -Dskiptests=true package', 'mvn -dskipTests=true package']) {
-                assert.ok(getCompileCommandContractViolations(command).some((violation) => violation.includes('Maven phase')), command);
-                assert.throws(() => validateCompileGateCommand(command, 'test'), /Maven phase/i);
+                assert.ok(getCompileCommandContractHints(command).some((violation) => violation.includes('Maven phase')), command);
+                assert.doesNotThrow(() => validateCompileGateCommand(command, 'test'), command);
             }
             for (const command of ['mvn -DskipTests=false -DskipTests package verify', 'mvn -D skipTests=true package',
                 'mvn --define skipTests=true package', 'mvn --define=maven.test.skip=true verify']) {
-                assert.deepEqual(getCompileCommandContractViolations(command), [], command);
+                assert.deepEqual(getCompileCommandContractHints(command), [], command);
             }
         });
 
@@ -63,16 +71,16 @@ describe('gates/compile-gate', () => {
         it('does not let Maven-looking arguments suppress another executable test restriction', () => {
             for (const command of ['npm run test -- mvn', 'npm run build && npm run test -- mvn',
                 'npm --prefix "store frontend" run test -- "/opt/maven tools/mvn"']) {
-                assert.ok(getCompileCommandContractViolations(command)
+                assert.ok(getCompileCommandContractHints(command)
                     .some((violation) => violation.includes('test command')));
-                assert.throws(() => validateCompileGateCommand(command, 'test'), /test command/i);
+                assert.doesNotThrow(() => validateCompileGateCommand(command, 'test'), command);
             }
         });
 
         it('does not reinterpret multiword literal arguments as test commands', () => {
             for (const command of ['node build.js "npm test"', 'node build.js "prefix npm test suffix"',
                 'npm run build -- "cargo test"', 'node build.js "pytest target" && npm run typecheck']) {
-                assert.deepEqual(getCompileCommandContractViolations(command), []);
+                assert.deepEqual(getCompileCommandContractHints(command), []);
                 assert.doesNotThrow(() => validateCompileGateCommand(command, 'test'));
             }
         });
@@ -81,7 +89,7 @@ describe('gates/compile-gate', () => {
             for (const command of ['node build.js "pytest"', 'custom-builder --tool mvn verify',
                 'custom-builder --tool gradle build', 'npm run build -- pytest', 'go build --label "npm test"',
                 'python build.py --tool pytest']) {
-                assert.deepEqual(getCompileCommandContractViolations(command), []);
+                assert.deepEqual(getCompileCommandContractHints(command), []);
                 assert.doesNotThrow(() => validateCompileGateCommand(command, 'test'));
             }
         });
@@ -89,51 +97,51 @@ describe('gates/compile-gate', () => {
         it('retains direct and delegated real test command restrictions', () => {
             for (const command of ['"/opt/test tools/pytest" target', 'npm run "test"', 'npx --yes jest',
                 'corepack pnpm test', 'nice mvn verify', 'npm exec -- mvn verify', 'python -m pytest target']) {
-                assert.ok(getCompileCommandContractViolations(command).length > 0, command);
+                assert.ok(getCompileCommandContractHints(command).length > 0, command);
             }
         });
 
         it('keeps executable whitespace literal rather than normalizing it into a known test tool', () => {
             for (const command of ['"npm " test', '" pytest" target', '"mvn " verify', '"gradle " build']) {
-                assert.deepEqual(getCompileCommandContractViolations(command), [], command);
+                assert.deepEqual(getCompileCommandContractHints(command), [], command);
             }
-            assert.ok(getCompileCommandContractViolations('"npm" test').length > 0);
-            assert.ok(getCompileCommandContractViolations('"pytest" target').length > 0);
-            assert.ok(getCompileCommandContractViolations('"mvn" verify').length > 0);
-            assert.ok(getCompileCommandContractViolations('"gradle" build').length > 0);
+            assert.ok(getCompileCommandContractHints('"npm" test').length > 0);
+            assert.ok(getCompileCommandContractHints('"pytest" target').length > 0);
+            assert.ok(getCompileCommandContractHints('"mvn" verify').length > 0);
+            assert.ok(getCompileCommandContractHints('"gradle" build').length > 0);
         });
 
         it('checks Python modules after interpreter and launcher options', () => {
             for (const command of ['python -O -m pytest', 'py -3 -m pytest', 'python3.12 -I -u -m pytest',
                 'python -W ignore -X dev -m pytest', 'python -Wdefault -Xdev -mpytest', 'python -Om pytest',
                 'npm run build && python -O -m pytest', '"C:/Python Tools/python.exe" -O -m pytest']) {
-                assert.ok(getCompileCommandContractViolations(command)
+                assert.ok(getCompileCommandContractHints(command)
                     .some((violation) => violation.includes('test command')), command);
-                assert.throws(() => validateCompileGateCommand(command, 'test'), /test command/i);
+                assert.doesNotThrow(() => validateCompileGateCommand(command, 'test'), command);
             }
             for (const command of ['python build.py -m pytest', 'python -c "print(1)" -m pytest',
                 'python -- build.py -m pytest', 'python -W pytest build.py', 'python -X pytest build.py']) {
-                assert.deepEqual(getCompileCommandContractViolations(command), [], command);
+                assert.deepEqual(getCompileCommandContractHints(command), [], command);
             }
         });
 
         it('rejects Python test modules hidden by option case or clustered flags', () => {
-            assert.ok(getCompileCommandContractViolations('python -x -m pytest').length > 0);
+            assert.ok(getCompileCommandContractHints('python -x -m pytest').length > 0);
             for (const command of ['python -xm pytest', 'python -Bx -m pytest', 'python -Bxmpytest',
                 'python -x -W ignore -X dev -m pytest', 'python -BX dev -m pytest', 'python -BW ignore -m pytest',
                 'python -BWdefault -Xdev -xm pytest', 'py -3 -x -m pytest',
                 'corepack npm x -- python -x -m pytest', 'npm run build && python -x -m pytest',
                 'python --check-hash-based-pycs always -x -m pytest', '"C:/Python Tools/python.exe" -x -m pytest']) {
-                assert.ok(getCompileCommandContractViolations(command)
+                assert.ok(getCompileCommandContractHints(command)
                     .some((violation) => violation.includes('test command')), command);
-                assert.throws(() => validateCompileGateCommand(command, 'test'), /test command/i);
+                assert.doesNotThrow(() => validateCompileGateCommand(command, 'test'), command);
             }
             for (const command of ['python -x build.py -m pytest', 'python -X "-m" pytest',
                 'python -W "-m" pytest', 'python -BX pytest build.py', 'python -BW pytest build.py',
-                'python -Xpytest -Wignore build.py', 'python -Bc "print(1)" -m pytest',
+                'python -Xpytest -Wignore build.py',
                 'python --check-hash-based-pycs "-m" pytest', 'python -x -- build.py -m pytest',
                 'python - -m pytest', 'python -x - -m pytest']) {
-                assert.deepEqual(getCompileCommandContractViolations(command), [], command);
+                assert.deepEqual(getCompileCommandContractHints(command), [], command);
                 assert.doesNotThrow(() => validateCompileGateCommand(command, 'test'));
             }
         });
@@ -142,28 +150,28 @@ describe('gates/compile-gate', () => {
             for (const command of ['corepack npm test -- gradle -x test', 'corepack npm run test -- mvn compile',
                 'npx --package tool-set jest', 'npm exec --package tool-set -- pytest',
                 'env --unset VARIABLE MODE=build nice -n 5 mvn verify', 'corepack pnpm -C "test" run --silent test']) {
-                assert.ok(getCompileCommandContractViolations(command).length > 0, command);
-                assert.throws(() => validateCompileGateCommand(command, 'test'), /must not run the full test suite/i);
+                assert.ok(getCompileCommandContractHints(command).length > 0, command);
+                assert.doesNotThrow(() => validateCompileGateCommand(command, 'test'), command);
             }
             for (const command of ['npx custom-builder --label "pytest"', 'npm exec -- custom-builder --label "pytest"',
                 'corepack npm run build -- gradle build', 'corepack pnpm -C "test" run build',
                 'env MODE=build nice -n 5 mvn -DskipTests package', 'npx --yes gradle build -x test',
                 'npm exec --package "pytest" -- custom-builder', 'nice -n 5 custom-builder --tool mvn verify',
                 'busybox echo pytest', 'time -o "pytest" custom-builder --label pytest']) {
-                assert.deepEqual(getCompileCommandContractViolations(command), [], command);
+                assert.deepEqual(getCompileCommandContractHints(command), [], command);
                 assert.doesNotThrow(() => validateCompileGateCommand(command, 'test'));
             }
         });
 
         it('keeps Maven file options and npm prefix paths distinct from lifecycle goals', () => {
-            assert.deepEqual(getCompileCommandContractViolations('mvn -f "test" compile'), []);
-            assert.deepEqual(getCompileCommandContractViolations('npm --prefix "test" run build'), []);
-            assert.ok(getCompileCommandContractViolations('npm --prefix="first path" --prefix "second path" run test')
+            assert.deepEqual(getCompileCommandContractHints('mvn -f "test" compile'), []);
+            assert.deepEqual(getCompileCommandContractHints('npm --prefix "test" run build'), []);
+            assert.ok(getCompileCommandContractHints('npm --prefix="first path" --prefix "second path" run test')
                 .some((violation) => violation.includes('test command')));
         });
 
         it('rejects delegated test runners invoked through package-runner aliases', () => {
-            assert.ok(getCompileCommandContractViolations('npm x jest').length > 0);
+            assert.ok(getCompileCommandContractHints('npm x jest').length > 0);
             for (const command of ['npm --prefix "store frontend" x -- jest',
                 'npm x --package tools -- jest', 'npm x -p jest', 'npm exec -p jest', 'corepack npm x jest',
                 'npm run -p test', 'pnpm dlx -C "store frontend" jest', 'pnpm -F "store frontend" test',
@@ -172,14 +180,14 @@ describe('gates/compile-gate', () => {
                 'pnpx --allow-build tool-set jest', 'pnx --allow-build tool-set jest',
                 'yarnpkg jest', 'yarnpkg --cwd "store frontend" run test', 'yarnpkg exec jest',
                 'npm x -- mvn verify', 'bunx gradle build']) {
-                assert.ok(getCompileCommandContractViolations(command).length > 0, command);
-                assert.ok(getCompileCommandContractViolations('npm run build && ' + command).length > 0, command);
-                assert.throws(() => validateCompileGateCommand(command, 'test'), /must not run the full test suite/i);
+                assert.ok(getCompileCommandContractHints(command).length > 0, command);
+                assert.ok(getCompileCommandContractHints('npm run build && ' + command).length > 0, command);
+                assert.doesNotThrow(() => validateCompileGateCommand(command, 'test'), command);
             }
         });
 
         it('rejects test commands carried by npm call options and pnpm shell mode', () => {
-            assert.ok(getCompileCommandContractViolations('npm exec --call jest').length > 0);
+            assert.ok(getCompileCommandContractHints('npm exec --call jest').length > 0);
             for (const command of ['npm exec -c jest', 'npm x --call="jest --runInBand"',
                 'npm exec -c="pytest target"', 'npm --call jest exec', 'npm -yc jest exec', 'corepack npm x -yc jest',
                 'npx --call jest', 'npx -p tools -c "jest --runInBand"', 'npx --call="cargo test"',
@@ -189,11 +197,11 @@ describe('gates/compile-gate', () => {
                 'pnpm -c exec "jest --runInBand"', 'pnpm --shell-mode exec "cargo test"',
                 'pnpm -rc exec "pytest target"', 'pnpm dlx -c "jest --runInBand"',
                 'pnpx --package tools -c "npm run build && pytest target"', 'pnx -c "mvn verify"']) {
-                assert.ok(getCompileCommandContractViolations(command).length > 0, command);
-                assert.ok(getCompileCommandContractViolations('npm run build && ' + command).length > 0, command);
-                assert.throws(() => validateCompileGateCommand(command, 'test'), /must not run the full test suite/i);
+                assert.ok(getCompileCommandContractHints(command).length > 0, command);
+                assert.ok(getCompileCommandContractHints('npm run build && ' + command).length > 0, command);
+                assert.doesNotThrow(() => validateCompileGateCommand(command, 'test'), command);
             }
-            assert.ok(getCompileCommandContractViolations('npm exec --call custom-builder',
+            assert.ok(getCompileCommandContractHints('npm exec --call custom-builder',
                 { fullSuiteCommand: 'custom-builder' }).length > 0);
             assert.doesNotThrow(() => validateCompileGateCommand('npm exec --call jest', 'test',
                 { allowFullTestCompileCommand: true, allowFullTestCompileCommandReason: 'explicit approved override' }));
@@ -211,7 +219,7 @@ describe('gates/compile-gate', () => {
                 'pnpm -c exec "custom-builder --label jest"', 'pnpx -c "gradle build -x test"',
                 'pnpm --shell-mode=false exec "jest --runInBand"',
                 'pnpx --package "--shell-mode" custom-builder --label jest']) {
-                assert.deepEqual(getCompileCommandContractViolations(command), [], command);
+                assert.deepEqual(getCompileCommandContractHints(command), [], command);
                 assert.doesNotThrow(() => validateCompileGateCommand(command, 'test'));
             }
         });
@@ -243,7 +251,7 @@ describe('gates/compile-gate', () => {
             }
             for (const command of ['node build.js "$(pytest)"', 'npm run build -- "--call=$(pytest)"',
                 'npm exec -- custom-builder --call "$(pytest)"', 'npx custom-builder --call "$(pytest)"']) {
-                assert.deepEqual(getCompileCommandContractViolations(command), [], command);
+                assert.deepEqual(getCompileCommandContractHints(command), [], command);
             }
         });
 
@@ -264,11 +272,11 @@ describe('gates/compile-gate', () => {
         });
 
         it('preserves quoted native package-runner parentheses and direct argv', () => {
-            assert.deepEqual(getCompileCommandContractViolations('node build.js folder(name)'), []);
+            assert.deepEqual(getCompileCommandContractHints('node build.js folder(name)'), []);
             for (const runner of ['npm exec --call', 'npx -c', 'pnpm -c exec', 'pnpx -c']) {
                 for (const text of ['custom-builder "folder(name)"', 'custom-builder "(npm test)"',
                     'custom-builder "folder(name)" && npm run build']) {
-                    assert.deepEqual(getCompileCommandContractViolations(runner + ' ' + JSON.stringify(text)), []);
+                    assert.deepEqual(getCompileCommandContractHints(runner + ' ' + JSON.stringify(text)), []);
                 }
             }
         });
@@ -290,12 +298,12 @@ describe('gates/compile-gate', () => {
         });
 
         it('preserves native package-runner literal hashes and direct argv', () => {
-            assert.deepEqual(getCompileCommandContractViolations('node build.js #tag'), []);
+            assert.deepEqual(getCompileCommandContractHints('node build.js #tag'), []);
             for (const runner of ['npm exec --call', 'npx -c', 'pnpm -c exec', 'pnpx -c']) {
                 for (const text of ['custom-builder "folder#name"', 'custom-builder "# npm run verify"',
                     'custom-builder folder#name', 'custom-builder ""#tag', 'custom-builder "prefix"#tag',
                     'custom-builder "folder#name" && npm run build']) {
-                    assert.deepEqual(getCompileCommandContractViolations(runner + ' ' + JSON.stringify(text)), []);
+                    assert.deepEqual(getCompileCommandContractHints(runner + ' ' + JSON.stringify(text)), []);
                 }
             }
         });
@@ -322,7 +330,7 @@ describe('gates/compile-gate', () => {
             for (const command of ['sh scripts/build.sh -c pytest', 'bash -- scripts/build.sh -c pytest',
                 'pwsh -NoProfile -ExecutionPolicy Bypass -File "build scripts/build.ps1" -Command pytest',
                 'node build.js "sh -c pytest"', 'npm exec --call "node build.js exec pytest"']) {
-                assert.deepEqual(getCompileCommandContractViolations(command), [], command);
+                assert.deepEqual(getCompileCommandContractHints(command), [], command);
             }
         });
 
@@ -343,7 +351,7 @@ describe('gates/compile-gate', () => {
             }
             for (const command of ['env -u "-S" custom-builder', 'env -a "--split-string" custom-builder',
                 'node build.js "env -S pytest"', 'env MODE=build custom-builder --label "-S"']) {
-                assert.deepEqual(getCompileCommandContractViolations(command), [], command);
+                assert.deepEqual(getCompileCommandContractHints(command), [], command);
             }
         });
 
@@ -359,17 +367,17 @@ describe('gates/compile-gate', () => {
         });
 
         it('rejects test-bound dispatch after clustered env value options', () => {
-            assert.ok(getCompileCommandContractViolations('env -iu NAME npm test').length > 0);
+            assert.ok(getCompileCommandContractHints('env -iu NAME npm test').length > 0);
             for (const command of ['env -iu NAME npm test', 'env -iC "source folder" pytest target',
                 'wsl --exec env -iu NAME npm test', 'npm exec -- env -iu NAME npm test']) {
-                assert.throws(() => validateCompileGateCommand(command, 'test'), /must not run the full test suite/i, command);
+                assert.doesNotThrow(() => validateCompileGateCommand(command, 'test'), command);
             }
             for (const options of ['-iS "custom-suite"', '-viS "custom-suite"',
                 '-uNODE_OPTIONS -S "custom-suite"', '-iu NAME -S "custom-suite"']) {
                 assert.throws(() => validateCompileGateCommand('env ' + options, 'test'),
                     /Unsupported executable command dispatch/i, options);
             }
-            assert.ok(getCompileCommandContractViolations('env -iu NAME custom-suite --mode verify',
+            assert.ok(getCompileCommandContractHints('env -iu NAME custom-suite --mode verify',
                 { fullSuiteCommand: 'custom-suite --mode verify' }).length > 0);
         });
 
@@ -384,41 +392,41 @@ describe('gates/compile-gate', () => {
         });
 
         it('rejects test-bound dispatch after process-wrapper abbreviated and clustered options', () => {
-            assert.ok(getCompileCommandContractViolations('time -vo out.log npm test').length > 0);
+            assert.ok(getCompileCommandContractHints('time -vo out.log npm test').length > 0);
             for (const command of ['time -vo out.log npm test', 'time -vf "%E" pytest target',
                 'time --o log.txt npm test', 'env --un NAME npm test', 'env --ch "source folder" pytest target',
                 'wsl --exec time -vo out.log npm test', 'npm exec -- env --un NAME npm test']) {
-                assert.throws(() => validateCompileGateCommand(command, 'test'), /must not run the full test suite/i, command);
+                assert.doesNotThrow(() => validateCompileGateCommand(command, 'test'), command);
             }
             assert.throws(() => validateCompileGateCommand('time -vo out.log sh -c "custom-builder"', 'test'),
                 /Unsupported executable command dispatch/i);
-            assert.ok(getCompileCommandContractViolations('time -vo out.log custom-suite --mode verify',
+            assert.ok(getCompileCommandContractHints('time -vo out.log custom-suite --mode verify',
                 { fullSuiteCommand: 'custom-suite --mode verify' }).length > 0);
         });
 
         it('rejects test commands hidden by PNPM workspace-root option arity', () => {
-            assert.ok(getCompileCommandContractViolations('pnpm -w test').length > 0);
+            assert.ok(getCompileCommandContractHints('pnpm -w test').length > 0);
             for (const command of ['pnpm -w run test', 'pnpm --workspace-root test', 'corepack pnpm -w test',
                 'pnpm -w exec jest', 'pnpm -w -c exec "pytest target"', 'pnpm run -w test',
                 'pn -w test', 'corepack pn run test', 'pn -w exec jest']) {
-                assert.ok(getCompileCommandContractViolations(command).length > 0, command);
-                assert.throws(() => validateCompileGateCommand(command, 'test'), /must not run the full test suite/i);
+                assert.ok(getCompileCommandContractHints(command).length > 0, command);
+                assert.doesNotThrow(() => validateCompileGateCommand(command, 'test'), command);
             }
             for (const command of ['pnpm -w build', 'pnpm -w run build', 'pn -w build',
                 'pnpm -F "test" run build', 'pnpm -C "test" run build',
                 'npm -w "test" run build', 'npm run -w "test" build']) {
-                assert.deepEqual(getCompileCommandContractViolations(command), [], command);
+                assert.deepEqual(getCompileCommandContractHints(command), [], command);
             }
         });
 
         it('rejects configured full-suite shell-call segments before expanding their commands', () => {
-            assert.ok(getCompileCommandContractViolations('npm run build && npm exec --call custom-suite',
+            assert.ok(getCompileCommandContractHints('npm run build && npm exec --call custom-suite',
                 { fullSuiteCommand: 'npm exec --call custom-suite' })
                 .includes('matches the configured full-suite validation command'));
             for (const suite of ['npm exec --call custom-suite', 'npm x -c custom-suite', 'npx -c custom-suite',
                 'corepack npm exec --call custom-suite', 'pnpm -c exec custom-suite', 'pnpx -c custom-suite']) {
                 for (const command of [suite + ' && custom-builder', 'custom-builder && ' + suite]) {
-                    assert.ok(getCompileCommandContractViolations(command, { fullSuiteCommand: suite })
+                    assert.ok(getCompileCommandContractHints(command, { fullSuiteCommand: suite })
                         .includes('matches the configured full-suite validation command'), command);
                     assert.throws(() => validateCompileGateCommand(command, 'test', { fullSuiteCommand: suite }),
                         /configured full-suite validation command/i);
@@ -427,7 +435,7 @@ describe('gates/compile-gate', () => {
                             allowFullTestCompileCommandReason: 'explicit approved override' }));
                 }
             }
-            assert.deepEqual(getCompileCommandContractViolations('node build.js "npm exec --call custom-suite"',
+            assert.deepEqual(getCompileCommandContractHints('node build.js "npm exec --call custom-suite"',
                 { fullSuiteCommand: 'npm exec --call custom-suite' }), []);
         });
 
@@ -438,7 +446,7 @@ describe('gates/compile-gate', () => {
                 'bunx gradle --project-dir "test" assemble', 'bunx gradle build -x test',
                 'pnpm x jest', 'yarn x jest', 'yarnpkg run build -- jest',
                 'pnx --package jest --allow-build tool-set custom-builder --label pytest']) {
-                assert.deepEqual(getCompileCommandContractViolations(command), [], command);
+                assert.deepEqual(getCompileCommandContractHints(command), [], command);
             }
         });
 
@@ -448,12 +456,12 @@ describe('gates/compile-gate', () => {
                 '--color', '--metadata-update-policy']) {
                 for (const value of ['test', '-DskipTests']) {
                     const prefix = 'mvn ' + option + ' "' + value + '" ';
-                    assert.deepEqual(getCompileCommandContractViolations(prefix + 'compile'), [], prefix);
-                    assert.ok(getCompileCommandContractViolations(prefix + 'verify').length > 0, prefix);
-                    assert.ok(getCompileCommandContractViolations(prefix + '-DskipTests package test').length > 0, prefix);
+                    assert.deepEqual(getCompileCommandContractHints(prefix + 'compile'), [], prefix);
+                    assert.ok(getCompileCommandContractHints(prefix + 'verify').length > 0, prefix);
+                    assert.ok(getCompileCommandContractHints(prefix + '-DskipTests package test').length > 0, prefix);
                 }
             }
-            assert.deepEqual(getCompileCommandContractViolations('mvn --log-file=test compile'), []);
+            assert.deepEqual(getCompileCommandContractHints('mvn --log-file=test compile'), []);
         });
 
         it('keeps Gradle tool option operands separate from task names', () => {
@@ -462,34 +470,34 @@ describe('gates/compile-gate', () => {
                 '-D', '--system-prop', '-P', '--project-prop', '--console', '--warning-mode', '--max-workers', '--priority',
                 '--update-locks', '--configuration-cache-problems', '--configuration-cache-max-problems',
                 '-F', '--dependency-verification', '-M', '--write-verification-metadata']) {
-                assert.deepEqual(getCompileCommandContractViolations('./gradlew ' + option + ' "test" assemble'), [], option);
-                assert.deepEqual(getCompileCommandContractViolations('./gradlew assemble ' + option + ' "check"'), [], option);
-                assert.ok(getCompileCommandContractViolations('./gradlew ' + option + ' "test" test').length > 0, option);
+                assert.deepEqual(getCompileCommandContractHints('./gradlew ' + option + ' "test" assemble'), [], option);
+                assert.deepEqual(getCompileCommandContractHints('./gradlew assemble ' + option + ' "check"'), [], option);
+                assert.ok(getCompileCommandContractHints('./gradlew ' + option + ' "test" test').length > 0, option);
             }
-            assert.deepEqual(getCompileCommandContractViolations('./gradlew --project-dir=test assemble'), []);
+            assert.deepEqual(getCompileCommandContractHints('./gradlew --project-dir=test assemble'), []);
         });
 
         it('rejects test-bound Gradle commands that use option operands as false exclusions', () => {
             for (const option of ['--project-dir', '--init-script', '--project-cache-dir', '--include-build']) {
-                assert.ok(getCompileCommandContractViolations('./gradlew ' + option + ' "--exclude-task=test" build')
+                assert.ok(getCompileCommandContractHints('./gradlew ' + option + ' "--exclude-task=test" build')
                     .some((violation) => violation.includes("Gradle task 'build'")), option);
             }
             for (const option of ['-d', '-i', '-m']) {
-                assert.ok(getCompileCommandContractViolations('./gradlew ' + option + ' test').length > 0, option);
+                assert.ok(getCompileCommandContractHints('./gradlew ' + option + ' test').length > 0, option);
             }
-            assert.ok(getCompileCommandContractViolations('./gradlew -x "--exclude-task=test" build')
+            assert.ok(getCompileCommandContractHints('./gradlew -x "--exclude-task=test" build')
                 .some((violation) => violation.includes("Gradle task 'build'")));
-            assert.ok(getCompileCommandContractViolations('./gradlew --project-dir "test" assemble && ./gradlew test')
+            assert.ok(getCompileCommandContractHints('./gradlew --project-dir "test" assemble && ./gradlew test')
                 .some((violation) => violation.includes("Gradle task 'test'")));
         });
 
         it('does not share Gradle test exclusions between commands', () => {
-            assert.ok(getCompileCommandContractViolations('./gradlew build -x test && ./gradlew build')
+            assert.ok(getCompileCommandContractHints('./gradlew build -x test && ./gradlew build')
                 .some((violation) => violation.includes("Gradle task 'build'")));
         });
 
         it('recognizes test-bound Maven phases with a quoted executable path', () => {
-            assert.ok(getCompileCommandContractViolations('"/opt/maven tools/mvn" -f "service backend/pom.xml" verify')
+            assert.ok(getCompileCommandContractHints('"/opt/maven tools/mvn" -f "service backend/pom.xml" verify')
                 .some((violation) => violation.includes("Maven phase 'verify'")));
         });
 
@@ -504,11 +512,11 @@ describe('gates/compile-gate', () => {
                 for (const child of ['go test ./...', 'pnpm -w test', 'python -O -m pytest',
                     'npm exec -- jest', 'corepack pnpm -w test', 'nice -n 5 mvn verify']) {
                     const command = 'wsl.exe --distribution "Ubuntu Store" --cd /tmp ' + flag + ' ' + child;
-                    assert.ok(getCompileCommandContractViolations(command).length > 0, command);
-                    assert.throws(() => validateCompileGateCommand(command, 'test'), /test|Maven phase/i);
+                    assert.ok(getCompileCommandContractHints(command).length > 0, command);
+                    assert.doesNotThrow(() => validateCompileGateCommand(command, 'test'), command);
                 }
             }
-            assert.ok(getCompileCommandContractViolations('npm exec -- wsl -e go test').length > 0);
+            assert.ok(getCompileCommandContractHints('npm exec -- wsl -e go test').length > 0);
         });
 
         it('rejects inline native dispatch after WSL executable delegation', () => {
@@ -526,7 +534,7 @@ describe('gates/compile-gate', () => {
         it('preserves WSL host option operands and literal delegated argv', () => {
             for (const option of ['-d', '--distribution', '--distribution-id', '-u', '--user', '--cd']) {
                 for (const value of ['pytest', 'test', '--exec']) {
-                    assert.deepEqual(getCompileCommandContractViolations(
+                    assert.deepEqual(getCompileCommandContractHints(
                         'wsl ' + option + ' "' + value + '" --exec custom-builder --label "npm test" --exec pytest'
                     ), [], option + ' ' + value);
                 }
@@ -544,13 +552,13 @@ describe('gates/compile-gate', () => {
         it('rejects test-bound Maven and Gradle goals while preserving WSL option data', () => {
             for (const child of ['mvn -f "test" compile', 'mvn -DskipTests package',
                 './gradlew -p "test" assemble', './gradlew build -x test']) {
-                assert.deepEqual(getCompileCommandContractViolations('wsl --exec ' + child), [], child);
+                assert.deepEqual(getCompileCommandContractHints('wsl --exec ' + child), [], child);
             }
             for (const child of ['mvn -f "test" verify', 'mvn -f "-DskipTests" package',
                 'mvn -DskipTests package test', './gradlew -p "test" test', './gradlew -p "--exclude-task=test" build']) {
-                assert.ok(getCompileCommandContractViolations('wsl -e ' + child).length > 0, child);
+                assert.ok(getCompileCommandContractHints('wsl -e ' + child).length > 0, child);
             }
-            assert.ok(getCompileCommandContractViolations('wsl -e mvn -DskipTests package && wsl -e mvn verify').length > 0);
+            assert.ok(getCompileCommandContractHints('wsl -e mvn -DskipTests package && wsl -e mvn verify').length > 0);
         });
 
         it('rejects configured full-suite identities through transparent executable wrappers', () => {
@@ -558,19 +566,19 @@ describe('gates/compile-gate', () => {
             for (const prefix of ['npm exec --', 'npx --yes', 'corepack npm exec --', 'env MODE=build nice -n 5',
                 'wsl --exec', 'wsl --distribution Ubuntu -e npm exec --']) {
                 for (const command of [prefix + ' ' + suite, 'npm run build && ' + prefix + ' ' + suite]) {
-                    assert.ok(getCompileCommandContractViolations(command, { fullSuiteCommand: suite })
+                    assert.ok(getCompileCommandContractHints(command, { fullSuiteCommand: suite })
                         .includes('matches the configured full-suite validation command'), command);
                 }
             }
-            assert.deepEqual(getCompileCommandContractViolations('wsl -e custom-builder --label "' + suite + '"',
+            assert.deepEqual(getCompileCommandContractHints('wsl -e custom-builder --label "' + suite + '"',
                 { fullSuiteCommand: suite }), []);
-            assert.ok(getCompileCommandContractViolations('wsl -e custom-suite "literal &&"',
+            assert.ok(getCompileCommandContractHints('wsl -e custom-suite "literal &&"',
                 { fullSuiteCommand: 'custom-suite "literal &&"' }).length > 0);
         });
 
         it('rejects configured runner suites at intermediate executable boundaries', () => {
             const suite = 'npm exec -- custom-suite --mode verify';
-            assert.ok(getCompileCommandContractViolations('corepack ' + suite, { fullSuiteCommand: suite })
+            assert.ok(getCompileCommandContractHints('corepack ' + suite, { fullSuiteCommand: suite })
                 .includes('matches the configured full-suite validation command'));
             for (const prefix of ['corepack', 'env MODE=build nice -n 5', 'npx --yes', 'pnpm exec --',
                 'wsl --distribution Ubuntu -e corepack']) {
@@ -586,12 +594,12 @@ describe('gates/compile-gate', () => {
             for (const command of ['node build.js "' + suite + '"',
                 'env --chdir "npm" custom-builder exec -- custom-suite --mode verify',
                 'wsl --exec custom-builder --label "' + suite + '"']) {
-                assert.deepEqual(getCompileCommandContractViolations(command, { fullSuiteCommand: suite }), [], command);
+                assert.deepEqual(getCompileCommandContractHints(command, { fullSuiteCommand: suite }), [], command);
             }
         });
 
         it('rejects configured executable-string suites at intermediate runner boundaries', () => {
-            assert.ok(getCompileCommandContractViolations('corepack npm exec --call custom-suite',
+            assert.ok(getCompileCommandContractHints('corepack npm exec --call custom-suite',
                 { fullSuiteCommand: 'npm exec --call custom-suite' })
                 .includes('matches the configured full-suite validation command'));
             for (const suite of ['npm exec --call custom-suite', 'npm x -c custom-suite', 'npx -c custom-suite',
@@ -601,7 +609,7 @@ describe('gates/compile-gate', () => {
                     assert.throws(() => validateCompileGateCommand(command, 'test', { fullSuiteCommand: suite }),
                         /configured full-suite validation command/i, command);
                 }
-                assert.deepEqual(getCompileCommandContractViolations('custom-builder "' + suite + '"',
+                assert.deepEqual(getCompileCommandContractHints('custom-builder "' + suite + '"',
                     { fullSuiteCommand: suite }), [], suite);
             }
         });
@@ -623,7 +631,7 @@ describe('gates/compile-gate', () => {
         });
 
         it('checks the configured full-suite command inside every chain segment', () => {
-            assert.ok(getCompileCommandContractViolations('npm run build && npm run verify', {
+            assert.ok(getCompileCommandContractHints('npm run build && npm run verify', {
                 fullSuiteCommand: 'npm run verify'
             }).some((violation) => violation.includes('configured full-suite')));
         });
@@ -806,7 +814,7 @@ describe('gates/compile-gate', () => {
             fs.rmSync(tmpDir, { recursive: true, force: true });
         });
 
-        it('rejects full-suite test commands in compile gate section', () => {
+        it('rejects explicitly declared test purpose in compile gate section', () => {
             const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'compile-gate-'));
             const filePath = path.join(tmpDir, 'commands.md');
             fs.writeFileSync(filePath, [
@@ -816,7 +824,7 @@ describe('gates/compile-gate', () => {
                 '```',
             ].join('\n'), 'utf8');
 
-            assert.throws(() => getCompileCommands(filePath), /must not run the full test suite/i);
+            assert.throws(() => getCompileCommands(filePath, { purpose: 'test' }), /declared purpose/i);
             fs.rmSync(tmpDir, { recursive: true, force: true });
         });
 
@@ -857,17 +865,17 @@ describe('gates/compile-gate', () => {
         });
     });
 
-    describe('getCompileCommandContractViolations', () => {
+    describe('getCompileCommandContractHints', () => {
         it('flags Maven and Gradle test-bound lifecycle commands', () => {
-            assert.ok(getCompileCommandContractViolations('mvn package').some((item) => item.includes('Maven phase')));
-            assert.ok(getCompileCommandContractViolations('./gradlew build').some((item) => item.includes("Gradle task 'build'")));
-            assert.deepEqual(getCompileCommandContractViolations('./mvnw compile'), []);
-            assert.deepEqual(getCompileCommandContractViolations('./gradlew assemble'), []);
-            assert.deepEqual(getCompileCommandContractViolations('./gradlew build -x test'), []);
-            assert.deepEqual(getCompileCommandContractViolations('./gradlew :app:build --exclude-task :app:test'), []);
-            assert.deepEqual(getCompileCommandContractViolations('./gradlew :app:build -x :app:test'), []);
-            assert.ok(getCompileCommandContractViolations('./gradlew :app:build --exclude-task :other:test').some((item) => item.includes("Gradle task 'build'")));
-            assert.ok(getCompileCommandContractViolations('./gradlew build --exclude-task :app:test').some((item) => item.includes("Gradle task 'build'")));
+            assert.ok(getCompileCommandContractHints('mvn package').some((item) => item.includes('Maven phase')));
+            assert.ok(getCompileCommandContractHints('./gradlew build').some((item) => item.includes("Gradle task 'build'")));
+            assert.deepEqual(getCompileCommandContractHints('./mvnw compile'), []);
+            assert.deepEqual(getCompileCommandContractHints('./gradlew assemble'), []);
+            assert.deepEqual(getCompileCommandContractHints('./gradlew build -x test'), []);
+            assert.deepEqual(getCompileCommandContractHints('./gradlew :app:build --exclude-task :app:test'), []);
+            assert.deepEqual(getCompileCommandContractHints('./gradlew :app:build -x :app:test'), []);
+            assert.ok(getCompileCommandContractHints('./gradlew :app:build --exclude-task :other:test').some((item) => item.includes("Gradle task 'build'")));
+            assert.ok(getCompileCommandContractHints('./gradlew build --exclude-task :app:test').some((item) => item.includes("Gradle task 'build'")));
         });
     });
 

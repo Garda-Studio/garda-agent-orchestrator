@@ -27,8 +27,10 @@ function normalizePowerShellParameter(argument: string): string {
     return 'file'.startsWith(option) ? '-File' : `-${zeroValue ?? option}`;
 }
 
-// Rejection-only argument inspection: a normal return never authorizes a tool or validation recipe.
-export function rejectInlineValidationProgram(executable: string, argv: readonly string[]): void {
+// Argument-role facts are metadata, never approval of a tool or validation recipe.
+export function inspectValidationProgramBoundary(executable: string, argv: readonly string[]): {
+    tool: string; program: string | null;
+} {
     const basename = path.posix.basename(executable.replace(/\\/gu, '/')).replace(/\.exe$/iu, '').toLowerCase();
     const tool = /^python(?:\d+(?:\.\d+)*)?$/u.test(basename) ? 'python' : basename === 'nodejs' ? 'node' : basename;
     const isPowerShell = ['powershell', 'pwsh'].includes(tool);
@@ -56,10 +58,15 @@ export function rejectInlineValidationProgram(executable: string, argv: readonly
         !prefix.literalValueIndices.includes(index) && INLINE_OPTIONS[tool].test(normalizeValidationInterpreterOption(tool, argument)))) {
         throw new Error(INLINE_PROGRAM_MESSAGE);
     }
-    commandArgv.slice(0, prefix.programIndex + 1).forEach((argument, index) => {
-        if (!prefix.literalValueIndices.includes(index)) rejectInlineValidationProgramUrl(argument, index === prefix.programIndex);
-    });
-    if (/\.(?:cmd|bat)$/iu.test(executable)) {
-        throw new Error('Shell wrappers require an explicit pinned interpreter and file invocation');
+    if (Object.hasOwn(INLINE_OPTIONS, tool) || isPowerShell) {
+        commandArgv.slice(0, prefix.programIndex + 1).forEach((argument, index) => {
+            if (!prefix.literalValueIndices.includes(index)) rejectInlineValidationProgramUrl(argument, index === prefix.programIndex);
+        });
     }
+    return { tool, program: commandArgv[prefix.programIndex] ?? null };
+}
+
+// Preserve the rejection-only API: a normal return supplies no authority or metadata.
+export function rejectInlineValidationProgram(executable: string, argv: readonly string[]): void {
+    inspectValidationProgramBoundary(executable, argv);
 }

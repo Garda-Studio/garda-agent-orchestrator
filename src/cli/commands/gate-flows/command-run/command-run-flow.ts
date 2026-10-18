@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { inspectValidationCommand, type ValidationCommandDescriptor } from '../../../../core/validation-command-contract';
 import { appendTaskEventAsync } from '../../../../gate-runtime/task-events-io';
 import { isPlainRecord } from '../../../../core/records';
 import { runGit } from '../../../../core/git-helpers';
@@ -77,6 +78,7 @@ interface IntermediateCommandResult {
 }
 
 interface IntermediateCommandRecord {
+    command_descriptor: ValidationCommandDescriptor;
     schema_version: 1;
     event_source: 'native-intermediate-command';
     generated_utc: string;
@@ -637,7 +639,10 @@ export async function runIntermediateCommandCommand(
                 commandSource, command) };
     }
     const conventionalInvocation = isAllowedIntermediateCommand(command, commandSource);
-    if (!conventionalInvocation && (!nativeScopeBefore.scope_content_sha256
+    const commandPurpose = commandSource === 'targeted-test' || commandSource === 'node-test' ? 'test'
+        : commandSource === 'typecheck' ? 'compile' : 'validation';
+    const commandAdmission = inspectValidationCommand(command, commandPurpose);
+    if (!commandAdmission.supported || !commandAdmission.descriptor || !conventionalInvocation && (!nativeScopeBefore.scope_content_sha256
         || !isLiteralIntermediateInvocation(command))) {
         const message = 'Command is not eligible for auditable intermediate compaction for the selected source.';
         return {
@@ -712,6 +717,7 @@ export async function runIntermediateCommandCommand(
             task_id: taskId,
             command_source: commandSource,
             command,
+            command_descriptor: commandAdmission.descriptor,
             status,
             exit_code: result.exitCode,
             timed_out: result.timedOut,
