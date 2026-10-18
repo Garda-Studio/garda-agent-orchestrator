@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { isDeepStrictEqual } from 'node:util';
+import { mergeWorkflowConfigWithTemplate, resolveWorkflowConfigTemplateDefaults } from '../../../src/core/workflow-config';
+import { PROJECT_MEMORY_REQUIRED_FILE_NAMES } from '../../../src/core/project-memory';
 import { runUpdate } from '../../../src/lifecycle/update';
 import { runContractMigrations } from '../../../src/lifecycle/contract-migrations';
 import { formatManifestResult, formatVerifyResult, runVerify, validateManifest } from '../../../src/validators';
@@ -124,6 +127,96 @@ function createActiveUpdateWorkspace(serialize: (value: unknown) => string) {
 }
 
 describe('real update preserves the active task configuration identity', () => {
+    it('finalizes ordinary agent onboarding without replacing active configured commands', () => {
+        const fixture = createActiveUpdateWorkspace(value => JSON.stringify(value, null, 2) + '\n');
+        try {
+            for (const name of PROJECT_MEMORY_REQUIRED_FILE_NAMES) {
+                fs.writeFileSync(path.join(fixture.bundleRoot, 'live/docs/project-memory', name),
+                    `# Native onboarding fixture: ${name}\n\n`
+                    + 'The project source is src/app.js, a CommonJS module exporting an enabled flag. '
+                    + 'The configured compile check is node --check src/app.js. '
+                    + 'The existing TASK.md queue and active task remain authoritative during onboarding.\n');
+            }
+            const modePath = path.join(fixture.bundleRoot, 'runtime', 'reviews', `${TASK_ID}-task-mode.json`);
+            const mode = fs.readFileSync(modePath);
+            const before = JSON.parse(fs.readFileSync(fixture.configPath, 'utf8'));
+            const result = runNativeCli(fixture.projectRoot, ['agent-init', '--target-root', '.',
+                '--active-agent-files', 'AGENTS.md', '--project-rules-updated', 'yes',
+                '--skills-prompted', 'yes', '--ordinary-doc-paths', 'CHANGELOG.md']);
+            const after = JSON.parse(fs.readFileSync(fixture.configPath, 'utf8'));
+            const expected = mergeWorkflowConfigWithTemplate(resolveWorkflowConfigTemplateDefaults(JSON.parse(fs.readFileSync(
+                path.join(fixture.bundleRoot, 'template/config/workflow-config.json'), 'utf8'))), before,
+            { preserveLegacyReviewExecutionPolicyOmission: true });
+            const changed = [...new Set([...Object.keys(expected), ...Object.keys(after)])]
+                .filter(key => !isDeepStrictEqual(expected[key], after[key]));
+            assert.equal(result.status, 0, result.stdout + result.stderr + '\nUnexpected fields: ' + changed.join(', '));
+            assert.deepEqual(fs.readFileSync(modePath), mode);
+            assert.equal(after.compile_gate.command, before.compile_gate.command);
+            assert.equal(after.full_suite_validation.command, before.full_suite_validation.command);
+            assert.equal(after.full_suite_validation.enabled, before.full_suite_validation.enabled);
+            assert.deepEqual(after.project_validation, before.project_validation);
+        } finally { fs.rmSync(fixture.projectRoot, { recursive: true, force: true }); }
+    });
+
+    it('continues an active task when update materializes a previously absent default', () => {
+        const fixture = createActiveUpdateWorkspace((value) => {
+            const config = value as Record<string, unknown>;
+            delete config.task_test_selection;
+            return JSON.stringify(config, null, 2) + '\n';
+        });
+        try {
+            const modePath = path.join(fixture.bundleRoot, 'runtime', 'reviews', `${TASK_ID}-task-mode.json`);
+            const originalMode = fs.readFileSync(modePath);
+            const workPath = path.join(fixture.projectRoot, 'src', 'app.js');
+            const work = 'module.exports = { enabled: true };\n';
+            fs.writeFileSync(workPath, work);
+            const update = runUpdate(fixture.updateOptions);
+            assert.equal(update.materializationStatus, 'PASS');
+            assert.equal(update.verifyStatus, 'PASS');
+            assert.equal(fs.readFileSync(workPath, 'utf8'), work);
+            assert.deepEqual(fs.readFileSync(modePath), originalMode);
+            assert.deepEqual(JSON.parse(fs.readFileSync(fixture.configPath, 'utf8')).task_test_selection,
+                { require_operator_confirmation: false });
+            const mode = getTaskModeEvidence(fixture.projectRoot, TASK_ID);
+            const changes = getCurrentWorkflowConfigChanges(fixture.projectRoot, mode.workflow_config_file_hashes);
+            assert.deepEqual(getWorkflowConfigWorkViolations({
+                repoRoot: fixture.projectRoot,
+                changedFiles: changes.changed_files,
+                taskModeEvidence: mode,
+                phaseLabel: 'updated defaults resume',
+                baselineFileHashes: changes.baseline_file_hashes,
+                currentFileHashes: changes.current_file_hashes
+            }), []);
+            if (readNextStep(fixture.projectRoot).next_gate === 'load-rule-pack') {
+                refreshNativeTaskStartup(fixture.projectRoot);
+            }
+            const resumed = readNextStep(fixture.projectRoot);
+            assert.equal(resumed.next_gate, 'classify-change', resumed.reason);
+            const migratedConfig = fs.readFileSync(fixture.configPath);
+            const auditPath = path.join(fixture.bundleRoot, 'runtime', 'workflow-config-audit.jsonl');
+            const audit = fs.readFileSync(auditPath);
+            fs.appendFileSync(fixture.configPath, '\n');
+            const manualEdit = readNextStep(fixture.projectRoot);
+            assert.notEqual(manualEdit.next_gate, 'classify-change', 'a signed migration must not bless a later manual edit');
+            fs.writeFileSync(fixture.configPath, migratedConfig);
+            const records = audit.toString('utf8').trim().split('\n');
+            const last = JSON.parse(records.at(-1)!);
+            last.before_sha256 = 'f'.repeat(64);
+            records[records.length - 1] = JSON.stringify(last);
+            fs.writeFileSync(auditPath, records.join('\n') + '\n');
+            assert.notEqual(readNextStep(fixture.projectRoot).next_gate, 'classify-change', 'edited migration provenance must fail closed');
+            fs.writeFileSync(auditPath, audit);
+            const repeat = runUpdate(fixture.updateOptions);
+            assert.equal(repeat.materializationStatus, 'PASS');
+            assert.deepEqual(fs.readFileSync(fixture.configPath), migratedConfig);
+            assert.deepEqual(fs.readFileSync(auditPath), audit);
+            assert.deepEqual(fs.readFileSync(modePath), originalMode);
+            assert.equal(fs.readFileSync(workPath, 'utf8'), work);
+        } finally {
+            fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
+        }
+    });
+
     for (const [format, serialize] of Object.entries({
         compact: (value: unknown) => JSON.stringify(value),
         pretty: (value: unknown) => JSON.stringify(value, null, 4) + '\r\n'

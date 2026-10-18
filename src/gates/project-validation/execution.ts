@@ -3,7 +3,9 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawnStreamed, type SpawnStreamedResult } from '../../core/process/subprocess';
 import { assertContainedDestination, assertExistingPathIdentity, bindContainedDestination, ensureContainedDirectory } from '../../core/contained-filesystem';
-import { readValidationFile } from '../../core/project-validation-identity';
+import { readValidationFile, validationDigest } from '../../core/project-validation-identity';
+import { prepareValidationReportCapture, completeValidationReportCapture } from '../../core/validation-report-capture';
+import type { ValidationReportCapture } from '../../core/validation-report-contract';
 import type { FrozenValidationRecipe, ValidationAttempt } from '../../core/project-validation-contract';
 import { withFilesystemLockAsync } from '../../gate-runtime/timeline/task-events-locking';
 import { freezeValidationRecipe, validationPaths } from './authority';
@@ -20,10 +22,12 @@ function archiveSources(repoRoot: string, snapshot: FrozenValidationRecipe): str
         return { path: input.path, sha256: input.sha256, content_base64: file.bytes.toString('base64') };
     }));
 }
-function retainOutput(repoRoot: string, relative: string, result: SpawnStreamedResult | undefined, budget: number) {
+function retainOutput(repoRoot: string, relative: string, result: SpawnStreamedResult | undefined, budget: number,
+    reports: ValidationReportCapture | null) {
     const stdout = Buffer.from(result?.stdout ?? '').subarray(0, budget);
     const stderr = Buffer.from(result?.stderr ?? '').subarray(0, budget - stdout.length);
-    const content = JSON.stringify({ stdout_base64: stdout.toString('base64'), stderr_base64: stderr.toString('base64') });
+    const content = JSON.stringify({ stdout_base64: stdout.toString('base64'), stderr_base64: stderr.toString('base64'),
+        ...(reports ? { report_capture: reports } : {}) });
     return { output_sha256: writeValidationFact(repoRoot, relative, content), output_bytes: Buffer.byteLength(content),
         truncated: !result || result.stdoutTruncated || result.stderrTruncated || result.stdoutOriginalBytes + result.stderrOriginalBytes > budget };
 }
@@ -39,9 +43,13 @@ async function runAttempt(repoRoot: string, snapshot: FrozenValidationRecipe, si
     const cwd = path.resolve(repoRoot, recipe.cwd), cwdBinding = bindContainedDestination(repoRoot, cwd);
     if (!fs.lstatSync(cwd).isDirectory()) throw new Error('Validation cwd must be a contained directory');
     assertCurrent(repoRoot, snapshot);
+    const reportStart = prepareValidationReportCapture(repoRoot, recipe.report_files,
+        { evidenceDirectory: relative, excludedPaths: snapshot.inputs.map(input => input.path),
+            excludedRoots: [`${paths.bundle}/runtime/reviews`, `${paths.bundle}/runtime/task-events`] });
+    const reportStartBinding = reportStart ? { report_capture_start_sha256: validationDigest(reportStart) } : {};
     const started = Date.now();
     await recordValidationEvent(repoRoot, taskId, 'PROJECT_VALIDATION_STARTED',
-        { attempt_id: attemptId, recipe_id: recipe.id, snapshot_sha256: snapshot.snapshot_sha256 });
+        { attempt_id: attemptId, recipe_id: recipe.id, snapshot_sha256: snapshot.snapshot_sha256, ...reportStartBinding });
     const violations: string[] = []; let result: SpawnStreamedResult | undefined;
     try {
         assertCurrent(repoRoot, snapshot); assertExistingPathIdentity(cwdBinding);
@@ -50,6 +58,8 @@ async function runAttempt(repoRoot: string, snapshot: FrozenValidationRecipe, si
             timeoutMs: recipe.timeout_ms, maxBuffer: recipe.max_output_bytes,
             capturePolicy: { mode: 'full-buffer', maxBytes: recipe.max_output_bytes } });
     } catch (error) { violations.push(String(error)); }
+    const reports = completeValidationReportCapture(repoRoot, reportStart);
+    violations.push(...reports?.violations ?? []);
     try { assertCurrent(repoRoot, snapshot); assertExistingPathIdentity(cwdBinding); } catch (error) { violations.push(String(error)); }
     assertExistingPathIdentity(ownedDirectory);
     if (readValidationFile(repoRoot, sourceArchivePath).identity.sha256 !== sourceArchiveSha256) throw new Error('Retained source archive changed during execution');
@@ -57,7 +67,7 @@ async function runAttempt(repoRoot: string, snapshot: FrozenValidationRecipe, si
     const attempt: ValidationAttempt = { schema_version: 1, attempt_id: attemptId, snapshot, started_at: new Date(started).toISOString(),
         completed_at: completedAt, duration_ms: Date.now() - started, exit_code: result?.exitCode ?? -1,
         termination_signal: result?.terminationSignal ?? null, timed_out: result?.timedOut ?? false, cancelled: result?.cancelled ?? false,
-        output_path: outputPath, ...retainOutput(repoRoot, outputPath, result, recipe.max_output_bytes),
+        output_path: outputPath, ...retainOutput(repoRoot, outputPath, result, recipe.max_output_bytes, reports), ...reportStartBinding,
         source_archive_path: sourceArchivePath, source_archive_sha256: sourceArchiveSha256, cases: null, violations, expected_failure: false };
     const artifactPath = `${relative}/attempt.json`, artifactSha256 = writeValidationFact(repoRoot, artifactPath, JSON.stringify(attempt));
     await recordValidationEvent(repoRoot, taskId, 'PROJECT_VALIDATION_COMPLETED', { attempt_id: attemptId, recipe_id: recipe.id,

@@ -46,7 +46,7 @@ describe('getProjectDiscovery', () => {
             assert.ok(result.suggestedCommands.length > 0);
             assert.ok(result.suggestedCompileGateCommands.includes('npm run build'));
             assert.ok(result.suggestedCompileGateCommands.includes('go build ./...'));
-            assert.equal(result.suggestedFullSuiteValidationCommand, 'npm test');
+            assert.equal(result.suggestedFullSuiteValidationCommand, 'go test ./...');
         } finally {
             fs.rmSync(tmpDir, { recursive: true, force: true });
         }
@@ -405,6 +405,7 @@ describe('buildDiscoveryOverlaySection', () => {
             suggestedFullSuiteValidationCommand: null
         };
         const result = buildDiscoveryOverlaySection(discovery as unknown as ProjectDiscovery);
-        assert.ok(result.includes('keep workflow-config unconfigured'));
+        assert.ok(result.includes('the agent must inspect and configure all applicable project validation surfaces'));
+        assert.ok(result.includes('Coverage: unverified'));
     });
 });

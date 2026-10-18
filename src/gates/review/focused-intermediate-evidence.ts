@@ -3,8 +3,12 @@ import * as path from 'node:path';
 
 import { splitCommandLine } from '../../cli/gate-cli/gates-subprocess';
 import { isPlainRecord } from '../../core/records';
-import { readValidationFile } from '../../core/project-validation-identity';
-import { assertCurrentIntermediateSelection, type IntermediateSelectionBinding } from '../../core/intermediate-selected-cases';
+import { readValidationFile, validationDigest } from '../../core/project-validation-identity';
+import { MAX_RETAINED_VALIDATION_OUTPUT_BYTES, parseValidationReportEvidenceBinding, readRetainedValidationReports } from '../../core/validation-report-evidence';
+import type { ValidationReportEvidenceBinding } from '../../core/validation-report-contract';
+import { assertCurrentIntermediateSelection, intermediateInvocationIdentity, intermediateSourcePathKey, latestMatchingIntermediateAttempt,
+    type IntermediateSelectionBinding } from '../../core/intermediate-selected-cases';
+import { declaredFileRole, isTestScopePath, normalizeFileRoleBindings } from '../../core/file-role-bindings';
 import { inspectTaskEventFile } from '../../gate-runtime/task-events';
 import {
     readOrderedTaskEvents,
@@ -44,10 +48,13 @@ export interface FocusedIntermediateEvidenceEntry {
     output_artifact_path: string;
     output_artifact_sha256: string;
     output_artifact_size_bytes: number;
+    output_encoding?: 'base64-streams';
+    report_evidence?: ValidationReportEvidenceBinding;
     focused_test_paths: string[];
     scope_content_sha256?: string;
     execution_id?: string;
     selected_case_binding?: IntermediateSelectionBinding;
+    semantic_status?: 'PENDING_INDEPENDENT_REVIEW';
 }
 
 export interface FocusedIntermediateEvidenceSelection {
@@ -59,8 +66,12 @@ export interface FocusedIntermediateEvidenceSelection {
     truncated: boolean;
 }
 
-interface BoundIntermediateCommandEvidence {
-    entry: FocusedIntermediateEvidenceEntry | null;
+export type ExpectedFailureIntermediateEvidenceEntry = Omit<FocusedIntermediateEvidenceEntry, 'status' | 'exit_code'> & {
+    status: 'PENDING_REVIEW' | 'EXPECTED_FAILURE'; exit_code: number; expected_failure: true;
+};
+
+interface BoundIntermediateCommandEvidence<T = FocusedIntermediateEvidenceEntry> {
+    entry: T | null;
     violation: string | null;
 }
 
@@ -161,7 +172,7 @@ function resolveRequiredArtifact(
     }
 }
 
-function readBoundIntermediateCommandEvidence(options: {
+interface BoundIntermediateCommandOptions {
     event: TaskAuditEvent;
     repoRoot: string;
     reviewsRoot: string;
@@ -172,7 +183,18 @@ function readBoundIntermediateCommandEvidence(options: {
     expectedScopeContentSha256?: string;
     candidateTestPaths?: readonly string[];
     executionOnly?: boolean;
-}): BoundIntermediateCommandEvidence {
+    inspection?: ValidationEvidenceInspection;
+}
+
+export function readBoundIntermediateCommandEvidence(options: BoundIntermediateCommandOptions & {
+    expectedFailure: true;
+}): BoundIntermediateCommandEvidence<ExpectedFailureIntermediateEvidenceEntry>;
+export function readBoundIntermediateCommandEvidence(options: BoundIntermediateCommandOptions & {
+    expectedFailure?: false;
+}): BoundIntermediateCommandEvidence;
+export function readBoundIntermediateCommandEvidence(options: BoundIntermediateCommandOptions & {
+    expectedFailure?: boolean;
+}): BoundIntermediateCommandEvidence<FocusedIntermediateEvidenceEntry | ExpectedFailureIntermediateEvidenceEntry> {
     const details = isPlainRecord(options.event.details) ? options.event.details : {};
     const commandSource = String(details.command_source || '').trim();
     const command = String(details.command || '').trim();
@@ -192,7 +214,12 @@ function readBoundIntermediateCommandEvidence(options: {
     if (!command || !artifactPathText || !/^[0-9a-f]{64}$/u.test(artifactSha256)) {
         return { entry: null, violation: 'missing command, artifact path, or artifact sha256' };
     }
-    if (!isPassedIntermediateCommandEvent(options.event)) {
+    const expectedFailureEvent = options.event.event_type === 'TEST_FIRST_EXPECTED_FAILURE_RECORDED'
+        && details.expected_failure === true && details.timed_out === false && details.cancelled === false
+        && typeof details.exit_code === 'number' && Number.isSafeInteger(details.exit_code) && details.exit_code > 0
+        && (details.recorded_status === 'PENDING_REVIEW' && options.event.outcome === 'PENDING'
+            || details.recorded_status === 'EXPECTED_FAILURE' && options.event.outcome === 'PASS');
+    if (options.expectedFailure ? !expectedFailureEvent : !isPassedIntermediateCommandEvent(options.event)) {
         return { entry: null, violation: 'event is not a gate-owned PASSED command with exit_code=0' };
     }
     if (eventTaskSequence == null || parseUtcTimestamp(eventTimestampUtc) == null) {
@@ -225,21 +252,56 @@ function readBoundIntermediateCommandEvidence(options: {
     const expectedPreflightPath = normalizePath(options.expectedPreflightPath || '');
     const expectedPreflightSha256 = String(options.expectedPreflightSha256 || '').trim().toLowerCase();
     const expectedCoverageContractSha256 = String(options.expectedCoverageContractSha256 || '').trim().toLowerCase();
-    const expectedScope = options.expectedScopeContentSha256;
+    let expectedScope = options.expectedScopeContentSha256;
     let selectionBinding: IntermediateSelectionBinding | undefined;
-    if (options.executionOnly && record.selected_case_binding !== undefined) {
+    const historicalProductionInputs = new Set<string>();
+    if (record.selected_case_binding !== undefined) {
         try {
-            // File operands include generated reports. Their observations are facts, not immutable source declarations.
-            // The native case projection validates each selected source; canonical preflight scope remains mandatory below.
+            // Authenticate the envelope first; report-output exceptions are applied only after report validation.
             assertCurrentIntermediateSelection(options.repoRoot, record.selected_case_binding, []);
             if (JSON.stringify(record.selected_case_binding) !== JSON.stringify(details.selected_case_binding)
                 || typeof record.execution_id !== 'string' || !record.execution_id
                 || record.execution_id !== details.execution_id) throw new Error('Selected execution event binding differs.');
             selectionBinding = record.selected_case_binding;
+            const current = readValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection);
+            if (options.expectedFailure) {
+                // RED predates the implementation preflight. Authenticate its original native facts,
+                // while the caller checks that each selected test source is still unchanged.
+                const cycle = current.events.slice(current.events.map(event => event.event_type).lastIndexOf('TASK_MODE_ENTERED') + 1);
+                const native = cycle.find(event => validationDigest(event) === validationDigest(options.event));
+                const starts = cycle.filter(event => event.event_type === 'INTERMEDIATE_COMMAND_STARTED'
+                    && event.details?.execution_id === record.execution_id);
+                const start = starts[0];
+                const classified = cycle.filter(event => event.event_type === 'PREFLIGHT_CLASSIFIED'
+                    && Number(event.integrity?.task_sequence) < Number(start?.integrity?.task_sequence)).at(-1);
+                if (!native || starts.length !== 1 || Number(start.integrity?.task_sequence) >= eventTaskSequence
+                    || start.details?.preflight_sha256 !== recordPreflightSha256
+                    || start.details?.command !== command || start.details?.artifact_path !== artifactPathText
+                    || validationDigest(start.details?.selected_case_selection) !== validationDigest(selectionBinding.before)
+                    || record.test_scope_sha256 !== details.test_scope_sha256
+                    || record.test_scope_sha256 !== classified?.details?.scope_content_sha256
+                    || expectedScope !== record.test_scope_sha256)
+                    throw new Error('Expected-red execution lacks its authenticated original classification and start.');
+                const originalProfile = classified?.details?.profile_policy_snapshot;
+                const profile = isPlainRecord(originalProfile) ? originalProfile : {};
+                const policy = isPlainRecord(profile.review_trigger_policy) ? profile.review_trigger_policy : {};
+                const roles = normalizeFileRoleBindings(policy.file_roles);
+                for (const source of selectionBinding.before.sources) {
+                    if (declaredFileRole(source.path, roles) === 'source' && current.changed_files.includes(source.path)
+                        && !selectionBinding.before.cases.some(claim => intermediateSourcePathKey(claim.source) === intermediateSourcePathKey(source.path)))
+                        historicalProductionInputs.add(intermediateSourcePathKey(source.path));
+                }
+            } else {
+                if (recordPreflightSha256 !== current.preflight_sha256
+                    || path.resolve(options.repoRoot, recordPreflightPath) !== path.resolve(current.preflight_path))
+                    throw new Error('Selected execution requires the current canonical preflight.');
+                expectedScope = current.scope_content_sha256;
+            }
         } catch (error) { return { entry: null, violation: `selected execution binding rejected: ${String(error)}` }; }
     }
     if (expectedScope && (!isSha256Hex(expectedScope)
-        || record.timed_out !== false || record.cancelled !== false || record.expected_failure === true
+        || record.timed_out !== false || record.cancelled !== false
+        || (options.expectedFailure ? record.expected_failure !== true : record.expected_failure === true)
         || record.scope_content_sha256_before !== expectedScope || record.scope_content_sha256_after !== expectedScope
         || details.scope_content_sha256_before !== expectedScope || details.scope_content_sha256_after !== expectedScope)) {
         return { entry: null, violation: 'native execution source-content binding differs from the current scope' };
@@ -263,13 +325,22 @@ function readBoundIntermediateCommandEvidence(options: {
     const eventOutputArtifactPath = eventOutputArtifactPathText
         ? resolveRequiredArtifact(eventOutputArtifactPathText, options.repoRoot, options.reviewsRoot)
         : null;
+    if (options.expectedFailure && (record.output_truncated !== false || details.output_truncated !== false
+        || !Array.isArray(record.invocations) || record.invocations.length !== 1
+        || !isPlainRecord(record.invocations[0]) || record.invocations[0].exitCode !== record.exit_code
+        || record.invocations[0].executionError !== undefined || record.invocations[0].terminationSignal != null
+        || record.invocations[0].sinkError !== undefined || record.invocations[0].outputTruncated !== false))
+        return { entry: null, violation: 'Expected-red requires a complete observed child invocation without termination or capture errors.' };
     if (
         record.schema_version !== 1
         || String(record.task_id || '').trim() !== options.taskId
         || String(record.command_source || '').trim() !== commandSource
         || String(record.command || '').trim() !== command
-        || String(record.status || '').trim().toUpperCase() !== 'PASSED'
-        || record.exit_code !== 0
+        || (options.expectedFailure ? record.status !== details.recorded_status || record.exit_code !== details.exit_code
+            : String(record.status || '').trim().toUpperCase() !== 'PASSED' || record.exit_code !== 0)
+        || record.termination_signal != null || details.termination_signal != null
+        || record.output_truncated === true || details.output_truncated === true
+        || record.output_sink_error !== undefined || details.output_sink_error !== undefined
         || !outputArtifactPath
         || !/^[0-9a-f]{64}$/u.test(recordOutputArtifactSha256)
         || typeof recordOutputArtifactSizeBytes !== 'number'
@@ -296,18 +367,57 @@ function readBoundIntermediateCommandEvidence(options: {
     ) {
         return { entry: null, violation: 'focused evidence preflight or coverage binding does not match the current review context' };
     }
+    let reportEvidence: ValidationReportEvidenceBinding | undefined;
     try {
-        const output = readValidationFile(options.repoRoot, normalizePath(path.relative(options.repoRoot, outputArtifactPath)));
+        if (record.report_evidence !== undefined || details.report_evidence !== undefined
+            || record.output_encoding !== undefined || details.output_encoding !== undefined) {
+            reportEvidence = parseValidationReportEvidenceBinding(record.report_evidence,
+                normalizePath(path.relative(options.repoRoot, artifactPath)) + '.reports');
+            if (validationDigest(record.report_evidence) !== validationDigest(details.report_evidence)
+                || record.output_encoding !== 'base64-streams' || details.output_encoding !== 'base64-streams'
+                || !Array.isArray(record.report_violations) || record.report_violations.length !== 0
+                || !Array.isArray(details.report_violations) || details.report_violations.length !== 0)
+                throw new Error('Failed or foreign report evidence cannot prove a successful intermediate execution.');
+        }
+        const output = readValidationFile(options.repoRoot, normalizePath(path.relative(options.repoRoot, outputArtifactPath)),
+            MAX_RETAINED_VALIDATION_OUTPUT_BYTES);
         if (output.bytes.length !== recordOutputArtifactSizeBytes || output.identity.sha256 !== recordOutputArtifactSha256) {
             return { entry: null, violation: 'output artifact size or sha256 no longer matches the recorded evidence' };
         }
-    } catch {
-        return { entry: null, violation: 'output artifact is unavailable' };
+        if (reportEvidence) {
+            const envelope: unknown = JSON.parse(output.bytes.toString('utf8'));
+            if (!isPlainRecord(envelope)) throw new Error('Report capture envelope is malformed.');
+            readRetainedValidationReports({ repoRoot: options.repoRoot, capture: envelope.report_capture,
+                declarations: reportEvidence.declarations, expectedStartSha256: reportEvidence.start_sha256,
+                evidenceDirectory: reportEvidence.evidence_directory, executionViolations: [] });
+        }
+        if (selectionBinding) {
+            const outputs = new Set(reportEvidence?.declarations.map(report => intermediateSourcePathKey(report.path)) ?? []);
+            const currentInputs: string[] = [];
+            for (const [index, source] of selectionBinding.before.sources.entries()) {
+                if (outputs.has(intermediateSourcePathKey(source.path))) continue;
+                if (validationDigest(source) !== validationDigest(selectionBinding.after?.[index]))
+                    throw new Error('Captured command input changed during execution.');
+                if (!historicalProductionInputs.has(intermediateSourcePathKey(source.path))) currentInputs.push(source.path);
+            }
+            assertCurrentIntermediateSelection(options.repoRoot, selectionBinding, currentInputs);
+        }
+    } catch (error) {
+        return { entry: null, violation: `output artifact is unavailable or invalid: ${String(error)}` };
     }
-    if (!options.executionOnly && !isFocusedIntermediateCommand(commandSource, splitCommandLine(command))) {
+    if (!options.executionOnly && !selectionBinding && !isFocusedIntermediateCommand(commandSource, splitCommandLine(command))) {
         return { entry: null, violation: 'command is not an allowed focused test invocation' };
     }
-    const focusedTestPaths = options.executionOnly ? [] : focusedTestPathsFromCommand(command, options.candidateTestPaths);
+    const focusedTestPaths = options.executionOnly ? [] : selectionBinding
+        ? [...new Set((selectionBinding.before.cases.length ? selectionBinding.before.cases.map(item => item.source)
+            : selectionBinding.before.sources.map(item => item.path)).map(source => options.candidateTestPaths?.find(candidate =>
+                intermediateSourcePathKey(candidate) === intermediateSourcePathKey(source)))
+            .filter((source): source is string => source !== undefined))].sort()
+        : focusedTestPathsFromCommand(command, options.candidateTestPaths);
+    if (selectionBinding && !options.executionOnly) {
+        try { assertCurrentIntermediateSelection(options.repoRoot, selectionBinding, focusedTestPaths); }
+        catch (error) { return { entry: null, violation: String(error) }; }
+    }
     if (!options.executionOnly && focusedTestPaths.length === 0) {
         return { entry: null, violation: 'focused command does not name a concrete test path' };
     }
@@ -315,8 +425,9 @@ function readBoundIntermediateCommandEvidence(options: {
         entry: {
             command_source: commandSource,
             command,
-            status: 'PASSED',
-            exit_code: 0,
+            ...(options.expectedFailure ? { status: record.status as 'PENDING_REVIEW' | 'EXPECTED_FAILURE',
+                exit_code: record.exit_code as number, expected_failure: true as const }
+                : { status: 'PASSED' as const, exit_code: 0 as const }),
             preflight_path: recordPreflightPath || null,
             preflight_sha256: recordPreflightSha256 || null,
             coverage_contract_sha256: recordCoverageContractSha256 || null,
@@ -327,8 +438,10 @@ function readBoundIntermediateCommandEvidence(options: {
             output_artifact_path: normalizePath(outputArtifactPath),
             output_artifact_sha256: recordOutputArtifactSha256,
             output_artifact_size_bytes: recordOutputArtifactSizeBytes,
+            ...(reportEvidence ? { output_encoding: 'base64-streams' as const, report_evidence: reportEvidence } : {}),
             focused_test_paths: focusedTestPaths,
-            ...(selectionBinding ? { selected_case_binding: selectionBinding, execution_id: String(record.execution_id) } : {}),
+            ...(selectionBinding ? { selected_case_binding: selectionBinding, execution_id: String(record.execution_id),
+                semantic_status: 'PENDING_INDEPENDENT_REVIEW' as const } : {}),
             ...(expectedScope ? { scope_content_sha256: expectedScope } : {})
         },
         violation: null
@@ -358,10 +471,12 @@ interface IntermediateEvidenceOptions {
     expectedPreflightSha256?: string | null;
     expectedCoverageContractSha256?: string | null;
     expectedScopeContentSha256?: string;
+    inspection?: ValidationEvidenceInspection;
 }
 
 function readIntermediateEvidence(options: IntermediateEvidenceOptions, executionOnly: boolean): FocusedIntermediateEvidenceSelection {
     const timelinePath = path.join(options.eventsRoot, `${options.taskId}.jsonl`);
+    let timelineSha256: string | null = null;
     const maxTimelineBytes = Number.isInteger(options.maxTimelineBytes) && Number(options.maxTimelineBytes) > 0
         ? Number(options.maxTimelineBytes)
         : DEFAULT_MAX_TIMELINE_BYTES;
@@ -384,6 +499,8 @@ function readIntermediateEvidence(options: IntermediateEvidenceOptions, executio
                 truncated: true
             };
         }
+        timelineSha256 = readValidationFile(options.repoRoot, normalizePath(path.relative(options.repoRoot, timelinePath)),
+            maxTimelineBytes).identity.sha256;
     } catch {
         return {
             entries: [],
@@ -441,6 +558,7 @@ function readIntermediateEvidence(options: IntermediateEvidenceOptions, executio
         ? Number(options.maxEntries)
         : DEFAULT_MAX_ENTRIES;
     const entries: FocusedIntermediateEvidenceEntry[] = [];
+    const changedPaths = options.changedFiles.map(normalizePath);
     let candidateCount = 0;
     let rejectedCandidateCount = 0;
     let eligibleCount = 0;
@@ -482,16 +600,43 @@ function readIntermediateEvidence(options: IntermediateEvidenceOptions, executio
             expectedPreflightSha256: options.expectedPreflightSha256,
             expectedCoverageContractSha256: options.expectedCoverageContractSha256,
             expectedScopeContentSha256: options.expectedScopeContentSha256,
-            candidateTestPaths: [...changedTestPaths], executionOnly
+            candidateTestPaths: changedPaths, executionOnly, inspection: options.inspection
         });
         if (!bound.entry) {
             rejectedCandidateCount += 1;
             appendWarning(warnings, `focused intermediate evidence candidate seq=${sequence} rejected: ${bound.violation || 'invalid evidence'}`);
             continue;
         }
+        if (!executionOnly && bound.entry.selected_case_binding) {
+            try {
+                const entry = bound.entry;
+                const attempts = events.filter(attempt => {
+                    const data = isPlainRecord(attempt.details) ? attempt.details : {};
+                    return ['INTERMEDIATE_COMMAND_RUN', 'INTERMEDIATE_COMMAND_STARTED'].includes(String(attempt.event_type))
+                        && attempt.task_id === options.taskId
+                        && data.preflight_sha256 === entry.preflight_sha256
+                        && (readTaskSequence(attempt) ?? -1) > latestTaskModeSequence!;
+                });
+                for (const source of entry.focused_test_paths) {
+                    const latest = latestMatchingIntermediateAttempt(attempts, source);
+                    if (readTaskSequence(latest ?? {}) !== entry.event_task_sequence)
+                        throw new Error('Latest matching focused attempt is failed, unfinished or supersedes this execution.');
+                }
+                const start = attempts.find(attempt => attempt.event_type === 'INTERMEDIATE_COMMAND_STARTED'
+                    && isPlainRecord(attempt.details) && attempt.details.execution_id === entry.execution_id);
+                const data = start && isPlainRecord(start.details) ? start.details : {};
+                if (!start || (readTaskSequence(start) ?? Infinity) >= entry.event_task_sequence
+                    || data.command !== entry.command || data.artifact_path !== (isPlainRecord(event.details) ? event.details.artifact_path : null)
+                    || JSON.stringify(data.selected_case_selection) !== JSON.stringify(entry.selected_case_binding?.before)
+                    || validationDigest(data.report_evidence ?? null) !== validationDigest(entry.report_evidence ?? null))
+                    throw new Error('Focused selected execution has no matching authenticated prior start.');
+            } catch (error) {
+                rejectedCandidateCount += 1; appendWarning(warnings, String(error)); continue;
+            }
+        }
         if (!executionOnly && !focusedPathsMatchScope({
             focusedTestPaths: bound.entry.focused_test_paths,
-            changedTestPaths,
+            changedTestPaths: bound.entry.selected_case_binding ? new Set(changedPaths) : changedTestPaths,
             requiredTestPath
         })) {
             rejectedCandidateCount += 1;
@@ -549,6 +694,14 @@ function readIntermediateEvidence(options: IntermediateEvidenceOptions, executio
             break;
         }
     }
+    if (!executionOnly && entries.some(entry => entry.selected_case_binding)) {
+        try {
+            if (readValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection).timeline_sha256 !== timelineSha256)
+                throw new Error('Focused native timeline changed during evidence inspection.');
+            for (const entry of entries) if (entry.selected_case_binding)
+                assertCurrentIntermediateSelection(options.repoRoot, entry.selected_case_binding, entry.focused_test_paths);
+        } catch (error) { entries.length = 0; appendWarning(warnings, String(error)); }
+    }
     return {
         entries,
         warnings,
@@ -561,6 +714,71 @@ function readIntermediateEvidence(options: IntermediateEvidenceOptions, executio
 
 export function readTaskOwnedFocusedIntermediateEvidence(options: IntermediateEvidenceOptions): FocusedIntermediateEvidenceSelection {
     return readIntermediateEvidence(options, false);
+}
+
+/** Only current authenticated observations can supply a symbolic focused target to command syntax inspection. */
+export function readCurrentNativeFocusedCommand(repoRoot: string, taskId: string,
+    command: string): FocusedIntermediateEvidenceEntry | null {
+    try {
+        const current = readValidationEventSnapshot(repoRoot, taskId);
+        const relative = normalizePath(path.relative(repoRoot, current.preflight_path));
+        const file = readValidationFile(repoRoot, relative, MAX_NATIVE_PREFLIGHT_BYTES);
+        if (file.identity.sha256 !== current.preflight_sha256) return null;
+        const preflight: unknown = JSON.parse(file.bytes.toString('utf8'));
+        if (!isPlainRecord(preflight) || !Array.isArray(preflight.changed_files)
+            || !preflight.changed_files.every(item => typeof item === 'string')) return null;
+        const paths = validationPaths(repoRoot, taskId);
+        const evidence = readTaskOwnedFocusedIntermediateEvidence({ repoRoot, taskId,
+            reviewsRoot: path.join(repoRoot, path.dirname(paths.timeline), '../reviews'),
+            eventsRoot: path.join(repoRoot, path.dirname(paths.timeline)), changedFiles: preflight.changed_files,
+            expectedPreflightPath: current.preflight_path, expectedPreflightSha256: current.preflight_sha256,
+            expectedScopeContentSha256: current.scope_content_sha256, minimumTaskSequenceExclusive: current.preflight_sequence });
+        const identity = intermediateInvocationIdentity(command);
+        const entry = evidence.entries.find(item => item.selected_case_binding && item.focused_test_paths.length === 1
+            && identity !== null && intermediateInvocationIdentity(item.command) === identity);
+        if (entry?.selected_case_binding) {
+            const snapshot = isPlainRecord(preflight.profile_policy_snapshot) ? preflight.profile_policy_snapshot : {};
+            const policy = isPlainRecord(snapshot.review_trigger_policy) ? snapshot.review_trigger_policy : {};
+            const roles = normalizeFileRoleBindings(policy.file_roles);
+            const testPatterns = Array.isArray(policy.test_path_regexes)
+                ? policy.test_path_regexes.filter((pattern): pattern is string => typeof pattern === 'string') : [];
+            const isTest = (source: string): boolean => {
+                const role = declaredFileRole(source, roles);
+                return role ? role === 'test' : testPatterns.length > 0
+                    ? isTestScopePath(source, testPatterns) : isFocusedReviewTestPath(source);
+            };
+            const selection = entry.selected_case_binding.before;
+            // Historical capture omitted directories; it cannot establish one-target native authority.
+            if (!Array.isArray(selection.scope_operands)) return null;
+            if (selection.scope_operands.length) {
+                if (selection.scope_operands.some(scope => !isPathRealpathInsideRoot(
+                    path.resolve(repoRoot, scope), repoRoot, { allowMissing: false }))) return null;
+                const operandKey = (value: string): string => intermediateSourcePathKey(
+                    normalizePath(path.relative(repoRoot, path.resolve(repoRoot, value))) || '.');
+                const operands = new Set([...selection.sources.map(source => source.path),
+                    ...selection.scope_operands, ...(selection.unobserved_operands ?? [])].map(operandKey));
+                const argumentsOnly = splitCommandLine(entry.command).slice(1);
+                const values = new Set(argumentsOnly.flatMap(token =>
+                    [token, ...(token.includes('=') ? [token.slice(token.indexOf('=') + 1)] : [])]));
+                const terminator = argumentsOnly.indexOf('--');
+                const literalValues = new Set([...argumentsOnly.flatMap(token => token.includes('=')
+                    ? [token.slice(token.indexOf('=') + 1)] : []),
+                ...(terminator < 0 ? [] : argumentsOnly.slice(terminator + 1))]);
+                // A source/directory operand or mode flag cannot pretend to narrow a directory run.
+                if (!selection.cases.length || selection.cases.some(claim =>
+                    claim.selector.startsWith('-') && !literalValues.has(claim.selector)
+                    || !values.has(claim.selector) || operands.has(operandKey(claim.selector)))) return null;
+            }
+            const allTargets = new Set([...entry.focused_test_paths, ...selection.cases.map(item => item.source),
+                ...(selection.unobserved_operands ?? []).filter(isTest),
+                ...selection.sources.filter(source => isTest(source.path))
+                    .map(source => source.path)].map(intermediateSourcePathKey));
+            // Scope relevance cannot erase other actual test operands from the focused invocation.
+            if (allTargets.size !== 1) return null;
+        }
+        if (readValidationEventSnapshot(repoRoot, taskId).timeline_sha256 !== current.timeline_sha256) return null;
+        return entry ?? null;
+    } catch { return null; }
 }
 
 export type NativeIntermediateExecutionEntry = Omit<FocusedIntermediateEvidenceEntry, 'status' | 'focused_test_paths'> & {

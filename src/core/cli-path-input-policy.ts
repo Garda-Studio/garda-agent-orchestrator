@@ -72,6 +72,10 @@ export const CLI_PATH_INPUT_POLICIES: Readonly<Record<string, CliPathInputPolicy
     '--focused-required-test-path': workspaceContained('Names a focused repository test target.'),
     '--full-diff-path': workspaceContained('Reads or writes a repository-scoped diff artifact.'),
     '--full-suite-artifact-path': workspaceContained('Reads or writes task-owned full-suite evidence.'),
+    '--full-suite-report-files': {
+        classification: 'workspace-expression',
+        rationale: 'Bounded JSON report declarations; strict relative paths and byte limits are validated by the report contract and contained capture.'
+    },
     '--handshake-path': workspaceContained('Reads task-owned handshake evidence.'),
     '--impact-analysis-path': workspaceContained('Reads task-owned remediation impact evidence.'),
     '--include-path': workspaceContained('Names a repository manifest member.'),
@@ -112,6 +116,10 @@ export const CLI_PATH_INPUT_POLICIES: Readonly<Record<string, CliPathInputPolicy
     '--preflight-path': workspaceContained('Reads task-owned preflight evidence.'),
     '--profile': nonFilesystem('Profile id, not a filesystem path.'),
     '--receipt-path': workspaceContained('Reads task-owned review receipt evidence.'),
+    '--report-file': {
+        classification: 'workspace-expression',
+        rationale: 'One bounded JSON report declaration; its path is validated by the report contract and contained capture.'
+    },
     '--repo-root': {
         classification: 'root-anchor',
         rationale: 'Selects the repository root and establishes the containment boundary.'

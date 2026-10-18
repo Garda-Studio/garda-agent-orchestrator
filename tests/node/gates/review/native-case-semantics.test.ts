@@ -12,6 +12,7 @@ import { buildReviewRemediationReviewContract } from '../../../../src/gates/revi
 import { captureIntermediateSelection, completeIntermediateSelection,
     assertCurrentIntermediateSelection } from '../../../../src/core/intermediate-selected-cases';
 import { inspectValidationCommand } from '../../../../src/core/validation-command-contract';
+import { runCliWithCapturedOutput } from '../../cli/commands/gate-test-cli-capture';
 import { createTempRepo, initializeGitRepo, loadTaskEntryRulePack, runEnterTaskMode,
     runHandshakeForTask, runShellSmokeForTask, seedInitAnswers, seedTaskQueue } from '../../cli/commands/gates/preflight/gates-preflight-fixtures';
 
@@ -43,14 +44,15 @@ async function fixture(missingCase = false, withSecondCase = false, symbolic = f
             "  }",
             "}",
             "const report = process.argv.find(value => value.startsWith('--report='));",
-            `if (report) { fs.writeFileSync(report.slice(9), ${JSON.stringify(XML)});`,
+            `if (report && !process.argv.includes('--skip-report')) { fs.writeFileSync(report.slice(9), ${JSON.stringify(XML)}`
+                + " + (process.argv.includes('--large-report') ? ' '.repeat(9 * 1024 * 1024) : ''));",
             "  if (process.argv.includes('--delete-report')) fs.unlinkSync(report.slice(9)); }"
         ] : []),
         "function pay(value) { if (!value) throw new Error('empty payment'); return value; }",
         "function rejectsEmptyPayment() { assert.throws(() => pay(''), /empty payment/); }",
         ...(missingCase ? ["console.log('runner ready');"] : [
             `assert.equal(process.argv.at(-1), ${JSON.stringify(CASE)});`,
-            'rejectsEmptyPayment();', `console.log(${JSON.stringify(XML)});`
+            'rejectsEmptyPayment();', `console.log(process.argv.includes('--file-only') ? 'runner ready' : ${JSON.stringify(XML)});`
         ]), ''
     ].join('\n'));
     if (withSecondCase) fs.writeFileSync(path.join(repoRoot, SECOND_SOURCE), [
@@ -83,6 +85,47 @@ async function fixture(missingCase = false, withSecondCase = false, symbolic = f
     return { repoRoot, obligations, preflightPath, preflight, preflightSha256: validationDigest(preflightFile), sources,
         command, selectedCases };
 }
+
+for (const large of [false, true]) test(`ordinary command file reports ${large ? 'above 8 MiB' : 'small'} retain case quotations and reject stale or missing reports`, async t => {
+    const f = await fixture(false, false, false, true);
+    t.after(() => fs.rmSync(f.repoRoot, { recursive: true, force: true }));
+    const report = 'garda-agent-orchestrator/runtime/tmp/ordinary-case-report.xml';
+    fs.mkdirSync(path.dirname(path.join(f.repoRoot, report)), { recursive: true });
+    const run = async (extra = '') => {
+        const result = await runCliWithCapturedOutput(['gate', 'run-intermediate-command', '--repo-root', f.repoRoot,
+            '--task-id', TASK, '--command-source', 'targeted-test', '--preflight-path', f.preflightPath,
+            '--command', `node ${SOURCE} --file-only --report=${report} ${large ? '--large-report ' : ''}${extra} ${CASE}`,
+            '--report-file', JSON.stringify({ path: report, max_bytes: large ? 10 * 1024 * 1024 : 4096 })]);
+        return { exitCode: result.exitCode, outputLines: [...result.logs, ...result.errors] };
+    };
+    const inspect = () => readNativeCaseObligations({ repoRoot: f.repoRoot, taskId: TASK,
+        preflightPath: f.preflightPath, preflightSha256: f.preflightSha256,
+        scopeContentSha256: f.preflight.metrics.scope_content_sha256, sources: f.sources });
+    const result = await run();
+    assert.equal(result.exitCode, 0, result.outputLines.join('\n'));
+    const obligations = inspect(), binding = obligations[0], execution = binding.case_execution!;
+    assert.equal(execution.output_encoding, 'base64-streams');
+    const retained = JSON.parse(fs.readFileSync(execution.output_path, 'utf8'));
+    assert.equal(Buffer.from(retained.stdout_base64, 'base64').toString().includes(XML), false);
+    assert.equal(Buffer.from(retained.report_capture.reports[0].content_base64, 'base64').toString().trimEnd(), XML);
+    if (large) assert.ok(execution.output_size_bytes > 8 * 1024 * 1024);
+    const entries = [{ obligation_id: `VALIDATION-${binding.id.toUpperCase()}`, case_resolution: {
+        binding_sha256: validationDigest(binding), execution_sha256: execution.record_sha256,
+        output_sha256: execution.output_sha256, outcome: 'PASSED', evidence_quote: XML,
+        reasoning: 'The selected assertion and its actual retained XML establish this case result.' } }];
+    assert.deepEqual(getNativeCaseResolutionViolations({ repoRoot: f.repoRoot, obligations, entries, requirePassed: true }), []);
+    fs.writeFileSync(path.join(f.repoRoot, report), 'unrelated subsequent report');
+    assert.deepEqual(getNativeCaseResolutionViolations({ repoRoot: f.repoRoot, obligations, entries, requirePassed: true }), []);
+    const refreshed = await run();
+    assert.equal(refreshed.exitCode, 0, refreshed.outputLines.join('\n'));
+    assert.equal(inspect().length, 1, 'A declared output operand may be overwritten without weakening captured input checks.');
+    for (const extra of ['--skip-report', '--delete-report']) {
+        const failed = await run(extra);
+        assert.notEqual(failed.exitCode, 0, failed.outputLines.join('\n'));
+        assert.match(failed.outputLines.join('\n'), /INTERMEDIATE_COMMAND_FAILED/);
+        assert.throws(inspect, /latest matching|successful execution/u);
+    }
+});
 
 test('newer overlapping failed or unfinished attempts supersede an older late successful completion', async t => {
     const f = await fixture(false, false, false, true);
@@ -122,13 +165,14 @@ test('newer overlapping failed or unfinished attempts supersede an older late su
     });
 });
 
-test('keeps generated file operands separate from immutable selected-source identities', async t => {
+test('rejects changed undeclared captured operands while retaining unobserved operand diagnostics', async t => {
     const f = await fixture(false, false, false, true);
     t.after(() => fs.rmSync(f.repoRoot, { recursive: true, force: true }));
     const report = 'garda-agent-orchestrator/runtime/tmp/generated-case-report.xml';
     fs.mkdirSync(path.dirname(path.join(f.repoRoot, report)), { recursive: true });
-    for (const explicit of [false, true]) for (const remove of [false, true]) {
-        fs.writeFileSync(path.join(f.repoRoot, report), explicit ? Buffer.alloc(8 * 1024 * 1024 + 1) : 'previous report');
+    for (const { explicit, large } of [{ explicit: false, large: false }, { explicit: true, large: false },
+        { explicit: true, large: true }]) for (const remove of [false, true]) {
+        fs.writeFileSync(path.join(f.repoRoot, report), large ? Buffer.alloc(8 * 1024 * 1024 + 1) : 'previous report');
         const result = await runIntermediateCommandCommand({ repoRoot: f.repoRoot, taskId: TASK,
             commandSource: 'targeted-test',
             command: `node ${SOURCE} --report=${report} ${remove ? '--delete-report ' : ''}--select ${CASE}`,
@@ -137,12 +181,49 @@ test('keeps generated file operands separate from immutable selected-source iden
         assert.equal(result.exitCode, 0, result.outputLines.join('\n'));
         assert.equal(fs.existsSync(path.join(f.repoRoot, report)), !remove);
         if (!remove) assert.equal(fs.readFileSync(path.join(f.repoRoot, report), 'utf8'), XML);
-        const obligations = readNativeCaseObligations({ repoRoot: f.repoRoot, taskId: TASK,
+        const inspect = () => readNativeCaseObligations({ repoRoot: f.repoRoot, taskId: TASK,
             preflightPath: f.preflightPath, preflightSha256: f.preflightSha256,
             scopeContentSha256: f.preflight.metrics.scope_content_sha256, sources: f.sources });
+        if (!large) {
+            assert.throws(inspect, /latest matching|successful execution/u,
+                'An undeclared changed captured operand cannot become an output merely because its option is named --report.');
+            continue;
+        }
+        const obligations = inspect();
         assert.equal(obligations.length, 1);
         assert.equal(obligations[0].result_status, 'UNRESOLVED');
         assert.ok(fs.readFileSync(obligations[0].case_execution!.output_path, 'utf8').includes(XML));
+        const record = JSON.parse(fs.readFileSync(obligations[0].case_execution!.record_path, 'utf8'));
+        assert.ok(record.selected_case_binding.before.unobserved_operands.includes(report));
+        assert.ok(!record.selected_case_binding.before.sources.some((source: { path: string }) => source.path === report));
+    }
+});
+
+test('retains stdout case evidence with an explicitly declared mutable side report and rejects its deletion', async t => {
+    const f = await fixture(false, false, false, true);
+    t.after(() => fs.rmSync(f.repoRoot, { recursive: true, force: true }));
+    const report = 'garda-agent-orchestrator/runtime/tmp/declared-side-report.xml';
+    fs.mkdirSync(path.dirname(path.join(f.repoRoot, report)), { recursive: true });
+    const inspect = () => readNativeCaseObligations({ repoRoot: f.repoRoot, taskId: TASK,
+        preflightPath: f.preflightPath, preflightSha256: f.preflightSha256,
+        scopeContentSha256: f.preflight.metrics.scope_content_sha256, sources: f.sources });
+    for (const remove of [false, true]) {
+        fs.writeFileSync(path.join(f.repoRoot, report), 'previous report');
+        const result = await runIntermediateCommandCommand({ repoRoot: f.repoRoot, taskId: TASK,
+            commandSource: 'targeted-test', preflightPath: f.preflightPath,
+            command: `node ${SOURCE} --report=${report} ${remove ? '--delete-report ' : ''}--select ${CASE}`,
+            reportFiles: [{ path: report, max_bytes: 4096 }] });
+        if (remove) {
+            assert.notEqual(result.exitCode, 0);
+            assert.throws(inspect, /latest matching|successful execution/u);
+        } else {
+            assert.equal(result.exitCode, 0, result.outputLines.join('\n'));
+            const obligations = inspect(), execution = obligations[0].case_execution!;
+            assert.equal(obligations[0].result_status, 'UNRESOLVED');
+            const retained = JSON.parse(fs.readFileSync(execution.output_path, 'utf8'));
+            assert.ok(Buffer.from(retained.stdout_base64, 'base64').toString().includes(XML));
+            assert.equal(Buffer.from(retained.report_capture.reports[0].content_base64, 'base64').toString(), XML);
+        }
     }
 });
 

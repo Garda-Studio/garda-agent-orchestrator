@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { parseValidationReportFiles } from '../../../core/validation-report-contract';
 import { approveProjectValidationContract, readValidationFile, validationDigest } from '../../../core/project-validation-identity';
 import { applyCompactSettingOptions } from '../../../core/compact/setting-definitions';
 import { withWorkflowConfigTransaction } from './workflow-command-transaction';
@@ -438,6 +439,12 @@ function handleSetLocked(
         }
         nextFullSuiteValidation.command = command;
         changedFields.push('full_suite_validation.command');
+    }
+    if (options.fullSuiteReportFiles !== undefined) {
+        if (typeof options.fullSuiteReportFiles !== 'string' || Buffer.byteLength(options.fullSuiteReportFiles) > 1024 * 1024)
+            throw new Error('--full-suite-report-files requires a bounded JSON array; use [] to clear it.');
+        nextFullSuiteValidation.report_files = parseValidationReportFiles(JSON.parse(options.fullSuiteReportFiles));
+        changedFields.push('full_suite_validation.report_files');
     }
     if (typeof options.taskTestSelectionRequireOperatorConfirmation === 'string') {
         nextConfig.task_test_selection = {

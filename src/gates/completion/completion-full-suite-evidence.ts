@@ -1,4 +1,6 @@
 import * as path from 'node:path';
+import { loadFullSuiteValidationConfig } from '../../core/full-suite-validation-config';
+import { inspectFullSuiteReports } from '../full-suite/full-suite-report-evidence';
 
 import { normalizePath } from '../shared/helpers';
 import {
@@ -73,6 +75,16 @@ export function collectFullSuiteValidationEvidence(input: {
     }
 
     const artifactStatus = String(fullSuiteArtifact.status || '').trim().toUpperCase();
+    if (['PASSED', 'WARNED'].includes(artifactStatus)) {
+        try {
+            inspectFullSuiteReports({ repoRoot: input.repoRoot, taskId: input.taskId, reviewsRoot: input.reviewsRoot,
+                artifact: fullSuiteArtifact as unknown as Record<string, unknown>,
+                declarations: loadFullSuiteValidationConfig(input.repoRoot).report_files });
+        } catch (error) {
+            const message = `Full-suite report evidence rejected: ${String(error)}`;
+            input.errors.push(message); evidence.violations.push(message);
+        }
+    }
     evidence.status = artifactStatus || null;
     validateFullSuiteCycleBinding(fullSuiteArtifact, evidence, input);
 

@@ -368,6 +368,7 @@ export async function handleRunIntermediateCommand(gateArgv: string[]): Promise<
         '--command': { key: 'command', type: 'string' },
         '--command-source': { key: 'commandSource', type: 'string' },
         '--selected-case': { key: 'selectedCases', type: 'string[]' },
+        '--report-file': { key: 'reportFiles', type: 'string[]' },
         '--artifact-path': { key: 'artifactPath', type: 'string' },
         '--output-path': { key: 'outputPath', type: 'string' },
         '--timeout-ms': { key: 'timeoutMs', type: 'string' },

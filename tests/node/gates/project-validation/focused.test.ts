@@ -7,20 +7,30 @@ import { handleWorkflow } from '../../../../src/cli/commands/workflow-command';
 import { runClassifyChangeCommand } from '../../../../src/cli/commands/gates';
 import { executeValidationRecipe } from '../../../../src/gates/project-validation/execution';
 import { evaluateValidationAttempt } from '../../../../src/gates/project-validation/result-evaluation';
+import { inspectRecipeFocusedCommand } from '../../../../src/gates/project-validation/focused';
+import { splitCommandLine } from '../../../../src/core/command-line';
 import { inspectReviewerFocusedValidationCommand, validateReviewFindingsReport, REVIEW_FINDINGS_SCHEMA_VERSION } from '../../../../src/gates/review/review-findings-schema';
 import { readTaskOwnedFocusedIntermediateEvidence } from '../../../../src/gates/review/focused-intermediate-evidence';
 import { createTempRepo, initializeGitRepo, loadTaskEntryRulePack, runEnterTaskMode, runHandshakeForTask, runShellSmokeForTask,
     seedInitAnswers, seedTaskQueue } from '../../cli/commands/gates/preflight/gates-preflight-fixtures';
 
 const taskId = 'T-1';
-async function fixture(mode = 'passed', maxAttempts = 1, options: { selector?: string; unrelatedRecipe?: boolean; variableExecutable?: boolean; executableDirectory?: string; executableName?: string; argv?: (string | { target: string })[]; cwd?: string; environment?: Record<string, string> } = {}) {
+async function fixture(mode = 'passed', maxAttempts = 1, options: { selector?: string; unrelatedRecipe?: boolean; variableExecutable?: boolean; executableDirectory?: string; executableName?: string; argv?: (string | { target: string })[]; cwd?: string; environment?: Record<string, string>; holdExecution?: boolean } = {}) {
     const root = createTempRepo(), bundle = path.join(root, 'garda-agent-orchestrator');
     const config = path.join(bundle, 'live/config/workflow-config.json');
     fs.mkdirSync(path.dirname(config), { recursive: true }); fs.writeFileSync(config, JSON.stringify(buildDefaultWorkflowConfig()));
     fs.mkdirSync(path.join(root, 'specifications')); fs.writeFileSync(path.join(root, 'specifications/case'), 'declared test');
+    fs.mkdirSync(path.join(root, 'tests'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'tests/other.spec.ts'), "require('node:assert/strict').equal(1, 1);\n");
     const cwd = options.cwd ?? '.', driver = cwd === '.' ? 'driver' : `${cwd}/driver`;
     fs.mkdirSync(path.dirname(path.join(root, driver)), { recursive: true });
     fs.writeFileSync(path.join(root, driver), 'process.stdout.write(process.argv[2]==="opaque"?"unknown success":"TAP version 13\\n"+(process.argv[2]==="failed"?"not ok":"ok")+" 1 - declared case\\n1..1\\n");process.exitCode=process.argv[2]==="failed"?7:0;');
+    if (options.holdExecution) {
+        const original = fs.readFileSync(path.join(root, driver), 'utf8');
+        fs.writeFileSync(path.join(root, driver), 'const fs=require("node:fs");'
+            + 'if(fs.existsSync("garda-agent-orchestrator/runtime/hold")){fs.writeFileSync("garda-agent-orchestrator/runtime/ready","ready");setInterval(()=>{},1000);}else{'
+            + original + '}');
+    }
     const selector = options.selector ?? 'declared case';
     const directory = options.variableExecutable ? '$HOME' : options.executableDirectory;
     const executable = directory ? path.join(root, 'tools', directory, options.executableName ?? path.basename(process.execPath)) : process.execPath;
@@ -32,7 +42,7 @@ async function fixture(mode = 'passed', maxAttempts = 1, options: { selector?: s
     const recipe = { id: 'recipe', purpose: 'test',
         executable, argv: options.argv ?? ['driver', mode, { target: 'case' }], cwd,
         inputs: [{ path: 'src/app.ts', role: 'source' }, { path: 'specifications/case', role: 'test' }, { path: driver, role: 'helper' }],
-        targets: [{ id: 'case', source: 'specifications/case', selector }], environment: options.environment ?? {}, timeout_ms: 5000,
+        targets: [{ id: 'case', source: 'specifications/case', selector }], environment: options.environment ?? {}, timeout_ms: options.holdExecution ? 30000 : 5000,
         max_attempts: maxAttempts, max_output_bytes: 1024, max_input_bytes: 65536, required_capabilities: [], result_format: mode === 'opaque' ? 'opaque' : 'tap' };
     const unrelated = { ...recipe, id: 'other', argv: ['other-driver', mode, { target: 'case' }],
         inputs: [...recipe.inputs.filter(input => input.role !== 'helper'), { path: 'other-driver', role: 'helper' }] };
@@ -74,16 +84,60 @@ it('rejects modified argv foreign tasks and changed helper bytes for declared re
         assert.equal(f.inspect().syntax_supported, false); assert.equal(f.selected().entries.length, 0);
     } finally { f.clean(); }
 });
-it('never emits focused PASS from failed unresolved or altered retained recipe results', async () => {
+it('admits authenticated recipe literal options without reconstructing an option-stripped command', async () => {
+    const f = await fixture('passed', 1, { argv: ['driver', 'passed', '--scenario=refund', { target: 'case' }] });
+    try {
+        assert.equal(f.result.status, 'PASSED');
+        assert.deepEqual(f.inspect(), { syntax_supported: true, target: 'specifications/case', violations: [] });
+        assert.equal(f.selected().entries.length, 1);
+    } finally { f.clean(); }
+});
+it('keeps a newer cancelled recipe authoritative after delayed evaluation of an older success', async () => {
+    const f = await fixture('passed', 3);
+    try {
+        const older = await executeValidationRecipe({ repoRoot: f.root, taskId, recipeId: 'recipe' });
+        const controller = new AbortController(); controller.abort();
+        const newer = await executeValidationRecipe({ repoRoot: f.root, taskId, recipeId: 'recipe', signal: controller.signal });
+        assert.equal(newer.cancelled, true);
+        assert.equal((await evaluateValidationAttempt({ repoRoot: f.root, taskId, attemptId: newer.attempt_id })).status, 'FAILED');
+        assert.equal((await evaluateValidationAttempt({ repoRoot: f.root, taskId, attemptId: older.attempt_id })).status, 'PASSED');
+        assert.equal(f.selected().entries.length, 0, 'A late result is not a newer execution.');
+        assert.equal(inspectRecipeFocusedCommand(f.root, taskId, splitCommandLine(f.command))?.process_passed, false);
+    } finally { f.clean(); }
+});
+it('rejects an older recipe PASS while a newer actual execution is unfinished', async () => {
+    const f = await fixture('passed', 2, { holdExecution: true });
+    const controller = new AbortController();
+    let running: ReturnType<typeof executeValidationRecipe> | undefined;
+    try {
+        assert.equal(f.selected().entries.length, 1);
+        fs.writeFileSync(path.join(f.bundle, 'runtime/hold'), 'hold');
+        running = executeValidationRecipe({ repoRoot: f.root, taskId, recipeId: 'recipe', signal: controller.signal });
+        const deadline = Date.now() + 15000;
+        while (!fs.existsSync(path.join(f.bundle, 'runtime/ready'))) {
+            assert.ok(Date.now() < deadline, 'The actual child must start before checking unfinished evidence.');
+            await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        assert.equal(f.selected().entries.length, 0);
+        assert.equal(inspectRecipeFocusedCommand(f.root, taskId, splitCommandLine(f.command))?.process_passed, false);
+    } finally {
+        controller.abort();
+        if (running) assert.equal((await running).cancelled, true);
+        f.clean();
+    }
+});
+it('retains opaque successful recipe process facts without inventing semantic PASS and rejects failed or altered results', async () => {
     const failed = await fixture('failed'), opaque = await fixture('opaque'), altered = await fixture();
     try {
         fs.appendFileSync(path.join(altered.root, altered.result.result_path), ' ');
         assert.equal(failed.selected().entries.length, 0);
-        assert.equal(opaque.selected().entries.length, 0);
+        assert.equal(opaque.selected().entries.length, 1);
+        assert.equal(Reflect.get(opaque.selected().entries[0], 'semantic_status'), 'PENDING_INDEPENDENT_REVIEW');
+        assert.equal(opaque.result.status, 'UNRESOLVED');
         assert.equal(altered.selected().entries.length, 0);
     } finally { failed.clean(); opaque.clean(); altered.clean(); }
 });
-it('rejects malformed recipe review notes and admits only current authenticated PASSED results', async () => {
+it('rejects malformed recipe review notes and admits current authenticated successful process observations', async () => {
     const passed = await fixture(), opaque = await fixture('opaque');
     const note = (f: typeof passed, marker = false) => validateReviewFindingsReport({ schema_version: REVIEW_FINDINGS_SCHEMA_VERSION, task_id: taskId, review_type: 'code',
         review_context_sha256: 'a'.repeat(64), tree_state_sha256: 'b'.repeat(64),
@@ -103,12 +157,18 @@ it('rejects malformed recipe review notes and admits only current authenticated 
         repoRoot: f.root, allowStructuralOnlyReviewExecution: true });
     try {
         assert.equal(note(passed).valid, true, note(passed).violations.join('\n'));
-        assert.equal(note(opaque).valid, false);
-        assert.ok(note(opaque).violations.some(violation => violation.includes('authenticated PASSED')));
+        assert.equal(note(opaque).valid, true, note(opaque).violations.join('\n'));
         const malformed = { ...passed, command: 'node "unterminated' };
         assert.doesNotThrow(() => note(malformed)); assert.equal(note(malformed).valid, false);
         assert.doesNotThrow(() => note(malformed, true)); assert.equal(note(malformed, true).valid, false);
     } finally { passed.clean(); opaque.clean(); }
+});
+it('does not let an admitted recipe shadow unrelated ordinary focused commands', async () => {
+    const f = await fixture();
+    try {
+        assert.deepEqual(f.inspect('node --test tests/other.spec.ts'),
+            { syntax_supported: true, target: 'tests/other.spec.ts', violations: [] });
+    } finally { f.clean(); }
 });
 it('rejects unsafe original shell syntax for exact declared recipe arguments', async () => {
     const f = await fixture('passed', 1, { selector: 'case;echo' });

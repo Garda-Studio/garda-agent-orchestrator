@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import { parseCommandChain } from '../../../../core/command-line';
 import { inspectValidationCommand } from '../../../../core/validation-command-contract';
+import { selectionMatchesCase, type IntermediateSelection } from '../../../../core/intermediate-selected-cases';
 import { parseValidationTap } from '../../../../core/project-validation-results';
 import { validationDigest } from '../../../../core/project-validation-identity';
 import { readValidationEventSnapshot } from '../../../../gates/project-validation/attempt-evidence';
@@ -25,8 +26,10 @@ export function isLiteralIntermediateInvocation(command: string): boolean {
 }
 
 /** Target association is input metadata, not permission or proof of test execution. */
-export function getCurrentIntermediateTestTargets(repoRoot: string, command: string, changedFiles: readonly string[]): string[] {
+export function getCurrentIntermediateTestTargets(repoRoot: string, command: string, changedFiles: readonly string[],
+    selection?: IntermediateSelection): string[] {
     if (!isLiteralIntermediateInvocation(command)) return [];
+    if (selection) return changedFiles.filter(file => selectionMatchesCase(selection, file));
     const tokens = parseCommandChain(command)[0];
     const literalPaths = new Set(tokens.slice(1).map(token => path.resolve(repoRoot, token)));
     const suggestedPaths = new Set(getChangedTestPathsTargetedByCommandTokens(tokens, [...changedFiles]));
@@ -92,6 +95,7 @@ export function hasReportedFailedTestCase(output: string): boolean {
 
 export function observeNativeIntermediateScope(repoRoot: string, taskId: string, preflightPath?: string): {
     preflight_sha256: string | null; scope_content_sha256: string | null; error: string | null;
+    changed_files: string[];
 } {
     try {
         if (!preflightPath) throw new Error('Native command observation requires the current preflight path.');
@@ -99,9 +103,10 @@ export function observeNativeIntermediateScope(repoRoot: string, taskId: string,
         const snapshot = readValidationEventSnapshot(repoRoot, taskId);
         if (path.resolve(preflightPath) !== path.resolve(snapshot.preflight_path))
             throw new Error('Preflight path must match the latest native classification for this task.');
-        return { preflight_sha256: snapshot.preflight_sha256, scope_content_sha256: snapshot.scope_content_sha256, error: null };
+        return { preflight_sha256: snapshot.preflight_sha256, scope_content_sha256: snapshot.scope_content_sha256,
+            changed_files: snapshot.changed_files, error: null };
     } catch (error) {
-        return { preflight_sha256: null, scope_content_sha256: null,
+        return { preflight_sha256: null, scope_content_sha256: null, changed_files: [],
             error: error instanceof Error ? error.message.split('\n')[0].slice(0, 240) : 'Native command scope unavailable.' };
     }
 }

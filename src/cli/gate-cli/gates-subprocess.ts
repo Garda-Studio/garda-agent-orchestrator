@@ -30,7 +30,17 @@ export interface ExecuteCommandOptions {
     onSpawn?: (child: SpawnedProcessInfo) => void;
 }
 
-export interface AsyncCommandExecutionResult {
+export interface CommandExecutionFacts {
+    terminationSignal?: NodeJS.Signals;
+    sinkError?: string;
+    stdoutTruncated?: boolean;
+    stderrTruncated?: boolean;
+    stdoutOriginalBytes?: number;
+    stderrOriginalBytes?: number;
+    outputTruncated?: boolean;
+}
+
+export interface AsyncCommandExecutionResult extends CommandExecutionFacts {
     invocations?: CommandInvocationExecution[];
     invocationOutput?: string;
     exitCode: number;
@@ -39,7 +49,7 @@ export interface AsyncCommandExecutionResult {
     cancelled: boolean;
 }
 
-export interface CommandInvocationExecution {
+export interface CommandInvocationExecution extends CommandExecutionFacts {
     invocationIndex: number;
     executable: string;
     argv: string[];
@@ -169,8 +179,16 @@ async function executeCommandSegmentAsync(tokens: string[], options: ExecuteComm
             onSpawn: deferredSpawnObserver(options.onSpawn)
         });
 
+    const facts: CommandExecutionFacts = {
+        ...(result.terminationSignal ? { terminationSignal: result.terminationSignal } : {}),
+        ...(result.sinkError !== undefined ? { sinkError: result.sinkError } : {}),
+        stdoutTruncated: result.stdoutTruncated, stderrTruncated: result.stderrTruncated,
+        stdoutOriginalBytes: result.stdoutOriginalBytes, stderrOriginalBytes: result.stderrOriginalBytes,
+        outputTruncated: result.stdoutTruncated || result.stderrTruncated
+    };
     if (result.timedOut) {
         return {
+            ...facts,
             exitCode: EXIT_GENERAL_FAILURE,
             outputLines: redactOutputLines([
                 ...splitOutputLines(result.stdout),
@@ -184,6 +202,7 @@ async function executeCommandSegmentAsync(tokens: string[], options: ExecuteComm
 
     if (result.cancelled) {
         return {
+            ...facts,
             exitCode: EXIT_GENERAL_FAILURE,
             outputLines: redactOutputLines([
                 ...splitOutputLines(result.stdout),
@@ -196,6 +215,7 @@ async function executeCommandSegmentAsync(tokens: string[], options: ExecuteComm
     }
 
     return {
+        ...facts,
         exitCode: result.exitCode,
         outputLines: redactOutputLines([
             ...splitOutputLines(result.stdout),
@@ -310,7 +330,12 @@ function createInvocationCapture(enabled: boolean, timeoutMs: number, total: num
         record(tokens: string[], index: number, result: AsyncCommandExecutionResult): void {
             if (!output) return;
             invocations.push({ invocationIndex: index, executable: tokens[0], argv: tokens.slice(1),
-                exitCode: result.exitCode, timedOut: result.timedOut, cancelled: result.cancelled });
+                exitCode: result.exitCode, timedOut: result.timedOut, cancelled: result.cancelled,
+                ...(result.terminationSignal ? { terminationSignal: result.terminationSignal } : {}),
+                ...(result.sinkError !== undefined ? { sinkError: result.sinkError } : {}),
+                stdoutTruncated: result.stdoutTruncated, stderrTruncated: result.stderrTruncated,
+                stdoutOriginalBytes: result.stdoutOriginalBytes, stderrOriginalBytes: result.stderrOriginalBytes,
+                outputTruncated: result.outputTruncated });
             output.append(`==== INVOCATION ${index}/${total} ====\nARGV: ${redactSecretText(JSON.stringify(tokens))}\n`);
             appendCommandChainOutput(output, result, timeoutMs);
             output.append(`EXIT_CODE: ${result.exitCode}\n`);
@@ -328,7 +353,10 @@ function createInvocationCapture(enabled: boolean, timeoutMs: number, total: num
                 && !invocations.some(invocation => invocation.timedOut || invocation.cancelled)) {
                 output.append(result.cancelled ? 'Process was cancelled.\n' : `Process timed out after ${timeoutMs} ms.\n`);
             }
-            return output ? { ...result, invocations, invocationOutput: redactSecretText(output.finish().text) } : result;
+            if (!output) return result;
+            const retained = output.finish();
+            return { ...result, invocations, invocationOutput: redactSecretText(retained.text),
+                outputTruncated: result.outputTruncated === true || retained.truncated };
         }
     };
 }
@@ -342,9 +370,15 @@ export async function executeCommandAsync(
     const deadline = commandChainDeadline(timeoutMs);
     const output = createOutputCapture(COMMAND_CHAIN_OUTPUT_MAX_BYTES);
     const capture = createInvocationCapture(options.captureInvocations === true, timeoutMs, commands.length);
+    let childOutputTruncated = false;
+    const finish = (result: AsyncCommandExecutionResult): AsyncCommandExecutionResult => {
+        const retained = output.finish();
+        return capture.finish({ ...result, outputLines: redactOutputLines(splitOutputLines(retained.text)),
+            outputTruncated: childOutputTruncated || result.outputTruncated === true || retained.truncated });
+    };
     for (const [index, tokens] of commands.entries()) {
         const interruption = getCommandChainInterruption(options, deadline, timeoutMs, output);
-        if (interruption) return capture.finish(interruption);
+        if (interruption) return finish(interruption);
         let result: AsyncCommandExecutionResult;
         try {
             result = await executeCommandSegmentAsync(tokens, {
@@ -357,13 +391,14 @@ export async function executeCommandAsync(
             capture.recordError(tokens, index + 1, message);
             const failure = { exitCode: EXIT_GENERAL_FAILURE, outputLines: [message], timedOut: false, cancelled: false };
             appendCommandChainOutput(output, failure, timeoutMs);
-            return capture.finish({ ...failure, outputLines: finishCommandChainOutput(output) });
+            return finish(failure);
         }
+        childOutputTruncated ||= result.outputTruncated === true;
         capture.record(tokens, index + 1, result);
         appendCommandChainOutput(output, result, timeoutMs);
-        if (result.exitCode !== 0 || result.timedOut || result.cancelled) return capture.finish({ ...result, outputLines: finishCommandChainOutput(output) });
+        if (result.exitCode !== 0 || result.timedOut || result.cancelled) return finish(result);
     }
-    return capture.finish({ exitCode: 0, outputLines: finishCommandChainOutput(output), timedOut: false, cancelled: false });
+    return finish({ exitCode: 0, outputLines: [], timedOut: false, cancelled: false });
 }
 
 export function executeCommand(commandText: string, options: ExecuteCommandOptions = {}): SyncCommandExecutionResult {

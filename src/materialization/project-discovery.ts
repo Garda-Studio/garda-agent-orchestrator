@@ -35,6 +35,7 @@ export interface ProjectDiscovery {
     suggestedCommands: string[];
     suggestedCompileGateCommands: string[];
     suggestedFullSuiteValidationCommand: string | null;
+    suggestedFullSuiteValidationCommands?: string[];
     relativeFiles: string[];
     sampleFiles: string[];
 }
@@ -294,6 +295,10 @@ function resolveNodeFullSuiteValidationCommand(targetRoot: string): string | nul
     }
 
     const packageJson = readRootPackageJsonSafe(targetRoot);
+    const testScript = getPackageJsonScripts(packageJson).test;
+    if (typeof testScript !== 'string' || !testScript.trim()) {
+        return null;
+    }
     const runner = detectNodePackageManager(targetRoot, packageJson);
     return `${runner} test`;
 }
@@ -495,56 +500,71 @@ export function resolveSuggestedFullSuiteValidationCommand(
     targetRoot: string,
     runtimePlatform: NodeJS.Platform = process.platform
 ): string | null {
-    const normalizedTargetRoot = path.resolve(targetRoot);
+    const candidates = resolveSuggestedFullSuiteValidationCommands(targetRoot, runtimePlatform);
+    return candidates.length === 1 ? candidates[0]! : null;
+}
 
-    const nodeCommand = resolveNodeFullSuiteValidationCommand(normalizedTargetRoot);
-    if (nodeCommand) {
-        return nodeCommand;
+export function resolveSuggestedFullSuiteValidationCommands(
+    targetRoot: string,
+    runtimePlatform: NodeJS.Platform = process.platform
+): string[] {
+    const normalizedTargetRoot = path.resolve(targetRoot);
+    const candidates: string[] = [];
+    for (const packageRoot of listImmediateProjectRootsWithMarker(normalizedTargetRoot, ['package.json'], true)) {
+        const nodeCommand = resolveNodeFullSuiteValidationCommand(packageRoot);
+        if (nodeCommand) {
+            const relativeSurfacePath = getRelativeSurfacePath(normalizedTargetRoot, packageRoot);
+            candidates.push(relativeSurfacePath
+                ? buildNodeRunCommand(detectNodePackageManager(packageRoot, readRootPackageJsonSafe(packageRoot)), 'test', relativeSurfacePath)
+                : nodeCommand);
+        }
     }
 
     if (hasAnyRootFile(normalizedTargetRoot, ['pyproject.toml', 'requirements.txt', 'requirements-dev.txt'])) {
-        return 'pytest';
+        candidates.push('pytest');
     }
 
     if (pathExists(path.join(normalizedTargetRoot, 'pom.xml'))) {
         if (hasAnyRootFile(normalizedTargetRoot, ['mvnw', 'mvnw.cmd'])) {
-            return resolveJvmWrapperTestCommand({
+            candidates.push(resolveJvmWrapperTestCommand({
                 targetRoot: normalizedTargetRoot,
                 wrapperName: 'mvnw',
                 windowsWrapperName: 'mvnw.cmd',
                 fallbackCommand: 'mvn test',
                 runtimePlatform
-            });
+            }));
+        } else {
+            candidates.push('mvn test');
         }
-        return 'mvn test';
     }
 
     if (hasAnyRootFile(normalizedTargetRoot, ['build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts'])) {
         if (hasAnyRootFile(normalizedTargetRoot, ['gradlew', 'gradlew.bat'])) {
-            return resolveJvmWrapperTestCommand({
+            candidates.push(resolveJvmWrapperTestCommand({
                 targetRoot: normalizedTargetRoot,
                 wrapperName: 'gradlew',
                 windowsWrapperName: 'gradlew.bat',
                 fallbackCommand: 'gradle test',
                 runtimePlatform
-            });
+            }));
+        } else {
+            candidates.push('gradle test');
         }
-        return 'gradle test';
     }
 
     if (pathExists(path.join(normalizedTargetRoot, 'go.mod'))) {
-        return 'go test ./...';
+        candidates.push('go test ./...');
     }
 
     if (pathExists(path.join(normalizedTargetRoot, 'Cargo.toml'))) {
-        return 'cargo test';
+        candidates.push('cargo test');
     }
 
     if (hasAnyRootFileByExtension(normalizedTargetRoot, ['.sln', '.csproj', '.fsproj'])) {
-        return 'dotnet test';
+        candidates.push('dotnet test');
     }
 
-    return null;
+    return [...new Set(candidates)];
 }
 
 export function getProjectDiscovery(targetRoot: string, options: ProjectDiscoveryOptions = {}): ProjectDiscovery {
@@ -555,19 +575,12 @@ export function getProjectDiscovery(targetRoot: string, options: ProjectDiscover
     try {
         const gitDir = path.join(targetRoot, '.git');
         if (pathExists(gitDir)) {
-            const tracked = spawnSyncWithTimeout('git', ['ls-files'], {
+            const files = spawnSyncWithTimeout('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
                 cwd: targetRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
                 timeoutMs: DEFAULT_GIT_TIMEOUT_MS
             });
-            const untracked = spawnSyncWithTimeout('git', ['ls-files', '--others', '--exclude-standard'], {
-                cwd: targetRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
-                timeoutMs: DEFAULT_GIT_TIMEOUT_MS
-            });
-
-            if (tracked.status === 0 && untracked.status === 0) {
-                const trackedFiles = (tracked.stdout || '').split('\n').filter((l: string) => l.trim());
-                const untrackedFiles = (untracked.stdout || '').split('\n').filter((l: string) => l.trim());
-                relativeFiles = [...new Set([...trackedFiles, ...untrackedFiles])].sort();
+            if (files.status === 0) {
+                relativeFiles = [...new Set((files.stdout || '').split('\0').filter(Boolean))].sort();
                 discoverySource = 'git_index_and_worktree';
             } else {
                 diagnostics.push('Git discovery failed; using bounded filesystem fallback scan.');
@@ -612,30 +625,25 @@ export function getProjectDiscovery(targetRoot: string, options: ProjectDiscover
         // Ignore
     }
 
-    const suggestedCommands: string[] = [];
-    if (detectedStacks.includes('Node.js or JavaScript')) {
-        suggestedCommands.push('npm run test', 'npm run lint', 'npm run build');
-    }
-    if (detectedStacks.includes('Python')) {
-        suggestedCommands.push('pytest', 'ruff check .');
-    }
-    if (detectedStacks.includes('Java or JVM')) {
-        suggestedCommands.push('./mvnw test', './gradlew test');
-    }
-    if (detectedStacks.includes('Go')) {
-        suggestedCommands.push('go test ./...');
-    }
-    if (detectedStacks.includes('Rust')) {
-        suggestedCommands.push('cargo test');
-    }
-    if (detectedStacks.includes('.NET')) {
-        suggestedCommands.push('dotnet test');
+    const suggestedFullSuiteValidationCommands = resolveSuggestedFullSuiteValidationCommands(targetRoot);
+    const suggestedCommands = [...suggestedFullSuiteValidationCommands];
+    for (const packageRoot of listImmediateProjectRootsWithMarker(targetRoot, ['package.json'], true)) {
+        const packageJson = readRootPackageJsonSafe(packageRoot);
+        const scripts = getPackageJsonScripts(packageJson);
+        for (const script of ['lint', 'build']) {
+            if (typeof scripts[script] === 'string' && String(scripts[script]).trim()) {
+                suggestedCommands.push(buildNodeRunCommand(
+                    detectNodePackageManager(packageRoot, packageJson), script, getRelativeSurfacePath(targetRoot, packageRoot)
+                ));
+            }
+        }
     }
 
     const rootFiles = uniqueFiles.filter((filePath: string) => !filePath.includes('/')).slice(0, 20);
     const runtimePathHints = collectRuntimePathHints(uniqueFiles);
     const suggestedCompileGateCommands = resolveSuggestedCompileGateCommands(targetRoot);
-    const suggestedFullSuiteValidationCommand = resolveSuggestedFullSuiteValidationCommand(targetRoot);
+    const suggestedFullSuiteValidationCommand = suggestedFullSuiteValidationCommands.length === 1
+        ? suggestedFullSuiteValidationCommands[0]! : null;
 
     return {
         source: discoverySource,
@@ -649,6 +657,7 @@ export function getProjectDiscovery(targetRoot: string, options: ProjectDiscover
         suggestedCommands: [...new Set(suggestedCommands)].sort(),
         suggestedCompileGateCommands,
         suggestedFullSuiteValidationCommand,
+        suggestedFullSuiteValidationCommands,
         relativeFiles: uniqueFiles,
         sampleFiles: uniqueFiles.slice(0, 40)
     };
@@ -762,11 +771,13 @@ export function buildProjectDiscoveryLines(discovery: ProjectDiscovery, timestam
         `Generated at: ${timestampIso}`,
         `Source: ${discovery.source}`,
         `Files considered: ${discovery.fileCount}`,
+        'Coverage: unverified. Discovery lists candidates; it does not establish complete build or test coverage.',
+        'The agent must inspect repository-owned instructions, scripts and source/test layouts, configure applicable commands and exact file roles through the ordinary workflow, and execute the configured checks before claiming setup is complete.',
         '', '## Detected Stack Signals'
     ];
 
     if (discovery.detectedStacks.length === 0) {
-        lines.push('- No strong stack markers detected. Fill context rules manually.');
+        lines.push('- No strong stack markers detected. Continue ordinary agent setup using repository evidence.');
     } else {
         for (const stack of discovery.detectedStacks) {
             lines.push(`- ${stack}`);
@@ -821,7 +832,7 @@ export function buildProjectDiscoveryLines(discovery: ProjectDiscovery, timestam
 
     lines.push('', '## Suggested Compile Gate Commands (Heuristic)');
     if (!Array.isArray(discovery.suggestedCompileGateCommands) || discovery.suggestedCompileGateCommands.length === 0) {
-        lines.push(`- No deterministic compile-gate command detected. Keep workflow config at \`${UNCONFIGURED_COMPILE_GATE_COMMAND}\` until an operator or agent-init records a project-specific compile/build/type-check command.`);
+        lines.push(`- No compile-gate candidate detected. The agent must determine and configure the project-specific compile/build/type-check command; keep \`${UNCONFIGURED_COMPILE_GATE_COMMAND}\` until that step is complete.`);
     } else {
         lines.push('- Use these only for `workflow-config.compile_gate.command`; `40-commands.md` is human guidance. If the first command composes multiple build surfaces with `&&`, keep the whole command together. Full test suites belong in full-suite validation.');
         for (const cmd of discovery.suggestedCompileGateCommands) {
@@ -831,17 +842,20 @@ export function buildProjectDiscoveryLines(discovery: ProjectDiscovery, timestam
 
     lines.push('', '## Suggested Local Commands (Heuristic)');
     if (discovery.suggestedCommands.length === 0) {
-        lines.push('- No command suggestions from discovery. Populate `40-commands.md` manually.');
+        lines.push('- No command suggestions from discovery. The agent must inspect repository instructions and scripts to determine applicable checks.');
     } else {
         for (const cmd of discovery.suggestedCommands) {
             lines.push(`- ${tick}${cmd}${tick}`);
         }
     }
 
-    lines.push('', '## Suggested Full-Suite Validation Command');
+    lines.push('', '## Suggested Full-Suite Validation Commands (Candidates)');
+    for (const candidate of discovery.suggestedFullSuiteValidationCommands || []) {
+        lines.push(`- ${tick}${candidate}${tick}`);
+    }
     if (!discovery.suggestedFullSuiteValidationCommand || discovery.suggestedFullSuiteValidationCommand === UNCONFIGURED_FULL_SUITE_VALIDATION_COMMAND) {
-        lines.push('- No deterministic full-suite command detected yet. `agent-init` should keep the workflow-config command unconfigured until an operator or later CLI command sets it.');
-    } else {
+        lines.push('- No unambiguous single candidate. The agent must establish the required validation surfaces and configure their project-specific command; candidates alone do not complete setup.');
+    } else if (!discovery.suggestedFullSuiteValidationCommands?.length) {
         lines.push(`- ${tick}${discovery.suggestedFullSuiteValidationCommand}${tick}`);
     }
 
@@ -867,16 +881,17 @@ export function buildDiscoveryOverlaySection(discovery: ProjectDiscovery): strin
     const fullSuiteCommandText = discovery.suggestedFullSuiteValidationCommand
         && discovery.suggestedFullSuiteValidationCommand !== UNCONFIGURED_FULL_SUITE_VALIDATION_COMMAND
         ? `\`${discovery.suggestedFullSuiteValidationCommand}\``
-        : 'none detected; keep workflow-config unconfigured until an operator sets a project-specific command';
+        : 'no single candidate; the agent must inspect and configure all applicable project validation surfaces';
     const compileGateCommandText = Array.isArray(discovery.suggestedCompileGateCommands)
         && discovery.suggestedCompileGateCommands.length > 0
         ? `\`${discovery.suggestedCompileGateCommands[0]}\``
-        : 'none detected; choose a compile/build/type-check command manually and do not use the full test suite';
+        : 'none detected; the agent must inspect and configure a project-specific compile/build/type-check command';
 
     return [
         '## Project Discovery Snapshot',
         `- Discovery source: ${discovery.source}`,
         `- Files considered: ${discovery.fileCount}`,
+        '- Coverage: unverified; ordinary agent setup must inspect repository instructions, configure commands and exact file roles, then execute the configured checks.',
         `- Detected stacks: ${stacksText}`,
         `- Top-level directories: ${dirsText}`,
         `- Suggested compile-gate command: ${compileGateCommandText}`,

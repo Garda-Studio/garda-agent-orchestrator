@@ -2,6 +2,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { resolveBundleNameForTarget } from '../../core/constants';
+import { isAuthenticatedWorkflowMigration } from '../../core/auth/local-commit-availability';
+import { readWorkflowAuditTaskEntryHash } from '../../core/workflow-config-audit';
 import { normalizePath, toPlainRecord } from '../shared/helpers';
 import type {
     WorkflowConfigAuditChangeRecord,
@@ -68,6 +70,8 @@ function readWorkflowConfigAuditRecords(repoRoot: string): WorkflowConfigAuditCh
             if (!record || record.event_source !== 'workflow-config-set') {
                 continue;
             }
+            const migration = record.mutation_source === 'lifecycle';
+            if (migration && !isAuthenticatedWorkflowMigration(repoRoot, record)) continue;
             const afterSha256 = normalizeWorkflowConfigSha256(record.after_sha256);
             records.push({
                 audit_path: normalizePath(auditPath),
@@ -78,7 +82,9 @@ function readWorkflowConfigAuditRecords(repoRoot: string): WorkflowConfigAuditCh
                 changed_fields: toStringArray(record.changed_fields),
                 active_task_ids: toStringArray(record.active_task_ids),
                 active_task_id: String(record.active_task_id || '').trim() || null,
-                after_sha256: afterSha256
+                after_sha256: afterSha256,
+                before_sha256: normalizeWorkflowConfigSha256(record.before_sha256),
+                ...(migration ? { migration_task_entries: toPlainRecord(record.task_entry_sha256) as Record<string, string> || {} } : {})
             });
         }
     } catch {
@@ -88,7 +94,7 @@ function readWorkflowConfigAuditRecords(repoRoot: string): WorkflowConfigAuditCh
 }
 
 function isAcceptedMutationSource(source: string): boolean {
-    return source === 'local-ui' || source === 'cli';
+    return source === 'local-ui' || source === 'cli' || source === 'lifecycle';
 }
 
 function auditRecordMatchesTask(record: WorkflowConfigAuditChangeRecord, taskId: string | null): boolean {
@@ -103,6 +109,8 @@ function findAuditRecordForChangedFile(params: {
     relativePath: string;
     currentHash: string | null;
     taskId: string | null;
+    baselineHash: string | null;
+    taskEntryHash: string | null;
 }): WorkflowConfigAuditChangeRecord | null {
     if (!params.currentHash) {
         return null;
@@ -114,27 +122,50 @@ function findAuditRecordForChangedFile(params: {
         && record.changed_fields.length > 0
         && auditRecordMatchesTask(record, params.taskId)
     ));
-    return matches.length > 0 ? matches[matches.length - 1] : null;
+    const match = matches.at(-1);
+    if (!match) return null;
+    if (match.mutation_source !== 'lifecycle') return match;
+    if (!params.baselineHash) return null;
+    let expectedHash = params.currentHash;
+    for (let index = params.records.lastIndexOf(match); index >= 0; index--) {
+        const record = params.records[index];
+        if (record.config_path !== params.relativePath) continue;
+        if (record.after_sha256 !== expectedHash || !isAcceptedMutationSource(record.mutation_source)
+            || !auditRecordMatchesTask(record, params.taskId)) return null;
+        if (record.mutation_source === 'lifecycle' && params.taskId
+            && (!params.taskEntryHash || record.migration_task_entries?.[params.taskId] !== params.taskEntryHash)) return null;
+        if (record.before_sha256 === params.baselineHash) return match;
+        if (!record.before_sha256) return null;
+        expectedHash = record.before_sha256;
+    }
+    return null;
 }
 
 export function getAuditedWorkflowConfigChangeProvenance(options: {
     repoRoot: string;
     changedFiles: readonly string[];
     currentFileHashes: Record<string, string | null>;
+    baselineFileHashes?: Record<string, string | null> | null;
     taskId?: string | null;
 }): WorkflowConfigAuditProvenance {
     const changedFiles = getWorkflowConfigChangedFiles(options.changedFiles, Object.keys(options.currentFileHashes));
-    const records = readWorkflowConfigAuditRecords(options.repoRoot);
+    const records = changedFiles.length > 0 ? readWorkflowConfigAuditRecords(options.repoRoot) : [];
     const acceptedRecords: WorkflowConfigAuditChangeRecord[] = [];
     const auditedFiles: string[] = [];
     const unauditedFiles: string[] = [];
     const taskId = String(options.taskId || '').trim() || null;
+    const needsMigrationBinding = records.some(record => record.mutation_source === 'lifecycle'
+        && changedFiles.includes(record.config_path));
+    const taskEntryHash = taskId && needsMigrationBinding ? readWorkflowAuditTaskEntryHash(
+        path.join(options.repoRoot, resolveBundleNameForTarget(options.repoRoot)), taskId) : null;
     for (const relativePath of changedFiles) {
         const record = findAuditRecordForChangedFile({
             records,
             relativePath,
             currentHash: options.currentFileHashes[relativePath] ?? null,
-            taskId
+            taskId,
+            baselineHash: options.baselineFileHashes?.[relativePath] ?? null,
+            taskEntryHash
         });
         if (record) {
             auditedFiles.push(relativePath);

@@ -1,6 +1,8 @@
 import * as path from 'node:path';
 import type { ValidationAttempt } from '../../core/project-validation-contract';
-import { readValidationFile } from '../../core/project-validation-identity';
+import { readValidationFile, validationDigest } from '../../core/project-validation-identity';
+import { isPlainRecord } from '../../core/records';
+import { MAX_RETAINED_VALIDATION_OUTPUT_BYTES, readRetainedValidationReports } from '../../core/validation-report-evidence';
 import { summarizeValidationResults } from '../../core/project-validation-results';
 import { eligibleExpectedRedRecipes } from '../../core/project-validation-recipes';
 import { readTaskQueueEntries } from '../../core/task-queue-read';
@@ -36,7 +38,7 @@ export function assertValidationExpectedRed(repoRoot: string, taskId: string, re
     if (!eligibleExpectedRedRecipes([snapshot.recipe], preflight.changed_files as unknown[]).some(recipe => recipe.id === recipeId)) throw new Error('Expected-red recipe lacks changed declared test targets');
 }
 export function readValidationAttemptFacts(repoRoot: string, taskId: string, attemptId: string,
-    inspection: ValidationEvidenceInspection = 'active', batch?: ValidationEvidenceBatch) {
+    inspection: ValidationEvidenceInspection = 'active', batch?: ValidationEvidenceBatch, expectedRedHistory = false) {
     const paths = validationPaths(repoRoot, taskId), events = readValidationEvents(repoRoot, taskId, inspection, batch);
     const completed = events.filter(event => event.event_type === 'PROJECT_VALIDATION_COMPLETED' && event.details?.attempt_id === attemptId);
     if (completed.length !== 1) throw new Error('Missing or ambiguous canonical completed attempt');
@@ -44,17 +46,40 @@ export function readValidationAttemptFacts(repoRoot: string, taskId: string, att
     const file = readValidationFile(repoRoot, attemptPath);
     if (file.identity.sha256 !== details.artifact_sha256) throw new Error('Retained attempt digest changed');
     const attempt = JSON.parse(file.bytes.toString('utf8')) as ValidationAttempt;
-    const snapshot = readValidationRecipeSnapshot(repoRoot, taskId, String(details.recipe_id), inspection, batch);
+    const currentSnapshot = readValidationRecipeSnapshot(repoRoot, taskId, String(details.recipe_id), inspection, batch);
+    let snapshot = currentSnapshot;
+    if (expectedRedHistory) {
+        const evaluated = events.filter(event => event.event_type === 'PROJECT_VALIDATION_RESULTS_EVALUATED'
+            && event.details?.attempt_id === attemptId);
+        const resultFile = readValidationFile(repoRoot, `${paths.attempts}/${attemptId}/result.json`);
+        const result: unknown = JSON.parse(resultFile.bytes.toString('utf8'));
+        const cycleStart = events.map(event => event.event_type).lastIndexOf('TASK_MODE_ENTERED');
+        const starts = events.filter(event => event.event_type === 'PROJECT_VALIDATION_STARTED' && event.details?.attempt_id === attemptId);
+        const { snapshot_sha256: originalHash, ...original } = attempt.snapshot;
+        if (evaluated.length !== 1 || resultFile.identity.sha256 !== evaluated[0].details?.artifact_sha256
+            || !isPlainRecord(result) || result.expected_failure !== true || !['EXPECTED_FAILURE', 'UNRESOLVED'].includes(String(result.status))
+            || starts.length !== 1 || events.indexOf(starts[0]) <= cycleStart || events.indexOf(completed[0]) <= events.indexOf(starts[0])
+            || events.indexOf(evaluated[0]) <= events.indexOf(completed[0]) || starts[0].details?.snapshot_sha256 !== originalHash
+            || validationDigest(original) !== originalHash || original.authority_sha256 !== currentSnapshot.authority_sha256
+            || validationDigest(original.recipe) !== validationDigest(currentSnapshot.recipe)
+            || validationDigest(original.tool) !== validationDigest(currentSnapshot.tool)
+            || original.inputs.length !== currentSnapshot.inputs.length
+            || original.recipe.inputs.some((input, index) => input.role !== 'source'
+                && validationDigest(original.inputs[index]) !== validationDigest(currentSnapshot.inputs[index])))
+            throw new Error('Historical expected-RED recipe source, authority or native execution binding changed.');
+        snapshot = attempt.snapshot;
+    }
     if (attempt.schema_version !== 1 || attempt.attempt_id !== attemptId || attempt.snapshot.task_id !== taskId
         || attempt.snapshot.snapshot_sha256 !== snapshot.snapshot_sha256 || details.snapshot_sha256 !== snapshot.snapshot_sha256
         || attempt.cases !== null || attempt.expected_failure !== false) throw new Error('Foreign or stale execution facts');
     const directory = `${paths.attempts}/${attemptId}`;
     if (attemptPath !== `${directory}/attempt.json` || attempt.output_path !== `${directory}/output.json`
         || attempt.source_archive_path !== `${directory}/sources.json`) throw new Error('Foreign retained attempt paths');
-    const output = readValidationFile(repoRoot, attempt.output_path, Math.ceil(snapshot.recipe.max_output_bytes * 4 / 3) + 128);
+    const output = readValidationFile(repoRoot, attempt.output_path, snapshot.recipe.report_files?.length
+        ? MAX_RETAINED_VALIDATION_OUTPUT_BYTES : Math.ceil(snapshot.recipe.max_output_bytes * 4 / 3) + 128);
     if (output.identity.sha256 !== attempt.output_sha256 || output.bytes.length !== attempt.output_bytes
         || readValidationFile(repoRoot, attempt.source_archive_path).identity.sha256 !== attempt.source_archive_sha256) throw new Error('Retained source or output digest changed');
-    const streams = JSON.parse(output.bytes.toString('utf8')) as { stdout_base64: string; stderr_base64: string };
+    const streams = JSON.parse(output.bytes.toString('utf8')) as { stdout_base64: string; stderr_base64: string; report_capture?: unknown };
     const decoded = [streams.stdout_base64, streams.stderr_base64].map(value => {
         if (typeof value !== 'string') throw new Error('Invalid retained output stream');
         const bytes = Buffer.from(value, 'base64');
@@ -62,7 +87,15 @@ export function readValidationAttemptFacts(repoRoot: string, taskId: string, att
         return bytes;
     });
     if (decoded[0].length + decoded[1].length > snapshot.recipe.max_output_bytes) throw new Error('Retained output exceeds frozen budget');
-    return { events, attempt, snapshot, attemptPath, attemptSha256: file.identity.sha256, directory, decoded };
+    const starts = events.filter(event => event.event_type === 'PROJECT_VALIDATION_STARTED' && event.details?.attempt_id === attemptId);
+    const startSha256 = attempt.report_capture_start_sha256 ?? null;
+    if (startSha256 && (starts.length !== 1 || starts[0].details?.report_capture_start_sha256 !== startSha256
+        || starts[0].details?.snapshot_sha256 !== snapshot.snapshot_sha256 || starts[0].details?.recipe_id !== snapshot.recipe.id
+        || Number(starts[0].integrity?.task_sequence) >= Number(completed[0].integrity?.task_sequence)))
+        throw new Error('Report capture lacks the matching native execution start');
+    const reports = readRetainedValidationReports({ repoRoot, capture: streams.report_capture, declarations: snapshot.recipe.report_files,
+        evidenceDirectory: directory, expectedStartSha256: startSha256, executionViolations: attempt.violations });
+    return { events, attempt, snapshot, currentSnapshot, attemptPath, attemptSha256: file.identity.sha256, directory, decoded, reports };
 }
 export async function evaluateValidationAttempt(options: { repoRoot: string; taskId: string; attemptId: string; expectedFailure?: boolean }) {
     const { repoRoot, taskId, attemptId } = options, paths = validationPaths(repoRoot, taskId);

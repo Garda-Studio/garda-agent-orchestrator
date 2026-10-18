@@ -741,6 +741,7 @@ export function runClassifyChangeCommand(options: ClassifyChangeCommandOptions):
             repoRoot,
             changedFiles: changedWorkflowConfigFiles,
             currentFileHashes: workflowConfigChanges.current_file_hashes,
+            baselineFileHashes: workflowConfigChanges.baseline_file_hashes,
             taskId: taskModeEvidence.task_id
         });
         if (auditedWorkflowConfigProvenance.records.length > 0 || auditedWorkflowConfigProvenance.unaudited_files.length > 0) {

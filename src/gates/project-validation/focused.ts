@@ -3,11 +3,12 @@ import { isPlainRecord } from '../../core/records';
 import type { FrozenValidationRecipe } from '../../core/project-validation-contract';
 import { eligibleExpectedRedRecipes } from '../../core/project-validation-recipes';
 import { currentProjectValidationAuthority, freezeValidationRecipe, readProjectValidationAuthority } from './authority';
-import { readValidationEvents } from './attempt-evidence';
+import { latestValidationRecipeAttempt, readValidationEvents } from './attempt-evidence';
 import { readValidationResult } from './evidence';
 import { assertValidationExpectedRed } from './result-evaluation';
 import type { TaskAuditEvent } from '../task-audit/task-audit-summary-lifecycle';
 import type { FocusedIntermediateEvidenceEntry } from '../review/focused-intermediate-evidence';
+import { isCompleteExpectedFailureAttempt } from '../../core/project-validation-results';
 
 function invocation(snapshot: Pick<FrozenValidationRecipe, 'tool' | 'recipe'>): string[] {
     return [snapshot.tool.path, ...snapshot.recipe.argv.map(argument => typeof argument === 'string'
@@ -41,8 +42,7 @@ export function inspectRecipeExpectedRedRoute(options: {
             const snapshot = freezeValidationRecipe(options.repoRoot, options.taskId, recipe.id);
             if (snapshot.preflight_sha256 !== options.preflightSha256) throw new Error('Expected-red preflight changed');
             recipeIds.push(recipe.id);
-            const latest = events.slice(cycleStart + 1).reverse().find(event => event.details?.recipe_id === recipe.id
-                && ['PROJECT_VALIDATION_STARTED', 'PROJECT_VALIDATION_COMPLETED', 'PROJECT_VALIDATION_RESULTS_EVALUATED'].includes(event.event_type));
+            const latest = latestValidationRecipeAttempt(events, recipe.id);
             if (latest?.event_type !== 'PROJECT_VALIDATION_RESULTS_EVALUATED') continue;
             try {
                 const { attempt, result } = readValidationResult({ repoRoot: options.repoRoot, taskId: options.taskId,
@@ -50,9 +50,8 @@ export function inspectRecipeExpectedRedRoute(options: {
                 const current = latestRecipeAttemptEvent(options.repoRoot, options.taskId, recipe.id);
                 if (current?.event_type !== 'PROJECT_VALIDATION_RESULTS_EVALUATED'
                     || current.details?.attempt_id !== attempt.attempt_id) continue;
-                expectedFailure ||= result.status === 'EXPECTED_FAILURE' && result.expected_failure === true
-                    && attempt.exit_code !== null && attempt.exit_code !== 0 && !attempt.timed_out && !attempt.cancelled
-                    && attempt.violations.length === 0;
+                expectedFailure ||= ['EXPECTED_FAILURE', 'UNRESOLVED'].includes(result.status) && result.expected_failure === true
+                    && isCompleteExpectedFailureAttempt(attempt);
             } catch { /* Invalid retained results cannot advance the navigator. */ }
         }
         return { recipeIds, expectedFailure, violation: null };
@@ -61,13 +60,11 @@ export function inspectRecipeExpectedRedRoute(options: {
     }
 }
 function latestRecipeAttemptEvent(repoRoot: string, taskId: string, recipeId: string) {
-    const events = readValidationEvents(repoRoot, taskId);
-    for (let index = events.length - 1; index >= 0; index--) {
-        const event = events[index];
-        if (event.details?.recipe_id === recipeId && ['PROJECT_VALIDATION_STARTED', 'PROJECT_VALIDATION_COMPLETED',
-            'PROJECT_VALIDATION_RESULTS_EVALUATED'].includes(event.event_type)) return event;
-    }
-    return undefined;
+    return latestValidationRecipeAttempt(readValidationEvents(repoRoot, taskId), recipeId);
+}
+function successfulFocusedProcess({ attempt, result }: ReturnType<typeof readValidationResult>): boolean {
+    return ['PASSED', 'UNRESOLVED'].includes(result.status) && attempt.exit_code === 0
+        && !attempt.timed_out && !attempt.cancelled && attempt.violations.length === 0;
 }
 export function inspectRecipeFocusedCommand(repoRoot: string, taskId: string, tokens: string[]) {
     try {
@@ -75,16 +72,18 @@ export function inspectRecipeFocusedCommand(repoRoot: string, taskId: string, to
         if (!authority) return null;
         const matches = authority.approved.contract.recipes.filter(recipe => JSON.stringify(invocation({ recipe,
             tool: authority.approved.tools[recipe.id] })) === JSON.stringify(tokens));
+        if (matches.length === 0) return null;
         if (matches.length !== 1) throw new Error('Command must match exactly one current admitted recipe');
         const snapshot = freezeValidationRecipe(repoRoot, taskId, matches[0].id), target = focusedTarget(snapshot);
         if (snapshot.recipe.cwd !== '.' || Object.keys(snapshot.recipe.environment).length !== 0)
             throw new Error('Bare command omits recipe cwd or environment; use the authenticated retained recipe result');
         const event = latestRecipeAttemptEvent(repoRoot, taskId, snapshot.recipe.id);
-        const status = event?.event_type === 'PROJECT_VALIDATION_RESULTS_EVALUATED'
-            ? readValidationResult({ repoRoot, taskId, attemptId: String(event.details?.attempt_id) }).result.status : null;
-        return { target, status, violations: [] as string[] };
+        const evidence = event?.event_type === 'PROJECT_VALIDATION_RESULTS_EVALUATED'
+            ? readValidationResult({ repoRoot, taskId, attemptId: String(event.details?.attempt_id) }) : null;
+        return { target, status: evidence?.result.status ?? null, process_passed: evidence !== null && successfulFocusedProcess(evidence),
+            violations: [] as string[] };
     } catch (error) {
-        return { target: null, status: null, violations: [String(error)] };
+        return { target: null, status: null, process_passed: false, violations: [String(error)] };
     }
 }
 export function readFocusedRecipeEntry(options: {
@@ -98,14 +97,15 @@ export function readFocusedRecipeEntry(options: {
         const { snapshot, attempt, result } = readValidationResult({ repoRoot: options.repoRoot, taskId: options.taskId,
             attemptId: String(details.attempt_id) });
         const target = focusedTarget(snapshot);
-        if (result.status !== 'PASSED' || attempt.exit_code !== 0
+        if (!successfulFocusedProcess({ snapshot, attempt, result })
             || (options.expectedPreflightSha256 && snapshot.preflight_sha256 !== options.expectedPreflightSha256))
             throw new Error(`Recipe result is not current focused PASS: ${result.status}`);
         const latest = latestRecipeAttemptEvent(options.repoRoot, options.taskId, snapshot.recipe.id);
         if (latest?.details?.attempt_id !== attempt.attempt_id) throw new Error('Historical recipe result is superseded');
         return { entry: { command_source: 'project-recipe', command: invocation(snapshot).map(quoteCommandValue).join(' '),
             recipe_context: { cwd: snapshot.recipe.cwd, environment: snapshot.recipe.environment },
-            status: 'PASSED', exit_code: 0, preflight_path: null, preflight_sha256: snapshot.preflight_sha256,
+            status: 'PASSED', exit_code: 0, semantic_status: 'PENDING_INDEPENDENT_REVIEW',
+            preflight_path: null, preflight_sha256: snapshot.preflight_sha256,
             coverage_contract_sha256: null, event_timestamp_utc: String(options.event.timestamp_utc),
             event_task_sequence: integrity.task_sequence, artifact_path: result.result_path,
             artifact_sha256: result.result_sha256, output_artifact_path: attempt.output_path,

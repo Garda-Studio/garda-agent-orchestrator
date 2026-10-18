@@ -14,6 +14,8 @@ import type { ValidationEvidenceInspection } from '../project-validation/attempt
 import type { TrustBoundarySourceEvidence } from '../../core/trust-boundary-analysis';
 import { assessTrustBoundaryAnalysisApplicability } from '../../core/trust-boundary-analysis';
 import { readNativeCaseObligations } from '../review/native-case-semantics';
+import { readExpectedRedReviewObligations, taskRequiresExpectedRed } from '../test-first/expected-red-evidence';
+import { resolveValidationSemanticReviewLanes, type EffectiveReviewSnapshot } from '../../policy/effective-review-snapshot';
 
 export interface AuthoritativeReviewCoverageScope {
     changedFiles: string[];
@@ -64,10 +66,19 @@ export function resolveAuthoritativeReviewValidationObligations(options: {
     reviewType: string; preflight: Record<string, unknown>; repoRoot: string; preflightPath?: string; taskModePath?: string;
     inspection?: ValidationEvidenceInspection;
 }) {
-    if (!currentProjectValidationAuthority(options.repoRoot, options.preflight)
-        && !assessTrustBoundaryAnalysisApplicability(options.preflight).required) return undefined;
     const taskId = String(options.preflight.task_id ?? '');
+    const expectedRed = taskRequiresExpectedRed(options.repoRoot, taskId);
+    const declaredOrMatrix = currentProjectValidationAuthority(options.repoRoot, options.preflight)
+        || assessTrustBoundaryAnalysisApplicability(options.preflight).required;
+    if (!declaredOrMatrix && !expectedRed) return undefined;
     const preflightPath = resolveCurrentNoOpPreflightPath(options.repoRoot, taskId, options.preflightPath);
+    const retained = readValidationFile(options.repoRoot,
+        path.relative(path.resolve(options.repoRoot), preflightPath).replace(/\\/gu, '/'));
+    if (validationDigest(JSON.parse(retained.bytes.toString('utf8'))) !== validationDigest(options.preflight))
+        throw new Error('Declared review coverage preflight differs from current canonical projection.');
+    if (!declaredOrMatrix) return resolveValidationSemanticReviewLanes(
+        options.preflight.effective_review_snapshot as EffectiveReviewSnapshot).some(lane => lane === options.reviewType)
+        ? readExpectedRedReviewObligations({ ...options, taskId, preflightPath, preflightSha256: retained.identity.sha256 }) : undefined;
     let mode = getTaskModeEvidence(options.repoRoot, taskId, options.taskModePath ?? '');
     if (!options.taskModePath && mode.timeline_artifact_path
         && path.resolve(mode.timeline_artifact_path) !== path.resolve(mode.evidence_path ?? ''))
@@ -75,12 +86,13 @@ export function resolveAuthoritativeReviewValidationObligations(options: {
     if (mode.evidence_status !== 'PASS' || !mode.evidence_path)
         throw new Error(`Declared review coverage task-mode identity rejected: ${mode.evidence_status}`);
     const projection = readValidationReviewObligations({ ...options, taskId, preflightPath, taskModePath: mode.evidence_path });
-    const retained = readValidationFile(options.repoRoot,
-        path.relative(path.resolve(options.repoRoot), preflightPath).replace(/\\/gu, '/'));
     if (retained.identity.sha256 !== projection.preflight_sha256
         || validationDigest(JSON.parse(retained.bytes.toString('utf8'))) !== validationDigest(options.preflight))
         throw new Error('Declared review coverage preflight differs from current canonical projection.');
-    return projection.semantic_review_lanes.some(lane => lane === options.reviewType) ? projection.obligations : undefined;
+    const redGreen = expectedRed ? readExpectedRedReviewObligations({ ...options, taskId, preflightPath,
+        preflightSha256: retained.identity.sha256 }, projection.obligations) : [];
+    return projection.semantic_review_lanes.some(lane => lane === options.reviewType)
+        ? [...new Map([...projection.obligations, ...redGreen].map(item => [item.id, item])).values()] : undefined;
 }
 
 export function buildDeclaredReviewCoverageContract(options: Parameters<typeof resolveAuthoritativeReviewValidationObligations>[0]) {

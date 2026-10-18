@@ -4,6 +4,7 @@ import { UNCONFIGURED_FULL_SUITE_VALIDATION_COMMAND } from '../../../../core/con
 import { VALIDATION_REPO_ROOT_ENV, VALIDATION_TASK_ID_ENV } from '../../../../core/validation-output-retention';
 import * as gateHelpers from '../../../../gates/shared/helpers';
 import { redactSecretText } from '../../../../core/redaction';
+import { startFullSuiteReports, completeFullSuiteReports, type FullSuiteReportAttempt } from '../../../../gates/full-suite/full-suite-report-evidence';
 import {
     buildFullSuiteDurationHistoryComparison,
     buildFullSuiteValidationOutputTelemetry,
@@ -428,6 +429,7 @@ export async function runFullSuiteValidationCommand(
     const maxAttempts = Math.max(1, 1 + timeoutRetryCount);
     const timeoutCleanupObservations: string[] = [];
     const timeoutAttempts: FullSuiteTimeoutAttemptEvidence[] = [];
+    const reportAttempts: FullSuiteReportAttempt[] = [];
     // Failed admission must never enter another run's terminal cleanup.
     const runMarkerOwner = writeFullSuiteValidationRunMarker({
         repoRoot,
@@ -439,7 +441,10 @@ export async function runFullSuiteValidationCommand(
     });
     try {
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            let reportStart: Awaited<ReturnType<typeof startFullSuiteReports>> = null;
             try {
+                reportStart = await startFullSuiteReports({ repoRoot, taskId, reviewsRoot, eventsRoot, command: config.command,
+                    declarations: config.report_files, attempt, changedFiles });
                 const execution = await executeCommandAsync(config.command, {
                     cwd: repoRoot,
                     env: {
@@ -475,6 +480,8 @@ export async function runFullSuiteValidationCommand(
                     message
                 ];
             }
+            const reportAttempt = completeFullSuiteReports(reportStart);
+            if (reportAttempt) reportAttempts.push(reportAttempt);
             timeoutAttempts.push({
                 attempt,
                 exit_code: commandExitCode,
@@ -513,9 +520,20 @@ export async function runFullSuiteValidationCommand(
             outputLines,
             outputArtifactPath,
             changedFiles,
-            cycleBinding
+            cycleBinding,
+            repoRoot
         );
         result.command_provenance = commandContract.provenance;
+        if (config.report_files?.length) {
+            result.report_attempts = reportAttempts;
+            const reportViolations = reportAttempts.at(-1)?.violations ?? ['Declared full-suite report observation did not complete.'];
+            if (reportViolations.length) {
+                result.status = 'FAILED';
+                result.violations.push(...reportViolations);
+                result.failure_chunks.push(reportViolations);
+                result.compact_summary = reportViolations.slice(0, executionConfig.green_summary_max_lines);
+            }
+        }
         const timeoutAttemptsExhausted = timedOut && timeoutAttempts.length >= maxAttempts;
         const timeoutBlockerEvidence = timeoutAttemptsExhausted && executionConfig.timeout_blocker !== false
             ? resolveFullSuiteTimeoutBlockerEvidence({
@@ -581,6 +599,7 @@ export async function runFullSuiteValidationCommand(
                 postWorkflowConfigChanges.scan_error
             );
             blockedResult.command_provenance = commandContract.provenance;
+            if (result.report_attempts) blockedResult.report_attempts = result.report_attempts;
             blockedResult.output_artifact_path = gateHelpers.normalizePath(outputArtifactPath);
             blockedResult.output_retention = buildRawOutputRetentionEvidence(rawOutputText, true);
             blockedResult.duration_ms = durationMs;

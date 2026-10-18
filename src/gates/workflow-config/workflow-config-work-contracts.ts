@@ -24,6 +24,8 @@ export interface WorkflowConfigAuditChangeRecord {
     active_task_ids: string[];
     active_task_id: string | null;
     after_sha256: string | null;
+    before_sha256?: string | null;
+    migration_task_entries?: Record<string, string>;
 }
 
 export interface WorkflowConfigAuditProvenance {

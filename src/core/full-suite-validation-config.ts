@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { assertWorkflowTransactionReadable } from './workflow-transaction-state';
+import { parseValidationReportFiles, type ValidationReportFile } from './validation-report-contract';
 
 import { ensurePlainObject, normalizeBooleanLike, normalizeInteger } from '../schemas/shared';
 import {
@@ -24,6 +25,7 @@ export type OutOfScopeFailurePolicy = (typeof OUT_OF_SCOPE_FAILURE_POLICIES)[num
 export interface FullSuiteValidationConfig {
     readonly enabled: boolean;
     readonly command: string;
+    readonly report_files?: ValidationReportFile[];
     readonly timeout_ms: number;
     readonly timeout_blocker?: boolean;
     readonly timeout_retry_count?: number;
@@ -158,6 +160,7 @@ function normalizeFullSuiteConfig(record: Record<string, unknown>): FullSuiteVal
     return {
         enabled: normalizeBooleanLikeOrDefault(record.enabled, field('enabled'), defaults.enabled),
         command: normalizeCommand(record.command),
+        ...(record.report_files !== undefined ? { report_files: parseValidationReportFiles(record.report_files) } : {}),
         timeout_ms: normalizeIntegerOrDefault(record.timeout_ms, field('timeout_ms'), defaults.timeout_ms, { minimum: 1 }),
         timeout_blocker: normalizeBooleanLikeOrDefault(
             record.timeout_blocker, field('timeout_blocker'), defaults.timeout_blocker ?? true

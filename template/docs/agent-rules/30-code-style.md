@@ -20,8 +20,8 @@ repository-specific conventions replace or refine it.
   correctness.
 
 ## Style Priority Order
-- Rules written in this file are the primary source of truth.
-- Formatter, linter, and static-analysis configs come next.
+- Explicit repository-owned conventions and formatter, linter, and static-analysis configs take precedence over vendor style defaults.
+- Apply the defaults in this file only where the project has no applicable convention; naming and language examples do not restrict supported stacks.
 - Strong, consistent patterns from high-quality project modules may refine local style decisions.
 - Common best practices are the fallback when project-specific guidance is missing.
 
@@ -70,5 +70,5 @@ repository-specific conventions replace or refine it.
 
 ## Definition of Done for Style
 - Rules above must match actual stack from `live/project-discovery.md`.
-- Repository-specific conventions in `project-memory/conventions.md` may refine
-  these defaults but must not contradict mandatory rule files.
+- Repository-specific conventions in `project-memory/conventions.md` replace
+  conflicting vendor style defaults. Workflow, authorization, and evidence requirements remain mandatory.

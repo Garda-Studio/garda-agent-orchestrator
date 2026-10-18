@@ -1248,7 +1248,11 @@ test('runAgentInit preserves manual full-suite command overrides when they diffe
     }
 });
 
-test('runAgentInit preserves manual full-suite command overrides across later detected stack changes', () => {
+for (const setting of [
+    { name: 'manual', command: 'python -m pytest -q', seeded: 'pytest' },
+    { name: 'previously seeded', command: 'pytest', seeded: 'pytest' },
+    { name: 'legacy configured', command: 'npm test', seeded: null }
+]) test(`runAgentInit preserves ${setting.name} full-suite commands across later detected stack changes`, () => {
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-agent-init-manual-fsv-stack-change-'));
     const bundleRoot = path.join(workspaceRoot, 'garda-agent-orchestrator');
     const initAnswersPath = path.join(bundleRoot, 'runtime', 'init-answers.json');
@@ -1270,7 +1274,7 @@ test('runAgentInit preserves manual full-suite command overrides across later de
         writeJson(path.join(bundleRoot, 'live', 'config', 'workflow-config.json'), {
             full_suite_validation: {
                 enabled: false,
-                command: 'python -m pytest -q',
+                command: setting.command,
                 timeout_ms: 600000,
                 green_summary_max_lines: 5,
                 red_failure_chunk_lines: 50,
@@ -1290,7 +1294,7 @@ test('runAgentInit preserves manual full-suite command overrides across later de
             VerificationPassed: true,
             ManifestValidationPassed: true,
             ActiveAgentFiles: ['AGENTS.md'],
-            LastSeededFullSuiteCommand: 'pytest'
+            LastSeededFullSuiteCommand: setting.seeded
         });
         writeJson(path.join(workspaceRoot, 'package.json'), {
             packageManager: 'pnpm@9.0.0',
@@ -1318,10 +1322,10 @@ test('runAgentInit preserves manual full-suite command overrides across later de
         assert.equal(result.readyForTasks, true);
         const workflowConfig = readWorkflowConfig(bundleRoot);
         const fullSuiteValidation = workflowConfig.full_suite_validation as Record<string, unknown>;
-        assert.equal(fullSuiteValidation.command, 'python -m pytest -q');
+        assert.equal(fullSuiteValidation.command, setting.command);
 
         const persistedState = JSON.parse(fs.readFileSync(result.agentInitStatePath, 'utf8'));
-        assert.equal(persistedState.LastSeededFullSuiteCommand, 'pytest');
+        assert.equal(persistedState.LastSeededFullSuiteCommand, setting.seeded);
     } finally {
         fs.rmSync(workspaceRoot, { recursive: true, force: true });
     }

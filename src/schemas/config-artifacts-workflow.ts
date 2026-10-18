@@ -9,6 +9,7 @@ import {
 import { compactSettingsFromConfig, compactSettingsToConfig } from '../core/compact/setting-definitions';
 import { normalizeReviewExecutionPolicyMode } from '../core/review-execution-policy';
 import { parseApprovedValidationContract } from '../core/project-validation-identity';
+import { parseValidationReportFiles } from '../core/validation-report-contract';
 import {
     SCOPE_BUDGET_GUARD_ACTIONS,
     normalizeScopeBudgetGuardConfig
@@ -63,6 +64,7 @@ export function validateWorkflowConfig(input: unknown): Record<string, unknown> 
     const sectionKnownKeys = new Set([
         'enabled',
         'command',
+        'report_files',
         'timeout_ms',
         'timeout_blocker',
         'timeout_retry_count',
@@ -76,6 +78,7 @@ export function validateWorkflowConfig(input: unknown): Record<string, unknown> 
         [
             'enabled',
             'command',
+            'report_files',
             'timeout_ms',
             'timeout_blocker',
             'timeout_retry_count',
@@ -87,6 +90,7 @@ export function validateWorkflowConfig(input: unknown): Record<string, unknown> 
         'workflow-config.full_suite_validation'
     );
     const normalizedSection = cloneUnknownProperties(section, sectionKnownKeys);
+    if (section.report_files !== undefined) normalizedSection.report_files = parseValidationReportFiles(section.report_files);
 
     normalizedSection.enabled = normalizeBooleanLike(
         section.enabled,

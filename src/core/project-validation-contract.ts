@@ -1,3 +1,5 @@
+import type { ValidationReportFile } from './validation-report-contract';
+
 export type ValidationPurpose = 'test' | 'compile' | 'typecheck' | 'validation';
 export type ValidationInputRole = 'source' | 'test' | 'helper' | 'config';
 export interface ValidationInput { path: string; role: ValidationInputRole }
@@ -17,6 +19,7 @@ export interface ValidationRecipe {
     max_input_bytes: number;
     required_capabilities: Array<'offline' | 'write_confinement'>;
     result_format: 'tap' | 'opaque';
+    report_files?: ValidationReportFile[];
 }
 export interface ProjectValidationContract {
     schema_version: 1;
@@ -62,6 +65,7 @@ export interface ValidationAttempt {
     source_archive_sha256: string;
     output_sha256: string;
     output_bytes: number;
+    report_capture_start_sha256?: string;
     truncated: boolean;
     cases: ValidationCase[] | null;
     violations: string[];

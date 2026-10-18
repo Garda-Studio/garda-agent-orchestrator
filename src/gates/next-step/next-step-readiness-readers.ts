@@ -1,5 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { loadFullSuiteValidationConfig } from '../../core/full-suite-validation-config';
+import { inspectFullSuiteReports } from '../full-suite/full-suite-report-evidence';
 
 import {
     type GateOutcome,
@@ -121,10 +123,17 @@ export function fullSuiteArtifactMatchesCurrentCycle(
     taskId: string,
     preflightPath: string,
     preflightSha256: string | null,
-    summary: TaskAuditSummaryResult
+    summary: TaskAuditSummaryResult,
+    repoRoot?: string
 ): boolean {
     if (!artifact) {
         return false;
+    }
+    if (repoRoot && ['PASSED', 'WARNED'].includes(String(artifact.status))) {
+        try {
+            inspectFullSuiteReports({ repoRoot, taskId, reviewsRoot: path.dirname(preflightPath), artifact,
+                declarations: loadFullSuiteValidationConfig(repoRoot).report_files });
+        } catch { return false; }
     }
     const rawCycleBinding = artifact.cycle_binding;
     if (!rawCycleBinding || typeof rawCycleBinding !== 'object' || Array.isArray(rawCycleBinding)) {

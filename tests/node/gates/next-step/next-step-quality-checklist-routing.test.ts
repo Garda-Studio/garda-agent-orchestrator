@@ -51,10 +51,14 @@ import { runBuildReviewContextCommand, runClassifyChangeCommand, runCompileGateC
 import { executeValidationRecipe } from '../../../../src/gates/project-validation/execution';
 import { evaluateValidationAttempt } from '../../../../src/gates/project-validation/result-evaluation';
 import { readValidationEvents } from '../../../../src/gates/project-validation/attempt-evidence';
+import { inspectFullSuiteReports, startFullSuiteReports } from '../../../../src/gates/full-suite/full-suite-report-evidence';
+import { collectFullSuiteValidationEvidence } from '../../../../src/gates/completion/completion-full-suite-evidence';
+import { collectOrderedTimelineEvents } from '../../../../src/gates/completion/completion-evidence';
 import { createTempRepo, loadTaskEntryRulePack, runEnterTaskMode, runHandshakeForTask,
     runShellSmokeForTask, seedInitAnswers, seedTaskQueue } from '../../cli/commands/gates/preflight/gates-preflight-fixtures';
 
-function declaredNavigationFixture(disabled = false, delayed = false, twoRecipes = false) {
+function declaredNavigationFixture(disabled = false, delayed = false, twoRecipes = false,
+    reportMode?: 'fresh' | 'stale' | 'missing') {
     const repoRoot = createTempRepo(), taskId = 'T-declared-navigation';
     const bundle = path.join(repoRoot, 'garda-agent-orchestrator');
     const configPath = path.join(bundle, 'live/config/workflow-config.json');
@@ -71,8 +75,14 @@ function declaredNavigationFixture(disabled = false, delayed = false, twoRecipes
     fs.writeFileSync(codeSkillPath, '# Fixture Code Review\nInspect current fixture changes.\n');
     fs.mkdirSync(path.join(repoRoot, 'src/domain'), { recursive: true });
     fs.writeFileSync(path.join(repoRoot, 'src/domain/catalog.ts'), 'export const value = 1;\n');
-    fs.writeFileSync(path.join(repoRoot, 'RootSuite'), "require('node:test')('declared case', () => "
-        + "require('node:assert/strict').match(require('node:fs').readFileSync('src/domain/catalog.ts', 'utf8'), /changed = 1/));");
+    fs.writeFileSync(path.join(repoRoot, 'RootSuite'), "require('node:test')('declared case', () => {"
+        + "require('node:assert/strict').match(require('node:fs').readFileSync('src/domain/catalog.ts', 'utf8'), /changed = 1/);"
+        + (reportMode === 'fresh' ? "require('node:fs').mkdirSync('reports',{recursive:true});"
+            + "require('node:fs').writeFileSync('reports/suite.xml','<case id=\"declared case\">passed</case>');" : '') + '});');
+    if (reportMode === 'stale') {
+        fs.mkdirSync(path.join(repoRoot, 'reports'));
+        fs.writeFileSync(path.join(repoRoot, 'reports/suite.xml'), '<case id="declared case">old success</case>');
+    }
     fs.writeFileSync(path.join(repoRoot, 'driver'), delayed
         ? 'setTimeout(() => process.stdout.write("opaque output"), 1500);'
         : 'process.stdout.write("opaque output");');
@@ -87,9 +97,10 @@ function declaredNavigationFixture(disabled = false, delayed = false, twoRecipes
     if (twoRecipes) manifest.recipes.push({ ...manifest.recipes[0], id: 'second' });
     fs.writeFileSync(path.join(repoRoot, 'recipes.json'), JSON.stringify(manifest));
     seedInitAnswers(repoRoot); seedTaskQueue(repoRoot, taskId, 'TODO', 'default', '', 'Declared validation navigation');
-    fs.writeFileSync(path.join(repoRoot, '.gitignore'), 'TASK.md\ngarda-agent-orchestrator/runtime/\n');
+    fs.writeFileSync(path.join(repoRoot, '.gitignore'), 'TASK.md\ngarda-agent-orchestrator/runtime/\nreports/\n');
     initializeGitRepo(repoRoot);
     handleWorkflow(['set', '--target-root', repoRoot, '--project-validation-contract', 'recipes.json',
+        ...(reportMode ? ['--full-suite-report-files', JSON.stringify([{ path: 'reports/suite.xml', max_bytes: 4096 }])] : []),
         '--operator-confirmed', 'yes', '--operator-confirmed-at-utc', new Date().toISOString()],
     { name: 'garda-agent-orchestrator', version: '1.0.0' });
     runEnterTaskMode({ repoRoot, taskId, entryMode: 'EXPLICIT_TASK_EXECUTION', requestedDepth: 2,
@@ -110,15 +121,77 @@ function declaredNavigationFixture(disabled = false, delayed = false, twoRecipes
     fs.mkdirSync(path.dirname(answersPath), { recursive: true });
     fs.writeFileSync(answersPath, JSON.stringify({ ...answerTemplate, answers }));
     const starts = () => readValidationEvents(repoRoot, taskId).filter(e => e.event_type === 'PROJECT_VALIDATION_STARTED');
-    return { repoRoot, taskId, starts, cleanup: () => removeTempRepoWithRetry(repoRoot),
+    return { repoRoot, taskId, starts, preflightPath, cleanup: () => removeTempRepoWithRetry(repoRoot),
         publish: () => runQualityChecklistCommand({ repoRoot, taskId, preflightPath, answersPath, emitMetrics: false }),
         next: () => resolveNextStep({ repoRoot, taskId }),
         compile: () => runCompileGateCommand({ repoRoot, taskId, preflightPath, emitMetrics: false }),
-        suite: () => runFullSuiteValidationCommand({ repoRoot, taskId, preflightPath }),
+        suite: async () => {
+            const testContext = process.env.NODE_TEST_CONTEXT;
+            try {
+                delete process.env.NODE_TEST_CONTEXT;
+                return await runFullSuiteValidationCommand({ repoRoot, taskId, preflightPath });
+            } finally {
+                if (testContext === undefined) delete process.env.NODE_TEST_CONTEXT;
+                else process.env.NODE_TEST_CONTEXT = testContext;
+            }
+        },
         review: () => runBuildReviewContextCommand({ repoRoot, reviewType: 'code', depth: 2, preflightPath }),
         execute: (signal?: AbortSignal, recipeId = 'neutral') => executeValidationRecipe({ repoRoot, taskId, recipeId, signal }),
         evaluate: (attemptId: string) => evaluateValidationAttempt({ repoRoot, taskId, attemptId }) };
 }
+
+describe('native full-suite declared report channel', () => {
+    for (const mode of ['fresh', 'stale', 'missing'] as const) it(`retains ${mode} file observations through native navigation`, async () => {
+        const f = declaredNavigationFixture(false, false, false, mode);
+        try {
+            assert.equal(f.publish().exitCode, 0);
+            const attempt = await f.execute(); await f.evaluate(attempt.attempt_id); f.publish();
+            const compiled = await f.compile(); assert.equal(compiled.exitCode, 0, compiled.outputLines.join('\n'));
+            const suite = await f.suite();
+            const directory = path.dirname(f.preflightPath);
+            const artifact = JSON.parse(fs.readFileSync(path.join(directory, `${f.taskId}-full-suite-validation.json`), 'utf8'));
+            const inspect = () => inspectFullSuiteReports({ repoRoot: f.repoRoot, taskId: f.taskId, reviewsRoot: directory,
+                artifact, declarations: [{ path: 'reports/suite.xml', max_bytes: 4096 }] });
+            const completionErrors = () => {
+                const errors: string[] = [];
+                const timelinePath = path.join(directory, '../task-events', `${f.taskId}.jsonl`);
+                collectFullSuiteValidationEvidence({ repoRoot: f.repoRoot, taskId: f.taskId, reviewsRoot: directory,
+                    enabled: true, required: true, fullSuiteNotRequiredForDocsOnly: false, errors, timelinePath,
+                    orderedEvents: collectOrderedTimelineEvents(timelinePath, errors), expectedCommand: artifact.command,
+                    expectedPreflightPath: f.preflightPath, expectedPreflightSha256: artifact.cycle_binding.preflight_sha256,
+                    expectedCompileGateTimestamp: artifact.cycle_binding.compile_gate_timestamp });
+                return errors;
+            };
+            assert.equal(artifact.exit_code, 0, 'The actual test process completed successfully in every report scenario.');
+            assert.equal(artifact.report_attempts.length, 1);
+            if (mode !== 'fresh') {
+                assert.notEqual(suite.exitCode, 0, suite.outputText);
+                assert.equal(artifact.status, 'FAILED');
+                assert.equal(inspect().attempts[0].violations.length, 1);
+                return;
+            }
+            assert.equal(suite.exitCode, 0, suite.outputText);
+            assert.equal(artifact.status, 'PASSED');
+            assert.deepEqual(completionErrors(), []);
+            assert.equal(artifact.output_artifact_path, null, 'Clean stdout retention policy remains unchanged.');
+            const proof = inspect();
+            assert.match(proof.texts[0], /<case id="declared case">passed<\/case>/);
+            assert.equal(f.next().next_gate, 'build-review-context', f.next().reason);
+            const review = await f.review(); assert.ok(fs.existsSync(review.outputPath));
+            fs.writeFileSync(path.join(f.repoRoot, 'reports/suite.xml'), 'later report');
+            assert.deepEqual(inspect().texts, proof.texts);
+            fs.appendFileSync(path.join(f.repoRoot, proof.attempts[0].output_path), 'tampered');
+            assert.throws(inspect, /output changed/);
+            assert.match(completionErrors().join('\n'), /report evidence rejected/);
+            assert.equal(f.next().next_gate, 'full-suite-validation', f.next().reason);
+            await startFullSuiteReports({ repoRoot: f.repoRoot, taskId: f.taskId, reviewsRoot: directory,
+                eventsRoot: path.join(directory, '../task-events'), command: artifact.command,
+                declarations: [{ path: 'reports/suite.xml', max_bytes: 4096 }], attempt: 1,
+                changedFiles: ['src/domain/catalog.ts', 'RootSuite'] });
+            assert.throws(inspect, /newer unfinished/);
+        } finally { await f.cleanup(); }
+    });
+});
 
 describe('declared validation phase navigation', () => {
     it('rejects superseded cancelled execution and refreshes observed evidence before compile', async () => {

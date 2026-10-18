@@ -49,8 +49,8 @@ function collectPathShapedCliFlags(repoRoot: string): string[] {
         }
     }
     const delegatedContract = fs.readFileSync(path.join(repoRoot,
-        'src/cli/commands/gate-flows/full-suite/full-suite-command-contract.ts'), 'utf8');
-    const envOptions = delegatedContract.match(/^const ENV_OPTIONS_WITH_VALUE\s*=\s*new Set\(\[([\s\S]*?)\]\);/mu);
+        'src/core/validation-command-dispatch.ts'), 'utf8');
+    const envOptions = delegatedContract.match(/^\s*env:\s*new Set\(\[([^\]]*)\]\)/mu);
     assert.ok(envOptions, 'The delegated env option declaration must remain available to the inventory.');
     for (const match of envOptions[1].matchAll(OPTION_PATTERN)) {
         if (isPathShapedCliFlag(match[1])) {

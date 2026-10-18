@@ -2,7 +2,7 @@ import type { FrozenValidationRecipe, ValidationFileIdentity } from '../../core/
 import { validationDigest } from '../../core/project-validation-identity';
 import { assessBoundTrustBoundaryMatrix, assessTrustBoundaryMatrix } from '../../core/trust-boundary-analysis';
 import { currentProjectValidationAuthority } from '../project-validation/authority';
-import { readValidationEvents, readValidationRecipeSnapshot, withValidationEvidenceBatch,
+import { latestValidationRecipeAttempt, readValidationEvents, readValidationRecipeSnapshot, withValidationEvidenceBatch,
     type ValidationEvidenceBatch, type ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 import { readValidationResult } from '../project-validation/evidence';
 import type { NativeCaseExecution } from '../review/native-case-semantics';
@@ -101,7 +101,10 @@ function observeExecution(options: {
             caseExecution = { record_path: result.attempt_path, record_sha256: result.attempt_sha256,
                 output_path: attempt.output_path, output_sha256: attempt.output_sha256,
                 output_size_bytes: attempt.output_bytes, output_encoding: 'base64-streams',
-                event_task_sequence: Number(sequence), scope_content_sha256: scopeContentSha256 };
+                event_task_sequence: Number(sequence), scope_content_sha256: scopeContentSha256,
+                ...(attempt.report_capture_start_sha256 ? { report_evidence: {
+                    declarations: snapshot.recipe.report_files!, start_sha256: attempt.report_capture_start_sha256,
+                    evidence_directory: path.posix.dirname(attempt.output_path) } } : {}) };
         }
         return { observation, caseExecution, diagnostic: observation.execution === 'REJECTED' ? `Recipe ${snapshot.recipe.id} retained ${result.status}.` : null };
     } catch (error) {
@@ -124,10 +127,7 @@ function inspectDeclaredPhases(options: QualityValidationPhaseInspectionOptions,
     const obligations: QualityValidationObligation[] = [], diagnostics: string[] = [];
     const executions: QualityRecipeExecution[] = [];
     for (const snapshot of snapshots) {
-        const recipeEvents = events.slice(start + 1).reverse().filter(event => event.details?.recipe_id === snapshot.recipe.id);
-        const started = recipeEvents.find(event => event.event_type === 'PROJECT_VALIDATION_STARTED');
-        const latest = started && recipeEvents.find(event => event.details?.attempt_id === started.details?.attempt_id
-            && ['PROJECT_VALIDATION_STARTED', 'PROJECT_VALIDATION_COMPLETED', 'PROJECT_VALIDATION_RESULTS_EVALUATED'].includes(event.event_type));
+        const latest = latestValidationRecipeAttempt(events.slice(start + 1), snapshot.recipe.id);
         const { observation, caseExecution, diagnostic } = observeExecution({ repoRoot, taskId, snapshot, latest,
             scopeContentSha256: String((preflight.metrics as Record<string, unknown>)?.scope_content_sha256 ?? ''),
             inspection: options.inspection, batch });

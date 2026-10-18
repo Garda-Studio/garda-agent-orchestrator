@@ -6,6 +6,9 @@ import {
     type FullSuiteValidationResult
 } from './full-suite-validation-types';
 import { isPlainRecord } from '../../core/records';
+import * as path from 'node:path';
+import { resolveNodeFoundationFailureSource } from '../../core/validation/node-foundation-source-attribution';
+import { MAX_BOUNDARY_SOURCE_REFERENCES } from '../../core/trust-boundary-source-evidence';
 
 function hasTrueFlag(record: Record<string, unknown>, key: string): boolean {
     return record[key] === true;
@@ -365,7 +368,8 @@ export function buildValidationResult(
     outputLines: string[],
     outputArtifactPath: string | null,
     taskChangedFiles: string[],
-    cycleBinding?: FullSuiteValidationCycleBinding
+    cycleBinding?: FullSuiteValidationCycleBinding,
+    repoRoot?: string
 ): FullSuiteValidationResult {
     const passed = exitCode === 0 && !timedOut;
     const violations: string[] = [];
@@ -392,8 +396,9 @@ export function buildValidationResult(
     }
 
     const failureChunks = compactRedFailureChunks(outputLines, config.red_failure_chunk_lines);
-    const outOfScopeDetected = detectOutOfScopeFailures(outputLines, taskChangedFiles);
-    const harnessFailure = detectHarnessTimeoutFailure(outputLines, taskChangedFiles, timedOut);
+    const failureScope = inspectFailureScope(outputLines, taskChangedFiles, repoRoot);
+    const outOfScopeDetected = failureScope.outside;
+    const harnessFailure = detectHarnessTimeoutFailure(outputLines, taskChangedFiles, timedOut, failureScope);
     let auditVerdict: 'BLOCKED' | 'WARNED' | 'NOT_APPLICABLE' = 'NOT_APPLICABLE';
     if (outOfScopeDetected) {
         auditVerdict = harnessFailure.detected || config.out_of_scope_failure_policy === 'AUDIT_AND_WARN'
@@ -407,6 +412,7 @@ export function buildValidationResult(
             : harnessFailure.detected
             ? 'WARNED'
             : outOfScopeDetected
+            && !failureScope.inside && !failureScope.unresolved
             && config.out_of_scope_failure_policy === 'AUDIT_AND_WARN'
             && !timedOut
                 ? 'WARNED'
@@ -470,57 +476,63 @@ export function buildValidationResult(
     };
 }
 
-export function detectOutOfScopeFailures(outputLines: string[], taskChangedFiles: string[]): boolean {
-    if (taskChangedFiles.length === 0) {
-        return false;
-    }
+function failurePathKey(file: string): string {
+    const normalized = normalizePath(file).replace(/^\.\//u, '');
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
 
-    const changedSet = new Set(taskChangedFiles.map((filePath) => normalizePath(filePath)));
-    const failureFileRefs = collectFailureFileRefs(outputLines);
-
-    if (failureFileRefs.length === 0) {
-        return false;
-    }
-
-    for (const ref of failureFileRefs) {
-        const isInScope = [...changedSet].some((changed) => ref.includes(changed) || changed.includes(ref));
-        if (!isInScope) {
-            return true;
+function inspectFailureScope(outputLines: string[], taskChangedFiles: string[], repoRoot?: string) {
+    const result = { outside: false, inside: false, unresolved: false };
+    if (!taskChangedFiles.length) return result;
+    const changed = new Set(taskChangedFiles.map(failurePathKey));
+    const references = collectFailureFileRefs(outputLines);
+    result.unresolved = references.length > MAX_BOUNDARY_SOURCE_REFERENCES;
+    for (const ref of references.slice(0, MAX_BOUNDARY_SOURCE_REFERENCES)) {
+        let source = ref;
+        if (repoRoot) {
+            source = normalizePath(path.relative(path.resolve(repoRoot), path.resolve(repoRoot, ref)));
+            if (source.startsWith('.node-build/')) {
+                const mapped = resolveNodeFoundationFailureSource(repoRoot, source);
+                if (!mapped) { result.unresolved = true; continue; }
+                source = mapped;
+            }
         }
+        if (changed.has(failurePathKey(source))) result.inside = true;
+        else result.outside = true;
     }
+    return result;
+}
 
-    return false;
+export function detectOutOfScopeFailures(outputLines: string[], taskChangedFiles: string[], repoRoot?: string): boolean {
+    return inspectFailureScope(outputLines, taskChangedFiles, repoRoot).outside;
 }
 
 function collectFailureFileRefs(outputLines: string[]): string[] {
     const failureFileRefs: string[] = [];
 
     for (const line of outputLines) {
+        // A launcher reports the failed invocation, not the source owning an assertion.
+        if (/\bCommand failed:/iu.test(line)) continue;
+        const testLocation = /^\s*test at (.+?):\d+(?::\d+)?\s*$/u.exec(line);
+        if (testLocation) { failureFileRefs.push(normalizePath(testLocation[1])); continue; }
         if (!/\bfail(ed|ure|ing)?\b/i.test(line) && !/\berror\b/i.test(line) && !/\bnot ok\b/i.test(line)) {
             continue;
         }
-        const fileRefMatch = line.match(/(?:at\s+|in\s+|file\s+)?([a-zA-Z0-9_\-./\\]+\.[a-zA-Z]{1,4})[\s:(\]]/);
+        const fileRefMatch = line.match(/\b(?:at|in|file)\s+(.+?):\d+(?::\d+)?(?:\s|$)/u)
+            ?? line.match(/(?:at\s+|in\s+|file\s+)?([^\s:()[\]]+\.[^\s:()[\]]+)[\s:(\]]/u);
         if (fileRefMatch) {
             failureFileRefs.push(normalizePath(fileRefMatch[1]));
         }
     }
 
-    return failureFileRefs;
-}
-
-function failureRefMatchesChangedFile(ref: string, changedFiles: Set<string>): boolean {
-    for (const changed of changedFiles) {
-        if (ref.includes(changed) || changed.includes(ref)) {
-            return true;
-        }
-    }
-    return false;
+    return [...new Set(failureFileRefs)];
 }
 
 function detectHarnessTimeoutFailure(
     outputLines: string[],
     taskChangedFiles: string[],
-    timedOut: boolean
+    timedOut: boolean,
+    scope: ReturnType<typeof inspectFailureScope>
 ): { detected: boolean; reason: string | null; } {
     if (!timedOut || taskChangedFiles.length === 0) {
         return { detected: false, reason: null };
@@ -544,9 +556,7 @@ function detectHarnessTimeoutFailure(
         return { detected: false, reason: null };
     }
 
-    const changedSet = new Set(taskChangedFiles.map((filePath) => normalizePath(filePath)));
-    const hasInScopeFailure = failureFileRefs.some((ref) => failureRefMatchesChangedFile(ref, changedSet));
-    if (hasInScopeFailure) {
+    if (scope.inside || scope.unresolved || !scope.outside) {
         return { detected: false, reason: null };
     }
 

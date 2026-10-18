@@ -148,6 +148,7 @@ export const WORKFLOW_SET_DEFINITIONS = {
     '--compile-gate-command': { key: 'compileGateCommand', type: 'string' },
     '--full-suite-enabled': { key: 'fullSuiteEnabled', type: 'string' },
     '--full-suite-command': { key: 'fullSuiteCommand', type: 'string' },
+    '--full-suite-report-files': { key: 'fullSuiteReportFiles', type: 'string' },
     '--task-test-selection-require-operator-confirmation': { key: 'taskTestSelectionRequireOperatorConfirmation', type: 'string' },
     '--task-id': { key: 'taskId', type: 'string' },
     '--reason': { key: 'taskTestSelectionReason', type: 'string' },

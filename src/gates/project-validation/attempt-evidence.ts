@@ -18,6 +18,16 @@ const MAXIMUM_EVENTS = 10_000;
 type ValidationEvent = { event_type: string; details?: Record<string, unknown>; integrity?: { task_sequence?: number } };
 export type ValidationEvidenceInspection = 'active' | 'retained_completed';
 
+/** Results may be evaluated late; execution recency is established by native START order. */
+export function latestValidationRecipeAttempt<T extends ValidationEvent>(events: readonly T[], recipeId: string): T | undefined {
+    const cycle = events.slice(events.map(event => event.event_type).lastIndexOf('TASK_MODE_ENTERED') + 1).reverse();
+    const started = cycle.find(event => event.event_type === 'PROJECT_VALIDATION_STARTED'
+        && event.details?.recipe_id === recipeId);
+    return started && cycle.find(event => event.details?.recipe_id === recipeId
+        && event.details?.attempt_id === started.details?.attempt_id
+        && ['PROJECT_VALIDATION_STARTED', 'PROJECT_VALIDATION_COMPLETED', 'PROJECT_VALIDATION_RESULTS_EVALUATED'].includes(event.event_type));
+}
+
 declare const batchIdentity: unique symbol;
 export type ValidationEvidenceBatch = { readonly [batchIdentity]: true };
 interface ValidationEvidenceBatchState {
@@ -83,7 +93,7 @@ export function classifiedContentFingerprint(repoRoot: string, source: string, f
 export function readValidationEventSnapshot(repoRoot: string, taskId: string,
     inspection: ValidationEvidenceInspection = 'active'): {
         events: ValidationEvent[]; preflight_path: string; preflight_sha256: string; scope_content_sha256: string;
-        preflight_sequence: number; timeline_sha256: string;
+        preflight_sequence: number; timeline_sha256: string; changed_files: string[];
     } {
     const paths = validationPaths(repoRoot, taskId);
     const status = readTaskQueueStatusToken(readTaskQueueEntries(repoRoot).get(taskId)?.status ?? null);
@@ -130,6 +140,7 @@ export function readValidationEventSnapshot(repoRoot: string, taskId: string,
     if (readValidationFile(repoRoot, preflightRelative, MAXIMUM_CONTROL_BYTES).identity.sha256 !== retainedPreflight.identity.sha256)
         throw new Error('Validation preflight changed during inspection');
     return { events, preflight_path: preflightPath, preflight_sha256: retainedPreflight.identity.sha256,
+        changed_files: preflight.changed_files as string[],
         scope_content_sha256: contentFingerprint, preflight_sequence: Number(preflightSequence),
         timeline_sha256: timeline.identity.sha256 };
 }

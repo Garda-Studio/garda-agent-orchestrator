@@ -24,6 +24,21 @@ function createConfigFixture(context: TestContext, value: unknown): { root: stri
     return { root, configPath };
 }
 describe('gates/full-suite-validation', () => {
+    it('binds declared report paths and byte limits to the suite config signature', context => {
+        const fixture = createConfigFixture(context, { full_suite_validation: {
+            enabled: true, command: 'custom-suite', report_files: [{ path: 'reports/suite.xml', max_bytes: 4096 }]
+        } });
+        const config = loadCoreConfig(fixture.root);
+        assert.deepEqual(config.report_files, [{ path: 'reports/suite.xml', max_bytes: 4096 }]);
+        const signature = buildFullSuiteConfigSignature(config);
+        assert.notEqual(buildFullSuiteConfigSignature({ ...config,
+            report_files: [{ path: 'reports/suite.xml', max_bytes: 8192 }] }), signature);
+        assert.notEqual(buildFullSuiteConfigSignature({ ...config, report_files: [] }), signature);
+        fs.writeFileSync(fixture.configPath, JSON.stringify({ full_suite_validation: {
+            enabled: true, command: 'custom-suite', report_files: [{ path: '../foreign.xml', max_bytes: 4096 }]
+        } }));
+        assert.throws(() => loadCoreConfig(fixture.root), /relative|report|path/i);
+    });
     describe('loadFullSuiteValidationConfig', () => {
         it('returns defaults when config file does not exist', () => {
             const config = loadFullSuiteValidationConfig('/nonexistent/path');

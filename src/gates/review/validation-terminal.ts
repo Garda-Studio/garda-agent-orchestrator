@@ -10,6 +10,7 @@ import { assessTrustBoundaryAnalysisApplicability } from '../../core/trust-bound
 import { sha256RedactedJsonPayload } from '../../core/redaction';
 import type { ReviewFindingsDispositionEvidenceCheckResult } from './review-findings-disposition-evidence';
 import type { ReviewFindingsDispositionItemKind } from './review-findings-disposition-artifact';
+import { taskRequiresExpectedRed } from '../test-first/expected-red-evidence';
 
 interface TerminalReviewArtifact { content: string; receipt?: unknown }
 
@@ -44,9 +45,13 @@ function semanticViolations(options: {
         return [`${prefix}: independent semantic coverage is not accepted.`];
     const entries = Array.isArray(ledger?.entries) ? ledger.entries.map(toPlainRecord) : [];
     const errors: string[] = [];
-    errors.push(...getNativeCaseResolutionViolations({ repoRoot, obligations: targets,
-        entries: entries.map(entry => ({ obligation_id: String(entry?.obligation_id ?? ''),
-            case_resolution: entry?.case_resolution })), requirePassed: true }));
+    const resolutions = entries.map(entry => ({ obligation_id: String(entry?.obligation_id ?? ''),
+        case_resolution: entry?.case_resolution }));
+    const red = targets.filter(target => target.case_execution?.expected_failure);
+    errors.push(...getNativeCaseResolutionViolations({ repoRoot,
+        obligations: targets.filter(target => !target.case_execution?.expected_failure), entries: resolutions, requirePassed: true }));
+    if (red.length) errors.push(...getNativeCaseResolutionViolations({ repoRoot, obligations: red,
+        entries: resolutions, requireExpectedRed: true }));
     const satisfiedFindings = satisfiedDispositionIds(taskId, lane, 'finding', disposition);
     const satisfiedRisks = satisfiedDispositionIds(taskId, lane, 'residual_risk', disposition);
     for (const id of ids) {
@@ -75,7 +80,8 @@ export function getValidationTerminalViolations(options: {
         if (!options.preflight) return readProjectValidationAuthority(options.repoRoot)
             ? ['Declared validation terminal: current preflight is missing.'] : [];
         if (!currentProjectValidationAuthority(options.repoRoot, options.preflight)
-            && !assessTrustBoundaryAnalysisApplicability(options.preflight).required) return [];
+            && !assessTrustBoundaryAnalysisApplicability(options.preflight).required
+            && !taskRequiresExpectedRed(options.repoRoot, options.taskId)) return [];
         if (options.preflight.task_id !== options.taskId) throw new Error('Foreign terminal task identity.');
         const lanes = resolveValidationSemanticReviewLanes(options.preflight.effective_review_snapshot as EffectiveReviewSnapshot);
         const targets = resolveAuthoritativeReviewValidationObligations({ ...options, preflight: options.preflight,

@@ -3,7 +3,8 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { assertExistingPathIdentity, bindContainedDestination } from './contained-filesystem';
 import type { ApprovedValidationContract, ValidationFileIdentity, ValidationRecipe } from './project-validation-contract';
-import { parseProjectValidationContract, validationRelativePath } from './project-validation-recipes';
+import { parseProjectValidationContract } from './project-validation-recipes';
+import { validationRelativePath } from './validation-relative-path';
 
 const MAXIMUM_FILE_BYTES = 128 * 1024 * 1024;
 
@@ -11,6 +12,18 @@ export function validationDigest(value: unknown): string {
     return createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex');
 }
 export function readValidationFile(root: string, relative: string, maximumBytes = MAXIMUM_FILE_BYTES): { identity: ValidationFileIdentity; bytes: Buffer } {
+    const { identity, bytes } = readObservedValidationFile(root, relative, maximumBytes);
+    return { identity, bytes };
+}
+
+export interface ValidationFileObservation {
+    identity: ValidationFileIdentity;
+    modified_ns: string;
+    changed_ns: string;
+    created_ns: string;
+}
+
+export function readObservedValidationFile(root: string, relative: string, maximumBytes = MAXIMUM_FILE_BYTES): ValidationFileObservation & { bytes: Buffer } {
     relative = validationRelativePath(relative);
     if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 0 || maximumBytes > MAXIMUM_FILE_BYTES) throw new Error('Invalid validation file byte bound');
     const target = path.resolve(root, relative);
@@ -33,7 +46,8 @@ export function readValidationFile(root: string, relative: string, maximumBytes 
         if (before.dev !== after.dev || before.ino !== after.ino || before.birthtimeNs !== after.birthtimeNs || after.nlink !== 1n
             || before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs || offset !== Number(before.size)) throw new Error(`Validation input changed during read: ${relative}`);
         const bytes = buffer.subarray(0, offset);
-        return { bytes, identity: { path: relative, sha256: validationDigest(bytes), size: bytes.length,
+        return { bytes, modified_ns: before.mtimeNs.toString(), changed_ns: before.ctimeNs.toString(),
+            created_ns: before.birthtimeNs.toString(), identity: { path: relative, sha256: validationDigest(bytes), size: bytes.length,
             identity: `${before.dev}:${before.ino}:${before.birthtimeNs}` } };
     } finally { fs.closeSync(descriptor); }
 }
@@ -81,7 +95,7 @@ export function parseApprovedValidationContract(value: unknown): ApprovedValidat
     for (const dependency of deps) dependencies[dependency] = parseFileIdentity(raw.dependencies[dependency], dependency);
     return { schema_version: 1, contract, tools, dependencies };
 }
-function parseFileIdentity(value: ValidationFileIdentity, expectedPath: string): ValidationFileIdentity {
+export function parseFileIdentity(value: ValidationFileIdentity, expectedPath: string): ValidationFileIdentity {
     if (!value || typeof value !== 'object' || Array.isArray(value) || value.path !== expectedPath || typeof value.sha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(value.sha256)
         || !Number.isSafeInteger(value.size) || value.size < 0 || value.size > MAXIMUM_FILE_BYTES || typeof value.identity !== 'string'
         || !/^\d+:\d+:\d+$/u.test(value.identity) || Object.keys(value).some((key) => !['path', 'sha256', 'size', 'identity'].includes(key))) throw new Error('Invalid approved file identity');

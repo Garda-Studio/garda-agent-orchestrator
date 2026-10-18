@@ -1,6 +1,8 @@
-import * as path from 'node:path';
 import type { ProjectValidationContract, ValidationRecipe } from './project-validation-contract';
 import { rejectInlineValidationProgram } from './project-validation-command';
+import { validationRelativePath } from './validation-relative-path';
+import { parseValidationReportFiles } from './validation-report-contract';
+export { validationRelativePath } from './validation-relative-path';
 export { rejectInlineValidationProgram } from './project-validation-command';
 
 function object(value: unknown, keys: string[] | null, label: string): Record<string, unknown> {
@@ -12,13 +14,6 @@ function object(value: unknown, keys: string[] | null, label: string): Record<st
 function text(value: unknown, label: string): string {
     if (typeof value !== 'string' || !value.trim() || /[\u0000-\u001f]/u.test(value)) throw new Error(`${label}: expected nonempty text`);
     return value;
-}
-export function validationRelativePath(value: unknown, label = 'path'): string {
-    const result = text(value, label);
-    if (result.includes('\\') || result.includes(':') || path.posix.isAbsolute(result)
-        || result.split('/').some((part) => !part || part === '.' || part === '..'
-            || (process.platform === 'win32' && /[ .]$/u.test(part)))) throw new Error(`${label}: expected canonical repository relative path`);
-    return result;
 }
 function list(value: unknown, label: string, maximum = 1024): unknown[] {
     if (!Array.isArray(value) || value.length > maximum) throw new Error(`${label}: expected bounded array`);
@@ -94,7 +89,7 @@ function parseCapabilities(value: unknown): ValidationRecipe['required_capabilit
 
 function recipe(value: unknown): ValidationRecipe {
     const raw = object(value, ['id', 'purpose', 'executable', 'argv', 'cwd', 'inputs', 'targets', 'environment',
-        'timeout_ms', 'max_attempts', 'max_output_bytes', 'max_input_bytes', 'required_capabilities', 'result_format'], 'recipe');
+        'timeout_ms', 'max_attempts', 'max_output_bytes', 'max_input_bytes', 'required_capabilities', 'result_format', 'report_files'], 'recipe');
     const id = text(raw.id, 'recipe.id');
     const purpose = text(raw.purpose, 'purpose') as ValidationRecipe['purpose'];
     if (!['test', 'compile', 'typecheck', 'validation'].includes(purpose)) throw new Error('Unknown validation purpose');
@@ -106,6 +101,9 @@ function recipe(value: unknown): ValidationRecipe {
     const environment = parseEnvironment(raw.environment);
     const requiredCapabilities = parseCapabilities(raw.required_capabilities);
     const result_format = raw.result_format;
+    const reportFiles = parseValidationReportFiles(raw.report_files);
+    if (reportFiles.some(report => inputs.some(input => pathKey(input.path) === pathKey(report.path))))
+        throw new Error('Report files cannot overwrite declared recipe inputs');
     if (result_format !== 'tap' && result_format !== 'opaque') throw new Error('Unknown result format');
     rejectInlineValidationProgram(executable, argv.map((arg) => typeof arg === 'string' ? arg : targets.find((target) => target.id === arg.target)!.selector));
     return { id, purpose, executable, argv, cwd, inputs, targets, environment,
@@ -113,7 +111,8 @@ function recipe(value: unknown): ValidationRecipe {
         max_attempts: integer(raw.max_attempts, 1, 10, 'max_attempts'),
         max_output_bytes: integer(raw.max_output_bytes, 1024, 16_777_216, 'max_output_bytes'),
         max_input_bytes: integer(raw.max_input_bytes, 1024, 67_108_864, 'max_input_bytes'),
-        required_capabilities: requiredCapabilities, result_format };
+        required_capabilities: requiredCapabilities, result_format,
+        ...(raw.report_files !== undefined ? { report_files: reportFiles } : {}) };
 }
 
 function assertDeclarationByteBound(value: unknown): void {
@@ -147,8 +146,8 @@ export function eligibleExpectedRedRecipes(recipes: readonly ValidationRecipe[],
         && !recipes.some((recipe) => recipe.inputs.some((input) => pathKey(input.path) === pathKey(file) && input.role !== 'test')))) {
         throw new Error('Expected-red requires an exact changed test-only recipe scope');
     }
-    const eligible = recipes.filter((recipe) => recipe.purpose === 'test' && recipe.result_format === 'tap'
+    const eligible = recipes.filter((recipe) => recipe.purpose === 'test'
         && recipe.targets.some((target) => recipe.argv.some((arg) => typeof arg !== 'string' && arg.target === target.id) && changedFiles.some((file) => typeof file === 'string' && pathKey(file) === pathKey(target.source))));
-    if (!changedFiles.every((file) => typeof file === 'string' && eligible.some((recipe) => recipe.targets.some((target) => recipe.argv.some((arg) => typeof arg !== 'string' && arg.target === target.id) && pathKey(file) === pathKey(target.source))))) throw new Error('Expected-red requires a recipe with a changed declared test target and a supported case adapter');
+    if (!changedFiles.every((file) => typeof file === 'string' && eligible.some((recipe) => recipe.targets.some((target) => recipe.argv.some((arg) => typeof arg !== 'string' && arg.target === target.id) && pathKey(file) === pathKey(target.source))))) throw new Error('Expected-red requires a recipe with an executed changed declared test target');
     return eligible;
 }

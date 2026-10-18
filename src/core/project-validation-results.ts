@@ -4,6 +4,11 @@ const MAXIMUM_CASES = 1024;
 export type ValidationResultStatus = 'PASSED' | 'FAILED' | 'EXPECTED_FAILURE' | 'UNEXPECTED_PASS' | 'UNRESOLVED';
 type HostFacts = Pick<ValidationAttempt, 'exit_code' | 'timed_out' | 'cancelled' | 'truncated' | 'violations' | 'termination_signal'>;
 
+export function isCompleteExpectedFailureAttempt(facts: HostFacts): boolean {
+    return Number.isSafeInteger(facts.exit_code) && facts.exit_code > 0 && facts.timed_out === false
+        && facts.cancelled === false && facts.truncated === false && !facts.termination_signal && facts.violations.length === 0;
+}
+
 export function parseValidationTap(output: string): ValidationCase[] {
     const cases: ValidationCase[] = []; let plan: number | null = null, diagnostics = false;
     for (const line of output.split(/\r?\n/u)) {

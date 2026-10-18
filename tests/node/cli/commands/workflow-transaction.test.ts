@@ -87,7 +87,7 @@ test('workflow transaction retains pending cycle evidence when interrupted after
     const { root, bundle, config } = fixture();
     try {
         const child = spawnSync(process.execPath, ['-e', `
-            const mutation = require(${JSON.stringify(require.resolve('../../../../src/cli/commands/workflow/workflow-command-mutation'))});
+            const mutation = require(${JSON.stringify(require.resolve('../../../../src/core/workflow-config-audit'))});
             const api = require(${JSON.stringify(require.resolve('../../../../src/cli/commands/workflow/workflow-command-set'))});
             mutation.bindCommittedWorkflowConfigAudit = () => process.exit(79);
             api.handleSet(${JSON.stringify(options(root))});

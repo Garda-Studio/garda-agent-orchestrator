@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { splitCommandLine } from '../../core/command-line';
 import { inspectRecipeFocusedCommand } from '../project-validation/focused';
+import { readCurrentNativeFocusedCommand } from './focused-intermediate-evidence';
 import { parseFocusedCommandSyntax } from './review-focused-command-tokenizer';
 import { parseMavenFocusedCommand, resolveMavenFocusedTargets } from './review-focused-command-maven';
 import { getNativeCaseResolutionViolations, type NativeCaseResolution } from './native-case-semantics';
@@ -294,6 +295,7 @@ export const reviewFindingsReportJsonSchema = {
                 execution_sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
                 output_sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
                 outcome: { type: 'string', enum: ['PASSED', 'FAILED', 'SKIPPED', 'UNRESOLVED'] },
+                failure_kind: { type: 'string', enum: ['ASSERTION', 'PROCESS', 'DEPENDENCY', 'UNKNOWN'] },
                 evidence_quote: { type: 'string', maxLength: 4096 },
                 reasoning: { type: 'string', minLength: 1, maxLength: 8192 }
             }
@@ -610,7 +612,7 @@ function validateFocusedValidationNoteCommand(
     violations.push(...commandInspection.violations);
     if (commandInspection.syntax_supported && fields.commandOutcome === 'passed' && repoRoot && expectedTaskId) {
         const recipe = inspectRecipeFocusedCommand(repoRoot, expectedTaskId, getFocusedCommandTokens(fields.command));
-        if (recipe && recipe.status !== 'PASSED') violations.push('Declared recipe PASS requires a current authenticated PASSED result.');
+        if (recipe && !recipe.process_passed) violations.push('Declared recipe process PASS requires a current authenticated successful process observation.');
     }
     if (
         commandInspection.target
@@ -837,7 +839,7 @@ function reviewerCommandInvokesGarda(command: string): boolean {
         && /^garda(?:\.cmd|\.exe)?$/u.test(focusedCommandTokenBasename(tokens[packageTargetIndex]));
 }
 
-function getUnsafeFocusedCommandReason(command: string): string | null {
+function getUnsafeFocusedCommandReason(command: string, literalOptionsBound = false): string | null {
     if (reviewerCommandInvokesGarda(command)) return 'invoke Garda navigation, gate, or result commands';
     const syntax = parseFocusedCommandSyntax(command);
     const scopedOperands = getFocusedNodeLoaderOperands(syntax.tokens)
@@ -849,7 +851,7 @@ function getUnsafeFocusedCommandReason(command: string): string | null {
         || getUnsafeFocusedCommandShellReason(command, new Set(scopedOperands.map(({ value }) => value)))
         || (unsafeResponse ? 'use shell redirection, process expansion, escaping, or response-file expansion inside a focused validation attempt' : null)
         || syntax.invalidSyntaxReason
-        || getUnsafeFocusedCommandTokenReason(command)
+        || getUnsafeFocusedCommandTokenReason(command, literalOptionsBound)
         || null;
 }
 
@@ -1024,10 +1026,28 @@ function isSafeNodeSyntaxCheckToken(
                 && (options.terminatorIndex < 0 || optionIndex < options.terminatorIndex)));
 }
 
-function getUnsafeFocusedCommandTokenReason(command: string): string | null {
+function focusedSideEffectTokens(tokens: readonly string[]): string[] {
+    const executable = path.basename(tokens[0] || '').replace(/\.(?:exe|cmd|bat)$/iu, '');
+    let argumentIndex = 1;
+    while (/^git$/iu.test(executable) && tokens[argumentIndex]?.startsWith('-')) {
+        const option = tokens[argumentIndex++];
+        if (/^(?:-c|-C|--git-dir|--work-tree|--namespace|--super-prefix|--config-env|--exec-path)$/u.test(option)) argumentIndex++;
+    }
+    return [executable, ...tokens.slice(argumentIndex)];
+}
+
+function getUnsafeFocusedCommandTokenReason(command: string, literalOptionsBound = false): string | null {
     const tokens = getFocusedCommandTokens(command);
+    const inspection = focusedSideEffectTokens(tokens);
+    const terminator = inspection.indexOf('--');
+    const inspectionOptions = inspection.slice(2, terminator < 0 ? undefined : terminator);
+    if (/^(?:cat|type|head|tail|more|less|get-content|gc|echo|printf|write-output|write-host)$/iu.test(inspection[0] || '')
+        || /^git$/iu.test(inspection[0] || '') && (/^(?:show|status|log|blame|ls-files|cat-file)$/u.test(inspection[1] || '')
+            || inspection[1] === 'diff' && !inspectionOptions.some(option => ['--check', '--exit-code', '--quiet'].includes(option)))) {
+        return 'only inspect or print source instead of execute a focused validation';
+    }
     const mavenCommand = parseMavenFocusedCommand(tokens);
-    if (mavenCommand) return mavenCommand.unsafeReason;
+    if (mavenCommand && !literalOptionsBound) return mavenCommand.unsafeReason;
     const options = parseFocusedCommandOptions(tokens);
     const loaderOperands = getFocusedNodeLoaderOperands(tokens);
     const loaderReason = getUnsafeNodeLoaderReason(tokens, loaderOperands);
@@ -1056,7 +1076,8 @@ function getUnsafeFocusedCommandTokenReason(command: string): string | null {
     if (optionNames.some((option) => REVIEWER_MUTATING_FOCUSED_OPTION_NAMES.has(option))) {
         return 'use validation-runner flags that may mutate source files or snapshots';
     }
-    if (optionNames.some((option) => REVIEWER_OUTPUT_FOCUSED_OPTION_NAMES.has(option))) {
+    if (optionNames.some((option) => REVIEWER_OUTPUT_FOCUSED_OPTION_NAMES.has(option)
+        && !(mavenCommand && option === '-o'))) {
         return 'use validation-runner flags that may write output artifacts';
     }
     if (optionNames.some((option) => REVIEWER_INTERACTIVE_FOCUSED_OPTION_NAMES.has(option))) {
@@ -1066,7 +1087,7 @@ function getUnsafeFocusedCommandTokenReason(command: string): string | null {
         return 'run TypeScript compilation without --noEmit, which may write output artifacts';
     }
     const programIndex = options.programIndex;
-    if (tokens.some((token, index) => token.startsWith('-')
+    if (!literalOptionsBound && tokens.some((token, index) => token.startsWith('-')
         && !valueIndexes.has(index)
         && !loaderOperands.some((operand) => operand.optionIndex === index)
         && !REVIEWER_SAFE_FOCUSED_OPTION_NAMES.has(normalizeFocusedOptionName(token))
@@ -1424,12 +1445,30 @@ function focusedCommandExecutesValidation(command: string, repoRoot?: string): b
         && focusedCommandHasConcreteTarget(command, repoRoot);
 }
 
+function authenticatedFocusedCommandViolation(command: string, tokens: string[]): string | null {
+    const effectTokens = focusedSideEffectTokens(tokens);
+    const executable = effectTokens[0];
+    const normalized = command.replace(/^\s*(?:"(?:\\.|[^"])*"|'[^']*'|\S+)/u, executable);
+    const sideEffectInvocation = effectTokens
+        .map(token => /^[\p{L}\p{N}_.:/\\-]+$/u.test(token) ? token : JSON.stringify(token)).join(' ');
+    const loaders = getFocusedNodeLoaderOperands([executable, ...tokens.slice(1)]);
+    return getUnsafeFocusedCommandShellReason(command, new Set(loaders.map(({ value }) => value)))
+        || getUnsafeFocusedCommandReason(normalized, true)
+        || getUnsafeFocusedCommandReason(sideEffectInvocation, true);
+}
+
 export function inspectReviewerFocusedValidationCommand(command: string, repoRoot?: string, taskId?: string): {
     syntax_supported: boolean;
     target: string | null;
     violations: string[];
 } {
     const violations: string[] = [];
+    const native = repoRoot && taskId ? readCurrentNativeFocusedCommand(repoRoot, taskId, command) : null;
+    if (native) {
+        const unsafe = authenticatedFocusedCommandViolation(command, getFocusedCommandTokens(command));
+        return { syntax_supported: !unsafe, target: unsafe ? null : native.focused_test_paths[0],
+            violations: unsafe ? [`Reviewer focused self-validation must not ${unsafe}.`] : [] };
+    }
     if (repoRoot && taskId) {
         let tokens: string[];
         try { tokens = splitCommandLine(command); } catch (error) {
@@ -1437,14 +1476,7 @@ export function inspectReviewerFocusedValidationCommand(command: string, repoRoo
         }
         const recipe = inspectRecipeFocusedCommand(repoRoot, taskId, tokens);
         if (recipe) {
-            const executable = path.basename(tokens[0] || '').replace(/\.(?:exe|cmd)$/iu, '');
-            const invocation = [executable, ...tokens.slice(1).filter(token => !token.startsWith('-'))]
-                .map(token => /^[\p{L}\p{N}_.:/\\-]+$/u.test(token) ? token : JSON.stringify(token)).join(' ');
-            const sideEffect = getUnsafeFocusedCommandReason(invocation);
-            const loaders = getFocusedNodeLoaderOperands([executable, ...tokens.slice(1)]);
-            const unsafe = getUnsafeFocusedCommandShellReason(command, new Set(loaders.map(({ value }) => value)))
-                || sideEffect
-                || getUnsafeFocusedCommandReason(command.replace(/^\s*(?:"(?:\\.|[^"])*"|'[^']*'|\S+)/u, executable));
+            const unsafe = authenticatedFocusedCommandViolation(command, tokens);
             const reasons = [...recipe.violations, ...(unsafe ? [`Reviewer focused self-validation must not ${unsafe}.`] : [])];
             return { syntax_supported: reasons.length === 0, target: reasons.length === 0 ? recipe.target : null, violations: reasons };
         }
@@ -1466,6 +1498,10 @@ export function inspectReviewerFocusedValidationCommand(command: string, repoRoo
 
 function focusedCommandExecutesMarkerTarget(command: string, markerTarget: string, repoRoot?: string, taskId?: string): boolean {
     const normalizedTarget = normalizeFocusedTargetPath(markerTarget);
+    if (repoRoot && taskId && readCurrentNativeFocusedCommand(repoRoot, taskId, command)) {
+        const inspection = inspectReviewerFocusedValidationCommand(command, repoRoot, taskId);
+        return inspection.syntax_supported && inspection.target === normalizedTarget;
+    }
     if (repoRoot && taskId && inspectRecipeFocusedCommand(repoRoot, taskId, getFocusedCommandTokens(command))) {
         const inspection = inspectReviewerFocusedValidationCommand(command, repoRoot, taskId);
         return inspection.syntax_supported && inspection.target === normalizedTarget;

@@ -23,6 +23,8 @@ interface PermissionContext {
 
 const AUTHENTICATION_DOMAIN = 'garda.local-commit.workflow.v1';
 const KEY_RELATIVE_PATH = 'garda-private/local-commit-key';
+const MIGRATION_KEY_RELATIVE_PATH = 'garda-private/workflow-migration-key';
+const MIGRATION_AUTHENTICATION_DOMAIN = 'garda.workflow-migration.v1';
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const MAX_AUDIT_WINDOW_BYTES = 8 * 1024 * 1024;
 const MAX_AUDIT_LINE_BYTES = 64 * 1024;
@@ -37,7 +39,7 @@ function normalizedPath(value: string): string {
     return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
-function resolvePermissionContext(repoRoot: string): PermissionContext {
+function resolvePermissionContext(repoRoot: string, keyRelativePath = KEY_RELATIVE_PATH): PermissionContext {
     const root = fs.realpathSync.native(path.resolve(repoRoot));
     const gitPath = path.join(root, '.git');
     const gitStat = fs.lstatSync(gitPath);
@@ -46,7 +48,7 @@ function resolvePermissionContext(repoRoot: string): PermissionContext {
     const gitDirectory = gitStat.isDirectory() ? gitPath : pointer ? path.resolve(root, pointer[1]) : '';
     if (!gitDirectory || !fs.lstatSync(gitDirectory).isDirectory()) throw new Error('Local commit permission requires a Git workspace.');
     const canonicalGitDirectory = fs.realpathSync.native(gitDirectory);
-    const keyPath = path.join(canonicalGitDirectory, KEY_RELATIVE_PATH);
+    const keyPath = path.join(canonicalGitDirectory, keyRelativePath);
     bindContainedDestination(canonicalGitDirectory, keyPath);
     const identity = fs.statSync(root, { bigint: true });
     return { gitDirectory: canonicalGitDirectory, keyPath,
@@ -101,6 +103,44 @@ function isAuthenticatedAudit(record: Record<string, unknown>, context: Permissi
         || typeof authentication.hmac_sha256 !== 'string' || !SHA256_PATTERN.test(authentication.hmac_sha256)) return false;
     const expected = createHmac('sha256', key).update(authenticationPayload(record, context.workspaceIdentity)).digest();
     return timingSafeEqual(expected, Buffer.from(authentication.hmac_sha256, 'hex'));
+}
+
+function migrationAuthenticationPayload(record: Record<string, unknown>, workspaceIdentity: string): string {
+    const unsigned = { ...record };
+    delete unsigned.local_commit_authentication;
+    delete unsigned.workflow_migration_authentication;
+    return JSON.stringify({ domain: MIGRATION_AUTHENTICATION_DOMAIN, workspace_identity: workspaceIdentity, record: unsigned });
+}
+
+export function authenticateWorkflowMigration<TRecord extends Record<string, unknown>>(
+    repoRoot: string, record: TRecord
+): TRecord & { workflow_migration_authentication: Record<string, string>; local_commit_authentication?: Record<string, string> } {
+    // Migration provenance survives permission revocation; it cannot itself enable a commit grant.
+    const context = resolvePermissionContext(repoRoot, MIGRATION_KEY_RELATIVE_PATH);
+    const key = readPermissionKey(context) ?? rotatePermissionKey(context);
+    const signed = { ...record, workflow_migration_authentication: {
+        workspace_identity_sha256: context.workspaceIdentity,
+        hmac_sha256: createHmac('sha256', key).update(migrationAuthenticationPayload(record, context.workspaceIdentity)).digest('hex')
+    } };
+    return authenticateLocalCommitWorkflowAudit(repoRoot, signed, false);
+}
+
+export function isAuthenticatedWorkflowMigration(repoRoot: string, record: Record<string, unknown>): boolean {
+    if (record.event_source !== 'workflow-config-set' || record.command !== 'lifecycle configuration migration'
+        || record.mutation_source !== 'lifecycle' || record.migration_version !== 1
+        || record.permissions_preserved !== true) return false;
+    try {
+        const context = resolvePermissionContext(repoRoot, MIGRATION_KEY_RELATIVE_PATH);
+        const key = readPermissionKey(context);
+        const authentication = record.workflow_migration_authentication;
+        if (!key || !isPlainRecord(authentication)
+            || authentication.workspace_identity_sha256 !== context.workspaceIdentity
+            || typeof authentication.hmac_sha256 !== 'string' || !SHA256_PATTERN.test(authentication.hmac_sha256)) return false;
+        const expected = createHmac('sha256', key).update(migrationAuthenticationPayload(record, context.workspaceIdentity)).digest();
+        return timingSafeEqual(expected, Buffer.from(authentication.hmac_sha256, 'hex'));
+    } catch {
+        return false;
+    }
 }
 
 export function localCommitReceiptPath(repoRoot: string): string {
@@ -178,7 +218,8 @@ function hasAuthenticatedEnablement(repoRoot: string, configPath: string, config
             if (expectedHash === null) return false;
             continue;
         }
-        if (record.event_source !== 'workflow-config-set' || record.command !== 'workflow set'
+        if (record.event_source !== 'workflow-config-set'
+            || (record.command !== 'workflow set' && !isAuthenticatedWorkflowMigration(repoRoot, record))
             || !isAuthenticatedAudit(record, context, key)) return false;
         if (expectedHash === null) {
             if (!Array.isArray(record.changed_fields) || !record.changed_fields.includes('local_commit.enabled')

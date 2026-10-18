@@ -117,8 +117,8 @@ const PRIVATE_KEY_BLOCK_PATTERN = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?
 const AUTHORIZATION_PATTERN = /\b(Authorization\s*[:=]\s*)(Bearer|Basic)\s+([^\s"',;]+)/gi;
 const URL_PASSWORD_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/[^:\s/@]+:)([^@\s/]+)(@)/gi;
 const TOKEN_LITERAL_PATTERN = /\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|npm_[A-Za-z0-9]{20,})\b/g;
-const JSON_DOUBLE_QUOTED_FIELD_PATTERN = /("((?:[^"\\]|\\.)*)"\s*:\s*")([^"\\]*(?:\\.[^"\\]*)*)(")/g;
-const JSON_SINGLE_QUOTED_FIELD_PATTERN = /('((?:[^'\\]|\\.)*)'\s*:\s*')([^'\\]*(?:\\.[^'\\]*)*)(')/g;
+const JSON_DOUBLE_QUOTED_FIELD_PATTERN = /("([^"\\]*(?:\\.[^"\\]*)*)"\s*:\s*")([^"\\]*(?:\\.[^"\\]*)*)(")/g;
+const JSON_SINGLE_QUOTED_FIELD_PATTERN = /('([^'\\]*(?:\\.[^'\\]*)*)'\s*:\s*')([^'\\]*(?:\\.[^'\\]*)*)(')/g;
 const ASSIGNMENT_QUOTED_FIELD_PATTERN = /\b([A-Z0-9_.-]*(?:SECRET|TOKEN|PASSWORD|CREDENTIAL|API[_-]?KEY|PRIVATE[_-]?KEY|AUTHORIZATION|AUTH)[A-Z0-9_.-]*)(\s*[:=]\s*)(["'])([\s\S]*?)(\3)/gi;
 const ASSIGNMENT_UNQUOTED_FIELD_PATTERN = /\b([A-Z0-9_.-]*(?:SECRET|TOKEN|PASSWORD|CREDENTIAL|API[_-]?KEY|PRIVATE[_-]?KEY|AUTHORIZATION|AUTH)[A-Z0-9_.-]*)(\s*[:=]\s*)([^\s"',;]+)/gi;
 const CANONICAL_REDACTED_UNQUOTED_VALUE_PATTERN = /^<redacted>(?:\\r\\n|\\r|\\n)?$/u;

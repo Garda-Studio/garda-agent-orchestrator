@@ -2779,7 +2779,8 @@ export function resolveNextStepDecisionRoute(
         taskId,
         preflightPath,
         preflightSha256,
-        summary
+        summary,
+        repoRoot
     );
     const fullSuiteCurrentArtifactMatchesConfig = !fullSuiteConfig.enabled
         || (

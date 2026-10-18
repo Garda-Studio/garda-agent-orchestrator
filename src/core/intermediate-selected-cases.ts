@@ -11,6 +11,7 @@ export interface IntermediateSelection {
     schema_version: 1;
     sources: ValidationFileIdentity[];
     cases: SelectedCaseClaim[];
+    scope_operands?: string[];
     unobserved_operands?: string[];
 }
 export interface IntermediateSelectionBinding {
@@ -23,7 +24,7 @@ export function intermediateInvocationIdentity(command: unknown): string | null 
     const descriptor = inspectValidationCommand(command, 'validation').descriptor;
     return descriptor ? validationDigest(descriptor.invocations) : null;
 }
-const pathKey = (value: string): string => process.platform === 'win32' ? value.toLowerCase() : value;
+export const intermediateSourcePathKey = (value: string): string => process.platform === 'win32' ? value.toLowerCase() : value;
 function relativeSource(root: string, value: string): string {
     const relative = path.relative(path.resolve(root), path.resolve(root, value)).replace(/\\/gu, '/');
     if (!relative || relative === '..' || relative.startsWith('../') || path.isAbsolute(relative))
@@ -50,28 +51,39 @@ export function captureIntermediateSelection(root: string, descriptor: Validatio
         return { source: relativeSource(root, claim.source), case_id: claim.case_id, selector: claim.selector };
     });
     const sources = new Map<string, ValidationFileIdentity>();
+    const scopes = new Set<string>();
     const unobserved: string[] = [];
     const add = (relative: string): void => {
-        if (sources.has(pathKey(relative))) return;
+        if (sources.has(intermediateSourcePathKey(relative))) return;
         if (sources.size >= MAX_SOURCES) throw new Error('Selected source inputs exceed their bound.');
-        sources.set(pathKey(relative), readValidationFile(root, relative, MAX_SOURCE_BYTES).identity);
+        sources.set(intermediateSourcePathKey(relative), readValidationFile(root, relative, MAX_SOURCE_BYTES).identity);
     };
     for (const claim of cases) add(claim.source);
     for (const value of values) {
         if (!value || value.startsWith('-')) continue;
         let relative: string;
-        try { relative = relativeSource(root, value); } catch { continue; }
+        try { relative = relativeSource(root, value); } catch {
+            if (path.resolve(root, value) === path.resolve(root)) {
+                if (!scopes.has('.') && scopes.size >= MAX_SOURCES) throw new Error('Directory scope operands exceed their bound.');
+                scopes.add('.');
+            }
+            continue;
+        }
         if (!fs.existsSync(path.resolve(root, relative))) continue;
-        // Directories are scope operands, not source identities. Existing file operands fail closed.
-        if (fs.lstatSync(path.resolve(root, relative)).isDirectory()) continue;
+        // Directory scope must remain observable even though it is not a source-file identity.
+        if (fs.statSync(path.resolve(root, relative)).isDirectory()) {
+            if (scopes.size >= MAX_SOURCES) throw new Error('Directory scope operands exceed their bound.');
+            scopes.add(relative);
+            continue;
+        }
         try { add(relative); } catch {
             // An automatic file operand can be generated output. Missing identity never authorizes it as a selected source.
             if (unobserved.length < MAX_SOURCES) unobserved.push(relative);
         }
     }
-    if (new Set(cases.map(item => validationDigest([pathKey(item.source), item.case_id]))).size !== cases.length)
+    if (new Set(cases.map(item => validationDigest([intermediateSourcePathKey(item.source), item.case_id]))).size !== cases.length)
         throw new Error('Selected case source identities are ambiguous.');
-    return { schema_version: 1, sources: [...sources.values()], cases,
+    return { schema_version: 1, sources: [...sources.values()], cases, scope_operands: [...scopes],
         ...(unobserved.length ? { unobserved_operands: unobserved } : {}) };
 }
 
@@ -91,16 +103,50 @@ function isFileIdentity(item: unknown): item is ValidationFileIdentity {
 export function isIntermediateSelection(value: unknown): value is IntermediateSelection {
     if (!isPlainRecord(value) || value.schema_version !== 1 || !Array.isArray(value.sources)
         || !Array.isArray(value.cases) || value.sources.length > MAX_SOURCES || value.cases.length > MAX_SOURCES) return false;
-    return (value.unobserved_operands === undefined || Array.isArray(value.unobserved_operands)
+    return (value.scope_operands === undefined || Array.isArray(value.scope_operands)
+        && value.scope_operands.length <= MAX_SOURCES && value.scope_operands.every(boundedText))
+        && (value.unobserved_operands === undefined || Array.isArray(value.unobserved_operands)
         && value.unobserved_operands.length <= MAX_SOURCES && value.unobserved_operands.every(boundedText))
         && value.sources.every(isFileIdentity)
         && value.cases.every(item => isPlainRecord(item) && boundedText(item.source)
             && boundedText(item.case_id) && boundedText(item.selector));
 }
-export function selectionMatchesCase(selection: IntermediateSelection, sourcePath: string, caseId: string): boolean {
-    if (!selection.sources.some(source => pathKey(source.path) === pathKey(sourcePath))) return false;
-    const cases = selection.cases.filter(item => pathKey(item.source) === pathKey(sourcePath));
-    return cases.length === 0 || cases.some(item => item.case_id === caseId);
+export function selectionMatchesCase(selection: IntermediateSelection, sourcePath: string, caseId?: string): boolean {
+    if (!selection.sources.some(source => intermediateSourcePathKey(source.path) === intermediateSourcePathKey(sourcePath))) return false;
+    const cases = selection.cases.filter(item => intermediateSourcePathKey(item.source) === intermediateSourcePathKey(sourcePath));
+    return caseId === undefined || cases.length === 0 || cases.some(item => item.case_id === caseId);
+}
+
+/** Selects facts from an already authenticated current-cycle timeline; it grants no execution or semantic authority. */
+export function latestMatchingIntermediateAttempt<T extends Record<string, unknown>>(
+    attempts: readonly T[], sourcePath: string, caseId?: string
+): T | undefined {
+    const details = (event: T) => isPlainRecord(event.details) ? event.details : {};
+    const sequence = (event: T) => isPlainRecord(event.integrity) ? Number(event.integrity.task_sequence) : NaN;
+    const selection = (event: T) => {
+        const value = details(event), binding = value.selected_case_binding;
+        return value.selected_case_selection ?? (isPlainRecord(binding) ? binding.before : undefined);
+    };
+    const identities = new Map(attempts.map(event => [event, intermediateInvocationIdentity(details(event).command)]));
+    const starts = new Map<string, T>();
+    for (const event of attempts) if (event.event_type === 'INTERMEDIATE_COMMAND_STARTED') {
+        const id = details(event).execution_id;
+        if (typeof id !== 'string' || starts.has(id) || !Number.isSafeInteger(sequence(event)))
+            throw new Error('Native command start identity is missing or ambiguous.');
+        starts.set(id, event);
+    }
+    const startSequence = (event: T) => sequence(starts.get(String(details(event).execution_id)) ?? event);
+    const ordered = [...attempts].sort((left, right) => startSequence(right) - startSequence(left)
+        || sequence(right) - sequence(left));
+    const associated = new Set(attempts.filter(event => {
+        const value = selection(event);
+        return isIntermediateSelection(value) && selectionMatchesCase(value, sourcePath, caseId);
+    }).map(event => identities.get(event)).filter(identity => identity != null));
+    return ordered.find(event => {
+        const value = selection(event), identity = identities.get(event);
+        return identity != null && associated.has(identity) || value === undefined
+            || !isIntermediateSelection(value) || selectionMatchesCase(value, sourcePath, caseId);
+    });
 }
 /** Empty sourcePaths validates observed facts only; case consumers must request their actual source identities. */
 export function assertCurrentIntermediateSelection(root: string, value: unknown,
@@ -109,13 +155,13 @@ export function assertCurrentIntermediateSelection(root: string, value: unknown,
         throw new Error('Selected command source identity facts are malformed.');
     const before = value.before, after = value.after;
     if (after.length !== before.sources.length || !after.every((item, index) => item === null || isFileIdentity(item)
-        && pathKey(item.path) === pathKey(before.sources[index].path)))
+        && intermediateSourcePathKey(item.path) === intermediateSourcePathKey(before.sources[index].path)))
         throw new Error('Selected command source identity facts are malformed.');
-    const requested = new Set((sourcePaths ?? before.sources.map(source => source.path)).map(pathKey));
-    if ([...requested].some(file => !before.sources.some(source => pathKey(source.path) === file)))
+    const requested = new Set((sourcePaths ?? before.sources.map(source => source.path)).map(intermediateSourcePathKey));
+    if ([...requested].some(file => !before.sources.some(source => intermediateSourcePathKey(source.path) === file)))
         throw new Error('Selected command source identity was not captured before execution.');
     for (const [index, source] of before.sources.entries()) {
-        if (!requested.has(pathKey(source.path))) continue;
+        if (!requested.has(intermediateSourcePathKey(source.path))) continue;
         if (validationDigest(source) !== validationDigest(after[index]))
             throw new Error('Selected command source identities changed during execution.');
         if (validationDigest(readValidationFile(root, source.path, MAX_SOURCE_BYTES).identity) !== validationDigest(source))

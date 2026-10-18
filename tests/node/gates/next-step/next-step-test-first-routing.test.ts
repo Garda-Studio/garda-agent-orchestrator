@@ -4,8 +4,14 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { runIntermediateCommandCommand } from '../../../../src/cli/commands/gates';
+import { buildFullSuiteValidationEvidence, getReviewContextFullSuiteValidationViolations } from '../../../../src/gates/review-context/review-context-validation-evidence';
 import { hasReportedFailedTestCase, readReportedTestCases } from '../../../../src/cli/commands/gate-flows/command-run/intermediate-command-scope';
 import { buildTestFirstExpectedFailureRoute } from '../../../../src/gates/next-step/next-step-test-first-routing';
+import { readExpectedRedExecutionEvidence } from '../../../../src/gates/test-first/expected-red-evidence';
+import { resolveAuthoritativeReviewValidationObligations } from '../../../../src/gates/review-context/review-context-coverage';
+import { getNativeCaseResolutionViolations } from '../../../../src/gates/review/native-case-semantics';
+import { validationDigest } from '../../../../src/core/project-validation-identity';
+import { fileSha256 } from '../../../../src/gates/shared/helpers';
 import { resolveValidationDecisionRoute } from '../../../../src/gates/next-step/next-step-validation-routes';
 import {
     getChangedTestPathsTargetedByCommandTokens,
@@ -17,6 +23,11 @@ import { handleWorkflow } from '../../../../src/cli/commands/workflow-command';
 import { runClassifyChangeCommand } from '../../../../src/cli/commands/gates';
 import { executeValidationRecipe } from '../../../../src/gates/project-validation/execution';
 import { evaluateValidationAttempt } from '../../../../src/gates/project-validation/result-evaluation';
+import { readValidationResult } from '../../../../src/gates/project-validation/evidence';
+import { buildQualityChecklistAnswersTemplate } from '../../../../src/gates/quality-checklist';
+import { runQualityChecklistCommand } from '../../../../src/cli/commands/gate-flows/quality-checklist/quality-checklist-flow';
+import { resolveValidationSemanticReviewLanes, type EffectiveReviewSnapshot } from '../../../../src/policy/effective-review-snapshot';
+import { getValidationTerminalViolations } from '../../../../src/gates/review/validation-terminal';
 import { initializeGitRepo, loadTaskEntryRulePack, runEnterTaskMode, runHandshakeForTask,
     runShellSmokeForTask, createTempRepo as createRecipeTempRepo, seedInitAnswers as seedRecipeInit,
     seedTaskQueue as seedRecipeTask } from '../../cli/commands/gates/preflight/gates-preflight-fixtures';
@@ -115,14 +126,22 @@ function resolveRoute(fixture: Fixture) {
     });
 }
 
-function buildRecipeFixture(mode = 'failed', testPath = 'specifications/case', withRecipe = true,
-    fixtureReadiness = false, nestedReport = false): Fixture {
+function buildRecipeFixture(mode = 'failed', testPath = 'specifications/case', options: {
+    withRecipe?: boolean; fixtureReadiness?: boolean; nestedReport?: boolean;
+    opaqueAssertion?: boolean; symbolic?: boolean; reviewSuite?: boolean; productionReadiness?: boolean; opaqueRecipe?: boolean;
+    productionOperand?: boolean; maxAttempts?: number;
+} = {}): Fixture {
+    const { withRecipe = true, fixtureReadiness = false, nestedReport = false } = options;
     const repoRoot = createRecipeTempRepo(); tempRoots.push(repoRoot);
     const bundle = getOrchestratorRoot(repoRoot);
     fs.mkdirSync(path.join(bundle, 'live/config'), { recursive: true });
-    fs.writeFileSync(path.join(bundle, 'live/config/workflow-config.json'), JSON.stringify(buildDefaultWorkflowConfig()));
+    const config = buildDefaultWorkflowConfig();
+    if (options.reviewSuite) config.full_suite_validation = { ...config.full_suite_validation, enabled: true,
+        placement: 'after_compile_before_reviews', command: `"${process.execPath}" opaque-checker "${testPath}"` };
+    fs.writeFileSync(path.join(bundle, 'live/config/workflow-config.json'), JSON.stringify(config));
     fs.copyFileSync(path.join(process.cwd(), 'template/config/profiles.json'), path.join(bundle, 'live/config/profiles.json'));
-    fs.writeFileSync(path.join(bundle, 'live/config/paths.json'), JSON.stringify({ triggers: { test: [withRecipe ? '(^|/)specifications/' : `(^|/)${path.dirname(testPath).replace(/\\/g, '/')}/`] } }));
+    fs.writeFileSync(path.join(bundle, 'live/config/paths.json'), JSON.stringify({ triggers: { test: [withRecipe ? '(^|/)specifications/' : `(^|/)${path.dirname(testPath).replace(/\\/g, '/')}/`] },
+        ...(options.productionOperand ? { file_roles: { 'src/app.ts': 'source' } } : {}) }));
     fs.mkdirSync(path.dirname(path.join(repoRoot, testPath)), {recursive: true});
     fs.writeFileSync(path.join(repoRoot, testPath), 'declared test');
     fs.writeFileSync(path.join(repoRoot, 'driver'), 'process.stdout.write(process.argv[2]==="opaque"?"opaque":"TAP version 13\\n"+(process.argv[2]==="failed"?"not ok":"ok")+" 1 - declared case\\n1..1\\n");process.exitCode=process.argv[2]==="failed"?7:0;');
@@ -147,11 +166,28 @@ function buildRecipeFixture(mode = 'failed', testPath = 'specifications/case', w
             ].join('\n'));
         }
     }
+    if (!withRecipe && options.opaqueAssertion) fs.writeFileSync(path.join(repoRoot, 'opaque-checker'), [
+        'const fs=require("node:fs"),assert=require("node:assert/strict");',
+        `const source=fs.readFileSync(${options.symbolic ? JSON.stringify(testPath) : 'process.argv.at(-1)'},"utf8");`,
+        `const actual=${options.productionReadiness ? 'fs.readFileSync("src/app.ts","utf8")' : 'source.trim()'};`,
+        'let failed=false;try{assert.equal(actual,"ready");}',
+        'catch(error){if(error.code!=="ERR_ASSERTION")throw error;failed=true;}',
+        'process.stdout.write(JSON.stringify({case:"source readiness",outcome:failed?"ASSERTION_FAILED":"PASSED",actual,expected:"ready"})+"\\n");',
+        'process.exitCode=failed?7:0;'
+    ].join('\n'));
+    if (options.productionReadiness) fs.writeFileSync(path.join(repoRoot, 'src/app.ts'), 'blocked');
+    if (options.opaqueRecipe) fs.writeFileSync(path.join(repoRoot, 'driver'), [
+        'const fs=require("node:fs"),assert=require("node:assert/strict");',
+        `fs.readFileSync(${JSON.stringify(testPath)},"utf8");`,
+        'let failed=false;try{assert.equal(fs.readFileSync("src/app.ts","utf8"),"ready");}',
+        'catch(error){if(error.code!=="ERR_ASSERTION")throw error;failed=true;}',
+        'process.stdout.write(JSON.stringify({case:process.argv.at(-1),outcome:failed?"ASSERTION_FAILED":"PASSED"})+"\\n");process.exitCode=failed?7:0;'
+    ].join('\n'));
     fs.writeFileSync(path.join(repoRoot, 'recipes.json'), JSON.stringify({ schema_version: 1, recipes: [{ id: 'declared',
         purpose: 'test', executable: process.execPath, argv: ['driver', mode, { target: 'case' }], cwd: '.',
         inputs: [{ path: 'src/app.ts', role: 'source' }, { path: testPath, role: 'test' }, { path: 'driver', role: 'helper' }],
         targets: [{ id: 'case', source: testPath, selector: 'declared case' }], environment: {}, timeout_ms: 5000,
-        max_attempts: 2, max_output_bytes: 1024, max_input_bytes: 65536, required_capabilities: [], result_format: 'tap' }] }));
+        max_attempts: options.maxAttempts ?? 2, max_output_bytes: 1024, max_input_bytes: 65536, required_capabilities: [], result_format: options.opaqueRecipe ? 'opaque' : 'tap' }] }));
     seedRecipeInit(repoRoot); seedRecipeTask(repoRoot, TASK_ID, 'TODO', 'default', 'Test-first: expected-red.', 'Declared recipe expected red');
     initializeGitRepo(repoRoot);
     if (withRecipe) handleWorkflow(['set', '--target-root', repoRoot, '--project-validation-contract', 'recipes.json', '--operator-confirmed', 'yes',
@@ -176,6 +212,189 @@ afterEach(() => {
 });
 
 describe('next-step test-first expected-red routing', () => {
+    for (const symbolic of [false, true]) it(`retains opaque assertion facts for independent review with ${symbolic ? 'symbolic' : 'literal'} selection`, async () => {
+        const testPath = 'modules/safety/checkcase.custom';
+        const fixture = buildRecipeFixture('failed', testPath, { withRecipe: false, opaqueAssertion: true, symbolic, reviewSuite: true });
+        const selector = symbolic ? 'source readiness' : testPath;
+        const run = await runIntermediateCommandCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
+            commandSource: 'targeted-test', preflightPath: fixture.preflightPath, expectFailure: true,
+            command: `"${process.execPath}" opaque-checker ${symbolic ? '--story=' : ''}"${selector}"`,
+            selectedCases: [{ source: testPath, case_id: 'source readiness', selector }] });
+        const event = readTaskTimelineEvents(fixture.repoRoot, TASK_ID).filter(item =>
+            item.event_type === 'TEST_FIRST_EXPECTED_FAILURE_RECORDED').at(-1)!;
+        assert.ok(event, run.outputLines.join('\n'));
+        const record = JSON.parse(fs.readFileSync(String((event.details as Record<string, unknown>).artifact_path), 'utf8'));
+        assert.equal(record.exit_code, 7, 'The real assertion must fail before its independent interpretation.');
+        assert.match(fs.readFileSync(record.output_artifact, 'utf8'), /"outcome":"ASSERTION_FAILED"/);
+        assert.equal(record.status, 'PENDING_REVIEW');
+        assert.equal(run.exitCode, 0, run.outputLines.join('\n'));
+        assert.equal(resolveRoute(fixture)?.nextGate, 'implementation', 'Retain failure facts, then continue the existing implementation-before-review workflow.');
+        const evidence = readExpectedRedExecutionEvidence({ ...fixture, taskId: TASK_ID,
+            preflightSha256: fileSha256(fixture.preflightPath) });
+        assert.equal(evidence?.obligations.length, 1, 'Actual retained failure must reach the existing independent case contract.');
+        const binding = evidence!.obligations[0];
+        assert.equal(binding.case_execution?.exit_code, 7);
+        assert.equal(binding.case_execution?.expected_failure, true);
+        const resolution = { binding_sha256: validationDigest(binding), execution_sha256: binding.case_execution!.record_sha256,
+            output_sha256: binding.case_execution!.output_sha256, outcome: 'FAILED', failure_kind: 'ASSERTION',
+            evidence_quote: '"outcome":"ASSERTION_FAILED"', reasoning: 'The retained assertion compares the selected source to the required ready value.' };
+        const entries = [{ obligation_id: `VALIDATION-${binding.id.toUpperCase()}`, case_resolution: resolution }];
+        assert.deepEqual(getNativeCaseResolutionViolations({ repoRoot: fixture.repoRoot,
+            obligations: evidence!.obligations, entries, requireExpectedRed: true }), []);
+        for (const failure_kind of ['PROCESS', 'DEPENDENCY', 'UNKNOWN']) {
+            assert.ok(getNativeCaseResolutionViolations({ repoRoot: fixture.repoRoot, obligations: evidence!.obligations,
+                entries: [{ ...entries[0], case_resolution: { ...resolution, failure_kind } }], requireExpectedRed: true }).length);
+        }
+        assert.ok(getNativeCaseResolutionViolations({ repoRoot: fixture.repoRoot,
+            obligations: evidence!.obligations, entries, requirePassed: true }).length, 'RED semantics cannot close final GREEN.');
+        assert.match(resolveRoute(fixture)?.reason ?? '', /pending the ordinary independent review after implementation/);
+        const suiteOptions = { ...fixture, taskId: TASK_ID, reviewType: 'code',
+            preflightSha256: fileSha256(fixture.preflightPath) };
+        const suite = buildFullSuiteValidationEvidence(suiteOptions);
+        assert.equal(suite?.required_for_review, true, 'Expected-red capture cannot waive the ordinary pre-review full-suite gate.');
+        assert.equal(suite?.available, false);
+        assert.ok(getReviewContextFullSuiteValidationViolations({ ...suiteOptions,
+            reviewContext: { full_suite_validation: suite } }).length, 'Review preparation stays blocked until normal validation completes.');
+    });
+    for (const rejectedLast of [false, true]) it(`orders rejected and valid RED captures before ordinary review (${rejectedLast})`, async () => {
+        const testPath = 'modules/safety/checkcase.custom';
+        const fixture = buildRecipeFixture('failed', testPath,
+            { withRecipe: false, opaqueAssertion: true, productionReadiness: true });
+        const options = { repoRoot: fixture.repoRoot, taskId: TASK_ID, commandSource: 'targeted-test',
+            preflightPath: fixture.preflightPath,
+            selectedCases: [{ source: testPath, case_id: 'source readiness', selector: testPath }] };
+        const rejected = () => runIntermediateCommandCommand({ ...options, expectFailure: true,
+            command: `"${process.execPath}" --version "${testPath}"` });
+        const command = `"${process.execPath}" opaque-checker "${testPath}"`;
+        if (!rejectedLast) assert.notEqual((await rejected()).exitCode, 0);
+        assert.equal((await runIntermediateCommandCommand({ ...options, command, expectFailure: true })).exitCode, 0);
+        if (rejectedLast) assert.notEqual((await rejected()).exitCode, 0);
+        fs.writeFileSync(path.join(fixture.repoRoot, 'src/app.ts'), 'ready');
+        runClassifyChangeCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID, taskIntent: 'Fix production readiness',
+            outputPath: fixture.preflightPath, changedFiles: [testPath, 'src/app.ts'], emitMetrics: false });
+        fixture.preflight = JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8'));
+        assert.equal((await runIntermediateCommandCommand({ ...options, command })).exitCode, 0);
+        const obligations = () => resolveAuthoritativeReviewValidationObligations({ ...fixture,
+            reviewType: resolveValidationSemanticReviewLanes(fixture.preflight.effective_review_snapshot as EffectiveReviewSnapshot)[0] });
+        if (rejectedLast) assert.throws(obligations, /RED|execution|successful/i);
+        else assert.equal(obligations()?.length, 2, 'An earlier rejected capture must not poison a later valid RED/GREEN pair.');
+    });
+    for (const symbolic of [false, true]) it(`keeps opaque RED and current GREEN in ordinary review after production changes (${symbolic})`, async () => {
+        const testPath = 'modules/safety/checkcase.custom';
+        const fixture = buildRecipeFixture('failed', testPath,
+            { withRecipe: false, opaqueAssertion: true, symbolic, productionReadiness: true, productionOperand: symbolic });
+        const selector = symbolic ? 'source readiness' : testPath;
+        const command = `"${process.execPath}" opaque-checker ${symbolic ? '--input=src/app.ts --story=' : ''}"${selector}"`;
+        const selectedCases = [{ source: testPath, case_id: 'source readiness', selector }];
+        const runOptions = { repoRoot: fixture.repoRoot, taskId: TASK_ID, commandSource: 'targeted-test',
+            command, preflightPath: fixture.preflightPath, selectedCases };
+        const red = await runIntermediateCommandCommand({ ...runOptions, expectFailure: true });
+        assert.equal(red.exitCode, 0, red.outputLines.join('\n'));
+        const sourceBefore = fs.readFileSync(path.join(fixture.repoRoot, testPath));
+        fs.writeFileSync(path.join(fixture.repoRoot, 'src/app.ts'), 'ready');
+        const classify = () => {
+            runClassifyChangeCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
+                taskIntent: 'Fix production readiness', outputPath: fixture.preflightPath,
+                changedFiles: [testPath, 'src/app.ts'], emitMetrics: false });
+            fixture.preflight = JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8'));
+        };
+        classify();
+        const green = await runIntermediateCommandCommand(runOptions);
+        assert.equal(green.exitCode, 0, green.outputLines.join('\n'));
+        const obligations = () => resolveAuthoritativeReviewValidationObligations({ ...fixture,
+            reviewType: resolveValidationSemanticReviewLanes(fixture.preflight.effective_review_snapshot as EffectiveReviewSnapshot)[0] });
+        const paired = obligations();
+        assert.equal(paired?.length, 2, 'The existing ordinary review must receive both actual executions.');
+        const historical = paired!.find(item => item.case_execution?.expected_failure)!;
+        const current = paired!.find(item => !item.case_execution?.expected_failure)!;
+        assert.equal(historical.case_execution?.exit_code, 7);
+        assert.ok(current.case_execution!.event_task_sequence > historical.case_execution!.event_task_sequence);
+        assert.deepEqual(historical.source_identity, current.source_identity);
+        assert.deepEqual(fs.readFileSync(path.join(fixture.repoRoot, testPath)), sourceBefore);
+        const helperPath = path.join(fixture.repoRoot, 'opaque-checker'), helperBefore = fs.readFileSync(helperPath);
+        fs.appendFileSync(helperPath, '\n// changed helper\n');
+        runClassifyChangeCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
+            taskIntent: 'Observe changed helper', outputPath: fixture.preflightPath,
+            changedFiles: [testPath, 'src/app.ts', 'opaque-checker'], emitMetrics: false });
+        fixture.preflight = JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8'));
+        assert.equal((await runIntermediateCommandCommand(runOptions)).exitCode, 0);
+        assert.throws(obligations, /RED|identity|input|source/i, 'Historical RED cannot reuse a changed helper.');
+        fs.writeFileSync(helperPath, helperBefore); classify();
+        assert.equal((await runIntermediateCommandCommand(runOptions)).exitCode, 0);
+        assert.equal(obligations()?.length, 2);
+        fs.writeFileSync(path.join(fixture.repoRoot, 'src/app.ts'), 'blocked'); classify();
+        assert.notEqual((await runIntermediateCommandCommand(runOptions)).exitCode, 0);
+        assert.throws(obligations, /successful|GREEN|execution/i, 'A later failed run must invalidate old GREEN.');
+        assert.ok(getValidationTerminalViolations({ ...fixture, taskId: TASK_ID,
+            requiredReviews: fixture.preflight.required_reviews as Record<string, unknown>, artifacts: {} })
+            .some(message => /successful|GREEN|execution/i.test(message)), 'The terminal consumer must also reject the failed current case.');
+        fs.writeFileSync(path.join(fixture.repoRoot, 'src/app.ts'), 'ready'); classify();
+        assert.equal((await runIntermediateCommandCommand(runOptions)).exitCode, 0);
+        assert.equal(obligations()?.length, 2);
+        fs.appendFileSync(path.join(fixture.repoRoot, testPath), '\nchanged selected test\n'); classify();
+        assert.equal((await runIntermediateCommandCommand(runOptions)).exitCode, 0);
+        assert.throws(obligations, /source|RED|identity/i, 'A changed test must not reuse the old failure.');
+    });
+    for (const cancelled of [false, true]) it(`selects recipe RED by execution order despite delayed older evaluation (${cancelled})`, async () => {
+        const testPath = 'modules/safety/checkcase.custom';
+        const fixture = buildRecipeFixture('failed', testPath, { opaqueRecipe: true, productionReadiness: true, maxAttempts: 3 });
+        const options = { repoRoot: fixture.repoRoot, taskId: TASK_ID, recipeId: 'declared' };
+        const older = await executeValidationRecipe(options);
+        const controller = new AbortController();
+        if (cancelled) controller.abort();
+        const newer = await executeValidationRecipe({ ...options, signal: controller.signal });
+        assert.equal(newer.cancelled, cancelled);
+        await evaluateValidationAttempt({ ...options, attemptId: newer.attempt_id, expectedFailure: true });
+        await evaluateValidationAttempt({ ...options, attemptId: older.attempt_id, expectedFailure: true });
+        assert.equal(resolveRoute(fixture)?.nextGate === 'implementation', !cancelled,
+            'A delayed old RED result must not replace the latest execution in navigation.');
+        fs.writeFileSync(path.join(fixture.repoRoot, 'src/app.ts'), 'ready');
+        runClassifyChangeCommand({ ...options, taskIntent: 'Fix production readiness', outputPath: fixture.preflightPath,
+            changedFiles: [testPath, 'src/app.ts'], emitMetrics: false });
+        fixture.preflight = JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8'));
+        const green = await executeValidationRecipe(options);
+        await evaluateValidationAttempt({ ...options, attemptId: green.attempt_id });
+        const answers = buildQualityChecklistAnswersTemplate({ ...fixture, taskId: TASK_ID }).answers
+            .map(answer => ({ ...answer, status: 'PASS', answer: 'Checked actual recipe execution order and current source/output identities.' }));
+        const quality = runQualityChecklistCommand({ ...fixture, taskId: TASK_ID, answersJson: JSON.stringify(answers), emitMetrics: false });
+        assert.equal(quality.exitCode, 0, quality.outputLines.join('\n'));
+        const obligations = () => resolveAuthoritativeReviewValidationObligations({ ...fixture, reviewType: 'code' });
+        if (cancelled) assert.throws(obligations, /RED|nonzero|cancelled|execution/i);
+        else assert.equal(obligations()?.find(item => item.case_execution?.expected_failure)?.attempt_id, newer.attempt_id);
+    });
+    it('retains opaque recipe RED and pairs unchanged targets with current GREEN in ordinary review', async () => {
+        const testPath = 'modules/safety/checkcase.custom';
+        const fixture = buildRecipeFixture('failed', testPath, { opaqueRecipe: true, productionReadiness: true });
+        const red = await runIntermediateCommandCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
+            recipeId: 'declared', expectFailure: true });
+        assert.equal(red.exitCode, 0, red.outputLines.join('\n'));
+        assert.match(red.outputLines.join('\n'), /UNRESOLVED/, 'Execution capture must not fabricate assertion acceptance.');
+        assert.equal(resolveRoute(fixture)?.nextGate, 'implementation');
+        fs.writeFileSync(path.join(fixture.repoRoot, 'src/app.ts'), 'ready');
+        runClassifyChangeCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
+            taskIntent: 'Fix production readiness', outputPath: fixture.preflightPath,
+            changedFiles: [testPath, 'src/app.ts'], emitMetrics: false });
+        fixture.preflight = JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8'));
+        const attempt = await executeValidationRecipe({ repoRoot: fixture.repoRoot, taskId: TASK_ID, recipeId: 'declared' });
+        const green = await evaluateValidationAttempt({ repoRoot: fixture.repoRoot, taskId: TASK_ID, attemptId: attempt.attempt_id });
+        assert.equal(green.status, 'UNRESOLVED');
+        const answers = buildQualityChecklistAnswersTemplate({ ...fixture, taskId: TASK_ID }).answers
+            .map(answer => ({ ...answer, status: 'PASS', answer: 'Checked the actual isolated recipe execution and retained source/output identities.' }));
+        const quality = runQualityChecklistCommand({ ...fixture, taskId: TASK_ID, answersJson: JSON.stringify(answers), emitMetrics: false });
+        assert.equal(quality.exitCode, 0, quality.outputLines.join('\n'));
+        const paired = resolveAuthoritativeReviewValidationObligations({ ...fixture, reviewType: 'code' });
+        assert.equal(paired?.length, 2);
+        assert.equal(paired!.filter(item => item.case_execution?.expected_failure).length, 1);
+        assert.equal(paired!.filter(item => !item.case_execution?.expected_failure).length, 1);
+        fs.appendFileSync(path.join(fixture.repoRoot, testPath), '\nchanged selected test\n');
+        runClassifyChangeCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
+            taskIntent: 'Changed test needs a new failing execution', outputPath: fixture.preflightPath,
+            changedFiles: [testPath, 'src/app.ts'], emitMetrics: false });
+        fixture.preflight = JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8'));
+        const redAttemptId = red.outputLines.find(line => line.startsWith('AttemptId: '))!.slice('AttemptId: '.length);
+        assert.throws(() => readValidationResult({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
+            attemptId: redAttemptId, expectedRedHistory: true }), /source|RED|identity/i);
+    });
     it('rejects TAP bailout records after the complete failed-case prefix', () => {
         const result = 'not ok 1 - source readiness';
         assert.equal(hasReportedFailedTestCase(`TAP version 13\n${result}\n1..1\n`), true);
@@ -213,7 +432,7 @@ describe('next-step test-first expected-red routing', () => {
 
     it('accepts actual current native expected-red command facts without a known runner grammar and rejects modified output', async () => {
         const testPath = 'modules/safety/checkcase.custom';
-        const fixture = buildRecipeFixture('failed', testPath, false);
+        const fixture = buildRecipeFixture('failed', testPath, { withRecipe: false });
         const command = `"${process.execPath}" opaque-checker "${testPath}"`;
         const run = await runIntermediateCommandCommand({repoRoot: fixture.repoRoot, taskId: TASK_ID,
             commandSource: 'targeted-test', command, preflightPath: fixture.preflightPath, expectFailure: true});
@@ -227,7 +446,7 @@ describe('next-step test-first expected-red routing', () => {
         assert.equal(resolveRoute(fixture)?.nextGate, 'test-first-expected-failure');
     });
     it('continues unchanged test-only RED to current GREEN after fixture implementation and rejects tampered proof', async () => {
-        const fixture = buildRecipeFixture('failed', TEST_PATH, false, true);
+        const fixture = buildRecipeFixture('failed', TEST_PATH, { withRecipe: false, fixtureReadiness: true });
         const command = `"${process.execPath}" opaque-checker "${TEST_PATH}"`;
         const red = await runIntermediateCommandCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
             commandSource: 'targeted-test', command, preflightPath: fixture.preflightPath, expectFailure: true });
@@ -294,7 +513,7 @@ describe('next-step test-first expected-red routing', () => {
         assert.equal(resolveRoute(fixture)?.nextGate, 'test-first-expected-failure', 'Changed tested source needs new RED.');
     });
     it('requires authentic RED before accepting a current test-only GREEN fixture run', async () => {
-        const fixture = buildRecipeFixture('failed', TEST_PATH, false, true);
+        const fixture = buildRecipeFixture('failed', TEST_PATH, { withRecipe: false, fixtureReadiness: true });
         fs.writeFileSync(path.join(fixture.repoRoot, READINESS_FIXTURE_PATH), 'ready');
         runClassifyChangeCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
             taskIntent: 'Complete test-only fixture readiness', outputPath: fixture.preflightPath,
@@ -307,7 +526,7 @@ describe('next-step test-first expected-red routing', () => {
         assert.equal(resolveRoute(fixture)?.nextGate, 'test-first-expected-failure');
     });
     it('requires every nested RED case to pass instead of accepting skipped or replaced children', async () => {
-        const fixture = buildRecipeFixture('failed', TEST_PATH, false, true, true);
+        const fixture = buildRecipeFixture('failed', TEST_PATH, { withRecipe: false, fixtureReadiness: true, nestedReport: true });
         const command = `"${process.execPath}" opaque-checker "${TEST_PATH}"`;
         const red = await runIntermediateCommandCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
             commandSource: 'targeted-test', command, preflightPath: fixture.preflightPath, expectFailure: true });
@@ -330,7 +549,7 @@ describe('next-step test-first expected-red routing', () => {
     });
     for (const failure of ['missing runner', 'assertless process'] as const) {
         it(`does not mistake ${failure} failure for a reported failed test case`, async () => {
-            const fixture = buildRecipeFixture('failed', TEST_PATH, false);
+            const fixture = buildRecipeFixture('failed', TEST_PATH, { withRecipe: false });
             const program = failure === 'missing runner' ? 'missing-runner.cjs' : 'assertless-checker';
             const run = await runIntermediateCommandCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
                 commandSource: 'targeted-test', command: `"${process.execPath}" ${program} ${TEST_PATH}`,
@@ -448,7 +667,7 @@ describe('next-step test-first expected-red routing', () => {
         assert.equal(route?.nextGate, 'test-first-expected-failure');
         assert.deepEqual(route?.commands, []);
         assert.match(route?.reason || '', /actual project --command/u);
-        assert.match(route?.reason || '', /complete TAP 13\/14 report/u);
+        assert.match(route?.reason || '', /--selected-case.*ordinary independent review/u);
         assert.match(route?.reason || '', /admitted recipe/u);
     });
 
@@ -465,7 +684,7 @@ describe('next-step test-first expected-red routing', () => {
 
         assert.equal(route?.nextGate, 'test-first-expected-failure');
         assert.deepEqual(route?.commands, []);
-        assert.match(route?.reason || '', /complete TAP 13\/14 report/u);
+        assert.match(route?.reason || '', /--selected-case.*ordinary independent review/u);
         assert.match(route?.reason || '', /admitted recipe/u);
     });
 
@@ -505,7 +724,7 @@ describe('next-step test-first expected-red routing', () => {
     });
 
     it('routes authenticated bounded expected-red evidence to implementation', async () => {
-        const fixture = buildRecipeFixture('failed', TEST_PATH, false);
+        const fixture = buildRecipeFixture('failed', TEST_PATH, { withRecipe: false });
         const runResult = await runIntermediateCommandCommand({
             repoRoot: fixture.repoRoot,
             taskId: TASK_ID,
@@ -520,11 +739,11 @@ describe('next-step test-first expected-red routing', () => {
 
         assert.equal(route?.nextGate, 'implementation');
         assert.deepEqual(route?.commands, []);
-        assert.match(route?.reason || '', /authenticated against the exact test-only preflight/u);
+        assert.match(route?.reason || '', /exact source, selected cases and actual nonzero execution/u);
     });
 
     it('rejects modified output evidence and asks to record expected-red again', async () => {
-        const fixture = buildRecipeFixture('failed', TEST_PATH, false);
+        const fixture = buildRecipeFixture('failed', TEST_PATH, { withRecipe: false });
         await runIntermediateCommandCommand({
             repoRoot: fixture.repoRoot,
             taskId: TASK_ID,

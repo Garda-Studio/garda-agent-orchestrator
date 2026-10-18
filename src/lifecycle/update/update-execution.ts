@@ -21,6 +21,7 @@ import {
 import { restoreRollbackSnapshot } from '../common';
 import { getLiveVersionPayload, type ResolvedUpdateSources } from './update-source';
 import { readPreservableCompileGateCommandFromFile } from '../agent-init/contract-migrations';
+import { captureWorkflowConfigMigration, recordWorkflowConfigMigration } from '../../core/workflow-config-migration';
 
 export interface InstallRunnerOptions {
     targetRoot: string;
@@ -255,6 +256,8 @@ export function executeUpdatePipelineStages(options: {
         ));
 
     const expectedInvariantPaths = getExpectedBundleInvariantPaths(bundleRoot);
+    const workflowMigration = dryRun ? null : captureWorkflowConfigMigration(
+        normalizedTarget, rollbackSnapshotCreated ? rollbackSnapshotPath : normalizedTarget);
     let currentStage = 'INSTALL';
 
     try {
@@ -441,6 +444,7 @@ export function executeUpdatePipelineStages(options: {
                     updatedVersion = 'unknown';
                 }
             }
+            if (workflowMigration) recordWorkflowConfigMigration(normalizedTarget, workflowMigration);
         }
     } catch (error: unknown) {
         const errorMessage = getErrorMessage(error);

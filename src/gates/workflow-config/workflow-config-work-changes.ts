@@ -147,6 +147,7 @@ export function getWorkflowConfigWorkViolations(options: {
             repoRoot: options.repoRoot,
             changedFiles: changedWorkflowConfigFiles,
             currentFileHashes: options.currentFileHashes,
+            baselineFileHashes: options.baselineFileHashes,
             taskId: options.taskModeEvidence.task_id
         });
         if (provenance.accepted) {

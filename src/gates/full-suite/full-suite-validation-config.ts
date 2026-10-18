@@ -41,6 +41,7 @@ export function resolveFullSuiteDurationHistoryPath(repoRoot: string): string {
 export function buildFullSuiteConfigSignature(config: FullSuiteValidationConfig): string {
     const relevantConfig = {
         command: config.command,
+        ...(config.report_files?.length ? { report_files: config.report_files } : {}),
         timeout_ms: config.timeout_ms,
         timeout_blocker: config.timeout_blocker !== false,
         timeout_retry_count: Number.isSafeInteger(config.timeout_retry_count) && (config.timeout_retry_count ?? 0) >= 0

@@ -2,8 +2,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { inspectValidationCommand, type ValidationCommandDescriptor } from '../../../../core/validation-command-contract';
+import { validationDigest } from '../../../../core/project-validation-identity';
+import { prepareValidationReportCapture, completeValidationReportCapture } from '../../../../core/validation-report-capture';
+import { parseValidationReportArguments, type ValidationReportEvidenceBinding } from '../../../../core/validation-report-contract';
+import { validationPathKey } from '../../../../core/validation-relative-path';
 import { appendMandatoryTaskEventAsync, appendTaskEventAsync } from '../../../../gate-runtime/task-events-io';
-import { captureIntermediateSelection, completeIntermediateSelection,
+import { captureIntermediateSelection, completeIntermediateSelection, assertCurrentIntermediateSelection,
     type IntermediateSelectionBinding } from '../../../../core/intermediate-selected-cases';
 import type { CommandInvocationExecution } from '../../../gate-cli/gates-subprocess';
 import { isPlainRecord } from '../../../../core/records';
@@ -41,7 +45,7 @@ const SOURCE_INPUT_MAX_BYTES = 4 * 1024 * 1024;
 const SOURCE_GIT_OPTIONS = { timeoutMs: 5_000, maxBuffer: SOURCE_INPUT_MAX_BYTES };
 
 type IntermediateCommandSource = (typeof ALLOWED_COMMAND_SOURCES)[number];
-type IntermediateCommandStatus = 'PASSED' | 'FAILED' | 'EXPECTED_FAILURE' | 'UNEXPECTED_PASS';
+type IntermediateCommandStatus = 'PASSED' | 'FAILED' | 'EXPECTED_FAILURE' | 'UNEXPECTED_PASS' | 'PENDING_REVIEW';
 
 export interface RunIntermediateCommandOptions {
     taskId?: unknown;
@@ -49,6 +53,7 @@ export interface RunIntermediateCommandOptions {
     command?: unknown;
     commandSource?: unknown;
     selectedCases?: unknown;
+    reportFiles?: unknown;
     artifactPath?: unknown;
     outputPath?: unknown;
     timeoutMs?: unknown;
@@ -95,10 +100,16 @@ interface IntermediateCommandRecord {
     test_scope_sha256?: string;
     timed_out?: boolean;
     cancelled?: boolean;
+    termination_signal?: NodeJS.Signals;
+    output_truncated?: boolean;
+    output_sink_error?: string;
     duration_ms: number;
     output_artifact: string;
     output_artifact_sha256: string;
     output_artifact_size_bytes: number;
+    output_encoding?: 'base64-streams';
+    report_evidence?: ValidationReportEvidenceBinding;
+    report_violations?: string[];
     preflight_path?: string;
     preflight_sha256?: string;
     coverage_contract_sha256?: string;
@@ -338,6 +349,7 @@ function readExpectedFailurePreflightBinding(options: {
     commandSource: IntermediateCommandSource;
     preflightPath?: string;
     requestedPreflightSha256?: string;
+    selectedCases?: unknown;
 }): ExpectedFailurePreflightBinding {
     if (options.commandSource !== 'node-test' && options.commandSource !== 'targeted-test') {
         throw new Error('--expect-failure is allowed only for node-test or targeted-test commands.');
@@ -374,9 +386,12 @@ function readExpectedFailurePreflightBinding(options: {
             .map((entry) => gateHelpers.normalizePath(String(entry || '').trim()).replace(/^\.\/?/u, ''))
             .filter(Boolean)
     );
+    const admission = inspectValidationCommand(options.command, 'test');
+    const selection = admission.descriptor
+        ? captureIntermediateSelection(options.repoRoot, admission.descriptor, options.selectedCases) : undefined;
     const focusedTestPaths = getCurrentIntermediateTestTargets(
         options.repoRoot, options.command,
-        [...changedFiles]
+        [...changedFiles], selection
     );
     if (focusedTestPaths.length === 0) {
         throw new Error('--expect-failure command must name a concrete changed test from the current preflight scope.');
@@ -512,7 +527,9 @@ function formatStatusLines(
     artifactPath: string,
     outputPath: string,
 ): string[] {
-    const statusLabel = status === 'EXPECTED_FAILURE'
+    const statusLabel = status === 'PENDING_REVIEW'
+        ? 'TEST_FIRST_ASSERTION_SEMANTICS_PENDING'
+        : status === 'EXPECTED_FAILURE'
         ? 'TEST_FIRST_EXPECTED_FAILURE_RECORDED'
         : status === 'UNEXPECTED_PASS'
             ? 'TEST_FIRST_EXPECTED_FAILURE_NOT_REPRODUCED'
@@ -562,7 +579,7 @@ async function persistCommandEvent(
         ? 'TEST_FIRST_EXPECTED_FAILURE_RECORDED'
         : 'INTERMEDIATE_COMMAND_RUN';
     const outcome = expectedFailure
-        ? (status === 'EXPECTED_FAILURE' ? 'PASS' : 'FAIL')
+        ? (status === 'PENDING_REVIEW' ? 'PENDING' : status === 'EXPECTED_FAILURE' ? 'PASS' : 'FAIL')
         : status;
     await appendTaskEventAsync(
         gateHelpers.joinOrchestratorPath(repoRoot, ''),
@@ -570,7 +587,8 @@ async function persistCommandEvent(
         eventType,
         outcome,
         expectedFailure
-            ? `Test-first ${commandSource} expected failure ${status === 'EXPECTED_FAILURE' ? 'recorded' : 'not reproduced'}.`
+            ? status === 'PENDING_REVIEW' ? 'Test-first execution retained; the ordinary post-implementation review must verify assertion semantics alongside current GREEN.'
+                : `Test-first ${commandSource} expected failure ${status === 'EXPECTED_FAILURE' ? 'recorded' : 'not reproduced'}.`
             : `Intermediate ${commandSource} command ${status.toLowerCase()}.`,
         {
             command_source: commandSource,
@@ -580,6 +598,8 @@ async function persistCommandEvent(
             output_artifact_path: record.output_artifact,
             output_artifact_sha256: record.output_artifact_sha256,
             output_artifact_size_bytes: record.output_artifact_size_bytes,
+            ...(record.report_evidence ? { output_encoding: record.output_encoding,
+                report_evidence: record.report_evidence, report_violations: record.report_violations } : {}),
             ...(record.preflight_path ? { preflight_path: record.preflight_path } : {}),
             ...(record.preflight_sha256 ? { preflight_sha256: record.preflight_sha256 } : {}),
             ...(record.coverage_contract_sha256 ? { coverage_contract_sha256: record.coverage_contract_sha256 } : {}),
@@ -589,6 +609,9 @@ async function persistCommandEvent(
             } : {}),
             output_telemetry: record.output_telemetry,
             exit_code: record.exit_code,
+            ...(record.termination_signal ? { termination_signal: record.termination_signal } : {}),
+            output_truncated: record.output_truncated === true,
+            ...(record.output_sink_error !== undefined ? { output_sink_error: record.output_sink_error } : {}),
             duration_ms: record.duration_ms,
             source_composition_sha256: createHash('sha256').update(JSON.stringify(record.source_composition)).digest('hex'),
             ...(record.selected_case_binding ? { execution_id: record.execution_id,
@@ -616,6 +639,7 @@ export async function runIntermediateCommandCommand(
     const taskId = normalizeRequiredString(options.taskId, '--task-id');
     const command = normalizeRequiredString(options.command, '--command');
     const commandSource = normalizeCommandSource(options.commandSource);
+    const reportFiles = parseValidationReportArguments(options.reportFiles);
     const timeoutMs = normalizeTimeoutMs(options.timeoutMs);
     const preflightPathInput = normalizeOptionalString(options.preflightPath);
     const preflightPath = preflightPathInput ? path.resolve(repoRoot, preflightPathInput) : undefined;
@@ -628,7 +652,8 @@ export async function runIntermediateCommandCommand(
             command,
             commandSource,
             preflightPath,
-            requestedPreflightSha256
+            requestedPreflightSha256,
+            selectedCases: options.selectedCases
         })
         : null;
     const preflightSha256 = expectedFailureBinding?.preflightSha256
@@ -660,9 +685,9 @@ export async function runIntermediateCommandCommand(
         };
     }
 
-    if (options.selectedCases !== undefined && !nativeScopeBefore.scope_content_sha256)
+    if ((options.selectedCases !== undefined || reportFiles.length > 0) && !nativeScopeBefore.scope_content_sha256)
         return { exitCode: EXIT_GATE_FAILURE, outputLines: formatRejectedLines(
-            'Selected cases require the current authenticated native preflight.', commandSource, command) };
+            'Selected cases and report files require the current authenticated native preflight.', commandSource, command) };
     const selection = nativeScopeBefore.scope_content_sha256
         ? captureIntermediateSelection(repoRoot, commandAdmission.descriptor, options.selectedCases) : null;
     const executionId = selection ? randomUUID() : undefined;
@@ -676,12 +701,28 @@ export async function runIntermediateCommandCommand(
     );
     const reserved = reserveIntermediateArtifacts(repoRoot, artifacts);
     try {
+        const reportPaths = new Set(reportFiles.map(report => validationPathKey(report.path)));
+        const reportStart = prepareValidationReportCapture(repoRoot, reportFiles, {
+            evidenceDirectory: gateHelpers.normalizePath(path.relative(repoRoot, artifacts.artifactPath)) + '.reports',
+            excludedRoots: [gateHelpers.joinOrchestratorPath(repoRoot, 'runtime/reviews'),
+                normalizeOptionalString(options.eventsRoot) ?? gateHelpers.joinOrchestratorPath(repoRoot, 'runtime/task-events')]
+                .map(directory => gateHelpers.normalizePath(path.relative(repoRoot, path.resolve(repoRoot, directory)))),
+            excludedPaths: [...nativeScopeBefore.changed_files, ...selection?.cases.map(claim => claim.source) ?? [],
+                ...selection?.sources.map(source => source.path).filter(file => !reportPaths.has(validationPathKey(file))) ?? [],
+                ...[artifacts.artifactPath, artifacts.outputPath].map(file => gateHelpers.normalizePath(path.relative(repoRoot, file)))]
+        });
+        const reportEvidence: ValidationReportEvidenceBinding | undefined = reportStart ? {
+            declarations: reportStart.declarations, start_sha256: validationDigest(reportStart),
+            evidence_directory: path.posix.dirname(reportStart.anchor.identity.path)
+        } : undefined;
         const authorityBefore = observeCompositionAuthority(repoRoot);
         const sourceBefore = observeIntermediateSource(repoRoot);
         if (selection) await appendMandatoryTaskEventAsync(gateHelpers.joinOrchestratorPath(repoRoot, ''), taskId,
             'INTERMEDIATE_COMMAND_STARTED', 'STARTED', 'Native intermediate command selection captured before execution.', {
                 command_source: commandSource, command, execution_id: executionId,
+                expected_failure: options.expectFailure === true,
                 artifact_path: artifacts.artifactPath, selected_case_selection: selection,
+                ...(reportEvidence ? { report_evidence: reportEvidence } : {}),
                 preflight_path: preflightPath ? gateHelpers.normalizePath(preflightPath) : undefined,
                 preflight_sha256: preflightSha256, scope_content_sha256_before: nativeScopeBefore.scope_content_sha256
             }, { actor: 'gate', eventsRoot: normalizeOptionalString(options.eventsRoot) });
@@ -693,25 +734,42 @@ export async function runIntermediateCommandCommand(
             captureInvocations: true
         });
         const durationMs = Date.now() - startedAt;
+        const reports = completeValidationReportCapture(repoRoot, reportStart);
         const selectionBinding = selection ? completeIntermediateSelection(repoRoot, selection) : undefined;
         const nativeScopeAfter = nativeScopeBefore.scope_content_sha256
             ? observeNativeIntermediateScope(repoRoot, taskId, preflightPath) : null;
         const sourceComposition = bindIntermediateSourceComposition(sourceBefore, observeIntermediateSource(repoRoot));
         const rawLines = result.outputLines;
-        const actualOutput = `${rawLines.join('\n')}\n`;
+        const streamOutput = `${rawLines.join('\n')}\n`;
+        const actualOutput = reports ? JSON.stringify({ stdout_base64: Buffer.from(streamOutput).toString('base64'),
+            stderr_base64: '', report_capture: reports }) : streamOutput;
         writeReservedIntermediateFile(reserved.output, actualOutput);
         const outputArtifactSha256 = gateHelpers.fileSha256(artifacts.outputPath);
         if (!outputArtifactSha256) {
             throw new Error(`Unable to hash intermediate command output artifact '${artifacts.outputPath}'.`);
         }
         const outputArtifactSizeBytes = fs.statSync(artifacts.outputPath).size;
-
-        const status: IntermediateCommandStatus = expectFailure
+        let semanticCandidate = false;
+        if (expectFailure && selectionBinding?.before.cases.length && result.exitCode > 0
+            && !result.timedOut && !result.cancelled && result.invocations?.length === 1
+            && !result.terminationSignal && !result.outputTruncated && result.sinkError === undefined
+            && result.invocations[0].exitCode === result.exitCode && !result.invocations[0].executionError
+            && nativeScopeAfter?.preflight_sha256 === nativeScopeBefore.preflight_sha256
+            && nativeScopeAfter?.scope_content_sha256 === nativeScopeBefore.scope_content_sha256
+            && selectionBinding.before.cases.every(claim => nativeScopeBefore.changed_files.includes(claim.source))) {
+            try {
+                assertCurrentIntermediateSelection(repoRoot, selectionBinding, selectionBinding.before.sources
+                    .filter(source => !reportPaths.has(validationPathKey(source.path))).map(source => source.path));
+                semanticCandidate = true;
+            } catch { /* Changed source identities cannot become semantic review candidates. */ }
+        }
+        const status: IntermediateCommandStatus = reports?.violations.length || result.terminationSignal
+            || result.outputTruncated || result.sinkError !== undefined ? 'FAILED' : expectFailure
             ? result.timedOut || result.cancelled
                 ? 'FAILED'
                 : result.exitCode === EXIT_SUCCESS
                     ? 'UNEXPECTED_PASS'
-                    : hasReportedFailedTestCase(actualOutput) ? 'EXPECTED_FAILURE' : 'FAILED'
+                    : hasReportedFailedTestCase(streamOutput) ? 'EXPECTED_FAILURE' : semanticCandidate ? 'PENDING_REVIEW' : 'FAILED'
             : result.exitCode === EXIT_SUCCESS
                 ? 'PASSED'
                 : 'FAILED';
@@ -724,7 +782,7 @@ export async function runIntermediateCommandCommand(
             artifacts.artifactPath,
             artifacts.outputPath,
         );
-        const visibleLines = status === 'PASSED' ? statusLines : [...statusLines, ...boundedTail(rawLines)];
+        const visibleLines = status === 'PASSED' ? statusLines : [...statusLines, ...reports?.violations ?? [], ...boundedTail(rawLines)];
         const telemetry = buildOutputTelemetry(rawLines, visibleLines, {
             filterMode: 'compact_summary',
             parserName: 'intermediate-command',
@@ -746,6 +804,9 @@ export async function runIntermediateCommandCommand(
             exit_code: result.exitCode,
             timed_out: result.timedOut,
             cancelled: result.cancelled,
+            ...(result.terminationSignal ? { termination_signal: result.terminationSignal } : {}),
+            output_truncated: result.outputTruncated === true,
+            ...(result.sinkError !== undefined ? { output_sink_error: result.sinkError } : {}),
             invocations: result.invocations,
             ...(selectionBinding ? { execution_id: executionId, selected_case_binding: selectionBinding } : {}),
             ...(expectFailure ? {
@@ -756,6 +817,8 @@ export async function runIntermediateCommandCommand(
             output_artifact: artifacts.outputPath,
             output_artifact_sha256: outputArtifactSha256,
             output_artifact_size_bytes: outputArtifactSizeBytes,
+            ...(reportEvidence ? { output_encoding: 'base64-streams' as const,
+                report_evidence: reportEvidence, report_violations: reports!.violations } : {}),
             ...(preflightPath ? { preflight_path: gateHelpers.normalizePath(preflightPath) } : {}),
             ...(preflightSha256 ? { preflight_sha256: preflightSha256 } : {}),
             ...(coverageContractSha256 ? { coverage_contract_sha256: coverageContractSha256 } : {}),
@@ -792,8 +855,8 @@ export async function runIntermediateCommandCommand(
         });
         const outputLines = [...visibleLines, `OutputTelemetry: ${formatTelemetryLine(telemetry)}`];
         return {
-            exitCode: expectFailure
-                ? (status === 'EXPECTED_FAILURE' ? EXIT_SUCCESS : EXIT_GATE_FAILURE)
+            exitCode: reports?.violations.length ? EXIT_GATE_FAILURE : expectFailure
+                ? (status === 'EXPECTED_FAILURE' || status === 'PENDING_REVIEW' ? EXIT_SUCCESS : EXIT_GATE_FAILURE)
                 : result.exitCode,
             outputLines: savingsLine ? [...outputLines, savingsLine] : outputLines,
         };

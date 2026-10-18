@@ -2,7 +2,7 @@
 
 Garda uses the same source, execution and independent case-resolution mechanism in ordinary projects. A project declaration is optional command metadata, not an opt-in universal mode. Existing projects keep their configured commands, permissions and tooling after an update. Mandatory source admission does not require JavaScript syntax, English case names or conventional test directories.
 
-Expected-red admission uses the current authenticated test-only scope, including explicit declared test roles outside conventional directories. A literal command can name its changed test input without a recognized runner grammar; optional runner hints only associate arguments with that source. Current task/preflight, unchanged source before and after execution, nonzero exit and retained output integrity remain required. A native expected-red command must also report an actual failed case in a complete TAP report; process startup errors, assertless exits and opaque output cannot satisfy this observation. Select the actual project's machine-readable reporter when recording expected red. Native capture combines stdout and stderr; all root TAP control records, including trailing aborts, are checked while process diagnostics remain outside the case report. This portable output contract does not restrict ordinary opaque command execution or prove terminal semantic acceptance. If an opaque selector cannot be associated with its source, declare that association instead of guessing it.
+Expected-red admission uses the current authenticated test-only scope, including explicit declared test roles outside conventional directories. A literal command can name its changed test input without a recognized runner grammar; opaque selectors use the same explicit selected-case association as ordinary validation. Garda retains the exact source identities, complete nonzero execution and output before implementation. Opaque results remain unresolved. At the ordinary post-implementation review, the reviewer inspects the retained failure together with current GREEN for every unchanged selected case, distinguishing assertion failure from process or dependency failure, skipped cases and incomplete output. No separate early review is added. Timeout, cancellation, termination signals, truncation, changed sources and later failed or unfinished attempts cannot establish acceptance. Existing complete TAP reports remain supported.
 
 Updating an existing project replaces the exact historical built-in trust-boundary prompt with this source/execution guidance. Custom prompts, titles, disabled rules and explicit scope filters remain intact. Full-suite advice preserves the configured command and never substitutes an invented package-manager fallback.
 
@@ -20,13 +20,27 @@ If an attempted segment fails without an observed process exit, its evidence ret
 
 Where a trust-boundary matrix is required, cite each actual contained source as `path#case selector`. The selector is an opaque project identity; the scenario and expected behavior may use the project's language. Source identities are captured before execution. A bound reference does not prove that an assertion exists or that it ran.
 
-Run the actual focused project command through the task-owned `gate run-intermediate-command --command-source targeted-test --command "<actual project command>"` route selected by `next-step`. Garda retains current preflight/source and process/output identities. Use the project's actual configured command, never a guessed `npm test` command. For expected red, the navigator selects an admitted recipe when present; otherwise it explains the native TAP report requirement without guessing a runner or reporter from filenames or build manifests. Commands using another supported result format can declare it through a recipe. Unfamiliar runners remain eligible through an explicit bounded invocation.
+Run the actual focused project command through the task-owned `gate run-intermediate-command --command-source targeted-test --command "<actual project command>"` route selected by `next-step`. Garda retains current preflight/source and process/output identities. Use the project's actual configured command, never a guessed `npm test` command. For expected red, the navigator selects an admitted recipe when present; otherwise it explains the native command and selected-case binding without guessing a runner or reporter from filenames or build manifests. Both ordinary commands and admitted opaque recipes retain their actual output for independent interpretation.
 
 Current independent code/test reviewers receive each selected case's source, execution record and retained output. They must resolve its behavior with an exact quotation from that output. Missing cases, skipped cases, zero-case output and unresolved semantics cannot close selected obligations merely because the process exited zero. Compile-only and documentation-only work retain their own gates and do not acquire fabricated test results.
 
 Active and completed-task audits inspect those same bound reports with or without a project declaration. Native DONE selects read-only retained inspection with current completion provenance; it does not authorize execution or waive source and report integrity.
 
 ## Declare the existing project command
+
+A recipe may include `report_files`, an array of `{ "path": "reports/result.xml",
+"max_bytes": 1048576 }` declarations for files produced by its command. Paths are
+relative to the repository root, including when the command uses another `cwd`.
+The same bounded capture used by ordinary `--report-file` commands authenticates
+these files against the actual attempt start. Reports remain opaque evidence for
+independent interpretation; declaring a report does not establish a passing case.
+Omitting this field preserves stdout/stderr-only behavior.
+
+For the configured full suite, the agent sets the same declarations through the
+audited `workflow set --full-suite-report-files '<JSON array>'` option before task
+preflight. Use `[]` to clear them. Each actual attempt retains its own capture and
+native start binding. Clean-success stdout cleanup preserves these separate report
+artifacts; review, completion and navigation reject changed or unavailable captures.
 
 For a declared command, matrix references use `path#target-id`; the declaration binds that ID to the command's opaque selector. Every required matrix reference must correspond to a declared target. Reusing a source file does not add execution coverage for another case.
 
@@ -73,7 +87,7 @@ Budgets are explicit: timeout is 100–3,600,000 ms, attempts 1–10, output 1 K
 In a source checkout, use the existing audited setter with a real operator approval and its original valid observation time:
 
 ```text
-node bin/garda.js workflow set --target-root "." --project-validation-contract "project-validation.json" --reason "Admit the existing project validator" --operator-confirmed yes --operator-confirmed-at-utc "<actual valid operator approval UTC>"
+node bin/garda.js workflow set --target-root "." --project-validation-contract "project-validation.json" --operator-confirmed yes --operator-confirmed-at-utc "<actual valid operator approval UTC>"
 node bin/garda.js next-step "<task-id>" --repo-root "."
 ```
 

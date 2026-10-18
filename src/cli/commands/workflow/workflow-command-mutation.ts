@@ -7,8 +7,9 @@ import { buildProtectedControlPlaneManifest, resolveProtectedControlPlaneManifes
 import type { RecoverableFileTransaction } from '../../../core/recoverable-file-transaction';
 import { writeFileAtomically } from '../../../core/filesystem';
 import { validateWorkflowConfig } from '../../../schemas/config-artifacts';
-import { resolveActiveTaskIds } from '../../../core/task-queue/active-task-state';
-import { appendMandatoryTaskEvent, inspectTaskEventFile, readTaskTimelineJsonlEntries } from '../../../gate-runtime/task-events';
+import { bindCommittedWorkflowConfigAudit, captureWorkflowAuditTaskContext, recordWorkflowConfigAuditStage,
+    type WorkflowConfigAuditBinding } from '../../../core/workflow-config-audit';
+export { bindCommittedWorkflowConfigAudit, type WorkflowConfigAuditBinding } from '../../../core/workflow-config-audit';
 import { normalizeWorkflowFileConfig } from './workflow-command-state';
 import { authenticateLocalCommitWorkflowAudit, localCommitReceiptPath } from '../../../core/auth/local-commit-availability';
 import type { TaskTestSelectionAuthority } from './workflow-command-task-test-selection';
@@ -24,48 +25,6 @@ export interface WorkflowConfigAuditWriteOptions {
     targetRoot?: string | null;
     onAuditWritten?: (binding: WorkflowConfigAuditBinding) => void;
     taskTestSelection?: TaskTestSelectionAuthority | null;
-}
-
-export interface WorkflowConfigAuditBinding {
-    auditPath: string;
-    configPath: string;
-    recordSha256: string;
-    taskEntryHashes: Record<string, string>;
-}
-
-function readAuditTaskEntryHash(bundleRoot: string, taskId: string): string | null {
-    const timelinePath = path.join(bundleRoot, 'runtime', 'task-events', `${taskId}.jsonl`);
-    if (!fs.existsSync(timelinePath)
-        || !['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(inspectTaskEventFile(timelinePath, taskId).status)) return null;
-    const entry = [...readTaskTimelineJsonlEntries(timelinePath)].reverse()
-        .find(({ record }) => record?.event_type === 'TASK_MODE_ENTERED');
-    return entry?.record?.outcome === 'PASS' ? sha256Text(entry.rawLine.trim()) : null;
-}
-
-function recordWorkflowConfigAuditStage(
-    bundleRoot: string,
-    binding: WorkflowConfigAuditBinding,
-    committed: boolean
-): void {
-    for (const [taskId, entryHash] of Object.entries(binding.taskEntryHashes)) {
-        if (readAuditTaskEntryHash(bundleRoot, taskId) !== entryHash) {
-            throw new Error(`Workflow audit cannot bind to a changed task cycle for '${taskId}'.`);
-        }
-        appendMandatoryTaskEvent(bundleRoot, taskId,
-            committed ? 'WORKFLOW_CONFIG_MUTATION_AUDITED' : 'WORKFLOW_CONFIG_MUTATION_PREPARED',
-            committed ? 'PASS' : 'INFO',
-            committed ? 'Committed workflow configuration mutation bound to the current task cycle.'
-                : 'Workflow configuration mutation prepared for the current task cycle.', {
-                audit_path: normalizeOutputPath(binding.auditPath),
-                config_path: normalizeOutputPath(binding.configPath),
-                audit_record_sha256: binding.recordSha256,
-                task_mode_entry_sha256: entryHash
-            }, { actor: 'workflow-config-set' });
-    }
-}
-
-export function bindCommittedWorkflowConfigAudit(bundleRoot: string, binding: WorkflowConfigAuditBinding): void {
-    recordWorkflowConfigAuditStage(bundleRoot, binding, true);
 }
 
 export function getWorkflowConfigField(config: WorkflowFileConfigData, fieldPath: string): unknown {
@@ -123,20 +82,6 @@ export function normalizeWorkflowConfigMutationSource(value: unknown): WorkflowC
     throw new Error('--mutation-source must be one of: cli, local-ui, manual.');
 }
 
-function resolveAuditActiveTaskIds(bundleRoot: string, targetRoot: string | null | undefined): string[] {
-    const resolvedTargetRoot = targetRoot && targetRoot.trim()
-        ? targetRoot
-        : path.dirname(bundleRoot);
-    try {
-        return [...resolveActiveTaskIds(resolvedTargetRoot, bundleRoot, [], {
-            includeAmbiguousRuntimeTasks: false,
-            includeStaleRuntimeActiveTasks: false
-        })].sort((left, right) => left.localeCompare(right));
-    } catch {
-        return [];
-    }
-}
-
 function isCommandOnlyConfigChange(beforeText: string, afterText: string): boolean {
     try {
         const before = normalizeWorkflowFileConfig(validateWorkflowConfig(JSON.parse(beforeText)) as WorkflowFileConfigData);
@@ -160,12 +105,8 @@ export function writeWorkflowConfigAuditRecord(
     const auditPath = path.join(bundleRoot, 'runtime', 'workflow-config-audit.jsonl');
     fs.mkdirSync(path.dirname(auditPath), { recursive: true });
     const mutationSource = normalizeWorkflowConfigMutationSource(options.mutationSource);
-    const activeTaskIds = resolveAuditActiveTaskIds(bundleRoot, options.targetRoot);
-    const taskEntryHashes: Record<string, string> = {};
-    for (const taskId of activeTaskIds) {
-        const entryHash = readAuditTaskEntryHash(bundleRoot, taskId);
-        if (entryHash) taskEntryHashes[taskId] = entryHash;
-    }
+    const { activeTaskIds, taskEntryHashes } = captureWorkflowAuditTaskContext(
+        bundleRoot, options.targetRoot?.trim() || path.dirname(bundleRoot));
     if (options.taskTestSelection && (activeTaskIds.length !== 1
         || activeTaskIds[0] !== options.taskTestSelection.task_id
         || taskEntryHashes[activeTaskIds[0]] !== options.taskTestSelection.task_mode_entry_sha256)) {

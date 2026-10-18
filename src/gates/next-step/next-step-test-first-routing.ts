@@ -23,6 +23,7 @@ import { readTaskOwnedIntermediateExecutionEvidence, type NativeIntermediateExec
 import { buildCommand, quoteCommandValue } from './next-step-command-formatters';
 import type { NextStepCommand } from './next-step';
 import type { TaskQueueEntry } from './next-step-task-queue';
+import { currentExpectedRedExecutionEvidence } from '../test-first/expected-red-evidence';
 
 const MAX_TIMELINE_BYTES = 2 * 1024 * 1024;
 const MAX_TIMELINE_EVENTS = 1024;
@@ -300,11 +301,11 @@ export function buildTestFirstExpectedFailureRoute(
     if (recipeRoute) {
         return {
             nextGate: recipeRoute.expectedFailure ? 'implementation' : 'test-first-expected-failure',
-            title: recipeRoute.expectedFailure ? 'Implement the behavior proved red by the declared recipe.'
+            title: recipeRoute.expectedFailure ? 'Implement the behavior after retaining the declared recipe failure.'
                 : 'Record genuine expected-red evidence from the admitted recipe.',
             reason: recipeRoute.violation ?? (recipeRoute.expectedFailure
-                ? 'Current canonical EXPECTED_FAILURE evidence authenticates the declared target, task cycle and exact test-only preflight.'
-                : 'TASK.md declares expected red. Run the current admitted recipe; unexpected pass, unresolved output and superseded evidence cannot advance implementation.'),
+                ? 'Native evidence retains the declared targets and complete nonzero execution. The ordinary post-implementation review must verify assertion semantics alongside current GREEN.'
+                : 'TASK.md declares expected red. Run the current admitted recipe; unexpected pass, interrupted execution and superseded evidence cannot advance implementation.'),
             commands: recipeRoute.expectedFailure || recipeRoute.recipeIds.length === 0 ? [] : [buildCommand(
                 'Record declared recipe expected-red failure', `${options.cliPrefix} gate run-intermediate-command`
                 + ` --task-id ${quoteCommandValue(options.taskId)} --recipe-id ${quoteCommandValue(recipeRoute.recipeIds[0])}`
@@ -322,6 +323,13 @@ export function buildTestFirstExpectedFailureRoute(
                 + 'Materialize and classify the intended test; compile and full-suite remain fail-closed.',
             commands: []
         };
+    }
+    const expectedRed = currentExpectedRedExecutionEvidence(options.repoRoot, options.taskId);
+    if (expectedRed) {
+        return { nextGate: 'implementation',
+            title: 'Implement the behavior after retaining the current failing test execution.',
+            reason: 'Native evidence retains the exact source, selected cases and actual nonzero execution. Assertion semantics remain pending the ordinary independent review after implementation. Preserve these test sources, obtain complete current GREEN, and let the existing review verify both executions before task acceptance.',
+            commands: [] };
     }
     const nativeProgress = inspectNativeExpectedFailureProgress(options);
     if (nativeProgress === 'complete') return null;
@@ -341,9 +349,9 @@ export function buildTestFirstExpectedFailureRoute(
         reason:
             `TASK.md declares ${TEST_FIRST_EXPECTED_RED_MARKER}. No command or reporter is inferred from source names or build manifests. `
             + 'Use gate run-intermediate-command with --command-source targeted-test, the actual project --command, '
-            + '--expect-failure and the current --preflight-path. The command must emit a complete TAP 13/14 report with an actual failed case. '
+            + '--expect-failure and the current --preflight-path. Bind opaque selectors with --selected-case; retained output and exact source identities reach the ordinary independent review after implementation. '
             + 'Alternatively, declare the actual project command, target association and supported result format through an admitted recipe. '
-            + 'Process failure alone cannot advance implementation; current source and retained output authentication remain required.',
+            + 'Process failure alone cannot establish assertion semantics or final acceptance; current source and retained output authentication remain required.',
         commands: []
     };
 }

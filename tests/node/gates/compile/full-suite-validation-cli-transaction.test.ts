@@ -387,7 +387,10 @@ describe('gates/full-suite-validation', () => {
                 execution_mode: 'DIRECT_ARGV',
                 validation_status: 'PASSED',
                 rejection_reason: null,
-                detected_syntax: null
+                detected_syntax: null,
+                command_descriptor: { schema_version: 1, purpose: 'test', invocations: [{
+                    executable: process.execPath.replace(/\\/g, '/'), argv: [helperScript.replace(/\\/g, '/')]
+                }] }
             });
             assert.equal(typeof artifact.duration_ms, 'number');
             assert.equal(artifact.timeout_forecast.recommendation_source, 'history');
@@ -992,7 +995,7 @@ describe('gates/full-suite-validation', () => {
                 rejection_reason: 'SHELL_CONTROL_OPERATOR',
                 detected_syntax: '&&'
             });
-            assert.ok(artifact.violations.some((line: string) => line.includes('npm run <wrapper-script>')));
+            assert.ok(artifact.violations.some((line: string) => line.includes('source-file runner or trusted wrapper script')));
             fs.rmSync(tempDir, { recursive: true, force: true });
         });
 

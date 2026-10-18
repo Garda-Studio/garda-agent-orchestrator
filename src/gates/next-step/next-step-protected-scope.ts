@@ -20,6 +20,8 @@ import {
 import {
     normalizeDirtyWorkspaceBaseline
 } from '../workspace/dirty-worktree-protection';
+import { getAuditedWorkflowConfigChangeProvenance } from '../workflow-config/workflow-config-work-audit';
+import { normalizeWorkflowConfigFileHashes } from '../workflow-config/workflow-config-work-paths';
 
 export interface CurrentGitWorkspaceSnapshotLike {
     changed_files: string[];
@@ -29,6 +31,26 @@ export interface CurrentProtectedScope {
     changedFiles: string[];
     protectedFiles: string[];
     workflowConfigFiles: string[];
+}
+
+function excludeAuditedLifecycleWorkflowFiles(
+    repoRoot: string, scope: CurrentProtectedScope | null, taskMode: Record<string, unknown> | null
+): CurrentProtectedScope | null {
+    const baseline = normalizeWorkflowConfigFileHashes(taskMode?.workflow_config_file_hashes);
+    if (!scope || scope.workflowConfigFiles.length === 0 || !baseline || typeof taskMode?.task_id !== 'string') return scope;
+    const provenance = getAuditedWorkflowConfigChangeProvenance({
+        repoRoot, taskId: taskMode.task_id, changedFiles: scope.workflowConfigFiles,
+        baselineFileHashes: baseline,
+        currentFileHashes: Object.fromEntries(scope.workflowConfigFiles.map(file => [file, fileSha256(path.resolve(repoRoot, file))]))
+    });
+    const migrated = new Set(provenance.records
+        .filter(record => record.mutation_source === 'lifecycle').map(record => record.config_path));
+    const protectedFiles = scope.protectedFiles.filter(file => !migrated.has(file));
+    return protectedFiles.length === 0 ? null : {
+        changedFiles: scope.changedFiles.filter(file => !migrated.has(file)),
+        protectedFiles,
+        workflowConfigFiles: scope.workflowConfigFiles.filter(file => !migrated.has(file))
+    };
 }
 
 function excludeUnchangedTaskModeBaselineFiles(
@@ -267,9 +289,9 @@ export function readCurrentProtectedScopeBeforePreflight(
     if (protectedFiles.length === 0) {
         return null;
     }
-    return excludeUnchangedTaskModeBaselineFiles(repoRoot, {
+    return excludeAuditedLifecycleWorkflowFiles(repoRoot, excludeUnchangedTaskModeBaselineFiles(repoRoot, {
         changedFiles,
         protectedFiles,
         workflowConfigFiles: protectedFiles.filter((entry) => isWorkflowConfigControlPlanePath(entry))
-    }, taskMode);
+    }, taskMode), taskMode);
 }

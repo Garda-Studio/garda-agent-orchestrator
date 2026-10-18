@@ -17,11 +17,14 @@ Supply repeated `--selected-case` JSON values with `source`, `case_id` and
 ```
 
 Literal file operands are candidate observations: they can include generated
-reports. Native case projection requires unchanged before/after/current identity
-for its selected source, so replacing or deleting a generated report does not
-invalidate an unchanged case source. Unobservable automatic operands are retained
-as diagnostics and cannot stand in for a captured source. Explicit source claims
-must pass the source identity checks before execution.
+reports. Current native evidence requires unchanged before/after/current identity
+for every captured input, including the selected source and observed helpers.
+An option name such as `--report` does not establish an output role. Declare a
+mutable report with `--report-file` so its authenticated output capture supplies
+that exception; a changed undeclared captured operand invalidates the evidence
+even when stdout contains a case result. Unobservable automatic operands remain
+diagnostics: they cannot stand in for a captured source or prove input freshness.
+Explicit source claims must pass the source identity checks before execution.
 
 The selector must occur literally in the actual command, either as an argument
 or as the value following `=`. Sources must be contained regular files. Claims
@@ -43,3 +46,42 @@ Exit zero establishes a successful process only. Case outcomes remain
 `UNRESOLVED` until independent review inspects the selected assertion and the
 retained output. Missing or skipped assertions cannot become a semantic PASS
 through selection metadata.
+
+For a command that writes its results to files, include repeated `--report-file`
+JSON declarations with repository-relative `path` and positive `max_bytes` fields:
+
+```powershell
+--report-file '{"path":"reports/purchase.xml","max_bytes":1048576}'
+```
+
+The declaration records existing project output; it does not change the command
+or require a report-format adapter. Garda captures a native start observation,
+then retains freshly written file bytes alongside process output. Up to 32 files
+and 16 MiB in total may be declared. Paths must stay inside the repository and
+cannot replace captured inputs or execution evidence. Missing, stale, linked,
+oversized or foreign replacement files fail the execution evidence. Reviewers
+quote the retained bytes, so a later run overwriting the original report cannot
+rewrite an earlier result. File output still requires independent case semantics.
+
+Focused review checks consume this same captured relation. An unfamiliar bare
+executable, literal option or symbolic selector can supply a focused target
+through its authenticated current execution, without a runner-name or target
+extension list. Metadata alone and an unbound broad command cannot supply that
+authority. Existing shell, containment, mutation, network and interactive-command
+restrictions still apply. A newer failed or unfinished matching attempt blocks
+older focused success; source and retained output are checked again when read.
+
+Directory operands remain recorded as scope observations. A directory run needs
+an explicit source-bound case selector in the actual arguments to qualify as
+focused; a source path, directory path or mode flag cannot supply that selector.
+Historical observations that omitted directory scope retain legacy command
+validation. Source-printing and inspection-only commands do not become focused
+validation through a successful process observation.
+
+Optional admitted recipes apply only to their exact invocation; they do not
+replace unrelated ordinary focused commands. A successful recipe process with
+opaque output remains available as an observation pending independent case
+review. Its canonical result stays `UNRESOLVED` until the existing semantic
+contract is satisfied. Failed, cancelled, timed-out or altered recipe evidence
+cannot supply successful process observation. Recipe working-directory and
+environment requirements remain explicit.

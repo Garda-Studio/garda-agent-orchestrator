@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { redactSensitiveData } from '../../../../core/redaction';
+import { isPlainRecord } from '../../../../core/records';
 import { LIFECYCLE_EVENT_TYPES } from '../../../../gate-runtime/lifecycle-events';
 import { appendTaskEventAsync } from '../../../../gate-runtime/task-events';
 import * as gateHelpers from '../../../../gates/shared/helpers';
@@ -188,6 +189,7 @@ export async function writeArtifactThenEmitMandatoryFullSuiteEvent(
     try {
         await appendFullSuiteValidationLifecycleEvent(repoRoot, eventsRoot, taskId, status, {
             ...details,
+            ...(isPlainRecord(artifact) && artifact.report_attempts !== undefined ? { report_attempts: artifact.report_attempts } : {}),
             artifact_transaction_id: transactionId
         });
     } catch (error: unknown) {

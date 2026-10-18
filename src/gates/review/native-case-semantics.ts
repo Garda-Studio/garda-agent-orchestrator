@@ -2,8 +2,10 @@ import * as path from 'node:path';
 import type { TrustBoundarySourceEvidence } from '../../core/trust-boundary-analysis';
 import { MAX_BOUNDARY_SOURCE_REFERENCES, readBoundarySourceEvidence } from '../../core/trust-boundary-source-evidence';
 import { readValidationFile, validationDigest } from '../../core/project-validation-identity';
+import { MAX_RETAINED_VALIDATION_OUTPUT_BYTES, readRetainedValidationReports } from '../../core/validation-report-evidence';
+import type { ValidationReportEvidenceBinding } from '../../core/validation-report-contract';
 import { isPlainRecord } from '../../core/records';
-import { assertCurrentIntermediateSelection, intermediateInvocationIdentity, isIntermediateSelection, selectionMatchesCase } from '../../core/intermediate-selected-cases';
+import { assertCurrentIntermediateSelection, latestMatchingIntermediateAttempt, selectionMatchesCase } from '../../core/intermediate-selected-cases';
 import type { QualityValidationObligation } from '../quality-checklist/quality-checklist-validation-phases';
 import { validationPaths } from '../project-validation/authority';
 import type { ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
@@ -24,10 +26,14 @@ export interface NativeCaseExecution {
     record_path: string; record_sha256: string; output_path: string; output_sha256: string;
     output_size_bytes: number; output_encoding: 'utf8' | 'base64-streams';
     event_task_sequence: number; scope_content_sha256: string;
+    report_evidence?: ValidationReportEvidenceBinding;
+    expected_failure?: true;
+    exit_code?: number;
 }
 export interface NativeCaseResolution {
     binding_sha256: string; execution_sha256: string; output_sha256: string;
     outcome: 'PASSED' | 'FAILED' | 'SKIPPED' | 'UNRESOLVED';
+    failure_kind?: 'ASSERTION' | 'PROCESS' | 'DEPENDENCY' | 'UNKNOWN';
     evidence_quote: string; reasoning: string;
 }
 
@@ -48,38 +54,16 @@ export function readNativeCaseObligations(options: {
         maxIntermediateCandidatesScanned: 1024 });
     if (!proof.entries.length) throw new NativeCaseExecutionUnavailableError(proof.warnings);
     const events = timeline.bytes.toString('utf8').split(/\r?\n/u).filter(Boolean).map(line => JSON.parse(line)).reverse();
-    const attempts = events.filter(event => ['INTERMEDIATE_COMMAND_RUN', 'INTERMEDIATE_COMMAND_STARTED'].includes(event.event_type)
+    const attempts = events.filter(event => ['INTERMEDIATE_COMMAND_RUN', 'INTERMEDIATE_COMMAND_STARTED', 'TEST_FIRST_EXPECTED_FAILURE_RECORDED'].includes(event.event_type)
         && event.task_id === options.taskId && event.details?.command_source !== 'typecheck'
         && event.details?.preflight_sha256 === options.preflightSha256
         && event.integrity?.task_sequence > (proof.latest_task_mode_sequence ?? Infinity));
-    const invocationIdentities = new Map(attempts.map(event => [event, intermediateInvocationIdentity(event.details.command)]));
-    const starts = new Map<string, (typeof attempts)[number]>();
-    for (const event of attempts) if (event.event_type === 'INTERMEDIATE_COMMAND_STARTED') {
-        if (typeof event.details.execution_id !== 'string' || starts.has(event.details.execution_id))
-            throw new NativeCaseExecutionUnavailableError(['Native command start identity is missing or ambiguous.']);
-        starts.set(event.details.execution_id, event);
-    }
-    const startSequence = (event: (typeof attempts)[number]): number =>
-        starts.get(event.details.execution_id)?.integrity.task_sequence ?? event.integrity.task_sequence;
-    const orderedAttempts = [...attempts].sort((left, right) => startSequence(right) - startSequence(left)
-        || right.integrity.task_sequence - left.integrity.task_sequence);
     const sources = readBoundarySourceEvidence({ repoRoot: options.repoRoot,
         references: options.sources.map(source => ({ filePath: source.source_identity.path, caseId: source.case_id })),
         expectedSources: [...new Map(options.sources.map(source => [source.source_identity.path, source.source_identity])).values()] });
     if (sources.violations.length) throw new Error(sources.violations.join(' '));
     const obligations = sources.sourceEvidence.map(source => {
-        const associatedCommands = new Set(attempts.filter(event => {
-            const selection: unknown = event.details.selected_case_selection ?? event.details.selected_case_binding?.before;
-            return isIntermediateSelection(selection) && selectionMatchesCase(selection, source.source_identity.path, source.case_id);
-        }).map(event => invocationIdentities.get(event)).filter(identity => identity != null));
-        const latestRun = orderedAttempts.find(event => {
-            const selection: unknown = event.details.selected_case_selection ?? event.details.selected_case_binding?.before;
-            // Historical records keep their prior conservative global-currentness contract.
-            const invocationIdentity = invocationIdentities.get(event);
-            return invocationIdentity != null && associatedCommands.has(invocationIdentity)
-                || selection === undefined || !isIntermediateSelection(selection)
-                || selectionMatchesCase(selection, source.source_identity.path, source.case_id);
-        });
+        const latestRun = latestMatchingIntermediateAttempt(attempts, source.source_identity.path, source.case_id);
         const latest = proof.entries.find(entry => entry.command_source !== 'typecheck'
             && entry.event_task_sequence === latestRun?.integrity?.task_sequence);
         if (!latest) throw new NativeCaseExecutionUnavailableError([
@@ -92,13 +76,15 @@ export function readNativeCaseObligations(options: {
             if (!start || start.details.command !== latest.command
                 || start.details.artifact_path !== latestRun.details.artifact_path
                 || validationDigest(start.details.selected_case_selection) !== validationDigest(latest.selected_case_binding.before)
+                || validationDigest(start.details.report_evidence ?? null) !== validationDigest(latest.report_evidence ?? null)
                 || !selectionMatchesCase(latest.selected_case_binding.before, source.source_identity.path, source.case_id)
                 || !latest.selected_case_binding.before.sources.some(identity => validationDigest(identity) === validationDigest(source.source_identity)))
                 throw new NativeCaseExecutionUnavailableError(['Selected execution source/start binding is missing or foreign.']);
         }
         const execution: NativeCaseExecution = { record_path: latest.artifact_path, record_sha256: latest.artifact_sha256,
             output_path: latest.output_artifact_path, output_sha256: latest.output_artifact_sha256,
-            output_size_bytes: latest.output_artifact_size_bytes, output_encoding: 'utf8',
+            output_size_bytes: latest.output_artifact_size_bytes, output_encoding: latest.output_encoding ?? 'utf8',
+            ...(latest.report_evidence ? { report_evidence: latest.report_evidence } : {}),
             event_task_sequence: latest.event_task_sequence, scope_content_sha256: options.scopeContentSha256 };
         const binding = { task_id: options.taskId, preflight_sha256: options.preflightSha256,
             source_identity: source.source_identity, case_id: source.case_id, case_execution: execution };
@@ -127,21 +113,26 @@ function withinCharacterLimit(value: string, maximum: number): boolean {
 
 function resolutionShape(value: unknown): value is NativeCaseResolution {
     if (!isPlainRecord(value) || Object.keys(value).some(key => !['binding_sha256', 'execution_sha256',
-        'output_sha256', 'outcome', 'evidence_quote', 'reasoning'].includes(key))) return false;
+        'output_sha256', 'outcome', 'failure_kind', 'evidence_quote', 'reasoning'].includes(key))) return false;
     return ['binding_sha256', 'execution_sha256', 'output_sha256'].every(key =>
         typeof value[key] === 'string' && HASH.test(value[key] as string))
         && typeof value.outcome === 'string'
         && ['PASSED', 'FAILED', 'SKIPPED', 'UNRESOLVED'].includes(value.outcome)
+        && (value.failure_kind === undefined || value.outcome === 'FAILED'
+            && ['ASSERTION', 'PROCESS', 'DEPENDENCY', 'UNKNOWN'].includes(String(value.failure_kind)))
         && typeof value.evidence_quote === 'string' && withinCharacterLimit(value.evidence_quote, MAX_QUOTE_CHARS)
         && typeof value.reasoning === 'string' && !!value.reasoning.trim() && withinCharacterLimit(value.reasoning, MAX_REASON_CHARS);
 }
 
-function retainedOutput(repoRoot: string, execution: NativeCaseExecution): { text: string; relative: string } {
+export function retainedNativeCaseOutput(repoRoot: string, execution: NativeCaseExecution): { text: string; relative: string } {
     const relative = path.relative(path.resolve(repoRoot), path.resolve(repoRoot, execution.output_path)).replace(/\\/gu, '/');
-    const file = readValidationFile(repoRoot, relative, MAX_CONTROL_BYTES);
+    const file = readValidationFile(repoRoot, relative, MAX_RETAINED_VALIDATION_OUTPUT_BYTES);
     if (file.identity.sha256 !== execution.output_sha256 || file.bytes.length !== execution.output_size_bytes)
         throw new Error('Native case output identity changed.');
-    if (execution.output_encoding === 'utf8') return { text: file.bytes.toString('utf8'), relative };
+    if (execution.output_encoding === 'utf8') {
+        if (execution.report_evidence) throw new Error('Report evidence requires its retained capture envelope.');
+        return { text: file.bytes.toString('utf8'), relative };
+    }
     if (execution.output_encoding !== 'base64-streams') throw new Error('Unknown native output encoding.');
     const streams: unknown = JSON.parse(file.bytes.toString('utf8'));
     if (!isPlainRecord(streams)) throw new Error('Native output streams are malformed.');
@@ -151,24 +142,29 @@ function retainedOutput(repoRoot: string, execution: NativeCaseExecution): { tex
         if (bytes.toString('base64') !== streams[key]) throw new Error('Native output encoding is not canonical.');
         return bytes.toString('utf8');
     });
-    return { text: decoded.join('\n'), relative };
+    const reports = readRetainedValidationReports({ repoRoot, capture: streams.report_capture,
+        declarations: execution.report_evidence?.declarations,
+        expectedStartSha256: execution.report_evidence?.start_sha256 ?? null,
+        evidenceDirectory: execution.report_evidence?.evidence_directory ?? path.posix.dirname(relative), executionViolations: [] });
+    return { text: [...decoded, ...reports.texts].join('\n'), relative };
 }
 
 /** Binding/quotation validation does not interpret a report format or decide case semantics. */
 export function getNativeCaseResolutionViolations(options: {
     obligations: readonly QualityValidationObligation[];
     entries: readonly { obligation_id: string; case_resolution?: unknown }[];
-    repoRoot?: string; requirePassed?: boolean;
+    repoRoot?: string; requirePassed?: boolean; requireExpectedRed?: boolean;
 }): string[] {
     const nativeBindings = options.obligations.filter(binding => binding.case_execution);
     if (nativeBindings.length > MAX_BOUNDARY_SOURCE_REFERENCES) return ['Native case obligations exceed their bound.'];
     if (nativeBindings.length === 0) return [];
-    if (options.requirePassed && !options.repoRoot)
+    if ((options.requirePassed || options.requireExpectedRed) && !options.repoRoot)
         return ['Native case terminal closure requires actual retained source, record and output inspection.'];
     const violations: string[] = [], outputs = new Map<string, { text: string; relative: string; digest: string }>();
     const sources = new Map<string, string>();
     const records = new Map<string, string>();
     const entriesById = new Map<string, typeof options.entries[number][]>();
+    const expectedExecutions = new Set<string>(), assertionFailures = new Set<string>();
     for (const entry of options.entries) {
         const matches = entriesById.get(entry.obligation_id) ?? [];
         matches.push(entry); entriesById.set(entry.obligation_id, matches);
@@ -187,6 +183,16 @@ export function getNativeCaseResolutionViolations(options: {
             violations.push(`${id}: independent case resolution has foreign source/execution/output bindings.`);
         if (options.requirePassed && resolution.outcome !== 'PASSED')
             violations.push(`${id}: selected case remains ${resolution.outcome}; source coverage is not result closure.`);
+        if (options.requirePassed && execution.expected_failure)
+            violations.push(`${id}: expected-red evidence cannot close final GREEN validation.`);
+        if (options.requireExpectedRed) {
+            expectedExecutions.add(execution.record_sha256);
+            if (!execution.expected_failure || !Number.isSafeInteger(execution.exit_code) || Number(execution.exit_code) <= 0)
+                violations.push(`${id}: expected-red semantics require an actual authenticated nonzero execution.`);
+            if (resolution.outcome === 'FAILED' && resolution.failure_kind === 'ASSERTION') assertionFailures.add(execution.record_sha256);
+            else if (resolution.outcome !== 'PASSED')
+                violations.push(`${id}: ${resolution.outcome}/${resolution.failure_kind ?? 'UNKNOWN'} is not a resolved assertion result.`);
+        }
         if (resolution.outcome === 'UNRESOLVED') continue;
         if (!resolution.evidence_quote.trim()) {
             violations.push(`${id}: a resolved outcome requires actual retained output evidence.`); continue;
@@ -204,14 +210,16 @@ export function getNativeCaseResolutionViolations(options: {
                 validationDigest(readValidationFile(options.repoRoot, source.path, MAX_CONTROL_BYTES).identity));
             if (sources.get(source.path) !== expected) throw new Error('Native case source identity changed.');
             const key = validationDigest(execution);
-            if (!outputs.has(key)) outputs.set(key, { ...retainedOutput(options.repoRoot, execution), digest: execution.output_sha256 });
+            if (!outputs.has(key)) outputs.set(key, { ...retainedNativeCaseOutput(options.repoRoot, execution), digest: execution.output_sha256 });
             if (!outputs.get(key)!.text.includes(resolution.evidence_quote))
                 violations.push(`${id}: the independent quotation is absent from actual retained output.`);
         } catch (error) { violations.push(`${id}: retained case evidence rejected: ${String(error)}`); }
     }
+    if (options.requireExpectedRed && [...expectedExecutions].some(execution => !assertionFailures.has(execution)))
+        violations.push('Expected-red review must independently identify an actual assertion failure in each retained failing execution.');
     for (const output of outputs.values()) {
         try {
-            if (readValidationFile(options.repoRoot!, output.relative, MAX_CONTROL_BYTES).identity.sha256 !== output.digest)
+            if (readValidationFile(options.repoRoot!, output.relative, MAX_RETAINED_VALIDATION_OUTPUT_BYTES).identity.sha256 !== output.digest)
                 violations.push('Native case output changed during batched resolution inspection.');
         } catch (error) { violations.push(`Native case output recheck rejected: ${String(error)}`); }
     }

@@ -124,6 +124,7 @@ function buildWorkflowConfigAuditSummary(input: BuildFinalCloseoutArtifactInput)
         repoRoot: input.repoRoot,
         changedFiles: changes.changed_files,
         currentFileHashes: changes.current_file_hashes,
+        baselineFileHashes: changes.baseline_file_hashes,
         taskId: input.taskId
     });
     const status = changes.changed_files.length === 0

@@ -84,7 +84,8 @@ function hasCommandOnlyConfigAuditChain(options: {
     if (!options.baselineHash || !currentHash || currentHash !== options.preflightHash) return false;
     const provenance = getAuditedWorkflowConfigChangeProvenance({
         repoRoot: options.repoRoot, taskId: options.taskId, changedFiles: [options.relativePath],
-        currentFileHashes: { [options.relativePath]: currentHash }
+        currentFileHashes: { [options.relativePath]: currentHash },
+        baselineFileHashes: { [options.relativePath]: options.baselineHash }
     });
     if (!provenance.accepted) return false;
     const auditPath = provenance.records[0].audit_path;

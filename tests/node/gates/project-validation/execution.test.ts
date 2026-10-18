@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import * as childProcess from 'node:child_process';
 import type { ValidationAttempt } from '../../../../src/core/project-validation-contract';
 import { validationDigest } from '../../../../src/core/project-validation-identity';
+import { readValidationAttemptFacts, evaluateValidationAttempt } from '../../../../src/gates/project-validation/result-evaluation';
 import { pathListSha256 } from '../../../../src/gates/shared/canonical-path-list';
 import { buildDefaultWorkflowConfig } from '../../../../src/core/workflow-config';
 import { handleWorkflow } from '../../../../src/cli/commands/workflow-command';
@@ -18,7 +19,7 @@ function execute(root: string, signal?: AbortSignal): Promise<ValidationAttempt>
     const run = (require('../../../../src/gates/project-validation/execution') as { executeValidationRecipe: Execute }).executeValidationRecipe;
     return run({ repoRoot: root, taskId, recipeId: 'recipe', signal });
 }
-function fixture(mode = 'ok', capability = false, alternateTool = false) {
+function fixture(mode = 'ok', capability = false, alternateTool = false, reports = false) {
     const root = createTempRepo(), bundle = path.join(root, 'garda-agent-orchestrator');
     const config = path.join(bundle, 'live/config/workflow-config.json');
     fs.mkdirSync(path.dirname(config), { recursive: true });
@@ -32,6 +33,7 @@ function fixture(mode = 'ok', capability = false, alternateTool = false) {
         'else if(mode==="signal")process.kill(process.pid,"SIGTERM");',
         'else if(mode==="mutate")fs.writeFileSync("../src/app.ts","changed during execution");',
         'else if(mode==="large")process.stdout.write("x".repeat(4096));',
+        'else if(mode==="report")fs.writeFileSync("purchase.result",JSON.stringify({case:"purchase",outcome:"PASSED",actual:125}));',
         'else {process.stdout.write(JSON.stringify({argv:process.argv.slice(2),value:process.env.EXPLICIT}));process.exitCode=mode==="fail"?7:0;}'
     ].join('\n'));
     const declaration = { schema_version: 1, recipes: [{ id: 'recipe', purpose: 'validation',
@@ -40,7 +42,8 @@ function fixture(mode = 'ok', capability = false, alternateTool = false) {
         inputs: [{ path: 'src/app.ts', role: 'source' }, { path: 'specifications/case.unknown', role: 'test' }, { path: 'driver.cjs', role: 'helper' }],
         targets: [{ id: 'case', source: 'specifications/case.unknown', selector: 'literal selector' }], environment: { EXPLICIT: 'value' },
         timeout_ms: mode === 'wait' ? 150 : 5000, max_attempts: 1, max_output_bytes: 1024, max_input_bytes: 65536,
-        required_capabilities: capability ? ['offline'] : [], result_format: 'opaque' }] };
+        required_capabilities: capability ? ['offline'] : [], result_format: 'opaque',
+        ...(reports ? { report_files: [{ path: 'work/purchase.result', max_bytes: 4096 }] } : {}) }] };
     fs.writeFileSync(path.join(root, 'recipes.json'), JSON.stringify(declaration));
     seedInitAnswers(root); seedTaskQueue(root, taskId, 'TODO', 'default', 'Required reviews: code, security, test.', 'Change validation source');
     initializeGitRepo(root);
@@ -56,6 +59,35 @@ function fixture(mode = 'ok', capability = false, alternateTool = false) {
     classify();
     return { root, bundle, preflight, classify, clean: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
+it('retains actual declared file output bound to its recipe start with independent semantics pending', async () => {
+    const f = fixture('report', false, false, true);
+    try {
+        const attempt = await execute(f.root);
+        assert.equal(attempt.exit_code, 0); assert.deepEqual(attempt.violations, []);
+        const facts = readValidationAttemptFacts(f.root, taskId, attempt.attempt_id);
+        assert.equal(facts.decoded[0].length, 0);
+        assert.match(facts.reports.texts[0], /"case":"purchase","outcome":"PASSED","actual":125/);
+        assert.equal((await evaluateValidationAttempt({ repoRoot: f.root, taskId, attemptId: attempt.attempt_id })).status, 'UNRESOLVED');
+        fs.writeFileSync(path.join(f.root, 'work/purchase.result'), 'changed after the native execution');
+        assert.deepEqual(readValidationAttemptFacts(f.root, taskId, attempt.attempt_id).reports, facts.reports);
+        fs.appendFileSync(path.join(f.root, attempt.output_path), 'changed');
+        assert.throws(() => readValidationAttemptFacts(f.root, taskId, attempt.attempt_id), /digest changed/);
+    } finally { f.clean(); }
+});
+
+it('records missing and stale declared reports as actual failed attempts even when the child exits zero', async () => {
+    for (const stale of [false, true]) {
+        const f = fixture('ok', false, false, true);
+        try {
+            if (stale) fs.writeFileSync(path.join(f.root, 'work/purchase.result'), 'old success');
+            const attempt = await execute(f.root);
+            assert.equal(attempt.exit_code, 0); assert.equal(attempt.violations.length, 1);
+            const result = await evaluateValidationAttempt({ repoRoot: f.root, taskId, attemptId: attempt.attempt_id });
+            assert.equal(result.status, 'FAILED');
+            assert.equal(readValidationAttemptFacts(f.root, taskId, attempt.attempt_id).reports.texts.length, 0);
+        } finally { f.clean(); }
+    }
+});
 function retained(root: string, attempt: ValidationAttempt) {
     const output = fs.readFileSync(path.join(root, attempt.output_path));
     const sources = fs.readFileSync(path.join(root, attempt.source_archive_path));

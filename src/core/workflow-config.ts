@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { compactSettingsToConfig } from './compact/setting-definitions';
 import {
     UNCONFIGURED_COMPILE_GATE_COMMAND,
@@ -83,6 +84,7 @@ export type {
 export interface FullSuiteValidationConfig {
     enabled: boolean;
     command: string;
+    report_files?: import('./validation-report-contract').ValidationReportFile[];
     timeout_ms: number;
     timeout_blocker: boolean;
     timeout_retry_count: number;
@@ -455,6 +457,10 @@ function warnWorkflowConfigTemplateFallback(templatePath: string, reason: string
     );
 }
 
+export function resolveWorkflowConfigTemplateDefaults(templateConfig: Record<string, unknown>): WorkflowConfigData {
+    return mergeConfig(buildDefaultWorkflowConfig(), templateConfig) as WorkflowConfigData;
+}
+
 function readWorkflowConfigTemplate(bundleRoot: string): WorkflowConfigData {
     const templatePath = getWorkflowConfigTemplatePath(bundleRoot);
     if (!pathExists(templatePath)) {
@@ -467,7 +473,7 @@ function readWorkflowConfigTemplate(bundleRoot: string): WorkflowConfigData {
             warnWorkflowConfigTemplateFallback(templatePath, 'non_object_template');
             return buildDefaultWorkflowConfig();
         }
-        return mergeConfig(buildDefaultWorkflowConfig(), parsed) as WorkflowConfigData;
+        return resolveWorkflowConfigTemplateDefaults(parsed);
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         warnWorkflowConfigTemplateFallback(templatePath, `invalid_json_template:${message}`);
@@ -786,6 +792,14 @@ export function syncWorkflowConfigWithTemplate(
     const templateConfig = readWorkflowConfigTemplate(bundleRoot);
 
     const nextConfig = mergeWorkflowConfigWithTemplate(templateConfig, existing.config, options);
-    writeJsonFile(workflowConfigPath, nextConfig);
+    if (!isDeepStrictEqual(existing.config, nextConfig)) writeJsonFile(workflowConfigPath, nextConfig);
     return nextConfig;
+}
+
+export function writeWorkflowConfigIfChanged(configPath: string, config: Record<string, unknown>): void {
+    const existing = readWorkflowConfigForMerge(configPath);
+    if (existing.status !== 'present' && existing.status !== 'missing') {
+        throw new Error('Existing workflow-config is unreadable; preserve it and repair before writing settings.');
+    }
+    if (!isDeepStrictEqual(existing.config, config)) writeJsonFile(configPath, config);
 }

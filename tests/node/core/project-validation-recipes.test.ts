@@ -109,7 +109,9 @@ it('uses declared test roles for expected-red eligibility and rejects source-rol
     assert.throws(() => eligibleExpectedRedRecipes([recipe], []), /test-only/u);
     const alias = { ...other, inputs: [{ path: 'specifications/case.unfamiliar', role: 'source' as const }] };
     assert.throws(() => eligibleExpectedRedRecipes([recipe, alias], ['specifications/case.unfamiliar']), /test-only/u);
-    for (const candidates of [[{ ...recipe, result_format: 'opaque' as const }], [recipe, { ...other, result_format: 'opaque' as const }], [other], [parseProjectValidationContract(declaration({ argv: [] })).recipes[0]], [parseProjectValidationContract(declaration({ argv: ['unrelated.any'] })).recipes[0]]]) assert.throws(() => eligibleExpectedRedRecipes(candidates, candidates.flatMap((entry) => entry.inputs.filter((input) => input.role === 'test').map((input) => input.path))), /adapter/u);
+    const opaque = { ...recipe, result_format: 'opaque' as const };
+    assert.deepEqual(eligibleExpectedRedRecipes([opaque], ['specifications/case.unfamiliar']), [opaque]);
+    for (const candidates of [[recipe, { ...other, result_format: 'opaque' as const }], [other], [parseProjectValidationContract(declaration({ argv: [] })).recipes[0]], [parseProjectValidationContract(declaration({ argv: ['unrelated.any'] })).recipes[0]]]) assert.throws(() => eligibleExpectedRedRecipes(candidates, candidates.flatMap((entry) => entry.inputs.filter((input) => input.role === 'test').map((input) => input.path))), /executed changed declared test target/u);
 });
 
 it('rejects case-aliased input identities on Windows', { skip: process.platform !== 'win32' }, () => {

@@ -4,6 +4,7 @@ import { bindContainedDestination } from './contained-filesystem';
 import { parseApprovedValidationContract, readValidationFile, validationDigest } from './project-validation-identity';
 import type { ApprovedValidationContract } from './project-validation-contract';
 import { mergeFileRoleBindings, type FileRoleBindings } from './file-role-bindings';
+import { isAuthenticatedWorkflowMigration } from './auth/local-commit-availability';
 
 const MAXIMUM_CONTROL_BYTES = 8 * 1024 * 1024;
 
@@ -22,7 +23,9 @@ export function readProjectValidationAuthority(repoRoot: string): { approved: Ap
     records.forEach((entry, index) => { if (Array.isArray(entry.changed_fields) && entry.changed_fields.includes('project_validation')) admissionIndex = index; });
     if (records.at(-1)?.after_sha256 !== file.identity.sha256 || admissionIndex < 0
         || records[admissionIndex].project_validation_admission_sha256 !== validationDigest(approved)) throw new Error('Project validation authority lacks an explicit recipe admission and current audited workflow configuration mutation');
-    if (records.slice(admissionIndex).some((entry) => entry.mutation_source !== 'cli' && entry.mutation_source !== 'local-ui')) throw new Error('Unsupported audited workflow configuration mutation origin');
+    if (records.slice(admissionIndex).some((entry) => entry.mutation_source !== 'cli' && entry.mutation_source !== 'local-ui'
+        && !(isAuthenticatedWorkflowMigration(repoRoot, entry)
+            && entry.project_validation_preserved_sha256 === validationDigest(approved)))) throw new Error('Unsupported audited workflow configuration mutation origin');
     for (let index = admissionIndex + 1; index < records.length; index++) {
         const before = records[index].before_sha256;
         if (typeof before !== 'string' || !/^[a-f0-9]{64}$/u.test(before) || before !== records[index - 1].after_sha256) throw new Error('Project validation audited mutation chain is discontinuous');

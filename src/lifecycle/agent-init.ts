@@ -1,14 +1,15 @@
 import * as path from 'node:path';
 import {
-    LEGACY_FULL_SUITE_VALIDATION_COMMAND,
     UNCONFIGURED_COMPILE_GATE_COMMAND,
     UNCONFIGURED_FULL_SUITE_VALIDATION_COMMAND,
     resolveBundleName
 } from '../core/constants';
 import { pathExists, readTextFile, writeTextFile } from '../core/filesystem';
+import { captureWorkflowConfigMigration, recordWorkflowConfigMigration } from '../core/workflow-config-migration';
 import { readJsonFile, writeJsonFile } from '../core/json';
 import { isPlainObject } from '../core/config-merge';
-import { getWorkflowConfigPath, isConfiguredCompileGateCommand, syncWorkflowConfigWithTemplate } from '../core/workflow-config';
+import { getWorkflowConfigPath, isConfiguredCompileGateCommand, syncWorkflowConfigWithTemplate,
+    writeWorkflowConfigIfChanged } from '../core/workflow-config';
 import { validateInitAnswers, serializeInitAnswers } from '../schemas/init-answers';
 import { convertActiveAgentEntrypointFilesToString, getActiveAgentEntrypointFiles } from '../materialization/common';
 import { resolveSuggestedCompileGateCommands, resolveSuggestedFullSuiteValidationCommand } from '../materialization/project-discovery';
@@ -203,7 +204,7 @@ function seedWorkflowConfigCompileGateCommand(targetRoot: string, bundleRoot: st
             command: detectedCommand || UNCONFIGURED_COMPILE_GATE_COMMAND
         }
     };
-    writeJsonFile(workflowConfigPath, nextConfig);
+    writeWorkflowConfigIfChanged(workflowConfigPath, nextConfig);
     syncCompileGateCommandGuidance(bundleRoot, detectedCommand || UNCONFIGURED_COMPILE_GATE_COMMAND);
 }
 
@@ -223,13 +224,7 @@ function seedWorkflowConfigFullSuiteCommand(
     const currentCommand = normalizeOptionalCommand(existingSection.command);
     const previousSeededCommand = normalizeOptionalCommand(previousState?.LastSeededFullSuiteCommand);
     const shouldReplaceCommand = !currentCommand
-        || currentCommand === UNCONFIGURED_FULL_SUITE_VALIDATION_COMMAND
-        || (previousSeededCommand !== null && currentCommand === previousSeededCommand)
-        || (
-            previousSeededCommand === null
-            && currentCommand === LEGACY_FULL_SUITE_VALIDATION_COMMAND
-            && detectedCommand !== LEGACY_FULL_SUITE_VALIDATION_COMMAND
-        );
+        || currentCommand === UNCONFIGURED_FULL_SUITE_VALIDATION_COMMAND;
 
     const nextCommand = shouldReplaceCommand ? detectedCommand : currentCommand;
     const nextConfig = {
@@ -242,7 +237,7 @@ function seedWorkflowConfigFullSuiteCommand(
     };
 
     const nextSeededCommand = shouldReplaceCommand ? detectedCommand : previousSeededCommand;
-    writeJsonFile(workflowConfigPath, nextConfig);
+    writeWorkflowConfigIfChanged(workflowConfigPath, nextConfig);
     return nextSeededCommand;
 }
 
@@ -463,6 +458,7 @@ export function runAgentInit(options: RunAgentInitOptions): AgentInitResult {
         CollectedVia: 'AGENT_INIT_PROMPT.md',
         ActiveAgentFiles: convertActiveAgentEntrypointFilesToString(normalizedActiveFiles)
     });
+    const workflowMigration = captureWorkflowConfigMigration(normalizedTargetRoot);
     writeJsonFile(resolvedInitAnswersPath, serializedAnswers);
 
     installRunner({
@@ -524,6 +520,9 @@ export function runAgentInit(options: RunAgentInitOptions): AgentInitResult {
         ProjectMemoryWarnings: projectMemoryResult.warnings
     }) as AgentInitState;
     const statePath = writeAgentInitState(normalizedTargetRoot, state);
+    recordWorkflowConfigMigration(normalizedTargetRoot, workflowMigration, {
+        initializeUnconfiguredCommands: true
+    });
     writeProtectedControlPlaneManifest(normalizedTargetRoot);
 
     return {

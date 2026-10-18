@@ -1,5 +1,6 @@
 import type { FullSuiteValidationPlacement } from '../../core/workflow-config';
 import type { RawOutputRetentionEvidence } from '../../gate-runtime/output-log-retention';
+import type { FullSuiteReportAttempt } from './full-suite-report-evidence';
 import type { OutOfScopeFailurePolicy } from '../../core/full-suite-validation-config';
 
 export {
@@ -178,6 +179,7 @@ export interface FullSuiteValidationResult {
     command_provenance?: FullSuiteCommandProvenance;
     cycle_binding?: FullSuiteValidationCycleBinding;
     failure_evidence?: FullSuiteFailureEvidence | null;
+    report_attempts?: FullSuiteReportAttempt[];
 }
 
 export interface FullSuiteFailureEvidenceCopiedLog {

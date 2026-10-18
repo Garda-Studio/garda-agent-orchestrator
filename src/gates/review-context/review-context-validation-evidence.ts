@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { inspectFullSuiteReports, type FullSuiteReportAttempt } from '../full-suite/full-suite-report-evidence';
 import { readBoundedTaskPlanFile } from '../../core/task-plan-read';
 import { type FullSuiteValidationPlacement } from '../../core/workflow-config';
 import { isFullSuiteNotRequiredForDocsOnlyScope } from '../full-suite/full-suite-validation-results';
@@ -40,6 +41,7 @@ export interface ReviewContextFullSuiteValidationEvidence {
     duration_human: string | null;
     output_artifact_path: string | null;
     output_retention: Record<string, unknown> | null;
+    report_attempts?: FullSuiteReportAttempt[];
     compact_summary: string[];
     violations: string[];
     warnings: string[];
@@ -338,6 +340,8 @@ export function getReviewContextFullSuiteValidationViolations(options: {
         duration_human: normalizeNullableString(rawContextEvidence.duration_human),
         output_artifact_path: normalizeNullablePath(rawContextEvidence.output_artifact_path),
         output_retention: asPlainRecord(rawContextEvidence.output_retention),
+        ...(Array.isArray(rawContextEvidence.report_attempts)
+            ? { report_attempts: rawContextEvidence.report_attempts as FullSuiteReportAttempt[] } : {}),
         compact_summary: toStringArray(rawContextEvidence.compact_summary, { trimValues: true }),
         violations: toStringArray(rawContextEvidence.violations, { trimValues: true }),
         warnings: toStringArray(rawContextEvidence.warnings, { trimValues: true }),
@@ -557,6 +561,10 @@ export function buildFullSuiteValidationEvidence(options: FullSuiteValidationEvi
             mismatchReason = 'Full-suite validation artifact is missing cycle_binding.';
         }
 
+        const reports = ['PASSED', 'WARNED'].includes(String(raw.status))
+            ? inspectFullSuiteReports({ repoRoot: options.repoRoot, taskId: String(options.taskId),
+                reviewsRoot: path.dirname(artifactPath), artifact: raw, declarations: fullSuiteValidationConfig.report_files })
+            : null;
         const artifactFreshness = cycleBindingValid === true
             ? 'current'
             : cycleBindingValid === false
@@ -581,6 +589,7 @@ export function buildFullSuiteValidationEvidence(options: FullSuiteValidationEvi
             duration_human: formatDurationMsForReviewContext(durationMs),
             output_artifact_path: normalizeNullablePath(raw.output_artifact_path),
             output_retention: asPlainRecord(raw.output_retention),
+            ...(reports?.attempts.length ? { report_attempts: reports.attempts } : {}),
             compact_summary: toStringArray(raw.compact_summary, { trimValues: true }),
             violations: toStringArray(raw.violations, { trimValues: true }),
             warnings: toStringArray(raw.warnings, { trimValues: true }),
@@ -658,6 +667,10 @@ export function buildFullSuiteValidationEvidenceMarkdown(evidence: ReviewContext
         `- Matches current compile gate: ${evidence.matches_current_compile_gate == null ? 'unknown' : String(evidence.matches_current_compile_gate)}`,
         `- Cycle binding valid: ${evidence.cycle_binding_valid == null ? 'unknown' : String(evidence.cycle_binding_valid)}`
     ];
+    for (const attempt of evidence.report_attempts ?? []) {
+        lines.push(`- Retained report attempt ${attempt.attempt}: ${attempt.output_path} (sha256=${attempt.output_sha256}). `
+            + 'Inspect report_capture.reports content_base64; these are retained bytes, independent of later mutable output files.');
+    }
     if (
         evidence.required_for_review === true
         && (evidence.status === 'PASSED' || evidence.status === 'WARNED')
