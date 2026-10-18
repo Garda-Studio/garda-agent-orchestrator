@@ -14,6 +14,7 @@ import { inspectTaskEventFile, withTaskTimelineReadSnapshot } from '../../gate-r
 import {
     captureTaskTimelineReadSnapshotSha256, assertTaskTimelineReadSnapshotCurrent
 } from '../../gate-runtime/timeline/task-timeline-read-snapshot';
+import { readNativeAuditedNoOpSourceAcceptance, type NativeChildAuditReader } from './task-audit-summary-no-op-source';
 
 const MAX_PROOF_INPUT_BYTES = 8 * 1024 * 1024;
 const GIT_OBJECT_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
@@ -29,12 +30,14 @@ export interface NativeChildGitSource {
     parentCommitSha: string | null;
 }
 
-export interface NativeChildSourceAcceptance extends NativeChildGitSource {
+export type NativeChildSourceAcceptance = NativeChildGitSource & {
     taskId: string;
     artifactPath: string;
     artifactSha256: string;
-    postCommitAudit: Record<string, unknown>;
-}
+} & ({ postCommitAudit: Record<string, unknown>; noOpAcceptanceAudit?: never }
+    | { postCommitAudit?: never; noOpAcceptanceAudit: Record<string, unknown> });
+
+class MissingNativeChildSourceAcceptanceError extends Error {}
 
 function assertNativeSourceAuthentication(root: string, proof: Record<string, unknown>): void {
     if (!resolveLocalCommitAvailability(root).enabled) {
@@ -67,7 +70,7 @@ function readCurrentNativeSourceEvent(file: string, taskId: string): Record<stri
         throw new Error(`Native child ${taskId} source acceptance requires an intact task timeline.`);
     }
     if (!selected) {
-        throw new Error(`Native child ${taskId} is missing TASK_SOURCE_COMMIT_ACCEPTED evidence; an audited no-op alone does not prove source acceptance.`);
+        throw new MissingNativeChildSourceAcceptanceError(`Native child ${taskId} is missing TASK_SOURCE_COMMIT_ACCEPTED evidence; an audited no-op alone does not prove source acceptance.`);
     }
     if (selected.schema_version !== 2 || selected.outcome !== 'PASS'
         || selected.task_id !== taskId || !isPlainRecord(selected.details) || duplicate) {
@@ -116,7 +119,19 @@ function validateNativeSourceRecord(
 }
 
 /** Child source corroboration does not discharge parent graph, memory, WIP or suite obligations. */
-export function readNativeChildSourceAcceptance(repoRoot: string, taskId: string): NativeChildSourceAcceptance {
+export function readNativeChildSourceAcceptance(
+    repoRoot: string, taskId: string, readAudit?: NativeChildAuditReader
+): NativeChildSourceAcceptance {
+    try { return readNativeCommittedChildSourceAcceptance(repoRoot, taskId); }
+    catch (error: unknown) {
+        if (!(error instanceof MissingNativeChildSourceAcceptanceError) || !readAudit) throw error;
+        return readNativeAuditedNoOpSourceAcceptance(repoRoot, taskId, {
+            readAudit, verifyComposition: readNativeSourceCompositionProof, validateGit: validateNativeChildGitSource
+        });
+    }
+}
+
+function readNativeCommittedChildSourceAcceptance(repoRoot: string, taskId: string): NativeChildSourceAcceptance {
     if (!isCanonicalTaskId(taskId)) throw new Error('Native child source acceptance requires an exact canonical task ID.');
     const root = fs.realpathSync.native(repoRoot), eventsRoot = joinOrchestratorPath(root, 'runtime/task-events');
     if (!resolveLocalCommitAvailability(root).enabled) {

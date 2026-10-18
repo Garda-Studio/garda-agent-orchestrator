@@ -19,6 +19,7 @@ import { getTaskModeEvidence } from '../task-mode/task-mode-evidence';
 import { inspectCompletionGateFinalizationLock } from '../locks/finalization-lock';
 import { getShellSmokeEvidence } from '../diagnostics/shell-smoke-preflight';
 import type { DecomposedParentRequiredProof } from './task-audit-summary-types';
+import type { NativeChildAuditReader } from './task-audit-summary-no-op-source';
 
 type Event = Readonly<Record<string, unknown>>;
 const ORIGINAL_SUITE_EVENTS = new Set(['FULL_SUITE_VALIDATION_PASSED', 'FULL_SUITE_VALIDATION_WARNED', 'FULL_SUITE_VALIDATION_FAILED']);
@@ -187,6 +188,7 @@ function qualifyCommands(root: string, taskId: string, original: Event[], events
 interface ParentReadScope {
     rootTaskId: string;
     sourceEpoch: string | null;
+    readChildAudit?: NativeChildAuditReader;
     rechecks: Array<() => void>;
     proofRechecks: Array<() => void>;
 }
@@ -211,9 +213,9 @@ function readParentObligations(repoRoot: string, taskId: string, scope: ParentRe
             // Native strict decisions already require parent-derived child IDs.
             const nested = readParentObligations(root, child, scope);
             if (!nested) {
-                const source = readNativeChildSourceAcceptance(root, child), observed = JSON.stringify(source);
+                const source = readNativeChildSourceAcceptance(root, child, scope.readChildAudit), observed = JSON.stringify(source);
                 scope.proofRechecks.push(() => {
-                    if (JSON.stringify(readNativeChildSourceAcceptance(root, child)) !== observed) {
+                    if (JSON.stringify(readNativeChildSourceAcceptance(root, child, scope.readChildAudit)) !== observed) {
                         throw new Error('Native child SOURCE proof changed during qualification: ' + child);
                     }
                 });
@@ -281,9 +283,11 @@ function readParentObligations(repoRoot: string, taskId: string, scope: ParentRe
 }
 
 /** Qualified observations are not parent acceptance and never mutate original evidence. */
-export function readNativeParentObligationProofs(repoRoot: string, taskId: string): NativeParentObligationProofs | null {
+export function readNativeParentObligationProofs(
+    repoRoot: string, taskId: string, readChildAudit?: NativeChildAuditReader
+): NativeParentObligationProofs | null {
     const root = path.resolve(repoRoot), id = assertValidTaskId(taskId);
-    const scope: ParentReadScope = { rootTaskId: id, sourceEpoch: null, rechecks: [], proofRechecks: [] };
+    const scope: ParentReadScope = { rootTaskId: id, sourceEpoch: null, readChildAudit, rechecks: [], proofRechecks: [] };
     const proof = readParentObligations(root, id, scope);
     if (proof?.status === 'QUALIFIED') {
         try {

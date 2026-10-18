@@ -33,7 +33,7 @@ function compositionReader(): (root: string, options: Record<string, unknown>) =
     return read;
 }
 
-async function compositionFixture(grant = true) {
+async function compositionFixture(grant = true, completedNoOp = false, noOpClassification = 'ALREADY_DONE') {
     const root = createTempRepo(); roots.push(root);
     const taskId = 'T-COMPOSITION-1', bundle = path.join(root, 'garda-agent-orchestrator');
     seedTaskQueue(root, taskId);
@@ -57,6 +57,28 @@ async function compositionFixture(grant = true) {
         operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() });
     appendMandatoryTaskEvent(bundle, taskId, 'TASK_MODE_ENTERED', 'PASS', 'Isolated composition fixture.', {});
     const command = `node ${script} test.js ${target}`;
+    if (completedNoOp) {
+        const preflight = path.join(bundle, 'runtime/reviews', taskId + '-preflight.json');
+        fs.mkdirSync(path.dirname(preflight), { recursive: true });
+        fs.writeFileSync(preflight, JSON.stringify({ task_id: taskId, zero_diff_guard: { zero_diff_detected: true } }));
+        appendMandatoryTaskEvent(bundle, taskId, 'PREFLIGHT_CLASSIFIED', 'PASS', 'Isolated no-op preflight.', { output_path: preflight });
+        const noOpPath = path.join(path.dirname(preflight), taskId + '-no-op.json');
+        const artifact = { event_source: 'record-no-op', task_id: taskId, status: 'PASSED', outcome: 'PASS',
+            classification: noOpClassification, reason: 'Existing implementation is qualified in this isolated fixture.',
+            preflight_path: preflight.replace(/\\/gu, '/'), preflight_sha256: digest(fs.readFileSync(preflight)) };
+        fs.writeFileSync(noOpPath, JSON.stringify(artifact));
+        appendMandatoryTaskEvent(bundle, taskId, 'NO_OP_RECORDED', 'PASS', 'Isolated native no-op binding.', {
+            ...artifact, artifact_path: noOpPath.replace(/\\/gu, '/'), artifact_sha256: digest(fs.readFileSync(noOpPath)) });
+        appendMandatoryTaskEvent(bundle, taskId, 'FULL_SUITE_VALIDATION_PASSED', 'PASS', 'Isolated original suite contract.', {
+            command, coverage_contract_sha256: 'a'.repeat(64) });
+        appendMandatoryTaskEvent(bundle, taskId, 'COMPLETION_GATE_PASSED', 'PASS', 'Isolated completed child.', {});
+        const queue = path.join(root, 'TASK.md');
+        fs.writeFileSync(queue, fs.readFileSync(queue, 'utf8').split('\n').map(line => {
+            const fields = line.split('|');
+            if (fields[1]?.trim() === taskId) { fields[2] = ' DONE '; return fields.join('|'); }
+            return line;
+        }).join('\n'));
+    }
     const run = () => runIntermediateCommandCommand({ repoRoot: root, taskId, command, commandSource: 'targeted-test',
         coverageContractSha256: 'a'.repeat(64), timeoutMs: 10000 });
     assert.equal((await run()).exitCode, 0);
@@ -190,7 +212,7 @@ describe('native final-source composition proof', () => {
     });
 });
 
-function childReader(): (root: string, taskId: string) => Record<string, unknown> {
+function childReader(): (root: string, taskId: string, audit?: (id: string) => Record<string, unknown>) => Record<string, unknown> {
     const read = require(modulePath).readNativeChildSourceAcceptance;
     assert.equal(typeof read, 'function', 'native child source-proof reader must exist');
     return read;
@@ -274,6 +296,100 @@ function gitFixture() {
         treeSha: proofGit(f.root, ['rev-parse', 'HEAD^{tree}']), parentCommitSha };
     return { ...f, source };
 }
+
+describe('native audited no-op child source qualification', () => {
+    const passAudit = (taskId: string) => ({ task_id: taskId, status: 'PASS', integrity_status: 'PASS', blockers: [],
+        point_in_time_snapshot: { status: 'STABLE' } });
+
+    it('qualifies a completed native no-op only through its exact post-completion signed suite composition', async () => {
+        const f = await compositionFixture(true, true), read = childReader();
+        const before = fs.readFileSync(f.eventFile), result = read(f.root, f.taskId, passAudit);
+        assert.equal(result.commitSha, f.options.source.commitSha);
+        assert.equal(result.treeSha, f.options.source.treeSha);
+        assert.equal(result.artifactSha256, f.options.artifactSha256);
+        assert.equal(result.postCommitAudit, undefined);
+        assert.equal((result.noOpAcceptanceAudit as Record<string, unknown>).status, 'PASS');
+        assert.deepEqual(read(f.root, f.taskId, passAudit), result);
+        assert.deepEqual(fs.readFileSync(f.eventFile), before);
+        assert.throws(() => read(f.root, f.taskId), /missing.*TASK_SOURCE_COMMIT_ACCEPTED/);
+    });
+
+    it('rejects a no-op whose current native audit is blocked or belongs to another task', async () => {
+        const f = await compositionFixture(true, true), read = childReader();
+        assert.throws(() => read(f.root, f.taskId, id => ({ ...passAudit(id), status: 'BLOCKED' })), /audit.*PASS/iu);
+        assert.throws(() => read(f.root, f.taskId, () => passAudit('T-FOREIGN')), /audit.*PASS/iu);
+    });
+
+    it('rejects dirty, unsigned, stale and failed command evidence without changing child history', async () => {
+        const f = await compositionFixture(true, true), read = childReader();
+        fs.appendFileSync(path.join(f.root, f.script), '\n// dirty source\n');
+        assert.throws(() => read(f.root, f.taskId, passAudit), /clean|Git|composition/iu);
+        proofGit(f.root, ['checkout', '--', f.script]);
+        alterCompositionFixture(f, record => { delete record.local_commit_authentication; }, false);
+        assert.throws(() => read(f.root, f.taskId, passAudit), /authentication/iu);
+        fs.writeFileSync(f.file, f.bytes);
+        fs.writeFileSync(f.eventFile, f.events.map(event => JSON.stringify(event)).join('\n') + '\n');
+        appendMandatoryTaskEvent(f.bundle, f.taskId, 'COMPLETION_GATE_PASSED', 'PASS', 'New isolated completion boundary.', {});
+        assert.throws(() => read(f.root, f.taskId, passAudit), /post-completion/iu);
+        const failed = await f.run();
+        assert.equal(failed.exitCode, 7);
+        assert.throws(() => read(f.root, f.taskId, passAudit), /successful|composition|post-completion/iu);
+    });
+
+    it('does not fall back from malformed SOURCE evidence to an accepted no-op', async () => {
+        const f = await compositionFixture(true, true);
+        appendMandatoryTaskEvent(f.bundle, f.taskId, 'TASK_SOURCE_COMMIT_ACCEPTED', 'PASS', 'Invalid isolated SOURCE record.', {});
+        assert.throws(() => childReader()(f.root, f.taskId, passAudit), /workspace|Git|source event/iu);
+    });
+
+    it('rejects changed no-op inputs, discarded children and non-DONE queue rows', async () => {
+        const f = await compositionFixture(true, true), read = childReader();
+        const noOpPath = path.join(f.bundle, 'runtime/reviews', f.taskId + '-no-op.json');
+        const original = fs.readFileSync(noOpPath);
+        assert.throws(() => read(f.root, f.taskId, id => {
+            fs.writeFileSync(noOpPath, '{}');
+            return passAudit(id);
+        }), /audited no-op|inputs changed/iu);
+        fs.writeFileSync(noOpPath, original);
+        const queue = path.join(f.root, 'TASK.md'), queueBytes = fs.readFileSync(queue);
+        fs.writeFileSync(queue, queueBytes.toString().replace('| DONE |', '| TODO |'));
+        assert.throws(() => read(f.root, f.taskId, passAudit), /DONE.*queue row/iu);
+        fs.writeFileSync(queue, queueBytes);
+        appendMandatoryTaskEvent(f.bundle, f.taskId, 'TASK_DISCARDED', 'INFO', 'Isolated operator discard.', {});
+        assert.throws(() => read(f.root, f.taskId, passAudit), /audited no-op/iu);
+    });
+
+    it('rejects finalization acquired during current child audit reconstruction', async () => {
+        const f = await compositionFixture(true, true);
+        const locks = require('../../../../src/gates/locks/finalization-lock');
+        assert.throws(() => childReader()(f.root, f.taskId, id => {
+            mock.method(locks, 'inspectCompletionGateFinalizationLock', () => ({ active: true }));
+            return passAudit(id);
+        }), /finalization.*unresolved/iu);
+    });
+
+    for (const classification of ['AUDIT_ONLY', 'NO_CHANGES_REQUIRED']) {
+        it(`qualifies the existing native ${classification} no-op classification with the same source requirements`, async () => {
+            const f = await compositionFixture(true, true, classification);
+            const result = childReader()(f.root, f.taskId, passAudit);
+            assert.equal((result.noOpAcceptanceAudit as Record<string, unknown>).no_op_classification, classification);
+            assert.equal(result.commitSha, f.options.source.commitSha);
+            assert.equal(result.postCommitAudit, undefined);
+        });
+    }
+
+    it('rejects SOURCE inserted between strict absence inspection and no-op reconstruction', async () => {
+        const f = await compositionFixture(true, true);
+        const noOpApi = require('../../../../src/gates/task-audit/task-audit-summary-no-op-source');
+        const originalRead = noOpApi.readNativeAuditedNoOpSourceAcceptance;
+        mock.method(noOpApi, 'readNativeAuditedNoOpSourceAcceptance', (root: string, id: string, services: unknown) => {
+            appendMandatoryTaskEvent(f.bundle, f.taskId, 'TASK_SOURCE_COMMIT_ACCEPTED', 'PASS',
+                'Adversarial isolated SOURCE insertion before no-op reconstruction.', {});
+            return originalRead(root, id, services);
+        });
+        assert.throws(() => childReader()(f.root, f.taskId, passAudit), /SOURCE.*appeared/iu);
+    });
+});
 
 describe('forward-only native child source acceptance', () => {
     it('distinguishes missing source acceptance from an invalid timeline without accepting no-op claims', async () => {

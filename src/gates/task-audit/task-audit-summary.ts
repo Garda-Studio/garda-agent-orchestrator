@@ -147,7 +147,8 @@ function buildNativeAggregateAudit(options: TaskAuditSummaryOptions, events: Rea
     if (!taskMetadata && !parentMarker) return null;
     let proof: ReturnType<typeof readNativeParentObligationProofs> = null;
     const blockers: TaskAuditSummaryResult['blockers'] = [];
-    try { proof = readNativeParentObligationProofs(repoRoot, taskId); }
+    try { proof = readNativeParentObligationProofs(repoRoot, taskId,
+        childTaskId => buildTaskAuditSummary({ repoRoot, taskId: childTaskId })); }
     catch (error: unknown) { blockers.push({ gate: 'decomposed-parent-obligations', reason: error instanceof Error ? error.message : String(error) }); }
     const canonicalParentMarker = Boolean(proof?.native.facts.decomposition || proof?.native.facts.completion);
     if (!parentMarker && !canonicalParentMarker && proof && !isTaskQueueDecomposedStatus(proof.native.facts.taskStatus)) return null;
