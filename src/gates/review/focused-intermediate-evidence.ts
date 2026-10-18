@@ -4,13 +4,13 @@ import * as path from 'node:path';
 import { splitCommandLine } from '../../cli/gate-cli/gates-subprocess';
 import { isPlainRecord } from '../../core/records';
 import { readValidationFile } from '../../core/project-validation-identity';
+import { assertCurrentIntermediateSelection, type IntermediateSelectionBinding } from '../../core/intermediate-selected-cases';
 import { inspectTaskEventFile } from '../../gate-runtime/task-events';
 import {
     readOrderedTaskEvents,
     type TaskAuditEvent
 } from '../task-audit/task-audit-summary-lifecycle';
 import {
-    fileSha256,
     isPathRealpathInsideRoot,
     normalizePath,
     resolvePathInsideRepo
@@ -46,6 +46,8 @@ export interface FocusedIntermediateEvidenceEntry {
     output_artifact_size_bytes: number;
     focused_test_paths: string[];
     scope_content_sha256?: string;
+    execution_id?: string;
+    selected_case_binding?: IntermediateSelectionBinding;
 }
 
 export interface FocusedIntermediateEvidenceSelection {
@@ -197,12 +199,16 @@ function readBoundIntermediateCommandEvidence(options: {
         return { entry: null, violation: 'event is missing valid task sequence or timestamp binding' };
     }
     const artifactPath = resolveRequiredArtifact(artifactPathText, options.repoRoot, options.reviewsRoot);
-    if (!artifactPath || fileSha256(artifactPath) !== artifactSha256) {
+    if (!artifactPath) {
         return { entry: null, violation: 'intermediate command artifact is missing, outside reviews root, or hash-mismatched' };
     }
     let record: Record<string, unknown>;
     try {
-        const parsed = JSON.parse(fs.readFileSync(artifactPath, 'utf8')) as unknown;
+        const artifact = readValidationFile(options.repoRoot, normalizePath(path.relative(options.repoRoot, artifactPath)),
+            MAX_NATIVE_PREFLIGHT_BYTES);
+        if (artifact.identity.sha256 !== artifactSha256)
+            return { entry: null, violation: 'intermediate command artifact is hash-mismatched' };
+        const parsed = JSON.parse(artifact.bytes.toString('utf8')) as unknown;
         if (!isPlainRecord(parsed)) {
             return { entry: null, violation: 'intermediate command artifact must be a JSON object' };
         }
@@ -220,6 +226,18 @@ function readBoundIntermediateCommandEvidence(options: {
     const expectedPreflightSha256 = String(options.expectedPreflightSha256 || '').trim().toLowerCase();
     const expectedCoverageContractSha256 = String(options.expectedCoverageContractSha256 || '').trim().toLowerCase();
     const expectedScope = options.expectedScopeContentSha256;
+    let selectionBinding: IntermediateSelectionBinding | undefined;
+    if (options.executionOnly && record.selected_case_binding !== undefined) {
+        try {
+            // File operands include generated reports. Their observations are facts, not immutable source declarations.
+            // The native case projection validates each selected source; canonical preflight scope remains mandatory below.
+            assertCurrentIntermediateSelection(options.repoRoot, record.selected_case_binding, []);
+            if (JSON.stringify(record.selected_case_binding) !== JSON.stringify(details.selected_case_binding)
+                || typeof record.execution_id !== 'string' || !record.execution_id
+                || record.execution_id !== details.execution_id) throw new Error('Selected execution event binding differs.');
+            selectionBinding = record.selected_case_binding;
+        } catch (error) { return { entry: null, violation: `selected execution binding rejected: ${String(error)}` }; }
+    }
     if (expectedScope && (!isSha256Hex(expectedScope)
         || record.timed_out !== false || record.cancelled !== false || record.expected_failure === true
         || record.scope_content_sha256_before !== expectedScope || record.scope_content_sha256_after !== expectedScope
@@ -279,10 +297,8 @@ function readBoundIntermediateCommandEvidence(options: {
         return { entry: null, violation: 'focused evidence preflight or coverage binding does not match the current review context' };
     }
     try {
-        if (
-            fs.statSync(outputArtifactPath).size !== recordOutputArtifactSizeBytes
-            || fileSha256(outputArtifactPath) !== recordOutputArtifactSha256
-        ) {
+        const output = readValidationFile(options.repoRoot, normalizePath(path.relative(options.repoRoot, outputArtifactPath)));
+        if (output.bytes.length !== recordOutputArtifactSizeBytes || output.identity.sha256 !== recordOutputArtifactSha256) {
             return { entry: null, violation: 'output artifact size or sha256 no longer matches the recorded evidence' };
         }
     } catch {
@@ -312,6 +328,7 @@ function readBoundIntermediateCommandEvidence(options: {
             output_artifact_sha256: recordOutputArtifactSha256,
             output_artifact_size_bytes: recordOutputArtifactSizeBytes,
             focused_test_paths: focusedTestPaths,
+            ...(selectionBinding ? { selected_case_binding: selectionBinding, execution_id: String(record.execution_id) } : {}),
             ...(expectedScope ? { scope_content_sha256: expectedScope } : {})
         },
         violation: null

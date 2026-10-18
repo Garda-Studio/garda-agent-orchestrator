@@ -9,13 +9,18 @@ import { buildNativeCaseReviewCoverageContract } from '../../../../src/gates/rev
 import { validateReviewFindingsReport } from '../../../../src/gates/review/review-findings-schema';
 import { buildReviewerFindingsOutputTemplateJson } from '../../../../src/gates/review/reviewer-findings-prompt-contract';
 import { buildReviewRemediationReviewContract } from '../../../../src/gates/review-remediation/review-remediation-review-contract';
+import { captureIntermediateSelection, completeIntermediateSelection,
+    assertCurrentIntermediateSelection } from '../../../../src/core/intermediate-selected-cases';
+import { inspectValidationCommand } from '../../../../src/core/validation-command-contract';
 import { createTempRepo, initializeGitRepo, loadTaskEntryRulePack, runEnterTaskMode,
     runHandshakeForTask, runShellSmokeForTask, seedInitAnswers, seedTaskQueue } from '../../cli/commands/gates/preflight/gates-preflight-fixtures';
 
 const TASK = 'T-NATIVE-CASE', SOURCE = 'custom/Кейс.case', CASE = 'Оплата::rejectsEmptyPayment';
 const XML = `<результат случай="${CASE}">успех</результат>`;
+const SECOND_SOURCE = 'custom/Другой.case', SECOND_CASE = 'Возврат::rejectsInvalidRefund';
+const SECOND_XML = `<результат случай="${SECOND_CASE}">успех</результат>`;
 
-async function fixture(missingCase = false) {
+async function fixture(missingCase = false, withSecondCase = false, symbolic = false, concurrent = false) {
     const repoRoot = createTempRepo();
     seedTaskQueue(repoRoot, TASK); seedInitAnswers(repoRoot); initializeGitRepo(repoRoot);
     const entry = runEnterTaskMode({ repoRoot, taskId: TASK, entryMode: 'EXPLICIT_TASK_EXECUTION',
@@ -25,6 +30,22 @@ async function fixture(missingCase = false) {
     fs.mkdirSync(path.join(repoRoot, 'custom'));
     fs.writeFileSync(path.join(repoRoot, SOURCE), [
         "const assert = require('node:assert/strict');",
+        ...(concurrent ? [
+            "const fs = require('node:fs');",
+            "const hold = process.argv.find(value => value === '--hold-a' || value === '--hold-b');",
+            "if (hold) {",
+            "  const root = 'garda-agent-orchestrator/runtime/tmp/case-overlap/';",
+            "  fs.mkdirSync(root, { recursive: true }); fs.writeFileSync(root + hold + '.ready', 'ready');",
+            "  const deadline = Date.now() + 30000;",
+            "  while (!fs.existsSync(root + hold + '.release')) {",
+            "    if (Date.now() > deadline) throw new Error('release timed out');",
+            "    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);",
+            "  }",
+            "}",
+            "const report = process.argv.find(value => value.startsWith('--report='));",
+            `if (report) { fs.writeFileSync(report.slice(9), ${JSON.stringify(XML)});`,
+            "  if (process.argv.includes('--delete-report')) fs.unlinkSync(report.slice(9)); }"
+        ] : []),
         "function pay(value) { if (!value) throw new Error('empty payment'); return value; }",
         "function rejectsEmptyPayment() { assert.throws(() => pay(''), /empty payment/); }",
         ...(missingCase ? ["console.log('runner ready');"] : [
@@ -32,21 +53,209 @@ async function fixture(missingCase = false) {
             'rejectsEmptyPayment();', `console.log(${JSON.stringify(XML)});`
         ]), ''
     ].join('\n'));
+    if (withSecondCase) fs.writeFileSync(path.join(repoRoot, SECOND_SOURCE), [
+        "const assert = require('node:assert/strict');",
+        `assert.equal(process.argv.at(-1), ${JSON.stringify(SECOND_CASE)});`,
+        "assert.throws(() => { throw new Error('invalid refund'); }, /invalid refund/);",
+        `console.log(${JSON.stringify(SECOND_XML)});`, ''
+    ].join('\n'));
+    const helper = 'custom/Runner.unfamiliar';
+    if (symbolic) fs.writeFileSync(path.join(repoRoot, helper), [
+        "const assert = require('node:assert/strict');",
+        `assert.equal(process.argv[2], ${JSON.stringify(`--история=${CASE}`)});`,
+        `process.argv.push(${JSON.stringify(CASE)});`, "require('./Кейс.case');", ''
+    ].join('\n'));
     const preflightPath = path.join(repoRoot, 'garda-agent-orchestrator/runtime/reviews/native-preflight.json');
     const classified = runClassifyChangeCommand({ repoRoot, taskId: TASK, taskIntent: 'Native case source and report',
-        changedFiles: [SOURCE], outputPath: preflightPath });
+        changedFiles: [SOURCE, ...(withSecondCase ? [SECOND_SOURCE] : []), ...(symbolic ? [helper] : [])], outputPath: preflightPath });
     assert.ok(fs.existsSync(preflightPath), classified.outputText);
     const preflightFile = fs.readFileSync(preflightPath);
     const preflight = JSON.parse(preflightFile.toString('utf8'));
+    const command = symbolic ? `node ${helper} --история=${CASE}` : `node ${SOURCE} --select ${CASE}`;
+    const selectedCases = symbolic ? [{ source: SOURCE, case_id: CASE, selector: CASE }] : undefined;
     const result = await runIntermediateCommandCommand({ repoRoot, taskId: TASK, commandSource: 'targeted-test',
-        command: `node ${SOURCE} --select ${CASE}`, preflightPath });
+        command, selectedCases, preflightPath });
     assert.equal(result.exitCode, 0, result.outputLines.join('\n'));
     const sources = [{ source_identity: readValidationFile(repoRoot, SOURCE).identity,
         case_id: CASE, selector: CASE, syntax_status: 'UNRESOLVED' as const }];
     const obligations = readNativeCaseObligations({ repoRoot, taskId: TASK, preflightPath,
         preflightSha256: validationDigest(preflightFile), scopeContentSha256: preflight.metrics.scope_content_sha256, sources });
-    return { repoRoot, obligations, preflightPath, preflight, preflightSha256: validationDigest(preflightFile), sources };
+    return { repoRoot, obligations, preflightPath, preflight, preflightSha256: validationDigest(preflightFile), sources,
+        command, selectedCases };
 }
+
+test('newer overlapping failed or unfinished attempts supersede an older late successful completion', async t => {
+    const f = await fixture(false, false, false, true);
+    t.after(() => fs.rmSync(f.repoRoot, { recursive: true, force: true }));
+    const root = path.join(f.repoRoot, 'garda-agent-orchestrator/runtime/tmp/case-overlap');
+    const ready = async (name: string) => {
+        const deadline = Date.now() + 15000;
+        while (!fs.existsSync(path.join(root, name + '.ready'))) {
+            assert.ok(Date.now() < deadline, 'Real child must publish readiness before overlap assertions.');
+            await new Promise(resolve => setTimeout(resolve, 20));
+        }
+    };
+    const release = (name: string) => fs.writeFileSync(path.join(root, name + '.release'), 'release');
+    const run = (argument: string) => runIntermediateCommandCommand({ repoRoot: f.repoRoot, taskId: TASK,
+        commandSource: 'targeted-test', command: `node ${SOURCE} ${argument} ${CASE}`, preflightPath: f.preflightPath });
+    const inspect = () => readNativeCaseObligations({ repoRoot: f.repoRoot, taskId: TASK,
+        preflightPath: f.preflightPath, preflightSha256: f.preflightSha256,
+        scopeContentSha256: f.preflight.metrics.scope_content_sha256, sources: f.sources });
+    for (const scenario of ['failed', 'unfinished']) await t.test(scenario, async () => {
+        fs.rmSync(root, { recursive: true, force: true });
+        const earlier = run('--hold-a'); let later: ReturnType<typeof run> | undefined;
+        try {
+            await ready('--hold-a');
+            if (scenario === 'failed') {
+                const failed = await runIntermediateCommandCommand({ repoRoot: f.repoRoot, taskId: TASK,
+                    commandSource: 'targeted-test', command: `node ${SOURCE} --select invalid`, preflightPath: f.preflightPath });
+                assert.equal(failed.exitCode, 1);
+            } else { later = run('--hold-b'); await ready('--hold-b'); }
+            release('--hold-a');
+            assert.equal((await earlier).exitCode, 0);
+            assert.throws(inspect, /latest matching|successful execution/u);
+            if (later) { release('--hold-b'); assert.equal((await later).exitCode, 0); assert.equal(inspect().length, 1); }
+        } finally {
+            fs.mkdirSync(root, { recursive: true }); release('--hold-a'); release('--hold-b');
+            await Promise.allSettled([earlier, ...(later ? [later] : [])]);
+        }
+    });
+});
+
+test('keeps generated file operands separate from immutable selected-source identities', async t => {
+    const f = await fixture(false, false, false, true);
+    t.after(() => fs.rmSync(f.repoRoot, { recursive: true, force: true }));
+    const report = 'garda-agent-orchestrator/runtime/tmp/generated-case-report.xml';
+    fs.mkdirSync(path.dirname(path.join(f.repoRoot, report)), { recursive: true });
+    for (const explicit of [false, true]) for (const remove of [false, true]) {
+        fs.writeFileSync(path.join(f.repoRoot, report), explicit ? Buffer.alloc(8 * 1024 * 1024 + 1) : 'previous report');
+        const result = await runIntermediateCommandCommand({ repoRoot: f.repoRoot, taskId: TASK,
+            commandSource: 'targeted-test',
+            command: `node ${SOURCE} --report=${report} ${remove ? '--delete-report ' : ''}--select ${CASE}`,
+            selectedCases: explicit ? [{ source: SOURCE, case_id: CASE, selector: CASE }] : undefined,
+            preflightPath: f.preflightPath });
+        assert.equal(result.exitCode, 0, result.outputLines.join('\n'));
+        assert.equal(fs.existsSync(path.join(f.repoRoot, report)), !remove);
+        if (!remove) assert.equal(fs.readFileSync(path.join(f.repoRoot, report), 'utf8'), XML);
+        const obligations = readNativeCaseObligations({ repoRoot: f.repoRoot, taskId: TASK,
+            preflightPath: f.preflightPath, preflightSha256: f.preflightSha256,
+            scopeContentSha256: f.preflight.metrics.scope_content_sha256, sources: f.sources });
+        assert.equal(obligations.length, 1);
+        assert.equal(obligations[0].result_status, 'UNRESOLVED');
+        assert.ok(fs.readFileSync(obligations[0].case_execution!.output_path, 'utf8').includes(XML));
+    }
+});
+
+test('binds a symbolic selector without runner, option or source-extension grammar and supersedes a metadata-omitting cancellation', async t => {
+    const f = await fixture(false, false, true);
+    t.after(() => fs.rmSync(f.repoRoot, { recursive: true, force: true }));
+    const execution = f.obligations[0].case_execution!;
+    const record = JSON.parse(fs.readFileSync(execution.record_path, 'utf8'));
+    assert.equal(record.command, f.command);
+    assert.equal(record.invocations[0].argv.at(-1), `--история=${CASE}`);
+    assert.deepEqual(record.selected_case_binding.before.cases, f.selectedCases);
+    assert.deepEqual(record.selected_case_binding.before.sources, record.selected_case_binding.after);
+    const inspect = () => readNativeCaseObligations({ repoRoot: f.repoRoot, taskId: TASK,
+        preflightPath: f.preflightPath, preflightSha256: f.preflightSha256,
+        scopeContentSha256: f.preflight.metrics.scope_content_sha256, sources: f.sources });
+    const controller = new AbortController(); controller.abort();
+    const repeatedCommand = `node  "custom/Runner.unfamiliar" "--история=${CASE}"`;
+    assert.deepEqual(inspectValidationCommand(repeatedCommand, 'test').descriptor,
+        inspectValidationCommand(f.command, 'test').descriptor);
+    const cancelled = await runIntermediateCommandCommand({ repoRoot: f.repoRoot, taskId: TASK,
+        commandSource: 'targeted-test', command: repeatedCommand, preflightPath: f.preflightPath, signal: controller.signal });
+    assert.notEqual(cancelled.exitCode, 0);
+    assert.throws(inspect, /latest matching|successful execution/u);
+    const unavailable = await runIntermediateCommandCommand({ repoRoot: f.repoRoot, taskId: TASK,
+        commandSource: 'targeted-test', command: `garda-missing-runner-t3261 --история=${CASE}`,
+        selectedCases: f.selectedCases, preflightPath: f.preflightPath });
+    assert.notEqual(unavailable.exitCode, 0);
+    const unavailableRecord = unavailable.outputLines.find(line => line.startsWith('ArtifactPath: '))!.slice(14);
+    const retained = JSON.parse(fs.readFileSync(unavailableRecord, 'utf8'));
+    assert.equal(retained.invocations[0].exitCode, null);
+    assert.equal(typeof retained.invocations[0].executionError, 'string');
+    assert.ok(fs.readFileSync(retained.output_artifact, 'utf8').trim());
+    assert.throws(inspect, /latest matching|successful execution/u);
+});
+
+test('selected-source metadata rejects foreign, duplicate, oversized and linked inputs before any execution claim', t => {
+    const repoRoot = createTempRepo(); t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(repoRoot, 'custom')); fs.writeFileSync(path.join(repoRoot, SOURCE), 'source bytes\n');
+    const descriptor = inspectValidationCommand(`widget-check --чужая-опция=${CASE}`, 'test').descriptor!;
+    const claim = { source: SOURCE, case_id: CASE, selector: CASE };
+    const capture = (input: unknown) => captureIntermediateSelection(repoRoot, descriptor, input);
+    const selection = capture([claim]);
+    assert.equal(selection.sources[0].path, SOURCE);
+    assertCurrentIntermediateSelection(repoRoot, completeIntermediateSelection(repoRoot, selection));
+    assert.throws(() => capture([{ ...claim, source: '../outside.case' }]), /contained/u);
+    assert.throws(() => capture([{ ...claim, source: 'custom/missing.case' }]));
+    assert.throws(() => capture([{ ...claim, extra: true }]), /requires/u);
+    assert.throws(() => capture([claim, claim]), /ambiguous/u);
+    assert.throws(() => capture(Array.from({ length: 129 }, () => claim)), /bound/u);
+    fs.appendFileSync(path.join(repoRoot, SOURCE), 'changed\n');
+    assert.throws(() => assertCurrentIntermediateSelection(repoRoot,
+        completeIntermediateSelection(repoRoot, selection)), /changed/u);
+    const linked = path.join(repoRoot, 'custom/linked.case'); fs.linkSync(path.join(repoRoot, SOURCE), linked);
+    assert.throws(() => capture([claim]), /identity|regular|link/u);
+});
+
+test('rejects absent selectors and replaced symbolic source identities while preserving actual successful process facts', async t => {
+    const f = await fixture(false, false, true);
+    t.after(() => fs.rmSync(f.repoRoot, { recursive: true, force: true }));
+    await assert.rejects(runIntermediateCommandCommand({ repoRoot: f.repoRoot, taskId: TASK,
+        commandSource: 'targeted-test', command: f.command, preflightPath: f.preflightPath,
+        selectedCases: [{ source: SOURCE, case_id: CASE, selector: 'not-in-argv' }] }), /selector.*absent/u);
+    const execution = f.obligations[0].case_execution!;
+    const before = fs.readFileSync(path.join(f.repoRoot, SOURCE));
+    fs.unlinkSync(path.join(f.repoRoot, SOURCE)); fs.writeFileSync(path.join(f.repoRoot, SOURCE), before);
+    assert.throws(() => readNativeCaseObligations({ repoRoot: f.repoRoot, taskId: TASK,
+        preflightPath: f.preflightPath, preflightSha256: f.preflightSha256,
+        scopeContentSha256: f.preflight.metrics.scope_content_sha256, sources: f.sources }), /execution|source|identity/u);
+    const record = JSON.parse(fs.readFileSync(execution.record_path, 'utf8'));
+    assert.equal(record.exit_code, 0);
+    assert.equal(record.status, 'PASSED');
+    assert.ok(fs.readFileSync(execution.output_path, 'utf8').includes(XML));
+});
+
+test('binds each case to its latest matching native execution and preserves unrelated successful cases after failure', async t => {
+    const f = await fixture(false, true);
+    t.after(() => fs.rmSync(f.repoRoot, { recursive: true, force: true }));
+    const firstRecord = f.obligations[0].case_execution!.record_path;
+    const second = await runIntermediateCommandCommand({ repoRoot: f.repoRoot, taskId: TASK,
+        commandSource: 'targeted-test', command: `node ${SECOND_SOURCE} --select ${SECOND_CASE}`,
+        preflightPath: f.preflightPath });
+    assert.equal(second.exitCode, 0, second.outputLines.join('\n'));
+    const secondSource = { source_identity: readValidationFile(f.repoRoot, SECOND_SOURCE).identity,
+        case_id: SECOND_CASE, selector: SECOND_CASE, syntax_status: 'UNRESOLVED' as const };
+    const read = (sources = [...f.sources, secondSource]) => readNativeCaseObligations({
+        repoRoot: f.repoRoot, taskId: TASK, preflightPath: f.preflightPath,
+        preflightSha256: f.preflightSha256, scopeContentSha256: f.preflight.metrics.scope_content_sha256, sources });
+    const obligations = read();
+    assert.equal(obligations[0].case_execution!.record_path, firstRecord);
+    assert.notEqual(obligations[1].case_execution!.record_path, firstRecord);
+    const entries = obligations.map((binding, index) => ({
+        obligation_id: `VALIDATION-${binding.id.toUpperCase()}`, case_resolution: {
+            binding_sha256: validationDigest(binding), execution_sha256: binding.case_execution!.record_sha256,
+            output_sha256: binding.case_execution!.output_sha256, outcome: 'PASSED',
+            evidence_quote: index === 0 ? XML : SECOND_XML,
+            reasoning: 'The exact selected source and case assertion completed in its own retained native invocation.'
+        }
+    }));
+    assert.deepEqual(getNativeCaseResolutionViolations({ repoRoot: f.repoRoot, obligations, entries,
+        requirePassed: true }), []);
+    const failed = await runIntermediateCommandCommand({ repoRoot: f.repoRoot, taskId: TASK,
+        commandSource: 'targeted-test', command: `node ${SOURCE} --select invalid-selection`,
+        preflightPath: f.preflightPath });
+    assert.notEqual(failed.exitCode, 0);
+    const timeline = fs.readFileSync(path.join(f.repoRoot,
+        `garda-agent-orchestrator/runtime/task-events/${TASK}.jsonl`), 'utf8').trim().split(/\r?\n/u).map(line => JSON.parse(line));
+    const failure = timeline.at(-1);
+    assert.equal(failure.event_type, 'INTERMEDIATE_COMMAND_RUN');
+    assert.equal(failure.details.exit_code, 1);
+    assert.equal(failure.details.command, `node ${SOURCE} --select invalid-selection`);
+    assert.equal(read([secondSource])[0].case_execution!.record_path, obligations[1].case_execution!.record_path);
+    assert.throws(() => read(f.sources), /latest|failed|successful|execution/iu);
+});
 
 test('rejects forged and changed native case evidence for opaque XML and Unicode sources', async t => {
     const f = await fixture(); t.after(() => fs.rmSync(f.repoRoot, { recursive: true, force: true }));

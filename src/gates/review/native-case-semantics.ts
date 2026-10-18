@@ -3,6 +3,7 @@ import type { TrustBoundarySourceEvidence } from '../../core/trust-boundary-anal
 import { MAX_BOUNDARY_SOURCE_REFERENCES, readBoundarySourceEvidence } from '../../core/trust-boundary-source-evidence';
 import { readValidationFile, validationDigest } from '../../core/project-validation-identity';
 import { isPlainRecord } from '../../core/records';
+import { assertCurrentIntermediateSelection, intermediateInvocationIdentity, isIntermediateSelection, selectionMatchesCase } from '../../core/intermediate-selected-cases';
 import type { QualityValidationObligation } from '../quality-checklist/quality-checklist-validation-phases';
 import { validationPaths } from '../project-validation/authority';
 import type { ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
@@ -43,23 +44,62 @@ export function readNativeCaseObligations(options: {
         reviewsRoot: path.join(root, '../reviews'), eventsRoot: root, inspection: options.inspection,
         expectedPreflightPath: options.preflightPath, expectedPreflightSha256: options.preflightSha256,
         expectedScopeContentSha256: options.scopeContentSha256, maxTimelineBytes: MAX_CONTROL_BYTES,
-        maxTimelineEvents: 10_000 });
-    const latest = proof.entries.find(entry => entry.command_source !== 'typecheck');
-    if (!latest) throw new NativeCaseExecutionUnavailableError(proof.warnings);
-    const latestRun = timeline.bytes.toString('utf8').split(/\r?\n/u).filter(Boolean).map(line => JSON.parse(line))
-        .reverse().find(event => event.event_type === 'INTERMEDIATE_COMMAND_RUN'
-            && event.details?.command_source !== 'typecheck' && event.details?.preflight_sha256 === options.preflightSha256);
-    if (latestRun && latestRun.integrity?.task_sequence !== latest.event_task_sequence)
-        throw new NativeCaseExecutionUnavailableError(['The latest current command is not an authenticated successful execution.']);
+        maxTimelineEvents: 10_000, maxEntries: MAX_BOUNDARY_SOURCE_REFERENCES,
+        maxIntermediateCandidatesScanned: 1024 });
+    if (!proof.entries.length) throw new NativeCaseExecutionUnavailableError(proof.warnings);
+    const events = timeline.bytes.toString('utf8').split(/\r?\n/u).filter(Boolean).map(line => JSON.parse(line)).reverse();
+    const attempts = events.filter(event => ['INTERMEDIATE_COMMAND_RUN', 'INTERMEDIATE_COMMAND_STARTED'].includes(event.event_type)
+        && event.task_id === options.taskId && event.details?.command_source !== 'typecheck'
+        && event.details?.preflight_sha256 === options.preflightSha256
+        && event.integrity?.task_sequence > (proof.latest_task_mode_sequence ?? Infinity));
+    const invocationIdentities = new Map(attempts.map(event => [event, intermediateInvocationIdentity(event.details.command)]));
+    const starts = new Map<string, (typeof attempts)[number]>();
+    for (const event of attempts) if (event.event_type === 'INTERMEDIATE_COMMAND_STARTED') {
+        if (typeof event.details.execution_id !== 'string' || starts.has(event.details.execution_id))
+            throw new NativeCaseExecutionUnavailableError(['Native command start identity is missing or ambiguous.']);
+        starts.set(event.details.execution_id, event);
+    }
+    const startSequence = (event: (typeof attempts)[number]): number =>
+        starts.get(event.details.execution_id)?.integrity.task_sequence ?? event.integrity.task_sequence;
+    const orderedAttempts = [...attempts].sort((left, right) => startSequence(right) - startSequence(left)
+        || right.integrity.task_sequence - left.integrity.task_sequence);
     const sources = readBoundarySourceEvidence({ repoRoot: options.repoRoot,
         references: options.sources.map(source => ({ filePath: source.source_identity.path, caseId: source.case_id })),
         expectedSources: [...new Map(options.sources.map(source => [source.source_identity.path, source.source_identity])).values()] });
     if (sources.violations.length) throw new Error(sources.violations.join(' '));
-    const execution: NativeCaseExecution = { record_path: latest.artifact_path, record_sha256: latest.artifact_sha256,
-        output_path: latest.output_artifact_path, output_sha256: latest.output_artifact_sha256,
-        output_size_bytes: latest.output_artifact_size_bytes, output_encoding: 'utf8',
-        event_task_sequence: latest.event_task_sequence, scope_content_sha256: options.scopeContentSha256 };
     const obligations = sources.sourceEvidence.map(source => {
+        const associatedCommands = new Set(attempts.filter(event => {
+            const selection: unknown = event.details.selected_case_selection ?? event.details.selected_case_binding?.before;
+            return isIntermediateSelection(selection) && selectionMatchesCase(selection, source.source_identity.path, source.case_id);
+        }).map(event => invocationIdentities.get(event)).filter(identity => identity != null));
+        const latestRun = orderedAttempts.find(event => {
+            const selection: unknown = event.details.selected_case_selection ?? event.details.selected_case_binding?.before;
+            // Historical records keep their prior conservative global-currentness contract.
+            const invocationIdentity = invocationIdentities.get(event);
+            return invocationIdentity != null && associatedCommands.has(invocationIdentity)
+                || selection === undefined || !isIntermediateSelection(selection)
+                || selectionMatchesCase(selection, source.source_identity.path, source.case_id);
+        });
+        const latest = proof.entries.find(entry => entry.command_source !== 'typecheck'
+            && entry.event_task_sequence === latestRun?.integrity?.task_sequence);
+        if (!latest) throw new NativeCaseExecutionUnavailableError([
+            `The latest matching command for ${source.source_identity.path} / ${source.case_id} is not an authenticated successful execution.`]);
+        if (latest.selected_case_binding) {
+            assertCurrentIntermediateSelection(options.repoRoot, latest.selected_case_binding, [source.source_identity.path]);
+            const start = attempts.find(event => event.event_type === 'INTERMEDIATE_COMMAND_STARTED'
+                && event.details.execution_id === latest.execution_id
+                && event.integrity.task_sequence < latest.event_task_sequence);
+            if (!start || start.details.command !== latest.command
+                || start.details.artifact_path !== latestRun.details.artifact_path
+                || validationDigest(start.details.selected_case_selection) !== validationDigest(latest.selected_case_binding.before)
+                || !selectionMatchesCase(latest.selected_case_binding.before, source.source_identity.path, source.case_id)
+                || !latest.selected_case_binding.before.sources.some(identity => validationDigest(identity) === validationDigest(source.source_identity)))
+                throw new NativeCaseExecutionUnavailableError(['Selected execution source/start binding is missing or foreign.']);
+        }
+        const execution: NativeCaseExecution = { record_path: latest.artifact_path, record_sha256: latest.artifact_sha256,
+            output_path: latest.output_artifact_path, output_sha256: latest.output_artifact_sha256,
+            output_size_bytes: latest.output_artifact_size_bytes, output_encoding: 'utf8',
+            event_task_sequence: latest.event_task_sequence, scope_content_sha256: options.scopeContentSha256 };
         const binding = { task_id: options.taskId, preflight_sha256: options.preflightSha256,
             source_identity: source.source_identity, case_id: source.case_id, case_execution: execution };
         return { id: validationDigest(binding), recipe_id: 'native-task-command', target_id: source.case_id,

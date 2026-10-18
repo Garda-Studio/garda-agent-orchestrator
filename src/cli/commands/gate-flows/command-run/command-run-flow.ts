@@ -2,7 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { inspectValidationCommand, type ValidationCommandDescriptor } from '../../../../core/validation-command-contract';
-import { appendTaskEventAsync } from '../../../../gate-runtime/task-events-io';
+import { appendMandatoryTaskEventAsync, appendTaskEventAsync } from '../../../../gate-runtime/task-events-io';
+import { captureIntermediateSelection, completeIntermediateSelection,
+    type IntermediateSelectionBinding } from '../../../../core/intermediate-selected-cases';
+import type { CommandInvocationExecution } from '../../../gate-cli/gates-subprocess';
 import { isPlainRecord } from '../../../../core/records';
 import { runGit } from '../../../../core/git-helpers';
 import { TASK_QUEUE_FILENAME } from '../../../../core/orchestration-constants';
@@ -45,6 +48,7 @@ export interface RunIntermediateCommandOptions {
     recipeId?: unknown;
     command?: unknown;
     commandSource?: unknown;
+    selectedCases?: unknown;
     artifactPath?: unknown;
     outputPath?: unknown;
     timeoutMs?: unknown;
@@ -105,6 +109,9 @@ interface IntermediateCommandRecord {
     scope_content_sha256_before?: string;
     scope_content_sha256_after?: string | null;
     scope_observation_error?: string;
+    execution_id?: string;
+    selected_case_binding?: IntermediateSelectionBinding;
+    invocations?: CommandInvocationExecution[];
 }
 
 interface IntermediateCompositionAuthority {
@@ -584,6 +591,8 @@ async function persistCommandEvent(
             exit_code: record.exit_code,
             duration_ms: record.duration_ms,
             source_composition_sha256: createHash('sha256').update(JSON.stringify(record.source_composition)).digest('hex'),
+            ...(record.selected_case_binding ? { execution_id: record.execution_id,
+                selected_case_binding: record.selected_case_binding } : {}),
             ...(expectedFailure ? {
                 expected_failure: true,
                 recorded_status: status,
@@ -651,6 +660,12 @@ export async function runIntermediateCommandCommand(
         };
     }
 
+    if (options.selectedCases !== undefined && !nativeScopeBefore.scope_content_sha256)
+        return { exitCode: EXIT_GATE_FAILURE, outputLines: formatRejectedLines(
+            'Selected cases require the current authenticated native preflight.', commandSource, command) };
+    const selection = nativeScopeBefore.scope_content_sha256
+        ? captureIntermediateSelection(repoRoot, commandAdmission.descriptor, options.selectedCases) : null;
+    const executionId = selection ? randomUUID() : undefined;
     const artifacts = resolveArtifacts(
         repoRoot,
         taskId,
@@ -663,13 +678,22 @@ export async function runIntermediateCommandCommand(
     try {
         const authorityBefore = observeCompositionAuthority(repoRoot);
         const sourceBefore = observeIntermediateSource(repoRoot);
+        if (selection) await appendMandatoryTaskEventAsync(gateHelpers.joinOrchestratorPath(repoRoot, ''), taskId,
+            'INTERMEDIATE_COMMAND_STARTED', 'STARTED', 'Native intermediate command selection captured before execution.', {
+                command_source: commandSource, command, execution_id: executionId,
+                artifact_path: artifacts.artifactPath, selected_case_selection: selection,
+                preflight_path: preflightPath ? gateHelpers.normalizePath(preflightPath) : undefined,
+                preflight_sha256: preflightSha256, scope_content_sha256_before: nativeScopeBefore.scope_content_sha256
+            }, { actor: 'gate', eventsRoot: normalizeOptionalString(options.eventsRoot) });
         const startedAt = Date.now();
         const result = await executeCommandAsync(command, {
             cwd: repoRoot,
             timeoutMs,
-            signal: options.signal
+            signal: options.signal,
+            captureInvocations: true
         });
         const durationMs = Date.now() - startedAt;
+        const selectionBinding = selection ? completeIntermediateSelection(repoRoot, selection) : undefined;
         const nativeScopeAfter = nativeScopeBefore.scope_content_sha256
             ? observeNativeIntermediateScope(repoRoot, taskId, preflightPath) : null;
         const sourceComposition = bindIntermediateSourceComposition(sourceBefore, observeIntermediateSource(repoRoot));
@@ -722,6 +746,8 @@ export async function runIntermediateCommandCommand(
             exit_code: result.exitCode,
             timed_out: result.timedOut,
             cancelled: result.cancelled,
+            invocations: result.invocations,
+            ...(selectionBinding ? { execution_id: executionId, selected_case_binding: selectionBinding } : {}),
             ...(expectFailure ? {
                 expected_failure: true as const,
                 test_scope_sha256: expectedFailureBinding!.testScopeSha256,
