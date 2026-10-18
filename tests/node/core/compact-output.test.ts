@@ -53,6 +53,22 @@ test('sink failure stops the producer and reports incomplete capture', async () 
     assert.notEqual(result.exitCode, 0);
 });
 
+test('cancellation before sink delivery preserves output without a sink error', async () => {
+    const controller = new AbortController();
+    let writes = 0;
+    const result = await spawnStreamed(process.execPath, ['-e', "process.stdout.write('ready');setInterval(()=>{},1000)"], {
+        signal: controller.signal,
+        timeoutMs: 5000,
+        onStdout: () => controller.abort(),
+        outputSink: { async write() { writes++; } }
+    });
+    assert.equal(result.cancelled, true);
+    assert.equal(result.timedOut, false);
+    assert.equal(result.stdout, 'ready');
+    assert.equal(writes, 0);
+    assert.equal(result.sinkError, undefined);
+});
+
 test('sink timeout still finishes after child exit', async () => {
     const result = await spawnStreamed(process.execPath, ['-e', "process.stdout.write('x')"], {
         timeoutMs: 200, outputSink: { write: () => new Promise(() => {}) }

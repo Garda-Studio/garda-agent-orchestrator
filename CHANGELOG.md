@@ -1,5 +1,7 @@
 # Changelog
 
+- Preserve captured subprocess output after cancellation without starting a new sink write or reporting a false sink failure.
+
 - Keep nested runtime journal writes readable by a legacy updater until its active operation settles; subsequent operations retain modern owner metadata and recovery checks.
 
 - Refresh the Windows package surface baseline and lifecycle audited-source digest from verified accepted composition, preserving growth allowances, writer ownership checks and platform qualifications.

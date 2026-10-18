@@ -1181,6 +1181,10 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
                             const text = decoder.write(bytes);
                             capture.append(text);
                             callback?.(text);
+                            if (sinkController.signal.aborted) {
+                                awaitingChunk = true;
+                                continue;
+                            }
                             const write = sinkQueue.then(() => {
                                 sinkController.signal.throwIfAborted();
                                 return sink.write(stream, bytes, sinkController.signal);
