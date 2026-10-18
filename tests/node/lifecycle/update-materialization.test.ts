@@ -207,7 +207,10 @@ describe('runUpdate', () => {
             ));
             assert.ok(reportingLine);
             const userRule = '- User-owned completion note: retain the local release checklist.';
-            fs.writeFileSync(path.join(liveRuleDir, '80-task-workflow.md'), workflowTemplate.replace(
+            const legacyPermissionLine = '- `garda workflow set` is a guarded workflow-config mutation surface and requires separate explicit operator approval with `--operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>"`; agents must not approve workflow-config mutations for themselves.';
+            const permissionLines = workflowTemplate.split(/\r?\n/u).filter(line => line.startsWith('- Ordinary `garda workflow set` mutations ') || line.startsWith('- `task_test_selection.require_operator_confirmation` defaults '));
+            assert.equal(permissionLines.length, 2);
+            fs.writeFileSync(path.join(liveRuleDir, '80-task-workflow.md'), workflowTemplate.replace(permissionLines.join('\n'), legacyPermissionLine).replace(
                 reportingLine, `${legacyReportingLine}\n${userRule}`
             ));
 

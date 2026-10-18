@@ -126,6 +126,20 @@
       }
     }
   },
+  "task-test-selection-require-operator-confirmation": {
+    "label": "Görevin test seçimini onayla",
+    "description": "Etkin görevin test seçimi için operatör onayı ister. Varsayılan olarak kapalıdır. Bu ayarı değiştirmek yine onay gerektirir; zorunlu testler ve incelemeler değişmez.",
+    "options": {
+      "true": {
+        "label": "Açık",
+        "description": "Görevin her test seçiminden önce onay iste."
+      },
+      "false": {
+        "label": "Kapalı",
+        "description": "Etkin görev için gerekçeli ve kayda alınmış test seçimine tekrar sormadan izin ver."
+      }
+    }
+  },
   "full-suite-command": {
     "label": "Tam paket komutu",
     "description": "Zorunlu tam paket doğrulaması etkin olduğunda tam paket kapısının çalıştırdığı komut."

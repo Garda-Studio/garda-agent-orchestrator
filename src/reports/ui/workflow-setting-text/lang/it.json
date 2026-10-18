@@ -126,6 +126,20 @@
       }
     }
   },
+  "task-test-selection-require-operator-confirmation": {
+    "label": "Conferma la scelta dei test",
+    "description": "Richiede conferma per scegliere i test del compito attivo. Disattivato per impostazione predefinita. Modificare questa impostazione richiede comunque conferma; test e revisioni obbligatori restano invariati.",
+    "options": {
+      "true": {
+        "label": "Attivato",
+        "description": "Chiedi conferma prima di ogni scelta dei test del compito."
+      },
+      "false": {
+        "label": "Disattivato",
+        "description": "Consenti una scelta motivata e registrata per il compito attivo senza altre domande."
+      }
+    }
+  },
   "full-suite-command": {
     "label": "Comando suite completa",
     "description": "Comando eseguito dal gate della suite completa quando la validazione completa obbligatoria è attiva."

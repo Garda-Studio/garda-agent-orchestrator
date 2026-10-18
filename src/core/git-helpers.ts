@@ -195,7 +195,8 @@ function parseBatchTreeContents(
 export function readGitTreeEntriesForPaths(
     repoRoot: string,
     treeish: string,
-    paths: Iterable<string>
+    paths: Iterable<string>,
+    options: Pick<RunGitOptions, 'timeoutMs'> = {}
 ): Map<string, GitTreeEntry> {
     const wantedPaths = new Set(
         [...paths]
@@ -237,7 +238,8 @@ export function readGitTreeEntriesForPaths(
             ['cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)', '-Z'],
             {
                 input: Buffer.from(`${metadataRequests.join('\0')}\0`, 'utf8'),
-                maxBuffer: metadataBuffer
+                maxBuffer: metadataBuffer,
+                timeoutMs: options.timeoutMs
             }
         ),
         metadataRequests
@@ -263,7 +265,8 @@ export function readGitTreeEntriesForPaths(
                 ['cat-file', '--batch', '-Z'],
                 {
                     input: Buffer.from(`${parentMetadata.map((entry) => entry.request).join('\0')}\0`, 'utf8'),
-                    maxBuffer: Math.max(GIT_TREE_METADATA_MIN_BUFFER_BYTES, requiredContentBytes)
+                    maxBuffer: Math.max(GIT_TREE_METADATA_MIN_BUFFER_BYTES, requiredContentBytes),
+                    timeoutMs: options.timeoutMs
                 }
             ),
             parentMetadata

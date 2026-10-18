@@ -126,6 +126,20 @@
       }
     }
   },
+  "task-test-selection-require-operator-confirmation": {
+    "label": "确认任务测试选择",
+    "description": "要求操作员确认当前任务的测试选择。默认关闭。更改此设置仍需确认；必需的测试和审查保持不变。",
+    "options": {
+      "true": {
+        "label": "开启",
+        "description": "每次选择任务测试前请求确认。"
+      },
+      "false": {
+        "label": "关闭",
+        "description": "允许为当前任务选择有理由且有审计记录的测试，无需再次询问。"
+      }
+    }
+  },
   "full-suite-command": {
     "label": "完整套件命令",
     "description": "启用强制完整套件验证时，完整套件门禁执行的命令。"

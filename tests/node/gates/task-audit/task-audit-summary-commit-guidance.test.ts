@@ -1,5 +1,8 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { handleSet } from '../../../../src/cli/commands/workflow/workflow-command-set';
+import { resolveLocalCommitAvailability } from '../../../../src/core/auth/local-commit-availability';
+import { buildFinalReportOrder } from '../../../../src/gates/next-step/next-step-closeout-status-readers';
 
 import {
     fs,
@@ -34,6 +37,29 @@ describe('gates/task-audit-summary', () => {
     });
 
     describe('buildTaskAuditSummary', () => {
+
+        it('retains a task-bound commit suggestion and suppresses the question with an authentic ON grant', () => {
+            const source = path.join(tmpDir, 'src', 'feature.ts');
+            fs.mkdirSync(path.dirname(source), { recursive: true });
+            fs.writeFileSync(source, 'export const feature = 1;\n');
+            initGitRepo(tmpDir);
+            fs.writeFileSync(source, 'export const feature = 2;\n');
+            handleSet({ targetRoot: tmpDir, localCommitEnabled: 'true', json: true,
+                operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() });
+            assert.equal(resolveLocalCommitAvailability(tmpDir).enabled, true);
+            writePreflight(reviewsDir, TASK_ID, { changed_files: ['src/feature.ts'],
+                metrics: { changed_lines_total: 2 }, required_reviews: {} });
+            const result = buildTaskAuditSummary({ taskId: TASK_ID, repoRoot: tmpDir, eventsRoot: eventsDir, reviewsRoot: reviewsDir });
+            assert.match(result.final_report_contract.commit_command_suggestion, /human-commit --task-id "T-AUDIT-1"/);
+            assert.equal(result.final_report_contract.commit_question, '');
+            assert.equal(result.final_closeout.commit_question, '');
+            assert.ok(!result.final_report_contract.required_order.some(item => /question|confirm/i.test(item)));
+            assert.deepEqual(buildFinalReportOrder(result), [
+                'short agent-authored summary of what changed',
+                'verbatim Garda final user report',
+                result.final_report_contract.commit_command_suggestion
+            ]);
+        });
 
         it('infers a conventional-style commit suggestion from task metadata and changed scope', () => {
             const now = new Date().toISOString();

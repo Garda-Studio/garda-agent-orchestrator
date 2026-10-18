@@ -3,10 +3,13 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as childProcess from 'node:child_process';
 
 import {
     assertSingleLinkIdentity,
     parseRepairWipManifest,
+    runGitStatus,
+    runGitWithInput,
     validatePhysicalRepoContainment
 } from '../../../../src/gates/full-suite/full-suite-repair-manifest';
 
@@ -20,6 +23,21 @@ function removeTempRoot(rootPath: string): void {
 }
 
 describe('full-suite repair manifest boundary', () => {
+    it('bounds Git probes and rejects partial output on timeout or output overflow', context => {
+        for (const code of ['ETIMEDOUT', 'ENOBUFS']) {
+            context.mock.method(require('node:child_process') as typeof childProcess, 'spawnSync', (_command: string, _args: string[], options: childProcess.SpawnSyncOptions) => {
+                assert.equal(options.timeout, 120_000);
+                assert.equal(options.maxBuffer, 64 * 1024 * 1024);
+                assert.deepEqual(options.input, Buffer.from('preserved patch'));
+                return { status: 0, signal: null, stdout: 'partial', stderr: '', error: Object.assign(new Error(code), { code }) };
+            });
+            const result = runGitStatus('.', ['apply', '--check', '-'], Buffer.from('preserved patch'));
+            assert.equal(result.status, -1);
+            assert.match(result.stderr, new RegExp(code));
+            assert.throws(() => runGitWithInput('.', ['apply', '--check', '-'], Buffer.from('preserved patch')), new RegExp(code));
+            context.mock.restoreAll();
+        }
+    });
     it('rejects malformed manifest fields without constructing a restore manifest', (context) => {
         const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-repair-manifest-'));
         context.after(() => removeTempRoot(repoRoot));

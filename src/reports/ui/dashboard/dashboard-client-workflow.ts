@@ -158,6 +158,7 @@ function settingGroupId(setting) {
   if (key.startsWith('compact.')) return 'compact';
   if (key.startsWith('compile_gate.')) return 'validation';
   if (key.startsWith('full_suite_validation.')) return 'validation';
+  if (key.startsWith('task_test_selection.')) return 'validation';
   if (key.startsWith('optional_quality_checks.')) return 'validation';
   if (key.startsWith('optional_skill_selection_policy.')) return 'validation';
   if (key.startsWith('review_execution_policy.') || key.startsWith('review_cycle_guard.')) return 'review';

@@ -126,6 +126,20 @@
       }
     }
   },
+  "task-test-selection-require-operator-confirmation": {
+    "label": "Confirmar selección de pruebas",
+    "description": "Exige confirmación para seleccionar pruebas de la tarea activa. Desactivado por defecto. Cambiar este ajuste sigue requiriendo confirmación; las pruebas y revisiones obligatorias no cambian.",
+    "options": {
+      "true": {
+        "label": "Activado",
+        "description": "Pedir confirmación antes de cada selección de pruebas de la tarea."
+      },
+      "false": {
+        "label": "Desactivado",
+        "description": "Permitir una selección justificada y registrada para la tarea activa sin otra pregunta."
+      }
+    }
+  },
   "full-suite-command": {
     "label": "Comando de suite completa",
     "description": "Comando que ejecuta el gate de suite completa cuando la validación completa obligatoria está activada."

@@ -130,6 +130,20 @@
     "label": "Review failures between quality checks",
     "description": "Number of recorded review-failure attempts between required quality-checklist answer runs. The counter still advances only on recorded review FAIL results; repeated next-step or preflight refreshes do not advance it."
   },
+  "task-test-selection-require-operator-confirmation": {
+    "label": "Confirm task test selection",
+    "description": "Require operator confirmation for audited task-scoped test selection. Off by default: agents may select relevant tests for the active task with a recorded justification. Changing this setting still requires confirmation; mandatory tests, reviews and other settings remain unchanged.",
+    "options": {
+      "true": {
+        "label": "On",
+        "description": "Ask for confirmation before each task-scoped test selection."
+      },
+      "false": {
+        "label": "Off",
+        "description": "Allow justified, audited test selection for the active task without another prompt."
+      }
+    }
+  },
   "full-suite-command": {
     "label": "Full-suite command",
     "description": "Command the full-suite gate runs when mandatory full-suite validation is enabled. Local UI edits use the same audited `garda workflow set` path and require explicit confirmation."

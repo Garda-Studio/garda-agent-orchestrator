@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import { lstatFileIdentitySync, statFileIdentitySync } from '../../core/file-stat';
 import * as path from 'node:path';
 
-import { runGit } from '../../core/git-helpers';
+import { runWipGit as runGit, WIP_GIT_TIMEOUT_MS, WIP_GIT_MAX_BUFFER_BYTES } from '../shared/wip-git';
 import { isPlainRecord } from '../../core/records';
 import {
     joinOrchestratorPath,
@@ -311,12 +311,15 @@ export function runGitStatus(repoRoot: string, args: string[], input?: Buffer): 
     const result = childProcess.spawnSync('git', ['-C', repoRoot, ...args], {
         encoding: 'utf8',
         input,
+        timeout: WIP_GIT_TIMEOUT_MS,
+        maxBuffer: WIP_GIT_MAX_BUFFER_BYTES,
+        windowsHide: true,
         stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe']
     });
     return {
-        status: result.status ?? -1,
+        status: result.error || result.signal ? -1 : result.status ?? -1,
         stdout: String(result.stdout || ''),
-        stderr: String(result.stderr || '')
+        stderr: [String(result.stderr || ''), result.error?.message, result.signal && `Git terminated by ${result.signal}`].filter(Boolean).join('\n')
     };
 }
 

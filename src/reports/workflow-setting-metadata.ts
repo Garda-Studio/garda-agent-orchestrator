@@ -108,11 +108,25 @@ function decorateCompactPresentation(definition: WorkflowSettingDefinition): Wor
     };
 }
 
+const taskTestSelectionDefinition: WorkflowSettingDefinition = {
+    id: 'task-test-selection-require-operator-confirmation',
+    key: 'task_test_selection.require_operator_confirmation',
+    label: 'Confirm task test selection',
+    description: 'Require operator confirmation for audited task-scoped test selection. Off by default: agents may select relevant tests for the active task with a recorded justification. Changing this setting still requires confirmation; mandatory tests, reviews and other settings remain unchanged.',
+    flag: '--task-test-selection-require-operator-confirmation',
+    value_type: 'boolean',
+    options: booleanOptions(
+        'Ask for confirmation before each task-scoped test selection.',
+        'Allow justified, audited test selection for the active task without another prompt.'
+    )
+};
+
 export const WORKFLOW_SETTING_DEFINITIONS: readonly WorkflowSettingDefinition[] = Object.freeze(
     buildWorkflowSettingMetadata(WORKFLOW_SETTING_REGISTRY).flatMap(definition => {
         const compatible = decorateCompactPresentation(definition);
-        return definition.id === 'optional-checks-review-failure-cadence-interval'
-            ? [compatible, optionalSkillSelectionDefinition] : [compatible];
+        if (definition.id === 'optional-checks-review-failure-cadence-interval') return [compatible, optionalSkillSelectionDefinition];
+        if (definition.id === 'full-suite-command') return [compatible, taskTestSelectionDefinition];
+        return [compatible];
     })
 );
 

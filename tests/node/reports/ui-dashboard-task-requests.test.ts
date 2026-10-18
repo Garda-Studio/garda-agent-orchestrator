@@ -12,7 +12,7 @@ function deferred<T>() {
     return { promise, resolve, reject };
 }
 type Response = { ok: boolean; status: number; json: () => Promise<unknown> };
-type Control = { disabled: boolean; checked: boolean; innerHTML: string; dataset: Record<string, string>; click: () => Promise<void>; addEventListener: (event: string, listener: () => Promise<void>) => void };
+type Control = { isConnected: boolean; disabled: boolean; checked: boolean; innerHTML: string; dataset: Record<string, string>; click: () => Promise<void>; addEventListener: (event: string, listener: () => Promise<void>) => void };
 
 function createClient(onRequest?: (url: string) => void) {
     const requests: Array<ReturnType<typeof deferred<Response>> & { url: string; options?: { body: string } }> = [];
@@ -22,11 +22,12 @@ function createClient(onRequest?: (url: string) => void) {
     const detailNode = {
         get innerHTML() { return html; },
         set innerHTML(value: string) {
+            for (const node of [...elements.values(), ...actionButtons]) node.isConnected = false;
             html = value; elements.clear(); actionButtons = [];
             // Only the task-action controls/status nodes are needed by this DOM seam.
             const create = (disabled: boolean, dataset: Record<string, string> = {}): Control => {
                 let click = async () => {};
-                const node: Control = { disabled, checked: false, innerHTML: '', dataset,
+                const node: Control = { isConnected: true, disabled, checked: false, innerHTML: '', dataset,
                     click: async () => { if (!node.disabled) await click(); },
                     addEventListener: (event, listener) => { if (event === 'click') click = listener; } };
                 return node;
@@ -167,11 +168,18 @@ test('late closure-policy preview cannot enter a different task context', async 
 test('rerendering the current task keeps its pending action controls locked', async () => {
     const client = createClient(); await client.select('T-A');
     const pending = client.action('T-A');
-    vm.runInContext('renderTaskDetail(currentTaskDetail)', client.context);
+    const oldControls = client.buttons();
+    for (let index = 0; index < 20; index++) {
+        vm.runInContext('renderTaskDetail(currentTaskDetail)', client.context);
+        const retained = vm.runInContext('Array.from(taskDetailContext.pendingAction.keys())', client.context) as Control[];
+        assert.ok(retained.every(control => control.isConnected));
+        assert.equal(retained.length, client.detailNode.querySelectorAll('button[data-task-action-id], .task-closure-policy-card button, .task-closure-policy-card input').length);
+    }
     const locked = client.buttons().every(button => button.disabled) && client.elements.get('task-closure-policy-preview')!.disabled;
     client.respond(1, { task_id: 'T-A', status: 'executed' }); await pending;
     assert.equal(locked, true);
     assert.ok(client.buttons().every(button => !button.disabled));
+    assert.ok(oldControls.every(button => button.disabled), 'detached controls must not be restored');
 });
 
 test('a later request for the same task also owns the detail and cache', async () => {

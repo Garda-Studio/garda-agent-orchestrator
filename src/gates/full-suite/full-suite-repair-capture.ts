@@ -3,12 +3,12 @@ import * as fs from 'node:fs';
 import { lstatFileIdentitySync } from '../../core/file-stat';
 import * as path from 'node:path';
 
+import { splitNulList } from '../../core/git-helpers';
 import {
-    runGit,
-    runGitBinary,
-    readGitTreeEntriesForPaths,
-    splitNulList
-} from '../../core/git-helpers';
+    runWipGit as runGit,
+    runWipGitBinary as runGitBinary,
+    readWipGitTreeEntries as readGitTreeEntriesForPaths
+} from '../shared/wip-git';
 import type { GitTreeEntry } from '../../core/git-helpers';
 import { isPlainRecord } from '../../core/records';
 import {

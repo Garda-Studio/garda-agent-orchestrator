@@ -1,5 +1,9 @@
 # Changelog
 
+- Expose task-scoped test-selection confirmation in Settings and all UI languages; align updated workflow and specialist-authoring guidance with audited selection and findings-only reviews.
+- Bound repair and WIP-capture Git subprocesses, preserve endpoint-specific UI rejection codes with query strings, and release detached task-action controls after dashboard rerenders.
+- Clarify residual-risk output fields and gate-owned task events; verify durable local-commit guidance without another confirmation prompt.
+
 - Preserve captured subprocess output after cancellation without starting a new sink write or reporting a false sink failure.
 
 - Keep nested runtime journal writes readable by a legacy updater until its active operation settles; subsequent operations retain modern owner metadata and recovery checks.

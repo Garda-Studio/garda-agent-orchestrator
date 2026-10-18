@@ -205,6 +205,7 @@ Create or update plans only for tasks that have never started; retained start ev
    - Node: `node garda-agent-orchestrator/bin/garda.js gate doc-impact-gate --preflight-path "garda-agent-orchestrator/runtime/reviews/<task-id>-preflight.json" --task-id "<task-id>" --decision "<NO_DOC_UPDATES|DOCS_UPDATED>" --behavior-changed "<true|false>" --changelog-updated "<true|false>" --rationale "<why>"`
    - Doc impact gate writes task-scoped event `DOC_IMPACT_ASSESSED` or `DOC_IMPACT_ASSESSMENT_FAILED`.
 21. Run full-suite validation gate when `next-step` requests it; enablement is controlled by `garda-agent-orchestrator/live/config/workflow-config.json`:
+   - Task-scoped test selection follows `80-task-workflow.md`: `task_test_selection.require_operator_confirmation` defaults to `false`. Use the audited task-id/reason/full-suite-command/focused-required-test-path route for the active task, then follow `next-step` for current bindings. When the setting is on, obtain genuine confirmation. This exception never changes mandatory validation or authorizes unrelated settings.
    - Node: `node garda-agent-orchestrator/bin/garda.js gate full-suite-validation --task-id "<task-id>" --preflight-path "garda-agent-orchestrator/runtime/reviews/<task-id>-preflight.json" --repo-root "."`
    - Full-suite validation emits `FULL_SUITE_VALIDATION_PASSED`, `FULL_SUITE_VALIDATION_WARNED`, `FULL_SUITE_VALIDATION_FAILED`, or `FULL_SUITE_VALIDATION_SKIPPED`.
    - When enabled, completion-gate requires `PASSED` or `WARNED` status; `FAILED` and `SKIPPED` block completion.
@@ -229,7 +230,7 @@ Create or update plans only for tasks that have never started; retained start ev
     - `DECOMPOSED` when a scope-budget, review-cycle, or strict-decomposition guard intentionally split the parent into child tasks; do not run parent lifecycle gates after decomposition.
     - Strict decomposition children must stay strict: `next-step` only routes a `split-required` strict parent when the linked child rows match the decision artifact, are parent-derived, exist in `TASK.md`, and use profile `strict`.
     - Before entering a routed decomposed child task, inspect `workflow-config.full_suite_validation.command` against that child scope. If it still includes suspended sibling tests, update it only through the audited workflow-config route before `enter-task-mode`; keep current-child tests covered, exclude suspended siblings, and leave an already-suitable command unchanged.
-    - Log terminal event: `TASK_DONE` or `TASK_BLOCKED`.
+    - Terminal lifecycle events are gate-owned. Do not call `log-task-event` for reserved events such as `TASK_DONE` or `TASK_BLOCKED`. After success or failure, run `next-step` and follow its supported continuation; retain the actual failure evidence and report any blocker without inventing a lifecycle event or editing task status.
 27. Report to user in exact order:
     1. concise implementation summary (include depth, path mode, review result status, docs updated)
        - do not paste the full final-closeout markdown or duplicate its complete section order in chat; link or name the canonical artifact when useful, then report only the status, key changes, validations, and commit readiness;

@@ -126,6 +126,20 @@
       }
     }
   },
+  "task-test-selection-require-operator-confirmation": {
+    "label": "Potwierdzaj wybór testów zadania",
+    "description": "Wymaga potwierdzenia wyboru testów aktywnego zadania. Domyślnie wyłączone. Zmiana tego ustawienia nadal wymaga potwierdzenia; obowiązkowe testy i przeglądy pozostają bez zmian.",
+    "options": {
+      "true": {
+        "label": "Włączone",
+        "description": "Pytaj o potwierdzenie przed każdym wyborem testów zadania."
+      },
+      "false": {
+        "label": "Wyłączone",
+        "description": "Pozwól na uzasadniony i zapisany wybór testów aktywnego zadania bez dodatkowego pytania."
+      }
+    }
+  },
   "full-suite-command": {
     "label": "Polecenie pełnej walidacji",
     "description": "Polecenie uruchamiane przez bramę pełnej walidacji, gdy obowiązkowa pełna walidacja jest włączona."

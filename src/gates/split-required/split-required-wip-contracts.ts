@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { runGit } from '../../core/git-helpers';
+import { runWipGit as runGit, WIP_GIT_TIMEOUT_MS, WIP_GIT_MAX_BUFFER_BYTES } from '../shared/wip-git';
 import { isPlainRecord } from '../../core/records';
 import {
     fileSha256,
@@ -155,9 +155,12 @@ export function fileBytes(filePath: string): number {
 export function canCaptureSplitRequiredWip(repoRoot: string): boolean {
     const result = childProcess.spawnSync('git', ['-C', path.resolve(repoRoot || '.'), 'rev-parse', '--is-inside-work-tree'], {
         encoding: 'utf8',
+        timeout: WIP_GIT_TIMEOUT_MS,
+        maxBuffer: WIP_GIT_MAX_BUFFER_BYTES,
+        windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe']
     });
-    return result.status === 0 && String(result.stdout || '').trim() === 'true';
+    return !result.error && !result.signal && result.status === 0 && String(result.stdout || '').trim() === 'true';
 }
 
 export function normalizeGitPath(value: string): string {

@@ -9,6 +9,7 @@ import {
     generateProjectMemorySummary,
     isBootstrapOnlyLegacyCodeStyleRule,
     migrateLegacyOutputCompactionGuidance,
+    migrateLegacyTaskTestSelectionGuidance,
     RULE_FILES,
     selectRuleSource
 } from '../rule-materialization';
@@ -122,6 +123,7 @@ function materializeRuleFiles(
             const templatePath = path.join(templateRuleRoot, ruleFile);
             if (pathExists(templatePath)) {
                 content = migrateLegacyOutputCompactionGuidance(content, readTextFile(templatePath));
+                content = migrateLegacyTaskTestSelectionGuidance(content, readTextFile(templatePath));
             }
         }
         content = applyCompileGateCommandDefaults(content, ruleFile, [compileGateCommandForGuidance]);

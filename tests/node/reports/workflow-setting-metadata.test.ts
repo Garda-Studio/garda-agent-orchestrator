@@ -154,8 +154,12 @@ test('review-cycle adapter preserves six ordered definitions and its existing de
 
 test('typed full-suite projection preserves the entire existing report contract and interleaved order', () => {
     // Independent pre-migration contract: all 61 definitions at accepted source HEAD 9a7d0374.
-    const digest = createHash('sha256').update(JSON.stringify(canonical(WORKFLOW_SETTING_DEFINITIONS))).digest('hex');
-    assert.equal(WORKFLOW_SETTING_DEFINITIONS.length, 61);
+    const existingDefinitions = WORKFLOW_SETTING_DEFINITIONS.filter(
+        entry => entry.id !== 'task-test-selection-require-operator-confirmation'
+    );
+    const digest = createHash('sha256').update(JSON.stringify(canonical(existingDefinitions))).digest('hex');
+    assert.equal(existingDefinitions.length, 61);
+    assert.equal(WORKFLOW_SETTING_DEFINITIONS.length, 62);
     assert.equal(digest, '5b5a817e07d37c55b65bcbd419cab2852ac33e604dbeeb39394bcef6681db370');
     const ids = WORKFLOW_SETTING_DEFINITIONS.map(entry => entry.id);
     assert.ok(ids.indexOf('full-suite-enabled') < ids.indexOf('optional-checks-enabled'));
@@ -296,7 +300,7 @@ test('all fifteen scope-budget projections retain ordered presentation-only owne
 
 test('complete assembly keeps the external policy position and compact presentation without write authority', () => {
     const typedIds = WORKFLOW_SETTING_REGISTRY.entries.map(entry => entry.id);
-    assert.deepEqual(WORKFLOW_SETTING_DEFINITIONS.filter(entry => entry.id !== 'optional-skill-selection-mode')
+    assert.deepEqual(WORKFLOW_SETTING_DEFINITIONS.filter(entry => !['optional-skill-selection-mode', 'task-test-selection-require-operator-confirmation'].includes(entry.id))
         .map(entry => entry.id), typedIds);
     const policy = getWorkflowSettingDefinition('optional_skill_selection_policy.mode')!;
     const policyIndex = WORKFLOW_SETTING_DEFINITIONS.indexOf(policy);

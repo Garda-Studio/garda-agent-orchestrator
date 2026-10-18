@@ -126,6 +126,20 @@
       }
     }
   },
+  "task-test-selection-require-operator-confirmation": {
+    "label": "タスクのテスト選択を確認",
+    "description": "進行中タスクのテスト選択に操作者の確認を求めます。既定では無効です。この設定の変更には引き続き確認が必要です。必須テストとレビューは変わりません。",
+    "options": {
+      "true": {
+        "label": "有効",
+        "description": "タスクのテストを選択するたびに確認を求めます。"
+      },
+      "false": {
+        "label": "無効",
+        "description": "進行中タスクについて、理由を記録したテスト選択を追加確認なしで許可します。"
+      }
+    }
+  },
   "full-suite-command": {
     "label": "フルスイートコマンド",
     "description": "フルスイート検証が必須のときにフルスイートゲートが実行するコマンド。"

@@ -126,6 +126,20 @@
       }
     }
   },
+  "task-test-selection-require-operator-confirmation": {
+    "label": "Testkeuze voor taak bevestigen",
+    "description": "Vraagt bevestiging voor de testkeuze van de actieve taak. Standaard uit. Deze instelling wijzigen vereist nog steeds bevestiging; verplichte tests en reviews blijven ongewijzigd.",
+    "options": {
+      "true": {
+        "label": "Aan",
+        "description": "Vraag bevestiging vóór elke testkeuze voor de taak."
+      },
+      "false": {
+        "label": "Uit",
+        "description": "Sta onderbouwde en vastgelegde testkeuze voor de actieve taak toe zonder extra vraag."
+      }
+    }
+  },
   "full-suite-command": {
     "label": "Volledige testopdracht",
     "description": "Opdracht die de volledige testgate uitvoert wanneer verplichte volledige validatie is ingeschakeld."

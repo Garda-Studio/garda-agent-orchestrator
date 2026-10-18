@@ -126,6 +126,20 @@
       }
     }
   },
+  "task-test-selection-require-operator-confirmation": {
+    "label": "Confirmer le choix des tests",
+    "description": "Exige une confirmation pour choisir les tests de la tâche active. Désactivé par défaut. Modifier ce réglage exige toujours une confirmation ; les tests et revues obligatoires restent inchangés.",
+    "options": {
+      "true": {
+        "label": "Activé",
+        "description": "Demander confirmation avant chaque choix de tests de la tâche."
+      },
+      "false": {
+        "label": "Désactivé",
+        "description": "Autoriser un choix justifié et consigné pour la tâche active sans nouvelle question."
+      }
+    }
+  },
   "full-suite-command": {
     "label": "Commande de suite complète",
     "description": "Commande exécutée par le gate de suite complète lorsque la validation complète obligatoire est activée."

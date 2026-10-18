@@ -13,6 +13,9 @@ function ownsTaskDetailContext(context) {
 }
 function lockTaskActionControls(context) {
   if (!ownsTaskDetailContext(context) || !context.pendingAction) return;
+  for (const control of context.pendingAction.keys()) {
+    if (control.isConnected === false) context.pendingAction.delete(control);
+  }
   for (const control of detailNode.querySelectorAll('button[data-task-action-id], .task-closure-policy-card button, .task-closure-policy-card input')) {
     if (!context.pendingAction.has(control)) context.pendingAction.set(control, control.disabled);
     control.disabled = true;

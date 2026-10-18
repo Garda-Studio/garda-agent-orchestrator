@@ -126,6 +126,20 @@
       }
     }
   },
+  "task-test-selection-require-operator-confirmation": {
+    "label": "Bekräfta uppgiftens testval",
+    "description": "Kräver bekräftelse för testval i den aktiva uppgiften. Av som standard. Ändring av inställningen kräver fortfarande bekräftelse; obligatoriska tester och granskningar är oförändrade.",
+    "options": {
+      "true": {
+        "label": "På",
+        "description": "Begär bekräftelse före varje testval för uppgiften."
+      },
+      "false": {
+        "label": "Av",
+        "description": "Tillåt motiverat och loggat testval för den aktiva uppgiften utan en ny fråga."
+      }
+    }
+  },
   "full-suite-command": {
     "label": "Kommando för full testsvit",
     "description": "Kommando som full testsvit-gate kör när obligatorisk full validering är aktiverad."

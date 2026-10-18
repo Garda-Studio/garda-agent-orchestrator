@@ -182,6 +182,28 @@ test('task-action authorization precedes task lookup for missing, foreign and re
     }
 });
 
+test('protected POST error codes are unchanged by query parameters at both admission boundaries', async () => {
+    const repoRoot = makeLocalUiTempRepo();
+    writeLocalUiRepoFixture(repoRoot);
+    const server = await startLocalUiServer({ repoRoot, port: 0, actionsEnabled: true, idleShutdownEnabled: false });
+    try {
+        for (const [endpoint, code] of [
+            ['/api/update-availability/check', 'update_boundary_rejected'],
+            ['/api/ordinary-docs', 'ordinary_docs_boundary_rejected']
+        ]) {
+            for (const suffix of ['', '?source=dashboard']) {
+                for (const headers of [{}, { host: `rebind.invalid:${server.port}` }]) {
+                    const denied = await request(server, endpoint + suffix, headers, 'POST');
+                    assert.equal(denied.status, 403);
+                    assert.equal(JSON.parse(denied.body).code, code);
+                }
+            }
+        }
+    } finally {
+        await cleanupLocalUiTestResources({ repoRoot, server });
+    }
+});
+
 test('contained file previews reject foreign tokens and traversal without extension restrictions', async () => {
     const repoRoot = makeLocalUiTempRepo();
     writeLocalUiRepoFixture(repoRoot);

@@ -126,6 +126,20 @@
       }
     }
   },
+  "task-test-selection-require-operator-confirmation": {
+    "label": "작업 테스트 선택 확인",
+    "description": "활성 작업의 테스트 선택에 운영자 확인을 요구합니다. 기본값은 꺼짐입니다. 이 설정 변경에는 확인이 필요하며 필수 테스트와 리뷰는 유지됩니다.",
+    "options": {
+      "true": {
+        "label": "켜짐",
+        "description": "작업 테스트를 선택할 때마다 확인을 요청합니다."
+      },
+      "false": {
+        "label": "꺼짐",
+        "description": "추가 질문 없이 활성 작업의 근거가 기록된 테스트 선택을 허용합니다."
+      }
+    }
+  },
   "full-suite-command": {
     "label": "전체 스위트 명령",
     "description": "필수 전체 스위트 검증이 활성화된 경우 전체 스위트 게이트가 실행하는 명령입니다."

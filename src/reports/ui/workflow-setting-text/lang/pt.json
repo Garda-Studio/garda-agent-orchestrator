@@ -126,6 +126,20 @@
       }
     }
   },
+  "task-test-selection-require-operator-confirmation": {
+    "label": "Confirmar seleção de testes",
+    "description": "Exige confirmação para selecionar testes da tarefa ativa. Desativado por predefinição. Alterar esta definição continua a exigir confirmação; os testes e revisões obrigatórios mantêm-se.",
+    "options": {
+      "true": {
+        "label": "Ativado",
+        "description": "Pedir confirmação antes de cada seleção de testes da tarefa."
+      },
+      "false": {
+        "label": "Desativado",
+        "description": "Permitir uma seleção justificada e registada para a tarefa ativa sem nova pergunta."
+      }
+    }
+  },
   "full-suite-command": {
     "label": "Comando da suite completa",
     "description": "Comando executado pela gate da suite completa quando a validação completa obrigatória está ativada."

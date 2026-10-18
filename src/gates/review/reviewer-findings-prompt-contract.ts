@@ -168,7 +168,10 @@ export function buildReviewerFindingsPromptContractMarkdown(options: ReviewerFin
         ...(emptyReviewScope
             ? ['An empty evidence domain has no authorized focused command target; inspect existing validation records without executing commands.']
             : buildReviewerFocusedSelfValidationContractLines()),
-        'Use residual_risks only for concrete evidence-bound risks that remain after the review.',
+        'Use residual_risks only for concrete evidence-bound risks that remain after the review. Each entry has exactly id, description and evidence; id must be a unique R-### and evidence must be a nonempty array of location/observation objects. Use [] when no risk remains; do not invent a risk to fill the example.',
+        ...(!emptyReviewScope ? [
+            'Residual risk object shape: {"id":"R-001","description":"<concrete remaining risk>","evidence":[{"location":"<in-scope-file>:<line>","observation":"<observed evidence supporting this risk>"}]}. No severity, title, mitigation, disposition or verdict fields are accepted.'
+        ] : []),
         'The local orchestrator does not claim OS-enforced containment against another process running as the same OS user. Do not report deliberate same-user workspace-directory replacement between system calls as an active defect unless the authenticated task acceptance criteria explicitly require that stronger boundary.',
         'Continue to report ordinary path traversal, symlink or junction escape, stale identity, and observable replacement defects that violate the authenticated task or path-ownership contract.',
         'Describe observed defects only. Do not choose downstream disposition, scheduling, acceptance, or policy outcomes.',

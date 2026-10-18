@@ -5,12 +5,14 @@ import { lstatFileIdentitySync } from '../../core/file-stat';
 import * as path from 'node:path';
 
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
+import { splitNulList } from '../../core/git-helpers';
 import {
-    readGitTreeEntriesForPaths,
-    runGit,
-    runGitBinary,
-    splitNulList
-} from '../../core/git-helpers';
+    readWipGitTreeEntries as readGitTreeEntriesForPaths,
+    runWipGit as runGit,
+    runWipGitBinary as runGitBinary,
+    WIP_GIT_TIMEOUT_MS,
+    WIP_GIT_MAX_BUFFER_BYTES
+} from '../shared/wip-git';
 import type { GitTreeEntry } from '../../core/git-helpers';
 import { isPlainRecord } from '../../core/records';
 import {
@@ -740,6 +742,9 @@ function validatePreparedCaptureSuspended(
 function runGitWithInput(repoRoot: string, args: string[], input: Buffer): void {
     childProcess.execFileSync('git', ['-C', repoRoot, ...args], {
         input,
+        timeout: WIP_GIT_TIMEOUT_MS,
+        maxBuffer: WIP_GIT_MAX_BUFFER_BYTES,
+        windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe']
     });
 }

@@ -126,6 +126,20 @@
       }
     }
   },
+  "task-test-selection-require-operator-confirmation": {
+    "label": "Konfirmasi pemilihan tes tugas",
+    "description": "Memerlukan konfirmasi operator untuk memilih tes tugas aktif. Nonaktif secara bawaan. Perubahan pengaturan ini tetap memerlukan konfirmasi; tes dan tinjauan wajib tidak berubah.",
+    "options": {
+      "true": {
+        "label": "Aktif",
+        "description": "Minta konfirmasi sebelum setiap pemilihan tes tugas."
+      },
+      "false": {
+        "label": "Nonaktif",
+        "description": "Izinkan pemilihan tes tugas aktif yang beralasan dan tercatat tanpa pertanyaan tambahan."
+      }
+    }
+  },
   "full-suite-command": {
     "label": "Perintah full-suite",
     "description": "Perintah yang dijalankan gerbang full-suite saat validasi full-suite wajib diaktifkan."

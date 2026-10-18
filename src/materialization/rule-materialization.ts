@@ -351,6 +351,16 @@ export function migrateLegacyOutputCompactionGuidance(content: string, templateC
     return content.replace(new RegExp(`^${escapeRegex(legacyLine)}(?=\\r?$)`, 'gm'), () => replacement);
 }
 
+export function migrateLegacyTaskTestSelectionGuidance(content: string, templateContent: string): string {
+    const legacyLine = '- `garda workflow set` is a guarded workflow-config mutation surface and requires separate explicit operator approval with `--operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>"`; agents must not approve workflow-config mutations for themselves.';
+    const lines = templateContent.split(/\r?\n/u);
+    const general = lines.find(line => line.startsWith('- Ordinary `garda workflow set` mutations '));
+    const selection = lines.find(line => line.startsWith('- `task_test_selection.require_operator_confirmation` defaults '));
+    if (!general || !selection) return content;
+    const newline = content.includes('\r\n') ? '\r\n' : '\n';
+    return content.replace(new RegExp(`^${escapeRegex(legacyLine)}(?=\\r?$)`, 'gm'), () => general + newline + selection);
+}
+
 export function applyAssistantDefaults(content: string, ruleFile: string, assistantLanguage: string, assistantBrevity: string): string {
     if (ruleFile !== '00-core.md') return content;
 

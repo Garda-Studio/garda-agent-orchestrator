@@ -126,6 +126,20 @@
       }
     }
   },
+  "task-test-selection-require-operator-confirmation": {
+    "label": "Testauswahl der Aufgabe bestätigen",
+    "description": "Verlangt eine Bestätigung für die Testauswahl der aktiven Aufgabe. Standardmäßig aus. Eine Änderung dieser Einstellung erfordert weiterhin eine Bestätigung; Pflichtprüfungen und Reviews bleiben unverändert.",
+    "options": {
+      "true": {
+        "label": "Ein",
+        "description": "Vor jeder aufgabenbezogenen Testauswahl nach Bestätigung fragen."
+      },
+      "false": {
+        "label": "Aus",
+        "description": "Begründete und protokollierte Testauswahl für die aktive Aufgabe ohne weitere Rückfrage erlauben."
+      }
+    }
+  },
   "full-suite-command": {
     "label": "Volltest-Befehl",
     "description": "Befehl, den das Volltest-Gate ausführt, wenn die Pflicht-Volltestsuite aktiviert ist."

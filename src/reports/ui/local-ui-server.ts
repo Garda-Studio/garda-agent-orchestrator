@@ -605,9 +605,10 @@ function admitLocalUiRequest(request: http.IncomingMessage): URL {
 
 function localUiBoundaryErrorCode(request: http.IncomingMessage): string {
     if (request.method !== 'POST') return 'local_ui_boundary_rejected';
-    if (request.url?.startsWith('/api/session/')) return 'session_boundary_rejected';
-    if (request.url === '/api/update-availability/check') return 'update_boundary_rejected';
-    if (request.url === '/api/ordinary-docs') return 'ordinary_docs_boundary_rejected';
+    const pathname = (request.url || '').split(/[?#]/u, 1)[0];
+    if (pathname.startsWith('/api/session/')) return 'session_boundary_rejected';
+    if (pathname === '/api/update-availability/check') return 'update_boundary_rejected';
+    if (pathname === '/api/ordinary-docs') return 'ordinary_docs_boundary_rejected';
     return 'action_boundary_rejected';
 }
 

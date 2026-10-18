@@ -126,6 +126,20 @@
       }
     }
   },
+  "task-test-selection-require-operator-confirmation": {
+    "label": "Xác nhận chọn kiểm thử cho tác vụ",
+    "description": "Yêu cầu người vận hành xác nhận việc chọn kiểm thử cho tác vụ đang hoạt động. Mặc định tắt. Thay đổi cài đặt này vẫn cần xác nhận; kiểm thử và đánh giá bắt buộc không thay đổi.",
+    "options": {
+      "true": {
+        "label": "Bật",
+        "description": "Hỏi xác nhận trước mỗi lần chọn kiểm thử cho tác vụ."
+      },
+      "false": {
+        "label": "Tắt",
+        "description": "Cho phép chọn kiểm thử có lý do và ghi nhận cho tác vụ đang hoạt động mà không hỏi lại."
+      }
+    }
+  },
   "full-suite-command": {
     "label": "Lệnh full-suite",
     "description": "Lệnh mà cổng full-suite chạy khi xác thực full-suite bắt buộc được bật."
