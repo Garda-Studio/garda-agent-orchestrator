@@ -5,7 +5,9 @@ import { describe, it } from 'node:test';
 
 import {
     runClassifyChangeCommand,
+    runCompileGateCommand,
     runEnterTaskModeCommand,
+    runFullSuiteValidationCommand,
     runHandshakeDiagnosticsCommand,
     runLoadRulePackCommand,
     runRecordNoOpCommand,
@@ -40,8 +42,26 @@ function resolveSourceCliPath(): string {
     throw new Error('Cannot resolve the source CLI for the native fixture launcher.');
 }
 
-function createFixture() {
+function createFixture(requiredValidation = false) {
     const repoRoot = makeTempRepo();
+    if (requiredValidation) {
+        const taskPath = path.join(repoRoot, 'TASK.md');
+        fs.writeFileSync(taskPath, fs.readFileSync(taskPath, 'utf8').replace('Test queue entry.', 'Required reviews: code.'));
+        const workflowPath = path.join(repoRoot, 'garda-agent-orchestrator/live/config/workflow-config.json');
+        const workflow = JSON.parse(fs.readFileSync(workflowPath, 'utf8'));
+        workflow.compile_gate.command = 'node --check bin/garda.js';
+        workflow.full_suite_validation.enabled = true;
+        workflow.full_suite_validation.placement = 'after_compile_before_reviews';
+        workflow.full_suite_validation.command = 'node --test validation.test.cjs';
+        fs.writeFileSync(workflowPath, `${JSON.stringify(workflow, null, 2)}\n`);
+        fs.writeFileSync(path.join(repoRoot, 'validation.test.cjs'), [
+            "const { test } = require('node:test');",
+            "const assert = require('node:assert/strict');",
+            "const fs = require('node:fs');",
+            "test('committed source contract', () => assert.match(fs.readFileSync('src/app.ts', 'utf8'), /value = 1/u));",
+            ''
+        ].join('\n'));
+    }
     fs.writeFileSync(path.join(repoRoot, 'AGENTS.md'), '# Codex fixture\n');
     fs.mkdirSync(path.join(repoRoot, '.agents/workflows'), { recursive: true });
     fs.writeFileSync(path.join(repoRoot, '.agents/workflows/start-task.md'), '# Start task fixture\n');
@@ -110,8 +130,8 @@ function createFixture() {
 
 describe('record-no-op current preflight admission', () => {
     for (const explicit of [true, false]) {
-        it(`publishes a usable authenticated binding with ${explicit ? 'explicit' : 'resolved'} preflight`, () => {
-            const fixture = createFixture();
+        it(`validates before reviewing an audited no-op with ${explicit ? 'explicit' : 'resolved'} preflight`, async () => {
+            const fixture = createFixture(true);
             const result = fixture.record(explicit ? fixture.preflightPath : undefined);
             assert.equal(result.exitCode, 0);
             const evidence = getNoOpEvidence(fixture.repoRoot, TASK_ID, '', fixture.preflightPath);
@@ -120,9 +140,24 @@ describe('record-no-op current preflight admission', () => {
             assert.ok(getCurrentNoOpEventSha256(fixture.repoRoot, TASK_ID, evidence));
             assert.match(inspectTaskEventFile(fixture.timelinePath, TASK_ID).status, /^PASS/u);
             const next = resolveNextStep({ taskId: TASK_ID, repoRoot: fixture.repoRoot });
-            assert.equal(next.next_gate, 'build-review-context', next.reason);
             assert.ok(next.review.required_reviews.includes('code'));
+            assert.equal(next.next_gate, 'compile-gate', next.reason);
             assert.doesNotMatch(next.reason, /EVIDENCE_PREFLIGHT_PATH_MISSING/u);
+            const compileOptions = {
+                repoRoot: fixture.repoRoot, taskId: TASK_ID,
+                preflightPath: fixture.preflightPath, emitMetrics: false
+            };
+            const currentCompile = await runCompileGateCommand(compileOptions);
+            assert.equal(currentCompile.exitCode, 0, currentCompile.outputLines.join('\n'));
+            const noOpRoute = resolveNextStep({ taskId: TASK_ID, repoRoot: fixture.repoRoot });
+            assert.equal(noOpRoute.next_gate, 'record-no-op', noOpRoute.reason);
+            assert.equal(fixture.record(explicit ? fixture.preflightPath : undefined).exitCode, 0);
+            const suiteRoute = resolveNextStep({ taskId: TASK_ID, repoRoot: fixture.repoRoot });
+            assert.equal(suiteRoute.next_gate, 'full-suite-validation', suiteRoute.reason);
+            const suite = await runFullSuiteValidationCommand(compileOptions);
+            assert.equal(suite.exitCode, 0, suite.outputText);
+            const reviewRoute = resolveNextStep({ taskId: TASK_ID, repoRoot: fixture.repoRoot });
+            assert.equal(reviewRoute.next_gate, 'build-review-context', reviewRoute.reason);
         });
     }
 

@@ -344,6 +344,34 @@ describe('gates/next-step', () => {
         assert.equal(result.commands.length, 0);
     });
 
+    it('refreshes stale compile evidence before required reviews for an audited zero-diff task', () => {
+        const repoRoot = makeTempRepo();
+        initGitRepo(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        const preflightPath = writeGitAutoPreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+        const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8'));
+        preflight.scope_category = 'empty';
+        preflight.zero_diff_guard = {
+            zero_diff_detected: true,
+            status: 'BASELINE_ONLY',
+            completion_requires_audited_no_op: true
+        };
+        writeJson(preflightPath, preflight);
+        seedPostPreflightRulePack(repoRoot, TASK_ID, preflightPath);
+        seedGitAutoCompilePass(repoRoot, TASK_ID);
+        const compilePath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-compile-gate.json`);
+        const compile = JSON.parse(fs.readFileSync(compilePath, 'utf8'));
+        compile.preflight_hash_sha256 = '0'.repeat(64);
+        writeJson(compilePath, compile);
+        writeNoOpEvidence(repoRoot, TASK_ID, preflightPath);
+        seedHashBoundNoOpEvent(repoRoot, preflightPath);
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+
+        assert.equal(result.next_gate, 'compile-gate', result.reason);
+        assert.ok(result.commands[0].command.includes('gate compile-gate'));
+    });
+
     it('continues to required reviews check after current zero-diff no-op evidence exists', () => {
         const repoRoot = makeTempRepo();
         initGitRepo(repoRoot);

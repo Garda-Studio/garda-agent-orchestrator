@@ -4273,8 +4273,8 @@ export function resolveNextStepDecisionRoute(
             readiness: qualityChecklistReadiness, cliPrefix, taskId
         }),
         lifecycleGateIds: getActiveTaskLifecycleGateIds('validation', {
-            changes_exist:
-                Array.isArray(preflight?.changed_files) && preflight.changed_files.length > 0,
+            // Required reviews still need current validation on audited zero-diff tasks.
+            changes_exist: !fullSuiteNotRequiredForZeroDiffNoReviewableScope,
             optional_quality_checks_enabled: qualityChecklistReadiness?.enabled === true,
             full_suite_after_compile_before_reviews:
                 fullSuiteConfig.enabled && fullSuiteConfig.placement === 'after_compile_before_reviews'
