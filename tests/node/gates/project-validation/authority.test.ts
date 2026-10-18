@@ -5,6 +5,21 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { approveProjectValidationContract, parseApprovedValidationContract, readValidationFile, validationDigest } from '../../../../src/core/project-validation-identity';
 import { freezeProjectValidationAuthority, freezeValidationRecipe, readProjectValidationAuthority, validationPaths } from '../../../../src/gates/project-validation/authority';
+import { getClassificationConfig } from '../../../../src/gates/preflight/classify-change';
+import { declaredFileRole } from '../../../../src/core/file-role-bindings';
+
+it('projects both admitted source and test roles through ordinary classification without helper authority', () => {
+    const f = fixture();
+    try {
+        admitted(f);
+        const config = getClassificationConfig(f.root);
+        assert.equal(declaredFileRole('product.any', config.file_roles), 'source');
+        assert.equal(declaredFileRole('specifications/case.unknown', config.file_roles), 'test');
+        assert.equal(declaredFileRole('driver.cjs', config.file_roles), undefined);
+        fs.appendFileSync(f.configPath, ' ');
+        assert.throws(() => getClassificationConfig(f.root), /authority|audited/u);
+    } finally { f.clean(); }
+});
 
 function fixture() {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-recipe-authority-'));

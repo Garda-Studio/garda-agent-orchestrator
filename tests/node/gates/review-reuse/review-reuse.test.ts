@@ -17,6 +17,7 @@ import {
     resolveReviewReceiptReuseContractBindings
 } from '../../../../src/gates/review-reuse';
 import { stringSha256 } from '../../../../src/gate-runtime/hash';
+import { normalizeReviewTriggerPolicyFromPaths } from '../../../../src/policy/review-trigger-policy';
 import {
     validateReviewContextMaterializationSnapshot
 } from '../../../../src/gates/review-reuse/review-reuse-materialization';
@@ -37,6 +38,44 @@ function writePathsConfig(repoRoot: string, config: Record<string, unknown>): vo
 }
 
 describe('gates/review-reuse', () => {
+    it('keeps source declarations in reuse hashes and preserves frozen roles despite live path edits', () => {
+        const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-frozen-role-reuse-'));
+        try {
+            fs.mkdirSync(path.join(repoRoot, 'docs'), { recursive: true });
+            fs.mkdirSync(path.join(repoRoot, 'quality'), { recursive: true });
+            fs.mkdirSync(path.join(repoRoot, 'perf'), { recursive: true });
+            fs.writeFileSync(path.join(repoRoot, 'docs/view.mdx'), 'before\n');
+            fs.writeFileSync(path.join(repoRoot, 'perf/engine.rules'), 'before\n');
+            fs.writeFileSync(path.join(repoRoot, 'quality/purchase.case'), 'test\n');
+            fs.writeFileSync(path.join(repoRoot, 'README.md'), '# Guide\n');
+            const roleConfig = { file_roles: {
+                'docs/view.mdx': 'source', 'perf/engine.rules': 'source', 'quality/purchase.case': 'test'
+            } };
+            writePathsConfig(repoRoot, roleConfig);
+            const preflight = { changed_files: ['docs/view.mdx', 'perf/engine.rules', 'quality/purchase.case'],
+                detection_source: 'explicit_changed_files', profile_policy_snapshot: {
+                    review_trigger_policy: normalizeReviewTriggerPolicyFromPaths(roleConfig)
+                } };
+            const before = computeReviewReuseCodeScopeFingerprint('code', preflight, repoRoot);
+            assert.deepEqual(before.non_test_changed_files, ['docs/view.mdx', 'perf/engine.rules']);
+            assert.deepEqual(before.performance_support_changed_files, []);
+            assert.equal(before.docs_only, false);
+            assert.equal(before.test_only, false);
+            writePathsConfig(repoRoot, { file_roles: { 'docs/view.mdx': 'test' } });
+            assert.deepEqual(computeReviewReuseCodeScopeFingerprint('code', preflight, repoRoot), before);
+            fs.writeFileSync(path.join(repoRoot, 'docs/view.mdx'), 'after\n');
+            assert.notEqual(computeReviewReuseCodeScopeFingerprint('code', preflight, repoRoot).code_scope_sha256,
+                before.code_scope_sha256);
+            const afterDocs = computeReviewReuseCodeScopeFingerprint('code', preflight, repoRoot);
+            fs.writeFileSync(path.join(repoRoot, 'perf/engine.rules'), 'after\n');
+            assert.notEqual(computeReviewReuseCodeScopeFingerprint('code', preflight, repoRoot).code_scope_sha256,
+                afterDocs.code_scope_sha256);
+            assert.equal(computeReviewReuseCodeScopeFingerprint('code', {
+                ...preflight, changed_files: ['README.md']
+            }, repoRoot).docs_only, true);
+        } finally { fs.rmSync(repoRoot, { recursive: true, force: true }); }
+    });
+
     it('reconstructs the historical schema-3 reuse hash from a current review context', () => {
         const legacyContext = {
             schema_version: 3,

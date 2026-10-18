@@ -21,7 +21,14 @@ import {
 
 const DEFAULT_GIT_SETUP_RETRY_DELAYS_MS = [0, 25, 100];
 const RETRYABLE_GIT_SETUP_PATTERN = /\b(?:EACCES|EBUSY|ENOTEMPTY|EPERM|Permission denied)\b|\.git[\\/]+config|could not set ['"]?core\./iu;
-const TEST_COMPILE_GATE_COMMAND = 'node -e "console.log(\'build ok\')"';
+export const TEST_COMPILE_FIXTURE_PATH = 'garda-agent-orchestrator/runtime/compile-fixture.cjs';
+export const TEST_COMPILE_GATE_COMMAND = `node ${TEST_COMPILE_FIXTURE_PATH}`;
+
+export function writeTestCompileFixture(repoRoot: string): void {
+    const filePath = path.join(repoRoot, TEST_COMPILE_FIXTURE_PATH);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "console.log('build ok');\n", 'utf8');
+}
 
 interface RunGitOptions {
     readonly spawnSync?: (
@@ -92,6 +99,7 @@ function seedTempRepoScaffold(root: string): void {
     fs.writeFileSync(path.join(root, 'src', 'app.ts'), 'const a = 1;\nconst b = 2;\nconsole.log(a + b);\n', 'utf8');
     
     seedRuleFiles(root);
+    writeTestCompileFixture(root);
     const workflowConfig = buildDefaultWorkflowConfig();
     workflowConfig.compile_gate.command = TEST_COMPILE_GATE_COMMAND;
     workflowConfig.full_suite_validation.enabled = false;

@@ -1,5 +1,6 @@
 import { matchAnyRegex } from '../../gate-runtime/text-utils';
 import { testPathPrefix } from '../shared/helpers';
+import { declaredFileRole, type FileRoleBindings } from '../../core/file-role-bindings';
 import {
     isAuditOnlyPath,
     isConfigLikePath,
@@ -12,6 +13,7 @@ import {
 export type ScopeCategory = 'code' | 'docs-only' | 'test-only' | 'config-only' | 'audit-only' | 'mixed' | 'empty';
 
 interface ScopeCategoryOptions {
+    fileRoles?: FileRoleBindings;
     declaredTestPaths?: readonly string[];
     ordinaryDocPaths?: string[];
     protectedControlPlaneRoots?: string[];
@@ -53,6 +55,11 @@ export function classifyScopeCategory(
     let auditCount = 0;
 
     for (const file of normalizedFiles) {
+        const declaredRole = declaredFileRole(file, options.fileRoles);
+        if (declaredRole === 'source') {
+            codeCount++;
+            continue;
+        }
         const isCode = isRuntimeCodeLikePath(file, codeLikeRegexes, runtimeRoots);
         const isDeclaredTest = options.declaredTestPaths?.includes(file);
         const isTest = isDeclaredTest || matchAnyRegex(file, options.testTriggerRegexes || [], {
@@ -84,6 +91,10 @@ export function classifyScopeCategory(
             auditCount++;
             continue;
         }
+        if (declaredRole === 'test') {
+            testCount++;
+            continue;
+        }
         if (isDeclaredTest) {
             testCount++;
             continue;
@@ -97,6 +108,7 @@ export function classifyScopeCategory(
             runtime_roots: runtimeRoots,
             protected_control_plane_roots: options.protectedControlPlaneRoots || [],
             ordinary_doc_paths: options.ordinaryDocPaths || [],
+            file_roles: options.fileRoles,
             sql_or_migration_regexes: options.sqlOrMigrationRegexes || [],
             db_trigger_regexes: options.dbTriggerRegexes || [],
             security_trigger_regexes: options.securityTriggerRegexes || [],

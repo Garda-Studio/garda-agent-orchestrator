@@ -1,4 +1,5 @@
 import { buildReviewExecutionPolicySummaryLine } from '../../core/review-execution-policy';
+import { declaredFileRole, isTestScopePath } from '../../core/file-role-bindings';
 import { matchAnyRegex } from '../../gate-runtime/text-utils';
 import {
     buildGeneratedRuntimeArtifactHygieneWarnings,
@@ -261,7 +262,8 @@ export function classifyChange(options: ClassifyChangeOptions): ClassifyChangeRe
         maxDriverFiles: fastPathMaxFiles,
         maxDriverChangedLines: fastPathMaxChangedLines
     });
-    const uiI18nCompanionScope = normalizedFiles.some(file => options.declaredTestPaths?.includes(file))
+    const uiI18nCompanionScope = normalizedFiles.some(file => options.declaredTestPaths?.includes(file)
+        || declaredFileRole(file, classificationConfig.file_roles))
         ? { ...detectedUiI18nScope, eligible: false, reviewTriggerSuppressionEligible: false,
             reason: 'explicit_test_scope' }
         : detectedUiI18nScope;
@@ -294,6 +296,7 @@ export function classifyChange(options: ClassifyChangeOptions): ClassifyChangeRe
         : changedLinesTotal;
 
     const scopeCategoryOptions = {
+        fileRoles: classificationConfig.file_roles,
         declaredTestPaths: options.declaredTestPaths,
         ordinaryDocPaths: classificationConfig.ordinary_doc_paths,
         protectedControlPlaneRoots: classificationConfig.protected_control_plane_roots,
@@ -306,7 +309,8 @@ export function classifyChange(options: ClassifyChangeOptions): ClassifyChangeRe
     };
     const rawScopeClassification = classifyScopeCategory(normalizedFiles, codeLike, runtimeRoots, scopeCategoryOptions);
     const testTriggered = pathTriggers.testTriggered || reviewTriggerFiles.some((file) => (
-        options.declaredTestPaths?.includes(file)
+        (options.declaredTestPaths?.includes(file)
+            || isTestScopePath(file, [], classificationConfig.file_roles))
         && classifyScopeCategory([file], codeLike, runtimeRoots, scopeCategoryOptions).category === 'test-only'
     ));
     const reviewableCodeChanged = reviewTriggerFiles.some((file) => (

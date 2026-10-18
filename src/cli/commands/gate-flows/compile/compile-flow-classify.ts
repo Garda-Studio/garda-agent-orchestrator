@@ -441,7 +441,7 @@ export function runClassifyChangeCommand(options: ClassifyChangeCommandOptions):
     const projectValidationAdmission = freezeProjectValidationAdmission(repoRoot);
     const result: ClassifyChangeResult = classifyChange({
         declaredTestPaths: projectValidationAdmission.declared_test_paths,
-        normalizedFiles: authorizedFiles,
+        normalizedFiles: workspaceSnapshot.changed_files,
         repoRoot,
         isSourceCheckout,
         taskIntent: String(options.taskIntent || ''),

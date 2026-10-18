@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { splitCommandLine } from '../../../../src/core/command-line';
+import { normalizeReviewTriggerPolicyFromPaths } from '../../../../src/policy/review-trigger-policy';
 import { assessDocImpact } from '../../../../src/gates/doc-impact';
 import { buildDocImpactCommandPlan } from '../../../../src/gates/next-step/next-step-doc-closeout-readiness';
 import {
@@ -43,6 +44,31 @@ function declaredDocs(command: string): string[] {
     const argv = splitCommandLine(command);
     return argv.flatMap((value, index) => value === '--docs-updated' ? [argv[index + 1]] : []);
 }
+
+test('generated doc-impact uses frozen source/test roles and actual behavioral scope without a public changelog', async () => {
+    const f = fixture(['docs/view.mdx', 'quality/test.md', 'README.md', memoryFile]);
+    try {
+        const configPath = path.join(f.repoRoot, 'garda-agent-orchestrator/live/config/paths.json');
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        const roles = { file_roles: { 'docs/view.mdx': 'source', 'quality/test.md': 'test' } };
+        fs.writeFileSync(configPath, JSON.stringify(roles));
+        fs.mkdirSync(path.join(f.repoRoot, 'quality'), { recursive: true });
+        fs.writeFileSync(path.join(f.repoRoot, 'docs/view.mdx'), 'export default function View() {}\n');
+        fs.writeFileSync(path.join(f.repoRoot, 'quality/test.md'), 'purchase assertion\n');
+        Object.assign(f.preflight, { scope_category: 'mixed', profile_policy_snapshot: {
+            review_trigger_policy: normalizeReviewTriggerPolicyFromPaths(roles)
+        } });
+        fs.writeFileSync(f.preflightPath, JSON.stringify(f.preflight));
+        const plan = generate(f);
+        assert.deepEqual(declaredDocs(plan.command), ['README.md']);
+        assert.match(plan.command, /--behavior-changed true/u);
+        assert.match(plan.command, /--changelog-updated false/u);
+        assert.match(plan.command, /--project-memory-updated true/u);
+        assert.equal(plan.requiresProjectMemoryBeforeAssessment, true);
+        const result = await runCliWithCapturedOutput(splitCommandLine(plan.command).slice(2), { cwd: f.repoRoot });
+        assert.equal(result.exitCode, 0, [...result.logs, ...result.errors].join('\n'));
+    } finally { removeTempRepoWithRetry(f.repoRoot); }
+});
 
 test('generated mixed closeout command routes internal evidence separately and the real CLI gate accepts it', async () => {
     const f = fixture(['src/app.ts', 'docs/guide.md', 'CHANGELOG.md', 'TASK.md', internalChangelog, memoryFile]);

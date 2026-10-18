@@ -7,6 +7,18 @@ import {
     validateReviewTriggerPolicy
 } from '../../../src/policy/review-trigger-policy';
 
+test('preserves exact role declarations in the frozen review policy without changing legacy policy shape', () => {
+    const policy = normalizeReviewTriggerPolicyFromPaths({ file_roles: {
+        'src/view.mdx': 'source', 'specifications/purchase.case': 'test'
+    } });
+    assert.deepEqual(validateReviewTriggerPolicy(policy), policy);
+    assert.deepEqual(policy.file_roles, { 'specifications/purchase.case': 'test', 'src/view.mdx': 'source' });
+    assert.equal(Object.hasOwn(normalizeReviewTriggerPolicyFromPaths({}), 'file_roles'), false);
+    assert.equal(Object.hasOwn(validateReviewTriggerPolicy(DEFAULT_REVIEW_TRIGGER_POLICY), 'file_roles'), false);
+    assert.throws(() => normalizeReviewTriggerPolicyFromPaths({ file_roles: { '../source.md': 'source' } }));
+    assert.throws(() => validateReviewTriggerPolicy({ ...policy, file_roles: { 'src/view.mdx': 'docs' } }));
+});
+
 test('normalizes legacy paths trigger values into one deterministic review-trigger policy', () => {
     const policy = normalizeReviewTriggerPolicyFromPaths({
         test_refactor_changed_lines_threshold: 37,

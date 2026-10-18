@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { normalizeFileRoleBindings, type FileRoleBindings } from '../core/file-role-bindings';
 
 export const REVIEW_TRIGGER_POLICY_SCHEMA_VERSION = 1 as const;
 export const DEFAULT_TEST_REFACTOR_CHANGED_LINES_THRESHOLD = 20;
@@ -9,6 +10,7 @@ export interface ReviewTriggerPolicy {
     test_path_regexes: string[];
     test_refactor_structural_path_regexes: string[];
     test_refactor_changed_lines_threshold: number;
+    file_roles?: FileRoleBindings;
 }
 
 const DEFAULT_REFACTOR_PATH_REGEXES = Object.freeze([
@@ -92,8 +94,10 @@ export function normalizeReviewTriggerPolicyFromPaths(pathsConfig: unknown): Rev
         throw new Error('paths.triggers must be a JSON object.');
     }
     const triggers = isPlainRecord(rawTriggers) ? rawTriggers : {};
+    const fileRoles = normalizeFileRoleBindings(pathsConfig.file_roles, 'paths.file_roles');
     return {
         schema_version: REVIEW_TRIGGER_POLICY_SCHEMA_VERSION,
+        ...(Object.keys(fileRoles).length > 0 ? { file_roles: fileRoles } : {}),
         refactor_path_regexes: normalizeRegexList(
             triggers.refactor,
             'paths.triggers.refactor',
@@ -146,8 +150,10 @@ export function validateReviewTriggerPolicy(value: unknown): ReviewTriggerPolicy
             throw new Error(`review_trigger_policy.${requiredKey} is required.`);
         }
     }
+    const fileRoles = normalizeFileRoleBindings(value.file_roles, 'review_trigger_policy.file_roles');
     return {
         schema_version: REVIEW_TRIGGER_POLICY_SCHEMA_VERSION,
+        ...(Object.keys(fileRoles).length > 0 ? { file_roles: fileRoles } : {}),
         refactor_path_regexes: normalizeRegexList(
             value.refactor_path_regexes,
             'review_trigger_policy.refactor_path_regexes',

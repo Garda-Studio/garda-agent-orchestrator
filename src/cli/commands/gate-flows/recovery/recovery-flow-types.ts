@@ -1,3 +1,6 @@
+import type { ReviewRemediationScopeBoundary } from '../../../../gates/review-remediation/review-remediation-scope-boundary';
+export type { ReviewRemediationScopeBoundary } from '../../../../gates/review-remediation/review-remediation-scope-boundary';
+
 export interface RestartCoherentCycleCommandOptions {
     repoRoot?: string;
     taskId?: unknown;
@@ -42,15 +45,6 @@ export interface ResolvedReplayScope {
     useStaged?: boolean;
     includeUntracked?: boolean;
     detectionSource: string;
-}
-
-export interface ReviewRemediationScopeBoundary {
-    status: 'OK' | 'BLOCKED';
-    previousChangedFiles: string[];
-    currentChangedFiles: string[];
-    expandedFiles: string[];
-    expandedNonTestFiles: string[];
-    allowedTestOnlyExpansionFiles: string[];
 }
 
 export interface ReviewRemediationImpactAnalysis {

@@ -84,7 +84,7 @@ import {
     findLastTimelineEventIndex
 } from '../../gate-test-helpers';
 
-const TEST_COMPILE_GATE_COMMAND = 'node -e "console.log(\'build ok\')"';
+import { TEST_COMPILE_GATE_COMMAND, writeTestCompileFixture } from '../../gate-test-repo-bootstrap';
 const TRUST_BOUNDARY_FIXTURE_EVIDENCE_PATH =
     'tests/node/gates/review-context/review-context-trust-boundary-fixture.test.ts';
 
@@ -272,6 +272,7 @@ function writeWorkflowConfig(
     const configDir = path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config');
     const configPath = path.join(configDir, 'workflow-config.json');
     fs.mkdirSync(configDir, { recursive: true });
+    writeTestCompileFixture(repoRoot);
     fs.writeFileSync(configPath, JSON.stringify({
         compile_gate: {
             command: TEST_COMPILE_GATE_COMMAND
@@ -662,10 +663,11 @@ function writeSimpleCompileCommandsFile(
 ): { commandsPath: string; outputFiltersPath: string } {
     const commandsPath = path.join(repoRoot, `commands-${suffix}.md`);
     const outputFiltersPath = writeBudgetOutputFilters(repoRoot);
+    writeTestCompileFixture(repoRoot);
     fs.writeFileSync(commandsPath, [
         '### Compile Gate (Mandatory)',
         '```bash',
-        'node -e "console.log(\'build ok\')"',
+        TEST_COMPILE_GATE_COMMAND,
         '```'
     ].join('\n'), 'utf8');
     return { commandsPath, outputFiltersPath };

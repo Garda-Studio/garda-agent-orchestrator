@@ -1,4 +1,4 @@
-import { matchAnyRegex } from '../../gate-runtime/text-utils';
+import { declaredFileRole, isTestScopePath } from '../../core/file-role-bindings';
 import {
     readStagedBlobFingerprints,
     type StagedBlobFingerprints
@@ -53,17 +53,18 @@ function classifyDomainFile(
     if (isCloseoutEvidencePath(normalizedPath)) {
         return 'closeout';
     }
+    const role = declaredFileRole(normalizedPath, classificationConfig.file_roles);
+    if (role === 'source') return 'implementation';
+    const protectedControlPlane = testPathPrefix(normalizedPath, classificationConfig.protected_control_plane_roots);
+    if (role === 'test' && !protectedControlPlane) return 'test';
     if (isSafeOrdinaryDocumentationPath(normalizedPath, classificationConfig)) {
         return 'docs';
     }
-    const testTriggered = matchAnyRegex(normalizedPath, classificationConfig.test_trigger_regexes, {
-        skipInvalidRegex: true,
-        caseInsensitive: true
-    });
+    const testTriggered = isTestScopePath(normalizedPath, classificationConfig.test_trigger_regexes,
+        protectedControlPlane ? undefined : classificationConfig.file_roles);
     if (testTriggered) {
         return 'test';
     }
-    const protectedControlPlane = testPathPrefix(normalizedPath, classificationConfig.protected_control_plane_roots);
     if (protectedControlPlane && isRuntimeCodeLikePath(
         normalizedPath,
         classificationConfig.code_like_regexes,

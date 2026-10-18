@@ -1,5 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { mergeFileRoleBindings, type FileRoleBindings } from '../../core/file-role-bindings';
+import { readProjectValidationFileRoles } from '../../core/project-validation-authority';
 
 import {
     DEFAULT_ORDINARY_DOC_PATHS,
@@ -55,6 +57,7 @@ export interface ClassificationConfig {
 }
 
 export interface ResolvedClassificationConfig {
+    file_roles?: FileRoleBindings;
     source: string;
     config_path: string;
     metrics_path: string;
@@ -227,8 +230,16 @@ export function getClassificationConfig(
         `paths.${ORDINARY_DOC_PATHS_CONFIG_KEY}`,
         { allowScalar: true }
     );
+    const fileRoles = mergeFileRoleBindings(reviewTriggerPolicy.file_roles ?? {}, readProjectValidationFileRoles(repoRoot));
+    const protectedControlPlaneRoots = normalizeProtectedControlPlaneRoots(toStringArray(defaults.protected_control_plane_roots));
+    for (const [file, role] of Object.entries(fileRoles)) {
+        if (role === 'test' && testPathPrefix(file, protectedControlPlaneRoots)) {
+            throw new Error(`Declared test role cannot downgrade protected control-plane scope: ${file}`);
+        }
+    }
 
     return {
+        ...(Object.keys(fileRoles).length > 0 ? { file_roles: fileRoles } : {}),
         source: options.reviewTriggerPolicy ? 'task_profile_policy_snapshot' : source,
         config_path: toPosix(path.resolve(configPath)),
         metrics_path: String(defaults.metrics_path),
@@ -248,13 +259,14 @@ export function getClassificationConfig(
         test_refactor_structural_trigger_regexes: [...reviewTriggerPolicy.test_refactor_structural_path_regexes],
         performance_trigger_regexes: toStringArray(defaults.triggers.performance),
         code_like_regexes: toStringArray(defaults.code_like_regexes),
-        protected_control_plane_roots: normalizeProtectedControlPlaneRoots(toStringArray(defaults.protected_control_plane_roots)),
+        protected_control_plane_roots: protectedControlPlaneRoots,
         ordinary_doc_paths: ordinaryDocPaths
     };
 }
 
 function validateClassificationReviewTriggerPolicy(policy: ReviewTriggerPolicy): ReviewTriggerPolicy {
     return normalizeReviewTriggerPolicyFromPaths({
+        file_roles: policy.file_roles,
         test_refactor_changed_lines_threshold: policy.test_refactor_changed_lines_threshold,
         triggers: {
             refactor: policy.refactor_path_regexes,

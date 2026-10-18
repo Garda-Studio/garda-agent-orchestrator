@@ -252,7 +252,7 @@ export function classifyReviewRemediationFix(
             scopeSource: 'current_changed_files' as const
         }
         : getReviewRemediationSemanticSignals(scopeBoundary, impactAnalysis, testTriggerRegexes);
-    const affectedFileGroups = groupReviewRemediationFiles(scopeBoundary.currentChangedFiles, testTriggerRegexes);
+    const affectedFileGroups = groupReviewRemediationFiles(scopeBoundary.currentChangedFiles, testTriggerRegexes, scopeBoundary.fileRoles);
     const preflightReuseBlockReason = getPreflightReuseBlockReason(
         preflightPayload,
         semantic.category === 'test_coverage_only' ? semantic.changedFiles : []

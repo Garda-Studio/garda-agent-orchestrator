@@ -1,5 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import type { FileRoleBindings } from '../../../../core/file-role-bindings';
+import { getClassificationConfig } from '../../../../gates/preflight/classify-change';
 import { EXIT_GATE_FAILURE } from '../../../exit-codes';
 import { getReviewExecutionPreparationBatches, resolveReviewExecutionPolicyModeFromPreflight } from '../../../../core/review-execution-policy';
 import { resolveCompiledReviewDependencyGraphFromPreflight } from '../../../../core/review-dependency-graph';
@@ -155,6 +157,7 @@ export function resolveRuntimeDecisionInputs(options: {
     profilePolicySnapshot: unknown;
     currentChangedFiles: readonly string[];
     reviewTriggerPolicy: {
+        file_roles?: FileRoleBindings;
         test_path_regexes: readonly string[];
         test_refactor_structural_path_regexes: readonly string[];
         test_refactor_changed_lines_threshold: number;
@@ -291,6 +294,7 @@ export function resolveRuntimeDecisionInputs(options: {
                 baselineArtifactSha256: baselineSnapshotSha256,
                 currentChangedFiles: options.currentChangedFiles,
                 testPathRegexes: options.reviewTriggerPolicy.test_path_regexes,
+                fileRoles: options.reviewTriggerPolicy.file_roles,
                 structuralTestPathRegexes: options.reviewTriggerPolicy.test_refactor_structural_path_regexes,
                 structuralTestChangedLinesThreshold:
                     options.reviewTriggerPolicy.test_refactor_changed_lines_threshold,
@@ -417,7 +421,10 @@ export async function runRestartReviewCycleCommand(
     if (!previousTaskMode.profile_policy_snapshot) {
         throw new Error('Review-cycle recovery requires the authenticated task profile policy snapshot.');
     }
-    const reviewTriggerPolicy = resolveTaskProfileReviewTriggerPolicy(previousTaskMode.profile_policy_snapshot);
+    const frozenReviewTriggerPolicy = resolveTaskProfileReviewTriggerPolicy(previousTaskMode.profile_policy_snapshot);
+    const reviewTriggerPolicy = { ...frozenReviewTriggerPolicy, file_roles: getClassificationConfig(repoRoot, {
+        reviewTriggerPolicy: frozenReviewTriggerPolicy
+    }).file_roles };
     let ignoredRemediationTargetAssessment: IgnoredRemediationTargetAssessment = {
         targets: [],
         allowedBoundaryFiles: [],
@@ -427,7 +434,8 @@ export async function runRestartReviewCycleCommand(
         previousChangedFiles,
         currentRemediationChangedFiles,
         baseAllowedBoundaryFiles,
-        reviewTriggerPolicy.test_path_regexes
+        reviewTriggerPolicy.test_path_regexes,
+        reviewTriggerPolicy.file_roles
     );
     let remediationFixClassification = classifyReviewRemediationFix(
         scopeBoundary,
@@ -578,7 +586,8 @@ export async function runRestartReviewCycleCommand(
                 ...baseAllowedBoundaryFiles,
                 ...ignoredRemediationTargetAssessment.allowedBoundaryFiles
             ],
-            reviewTriggerPolicy.test_path_regexes
+            reviewTriggerPolicy.test_path_regexes,
+            reviewTriggerPolicy.file_roles
         );
         remediationImpactAnalysis = {
             ...remediationImpactAnalysis,

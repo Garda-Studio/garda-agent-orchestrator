@@ -1,7 +1,8 @@
-import { matchAnyRegex } from '../../gate-runtime/text-utils';
 import { normalizePath } from '../shared/helpers';
+import { isTestScopePath, type FileRoleBindings } from '../../core/file-role-bindings';
 
 export interface ReviewRemediationScopeBoundary {
+    fileRoles?: FileRoleBindings;
     status: 'OK' | 'BLOCKED';
     previousChangedFiles: string[];
     currentChangedFiles: string[];
@@ -14,11 +15,8 @@ export function normalizeReviewRemediationChangedFiles(values: readonly unknown[
     return [...new Set(values.map((entry) => normalizePath(String(entry || '').trim())).filter(Boolean))].sort();
 }
 
-export function isTestLikeRemediationPath(relativePath: string, testTriggerRegexes: readonly string[]): boolean {
-    return matchAnyRegex(normalizePath(relativePath), [...testTriggerRegexes], {
-        skipInvalidRegex: true,
-        caseInsensitive: true
-    });
+export function isTestLikeRemediationPath(relativePath: string, testTriggerRegexes: readonly string[], fileRoles?: FileRoleBindings): boolean {
+    return isTestScopePath(normalizePath(relativePath), testTriggerRegexes, fileRoles);
 }
 
 export function getTaskManualValidationBoundaryFiles(taskId: string, currentChangedFiles: readonly string[]): string[] {
@@ -40,7 +38,8 @@ export function assessReviewRemediationScopeBoundary(
     previousChangedFiles: readonly string[],
     currentChangedFiles: readonly string[],
     allowedBoundaryFiles: readonly string[] = [],
-    testTriggerRegexes: readonly string[] = []
+    testTriggerRegexes: readonly string[] = [],
+    fileRoles?: FileRoleBindings
 ): ReviewRemediationScopeBoundary {
     const previous = normalizeReviewRemediationChangedFiles(previousChangedFiles);
     const current = normalizeReviewRemediationChangedFiles(currentChangedFiles);
@@ -48,9 +47,10 @@ export function assessReviewRemediationScopeBoundary(
     const allowedSet = new Set(normalizeReviewRemediationChangedFiles([...previous, ...allowedBoundaryFiles]));
     const expandedFiles = current.filter((entry) => !previousSet.has(entry));
     const unplannedExpandedFiles = current.filter((entry) => !allowedSet.has(entry));
-    const expandedNonTestFiles = unplannedExpandedFiles.filter((entry) => !isTestLikeRemediationPath(entry, testTriggerRegexes));
-    const allowedTestOnlyExpansionFiles = unplannedExpandedFiles.filter((entry) => isTestLikeRemediationPath(entry, testTriggerRegexes));
+    const expandedNonTestFiles = unplannedExpandedFiles.filter((entry) => !isTestLikeRemediationPath(entry, testTriggerRegexes, fileRoles));
+    const allowedTestOnlyExpansionFiles = unplannedExpandedFiles.filter((entry) => isTestLikeRemediationPath(entry, testTriggerRegexes, fileRoles));
     return {
+        ...(fileRoles ? { fileRoles } : {}),
         status: expandedNonTestFiles.length > 0 ? 'BLOCKED' : 'OK',
         previousChangedFiles: previous,
         currentChangedFiles: current,

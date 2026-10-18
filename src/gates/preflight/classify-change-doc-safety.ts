@@ -5,6 +5,7 @@ import {
 } from '../../core/ordinary-doc-paths';
 import { matchAnyRegex } from '../../gate-runtime/text-utils';
 import { normalizePath, testPathPrefix } from '../shared/helpers';
+import { declaredFileRole, type FileRoleBindings } from '../../core/file-role-bindings';
 import {
     matchesConfiguredRoot,
     type ResolvedClassificationConfig
@@ -47,6 +48,7 @@ function testPrecompiled(value: string, patterns: RegExp[]): boolean {
 }
 
 export interface SafeOrdinaryDocumentationPathConfig {
+    file_roles?: FileRoleBindings;
     code_like_regexes: string[];
     runtime_roots: string[];
     protected_control_plane_roots: string[];
@@ -105,6 +107,7 @@ export function isProtectedControlPlaneDocumentationSurfacePath(
     const isDocsSurface = normalizedPath.startsWith('docs/')
         || normalizedPath.includes('/docs/');
     return isDocsSurface
+        && !declaredFileRole(normalizedPath, config.file_roles)
         && isDocumentationLikePath(normalizedPath, config.ordinary_doc_paths)
         && !isRuntimeCodeLikePath(normalizedPath, config.code_like_regexes, config.runtime_roots)
         && !isConfigLikePath(normalizedPath)
@@ -117,6 +120,7 @@ export function isSecuritySensitiveDocumentationScopePath(
 ): boolean {
     const normalizedPath = normalizePath(pathValue);
     return isDocumentationLikePath(normalizedPath, config.ordinary_doc_paths)
+        && !declaredFileRole(normalizedPath, config.file_roles)
         && !isRuntimeCodeLikePath(normalizedPath, config.code_like_regexes, config.runtime_roots)
         && !isAuditOnlyPath(normalizedPath)
         && !testPathPrefix(normalizedPath, config.protected_control_plane_roots)
@@ -152,7 +156,8 @@ export function isSafeOrdinaryDocumentationPath(
     config: SafeOrdinaryDocumentationPathConfig
 ): boolean {
     const normalizedPath = normalizePath(filePath);
-    if (isRuntimeCodeLikePath(normalizedPath, config.code_like_regexes, config.runtime_roots)
+    if (declaredFileRole(normalizedPath, config.file_roles)
+        || isRuntimeCodeLikePath(normalizedPath, config.code_like_regexes, config.runtime_roots)
         || isAuditOnlyPath(normalizedPath)
         || testPathPrefix(normalizedPath, config.protected_control_plane_roots)
         || isConfigLikePath(normalizedPath)

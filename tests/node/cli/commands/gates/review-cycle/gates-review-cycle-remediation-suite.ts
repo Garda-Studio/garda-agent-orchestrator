@@ -3485,11 +3485,21 @@ describe('cli/commands/gates – review-cycle remediation scope expansion', {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });
 
-    it('restart-review-cycle allows __tests__ files as test-only remediation expansion', { concurrency: false }, async () => {
+    for (const scenario of [
+        { suffix: 'dunder-tests', file: 'src/__tests__/app-helper.ts', roles: {} },
+        { suffix: 'declared-case', file: 'specifications/purchase.case', roles: { 'specifications/purchase.case': 'test' } }
+    ]) {
+    it(`restart-review-cycle allows ${scenario.file} as test-only remediation expansion`, { concurrency: false }, async () => {
         const repoRoot = createTempRepo();
-        const taskId = 'T-903b-restart-review-cycle-dunder-tests';
+        const taskId = `T-903b-restart-review-cycle-${scenario.suffix}`;
         seedRemediationRepoBase(repoRoot);
         writeReviewCapabilitiesConfig(repoRoot);
+        const pathsConfig = path.join(repoRoot, 'garda-agent-orchestrator/live/config/paths.json');
+        fs.mkdirSync(path.dirname(pathsConfig), { recursive: true });
+        fs.writeFileSync(pathsConfig, JSON.stringify({
+            ...(fs.existsSync(pathsConfig) ? JSON.parse(fs.readFileSync(pathsConfig, 'utf8')) : {}),
+            file_roles: scenario.roles
+        }));
         const { commandsPath, outputFiltersPath } = writeSimpleCompileCommandsFile(repoRoot, 'restart-review-cycle-dunder-tests');
         initializeGitRepo(repoRoot);
         seedTaskQueue(repoRoot, taskId);
@@ -3499,7 +3509,7 @@ describe('cli/commands/gates – review-cycle remediation scope expansion', {
             repoRoot,
             taskId,
             taskSummary: 'Restart review cycle treats __tests__ as test remediation scope',
-            plannedChangedFiles: ['src/app.ts', 'src/__tests__/app-helper.ts']
+            plannedChangedFiles: ['src/app.ts', scenario.file]
         });
         loadTaskEntryRulePack(repoRoot, taskId);
         runHandshakeForTask(repoRoot, taskId);
@@ -3523,8 +3533,8 @@ describe('cli/commands/gates – review-cycle remediation scope expansion', {
         });
         assert.equal(compileResult.exitCode, 0);
 
-        fs.mkdirSync(path.join(repoRoot, 'src', '__tests__'), { recursive: true });
-        fs.writeFileSync(path.join(repoRoot, 'src', '__tests__', 'app-helper.ts'), 'export const ok = true;\n', 'utf8');
+        fs.mkdirSync(path.dirname(path.join(repoRoot, scenario.file)), { recursive: true });
+        fs.writeFileSync(path.join(repoRoot, scenario.file), 'export const ok = true;\n', 'utf8');
 
         const restartResult = await runRestartReviewCycleCommand({
             repoRoot,
@@ -3538,7 +3548,7 @@ describe('cli/commands/gates – review-cycle remediation scope expansion', {
         assert.equal(restartResult.exitCode, 0, restartResult.outputLines.join('\n'));
 
         const refreshedPreflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as Record<string, unknown>;
-        assert.deepEqual(refreshedPreflight.changed_files, ['src/__tests__/app-helper.ts', 'src/app.ts']);
+        assert.deepEqual(refreshedPreflight.changed_files, [scenario.file, 'src/app.ts'].sort());
         assert.equal((refreshedPreflight.required_reviews as Record<string, boolean>).test, true);
         const remediationArtifact = JSON.parse(fs.readFileSync(
             path.join(getReviewsRoot(repoRoot), `${taskId}-review-remediation-cycle.json`),
@@ -3546,11 +3556,12 @@ describe('cli/commands/gates – review-cycle remediation scope expansion', {
         )) as Record<string, unknown>;
         assert.deepEqual(
             (remediationArtifact.remediation_scope as Record<string, unknown>).allowed_test_only_expansion_files,
-            ['src/__tests__/app-helper.ts']
+            [scenario.file]
         );
 
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });
+    }
 
     it('restart-review-cycle uses classifier test regexes for non-JavaScript test expansion', { concurrency: false }, async () => {
         const repoRoot = createTempRepo();

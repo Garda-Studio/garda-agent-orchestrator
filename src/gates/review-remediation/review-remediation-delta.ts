@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { declaredFileRole, type FileRoleBindings } from '../../core/file-role-bindings';
 
 import { sha256RedactedJsonPayload } from '../../core/redaction';
 import { DEFAULT_REVIEW_TRIGGER_POLICY } from '../../policy/review-trigger-policy';
@@ -105,6 +106,7 @@ export interface ReviewRemediationDeltaClassification {
 }
 
 export interface ClassifyReviewRemediationDeltaOptions {
+    fileRoles?: FileRoleBindings;
     repoRoot: string;
     taskId: string;
     reviewType: string;
@@ -194,6 +196,7 @@ function getOperation(
 }
 
 function categorizeFile(options: {
+    fileRoles?: FileRoleBindings;
     filePath: string;
     operation: ReviewRemediationDeltaOperation;
     changedLines: number | null;
@@ -217,7 +220,9 @@ function categorizeFile(options: {
                 || `line delta is unavailable for ${options.baselineStatus} -> ${options.currentStatus}`
         };
     }
-    if (GENERATED_PATH_PATTERN.test(options.filePath)) {
+    const role = declaredFileRole(options.filePath, options.fileRoles);
+    if (role === 'source') return { category: 'production', reason: 'path has an explicit source role' };
+    if (role !== 'test' && GENERATED_PATH_PATTERN.test(options.filePath)) {
         return { category: 'generated_churn', reason: 'path is a generated or snapshot artifact' };
     }
     if (options.structuralPatterns.some((pattern) => pattern.test(options.filePath))) {
@@ -226,7 +231,7 @@ function categorizeFile(options: {
             reason: 'path matches the frozen shared test helper or harness policy'
         };
     }
-    if (isTestLikeRemediationPath(options.filePath, options.testPathRegexes)) {
+    if (isTestLikeRemediationPath(options.filePath, options.testPathRegexes, options.fileRoles)) {
         if (options.operation === 'added' || options.operation === 'deleted' || options.operation === 'type_changed') {
             return {
                 category: 'structural_test',
@@ -254,6 +259,7 @@ function categorizeFile(options: {
 }
 
 function classifyFromBaseline(options: {
+    fileRoles?: FileRoleBindings;
     repoRoot: string;
     taskId: string;
     reviewType: string;
@@ -348,6 +354,7 @@ function classifyFromBaseline(options: {
             baselineStatus: baselineEntry.status,
             currentStatus: currentEntry.status,
             testPathRegexes: options.testPathRegexes,
+            fileRoles: options.fileRoles,
             structuralPatterns,
             structuralThreshold: options.structuralTestChangedLinesThreshold
         });
@@ -488,6 +495,7 @@ export function classifyReviewRemediationDelta(
         baseline: baselineValidation.artifact,
         currentChangedFiles: options.currentChangedFiles,
         testPathRegexes: options.testPathRegexes ?? DEFAULT_REVIEW_TRIGGER_POLICY.test_path_regexes,
+        fileRoles: options.fileRoles,
         structuralTestPathRegexes: options.structuralTestPathRegexes
             ?? DEFAULT_REVIEW_TRIGGER_POLICY.test_refactor_structural_path_regexes,
         structuralTestChangedLinesThreshold: structuralThreshold

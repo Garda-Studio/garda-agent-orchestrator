@@ -46,6 +46,28 @@ function classifyFile(filePath: string) {
 }
 
 describe('ordinary documentation file safety', () => {
+    it('keeps explicitly declared source roles behavioral under documentation and configuration names', () => {
+        for (const filePath of ['src/view.mdx', 'docs/worker.md', 'config/rules.yaml', 'README']) {
+            const declaredConfig = makeConfig({ file_roles: { [filePath]: 'source' } });
+            const result = classifyChange({ normalizedFiles: [filePath], changedLinesTotal: 5,
+                taskIntent: 'Change project behavior', classificationConfig: declaredConfig,
+                reviewCapabilities: defaultCapabilities });
+            assert.equal(result.scope_category, 'code', filePath);
+            assert.equal(isSafeOrdinaryDocumentationPath(filePath, declaredConfig), false, filePath);
+        }
+    });
+
+    it('recognizes explicitly declared test roles before extension and directory guesses', () => {
+        for (const filePath of ['specifications/purchase.case', 'tests/purchase.yaml', 'docs/purchase.mdx', 'quality/购买']) {
+            const result = classifyChange({ normalizedFiles: [filePath], changedLinesTotal: 5,
+                taskIntent: 'Verify project behavior', classificationConfig: makeConfig({
+                    file_roles: { [filePath]: 'test' }
+                }), reviewCapabilities: defaultCapabilities });
+            assert.equal(result.scope_category, 'test-only', filePath);
+            assert.equal(result.required_reviews.test, true, filePath);
+        }
+    });
+
     for (const stem of [
         'docs/worker', 'doc/worker', 'packages/help/docs/worker', 'README',
         'README/index', 'CHANGELOG', 'examples/worker', 'custom-notes/worker'

@@ -2,6 +2,7 @@ import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { DOMAIN_SCOPE_NAMES } from '../../core/domain-scope-contracts';
+import { declaredFileRole, isTestScopePath } from '../../core/file-role-bindings';
 
 import { matchAnyRegex } from '../../gate-runtime/text-utils';
 import {
@@ -425,6 +426,9 @@ function isNonRuntimePerformanceSupportPath(
     classificationConfig: ReturnType<typeof getClassificationConfig>
 ): boolean {
     const normalizedPath = normalizePath(filePath);
+    if (declaredFileRole(normalizedPath, classificationConfig.file_roles) === 'source') {
+        return false;
+    }
     if (!hasPerformanceSupportDirectory(normalizedPath)) {
         return false;
     }
@@ -706,10 +710,8 @@ function computeCodeReviewScopeFingerprintInternal(
     const stagedBlobFingerprints = usesStagedContent(preflight)
         ? options.stagedBlobFingerprints || readStagedBlobFingerprints(repoRoot, allChangedFiles)
         : undefined;
-    const testChangedFiles = allChangedFiles.filter((filePath) => matchAnyRegex(filePath, classificationConfig.test_trigger_regexes, {
-        skipInvalidRegex: true,
-        caseInsensitive: true
-    }));
+    const testChangedFiles = allChangedFiles.filter((filePath) => isTestScopePath(filePath,
+        classificationConfig.test_trigger_regexes, classificationConfig.file_roles));
     const docsOnlyChangedFiles = allChangedFiles.filter((filePath) => (
         isSafeOrdinaryDocumentationPath(filePath, classificationConfig)
         && !isCloseoutEvidencePath(filePath)
@@ -885,9 +887,8 @@ export function computeReviewRelevantScopeFingerprint(
         review_scope_sha256: stringSha256(fingerprintEntries.join('\n')),
         docs_only: sortedReviewRelevantFiles.length === 0 && docsOnlyChangedFiles.length === allChangedFiles.length,
         documentation_review: docsOnlyChangedFiles.length > 0 && allChangedFiles.every((file) =>
-            !isCloseoutEvidencePath(file) && (docsOnlyChangedFiles.includes(file) || matchAnyRegex(file, resolvedClassificationConfig.test_trigger_regexes, {
-                skipInvalidRegex: true, caseInsensitive: true
-            })))
+            !isCloseoutEvidencePath(file) && (docsOnlyChangedFiles.includes(file) || isTestScopePath(file,
+                resolvedClassificationConfig.test_trigger_regexes, resolvedClassificationConfig.file_roles)))
     };
 }
 

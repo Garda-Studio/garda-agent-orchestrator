@@ -1,4 +1,6 @@
 import * as path from 'node:path';
+import { declaredFileRole, isTestScopePath } from '../../core/file-role-bindings';
+import { resolveReviewReuseClassificationConfig } from '../review-reuse/review-reuse';
 
 import {
     getInternalCloseoutEvidenceKind,
@@ -539,48 +541,27 @@ function isChangelogPath(filePath: string): boolean {
 
 function getDocImpactChangedFiles(
     preflight: Record<string, unknown> | null,
-    repoRoot: string
+    repoRoot: string,
+    classificationConfig: ResolvedClassificationConfig
 ): string[] {
-    const classificationConfig = getClassificationConfig(repoRoot);
     return getPreflightChangedFiles(preflight)
         .map((filePath) => normalizeDocImpactInputPath(filePath, repoRoot))
         .filter((filePath) => (
-            isDocumentationLikePath(filePath, classificationConfig.ordinary_doc_paths)
+            !declaredFileRole(filePath, classificationConfig.file_roles)
+            && isDocumentationLikePath(filePath, classificationConfig.ordinary_doc_paths)
             && !isRuntimeCodeLikePath(filePath, classificationConfig.code_like_regexes, classificationConfig.runtime_roots)
         ));
 }
 
 function hasNonDocumentationPreflightScope(
     preflight: Record<string, unknown> | null,
-    repoRoot: string
+    classificationConfig: ResolvedClassificationConfig
 ): boolean {
-    const classificationConfig = getClassificationConfig(repoRoot);
     return getPreflightChangedFiles(preflight).some((filePath) => (
-        !isDocumentationLikePath(filePath, classificationConfig.ordinary_doc_paths)
+        declaredFileRole(filePath, classificationConfig.file_roles) === 'source'
+        || (!isTestScopePath(filePath, classificationConfig.test_trigger_regexes, classificationConfig.file_roles)
+            && !isDocumentationLikePath(filePath, classificationConfig.ordinary_doc_paths))
     ));
-}
-
-function shouldDefaultDocImpactBehaviorChanged(
-    preflight: Record<string, unknown> | null,
-    repoRoot: string,
-    docsUpdated: string[]
-): boolean {
-    const changelogUpdated = docsUpdated.some((filePath) => isChangelogPath(filePath));
-    if (!changelogUpdated) {
-        return false;
-    }
-    return hasNonDocumentationPreflightScope(preflight, repoRoot);
-}
-
-function shouldDefaultInternalOnlyBehaviorChanged(
-    preflight: Record<string, unknown> | null,
-    repoRoot: string,
-    docsUpdated: string[]
-): boolean {
-    const scopeCategory = String(preflight?.scope_category || '').trim().toLowerCase();
-    return docsUpdated.length === 0
-        && scopeCategory !== 'test-only'
-        && hasNonDocumentationPreflightScope(preflight, repoRoot);
 }
 
 export interface DocImpactCommandPlan {
@@ -591,14 +572,14 @@ export interface DocImpactCommandPlan {
 function buildInternalCloseoutFields(
     changedFiles: string[],
     repoRoot: string,
-    internalOnlyBehaviorChanged: boolean
+    requiresInternalBehaviorEvidence: boolean
 ): string[] {
     const evidenceKinds = new Set(changedFiles.map((filePath) => getInternalCloseoutEvidenceKind(filePath, repoRoot)));
     const fields: string[] = [];
     if (evidenceKinds.has('internal-changelog')) fields.push('--internal-changelog-updated true');
     if (evidenceKinds.has('project-memory')) {
         fields.push('--project-memory-updated true');
-    } else if (internalOnlyBehaviorChanged) {
+    } else if (requiresInternalBehaviorEvidence) {
         const memoryImpact = routeProjectMemoryImpact(changedFiles);
         fields.push(memoryImpact.affectedFileNames.length > 0
             ? '--project-memory-updated true'
@@ -615,17 +596,22 @@ export function buildDocImpactCommandPlan(
     repoRoot: string,
     additionalDocsUpdated: string[] = []
 ): DocImpactCommandPlan {
+    const classificationConfig = resolveReviewReuseClassificationConfig(preflight || {}, repoRoot);
     const additionalPaths = additionalDocsUpdated
         .map((entry) => normalizeDocImpactInputPath(entry, repoRoot)).filter(Boolean);
     const changedFiles = [...getPreflightChangedFiles(preflight), ...additionalPaths]
         .map((entry) => normalizeDocImpactInputPath(entry, repoRoot));
     const docsUpdated = [...new Set([
-        ...getDocImpactChangedFiles(preflight, repoRoot),
+        ...getDocImpactChangedFiles(preflight, repoRoot, classificationConfig),
         ...additionalPaths
-    ].filter((entry) => getInternalCloseoutEvidenceKind(entry, repoRoot) === null))].sort();
+    ].filter((entry) => getInternalCloseoutEvidenceKind(entry, repoRoot) === null
+        && !declaredFileRole(entry, classificationConfig.file_roles)))].sort();
     const changelogUpdated = docsUpdated.some((filePath) => isChangelogPath(filePath));
-    const behaviorChanged = shouldDefaultDocImpactBehaviorChanged(preflight, repoRoot, docsUpdated);
-    const internalOnlyBehaviorChanged = shouldDefaultInternalOnlyBehaviorChanged(preflight, repoRoot, docsUpdated);
+    const behaviorChanged = hasNonDocumentationPreflightScope(preflight, classificationConfig);
+    const internalOnlyBehaviorChanged = docsUpdated.length === 0
+        && String(preflight?.scope_category || '').trim().toLowerCase() !== 'test-only'
+        && behaviorChanged;
+    const requiresInternalBehaviorEvidence = (behaviorChanged || internalOnlyBehaviorChanged) && !changelogUpdated;
     const parts = [
         `${cliPrefix} gate doc-impact-gate`,
         `--task-id ${quoteCommandValue(taskId)}`,
@@ -643,13 +629,15 @@ export function buildDocImpactCommandPlan(
         parts.push(`--behavior-changed ${internalOnlyBehaviorChanged ? 'true' : 'false'}`);
         parts.push('--changelog-updated false');
     }
-    parts.push(...buildInternalCloseoutFields(changedFiles, repoRoot, internalOnlyBehaviorChanged));
+    parts.push(...buildInternalCloseoutFields(changedFiles, repoRoot, requiresInternalBehaviorEvidence));
     if (requiresSensitiveScopeDocAcknowledgement(preflight)) {
         parts.push('--sensitive-scope-reviewed true');
     }
     parts.push(docsUpdated.length > 0
         ? behaviorChanged
-            ? '--rationale "Changelog and implementation files changed in the current preflight; recording documentation impact as behavior-changing by default. Adjust only if the changelog entry is not user-visible behavior."'
+            ? changelogUpdated
+                ? '--rationale "Changelog and implementation files changed in the current preflight; recording documentation impact as behavior-changing by default. Adjust only if the changelog entry is not user-visible behavior."'
+                : '--rationale "Implementation and documentation changed in the current preflight; record behavior impact with current internal evidence when the public changelog is unchanged."'
             : '--rationale "Documentation or changelog files were changed in the current preflight; next-step records them without requiring a fresh code/test review when non-doc scope is unchanged."'
         : internalOnlyBehaviorChanged
             ? '--rationale "Implementation files changed with no user-facing documentation paths; recording internal-only behavior evidence. Update task-scoped project memory before running if this command reports missing internal evidence."'
@@ -657,7 +645,7 @@ export function buildDocImpactCommandPlan(
     parts.push('--repo-root "."');
     return {
         command: parts.join(' '),
-        requiresProjectMemoryBeforeAssessment: internalOnlyBehaviorChanged
+        requiresProjectMemoryBeforeAssessment: requiresInternalBehaviorEvidence
     };
 }
 

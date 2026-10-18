@@ -1,4 +1,5 @@
 import { isTestLikeRemediationPath } from '../../../../gates/review-remediation/review-remediation-scope-boundary';
+import { declaredFileRole, type FileRoleBindings } from '../../../../core/file-role-bindings';
 import { normalizeChangedFiles } from './recovery-flow-shared';
 import type {
     ReviewRemediationImpactAnalysis,
@@ -16,7 +17,8 @@ export interface ReviewRemediationSemanticSignals {
 
 export function groupReviewRemediationFiles(
     files: readonly string[],
-    testTriggerRegexes: readonly string[]
+    testTriggerRegexes: readonly string[],
+    fileRoles?: FileRoleBindings
 ): Record<string, string[]> {
     const groups: Record<string, string[]> = {
         source: [],
@@ -27,7 +29,9 @@ export function groupReviewRemediationFiles(
         other: []
     };
     for (const file of normalizeChangedFiles(files)) {
-        if (isTestLikeRemediationPath(file, testTriggerRegexes)) {
+        if (declaredFileRole(file, fileRoles) === 'source') {
+            groups.source.push(file);
+        } else if (isTestLikeRemediationPath(file, testTriggerRegexes, fileRoles)) {
             groups.test.push(file);
         } else if (/^(docs|docs_local)\//iu.test(file) || /\.(md|mdx)$/iu.test(file)) {
             groups.docs.push(file);
@@ -150,7 +154,7 @@ function getTestOnlyImpactAnalysisFileScope(
     if (mentionedFiles.length === 0) {
         return [];
     }
-    return mentionedFiles.every((entry) => isTestLikeRemediationPath(entry, testTriggerRegexes))
+    return mentionedFiles.every((entry) => isTestLikeRemediationPath(entry, testTriggerRegexes, scopeBoundary.fileRoles))
         ? mentionedFiles
         : [];
 }
@@ -228,7 +232,8 @@ export function getReviewRemediationSemanticSignals(
     }
     const semanticFileGroups = groupReviewRemediationFiles(
         semanticFileScope.files,
-        testTriggerRegexes
+        testTriggerRegexes,
+        scopeBoundary.fileRoles
     );
     if (impactAnalysis && (semanticFileGroups.source?.length || 0) > 0) {
         return {

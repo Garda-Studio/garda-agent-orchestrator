@@ -27,6 +27,43 @@ function runGit(repoRoot: string, args: string[]): void {
 }
 
 describe('gates/domain-scope-fingerprints', () => {
+    it('uses declared roles consistently in domain and legacy fingerprints for arbitrary paths', () => {
+        const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-role-domains-'));
+        try {
+            const roles = { 'docs/view.mdx': 'source', 'perf/engine.rules': 'source',
+                'settings/rules.yaml': 'source', 'quality/purchase.case': 'test' };
+            const changedFiles = Object.keys(roles);
+            for (const file of changedFiles) {
+                fs.mkdirSync(path.dirname(path.join(repoRoot, file)), { recursive: true });
+                fs.writeFileSync(path.join(repoRoot, file), 'before\n');
+            }
+            const configFile = path.join(repoRoot, 'garda-agent-orchestrator/live/config/paths.json');
+            fs.mkdirSync(path.dirname(configFile), { recursive: true });
+            fs.writeFileSync(configFile, JSON.stringify({ file_roles: roles }));
+            const read = () => buildDomainScopeFingerprints({ repoRoot, detectionSource: 'explicit_changed_files',
+                includeUntracked: true, changedFiles });
+            const before = read();
+            assert.deepEqual(before.domains.implementation.changed_files,
+                ['docs/view.mdx', 'perf/engine.rules', 'settings/rules.yaml']);
+            assert.deepEqual(before.domains.test.changed_files, ['quality/purchase.case']);
+            assert.deepEqual(before.domains.docs.changed_files, []);
+            assert.deepEqual(before.domains.config.changed_files, []);
+            fs.writeFileSync(path.join(repoRoot, 'docs/view.mdx'), 'after\n');
+            const after = read();
+            assert.notEqual(after.domains.implementation.scope_sha256, before.domains.implementation.scope_sha256);
+            assert.notEqual(after.legacy.code_review_scope_sha256, before.legacy.code_review_scope_sha256);
+            assert.equal(after.domains.test.scope_sha256, before.domains.test.scope_sha256);
+            fs.writeFileSync(path.join(repoRoot, 'perf/engine.rules'), 'after\n');
+            const afterPerformanceSource = read();
+            assert.notEqual(getReviewLaneScopeSha256('code', afterPerformanceSource),
+                getReviewLaneScopeSha256('code', after));
+            fs.writeFileSync(configFile, JSON.stringify({ file_roles: {
+                'garda-agent-orchestrator/src/gates/runner.ts': 'test'
+            } }));
+            assert.throws(() => getClassificationConfig(repoRoot), /cannot downgrade protected control-plane/u);
+        } finally { fs.rmSync(repoRoot, { recursive: true, force: true }); }
+    });
+
     it('shares one staged-index read across domain and legacy fingerprints', () => {
         const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-domain-scope-staged-batch-'));
         try {

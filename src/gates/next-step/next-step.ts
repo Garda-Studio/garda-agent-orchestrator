@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { resolveReviewReuseClassificationConfig } from '../review-reuse/review-reuse';
 import { readCloseoutLinkageRecovery } from '../completion/completion-linkage-recovery';
 import { findUnapprovedActiveImplementationOwners } from '../workspace/active-implementation-ownership';
 import { assertWorkflowTransactionReadable } from '../../core/workflow-transaction-state';
@@ -176,7 +177,6 @@ import {
     readPreflightWorkspaceReadiness
 } from './next-step-compile-full-suite-readiness';
 import {
-    getClassificationConfig,
     getReviewCapabilities
 } from '../preflight/classify-change-config';
 import {
@@ -1488,7 +1488,7 @@ function getExpandedNonTestReviewRemediationFiles(params: {
     if (!params.preflight || !params.currentChangedFiles || params.currentChangedFiles.length === 0) {
         return [];
     }
-    const classificationConfig = getClassificationConfig(params.repoRoot);
+    const classificationConfig = resolveReviewReuseClassificationConfig(params.preflight, params.repoRoot);
     const scopeBoundary = assessReviewRemediationScopeBoundary(
         getPreflightChangedFilesForReviewRemediation(params.preflight),
         params.currentChangedFiles,
@@ -1496,7 +1496,8 @@ function getExpandedNonTestReviewRemediationFiles(params: {
             ...getTaskModeDirtyWorkspaceBaselineChangedFiles(params.repoRoot, params.taskMode),
             ...getTaskManualValidationBoundaryFiles(params.taskId, params.currentChangedFiles)
         ],
-        classificationConfig.test_trigger_regexes
+        classificationConfig.test_trigger_regexes,
+        classificationConfig.file_roles
     );
     return scopeBoundary.expandedNonTestFiles;
 }
