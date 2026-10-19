@@ -455,10 +455,25 @@ function terminateWindowsProcessTreesSync(
 // The tree helper is best-effort (PowerShell can be cold, blocked or missing).
 // Node's own handle still terminates the root child, so a failed helper never
 // leaves a timed-out or cancelled command running to completion.
-function killUnsettledWindowsRootChildren(entries: readonly ManagedChildProcess[]): void {
+const WINDOWS_FALLBACK_TREE_KILL_TIMEOUT_MS = 2_000;
+// Total budget for System32 tree kills after a failed helper run, shared by the whole batch.
+const WINDOWS_FALLBACK_TREE_KILL_BUDGET_MS = 3_000;
+
+function killUnsettledWindowsRootChildren(entries: readonly ManagedChildProcess[], treeKillBudgetMs: number): void {
+    const deadline = Date.now() + treeKillBudgetMs;
     for (const entry of entries) {
         const child = entry.child;
         if (entry.released || child.exitCode !== null || child.signalCode !== null) continue;
+        // The root is still running and Node holds its handle, so its PID cannot be reused yet;
+        // the System32 taskkill (never PATH) also stops descendants that inherited the output pipes.
+        const remainingMs = deadline - Date.now();
+        if (remainingMs > 0 && child.pid && WINDOWS_SYSTEM32_ROOT) {
+            try {
+                childProcess.execFileSync(path.join(WINDOWS_SYSTEM32_ROOT, 'taskkill.exe'),
+                    ['/PID', String(child.pid), '/T', '/F'],
+                    { stdio: 'ignore', windowsHide: true, timeout: Math.min(WINDOWS_FALLBACK_TREE_KILL_TIMEOUT_MS, remainingMs) });
+            } catch (_error) { /* Fall through to the direct handle kill. */ }
+        }
         try { child.kill(); } catch (_error) { /* Already exited. */ }
     }
 }
@@ -467,7 +482,8 @@ function killWindowsProcessTreesOnExit(entries: readonly ManagedChildProcess[], 
     if (timeoutMs > 0) {
         terminateWindowsProcessTreesSync(entries, timeoutMs);
     }
-    killUnsettledWindowsRootChildren(entries);
+    // The exit path already spent its bounded budget; only the direct handle kill remains.
+    killUnsettledWindowsRootChildren(entries, 0);
 }
 
 async function drainWindowsForceTerminations(): Promise<void> {
@@ -475,14 +491,16 @@ async function drainWindowsForceTerminations(): Promise<void> {
         const scheduledEntries = [...pendingWindowsForceTerminations.entries()];
         pendingWindowsForceTerminations.clear();
         const admittedEntries = scheduledEntries.map(([entry]) => entry);
+        let helperTerminated = false;
         try {
             if (admittedEntries.length > 0) {
-                await terminateWindowsProcessTrees(admittedEntries);
+                helperTerminated = await terminateWindowsProcessTrees(admittedEntries);
             }
         } catch (_error) {
             // Shutdown remains best-effort; settle every admitted request so later batches can run.
         } finally {
-            killUnsettledWindowsRootChildren(admittedEntries);
+            // Only a failed or empty helper run needs the slower System32 tree kill.
+            killUnsettledWindowsRootChildren(admittedEntries, helperTerminated ? 0 : WINDOWS_FALLBACK_TREE_KILL_BUDGET_MS);
             for (const [, resolve] of scheduledEntries) resolve();
         }
     }

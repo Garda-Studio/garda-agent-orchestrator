@@ -995,10 +995,12 @@ describe('shutdown cleanup concurrency', () => {
                 return new EventEmitter();
             };
 
+            // The timeout must exceed the time needed to start every fake child so all timers really
+            // fire together; with 10 ms a slow runner split them across two drains.
             for (let index = 0; index < SHUTDOWN_CLEANUP_CONCURRENCY * 3; index += 1) {
-                pendingResults.push(spawnStreamed('mock-command', [], { timeoutMs: 10 }));
+                pendingResults.push(spawnStreamed('mock-command', [], { timeoutMs: 200 }));
             }
-            await new Promise((resolve) => setTimeout(resolve, 50));
+            await new Promise((resolve) => setTimeout(resolve, 400));
             assert.deepEqual(
                 helperTargetCounts,
                 [fakeChildren.length],
@@ -1465,6 +1467,44 @@ describe('shell-surface hardening', () => {
             }
             fixture.cleanup();
             fs.rmSync(fakeToolRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('kills the root and its inherited-pipe descendants on timeout when the PowerShell tree helper fails', async () => {
+        if (process.platform !== 'win32') return;
+        const mutableChildProcess = require('node:child_process') as typeof childProcess;
+        const originalExecFile = mutableChildProcess.execFile;
+        const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-helper-failure-'));
+        const descendantPidPath = path.join(tempRoot, 'descendant.pid');
+        const script = [
+            "const cp = require('node:child_process');",
+            "const descendant = cp.spawn(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], { stdio: 'inherit' });",
+            `require('node:fs').writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
+            'setTimeout(()=>{},60000);'
+        ].join('\n');
+        let descendantPid: number | null = null;
+        try {
+            // Every helper launch fails immediately, as with a blocked or broken PowerShell.
+            (mutableChildProcess as any).execFile = function (...invocation: any[]) {
+                const callback = invocation[invocation.length - 1];
+                setImmediate(() => callback(Object.assign(new Error('helper unavailable'), { code: 1 }), '', ''));
+                return new EventEmitter();
+            };
+            const startedAt = Date.now();
+            const pending = spawnStreamed(process.execPath, ['-e', script], { timeoutMs: 1_500 });
+            assert.equal(await waitForFile(descendantPidPath, 5_000), true, 'descendant PID was not recorded');
+            descendantPid = Number(fs.readFileSync(descendantPidPath, 'utf8'));
+            const result = await pending;
+            assert.equal(result.timedOut, true);
+            assert.ok(Date.now() - startedAt < 1_500 + SUBPROCESS_TERMINATION_TIMEOUT_MS + 2_000,
+                `helper failure must not leave the command running, took ${Date.now() - startedAt}ms`);
+            assert.equal(await waitForProcessExit(descendantPid), true, 'inherited-pipe descendant survived the fallback');
+        } finally {
+            (mutableChildProcess as any).execFile = originalExecFile;
+            if (descendantPid !== null && isProcessAlive(descendantPid)) {
+                try { process.kill(descendantPid, 'SIGKILL'); } catch { /* Already exited. */ }
+            }
+            fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
         }
     });
 

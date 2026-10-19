@@ -25,7 +25,7 @@ describe('git helpers', () => {
     afterEach(() => {
         mock.restoreAll();
         for (const tempRoot of tempRoots.splice(0)) {
-            fs.rmSync(tempRoot, { recursive: true, force: true });
+            fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
         }
     });
 
