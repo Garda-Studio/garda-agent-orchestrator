@@ -719,8 +719,12 @@ const MISSING_FOCUSED_VALIDATION_MARKER_PATTERN = new RegExp(
     + `action=${escapeFocusedPatternLiteral(REVIEWER_MISSING_FOCUSED_VALIDATION_ACTION)})$`,
     'u'
 );
+// Inspect overlapping starts so an ignored negated claim cannot consume the next affirmative one.
 const MISSING_FOCUSED_VALIDATION_CLAIM_PATTERN =
-    /\b(?:missing|absent|no)\s+(?:prior\s+)?focused\s+(?:(?:test|check|validation)\s+)?(?:execution|run|evidence)\b|\bfocused\s+(?:test|check|validation|execution)(?:\s+(?:execution|run|evidence))?\b.{0,48}\b(?:missing|absent|unavailable|prohibited|not\s+(?:run|executed))\b|\b(?:could\s+not|cannot|can't|unable\s+to)\s+(?:run|execute)\b.{0,48}\bfocused\s+(?:test|check|validation)\b/iu;
+    /(?=\b(?:missing|absent|no)\s+(?:prior\s+)?focused\s+(?:(?:test|check|validation)\s+)?(?:execution|run|evidence)\b|\bfocused\s+(?:test|check|validation|execution)(?:\s+(?:execution|run|evidence))?\b.{0,48}?\b(?:missing|absent|unavailable|prohibited|not\s+(?:run|executed))\b|\b(?:could\s+not|cannot|can't|unable\s+to)\s+(?:run|execute)\b.{0,48}?\bfocused\s+(?:test|check|validation)\b)/giu;
+const NEGATED_FOCUSED_VALIDATION_CLAIM_PREFIX_PATTERN =
+    /\b(?:not\s+(?:an?|the)\s+(?:claim|assertion)\s+(?:that|of)|(?:do|does|did)\s+not\s+(?:claim|assert|report)(?:\s+that)?)\s+(?:(?:an?|the|any|prior|particular|specific|relevant)\s+){0,4}$/iu;
+const FOCUSED_VALIDATION_CLAIM_PREFIX_LIMIT = 160;
 const REVIEWER_FOCUSED_SCOPE_ESCAPE_PATTERN = /(?:^|[/\\])\.\.(?:[/\\]|$)|(?:^|[\s"'=])[a-z]:|(?:^|[\s"'=])\/(?!\/)/iu;
 const REVIEWER_UNSAFE_FOCUSED_COMMAND_PATTERNS: ReadonlyArray<{ pattern: RegExp; reason: string; unquotedOnly?: boolean }> = [
     {
@@ -1631,8 +1635,12 @@ function getMissingFocusedValidationMarkerTargets(finding: ReviewFinding): strin
 }
 
 function containsMissingFocusedValidationClaim(value: string): boolean {
-    return MISSING_FOCUSED_VALIDATION_MARKER_PATTERN.test(value)
-        || MISSING_FOCUSED_VALIDATION_CLAIM_PATTERN.test(value);
+    if (MISSING_FOCUSED_VALIDATION_MARKER_PATTERN.test(value)) return true;
+    for (const match of value.matchAll(MISSING_FOCUSED_VALIDATION_CLAIM_PATTERN)) {
+        const prefix = value.slice(Math.max(0, match.index - FOCUSED_VALIDATION_CLAIM_PREFIX_LIMIT), match.index);
+        if (!NEGATED_FOCUSED_VALIDATION_CLAIM_PREFIX_PATTERN.test(prefix)) return true;
+    }
+    return false;
 }
 
 function validateMissingFocusedValidationClaimChannels(

@@ -1580,6 +1580,92 @@ test('validateReviewFindingsReport rejects missing-focused-execution claims in o
     assert.ok(residualResult.violations.some((entry) => entry.includes("Residual risk 'R-001' must not report")));
 });
 
+test('validateReviewFindingsReport accepts explicitly negated focused-execution claims in design findings', () => {
+    for (const description of [
+        'The default upgrade regression permits a current-to-current no-op. This is a test-design gap, not a claim that a particular focused execution was missing.',
+        'The optional historical branch does not protect ordinary upgrades. We do not claim that prior focused execution was missing.',
+        'The regression omits the upgrade boundary. This is not an assertion of missing focused validation evidence.'
+    ]) {
+        const report = validReport();
+        (report.findings as Record<string, Array<Record<string, unknown>>>).medium = [{
+            id: 'F-001', title: 'The default upgrade regression permits a current-to-current no-op',
+            description, evidence: [evidence()], coverage_obligation_ids: ['FILE-001']
+        }];
+        (report.coverage_ledger as { entries: Array<Record<string, unknown>> }).entries[0].finding_ids = ['F-001'];
+        const result = validateReviewFindingsReport(report, validationOptions);
+        assert.equal(result.valid, true, result.violations.join('\n'));
+    }
+});
+
+test('validateReviewFindingsReport accepts explicitly negated focused-execution claims in design risks', () => {
+    const report = validReport();
+    report.residual_risks = [{ id: 'R-001',
+        description: 'The optional upgrade branch needs stronger coverage. This is not a claim that focused execution was missing.',
+        evidence: [evidence()] }];
+    const result = validateReviewFindingsReport(report, validationOptions);
+    assert.equal(result.valid, true, result.violations.join('\n'));
+});
+
+test('validateReviewFindingsReport keeps affirmative focused-execution claims blocking beside negated claims', () => {
+    for (const description of [
+        'Focused execution was missing. This is not a claim that a particular focused execution was missing.',
+        'This is not a claim that focused execution was missing; focused validation was unavailable.',
+        'This is not a claim that focused execution was missing, but focused validation was unavailable.',
+        'This is not a claim that focused execution was missing. No prior focused execution evidence exists.'
+    ]) {
+        const report = validReport();
+        (report.findings as Record<string, Array<Record<string, unknown>>>).medium = [{
+            id: 'F-001', title: 'Upgrade regression coverage', description,
+            evidence: [evidence()], coverage_obligation_ids: ['FILE-001']
+        }];
+        (report.coverage_ledger as { entries: Array<Record<string, unknown>> }).entries[0].finding_ids = ['F-001'];
+        const result = validateReviewFindingsReport(report, validationOptions);
+        assert.equal(result.valid, false, description);
+        assert.ok(result.violations.some(entry => entry.includes('ordinary noncanonical finding')), description);
+    }
+});
+
+test('validateReviewFindingsReport keeps affirmative focused-execution titles blocking with a negated description', () => {
+    const report = validReport();
+    (report.findings as Record<string, Array<Record<string, unknown>>>).medium = [{
+        id: 'F-001', title: 'Focused validation was unavailable',
+        description: 'This is not a claim that focused execution was missing.',
+        evidence: [evidence()], coverage_obligation_ids: ['FILE-001']
+    }];
+    (report.coverage_ledger as { entries: Array<Record<string, unknown>> }).entries[0].finding_ids = ['F-001'];
+    const result = validateReviewFindingsReport(report, validationOptions);
+    assert.equal(result.valid, false);
+    assert.ok(result.violations.some(entry => entry.includes('ordinary noncanonical finding')));
+});
+
+for (const channel of ['finding', 'risk'] as const) {
+    test(`validateReviewFindingsReport rejects overlapping affirmative focused claims in a ${channel}`, () => {
+        for (const description of [
+            'This is not a claim that focused execution succeeded; focused validation was unavailable.',
+            'This is not a claim that focused execution ran. Focused validation was unavailable.',
+            'This is not a claim that focused execution ran, but focused validation was unavailable.',
+            'We do not claim that focused execution ran; focused check evidence was absent.',
+            'This is not a claim that focused execution ran; no focused execution evidence exists.'
+        ]) {
+            const report = validReport();
+            if (channel === 'finding') {
+                (report.findings as Record<string, Array<Record<string, unknown>>>).medium = [{
+                    id: 'F-001', title: 'Upgrade regression coverage', description,
+                    evidence: [evidence()], coverage_obligation_ids: ['FILE-001']
+                }];
+                (report.coverage_ledger as { entries: Array<Record<string, unknown>> }).entries[0].finding_ids = ['F-001'];
+            } else {
+                report.residual_risks = [{ id: 'R-001', description, evidence: [evidence()] }];
+            }
+            const result = validateReviewFindingsReport(report, validationOptions);
+            assert.equal(result.valid, false, description);
+            const violation = channel === 'finding'
+                ? 'ordinary noncanonical finding' : "Residual risk 'R-001' must not report";
+            assert.ok(result.violations.some(entry => entry.includes(violation)), description);
+        }
+    });
+}
+
 test('validateReviewFindingsReport rejects conflicting F-000 marker targets across title and description', () => {
     const sameTargetReport = missingFocusedValidationReport();
     const sameTargetFinding = (sameTargetReport.findings as Record<string, Array<Record<string, unknown>>>).medium[0];
