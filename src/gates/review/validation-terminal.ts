@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import { currentProjectValidationAuthority, readProjectValidationAuthority } from '../project-validation/authority';
 import type { ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 import { resolveValidationSemanticReviewLanes, type EffectiveReviewSnapshot } from '../../policy/effective-review-snapshot';
@@ -11,6 +12,9 @@ import { sha256RedactedJsonPayload } from '../../core/redaction';
 import type { ReviewFindingsDispositionEvidenceCheckResult } from './review-findings-disposition-evidence';
 import type { ReviewFindingsDispositionItemKind } from './review-findings-disposition-artifact';
 import { taskRequiresExpectedRed } from '../test-first/expected-red-evidence';
+import { getCurrentNoOpEventSha256, getNoOpEvidence, resolveCurrentNoOpPreflightPath } from '../task-mode/no-op';
+import { isFullSuiteNotRequiredForZeroDiffNoReviewableScope } from '../full-suite/full-suite-validation-results';
+import { readValidationFile, validationDigest } from '../../core/project-validation-identity';
 
 interface TerminalReviewArtifact { content: string; receipt?: unknown }
 
@@ -79,10 +83,23 @@ export function getValidationTerminalViolations(options: {
     try {
         if (!options.preflight) return readProjectValidationAuthority(options.repoRoot)
             ? ['Declared validation terminal: current preflight is missing.'] : [];
-        if (!currentProjectValidationAuthority(options.repoRoot, options.preflight)
-            && !assessTrustBoundaryAnalysisApplicability(options.preflight).required
-            && !taskRequiresExpectedRed(options.repoRoot, options.taskId)) return [];
+        const declaredOrMatrix = currentProjectValidationAuthority(options.repoRoot, options.preflight)
+            || assessTrustBoundaryAnalysisApplicability(options.preflight).required;
+        const expectedRed = taskRequiresExpectedRed(options.repoRoot, options.taskId);
+        if (!declaredOrMatrix && !expectedRed) return [];
         if (options.preflight.task_id !== options.taskId) throw new Error('Foreign terminal task identity.');
+        if (!declaredOrMatrix) {
+            if (isFullSuiteNotRequiredForZeroDiffNoReviewableScope(options.preflight)
+                && Array.isArray(options.preflight.changed_files) && options.preflight.changed_files.length === 0) {
+                const preflightPath = resolveCurrentNoOpPreflightPath(options.repoRoot, options.taskId, options.preflightPath);
+                const retained = readValidationFile(options.repoRoot,
+                    path.relative(path.resolve(options.repoRoot), preflightPath).replace(/\\/gu, '/'));
+                if (validationDigest(JSON.parse(retained.bytes.toString('utf8'))) !== validationDigest(options.preflight))
+                    throw new Error('Expected-red no-op preflight differs from current canonical projection.');
+                const noOp = getNoOpEvidence(options.repoRoot, options.taskId, '', preflightPath);
+                if (getCurrentNoOpEventSha256(options.repoRoot, options.taskId, noOp)) return [];
+            }
+        }
         const lanes = resolveValidationSemanticReviewLanes(options.preflight.effective_review_snapshot as EffectiveReviewSnapshot);
         const targets = resolveAuthoritativeReviewValidationObligations({ ...options, preflight: options.preflight,
             reviewType: lanes[0] });

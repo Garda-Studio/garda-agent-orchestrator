@@ -11,11 +11,14 @@ import {
     runHandshakeDiagnosticsCommand,
     runLoadRulePackCommand,
     runRecordNoOpCommand,
+    runRequiredReviewsCheckCommand,
     runShellSmokePreflightCommand
 } from '../../../../../../src/cli/commands/gates';
 import { appendTaskEvent, inspectTaskEventFile } from '../../../../../../src/gate-runtime/task-events';
 import { fileSha256 } from '../../../../../../src/gates/shared/helpers';
 import { getCurrentNoOpEventSha256, getNoOpEvidence } from '../../../../../../src/gates/task-mode/no-op';
+import { getValidationTerminalViolations } from '../../../../../../src/gates/review/validation-terminal';
+import { isFullSuiteNotRequiredForZeroDiffNoReviewableScope } from '../../../../../../src/gates/full-suite/full-suite-validation-results';
 import { initGitRepo } from '../../../../gates/git-fixtures';
 import {
     makeTempRepo,
@@ -42,8 +45,13 @@ function resolveSourceCliPath(): string {
     throw new Error('Cannot resolve the source CLI for the native fixture launcher.');
 }
 
-function createFixture(requiredValidation = false) {
+function createFixture(requiredValidation = false, expectedRed = false) {
     const repoRoot = makeTempRepo();
+    if (expectedRed) {
+        const taskPath = path.join(repoRoot, 'TASK.md');
+        fs.writeFileSync(taskPath, fs.readFileSync(taskPath, 'utf8').replace('Test queue entry.',
+            `Test-first: expected-red.${requiredValidation ? ' Required reviews: code.' : ''}`));
+    }
     if (requiredValidation) {
         const taskPath = path.join(repoRoot, 'TASK.md');
         fs.writeFileSync(taskPath, fs.readFileSync(taskPath, 'utf8').replace('Test queue entry.', 'Required reviews: code.'));
@@ -74,7 +82,8 @@ function createFixture(requiredValidation = false) {
         const entry = runEnterTaskModeCommand({
             repoRoot, taskId: TASK_ID, taskSummary: 'Audit the already implemented source behavior',
             provider: 'Codex', requestedDepth: 2, startBanner: 'Garda task workflow engaged.',
-            plannedChangedFiles: ['src/app.ts'], upgradeExistingTaskMode, emitMetrics: false
+            plannedChangedFiles: expectedRed && !requiredValidation ? [] : ['src/app.ts'],
+            upgradeExistingTaskMode, emitMetrics: false
         });
         assert.equal(entry.exitCode, 0, entry.outputLines.join('\n'));
         const rules = runLoadRulePackCommand({
@@ -95,7 +104,8 @@ function createFixture(requiredValidation = false) {
     function classify(outputPath = preflightPath) {
         const result = runClassifyChangeCommand({
             repoRoot, taskId: TASK_ID, taskIntent: 'Audit the already implemented source behavior',
-            changedFiles: ['src/app.ts'], outputPath, emitMetrics: false
+            ...(expectedRed && !requiredValidation ? {} : { changedFiles: ['src/app.ts'] }),
+            outputPath, emitMetrics: false
         });
         assert.equal(JSON.parse(fs.readFileSync(outputPath, 'utf8')).task_id, TASK_ID, result.outputText);
         const rules = runLoadRulePackCommand({
@@ -129,6 +139,52 @@ function createFixture(requiredValidation = false) {
 }
 
 describe('record-no-op current preflight admission', () => {
+    it('closes a native no-review no-op despite a retained historical expected-red marker', () => {
+        const fixture = createFixture(false, true);
+        const preflight = JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8'));
+        assert.deepEqual(preflight.changed_files, []);
+        assert.deepEqual(preflight.effective_review_snapshot.required_review_ids, []);
+        assert.equal(isFullSuiteNotRequiredForZeroDiffNoReviewableScope(preflight), true,
+            JSON.stringify({ guard: preflight.zero_diff_guard, profile: preflight.profile_guardrails }));
+        const terminal = (projection = preflight) => getValidationTerminalViolations({
+            repoRoot: fixture.repoRoot, taskId: TASK_ID, preflightPath: fixture.preflightPath,
+            preflight: projection, requiredReviews: preflight.required_reviews, artifacts: {}
+        });
+        assert.notDeepEqual(terminal(), [], 'A clean baseline without audited no-op is not acceptance.');
+        assert.equal(fixture.record().exitCode, 0);
+        assert.ok(getCurrentNoOpEventSha256(fixture.repoRoot, TASK_ID,
+            getNoOpEvidence(fixture.repoRoot, TASK_ID, '', fixture.preflightPath)));
+        assert.deepEqual(terminal(), []);
+        const review = runRequiredReviewsCheckCommand({
+            repoRoot: fixture.repoRoot, taskId: TASK_ID, preflightPath: fixture.preflightPath, emitMetrics: false
+        });
+        assert.equal(review.exitCode, 0, review.outputLines.join('\n'));
+        assert.notDeepEqual(terminal({ ...preflight, changed_files: ['src/app.ts'] }), [],
+            'An in-memory empty-scope claim cannot replace the retained canonical projection.');
+        assert.notDeepEqual(terminal({ ...preflight, metrics: { ...preflight.metrics, changed_lines_total: 1 } }), [],
+            'Canonical projection authentication includes scope metrics.');
+        fs.appendFileSync(fixture.noOpPath, ' ');
+        assert.notDeepEqual(terminal(), [], 'Changed no-op bytes must invalidate the native event binding.');
+    });
+
+    it('ignores semantic validation for an ordinary task without validation activation', () => {
+        const fixture = createFixture();
+        assert.deepEqual(getValidationTerminalViolations({
+            repoRoot: fixture.repoRoot, taskId: TASK_ID, preflight: {}, requiredReviews: {}, artifacts: {}
+        }), []);
+    });
+
+    it('does not exempt historical expected-red when a no-op retains mandatory review lanes', () => {
+        const fixture = createFixture(true, true);
+        assert.equal(fixture.record().exitCode, 0);
+        const preflight = JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8'));
+        assert.ok(preflight.effective_review_snapshot.required_review_ids.includes('code'));
+        assert.notDeepEqual(getValidationTerminalViolations({
+            repoRoot: fixture.repoRoot, taskId: TASK_ID, preflightPath: fixture.preflightPath,
+            preflight, requiredReviews: preflight.required_reviews, artifacts: {}
+        }), []);
+    });
+
     for (const explicit of [true, false]) {
         it(`validates before reviewing an audited no-op with ${explicit ? 'explicit' : 'resolved'} preflight`, async () => {
             const fixture = createFixture(true);
