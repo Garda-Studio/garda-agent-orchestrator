@@ -64,6 +64,27 @@ function fetchAuthenticated(endpoint) {
     catch { throw new Error('Authenticated GitHub publication evidence is unavailable or malformed.'); }
 }
 
+function sameSourceMetadata(left, right) {
+    return left.isFile() && right.isFile() && left.ino === right.ino && left.mode === right.mode &&
+        left.uid === right.uid && left.gid === right.gid && left.nlink === right.nlink && left.size === right.size &&
+        left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs && left.birthtimeMs === right.birthtimeMs;
+}
+
+function completeSourcePathIdentity(file, current, flags) {
+    if (process.platform !== 'win32' || current.dev !== 0 || !current.isFile()) return current;
+    // This guard runs before compilation. Authenticate the omitted Windows
+    // volume through a second live descriptor without a compiled dependency.
+    const realFile = fs.realpathSync.native(file);
+    const descriptor = fs.openSync(file, flags);
+    try {
+        const identity = fs.fstatSync(descriptor), after = fs.lstatSync(file);
+        requireCondition(sameSourceMetadata(current, identity) && sameSourceMetadata(current, after) &&
+            current.dev === after.dev && !after.isSymbolicLink() && fs.realpathSync.native(file) === realFile,
+        'Publish source identity changed while reading.');
+        return identity;
+    } finally { fs.closeSync(descriptor); }
+}
+
 function readContractFile(root, relative) {
     const resolved = path.resolve(root);
     requireCondition(fs.realpathSync(resolved) === resolved, 'Publish source root must not be a symlink.');
@@ -71,11 +92,13 @@ function readContractFile(root, relative) {
     for (const part of [path.dirname(path.dirname(file)), path.dirname(file), file]) {
         requireCondition(!fs.lstatSync(part).isSymbolicLink() && fs.realpathSync(part) === part, 'Publish source symlinks are forbidden.');
     }
-    const descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
+    const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0);
+    const descriptor = fs.openSync(file, flags);
     try {
         const before = fs.fstatSync(descriptor);
         requireCondition(before.isFile() && before.size <= MAX_BYTES, 'Publish source must be a bounded regular file.');
-        const bytes = fs.readFileSync(descriptor), after = fs.fstatSync(descriptor), current = fs.lstatSync(file);
+        const bytes = fs.readFileSync(descriptor), after = fs.fstatSync(descriptor);
+        const current = completeSourcePathIdentity(file, fs.lstatSync(file), flags);
         requireCondition(after.size === bytes.length && bytes.length <= MAX_BYTES && before.ino === current.ino &&
             before.dev === current.dev && !current.isSymbolicLink(), 'Publish source identity changed while reading.');
         return bytes;

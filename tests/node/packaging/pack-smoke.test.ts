@@ -404,7 +404,7 @@ function preparePackSmokeTarball(repoRoot: string, fixtureRoot: string, candidat
 }
 
 test('startup probe counts modules through a symlinked package root', () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-startup-probe-'));
+    const tempRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gao-startup-probe-')));
     try {
         const packageRoot = path.join(tempRoot, 'package');
         const aliasRoot = path.join(tempRoot, 'package-alias');

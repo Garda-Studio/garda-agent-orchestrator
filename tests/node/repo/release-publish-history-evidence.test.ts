@@ -142,6 +142,38 @@ test('offline publish guard accepts initial validation and known pre-stage failu
     } finally { f.dispose(); }
 });
 
+test('offline publish guard authenticates a Windows source path with an omitted volume id', {
+    skip: process.platform !== 'win32'
+}, t => {
+    const f = fixture();
+    const filesystem = require('node:fs') as typeof fs;
+    const lstatSync = filesystem.lstatSync;
+    t.mock.method(filesystem, 'lstatSync', ((...args: Parameters<typeof lstatSync>) => {
+        const identity = Reflect.apply(lstatSync, filesystem, args);
+        if (!identity || !identity.isFile()) return identity;
+        return Object.assign(Object.create(Object.getPrototypeOf(identity)), identity, {
+            dev: typeof identity.dev === 'bigint' ? 0n : 0
+        });
+    }) as typeof lstatSync);
+    try {
+        assert.equal(f.verify().total_attempts, 1);
+        const fstatSync = filesystem.fstatSync;
+        let originalDescriptor: number | undefined;
+        t.mock.method(filesystem, 'fstatSync', ((...args: Parameters<typeof fstatSync>) => {
+            const identity = Reflect.apply(fstatSync, filesystem, args);
+            originalDescriptor ??= args[0];
+            if (args[0] === originalDescriptor) return identity;
+            return Object.assign(Object.create(Object.getPrototypeOf(identity)), identity, {
+                dev: typeof identity.dev === 'bigint' ? identity.dev + 1n : identity.dev + 1
+            });
+        }) as typeof fstatSync);
+        assert.throws(f.verify, /source identity changed while reading/u,
+            'A matching inode on another descriptor volume must still be rejected');
+    } finally {
+        f.dispose();
+    }
+});
+
 test('offline publish guard accepts retained authorization only with authenticated complete attempt history', () => {
     const f = fixture();
     try {
