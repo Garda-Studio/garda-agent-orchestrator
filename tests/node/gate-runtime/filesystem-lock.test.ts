@@ -1343,6 +1343,9 @@ test('active release intent bounds sync and async waiter metadata reads', async 
                 pid: 999999999,
                 created_at_utc: new Date().toISOString()
             }) + '\n', 'utf8');
+            // Anchor an active intent away from native file-clock precision and the future-date rejection boundary.
+            const activeIntentTime = new Date(Date.now() - 1_000);
+            fs.utimesSync(`${lockPath}.release-intent`, activeIntentTime, activeIntentTime);
             realFs.readFileSync = function (...args: unknown[]) {
                 const targetPath = typeof args[0] === 'string' ? path.resolve(args[0]) : '';
                 if (targetPath === path.resolve(ownerPath)) ownerReads += 1;

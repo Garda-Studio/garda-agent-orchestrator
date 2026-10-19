@@ -63,6 +63,7 @@ const NODE_FOUNDATION_ISOLATED_TEST_PATHS = new Set<string>([
 const NODE_FOUNDATION_SERIAL_TEST_PATHS = new Set<string>([
     'tests/node/bin/garda-delegation.test.ts',
     'tests/node/core/subprocess.test.ts',
+    'tests/node/core/windows-native-environment.test.ts',
     'tests/node/cli/commands/gates/diagnostics/gates-command-timeout.test.ts',
     'tests/node/cli/commands/gates/preflight/gates-dirty-workspace.test.ts',
     'tests/node/cli/commands/gates/review-launch/gates-command-review-launch-prepared-1.test.ts',
@@ -73,8 +74,10 @@ const NODE_FOUNDATION_SERIAL_TEST_PATHS = new Set<string>([
     'tests/node/cli/commands/gates/task-mode/gates-workflow-config-policy.test.ts',
     'tests/node/cli/commands/profile.test.ts',
     'tests/node/gate-runtime/review-artifacts.test.ts',
+    'tests/node/gate-runtime/lifecycle-events.test.ts',
     'tests/node/gate-runtime/task-events-locks.test.ts',
     'tests/node/gate-runtime/task-timeline-performance-acceptance.test.ts',
+    'tests/node/gate-runtime/windows-file-identity.test.ts',
     'tests/node/gates/next-step/next-step-review-failure-routing.test.ts',
     'tests/node/reports/local-ui-server-network.test.ts'
 ]);

@@ -599,6 +599,7 @@ test('runNodeFoundationTests runs contention-sensitive tests after parallel shar
     const originalAvailableParallelism = mutableOs.availableParallelism;
     const serialTestArgs = [
         'tests/node/core/subprocess.test.js',
+        'tests/node/core/windows-native-environment.test.js',
         'tests/node/cli/commands/gates/review-launch/gates-command-review-launch-prepared-1.test.js',
         'tests/node/cli/commands/gates/review-launch/gates-command-review-launch-prepared-2.test.js',
         'tests/node/cli/commands/gates/review-launch/gates-command-review-launch-prepared-3.test.js',
@@ -606,8 +607,10 @@ test('runNodeFoundationTests runs contention-sensitive tests after parallel shar
         'tests/node/cli/commands/gates/review-launch/gates-command-review-launch-prepared-5.test.js',
         'tests/node/cli/commands/gates/task-mode/gates-workflow-config-policy.test.js',
         'tests/node/cli/commands/profile.test.js',
+        'tests/node/gate-runtime/lifecycle-events.test.js',
         'tests/node/gate-runtime/task-events-locks.test.js',
         'tests/node/gate-runtime/task-timeline-performance-acceptance.test.js',
+        'tests/node/gate-runtime/windows-file-identity.test.js',
         'tests/node/gates/next-step/next-step-review-failure-routing.test.js'
     ].map((relativePath) => toNodeTestFileArg(
         buildResult,
