@@ -174,6 +174,8 @@ if (process.argv[2] === '--validate-selection') {
         console.error('Windows native diagnosis requires job=release and os=windows-latest.');
         process.exitCode = 1;
     }
-} else {
+} else if (process.argv[2] === '--baseline-controls') {
     main().catch(error => { console.error(error); process.exitCode = 1; });
+} else {
+    require('./trace-windows-native-failures.cjs').run();
 }

@@ -15,6 +15,8 @@ import { withRuntimeMutationGeneration } from '../../../src/gate-runtime/runtime
 import { buildRuntimeRetentionPreview } from '../../../src/lifecycle/runtime-policy/runtime-retention-policy';
 import { buildReportDataContract } from '../../../src/reports/report-data-contract';
 import { renderTaskRow } from '../../../src/reports/static-html/tasks-tab';
+import { inspectTrustedWindowsWriteAuthority } from '../../../src/gate-runtime/timeline/windows-acl-authority';
+import { getWindowsSystemDirectory } from '../../../src/core/windows-native-environment';
 import {
     buildCanonicalCatalogProjection,
     CanonicalCatalogInputError,
@@ -39,6 +41,7 @@ const SQLITE_CATALOG_CAPABILITY = probeSqliteCatalogCapability();
 const sqliteCatalogTest = SQLITE_CATALOG_CAPABILITY.available ? test : test.skip;
 const childProcessModule = require('node:child_process') as typeof import('node:child_process');
 const originalSpawnSync = childProcessModule.spawnSync;
+let fixtureAclInspections = 0;
 
 sqliteCatalogTest('catalog ingestion reconstructs missing devices and rejects a different-device source descriptor', () => {
     const workspaceRoot = createWorkspace('gao-catalog-device-');
@@ -96,11 +99,13 @@ sqliteCatalogTest('catalog ingestion reconstructs missing devices and rejects a 
 
 test.before(() => {
     if (process.platform !== 'win32') return;
+    const trustedAclCommand = path.join(getWindowsSystemDirectory(), 'icacls.exe');
     childProcessModule.spawnSync = ((command: string, args: string[], options: unknown) => {
-        if (command.toLowerCase() !== 'icacls.exe') {
+        if (command.toLowerCase() !== trustedAclCommand.toLowerCase()) {
             return originalSpawnSync(command, args, options as never);
         }
         const inspectedPath = String(args[0] || 'fixture');
+        fixtureAclInspections += 1;
         const stdout = `${inspectedPath} BUILTIN\\Users:(I)(RX)\r\n`;
         return {
             pid: 0,
@@ -116,6 +121,19 @@ test.before(() => {
 
 test.after(() => {
     childProcessModule.spawnSync = originalSpawnSync;
+});
+
+test('catalog fixture intercepts the trusted native ACL tool instead of inspecting host permissions', {
+    skip: process.platform !== 'win32' ? 'Windows ACL fixture is unavailable.' : false
+}, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-catalog-acl-fixture-'));
+    const inspectionsBefore = fixtureAclInspections;
+    try {
+        assert.equal(inspectTrustedWindowsWriteAuthority(root), true);
+        assert.equal(fixtureAclInspections - inspectionsBefore, 1);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
 });
 
 function createWorkspace(prefix: string): string {
