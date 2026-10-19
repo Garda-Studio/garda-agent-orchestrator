@@ -77,6 +77,35 @@ test('lifecycle migration preserves an existing grant and keeps provenance after
     } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
+test('lifecycle migration verifies its audit when Windows path stats omit the volume', {
+    skip: process.platform !== 'win32'
+}, (t) => {
+    const f = fixture();
+    const mutableFs = require('node:fs') as typeof fs;
+    const originalStat = mutableFs.statSync;
+    try {
+        permission(f.root, true);
+        const receiptPath = path.join(f.bundle, 'live/config/local-commit-enablement-receipt.json');
+        const receipt = fs.readFileSync(receiptPath);
+        const baseline = captureWorkflowConfigMigration(f.root);
+        addManagedRule(f);
+        recordWorkflowConfigMigration(f.root, baseline);
+        let omittedVolumeObservations = 0;
+        t.mock.method(mutableFs, 'statSync', (...args: unknown[]) => {
+            const stats = Reflect.apply(originalStat, mutableFs, args) as fs.Stats | fs.BigIntStats;
+            if (args[0] !== f.auditPath) return stats;
+            omittedVolumeObservations += 1;
+            return Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
+                { dev: typeof stats.dev === 'bigint' ? 0n : 0 });
+        });
+        assert.equal(resolveLocalCommitAvailability(f.root).enabled, true);
+        assert.ok(omittedVolumeObservations > 0, 'audit path must actually exercise the missing-volume condition');
+        assert.deepEqual(fs.readFileSync(receiptPath), receipt, 'verification must not replace or renew operator authority');
+        const edited = JSON.parse(fs.readFileSync(f.auditPath, 'utf8').trim().split('\n').at(-1)!);
+        assert.equal(isAuthenticatedWorkflowMigration(f.root, { ...edited, before_sha256: 'f'.repeat(64) }), false);
+    } finally { t.mock.restoreAll(); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test('lifecycle migration rejects permission elevation and foreign or edited provenance', () => {
     const f = fixture();
     const foreign = fixture();

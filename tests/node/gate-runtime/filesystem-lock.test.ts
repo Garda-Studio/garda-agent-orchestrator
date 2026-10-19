@@ -657,6 +657,49 @@ test('heartbeat handles partial descriptor writes and truncates the existing own
     }
 });
 
+test('heartbeat authenticates omitted Windows path volumes and rejects descriptor substitution', {
+    skip: process.platform !== 'win32'
+}, (t) => {
+    const tmp = mkTmpDir();
+    const lockPath = path.join(tmp, '.heartbeat-path-volume.lock');
+    const ownerPath = path.join(lockPath, 'owner.json');
+    const mutableFs = require('node:fs') as typeof fs;
+    const originalLstat = mutableFs.lstatSync;
+    const originalFstat = mutableFs.fstatSync;
+    try {
+        const { handle } = acquireFilesystemLock(lockPath);
+        const owner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
+        owner.heartbeat_at_utc = '2000-01-01T00:00:00.000Z';
+        fs.writeFileSync(ownerPath, JSON.stringify(owner));
+        t.mock.method(mutableFs, 'lstatSync', (...args: unknown[]) => {
+            const stats = Reflect.apply(originalLstat, mutableFs, args) as fs.Stats | fs.BigIntStats;
+            return args[0] === ownerPath ? Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
+                { dev: typeof stats.dev === 'bigint' ? 0n : 0 }) : stats;
+        });
+        writeLockHeartbeat(lockPath, handle.lockId!);
+        assert.notEqual(JSON.parse(fs.readFileSync(ownerPath, 'utf8')).heartbeat_at_utc, owner.heartbeat_at_utc);
+        const acceptedBytes = fs.readFileSync(ownerPath);
+        const writes = t.mock.method(mutableFs, 'writeSync');
+        const truncations = t.mock.method(mutableFs, 'ftruncateSync');
+        let observations = 0;
+        t.mock.method(mutableFs, 'fstatSync', (...args: unknown[]) => {
+            const stats = Reflect.apply(originalFstat, mutableFs, args) as fs.BigIntStats;
+            observations += 1;
+            return observations === 2 ? Object.assign(Object.create(Object.getPrototypeOf(stats)), stats, { dev: stats.dev + 1n }) : stats;
+        });
+        writeLockHeartbeat(lockPath, handle.lockId!);
+        assert.ok(observations >= 2, 'both live descriptor identities must actually be observed');
+        assert.equal(writes.mock.callCount(), 0, 'substituted native volume must not receive a write');
+        assert.equal(truncations.mock.callCount(), 0, 'substituted native volume must not be truncated');
+        assert.deepEqual(fs.readFileSync(ownerPath), acceptedBytes, 'unknown native volume must not receive a heartbeat write');
+        t.mock.restoreAll();
+        releaseFilesystemLock(handle);
+    } finally {
+        t.mock.restoreAll();
+        fs.rmSync(tmp, { recursive: true, force: true });
+    }
+});
+
 test('heartbeat rejects a replaced owner file opened after identity observation even with matching metadata', (t) => {
     const tmp = mkTmpDir();
     const lockPath = path.join(tmp, '.heartbeat-open-race.lock');
@@ -672,7 +715,8 @@ test('heartbeat rejects a replaced owner file opened after identity observation 
         const ownerMutations = (['writeSync', 'writeFileSync', 'ftruncateSync'] as const)
             .map((method) => t.mock.method(mutableFs, method));
         t.mock.method(mutableFs, 'openSync', (...args: unknown[]) => {
-            if (args[0] === ownerPath && !replaced) {
+            if (args[0] === ownerPath && typeof args[1] === 'number'
+                && (args[1] & fs.constants.O_RDWR) !== 0 && !replaced) {
                 replaced = true;
                 fs.renameSync(ownerPath, ownerPath + '.displaced');
                 fs.writeFileSync(ownerPath, originalBytes);

@@ -6,6 +6,7 @@ import { joinOrchestratorPath } from '../orchestrator-paths';
 import { assertWorkflowTransactionReadable } from '../workflow-transaction-state';
 import { validateWorkflowConfig } from '../../schemas/config-artifacts';
 import { isPlainRecord } from '../records';
+import { statFileIdentitySync } from '../file-stat';
 
 export interface LocalCommitAvailability {
     enabled: boolean;
@@ -177,7 +178,7 @@ function* readAuditWindow(auditPath: string, start: number): Generator<{ line: s
             if (pending.length > MAX_AUDIT_LINE_BYTES) throw new Error('Local commit audit record exceeds its 64 KiB budget.');
         }
         if (pending.length > 0) throw new Error('Local commit audit ends with an incomplete record.');
-        const current = fs.statSync(auditPath);
+        const current = statFileIdentitySync(auditPath);
         if (current.dev !== initial.dev || current.ino !== initial.ino || current.size !== initial.size
             || current.mtimeMs !== initial.mtimeMs || current.ctimeMs !== initial.ctimeMs) {
             throw new Error('Local commit audit changed during verification.');

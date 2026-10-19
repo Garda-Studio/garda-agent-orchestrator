@@ -5,6 +5,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { windowsAclOutputHasOnlyTrustedExplicitGrants } from '../../../src/gate-runtime/timeline/windows-acl-authority';
+import { observeIdentityAcquisitions } from './helpers/identity-acquisition-probe';
 
 import {
     appendTaskEvent,
@@ -82,12 +83,13 @@ test('reuses one immutable timeline payload read inside an invocation and releas
     const originalOpenSync = fsModule.openSync;
     let payloadReadCount = 0;
     let descriptorOpenCount = 0;
+    const identityProbe = observeIdentityAcquisitions();
     fsModule.openSync = ((
         targetPath: fs.PathLike,
         flags: fs.OpenMode,
         mode?: fs.Mode
     ) => {
-        if (isTimelinePayloadReadMode(flags) && path.resolve(String(targetPath)) === path.resolve(timelinePath)) {
+        if (!identityProbe.isActive() && isTimelinePayloadReadMode(flags) && path.resolve(String(targetPath)) === path.resolve(timelinePath)) {
             descriptorOpenCount += 1;
         }
         return originalOpenSync(targetPath, flags, mode);
@@ -157,6 +159,7 @@ test('reuses one immutable timeline payload read inside an invocation and releas
     } finally {
         fsModule.openSync = originalOpenSync;
         fsModule.readSync = originalReadSync;
+        identityProbe.restore();
     }
 });
 
@@ -168,9 +171,10 @@ test('completes one authenticated payload capture across valid short read syscal
     const originalOpenSync = fsModule.openSync;
     let payloadReadCalls = 0;
     let timelineReadDescriptors = 0;
+    const identityProbe = observeIdentityAcquisitions();
 
     fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
-        if (isTimelinePayloadReadMode(flags) && path.resolve(String(targetPath)) === path.resolve(timelinePath)) {
+        if (!identityProbe.isActive() && isTimelinePayloadReadMode(flags) && path.resolve(String(targetPath)) === path.resolve(timelinePath)) {
             timelineReadDescriptors += 1;
         }
         return originalOpenSync(targetPath, flags, mode);
@@ -197,6 +201,7 @@ test('completes one authenticated payload capture across valid short read syscal
     } finally {
         fsModule.openSync = originalOpenSync;
         fsModule.readSync = originalReadSync;
+        identityProbe.restore();
     }
 });
 
@@ -209,13 +214,14 @@ test('counts ordinary readonly captures without POSIX open bits', () => {
         const originalReadSync = fsModule.readSync;
         let captureCount = 0;
         let readCount = 0;
+        const identityProbe = observeIdentityAcquisitions();
         fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
             // Observe the access mode supplied without POSIX-only acquisition bits.
             // Actual native acquisition flags and filesystem authority stay intact.
             const observedFlags = typeof flags === 'number'
                 ? flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR)
                 : flags;
-            if (path.resolve(String(targetPath)) === path.resolve(timelinePath)
+            if (!identityProbe.isActive() && path.resolve(String(targetPath)) === path.resolve(timelinePath)
                 && isTimelinePayloadReadMode(observedFlags)) {
                 captureCount += 1;
             }
@@ -241,6 +247,7 @@ test('counts ordinary readonly captures without POSIX open bits', () => {
         } finally {
             fsModule.openSync = originalOpenSync;
             fsModule.readSync = originalReadSync;
+            identityProbe.restore();
         }
     }
 });
@@ -256,8 +263,9 @@ test('requests nonblocking acquisition when the platform exposes that capability
     // Windows lacks this capability; simulate the API contract, not a native FIFO result.
     if (simulated) Object.defineProperty(fs.constants, 'O_NONBLOCK', { value: nonblocking, configurable: true });
     let observed: fs.OpenMode | undefined;
+    const identityProbe = observeIdentityAcquisitions();
     fsModule.openSync = ((target: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
-        if (path.resolve(String(target)) === path.resolve(timelinePath) && isTimelinePayloadReadMode(flags)) {
+        if (!identityProbe.isActive() && path.resolve(String(target)) === path.resolve(timelinePath) && isTimelinePayloadReadMode(flags)) {
             observed = flags;
         }
         return originalOpen(target, simulated && typeof flags === 'number' ? flags & ~nonblocking : flags, mode);
@@ -267,9 +275,14 @@ test('requests nonblocking acquisition when the platform exposes that capability
         assert.equal(result.valid, true);
         assert.deepEqual(result.content, originalBytes);
         assert.equal(typeof observed, 'number', 'Descriptor acquisition must request the available nonblocking capability.');
-        assert.notEqual(Number(observed) & nonblocking, 0);
+        if (simulated || fs.constants.O_NONBLOCK) {
+            assert.notEqual(Number(observed) & nonblocking, 0);
+        } else {
+            assert.equal(Number(observed) & nonblocking, 0, 'An unsupported zero capability must not add acquisition flags.');
+        }
     } finally {
         fsModule.openSync = originalOpen;
+        identityProbe.restore();
         if (simulated) Reflect.deleteProperty(fs.constants, 'O_NONBLOCK');
     }
 });

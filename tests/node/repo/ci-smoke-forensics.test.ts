@@ -112,9 +112,11 @@ function assertReleasePreparation(job: string): void {
     assert.match(build, /^ {8}run: npm run build$/mu);
     assert.match(bootstrap, /^ {8}run: node bin\/garda\.js bootstrap --destination garda-agent-orchestrator$/mu);
     assert.match(validation, /^ {8}run: npm run validate:release:fast$/mu);
-    for (const step of [build, bootstrap, validation]) {
+    for (const step of [build, bootstrap]) {
         assert.doesNotMatch(step, /^ {8}if:|continue-on-error:/mu);
     }
+    assert.doesNotMatch(validation, /continue-on-error:/mu);
+    assert.match(validation, /^ {8}if: inputs\.release_mode != 'windows-native' \|\| runner\.os != 'Windows'$/mu);
     assert.ok(job.indexOf(build) < job.indexOf(bootstrap));
     assert.ok(job.indexOf(bootstrap) < job.indexOf(validation));
     assert.match(temporaryPaths, /^ {8}if: runner\.os == 'Windows'$/mu);
@@ -126,17 +128,21 @@ function assertReleasePreparation(job: string): void {
 }
 
 test('release validation prepares the actual embedded bundle before mandatory parity', () => {
-    assertReleasePreparation(getWorkflowJobBlock(getRawContent(loadCiWorkflow()), 'validate-release'));
+    const raw = getRawContent(loadCiWorkflow());
+    assert.match(raw, /^ {6}release_mode:\r?\n(?: {8}[^\r\n]*\r?\n)*? {8}default: full$/mu);
+    assertReleasePreparation(getWorkflowJobBlock(raw, 'validate-release'));
 });
 
 test('release preparation assertions reject skipped, reordered or neighboring-only preparation', () => {
     const job = getWorkflowJobBlock(getRawContent(loadCiWorkflow()), 'validate-release');
     const build = getWorkflowStepBlock(job, 'Prepare embedded release bundle');
     const bootstrap = getWorkflowStepBlock(job, 'Bootstrap embedded release bundle');
+    const validation = getWorkflowStepBlock(job, 'Validate release');
     const decoy = bootstrap.replace('Bootstrap embedded release bundle', 'Unrelated bootstrap');
     for (const invalid of [
         job.replace(bootstrap, bootstrap.replace('--destination garda-agent-orchestrator', '--destination unrelated')),
         job.replace(bootstrap, bootstrap.replace('        run:', "        if: false\n        run:")),
+        job.replace(validation, validation.replace("inputs.release_mode != 'windows-native' || runner.os != 'Windows'", 'false')),
         job.replace(build, '__BUILD_STEP__').replace(bootstrap, build).replace('__BUILD_STEP__', bootstrap)
     ]) {
         assert.throws(() => assertReleasePreparation(invalid + '\n' + decoy));

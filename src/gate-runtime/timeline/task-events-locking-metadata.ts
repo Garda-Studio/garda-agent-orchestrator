@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { FileIdentityChangedError, lstatFileIdentitySync } from '../../core/file-stat';
 
 import { DEFAULT_LOCK_HEARTBEAT_INTERVAL_MS, FOREIGN_HOST_FILE_LOCK_STALE_RECOVERY_ENV } from './task-events-locking-types';
 import type { LockFreshness, LockInspectionResult, LockOptions, LockOwnerMetadata } from './task-events-locking-types';
@@ -12,7 +13,7 @@ export function updateLockHeartbeatInPlace(
 ): void {
     let descriptor: number | undefined;
     try {
-        const observed = fs.lstatSync(metadataPath, { bigint: true });
+        const observed = lstatFileIdentitySync(metadataPath, { bigint: true });
         if (!observed.isFile() || observed.ino <= 0n || observed.nlink !== 1n) return;
         descriptor = fs.openSync(metadataPath,
             fs.constants.O_RDWR | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
@@ -23,6 +24,7 @@ export function updateLockHeartbeatInPlace(
         const payload = serializeHeartbeat(fs.readFileSync(descriptor, 'utf8'));
         if (payload !== null) writeHeartbeatPayload(descriptor, payload);
     } catch (error: unknown) {
+        if (error instanceof FileIdentityChangedError) return;
         if (!['ENOENT', 'ENOTDIR', 'EISDIR', 'ELOOP'].includes(getErrorCode(error))) throw error;
     } finally {
         if (descriptor !== undefined) fs.closeSync(descriptor);

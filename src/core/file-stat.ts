@@ -2,6 +2,12 @@ import * as fs from 'node:fs';
 
 type FileStat = fs.Stats | fs.BigIntStats;
 
+export class FileIdentityChangedError extends Error {
+    constructor(filePath: fs.PathLike) {
+        super(`File identity changed while inspecting: ${String(filePath)}`);
+    }
+}
+
 function sameMetadata(left: FileStat, right: FileStat): boolean {
     const sameNode = left.ino === right.ino
         && left.mode === right.mode
@@ -33,7 +39,7 @@ function readFileIdentity(filePath: fs.PathLike, followLinks: boolean, bigint: b
     };
     const before = readPathStat();
     if (expected && !sameIdentity(expected, before)) {
-        throw new Error(`File identity changed while inspecting: ${String(filePath)}`);
+        throw new FileIdentityChangedError(filePath);
     }
     if (process.platform !== 'win32' || (before.dev !== 0 && before.dev !== 0n)
         || (!before.isFile() && !before.isDirectory())) return before;
@@ -58,7 +64,7 @@ function readFileIdentity(filePath: fs.PathLike, followLinks: boolean, bigint: b
             || !sameMetadata(before, first) || !sameIdentity(first, second)
             || !sameIdentity(first, current) || !sameIdentity(before, after)
             || fs.realpathSync.native(filePath) !== realPath) {
-            throw new Error(`File identity changed while inspecting: ${String(filePath)}`);
+            throw new FileIdentityChangedError(filePath);
         }
         return current;
     } finally {
