@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const CI_WORKFLOW_SHA256 = 'ac7018f10399ebd374289933db3162f541f21bcc69ba5f728d43f6286f4f1c4e';
+const CI_WORKFLOW_SHA256 = 'f3ab52b14039876cc18aeaf5dead882a0800fd0d34722453e8c943e50180b6e4';
 const SELECTOR_SHA256 = 'cb34c3544940e746ad023a8fa4c9e6de4b789fec05e1cdef106bbb7c0da034a5';
 // Accepted common-baseline scripts, including the current coverage commands.
 const CI_SCRIPTS_SHA256 = '4b4dbe27b0bb021eec5152cb0ff654bbb16bb30b1946f5539bf7f8008398f8f8';

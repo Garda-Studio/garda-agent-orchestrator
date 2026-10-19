@@ -607,6 +607,7 @@ test('runNodeFoundationTests runs contention-sensitive tests after parallel shar
         'tests/node/cli/commands/gates/task-mode/gates-workflow-config-policy.test.js',
         'tests/node/cli/commands/profile.test.js',
         'tests/node/gate-runtime/task-events-locks.test.js',
+        'tests/node/gate-runtime/task-timeline-performance-acceptance.test.js',
         'tests/node/gates/next-step/next-step-review-failure-routing.test.js'
     ].map((relativePath) => toNodeTestFileArg(
         buildResult,
@@ -684,8 +685,7 @@ test('runNodeFoundationTests isolates mutation-sensitive suites from grouped sha
         'tests/node/cli/commands/gates/review-cycle/gates-review-cycle-restart.test.js',
         'tests/node/cli/commands/gates/review-reuse/gates-review-reuse-historical-rejections.test.js',
         'tests/node/cli/commands/gates/review-reuse/gates-review-reuse-upstream.test.js',
-        'tests/node/cli/commands/task-events-human-format.test.js',
-        'tests/node/gate-runtime/task-timeline-performance-acceptance.test.js'
+        'tests/node/cli/commands/task-events-human-format.test.js'
     ].map((relativePath) => toNodeTestFileArg(
         buildResult,
         addCompiledTestFile(buildResult, relativePath)
