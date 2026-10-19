@@ -452,11 +452,22 @@ function terminateWindowsProcessTreesSync(
     return terminatedAny;
 }
 
-function killWindowsProcessTreesOnExit(entries: readonly ManagedChildProcess[], timeoutMs: number): void {
-    if (timeoutMs <= 0) {
-        return;
+// The tree helper is best-effort (PowerShell can be cold, blocked or missing).
+// Node's own handle still terminates the root child, so a failed helper never
+// leaves a timed-out or cancelled command running to completion.
+function killUnsettledWindowsRootChildren(entries: readonly ManagedChildProcess[]): void {
+    for (const entry of entries) {
+        const child = entry.child;
+        if (entry.released || child.exitCode !== null || child.signalCode !== null) continue;
+        try { child.kill(); } catch (_error) { /* Already exited. */ }
     }
-    terminateWindowsProcessTreesSync(entries, timeoutMs);
+}
+
+function killWindowsProcessTreesOnExit(entries: readonly ManagedChildProcess[], timeoutMs: number): void {
+    if (timeoutMs > 0) {
+        terminateWindowsProcessTreesSync(entries, timeoutMs);
+    }
+    killUnsettledWindowsRootChildren(entries);
 }
 
 async function drainWindowsForceTerminations(): Promise<void> {
@@ -471,6 +482,7 @@ async function drainWindowsForceTerminations(): Promise<void> {
         } catch (_error) {
             // Shutdown remains best-effort; settle every admitted request so later batches can run.
         } finally {
+            killUnsettledWindowsRootChildren(admittedEntries);
             for (const [, resolve] of scheduledEntries) resolve();
         }
     }

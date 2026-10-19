@@ -4,7 +4,9 @@ import { getWindowsNativeEnvironment, getWindowsSystemDirectory, WINDOWS_NATIVE_
 
 const ACL_INSPECTION_TIMEOUT_MS = 1_000;
 const ACL_INSPECTION_MAX_ATTEMPTS = 2;
-const NATIVE_SID_LOOKUP_TIMEOUT_MS = 2_500;
+// A cold Windows PowerShell start has been measured above 3.5s on hosted runners;
+// a too-short budget fails closed and rejects every trusted timeline append.
+const NATIVE_SID_LOOKUP_TIMEOUT_MS = 10_000;
 let trustedPrincipalNames: ReadonlySet<string> | null = null;
 
 const TRUSTED_PRINCIPALS_SCRIPT = WINDOWS_NATIVE_POWERSHELL_BOOTSTRAP + `

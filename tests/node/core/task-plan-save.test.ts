@@ -113,8 +113,11 @@ if (process.env.GARDA_TASK_PLAN_ENTRY_TEST_ROOT) {
         assert.throws(() => saveTaskPlan(root, TASK_ID, file), /start evidence/);
         fs.unlinkSync(mode);
         const bundle = path.dirname(path.dirname(path.dirname(saved)));
-        appendTaskEvent(bundle, TASK_ID, 'TASK_MODE_ENTERED', 'PASS', 'Started', {}, { passThru: true });
-        appendTaskEvent(bundle, TASK_ID, 'TASK_RESET', 'PASS', 'Reset to TODO', {}, { passThru: true });
+        for (const [eventType, message] of [['TASK_MODE_ENTERED', 'Started'], ['TASK_RESET', 'Reset to TODO']]) {
+            const appended = appendTaskEvent(bundle, TASK_ID, eventType, 'PASS', message, {}, { passThru: true });
+            assert.equal(appended?.canonical_committed, true,
+                `setup append ${eventType} was rejected: ${appended?.warnings.join('; ')}`);
+        }
         assert.throws(() => saveTaskPlan(root, TASK_ID, file), /lifecycle history/);
         const timeline = path.join(bundle, 'runtime', 'task-events', `${TASK_ID}.jsonl`);
         fs.writeFileSync(timeline, '{ malformed history');

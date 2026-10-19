@@ -58,7 +58,10 @@ const NODE_FOUNDATION_ISOLATED_TEST_PATHS = new Set<string>([
     'tests/node/cli/commands/gates/review-reuse/gates-review-reuse-upstream.test.ts',
     'tests/node/cli/commands/task-events-human-format.test.ts',
     'tests/node/gates/diagnostics/shell-smoke-preflight.test.ts',
-    'tests/node/gates/compile/full-suite-validation-cli-transaction.test.ts'
+    'tests/node/gates/compile/full-suite-validation-cli-transaction.test.ts',
+    // Node reports files in order: behind another long file this ~10 minute Windows suite
+    // emits nothing until the end and trips the shard idle timeout.
+    'tests/node/repo/release-readiness.test.ts'
 ]);
 const NODE_FOUNDATION_SERIAL_TEST_PATHS = new Set<string>([
     'tests/node/bin/garda-delegation.test.ts',
