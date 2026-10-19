@@ -503,7 +503,7 @@ test('release readiness passes when package, CI, docs, security, and checklist c
         assert.match(output, /Trusted Publishing path: explicitly dispatch/);
         assert.doesNotMatch(output, /Security\/audit proof:/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -532,7 +532,7 @@ for (const [name, before, after] of [
             const result = validateReleaseReadiness(root);
             assert.equal(result.checks.find(check => check.area === 'trusted-publish-workflow')?.passed, false);
             assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
-        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+        } finally { fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
     });
 }
 
@@ -543,7 +543,7 @@ test('release readiness accepts the reviewed SHA-pinned Actions across security 
         const result = validateReleaseReadiness(repoRoot);
         assert.equal(result.passed, true, formatReleaseReadinessResult(result));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -564,7 +564,7 @@ test('release readiness accepts quoted uses keys and references for reviewed pin
         const result = validateReleaseReadiness(repoRoot);
         assert.equal(result.passed, true, formatReleaseReadinessResult(result));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -581,7 +581,7 @@ test('release readiness accepts CRLF reviewed CI, Security, auxiliary and Publis
         const result = validateReleaseReadiness(repoRoot);
         assert.equal(result.passed, true, formatReleaseReadinessResult(result));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -609,7 +609,7 @@ test('release readiness rejects manual Security source drift without a legacy ma
         assert.match(output, /blocking: security\.yml npm audit high-severity gate present=false/);
         assert.match(output, /informational: security\.yml OSV lockfile scan present=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -637,7 +637,7 @@ test('release readiness rejects executable scalar source drift in reviewed Publi
         writeFile(workflowPath, original.trimEnd());
         assert.ok(validateReleaseReadiness(repoRoot).violations.some(violation => violation.startsWith('trusted-publish-workflow:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -657,7 +657,7 @@ test('release readiness ignores a reviewed-looking uses line inside a block scal
         assert.equal(result.passed, false);
         assert.match(formatReleaseReadinessResult(result), /informational: security\.yml OSV lockfile scan present=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -681,7 +681,7 @@ test('release readiness ignores reviewed-looking uses text in multiline quoted s
             assert.equal(result.passed, false);
             assert.match(formatReleaseReadinessResult(result), /informational: security\.yml OSV lockfile scan present=false/);
         } finally {
-            fs.rmSync(repoRoot, { recursive: true, force: true });
+            fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
         }
     }
 });
@@ -706,7 +706,7 @@ test('release readiness rejects a forged SHA or version comment in a pinned Acti
             assert.equal(result.passed, false);
             assert.match(formatReleaseReadinessResult(result), /blocking: secret-scanning\.yml gitleaks gate present=false/);
         } finally {
-            fs.rmSync(repoRoot, { recursive: true, force: true });
+            fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
         }
     }
 });
@@ -732,7 +732,7 @@ test('release readiness rejects the target tag even when it points at HEAD', () 
         assert.match(output, /release-tag: the target version is not assigned to another local Git commit/u);
         assert.match(output, /Local release tag v1\.1\.0 already points at/u);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -750,7 +750,7 @@ test('release readiness fails when CHANGELOG does not start with the target vers
         assert.match(output, /changelog: CHANGELOG starts with one populated target section and preserves released history/u);
         assert.match(output, /first release heading=1\.2\.0/u);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -789,7 +789,7 @@ test('release readiness rejects rewritten history from the prior release tag', (
         assert.equal(deletedHistoryResult.passed, false);
         assert.match(deletedHistoryOutput, /released history baseline=v1\.0\.0; preserved=false/u);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -805,7 +805,7 @@ test('release readiness fails on broken links in tracked Markdown documents', ()
         assert.match(output, /documentation-links: tracked Markdown documents contain no broken repository-relative links/u);
         assert.match(output, /docs\/broken-link\.md -> \.\/not-present\.md \(missing target\)/u);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -830,8 +830,8 @@ test('release readiness rejects Markdown destinations that escape through direct
         assert.equal(result.passed, false);
         assert.match(output, /docs\/external-link\.md -> \.\/external-target\/README\.md \(outside repository\)/u);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
-        fs.rmSync(outsideRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+        fs.rmSync(outsideRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -849,7 +849,7 @@ test('release readiness checks reference-style Markdown destinations', () => {
         assert.equal(result.passed, false);
         assert.match(output, /docs\/broken-reference\.md -> \.\/not-present\.md \(missing target\)/u);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -864,7 +864,7 @@ test('release readiness rejects undefined shortcut references', () => {
         assert.equal(result.passed, false);
         assert.match(output, /docs\/broken-shortcut\.md -> \[missing guide\] \(undefined reference\)/u);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -883,7 +883,7 @@ test('release readiness rejects missing Markdown heading anchors', () => {
         assert.equal(result.passed, false);
         assert.match(output, /docs\/broken-anchor\.md -> \.\/anchor-target\.md#missing-heading \(missing anchor\)/u);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -913,7 +913,7 @@ test('release readiness accepts spaced destinations, duplicate heading anchors, 
         const result = validateReleaseReadiness(repoRoot);
         assert.equal(result.passed, true, formatReleaseReadinessResult(result));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -933,7 +933,7 @@ test('release readiness fails when the package-surface baseline belongs to anoth
         assert.match(output, /package-surface: release preflight scores the deterministic packed surface/u);
         assert.match(output, /baselineIdentityAligned=false/u);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -949,7 +949,7 @@ test('release readiness fails closed when the package-surface baseline is missin
         assert.match(output, /package-surface: release preflight scores the deterministic packed surface/u);
         assert.match(output, /missing config\/release-package-surface-baseline\.json/u);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -967,7 +967,7 @@ test('release readiness fails closed when the package-surface baseline is malfor
         assert.equal(result.passed, false);
         assert.match(output, /release-package-surface-baseline\.json\.schemaVersion must be 2/u);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -984,7 +984,7 @@ test('release readiness fails when package-surface scoring is removed from relea
         assert.ok(result.violations.some((violation) => violation.startsWith('package-surface:')));
         assert.ok(result.violations.some((violation) => violation.startsWith('release-gate:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1000,7 +1000,7 @@ test('release readiness fails when trusted publish workflow is missing', () => {
         assert.match(output, /publish\.yml present=false/);
         assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1024,7 +1024,7 @@ test('release readiness fails when tagged publish jobs keep the local release ta
         assert.match(output, /publish job removes its ephemeral local tag ref before release uniqueness proof=false/u);
         assert.ok(result.violations.some((violation) => violation.startsWith('trusted-publish-workflow:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1045,7 +1045,7 @@ test('release readiness fails when manual publish jobs omit their bounded retry 
         assert.match(output, /publish job rejects started or uncertain staging history=false/u);
         assert.ok(result.violations.some((violation) => violation.startsWith('trusted-publish-workflow:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1068,7 +1068,7 @@ test('release readiness fails when tagged publish validation omits prior-run his
         assert.match(output, /validate job binds bounded complete same-tag attempt history=false/u);
         assert.ok(result.violations.some((violation) => violation.startsWith('trusted-publish-workflow:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1098,7 +1098,7 @@ test('release readiness rejects inert text containing every prior-run history ma
         assert.match(output, /validate job binds bounded complete same-tag attempt history=false/u);
         assert.ok(result.violations.some((violation) => violation.startsWith('trusted-publish-workflow:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1118,7 +1118,7 @@ test('release readiness fails when workflow-run history permission is missing', 
         assert.match(output, /publish workflow has read-only access to provider workflow-run history=false/u);
         assert.ok(result.violations.some((violation) => violation.startsWith('trusted-publish-workflow:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1141,7 +1141,7 @@ test('release readiness fails when tagged publish jobs omit release-tag history'
         assert.match(output, /publish jobs fetch release-tag history for changelog preservation checks=false/u);
         assert.ok(result.violations.some((violation) => violation.startsWith('trusted-publish-workflow:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1156,7 +1156,7 @@ test('release readiness fails when trusted publish workflow falls back to npm to
         assert.equal(result.passed, false);
         assert.match(output, /publish workflow avoids npm tokens, --provenance override, and self-hosted runners=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1179,7 +1179,7 @@ test('release readiness fails when manual Publish also allows automatic tag push
         assert.match(output, /publish\.yml accepts only manual dispatch=false/);
         assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1202,7 +1202,7 @@ test('release readiness fails when manual Publish dispatch is replaced by a rele
         assert.match(output, /publish\.yml accepts only manual dispatch=false/);
         assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1222,7 +1222,7 @@ test('release readiness fails when trusted publish workflow omits Node version p
         assert.match(output, /publish workflow pins Node 24 for Trusted Publishing=false/);
         assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1242,7 +1242,7 @@ test('release readiness fails when trusted publish workflow downgrades Node vers
         assert.match(output, /publish workflow pins Node 24 for Trusted Publishing=false/);
         assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1272,7 +1272,7 @@ test('release readiness fails when trusted publish validate job only echoes vers
         assert.match(output, /validate job has fail-closed tag\/version guard=false/);
         assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1313,7 +1313,7 @@ test('release readiness fails when trusted publish validate guard markers are on
         assert.match(output, /validate job has fail-closed tag\/version guard=false/);
         assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1330,7 +1330,7 @@ test('release readiness rejects CI proof markers printed without running the che
         const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
         assert.match(output, /validate job requires successful CI for the exact release commit=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1343,7 +1343,7 @@ test('release readiness rejects a candidate packed inside the checkout', () => {
         const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
         assert.match(output, /validate job packs, smokes, and uploads the digest-bound release candidate=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1356,7 +1356,7 @@ test('release readiness rejects candidate packing without strict shell checks', 
         const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
         assert.match(output, /validate job packs, smokes, and uploads the digest-bound release candidate=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1370,7 +1370,7 @@ test('release readiness rejects a candidate upload without exact-tarball smoke',
         const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
         assert.match(output, /validate job packs, smokes, and uploads the digest-bound release candidate=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1406,7 +1406,7 @@ for (const [name, before, after] of [
             assert.match(output, /trusted-publish-workflow|validate job (requires successful CI|packs, smokes, and uploads)/);
             assert.equal(validateReleaseReadiness(repoRoot).passed, false);
         } finally {
-            fs.rmSync(repoRoot, { recursive: true, force: true });
+            fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
         }
     });
 }
@@ -1427,7 +1427,7 @@ test('release readiness fails when trusted publish environment binding is missin
         assert.match(output, /publish job is npm-release environment bound and uses id-token OIDC staged publishing=false/);
         assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1447,7 +1447,7 @@ test('release readiness fails when trusted publish OIDC permission is missing', 
         assert.match(output, /publish job is npm-release environment bound and uses id-token OIDC staged publishing=false/);
         assert.ok(result.violations.some(v => v.startsWith('trusted-publish-workflow:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1460,7 +1460,7 @@ test('release readiness rejects an echoed npm version in publish sanity checks',
         const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
         assert.match(output, /publish job has fail-closed package and npm CLI sanity guard=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1474,7 +1474,7 @@ test('release readiness rejects an npm guard present only in heredoc text', () =
         const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
         assert.match(output, /publish job has fail-closed package and npm CLI sanity guard=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1491,7 +1491,7 @@ test('release readiness rejects publishing before candidate verification', () =>
         const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
         assert.match(output, /publish job verifies and stages the exact validated tarball without rebuilding=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1511,7 +1511,7 @@ for (const [name, before, after] of [
             const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
             assert.match(output, /publish job verifies and stages the exact validated tarball without rebuilding=false/);
         } finally {
-            fs.rmSync(repoRoot, { recursive: true, force: true });
+            fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
         }
     });
 }
@@ -1543,7 +1543,7 @@ test('release readiness rejects a sibling job that stages an unvalidated tarball
         assert.equal(result.passed, false);
         assert.match(output, /publish workflow exactly matches the reviewed release path=false/u);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1576,7 +1576,7 @@ test('release readiness ignores a trusted publish job decoy inside a run script'
         assert.equal(result.passed, false);
         assert.match(output, /publish job verifies and stages the exact validated tarball without rebuilding=false/u);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1591,7 +1591,7 @@ test('release readiness rejects an additional direct npm publish before candidat
         const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
         assert.match(output, /publish job verifies and stages the exact validated tarball without rebuilding=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1608,7 +1608,7 @@ for (const command of ['npm pack', 'npm run build', 'npm install -g npm@12.0.0',
             const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
             assert.match(output, /publish job verifies and stages the exact validated tarball without rebuilding=false/);
         } finally {
-            fs.rmSync(repoRoot, { recursive: true, force: true });
+            fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
         }
     });
 }
@@ -1622,7 +1622,7 @@ test('release readiness fails when trusted publish workflow uses direct npm publ
         const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
         assert.match(output, /publish job verifies and stages the exact validated tarball without rebuilding=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1636,7 +1636,7 @@ test('release readiness fails when trusted publish command is only heredoc text'
         const output = formatReleaseReadinessResult(validateReleaseReadiness(repoRoot));
         assert.match(output, /publish job verifies and stages the exact validated tarball without rebuilding=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1652,7 +1652,7 @@ test('release readiness fails when trusted publish operator docs are missing', (
         assert.match(output, /docs\/run-methods\.md documents GitHub Environment and npm Trusted Publisher setup=false/);
         assert.ok(result.violations.some(v => v.startsWith('trusted-publish-docs:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1672,7 +1672,7 @@ test('release readiness fails when trusted publish tag restriction docs are miss
         assert.match(output, /docs\/run-methods\.md documents GitHub Environment and npm Trusted Publisher setup=false/);
         assert.ok(result.violations.some(v => v.startsWith('trusted-publish-docs:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1691,7 +1691,7 @@ test('release readiness fails when residual release-security workflow evidence i
             result.violations.includes('security-ci: existing release-security CI checks are present and labelled blocking or informational')
         );
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1711,7 +1711,7 @@ test('release readiness fails when release-security labels or policy decisions a
             result.violations.includes('security-ci: existing release-security CI checks are present and labelled blocking or informational')
         );
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1741,7 +1741,7 @@ test('release readiness rejects commented release-security workflow commands', (
         assert.match(output, /informational: security\.yml OSV lockfile scan present=false/);
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1775,7 +1775,7 @@ for (const [workflowName, jobId] of [['secret-scanning', 'gitleaks'], ['sbom', '
                     ? /informational: sbom\.yml CycloneDX artifact generation present=false/
                     : /blocking: secret-scanning\.yml gitleaks gate present=false/);
             } finally {
-                fs.rmSync(repoRoot, { recursive: true, force: true });
+                fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
             }
         });
     }
@@ -1794,7 +1794,7 @@ test('release readiness rejects an altered shared manual selector for both auxil
         assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
         assert.match(output, /informational: sbom\.yml CycloneDX artifact generation present=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1816,7 +1816,7 @@ test('release readiness rejects expression comments inside the Gitleaks install 
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
         assert.match(formatReleaseReadinessResult(result), /blocking: secret-scanning\.yml gitleaks gate present=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1837,7 +1837,7 @@ test('release readiness rejects expression comments after the SBOM identity here
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
         assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1855,7 +1855,7 @@ test('release readiness retains ordinary comment bytes inside scanner run scalar
             assert.equal(result.passed, false);
             assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
         } finally {
-            fs.rmSync(repoRoot, { recursive: true, force: true });
+            fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
         }
     }
 });
@@ -1878,7 +1878,7 @@ test('release readiness rejects a commented pinned Gitleaks CLI version', () => 
         assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1897,7 +1897,7 @@ test('release readiness rejects trusted Gitleaks job text outside the jobs mappi
         assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1919,7 +1919,7 @@ test('release readiness rejects a Gitleaks mapping nested below another job', ()
         assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1941,7 +1941,7 @@ test('release readiness rejects trusted Gitleaks text with changed step indentat
         assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1973,7 +1973,7 @@ test('release readiness rejects a disconnected Gitleaks download and checksum pi
         assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -1995,7 +1995,7 @@ test('release readiness rejects a success-forcing Gitleaks scan suffix', () => {
         assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2022,7 +2022,7 @@ test('release readiness rejects a Gitleaks scan step that disables failure propa
         assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2044,7 +2044,7 @@ test('release readiness rejects a Gitleaks install step that does not publish it
         assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2066,7 +2066,7 @@ test('release readiness rejects Gitleaks jobs that continue after failure', () =
         assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2085,7 +2085,7 @@ test('release readiness rejects shallow checkout for Gitleaks history scanning',
         assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2115,7 +2115,7 @@ test('release readiness rejects commented OSV lockfile argument', () => {
         assert.match(output, /informational: security\.yml OSV lockfile scan present=false/);
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2137,7 +2137,7 @@ test('release readiness rejects commented gitleaks config', () => {
         assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2168,7 +2168,7 @@ test('release readiness rejects commented SBOM artifact failure policy', () => {
         assert.match(output, /informational: sbom\.yml CycloneDX artifact generation present=false/);
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2194,7 +2194,7 @@ for (const dynamicCommand of [
             assert.equal(result.passed, false);
             assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
         } finally {
-            fs.rmSync(repoRoot, { recursive: true, force: true });
+            fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
         }
     });
 }
@@ -2213,7 +2213,7 @@ test('release readiness rejects an additional SBOM run step that acquires a tool
         assert.equal(result.passed, false);
         assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2231,7 +2231,7 @@ test('release readiness rejects SBOM installation that runs dependency lifecycle
         assert.equal(result.passed, false);
         assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2248,7 +2248,7 @@ test('release readiness rejects SBOM generator version drift from the lockfile',
         assert.equal(result.passed, false);
         assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2263,7 +2263,7 @@ test('release readiness requires toolchain identity in the SBOM upload', () => {
         assert.equal(result.passed, false);
         assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2278,7 +2278,7 @@ test('release readiness requires generation of lockfile and SBOM digests', () =>
         assert.equal(result.passed, false);
         assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2295,7 +2295,7 @@ for (const [name, search, replacement] of [
             assert.equal(result.passed, false);
             assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
         } finally {
-            fs.rmSync(repoRoot, { recursive: true, force: true });
+            fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
         }
     });
 }
@@ -2314,7 +2314,7 @@ test('release readiness rejects inherited SBOM shell command acquisition', () =>
         assert.equal(result.passed, false);
         assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2332,7 +2332,7 @@ test('release readiness rejects an additional non-run SBOM action step', () => {
         assert.equal(result.passed, false);
         assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2350,7 +2350,7 @@ test('release readiness rejects mutable action tags in the SBOM source workflow'
         assert.equal(result.passed, false);
         assert.match(formatReleaseReadinessResult(result), /informational: sbom\.yml CycloneDX artifact generation present=false/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2384,7 +2384,7 @@ test('release readiness rejects misplaced OSV lockfile argument outside OSV scan
         assert.match(output, /informational: security\.yml OSV lockfile scan present=false/);
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2412,7 +2412,7 @@ test('release readiness rejects misplaced gitleaks config outside gitleaks step'
         assert.match(output, /blocking: secret-scanning\.yml gitleaks gate present=false/);
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2447,7 +2447,7 @@ test('release readiness rejects misplaced SBOM artifact failure policy outside u
         assert.match(output, /informational: sbom\.yml CycloneDX artifact generation present=false/);
         assert.ok(result.violations.some(v => v.startsWith('security-ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2469,7 +2469,7 @@ test('release readiness fails when unused-symbol enforcement is removed from qua
             result.violations.includes('security: quality keeps unused-symbol enforcement, production audit, and security document surface aligned')
         );
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2487,7 +2487,7 @@ test('release readiness fails while a tracked 1.1.0 checklist item remains open'
             result.violations.includes('release-blockers: tracked Release 1.1.0 readiness checklist is complete')
         );
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2502,7 +2502,7 @@ test('release readiness does not read local TASK.md as release blocker truth', (
         assert.equal(result.passed, true, output);
         assert.match(output, /ReleaseChecklistItems: 28/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2521,7 +2521,7 @@ test('release readiness fails closed when the tracked checklist is missing', () 
             result.violations.includes('release-blockers: tracked Release 1.1.0 readiness checklist is complete')
         );
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2540,7 +2540,7 @@ test('release readiness fails closed when the checklist exists but is untracked'
             result.violations.includes('release-blockers: tracked Release 1.1.0 readiness checklist is complete')
         );
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2569,7 +2569,7 @@ test('release readiness matches exact tracked checklist version heading', () => 
         assert.match(output, /ReleaseChecklistItems: 1/);
         assert.match(output, /OpenReleaseChecklistItems: final release checklist item/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2585,7 +2585,7 @@ test('release readiness accepts reviewed multiline manual CI lifecycle smoke run
         assert.equal(result.passed, true, output);
         assert.match(output, /RELEASE_READINESS_OK/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2613,7 +2613,7 @@ test('release readiness rejects legacy CI lifecycle steps without manual authori
         assert.equal(result.checks.find(check => check.area === 'ci')?.passed, false);
         assert.match(output, /reviewed manual complete-suite contract/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2641,7 +2641,7 @@ test('release readiness rejects commented or echoed CI lifecycle smoke markers',
         assert.match(output, /RELEASE_READINESS_FAILED/);
         assert.ok(result.violations.some(v => v.startsWith('ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2671,7 +2671,7 @@ test('release readiness rejects CI lifecycle smoke markers inside heredoc payloa
         assert.match(output, /RELEASE_READINESS_FAILED/);
         assert.ok(result.violations.some(v => v.startsWith('ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2690,7 +2690,7 @@ test('release readiness fails when Node matrix markers are outside required CI j
         assert.match(output, /RELEASE_READINESS_FAILED/);
         assert.ok(result.violations.some(v => v.startsWith('ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2723,7 +2723,7 @@ test('release readiness fails when CLI tests are not sharded in CI', () => {
         assert.match(output, /reviewed manual complete-suite contract/);
         assert.ok(result.violations.some(v => v.startsWith('ci:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2744,7 +2744,7 @@ test('release readiness fails when full-suite optimization guardrails are missin
         assert.equal(result.passed, false);
         assert.ok(result.violations.some(v => v.startsWith('runtime-state:')), output);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2762,7 +2762,7 @@ test('release readiness fails when shipped security docs are missing from MANIFE
             result.violations.includes('security: quality keeps unused-symbol enforcement, production audit, and security document surface aligned')
         );
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2775,7 +2775,7 @@ test('release readiness fails when SECURITY.md is missing from filesystem', () =
         assert.equal(result.passed, false);
         assert.ok(result.violations.some(v => v.includes('security:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2788,7 +2788,7 @@ test('release readiness fails when docs/threat-model.md is missing from filesyst
         assert.equal(result.passed, false);
         assert.ok(result.violations.some(v => v.includes('security:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2801,7 +2801,7 @@ test('release readiness fails when docs/sbom.md is missing from filesystem', () 
         assert.equal(result.passed, false);
         assert.ok(result.violations.some(v => v.includes('security:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2816,7 +2816,7 @@ test('release readiness fails when SECURITY.md is missing from package.json file
         assert.equal(result.passed, false);
         assert.ok(result.violations.some(v => v.includes('security:')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2834,7 +2834,7 @@ test('release readiness fails when compiled-only package surface includes src', 
         assert.match(output, /RELEASE_READINESS_FAILED/);
         assert.ok(result.violations.some(v => v.includes('compiled-only runtime, and linked public-doc contracts')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2852,7 +2852,7 @@ test('release readiness fails when compiled-only package surface includes a broa
         assert.match(output, /RELEASE_READINESS_FAILED/);
         assert.ok(result.violations.some(v => v.includes('compiled-only runtime, and linked public-doc contracts')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2870,7 +2870,7 @@ test('release readiness fails when package files omit a README-linked public doc
         assert.match(output, /RELEASE_READINESS_FAILED/);
         assert.ok(result.violations.some(v => v.includes('linked public-doc contracts')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2893,7 +2893,7 @@ test('release readiness fails when MANIFEST omits a README-linked public doc', (
         assert.match(output, /RELEASE_READINESS_FAILED/);
         assert.ok(result.violations.some(v => v.includes('linked public-doc contracts')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -2909,7 +2909,7 @@ test('release readiness fails when package files include node test build output'
         assert.equal(result.passed, false);
         assert.ok(result.violations.some(v => v.includes('compiled-only runtime, and linked public-doc contracts')));
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3085,7 +3085,7 @@ function createCandidateReadinessFixture(repository = CANDIDATE_TEST_REPOSITORY)
             root, CANDIDATE_TEST_NOW, () => ({ run: securityRun, jobs: [{ total_count: securityJobs.length, jobs: securityJobs }] }));
         return { root, request, fetch, ci, jobs, securityRun, securityJobs };
     } catch (error) {
-        fs.rmSync(root, { recursive: true, force: true });
+        fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
         throw error;
     }
 }
@@ -3100,7 +3100,7 @@ test('candidate readiness combines real Git and tarball proof with complete offl
         assert.equal(result.candidate?.taskQueueSha256,
             crypto.createHash('sha256').update(fs.readFileSync(path.join(fixture.root, 'TASK.md'))).digest('hex'));
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3140,7 +3140,7 @@ test('candidate readiness rejects legacy Security records and missing or altered
             assert.equal(fs.readFileSync(evidencePath, 'utf8'), altered);
         }
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3183,7 +3183,7 @@ test('candidate readiness accepts retained security scans only through authentic
             assert.equal(invalid.checks.find(check => check.area === 'candidate-security')?.passed, false);
         }
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3200,7 +3200,7 @@ test('candidate readiness rejects automatic and partial security evidence at the
         assert.equal(partial.candidate?.decision, 'NO_GO');
         assert.equal(partial.checks.find(check => check.area === 'candidate-security')?.passed, false);
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3227,7 +3227,7 @@ test('candidate readiness rejects foreign, stale, skipped, empty and replayed su
             assert.equal(result.checks.find(check => check.area === 'candidate-suite')?.passed, false);
         }
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3252,7 +3252,7 @@ test('candidate readiness accepts a narrow failed-job rerun only with complete a
         assert.ok(endpoints.some(endpoint => endpoint.endsWith('/41/attempts/1')));
         assert.equal(fixture.jobs.filter(job => job.run_attempt === 2).length, 1);
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3318,7 +3318,7 @@ test('candidate readiness accepts recovered upstream failures only after every s
                 .some(value => value.includes('CI run belongs to another run, repository or candidate commit')), formatReleaseReadinessResult(foreignAttempt));
         }
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3346,7 +3346,7 @@ test('publication CI proof rejects failed and reversed retained attempts after a
         prior.updated_at = '2026-09-26T09:55:00Z';
         assert.throws(verify, /attempt timelines are reversed or overlapping/u);
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3384,7 +3384,7 @@ test('publication CI proof rejects summary-only, missing, partial, skipped, forg
             ? [{ total_count: originalJobs.length + 1, jobs: originalJobs }] : fixture.fetch(endpoint)), /history is incomplete/u);
         assert.throws(() => verify(() => { throw new Error('Authenticated Actions evidence unavailable (offline control).'); }), /evidence unavailable/u);
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3414,7 +3414,7 @@ test('publication CI transport rejects missing or malformed evidence while pinni
         transport.mock.mockImplementation(() => ({ status: 0, stdout: 'not JSON', stderr: '' }));
         assert.throws(() => publicationCi.verifyCiRun('41', fixture.request.commit, fixture.request.repository));
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3440,7 +3440,7 @@ test('release readiness rejects replaced publication CI discovery and token tran
                 formatReleaseReadinessResult(result));
         }
     } finally {
-        fs.rmSync(root, { recursive: true, force: true });
+        fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3462,7 +3462,7 @@ test('candidate readiness rejects a historical skipped matrix family without lat
         assert.ok(result.checks.find(check => check.area === 'candidate-suite')?.details
             .some(value => value.includes('skipped matrix family was not fully superseded')), formatReleaseReadinessResult(result));
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3525,7 +3525,7 @@ test('candidate readiness rejects reversed or overlapping retained attempts desp
         const clockSkewAllowance = verify();
         assert.equal(clockSkewAllowance.candidate?.decision, 'GO', formatReleaseReadinessResult(clockSkewAllowance));
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3561,7 +3561,7 @@ test('candidate readiness rejects replayed, foreign and inconsistent rerun attem
         const duplicate = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch });
         assert.equal(duplicate.candidate?.decision, 'NO_GO');
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3584,7 +3584,7 @@ test('candidate readiness rejects partial coverage and missing authorization des
             assert.equal(result.checks.find(check => check.area === 'candidate-suite')?.passed, false);
         }
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3614,7 +3614,7 @@ test('release readiness rejects changed manual CI authorization and candidate se
         assert.equal(result.checks.find(check => check.area === 'ci')?.passed, false);
         assert.equal(fs.existsSync(sentinel), false);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3645,7 +3645,7 @@ test('reviewed CI evidence rejects executable scalar source drift while acceptin
         writeFile(workflowPath, original.trimEnd());
         assert.throws(() => verifier.assertCiContract(repoRoot, false), /reviewed manual complete-suite contract/);
     } finally {
-        fs.rmSync(repoRoot, { recursive: true, force: true });
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3676,7 +3676,7 @@ test('reviewed CI evidence rejects weakened npm scripts, missing permissions and
             assert.throws(() => verifier.assertCiContract(fixture.root), /ENOENT/);
         }
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3712,7 +3712,7 @@ test('candidate readiness requires successful tool and release preparation in ev
             }
         }
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3729,7 +3729,7 @@ test('candidate readiness rejects diagnostic-only Windows Release success withou
         assert.equal(result.candidate?.decision, 'NO_GO');
         assert.equal(result.checks.find(check => check.area === 'candidate-suite')?.passed, false);
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3762,7 +3762,7 @@ test('candidate readiness recursively checks manually decomposed DONE parents an
         result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
         assert.equal(result.candidate?.decision, 'NO_GO');
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3797,7 +3797,7 @@ test('candidate readiness rejects absent mandatory evidence, altered artifacts a
         assert.equal(result.candidate?.decision, 'NO_GO');
         assert.equal(result.checks.find(check => check.area === 'candidate-recheck')?.passed, false);
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3824,7 +3824,7 @@ test('candidate readiness never exempts release blockers through incidental post
         assert.equal(result.candidate?.decision, 'NO_GO');
         assert.match(formatReleaseReadinessResult(result), /Unfinished release task: T-083/);
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3845,7 +3845,7 @@ test('candidate readiness rejects missing explicit children including suffixes a
             assert.match(formatReleaseReadinessResult(result), new RegExp('Missing release child task: ' + missing));
         }
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3870,7 +3870,7 @@ test('candidate readiness requires exact security and current or legacy provenan
         result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
         assert.equal(result.candidate?.decision, 'NO_GO');
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3888,7 +3888,7 @@ test('candidate readiness CLI keeps static preflight separate and rejects incomp
         assert.equal(result.candidate?.decision, 'NO_GO');
         assert.equal(result.passed, false);
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3904,7 +3904,7 @@ test('candidate readiness rejects matching fork CI and security evidence before 
         assert.match(formatReleaseReadinessResult(result), /authoritative verifier repository/);
         assert.equal(fetches, 0);
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3925,7 +3925,7 @@ test('candidate readiness rejects unsafe tarball names at parser and artifact bo
             assert.equal(fetches, 0);
         }
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3952,7 +3952,7 @@ test('candidate readiness final recheck detects tracked checkout and security re
             fs.writeFileSync(file, saved);
         }
     } finally {
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -3996,7 +3996,7 @@ test('candidate readiness public CLI forwards candidate identity and reports GO 
     } finally {
         t.mock.restoreAll();
         t.mock.timers.reset();
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
 
@@ -4041,6 +4041,6 @@ test('candidate readiness rejects malformed verifier repository metadata before 
         }
     } finally {
         t.mock.restoreAll();
-        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
