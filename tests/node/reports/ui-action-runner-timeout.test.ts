@@ -12,6 +12,7 @@ import {
 } from '../../../src/reports/ui/actions/action-common';
 import { buildUiWorkspaceActionDefinitions } from '../../../src/reports/ui/actions/workspace-actions';
 import type { UiActionDefinition } from '../../../src/reports/ui/actions/types';
+import { SUBPROCESS_TERMINATION_TIMEOUT_MS } from '../../../src/core/subprocess';
 
 function delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -48,18 +49,22 @@ function cleanupTmpDir(tmpDir: string): void {
 test('runUiActionCommand reports timeout and kills the subprocess tree', async () => {
     const repoRoot = makeTmpDir();
     try {
+        const timeoutMs = 3_000;
+        const schedulingMarginMs = 1_000;
+        const markerDelayMs = timeoutMs + SUBPROCESS_TERMINATION_TIMEOUT_MS + schedulingMarginMs;
+        const childLifetimeMs = markerDelayMs + schedulingMarginMs;
         const markerPath = path.join(repoRoot, 'child-survived.txt');
         const childPidPath = path.join(repoRoot, 'child.pid');
         const childScript = [
-            `setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'alive'), 6000);`,
-            'setTimeout(() => {}, 10000);'
+            `setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'alive'), ${markerDelayMs});`,
+            `setTimeout(() => {}, ${childLifetimeMs});`
         ].join('');
         const parentScript = [
             'const childProcess = require("node:child_process");',
             'const fs = require("node:fs");',
             `const child = childProcess.spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
             `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
-            'setTimeout(() => {}, 10000);'
+            `setTimeout(() => {}, ${childLifetimeMs});`
         ].join('');
         const action: UiActionDefinition = {
             id: 'timeout-regression',
@@ -71,7 +76,7 @@ test('runUiActionCommand reports timeout and kills the subprocess tree', async (
             unavailable_reason: null,
             requires_confirmation: false,
             confirmation_phrase: null,
-            timeout_ms: 3000,
+            timeout_ms: timeoutMs,
             command: {
                 executable: process.execPath,
                 args: ['-e', parentScript],
@@ -79,11 +84,13 @@ test('runUiActionCommand reports timeout and kills the subprocess tree', async (
             }
         };
 
+        const startedAt = performance.now();
         const result = await runUiActionCommand(action, repoRoot);
 
         assert.equal(result.timed_out, true);
-        assert.equal(result.timeout_ms, 3000);
+        assert.equal(result.timeout_ms, timeoutMs);
         assert.notEqual(result.exit_code, 0);
+        assert.ok(performance.now() - startedAt < markerDelayMs, 'action exceeded command and cleanup budgets');
         assert.match(result.stderr, /Process timed out after 3000 ms/u);
         assert.match(result.stderr, new RegExp(formatUiActionTimeoutMessage(3000).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'u'));
         assert.equal(fs.existsSync(childPidPath), true, 'child process pid should be captured before timeout cleanup');

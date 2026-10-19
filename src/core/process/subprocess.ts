@@ -75,6 +75,7 @@ const PROCESS_TERMINATION_SIGNALS: NodeJS.Signals[] = process.platform === 'win3
     : ['SIGINT', 'SIGTERM', 'SIGHUP'];
 const WINDOWS_PROCESS_TREE_COMMAND_TIMEOUT_MS = 2_500;
 const WINDOWS_PROCESS_TREE_MAX_ATTEMPTS = 2;
+const WINDOWS_PROCESS_TREE_ASYNC_COMMAND_TIMEOUT_MS = WINDOWS_PROCESS_TREE_COMMAND_TIMEOUT_MS * WINDOWS_PROCESS_TREE_MAX_ATTEMPTS;
 export const WINDOWS_PROCESS_TREE_TARGET_BATCH_MAX_CHARS = 12_000;
 export const WINDOWS_EXIT_CLEANUP_BUDGET_MS = 2_500;
 const WINDOWS_SYSTEM32_ROOT = process.platform === 'win32'
@@ -394,7 +395,7 @@ async function terminateWindowsProcessTrees(entries: readonly ManagedChildProces
                 encoding: 'utf8',
                 env: environment,
                 windowsHide: true,
-                timeout: Math.min(WINDOWS_PROCESS_TREE_COMMAND_TIMEOUT_MS, remainingMs),
+                timeout: Math.min(WINDOWS_PROCESS_TREE_ASYNC_COMMAND_TIMEOUT_MS, remainingMs),
                 maxBuffer: 1024 * 1024
             });
             if (!result.error) {

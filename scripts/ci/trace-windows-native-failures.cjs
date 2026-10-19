@@ -35,7 +35,7 @@ function installNativeTrace() {
                 timeout_ms: options.timeout, error_code: error?.code, killed: error?.killed,
                 owned_targets: bounded(options.env?.GARDA_PROCESS_TREE_TARGETS), stdout: bounded(stdout),
                 stderr: bounded(stderr), script_sha256: crypto.createHash('sha256').update(String(args.at(-1))).digest('hex'), ...clock() });
-            if (error || String(stdout).trim() === '0') {
+            if (!error && String(stdout).trim() === '0') {
                 try {
                     const observation = originalSpawnSync(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', `
 foreach ($target in $env:GARDA_PROCESS_TREE_TARGETS.Split(';')) {
