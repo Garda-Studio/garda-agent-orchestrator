@@ -2,7 +2,7 @@ import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import { getWindowsNativeEnvironment, getWindowsSystemDirectory } from '../windows-native-environment';
+import { getWindowsNativeEnvironment, getWindowsSystemDirectory, WINDOWS_NATIVE_POWERSHELL_BOOTSTRAP } from '../windows-native-environment';
 import type { ChildProcess, SpawnSyncReturns, SpawnSyncOptions, StdioOptions } from 'node:child_process';
 
 export const DEFAULT_GIT_TIMEOUT_MS = 60_000;         // 60 s for routine git ops
@@ -117,8 +117,8 @@ let terminationCleanup: Promise<void> | null = null;
 const pendingWindowsForceTerminations = new Map<ManagedChildProcess, () => void>();
 let windowsForceDrainScheduled = false;
 let windowsForceDrainRunning = false;
-const WINDOWS_PROCESS_TREE_FALLBACK_SCRIPT = `
-Add-Type -TypeDefinition @'
+const WINDOWS_PROCESS_TREE_FALLBACK_SCRIPT = WINDOWS_NATIVE_POWERSHELL_BOOTSTRAP + `
+Microsoft.PowerShell.Utility\\Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
 using System.Globalization;

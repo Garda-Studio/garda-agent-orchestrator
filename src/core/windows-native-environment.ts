@@ -2,6 +2,15 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+export const WINDOWS_NATIVE_POWERSHELL_BOOTSTRAP = `
+$PSModuleAutoLoadingPreference = 'None'
+$env:PSModulePath = $PSHOME
+foreach ($module in @('Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security')) {
+    $manifest = [IO.Path]::Combine($PSHOME, 'Modules', $module, $module + '.psd1')
+    Microsoft.PowerShell.Core\\Import-Module -Name $manifest -ErrorAction Stop
+}
+`;
+
 export function getWindowsSystemDirectory(): string {
     return path.join(fs.realpathSync.native('\\\\?\\GLOBALROOT\\SystemRoot'), 'System32');
 }
@@ -19,7 +28,8 @@ export function getWindowsNativeEnvironment(): NodeJS.ProcessEnv {
         LOCALAPPDATA: path.join(profile, 'AppData', 'Local'),
         APPDATA: path.join(profile, 'AppData', 'Roaming'),
         PATH: [system32, powershellHome].join(path.delimiter),
-        PSModulePath: path.join(powershellHome, 'Modules'),
+        // Avoid startup rewriting a Modules search path; scripts import native manifests explicitly.
+        PSModulePath: powershellHome,
         COMSPEC: path.join(system32, 'cmd.exe')
     };
     for (const name of ['TEMP', 'TMP'] as const) {

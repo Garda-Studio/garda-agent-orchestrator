@@ -1,13 +1,13 @@
 import * as childProcess from 'node:child_process';
 import * as path from 'node:path';
-import { getWindowsNativeEnvironment, getWindowsSystemDirectory } from '../../core/windows-native-environment';
+import { getWindowsNativeEnvironment, getWindowsSystemDirectory, WINDOWS_NATIVE_POWERSHELL_BOOTSTRAP } from '../../core/windows-native-environment';
 
 const ACL_INSPECTION_TIMEOUT_MS = 1_000;
 const ACL_INSPECTION_MAX_ATTEMPTS = 2;
 const NATIVE_SID_LOOKUP_TIMEOUT_MS = 2_500;
 let trustedPrincipalNames: ReadonlySet<string> | null = null;
 
-const TRUSTED_PRINCIPALS_SCRIPT = `
+const TRUSTED_PRINCIPALS_SCRIPT = WINDOWS_NATIVE_POWERSHELL_BOOTSTRAP + `
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -17,7 +17,7 @@ $names = @($identity.Name, $identity.User.Value, 'S-1-5-18', 'S-1-5-32-544',
 Microsoft.PowerShell.Utility\\ConvertTo-Json -InputObject $names -Compress
 `;
 
-const EXPLICIT_SIDS_SCRIPT = `
+const EXPLICIT_SIDS_SCRIPT = WINDOWS_NATIVE_POWERSHELL_BOOTSTRAP + `
 $ErrorActionPreference = 'Stop'
 $acl = Microsoft.PowerShell.Security\\Get-Acl -LiteralPath $env:GARDA_ACL_TARGET
 $trusted = @('S-1-5-18', 'S-1-5-32-544', [Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
