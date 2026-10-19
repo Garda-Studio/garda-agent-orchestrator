@@ -7,6 +7,8 @@ export interface OperatorNextActionBlockInput {
     reason?: string | null;
     command?: string | null;
     commandReference?: string | null;
+    /** One short line telling the agent what to do when there is no executable command. */
+    nextInstruction?: string | null;
     detailsPath?: string | null;
     detailsHint?: string | null;
 }
@@ -40,6 +42,9 @@ export function buildOperatorNextActionBlock(input: OperatorNextActionBlockInput
         lines.push(`  Command: ${input.command}`);
     } else {
         lines.push('  Command: none');
+        if (input.nextInstruction) {
+            lines.push(`  Next: ${input.nextInstruction}`);
+        }
     }
     const contradictsCommand = Boolean(input.command)
         && /no executable command is available/iu.test(input.commandReference || '');

@@ -84,13 +84,45 @@ export function toRepoDisplayPath(repoRoot: string, filePath: string): string {
     return normalizePath(path.relative(repoRoot, resolved));
 }
 
+/**
+ * Short instruction for a non-terminal result without an executable command, so the
+ * navigator never leaves the agent at a dead end. Kept to one line to save tokens.
+ */
+export function buildNextStepInstruction(
+    result: Pick<NextStepResult, 'status' | 'next_gate' | 'task_id' | 'navigator_command' | 'commands'>
+): string | null {
+    if (result.status === 'DONE' || result.commands.length > 0) return null;
+    const rerun = 'then rerun the Navigator.';
+    const cliPrefix = result.navigator_command.split(' next-step ')[0] || 'garda';
+    switch (result.next_gate) {
+        case 'quality-checklist':
+            return `fill "status" and "answer" for every active rule in the answers file named in Reason, ${rerun}`;
+        case 'run-intermediate-command':
+            return `${cliPrefix} gate run-intermediate-command --task-id ${quoteCommandValue(result.task_id)} `
+                + '--command-source targeted-test --command "<project focused test command>" --repo-root "." '
+                + `(add --selected-case '{"source":"<test file>","case_id":"<test name>","selector":"<selector>"}' `
+                + `when the command selects tests by name, class, package or project), ${rerun}`;
+        case 'project-validation-evidence':
+            return `fix what Reason names, rerun the project check with \`gate run-intermediate-command\`, ${rerun}`;
+        case 'await-project-validation':
+            return `wait for the running project check to finish, ${rerun}`;
+        case 'implementation':
+        case 'test-first-expected-failure':
+            return `make the code or test change described in Reason, ${rerun}`;
+        case 'materialize-planned-scope':
+            return `create or edit the planned files named in Reason, ${rerun}`;
+        default:
+            return `do what Reason says (report it to the operator if it needs an operator decision), ${rerun}`;
+    }
+}
+
 export function formatNextStepText(result: NextStepResult): string {
     const primaryCommand = result.commands.length === 1 ? result.commands[0] : null;
     const commandReference = result.status === 'DONE'
         ? 'none'
         : result.commands.length > 1
             ? `choose one of the ${result.commands.length} Commands entries below`
-            : 'inspect diagnostics; no executable command is available';
+            : null;
     const detailsPath = result.final_report?.closeout_json_path
         || `garda-agent-orchestrator/runtime/task-events/${result.task_id}.jsonl`;
     const lines = [
@@ -101,6 +133,7 @@ export function formatNextStepText(result: NextStepResult): string {
             reason: result.reason,
             command: primaryCommand?.command,
             commandReference,
+            nextInstruction: buildNextStepInstruction(result),
             detailsPath,
             detailsHint: `For structured diagnostics, rerun the navigator with --as-json.`
         }),
