@@ -3716,6 +3716,23 @@ test('candidate readiness requires successful tool and release preparation in ev
     }
 });
 
+test('candidate readiness rejects diagnostic-only Windows Release success without full validation', () => {
+    const fixture = createCandidateReadinessFixture();
+    try {
+        for (const job of fixture.jobs) {
+            if (!String(job.name).startsWith('Release Validation / windows-latest /')) continue;
+            const steps = job.steps as Record<string, unknown>[];
+            job.steps = steps.map(step => step.name === 'Validate release'
+                ? { ...step, name: 'Diagnose Windows native controls' } : step);
+        }
+        const result = validateReleaseReadiness(fixture.root, fixture.request, { now: CANDIDATE_TEST_NOW, fetch: fixture.fetch });
+        assert.equal(result.candidate?.decision, 'NO_GO');
+        assert.equal(result.checks.find(check => check.area === 'candidate-suite')?.passed, false);
+    } finally {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+});
+
 test('candidate readiness recursively checks manually decomposed DONE parents and ignores post-release feature parents', () => {
     const fixture = createCandidateReadinessFixture();
     try {

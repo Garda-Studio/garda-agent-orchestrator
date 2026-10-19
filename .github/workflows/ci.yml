@@ -36,6 +36,12 @@ on:
         type: choice
         default: '24'
         options: ['22.13.0', '24', all]
+      release_mode:
+        description: Full Release validation or focused Windows native diagnosis
+        required: true
+        type: choice
+        default: full
+        options: [full, windows-native]
 
 # Preserve each separately authorized dispatch instead of replacing a queued run.
 concurrency:
@@ -58,6 +64,13 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: '24'
+      - name: Validate focused Release selection
+        if: inputs.release_mode == 'windows-native'
+        env:
+          MANUAL_JOB: ${{ inputs.job }}
+          MANUAL_OS: ${{ inputs.os }}
+        run: node scripts/ci/probe-windows-native-controls.cjs --validate-selection
+
       - name: Authorize selected jobs
         id: selection
         env:
@@ -425,7 +438,15 @@ jobs:
       - name: Bootstrap embedded release bundle
         run: node bin/garda.js bootstrap --destination garda-agent-orchestrator
 
+      - name: Diagnose Windows native controls
+        if: inputs.release_mode == 'windows-native' && runner.os == 'Windows'
+        run: |
+          npm run build:node-foundation
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node node_modules/c8/bin/c8.js --check-coverage=false --all=false --reporter=json-summary --temp-directory "$env:RUNNER_TEMP/garda-native-diagnostic-coverage" --reports-dir "$env:RUNNER_TEMP/garda-native-diagnostic-report" node scripts/ci/probe-windows-native-controls.cjs
+
       - name: Validate release
+        if: inputs.release_mode != 'windows-native' || runner.os != 'Windows'
         run: npm run validate:release:fast
 
       - name: Upload lcov coverage
