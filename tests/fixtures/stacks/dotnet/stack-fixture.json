@@ -1,0 +1,6 @@
+{
+  "source": "src/Billing/Invoice.cs",
+  "test": "tests/Billing.Tests/InvoiceTests.cs",
+  "dependency": "src/Billing/Billing.csproj",
+  "detected_stack": ".NET"
+}

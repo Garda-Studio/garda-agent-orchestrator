@@ -1,0 +1,6 @@
+{
+  "source": "internal/invoice/invoice.go",
+  "test": "internal/invoice/invoice_test.go",
+  "dependency": "go.mod",
+  "detected_stack": "Go"
+}

@@ -1,5 +1,10 @@
 # Changelog
 
+- Make default path classification stack-neutral: recognize test conventions of Go, Python, Ruby, Elixir, Dart, Swift, .NET, Kotlin, C/C++, Perl, PowerShell and Erlang without treating production names such as `Contest.java` as tests; cover dependency manifests and lockfiles of all common ecosystems; apply database, API, performance and refactor triggers to every common source language. Updates replace only uncustomized legacy defaults in `live/config/paths.json`.
+- Recognize Elixir, Swift, Scala, Dart/Flutter and C/C++ projects during discovery without inventing their commands, and admit focused self-validation through `mix`, `swift`, `dart`, `flutter`, `zig`, `lein`, `stack`, `cabal`, `rebar3`, `bundle exec`, `poetry run`, `pipenv run`, `bats`, `prove`, `busted` and `pest`.
+- Terminate the root child through its own process handle when the Windows process-tree helper fails, so command timeouts and cancellation always stop the command; allow a cold Windows PowerShell start when resolving trusted ACL principals.
+- Use a stack-neutral code-style label in generated rule indexes.
+
 - Expose task-scoped test-selection confirmation in Settings and all UI languages; align updated workflow and specialist-authoring guidance with audited selection and findings-only reviews.
 - Bound repair and WIP-capture Git subprocesses, preserve endpoint-specific UI rejection codes with query strings, and release detached task-action controls after dashboard rerenders.
 - Clarify residual-risk output fields and gate-owned task events; verify durable local-commit guidance without another confirmation prompt.

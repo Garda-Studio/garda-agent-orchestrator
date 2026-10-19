@@ -1,0 +1,6 @@
+{
+  "source": "src/lib.rs",
+  "test": "tests/total.rs",
+  "dependency": "Cargo.toml",
+  "detected_stack": "Rust"
+}

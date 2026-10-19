@@ -1,0 +1,6 @@
+{
+  "source": "billing/invoice.py",
+  "test": "billing/invoice_test.py",
+  "dependency": "pyproject.toml",
+  "detected_stack": "Python"
+}

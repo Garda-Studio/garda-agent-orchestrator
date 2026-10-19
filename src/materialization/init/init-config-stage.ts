@@ -26,6 +26,7 @@ import {
     buildDefaultReviewRemediationModePolicy,
     migrateReviewRemediationModePolicyLaneDefaults
 } from '../../policy/review-remediation-mode-policy';
+import { migrateLegacyManagedPathRegexes } from '../../policy/default-path-regexes';
 import { isSourceCheckoutRoot } from '../../validators/workspace-layout/source-runtime';
 import type { InitProjectDiscovery } from './init-contracts';
 
@@ -396,6 +397,11 @@ export function runInitConfigStage(
                             allowedReviewTypeIds: catalogReviewTypeIds
                         })
                         : mergeConfig(templateConfig, existingConfig);
+
+            if (configName === 'paths' && hadExistingConfig) {
+                // Uncustomized legacy stack-specific defaults follow the current template.
+                migrateLegacyManagedPathRegexes(materializedConfig, templateConfig);
+            }
 
             if (configName === 'runtime-retention' && hadExistingConfig) {
                 const existingDaily = existingConfig?.daily_maintenance;

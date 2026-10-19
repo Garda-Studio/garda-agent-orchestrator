@@ -1,0 +1,6 @@
+{
+  "source": "Sources/Billing/Invoice.swift",
+  "test": "Tests/BillingTests/InvoiceTests.swift",
+  "dependency": "Package.swift",
+  "detected_stack": "Swift"
+}

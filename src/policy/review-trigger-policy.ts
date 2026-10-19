@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import { normalizeFileRoleBindings, type FileRoleBindings } from '../core/file-role-bindings';
+import { DEFAULT_REFACTOR_PATH_REGEXES, DEFAULT_TEST_PATH_REGEXES } from './default-path-regexes';
 
 export const REVIEW_TRIGGER_POLICY_SCHEMA_VERSION = 1 as const;
 export const DEFAULT_TEST_REFACTOR_CHANGED_LINES_THRESHOLD = 20;
@@ -12,18 +13,6 @@ export interface ReviewTriggerPolicy {
     test_refactor_changed_lines_threshold: number;
     file_roles?: FileRoleBindings;
 }
-
-const DEFAULT_REFACTOR_PATH_REGEXES = Object.freeze([
-    '(Config|Settings|Options|Schema|Contract|Dto|DTO)[^/]*\\.(java|kt|ts|tsx|js|jsx|py|go|cs|rb|php|json|ya?ml|toml|xml)$',
-    '(^|/)(config|configs?|schemas?|contracts?)(/|$)',
-    '(^|/)[^/]*(config|settings|paths)[^/]*\\.(json|ya?ml|toml|xml)$'
-]);
-
-const DEFAULT_TEST_PATH_REGEXES = Object.freeze([
-    '/src/test/',
-    '(^|/)(__tests__|tests?)/',
-    '\\.(spec|test)\\.(ts|tsx|js|jsx|java|kt|go|py|rb|php)$'
-]);
 
 const DEFAULT_TEST_REFACTOR_STRUCTURAL_PATH_REGEXES = Object.freeze([
     '(^|/)(?:__fixtures__|fixtures?|__mocks__|mocks?|helpers?|harness|support|setup|factories|factory|snapshots?)(?:/|\\.|-|_|$)',

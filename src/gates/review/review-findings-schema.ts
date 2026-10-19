@@ -914,11 +914,11 @@ function normalizeFocusedTargetPath(value: string): string {
 }
 
 const REVIEWER_FOCUSED_EXECUTION_SIGNAL_PATTERN =
-    /(?:^|[\s/\\._:-])(?:test|spec|check|lint|validat|verif|audit|bench)[a-z0-9]*(?=$|[\s/\\._:=#-])|(?:^|[\s/\\._:-])(?:vitest|jest|mocha|ava|tap|pytest|rspec|phpunit|playwright|cypress|spectral|ajv|eslint|tsc|hyperfine)(?=$|[\s/\\._:=#-])/iu;
+    /(?:^|[\s/\\._:-])(?:test|spec|check|lint|validat|verif|audit|bench)[a-z0-9]*(?=$|[\s/\\._:=#-])|(?:^|[\s/\\._:-])(?:vitest|jest|mocha|ava|tap|pytest|rspec|phpunit|pest|bats|prove|busted|playwright|cypress|spectral|ajv|eslint|tsc|hyperfine)(?=$|[\s/\\._:=#-])/iu;
 const REVIEWER_GENERIC_FOCUSED_COMMAND_TOKEN_PATTERN =
-    /^(?:node(?:\.exe)?|deno|bun|python(?:3)?|pytest|ruby|perl|php|tsx|ts-node|npx|npm(?:\.cmd|\.exe)?|pnpm|yarn|mvnw?|gradlew?|dotnet|go|cargo|make|just|java|openssl|spectral|ajv|eslint|tsc|vitest|jest|mocha|ava|tap|rspec|phpunit|playwright|cypress|hyperfine|powershell|pwsh|bash|sh|zsh|run|exec|test|tests|spec|check|lint|validate|validation|verify|audit|bench|build)$/iu;
+    /^(?:node(?:\.exe)?|deno|bun|python(?:3)?|pytest|ruby|perl|php|tsx|ts-node|npx|npm(?:\.cmd|\.exe)?|pnpm|yarn|mvnw?|gradlew?|dotnet|go|cargo|make|just|mix|swift|dart|flutter|zig|lein|stack|cabal|rebar3|bundle|poetry|pipenv|java|openssl|spectral|ajv|eslint|tsc|vitest|jest|mocha|ava|tap|rspec|phpunit|pest|bats|prove|busted|playwright|cypress|hyperfine|powershell|pwsh|bash|sh|zsh|run|exec|test|tests|spec|check|lint|validate|validation|verify|audit|bench|build)$/iu;
 const REVIEWER_DIRECT_VALIDATION_RUNNER_PATTERN =
-    /^(?:pytest|spectral|ajv|eslint|tsc|vitest|jest|mocha|ava|tap|rspec|phpunit|playwright|cypress|hyperfine)$/iu;
+    /^(?:pytest|spectral|ajv|eslint|tsc|vitest|jest|mocha|ava|tap|rspec|phpunit|pest|bats|prove|busted|playwright|cypress|hyperfine)$/iu;
 const REVIEWER_DIRECT_VALIDATION_RUNNER_SUBCOMMANDS: Readonly<Record<string, readonly string[]>> = {
     ajv: ['validate'],
     cypress: ['run'],
@@ -928,9 +928,9 @@ const REVIEWER_DIRECT_VALIDATION_RUNNER_SUBCOMMANDS: Readonly<Record<string, rea
 };
 const REVIEWER_GENERIC_RUNTIME_PATTERN =
     /^(?:node(?:\.exe)?|deno|python(?:3)?|ruby|perl|php|tsx|ts-node|java|powershell|pwsh|bash|sh|zsh)$/iu;
-const REVIEWER_PACKAGE_MANAGER_PATTERN = /^(?:npm(?:\.cmd|\.exe)?|pnpm|yarn|bun)$/iu;
+const REVIEWER_PACKAGE_MANAGER_PATTERN = /^(?:npm(?:\.cmd|\.exe)?|pnpm|yarn|bun|bundle|poetry|pipenv)$/iu;
 const REVIEWER_PACKAGE_EXEC_WRAPPER_PATTERN = /^(?:npx|bunx)$/iu;
-const REVIEWER_BUILD_OR_VALIDATION_TOOL_PATTERN = /^(?:mvnw?|gradlew?|dotnet|go|cargo|make|just|openssl)$/iu;
+const REVIEWER_BUILD_OR_VALIDATION_TOOL_PATTERN = /^(?:mvnw?|gradlew?|dotnet|go|cargo|make|just|mix|swift|dart|flutter|zig|lein|stack|cabal|rebar3|openssl)$/iu;
 const REVIEWER_NODE_FOUNDATION_TEST_WRAPPER_PATTERN = /^scripts\/node-foundation\/build-scripts\.cjs$/iu;
 const REVIEWER_DIRECT_TEST_TARGET_PATTERN =
     /^(?:tests?\/.*|(?:.*\/)?[^/]+\.(?:test|spec)\.(?:c|m)?[jt]sx?)$/iu;
@@ -1070,6 +1070,8 @@ function getUnsafeFocusedCommandTokenReason(command: string, literalOptionsBound
     }
     if (
         REVIEWER_PACKAGE_MANAGER_PATTERN.test(firstToken)
+        // `bundle exec` only runs gems already resolved by Gemfile.lock.
+        && !/^bundle$/iu.test(firstToken)
         && tokens.slice(1).some((token) => /^(?:exec|dlx|x)$/iu.test(token))
     ) {
         return 'use package-execution wrappers that may fetch dependencies implicitly';

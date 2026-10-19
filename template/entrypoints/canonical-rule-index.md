@@ -39,7 +39,7 @@ Non-selected entrypoint files must only redirect to the selected source-of-truth
 | Project goals and tech stack | `garda-agent-orchestrator/live/docs/agent-rules/10-project-context.md` |
 | Durable project memory summary | `garda-agent-orchestrator/live/docs/agent-rules/15-project-memory.md` |
 | System architecture and data or event flow | `garda-agent-orchestrator/live/docs/agent-rules/20-architecture.md` |
-| Java, TypeScript, Angular code style | `garda-agent-orchestrator/live/docs/agent-rules/30-code-style.md` |
+| Code style and language conventions | `garda-agent-orchestrator/live/docs/agent-rules/30-code-style.md` |
 | Strict SOLID rules and quality gates | `garda-agent-orchestrator/live/docs/agent-rules/35-strict-coding-rules.md` |
 | Command policy and available task commands | `garda-agent-orchestrator/live/docs/agent-rules/40-commands.md` |
 | Repository structure and documentation map | `garda-agent-orchestrator/live/docs/agent-rules/50-structure-and-docs.md` |

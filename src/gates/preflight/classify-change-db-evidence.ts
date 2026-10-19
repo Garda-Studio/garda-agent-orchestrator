@@ -3,13 +3,18 @@ import * as path from 'node:path';
 
 import { matchAnyRegex } from '../../gate-runtime/text-utils';
 import { normalizePath } from '../shared/helpers';
+import { DEFAULT_DB_AMBIENT_SIGNAL_REGEX, DEFAULT_DB_WEAK_SIGNAL_REGEX } from '../../policy/default-path-regexes';
 
+// Signals are recognized by exact configured pattern; keep the legacy managed
+// spellings so projects that still carry them retain weak/ambient semantics.
 const WEAK_DB_SIGNAL_REGEXES = Object.freeze([
-    '(Repository|Dao|Specification|Query|Migration)[^/]*\\.(java|kt|ts|js|py|go|cs|rb|php)$'
+    '(Repository|Dao|Specification|Query|Migration)[^/]*\\.(java|kt|ts|js|py|go|cs|rb|php)$',
+    DEFAULT_DB_WEAK_SIGNAL_REGEX
 ]);
 
 const AMBIENT_DB_SIGNAL_REGEXES = Object.freeze([
-    '(typeorm|prisma|flyway|liquibase|alembic|knex|sequelize)'
+    '(typeorm|prisma|flyway|liquibase|alembic|knex|sequelize)',
+    DEFAULT_DB_AMBIENT_SIGNAL_REGEX
 ]);
 
 const DB_CONFIG_CHANGED_SCOPE_REGEXES = Object.freeze([

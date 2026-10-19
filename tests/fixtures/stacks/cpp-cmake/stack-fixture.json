@@ -1,0 +1,6 @@
+{
+  "source": "src/invoice.cpp",
+  "test": "src/invoice_unittest.cc",
+  "dependency": "CMakeLists.txt",
+  "detected_stack": "C or C++"
+}

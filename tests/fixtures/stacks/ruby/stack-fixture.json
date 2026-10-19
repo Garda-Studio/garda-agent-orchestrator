@@ -1,0 +1,6 @@
+{
+  "source": "lib/billing/invoice.rb",
+  "test": "spec/billing/invoice_spec.rb",
+  "dependency": "Gemfile",
+  "detected_stack": "Ruby"
+}

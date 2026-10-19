@@ -59,6 +59,11 @@ export const STACK_SIGNALS: readonly StackSignal[] = Object.freeze([
     { name: '.NET', pattern: /\.(sln|csproj|fsproj)$/ },
     { name: 'PHP', pattern: /(^|\/)composer\.json$/ },
     { name: 'Ruby', pattern: /(^|\/)Gemfile$/ },
+    { name: 'Scala', pattern: /(^|\/)build\.sbt$/ },
+    { name: 'Elixir', pattern: /(^|\/)mix\.exs$/ },
+    { name: 'Swift', pattern: /(^|\/)Package\.swift$/ },
+    { name: 'Dart or Flutter', pattern: /(^|\/)pubspec\.yaml$/ },
+    { name: 'C or C++', pattern: /(^|\/)(?:CMakeLists\.txt|meson\.build|conanfile\.(?:txt|py)|vcpkg\.json)$/ },
     { name: 'Containerization', pattern: /(^|\/)Dockerfile(\..+)?$|(^|\/)docker-compose(\.[^/]+)?\.ya?ml$/ }
 ]);
 

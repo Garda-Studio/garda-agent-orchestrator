@@ -32,6 +32,7 @@ import {
 import {
     serializeReviewContextTelemetry
 } from './review-context-telemetry';
+import { DEFAULT_REFACTOR_PATH_REGEXES } from '../../../../policy/default-path-regexes';
 import {
     findLatestTimelineSequence,
     readCompileEvidenceSummary,
@@ -89,9 +90,7 @@ function findSensitiveTestDeltaFiles(
         ...classificationConfig.infra_trigger_regexes,
         ...classificationConfig.performance_trigger_regexes,
         ...classificationConfig.fast_path_sensitive_regexes,
-        '(Config|Settings|Options|Schema|Contract|Dto|DTO)[^/]*\\.(java|kt|ts|tsx|js|jsx|py|go|cs|rb|php|json|ya?ml|toml|xml)$',
-        '(^|/)(config|configs?|schemas?|contracts?)(/|$)',
-        '(^|/)[^/]*(config|settings|paths)[^/]*\\.(json|ya?ml|toml|xml)$'
+        ...DEFAULT_REFACTOR_PATH_REGEXES
     ];
     return testDeltaFiles.filter((filePath) => (
         gateHelpers.testPathPrefix(filePath, classificationConfig.protected_control_plane_roots)

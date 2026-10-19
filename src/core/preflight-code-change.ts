@@ -16,13 +16,13 @@ import {
     normalizePath,
     testPathPrefix
 } from './orchestrator-paths';
+import { DEFAULT_CODE_LIKE_REGEXES } from '../policy/default-path-regexes';
 
 export type LegacyScopeClassifier = (
     changedFiles: string[],
     repoRoot: string
 ) => 'code' | 'mixed' | 'docs-only' | 'config-only' | 'audit-only' | 'empty' | string;
 
-const DEFAULT_CODE_LIKE_REGEXES = ['\\.(java|kt|kts|groovy|ts|tsx|js|jsx|cjs|mjs|cs|go|py|rb|php|rs)$'];
 const DEFAULT_RUNTIME_ROOTS = ['src/', 'app/', 'apps/', 'backend/', 'frontend/', 'web/', 'api/', 'services/', 'packages/'];
 const DOC_LIKE_REGEXES = [
     '\\.(md|mdx|txt|rst|adoc|asciidoc|textile)$',

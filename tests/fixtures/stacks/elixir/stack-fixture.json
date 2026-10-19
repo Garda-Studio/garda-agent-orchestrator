@@ -1,0 +1,6 @@
+{
+  "source": "lib/billing/invoice.ex",
+  "test": "test/billing/invoice_test.exs",
+  "dependency": "mix.exs",
+  "detected_stack": "Elixir"
+}

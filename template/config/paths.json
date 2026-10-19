@@ -34,39 +34,81 @@
     "db": [
       "(^|/)(db|database|migrations?|schema)(/|$)",
       "\\.sql$",
-      "(Repository|Dao|Specification|Query|Migration)[^/]*\\.(java|kt|ts|js|py|go|cs|rb|php)$",
-      "(typeorm|prisma|flyway|liquibase|alembic|knex|sequelize)"
+      "(Repository|Dao|Specification|Query|Migration)[^/]*\\.(?:java|kt|kts|groovy|scala|sc|clj|cljs|cljc|ts|tsx|js|jsx|cjs|mjs|vue|svelte|cs|fs|vb|go|py|rb|php|rs|swift|m|mm|c|cc|cpp|cxx|h|hh|hpp|hxx|ex|exs|erl|hrl|dart|lua|hs|ml|mli|jl|r|nim|zig|cr|pl|pm|sh|bash|ps1|psm1)$",
+      "(typeorm|prisma|flyway|liquibase|alembic|knex|sequelize|sqlalchemy|hibernate|entityframework|dbcontext|activerecord|doctrine)"
     ],
     "security": [
       "(^|/)(auth|security|oauth|jwt|token|rbac|acl|keycloak|okta|saml|openid|mfa|crypt|encryption|certificate|secret|vault|webhook|payment|checkout|billing)(/|\\.|$)"
     ],
     "refactor": [
-      "(Config|Settings|Options|Schema|Contract|Dto|DTO)[^/]*\\.(java|kt|ts|tsx|js|jsx|py|go|cs|rb|php|json|ya?ml|toml|xml)$",
+      "(Config|Settings|Options|Schema|Contract|Dto|DTO)[^/]*\\.(?:java|kt|kts|groovy|scala|sc|clj|cljs|cljc|ts|tsx|js|jsx|cjs|mjs|vue|svelte|cs|fs|vb|go|py|rb|php|rs|swift|m|mm|c|cc|cpp|cxx|h|hh|hpp|hxx|ex|exs|erl|hrl|dart|lua|hs|ml|mli|jl|r|nim|zig|cr|pl|pm|sh|bash|ps1|psm1|json|ya?ml|toml|xml)$",
       "(^|/)(config|configs?|schemas?|contracts?)(/|$)",
       "(^|/)[^/]*(config|settings|paths)[^/]*\\.(json|ya?ml|toml|xml)$"
     ],
     "api": [
       "(^|/)(controllers?|routes?|handlers?|endpoints?|graphql)(/|\\.|$)",
-      "(Request|Response|Dto|DTO|Contract|Schema)[^/]*\\.(java|kt|ts|tsx|js|jsx|py|go|cs|rb|php)$",
-      "(^|/)(openapi|swagger)\\.(ya?ml|json)$"
+      "(Controller|Handler|Endpoint|Router|Routes)[^/]*\\.(?:java|kt|kts|groovy|scala|sc|clj|cljs|cljc|ts|tsx|js|jsx|cjs|mjs|vue|svelte|cs|fs|vb|go|py|rb|php|rs|swift|m|mm|c|cc|cpp|cxx|h|hh|hpp|hxx|ex|exs|erl|hrl|dart|lua|hs|ml|mli|jl|r|nim|zig|cr|pl|pm|sh|bash|ps1|psm1)$",
+      "(Request|Response|Dto|DTO|Contract|Schema)[^/]*\\.(?:java|kt|kts|groovy|scala|sc|clj|cljs|cljc|ts|tsx|js|jsx|cjs|mjs|vue|svelte|cs|fs|vb|go|py|rb|php|rs|swift|m|mm|c|cc|cpp|cxx|h|hh|hpp|hxx|ex|exs|erl|hrl|dart|lua|hs|ml|mli|jl|r|nim|zig|cr|pl|pm|sh|bash|ps1|psm1)$",
+      "(^|/)(openapi|swagger)\\.(ya?ml|json)$",
+      "\\.(proto|graphqls?|avsc|thrift)$"
     ],
     "dependency": [
       "(^|/)pom\\.xml$",
       "(^|/)build\\.gradle(\\.kts)?$",
       "(^|/)settings\\.gradle(\\.kts)?$",
+      "(^|/)gradle/[^/]*\\.versions\\.toml$",
+      "(^|/)gradle\\.lockfile$",
+      "(^|/)build\\.sbt$",
+      "(^|/)project/(?:plugins|build)\\.sbt$",
       "(^|/)package\\.json$",
-      "(^|/)package-lock\\.json$",
-      "(^|/)pnpm-lock\\.yaml$",
+      "(^|/)(?:package-lock|npm-shrinkwrap)\\.json$",
+      "(^|/)pnpm-(?:lock|workspace)\\.yaml$",
       "(^|/)yarn\\.lock$",
-      "(^|/)requirements(\\.txt|-dev\\.txt)?$",
-      "(^|/)poetry\\.lock$",
+      "(^|/)\\.yarnrc\\.yml$",
+      "(^|/)bun\\.lockb?$",
+      "(^|/)deno\\.(?:jsonc?|lock)$",
+      "(^|/)requirements[^/]*\\.(?:txt|in)$",
+      "(^|/)constraints[^/]*\\.txt$",
+      "(^|/)(?:poetry|uv|pdm)\\.lock$",
+      "(^|/)Pipfile(\\.lock)?$",
       "(^|/)pyproject\\.toml$",
-      "(^|/)go\\.mod$",
-      "(^|/)go\\.sum$",
-      "(^|/)Cargo\\.toml$",
-      "(^|/)Cargo\\.lock$",
-      "(^|/)composer\\.json$",
-      "(^|/)Gemfile(\\.lock)?$"
+      "(^|/)setup\\.(?:py|cfg)$",
+      "(^|/)(?:environment|conda-lock)\\.ya?ml$",
+      "(^|/)go\\.(?:mod|sum|work|work\\.sum)$",
+      "(^|/)Cargo\\.(?:toml|lock)$",
+      "(^|/)rust-toolchain(\\.toml)?$",
+      "(^|/)build\\.zig\\.zon$",
+      "\\.nimble$",
+      "(^|/)shard\\.(?:yml|lock)$",
+      "(^|/)composer\\.(?:json|lock)$",
+      "(^|/)Gemfile(\\.lock)?$",
+      "\\.gemspec$",
+      "(^|/)cpanfile(\\.snapshot)?$",
+      "\\.rockspec$",
+      "\\.(?:csproj|fsproj|vbproj|sln|slnx)$",
+      "(^|/)Directory\\.(?:Packages|Build)\\.(?:props|targets)$",
+      "(^|/)(?:packages\\.config|packages\\.lock\\.json|global\\.json|nuget\\.config)$",
+      "(^|/)Package\\.(?:swift|resolved)$",
+      "(^|/)Podfile(\\.lock)?$",
+      "(^|/)Cartfile(\\.resolved)?$",
+      "(^|/)pubspec\\.(?:yaml|lock)$",
+      "(^|/)mix\\.(?:exs|lock)$",
+      "(^|/)rebar\\.(?:config|lock)$",
+      "\\.cabal$",
+      "(^|/)cabal\\.project(\\.freeze)?$",
+      "(^|/)stack\\.yaml(\\.lock)?$",
+      "\\.opam$",
+      "(^|/)dune-project$",
+      "(^|/)(?:deps\\.edn|project\\.clj)$",
+      "(^|/)elm\\.json$",
+      "(^|/)(?:Project|Manifest)\\.toml$",
+      "(^|/)renv\\.lock$",
+      "(^|/)CMakeLists\\.txt$",
+      "(^|/)conanfile\\.(?:txt|py)$",
+      "(^|/)vcpkg(?:-configuration)?\\.json$",
+      "(^|/)meson\\.build$",
+      "(^|/)(?:MODULE\\.bazel|WORKSPACE(?:\\.bazel)?)(\\.lock)?$",
+      "(^|/)flake\\.(?:nix|lock)$"
     ],
     "infra": [
       "(^|/)Dockerfile(\\..+)?$",
@@ -77,7 +119,17 @@
     "test": [
       "/src/test/",
       "(^|/)(__tests__|tests?)/",
-      "\\.(spec|test)\\.(ts|tsx|js|jsx|java|kt|go|py|rb|php)$"
+      "(^|/)src/(?:common|jvm|js|native|android|androidUnit|androidInstrumented|ios|desktop|wasmJs|wasmWasi|integration|functional|unit)Test/",
+      "(^|/)[^/]+\\.(?:unit|integration|functional|acceptance|component|e2e)?tests?/",
+      "(^|/)e2e/",
+      "\\.(spec|test)\\.(?:java|kt|kts|groovy|scala|sc|clj|cljs|cljc|ts|tsx|js|jsx|cjs|mjs|vue|svelte|cs|fs|vb|go|py|rb|php|rs|swift|m|mm|c|cc|cpp|cxx|h|hh|hpp|hxx|ex|exs|erl|hrl|dart|lua|hs|ml|mli|jl|r|nim|zig|cr|pl|pm|sh|bash|ps1|psm1)$",
+      "_test\\.(?:go|py|exs|dart|cc|cpp|cxx|c|lua|cr|nim|zig|jl)$",
+      "_unittest\\.(?:cc|cpp|cxx|c)$",
+      "_spec\\.(?:rb|lua|cr|exs|js|ts)$",
+      "(^|/)test_[^/]+\\.py$",
+      "(^|/)t/[^/]+\\.t$",
+      "\\.tests\\.ps1$",
+      "_SUITE\\.erl$"
     ],
     "test_refactor_structural": [
       "(^|/)(?:__fixtures__|fixtures?|__mocks__|mocks?|helpers?|harness|support|setup|factories|factory|snapshots?)(?:/|\\.|-|_|$)",
@@ -85,11 +137,11 @@
       "(?:helpers?|fixtures?|harness|support|setup|factories?|mocks?)[-_]?(?:test|spec)"
     ],
     "performance": [
-      "(Cache|Redis|Elasticsearch|Search|Query|Benchmark|Profiling)[^/]*\\.(java|kt|ts|js|py|go|cs|rb|php)$",
-      "(^|/)(performance|perf|benchmark)/"
+      "(Cache|Redis|Elasticsearch|Search|Query|Benchmark|Profiling)[^/]*\\.(?:java|kt|kts|groovy|scala|sc|clj|cljs|cljc|ts|tsx|js|jsx|cjs|mjs|vue|svelte|cs|fs|vb|go|py|rb|php|rs|swift|m|mm|c|cc|cpp|cxx|h|hh|hpp|hxx|ex|exs|erl|hrl|dart|lua|hs|ml|mli|jl|r|nim|zig|cr|pl|pm|sh|bash|ps1|psm1)$",
+      "(^|/)(performance|perf|benchmarks?|benches)/"
     ]
   },
   "code_like_regexes": [
-    "\\.(java|kt|kts|groovy|ts|tsx|js|jsx|cjs|mjs|cs|go|py|rb|php|rs)$"
+    "\\.(?:java|kt|kts|groovy|scala|sc|clj|cljs|cljc|ts|tsx|js|jsx|cjs|mjs|vue|svelte|cs|fs|vb|go|py|rb|php|rs|swift|m|mm|c|cc|cpp|cxx|h|hh|hpp|hxx|ex|exs|erl|hrl|dart|lua|hs|ml|mli|jl|r|nim|zig|cr|pl|pm|sh|bash|ps1|psm1)$"
   ]
 }

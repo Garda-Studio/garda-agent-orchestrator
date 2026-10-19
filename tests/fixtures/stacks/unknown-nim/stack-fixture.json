@@ -1,0 +1,6 @@
+{
+  "source": "src/billing.nim",
+  "test": "tests/test_total.nim",
+  "dependency": "billing.nimble",
+  "detected_stack": null
+}

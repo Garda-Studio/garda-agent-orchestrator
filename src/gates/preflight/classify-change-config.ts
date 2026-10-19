@@ -19,6 +19,13 @@ import {
     normalizeReviewTriggerPolicyFromPaths,
     type ReviewTriggerPolicy
 } from '../../policy/review-trigger-policy';
+import {
+    DEFAULT_API_TRIGGER_REGEXES,
+    DEFAULT_CODE_LIKE_REGEXES,
+    DEFAULT_DB_TRIGGER_REGEXES,
+    DEFAULT_DEPENDENCY_TRIGGER_REGEXES,
+    DEFAULT_PERFORMANCE_TRIGGER_REGEXES
+} from '../../policy/default-path-regexes';
 import { resolveGateExecutionPath } from '../isolation/isolation-sandbox';
 import {
     getProtectedControlPlaneRoots,
@@ -128,38 +135,12 @@ export function getDefaultClassificationConfig(repoRoot: string): Classification
         sql_or_migration_regexes: ['\\.sql$', '(^|/)(db|database|migrations?|schema)(/|$)'],
         test_refactor_changed_lines_threshold: DEFAULT_REVIEW_TRIGGER_POLICY.test_refactor_changed_lines_threshold,
         triggers: {
-            db: [
-                '(^|/)(db|database|migrations?|schema)(/|$)',
-                '\\.sql$',
-                '(Repository|Dao|Specification|Query|Migration)[^/]*\\.(java|kt|ts|js|py|go|cs|rb|php)$',
-                '(typeorm|prisma|flyway|liquibase|alembic|knex|sequelize)'
-            ],
+            db: [...DEFAULT_DB_TRIGGER_REGEXES],
             security: [
                 '(^|/)(auth|security|oauth|jwt|token|rbac|acl|keycloak|okta|saml|openid|mfa|crypt|encryption|certificate|secret|vault|webhook|payment|checkout|billing)(/|\\.|$)'
             ],
-            api: [
-                '(^|/)(controllers?|routes?|handlers?|endpoints?|graphql)(/|\\.|$)',
-                '(Request|Response|Dto|DTO|Contract|Schema)[^/]*\\.(java|kt|ts|tsx|js|jsx|py|go|cs|rb|php)$',
-                '(^|/)(openapi|swagger)\\.(ya?ml|json)$'
-            ],
-            dependency: [
-                '(^|/)pom\\.xml$',
-                '(^|/)build\\.gradle(\\.kts)?$',
-                '(^|/)settings\\.gradle(\\.kts)?$',
-                '(^|/)package\\.json$',
-                '(^|/)package-lock\\.json$',
-                '(^|/)pnpm-lock\\.yaml$',
-                '(^|/)yarn\\.lock$',
-                '(^|/)requirements(\\.txt|-dev\\.txt)?$',
-                '(^|/)poetry\\.lock$',
-                '(^|/)pyproject\\.toml$',
-                '(^|/)go\\.mod$',
-                '(^|/)go\\.sum$',
-                '(^|/)Cargo\\.toml$',
-                '(^|/)Cargo\\.lock$',
-                '(^|/)composer\\.json$',
-                '(^|/)Gemfile(\\.lock)?$'
-            ],
+            api: [...DEFAULT_API_TRIGGER_REGEXES],
+            dependency: [...DEFAULT_DEPENDENCY_TRIGGER_REGEXES],
             infra: [
                 '(^|/)Dockerfile(\\..+)?$',
                 '(^|/)docker-compose(\\.[^/]+)?\\.ya?ml$',
@@ -168,12 +149,9 @@ export function getDefaultClassificationConfig(repoRoot: string): Classification
             ],
             refactor: [...DEFAULT_REVIEW_TRIGGER_POLICY.refactor_path_regexes],
             test: [...DEFAULT_REVIEW_TRIGGER_POLICY.test_path_regexes],
-            performance: [
-                '(Cache|Redis|Elasticsearch|Search|Query|Benchmark|Profiling)[^/]*\\.(java|kt|ts|js|py|go|cs|rb|php)$',
-                '(^|/)(performance|perf|benchmark)/'
-            ]
+            performance: [...DEFAULT_PERFORMANCE_TRIGGER_REGEXES]
         },
-        code_like_regexes: ['\\.(java|kt|kts|groovy|ts|tsx|js|jsx|cjs|mjs|cs|go|py|rb|php|rs)$'],
+        code_like_regexes: [...DEFAULT_CODE_LIKE_REGEXES],
         protected_control_plane_roots: getProtectedControlPlaneRoots(repoRoot),
         ordinary_doc_paths: [...DEFAULT_ORDINARY_DOC_PATHS]
     };
