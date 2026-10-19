@@ -230,7 +230,7 @@ export function restoreEntrypointRuleLinks(content: string): string {
     let restored = String(content || '');
     for (const [rulePath, label] of getEntrypointRuleLinks()) {
         const plainBullet = new RegExp('^\\- \\`' + escapeRegex(rulePath) + '\\`$', 'gm');
-        restored = restored.replace(plainBullet, `- [${label}](./${rulePath})`);
+        restored = restored.replace(plainBullet, () => `- [${label}](./${rulePath})`);
     }
     return restored;
 }

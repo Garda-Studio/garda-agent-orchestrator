@@ -476,7 +476,7 @@ export function syncManagedBlockInContent(content: string | null | undefined, ma
 
     let newContent;
     if (pattern.test(content || '')) {
-        newContent = (content || '').replace(pattern, managedBlock);
+        newContent = (content || '').replace(pattern, () => managedBlock);
     } else if (!content || !content.trim()) {
         newContent = managedBlock + '\r\n';
     } else {

@@ -588,3 +588,13 @@ describe('generateProjectMemorySummary', () => {
         }
     });
 });
+
+describe('literal dollar text in generated content', () => {
+    it('keeps $&, $` and $\' literally when replacing the discovery snapshot', () => {
+        const content = '# Commands\n\n## Project Discovery Snapshot\n- Old data\n';
+        const overlay = '## Project Discovery Snapshot\n- Command: echo "$&" "$`" "$\'" "$1"';
+        const result = applyContextDefaults(content, '40-commands.md', overlay)!;
+        assert.ok(result.includes('- Command: echo "$&" "$`" "$\'" "$1"'));
+        assert.ok(!result.includes('Old data'));
+    });
+});

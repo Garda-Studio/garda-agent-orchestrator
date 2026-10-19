@@ -179,7 +179,7 @@ function applyCompileGateCommandToSection(sectionContent: string, command: strin
         return sectionContent;
     }
 
-    return sectionContent.replace(sectionPattern, `$1${normalizedCommand}$3`);
+    return sectionContent.replace(sectionPattern, (_match, head: string, _old: string, tail: string) => `${head}${normalizedCommand}${tail}`);
 }
 
 function syncWorkflowConfigCompileGateCommand(rootPath: string, command: string | null): void {

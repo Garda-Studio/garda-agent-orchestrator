@@ -301,7 +301,7 @@ export function applyContextDefaults(content: string, ruleFile: string, discover
     // JavaScript has no `\z`; `(?![\s\S])` anchors the final section at end of input.
     const overlayPattern = /^## Project Discovery Snapshot[\s\S]*?(?=^## |(?![\s\S]))/m;
     if (overlayPattern.test(updated)) {
-        updated = updated.replace(overlayPattern, discoveryOverlay);
+        updated = updated.replace(overlayPattern, () => discoveryOverlay);
         return updated + '\r\n';
     }
 
@@ -336,7 +336,7 @@ export function applyCompileGateCommandDefaults(content: string, ruleFile: strin
         return content;
     }
 
-    return content.replace(sectionPattern, `$1${command}$3`);
+    return content.replace(sectionPattern, (_match, head: string, _old: string, tail: string) => `${head}${command}${tail}`);
 }
 
 export function migrateLegacyOutputCompactionGuidance(content: string, templateContent: string): string {
