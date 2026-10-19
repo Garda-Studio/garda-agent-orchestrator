@@ -76,7 +76,7 @@ const {
 void [ALL_REVIEW_FLAGS, appendEvent, buildReviewContextScopeFixture, eventsRoot, resolveNextStep, formatNextStepText, EXPECTED_LOOP_LINE, fileSha256, fs, getLoadedRuleFileBasenames, hasCompletedDecomposedParentAfterSplitRequiredClear, hasSplitRequiredClearedEvidence, launchInputEvidenceFixture, makeTempRepo, markReviewEvidenceAsStrictReuse, materializeFinalCloseout, NEXT_STEP_FULL_SUITE_TEST_CONFIG, normalizeForTimeline, os, path, PROVIDER_ENV_KEYS, readReviewContextTreeStateSha256, readSplitRequiredLatchEvidence, requireFromTest, resolveReviewCycleContinuationArtifactPath, resolveSplitRequiredArtifactPath, reviewsRoot, runRecordReviewCycleSplitDecisionCommand, seedCompilePass, seedCompletedReviewerLaunchAndInvocation, seedCompletedTaskWithIndependentCodeReview, seedCompletionPass, seedCustomStartedTask, seedDocImpactPass, seedFullSuiteValidation, seedGitAutoCompilePass, seedHandshake, seedPostPreflightRulePack, seedProjectMemory, seedProjectMemoryImpact, seedReviewGatePass, seedRulePack, seedShellSmoke, seedSourceCheckoutRuntime, seedSplitRequiredLatchEvidence, seedStartedTask, seedTaskModeOnly, sha256Text, TASK_ID, tempRoots, withProviderEnv, writeFreshReviewContextWithoutRouting, writeGitAutoPreflight, writeJson, writeJsonWithSha, writeNoOpEvidence, writePreflight, writeProjectMemoryWorkflowConfig, writeReviewContextOnly, writeReviewCycleContinuation, writeReviewEvidence, writeStrictDecompositionDecision, writeStrictIndependentCodeReviewEvidence];
 
 describe('gates/next-step split-required latch finalization', () => {
-    it('preserves done status after gate-owned split-required child completion', () => {
+    it('preserves synchronized queue status while requiring original parent acceptance after child completion', () => {
         const repoRoot = makeTempRepo();
         fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
             '# TASK.md',
@@ -100,16 +100,19 @@ describe('gates/next-step split-required latch finalization', () => {
         const events = fs.readFileSync(path.join(eventsRoot(repoRoot), 'T-652.jsonl'), 'utf8');
 
         assert.equal(decomposedResult.status, 'DECOMPOSED');
-        assert.equal(doneResult.status, 'DONE');
-        assert.equal(stableDoneResult.status, 'DONE');
-        assert.equal(stableDoneResult.next_gate, null);
+        assert.equal(doneResult.status, 'DECOMPOSED');
+        assert.equal(doneResult.next_gate, 'task-audit-summary');
+        assert.match(doneResult.commands[0].command, /gate task-audit-summary/u);
+        assert.equal(stableDoneResult.status, 'BLOCKED');
+        assert.equal(stableDoneResult.next_gate, 'decomposed-parent-obligations');
+        assert.equal(stableDoneResult.commands.length, 0);
         assert.ok(taskMd.includes('| T-652 | 🟩 DONE |'));
         assert.ok(events.includes('"event_type":"SPLIT_REQUIRED_CLEARED"'));
         assert.ok(events.includes('"event_type":"DECOMPOSED_PARENT_COMPLETED"'));
         assert.equal((events.match(/"event_type":"SPLIT_REQUIRED_RESTORED"/g) || []).length, 0);
     });
 
-    it('finalizes split-required parents through parent-derived suffixed child tasks', () => {
+    it('requests original parent acceptance after parent-derived suffixed child tasks finish', () => {
         const repoRoot = makeTempRepo();
         fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
             '# TASK.md',
@@ -133,13 +136,15 @@ describe('gates/next-step split-required latch finalization', () => {
         const events = fs.readFileSync(path.join(eventsRoot(repoRoot), 'T-506.jsonl'), 'utf8');
 
         assert.equal(decomposedResult.status, 'DECOMPOSED');
-        assert.equal(doneResult.status, 'DONE');
+        assert.equal(doneResult.status, 'DECOMPOSED');
+        assert.equal(doneResult.next_gate, 'task-audit-summary');
+        assert.match(doneResult.commands[0].command, /gate task-audit-summary/u);
         assert.ok(taskMd.includes('| T-506 | 🟩 DONE |'));
         assert.ok(events.includes('"event_type":"SPLIT_REQUIRED_CLEARED"'));
         assert.ok(events.includes('"event_type":"DECOMPOSED_PARENT_COMPLETED"'));
     });
 
-    it('finalizes nested decomposed parents when parent-derived leaf children are already done', () => {
+    it('requests original acceptance for nested decomposed parents after their leaf children finish', () => {
         const repoRoot = makeTempRepo();
         fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
             '# TASK.md',
@@ -156,8 +161,9 @@ describe('gates/next-step split-required latch finalization', () => {
         const result = resolveNextStep({ taskId: 'T-700', repoRoot });
         const taskMd = fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8');
 
-        assert.equal(result.status, 'DONE');
-        assert.equal(result.next_gate, null);
+        assert.equal(result.status, 'DECOMPOSED');
+        assert.equal(result.next_gate, 'task-audit-summary');
+        assert.match(result.commands[0].command, /gate task-audit-summary/u);
         assert.ok(taskMd.includes('| T-700 | 🟩 DONE |'));
         assert.ok(taskMd.includes('| T-700-1 | 🟩 DONE |'));
     });

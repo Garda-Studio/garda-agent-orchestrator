@@ -372,7 +372,7 @@ test('local UI settings use guarded workflow commands with preview confirmation 
         const invalidCompilePreviewResponse = await fetch(`${server.url}api/settings`, {
             method: 'POST',
             headers: actionHeaders,
-            body: JSON.stringify({ setting_id: 'compile-gate-command', mode: 'preview', value: 'npm test' })
+            body: JSON.stringify({ setting_id: 'compile-gate-command', mode: 'preview', value: 'npm run typecheck &&' })
         });
         assert.equal(invalidCompilePreviewResponse.status, 400);
         assert.equal((await invalidCompilePreviewResponse.json() as { code: string }).code, 'invalid_setting_value');

@@ -1,6 +1,7 @@
 import { TASK_QUEUE_FILENAME } from './orchestration-constants';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { TASK_ID_ALLOWED_PATTERN } from './task-ids';
 import { parseCanonicalActiveTaskQueue } from './task-md-table';
@@ -21,6 +22,25 @@ export interface TaskQueueEntry {
 
 export interface ReadTaskQueueEntriesOptions {
     missingFile?: 'empty' | 'throw';
+}
+
+interface TaskQueueReadSnapshot {
+    active: boolean;
+    contents: Map<string, string>;
+}
+
+const taskQueueReadSnapshots = new AsyncLocalStorage<TaskQueueReadSnapshot>();
+
+export function withTaskQueueReadSnapshot<T>(callback: () => T): T {
+    const snapshot: TaskQueueReadSnapshot = { active: true, contents: new Map() };
+    return taskQueueReadSnapshots.run(snapshot, () => {
+        try {
+            return callback();
+        } finally {
+            snapshot.active = false;
+            snapshot.contents.clear();
+        }
+    });
 }
 
 function fileExists(filePath: string): boolean {
@@ -61,8 +81,16 @@ export function readTaskQueueEntries(
     options: ReadTaskQueueEntriesOptions = {}
 ): Map<string, TaskQueueEntry> {
     const taskPath = path.join(repoRoot, TASK_QUEUE_FILENAME);
-    if (options.missingFile !== 'throw' && !fileExists(taskPath)) {
-        return new Map<string, TaskQueueEntry>();
+    const snapshot = taskQueueReadSnapshots.getStore();
+    const resolvedPath = path.resolve(taskPath);
+    const key = process.platform === 'win32' ? resolvedPath.toLowerCase() : resolvedPath;
+    let content = snapshot?.active ? snapshot.contents.get(key) : undefined;
+    if (content === undefined) {
+        if (options.missingFile !== 'throw' && !fileExists(taskPath)) {
+            return new Map<string, TaskQueueEntry>();
+        }
+        content = fs.readFileSync(taskPath, 'utf8');
+        if (snapshot?.active) snapshot.contents.set(key, content);
     }
-    return parseTaskQueueEntriesFromContent(fs.readFileSync(taskPath, 'utf8'));
+    return parseTaskQueueEntriesFromContent(content);
 }

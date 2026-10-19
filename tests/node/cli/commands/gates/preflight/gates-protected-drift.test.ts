@@ -8,6 +8,7 @@ import {
     writeBudgetOutputFilters
 } from '../../gate-test-helpers';
 import { createManagedTestTempDirectory } from '../../gate-test-temp-manager';
+import { TEST_COMPILE_GATE_COMMAND, writeTestCompileFixture } from '../../gate-test-repo-bootstrap';
 
 import { EXIT_GATE_FAILURE } from '../../../../../../src/cli/exit-codes';
 import {
@@ -43,7 +44,6 @@ import { buildDefaultWorkflowConfig } from '../../../../../../src/core/workflow-
 import { computeProtectedSnapshotDigest, writeProtectedControlPlaneManifest } from '../../../../../../src/gates/shared/helpers';
 import { serializeTaskPlan, validateTaskPlan } from '../../../../../../src/schemas/task-plan';
 
-const TEST_COMPILE_GATE_COMMAND = 'node -e "console.log(\'build ok\')"';
 
 function createReviewerRoutingFixture(
     sourceOfTruth: string,
@@ -99,6 +99,7 @@ function createTempRepo(): string {
         'utf8'
     );
     seedRuleFiles(root);
+    writeTestCompileFixture(root);
     const workflowConfig = buildDefaultWorkflowConfig();
     workflowConfig.compile_gate.command = TEST_COMPILE_GATE_COMMAND;
     workflowConfig.full_suite_validation.enabled = false;
@@ -991,6 +992,7 @@ describe('cli/commands/gates', () => {
         assert.equal(loadTaskEntryRulePack(repoRoot, taskId).exitCode, 0);
         runHandshakeForTask(repoRoot, taskId);
         runShellSmokeForTask(repoRoot, taskId);
+        fs.appendFileSync(path.join(repoRoot, protectedFile), '\n# Unauthorized protected change\n', 'utf8');
 
         const preflightPath = path.join(getReviewsRoot(repoRoot), `${taskId}-preflight.json`);
         let error: Error | null = null;
@@ -1770,6 +1772,7 @@ describe('cli/commands/gates', () => {
         const taskModePath = path.join(getReviewsRoot(repoRoot), `${taskId}-task-mode.json`);
         const taskModeArtifact = JSON.parse(fs.readFileSync(taskModePath, 'utf8')) as Record<string, unknown>;
         assert.equal((taskModeArtifact.plan as Record<string, unknown>).plan_path, normalizedPlanPath);
+        fs.appendFileSync(path.join(repoRoot, protectedFile), '\n# Unauthorized protected change\n', 'utf8');
 
         const preflightPath = path.join(getReviewsRoot(repoRoot), `${taskId}-preflight.json`);
         let error: Error | null = null;
@@ -1803,7 +1806,9 @@ describe('cli/commands/gates', () => {
 
         seedTaskQueue(repoRoot, taskId);
         seedInitAnswers(repoRoot);
-        writeCompileGateCommand(repoRoot, `node -e "${compileScript}"`);
+        const compileFixture = 'garda-agent-orchestrator/runtime/compile-drift-fixture.cjs';
+        fs.writeFileSync(path.join(repoRoot, compileFixture), compileScript + ';\n', 'utf8');
+        writeCompileGateCommand(repoRoot, `node ${compileFixture}`);
 
         fs.mkdirSync(path.dirname(generatedFileAbs), { recursive: true });
         fs.writeFileSync(generatedFileAbs, '# initial content\n', 'utf8');
@@ -1835,7 +1840,7 @@ describe('cli/commands/gates', () => {
         fs.writeFileSync(commandsPath, [
             '### Compile Gate (Mandatory)',
             '```bash',
-            `node -e "${compileScript}"`,
+            `node ${compileFixture}`,
             '```'
         ].join('\n'), 'utf8');
 
@@ -1877,7 +1882,9 @@ describe('cli/commands/gates', () => {
         fs.writeFileSync(path.join(repoRoot, ...taskFile.split('/')), 'export const value = 1;\n', 'utf8');
         fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
         fs.writeFileSync(manifestPath, '{"version":1}\n', 'utf8');
-        writeCompileGateCommand(repoRoot, `node -e "${compileScript}"`);
+        const compileFixture = 'garda-agent-orchestrator/runtime/compile-manifest-fixture.cjs';
+        fs.writeFileSync(path.join(repoRoot, compileFixture), compileScript + ';\n', 'utf8');
+        writeCompileGateCommand(repoRoot, `node ${compileFixture}`);
         writeProtectedControlPlaneManifest(repoRoot);
         fs.writeFileSync(
             path.join(repoRoot, '.gitignore'),
@@ -1911,7 +1918,7 @@ describe('cli/commands/gates', () => {
         fs.writeFileSync(commandsPath, [
             '### Compile Gate (Mandatory)',
             '```bash',
-            `node -e "${compileScript}"`,
+            `node ${compileFixture}`,
             '```'
         ].join('\n'), 'utf8');
 

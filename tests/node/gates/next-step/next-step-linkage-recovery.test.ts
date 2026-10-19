@@ -49,11 +49,13 @@ async function seedFailedCloseout(problemRecordId = taskId, crossReference = fal
     assert.equal((JSON.parse(classified.outputText) as { task_id: string }).task_id, taskId);
     loadPostPreflightRulePack(repoRoot, taskId, preflightPath);
     const outputFiltersPath = writeBudgetOutputFilters(repoRoot);
-    await runCompileGateCommand({ repoRoot, taskId, preflightPath, outputFiltersPath, emitMetrics: false });
+    const compile = await runCompileGateCommand({ repoRoot, taskId, preflightPath, outputFiltersPath, emitMetrics: false });
+    assert.equal(compile.exitCode, 0, compile.outputLines.join('\n'));
     writeCleanReviewArtifact(repoRoot, taskId, 'code', 'REVIEW PASSED');
     const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as { required_reviews: Record<string, boolean> };
     if (preflight.required_reviews.test) writeCleanReviewArtifact(repoRoot, taskId, 'test', 'TEST REVIEW PASSED');
-    assert.equal(runRequiredReviewsCheckCommand({ repoRoot, taskId, preflightPath, outputFiltersPath, emitMetrics: false }).exitCode, 0);
+    const reviews = runRequiredReviewsCheckCommand({ repoRoot, taskId, preflightPath, outputFiltersPath, emitMetrics: false });
+    assert.equal(reviews.exitCode, 0, reviews.outputLines.join('\n'));
     assert.equal(runDocImpactGateCommand({ repoRoot, taskId, preflightPath,
         decision: 'NO_DOC_UPDATES', behaviorChanged: false, changelogUpdated: false,
         rationale: 'No public behavior changes in this isolated lifecycle fixture.', emitMetrics: false }).exitCode, 0);

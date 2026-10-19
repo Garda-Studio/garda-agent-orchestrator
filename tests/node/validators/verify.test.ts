@@ -205,7 +205,7 @@ test('detectCommandsViolations returns empty for missing file', () => {
     }
 });
 
-test('detectCommandsViolations rejects test command in compile gate section', () => {
+test('detectCommandsViolations rejects malformed command in compile gate section', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-test-'));
     const rulesDir = path.join(
         tmpDir,
@@ -217,7 +217,7 @@ test('detectCommandsViolations rejects test command in compile gate section', ()
         '',
         '### Compile Gate (Mandatory)',
         '```bash',
-        'npm test',
+        'npm run typecheck &&',
         '```',
         '',
         ...requiredCommandContractSnippets()
@@ -225,7 +225,7 @@ test('detectCommandsViolations rejects test command in compile gate section', ()
 
     try {
         const violations = detectCommandsViolations(tmpDir);
-        assert.ok(violations.some((violation) => /must not run the full test suite/i.test(violation)));
+        assert.ok(violations.some((violation) => /Invalid compile command.*empty command before or after &&/i.test(violation)));
     } finally {
         cleanupVerifyTempDir(tmpDir);
     }

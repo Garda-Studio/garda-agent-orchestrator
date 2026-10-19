@@ -529,7 +529,7 @@ describe('gates/next-step decomposed parent child parsing', () => {
         assert.equal(result.reason.includes('T-959-1'), false);
     });
 
-    it('closes a manually decomposed parent after every explicit child is done without decomposition artifacts', () => {
+    it('requests original acceptance after every manually linked child is done without decomposition artifacts', () => {
         const repoRoot = makeTempRepo();
         fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
             '# TASK.md',
@@ -545,7 +545,10 @@ describe('gates/next-step decomposed parent child parsing', () => {
         const result = resolveNextStep({ taskId: 'T-960', repoRoot });
         const taskMd = fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8');
 
-        assert.equal(result.status, 'DONE');
+        assert.equal(result.status, 'DECOMPOSED');
+        assert.equal(result.next_gate, 'task-audit-summary');
+        assert.match(result.commands[0].command, /gate task-audit-summary/u);
+        assert.equal(result.final_report, null);
         assert.match(result.reason, /manual operator decomposition provenance/iu);
         assert.ok(taskMd.includes('| T-960 | 🟩 DONE |'));
         assert.equal(

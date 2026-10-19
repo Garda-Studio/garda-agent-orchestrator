@@ -27,6 +27,7 @@ import { isPlainRecord } from '../../core/records';
 import { resolveNextStepRequiredReviewTypes } from './next-step-required-review-lanes';
 import {
     readTaskQueueEntries,
+    withTaskQueueReadSnapshot,
     type TaskQueueEntry
 } from '../../core/task-queue-read';
 import {
@@ -5364,7 +5365,7 @@ function inspectNextStepEffects(options: NextStepPresentationOptions): {
     plan: NextStepEffectPlan | null;
 } {
     const effects = createNextStepEffectPlanner();
-    const result = resolveNextStepWithEffectController(options, effects);
+    const result = withTaskQueueReadSnapshot(() => resolveNextStepWithEffectController(options, effects));
     return { result, plan: effects.pendingPlan() };
 }
 

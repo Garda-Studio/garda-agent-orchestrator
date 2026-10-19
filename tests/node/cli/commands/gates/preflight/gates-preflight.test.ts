@@ -25,6 +25,7 @@ import {
 } from '../../../../../../src/gate-runtime/task-events';
 import { buildDefaultWorkflowConfig } from '../../../../../../src/core/workflow-config';
 import { formatReviewFollowUpTaskClosurePolicyMetadata } from '../../../../../../src/core/review-follow-up-task-closure-policy';
+import { TEST_COMPILE_GATE_COMMAND, writeTestCompileFixture } from '../../gate-test-repo-bootstrap';
 import {
     computeTaskProfilePolicySnapshotHash,
     type TaskProfilePolicySnapshot
@@ -45,7 +46,6 @@ import {
     writeHandshakeArtifact
 } from './gates-preflight-fixtures';
 
-const TEST_COMPILE_GATE_COMMAND = 'node -e "console.log(\'build ok\')"';
 
 function runClassifyChangeCommand(
     options: Parameters<typeof runSourceClassifyChangeCommand>[0]
@@ -126,6 +126,7 @@ function computeTaskTextSha256(taskText: string): string {
 }
 
 function writeConfiguredCompileGate(repoRoot: string): void {
+    writeTestCompileFixture(repoRoot);
     const configPath = path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config', 'workflow-config.json');
     const workflowConfig = buildDefaultWorkflowConfig();
     workflowConfig.compile_gate.command = TEST_COMPILE_GATE_COMMAND;
@@ -3029,7 +3030,8 @@ describe('cli/commands/gates — preflight', () => {
 
         assert.equal(result.exitCode, EXIT_GATE_FAILURE);
         assert.equal(result.outputLines[0], 'COMPILE_GATE_FAILED');
-        assert.ok(result.outputLines.some((line) => line.includes('Optional skill selection artifact is missing for current task cycle')));
+        assert.ok(result.outputLines.some((line) => line.includes('Optional skill selection artifact is missing for current task cycle')),
+            result.outputLines.join('\n'));
         assert.equal(
             readTaskTimelineEvents(repoRoot, taskId).some((event) => event.event_type === 'IMPLEMENTATION_STARTED'),
             false

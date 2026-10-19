@@ -57,10 +57,10 @@ import {
     writeReceiptBackedReviewArtifact as writeCanonicalReceiptBackedReviewArtifact
 } from '../../gate-test-helpers';
 import { createManagedTestTempDirectory } from '../../gate-test-temp-manager';
+import { TEST_COMPILE_GATE_COMMAND, writeTestCompileFixture } from '../../gate-test-repo-bootstrap';
 
 const GIT_INIT_RETRY_DELAYS_MS = [0, 25, 100];
 const RETRYABLE_GIT_INIT_PATTERNS = /\b(?:EACCES|EBUSY|ENOTEMPTY|EPERM|Permission denied)\b/i;
-const TEST_COMPILE_GATE_COMMAND = 'node -e "console.log(\'build ok\')"';
 const TRUST_BOUNDARY_FIXTURE_EVIDENCE_PATH =
     'tests/node/gates/review-context/review-context-trust-boundary-fixture.test.ts';
 
@@ -208,6 +208,7 @@ function createTempRepo(): string {
     fs.mkdirSync(path.join(root, 'garda-agent-orchestrator', 'live', 'docs', 'agent-rules'), { recursive: true });
     fs.mkdirSync(path.join(root, 'garda-agent-orchestrator', 'runtime'), { recursive: true });
     fs.writeFileSync(path.join(root, 'src', 'app.ts'), 'const a = 1;\nconst b = 2;\nconsole.log(a + b);\n', 'utf8');
+    writeTestCompileFixture(root);
     seedRuleFiles(root);
     seedProjectMemoryOffWorkflowConfig(root);
     writeBalancedProfilesConfig(root);

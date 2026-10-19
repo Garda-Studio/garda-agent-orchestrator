@@ -32,6 +32,10 @@ function resolveFixturePath(repoRoot: string, filePath: string): string {
 test('native empty-scope report preserves launch chronology and rejects stale result replay', { concurrency: false }, async () => {
     const repoRoot = createTempRepo();
     seedTaskQueue(repoRoot, TASK_ID);
+    const taskPath = path.join(repoRoot, 'TASK.md');
+    const taskText = fs.readFileSync(taskPath, 'utf8').replace('| fixture |', '| fixture. Required reviews: code, test. |');
+    assert.match(taskText, /Required reviews: code, test\./u);
+    fs.writeFileSync(taskPath, taskText, 'utf8');
     seedInitAnswers(repoRoot, 'Codex');
     const existingTestPath = 'tests/node/existing.test.ts';
     fs.mkdirSync(path.join(repoRoot, 'tests', 'node'), { recursive: true });

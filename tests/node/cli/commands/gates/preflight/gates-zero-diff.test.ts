@@ -24,8 +24,8 @@ import {
     writeBudgetOutputFilters
 } from '../../gate-test-seed-helpers';
 import { createManagedTestTempDirectory } from '../../gate-test-temp-manager';
+import { TEST_COMPILE_GATE_COMMAND, writeTestCompileFixture } from '../../gate-test-repo-bootstrap';
 
-const TEST_COMPILE_GATE_COMMAND = 'node -e "console.log(\'build ok\')"';
 const CLI_EXECUTION_TIMEOUT_MS = 30_000;
 
 function findSourceRepoRoot(): string {
@@ -95,6 +95,7 @@ function createTempRepo(): string {
         'utf8'
     );
     seedRuleFiles(root);
+    writeTestCompileFixture(root);
     const workflowConfig = buildDefaultWorkflowConfig();
     workflowConfig.compile_gate.command = TEST_COMPILE_GATE_COMMAND;
     workflowConfig.full_suite_validation.enabled = false;

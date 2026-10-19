@@ -6,7 +6,8 @@ import * as path from 'node:path';
 
 import {
     parseTaskQueueEntriesFromContent,
-    readTaskQueueEntries
+    readTaskQueueEntries,
+    withTaskQueueReadSnapshot
 } from '../../../src/core/task-queue-read';
 import {
     formatReviewFollowUpTaskClosurePolicyMetadata,
@@ -29,6 +30,33 @@ function taskQueueContent(): string {
         ''
     ].join('\n');
 }
+
+test('task queue snapshots keep independent entries and expire before deferred readers and later mutations', async t => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'task-queue-snapshot-'));
+    t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+    const taskPath = path.join(repoRoot, 'TASK.md');
+    fs.writeFileSync(taskPath, taskQueueContent());
+    let deferredRead: Promise<string | null | undefined> | undefined;
+    withTaskQueueReadSnapshot(() => {
+        const initial = readTaskQueueEntries(repoRoot).get('T-100');
+        assert.ok(initial);
+        initial.notes = 'Changed only in the caller';
+        assert.equal(readTaskQueueEntries(repoRoot).get('T-100')?.notes, 'child tasks: T-100-1');
+        fs.unlinkSync(taskPath);
+        assert.equal(readTaskQueueEntries(repoRoot).get('T-100')?.title, 'Centralize helpers');
+        fs.writeFileSync(taskPath, taskQueueContent().replace('Centralize helpers', 'Fresh queue title'));
+        assert.equal(readTaskQueueEntries(repoRoot).get('T-100')?.title, 'Centralize helpers');
+        deferredRead = Promise.resolve().then(() => readTaskQueueEntries(repoRoot).get('T-100')?.title);
+    });
+    assert.equal(await deferredRead, 'Fresh queue title');
+    assert.equal(readTaskQueueEntries(repoRoot).get('T-100')?.title, 'Fresh queue title');
+    assert.throws(() => withTaskQueueReadSnapshot(() => {
+        assert.equal(readTaskQueueEntries(repoRoot).get('T-100')?.title, 'Fresh queue title');
+        fs.writeFileSync(taskPath, taskQueueContent().replace('Centralize helpers', 'Title after failed inspection'));
+        throw new Error('Inspection failed');
+    }), /Inspection failed/u);
+    assert.equal(readTaskQueueEntries(repoRoot).get('T-100')?.title, 'Title after failed inspection');
+});
 
 function materializationNotes(parentTaskId: string, taskId: string): string {
     return `Review follow-up tasks materialized: \`${taskId}\`; artifact `

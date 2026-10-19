@@ -36,6 +36,7 @@ import {
     writeReviewCapabilitiesConfig
 } from '../../gate-test-helpers';
 import { seedRemediationRepoBase } from '../review-cycle/gates-review-cycle-fixtures';
+import { TEST_COMPILE_GATE_COMMAND, writeTestCompileFixture } from '../../gate-test-repo-bootstrap';
 
 describe('gate build-review-context CLI flow binding', () => {
     for (const mutatedArtifact of [
@@ -427,10 +428,13 @@ describe('gate build-review-context CLI flow binding', () => {
         const workflowConfig = fs.existsSync(workflowConfigPath)
             ? JSON.parse(fs.readFileSync(workflowConfigPath, 'utf8')) as Record<string, unknown>
             : {};
-        workflowConfig.compile_gate = { command: 'node -e "process.exit(0)"' };
+        writeTestCompileFixture(repoRoot);
+        const fullSuiteFixture = 'garda-agent-orchestrator/runtime/full-suite-fixture.cjs';
+        fs.writeFileSync(path.join(repoRoot, fullSuiteFixture), 'process.exit(0);\n', 'utf8');
+        workflowConfig.compile_gate = { command: TEST_COMPILE_GATE_COMMAND };
         workflowConfig.full_suite_validation = {
             enabled: true,
-            command: 'node -e "process.exit(0)"',
+            command: `node ${fullSuiteFixture}`,
             timeout_ms: 600000,
             green_summary_max_lines: 5,
             red_failure_chunk_lines: 50,

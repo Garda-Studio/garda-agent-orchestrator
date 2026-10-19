@@ -53,6 +53,7 @@ import {
     writeWorkflowConfig
 } from './gates-review-cycle-fixtures';
 import { writeBudgetOutputFilters } from '../../gate-test-helpers';
+import { TEST_COMPILE_GATE_COMMAND, writeTestCompileFixture } from '../../gate-test-repo-bootstrap';
 import { OPERATOR_CONFIRMATION_MAX_AGE_MS } from '../../../../../../src/core/operator-confirmation';
 import {
     handleCompleteReviewerLaunch,
@@ -1166,7 +1167,9 @@ describe('cli/commands/gates – review-cycle restart suite', () => {
         const workflowConfig = JSON.parse(fs.readFileSync(workflowConfigPath, 'utf8')) as {
             compile_gate: { command: string };
         };
-        workflowConfig.compile_gate.command = `node -e "${compileScript}"`;
+        const compileFixture = 'garda-agent-orchestrator/runtime/compile-publish-manifest.cjs';
+        fs.writeFileSync(path.join(repoRoot, compileFixture), compileScript + ';\n', 'utf8');
+        workflowConfig.compile_gate.command = `node ${compileFixture}`;
         fs.writeFileSync(workflowConfigPath, `${JSON.stringify(workflowConfig, null, 2)}\n`, 'utf8');
         fs.mkdirSync(path.join(repoRoot, 'scripts'), { recursive: true });
         fs.writeFileSync(path.join(repoRoot, ...taskFile.split('/')), 'export const value = 1;\n', 'utf8');
@@ -2303,12 +2306,13 @@ describe('cli/commands/gates – review-cycle restart suite', () => {
         const repoRoot = createTempRepo();
         const taskId = 'T-903b-restart-review-cycle-legacy-compat';
         seedRemediationRepoBase(repoRoot);
+        writeTestCompileFixture(repoRoot);
         fs.mkdirSync(path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config'), { recursive: true });
         fs.writeFileSync(
             path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config', 'workflow-config.json'),
             JSON.stringify({
                 compile_gate: {
-                    command: 'node -e "console.log(\'build ok\')"'
+                    command: TEST_COMPILE_GATE_COMMAND
                 },
                 full_suite_validation: {
                     enabled: false,

@@ -44,9 +44,9 @@ function setWorkflow(repoRoot: string, args: string[]): void {
 
 function interruptCommittedPolicyMutation(repoRoot: string, enabled: boolean): void {
     const child = spawnSync(process.execPath, ['-e', `
-        const mutation = require(${JSON.stringify(require.resolve('../../../../src/cli/commands/workflow/workflow-command-mutation'))});
+        const audit = require(${JSON.stringify(require.resolve('../../../../src/core/workflow-config-audit'))});
+        audit.bindCommittedWorkflowConfigAudit = () => process.exit(79);
         const api = require(${JSON.stringify(require.resolve('../../../../src/cli/commands/workflow/workflow-command-set'))});
-        mutation.bindCommittedWorkflowConfigAudit = () => process.exit(79);
         api.handleSet(${JSON.stringify({
             targetRoot: repoRoot, fullSuiteEnabled: String(enabled), operatorConfirmed: 'yes',
             operatorConfirmedAtUtc: new Date().toISOString(), json: true

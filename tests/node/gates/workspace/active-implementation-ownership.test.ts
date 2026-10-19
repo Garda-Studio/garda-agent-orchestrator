@@ -636,7 +636,9 @@ test(`compile gate ${approved ? 'accepts confirmed' : 'rejects unconfirmed'} unf
     const workflowConfig = JSON.parse(fs.readFileSync(workflowConfigPath, 'utf8')) as {
         compile_gate: { command: string };
     };
-    workflowConfig.compile_gate.command = 'node -e "require(\'node:fs\').writeFileSync(\'compile-ran.txt\', \'ran\')"';
+    fs.writeFileSync(path.join(repoRoot, 'compile-ownership-fixture.cjs'),
+        "require('node:fs').writeFileSync('compile-ran.txt', 'ran');\n", 'utf8');
+    workflowConfig.compile_gate.command = 'node compile-ownership-fixture.cjs';
     fs.writeFileSync(workflowConfigPath, JSON.stringify(workflowConfig, null, 2) + '\n', 'utf8');
     const outputFiltersPath = writeBudgetOutputFilters(repoRoot);
     seedTaskQueue(repoRoot, 'T-103');

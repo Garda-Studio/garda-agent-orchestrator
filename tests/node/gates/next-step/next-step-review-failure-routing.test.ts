@@ -2286,9 +2286,11 @@ describe('gates/next-step', { concurrency: 2 }, () => {
         const mutableFs = nodeRequire('node:fs') as typeof fs;
         const originalReadFileSync = mutableFs.readFileSync;
         let taskReads = 0;
+        const taskReadStacks: string[] = [];
         mutableFs.readFileSync = ((file: Parameters<typeof fs.readFileSync>[0], ...args: unknown[]) => {
             if (typeof file === 'string' && path.resolve(file) === path.resolve(taskPath)) {
                 taskReads += 1;
+                taskReadStacks.push(new Error('Task queue read').stack || '');
             }
             return originalReadFileSync(file as never, ...(args as never[]));
         }) as typeof fs.readFileSync;
@@ -2297,7 +2299,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
                 const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
                 assert.notEqual(result.next_gate, 'materialize-review-follow-up-tasks');
                 assert.notEqual(result.status, 'FAILED', `${result.next_gate}: ${result.title} :: ${result.reason}`);
-                assert.equal(taskReads, evaluation, 'each evaluation reads one fresh task queue snapshot');
+                assert.equal(taskReads, evaluation, 'each evaluation reads one fresh task queue snapshot\n' + taskReadStacks.join('\n'));
             }
         } finally {
             mutableFs.readFileSync = originalReadFileSync;

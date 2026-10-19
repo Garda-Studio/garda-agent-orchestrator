@@ -1979,7 +1979,7 @@ describe('gates/next-step protected recovery', () => {
         assert.ok(!command.includes('gate classify-change'));
     });
 
-    it('does not use protected recovery hints when startup rule-pack evidence is not current', () => {
+    it('requires task entry before interpreting protected recovery hints without a task-mode artifact', () => {
         const repoRoot = makeTempRepo();
         appendEvent(repoRoot, TASK_ID, 'TASK_MODE_ENTERED');
         seedRulePack(repoRoot, TASK_ID, 'TASK_ENTRY');
@@ -1993,8 +1993,9 @@ describe('gates/next-step protected recovery', () => {
 
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
 
-        assert.equal(result.next_gate, 'load-rule-pack');
-        assert.ok(result.commands[0].command.includes('gate load-rule-pack'));
+        assert.equal(result.next_gate, 'enter-task-mode');
+        assert.ok(result.commands[0].command.includes('gate enter-task-mode'));
+        assert.ok(!result.commands[0].command.includes('--orchestrator-work'));
         assert.ok(!result.commands[0].command.includes('T-EVIL'));
     });
 

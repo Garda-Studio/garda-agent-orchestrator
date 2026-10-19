@@ -13,7 +13,12 @@ export function readProjectValidationAuthority(repoRoot: string): { approved: Ap
     const configPath = `${bundle}/live/config/workflow-config.json`;
     if (bindContainedDestination(repoRoot, path.join(repoRoot, configPath)).missingAt) return null;
     const file = readValidationFile(repoRoot, configPath, MAXIMUM_CONTROL_BYTES);
-    const config = JSON.parse(file.bytes.toString('utf8')) as Record<string, unknown>;
+    let config: Record<string, unknown>;
+    try {
+        config = JSON.parse(file.bytes.toString('utf8')) as Record<string, unknown>;
+    } catch (error: unknown) {
+        throw new Error(`Workflow config at '${configPath}' is not valid JSON.`, { cause: error });
+    }
     if (config.project_validation === undefined) return null;
     const approved = parseApprovedValidationContract(config.project_validation);
     const audit = readValidationFile(repoRoot, `${bundle}/runtime/workflow-config-audit.jsonl`, MAXIMUM_CONTROL_BYTES);

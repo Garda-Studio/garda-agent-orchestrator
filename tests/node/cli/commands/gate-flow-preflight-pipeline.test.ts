@@ -803,7 +803,7 @@ describe('compile gate shared preflight pipeline pilot', () => {
                 'COMPILE_GATE_PASSED',
                 'CompileSummary: PASSED | duration_ms=<duration> | exit_code=0 | errors=0 | warnings=0',
                 'CompileOutputRetention: retained=false reason=SUCCESS_LOG_OMITTED '
-                    + 'sha256=<sha256> lines=7 chars=<chars>'
+                    + 'sha256=<sha256> lines=11 chars=<chars>'
             ]);
             assert.equal(evidence.preflight_path, path.resolve(preflightPath).replace(/\\/g, '/'));
             assert.equal(evidence.task_mode.task_id, taskId);
@@ -994,10 +994,11 @@ describe('review and full-suite shared preflight pipeline migration', () => {
             const workflowConfig = JSON.parse(
                 fs.readFileSync(workflowConfigPath, 'utf8')
             ) as Record<string, unknown>;
+            fs.writeFileSync(path.join(repoRoot, 'full-suite-fixture.cjs'), 'process.exit(0);\n', 'utf8');
             workflowConfig.full_suite_validation = {
                 ...(workflowConfig.full_suite_validation as Record<string, unknown>),
                 enabled: true,
-                command: `"${process.execPath.replace(/\\/g, '/')}" -e "process.exit(0)"`
+                command: 'node full-suite-fixture.cjs'
             };
             fs.writeFileSync(workflowConfigPath, JSON.stringify(workflowConfig, null, 2), 'utf8');
             initializeGitRepo(repoRoot);
@@ -1057,7 +1058,8 @@ describe('review and full-suite shared preflight pipeline migration', () => {
             const workflowConfig = JSON.parse(
                 fs.readFileSync(workflowConfigPath, 'utf8')
             ) as Record<string, unknown>;
-            const command = `"${process.execPath.replace(/\\/g, '/')}" -e "process.exit(0)"`;
+            fs.writeFileSync(path.join(repoRoot, 'full-suite-fixture.cjs'), 'process.exit(0);\n', 'utf8');
+            const command = 'node full-suite-fixture.cjs';
             workflowConfig.full_suite_validation = {
                 ...(workflowConfig.full_suite_validation as Record<string, unknown>),
                 enabled: true,
