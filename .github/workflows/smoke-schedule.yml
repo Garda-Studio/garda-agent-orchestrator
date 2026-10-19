@@ -121,10 +121,12 @@ jobs:
           # is synthetic, so seed a tiny project-specific build script before
           # setup and let normal discovery materialize `npm run build`.
           cat > "$SMOKE_DIR/package.json" <<'JSON'
-          {"private":true,"scripts":{"build":"node --version"}}
+          {"private":true,"scripts":{"build":"node --check index.js"}}
           JSON
+          echo 'module.exports = {};' > "$SMOKE_DIR/index.js"
           GIT_URL="$GITHUB_WORKSPACE"
           $CLI setup --target-root "$SMOKE_DIR" --no-prompt --assistant-language "English" --assistant-brevity "concise" --source-of-truth "Antigravity" --enforce-no-auto-commit false --claude-orchestrator-full-access false --token-economy-enabled true --active-agent-files ".antigravity/rules.md"
+          node scripts/ci/finalize-smoke-workspace.cjs "$SMOKE_DIR"
           echo "::endgroup::"
 
           echo "::group::2. Update (git clone flow)"

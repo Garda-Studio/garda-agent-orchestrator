@@ -285,6 +285,12 @@ test('lifecycle smoke commits the prebuilt bundle atop the checked-out commit', 
             `${label} must update from the commit containing the prebuilt runtime`);
         assert.match(smokeJob, /GIT_URL="\$GITHUB_WORKSPACE"/u,
             `${label} must clone from an explicit local path`);
+        const lifecycle = getWorkflowStepBlock(smokeJob, 'Lifecycle smoke (cross-platform E2E install → update → uninstall)');
+        const preparation = 'node scripts/ci/finalize-smoke-workspace.cjs "$SMOKE_DIR"';
+        assert.ok(lifecycle.includes(preparation), `${label} must finish real agent initialization`);
+        assert.ok(lifecycle.indexOf('$CLI setup ') < lifecycle.indexOf(preparation));
+        assert.ok(lifecycle.indexOf(preparation) < lifecycle.indexOf('$CLI update git '));
+        assert.ok(lifecycle.includes('"build":"node --check index.js"'));
         assert.match(
             smokeJob,
             /update git .* --branch "\$SMOKE_BRANCH"/u,

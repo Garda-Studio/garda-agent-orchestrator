@@ -341,7 +341,7 @@ function runCliStartupProbe(
 ): CliStartupProbeResult {
     const probeScript = [
         "const path = require('node:path');",
-        `const packageRoot = ${JSON.stringify(packageRoot)};`,
+        `const packageRoot = require('node:fs').realpathSync(${JSON.stringify(packageRoot)});`,
         "process.once('beforeExit', () => {",
         '  const packageModules = Object.keys(require.cache).filter((modulePath) => {',
         '    const relativePath = path.relative(packageRoot, modulePath);',
@@ -402,6 +402,30 @@ function preparePackSmokeTarball(repoRoot: string, fixtureRoot: string, candidat
     assert.ok(fs.existsSync(tarballPath), `Tarball not found at ${tarballPath}`);
     return tarballPath;
 }
+
+test('startup probe counts modules through a symlinked package root', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-startup-probe-'));
+    try {
+        const packageRoot = path.join(tempRoot, 'package');
+        const aliasRoot = path.join(tempRoot, 'package-alias');
+        const dispatchPath = path.join(packageRoot, 'dist', 'src', 'cli', 'commands', 'command-dispatch.js');
+        fs.mkdirSync(path.dirname(dispatchPath), { recursive: true });
+        fs.writeFileSync(dispatchPath, 'module.exports = {};\n');
+        fs.writeFileSync(path.join(packageRoot, 'cli.cjs'),
+            "if (!process.argv.includes('--version')) require('./dist/src/cli/commands/command-dispatch.js');\n");
+        fs.symlinkSync(packageRoot, aliasRoot, process.platform === 'win32' ? 'junction' : 'dir');
+        for (const root of [packageRoot, aliasRoot]) {
+            for (const args of [[], ['--version']]) {
+                const probe = runCliStartupProbe(path.join(root, 'cli.cjs'), args, tempRoot, root);
+                assert.equal(probe.result.status, 0, formatSpawnFailure('startup identity probe', probe.result));
+                assert.equal(probe.evidence.command_dispatch_loaded, args.length === 0);
+                assert.equal(probe.evidence.loaded_package_module_count, args.length === 0 ? 2 : 1);
+            }
+        }
+    } finally {
+        removePackSmokeTempRoot(tempRoot);
+    }
+});
 
 test('supplied release candidate is selected without packing a fixture', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-candidate-selection-'));
