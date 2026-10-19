@@ -552,6 +552,54 @@ describe('spawnStreamed – kill-path cleanup', () => {
         }
     });
 
+    for (const failure of ['timeout', 'max-buffer', 'identity-mismatch'] as const) {
+        it(`bounds Windows native helper recovery after ${failure}`, async () => {
+            if (process.platform !== 'win32') return;
+            const mutableChildProcess = require('node:child_process') as typeof childProcess;
+            const originalSpawn = mutableChildProcess.spawn;
+            const originalExecFile = mutableChildProcess.execFile;
+            const fakeChild = new EventEmitter() as childProcess.ChildProcess;
+            Object.defineProperties(fakeChild, {
+                pid: { value: 2_147_483_647 }, exitCode: { value: 1 }, signalCode: { value: null },
+                stdout: { value: null }, stderr: { value: null }
+            });
+            let pidOnlyKillCalls = 0;
+            fakeChild.kill = () => { pidOnlyKillCalls += 1; return true; };
+            const invocations: { command: unknown; args: unknown; options: childProcess.ExecFileOptions }[] = [];
+            try {
+                mutableChildProcess.spawn = (() => fakeChild) as typeof childProcess.spawn;
+                mutableChildProcess.execFile = ((command: unknown, args: unknown, options: childProcess.ExecFileOptions,
+                    callback: (error: childProcess.ExecFileException | null, stdout: string, stderr: string) => void) => {
+                    invocations.push({ command, args, options });
+                    const first = invocations.length === 1;
+                    queueMicrotask(() => {
+                        const error = first && failure !== 'identity-mismatch'
+                            ? Object.assign(new Error('Native helper failure'), {
+                                killed: true, code: failure === 'timeout' ? null : 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+                                signal: 'SIGTERM' as const
+                            }) : null;
+                        callback(error, first && failure === 'identity-mismatch' ? '0\n' : '1\n', '');
+                        setImmediate(() => fakeChild.emit('close', 1, 'SIGKILL'));
+                    });
+                    return fakeChild;
+                }) as typeof childProcess.execFile;
+                const result = await spawnStreamed('mock-command', [], { timeoutMs: 10 });
+                assert.equal(result.timedOut, true);
+                assert.equal(invocations.length, failure === 'timeout' ? 2 : 1);
+                assert.equal(pidOnlyKillCalls, 0);
+                assert.ok(invocations.every(invocation => Number(invocation.options.timeout) <= 2_500));
+                if (invocations.length === 2) {
+                    assert.equal(invocations[1].command, invocations[0].command);
+                    assert.deepEqual(invocations[1].args, invocations[0].args);
+                    assert.deepEqual(invocations[1].options.env, invocations[0].options.env);
+                }
+            } finally {
+                mutableChildProcess.spawn = originalSpawn;
+                mutableChildProcess.execFile = originalExecFile;
+            }
+        });
+    }
+
     it('does not terminate a different Windows process outside the managed creation window', async () => {
         if (process.platform !== 'win32') return;
         const victim = childProcess.spawn(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], { stdio: 'ignore' });

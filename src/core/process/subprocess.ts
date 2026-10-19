@@ -74,6 +74,7 @@ const PROCESS_TERMINATION_SIGNALS: NodeJS.Signals[] = process.platform === 'win3
     ? ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']
     : ['SIGINT', 'SIGTERM', 'SIGHUP'];
 const WINDOWS_PROCESS_TREE_COMMAND_TIMEOUT_MS = 2_500;
+const WINDOWS_PROCESS_TREE_MAX_ATTEMPTS = 2;
 export const WINDOWS_PROCESS_TREE_TARGET_BATCH_MAX_CHARS = 12_000;
 export const WINDOWS_EXIT_CLEANUP_BUDGET_MS = 2_500;
 const WINDOWS_SYSTEM32_ROOT = process.platform === 'win32'
@@ -327,11 +328,11 @@ function runExecFile(
     command: string,
     args: readonly string[],
     options: childProcess.ExecFileOptionsWithStringEncoding
-): Promise<{ error: NodeJS.ErrnoException | null; stdout: string }> {
+): Promise<{ error: childProcess.ExecFileException | null; stdout: string }> {
     return new Promise(function (resolve) {
         childProcess.execFile(command, [...args], options, function (error, stdout) {
             resolve({
-                error: error as NodeJS.ErrnoException | null,
+                error,
                 stdout
             });
         });
@@ -377,23 +378,34 @@ async function terminateWindowsProcessTrees(entries: readonly ManagedChildProces
         'powershell.exe'
     );
     let terminatedAny = false;
+    const deadline = performance.now() + SUBPROCESS_TERMINATION_TIMEOUT_MS;
     await settleWithShutdownConcurrency(targetBatches, async function (targets) {
-        const result = await runExecFile(powershellPath, [
-            '-NoLogo',
-            '-NoProfile',
-            '-NonInteractive',
-            '-EncodedCommand',
-            Buffer.from(WINDOWS_PROCESS_TREE_FALLBACK_SCRIPT, 'utf16le').toString('base64')
-        ], {
-            encoding: 'utf8',
-            env: windowsProcessTreeEnvironment(targets),
-            windowsHide: true,
-            timeout: WINDOWS_PROCESS_TREE_COMMAND_TIMEOUT_MS,
-            maxBuffer: 1024 * 1024
-        });
-        if (result.error) return;
-        const terminatedCount = Number(result.stdout.trim());
-        if (Number.isInteger(terminatedCount) && terminatedCount > 0) terminatedAny = true;
+        const environment = windowsProcessTreeEnvironment(targets);
+        for (let attempt = 0; attempt < WINDOWS_PROCESS_TREE_MAX_ATTEMPTS; attempt += 1) {
+            const remainingMs = Math.floor(deadline - performance.now());
+            if (remainingMs <= 0) return;
+            const result = await runExecFile(powershellPath, [
+                '-NoLogo',
+                '-NoProfile',
+                '-NonInteractive',
+                '-EncodedCommand',
+                Buffer.from(WINDOWS_PROCESS_TREE_FALLBACK_SCRIPT, 'utf16le').toString('base64')
+            ], {
+                encoding: 'utf8',
+                env: environment,
+                windowsHide: true,
+                timeout: Math.min(WINDOWS_PROCESS_TREE_COMMAND_TIMEOUT_MS, remainingMs),
+                maxBuffer: 1024 * 1024
+            });
+            if (!result.error) {
+                const terminatedCount = Number(result.stdout.trim());
+                if (Number.isInteger(terminatedCount) && terminatedCount > 0) terminatedAny = true;
+                return;
+            }
+            // A cold native compiler can exhaust one command budget. Keep the
+            // same authenticated targets and the existing total shutdown bound.
+            if (!result.error.killed || result.error.code != null) return;
+        }
     });
     return terminatedAny;
 }

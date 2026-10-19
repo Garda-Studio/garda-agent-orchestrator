@@ -65,8 +65,8 @@ function run() {
     const preload = '--require ' + JSON.stringify(__filename);
     const started = performance.now();
     const result = cp.spawnSync(process.execPath, ['--test', '--test-concurrency=1', '--test-name-pattern',
-        'adversarial PATH taskkill replacement|slow review reads release the transaction lock',
-        '.node-build/tests/node/core/subprocess.test.js', '.node-build/tests/node/gate-runtime/review-artifacts.test.js'], {
+        'adversarial PATH taskkill replacement',
+        '.node-build/tests/node/core/subprocess.test.js'], {
         cwd: root, env: { ...process.env, GARDA_TRACE_NATIVE_FAILURES: '1', NODE_OPTIONS: [process.env.NODE_OPTIONS, preload].filter(Boolean).join(' ') },
         encoding: 'utf8', timeout: 180_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true
     });

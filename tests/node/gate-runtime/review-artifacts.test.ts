@@ -132,7 +132,7 @@ function startReviewPublicationWorker(
     artifactPath: string,
     startSignalPath: string,
     resultPath: string,
-    options: { lowNoiseRuntimeWrites?: boolean } = {}
+    options: { lowNoiseRuntimeWrites?: boolean; exitDelayMs?: number; readyPath?: string } = {}
 ): Promise<{ code: number | null; stderr: string }> {
     const workerScript = [
         "const fs = require('node:fs');",
@@ -142,6 +142,8 @@ function startReviewPublicationWorker(
         'const startSignalPath = process.argv[4];',
         'const resultPath = process.argv[5];',
         "const lowNoiseRuntimeWrites = process.argv[6] === 'true';",
+        'const exitDelayMs = Number(process.argv[7] || 0);',
+        "if (process.argv[8]) fs.writeFileSync(process.argv[8], 'ready', 'utf8');",
         'const sleeper = new Int32Array(new SharedArrayBuffer(4));',
         'while (!fs.existsSync(startSignalPath)) { Atomics.wait(sleeper, 0, 0, 2); }',
         'try {',
@@ -155,6 +157,7 @@ function startReviewPublicationWorker(
         "  fs.writeFileSync(resultPath, JSON.stringify({ status: 'error', message: String(error && error.message || error) }), 'utf8');",
         '  process.exitCode = 1;',
         '}',
+        'if (exitDelayMs > 0) setTimeout(() => {}, exitDelayMs);',
         'void reviewsDir;'
     ].join('\n');
     const child = spawn(process.execPath, [
@@ -166,7 +169,9 @@ function startReviewPublicationWorker(
         artifactPath,
         startSignalPath,
         resultPath,
-        String(options.lowNoiseRuntimeWrites === true)
+        String(options.lowNoiseRuntimeWrites === true),
+        String(options.exitDelayMs || 0),
+        options.readyPath || ''
     ], {
         stdio: ['ignore', 'ignore', 'pipe']
     });
@@ -865,14 +870,17 @@ test('slow review reads release the transaction lock before concurrent publicati
     const publicationPath = path.join(reviewsDir, 'T-022-test.md');
     const startSignalPath = path.join(tempDir, 'publish.start');
     const resultPath = path.join(tempDir, 'publish.result.json');
+    const readyPath = path.join(tempDir, 'publish.ready');
     try {
         writeReviewArtifactText(existingPath, 'existing\n');
         const publication = startReviewPublicationWorker(
             reviewsDir,
             publicationPath,
             startSignalPath,
-            resultPath
+            resultPath,
+            { readyPath, exitDelayMs: 2_100 }
         );
+        waitForFileSync(readyPath, 5_000);
         const startedAt = Date.now();
         assert.throws(
             () => withReviewArtifactReadBarrier(reviewsDir, () => {
@@ -891,9 +899,10 @@ test('slow review reads release the transaction lock before concurrent publicati
             }),
             /invalidated by a concurrent review publication/
         );
+        const barrierElapsedMs = Date.now() - startedAt;
         const workerResult = await publication;
         assert.equal(workerResult.code, 0, workerResult.stderr);
-        assert.ok(Date.now() - startedAt < 2_000);
+        assert.ok(barrierElapsedMs < 2_000);
         assert.equal(fs.readFileSync(publicationPath, 'utf8'), 'published\n');
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
