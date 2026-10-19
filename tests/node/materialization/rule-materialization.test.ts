@@ -292,6 +292,17 @@ describe('applyContextDefaults', () => {
         const result = applyContextDefaults(content, '10-project-context.md', overlay);
         assert.ok(result!.includes('New data'));
     });
+
+    it('replaces a final overlay section completely, leaving no stale snapshot data', () => {
+        const content = '# Commands\n\n## Project Discovery Snapshot\n- Files considered: 515\n'
+            + '- Detected stacks: Node.js or JavaScript, TypeScript\n- Full report: `live/project-discovery.md`\n';
+        const overlay = '## Project Discovery Snapshot\n- Detected stacks: Go';
+        const result = applyContextDefaults(content, '40-commands.md', overlay)!;
+        assert.equal(result.match(/## Project Discovery Snapshot/gu)?.length, 1);
+        assert.ok(result.includes('Detected stacks: Go'));
+        assert.ok(!result.includes('Files considered: 515'));
+        assert.ok(!result.includes('Node.js or JavaScript'));
+    });
 });
 
 describe('applyAssistantDefaults', () => {

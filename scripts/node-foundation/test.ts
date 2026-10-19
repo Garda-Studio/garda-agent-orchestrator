@@ -65,6 +65,8 @@ const NODE_FOUNDATION_ISOLATED_TEST_PATHS = new Set<string>([
 ]);
 const NODE_FOUNDATION_SERIAL_TEST_PATHS = new Set<string>([
     'tests/node/bin/garda-delegation.test.ts',
+    // Real archived-runtime updates; under parallel shard load one case can exceed the idle timeout.
+    'tests/node/lifecycle/update-config-identity.test.ts',
     'tests/node/core/subprocess.test.ts',
     'tests/node/core/windows-native-environment.test.ts',
     'tests/node/cli/commands/gates/diagnostics/gates-command-timeout.test.ts',

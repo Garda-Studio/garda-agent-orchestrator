@@ -31,6 +31,7 @@ export type {
     ProfileReviewCatalogState,
     ResolvedProfileReviewCatalogPolicy
 } from './profile-review-catalog-policy';
+import { DEFAULT_RUNTIME_ROOTS } from './default-path-regexes';
 
 export interface ProfileReviewPolicy {
     code: boolean | 'auto';
@@ -887,7 +888,7 @@ export function loadSkillPacksConfig(configPath: string): SkillPacksConfig {
 
 const DEFAULT_PATHS_CONFIG: PathsConfig = {
     metrics_path: '',
-    runtime_roots: ['src/', 'app/', 'apps/', 'backend/', 'frontend/', 'web/', 'api/', 'services/', 'packages/'],
+    runtime_roots: [...DEFAULT_RUNTIME_ROOTS],
     fast_path_roots: ['frontend/', 'web/', 'ui/', 'mobile/', 'apps/'],
     fast_path_allowed_regexes: [],
     fast_path_sensitive_regexes: [],

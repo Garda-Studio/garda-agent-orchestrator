@@ -27,6 +27,7 @@ import {
     migrateReviewRemediationModePolicyLaneDefaults
 } from '../../policy/review-remediation-mode-policy';
 import { migrateLegacyManagedPathRegexes } from '../../policy/default-path-regexes';
+import { resolveActiveTaskIds } from '../../core/task-queue/active-task-state';
 import { isSourceCheckoutRoot } from '../../validators/workspace-layout/source-runtime';
 import type { InitProjectDiscovery } from './init-contracts';
 
@@ -322,6 +323,15 @@ function readExistingInitConfigs(
     return configs;
 }
 
+function hasAnyActiveTask(targetRoot: string, bundleRoot: string): boolean {
+    try {
+        return resolveActiveTaskIds(targetRoot, bundleRoot).size > 0;
+    } catch {
+        // An unreadable queue or runtime cannot prove that no task depends on the current config.
+        return true;
+    }
+}
+
 export function runInitConfigStage(
     options: RunInitConfigStageOptions
 ): InitConfigStageResult {
@@ -398,8 +408,9 @@ export function runInitConfigStage(
                         })
                         : mergeConfig(templateConfig, existingConfig);
 
-            if (configName === 'paths' && hadExistingConfig) {
-                // Uncustomized legacy stack-specific defaults follow the current template.
+            if (configName === 'paths' && hadExistingConfig && !hasAnyActiveTask(targetRoot, path.dirname(liveRoot))) {
+                // Uncustomized legacy stack-specific defaults follow the current template. Active
+                // tasks keep the exact classification config they started with; a later update migrates.
                 migrateLegacyManagedPathRegexes(materializedConfig, templateConfig);
             }
 

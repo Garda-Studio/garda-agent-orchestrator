@@ -262,11 +262,16 @@ function expandDirectoryPlaceholdersForCommand(repoRoot: string, scopeFiles: str
     return [...expanded].sort();
 }
 
+/** Git Bash, MSYS2 and Cygwin on Windows expand POSIX `$NAME`, not PowerShell `$env:NAME`. */
+export function usesPowerShellEnvironmentSyntax(env: NodeJS.ProcessEnv = process.env, platform = process.platform): boolean {
+    return platform === 'win32' && !env.MSYSTEM && !/cygwin/iu.test(env.TERM || '');
+}
+
 export function quoteProviderForCommand(provider: string | null): string {
     if (provider) {
         return quoteCommandValue(provider);
     }
-    return process.platform === 'win32'
+    return usesPowerShellEnvironmentSyntax()
         ? '"$env:GARDA_EXECUTION_PROVIDER"'
         : '"$GARDA_EXECUTION_PROVIDER"';
 }

@@ -1,9 +1,27 @@
 # Changelog
 
-- Make default path classification stack-neutral: recognize test conventions of Go, Python, Ruby, Elixir, Dart, Swift, .NET, Kotlin, C/C++, Perl, PowerShell and Erlang without treating production names such as `Contest.java` as tests; cover dependency manifests and lockfiles of all common ecosystems; apply database, API, performance and refactor triggers to every common source language. Updates replace only uncustomized legacy defaults in `live/config/paths.json`.
+## 1.4.4
+
+### Highlights
+
+- Stack-neutral operation: command admission, file roles, selected-case evidence, report artifacts, project discovery and default path classification no longer assume a particular language, build tool or test runner. Unknown stacks are reported honestly and configured explicitly instead of receiving invented commands.
+- Default classification recognizes test conventions, dependency manifests and domain-sensitive source files across common ecosystems (Go, Python, Ruby, Elixir, Dart, Swift, .NET, JVM, C/C++, Rust, PHP, Node.js and others); updates migrate only uncustomized legacy defaults and never while a task is active.
+- Declared report files are captured as authenticated, bounded evidence of the exact run that produced them.
+- Windows reliability: command timeouts and cancellation always terminate the command, native ACL and file-identity checks tolerate cold hosted runners, and protected system tools run from authenticated absolute paths.
+- Cross-stack fixture projects exercise discovery and classification end to end for nine stacks.
+
+### Stack neutrality and Windows reliability
+
+- Make default path classification stack-neutral: recognize test conventions of Go, Python, Ruby, Elixir, Dart, Swift, .NET, Kotlin, C/C++, Perl, PowerShell and Erlang without treating production names such as `Contest.java` as tests; cover dependency manifests and lockfiles of all common ecosystems; apply database, API, performance and refactor triggers to every common source language. Updates replace only uncustomized legacy defaults in `live/config/paths.json`, and defer that migration while any task is active.
 - Recognize Elixir, Swift, Scala, Dart/Flutter and C/C++ projects during discovery without inventing their commands, and admit focused self-validation through `mix`, `swift`, `dart`, `flutter`, `zig`, `lein`, `stack`, `cabal`, `rebar3`, `bundle exec`, `poetry run`, `pipenv run`, `bats`, `prove`, `busted` and `pest`.
 - Terminate the root child through its own process handle when the Windows process-tree helper fails, so command timeouts and cancellation always stop the command; allow a cold Windows PowerShell start when resolving trusted ACL principals.
 - Use a stack-neutral code-style label in generated rule indexes.
+- Replace the generated project-discovery snapshot completely when it is the final rule section, so generated command rules no longer carry Garda's own repository snapshot; drop that snapshot from the shipped template.
+- Treat `lib/`, `cmd/`, `internal/`, `pkg/`, `Sources/` and `crates/` as default production source roots.
+- Name a missing toolchain and the next operator action in compile and command failures and in `next-step`, instead of only asking for a retry.
+- Print the provider environment reference in POSIX form when Garda runs under Git Bash, MSYS2 or Cygwin on Windows.
+
+### Additional fixes and hardening
 
 - Expose task-scoped test-selection confirmation in Settings and all UI languages; align updated workflow and specialist-authoring guidance with audited selection and findings-only reviews.
 - Bound repair and WIP-capture Git subprocesses, preserve endpoint-specific UI rejection codes with query strings, and release detached task-action controls after dashboard rerenders.
@@ -169,12 +187,12 @@
   JSON record has been written, preserving accepted worker initialization guards
   and native platform-specific recovery assertions.
 
-## Shared recipe inspection evidence
+### Shared recipe inspection evidence
 
 - Reuse current native task, staged-scope and retained recipe observations inside one read-only inspection batch.
 - Recheck every recipe and the current native timeline before returning results; preserve standalone validation and reject changed or expired evidence.
 
-## Universal expected-red admission and update guidance
+### Universal expected-red admission and update guidance
 
 - Use authenticated test roles and current native command/source/output evidence for expected red, including literal test inputs outside known runner grammars.
 - Keep optional runner hints limited to source association; expected-red navigation uses admitted recipes or explicit reporter guidance without guessing technology-specific commands.
@@ -182,12 +200,12 @@
 - Replace the exact obsolete built-in trust-boundary prompt during normal load/update while preserving custom human guidance and rule choices.
 - Preserve configured full-suite commands without inventing an npm fallback.
 
-## Frozen review disposition and semantic closure
+### Frozen review disposition and semantic closure
 
 - Preserve a PASSED selected case when its linked finding or residual risk has an authenticated, satisfied nonblocking disposition under the frozen policy.
 - Forward the existing canonical disposition checks through required-review, completion and retained audit readers; missing follow-up evidence, fix-now obligations and FAILED or UNRESOLVED cases remain blocking.
 
-## Ordinary universal validation activation
+### Ordinary universal validation activation
 
 - Extend the existing source/execution/independent-case/terminal chain to ordinary task-owned commands without requiring a project declaration.
 - Bind opaque source selectors and localized scenarios to current native execution evidence; preserve configured commands, permissions and unresolved semantics.
@@ -200,19 +218,18 @@
   native WIP suspension, preserving the original preflight, captured source and
   gate-owned child/ownership transition.
 
-## Independent native case semantics
+### Independent native case semantics
 
 - Bind selected source cases to actual current native command/output records without a required report format.
 - Require independent case outcomes and exact retained quotations; unresolved, skipped, changed or replayed evidence cannot close required cases.
 - Share retained source/output reads within a resolution batch. Ordinary universal workflow activation remains the linked consumer step.
 
-## Universal native execution evidence
+### Universal native execution evidence
 
 - Authenticate current native project commands independently of familiar runner names, with source-content observations before and after execution.
 - Preserve pending case semantics, round-trip focused Maven/Gradle selectors, and consume audited test roles without weakening protected path classification.
 - Share timeline/preflight/scope capture within an observation; ordinary universal workflow activation remains a dependent step.
 
-## 1.4.4
 
 ### T-259-1 — Language-independent boundary source bindings
 

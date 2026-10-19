@@ -9,7 +9,13 @@
     "web/",
     "api/",
     "services/",
-    "packages/"
+    "packages/",
+    "lib/",
+    "cmd/",
+    "internal/",
+    "pkg/",
+    "Sources/",
+    "crates/"
   ],
   "fast_path_roots": [
     "frontend/",

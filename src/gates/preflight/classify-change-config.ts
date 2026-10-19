@@ -24,7 +24,8 @@ import {
     DEFAULT_CODE_LIKE_REGEXES,
     DEFAULT_DB_TRIGGER_REGEXES,
     DEFAULT_DEPENDENCY_TRIGGER_REGEXES,
-    DEFAULT_PERFORMANCE_TRIGGER_REGEXES
+    DEFAULT_PERFORMANCE_TRIGGER_REGEXES,
+    DEFAULT_RUNTIME_ROOTS
 } from '../../policy/default-path-regexes';
 import { resolveGateExecutionPath } from '../isolation/isolation-sandbox';
 import {
@@ -123,7 +124,7 @@ export interface GetClassificationConfigOptions {
 export function getDefaultClassificationConfig(repoRoot: string): ClassificationConfig {
     return {
         metrics_path: orchestratorRelativePath(repoRoot, 'runtime/metrics.jsonl'),
-        runtime_roots: ['src/', 'app/', 'apps/', 'backend/', 'frontend/', 'web/', 'api/', 'services/', 'packages/'],
+        runtime_roots: [...DEFAULT_RUNTIME_ROOTS],
         fast_path_roots: ['frontend/', 'web/', 'ui/', 'mobile/', 'apps/'],
         fast_path_allowed_regexes: [
             '^.+\\.(ts|tsx|js|jsx|vue|svelte|css|scss|sass|less|html)$',

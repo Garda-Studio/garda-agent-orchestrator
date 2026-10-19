@@ -108,6 +108,13 @@ function findExecutableCandidate(candidatePath: string, extensions: string[]): s
     return null;
 }
 
+// Keep the stable prefix for exit-code classification; the remainder names the operator's next action.
+export function formatMissingExecutableMessage(executable: string): string {
+    return `${executable} is required but was not found in PATH. Install or expose the toolchain that provides `
+        + `'${executable}' to this shell, or configure a project command that is available here `
+        + '(garda workflow set --compile-gate-command or --full-suite-command, or a project validation recipe).';
+}
+
 export function resolveExecutablePath(executableName: unknown, cwd?: string, envPath?: string): string {
     const requested = String(executableName || '');
     if (!requested) {
@@ -143,7 +150,7 @@ export function resolveExecutablePath(executableName: unknown, cwd?: string, env
     if (process.platform !== 'win32') {
         return requested;
     }
-    throw new Error(`${requested} is required but was not found in PATH.`);
+    throw new Error(formatMissingExecutableMessage(String(requested)));
 }
 
 function deferredSpawnObserver(callback: ExecuteCommandOptions['onSpawn']): ExecuteCommandOptions['onSpawn'] {
@@ -270,7 +277,7 @@ function executeCommandSegment(tokens: string[], options: ExecuteCommandOptions)
     if (result.error) {
         const errorCode = 'code' in result.error ? (result.error as NodeJS.ErrnoException).code : undefined;
         if (errorCode === 'ENOENT') {
-            throw new Error(`${tokens[0]} is required but was not found in PATH.`);
+            throw new Error(formatMissingExecutableMessage(tokens[0]));
         }
         throw result.error;
     }

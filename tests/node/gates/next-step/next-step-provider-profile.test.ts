@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
 import { formatNextStepText, resolveNextStep } from './next-step-test-support';
+import { usesPowerShellEnvironmentSyntax } from '../../../../src/gates/next-step/next-step-lifecycle-command-builders';
 import { getProviderRuntimeEnvironmentKeys } from './next-step-test-support';
 import {
     buildForcedSourceCheckoutRuntimeBuildCommand
@@ -472,7 +473,7 @@ describe('gates/next-step provider and profile output', () => {
     it('does not fabricate a provider when execution provider is unavailable', () => {
         const repoRoot = makeTempRepo();
         const result = withProviderEnv({}, () => resolveNextStep({ taskId: TASK_ID, repoRoot }));
-        const expectedProviderReference = process.platform === 'win32'
+        const expectedProviderReference = usesPowerShellEnvironmentSyntax()
             ? '--provider "$env:GARDA_EXECUTION_PROVIDER"'
             : '--provider "$GARDA_EXECUTION_PROVIDER"';
 
@@ -481,6 +482,13 @@ describe('gates/next-step provider and profile output', () => {
         assert.ok(result.commands[0].command.includes(expectedProviderReference));
         assert.ok(!result.commands[0].command.includes('--provider "Codex"'));
         assert.ok(!result.commands[0].command.includes('<'));
+    });
+
+    it('prints provider environment syntax for the shell that will run the command', () => {
+        assert.equal(usesPowerShellEnvironmentSyntax({}, 'win32'), true);
+        assert.equal(usesPowerShellEnvironmentSyntax({ MSYSTEM: 'MINGW64' }, 'win32'), false);
+        assert.equal(usesPowerShellEnvironmentSyntax({ TERM: 'cygwin' }, 'win32'), false);
+        assert.equal(usesPowerShellEnvironmentSyntax({}, 'linux'), false);
     });
 
     it('reports stale source runtime as a first-class remediation before classify-change', () => {

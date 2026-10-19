@@ -12,6 +12,7 @@ import {
     DEFAULT_DEPENDENCY_TRIGGER_REGEXES,
     DEFAULT_PERFORMANCE_TRIGGER_REGEXES,
     DEFAULT_REFACTOR_PATH_REGEXES,
+    DEFAULT_RUNTIME_ROOTS,
     DEFAULT_TEST_PATH_REGEXES,
     LEGACY_MANAGED_PATH_REGEX_DEFAULTS,
     migrateLegacyManagedPathRegexes
@@ -78,6 +79,7 @@ test('domain triggers apply to source files of any common language without gener
 
 test('materialized paths template matches the shared stack-neutral defaults', () => {
     const template = JSON.parse(fs.readFileSync(path.join(getRepoRoot(), 'template', 'config', 'paths.json'), 'utf8'));
+    assert.deepEqual(template.runtime_roots, DEFAULT_RUNTIME_ROOTS);
     assert.deepEqual(template.code_like_regexes, DEFAULT_CODE_LIKE_REGEXES);
     assert.deepEqual(template.triggers.test, DEFAULT_TEST_PATH_REGEXES);
     assert.deepEqual(template.triggers.refactor, DEFAULT_REFACTOR_PATH_REGEXES);
@@ -91,6 +93,7 @@ test('update migrates only uncustomized legacy managed path patterns', () => {
     const template = JSON.parse(fs.readFileSync(path.join(getRepoRoot(), 'template', 'config', 'paths.json'), 'utf8'));
     const customTest = ['(^|/)quality/'];
     const merged = {
+        runtime_roots: [...LEGACY_MANAGED_PATH_REGEX_DEFAULTS.runtime_roots[0]],
         code_like_regexes: [...LEGACY_MANAGED_PATH_REGEX_DEFAULTS.code_like_regexes[0]],
         triggers: {
             dependency: [...LEGACY_MANAGED_PATH_REGEX_DEFAULTS['triggers.dependency'][0]],
@@ -99,7 +102,8 @@ test('update migrates only uncustomized legacy managed path patterns', () => {
         }
     };
     const migrated = migrateLegacyManagedPathRegexes(merged, template);
-    assert.deepEqual(migrated.sort(), ['code_like_regexes', 'triggers.dependency']);
+    assert.deepEqual(migrated.sort(), ['code_like_regexes', 'runtime_roots', 'triggers.dependency']);
+    assert.deepEqual(merged.runtime_roots, DEFAULT_RUNTIME_ROOTS);
     assert.deepEqual(merged.code_like_regexes, DEFAULT_CODE_LIKE_REGEXES);
     assert.deepEqual(merged.triggers.dependency, DEFAULT_DEPENDENCY_TRIGGER_REGEXES);
     assert.equal(merged.triggers.test, customTest);

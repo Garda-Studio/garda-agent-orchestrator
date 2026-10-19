@@ -298,7 +298,8 @@ export function applyContextDefaults(content: string, ruleFile: string, discover
     }
 
     let updated = content.trimEnd();
-    const overlayPattern = /^## Project Discovery Snapshot[\s\S]*?(?=^## |\z)/m;
+    // JavaScript has no `\z`; `(?![\s\S])` anchors the final section at end of input.
+    const overlayPattern = /^## Project Discovery Snapshot[\s\S]*?(?=^## |(?![\s\S]))/m;
     if (overlayPattern.test(updated)) {
         updated = updated.replace(overlayPattern, discoveryOverlay);
         return updated + '\r\n';

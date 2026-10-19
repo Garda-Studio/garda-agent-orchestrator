@@ -13,6 +13,12 @@ export const CODE_EXTENSION_GROUP = '(?:java|kt|kts|groovy|scala|sc|clj|cljs|clj
     + '|cs|fs|vb|go|py|rb|php|rs|swift|m|mm|c|cc|cpp|cxx|h|hh|hpp|hxx|ex|exs|erl|hrl|dart|lua|hs|ml|mli'
     + '|jl|r|nim|zig|cr|pl|pm|sh|bash|ps1|psm1)';
 
+/** Conventional production source roots across ecosystems (Go `cmd/internal/pkg`, Swift `Sources`, Rust `crates`, Ruby/Elixir `lib`). */
+export const DEFAULT_RUNTIME_ROOTS: readonly string[] = Object.freeze([
+    'src/', 'app/', 'apps/', 'backend/', 'frontend/', 'web/', 'api/', 'services/', 'packages/',
+    'lib/', 'cmd/', 'internal/', 'pkg/', 'Sources/', 'crates/'
+]);
+
 export const DEFAULT_CODE_LIKE_REGEXES: readonly string[] = Object.freeze([
     `\\.${CODE_EXTENSION_GROUP}$`
 ]);
@@ -144,6 +150,7 @@ export const DEFAULT_DEPENDENCY_TRIGGER_REGEXES: readonly string[] = Object.free
  * project-owned customizations are never rewritten.
  */
 export const LEGACY_MANAGED_PATH_REGEX_DEFAULTS: Readonly<Record<string, readonly (readonly string[])[]>> = Object.freeze({
+    runtime_roots: [['src/', 'app/', 'apps/', 'backend/', 'frontend/', 'web/', 'api/', 'services/', 'packages/']],
     code_like_regexes: [['\\.(java|kt|kts|groovy|ts|tsx|js|jsx|cjs|mjs|cs|go|py|rb|php|rs)$']],
     'triggers.test': [[
         '/src/test/',

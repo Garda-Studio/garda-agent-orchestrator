@@ -105,7 +105,11 @@ export async function executeCompileCommands(params: {
 
         if (execution.exitCode !== 0) {
             exitCode = execution.exitCode;
-            exceptionMessage = `Compile command #${index + 1} exited with code ${execution.exitCode}.`;
+            const missingToolchain = execution.outputLines
+                .map(line => /^EXECUTION_ERROR: (.+ is required but was not found in PATH\..*)$/u.exec(line)?.[1])
+                .find(Boolean);
+            exceptionMessage = `Compile command #${index + 1} exited with code ${execution.exitCode}.`
+                + (missingToolchain ? ` ${missingToolchain}` : '');
             selectedCommandProfile = commandProfile;
             selectedCommandIndex = index + 1;
             selectedInvocationIndex = selected?.invocationIndex ?? null;
