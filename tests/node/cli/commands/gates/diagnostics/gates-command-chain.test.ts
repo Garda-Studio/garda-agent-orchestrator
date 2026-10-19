@@ -59,14 +59,21 @@ describe('gates command chains', () => {
         const taskId = 'T-901-command-chain';
         seedTaskQueue(repoRoot, taskId);
         seedInitAnswers(repoRoot);
+        fs.mkdirSync(path.join(repoRoot, 'scripts'), { recursive: true });
+        fs.writeFileSync(path.join(repoRoot, 'scripts', 'compile-chain.cjs'), [
+            'const fs = require("node:fs");',
+            'const phase = process.argv[2];',
+            'if (phase === "first") console.log("first command");',
+            'if (phase === "fail") { console.error("child failed"); process.exit(29); }',
+            'if (phase === "last") fs.writeFileSync("must-not-run", "ran");'
+        ].join('\n'), 'utf8');
         const configPath = path.join(getOrchestratorRoot(repoRoot), 'live', 'config', 'workflow-config.json');
         fs.mkdirSync(path.dirname(configPath), { recursive: true });
         fs.writeFileSync(configPath, JSON.stringify({
             project_memory_maintenance: { enabled: false },
             compile_gate: {
-                command: 'node -e "console.log(\'first command\')" && '
-                    + 'node -e "console.error(\'child failed\'); process.exit(29)" && '
-                    + 'node -e "require(\'node:fs\').writeFileSync(\'must-not-run\', \'ran\')"'
+                command: 'node scripts/compile-chain.cjs first && '
+                    + 'node scripts/compile-chain.cjs fail && node scripts/compile-chain.cjs last'
             }
         }, null, 2), 'utf8');
         assert.equal(runEnterTaskMode({ repoRoot, taskId, taskSummary: 'Update app flow' }).exitCode, 0);
