@@ -11,6 +11,63 @@ const emit = (name, value) => console.log(JSON.stringify({ kind: 'windows-native
 const summarize = result => ({ status: result.status, signal: result.signal,
     error_code: result.error?.code, stdout: bounded(result.stdout), stderr: bounded(result.stderr) });
 
+const ENVIRONMENT_GROUPS = [
+    ['platform', ['SystemDrive', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432',
+        'CommonProgramFiles', 'CommonProgramFiles(x86)', 'CommonProgramW6432', 'PROCESSOR_ARCHITECTURE',
+        'PROCESSOR_ARCHITEW6432', 'PROCESSOR_IDENTIFIER', 'PROCESSOR_LEVEL', 'PROCESSOR_REVISION', 'NUMBER_OF_PROCESSORS', 'OS']],
+    ['identity', ['USERDOMAIN', 'USERDOMAIN_ROAMINGPROFILE', 'USERNAME', 'HOMEDRIVE', 'HOMEPATH',
+        'LOGONSERVER', 'SESSIONNAME', 'COMPUTERNAME', 'ALLUSERSPROFILE', 'ProgramData', 'PUBLIC']],
+    ['powershell', ['PSModulePath', 'PSExecutionPolicyPreference', 'PATHEXT', 'HOME',
+        'PSModuleAnalysisCachePath', 'PSDisableModuleAnalysisCacheCleanup', 'POWERSHELL_TELEMETRY_OPTOUT']],
+    ['dotnet', ['DOTNET_ROOT', 'DOTNET_ROOT(x86)', 'DOTNET_ROOT_X64', 'DOTNET_MULTILEVEL_LOOKUP',
+        'DOTNET_SKIP_FIRST_TIME_EXPERIENCE', 'DOTNET_CLI_TELEMETRY_OPTOUT', 'COMPLUS_ReadyToRun',
+        'COMPLUS_ZapDisable', 'FrameworkDir', 'FrameworkVersion', 'FrameworkDIR64', 'FrameworkVersion64']],
+    ['profile-paths', ['SystemRoot', 'WINDIR', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'TEMP', 'TMP', 'COMSPEC']],
+    ['path-search', ['PATH']]
+];
+
+function environmentWithInheritedNames(base, names) {
+    const environment = { ...base, GARDA_PROCESS_TREE_TARGETS: '' };
+    const applied = [];
+    for (const name of names) {
+        const inherited = Object.keys(process.env).find(key => key.toLowerCase() === name.toLowerCase());
+        if (!inherited) continue;
+        for (const key of Object.keys(environment)) {
+            if (key.toLowerCase() === name.toLowerCase()) delete environment[key];
+        }
+        environment[name] = process.env[inherited];
+        applied.push(name);
+    }
+    return { environment, applied };
+}
+
+function diagnoseEnvironment(powershell, args, productionEnvironment) {
+    let experiments = 0;
+    const experiment = (label, names) => {
+        const { environment, applied } = environmentWithInheritedNames(productionEnvironment, names);
+        const started = performance.now();
+        const result = cp.spawnSync(powershell, args, {
+            env: environment, encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024, windowsHide: true
+        });
+        experiments += 1;
+        emit('native_environment_experiment', { label, inherited_names: applied,
+            elapsed_ms: performance.now() - started, ...summarize(result) });
+        return result.status === 0 && !result.error;
+    };
+    // Names only: never expose arbitrary inherited values or secrets in CI logs.
+    emit('environment_names', { inherited: Object.keys(process.env).sort(),
+        production: Object.keys(productionEnvironment).sort() });
+    for (const [group, names] of ENVIRONMENT_GROUPS) {
+        const applied = environmentWithInheritedNames(productionEnvironment, names).applied;
+        if (applied.length === 0 || !experiment(group, applied)) continue;
+        for (const name of applied) {
+            if (experiments >= 20) break;
+            if (experiment(group + '/' + name, [name])) break;
+        }
+        break;
+    }
+}
+
 async function main() {
     if (process.platform !== 'win32') throw new Error('This probe requires native Windows.');
     const temporaryParent = fs.realpathSync.native(os.tmpdir());
@@ -78,6 +135,8 @@ async function main() {
         emit('managed_timeout', { ...result, elapsed_ms: elapsed, accepted: terminationAccepted });
         cp.execFile = originalExecFile;
         if (capturedInvocation) {
+            let productionCompiled = false;
+            let inheritedCompiled = false;
             // Empty targets compile the exact native helper but cannot select or terminate any process.
             for (const [environment, env] of [
                 ['production-empty-targets', { ...capturedInvocation.options.env, GARDA_PROCESS_TREE_TARGETS: '' }],
@@ -89,6 +148,11 @@ async function main() {
                 });
                 emit('native_helper_compile', { environment, elapsed_ms: performance.now() - before,
                     ...summarize(compilation) });
+                if (environment === 'production-empty-targets') productionCompiled = compilation.status === 0 && !compilation.error;
+                else inheritedCompiled = compilation.status === 0 && !compilation.error;
+            }
+            if (!productionCompiled && inheritedCompiled) {
+                diagnoseEnvironment(powershell, capturedInvocation.args, capturedInvocation.options.env);
             }
         }
         emit('summary', { timeline_accepted: timelineAccepted, termination_accepted: terminationAccepted,
