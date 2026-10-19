@@ -239,3 +239,26 @@ test('classifyOwnership regions cover full text without overlap', () => {
     }
     assert.equal(reconstructed, text);
 });
+
+test('managed block mutations refuse orphaned, nested or reversed markers instead of deleting user text', () => {
+    const options = { startMarker: '<!-- s -->', endMarker: '<!-- e -->', blockLines: ['managed'] };
+    for (const content of [
+        'user head\n<!-- s -->\nold\nuser text that must survive\n',
+        'user\n<!-- e -->\nmiddle\n<!-- s -->\nold\n',
+        '<!-- s -->\n<!-- s -->\nold\n<!-- e -->\n'
+    ]) {
+        assert.throws(() => upsertManagedBlock(content, options), /Ambiguous managed block markers/u);
+        assert.throws(() => removeManagedBlock(content, options), /Ambiguous managed block markers/u);
+    }
+});
+
+test('upsertManagedBlock keeps one block and user text when complete duplicate pairs exist', () => {
+    const options = { startMarker: '<!-- s -->', endMarker: '<!-- e -->', blockLines: ['current'] };
+    const content = 'head\n\n\nkeep\n<!-- s -->\nold-1\n<!-- e -->\nbetween\n<!-- s -->\nold-2\n<!-- e -->\ntail\n';
+    const result = upsertManagedBlock(content, options);
+    assert.equal(result.match(/<!-- s -->/gu)?.length, 1);
+    assert.ok(result.startsWith('head\n\n\nkeep\n<!-- s -->\ncurrent\n<!-- e -->'));
+    assert.ok(result.includes('between'));
+    assert.ok(result.endsWith('tail\n'));
+    assert.ok(!result.includes('old-'));
+});

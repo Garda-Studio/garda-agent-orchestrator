@@ -97,15 +97,63 @@ export function classifyOwnership(text: string, startMarker: string, endMarker: 
     return regions;
 }
 
+function listMarkerIndexes(text: string, marker: string): number[] {
+    const indexes: number[] = [];
+    for (let index = text.indexOf(marker); index !== -1; index = text.indexOf(marker, index + marker.length)) {
+        indexes.push(index);
+    }
+    return indexes;
+}
+
+/**
+ * All managed spans for a mutation. Markers must strictly alternate start/end; an orphan, nested or
+ * reversed marker makes ownership ambiguous, and rewriting would delete user text between markers.
+ */
+function findWellFormedManagedSpans(text: string, startMarker: string, endMarker: string): ManagedSpan[] {
+    const markers = [
+        ...listMarkerIndexes(text, startMarker).map(index => ({ index, kind: 'start' as const })),
+        ...listMarkerIndexes(text, endMarker).map(index => ({ index, kind: 'end' as const }))
+    ].sort((left, right) => left.index - right.index);
+    const spans: ManagedSpan[] = [];
+    for (let position = 0; position < markers.length; position += 2) {
+        const start = markers[position];
+        const end = markers[position + 1];
+        if (start.kind !== 'start' || !end || end.kind !== 'end') {
+            throw new Error(`Ambiguous managed block markers (${startMarker} ... ${endMarker}): `
+                + 'markers are orphaned, nested or reversed. The file was left unchanged to preserve user text; '
+                + 'restore one complete marker pair and retry.');
+        }
+        spans.push({ start: start.index, end: end.index + endMarker.length });
+    }
+    return spans;
+}
+
+function removeSpans(text: string, spans: readonly ManagedSpan[]): string {
+    let result = text;
+    for (const span of [...spans].sort((left, right) => right.start - left.start)) {
+        const start = span.start > 0 && result[span.start - 1] === '\n' ? span.start - 1 : span.start;
+        const end = span.end < result.length && result[span.end] === '\n' ? span.end + 1 : span.end;
+        result = result.slice(0, start) + '\n' + result.slice(end);
+    }
+    return result;
+}
+
 export function upsertManagedBlock(content: string, options: ManagedBlockOptions): string {
     const newline = options.newline || '\n';
     const normalized = normalizeLineEndings(content || '', '\n');
     const block = buildManagedBlock(options.startMarker, options.endMarker, options.blockLines || [], '\n');
     let result: string;
 
-    const span = findManagedSpan(normalized, options.startMarker, options.endMarker, false);
+    const [span, ...duplicates] = findWellFormedManagedSpans(normalized, options.startMarker, options.endMarker);
     if (span) {
-        result = normalized.slice(0, span.start) + block + normalized.slice(span.end);
+        // Later complete pairs hold only Garda-managed content; keep exactly one current block.
+        const tail = normalized.slice(span.end);
+        const cleanTail = duplicates.length > 0
+            ? removeSpans(tail, duplicates.map(duplicate => ({
+                start: duplicate.start - span.end, end: duplicate.end - span.end
+            }))).replace(/\n{3,}/g, '\n\n')
+            : tail;
+        result = normalized.slice(0, span.start) + block + cleanTail;
     } else if (normalized.trim().length === 0) {
         result = block;
     } else {
@@ -119,10 +167,10 @@ export function removeManagedBlock(content: string, options: ManagedBlockOptions
     const newline = options.newline || '\n';
     const normalized = normalizeLineEndings(content || '', '\n');
 
-    const span = findManagedSpan(normalized, options.startMarker, options.endMarker, true);
-    if (!span) return normalizeLineEndings(normalized, newline);
+    const spans = findWellFormedManagedSpans(normalized, options.startMarker, options.endMarker);
+    if (spans.length === 0) return normalizeLineEndings(normalized, newline);
 
-    const result = (normalized.slice(0, span.start) + '\n' + normalized.slice(span.end))
+    const result = removeSpans(normalized, spans)
         .replace(/\n{3,}/g, '\n\n')
         .replace(/^\n/, '');
 
