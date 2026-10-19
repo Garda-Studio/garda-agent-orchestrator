@@ -617,7 +617,7 @@ describe('runInit', () => {
                 path.join(bundleRoot, 'live', 'docs', 'agent-rules', '40-commands.md'),
                 'utf8'
             );
-            const fullSuiteSection = extractMarkdownSection(discovery, 'Suggested Full-Suite Validation Command');
+            const fullSuiteSection = extractMarkdownSection(discovery, 'Suggested Full-Suite Validation Commands (Candidates)');
             const compileSection = extractMarkdownSection(discovery, 'Suggested Compile Gate Commands (Heuristic)');
 
             assert.equal(workflowConfig.full_suite_validation.command, UNCONFIGURED_FULL_SUITE_VALIDATION_COMMAND);
@@ -714,7 +714,9 @@ describe('runInit', () => {
             assert.equal(workflowConfig.full_suite_validation.command, UNCONFIGURED_FULL_SUITE_VALIDATION_COMMAND);
             assert.equal(workflowConfig.full_suite_validation.enabled, false);
             assert.equal(workflowConfig.compile_gate.command, UNCONFIGURED_COMPILE_GATE_COMMAND);
-            assert.ok(discovery.includes('No deterministic full-suite command detected yet.'));
+            assert.ok(discovery.includes('No unambiguous single candidate.'));
+            assert.ok(discovery.includes('Coverage: unverified.'));
+            assert.ok(discovery.includes('The agent must establish the required validation surfaces'));
             const commands = fs.readFileSync(
                 path.join(bundleRoot, 'live', 'docs', 'agent-rules', '40-commands.md'),
                 'utf8'

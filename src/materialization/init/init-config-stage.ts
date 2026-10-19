@@ -348,7 +348,7 @@ export function runInitConfigStage(
         const templateConfigPath = path.join(templateRoot, `config/${configName}.json`);
         const destConfigPath = path.join(liveRoot, `config/${configName}.json`);
         let pendingWrite: string | null = null;
-        let preserveExistingWorkflowConfig = false;
+        let preserveExistingConfig = false;
 
         if (!pathExists(templateConfigPath)) {
             configMergeStatuses[configName] = 'template_missing_preservation_skipped';
@@ -434,10 +434,10 @@ export function runInitConfigStage(
             }
 
             if (!dryRun) {
-                preserveExistingWorkflowConfig = configName === 'workflow-config'
+                preserveExistingConfig = !replaceWithCanonicalTemplate
                     && existingConfig !== null
                     && isDeepStrictEqual(existingConfig, materializedConfig);
-                if (!preserveExistingWorkflowConfig) {
+                if (!preserveExistingConfig) {
                     pendingWrite = JSON.stringify(materializedConfig, null, 2);
                 }
             }
@@ -460,7 +460,7 @@ export function runInitConfigStage(
         } catch {
             configMergeStatuses[configName] = 'merge_failed_template_applied';
         }
-        if (preserveExistingWorkflowConfig) {
+        if (preserveExistingConfig) {
             bindContainedDestination(targetRoot, destConfigPath);
         } else if (pendingWrite !== null) {
             writeContainedFile(targetRoot, destConfigPath, pendingWrite);
