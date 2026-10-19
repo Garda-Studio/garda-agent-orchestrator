@@ -244,7 +244,7 @@ export function getGitHubSkillBridgeProfileDefinitions() {
         {
             relativePath: '.github/agents/test-review.md',
             profileTitle: 'Test Review Bridge',
-            skillPath: `${resolveBundleName()}/live/skills/testing-strategy/SKILL.md (or custom ${resolveBundleName()}/live/skills/test-review/SKILL.md when present)`,
+            skillPath: `${resolveBundleName()}/live/skills/test-review/SKILL.md (or ${resolveBundleName()}/live/skills/testing-strategy/SKILL.md from the optional quality-architecture pack)`,
             reviewRequirement: 'required_reviews.test=true',
             capabilityFlag: 'review-capabilities.test=true'
         },

@@ -297,15 +297,19 @@ export function applyContextDefaults(content: string, ruleFile: string, discover
         return content;
     }
 
-    let updated = content.trimEnd();
-    // JavaScript has no `\z`; `(?![\s\S])` anchors the final section at end of input.
-    const overlayPattern = /^## Project Discovery Snapshot[\s\S]*?(?=^## |(?![\s\S]))/m;
-    if (overlayPattern.test(updated)) {
-        updated = updated.replace(overlayPattern, () => discoveryOverlay);
-        return updated + '\r\n';
+    // A snapshot is its heading plus `- key: value` bullets. Earlier releases could leave several
+    // (including Garda's own repository snapshot) before later subsections, so remove every
+    // snapshot body exactly and keep one current overlay where the first one was.
+    const snapshotPattern = /^## Project Discovery Snapshot[ \t]*(?:\r?\n|$)(?:[ \t]*-[^\r\n]*(?:\r?\n|$)|[ \t]*\r?\n)*/gm;
+    const trimmed = content.trimEnd();
+    const firstSnapshot = trimmed.search(snapshotPattern);
+    if (firstSnapshot === -1) {
+        return trimmed + '\r\n\r\n' + discoveryOverlay + '\r\n';
     }
-
-    return updated + '\r\n\r\n' + discoveryOverlay + '\r\n';
+    const before = trimmed.slice(0, firstSnapshot).replace(snapshotPattern, '');
+    const after = trimmed.slice(firstSnapshot).replace(snapshotPattern, '');
+    const rest = after.trim() ? '\r\n\r\n' + after.replace(/^\s+/u, '') : '';
+    return (before.trimEnd() ? before.trimEnd() + '\r\n\r\n' : '') + discoveryOverlay + rest + '\r\n';
 }
 
 function isReplaceableCompileGatePlaceholder(command: string): boolean {

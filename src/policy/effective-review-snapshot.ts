@@ -105,8 +105,17 @@ export function resolveValidationSemanticReviewLanes(snapshot: EffectiveReviewSn
     if (violations.length > 0) throw new Error(`Validation semantic review snapshot is invalid: ${violations.join(' ')}`);
     const lanes = snapshot.lanes.filter(lane => lane.definition.built_in
         && (lane.id === 'code' || lane.id === 'test') && lane.selection === 'required');
-    if (lanes.length === 0 || lanes.some(lane => !lane.profile.capability_enabled))
-        throw new Error('Declared validation requires capable mandatory code or test review lanes.');
+    const incapable = lanes.filter(lane => !lane.profile.capability_enabled).map(lane => lane.id);
+    if (lanes.length === 0 || incapable.length > 0) {
+        // Name the exact lanes and remedy; otherwise next-step can only repeat the failing command.
+        throw new Error('Declared validation requires capable mandatory code or test review lanes'
+            + (incapable.length > 0
+                ? `; capability disabled: ${incapable.join(', ')}. Install a matching review skill `
+                    + '(the baseline `test-review` skill covers test; `garda init` restores it if missing), then run '
+                    + `\`garda review-capabilities enable ${incapable.join(' ')}\`; the task's frozen review policy only `
+                    + 'includes the lane after task mode is entered again.'
+                : '.'));
+    }
     return lanes.map(lane => lane.id as 'code' | 'test').sort();
 }
 

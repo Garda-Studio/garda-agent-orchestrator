@@ -323,7 +323,7 @@ function readExistingInitConfigs(
     return configs;
 }
 
-function hasAnyActiveTask(targetRoot: string, bundleRoot: string): boolean {
+export function hasAnyActiveTask(targetRoot: string, bundleRoot: string): boolean {
     try {
         return resolveActiveTaskIds(targetRoot, bundleRoot).size > 0;
     } catch {
@@ -408,10 +408,17 @@ export function runInitConfigStage(
                         })
                         : mergeConfig(templateConfig, existingConfig);
 
-            if (configName === 'paths' && hadExistingConfig && !hasAnyActiveTask(targetRoot, path.dirname(liveRoot))) {
+            if (configName === 'paths' && hadExistingConfig) {
                 // Uncustomized legacy stack-specific defaults follow the current template. Active
-                // tasks keep the exact classification config they started with; a later update migrates.
-                migrateLegacyManagedPathRegexes(materializedConfig, templateConfig);
+                // tasks keep the exact classification config they started with; a later init migrates.
+                if (!hasAnyActiveTask(targetRoot, path.dirname(liveRoot))) {
+                    migrateLegacyManagedPathRegexes(materializedConfig, templateConfig);
+                } else if (!dryRun && migrateLegacyManagedPathRegexes(cloneJsonValue(materializedConfig), templateConfig).length > 0) {
+                    process.stderr.write('NOTICE: Stack-neutral default path patterns were not applied to '
+                        + 'live/config/paths.json because a task is active. After active tasks finish, run '
+                        + '"garda init --target-root . --init-answers-path garda-agent-orchestrator/runtime/init-answers.json" '
+                        + 'to apply them; customized patterns are never replaced.\n');
+                }
             }
 
             if (configName === 'runtime-retention' && hadExistingConfig) {

@@ -74,7 +74,7 @@ Required:
 14. ${REVIEWER_CLEANUP_AFTER_RECEIPT_INSTRUCTION}
 15. Do not launch a dependent downstream reviewer before the required upstream accepted findings receipt reports findings-satisfied for the same cycle. Parallel reviewer fan-out is allowed only between independent review types with no dependency edge.
 16. ${REVIEW_LAUNCH_NAVIGATION_INSTRUCTION}
-17. Do not fan out known producer-consumer validation commands as raw shell sidecars. Flows such as \`npm run build:node-foundation\` -> direct \`node --test .node-build/...\` must use the guarded workflow path or run strictly sequentially, never in parallel.
+17. Do not fan out known producer-consumer validation commands as raw shell sidecars. Flows such as a generator, build or compile step followed by a command that consumes its output (for example tests over generated or compiled artifacts) must use the guarded workflow path or run strictly sequentially, never in parallel.
 18. If any mandatory gate command fails, stop, keep the task blocked, run \`next-step\`, and report the exact command, cwd, CLI path, and stderr.
 19. Honest execution and strict workflow compliance outrank speed, autonomy, context preservation, and token economy.
 20. Mandatory gate failure means stop or \`BLOCKED\`; never workaround the gate, batch around it, or synthesize missing evidence.
@@ -139,7 +139,7 @@ ${buildTaskStartSnippetSection(runtimeProviderLabel, bridgePath)}
 15. After preflight, refresh downstream rule-pack evidence when requested by \`next-step\`: via \`node bin/garda.js gate load-rule-pack --stage "POST_PREFLIGHT" ...\` when rules must be read, or \`node bin/garda.js gate bind-rule-pack-to-preflight ...\` when \`next-step\` says current-cycle rule files and hashes are already loaded. Use the matching \`${getNodeGateCommandPrefix()}\` command inside a materialized/deployed workspace, and preserve any custom \`--task-mode-path\` on both POST_PREFLIGHT rule-pack commands.
 16. Run compile gate before review only after \`next-step\` reports it as the next gate: via \`node bin/garda.js gate compile-gate ...\` in a self-hosted source checkout, or via \`${getNodeGateCommandPrefix()} compile-gate ...\` inside a materialized/deployed workspace.
 17. Before each required review, run \`node bin/garda.js gate build-review-context ...\` in a self-hosted source checkout, or \`${getNodeGateCommandPrefix()} build-review-context ...\` inside a materialized/deployed workspace, only when \`next-step\` names that review; that step auto-emits \`REVIEW_PHASE_STARTED\`, \`SKILL_SELECTED\`, and \`SKILL_REFERENCE_LOADED\`. ${REVIEWER_FRESH_CONTEXT_LAUNCH_INSTRUCTION} ${REVIEWER_CLEANUP_AFTER_RECEIPT_INSTRUCTION} Dependent downstream review preparation or reviewer launch must wait until the required upstream accepted findings receipt reports findings-satisfied for the same cycle.
-18. Do not fan out known producer-consumer validation commands as raw shell sidecars around the gate flow. Flows such as \`npm run build:node-foundation\` -> direct \`node --test .node-build/...\` must use the guarded workflow path or run strictly sequentially, never in parallel.
+18. Do not fan out known producer-consumer validation commands as raw shell sidecars around the gate flow. Flows such as a generator, build or compile step followed by a command that consumes its output (for example tests over generated or compiled artifacts) must use the guarded workflow path or run strictly sequentially, never in parallel.
 19. Run required independent reviews and gates via \`node bin/garda.js gate required-reviews-check ...\` in a self-hosted source checkout, or \`${getNodeGateCommandPrefix()} required-reviews-check ...\` inside a materialized/deployed workspace; only independent review types may fan out in parallel for the same cycle. If a cycle changed only test scope, materialize reusable upstream \`code\` review evidence before launching \`test\`, then run \`doc-impact-gate\`, then \`completion-gate\` before marking \`DONE\`.
 20. Update task status and artifacts in \`TASK.md\`.
 21. Log or inspect lifecycle events by task id via \`node bin/garda.js gate log-task-event ...\` / \`task-events-summary\` in a self-hosted source checkout, or via \`${getNodeGateCommandPrefix()} log-task-event ...\` / \`task-events-summary\` inside a materialized/deployed workspace.
@@ -162,6 +162,7 @@ ${getDelegationRequiredProviderLaunchLines().join('\n')}
 - DB review: \`${resolveBundleName()}/live/skills/db-review/SKILL.md\`
 - Security review: \`${resolveBundleName()}/live/skills/security-review/SKILL.md\`
 - Refactor review: \`${resolveBundleName()}/live/skills/refactor-review/SKILL.md\`
+- Test review: \`${resolveBundleName()}/live/skills/test-review/SKILL.md\`
 
 ## Dynamic Skill Discovery (Required)
 - Canonical skill list: \`${resolveBundleName()}/live/docs/agent-rules/90-skill-catalog.md\`
@@ -241,7 +242,7 @@ Hard stops:
 - Do not spawn or pre-launch a dependent downstream reviewer before the required upstream accepted findings receipt reports findings-satisfied for the same cycle.
 - Parallel reviewer fan-out is allowed only between independent review types with no dependency edge.
 - ${REVIEW_LAUNCH_NAVIGATION_INSTRUCTION}
-- Do not fan out known producer-consumer validation commands as raw shell sidecars. Flows such as \`npm run build:node-foundation\` -> direct \`node --test .node-build/...\` must use the guarded workflow path or run strictly sequentially, never in parallel.
+- Do not fan out known producer-consumer validation commands as raw shell sidecars. Flows such as a generator, build or compile step followed by a command that consumes its output (for example tests over generated or compiled artifacts) must use the guarded workflow path or run strictly sequentially, never in parallel.
 - Do not hand-edit active \`TASK.md\` lifecycle statuses (\`IN_PROGRESS\`, \`IN_REVIEW\`, \`DONE\`, \`BLOCKED\`) as a substitute for gates; completion finalization owns \`DONE\`, review-gate owns \`IN_REVIEW\`, task-mode owns \`IN_PROGRESS\`, and explicit operator \`task-reset\` owns reset/discard.
 - Do not mark \`DONE\` without \`COMPLETION_GATE_PASSED\`.
 - Do not create fake review artifacts or bypass reviewer routing.

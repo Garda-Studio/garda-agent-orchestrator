@@ -651,7 +651,7 @@ describe('buildProviderOrchestratorAgentContent', () => {
         assert.ok(result!.includes('`NextReview` remains legacy single-lane compatibility'));
         assert.ok(result!.includes('full-suite validation blocks `test` review'));
         assert.ok(result!.includes('Do not fan out known producer-consumer validation commands as raw shell sidecars'));
-        assert.ok(result!.includes('build:node-foundation'));
+        assert.ok(result!.includes('a generator, build or compile step followed by a command that consumes its output'));
     });
 
     it('pins delegated-only review receipt contract in full provider bridges', () => {
@@ -729,7 +729,7 @@ describe('buildProviderOrchestratorAgentContent', () => {
         assert.ok(result!.includes('BlockedReviewLanes'));
         assert.ok(result!.includes('`NextReview` remains legacy single-lane compatibility'));
         assert.ok(result!.includes('Do not fan out known producer-consumer validation commands as raw shell sidecars'));
-        assert.ok(result!.includes('build:node-foundation'));
+        assert.ok(result!.includes('a generator, build or compile step followed by a command that consumes its output'));
     });
 
     it('includes exact copy-paste task-start snippets in full provider bridges', () => {
@@ -817,7 +817,7 @@ describe('buildSharedStartTaskWorkflowContent', () => {
         assert.ok(result.includes('failed current reviews take remediation priority'));
         assert.ok(result.includes('full-suite validation blocks `test` review'));
         assert.ok(result.includes('Do not fan out known producer-consumer validation commands as raw shell sidecars'));
-        assert.ok(result.includes('build:node-foundation'));
+        assert.ok(result.includes('a generator, build or compile step followed by a command that consumes its output'));
     });
 
     it('includes fresh reviewer launch and cleanup blockers in hard stops', () => {

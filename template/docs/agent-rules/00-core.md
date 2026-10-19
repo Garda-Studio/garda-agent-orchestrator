@@ -64,15 +64,16 @@ For supported inspections, prefer the enabled `garda compact` CLI described in `
 - Do not comment obvious behavior.
 - Write comments only in English.
 - Use comments only for rationale or non-obvious business constraints.
+- Examples below are illustrative; apply the same rule in the project's own language.
 
 Bad example:
-```java
+```text
 // Increment counter
 counter++;
 ```
 
 Good example:
-```java
+```text
 // Skip first element due to API limitation that always returns a duplicate
 items.stream().skip(1)...
 ```

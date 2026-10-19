@@ -180,7 +180,8 @@ test('addSkillPack synchronizes optional review capabilities for installed speci
 
         const removeResult = removeSkillPack(bundleRoot, 'quality-architecture');
         assert.equal(removeResult.reviewCapabilities!.api, false);
-        assert.equal(removeResult.reviewCapabilities!.test, false);
+        // The baseline test-review skill keeps the test lane available without the optional pack.
+        assert.equal(removeResult.reviewCapabilities!.test, true);
         assert.equal(removeResult.reviewCapabilities!.performance, false);
         assert.equal(removeResult.reviewCapabilities!.dependency, true);
     } finally {

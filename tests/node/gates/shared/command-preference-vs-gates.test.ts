@@ -164,7 +164,7 @@ describe('command-preference-vs-mandatory-gates rule clarity', () => {
                 '40-commands.md must explicitly name producer-consumer validation chains'
             );
             assert.ok(
-                content.includes('raw shell sidecars') && content.includes('build:node-foundation'),
+                content.includes('raw shell sidecars') && content.includes('a generator, build or compile step followed by a command that consumes its output'),
                 '40-commands.md must forbid raw-shell fan-out for generated-artifact validation flows'
             );
         });
@@ -237,7 +237,7 @@ describe('command-preference-vs-mandatory-gates rule clarity', () => {
                 'template 40-commands.md must explicitly name producer-consumer validation chains'
             );
             assert.ok(
-                content.includes('raw shell sidecars') && content.includes('build:node-foundation'),
+                content.includes('raw shell sidecars') && content.includes('a generator, build or compile step followed by a command that consumes its output'),
                 'template 40-commands.md must forbid raw-shell fan-out for generated-artifact validation flows'
             );
         });
@@ -345,7 +345,7 @@ describe('command-preference-vs-mandatory-gates rule clarity', () => {
         it('includes hard-stop banning raw-shell producer-consumer fan-out', () => {
             const content = readMaterializedProjectFile('.agents/workflows/start-task.md');
             assert.ok(
-                content.includes('raw shell sidecars') && content.includes('build:node-foundation'),
+                content.includes('raw shell sidecars') && content.includes('a generator, build or compile step followed by a command that consumes its output'),
                 'start-task.md must forbid raw-shell fan-out for producer-consumer validation flows'
             );
         });
@@ -363,7 +363,7 @@ describe('command-preference-vs-mandatory-gates rule clarity', () => {
 
         it('includes hard-stop banning raw-shell producer-consumer fan-out', () => {
             assert.ok(
-                content.includes('raw shell sidecars') && content.includes('build:node-foundation'),
+                content.includes('raw shell sidecars') && content.includes('a generator, build or compile step followed by a command that consumes its output'),
                 'template start-task.md must forbid raw-shell fan-out for producer-consumer validation flows'
             );
         });
@@ -436,7 +436,7 @@ describe('command-preference-vs-mandatory-gates rule clarity', () => {
         it('buildSharedStartTaskWorkflowContent includes producer-consumer raw-shell prohibition', () => {
             const generated = buildSharedStartTaskWorkflowContent('CLAUDE.md');
             assert.ok(
-                generated.includes('raw shell sidecars') && generated.includes('build:node-foundation'),
+                generated.includes('raw shell sidecars') && generated.includes('a generator, build or compile step followed by a command that consumes its output'),
                 'Generated start-task content must forbid raw-shell producer-consumer validation fan-out'
             );
         });

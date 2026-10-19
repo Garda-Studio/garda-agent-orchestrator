@@ -1447,7 +1447,10 @@ describe('shell-surface hardening', () => {
                     const result = await pending;
                     const elapsed = Date.now() - startedAt;
                     assert.equal(result.timedOut, true);
-                    assert.ok(elapsed < 8_000, `Expected prompt process-tree cleanup, took ${elapsed}ms`);
+                    // Command timeout plus the bounded tree-termination budget (a cold PowerShell helper can use
+                    // most of it) plus scheduling margin; without cleanup this would wait for the 60s child.
+                    assert.ok(elapsed < 3_000 + SUBPROCESS_TERMINATION_TIMEOUT_MS + 2_000,
+                        `Expected prompt process-tree cleanup, took ${elapsed}ms`);
                     assert.equal(await waitForProcessExit(descendantPid), true);
                 } finally {
                     await pending.catch(() => undefined);

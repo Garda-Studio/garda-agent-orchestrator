@@ -598,3 +598,23 @@ describe('literal dollar text in generated content', () => {
         assert.ok(!result.includes('Old data'));
     });
 });
+
+describe('discovery snapshot upgrade from earlier releases', () => {
+    it('removes every earlier snapshot and preserves the following subsection', () => {
+        const content = [
+            '# Commands', '', '## Project Discovery Snapshot', '- Discovery source: git_index_and_worktree',
+            '- Files considered: 515', '- Detected stacks: Node.js or JavaScript, TypeScript', '',
+            '## Project Discovery Snapshot', '- Files considered: 5', '- Detected stacks: Go', '',
+            '### Manual Validation Evidence Selector', 'Keep this rule text.', '', '## Later Section', 'tail'
+        ].join('\r\n');
+        const overlay = '## Project Discovery Snapshot\r\n- Detected stacks: Go\r\n- Files considered: 6';
+        const result = applyContextDefaults(content, '40-commands.md', overlay)!;
+        assert.equal(result.match(/## Project Discovery Snapshot/gu)?.length, 1);
+        assert.ok(!result.includes('Files considered: 515'));
+        assert.ok(!result.includes('Node.js or JavaScript'));
+        assert.ok(result.includes('- Files considered: 6'));
+        assert.ok(result.includes('### Manual Validation Evidence Selector\r\nKeep this rule text.'));
+        assert.ok(result.indexOf('Files considered: 6') < result.indexOf('### Manual Validation Evidence Selector'));
+        assert.ok(result.includes('## Later Section\r\ntail'));
+    });
+});

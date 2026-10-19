@@ -131,6 +131,18 @@ function listLiveSkillDirectories(bundleRoot: string): string[] {
 export function syncReviewCapabilities(bundleRoot: string): { configPath: string; capabilities: ReviewCapabilities } {
     const configPath = getReviewCapabilitiesConfigPath(bundleRoot);
     bindContainedDestination(bundleRoot, configPath);
+    const capabilities = computeReviewCapabilities(bundleRoot);
+
+    writeContainedFile(bundleRoot, configPath, formatJson(capabilities));
+
+    return {
+        configPath,
+        capabilities
+    };
+}
+
+/** Capabilities implied by the template and the live skills that are ready, without writing them. */
+export function computeReviewCapabilities(bundleRoot: string): ReviewCapabilities {
     const capabilities = readTemplateReviewCapabilities(bundleRoot);
     const readyLiveSkillDirectorySet = new Set(
         listLiveSkillDirectories(bundleRoot).filter((skillDir) => {
@@ -142,13 +154,7 @@ export function syncReviewCapabilities(bundleRoot: string): { configPath: string
         const candidateDirectories = getReviewSkillCandidates(capabilityKey);
         capabilities[capabilityKey] = candidateDirectories.some((candidate: string) => readyLiveSkillDirectorySet.has(candidate));
     }
-
-    writeContainedFile(bundleRoot, configPath, formatJson(capabilities));
-
-    return {
-        configPath,
-        capabilities
-    };
+    return capabilities;
 }
 
 function validateInstalledPackIds(value: unknown): string[] {

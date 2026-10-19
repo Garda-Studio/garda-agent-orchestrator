@@ -73,7 +73,8 @@ export const BASELINE_SKILL_DIRECTORIES = Object.freeze([
     'orchestration-depth1',
     'refactor-review',
     'security-review',
-    'skill-builder'
+    'skill-builder',
+    'test-review'
 ]);
 
 // Shared normalization helpers — used by manifest parsing and callers that

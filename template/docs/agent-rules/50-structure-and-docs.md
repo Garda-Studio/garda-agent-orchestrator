@@ -99,6 +99,7 @@ Primary entry point: selected source-of-truth entrypoint (depends on configured 
 - `garda-agent-orchestrator/live/skills/db-review/SKILL.md` - DB review skill.
 - `garda-agent-orchestrator/live/skills/security-review/SKILL.md` - security review skill.
 - `garda-agent-orchestrator/live/skills/refactor-review/SKILL.md` - refactor review skill.
+- `garda-agent-orchestrator/live/skills/test-review/SKILL.md` - test review skill.
 
 ## Orchestrator Git Boundary
 - In normal project deployments, local orchestration control-plane files are expected to stay gitignored.

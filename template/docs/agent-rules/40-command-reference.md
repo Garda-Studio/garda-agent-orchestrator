@@ -12,7 +12,7 @@ using `40-commands.md` without this appendix.
 | Instead of | Prefer | Use case |
 |---|---|---|
 | `git diff` | `git diff --stat` | Scope overview |
-| `git diff` | `git diff -- path/to/file.ts` | Targeted inspection |
+| `git diff` | `git diff -- path/to/changed-file` | Targeted inspection |
 | `git log` | `git log --oneline -n 20` | Recent history |
 | `git log --all` | `git log --oneline --graph -n 30` | Branch topology |
 | `git status` | `git status --short --branch` | Quick state |
@@ -62,7 +62,7 @@ using `40-commands.md` without this appendix.
 | `rg <pat>` | `rg -l --max-count=5 <pat> src/` | Files only, bounded, scoped |
 | `rg <pat>` with context | `rg -C2 --max-count=10 <pat> src/` | Limited context, bounded |
 | `cat <large-file>` | `head -n 60 <file>` or `tail -n 60 <file>` | Targeted region |
-| `find . -name "*.ts"` | `find . -name "*.ts" -not -path "*/node_modules/*"` | Exclude noise dirs |
+| `find . -name "*.<ext>"` | `find . -name "*.<ext>" -not -path "*/<dependency-or-build-dir>/*"` | Exclude dependency and build output (for example `node_modules`, `target`, `bin/obj`, `.venv`) |
 | `ls -laR` | `ls -la src/` or `tree -L 2 src/` | Scoped, bounded depth |
 
 ## Containers And Infrastructure

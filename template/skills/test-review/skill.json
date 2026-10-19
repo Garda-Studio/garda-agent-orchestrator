@@ -1,0 +1,11 @@
+{
+  "id": "test-review",
+  "name": "Test Review",
+  "summary": "Independent findings-only review of changed tests and test evidence for any language, framework or runner.",
+  "tags": ["core", "review", "test"],
+  "aliases": ["test review", "review tests", "review test changes"],
+  "references": ["test-review-checklist.md"],
+  "cost_hint": "medium",
+  "priority": 95,
+  "autoload": "required_when_preflight_requires"
+}

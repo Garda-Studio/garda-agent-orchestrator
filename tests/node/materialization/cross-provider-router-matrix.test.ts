@@ -825,7 +825,7 @@ describe('cross-provider-router-matrix: drift detection', () => {
                 `${profile.providerLabel} bridge missing raw-shell producer-consumer prohibition`
             );
             assert.ok(
-                content.includes('build:node-foundation'),
+                content.includes('a generator, build or compile step followed by a command that consumes its output'),
                 `${profile.providerLabel} bridge missing concrete producer-consumer validation example`
             );
         }

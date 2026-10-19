@@ -83,6 +83,8 @@ export function getBaseRequiredPaths(): readonly string[] {
         `${bundleName}/live/skills/security-review/skill.json`,
         `${bundleName}/live/skills/refactor-review/SKILL.md`,
         `${bundleName}/live/skills/refactor-review/skill.json`,
+        `${bundleName}/live/skills/test-review/SKILL.md`,
+        `${bundleName}/live/skills/test-review/skill.json`,
         `${bundleName}/live/init-report.md`,
         `${bundleName}/live/project-discovery.md`,
         `${bundleName}/live/source-inventory.md`,

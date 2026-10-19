@@ -162,11 +162,11 @@ describe('runInstall — provider bridges and start-task router', () => {
             assert.ok(bridge.includes('upstream accepted findings receipt reports findings-satisfied'));
             assert.ok(bridge.includes('Parallel reviewer fan-out is allowed only between independent review types'));
             assert.ok(bridge.includes('Do not fan out known producer-consumer validation commands as raw shell sidecars'));
-            assert.ok(bridge.includes('build:node-foundation'));
+            assert.ok(bridge.includes('a generator, build or compile step followed by a command that consumes its output'));
             assert.ok(workflow.includes('gate enter-task-mode'));
             assert.ok(workflow.includes('gate completion-gate'));
             assert.ok(workflow.includes('Do not fan out known producer-consumer validation commands as raw shell sidecars'));
-            assert.ok(workflow.includes('build:node-foundation'));
+            assert.ok(workflow.includes('a generator, build or compile step followed by a command that consumes its output'));
         } finally {
             fs.rmSync(projectRoot, { recursive: true, force: true });
         }
@@ -255,7 +255,7 @@ describe('runInstall — provider bridges and start-task router', () => {
                     'Do not treat downstream reviewers as speculative sidecars.'
                 )
                 .replace(
-                    'Do not fan out known producer-consumer validation commands as raw shell sidecars around the gate flow. Flows such as `npm run build:node-foundation` -> direct `node --test .node-build/...` must use the guarded workflow path or run strictly sequentially, never in parallel.',
+                    'Do not fan out known producer-consumer validation commands as raw shell sidecars around the gate flow. Flows such as a generator, build or compile step followed by a command that consumes its output (for example tests over generated or compiled artifacts) must use the guarded workflow path or run strictly sequentially, never in parallel.',
                     'Treat generated-artifact validation as best-effort shell fan-out and let local runners coordinate freshness opportunistically.'
                 );
             const staleWorkflow = fs.readFileSync(workflowPath, 'utf8')
@@ -268,7 +268,7 @@ describe('runInstall — provider bridges and start-task router', () => {
                     '- Do not parallelize dependent reviews.'
                 )
                 .replace(
-                    '- Do not fan out known producer-consumer validation commands as raw shell sidecars. Flows such as `npm run build:node-foundation` -> direct `node --test .node-build/...` must use the guarded workflow path or run strictly sequentially, never in parallel.',
+                    '- Do not fan out known producer-consumer validation commands as raw shell sidecars. Flows such as a generator, build or compile step followed by a command that consumes its output (for example tests over generated or compiled artifacts) must use the guarded workflow path or run strictly sequentially, never in parallel.',
                     '- Treat generated-artifact validation fan-out as acceptable when it is only local shell coordination.'
                 );
             assert.notEqual(staleBridge, fs.readFileSync(bridgePath, 'utf8'));
@@ -302,14 +302,14 @@ describe('runInstall — provider bridges and start-task router', () => {
             assert.ok(refreshedBridge.includes('ReviewLaunchableBatch'));
             assert.ok(refreshedBridge.includes('BlockedReviewLanes'));
             assert.ok(refreshedBridge.includes('Do not fan out known producer-consumer validation commands as raw shell sidecars'));
-            assert.ok(refreshedBridge.includes('build:node-foundation'));
+            assert.ok(refreshedBridge.includes('a generator, build or compile step followed by a command that consumes its output'));
             assert.ok(refreshedWorkflow.includes('Do not spawn or pre-launch a dependent downstream reviewer'));
             assert.ok(refreshedWorkflow.includes('Parallel reviewer fan-out is allowed only between independent review types'));
             assert.ok(refreshedWorkflow.includes('ReviewLaunchableBatch'));
             assert.ok(refreshedWorkflow.includes('BlockedReviewLanes'));
             assert.ok(refreshedWorkflow.includes('failed current reviews take remediation priority'));
             assert.ok(refreshedWorkflow.includes('Do not fan out known producer-consumer validation commands as raw shell sidecars'));
-            assert.ok(refreshedWorkflow.includes('build:node-foundation'));
+            assert.ok(refreshedWorkflow.includes('a generator, build or compile step followed by a command that consumes its output'));
         } finally {
             fs.rmSync(projectRoot, { recursive: true, force: true });
         }

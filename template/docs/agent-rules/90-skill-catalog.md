@@ -22,6 +22,7 @@ Primary entry point: selected source-of-truth entrypoint for this workspace.
 - `garda-agent-orchestrator/live/skills/dependency-review`
 - `garda-agent-orchestrator/live/skills/security-review`
 - `garda-agent-orchestrator/live/skills/refactor-review`
+- `garda-agent-orchestrator/live/skills/test-review`
 - `garda-agent-orchestrator/live/skills/skill-builder`
 
 ## Optional Skills (Live-Only, On Demand)
@@ -100,9 +101,9 @@ Primary entry point: selected source-of-truth entrypoint for this workspace.
   - `db-review` for `required_reviews.db=true`
   - `security-review` for `required_reviews.security=true`
   - `refactor-review` for `required_reviews.refactor=true`
+  - `test-review` (or `testing-strategy` from the optional `quality-architecture` pack) for `required_reviews.test=true`
   - optional specialist skills when enabled and required:
     - `api-contract-review` (or custom `api-review`) for `required_reviews.api=true`
-    - `testing-strategy` (or custom `test-review`) for `required_reviews.test=true`
     - `performance-review` for `required_reviews.performance=true`
     - `devops-k8s` (or custom `infra-review`) for `required_reviews.infra=true`
     - `dependency-review` for `required_reviews.dependency=true`

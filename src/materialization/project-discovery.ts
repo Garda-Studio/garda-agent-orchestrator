@@ -56,7 +56,7 @@ export const STACK_SIGNALS: readonly StackSignal[] = Object.freeze([
     { name: 'Python', pattern: /(^|\/)(?:pyproject\.toml|requirements(?:\.txt|-dev\.txt)?)$/ },
     { name: 'Go', pattern: /(^|\/)go\.mod$/ },
     { name: 'Rust', pattern: /(^|\/)Cargo\.toml$/ },
-    { name: '.NET', pattern: /\.(sln|csproj|fsproj)$/ },
+    { name: '.NET', pattern: /\.(sln|slnx|csproj|fsproj|vbproj)$/ },
     { name: 'PHP', pattern: /(^|\/)composer\.json$/ },
     { name: 'Ruby', pattern: /(^|\/)Gemfile$/ },
     { name: 'Scala', pattern: /(^|\/)build\.sbt$/ },
@@ -490,7 +490,7 @@ export function resolveSuggestedCompileGateCommands(
         });
     }
 
-    if (hasAnyRootFileByExtension(normalizedTargetRoot, ['.sln', '.csproj', '.fsproj'])) {
+    if (hasAnyRootFileByExtension(normalizedTargetRoot, ['.sln', '.slnx', '.csproj', '.fsproj', '.vbproj'])) {
         surfaces.push({
             commands: ['dotnet build']
         });
@@ -565,7 +565,7 @@ export function resolveSuggestedFullSuiteValidationCommands(
         candidates.push('cargo test');
     }
 
-    if (hasAnyRootFileByExtension(normalizedTargetRoot, ['.sln', '.csproj', '.fsproj'])) {
+    if (hasAnyRootFileByExtension(normalizedTargetRoot, ['.sln', '.slnx', '.csproj', '.fsproj', '.vbproj'])) {
         candidates.push('dotnet test');
     }
 

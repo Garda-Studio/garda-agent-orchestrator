@@ -8,6 +8,7 @@
 - Default classification recognizes test conventions, dependency manifests and domain-sensitive source files across common ecosystems (Go, Python, Ruby, Elixir, Dart, Swift, .NET, JVM, C/C++, Rust, PHP, Node.js and others); updates migrate only uncustomized legacy defaults and never while a task is active.
 - Declared report files are captured as authenticated, bounded evidence of the exact run that produced them.
 - Windows reliability: command timeouts and cancellation always terminate the command, native ACL and file-identity checks tolerate cold hosted runners, and protected system tools run from authenticated absolute paths.
+- Test review works out of the box: a baseline `test-review` skill keeps the test lane available on every stack.
 - Cross-stack fixture projects exercise discovery and classification end to end for nine stacks.
 
 ### Stack neutrality and Windows reliability
@@ -20,6 +21,11 @@
 - Treat `lib/`, `cmd/`, `internal/`, `pkg/`, `Sources/` and `crates/` as default production source roots.
 - Name a missing toolchain and the next operator action in compile and command failures and in `next-step`, instead of only asking for a retry.
 - Print the provider environment reference in POSIX form when Garda runs under Git Bash, MSYS2 or Cygwin on Windows.
+- Ship a baseline `test-review` skill so the test review lane is available by default on every stack; declared validation no longer stalls on a disabled test lane in fresh installs. Updates leave review capabilities and stack-neutral path defaults unchanged while a task is active and print the `garda init` command that applies them later.
+- Remove every stale project-discovery snapshot left by earlier releases, including Garda's own repository snapshot, while preserving the rule subsections that follow it.
+- Keep generated command rules, provider bridges and start-task guidance free of Node/npm defaults and Garda-internal build commands; document `--selected-case` for runners that select tests by name, class, package or project.
+- Suggest `dotnet build`/`dotnet test` for `.slnx` solutions and recognize `.vbproj` projects.
+- Show the full reason when `next-step` has no executable command and drop the contradictory "no executable command" reference when one is printed; name the missing review skill and enable command when declared validation needs an unavailable lane.
 
 ### Additional fixes and hardening
 

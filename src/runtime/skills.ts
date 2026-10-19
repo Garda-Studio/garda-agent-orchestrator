@@ -107,6 +107,7 @@ export {
     getSkillPacksConfigPath,
     getReviewCapabilitiesConfigPath,
     syncReviewCapabilities,
+    computeReviewCapabilities,
     readInstalledSkillPacks,
     writeInstalledSkillPacks,
     listSkillPacks,

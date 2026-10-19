@@ -64,7 +64,7 @@ Hard stops:
 - Do not spawn or pre-launch a dependent downstream reviewer before the required upstream accepted findings receipt reports findings-satisfied for the same cycle.
 - Parallel reviewer fan-out is allowed only between independent review types with no dependency edge.
 - Use next-step review navigation output before reviewer launch: `ReviewLaunchableBatch` / `launchable_review_types` list lanes that may be launched now, `BlockedReviewLanes` / `blocked_review_lanes` list dependency reasons, `NextReview` remains legacy single-lane compatibility, failed current reviews take remediation priority, and enabled full-suite validation blocks `test` review until current full-suite PASS evidence exists.
-- Do not fan out known producer-consumer validation commands as raw shell sidecars. Flows such as `npm run build:node-foundation` -> direct `node --test .node-build/...` must use the guarded workflow path or run strictly sequentially, never in parallel.
+- Do not fan out known producer-consumer validation commands as raw shell sidecars. Flows such as a generator, build or compile step followed by a command that consumes its output (for example tests over generated or compiled artifacts) must use the guarded workflow path or run strictly sequentially, never in parallel.
 - Do not hand-edit active `TASK.md` lifecycle statuses (`IN_PROGRESS`, `IN_REVIEW`, `DONE`, `BLOCKED`) as a substitute for gates; completion finalization owns `DONE`, review-gate owns `IN_REVIEW`, task-mode owns `IN_PROGRESS`, and explicit operator `task-reset` owns reset/discard.
 - Do not mark `DONE` without `COMPLETION_GATE_PASSED`.
 - Do not create fake review artifacts or bypass reviewer routing.

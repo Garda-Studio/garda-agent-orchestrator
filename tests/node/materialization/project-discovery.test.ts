@@ -409,3 +409,18 @@ describe('buildDiscoveryOverlaySection', () => {
         assert.ok(result.includes('Coverage: unverified'));
     });
 });
+
+describe('.NET solution formats', () => {
+    it('suggests dotnet build and test for an slnx solution with nested projects', () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-discovery-slnx-'));
+        try {
+            fs.writeFileSync(path.join(tmpDir, 'Billing.slnx'), '<Solution />\n');
+            fs.mkdirSync(path.join(tmpDir, 'src', 'Billing'), { recursive: true });
+            fs.writeFileSync(path.join(tmpDir, 'src', 'Billing', 'Billing.csproj'), '<Project Sdk="Microsoft.NET.Sdk" />\n');
+            assert.deepEqual(resolveSuggestedCompileGateCommands(tmpDir), ['dotnet build']);
+            assert.ok(getProjectDiscovery(tmpDir).detectedStacks.includes('.NET'));
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+});

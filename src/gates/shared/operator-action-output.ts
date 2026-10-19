@@ -12,6 +12,8 @@ export interface OperatorNextActionBlockInput {
 }
 
 const MAX_REASON_CHARS = 220;
+// Without an executable command the reason is the operator's only instruction; keep it readable.
+const MAX_COMMANDLESS_REASON_CHARS = 1_200;
 
 function compactOperatorText(value: string | null | undefined, maxChars = MAX_REASON_CHARS): string {
     const compact = String(value || '').replace(/\s+/g, ' ').trim();
@@ -31,14 +33,17 @@ export function buildOperatorNextActionBlock(input: OperatorNextActionBlockInput
     }
     lines.push(`  Do: ${compactOperatorText(input.action, 160) || 'Inspect details before continuing.'}`);
     if (input.reason) {
-        lines.push(`  Reason: ${compactOperatorText(input.reason)}`);
+        lines.push(`  Reason: ${compactOperatorText(input.reason,
+            input.command ? MAX_REASON_CHARS : MAX_COMMANDLESS_REASON_CHARS)}`);
     }
     if (input.command) {
         lines.push(`  Command: ${input.command}`);
     } else {
         lines.push('  Command: none');
     }
-    if (input.commandReference) {
+    const contradictsCommand = Boolean(input.command)
+        && /no executable command is available/iu.test(input.commandReference || '');
+    if (input.commandReference && !contradictsCommand) {
         lines.push(`  CommandReference: ${compactOperatorText(input.commandReference, 160)}`);
     }
     if (input.detailsPath) {

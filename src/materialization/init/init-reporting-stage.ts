@@ -12,7 +12,10 @@ import {
 import { resolveBundleName } from '../../core/constants';
 import { buildSetupStartBannerSentence } from '../../core/orchestrator-start-banner';
 import { writeProtectedControlPlaneManifest } from '../../gates/shared';
-import { syncReviewCapabilities, writeSkillsIndex } from '../../runtime/skills';
+import { computeReviewCapabilities, syncReviewCapabilities, writeSkillsIndex } from '../../runtime/skills';
+import { getReviewCapabilitiesConfigPath } from '../../runtime/skill-activation';
+import { readReviewCapabilitiesConfigFile } from '../../core/review-capabilities';
+import { isDeepStrictEqual } from 'node:util';
 import {
     buildGitignoreEntries,
     syncManagedAgentignoreActiveBlockInContent,
@@ -43,7 +46,7 @@ import {
     buildSourceInventoryLines,
     collectSourceInventory
 } from './init-filesystem';
-import { getFullSuiteEnabledDiagnostic } from './init-config-stage';
+import { getFullSuiteEnabledDiagnostic, hasAnyActiveTask } from './init-config-stage';
 
 interface BuildInitReportOptions {
     timestampIso: string;
@@ -318,6 +321,23 @@ function buildUsageLines(opts: BuildUsageOptions): string[] {
     ];
 }
 
+// Review capabilities are frozen into each task's review policy; an update with an active task keeps
+// the current file so the task continues, and reports the change a later init will apply.
+function syncReviewCapabilitiesUnlessTaskActive(targetRoot: string, bundleRoot: string): ReviewCapabilitiesSyncResult {
+    const configPath = getReviewCapabilitiesConfigPath(bundleRoot);
+    if (!pathExists(configPath) || !hasAnyActiveTask(targetRoot, bundleRoot)) {
+        return syncReviewCapabilities(bundleRoot);
+    }
+    const current = readReviewCapabilitiesConfigFile(configPath);
+    const computed = computeReviewCapabilities(bundleRoot);
+    if (!isDeepStrictEqual({ ...current }, { ...computed })) {
+        process.stderr.write('NOTICE: Review capabilities were left unchanged because a task is active. After active '
+            + 'tasks finish, run "garda init --target-root . --init-answers-path garda-agent-orchestrator/runtime/init-answers.json" '
+            + 'to apply them.\n');
+    }
+    return { configPath, capabilities: current };
+}
+
 export function runInitReportingStage(
     options: RunInitReportingStageOptions
 ): InitReportingStageResult {
@@ -331,7 +351,7 @@ export function runInitReportingStage(
     const sourceInventory = collectSourceInventory(options.targetRoot);
     const reviewCapabilitiesSync = options.dryRun
         ? null
-        : syncReviewCapabilities(options.bundleRoot);
+        : syncReviewCapabilitiesUnlessTaskActive(options.targetRoot, options.bundleRoot);
     const gitignoreEntries = buildGitignoreEntries(
         options.resolvedActiveEntryFiles,
         options.providerOrchestratorProfiles,

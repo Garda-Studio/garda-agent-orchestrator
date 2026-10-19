@@ -15,7 +15,7 @@ Ad-hoc command restraint and mandatory gate execution are separate concerns:
 - **Ad-hoc commands** (project build, test, or lint commands executed directly) - avoid as routine task validation. Use them only when requested, when doing a focused local debug pass, or when there is an explicit technical reason before returning to the gate flow.
 - **Mandatory gate commands** (`node garda-agent-orchestrator/bin/garda.js gate compile-gate`, `full-suite-validation`, etc.) - always execute when required by the workflow. A gate wrapping a build/test command is not ad-hoc execution; it is lifecycle-required validation with controlled output.
 - **Intermediate validation commands** (`gate run-intermediate-command`) - use for scoped, auditable manual probes while investigating one localized issue. The gate stores full raw output as an artifact and shows only compact status or a bounded failure tail in the transcript.
-- **Known producer-consumer validation chains** (`npm run build:node-foundation` -> direct `node --test .node-build/...`, similar generated-artifact consumers) - do not fan these out through raw shell sidecars. Use the guarded workflow path, `npm test`, or run producer then consumer strictly sequentially.
+- **Known producer-consumer validation chains** (a generator, build or compile step followed by a command that consumes its output (for example tests over generated or compiled artifacts)) - do not fan these out through raw shell sidecars. Use the guarded workflow path, the project's configured test command, or run producer then consumer strictly sequentially.
 
 Example (materialized/deployed workspace):
 ```
@@ -31,11 +31,15 @@ node garda-agent-orchestrator/bin/garda.js gate compile-gate --task-id "T-042" -
 ### Auditable Intermediate Commands
 Use `gate run-intermediate-command` for focused manual validation that is
 eligible for the auditable compact wrapper. This is the preferred path before
-raw targeted test, typecheck, or validation probes.
+raw targeted test, typecheck, or validation probes. When the command selects tests by
+name, class, package or project instead of naming the test source file (for example
+Maven `-Dtest=`, Gradle `--tests`, `dotnet test --filter`, `go test ./pkg`), bind each
+changed case with repeated `--selected-case` JSON values: `source` is the test file,
+`case_id` the test name and `selector` the exact selector text used in the command.
 
 ```bash
 node garda-agent-orchestrator/bin/garda.js gate run-intermediate-command --task-id "<task-id>" --command-source "targeted-test" --command "<project test command> -- tests/<path>.test" --repo-root "."
-node garda-agent-orchestrator/bin/garda.js gate run-intermediate-command --task-id "<task-id>" --command-source "node-test" --command "node --test tests/<path>.test.js" --repo-root "."
+node garda-agent-orchestrator/bin/garda.js gate run-intermediate-command --task-id "<task-id>" --command-source "targeted-test" --command "<project focused test command selecting a class, package or name>" --selected-case '{"source":"<test source path>","case_id":"<test case id>","selector":"<selector used in the command>"}' --repo-root "."
 ```
 
 Rules:
@@ -81,8 +85,8 @@ PowerShell:
 $taskId = "<task-id>"
 $logDir = "garda-agent-orchestrator/runtime/manual-validation/$taskId"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-$logPath = Join-Path $logDir "npm-test.log"
-& npm test *> $logPath
+$logPath = Join-Path $logDir "manual-validation.log"
+& <project focused test command> *> $logPath
 $exitCode = $LASTEXITCODE
 "ManualValidationExitCode: $exitCode"
 "ManualValidationLogPath: $logPath"
@@ -95,8 +99,8 @@ POSIX shell:
 task_id="<task-id>"
 log_dir="garda-agent-orchestrator/runtime/manual-validation/$task_id"
 mkdir -p "$log_dir"
-log_path="$log_dir/npm-test.log"
-npm test >"$log_path" 2>&1
+log_path="$log_dir/manual-validation.log"
+<project focused test command> >"$log_path" 2>&1
 status=$?
 printf 'ManualValidationExitCode: %s\n' "$status"
 printf 'ManualValidationLogPath: %s\n' "$log_path"
@@ -153,7 +157,7 @@ Replace these defaults with repository-specific commands when the real project d
 
 ### Setup
 ```bash
-npm install --prefer-offline --no-fund --no-audit
+<project dependency install command, if any>
 node garda-agent-orchestrator/bin/garda.js setup --target-root "."
 ```
 
@@ -203,7 +207,7 @@ Rules:
 - `__COMPILE_GATE_COMMAND_UNCONFIGURED__` is a blocking sentinel. Replace it during init/agent-init with a project-specific compile/build/type-check command or set `compile_gate.command` with `workflow set`.
 - Command must be non-interactive, must return non-zero exit code on compile failure, and must be a compile/build/type-check command.
 - Do not use full-suite test commands here (`npm test`, `mvn test`, `gradle test`, `go test`, `cargo test`, `dotnet test`, `pytest`, or equivalent). Put full repository tests in `full-suite-validation` instead.
-- Preferred examples: Node/TypeScript `npm run build` or `npx tsc --noEmit`; Maven `./mvnw compile`; Gradle `./gradlew assemble`; Go `go build ./...`; Rust `cargo check`; .NET `dotnet build`.
+- Examples by stack (use the project's own wrapper or script when it has one): Maven `./mvnw compile`; Gradle `./gradlew assemble`; Go `go build ./...`; Rust `cargo check`; .NET `dotnet build`; Python `python -m compileall -q <package>`; Node/TypeScript `npm run build` or `npx tsc --noEmit`.
 - If the repository truly has no separate compile/build/type-check command, stop for operator approval before using the compile-gate override flags.
 - This command is executed by `node garda-agent-orchestrator/bin/garda.js gate compile-gate` before review phase.
 
@@ -224,9 +228,8 @@ Rules:
 
 ### Build and Package
 ```bash
-npm run build
-npm pack
-npm publish
+<project build command>
+<project package or release command, if any>
 ```
 
 ## Compact Command Policy
