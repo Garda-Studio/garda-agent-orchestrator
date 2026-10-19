@@ -9,6 +9,7 @@ import { runContractMigrations } from '../../../src/lifecycle/contract-migration
 import { migrateLegacyOutputCompactionGuidance } from '../../../src/materialization/rule-materialization';
 import { removePathRecursive } from '../../../src/lifecycle/common';
 import { formatManifestResult, formatVerifyResult, runVerify, validateManifest } from '../../../src/validators';
+import { TEST_COMPILE_GATE_COMMAND, writeTestCompileFixture } from '../cli/commands/gate-test-repo-bootstrap';
 import {
     DEFAULT_OPTIONAL_QUALITY_CHECK_RULES,
     LEGACY_OPTIONAL_QUALITY_CHECK_RULES,
@@ -21,8 +22,6 @@ type CapturedMaterializationOptions = {
     providerMinimalism?: boolean;
     activeAgentFilesSeed?: string | null;
 };
-
-const TEST_COMPILE_GATE_COMMAND = 'node -e "console.log(\'build ok\')"';
 
 function findRepoRoot() {
     let dir = __dirname;
@@ -74,6 +73,7 @@ function seedExecutableBundleSurface(repoRoot: string, bundleRoot: string) {
 }
 
 function seedWorkflowConfigCompileGateCommand(bundleRoot: string, command: string = TEST_COMPILE_GATE_COMMAND) {
+    writeTestCompileFixture(path.dirname(bundleRoot));
     const configPath = path.join(bundleRoot, 'live', 'config', 'workflow-config.json');
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, JSON.stringify({

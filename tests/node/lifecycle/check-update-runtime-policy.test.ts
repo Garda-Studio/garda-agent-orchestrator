@@ -18,6 +18,7 @@ import { getUpdateRollbackItems } from '../../../src/lifecycle/update/update';
 import { PUBLIC_BUNDLE_ASSETS } from '../../../src/core/public-bundle-assets';
 import { verifySyncedItemsRestoredFromBackup } from '../../../src/lifecycle/check-update/check-update-bundle-sync';
 import { runDoctor } from '../../../src/validators/doctor';
+import { TEST_COMPILE_GATE_COMMAND, writeTestCompileFixture } from '../cli/commands/gate-test-repo-bootstrap';
 import {
     BUNDLE_SYNC_ITEMS,
     removePathRecursive,
@@ -31,7 +32,6 @@ const FIRST_NPM_RELEASE_PACKAGE_SPEC = 'garda-agent-orchestrator@1.0.0';
 const FIRST_NPM_RELEASE_FILENAME = 'garda-agent-orchestrator-1.0.0.tgz';
 const NEXT_RELEASE_TEST_VERSION = '1.0.1';
 const NPM_NETWORK_TESTS_ENABLED = process.env.GARDA_NPM_NETWORK_TESTS === '1';
-const TEST_COMPILE_GATE_COMMAND = 'node -e "console.log(\'build ok\')"';
 
 function assertOriginalBundleSnapshot(projectRoot: string, bundleRoot: string): void {
     const snapshotsRoot = path.join(bundleRoot, 'runtime', 'update-rollbacks');
@@ -123,6 +123,7 @@ function seedBundleSyncSurface(sourceRoot: string, bundleRoot: string) {
 }
 
 function seedWorkflowConfigCompileGateCommand(bundleRoot: string, command: string = TEST_COMPILE_GATE_COMMAND) {
+    writeTestCompileFixture(path.dirname(bundleRoot));
     const configPath = path.join(bundleRoot, 'live', 'config', 'workflow-config.json');
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, JSON.stringify({

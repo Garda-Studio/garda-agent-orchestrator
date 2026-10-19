@@ -17,8 +17,7 @@ import { getStatusSnapshot } from '../../../src/validators/status';
 import { runVerify } from '../../../src/validators/verify';
 import { validateManifest } from '../../../src/validators/validate-manifest';
 import { PROJECT_MEMORY_REQUIRED_FILE_NAMES } from '../../../src/core/project-memory';
-
-const TEST_COMPILE_GATE_COMMAND = 'node -e "console.log(\'build ok\')"';
+import { TEST_COMPILE_GATE_COMMAND, writeTestCompileFixture } from '../cli/commands/gate-test-repo-bootstrap';
 
 function findRepoRoot(): string {
     let dir = __dirname;
@@ -89,6 +88,7 @@ function materializeProjectMemory(bundleRoot: string) {
 }
 
 function configureCompileGateCommand(bundleRoot: string) {
+    writeTestCompileFixture(path.dirname(bundleRoot));
     const workflowConfigPath = path.join(bundleRoot, 'live', 'config', 'workflow-config.json');
     const workflowConfig = readJson(workflowConfigPath);
     const compileGate = workflowConfig.compile_gate;

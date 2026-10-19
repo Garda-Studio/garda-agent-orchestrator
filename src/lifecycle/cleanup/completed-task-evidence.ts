@@ -7,7 +7,7 @@ import { runGit, runGitBinary } from '../../core/git-helpers';
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import { assertCanonicalTaskId } from '../../core/task-ids';
 import { parseCanonicalActiveTaskQueue } from '../../core/task-md-table';
-import { parseTaskQueueEntriesFromContent, type TaskQueueEntry } from '../../core/task-queue-read';
+import { parseTaskQueueEntriesFromContent, withTaskQueueReadSnapshot, type TaskQueueEntry } from '../../core/task-queue-read';
 import { readTaskQueueStatusToken } from '../../core/active-task-state';
 import { readTaskTimelineJsonlEntries } from '../../gate-runtime/task-events';
 import { resolveTaskHistoryLedgerPath } from '../../gate-runtime/task-history-ledger';
@@ -450,9 +450,11 @@ export function inspectCompletedTaskEvidenceBatch(options: {
         const snapshot = JSON.stringify(workspace.read('git_auto', true, []));
         const fingerprint = computeSnapshotFingerprint(repoRoot, 'git_auto', true, []);
         const batch: CompletedEvidenceBatch = { queue, workspace, headSha: fingerprint.headSha, hashes: new Map(), scopes: [] };
-        for (const taskId of new Set(options.taskIds)) {
-            results.set(taskId, inspectTaskWithQueue({ ...options, taskId }, repoRoot, batch));
-        }
+        withTaskQueueReadSnapshot(() => {
+            for (const taskId of new Set(options.taskIds)) {
+                results.set(taskId, inspectTaskWithQueue({ ...options, taskId }, repoRoot, batch));
+            }
+        });
         verifyEvidenceHashes(repoRoot, batch.hashes, queue.path);
         for (const accepted of batch.scopes) verifyAcceptedTaskScope(repoRoot, accepted.audit, accepted.scope);
         assertEvidenceFile(repoRoot, queue.path);
