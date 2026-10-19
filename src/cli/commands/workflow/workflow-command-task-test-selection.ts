@@ -10,6 +10,7 @@ import { stringSha256 } from '../../../gate-runtime/hash';
 import { getTaskModeEvidence } from '../../../gates/task-mode/task-mode';
 import { getSafeWorktreePathState } from '../../../gates/workspace/worktree-path-state';
 import { computeSnapshotFingerprint } from '../../../gates/workspace/workspace-snapshot-cache';
+import { findOtherActiveImplementationOwners, findUnapprovedActiveImplementationOwners } from '../../../gates/workspace/active-implementation-ownership';
 import { inspectReviewerFocusedValidationCommand } from '../../../gates/review/review-findings-schema';
 import { getClassificationConfig } from '../../../gates/preflight/classify-change-config';
 import { matchAnyRegex } from '../../../gate-runtime/text-utils';
@@ -63,9 +64,14 @@ function readCurrentTask(roots: WorkflowCommandRoots, taskId: string): {
     const activeIds = resolveActiveTaskIds(roots.targetRoot, roots.bundleRoot, [], {
         includeAmbiguousRuntimeTasks: false, includeStaleRuntimeActiveTasks: false
     });
+    const owners = findOtherActiveImplementationOwners(roots.targetRoot, taskId);
     if (!queue.found || rows.length !== 1 || !isTaskQueueActiveStatus(rows[0].status)
-        || activeIds.size !== 1 || !activeIds.has(taskId)) {
+        || !activeIds.has(taskId) || activeIds.size !== owners.length + 1
+        || owners.some(owner => !activeIds.has(owner))) {
         fail('one current active task must match the canonical task queue and native runtime.');
+    }
+    if (findUnapprovedActiveImplementationOwners(roots.targetRoot, taskId).length) {
+        fail('other active implementation owners require current task-specific approval and disjoint scopes.');
     }
     const eventsRoot = path.join(roots.bundleRoot, 'runtime/task-events');
     const timeline = path.join(eventsRoot, `${taskId}.jsonl`);

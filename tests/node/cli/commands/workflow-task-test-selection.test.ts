@@ -6,6 +6,7 @@ import { handleWorkflow } from '../../../../src/cli/commands/workflow-command';
 import { buildDefaultWorkflowConfig, normalizeOptionalQualityChecksConfig } from '../../../../src/core/workflow-config';
 import { resolveWorkflowRoots } from '../../../../src/cli/commands/workflow/workflow-command-state';
 import { assertTaskTestSelectionCurrent, resolveTaskTestSelectionAuthority } from '../../../../src/cli/commands/workflow/workflow-command-task-test-selection';
+import { writeWorkflowConfigAuditRecord } from '../../../../src/cli/commands/workflow/workflow-command-mutation';
 import { appendMandatoryTaskEvent, readTaskTimelineJsonlEntries } from '../../../../src/gate-runtime/task-events';
 import { getTaskModeEvidence } from '../../../../src/gates/task-mode';
 import { getCurrentWorkflowConfigChanges, getWorkflowConfigWorkViolations } from '../../../../src/gates/workflow-config/workflow-config-work';
@@ -17,6 +18,9 @@ const TASK_ID = 'T-TEST-SELECTION-1';
 const TARGET = 'tests/widget.test.js';
 const SECOND_TARGET = 'tests/widget-regression.test.js';
 const SOURCE = 'src/widget.js';
+const HELD_TASK_ID = 'T-TEST-SELECTION-HELD';
+const HELD_SOURCE = 'src/held-widget.js';
+const HELD_TARGET = 'tests/held-widget.test.js';
 const PACKAGE_JSON = { name: 'garda-agent-orchestrator', version: '1.0.0' };
 
 function capture<T>(run: () => T): T {
@@ -25,7 +29,7 @@ function capture<T>(run: () => T): T {
     try { return run(); } finally { console.log = log; }
 }
 
-function fixture(options: { prompt?: boolean; legacy?: boolean; enabled?: boolean } = {}) {
+function fixture(options: { prompt?: boolean; legacy?: boolean; enabled?: boolean; heldOwner?: boolean } = {}) {
     const root = createTempRepo();
     const bundle = path.join(root, 'garda-agent-orchestrator');
     const configPath = path.join(bundle, 'live/config/workflow-config.json');
@@ -33,6 +37,8 @@ function fixture(options: { prompt?: boolean; legacy?: boolean; enabled?: boolea
     fs.mkdirSync(path.join(root, 'tests'), { recursive: true });
     fs.mkdirSync(path.join(root, 'src'), { recursive: true });
     fs.writeFileSync(path.join(root, SOURCE), 'export const widget = 1;\n');
+    fs.writeFileSync(path.join(root, HELD_SOURCE), 'export const heldWidget = 2;\n');
+    fs.writeFileSync(path.join(root, HELD_TARGET), "require('node:test').test('held widget', () => {});\n");
     for (const target of [TARGET, SECOND_TARGET]) {
         fs.writeFileSync(path.join(root, target), "const test = require('node:test'); const assert = require('node:assert/strict'); test('widget', () => assert.equal(1, 1));\n");
     }
@@ -54,9 +60,18 @@ function fixture(options: { prompt?: boolean; legacy?: boolean; enabled?: boolea
     writeProtectedControlPlaneManifest(root);
     process.chdir(root);
     try {
+        if (options.heldOwner) {
+            fs.appendFileSync(path.join(root, 'TASK.md'), `| ${HELD_TASK_ID} | TODO | P1 | app | Preserve held widget | fixture | 2026-10-07 | balanced | HUMAN HOLD: preserve existing source. |\n`);
+            const owner = capture(() => runEnterTaskMode({ repoRoot: root, taskId: HELD_TASK_ID,
+                entryMode: 'EXPLICIT_TASK_EXECUTION', requestedDepth: '2', taskSummary: 'Preserve the held owner scope.',
+                plannedChangedFiles: [HELD_SOURCE, HELD_TARGET] }));
+            assert.equal(owner.exitCode, 0, owner.outputLines.join('\n'));
+        }
         const entry = capture(() => runEnterTaskMode({ repoRoot: root, taskId: TASK_ID, entryMode: 'EXPLICIT_TASK_EXECUTION',
             requestedDepth: '2', taskSummary: 'Update widget behavior and its owning tests.',
-            plannedChangedFiles: [SOURCE, TARGET] }));
+            plannedChangedFiles: [SOURCE, TARGET],
+            ...(options.heldOwner ? { allowedActiveTasks: [HELD_TASK_ID], operatorConfirmed: 'yes',
+                operatorConfirmedAtUtc: new Date().toISOString() } : {}) }));
         assert.equal(entry.exitCode, 0);
     } catch (error) {
         process.chdir(originalCwd);
@@ -124,6 +139,82 @@ test('task selection defaults to autonomous for current and legacy configs and p
             }), []);
         } finally { f.cleanup(); }
     }
+});
+
+test('current task selection preserves an approved disjoint held owner and binds both current cycles', () => {
+    const f = fixture({ heldOwner: true });
+    try {
+        const heldSource = fs.readFileSync(path.join(f.root, HELD_SOURCE));
+        const heldMode = getTaskModeEvidence(f.root, HELD_TASK_ID);
+        const currentMode = getTaskModeEvidence(f.root, TASK_ID);
+        const queue = fs.readFileSync(path.join(f.root, 'TASK.md'));
+        const result = select(f.root);
+        assert.ok(result && result.action === 'set' && result.changed);
+        const audit = JSON.parse(fs.readFileSync(result.audit_path!, 'utf8').trim().split('\n').at(-1)!);
+        assert.deepEqual(audit.active_task_ids, [TASK_ID, HELD_TASK_ID].sort());
+        assert.equal(audit.active_task_id, null, 'The global audit must not pretend only one task is active.');
+        assert.equal(audit.task_test_selection_authority.task_id, TASK_ID);
+        for (const [id, mode] of [[TASK_ID, currentMode], [HELD_TASK_ID, heldMode]] as const) {
+            const events = readTaskTimelineJsonlEntries(path.join(f.bundle, 'runtime/task-events', `${id}.jsonl`));
+            assert.deepEqual(events.slice(-2).map(item => item.record?.event_type),
+                ['WORKFLOW_CONFIG_MUTATION_PREPARED', 'WORKFLOW_CONFIG_MUTATION_AUDITED']);
+            const changes = getCurrentWorkflowConfigChanges(f.root, mode.workflow_config_file_hashes);
+            assert.deepEqual(getWorkflowConfigWorkViolations({ taskModeEvidence: mode, changedFiles: changes.changed_files,
+                phaseLabel: 'approved held-owner selection compatibility', repoRoot: f.root,
+                currentFileHashes: changes.current_file_hashes, baselineFileHashes: mode.workflow_config_file_hashes }), []);
+        }
+        assert.deepEqual(fs.readFileSync(path.join(f.root, HELD_SOURCE)), heldSource);
+        assert.deepEqual(fs.readFileSync(path.join(f.root, 'TASK.md')), queue);
+        assert.equal(getTaskModeEvidence(f.root, HELD_TASK_ID).evidence_hash, heldMode.evidence_hash);
+        assert.equal(getTaskModeEvidence(f.root, TASK_ID).evidence_hash, currentMode.evidence_hash);
+    } finally { f.cleanup(); }
+});
+
+test('held-owner selection rejects orphan runtime owners and physical scope overlap before writes', () => {
+    for (const mutation of ['orphan', 'overlap'] as const) {
+        const f = fixture({ heldOwner: true });
+        try {
+            const before = fs.readFileSync(f.configPath);
+            if (mutation === 'orphan') {
+                const taskPath = path.join(f.root, 'TASK.md');
+                fs.writeFileSync(taskPath, fs.readFileSync(taskPath, 'utf8').split('\n')
+                    .filter(line => !line.startsWith(`| ${HELD_TASK_ID} |`)).join('\n'));
+            } else {
+                fs.unlinkSync(path.join(f.root, SOURCE));
+                fs.linkSync(path.join(f.root, HELD_SOURCE), path.join(f.root, SOURCE));
+            }
+            assert.throws(() => select(f.root), /current active task|owner|scope/i, mutation);
+            assert.deepEqual(fs.readFileSync(f.configPath), before);
+        } finally { f.cleanup(); }
+    }
+});
+
+test('restarting a held owner invalidates prepared selection and publication without rebinding frozen authority', () => {
+    const f = fixture({ heldOwner: true });
+    try {
+        const roots = resolveWorkflowRoots({ targetRoot: f.root });
+        const next = JSON.parse(JSON.stringify(f.config)); next.full_suite_validation.command = `node --test ${TARGET}`;
+        const authority = resolveTaskTestSelectionAuthority({ taskId: TASK_ID,
+            taskTestSelectionReason: `${TASK_ID} ${TARGET} covers ${SOURCE}`, focusedRequiredTestPath: [TARGET] },
+            roots, f.config, next, ['full_suite_validation.command']);
+        assert.ok(authority);
+        const before = fs.readFileSync(f.configPath);
+        const receiverMode = fs.readFileSync(path.join(f.bundle, 'runtime/reviews', `${TASK_ID}-task-mode.json`));
+        const restarted = capture(() => runEnterTaskMode({ repoRoot: f.root, taskId: HELD_TASK_ID,
+            entryMode: 'EXPLICIT_TASK_EXECUTION', requestedDepth: '2', taskSummary: 'Restart the held owner in a new cycle.',
+            plannedChangedFiles: [HELD_SOURCE, HELD_TARGET], allowedActiveTasks: [TASK_ID],
+            operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() }));
+        assert.equal(restarted.exitCode, 0, restarted.outputLines.join('\n'));
+        assert.throws(() => assertTaskTestSelectionCurrent(roots, authority), /owner|current active task/i);
+        const auditPath = path.join(f.bundle, 'runtime/workflow-config-audit.jsonl');
+        const auditBefore = fs.existsSync(auditPath) ? fs.readFileSync(auditPath) : null;
+        assert.throws(() => writeWorkflowConfigAuditRecord(f.bundle, f.configPath,
+            ['full_suite_validation.command'], before.toString(), JSON.stringify(next),
+            { targetRoot: f.root, taskTestSelection: authority }), /owner|current active task|changed task cycle/i);
+        assert.deepEqual(fs.existsSync(auditPath) ? fs.readFileSync(auditPath) : null, auditBefore);
+        assert.deepEqual(fs.readFileSync(f.configPath), before);
+        assert.deepEqual(fs.readFileSync(path.join(f.bundle, 'runtime/reviews', `${TASK_ID}-task-mode.json`)), receiverMode);
+    } finally { f.cleanup(); }
 });
 
 test('rejects missing and stale prompt confirmation and preserves unrelated settings guard', () => {

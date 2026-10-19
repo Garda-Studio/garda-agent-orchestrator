@@ -10,9 +10,9 @@ import { validateWorkflowConfig } from '../../../schemas/config-artifacts';
 import { bindCommittedWorkflowConfigAudit, captureWorkflowAuditTaskContext, recordWorkflowConfigAuditStage,
     type WorkflowConfigAuditBinding } from '../../../core/workflow-config-audit';
 export { bindCommittedWorkflowConfigAudit, type WorkflowConfigAuditBinding } from '../../../core/workflow-config-audit';
-import { normalizeWorkflowFileConfig } from './workflow-command-state';
+import { normalizeWorkflowFileConfig, resolveWorkflowRoots } from './workflow-command-state';
 import { authenticateLocalCommitWorkflowAudit, localCommitReceiptPath } from '../../../core/auth/local-commit-availability';
-import type { TaskTestSelectionAuthority } from './workflow-command-task-test-selection';
+import { assertTaskTestSelectionCurrent, type TaskTestSelectionAuthority } from './workflow-command-task-test-selection';
 import type {
     WorkflowConfigMutationSource,
     WorkflowFileConfigData
@@ -107,10 +107,14 @@ export function writeWorkflowConfigAuditRecord(
     const mutationSource = normalizeWorkflowConfigMutationSource(options.mutationSource);
     const { activeTaskIds, taskEntryHashes } = captureWorkflowAuditTaskContext(
         bundleRoot, options.targetRoot?.trim() || path.dirname(bundleRoot));
-    if (options.taskTestSelection && (activeTaskIds.length !== 1
-        || activeTaskIds[0] !== options.taskTestSelection.task_id
-        || taskEntryHashes[activeTaskIds[0]] !== options.taskTestSelection.task_mode_entry_sha256)) {
-        throw new Error('Task-scoped test selection audit cannot bind to a changed task cycle.');
+    if (options.taskTestSelection) {
+        if (!activeTaskIds.includes(options.taskTestSelection.task_id)
+            || taskEntryHashes[options.taskTestSelection.task_id] !== options.taskTestSelection.task_mode_entry_sha256) {
+            throw new Error('Task-scoped test selection audit cannot bind to a changed task cycle.');
+        }
+        assertTaskTestSelectionCurrent(resolveWorkflowRoots({
+            targetRoot: options.targetRoot?.trim() || path.dirname(bundleRoot)
+        }), options.taskTestSelection);
     }
     const permissionRequested = changedFields.includes('local_commit.enabled');
     const auditRecordByteOffset = permissionRequested && fs.existsSync(auditPath) ? fs.statSync(auditPath).size : 0;
