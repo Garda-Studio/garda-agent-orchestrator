@@ -600,6 +600,52 @@ describe('spawnStreamed – kill-path cleanup', () => {
         });
     }
 
+    for (const mode of ['streamed', 'shell'] as const) {
+        it(`${mode} cancellation stays distinct from timeout during delayed native cleanup`, async () => {
+            if (process.platform !== 'win32') return;
+            const mutableChildProcess = require('node:child_process') as typeof childProcess;
+            const originalSpawn = mutableChildProcess.spawn;
+            const originalExecFile = mutableChildProcess.execFile;
+            const fakeChild = new EventEmitter() as childProcess.ChildProcess;
+            Object.defineProperties(fakeChild, {
+                pid: { value: 2_147_483_647 }, exitCode: { value: 1 }, signalCode: { value: null },
+                stdout: { value: null }, stderr: { value: null }
+            });
+            let nativeCalls = 0;
+            let pidOnlyKillCalls = 0;
+            fakeChild.kill = () => { pidOnlyKillCalls += 1; return true; };
+            const controller = new AbortController();
+            const fixture = mode === 'shell' ? createNodeBatchFixture() : null;
+            try {
+                mutableChildProcess.spawn = (() => fakeChild) as typeof childProcess.spawn;
+                mutableChildProcess.execFile = ((_command: unknown, _args: unknown, _options: unknown,
+                    callback: (error: null, stdout: string, stderr: string) => void) => {
+                    nativeCalls += 1;
+                    setTimeout(() => {
+                        callback(null, '1\n', '');
+                        fakeChild.emit('close', 1, 'SIGKILL');
+                    }, 100);
+                    return fakeChild;
+                }) as typeof childProcess.execFile;
+                const options = { timeoutMs: 30, signal: controller.signal };
+                const pending = mode === 'shell'
+                    ? spawnShellCommand(fixture!.scriptPath, [], options)
+                    : spawnStreamed('mock-command', [], options);
+                controller.abort();
+                const result = await pending;
+                assert.equal(result.cancelled, true);
+                assert.equal(result.timedOut, false, 'cleanup latency changed cancellation into timeout');
+                assert.equal(nativeCalls, 1);
+                assert.equal(pidOnlyKillCalls, 0);
+            } finally {
+                fakeChild.emit('close', 1, 'SIGKILL');
+                mutableChildProcess.spawn = originalSpawn;
+                mutableChildProcess.execFile = originalExecFile;
+                fixture?.cleanup();
+            }
+        });
+    }
+
     it('does not terminate a different Windows process outside the managed creation window', async () => {
         if (process.platform !== 'win32') return;
         const victim = childProcess.spawn(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], { stdio: 'ignore' });

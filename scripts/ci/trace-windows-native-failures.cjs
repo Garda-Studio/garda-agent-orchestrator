@@ -64,11 +64,17 @@ function run() {
     const root = path.resolve(__dirname, '../..');
     const preload = '--require ' + JSON.stringify(__filename);
     const started = performance.now();
+    const node22 = process.versions.node.startsWith('22.');
+    const cases = node22
+        ? 'runUiActionCommand reports timeout|cancellation before sink delivery'
+        : 'times out a long-running process|terminates a process tree on timeout|kills a process that traps SIGTERM|kill-path via AbortController without timeout|spawnShellCommand supports timeout|adversarial PATH taskkill replacement|cancellation before sink delivery';
+    const files = node22
+        ? ['.node-build/tests/node/core/compact-output.test.js', '.node-build/tests/node/reports/ui-action-runner-timeout.test.js']
+        : ['.node-build/tests/node/core/compact-output.test.js', '.node-build/tests/node/core/subprocess.test.js'];
     const result = cp.spawnSync(process.execPath, ['--test', '--test-concurrency=1', '--test-name-pattern',
-        'adversarial PATH taskkill replacement',
-        '.node-build/tests/node/core/subprocess.test.js'], {
+        cases, '--test-timeout=90000', ...files], {
         cwd: root, env: { ...process.env, GARDA_TRACE_NATIVE_FAILURES: '1', NODE_OPTIONS: [process.env.NODE_OPTIONS, preload].filter(Boolean).join(' ') },
-        encoding: 'utf8', timeout: 180_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true
+        encoding: 'utf8', timeout: node22 ? 180_000 : 480_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true
     });
     if (result.stdout) process.stdout.write(result.stdout);
     if (result.stderr) process.stderr.write(result.stderr);
@@ -78,5 +84,6 @@ function run() {
 }
 
 module.exports = { run };
-if (process.env.GARDA_TRACE_NATIVE_FAILURES === '1') installNativeTrace();
+const testWorker = String(process.argv[1] || '').replace(/\\/g, '/').includes('/.node-build/tests/node/');
+if (process.env.GARDA_TRACE_NATIVE_FAILURES === '1' && testWorker) installNativeTrace();
 else if (require.main === module) run();

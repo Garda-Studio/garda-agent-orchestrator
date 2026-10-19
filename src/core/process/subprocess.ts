@@ -1139,6 +1139,10 @@ export function spawnStreamed(command: string, args: string[], options?: SpawnSt
         function onAbort(): void {
             if (settled) return;
             cancelled = true;
+            if (timeoutHandle) {
+                clearTimeout(timeoutHandle);
+                timeoutHandle = null;
+            }
             sinkController.abort();
             killChild();
         }
@@ -1361,6 +1365,10 @@ export function spawnShellCommand(
         function onAbort(): void {
             if (settled) return;
             cancelled = true;
+            if (timeoutHandle) {
+                clearTimeout(timeoutHandle);
+                timeoutHandle = null;
+            }
             killChild();
         }
 
