@@ -105,6 +105,7 @@ function assertSmokeForensics(job: string): void {
 }
 
 function assertReleasePreparation(job: string): void {
+    const temporaryPaths = getWorkflowStepBlock(job, 'Canonicalize Windows temporary paths');
     const build = getWorkflowStepBlock(job, 'Prepare embedded release bundle');
     const bootstrap = getWorkflowStepBlock(job, 'Bootstrap embedded release bundle');
     const validation = getWorkflowStepBlock(job, 'Validate release');
@@ -116,6 +117,12 @@ function assertReleasePreparation(job: string): void {
     }
     assert.ok(job.indexOf(build) < job.indexOf(bootstrap));
     assert.ok(job.indexOf(bootstrap) < job.indexOf(validation));
+    assert.match(temporaryPaths, /^ {8}if: runner\.os == 'Windows'$/mu);
+    assert.ok(temporaryPaths.includes('realpathSync.native(require("node:os").tmpdir())'));
+    for (const variable of ['TEMP', 'TMP', 'TMPDIR']) {
+        assert.ok(temporaryPaths.includes(`"${variable}=$physicalTemp" >> $env:GITHUB_ENV`));
+    }
+    assert.ok(job.indexOf(temporaryPaths) < job.indexOf(validation));
 }
 
 test('release validation prepares the actual embedded bundle before mandatory parity', () => {
@@ -287,6 +294,16 @@ test('lifecycle smoke commits the prebuilt bundle atop the checked-out commit', 
             `${label} must clone from an explicit local path`);
         const lifecycle = getWorkflowStepBlock(smokeJob, 'Lifecycle smoke (cross-platform E2E install → update → uninstall)');
         const preparation = 'node scripts/ci/finalize-smoke-workspace.cjs "$SMOKE_DIR"';
+        const canonicalRoot = `SMOKE_DIR="$(node -p 'require("node:fs").realpathSync.native(process.argv[1]).split(require("node:path").sep).join("/")' "$SMOKE_DIR")"`;
+        const canonicalTemp = `SMOKE_TEMP_ROOT="$(node -p 'require("node:fs").realpathSync.native(require("node:os").tmpdir()).split(require("node:path").sep).join("/")')"`;
+        const exportedTemp = 'export TMPDIR="$SMOKE_TEMP_ROOT" TEMP="$SMOKE_TEMP_ROOT" TMP="$SMOKE_TEMP_ROOT"';
+        assert.ok(lifecycle.includes(canonicalTemp));
+        assert.ok(lifecycle.includes(exportedTemp));
+        assert.ok(lifecycle.indexOf(canonicalTemp) < lifecycle.indexOf(exportedTemp));
+        assert.ok(lifecycle.indexOf(exportedTemp) < lifecycle.indexOf('SMOKE_DIR="$(mktemp -d)"'));
+        assert.ok(lifecycle.includes(canonicalRoot), `${label} must pass a physical temporary root to deployment`);
+        assert.ok(lifecycle.indexOf('SMOKE_DIR="$(mktemp -d)"') < lifecycle.indexOf(canonicalRoot));
+        assert.ok(lifecycle.indexOf(canonicalRoot) < lifecycle.indexOf('echo "smoke_dir=$SMOKE_DIR"'));
         assert.ok(lifecycle.includes(preparation), `${label} must finish real agent initialization`);
         assert.ok(lifecycle.indexOf('$CLI setup ') < lifecycle.indexOf(preparation));
         assert.ok(lifecycle.indexOf(preparation) < lifecycle.indexOf('$CLI update git '));

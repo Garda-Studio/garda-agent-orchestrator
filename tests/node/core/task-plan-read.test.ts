@@ -137,3 +137,20 @@ test('task-plan reader rejects a file changed during the bounded read', t => {
     assert.equal(result.content, null);
     assert.match(result.diagnostics[0], /changed during reading/);
 });
+
+test('task-plan reader authenticates a Windows path stat with an omitted volume id', {
+    skip: process.platform !== 'win32'
+}, t => {
+    const root = workspace(t);
+    const file = writePlan(root, 'T-001', JSON.stringify(plan('T-001')));
+    const filesystem = require('node:fs') as typeof fs;
+    const lstatSync = filesystem.lstatSync;
+    t.mock.method(filesystem, 'lstatSync', ((...args: Parameters<typeof lstatSync>) => {
+        const identity = Reflect.apply(lstatSync, filesystem, args);
+        if (!identity || String(args[0]) !== file) return identity;
+        return Object.assign(Object.create(Object.getPrototypeOf(identity)), identity, {
+            dev: typeof identity.dev === 'bigint' ? 0n : 0
+        });
+    }) as typeof lstatSync);
+    assert.equal(readTaskPlan(root, 'T-001').state, 'draft');
+});

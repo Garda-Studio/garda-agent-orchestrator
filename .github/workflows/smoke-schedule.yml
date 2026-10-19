@@ -106,7 +106,10 @@ jobs:
         run: |
           set -euo pipefail
 
+          SMOKE_TEMP_ROOT="$(node -p 'require("node:fs").realpathSync.native(require("node:os").tmpdir()).split(require("node:path").sep).join("/")')"
+          export TMPDIR="$SMOKE_TEMP_ROOT" TEMP="$SMOKE_TEMP_ROOT" TMP="$SMOKE_TEMP_ROOT"
           SMOKE_DIR="$(mktemp -d)"
+          SMOKE_DIR="$(node -p 'require("node:fs").realpathSync.native(process.argv[1]).split(require("node:path").sep).join("/")' "$SMOKE_DIR")"
           echo "smoke_dir=$SMOKE_DIR" >> "$GITHUB_OUTPUT"
           SMOKE_BRANCH="garda-ci-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           git -C "$GITHUB_WORKSPACE" branch --force "$SMOKE_BRANCH" "$GITHUB_SHA"

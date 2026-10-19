@@ -341,7 +341,7 @@ function runCliStartupProbe(
 ): CliStartupProbeResult {
     const probeScript = [
         "const path = require('node:path');",
-        `const packageRoot = require('node:fs').realpathSync(${JSON.stringify(packageRoot)});`,
+        `const packageRoot = require('node:fs').realpathSync.native(${JSON.stringify(packageRoot)});`,
         "process.once('beforeExit', () => {",
         '  const packageModules = Object.keys(require.cache).filter((modulePath) => {',
         '    const relativePath = path.relative(packageRoot, modulePath);',
@@ -446,7 +446,7 @@ test('npm pack -> install -> CLI invoke smoke test', () => {
     const repoRoot = getRepoRoot();
     const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     const expectedVersion = packageJson.version;
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-pack-smoke-'));
+    const tempRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gao-pack-smoke-')));
     const fixtureRoot = path.join(tempRoot, 'pack-repo');
     const installRoot = path.join(tempRoot, 'install-root');
 

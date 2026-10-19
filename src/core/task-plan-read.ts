@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { lstatFileIdentitySync } from './file-stat';
 import { joinOrchestratorPath, resolvePathInsideRepo } from './orchestrator-paths';
 import { TASK_QUEUE_FILENAME } from './orchestration-constants';
 import { assertCanonicalTaskId } from './task-ids';
@@ -30,7 +31,7 @@ export function readBoundedTaskPlanFile(repoRoot: string, file: string, maxBytes
     resolvePathInsideRepo(file, repoRoot, { allowMissing: true, enforceInside: true });
     let before: fs.Stats;
     try {
-        before = fs.lstatSync(file);
+        before = lstatFileIdentitySync(file);
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
         throw error;
@@ -54,7 +55,7 @@ export function readBoundedTaskPlanFile(repoRoot: string, file: string, maxBytes
         }
         if (bytes > maxBytes) throw new Error(`Inspection file exceeds the ${maxBytes}-byte limit.`);
         resolvePathInsideRepo(file, repoRoot, { enforceInside: true });
-        const after = fs.lstatSync(file);
+        const after = lstatFileIdentitySync(file);
         const finished = fs.fstatSync(fd);
         if (after.isSymbolicLink() || after.nlink !== 1 || finished.nlink !== 1
             || after.dev !== opened.dev || after.ino !== opened.ino
