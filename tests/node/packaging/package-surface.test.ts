@@ -570,8 +570,13 @@ test('package-surface validation reproduces real offline npm packs and cleans co
     const repoRoot = process.cwd();
     const relativeOutputPath = `garda-agent-orchestrator/runtime/release/package-surface-e2e-${process.pid}.json`;
     const relativePriorPath = `garda-agent-orchestrator/runtime/release/package-surface-e2e-prior-${process.pid}.json`;
+    const relativeBaselinePath = `garda-agent-orchestrator/runtime/release/package-surface-e2e-baseline-${process.pid}.json`;
     const outputPath = path.join(repoRoot, relativeOutputPath);
     const priorPath = path.join(repoRoot, relativePriorPath);
+    const fixtureBaselinePath = path.join(repoRoot, relativeBaselinePath);
+    const releaseBaselinePath = path.join(repoRoot, 'config', 'release-package-surface-baseline.json');
+    const releaseBaselineBytes = fs.readFileSync(releaseBaselinePath);
+    const releaseBaseline = parsePackageSurfaceBaseline(JSON.parse(releaseBaselineBytes.toString('utf8')));
     const compatibilityPath = path.join(repoRoot, 'template', 'CLAUDE.md');
     assert.equal(fs.existsSync(compatibilityPath), false);
     try {
@@ -593,14 +598,37 @@ test('package-surface validation reproduces real offline npm packs and cleans co
         assert.equal(measured.metrics.productionDependencyCount, 0);
         assert.equal(Object.keys(measured.packedFileSha256).length, measured.metrics.fileCount);
         assert.equal(fs.existsSync(compatibilityPath), false);
+        const fixtureBaseline = createPackageSurfaceBaseline(measured, {
+            rationale: 'Same-host package integration fixture, not release approval.', allowedGrowth: ZERO_GROWTH
+        });
+        fs.writeFileSync(fixtureBaselinePath, JSON.stringify(fixtureBaseline), 'utf8');
+        const baselineResult = validatePackageSurface(repoRoot, {
+            outputPath: relativeOutputPath, baselinePath: relativeBaselinePath
+        });
+        assert.equal(baselineResult.passed, true, formatPackageSurfaceComparison(baselineResult));
+        assert.equal(baselineResult.referenceKind, 'baseline');
+        assert.equal(baselineResult.referenceTarballSha256, measured.tarballSha256);
+
         const defaultResult = validatePackageSurface(repoRoot, { outputPath: relativeOutputPath });
-        assert.equal(defaultResult.passed, true, formatPackageSurfaceComparison(defaultResult));
+        assert.equal(defaultResult.referencePath, releaseBaselinePath);
+        assert.deepEqual(defaultResult.reference, releaseBaseline);
         assert.equal(defaultResult.referenceKind, 'baseline');
         assert.equal(defaultResult.platform, process.platform);
-        assert.equal(defaultResult.referenceTarballSha256, measured.tarballSha256);
+        const approvedDigest = releaseBaseline.tarballSha256ByPlatform
+            ? releaseBaseline.tarballSha256ByPlatform[process.platform] ?? null
+            : releaseBaseline.tarballSha256;
+        assert.equal(defaultResult.referenceTarballSha256, approvedDigest);
+        if (approvedDigest !== measured.tarballSha256
+            || releaseBaseline.packedFileManifestSha256 !== measured.packedFileManifestSha256) {
+            assert.equal(defaultResult.passed, false, 'Development drift must not silently approve a release archive');
+            assert.ok(defaultResult.violations.length > 0);
+        }
+        assert.deepEqual(fs.readFileSync(releaseBaselinePath), releaseBaselineBytes);
+        assert.equal(fs.existsSync(compatibilityPath), false);
     } finally {
         fs.rmSync(outputPath, { force: true });
         fs.rmSync(priorPath, { force: true });
+        fs.rmSync(fixtureBaselinePath, { force: true });
         fs.rmSync(compatibilityPath, { force: true });
     }
 });
