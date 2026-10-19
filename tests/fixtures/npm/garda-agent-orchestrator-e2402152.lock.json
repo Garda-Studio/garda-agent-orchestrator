@@ -1,0 +1,14 @@
+{
+  "name": "garda-agent-orchestrator",
+  "version": "1.4.4",
+  "filename": "garda-agent-orchestrator-e2402152.tgz",
+  "source_commit": "e2402152aecdcd6714f16dac70ad6f44511e3b8f",
+  "source": "Repository-owned public source snapshot at source_commit, built and packaged locally; no registry access",
+  "integrity": "sha512-0ri9+yGWlLF9THZg4TPWpw66RIQ0ETXsumRwJK9Bxdm59B4aUlx4umP4wS9CSJsjBuNDhuU0wWWmL338S3mNEA==",
+  "runtime_manifest_sha256": "9edca1ddc5e12a8fc8b23fe18c4ae4d40c12f20fccbcea139d412694d5969ffa",
+  "package_bytes": 6810260,
+  "pack_command": "npm pack --ignore-scripts --offline --pack-destination <output> --cache <isolated-cache> --json",
+  "package_entry_count": 1478,
+  "private_root_entries": 0,
+  "provenance_note": "Source revision upgrade: prior and current VERSION both read 1.4.4. The pinned public runtime is different; authentic project/task/permissions/history are created anew by each test."
+}
