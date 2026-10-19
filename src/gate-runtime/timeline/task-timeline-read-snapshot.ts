@@ -1,9 +1,10 @@
 import { createHash, type Hash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
 import { completePathFileIdentitySync, lstatFileIdentitySync } from '../../core/file-stat';
 import * as path from 'node:path';
+import { inspectTrustedWindowsWriteAuthority } from './windows-acl-authority';
+export { windowsAclOutputHasExplicitWriteGrant } from './windows-acl-authority';
 
 import {
     normalizeBoundedJsonlTailLimits,
@@ -96,8 +97,6 @@ export const MAX_TASK_TIMELINE_SNAPSHOT_BYTES = 64 * 1024 * 1024;
 const MAX_TASK_TIMELINE_MEMOIZED_OBJECTS = 500_000;
 const MAX_TASK_TIMELINE_MEMOIZED_DEPTH = 256;
 const TASK_TIMELINE_FILE_CREATE_MODE = 0o600;
-const WINDOWS_ACL_INSPECTION_TIMEOUT_MS = 1_000;
-const WINDOWS_ACL_INSPECTION_MAX_ATTEMPTS = 2;
 const WINDOWS_ACL_CACHE_MAX_ENTRIES = 128;
 
 const TASK_TIMELINE_TEXT_MEMOIZATION_KEY = createTaskTimelineMemoizationKey<string>('utf8-text');
@@ -163,23 +162,6 @@ interface WindowsAclAuthorityCacheEntry {
 
 const windowsAclAuthorityCache = new Map<string, WindowsAclAuthorityCacheEntry>();
 
-export function windowsAclOutputHasExplicitWriteGrant(output: string): boolean {
-    for (const rawLine of String(output || '').split(/\r?\n/u)) {
-        const aceStart = rawLine.lastIndexOf(':(');
-        if (aceStart < 0) {
-            continue;
-        }
-        const ace = rawLine.slice(aceStart + 1).toUpperCase();
-        if (ace.includes('(DENY)') || ace.includes('(IO)') || ace.includes('(I)')) {
-            continue;
-        }
-        if (/\((?:F|M|W|GA|GW|WD|AD|WEA|WA|DC|D|WO|WDAC)(?=[,)])/u.test(ace)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 function rememberWindowsAclAuthority(
     cacheKey: string,
     entry: WindowsAclAuthorityCacheEntry
@@ -210,21 +192,7 @@ function hasTrustedWindowsWriteAuthority(filePath: string, identity: fs.Stats): 
         return cached.trusted;
     }
 
-    let trusted = false;
-    for (let attempt = 0; attempt < WINDOWS_ACL_INSPECTION_MAX_ATTEMPTS; attempt += 1) {
-        const inspection = childProcess.spawnSync('icacls.exe', [path.resolve(filePath)], {
-            encoding: 'utf8',
-            maxBuffer: 256 * 1024,
-            timeout: WINDOWS_ACL_INSPECTION_TIMEOUT_MS,
-            windowsHide: true
-        });
-        const output = String(inspection.stdout || '');
-        const hasAclEntries = output.split(/\r?\n/u).some((line) => line.lastIndexOf(':(') >= 0);
-        if (inspection.status === 0 && !inspection.error && hasAclEntries) {
-            trusted = !windowsAclOutputHasExplicitWriteGrant(output);
-            break;
-        }
-    }
+    const trusted = inspectTrustedWindowsWriteAuthority(path.resolve(filePath));
     return rememberWindowsAclAuthority(cacheKey, {
         dev: identity.dev,
         ino: identity.ino,
@@ -240,8 +208,8 @@ function hasTrustedWriteAuthority(filePath: string, identity: fs.Stats): boolean
     if (typeof process.getuid !== 'function') {
         // The configured workspace DACL is the Windows trust root because a
         // principal that can rewrite the repository can also rewrite this code.
-        // Timeline paths must inherit that authority without an explicit
-        // writable ACE that widens access beneath the trust root.
+        // Explicit grants to SYSTEM, Administrators and the current token do
+        // not widen it. Other explicit writers still invalidate the boundary.
         return hasTrustedWindowsWriteAuthority(filePath, identity);
     }
     return identity.uid === process.getuid() && (identity.mode & 0o022) === 0;

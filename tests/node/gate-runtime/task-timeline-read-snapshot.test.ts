@@ -4,6 +4,7 @@ import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { windowsAclOutputHasOnlyTrustedExplicitGrants } from '../../../src/gate-runtime/timeline/windows-acl-authority';
 
 import {
     appendTaskEvent,
@@ -1007,6 +1008,60 @@ test('Windows ACL parsing rejects explicit writable ACEs but accepts inherited o
         windowsAclOutputHasExplicitWriteGrant('timeline S-1-5-21-500:(D)'),
         true
     );
+    assert.equal(windowsAclOutputHasExplicitWriteGrant('timeline Untrusted:(RD,WD)'), true);
+    assert.equal(windowsAclOutputHasExplicitWriteGrant('timeline Untrusted:(RC,WA)'), true);
+});
+
+test('Windows explicit ACL name shortcut requires exact ASCII token-derived principals', () => {
+    const trusted = new Set(['nt authority\\system', 'builtin\\administrators', 'machine\\owner']);
+    const acl = [
+        'timeline NT AUTHORITY\\SYSTEM:(OI)(CI)(F)',
+        '         BUILTIN\\Administrators:(OI)(CI)(F)',
+        '         MACHINE\\owner:(F)'
+    ].join('\r\n');
+    assert.equal(windowsAclOutputHasOnlyTrustedExplicitGrants(acl, 'timeline', trusted), true);
+    for (const changed of [
+        acl + '\r\n         Everyone:(RD,WD)',
+        acl.replace('MACHINE\\owner', 'OTHER\\owner'),
+        acl.replace('MACHINE\\owner', 'MACHINE\\owner '),
+        acl.replace('NT AUTHORITY\\SYSTEM', 'FAKE NT AUTHORITY\\SYSTEM'),
+        acl.replace('MACHINE\\owner', 'MACHINE\\own\ufffdr'),
+        acl.replace('MACHINE\\owner', 'MACHINE\\владелец')
+    ]) {
+        assert.equal(windowsAclOutputHasOnlyTrustedExplicitGrants(changed, 'timeline', trusted), false);
+    }
+});
+
+test('Windows ACL accepts explicit system administrator and current-user grants but rejects Everyone', {
+    skip: process.platform !== 'win32' ? 'Windows ACL metadata is unavailable on this platform.' : false
+}, () => {
+    const orchestratorRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gao-timeline-explicit-acl-')));
+    tempRoots.push(orchestratorRoot);
+    const eventsRoot = path.join(orchestratorRoot, 'runtime', 'task-events');
+    const timelinePath = path.join(eventsRoot, 'T-EXPLICIT-ACL.jsonl');
+    fs.mkdirSync(eventsRoot, { recursive: true });
+    fs.writeFileSync(timelinePath, '{}\n');
+    const system32 = path.join(fs.realpathSync.native('\\\\?\\GLOBALROOT\\SystemRoot'), 'System32');
+    const whoami = childProcess.spawnSync(path.join(system32, 'whoami.exe'), ['/user', '/fo', 'csv', '/nh'], {
+        encoding: 'utf8', windowsHide: true, timeout: 5_000
+    });
+    assert.equal(whoami.status, 0, String(whoami.stderr || whoami.error || 'whoami failed'));
+    const userSid = String(whoami.stdout).trim().match(/"(S-1-[0-9-]+)"$/u)?.[1];
+    assert.ok(userSid, 'The current token SID must be present.');
+    const trustedSids = [...new Set(['S-1-5-18', 'S-1-5-32-544', userSid])];
+    for (const [target, permissions] of [[eventsRoot, '(OI)(CI)(F)'], [timelinePath, '(F)']]) {
+        const result = childProcess.spawnSync(path.join(system32, 'icacls.exe'), [
+            target, '/inheritance:r', '/grant:r', ...trustedSids.map(sid => `*${sid}:${permissions}`)
+        ], { encoding: 'utf8', windowsHide: true, timeout: 5_000 });
+        assert.equal(result.status, 0, String(result.stderr || result.stdout || result.error));
+    }
+    assert.equal(readTaskTimelineTextFile(timelinePath), '{}\n');
+    const grant = childProcess.spawnSync(path.join(system32, 'icacls.exe'), [timelinePath, '/grant', '*S-1-1-0:(W)'], {
+        encoding: 'utf8', windowsHide: true, timeout: 5_000
+    });
+    assert.equal(grant.status, 0, String(grant.stderr || grant.stdout || grant.error));
+    fs.appendFileSync(timelinePath, '{}\n');
+    assert.throws(() => readTaskTimelineTextFile(timelinePath), /snapshot is unavailable/u);
 });
 
 test('Windows ACL cache invalidates a trusted decision when file metadata changes', {
@@ -1059,7 +1114,7 @@ test('Windows ACL inspection retries a transient timeout without caching an inde
             args: readonly string[] = [],
             options?: childProcess.SpawnSyncOptions
         ) => {
-            assert.equal(command, 'icacls.exe');
+            assert.equal(command, path.join(fs.realpathSync.native('\\\\?\\GLOBALROOT\\SystemRoot'), 'System32', 'icacls.exe'));
             assert.equal(options?.timeout, 1_000);
             const targetPath = path.resolve(String(args[0] || ''));
             const attempt = (attempts.get(targetPath) || 0) + 1;
@@ -1112,7 +1167,7 @@ test('Windows ACL inspection caches an indeterminate fail-closed decision', {
             _args: readonly string[] = [],
             options?: childProcess.SpawnSyncOptions
         ) => {
-            assert.equal(command, 'icacls.exe');
+            assert.equal(command, path.join(fs.realpathSync.native('\\\\?\\GLOBALROOT\\SystemRoot'), 'System32', 'icacls.exe'));
             assert.equal(options?.timeout, 1_000);
             attempts += 1;
             return {

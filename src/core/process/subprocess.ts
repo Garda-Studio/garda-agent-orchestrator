@@ -2,6 +2,7 @@ import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import { getWindowsNativeEnvironment, getWindowsSystemDirectory } from '../windows-native-environment';
 import type { ChildProcess, SpawnSyncReturns, SpawnSyncOptions, StdioOptions } from 'node:child_process';
 
 export const DEFAULT_GIT_TIMEOUT_MS = 60_000;         // 60 s for routine git ops
@@ -76,7 +77,7 @@ const WINDOWS_PROCESS_TREE_COMMAND_TIMEOUT_MS = 2_500;
 export const WINDOWS_PROCESS_TREE_TARGET_BATCH_MAX_CHARS = 12_000;
 export const WINDOWS_EXIT_CLEANUP_BUDGET_MS = 2_500;
 const WINDOWS_SYSTEM32_ROOT = process.platform === 'win32'
-    ? path.join(fs.realpathSync.native('\\\\?\\GLOBALROOT\\SystemRoot'), 'System32')
+    ? getWindowsSystemDirectory()
     : '';
 const CHILD_GRACEFUL_TERMINATION_MS = 3_000;
 export const SUBPROCESS_TERMINATION_TIMEOUT_MS = 6_000;
@@ -363,17 +364,7 @@ function windowsProcessTreeTargetBatches(entries: readonly ManagedChildProcess[]
 }
 
 function windowsProcessTreeEnvironment(targets: string): NodeJS.ProcessEnv {
-    const windowsRoot = path.dirname(WINDOWS_SYSTEM32_ROOT);
-    const environment: NodeJS.ProcessEnv = {
-        SystemRoot: windowsRoot,
-        WINDIR: windowsRoot,
-        GARDA_PROCESS_TREE_TARGETS: targets
-    };
-    for (const name of ['TEMP', 'TMP'] as const) {
-        const value = process.env[name];
-        if (value && value.length <= 1_024) environment[name] = value;
-    }
-    return environment;
+    return { ...getWindowsNativeEnvironment(), GARDA_PROCESS_TREE_TARGETS: targets };
 }
 
 async function terminateWindowsProcessTrees(entries: readonly ManagedChildProcess[]): Promise<boolean> {
