@@ -257,10 +257,12 @@ export function initializeGitRepo(repoRoot: string): void {
         runGit(repoRoot, [...gitArgs, 'init']);
     }
 
-    // 2. Direct write of user and GPG properties to .git/config to save process spawning
+    // 2. Direct write of user and GPG properties to .git/config to save process spawning.
+    // Auto gc/maintenance is disabled: a detached maintenance run rewrites .git/objects while
+    // fixtures copy the repository, which fails the copy with ENOENT.
     const configPath = path.join(repoRoot, '.git', 'config');
     if (fs.existsSync(configPath)) {
-        const userConfig = '\n[core]\n\tautocrlf = false\n\teol = lf\n\tsafecrlf = false\n[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n[user]\n\tname = Garda Tests\n\temail = garda-tests@example.com\n';
+        const userConfig = '\n[core]\n\tautocrlf = false\n\teol = lf\n\tsafecrlf = false\n[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n[user]\n\tname = Garda Tests\n\temail = garda-tests@example.com\n[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n';
         fs.appendFileSync(configPath, userConfig, 'utf8');
     }
 
