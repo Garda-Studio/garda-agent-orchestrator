@@ -1,6 +1,7 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { parsePorcelainV1Z } from '../../core/git-path-output';
 
 import { DEFAULT_GIT_TIMEOUT_MS, spawnSyncWithTimeout } from '../../core/subprocess';
 import {
@@ -97,6 +98,7 @@ function readGitIndexOrWorktreeStatus(repoRoot: string, relativePath: string): s
             repoRoot,
             'status',
             '--porcelain=v1',
+            '-z',
             '--untracked-files=all',
             '--ignored=matching',
             '--',
@@ -109,20 +111,16 @@ function readGitIndexOrWorktreeStatus(repoRoot: string, relativePath: string): s
         if (result.status !== 0 || result.timedOut || result.error) {
             return null;
         }
-        return String(result.stdout || '')
-            .split(/\r?\n/)
-            .map((line) => line.trimEnd())
-            .filter((line) => {
-                if (!line) {
-                    return false;
-                }
-                const statusPath = normalizePath(line.slice(3).trim().replace(/^"|"$/g, ''));
+        return parsePorcelainV1Z(String(result.stdout || ''))
+            .filter((entry) => {
+                const statusPath = normalizePath(entry.path);
                 if (statusPath === normalizedRelativePath) {
                     return true;
                 }
                 const statusPathWithSlash = statusPath.endsWith('/') ? statusPath : `${statusPath}/`;
                 return targetExists && normalizedRelativePath.startsWith(statusPathWithSlash);
-            });
+            })
+            .map((entry) => `${entry.indexStatus}${entry.worktreeStatus} ${entry.path}`);
     } catch {
         return null;
     }

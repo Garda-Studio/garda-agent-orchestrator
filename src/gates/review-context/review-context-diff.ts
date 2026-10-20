@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { DEFAULT_GIT_TIMEOUT_MS, spawnSyncWithTimeout } from '../../core/subprocess';
+import { splitNulRecords } from '../../core/git-path-output';
 import { stringSha256 } from '../../gate-runtime/hash';
 import { writeArtifactFileAtomically } from '../../gate-runtime/review-artifacts';
 import { fileSha256, normalizePath } from '../shared/helpers';
@@ -220,12 +221,11 @@ function readTrackedGitFileSet(repoRoot: string, changedFiles: string[]): Set<st
     if (changedFiles.length === 0) {
         return new Set();
     }
-    const result = runGitTextCommand(repoRoot, ['ls-files', '--', ...toLiteralGitPathspecs(changedFiles)], 120000);
+    const result = runGitTextCommand(repoRoot, ['ls-files', '-z', '--', ...toLiteralGitPathspecs(changedFiles)], 120000);
     if (result.error || !result.text) {
         return new Set();
     }
-    return new Set(result.text
-        .split(/\r?\n/)
+    return new Set(splitNulRecords(result.text)
         .map((entry) => normalizePath(entry))
         .filter(Boolean));
 }
@@ -250,9 +250,8 @@ function buildUntrackedFileDiff(
     options: { includeExplicitIgnored?: boolean } = {}
 ): { text: string | null; charCount: number; truncated: boolean } {
     const literalPathspecs = toLiteralGitPathspecs(changedFiles);
-    const untrackedResult = runGitTextCommand(repoRoot, ['ls-files', '--others', '--exclude-standard', '--', ...literalPathspecs], maxChars);
-    const visibleUntrackedFiles = String(untrackedResult.text || '')
-        .split('\n')
+    const untrackedResult = runGitTextCommand(repoRoot, ['ls-files', '-z', '--others', '--exclude-standard', '--', ...literalPathspecs], maxChars);
+    const visibleUntrackedFiles = splitNulRecords(untrackedResult.text || '')
         .map((entry) => normalizePath(entry))
         .filter((entry) => entry.length > 0);
     const visibleUntrackedFileSet = new Set(visibleUntrackedFiles);
@@ -362,12 +361,12 @@ function getStagedChangedFileFingerprintEntries(repoRoot: string, changedFiles: 
     if (changedFiles.length === 0) {
         return stagedEntries;
     }
-    const result = runGitTextCommand(repoRoot, ['ls-files', '-s', '--', ...toLiteralGitPathspecs(changedFiles)], 120000);
+    const result = runGitTextCommand(repoRoot, ['ls-files', '-s', '-z', '--', ...toLiteralGitPathspecs(changedFiles)], 120000);
     if (result.error || !result.text) {
         return stagedEntries;
     }
-    for (const line of result.text.split(/\r?\n/)) {
-        const match = /^(\d+)\s+([0-9a-f]{40,64})\s+\d+\t(.+)$/.exec(line);
+    for (const line of splitNulRecords(result.text)) {
+        const match = /^(\d+)\s+([0-9a-f]{40,64})\s+\d+\t([\s\S]+)$/.exec(line);
         if (!match) {
             continue;
         }

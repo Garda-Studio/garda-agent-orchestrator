@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { DEFAULT_GIT_TIMEOUT_MS, spawnSyncWithTimeout } from '../../core/subprocess';
+import { parsePorcelainV1Z } from '../../core/git-path-output';
 import {
     PROJECT_MEMORY_REQUIRED_FILE_NAMES,
     resolveLiveProjectMemoryDir
@@ -93,23 +94,12 @@ export function collectChangedProjectMemoryFiles(repoRoot: string, bundleRoot: s
     }
 
     const files = new Set<string>();
-    const parts = String(result.stdout || '').split('\0').filter((part) => part.length > 0);
-    for (let index = 0; index < parts.length; index += 1) {
-        const line = parts[index];
-        if (line.length < 4) {
-            continue;
-        }
-        const normalizedPath = normalizePath(line.slice(3));
+    for (const entry of parsePorcelainV1Z(String(result.stdout || ''))) {
+        const normalizedPath = normalizePath(entry.path);
         if (!normalizedPath.startsWith(`${repoRelativeMemoryDir}/`)) {
-            if ((line[0] === 'R' || line[0] === 'C') && index + 1 < parts.length) {
-                index += 1;
-            }
             continue;
         }
         files.add(normalizedPath);
-        if ((line[0] === 'R' || line[0] === 'C') && index + 1 < parts.length) {
-            index += 1;
-        }
     }
 
     return {

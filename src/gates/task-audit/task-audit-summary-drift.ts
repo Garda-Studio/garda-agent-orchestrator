@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { buildBundleRelativePath } from '../../core/constants';
 import { DEFAULT_GIT_TIMEOUT_MS, spawnSyncWithTimeout } from '../../core/subprocess';
+import { splitNulRecords } from '../../core/git-path-output';
 import { normalizeGitChangeClassificationEvidence } from '../../core/git-change-classification';
 import { readStagedBlobFingerprints } from '../../core/staged-index-fingerprints';
 import { getClassificationConfig, isSafeOrdinaryDocumentationPath } from '../preflight/classify-change';
@@ -137,6 +138,7 @@ function readUnstagedChangedFiles(repoRoot: string, auditedFiles: string[]): str
         String(repoRoot),
         'diff',
         '--name-only',
+        '-z',
         '--diff-filter=ACDMRTUXB',
         '--',
         ...auditedFiles
@@ -154,8 +156,7 @@ function readUnstagedChangedFiles(repoRoot: string, auditedFiles: string[]): str
                 : String(result.stderr || result.stdout || `exit status ${result.status}`).trim();
         throw new Error(reason);
     }
-    return canonicalPathList(String(result.stdout || '')
-        .split(/\r?\n/u)
+    return canonicalPathList(splitNulRecords(String(result.stdout || ''))
         .map((entry) => toPosix(entry.trim()))
         .filter(Boolean));
 }

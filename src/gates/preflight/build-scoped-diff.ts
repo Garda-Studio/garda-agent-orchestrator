@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { splitNulRecords } from '../../core/git-path-output';
 import { convertToGitPathspecs, filterDiffByHunks, parseUnifiedDiff, reassembleDiff } from '../../gate-runtime/scoped-diff';
 import { withReviewArtifactLock, writeArtifactFileAtomically } from '../../gate-runtime/review-artifacts';
 import { matchAnyRegex } from '../../gate-runtime/text-utils';
@@ -182,12 +183,11 @@ function resolveGitRelativePath(gitRoot: string, relativeFile: string): string |
 }
 
 function listUntrackedFiles(gitRoot: string, pathspecs: string[]): string[] {
-    const args = ['ls-files', '--others', '--exclude-standard'];
+    const args = ['ls-files', '-z', '--others', '--exclude-standard'];
     if (pathspecs.length > 0) {
         args.push('--', ...pathspecs);
     }
-    return runGitText(gitRoot, args)
-        .split(/\r?\n/)
+    return splitNulRecords(runGitText(gitRoot, args))
         .map((entry) => normalizePath(entry))
         .filter((entry) => entry.length > 0);
 }

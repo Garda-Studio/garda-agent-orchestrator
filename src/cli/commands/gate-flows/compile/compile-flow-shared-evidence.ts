@@ -11,6 +11,7 @@ import {
 import { readWorkflowConfigForMerge } from '../../../../core/workflow-config';
 import { parseTaskMdTableRow } from '../../../../core/task-md-table';
 import { DEFAULT_GIT_TIMEOUT_MS, spawnSyncWithTimeout } from '../../../../core/subprocess';
+import { parseNameStatusZ } from '../../../../core/git-path-output';
 import { classifyChange } from '../../../../gates/preflight/classify-change';
 import { getTaskModeEvidence } from '../../../../gates/task-mode/task-mode';
 import { parseSplitCheckpointDetectionSource } from '../../../../gates/split-required/split-checkpoint-scope';
@@ -21,7 +22,6 @@ import {
 import { resolveGateExecutionPath } from '../../../../gates/isolation/isolation-sandbox';
 import * as gateHelpers from '../../../../gates/shared/helpers';
 import { resolveDefaultReviewsPath, resolvePathForWrite } from '../../../gate-cli/gates-artifacts';
-import { splitOutputLines } from './gate-flow-helpers';
 
 type ClassificationResult = ReturnType<typeof classifyChange>;
 
@@ -147,6 +147,7 @@ export function getClassificationRenameCount(repoRoot: string, detectionSource: 
         '--no-textconv',
         '--no-color',
         '--name-status',
+        '-z',
         '--diff-filter=ACDMRTUXB'
     ];
     const splitCheckpointRange = parseSplitCheckpointDetectionSource(detectionSource);
@@ -172,7 +173,7 @@ export function getClassificationRenameCount(repoRoot: string, detectionSource: 
         return 0;
     }
 
-    return splitOutputLines(result.stdout).filter((line) => /^R\d*\t/i.test(line)).length;
+    return parseNameStatusZ(String(result.stdout || '')).filter((entry) => /^R\d*$/iu.test(entry.status)).length;
 }
 
 export function getTaskModeEntryTimestampMs(taskModeEvidencePath: string | null): number | null {

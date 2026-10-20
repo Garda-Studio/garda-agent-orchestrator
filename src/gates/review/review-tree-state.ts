@@ -1,4 +1,5 @@
 import { DEFAULT_GIT_TIMEOUT_MS, spawnSyncWithTimeout } from '../../core/subprocess';
+import { parsePorcelainV1Z, splitNulRecords } from '../../core/git-path-output';
 import { getWorkspaceSnapshot } from '../compile/compile-gate';
 import { isSplitCheckpointDetectionSource } from '../split-required/split-checkpoint-scope';
 import {
@@ -124,23 +125,12 @@ function collectStatusEntries(repoRoot: string, changedFiles: string[]): Map<str
         '--',
         ...toLiteralPathspecs(changedFiles)
     ]);
-    const parts = output.split('\0').filter((part) => part.length > 0);
-    for (let index = 0; index < parts.length; index += 1) {
-        const line = parts[index];
-        if (line.length < 3) {
-            continue;
-        }
-        const indexStatus = line[0] || ' ';
-        const worktreeStatus = line[1] || ' ';
-        const rawPath = line.slice(3);
-        const normalizedPath = normalizePath(rawPath);
+    for (const { path: filePath, indexStatus, worktreeStatus } of parsePorcelainV1Z(output)) {
+        const normalizedPath = normalizePath(filePath);
         if (!normalizedPath) {
             continue;
         }
         entries.set(normalizedPath, mergeStatusEntry(entries.get(normalizedPath), { indexStatus, worktreeStatus }));
-        if ((indexStatus === 'R' || indexStatus === 'C') && index + 1 < parts.length) {
-            index += 1;
-        }
     }
     return entries;
 }
@@ -153,11 +143,12 @@ function collectStagedEntries(repoRoot: string, changedFiles: string[]): Map<str
     const output = runGitText(repoRoot, [
         'ls-files',
         '-s',
+        '-z',
         '--',
         ...toLiteralPathspecs(changedFiles)
     ]);
-    for (const line of output.split(/\r?\n/)) {
-        const match = /^(\d+)\s+([0-9a-f]{40,64})\s+\d+\t(.+)$/.exec(line);
+    for (const line of splitNulRecords(output)) {
+        const match = /^(\d+)\s+([0-9a-f]{40,64})\s+\d+\t([\s\S]+)$/.exec(line);
         if (!match) {
             continue;
         }

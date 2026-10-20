@@ -2,6 +2,7 @@ import * as childProcess from 'node:child_process';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { splitNulRecords } from '../../core/git-path-output';
 import { isPlainRecord } from '../../core/records';
 import { findUnapprovedActiveImplementationOwners } from '../workspace/active-implementation-ownership';
 import {
@@ -120,14 +121,14 @@ function buildProtectedOperatorConfirmationCommandParts(): string[] {
     ];
 }
 
-function readGitPathLines(repoRoot: string, args: string[]): string[] | null {
+function readGitPaths(repoRoot: string, args: string[]): string[] | null {
     try {
         const output = childProcess.execFileSync('git', ['-C', repoRoot, ...args], {
             encoding: 'utf8',
             stdio: ['ignore', 'pipe', 'ignore'],
             timeout: 10000
         });
-        return String(output || '').split(/\r?\n/).map((entry) => normalizePath(entry)).filter(Boolean);
+        return splitNulRecords(String(output || '')).map((entry) => normalizePath(entry)).filter(Boolean);
     } catch {
         return null;
     }
@@ -164,8 +165,8 @@ function readCurrentWorkspaceChangedFiles(repoRoot: string): { changedFiles: str
 }
 
 function captureCurrentWorkspaceChangedFiles(repoRoot: string): { changedFiles: string[]; reliable: boolean } {
-    const trackedChangedFiles = readGitPathLines(repoRoot, ['diff', '--name-only', '--diff-filter=ACDMRTUXB', 'HEAD', '--']);
-    const untrackedChangedFiles = readGitPathLines(repoRoot, ['ls-files', '--others', '--exclude-standard']);
+    const trackedChangedFiles = readGitPaths(repoRoot, ['diff', '--name-only', '-z', '--diff-filter=ACDMRTUXB', 'HEAD', '--']);
+    const untrackedChangedFiles = readGitPaths(repoRoot, ['ls-files', '-z', '--others', '--exclude-standard']);
     if (trackedChangedFiles === null || untrackedChangedFiles === null) {
         return { changedFiles: [], reliable: false };
     }
@@ -179,7 +180,7 @@ function captureCurrentWorkspaceChangedFiles(repoRoot: string): { changedFiles: 
 }
 
 export function readCurrentStagedChangedFiles(repoRoot: string): string[] | null {
-    return readGitPathLines(repoRoot, ['diff', '--cached', '--name-only', '--diff-filter=ACDMRTUXB', '--']);
+    return readGitPaths(repoRoot, ['diff', '--cached', '--name-only', '-z', '--diff-filter=ACDMRTUXB', '--']);
 }
 
 function isSafeRepoRelativePath(relativePath: string): boolean {

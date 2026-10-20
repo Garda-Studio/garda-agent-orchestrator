@@ -9,6 +9,7 @@ import {
     type WorkspaceSnapshotGitGeneration
 } from '../compile/compile-gate';
 import { DEFAULT_GIT_TIMEOUT_MS, spawnSyncWithTimeout } from '../../core/subprocess';
+import { parsePorcelainV1Z } from '../../core/git-path-output';
 import { normalizeGitRepoRelativePath } from '../../core/git-change-classification';
 import { getSafeWorktreePathState } from './worktree-path-state';
 import { normalizeGitChangeClassificationEvidence } from '../../core/git-change-classification';
@@ -877,6 +878,11 @@ interface GitFingerprintStatusEntry {
     path: string;
     previousPath: string | null;
     untracked: boolean;
+    requiresNulPathFingerprint: boolean;
+}
+
+function requiresNulPathFingerprint(filePath: string | null): boolean {
+    return filePath !== null && /[^\x20-\x7e]|["\\]| => /u.test(filePath);
 }
 
 /**
@@ -909,24 +915,17 @@ function readGitFingerprintStatusEntries(
         throw new Error(formatGitFingerprintProbeFailure(repoRoot, args, result));
     }
 
-    const fields = String(result.stdout || '').split('\0');
     const entries: GitFingerprintStatusEntry[] = [];
-    let index = 0;
-    while (index < fields.length) {
-        const record = String(fields[index++] || '');
-        if (!record) continue;
-        if (record.length < 4 || record.charAt(2) !== ' ') {
-            throw new Error('Unable to compute workspace snapshot cache fingerprint: malformed git porcelain record.');
-        }
-        const xStatus = record.charAt(0);
-        const yStatus = record.charAt(1);
-        const currentPath = normalizeGitRepoRelativePath(record.slice(3));
+    for (const entry of parsePorcelainV1Z(String(result.stdout || ''))) {
+        const xStatus = entry.indexStatus;
+        const yStatus = entry.worktreeStatus;
+        const currentPath = normalizeGitRepoRelativePath(entry.path);
         if (!currentPath) {
             throw new Error('Unable to compute workspace snapshot cache fingerprint: git porcelain path is invalid.');
         }
         const renameOrCopy = /[RC]/u.test(xStatus) || /[RC]/u.test(yStatus);
         const previousPath = renameOrCopy
-            ? normalizeGitRepoRelativePath(String(fields[index++] || ''))
+            ? normalizeGitRepoRelativePath(entry.previousPath || '')
             : null;
         if (renameOrCopy && !previousPath) {
             throw new Error('Unable to compute workspace snapshot cache fingerprint: git porcelain rename source is invalid.');
@@ -935,7 +934,9 @@ function readGitFingerprintStatusEntries(
             statusCode: `${xStatus}${yStatus}`,
             path: currentPath,
             previousPath,
-            untracked: xStatus === '?' && yStatus === '?'
+            untracked: xStatus === '?' && yStatus === '?',
+            requiresNulPathFingerprint: requiresNulPathFingerprint(entry.path)
+                || requiresNulPathFingerprint(entry.previousPath)
         });
     }
     return entries;
@@ -1039,6 +1040,7 @@ function formatGitFingerprintProbeFailure(repoRoot: string, args: string[], resu
 }
 
 function readGitCachedRawDiff(repoRoot: string): string {
+    // Keep the legacy raw fingerprint text; path identities come from porcelain -z.
     const args = [
         '-C',
         String(repoRoot),
@@ -1087,7 +1089,9 @@ function buildGitStatusFingerprintHash(
     const stagedOnly = normalizedSource === 'git_staged_only' || normalizedSource === 'git_staged_plus_untracked';
     const repoRealPath = readRepoRealPath(repoRoot);
     const descriptors: string[] = [];
+    const stagedDeletedPaths = new Set<string>();
     let hasStagedChanges = false;
+    let hasNulPathFingerprint = false;
 
     for (const entry of readGitFingerprintStatusEntries(repoRoot, includeUntracked)) {
         if (
@@ -1099,6 +1103,7 @@ function buildGitStatusFingerprintHash(
 
         if (entry.untracked) {
             if (includeUntracked) {
+                hasNulPathFingerprint ||= entry.requiresNulPathFingerprint;
                 descriptors.push(`U|${entry.path}|${buildPathStateToken(repoRoot, entry.path, repoRealPath)}`);
             }
             continue;
@@ -1108,9 +1113,12 @@ function buildGitStatusFingerprintHash(
         const worktreeStatus = entry.statusCode.charAt(1) || ' ';
         if (indexStatus !== ' ' && indexStatus !== '?') {
             hasStagedChanges = true;
+            hasNulPathFingerprint ||= entry.requiresNulPathFingerprint;
             descriptors.push(`S|${indexStatus}|${entry.previousPath || ''}|${entry.path}`);
+            if (entry.statusCode === 'D ') stagedDeletedPaths.add(entry.path);
         }
         if (!stagedOnly && worktreeStatus !== ' ' && worktreeStatus !== '?') {
+            hasNulPathFingerprint ||= entry.requiresNulPathFingerprint;
             descriptors.push(
                 `W|${worktreeStatus}|${entry.previousPath || ''}|${entry.path}|${buildPathStateToken(repoRoot, entry.path, repoRealPath)}`
             );
@@ -1120,11 +1128,13 @@ function buildGitStatusFingerprintHash(
     if (stagedOnly || hasStagedChanges) {
         const cachedRawDiff = readGitCachedRawDiff(repoRoot);
         descriptors.unshift(cachedRawDiff);
-        for (const deletedPath of parseGitCachedRawDiffDeletedPaths(repoRoot, cachedRawDiff)) {
+        for (const deletedPath of [...stagedDeletedPaths].sort()) {
             descriptors.push(`D|${deletedPath}|${buildPathStateToken(repoRoot, deletedPath, repoRealPath)}`);
         }
     }
 
+    // Old authenticated caches can contain miscounted numstat for these paths.
+    if (hasNulPathFingerprint) descriptors.unshift('git-path-output-z-v1');
     return stringSha256(descriptors.join('\n')) || '';
 }
 
@@ -1138,6 +1148,7 @@ function buildExplicitPathFingerprintHash(repoRoot: string, explicitChangedFiles
         `${relativePath}|${buildPathStateToken(repoRoot, relativePath, repoRealPath)}`
     ));
 
+    if (normalizedExplicit.some(requiresNulPathFingerprint)) descriptors.unshift('git-path-output-z-v1');
     return stringSha256(descriptors.join('\n')) || '';
 }
 

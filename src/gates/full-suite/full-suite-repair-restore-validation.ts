@@ -2,10 +2,8 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import { lstatFileIdentitySync } from '../../core/file-stat';
 
-import {
-    runGit,
-    splitNulList
-} from '../../core/git-helpers';
+import { runGit } from '../../core/git-helpers';
+import { parseNumstatZ, splitNulRecords } from '../../core/git-path-output';
 import { isPlainRecord } from '../../core/records';
 import {
     normalizePath
@@ -42,13 +40,13 @@ import {
 
 export function ensureCleanTrackedWorkspace(repoRoot: string): string[] {
     const violations: string[] = [];
-    const unstaged = runGit(repoRoot, ['diff', '--name-only']).trim();
-    const staged = runGit(repoRoot, ['diff', '--name-only', '--cached']).trim();
-    if (unstaged) {
-        violations.push(`unstaged tracked changes exist: ${unstaged.replace(/\r?\n/gu, ', ')}`);
+    const unstaged = splitNulRecords(runGit(repoRoot, ['diff', '--name-only', '-z']));
+    const staged = splitNulRecords(runGit(repoRoot, ['diff', '--name-only', '--cached', '-z']));
+    if (unstaged.length > 0) {
+        violations.push(`unstaged tracked changes exist: ${unstaged.join(', ')}`);
     }
-    if (staged) {
-        violations.push(`staged changes exist: ${staged.replace(/\r?\n/gu, ', ')}`);
+    if (staged.length > 0) {
+        violations.push(`staged changes exist: ${staged.join(', ')}`);
     }
     return violations;
 }
@@ -193,34 +191,21 @@ export function parsePatchNumstatRecords(
     if (result.status !== 0) {
         return { records: [], violations: [gitFailureMessage(args, result)] };
     }
-    const tokens = result.stdout.split('\0');
-    if (tokens.at(-1) === '') {
-        tokens.pop();
-    }
     const records: PatchPathRecord[] = [];
     const violations: string[] = [];
-    for (let index = 0; index < tokens.length;) {
-        const header = tokens[index++];
-        const firstTab = header.indexOf('\t');
-        const secondTab = firstTab >= 0 ? header.indexOf('\t', firstTab + 1) : -1;
-        if (firstTab <= 0 || secondTab <= firstTab + 1) {
-            violations.push(`${label} has malformed git apply --numstat output.`);
-            break;
-        }
-        const additions = header.slice(0, firstTab);
-        const deletions = header.slice(firstTab + 1, secondTab);
-        if (!/^(?:[0-9]+|-)$/u.test(additions) || !/^(?:[0-9]+|-)$/u.test(deletions)) {
-            violations.push(`${label} has invalid numstat counters.`);
-            break;
-        }
-        const inlinePath = header.slice(secondTab + 1);
-        const rawPaths = inlinePath
-            ? [inlinePath]
-            : [tokens[index++] || '', tokens[index++] || ''];
-        if (rawPaths.some((entry) => !entry)) {
-            violations.push(`${label} has incomplete rename/copy path evidence.`);
-            break;
-        }
+    let entries: ReturnType<typeof parseNumstatZ> = [];
+    try {
+        entries = parseNumstatZ(result.stdout);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        violations.push(message.includes('invalid counters')
+            ? `${label} has invalid numstat counters.`
+            : message.includes('incomplete rename/copy')
+                ? `${label} has incomplete rename/copy path evidence.`
+                : `${label} has malformed git apply --numstat output.`);
+    }
+    for (const entry of entries) {
+        const rawPaths = entry.previousPath === null ? [entry.path] : [entry.previousPath, entry.path];
         const normalizedPaths = rawPaths.map(normalizeGitPath);
         normalizedPaths.forEach((entry, pathIndex) => {
             violations.push(...validateManifestRelativePath(
@@ -319,7 +304,7 @@ export function validateDescendantRestoreHead(repoRoot: string, manifest: Repair
         if (descendantPaths.status !== 0) {
             violations.push(gitFailureMessage(descendantPathsArgs, descendantPaths));
         } else {
-            const outOfScopePaths = splitNulList(descendantPaths.stdout)
+            const outOfScopePaths = splitNulRecords(descendantPaths.stdout)
                 .map((entry) => normalizeGitPath(entry))
                 .filter((entry) => !allowedRepairPaths.has(entry));
             if (outOfScopePaths.length > 0) {
@@ -346,7 +331,7 @@ export function validateDescendantRestoreHead(repoRoot: string, manifest: Repair
         const history = runGitStatus(repoRoot, historyArgs);
         if (history.status !== 0) {
             violations.push(gitFailureMessage(historyArgs, history));
-        } else if (splitNulList(history.stdout).length > 0) {
+        } else if (splitNulRecords(history.stdout).length > 0) {
             violations.push(`repair child commit overlaps suspended WIP path: ${trackedPath}`);
         }
     }

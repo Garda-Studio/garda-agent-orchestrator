@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { isTaskQueueDecomposedStatus } from '../../core/active-task-state';
 import { readTaskQueueEntries, type TaskQueueEntry } from '../../core/task-queue-read';
 import { DEFAULT_GIT_TIMEOUT_MS, spawnSyncWithTimeout } from '../../core/subprocess';
+import { parseNumstatZ, splitNulRecords } from '../../core/git-path-output';
 import {
     isPathRealpathInsideRoot,
     normalizePath,
@@ -278,6 +279,7 @@ function getCheckpointChangedFiles(repoRoot: string, range: SplitCheckpointRange
             'diff',
             ...GIT_DIFF_HARDENING_ARGS,
             '--name-only',
+            '-z',
             '--no-renames',
             '--diff-filter=ACDMRTUXB',
             range.base_commit,
@@ -287,8 +289,7 @@ function getCheckpointChangedFiles(repoRoot: string, range: SplitCheckpointRange
         'Split checkpoint validation'
     );
     return [...new Set(
-        output
-            .split(/\r?\n/u)
+        splitNulRecords(output)
             .map((entry) => normalizeCheckpointPath(repoRoot, entry))
             .filter((entry): entry is string => !!entry)
     )].sort();
@@ -339,6 +340,7 @@ function getCheckpointNumstat(
             'diff',
             ...GIT_DIFF_HARDENING_ARGS,
             '--numstat',
+            '-z',
             '--no-renames',
             '--diff-filter=ACDMRTUXB',
             range.base_commit,
@@ -349,17 +351,13 @@ function getCheckpointNumstat(
         'Split checkpoint snapshot'
     );
     const stats: Record<string, { additions: number; deletions: number; changed_lines: number }> = {};
-    for (const row of output.split(/\r?\n/u)) {
-        const parts = row.split('\t');
-        if (parts.length < 3) {
-            continue;
-        }
-        const changedFile = normalizeCheckpointPath(repoRoot, parts.slice(2).join('\t'));
+    for (const entry of parseNumstatZ(output)) {
+        const changedFile = normalizeCheckpointPath(repoRoot, entry.path);
         if (!changedFile || !changedFiles.includes(changedFile)) {
             continue;
         }
-        const additions = /^\d+$/u.test(parts[0] || '') ? Number.parseInt(parts[0], 10) : 0;
-        const deletions = /^\d+$/u.test(parts[1] || '') ? Number.parseInt(parts[1], 10) : 0;
+        const additions = entry.additions ?? 0;
+        const deletions = entry.deletions ?? 0;
         stats[changedFile] = {
             additions,
             deletions,

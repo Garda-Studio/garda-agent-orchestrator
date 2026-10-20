@@ -12,6 +12,7 @@ import { inspectValidationCommand, type ValidationCommandPurpose } from '../../c
 import { countFileLines, stringSha256, normalizePath, joinOrchestratorPath } from '../shared/helpers';
 import { canonicalPathList, pathListSha256 } from '../shared/canonical-path-list';
 import { DEFAULT_GIT_TIMEOUT_MS, spawnSyncWithTimeout } from '../../core/subprocess';
+import { parseNumstatZ, type GitNumstatEntry } from '../../core/git-path-output';
 import {
     readStagedBlobFingerprints,
     type StagedBlobFingerprints
@@ -570,13 +571,13 @@ export function buildScopeContentFingerprint(
 export interface WorkspaceSnapshotGitGeneration {
     readonly repo_root: string;
     readClassification(explicitUntrackedPaths: readonly string[]): GitChangeClassificationResult;
-    readNumstat(useStaged: boolean): readonly string[];
+    readNumstat(useStaged: boolean): readonly GitNumstatEntry[];
     readStagedBlobFingerprints(relativePaths: readonly string[]): StagedBlobFingerprints;
 }
 
 const workspaceSnapshotGitGenerations = new WeakSet<WorkspaceSnapshotGitGeneration>();
 
-function runWorkspaceSnapshotGitLines(repoRoot: string, args: string[], failMsg: string): string[] {
+function runWorkspaceSnapshotGitNumstat(repoRoot: string, args: string[], failMsg: string): GitNumstatEntry[] {
     const result = spawnSyncWithTimeout('git', ['-C', String(repoRoot), ...args], {
         encoding: 'utf8',
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -593,7 +594,7 @@ function runWorkspaceSnapshotGitLines(repoRoot: string, args: string[], failMsg:
         const errText = String(result.stderr || '').trim();
         throw new Error(`${failMsg} git exited with code ${result.status}. ${errText}`);
     }
-    return String(result.stdout || '').split(/\r?\n/).filter((line) => line.trim());
+    return parseNumstatZ(String(result.stdout || ''));
 }
 
 function normalizeGenerationPaths(relativePaths: readonly string[]): string[] {
@@ -608,7 +609,7 @@ export function createWorkspaceSnapshotGitGeneration(repoRoot: string): Workspac
     const resolvedRepoRoot = path.resolve(repoRoot);
     let classificationSnapshot: GitChangeClassificationSnapshot | null = null;
     const classifications = new Map<string, GitChangeClassificationResult>();
-    const numstatByTarget = new Map<boolean, readonly string[]>();
+    const numstatByTarget = new Map<boolean, readonly GitNumstatEntry[]>();
 
     function readClassificationSnapshot(): GitChangeClassificationSnapshot {
         classificationSnapshot ??= collectGitChangeClassificationSnapshot(resolvedRepoRoot, {
@@ -632,20 +633,20 @@ export function createWorkspaceSnapshotGitGeneration(repoRoot: string): Workspac
             classifications.set(key, classification);
             return classification;
         },
-        readNumstat(useStaged: boolean): readonly string[] {
+        readNumstat(useStaged: boolean): readonly GitNumstatEntry[] {
             const cached = numstatByTarget.get(useStaged);
             if (cached) return cached;
             if (readClassificationSnapshot().classification.changes.length === 0) {
-                const empty = Object.freeze([] as string[]);
+                const empty = Object.freeze([] as GitNumstatEntry[]);
                 numstatByTarget.set(useStaged, empty);
                 return empty;
             }
-            const args = ['diff', '--numstat', '--diff-filter=ACDMRTUXB', useStaged ? '--cached' : 'HEAD'];
-            const rows = Object.freeze(runWorkspaceSnapshotGitLines(
+            const args = ['diff', '--numstat', '-z', '--diff-filter=ACDMRTUXB', useStaged ? '--cached' : 'HEAD'];
+            const rows = Object.freeze(runWorkspaceSnapshotGitNumstat(
                 resolvedRepoRoot,
                 args,
                 'Failed to collect changed files snapshot.'
-            ));
+            ).map((entry) => Object.freeze(entry)));
             numstatByTarget.set(useStaged, rows);
             return rows;
         },
@@ -771,29 +772,26 @@ export function getWorkspaceSnapshot(
 
         let additionsTotal = 0, deletionsTotal = 0;
         if (normalizedExplicit.length > 0) {
-            const numstatLines = authenticatedGitGeneration
+            const numstatEntries = authenticatedGitGeneration
                 ? authenticatedGitGeneration.readNumstat(false)
-                : runWorkspaceSnapshotGitLines(
+                : runWorkspaceSnapshotGitNumstat(
                     repoRoot,
-                    ['diff', '--numstat', '--diff-filter=ACDMRTUXB', 'HEAD', '--', ...normalizedExplicit],
+                    ['diff', '--numstat', '-z', '--diff-filter=ACDMRTUXB', 'HEAD', '--', ...normalizedExplicit],
                     'Failed numstat'
                 );
-            for (const line of numstatLines) {
-                const parts = line.split('\t');
-                if (parts.length >= 3) {
-                    const changedPath = normalizePath(extractNewPathFromNumstat(parts.slice(2).join('\t')));
-                    if (!changedPath || isIgnoredWorkspaceSnapshotPath(changedPath)) continue;
-                    if (!normalizedChangedSet.has(changedPath)) continue;
-                    const additions = /^\d+$/.test(parts[0]) ? parseInt(parts[0], 10) : 0;
-                    const deletions = /^\d+$/.test(parts[1]) ? parseInt(parts[1], 10) : 0;
-                    additionsTotal += additions;
-                    deletionsTotal += deletions;
-                    changedFileStats[changedPath] = {
-                        additions,
-                        deletions,
-                        changed_lines: additions + deletions
-                    };
-                }
+            for (const entry of numstatEntries) {
+                const changedPath = normalizePath(entry.path);
+                if (!changedPath || isIgnoredWorkspaceSnapshotPath(changedPath)) continue;
+                if (!normalizedChangedSet.has(changedPath)) continue;
+                const additions = entry.additions ?? 0;
+                const deletions = entry.deletions ?? 0;
+                additionsTotal += additions;
+                deletionsTotal += deletions;
+                changedFileStats[changedPath] = {
+                    additions,
+                    deletions,
+                    changed_lines: additions + deletions
+                };
             }
         }
 
@@ -866,24 +864,21 @@ export function getWorkspaceSnapshot(
         context: `workspace snapshot detection_source=${source}`
     });
 
-    const diffArgs = ['diff', '--numstat', '--diff-filter=ACDMRTUXB'];
+    const diffArgs = ['diff', '--numstat', '-z', '--diff-filter=ACDMRTUXB'];
     diffArgs.push(useStaged ? '--cached' : 'HEAD');
     const numstatOutput = authenticatedGitGeneration
         ? authenticatedGitGeneration.readNumstat(useStaged)
-        : runWorkspaceSnapshotGitLines(repoRoot, diffArgs, 'Failed to collect changed files snapshot.');
+        : runWorkspaceSnapshotGitNumstat(repoRoot, diffArgs, 'Failed to collect changed files snapshot.');
 
     // Extract both file names and line counts from the single numstat call
     const diffFileStats: Record<string, { additions: number; deletions: number; changed_lines: number }> = {};
     let additionsTotal = 0, deletionsTotal = 0;
-    for (const row of numstatOutput) {
-        const parts = row.split('\t');
-        if (parts.length < 3) continue;
-        const filePath = extractNewPathFromNumstat(parts.slice(2).join('\t'));
-        const normalizedFilePath = normalizePath(filePath);
+    for (const entry of numstatOutput) {
+        const normalizedFilePath = normalizePath(entry.path);
         if (!normalizedFilePath || isIgnoredWorkspaceSnapshotPath(normalizedFilePath)) continue;
         if (!normalizedChangedSet.has(normalizedFilePath)) continue;
-        const additions = /^\d+$/.test(parts[0]) ? parseInt(parts[0], 10) : 0;
-        const deletions = /^\d+$/.test(parts[1]) ? parseInt(parts[1], 10) : 0;
+        const additions = entry.additions ?? 0;
+        const deletions = entry.deletions ?? 0;
         additionsTotal += additions;
         deletionsTotal += deletions;
         diffFileStats[normalizedFilePath] = {

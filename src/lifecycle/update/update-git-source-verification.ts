@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSyncWithTimeout, DEFAULT_GIT_TIMEOUT_MS } from '../../core/subprocess';
+import { splitNulRecords } from '../../core/git-path-output';
 import { BUNDLE_SYNC_ITEMS } from '../common';
 import { createLifecycleDiagnosticError } from './update-diagnostics';
 
@@ -86,9 +87,9 @@ function trackedRegularFiles(sourceRoot: string, env: NodeJS.ProcessEnv, sourceR
     const raw = gitText(sourceRoot, env, ['ls-files', '--stage', '-z']);
     if (raw === null) rejectUnverified(sourceReference, 'cannot inspect the Git index');
     const paths = new Set<string>();
-    for (const entry of raw.split('\0')) {
+    for (const entry of splitNulRecords(raw)) {
         if (!entry) continue;
-        const match = /^(100644|100755) [0-9a-f]{40,64} 0\t(.+)$/u.exec(entry);
+        const match = /^(100644|100755) [0-9a-f]{40,64} 0\t([\s\S]+)$/u.exec(entry);
         if (!match) rejectUnverified(sourceReference, 'the Git tree contains a link, submodule, or unresolved index entry');
         paths.add(match[2]);
     }
@@ -135,7 +136,7 @@ export function verifyGitUpdateSource(input: {
             rejectUnverified(sourceReference, 'the checked-out commit differs from the requested ref');
         }
     }
-    const status = gitText(sourceRoot, env, ['status', '--porcelain=v1', '--untracked-files=all']);
+    const status = gitText(sourceRoot, env, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
     if (status === null || status) rejectUnverified(sourceReference, 'the checked-out tree is not clean');
     const tracked = trackedRegularFiles(sourceRoot, env, sourceReference);
     if (!tracked.has('VERSION')) rejectUnverified(sourceReference, 'VERSION is not tracked by the selected commit');

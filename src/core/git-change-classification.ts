@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { TextDecoder } from 'node:util';
 
 import { isGitExitFailure, runGitBinary } from './git-helpers';
+import { parsePorcelainV1Z, splitNulRecords } from './git-path-output';
 import { normalizeLineEndings } from './line-endings';
 import { isPathInsideRoot, isPathRealpathInsideRoot } from './paths';
 import { DEFAULT_GIT_TIMEOUT_MS } from './subprocess';
@@ -269,25 +270,10 @@ function mapChangeKind(status: string): GitChangeKind {
 }
 
 function parsePorcelainStatus(output: Buffer): ParsedPorcelainStatus {
-    const fields = output.toString('utf8').split('\0');
     const staged: ParsedNameStatus[] = [];
     const unstaged: ParsedNameStatus[] = [];
     const untracked: string[] = [];
-    let index = 0;
-    while (index < fields.length) {
-        const record = String(fields[index++] || '');
-        if (!record) {
-            continue;
-        }
-        if (record.length < 4 || record.charAt(2) !== ' ') {
-            throw new Error(`Git porcelain output contains a malformed record: '${record.slice(0, 20)}'.`);
-        }
-        const xStatus = record.charAt(0);
-        const yStatus = record.charAt(1);
-        const filePath = record.slice(3);
-        if (!filePath) {
-            throw new Error(`Git porcelain output omitted the path for status '${xStatus}${yStatus}'.`);
-        }
+    for (const { indexStatus: xStatus, worktreeStatus: yStatus, path: filePath, previousPath } of parsePorcelainV1Z(output)) {
         if (xStatus === '?' && yStatus === '?') {
             untracked.push(filePath);
             continue;
@@ -307,11 +293,6 @@ function parsePorcelainStatus(output: Buffer): ParsedPorcelainStatus {
                 changeKind: 'unmerged'
             });
             continue;
-        }
-        const renameOrCopy = /[RC]/u.test(xStatus) || /[RC]/u.test(yStatus);
-        const previousPath = renameOrCopy ? String(fields[index++] || '') : null;
-        if (renameOrCopy && !previousPath) {
-            throw new Error(`Git porcelain output omitted the source path for status '${xStatus}${yStatus}'.`);
         }
         if (xStatus !== ' ' && xStatus !== '?') {
             staged.push({
@@ -337,7 +318,7 @@ function parseIndexBlobReferences(output: Buffer, wantedPaths: ReadonlySet<strin
     const references = new Map<string, GitBlobReference>();
     const trackedPaths = new Set<string>();
     const stagedBlobFingerprints = new Map<string, string>();
-    for (const record of output.toString('utf8').split('\0')) {
+    for (const record of splitNulRecords(output)) {
         if (!record) continue;
         const tabIndex = record.indexOf('\t');
         if (tabIndex < 0) continue;
@@ -360,7 +341,7 @@ function parseIndexBlobReferences(output: Buffer, wantedPaths: ReadonlySet<strin
 
 function parseHeadBlobReferences(output: Buffer, wantedPaths: ReadonlySet<string>): Map<string, GitBlobReference> {
     const references = new Map<string, GitBlobReference>();
-    for (const record of output.toString('utf8').split('\0')) {
+    for (const record of splitNulRecords(output)) {
         if (!record) continue;
         const tabIndex = record.indexOf('\t');
         if (tabIndex < 0) continue;
