@@ -305,6 +305,46 @@ describe('init materialization stages', () => {
         }
     });
 
+    it('refreshes stale discovery snapshots in preserved live command rules on update', () => {
+        const workspace = createStageWorkspace(repoRoot);
+        try {
+            const options = {
+                targetRoot: workspace.projectRoot,
+                bundleRoot: workspace.bundleRoot,
+                templateRoot: workspace.templateRoot,
+                liveRoot: workspace.liveRoot,
+                templateRuleRoot: path.join(workspace.templateRoot, 'docs', 'agent-rules'),
+                liveRuleRoot: path.join(workspace.liveRoot, 'docs', 'agent-rules'),
+                workflowConfigPath: path.join(workspace.liveRoot, 'config', 'workflow-config.json'),
+                dryRun: false,
+                timestampIso: '2026-07-26T00:00:00.000Z',
+                lang: 'English',
+                brevity: 'concise',
+                discovery: getProjectDiscovery(workspace.projectRoot),
+                preservedCompileGateCommand: null
+            };
+            runInitRuleStage(options);
+            const commandsPath = path.join(workspace.liveRoot, 'docs', 'agent-rules', '40-commands.md');
+            const live = fs.readFileSync(commandsPath, 'utf8').replace(/\n## Project Discovery Snapshot[\s\S]*$/u, '');
+            fs.writeFileSync(commandsPath, [
+                live, '## Project Discovery Snapshot', '- Files considered: 515',
+                '- Detected stacks: Node.js or JavaScript, TypeScript', '',
+                '## Project Discovery Snapshot', '- Files considered: 3', '',
+                '### Manual Validation Evidence Selector', 'Keep this user-visible rule.', ''
+            ].join('\n'), 'utf8');
+
+            runInitRuleStage(options);
+
+            const refreshed = fs.readFileSync(commandsPath, 'utf8');
+            assert.equal(refreshed.match(/^## Project Discovery Snapshot/gmu)?.length, 1);
+            assert.ok(!refreshed.includes('Files considered: 515'));
+            assert.ok(refreshed.includes('### Manual Validation Evidence Selector'));
+            assert.ok(refreshed.includes('Keep this user-visible rule.'));
+        } finally {
+            fs.rmSync(workspace.projectRoot, { recursive: true, force: true });
+        }
+    });
+
     it('materializes rule and project-memory outputs through the rule-stage contract', () => {
         const workspace = createStageWorkspace(repoRoot);
         try {

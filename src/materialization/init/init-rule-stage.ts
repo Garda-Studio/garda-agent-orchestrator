@@ -116,7 +116,9 @@ function materializeRuleFiles(
             throw new Error(`Rule source is empty: ${source.path}`);
         }
 
-        if (source.origin === 'template') {
+        // Discovery snapshots are generated sections; refresh them in preserved live rules too so an
+        // update replaces stale ones (including Garda's own repository snapshot shipped by 1.4.3).
+        if (source.origin === 'template' || /^## Project Discovery Snapshot[ \t]*$/mu.test(content)) {
             content = applyContextDefaults(content, ruleFile, discoveryOverlay);
         }
         if (ruleFile === '80-task-workflow.md' && source.origin !== 'template') {

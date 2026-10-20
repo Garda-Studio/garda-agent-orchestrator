@@ -678,7 +678,12 @@ export async function runIntermediateCommandCommand(
     const commandAdmission = inspectValidationCommand(command, commandPurpose);
     if (!commandAdmission.supported || !commandAdmission.descriptor || !conventionalInvocation && (!nativeScopeBefore.scope_content_sha256
         || !isLiteralIntermediateInvocation(command))) {
-        const message = 'Command is not eligible for auditable intermediate compaction for the selected source.';
+        const message = 'Command is not eligible for auditable intermediate compaction for the selected source. '
+            + (nativeScopeBefore.scope_content_sha256
+                ? 'Use one literal project command without shell operators, redirection or environment assignments.'
+                : 'Add --preflight-path to run the literal project command against the current preflight, '
+                    + 'or use a conventional focused form (for example `mvn -q -Dtest=<Class> test`, '
+                    + '`gradle test --tests <Class> --console=plain`, `python -m pytest <file>`, `go test ./<package>`).');
         return {
             exitCode: EXIT_GATE_FAILURE,
             outputLines: formatRejectedLines(message, commandSource, command),

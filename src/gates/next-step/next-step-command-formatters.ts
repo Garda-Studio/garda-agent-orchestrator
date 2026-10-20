@@ -89,19 +89,22 @@ export function toRepoDisplayPath(repoRoot: string, filePath: string): string {
  * navigator never leaves the agent at a dead end. Kept to one line to save tokens.
  */
 export function buildNextStepInstruction(
-    result: Pick<NextStepResult, 'status' | 'next_gate' | 'task_id' | 'navigator_command' | 'commands'>
+    result: Pick<NextStepResult, 'status' | 'next_gate' | 'task_id' | 'navigator_command' | 'commands'> & { reason?: string }
 ): string | null {
     if (result.status === 'DONE' || result.commands.length > 0) return null;
     const rerun = 'then rerun the Navigator.';
     const cliPrefix = result.navigator_command.split(' next-step ')[0] || 'garda';
+    const preflightPath = `garda-agent-orchestrator/runtime/reviews/${result.task_id}-preflight.json`;
     switch (result.next_gate) {
-        case 'quality-checklist':
-            return `fill "status" and "answer" for every active rule in the answers file named in Reason, ${rerun}`;
+        case 'quality-checklist': {
+            // Name the file here: a long Reason can push the path out of view.
+            const answersPath = /answer in "?([^\s"]+\.json)"?/u.exec(result.reason || '')?.[1];
+            return `fill "status" and "answer" for every active rule in ${answersPath ? answersPath : 'the answers file named in Reason'}, ${rerun}`;
+        }
         case 'run-intermediate-command':
             return `${cliPrefix} gate run-intermediate-command --task-id ${quoteCommandValue(result.task_id)} `
-                + '--command-source targeted-test --command "<project focused test command>" --repo-root "." '
-                + `(add --selected-case '{"source":"<test file>","case_id":"<test name>","selector":"<selector>"}' `
-                + `when the command selects tests by name, class, package or project), ${rerun}`;
+                + `--command-source targeted-test --command "<project focused test command>" --preflight-path "${preflightPath}" --repo-root "." `
+                + `(name/class selectors: add --selected-case '{"source":"<test file>","case_id":"<test>","selector":"<selector>"}'), ${rerun}`;
         case 'project-validation-evidence':
             return `fix what Reason names, rerun the project check with \`gate run-intermediate-command\`, ${rerun}`;
         case 'await-project-validation':

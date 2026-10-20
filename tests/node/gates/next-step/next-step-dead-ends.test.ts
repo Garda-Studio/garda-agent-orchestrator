@@ -47,3 +47,13 @@ test('operator block prints Next instead of a no-command dead end', () => {
     assert.ok(lines.some(line => line.startsWith('  Next: fill "status" and "answer"')));
     assert.ok(!lines.some(line => /no executable command is available/u.test(line)));
 });
+
+test('Next names the checklist answers file and binds focused checks to the current preflight', () => {
+    const checklist = buildNextStepInstruction({
+        ...base, status: 'BLOCKED', next_gate: 'quality-checklist',
+        reason: 'Rules a, b, c pending. Complete every active answer in "garda-agent-orchestrator/runtime/tmp/T-9-quality-checklist-answers.json" and rerun next-step.'
+    })!;
+    assert.match(checklist, /in garda-agent-orchestrator\/runtime\/tmp\/T-9-quality-checklist-answers\.json,/u);
+    const focused = buildNextStepInstruction({ ...base, status: 'BLOCKED', next_gate: 'run-intermediate-command' })!;
+    assert.match(focused, /--preflight-path "garda-agent-orchestrator\/runtime\/reviews\/T-9-preflight\.json"/u);
+});

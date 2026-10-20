@@ -22,12 +22,12 @@
 - Name a missing toolchain and the next operator action in compile and command failures and in `next-step`, instead of only asking for a retry.
 - Print the provider environment reference in POSIX form when Garda runs under Git Bash, MSYS2 or Cygwin on Windows.
 - Ship a baseline `test-review` skill so the test review lane is available by default on every stack; declared validation no longer stalls on a disabled test lane in fresh installs. Updates leave review capabilities and stack-neutral path defaults unchanged while a task is active and print the `garda init` command that applies them later.
-- Remove every stale project-discovery snapshot left by earlier releases, including Garda's own repository snapshot, while preserving the rule subsections that follow it.
+- Remove every stale project-discovery snapshot left by earlier releases, including Garda's own repository snapshot, while preserving the rule subsections that follow it; updates and `garda init` also refresh the snapshot in preserved live rule files.
 - Keep generated command rules, provider bridges and start-task guidance free of Node/npm defaults and Garda-internal build commands; document `--selected-case` for runners that select tests by name, class, package or project.
 - Suggest `dotnet build`/`dotnet test` for `.slnx` solutions and recognize `.vbproj` projects.
 - Refuse to rewrite a file whose managed-block markers are orphaned, nested or reversed instead of deleting the user text between them, and collapse duplicate complete managed blocks into one; keep literal `$&`, `` $` ``, `$'` and `$1` text in generated replacements.
 - Keep every TASK.md queue row when an editor leaves whitespace after the closing pipe (previously the whole queue could read as empty); report malformed rows and duplicate task IDs with line numbers, and refuse status changes or row removal while they are ambiguous.
-- `next-step` never ends at a dead end: every blocked step without an executable command prints a one-line `Next:` instruction (for example an editable `run-intermediate-command` with the `--selected-case` shape, or the checklist answers to fill).
+- `next-step` never ends at a dead end: every blocked step without an executable command prints a one-line `Next:` instruction (for example an editable `run-intermediate-command` bound to the current preflight through `--preflight-path` with the `--selected-case` shape, or the exact checklist answers file to fill). A rejected focused command now says how to run the literal project command instead of only refusing it.
 - Show the full reason when `next-step` has no executable command and drop the contradictory "no executable command" reference when one is printed; name the missing review skill and enable command when declared validation needs an unavailable lane.
 
 ### Additional fixes and hardening
