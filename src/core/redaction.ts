@@ -282,7 +282,16 @@ export function redactSensitiveData(value: unknown, keyHint?: string): unknown {
                     ? [...lines]
                     : lines.map(() => '<redacted>');
             }
-            return splitRedactedTextLines(redactSecretText(value.join('\n')));
+            const joinedRedacted = redactSecretText(value.join('\n'));
+            if (value.some((entry) => /[\r\n]/u.test(entry))) {
+                // Elements are multiline values, not output lines: redact them in place unless a
+                // secret spans elements, which only the joined redaction can mask.
+                const inPlace = (value as string[]).map((entry) => redactSecretText(entry));
+                if (inPlace.join('\n') === joinedRedacted) {
+                    return inPlace;
+                }
+            }
+            return splitRedactedTextLines(joinedRedacted);
         }
         return value.map((entry) => redactSensitiveData(entry));
     }
@@ -343,9 +352,9 @@ export function redactDiagnosticText(text: string, repoRoot?: string): string {
     if (homedir) {
         const forwardSlash = homedir.replace(/\\/g, '/');
         const backSlash = homedir.replace(/\//g, '\\');
-        result = replaceAll(result, forwardSlash, '<home>');
+        result = replaceAllAtPathBoundary(result, forwardSlash, '<home>');
         if (backSlash !== forwardSlash) {
-            result = replaceAll(result, backSlash, '<home>');
+            result = replaceAllAtPathBoundary(result, backSlash, '<home>');
         }
     }
 
@@ -404,6 +413,16 @@ function replaceAll(source: string, search: string, replacement: string): string
     // Case-insensitive replacement for path segments that may differ in casing.
     const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return source.replace(new RegExp(escaped, 'gi'), replacement);
+}
+
+// Like replaceAll, but skips matches that continue a path segment (`/home/dev` must not
+// rewrite `/home/dev2/...`).
+function replaceAllAtPathBoundary(source: string, search: string, replacement: string): string {
+    if (!search) {
+        return source;
+    }
+    const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return source.replace(new RegExp(`${escaped}(?![\\p{L}\\p{N}_-])`, 'giu'), () => replacement);
 }
 
 // For testing: reset cached values (not exported at module level).

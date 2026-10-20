@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import * as os from 'node:os';
+import * as path from 'node:path';
 
 import {
     redactHostname,
@@ -439,4 +440,22 @@ test('redactHostname token matches what redactDiagnosticText produces', () => {
 test('redactPath case-insensitive match on Windows-style paths', () => {
     const result = redactPath('C:/Users/Dev/REPO/src/file.ts', 'c:/users/dev/repo');
     assert.equal(result, 'src/file.ts');
+});
+
+test('redactDiagnosticText replaces the home prefix only at a path boundary', () => {
+    _resetCachedValues();
+    const home = os.homedir();
+    const sibling = `${home}2${path.sep}a.txt`;
+    const inside = `${home}${path.sep}a.txt`;
+    const result = redactDiagnosticText(`see ${sibling} and ${inside} and "${home}"`);
+    assert.ok(!result.includes('<home>2'), result);
+    assert.ok(result.includes(`<home>${path.sep}a.txt`), result);
+    assert.ok(result.includes('"<home>"'), result);
+});
+
+test('redactSensitiveData keeps multiline string array elements in place', () => {
+    const result = redactSensitiveData({ secrets: ['line1\napi_key=sk-abcdef123456', 'ok'] }) as { secrets: string[] };
+    assert.equal(result.secrets.length, 2);
+    assert.equal(result.secrets[0], 'line1\napi_key=<redacted>');
+    assert.equal(result.secrets[1], 'ok');
 });
