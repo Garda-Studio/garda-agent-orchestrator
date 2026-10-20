@@ -46,7 +46,8 @@ function runGitDiffWithTargetArgs(
     pathspecs: string[],
     commandLabel: string
 ): string {
-    const gitArgs = ['-C', String(gitRoot), 'diff', ...GIT_DIFF_HARDENING_ARGS, ...targetArgs];
+    // core.quotePath=false keeps non-ASCII paths readable in the reviewer patch headers.
+    const gitArgs = ['-C', String(gitRoot), '-c', 'core.quotePath=false', 'diff', ...GIT_DIFF_HARDENING_ARGS, ...targetArgs];
     if (pathspecs.length > 0) {
         gitArgs.push('--', ...pathspecs);
     }

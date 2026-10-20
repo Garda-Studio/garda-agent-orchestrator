@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { describe, it, type TestContext } from 'node:test';
 
 import { getWorkspaceSnapshot } from '../../../src/gates/compile/compile-gate';
+import { runGitDiff } from '../../../src/gates/preflight/build-scoped-diff';
 import { buildGitDiffSummary } from '../../../src/gates/review-context/review-context-diff';
 import { buildReviewTreeState } from '../../../src/gates/review/review-tree-state';
 import { initGitRepo, runGitFixtureCommand } from './git-fixtures';
@@ -86,5 +87,22 @@ describe('Git paths with core.quotePath=true', () => {
         assert.match(summary.diff || '', /\+modified-tracked-content/u);
         assert.equal((summary.diff || '').match(/^diff --git /gmu)?.length, 1);
         assert.doesNotMatch(summary.diff || '', /new file mode/u);
+    });
+
+    it('prints real Cyrillic paths in reviewer diff headers and stats', (context) => {
+        const fixture = createGitPathFixture(context);
+        fixture.writeFile('тест.txt', 'modified-tracked-content\n');
+        const summary = buildGitDiffSummary(
+            fixture.repoRoot, ['тест.txt'], { detection_source: 'git_auto' },
+            path.join(fixture.repoRoot, 'garda-agent-orchestrator/runtime/reviews/T-413-preflight.json')
+        );
+        assert.equal(summary.error, null);
+        assert.match(summary.diff || '', /^diff --git a\/тест\.txt b\/тест\.txt$/mu);
+        assert.match(summary.stat || '', /тест\.txt/u);
+        const scoped = runGitDiff(fixture.repoRoot, false, ['тест.txt']);
+        assert.match(scoped, /^\+\+\+ b\/тест\.txt$/mu);
+        for (const text of [summary.diff || '', summary.stat || '', scoped]) {
+            assert.doesNotMatch(text, /\\[0-7]{3}/u, 'reviewer diff text must not octal-escape paths');
+        }
     });
 });

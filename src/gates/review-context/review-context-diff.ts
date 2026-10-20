@@ -14,7 +14,8 @@ export const REVIEW_CONTEXT_DIFF_MAX_CHARS = 60000;
 export const REVIEW_CONTEXT_NON_CODE_PROMPT_DIFF_MAX_CHARS = 20000;
 const REVIEW_CONTEXT_DIFF_COLLECTION_MAX_CHARS = 160000;
 
-const GIT_NO_COLOR_GLOBAL_ARGS = ['-c', 'color.ui=false'];
+// core.quotePath=false keeps non-ASCII paths readable in reviewer diff headers and stats.
+const GIT_NO_COLOR_GLOBAL_ARGS = ['-c', 'color.ui=false', '-c', 'core.quotePath=false'];
 const GIT_DIFF_HARDENING_ARGS = ['--no-ext-diff', '--no-textconv', '--no-color'];
 
 export interface GitDiffSummary {

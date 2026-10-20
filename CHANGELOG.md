@@ -29,6 +29,8 @@
 - Keep every TASK.md queue row when an editor leaves whitespace after the closing pipe (previously the whole queue could read as empty); report malformed rows and duplicate task IDs with line numbers, and refuse status changes or row removal while they are ambiguous.
 - `next-step` never ends at a dead end: every blocked step without an executable command prints a one-line `Next:` instruction (for example an editable `run-intermediate-command` bound to the current preflight through `--preflight-path` with the `--selected-case` shape, or the exact checklist answers file to fill); when a selected test case lacks a bound execution, `Next:` prints the focused command with that case pre-filled in `--selected-case`. A rejected focused command now says how to run the literal project command instead of only refusing it.
 - Show the full reason when `next-step` has no executable command and drop the contradictory "no executable command" reference when one is printed; name the missing review skill and enable command when declared validation needs an unavailable lane.
+- Handle file names with non-ASCII characters, spaces or quotes everywhere Git paths are read. Changed-line counts, review tree state, untracked review diffs and explicit scopes use NUL-separated Git output and one shared parser. Reviewer diffs and stats show real names (for example Cyrillic) instead of octal escapes.
+- Refresh the local UI report when project memory files or relevant Git state (index flags, Git settings, symbolic-link targets) change. The report is built fresh instead of cached when that state cannot be observed.
 
 ### Additional fixes and hardening
 
