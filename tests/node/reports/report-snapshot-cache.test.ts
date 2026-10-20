@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import * as path from 'node:path';
+import { PROJECT_MEMORY_FILE_DEFINITIONS } from '../../../src/core/project-memory';
 import { buildReportSnapshotFingerprint, type ReportDataContract } from '../../../src/reports/report-data-contract';
 import { startLocalUiServer } from '../../../src/reports/ui';
 import { buildReportSnapshotCacheKey } from '../../../src/reports/report-data/report-snapshot-fingerprint';
@@ -58,6 +60,86 @@ test('complete snapshot keys are stable and change for small runtime trees', () 
     assert.notEqual(deleted, null);
     assert.notEqual(deleted, changed);
     assert.equal(deleted, buildReportSnapshotFingerprint(repoRoot));
+});
+
+test('snapshot keys cover edits, deletions and additions of every displayed project memory file', () => {
+    const repoRoot = makeLocalUiTempRepo();
+    writeLocalUiRepoFixture(repoRoot);
+    const memoryRoot = path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'docs', 'project-memory');
+    for (const { fileName } of PROJECT_MEMORY_FILE_DEFINITIONS) {
+        const filePath = path.join(memoryRoot, fileName);
+        const initial = buildReportSnapshotCacheKey(repoRoot);
+        assert.notEqual(initial, null);
+        fs.writeFileSync(filePath, `# ${fileName}\n\nUpdated project memory with different content and size.\n`);
+        const edited = buildReportSnapshotCacheKey(repoRoot);
+        assert.notEqual(edited, initial, `${fileName}: edit`);
+        assert.equal(buildReportSnapshotCacheKey(repoRoot), edited);
+        fs.unlinkSync(filePath);
+        const deleted = buildReportSnapshotCacheKey(repoRoot);
+        assert.notEqual(deleted, edited, `${fileName}: deletion`);
+        fs.writeFileSync(filePath, `# ${fileName}\n\nRestored memory.\n`);
+        assert.notEqual(buildReportSnapshotCacheKey(repoRoot), deleted, `${fileName}: addition`);
+    }
+});
+
+test('local UI refreshes project memory without restarting its server', async () => {
+    const repoRoot = makeLocalUiTempRepo();
+    writeLocalUiRepoFixture(repoRoot);
+    const compactPath = path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'docs', 'project-memory', 'compact.md');
+    fs.writeFileSync(compactPath, 'old\n');
+    const server = await startLocalUiServer({ repoRoot, port: 0, idleShutdownEnabled: false });
+    try {
+        const initial = await readReport(server.url);
+        const compact = (report: ReportDataContract) => report.project_memory_tab.files.find(
+            (file) => file.path.endsWith('/project-memory/compact.md')
+        );
+        assert.equal(compact(initial)?.size_bytes, 4);
+        assert.deepEqual(await readReport(server.url), initial);
+
+        const updated = '# Current project memory\n\nUpdated contents.\n';
+        fs.writeFileSync(compactPath, updated);
+        const edited = await readReport(server.url);
+        assert.equal(compact(edited)?.size_bytes, Buffer.byteLength(updated));
+        assert.deepEqual(await readReport(server.url), edited);
+
+        fs.unlinkSync(compactPath);
+        assert.equal(compact(await readReport(server.url))?.exists, false);
+        fs.writeFileSync(compactPath, 'restored\n');
+        assert.equal(compact(await readReport(server.url))?.size_bytes, 9);
+    } finally {
+        await cleanupLocalUiTestResources({ repoRoot, server });
+    }
+});
+
+test('snapshot keys follow Git worktree inputs used by quality-checklist freshness', () => {
+    const repoRoot = makeLocalUiTempRepo();
+    writeLocalUiRepoFixture(repoRoot);
+    const git = (args: string[]) => execFileSync('git', ['-C', repoRoot, ...args], {
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
+    });
+    git(['init', '-q']);
+    git(['config', 'user.name', 'Garda Tests']);
+    git(['config', 'user.email', 'tests@example.invalid']);
+    git(['config', 'core.autocrlf', 'false']);
+    const sourcePath = path.join(repoRoot, 'source.ts');
+    fs.writeFileSync(sourcePath, 'export const value = 1;\n');
+    git(['add', '.']);
+    git(['commit', '-qm', 'baseline']);
+    const initial = buildReportSnapshotCacheKey(repoRoot);
+    assert.notEqual(initial, null);
+
+    fs.writeFileSync(sourcePath, 'export const value = 200;\n');
+    const edited = buildReportSnapshotCacheKey(repoRoot);
+    assert.notEqual(edited, initial, 'worktree content used by quality freshness changed');
+    git(['add', '--', 'source.ts']);
+    const staged = buildReportSnapshotCacheKey(repoRoot);
+    assert.notEqual(staged, edited, 'quality freshness distinguishes staged and unstaged scope');
+    const untrackedPath = path.join(repoRoot, 'new-source.ts');
+    fs.writeFileSync(untrackedPath, 'export const added = true;\n');
+    const added = buildReportSnapshotCacheKey(repoRoot);
+    assert.notEqual(added, staged, 'untracked worktree scope changed');
+    fs.unlinkSync(untrackedPath);
+    assert.equal(buildReportSnapshotCacheKey(repoRoot), staged);
 });
 
 test('the exact scan limit remains cacheable until another entry is added', () => {
