@@ -57,3 +57,14 @@ test('Next names the checklist answers file and binds focused checks to the curr
     const focused = buildNextStepInstruction({ ...base, status: 'BLOCKED', next_gate: 'run-intermediate-command' })!;
     assert.match(focused, /--preflight-path "garda-agent-orchestrator\/runtime\/reviews\/T-9-preflight\.json"/u);
 });
+
+test('Next reruns an unbound selected case with that case pre-filled', () => {
+    const instruction = buildNextStepInstruction({
+        ...base, status: 'BLOCKED', next_gate: 'project-validation-evidence',
+        reason: 'Native case execution is unavailable: The latest matching command for src/test/java/example/InvoiceTest.java / discountRejectsInvalidInput is not an authenticated successful execution.'
+    })!;
+    assert.match(instruction, /gate run-intermediate-command --task-id "T-9"/u);
+    assert.match(instruction, /--selected-case '\{"source":"src\/test\/java\/example\/InvoiceTest\.java","case_id":"discountRejectsInvalidInput","selector":"<selector>"\}'/u);
+    // A ready command carries real paths, so it gets more room than a text instruction.
+    assert.ok(instruction.length <= 500);
+});
