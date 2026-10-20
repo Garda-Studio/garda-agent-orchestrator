@@ -146,6 +146,11 @@ export function syncTaskQueueStatusDetailed(repoRoot: string, taskId: string, ne
             const newline = originalContent.includes('\r\n') ? '\r\n' : '\n';
             const lines = originalContent.split(/\r?\n/);
             const queueRows = readTaskQueueStatusRows(originalContent);
+            const targetRows = queueRows.filter((row) => row.taskId === taskId);
+            if (targetRows.length > 1) {
+                throw new Error(`TASK.md has ${targetRows.length} rows for ${taskId} (lines `
+                    + `${targetRows.map((row) => row.lineIndex + 1).join(', ')}); remove the duplicate before changing its status.`);
+            }
             let changed = false;
             let taskFound = false;
             let previousStatus: string | null = null;

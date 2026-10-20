@@ -8,6 +8,7 @@ import { writeFileAtomically } from '../../../../core/filesystem';
 import { writeTaskQueueFile } from '../../../../core/task-queue/task-queue-repository';
 import { readTaskQueueStatusToken } from '../../../../core/active-task-state';
 import {
+    assertCanonicalActiveTaskQueueIntegrity,
     formatActiveTaskQueueTable,
     parseCanonicalActiveTaskQueue,
     replaceTaskMdTableCell,
@@ -215,6 +216,7 @@ function rollbackPendingReviewFollowUpRows(
             if (!parsed.found) {
                 throw new Error(parsed.unavailableReason || 'Canonical TASK.md queue is unavailable.');
             }
+            assertCanonicalActiveTaskQueueIntegrity(parsed);
             const expected = new Set(expectedTaskIds);
             const removableRows = parsed.rows.filter((row) => (
                 expected.has(row.taskId)

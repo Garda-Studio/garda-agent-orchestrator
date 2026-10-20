@@ -8,6 +8,7 @@ import {
 } from '../../../src/core/active-task-state';
 import {
     formatActiveTaskQueueTable,
+    assertCanonicalActiveTaskQueueIntegrity,
     parseCanonicalActiveTaskQueue,
     parseTaskMdTableRow,
     replaceTaskMdTableCell
@@ -182,4 +183,26 @@ test('buildTaskQueueStatusContract blocks agent-authored lifecycle status edits 
     assert.equal(contract.agent_may_edit_non_status_task_content, true);
     assert.equal(contract.operator_reset_command, 'gate task-reset --task-id "T-323" --reopen --dry-run --repo-root "."');
     assert.match(contract.reason, /instead of manually editing TASK\.md status cells/);
+});
+
+const T200_HEAD = '## Active Queue\n\n| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |\n|---|---|---|---|---|---|---|---|---|\n';
+const t200Row = (id: string, status: string) => `| ${id} | ${status} | P2 | a | t | o | 2026-01-01 | balanced | n |`;
+
+test('trailing whitespace after the closing pipe keeps every queue row (T-200)', () => {
+    const content = T200_HEAD + t200Row('T-1', 'TODO') + '   \n' + t200Row('T-2', 'TODO') + '\t\n';
+    const queue = parseCanonicalActiveTaskQueue(content);
+    assert.deepEqual(queue.rows.map(row => row.taskId), ['T-1', 'T-2']);
+    assert.equal(queue.rows[0].rawLine, t200Row('T-1', 'TODO') + '   ');
+    assert.deepEqual(queue.diagnostics, []);
+    assert.equal(parseTaskMdTableRow('| a | b |  ').length, 2);
+    assert.equal(parseTaskMdTableRow('| a | b | tail').length, 3);
+});
+
+test('duplicate IDs and malformed rows are reported with line numbers instead of silently disappearing (T-200)', () => {
+    const content = T200_HEAD + t200Row('T-1', 'TODO') + '\n| T-2 | TODO | P2 |\n' + t200Row('T-1', 'DONE') + '\n';
+    const queue = parseCanonicalActiveTaskQueue(content);
+    assert.deepEqual(queue.rows.map(row => `${row.taskId}:${row.status}`), ['T-1:TODO', 'T-1:DONE']);
+    assert.deepEqual(queue.diagnostics?.map(item => `${item.kind}@${item.lineIndex + 1}`), ['malformed_row@6', 'duplicate_id@7']);
+    assert.throws(() => assertCanonicalActiveTaskQueueIntegrity(queue), /line 6 has 3 cells[\s\S]*line 7 repeats task ID T-1 from line 5/u);
+    assert.doesNotThrow(() => assertCanonicalActiveTaskQueueIntegrity(parseCanonicalActiveTaskQueue(T200_HEAD + t200Row('T-3', 'TODO'))));
 });

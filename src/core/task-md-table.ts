@@ -31,10 +31,19 @@ export interface CanonicalActiveTaskQueueRow {
     notes: string;
 }
 
+export interface CanonicalActiveTaskQueueDiagnostic {
+    kind: 'malformed_row' | 'duplicate_id';
+    lineIndex: number;
+    taskId: string | null;
+    message: string;
+}
+
 export interface CanonicalActiveTaskQueueParseResult {
     found: boolean;
     rows: CanonicalActiveTaskQueueRow[];
     unavailableReason: string | null;
+    /** Rows that could not be read and duplicate IDs; authoritative consumers must refuse to act on them. */
+    diagnostics?: CanonicalActiveTaskQueueDiagnostic[];
 }
 
 function isEscapedPipe(row: string, index: number): boolean {
@@ -72,7 +81,8 @@ export function parseTaskMdTableRow(row: string): TaskMdTableCell[] {
     }
 
     const lastDelimiter = delimiterIndexes[delimiterIndexes.length - 1];
-    if (lastDelimiter < row.length - 1) {
+    // Whitespace after the closing pipe (editor or copy-paste artifact) is not an extra cell.
+    if (lastDelimiter < row.length - 1 && row.slice(lastDelimiter + 1).trim() !== '') {
         const start = lastDelimiter + 1;
         const raw = row.slice(start);
         cells.push({
@@ -209,14 +219,30 @@ export function parseCanonicalActiveTaskQueue(content: string): CanonicalActiveT
     }
 
     const rows: CanonicalActiveTaskQueueRow[] = [];
+    const diagnostics: CanonicalActiveTaskQueueDiagnostic[] = [];
+    const seenIds = new Map<string, number>();
     for (let index = range.rowsStartIndex; index < range.rowsEndIndex; index += 1) {
         const rawLine = lines[index];
         const cells = parseTaskMdTableRow(rawLine);
         if (cells.length !== CANONICAL_ACTIVE_QUEUE_COLUMN_COUNT) {
+            diagnostics.push({
+                kind: 'malformed_row', lineIndex: index, taskId: cells[0]?.trimmed || null,
+                message: `TASK.md line ${index + 1} has ${cells.length} cells instead of ${CANONICAL_ACTIVE_QUEUE_COLUMN_COUNT}.`
+            });
             continue;
         }
         if (cells[0].trimmed.toLowerCase() === 'id' || cellsMatchCanonicalSeparator(cells)) {
             continue;
+        }
+        const idKey = cells[0].trimmed.toLowerCase();
+        const firstLine = seenIds.get(idKey);
+        if (firstLine !== undefined) {
+            diagnostics.push({
+                kind: 'duplicate_id', lineIndex: index, taskId: cells[0].trimmed,
+                message: `TASK.md line ${index + 1} repeats task ID ${cells[0].trimmed} from line ${firstLine + 1}.`
+            });
+        } else {
+            seenIds.set(idKey, index);
         }
         rows.push({
             lineIndex: index,
@@ -237,8 +263,17 @@ export function parseCanonicalActiveTaskQueue(content: string): CanonicalActiveT
     return {
         found: true,
         rows,
-        unavailableReason: null
+        unavailableReason: null,
+        diagnostics
     };
+}
+
+/** Throws with every line-numbered diagnostic so destructive or authoritative consumers never guess. */
+export function assertCanonicalActiveTaskQueueIntegrity(queue: CanonicalActiveTaskQueueParseResult): void {
+    if (queue.diagnostics && queue.diagnostics.length > 0) {
+        throw new Error(`TASK.md queue is ambiguous: ${queue.diagnostics.map(item => item.message).join(' ')} `
+            + 'Fix or remove these rows, then retry.');
+    }
 }
 
 function formatTaskMdTableRowValues(values: readonly string[], widths: readonly number[]): string {
