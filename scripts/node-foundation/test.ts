@@ -84,6 +84,8 @@ const NODE_FOUNDATION_SERIAL_TEST_PATHS = new Set<string>([
     'tests/node/gate-runtime/task-timeline-performance-acceptance.test.ts',
     'tests/node/gate-runtime/windows-file-identity.test.ts',
     'tests/node/gates/next-step/next-step-review-failure-routing.test.ts',
+    // Parallel shard contention can push these Git-heavy transactions past their 30 s budget.
+    'tests/node/reports/local-ui-workflow-setting-transaction.test.ts',
     'tests/node/reports/local-ui-server-network.test.ts'
 ]);
 
