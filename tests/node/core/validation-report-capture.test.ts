@@ -4,7 +4,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { captureValidationReportFiles, prepareValidationReportCapture } from '../../../src/core/validation-report-capture';
+import { assertFreshValidationReport, captureValidationReportFiles, prepareValidationReportCapture } from '../../../src/core/validation-report-capture';
+import type { ValidationFileObservation } from '../../../src/core/project-validation-identity';
 import { parseValidationReportFiles, MAX_VALIDATION_REPORT_BYTES } from '../../../src/core/validation-report-contract';
 import { readRetainedValidationReports } from '../../../src/core/validation-report-evidence';
 import { validationDigest } from '../../../src/core/project-validation-identity';
@@ -87,7 +88,7 @@ test('declared report capture retains fresh bytes from a real child and is singl
         assert.equal(Buffer.from(captured.reports[0].content_base64, 'base64').toString('utf8'), CONTENT);
         assert.throws(() => captureValidationReportFiles(f.root, start), /native start observation/);
         const again = f.prepare();
-        f.write();
+        f.write('atomic');
         assert.deepEqual(captureValidationReportFiles(f.root, again).violations, [], 'identical results must be freshly observable');
     } finally { f.clean(); }
 });
@@ -173,4 +174,24 @@ test('report declarations reject traversal, ambiguity, source overwrite and unbo
         assert.throws(() => parseValidationReportFiles([{path: REPORT, max_bytes: 0}]), /positive/);
         assert.throws(() => parseValidationReportFiles([{path: REPORT, max_bytes: 4, trusted: true}]), /unsupported/);
     } finally { f.clean(); }
+});
+
+function reportObservation(identity: string, hash: string, modified: string, created = '1'): ValidationFileObservation {
+    return { identity: { path: REPORT, identity, sha256: hash.repeat(64), size: 1 },
+        modified_ns: modified, changed_ns: modified, created_ns: created };
+}
+
+test('T-404 accepts a rewritten pre-existing report with retained creation time and new identity', () => {
+    const before = reportObservation('1:10:1', 'a', '2');
+    const rewritten = reportObservation('1:11:1', 'b', '11');
+    assert.doesNotThrow(() => assertFreshValidationReport(rewritten, before, 10n, '1970-01-01T00:00:00.001Z'));
+    assert.throws(() => assertFreshValidationReport(rewritten, null, 10n, '1970-01-01T00:00:00.001Z'), /foreign|freshly written/);
+});
+
+test('T-404 refuses a merely touched old report and names the directory to clear', () => {
+    const before = reportObservation('1:10:1', 'a', '2');
+    assert.throws(() => assertFreshValidationReport(reportObservation('1:10:1', 'a', '11'), before, 10n,
+        '1970-01-01T00:00:00.001Z'), /[Cc]lear.*reports/);
+    assert.doesNotThrow(() => assertFreshValidationReport(reportObservation('1:10:1', 'b', '11'), before, 10n,
+        '1970-01-01T00:00:00.001Z'));
 });

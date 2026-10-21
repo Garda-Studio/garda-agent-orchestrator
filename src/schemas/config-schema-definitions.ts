@@ -225,6 +225,7 @@ export const pathsSchema: Record<string, unknown> = Object.freeze({
     type: 'object',
     properties: {
         metrics_path:                { type: 'string', minLength: 1, description: 'Relative path for runtime metrics.' },
+        untracked_build_output_regexes: { type: 'array', items: { type: 'string', minLength: 1 }, description: 'Regexes excluding only untracked build output from task scope; an empty array disables these exclusions.' },
         ordinary_doc_paths:          { type: 'array', items: { type: 'string', minLength: 1 }, description: 'Relative file paths or globs for ordinary documents that may skip code/test review while still remaining auditable.' },
         runtime_roots:               { type: 'array', items: { type: 'string', minLength: 1 }, description: 'Root directories for runtime code.' },
         fast_path_roots:             { type: 'array', items: { type: 'string', minLength: 1 }, description: 'Root directories eligible for fast path.' },

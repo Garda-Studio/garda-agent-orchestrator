@@ -1,3 +1,4 @@
+import { filterUntrackedBuildOutputPaths } from '../../core/build-output-paths';
 import * as childProcess from 'node:child_process';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import * as fs from 'node:fs';
@@ -173,7 +174,7 @@ function captureCurrentWorkspaceChangedFiles(repoRoot: string): { changedFiles: 
     return {
         changedFiles: [...new Set([
             ...trackedChangedFiles,
-            ...untrackedChangedFiles
+            ...filterUntrackedBuildOutputPaths(repoRoot, untrackedChangedFiles)
         ])].sort(),
         reliable: true
     };

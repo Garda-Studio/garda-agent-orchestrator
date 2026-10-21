@@ -1,3 +1,4 @@
+import { filterBuildOutputScopePaths, filterUntrackedBuildOutputPaths } from '../../core/build-output-paths';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { splitNulRecords } from '../../core/git-path-output';
@@ -188,7 +189,7 @@ function listUntrackedFiles(gitRoot: string, pathspecs: string[]): string[] {
     if (pathspecs.length > 0) {
         args.push('--', ...pathspecs);
     }
-    return splitNulRecords(runGitText(gitRoot, args))
+    return filterUntrackedBuildOutputPaths(gitRoot, splitNulRecords(runGitText(gitRoot, args)))
         .map((entry) => normalizePath(entry))
         .filter((entry) => entry.length > 0);
 }
@@ -343,7 +344,6 @@ export function buildScopedDiff(options: BuildScopedDiffOptions) {
     const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8'));
     const detectionSource = getDetectionSource(preflight);
     const requestedSplitCheckpointRange = parseSplitCheckpointDetectionSource(detectionSource);
-    const changedFiles = readReviewContextChangedFiles(preflight.changed_files);
     const splitCheckpointScope = requestedSplitCheckpointRange
         ? resolveAuthenticatedSplitCheckpointPreflightScope(
             repoRoot,
@@ -358,6 +358,9 @@ export function buildScopedDiff(options: BuildScopedDiffOptions) {
             checkpoint_commit: splitCheckpointScope.checkpoint_commit
         }
         : null;
+    const changedFiles = splitCheckpointScope
+        ? splitCheckpointScope.changed_files
+        : filterBuildOutputScopePaths(repoRoot, readReviewContextChangedFiles(preflight.changed_files));
     const useStaged = splitCheckpointRange
         ? false
         : options.useStaged === undefined ? usesStagedScope(preflight) : options.useStaged === true;
@@ -418,7 +421,7 @@ export function buildScopedDiff(options: BuildScopedDiffOptions) {
             fallbackToFullDiff = true;
         }
     } else {
-        fallbackToFullDiff = true;
+        fallbackToFullDiff = changedFiles.length > 0;
     }
 
     let outputDiffText = scopedDiffText;

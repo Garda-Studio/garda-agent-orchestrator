@@ -1,3 +1,4 @@
+import { UNTRACKED_BUILD_OUTPUT_CONFIG_KEY, normalizeUntrackedBuildOutputRegexes } from '../core/build-output-paths';
 import {
     cloneUnknownProperties,
     ensurePlainObject,
@@ -55,9 +56,13 @@ export function validatePathsConfig(input: unknown): Record<string, unknown> {
         'test_refactor_changed_lines_threshold',
         'triggers',
         'code_like_regexes',
+        UNTRACKED_BUILD_OUTPUT_CONFIG_KEY,
         ORDINARY_DOC_PATHS_CONFIG_KEY
     ]);
     const normalized = cloneUnknownProperties(raw, knownKeys);
+
+    if (raw[UNTRACKED_BUILD_OUTPUT_CONFIG_KEY] !== undefined)
+        normalized[UNTRACKED_BUILD_OUTPUT_CONFIG_KEY] = normalizeUntrackedBuildOutputRegexes(raw[UNTRACKED_BUILD_OUTPUT_CONFIG_KEY]);
 
     normalized.metrics_path = normalizeNonEmptyString(raw.metrics_path, 'paths.metrics_path');
     normalized.runtime_roots = normalizeStringArray(raw.runtime_roots, 'paths.runtime_roots', { allowScalar: true });

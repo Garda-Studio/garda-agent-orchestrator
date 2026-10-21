@@ -39,6 +39,30 @@ The root manifest `garda.config.json` references the managed config files valida
 node bin/garda.js gate validate-config
 ```
 
+## Untracked build output
+
+`paths.json` may override `untracked_build_output_regexes`, an array of
+case-insensitive regular expressions matched against repository-relative paths.
+Defaults exclude untracked files inside `target/`, `bin/`, `obj/`, `build/`,
+`dist/`, `out/`, `__pycache__/`, `.venv/`, `venv/`, `node_modules/`, `.gradle/`,
+`.pytest_cache/`, `.mypy_cache/` and `coverage/`, and untracked `*.pyc`/`*.pyo`.
+Tracked files inside these directories still count. Other untracked files,
+including `Cargo.lock`, remain in scope. This policy covers task detection,
+scoped diffs and review state; raw WIP and repair capture keep their contents.
+
+An explicit array replaces the defaults; `[]` disables the exclusions.
+Missing fields use the defaults, and materialization adds the missing field
+to legacy configurations while preserving explicitly customized arrays.
+
+Staged validation compares exact bytes unless Git's text/EOL rules convert
+CRLF to LF for that path. Binary and `-text` paths keep exact comparison;
+user clean, smudge and textconv commands are never run by this check.
+
+Declared reports are observed before execution. A pre-existing report must
+be replaced during the run or rewritten with a newer modification time and
+changed content; touching an unchanged report cannot establish fresh evidence.
+Stale-report errors name the report directory to clear before running again.
+
 ## Ordinary documentation paths
 
 `paths.json` may declare `ordinary_doc_paths`, such as `docs/**` or

@@ -1,3 +1,4 @@
+import { normalizeUntrackedBuildOutputRegexes } from '../core/build-output-paths';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -179,6 +180,7 @@ export interface EffectiveReviewPolicy {
 }
 
 export interface PathsConfig {
+    untracked_build_output_regexes?: string[];
     metrics_path: string;
     runtime_roots: string[];
     fast_path_roots: string[];
@@ -902,6 +904,8 @@ export function loadPathsConfig(configPath: string): PathsConfig {
     const data = readJsonFile<Record<string, unknown>>(configPath);
     if (!data) return defaults;
     if (typeof data.metrics_path === 'string') defaults.metrics_path = data.metrics_path;
+    if (data.untracked_build_output_regexes !== undefined)
+        defaults.untracked_build_output_regexes = normalizeUntrackedBuildOutputRegexes(data.untracked_build_output_regexes);
     for (const arrayKey of [
         'runtime_roots', 'fast_path_roots', 'fast_path_allowed_regexes',
         'fast_path_sensitive_regexes', 'sql_or_migration_regexes', 'code_like_regexes'

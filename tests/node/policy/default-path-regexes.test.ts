@@ -102,7 +102,8 @@ test('update migrates only uncustomized legacy managed path patterns', () => {
         }
     };
     const migrated = migrateLegacyManagedPathRegexes(merged, template);
-    assert.deepEqual(migrated.sort(), ['code_like_regexes', 'runtime_roots', 'triggers.dependency']);
+    assert.deepEqual(migrated.sort(), ['code_like_regexes', 'runtime_roots', 'triggers.dependency', 'untracked_build_output_regexes']);
+    assert.deepEqual((merged as Record<string, unknown>).untracked_build_output_regexes, template.untracked_build_output_regexes);
     assert.deepEqual(merged.runtime_roots, DEFAULT_RUNTIME_ROOTS);
     assert.deepEqual(merged.code_like_regexes, DEFAULT_CODE_LIKE_REGEXES);
     assert.deepEqual(merged.triggers.dependency, DEFAULT_DEPENDENCY_TRIGGER_REGEXES);

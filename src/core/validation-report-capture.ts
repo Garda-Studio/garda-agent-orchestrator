@@ -63,13 +63,18 @@ export function assertFreshValidationReport(
 ): void {
     const completed = (BigInt(Date.parse(completedAt)) + 1n) * NANOSECONDS_PER_MILLISECOND;
     const modified = BigInt(observation.modified_ns), changed = BigInt(observation.changed_ns);
+    const clearInstruction = ` Clear the report directory ${JSON.stringify(path.posix.dirname(observation.identity.path))} before the run.`;
     if (modified <= started || modified >= completed || changed <= started || changed >= completed)
-        throw new Error('Declared report was not freshly written within this execution observation.');
+        throw new Error('Declared report was not freshly written within this execution observation.' + clearInstruction);
     if (before?.identity.identity === observation.identity.identity) {
-        if (modified <= BigInt(before.modified_ns) || changed <= BigInt(before.changed_ns))
-            throw new Error('Declared report is stale from an earlier execution.');
+        if (modified <= BigInt(before.modified_ns) || changed <= BigInt(before.changed_ns)
+            || before.identity.sha256 === observation.identity.sha256)
+            throw new Error('Declared report is stale from an earlier execution.' + clearInstruction);
     } else if (BigInt(observation.created_ns) <= started || BigInt(observation.created_ns) >= completed) {
-        throw new Error('Declared report was replaced by a pre-existing foreign file.');
+        // Windows file tunneling can preserve birth time when a builder replaces an existing report.
+        if (!before || before.created_ns !== observation.created_ns
+            || modified <= BigInt(before.modified_ns) || changed <= BigInt(before.changed_ns))
+            throw new Error('Declared report was replaced by a pre-existing foreign file.' + clearInstruction);
     }
 }
 

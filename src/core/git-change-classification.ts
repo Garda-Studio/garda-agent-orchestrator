@@ -1,3 +1,4 @@
+import { filterUntrackedBuildOutputPaths } from './build-output-paths';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { TextDecoder } from 'node:util';
@@ -794,7 +795,8 @@ export function collectGitChangeClassificationSnapshot(
         .map((change) => classifyLayerChange(repoRoot, 'staged', change, snapshots));
     const unstaged = porcelain.unstaged
         .map((change) => classifyLayerChange(repoRoot, 'unstaged', change, snapshots));
-    const untracked = porcelain.untracked.map((filePath) => classifyUntrackedPath(repoRoot, filePath));
+    const untracked = filterUntrackedBuildOutputPaths(repoRoot, porcelain.untracked)
+        .map((filePath) => classifyUntrackedPath(repoRoot, filePath));
     const changes = [...staged, ...unstaged, ...untracked].sort((left, right) =>
         compareOrdinal(left.path, right.path) || LAYER_ORDER[left.layer] - LAYER_ORDER[right.layer]
     );
@@ -813,9 +815,9 @@ export function deriveGitChangeClassification(
     explicitPaths: readonly string[] = []
 ): GitChangeClassificationResult {
     const explicitUntrackedPaths = uniqueSorted(
-        explicitPaths
+        filterUntrackedBuildOutputPaths(repoRoot, explicitPaths
             .map(normalizeGitRepoRelativePath)
-            .filter((filePath): filePath is string => filePath !== null)
+            .filter((filePath): filePath is string => filePath !== null))
     );
     if (explicitUntrackedPaths.length === 0) {
         return snapshot.classification;

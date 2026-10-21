@@ -1,3 +1,4 @@
+import { filterBuildOutputScopePaths, filterUntrackedBuildOutputPaths } from '../../core/build-output-paths';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { DEFAULT_GIT_TIMEOUT_MS, spawnSyncWithTimeout } from '../../core/subprocess';
@@ -266,7 +267,8 @@ function buildUntrackedFileDiff(
             .filter((entry) => !visibleUntrackedFileSet.has(entry))
             .filter((entry) => isReviewableExplicitWorktreeFile(repoRoot, entry, trackedFiles))
         : [];
-    const untrackedFiles = [...new Set([...visibleUntrackedFiles, ...explicitIgnoredFiles])].sort();
+    const untrackedFiles = filterUntrackedBuildOutputPaths(repoRoot,
+        [...new Set([...visibleUntrackedFiles, ...explicitIgnoredFiles])]).sort();
     if (untrackedFiles.length === 0) {
         return { text: null, charCount: 0, truncated: false };
     }
@@ -534,6 +536,19 @@ export function buildGitDiffSummary(
     preflight: Record<string, unknown>,
     preflightPath: string
 ): GitDiffSummary {
+    const detectionSource = String(preflight.detection_source || '').trim().toLowerCase();
+    const requestedSplitCheckpointRange = parseSplitCheckpointDetectionSource(detectionSource);
+    const splitCheckpointScope = requestedSplitCheckpointRange
+        ? resolveAuthenticatedSplitCheckpointPreflightScope(
+            repoRoot,
+            preflight.task_id,
+            detectionSource,
+            changedFiles
+        )
+        : null;
+    changedFiles = splitCheckpointScope
+        ? splitCheckpointScope.changed_files
+        : filterBuildOutputScopePaths(repoRoot, changedFiles);
     const cachePath = resolveSharedScopedDiffSummaryPath(preflightPath);
     if (changedFiles.length === 0) {
         return {
@@ -549,16 +564,6 @@ export function buildGitDiffSummary(
         };
     }
 
-    const detectionSource = String(preflight.detection_source || '').trim().toLowerCase();
-    const requestedSplitCheckpointRange = parseSplitCheckpointDetectionSource(detectionSource);
-    const splitCheckpointScope = requestedSplitCheckpointRange
-        ? resolveAuthenticatedSplitCheckpointPreflightScope(
-            repoRoot,
-            preflight.task_id,
-            detectionSource,
-            changedFiles
-        )
-        : null;
     const splitCheckpointRange = splitCheckpointScope
         ? {
             base_commit: splitCheckpointScope.base_commit,

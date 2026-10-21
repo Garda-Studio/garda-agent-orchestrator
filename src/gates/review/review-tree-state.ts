@@ -1,3 +1,4 @@
+import { filterBuildOutputScopePaths } from '../../core/build-output-paths';
 import { DEFAULT_GIT_TIMEOUT_MS, spawnSyncWithTimeout } from '../../core/subprocess';
 import { parsePorcelainV1Z, splitNulRecords } from '../../core/git-path-output';
 import { getWorkspaceSnapshot } from '../compile/compile-gate';
@@ -195,9 +196,13 @@ export function buildReviewTreeState(options: {
         : undefined;
     const detectionSource = String(options.detectionSource || 'git_auto').trim().toLowerCase() || 'git_auto';
     const useStaged = usesStagedReviewTreeScope(detectionSource);
-    const changedFiles = [...new Set(
+    const normalizedChangedFiles = [...new Set(
         options.changedFiles.map((changedFile) => normalizePath(changedFile)).filter(Boolean)
-    )].sort();
+    )];
+    // A checkpoint contains tracked changes even when deleted endpoints are absent from today's index.
+    const changedFiles = (isSplitCheckpointDetectionSource(detectionSource)
+        ? normalizedChangedFiles
+        : filterBuildOutputScopePaths(options.repoRoot, normalizedChangedFiles)).sort();
     const statusEntries = collectStatusEntries(options.repoRoot, changedFiles);
     const stagedEntries = collectStagedEntries(options.repoRoot, changedFiles);
     const entries = changedFiles.map((changedFile): ReviewTreeStateEntry => {

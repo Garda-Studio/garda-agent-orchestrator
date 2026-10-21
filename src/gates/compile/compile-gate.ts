@@ -1,3 +1,4 @@
+import { filterBuildOutputScopePaths } from '../../core/build-output-paths';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { UNCONFIGURED_COMPILE_GATE_COMMAND } from '../../core/constants';
@@ -731,7 +732,7 @@ export function getWorkspaceSnapshot(
         .filter((item: string) => !isIgnoredWorkspaceSnapshotPath(item))
         .sort();
     const explicitSplit = splitGeneratedRuntimeControlPlaneArtifacts(allNormalizedExplicit, generatedRuntimeSplitOptions);
-    const normalizedExplicit = explicitSplit.reviewableFiles;
+    const normalizedExplicit = filterBuildOutputScopePaths(repoRoot, explicitSplit.reviewableFiles);
     const ignoredGeneratedRuntimeFiles = [
         ...rawExplicitSplit.ignoredGeneratedRuntimeFiles,
         ...explicitSplit.ignoredGeneratedRuntimeFiles

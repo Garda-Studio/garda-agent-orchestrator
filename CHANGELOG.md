@@ -13,6 +13,7 @@
 
 ### Stack neutrality and Windows reliability
 
+- T-404: Ignore configurable untracked build output consistently across task scope and review evidence while retaining tracked files; accept Git's EOL conversion in staged validation without running filters; recognize rewritten pre-existing reports and explain how to clear stale report directories.
 - Make default path classification stack-neutral: recognize test conventions of Go, Python, Ruby, Elixir, Dart, Swift, .NET, Kotlin, C/C++, Perl, PowerShell and Erlang without treating production names such as `Contest.java` as tests; cover dependency manifests and lockfiles of all common ecosystems; apply database, API, performance and refactor triggers to every common source language. Updates replace only uncustomized legacy defaults in `live/config/paths.json`, and defer that migration while any task is active.
 - Recognize Elixir, Swift, Scala, Dart/Flutter and C/C++ projects during discovery without inventing their commands, and admit focused self-validation through `mix`, `swift`, `dart`, `flutter`, `zig`, `lein`, `stack`, `cabal`, `rebar3`, `bundle exec`, `poetry run`, `pipenv run`, `bats`, `prove`, `busted` and `pest`.
 - When the Windows process-tree helper fails, terminate the command tree through System32 `taskkill` within a bounded budget and then the root through its own process handle, so timeouts and cancellation stop the command and its inherited-pipe descendants; allow a cold Windows PowerShell start when resolving trusted ACL principals.

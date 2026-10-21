@@ -1,5 +1,8 @@
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
+import { runGit, runGitBinary } from '../../core/git-helpers';
+import { splitNulRecords } from '../../core/git-path-output';
+import { DEFAULT_GIT_TIMEOUT_MS } from '../../core/subprocess';
 import { readStagedBlobFingerprints } from '../../core/staged-index-fingerprints';
 import { bindContainedDestination, writeContainedFile } from '../../core/contained-filesystem';
 import { readValidationFile, validationDigest } from '../../core/project-validation-identity';
@@ -15,6 +18,8 @@ import type { FrozenValidationRecipe } from '../../core/project-validation-contr
 
 const MAXIMUM_CONTROL_BYTES = 8 * 1024 * 1024;
 const MAXIMUM_EVENTS = 10_000;
+const MAXIMUM_GIT_EOL_PATHSPEC_CHARS = 16_000;
+interface GitEolMetadata { index: string; worktree: string; attributes: string }
 type ValidationEvent = { event_type: string; details?: Record<string, unknown>; integrity?: { task_sequence?: number } };
 export type ValidationEvidenceInspection = 'active' | 'retained_completed';
 
@@ -76,18 +81,89 @@ export function withValidationEvidenceBatch<T>(options: {
     } finally { activeBatches.delete(batch); }
 }
 
+function gitEolPathspecBatches(files: string[]): string[][] {
+    const batches: string[][] = [];
+    let batch: string[] = [], characters = 0;
+    for (const file of files) {
+        const pathspec = `:(literal)${file}`;
+        // Reserve worst-case Windows quoting plus headroom for executable, -C and fixed arguments.
+        const cost = pathspec.length * 2 + 3;
+        if (cost > MAXIMUM_GIT_EOL_PATHSPEC_CHARS) throw new Error('Staged Git EOL path exceeds the argument bound');
+        if (characters + cost > MAXIMUM_GIT_EOL_PATHSPEC_CHARS) {
+            batches.push(batch); batch = []; characters = 0;
+        }
+        batch.push(pathspec); characters += cost;
+    }
+    if (batch.length) batches.push(batch);
+    return batches;
+}
+
+function readGitEolMetadata(repoRoot: string, files: string[]): Map<string, GitEolMetadata> {
+    const metadata = new Map<string, GitEolMetadata>();
+    for (const pathspecs of gitEolPathspecBatches(files)) {
+        const wanted = new Set(pathspecs.map(spec => spec.slice(':(literal)'.length)));
+        // --eol reports Git's text/binary heuristic and resolved attributes without running filters.
+        const records = splitNulRecords(runGitBinary(repoRoot, ['ls-files', '--eol', '-z', '--', ...pathspecs], {
+            timeoutMs: DEFAULT_GIT_TIMEOUT_MS
+        }));
+        for (const record of records) {
+            const eol = /^i\/(\S+)\s+w\/(\S+)\s+attr\/([^\t]*)\t([\s\S]+)$/u.exec(record);
+            if (!eol || !wanted.delete(eol[4]) || metadata.has(eol[4]))
+                throw new Error('Cannot authenticate staged Git EOL metadata');
+            metadata.set(eol[4], { index: eol[1], worktree: eol[2], attributes: eol[3].trim() });
+        }
+        if (wanted.size) throw new Error('Cannot authenticate staged Git EOL metadata');
+    }
+    return metadata;
+}
+
+function gitEolNormalizedBytes(bytes: Buffer, metadata: GitEolMetadata, autocrlf: string): Buffer {
+    const { index: indexEol, worktree: worktreeEol, attributes } = metadata;
+    if (attributes === '-text') return bytes;
+    const automatic = attributes.startsWith('text=auto') || (!attributes && ['true', 'input'].includes(autocrlf));
+    if (!automatic && !/^text(?: eol=(?:lf|crlf))?$/u.test(attributes)) return bytes;
+    if (automatic && (worktreeEol === '-text' || ['crlf', 'mixed'].includes(indexEol))) return bytes;
+    const normalized = Buffer.allocUnsafe(bytes.length);
+    let length = 0;
+    for (let index = 0; index < bytes.length; index++) {
+        if (bytes[index] === 13 && bytes[index + 1] === 10) continue;
+        normalized[length++] = bytes[index];
+    }
+    return normalized.subarray(0, length);
+}
+
+function gitBlobHash(bytes: Buffer, objectId: string): string {
+    return createHash(objectId.length === 40 ? 'sha1' : 'sha256')
+        .update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+}
+
 export function classifiedContentFingerprint(repoRoot: string, source: string, files: string[]): string | null {
     const staged = ['git_staged_only', 'git_staged_plus_untracked'].includes(source)
         ? readStagedBlobFingerprints(repoRoot, files) : undefined;
-    if (staged) for (const [relative, fingerprint] of staged) {
+    if (staged) validateStagedWorktreeBytes(repoRoot, staged);
+    return buildScopeContentFingerprint(repoRoot, source, files, staged);
+}
+
+function validateStagedWorktreeBytes(repoRoot: string, staged: ReadonlyMap<string, string>): void {
+    const mismatched = new Map<string, string>();
+    for (const [relative, fingerprint] of staged) {
         const blob = /^staged:(?:100644|100755):([0-9a-f]{40}|[0-9a-f]{64})$/u.exec(fingerprint)?.[1];
         if (!blob) throw new Error('Validation staged scope must contain ordinary files');
         const { bytes } = readValidationFile(repoRoot, relative);
-        const actual = createHash(blob.length === 40 ? 'sha1' : 'sha256')
-            .update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
-        if (actual !== blob) throw new Error('Validation preflight staged scope differs from executable worktree bytes');
+        if (gitBlobHash(bytes, blob) !== blob) mismatched.set(relative, blob);
     }
-    return buildScopeContentFingerprint(repoRoot, source, files, staged);
+    if (!mismatched.size) return;
+    const metadata = readGitEolMetadata(repoRoot, [...mismatched.keys()]);
+    const autocrlf = [...metadata.values()].some(eol => !eol.attributes)
+        ? runGit(repoRoot, ['config', '--type=bool-or-str', '--get', 'core.autocrlf'], {
+            timeoutMs: DEFAULT_GIT_TIMEOUT_MS, allowFailure: true, allowedFailureExitCodes: [1]
+        }).trim().toLowerCase() : '';
+    for (const [relative, blob] of mismatched) {
+        // Re-read one file at a time rather than retaining the entire scoped worktree in memory.
+        const { bytes } = readValidationFile(repoRoot, relative);
+        if (gitBlobHash(bytes, blob) !== blob && gitBlobHash(gitEolNormalizedBytes(bytes, metadata.get(relative)!, autocrlf), blob) !== blob)
+            throw new Error('Validation preflight staged scope differs from executable worktree bytes');
+    }
 }
 
 export function readValidationEventSnapshot(repoRoot: string, taskId: string,

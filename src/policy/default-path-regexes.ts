@@ -1,3 +1,4 @@
+import { UNTRACKED_BUILD_OUTPUT_CONFIG_KEY } from '../core/build-output-paths';
 /**
  * Stack-neutral default path patterns shared by classification defaults,
  * review-trigger policy and the materialized `live/config/paths.json` template.
@@ -227,6 +228,10 @@ export function migrateLegacyManagedPathRegexes(
     template: Record<string, unknown>
 ): string[] {
     const migrated: string[] = [];
+    if (merged[UNTRACKED_BUILD_OUTPUT_CONFIG_KEY] === undefined && Array.isArray(template[UNTRACKED_BUILD_OUTPUT_CONFIG_KEY])) {
+        merged[UNTRACKED_BUILD_OUTPUT_CONFIG_KEY] = [...template[UNTRACKED_BUILD_OUTPUT_CONFIG_KEY]];
+        migrated.push(UNTRACKED_BUILD_OUTPUT_CONFIG_KEY);
+    }
     for (const [dottedKey, legacyValues] of Object.entries(LEGACY_MANAGED_PATH_REGEX_DEFAULTS)) {
         const current = readPath(merged, dottedKey);
         const templateValue = readPath(template, dottedKey);
