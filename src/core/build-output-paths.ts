@@ -1,4 +1,6 @@
 import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { isRecognizedPackageName } from './constants';
 import { joinOrchestratorPath } from './orchestrator-paths';
 import { runGit } from './git-helpers';
 import { splitNulRecords } from './git-path-output';
@@ -9,6 +11,18 @@ export const DEFAULT_UNTRACKED_BUILD_OUTPUT_REGEXES: readonly string[] = Object.
     '(^|/)(?:target|bin|obj|build|dist|out|__pycache__|\\.venv|venv|node_modules|\\.gradle|\\.pytest_cache|\\.mypy_cache|coverage)/',
     '\\.py[co]$'
 ]);
+
+const SOURCE_CHECKOUT_EXECUTABLE_PREFIX = 'dist/src/';
+
+function isGardaSourceCheckout(repoRoot: string): boolean {
+    try {
+        const value: unknown = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+        return value !== null && typeof value === 'object' && 'name' in value
+            && isRecognizedPackageName(value.name);
+    } catch {
+        return false;
+    }
+}
 
 export function normalizeUntrackedBuildOutputRegexes(value: unknown): string[] {
     if (!Array.isArray(value) || value.some(entry => typeof entry !== 'string' || !entry.length))
@@ -35,7 +49,11 @@ function readBuildOutputMatchers(repoRoot: string): RegExp[] {
 
 export function filterUntrackedBuildOutputPaths(repoRoot: string, untrackedPaths: readonly string[]): string[] {
     const matchers = readBuildOutputMatchers(repoRoot);
-    return untrackedPaths.filter(file => !matchers.some(regex => regex.test(file)));
+    // The source checkout launches dist/src before any other runtime candidate.
+    const retainExecutableRuntime = untrackedPaths.some(file => file.startsWith(SOURCE_CHECKOUT_EXECUTABLE_PREFIX))
+        && isGardaSourceCheckout(repoRoot);
+    return untrackedPaths.filter(file => (retainExecutableRuntime && file.startsWith(SOURCE_CHECKOUT_EXECUTABLE_PREFIX))
+        || !matchers.some(regex => regex.test(file)));
 }
 
 /** Scope lists may include tracked files, including staged deletions; protect both. */

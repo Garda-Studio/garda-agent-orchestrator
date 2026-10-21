@@ -8,7 +8,7 @@ import { getProjectDiscovery } from '../../../src/materialization/project-discov
 
 function withConfigStage(
     name: string, template: Record<string, unknown>, existing: string | null,
-    check: (fixture: { file: string; run: (dryRun?: boolean) => void }) => void
+    check: (fixture: { root: string; file: string; run: (dryRun?: boolean) => void }) => void
 ): void {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-config-identity-'));
     try {
@@ -20,7 +20,7 @@ function withConfigStage(
         fs.writeFileSync(path.join(templateRoot, 'config', name + '.json'), JSON.stringify(template));
         const file = path.join(liveRoot, 'config', name + '.json');
         if (existing !== null) fs.writeFileSync(file, existing);
-        check({ file, run(dryRun = false) {
+        check({ root, file, run(dryRun = false) {
             runInitConfigStage({ targetRoot: root, templateRoot, liveRoot,
                 workflowConfigExistedBeforeRun: false, preserveLegacyWorkflowConfigOmission: false,
                 discovery: getProjectDiscovery(root), preservedCompileGateCommand: null,
@@ -50,6 +50,37 @@ describe('managed configuration byte identity', () => {
                     assert.equal(fs.readFileSync(file, 'utf8'), original);
                     run();
                     assert.equal(fs.readFileSync(file, 'utf8'), original);
+                });
+            });
+        }
+    }
+
+    for (const status of ['IN_PROGRESS', 'IN_REVIEW']) {
+        for (const [format, serialize] of Object.entries(formats)) {
+            it(`T-419 defers new path defaults during ${status} in ${format} format and migrates after completion`, () => {
+                const existing = { runtime_roots: ['units/'], ordinary_doc_paths: ['notes/domain.md'] };
+                const template = { runtime_roots: ['src/'], ordinary_doc_paths: [],
+                    untracked_build_output_regexes: ['(^|/)target/'], metrics_path: 'runtime/metrics.jsonl' };
+                const original = serialize(existing);
+                withConfigStage('paths', template, original, ({ root, file, run }) => {
+                    const writeQueue = (state: string) => fs.writeFileSync(path.join(root, 'TASK.md'), [
+                        '# TASK.md', '', '## Active Tasks', '',
+                        '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+                        '|---|---|---|---|---|---|---|---|---|',
+                        `| T-ACTIVE | ${state} | P1 | app | Active project work | test | 2026-10-21 | balanced | Preserve configuration. |`, ''
+                    ].join('\n'));
+                    writeQueue(status);
+                    run();
+                    assert.equal(fs.readFileSync(file, 'utf8'), original);
+                    run();
+                    assert.equal(fs.readFileSync(file, 'utf8'), original);
+
+                    writeQueue('DONE');
+                    run();
+                    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { ...template, ...existing });
+                    const migrated = fs.readFileSync(file);
+                    run();
+                    assert.deepEqual(fs.readFileSync(file), migrated);
                 });
             });
         }

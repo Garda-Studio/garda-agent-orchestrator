@@ -49,10 +49,15 @@ Defaults exclude untracked files inside `target/`, `bin/`, `obj/`, `build/`,
 Tracked files inside these directories still count. Other untracked files,
 including `Cargo.lock`, remain in scope. This policy covers task detection,
 scoped diffs and review state; raw WIP and repair capture keep their contents.
+In Garda's own source checkout, executable files under `dist/src/` remain in
+scope, including explicitly selected Git-ignored files, because the CLI runs
+that namespace. Other projects and generated directories retain the exclusions.
 
 An explicit array replaces the defaults; `[]` disables the exclusions.
 Missing fields use the defaults, and materialization adds the missing field
 to legacy configurations while preserving explicitly customized arrays.
+Existing `paths.json` bytes are preserved while any task is active. New defaults
+and legacy migrations apply on a subsequent init/update after active tasks end.
 
 Staged validation compares exact bytes unless Git's text/EOL rules convert
 CRLF to LF for that path. Binary and `-text` paths keep exact comparison;

@@ -391,6 +391,8 @@ export function runInitConfigStage(
             }
 
             const replaceWithCanonicalTemplate = configName === 'garda.config';
+            const deferPathsMigration = configName === 'paths' && existingConfig !== null
+                && hasAnyActiveTask(targetRoot, path.dirname(liveRoot));
             const materializedConfig = replaceWithCanonicalTemplate
                 ? cloneJsonValue(templateConfig)
                 : configName === 'workflow-config'
@@ -406,18 +408,24 @@ export function runInitConfigStage(
                         ? mergeProfilesConfigWithTemplate(templateConfig, existingConfig, {
                             allowedReviewTypeIds: catalogReviewTypeIds
                         })
-                        : mergeConfig(templateConfig, existingConfig);
+                        : deferPathsMigration && existingConfig !== null
+                            ? cloneJsonValue(existingConfig)
+                            : mergeConfig(templateConfig, existingConfig);
 
             if (configName === 'paths' && hadExistingConfig) {
                 // Uncustomized legacy stack-specific defaults follow the current template. Active
                 // tasks keep the exact classification config they started with; a later init migrates.
-                if (!hasAnyActiveTask(targetRoot, path.dirname(liveRoot))) {
+                if (!deferPathsMigration) {
                     migrateLegacyManagedPathRegexes(materializedConfig, templateConfig);
-                } else if (!dryRun && migrateLegacyManagedPathRegexes(cloneJsonValue(materializedConfig), templateConfig).length > 0) {
-                    process.stderr.write('NOTICE: Stack-neutral default path patterns were not applied to '
-                        + 'live/config/paths.json because a task is active. After active tasks finish, run '
-                        + '"garda init --target-root . --init-answers-path garda-agent-orchestrator/runtime/init-answers.json" '
-                        + 'to apply them; customized patterns are never replaced.\n');
+                } else if (!dryRun) {
+                    const pendingConfig = mergeConfig(templateConfig, existingConfig);
+                    migrateLegacyManagedPathRegexes(pendingConfig, templateConfig);
+                    if (!isDeepStrictEqual(materializedConfig, pendingConfig)) {
+                        process.stderr.write('NOTICE: Stack-neutral default path patterns were not applied to '
+                            + 'live/config/paths.json because a task is active. After active tasks finish, run '
+                            + '"garda init --target-root . --init-answers-path garda-agent-orchestrator/runtime/init-answers.json" '
+                            + 'to apply them; customized patterns are never replaced.\n');
+                    }
                 }
             }
 

@@ -7,6 +7,7 @@ import { runGit } from '../../../src/core/git-helpers';
 import { classifyGitChanges } from '../../../src/core/git-change-classification';
 import { loadPathsConfig } from '../../../src/policy/profile-resolver';
 import { migrateLegacyManagedPathRegexes } from '../../../src/policy/default-path-regexes';
+import { filterBuildOutputScopePaths } from '../../../src/core/build-output-paths';
 
 const OUTPUTS = ['target', 'bin', 'obj', 'build', 'dist', 'out', '__pycache__', '.venv', 'venv',
     'node_modules', '.gradle', '.pytest_cache', '.mypy_cache', 'coverage'];
@@ -57,6 +58,50 @@ test('T-404 configured untracked build patterns replace defaults and preserve ex
         assert.deepEqual(classifyGitChanges(f.root).untrackedFiles, ['generated/result.dat', 'target/output.dat']);
     } finally { f.clean(); }
 });
+
+test('T-419 keeps ignored explicit Garda executable runtime in scope while filtering ordinary build output', () => {
+    const f = fixture();
+    try {
+        f.write('package.json', JSON.stringify({ name: 'garda-agent-orchestrator' }));
+        runGit(f.root, ['add', 'package.json']);
+        runGit(f.root, ['commit', '-m', 'source checkout']);
+        f.write('.git/info/exclude', 'dist/\n');
+        const runtime = 'dist/src/gates/next-step/next-step.js';
+        const paths = [runtime, 'dist/assets/result.js', 'dist/src-copy/result.js',
+            'nested/dist/src/result.js', 'target/tracked.ts'];
+        for (const file of paths) f.write(file);
+
+        assert.deepEqual(filterBuildOutputScopePaths(f.root, paths), [runtime, 'target/tracked.ts']);
+        assert.deepEqual(classifyGitChanges(f.root, { explicitUntrackedPaths: paths }).untrackedFiles, [runtime]);
+        assert.deepEqual(classifyGitChanges(f.root, { explicitUntrackedPaths: paths }).stagedFiles, []);
+        assert.ok(classifyGitChanges(f.root, { explicitUntrackedPaths: paths })
+            .effectiveChangedFiles.includes('target/tracked.ts'));
+
+        f.write('package.json', JSON.stringify({ name: 'ordinary-project' }));
+        assert.deepEqual(filterBuildOutputScopePaths(f.root, paths), ['target/tracked.ts']);
+        assert.deepEqual(classifyGitChanges(f.root, { explicitUntrackedPaths: paths }).untrackedFiles, []);
+    } finally { f.clean(); }
+});
+
+for (const [label, packageContents] of [
+    ['missing', undefined], ['unrelated', '{"name":"ordinary-project"}'],
+    ['lookalike', '{"name":"garda-agent-orchestrator-fork"}'], ['malformed', '{"name":']
+] as const) {
+    test(`T-419 retains build filtering for ${label} Garda package identity`, () => {
+        const f = fixture();
+        try {
+            if (packageContents !== undefined) {
+                f.write('package.json', packageContents);
+                runGit(f.root, ['add', 'package.json']);
+                runGit(f.root, ['commit', '-m', 'ordinary project']);
+            }
+            const runtime = 'dist/src/gates/next-step/next-step.js';
+            f.write(runtime);
+            assert.deepEqual(filterBuildOutputScopePaths(f.root, [runtime]), []);
+            assert.deepEqual(classifyGitChanges(f.root, { explicitUntrackedPaths: [runtime] }).untrackedFiles, []);
+        } finally { f.clean(); }
+    });
+}
 
 test('T-404 legacy paths migration adds missing build defaults without rewriting project customization', () => {
     const defaults = { untracked_build_output_regexes: ['(^|/)target/', '\\.py[co]$'] };
