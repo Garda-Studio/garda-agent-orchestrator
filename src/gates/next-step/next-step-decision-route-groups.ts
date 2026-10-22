@@ -513,8 +513,6 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
     effects?: NextStepEffectController;
 }): NextStepDecisionRoutePayload | null {
     const effects = options.effects ?? createNextStepEffectPlanner();
-    const parentAuditRoute = resolveParentAuditNavigation(options);
-    if (parentAuditRoute) return { ...parentAuditRoute, presentArtifacts: options.corePresentArtifacts };
     const taskQueueStatus = options.taskEntry?.status || null;
     const splitRequiredStatusInTaskQueue = isTaskQueueSplitRequiredStatus(taskQueueStatus);
     const permanentSplitRequiredLatchEvidence = splitRequiredStatusInTaskQueue
@@ -649,6 +647,9 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
             finalReport: null
         };
     }
+
+    const parentAuditRoute = resolveParentAuditNavigation(options);
+    if (parentAuditRoute) return { ...parentAuditRoute, presentArtifacts: options.corePresentArtifacts };
 
     if (splitRequiredStatusInTaskQueue) {
         const latchEvidence = readSplitRequiredLatchEvidence({

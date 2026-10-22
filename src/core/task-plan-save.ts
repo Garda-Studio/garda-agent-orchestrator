@@ -8,7 +8,7 @@ import { assertCanonicalTaskId } from './task-ids';
 import { parseTaskQueueEntriesFromContent } from './task-queue-read';
 import { readTaskQueueStatusToken } from './task-queue/task-queue-status';
 import {
-    readBoundedTaskPlanFile, resolveCanonicalTaskPlanPath, TASK_PLAN_READ_MAX_BYTES
+    readBoundedTaskPlanFile, resolveCanonicalTaskPlanPath, resolveCanonicalTaskPlanLockPath, TASK_PLAN_READ_MAX_BYTES
 } from './task-plan-read';
 import { acquireFilesystemLock, releaseFilesystemLock, type LockHandle } from '../gate-runtime/timeline/task-events-locking';
 import { serializeTaskPlan, validateTaskPlan } from '../schemas/task-plan';
@@ -16,19 +16,28 @@ import { serializeTaskPlan, validateTaskPlan } from '../schemas/task-plan';
 const TASK_QUEUE_MAX_BYTES = 4 * TASK_PLAN_READ_MAX_BYTES;
 const TASK_PLAN_LOCK_TIMEOUT_MS = 5000;
 
+function assertNoLegacyTaskPlanLock(repoRoot: string, taskId: string): void {
+    const legacyPath = resolveCanonicalTaskPlanPath(repoRoot, taskId).replace(/\.json$/u, '.lock');
+    if (!bindContainedDestination(repoRoot, legacyPath).missingAt) {
+        throw new Error('A legacy task-plan lock is present. Finish the older producer before continuing; the lock was not removed.');
+    }
+}
+
 /** Task entry and plan publication share this task-local synchronization boundary. */
 export function withTaskPlanMutationLock<T>(repoRoot: string, taskId: string, action: (lock: LockHandle) => T): T {
     assertCanonicalTaskId(taskId);
-    const reviewsRoot = path.dirname(resolveCanonicalTaskPlanPath(repoRoot, taskId));
-    ensureContainedDirectory(repoRoot, reviewsRoot);
-    const parent = bindContainedDestination(repoRoot, reviewsRoot);
-    const lockPath = path.join(reviewsRoot, `${taskId}-task-plan.lock`);
+    assertNoLegacyTaskPlanLock(repoRoot, taskId);
+    const lockPath = resolveCanonicalTaskPlanLockPath(repoRoot, taskId);
+    const lockRoot = path.dirname(lockPath);
+    ensureContainedDirectory(repoRoot, lockRoot);
+    const parent = bindContainedDestination(repoRoot, lockRoot);
     bindContainedDestination(repoRoot, lockPath);
     const { handle } = acquireFilesystemLock(lockPath, {
         timeoutMs: TASK_PLAN_LOCK_TIMEOUT_MS, requireKnownDeadOwner: true, ownerLabel: 'task-plan-save-entry'
     });
     try {
         assertContainedDestination(parent);
+        assertNoLegacyTaskPlanLock(repoRoot, taskId);
         return action(handle);
     } finally {
         releaseFilesystemLock(handle);

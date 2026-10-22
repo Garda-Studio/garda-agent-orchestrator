@@ -525,7 +525,7 @@ test('task entry without runtime ignores excludes its own lock and preserves unr
     initializeGitRepo(repoRoot);
     const lockMetadata = 'garda-agent-orchestrator/runtime/task-queue-locks/active-implementation.lock/owner.json';
     const foreignFile = 'garda-agent-orchestrator/runtime/task-queue-locks/foreign-work.txt';
-    const planLockMetadata = 'garda-agent-orchestrator/runtime/reviews/T-103-task-plan.lock/owner.json';
+    const planLockMetadata = 'garda-agent-orchestrator/runtime/task-queue-locks/T-103-task-plan.lock/owner.json';
     const foreignPlanFile = 'garda-agent-orchestrator/runtime/reviews/unrelated-work.txt';
     fs.mkdirSync(path.dirname(path.join(repoRoot, foreignFile)), { recursive: true });
     fs.writeFileSync(path.join(repoRoot, foreignFile), 'preserve this work');
@@ -554,7 +554,7 @@ test('task entry without runtime ignores excludes its own lock and preserves unr
 test('plan lock baseline exclusion requires the live canonical handle and retains tracked metadata', (t) => {
     const repoRoot = createTempRepo(t);
     initializeGitRepo(repoRoot);
-    const metadata = 'garda-agent-orchestrator/runtime/reviews/T-103-task-plan.lock/owner.json';
+    const metadata = 'garda-agent-orchestrator/runtime/task-queue-locks/T-103-task-plan.lock/owner.json';
     const released = withTaskPlanMutationLock(repoRoot, 'T-103', handle => {
         const proof = { taskId: 'T-103', handle };
         assert.ok(captureDirtyWorkspaceBaseline(repoRoot).changed_files.includes(metadata));

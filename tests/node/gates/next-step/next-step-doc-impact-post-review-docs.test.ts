@@ -207,8 +207,8 @@ describe('gates/next-step', () => {
 
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
 
-        assert.equal(result.next_gate, 'classify-change');
-        assert.ok(result.commands[0].command.includes('gate classify-change'));
+        assert.equal(result.next_gate, 'restart-coherent-cycle');
+        assert.ok(result.commands[0].command.includes('gate restart-coherent-cycle'));
         assert.ok(result.reason.includes('garda-agent-orchestrator/live/docs/project-memory/commands.md'));
     });
 
@@ -296,7 +296,7 @@ describe('gates/next-step', () => {
 
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
 
-        assert.equal(result.next_gate, 'classify-change');
+        assert.equal(result.next_gate, 'restart-coherent-cycle');
         assert.ok(result.reason.includes('src/extra.ts'));
         assert.ok(!result.commands[0].command.includes('gate doc-impact-gate'));
     });

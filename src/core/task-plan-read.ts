@@ -27,6 +27,12 @@ export function resolveCanonicalTaskPlanPath(repoRoot: string, taskId: string): 
     return resolvePathInsideRepo(candidate, repoRoot, { allowMissing: true, enforceInside: true })!;
 }
 
+export function resolveCanonicalTaskPlanLockPath(repoRoot: string, taskId: string): string {
+    const id = assertCanonicalTaskId(taskId);
+    const candidate = joinOrchestratorPath(repoRoot, path.join('runtime', 'task-queue-locks', `${id}-task-plan.lock`));
+    return resolvePathInsideRepo(candidate, repoRoot, { allowMissing: true, enforceInside: true })!;
+}
+
 export function readBoundedTaskPlanFile(repoRoot: string, file: string, maxBytes: number): string | null {
     resolvePathInsideRepo(file, repoRoot, { allowMissing: true, enforceInside: true });
     let before: fs.Stats;

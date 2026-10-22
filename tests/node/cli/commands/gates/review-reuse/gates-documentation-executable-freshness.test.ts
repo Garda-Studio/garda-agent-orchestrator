@@ -141,7 +141,7 @@ async function exerciseFreshness(
             return { compileReuseAccepted: true, suiteReuseAccepted: true };
         }
         const beforeRefresh = resolveNextStep({ repoRoot, taskId });
-        assert.equal(beforeRefresh.next_gate, 'classify-change', beforeRefresh.reason);
+        assert.equal(beforeRefresh.next_gate, 'restart-coherent-cycle', beforeRefresh.reason);
         assert.equal(fileHash(contextPath), originalContextHash, 'Navigation must require fresh evidence before replacing the earlier context.');
         const rejectedCompile = await runCompileGateCommand(compileOptions);
         assert.notEqual(rejectedCompile.exitCode, 0);

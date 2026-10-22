@@ -76,7 +76,7 @@ const {
 void [ALL_REVIEW_FLAGS, appendEvent, buildReviewContextScopeFixture, eventsRoot, resolveNextStep, formatNextStepText, EXPECTED_LOOP_LINE, fileSha256, fs, getLoadedRuleFileBasenames, hasCompletedDecomposedParentAfterSplitRequiredClear, hasSplitRequiredClearedEvidence, launchInputEvidenceFixture, makeTempRepo, markReviewEvidenceAsStrictReuse, materializeFinalCloseout, NEXT_STEP_FULL_SUITE_TEST_CONFIG, normalizeForTimeline, os, path, PROVIDER_ENV_KEYS, readReviewContextTreeStateSha256, readSplitRequiredLatchEvidence, requireFromTest, resolveReviewCycleContinuationArtifactPath, resolveSplitRequiredArtifactPath, reviewsRoot, runRecordReviewCycleSplitDecisionCommand, seedCompilePass, seedCompletedReviewerLaunchAndInvocation, seedCompletedTaskWithIndependentCodeReview, seedCompletionPass, seedCustomStartedTask, seedDocImpactPass, seedFullSuiteValidation, seedGitAutoCompilePass, seedHandshake, seedPostPreflightRulePack, seedProjectMemory, seedProjectMemoryImpact, seedReviewGatePass, seedRulePack, seedShellSmoke, seedSourceCheckoutRuntime, seedSplitRequiredLatchEvidence, seedStartedTask, seedTaskModeOnly, sha256Text, TASK_ID, tempRoots, withProviderEnv, writeFreshReviewContextWithoutRouting, writeGitAutoPreflight, writeJson, writeJsonWithSha, writeNoOpEvidence, writePreflight, writeProjectMemoryWorkflowConfig, writeReviewContextOnly, writeReviewCycleContinuation, writeReviewEvidence, writeStrictDecompositionDecision, writeStrictIndependentCodeReviewEvidence];
 
 describe('gates/next-step split-required latch finalization', () => {
-    it('preserves synchronized queue status while requiring original parent acceptance after child completion', () => {
+    it('keeps a retained parent decomposed until compatibility policy and native child acceptance exist', () => {
         const repoRoot = makeTempRepo();
         fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
             '# TASK.md',
@@ -101,18 +101,18 @@ describe('gates/next-step split-required latch finalization', () => {
 
         assert.equal(decomposedResult.status, 'DECOMPOSED');
         assert.equal(doneResult.status, 'DECOMPOSED');
-        assert.equal(doneResult.next_gate, 'task-audit-summary');
-        assert.match(doneResult.commands[0].command, /gate task-audit-summary/u);
-        assert.equal(stableDoneResult.status, 'BLOCKED');
-        assert.equal(stableDoneResult.next_gate, 'decomposed-parent-obligations');
-        assert.equal(stableDoneResult.commands.length, 0);
-        assert.ok(taskMd.includes('| T-652 | 🟩 DONE |'));
+        assert.equal(doneResult.next_gate, 'parent-audit');
+        assert.match(doneResult.commands[0].command, /gate parent-audit .*--phase register/u);
+        assert.equal(stableDoneResult.status, 'DECOMPOSED');
+        assert.equal(stableDoneResult.next_gate, 'parent-audit');
+        assert.deepEqual(stableDoneResult.commands, doneResult.commands);
+        assert.ok(taskMd.includes('| T-652 | 🟪 DECOMPOSED |'));
         assert.ok(events.includes('"event_type":"SPLIT_REQUIRED_CLEARED"'));
-        assert.ok(events.includes('"event_type":"DECOMPOSED_PARENT_COMPLETED"'));
+        assert.equal(events.includes('"event_type":"DECOMPOSED_PARENT_COMPLETED"'), false);
         assert.equal((events.match(/"event_type":"SPLIT_REQUIRED_RESTORED"/g) || []).length, 0);
     });
 
-    it('requests original parent acceptance after parent-derived suffixed child tasks finish', () => {
+    it('requires retained-parent compatibility policy for suffixed terminal child rows', () => {
         const repoRoot = makeTempRepo();
         fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
             '# TASK.md',
@@ -137,11 +137,11 @@ describe('gates/next-step split-required latch finalization', () => {
 
         assert.equal(decomposedResult.status, 'DECOMPOSED');
         assert.equal(doneResult.status, 'DECOMPOSED');
-        assert.equal(doneResult.next_gate, 'task-audit-summary');
-        assert.match(doneResult.commands[0].command, /gate task-audit-summary/u);
-        assert.ok(taskMd.includes('| T-506 | 🟩 DONE |'));
+        assert.equal(doneResult.next_gate, 'parent-audit');
+        assert.match(doneResult.commands[0].command, /gate parent-audit .*--phase register/u);
+        assert.ok(taskMd.includes('| T-506 | 🟪 DECOMPOSED |'));
         assert.ok(events.includes('"event_type":"SPLIT_REQUIRED_CLEARED"'));
-        assert.ok(events.includes('"event_type":"DECOMPOSED_PARENT_COMPLETED"'));
+        assert.equal(events.includes('"event_type":"DECOMPOSED_PARENT_COMPLETED"'), false);
     });
 
     it('requests original acceptance for nested decomposed parents after their leaf children finish', () => {

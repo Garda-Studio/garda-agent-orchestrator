@@ -76,7 +76,7 @@ export async function handleGate(commandArgv: string[]): Promise<void> {
         console.log(buildGateCommandOverviewText());
         console.log('');
         console.log('Available gates:');
-        for (const name of [...getAllShimmedGateNames(), 'parent-audit'].sort()) {
+        for (const name of getAllShimmedGateNames().sort()) {
             console.log(`  ${name}`);
         }
         return;

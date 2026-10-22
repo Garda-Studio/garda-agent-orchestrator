@@ -11,10 +11,38 @@ import { prepareParentAuditReview, recordParentReviewerStarted } from '../../../
 import { completeParentAuditReview } from '../../../../src/gates/parent-audit/parent-audit-review';
 import { inspectParentCompletion } from '../../../../src/gates/parent-audit/parent-audit-state';
 import { appendMandatoryTaskEvent } from '../../../../src/gate-runtime/task-events';
+import { withReviewArtifactReadBarrier } from '../../../../src/gate-runtime/review/review-artifacts';
 import { assertGenericTaskEventAdmission } from '../../../../src/gate-runtime/timeline/task-event-generic-admission';
 import { cleanupParentFixtures, parentFixture, PARENT_ID, outputFor } from './parent-audit-test-support';
 
 afterEach(cleanupParentFixtures);
+
+test('native parent publication participates in the review read barrier without changing signed bytes', async () => {
+    const fixture = await parentFixture({ origin: 'manual', children: false });
+    const contract = withReviewArtifactReadBarrier(fixture.reviews, () =>
+        registerParentCompletionContract(fixture.root, PARENT_ID));
+    assert.deepEqual(readParentCompletionContract(fixture.root, PARENT_ID), contract);
+    assert.equal(fs.readFileSync(parentRecordVersionPath(fixture.root, contract), 'utf8'),
+        JSON.stringify(contract, null, 2) + '\n');
+});
+
+test('native parent publication does not absorb an unrelated review-directory mutation', async () => {
+    const fixture = await parentFixture({ origin: 'manual', children: false });
+    assert.throws(() => withReviewArtifactReadBarrier(fixture.reviews, () => {
+        fs.writeFileSync(path.join(fixture.reviews, 'unrelated-publication.json'), '{}');
+        registerParentCompletionContract(fixture.root, PARENT_ID);
+    }), /invalidated by a concurrent review publication/u);
+    assert.equal(readParentRecord(fixture.root, PARENT_ID, 'contract'), null);
+});
+
+test('parent registration rejects an existing legacy task-plan lock without removing it', async () => {
+    const fixture = await parentFixture({ origin: 'manual', children: false });
+    const legacyLock = path.join(fixture.reviews, `${PARENT_ID}-task-plan.lock`);
+    fs.mkdirSync(legacyLock);
+    assert.throws(() => registerParentCompletionContract(fixture.root, PARENT_ID), /legacy task-plan lock/u);
+    assert.ok(fs.statSync(legacyLock).isDirectory());
+    assert.equal(readParentRecord(fixture.root, PARENT_ID, 'contract'), null);
+});
 
 test('aggregate coverage preserves unexecuted verification requirements from the approved parent plan', async () => {
     const verification = 'Verify both child changes together on the final source.';

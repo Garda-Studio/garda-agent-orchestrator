@@ -9,6 +9,7 @@ import { withTaskPlanMutationLock } from '../../core/task-plan-save';
 import { acquireFilesystemLock, releaseFilesystemLock } from '../../gate-runtime/task-events-locking';
 import { appendMandatoryTaskEvent, assertValidTaskId, inspectTaskEventFile, readTaskTimelineJsonlEntries } from '../../gate-runtime/task-events';
 import { withRuntimeMutationGeneration } from '../../gate-runtime/runtime-mutation-generation';
+import { withReviewArtifactTransactionLock } from '../../gate-runtime/review/review-artifacts';
 import { readParentAuditProofBytes, readParentAuditProofRecord } from '../task-audit/task-audit-summary-decomposed-parent-proofs';
 import type { ParentRecord } from './parent-audit-types';
 
@@ -137,7 +138,8 @@ export function writeParentAuditArtifact(root: string, file: string, bytes: stri
     ensureContainedDirectory(root, reviews);
     bindContainedDestination(reviews, file);
     ensureContainedDirectory(root, path.dirname(file));
-    withRuntimeMutationGeneration(joinOrchestratorPath(root, ''), 'parent-audit-artifact-write', () => writeContainedFile(root, file, bytes));
+    withReviewArtifactTransactionLock(reviews, () =>
+        withRuntimeMutationGeneration(joinOrchestratorPath(root, ''), 'parent-audit-artifact-write', () => writeContainedFile(root, file, bytes)));
 }
 
 export function withParentAuditMutation<T>(root: string, taskId: string, action: () => T): T {

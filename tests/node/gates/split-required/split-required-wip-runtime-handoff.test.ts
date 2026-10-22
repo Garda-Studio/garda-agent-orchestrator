@@ -2272,6 +2272,8 @@ describe('split-required WIP restored-runtime handoff', () => {
         writeFile(repoRoot, 'build-tree.cjs', [
             "const fs = require('node:fs'); const cp = require('node:child_process');",
             "const child = cp.spawn(process.execPath, ['grandchild.cjs'], { stdio: 'inherit' });",
+            // Reap the terminated child before exiting so POSIX zombies cannot satisfy kill(pid, 0).
+            "process.on('SIGTERM', () => { if (child.exitCode !== null || child.signalCode !== null) process.exit(0); child.once('exit', () => process.exit(0)); });",
             "fs.writeFileSync('descendant.pid', String(child.pid));",
             "setTimeout(() => process.exit(0), 15000); setInterval(() => {}, 1000);"
         ].join('\n'));

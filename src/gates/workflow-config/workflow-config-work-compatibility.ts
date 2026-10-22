@@ -327,6 +327,14 @@ function isSafeIgnoredWorkflowConfigCompatibilityBaseline(config: Record<string,
         }
     }
 
+    if (hasOwnKey(config, 'parent_audit')) {
+        const parentAudit = toPlainRecord(config.parent_audit);
+        if (!parentAudit || !hasExactOwnKeys(parentAudit, ['enabled'])
+            || typeof parentAudit.enabled !== 'boolean') {
+            return false;
+        }
+    }
+
     if (hasOwnKey(config, 'auto_backup')) {
         const autoBackup = toPlainRecord(config.auto_backup);
         const defaultAutoBackup = SAFE_WORKFLOW_CONFIG_COMPATIBILITY_BASELINE.auto_backup as unknown as Record<string, unknown>;

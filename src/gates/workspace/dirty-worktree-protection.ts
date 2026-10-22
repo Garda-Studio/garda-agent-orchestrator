@@ -9,7 +9,7 @@ import {
     type GitChangeClassificationEvidence
 } from '../../core/git-change-classification';
 import { DEFAULT_GIT_TIMEOUT_MS, spawnSyncWithTimeout } from '../../core/subprocess';
-import { resolveCanonicalTaskPlanPath } from '../../core/task-plan-read';
+import { resolveCanonicalTaskPlanLockPath } from '../../core/task-plan-read';
 import { inspectFilesystemLock, type LockHandle } from '../../gate-runtime/task-events-locking';
 import {
     fileSha256,
@@ -640,7 +640,7 @@ export function captureDirtyWorkspaceBaseline(
 ): DirtyWorkspaceBaseline {
     const ownedLocks = [
         ...(ownershipLock ? [{ handle: ownershipLock, path: joinOrchestratorPath(repoRoot, 'runtime/task-queue-locks/active-implementation.lock') }] : []),
-        ...(taskPlanLock ? [{ handle: taskPlanLock.handle, path: resolveCanonicalTaskPlanPath(repoRoot, taskPlanLock.taskId).replace(/\.json$/u, '.lock') }] : [])
+        ...(taskPlanLock ? [{ handle: taskPlanLock.handle, path: resolveCanonicalTaskPlanLockPath(repoRoot, taskPlanLock.taskId) }] : [])
     ];
     const ownedLockMetadataPaths = ownedLocks.map(lock => resolveOwnedEntryLockMetadataPath(repoRoot, lock.handle, lock.path));
     const gitChangeClassification = buildGitChangeClassificationEvidence(classifyGitChanges(repoRoot, {

@@ -559,7 +559,7 @@ describe('gates/next-step', () => {
 
 
 
-        assert.equal(result.next_gate, 'classify-change');
+        assert.equal(result.next_gate, 'restart-coherent-cycle');
 
         assert.ok(result.reason.includes('src/extra.ts'));
 
@@ -655,7 +655,7 @@ describe('gates/next-step', () => {
 
 
 
-        assert.equal(result.next_gate, 'classify-change');
+        assert.equal(result.next_gate, 'restart-coherent-cycle');
 
         assert.ok(result.reason.includes('stale preflight'), result.reason);
 
@@ -697,7 +697,7 @@ describe('gates/next-step', () => {
 
 
 
-        assert.equal(result.next_gate, 'classify-change');
+        assert.equal(result.next_gate, 'restart-coherent-cycle');
 
         assert.ok(result.reason.includes('stale preflight'), result.reason);
 
@@ -759,7 +759,7 @@ describe('gates/next-step', () => {
 
 
 
-        assert.equal(result.next_gate, 'classify-change');
+        assert.equal(result.next_gate, 'restart-coherent-cycle');
 
         assert.ok(result.reason.includes('stale preflight'), result.reason);
 

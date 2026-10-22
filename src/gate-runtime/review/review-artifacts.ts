@@ -564,7 +564,7 @@ export async function withReviewArtifactLockAsync<T>(
     });
 }
 
-function withReviewArtifactTransactionLock<T>(
+export function withReviewArtifactTransactionLock<T>(
     reviewsDir: string,
     callback: () => T,
     options: ReviewArtifactLockOptions = {}

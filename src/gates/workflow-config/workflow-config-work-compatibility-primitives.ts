@@ -25,6 +25,7 @@ export const COMPATIBILITY_TOP_LEVEL_KEYS = [
     'scope_budget_guard',
     'task_reset',
     'local_commit',
+    'parent_audit',
     'task_test_selection'
 ];
 const COMPATIBILITY_OPTIONAL_TOP_LEVEL_KEYS = [
@@ -37,6 +38,7 @@ const COMPATIBILITY_OPTIONAL_TOP_LEVEL_KEYS = [
     'review_execution_policy',
     'task_reset',
     'local_commit',
+    'parent_audit',
     'task_test_selection'
 ];
 export const COMPATIBILITY_ALLOWED_TOP_LEVEL_KEY_SETS = Array.from(

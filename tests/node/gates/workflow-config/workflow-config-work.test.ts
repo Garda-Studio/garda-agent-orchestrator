@@ -172,6 +172,38 @@ describe('workflow config work module boundaries', () => {
         );
     });
 
+    it('accepts absent or boolean initial parent-audit settings and detects later edits', (t) => {
+        const repoRoot = createTempRoot();
+        t.after(() => removeTempRoot(repoRoot));
+        const configPath = path.join(repoRoot, ...LIVE_CONFIG_PATH.split('/'));
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        for (const parentAudit of [undefined, { enabled: false }, { enabled: true }]) {
+            const config = { ...SAFE_WORKFLOW_CONFIG_COMPATIBILITY_BASELINE, parent_audit: parentAudit };
+            fs.writeFileSync(configPath, JSON.stringify(config));
+            assert.equal(hasUnsafeIgnoredWorkflowConfigCompatibilityBaseline(repoRoot, LIVE_CONFIG_PATH), false);
+            const hashes = getCurrentWorkflowConfigFileHashes(repoRoot);
+            config.parent_audit = { enabled: parentAudit?.enabled !== true };
+            fs.writeFileSync(configPath, JSON.stringify(config));
+            assert.deepEqual(getCurrentWorkflowConfigChanges(repoRoot, hashes, {
+                allowProtectedManifestFallback: false
+            }).changed_files, [LIVE_CONFIG_PATH]);
+        }
+    });
+
+    it('rejects malformed or unknown initial parent-audit settings', (t) => {
+        const repoRoot = createTempRoot();
+        t.after(() => removeTempRoot(repoRoot));
+        const configPath = path.join(repoRoot, ...LIVE_CONFIG_PATH.split('/'));
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        for (const parentAudit of [null, false, 0, [], {}, { enabled: 'false' },
+            { enabled: null }, { enabled: false, unknown: true }]) {
+            fs.writeFileSync(configPath, JSON.stringify({
+                ...SAFE_WORKFLOW_CONFIG_COMPATIBILITY_BASELINE, parent_audit: parentAudit
+            }));
+            assert.equal(hasUnsafeIgnoredWorkflowConfigCompatibilityBaseline(repoRoot, LIVE_CONFIG_PATH), true);
+        }
+    });
+
     it('keeps optional quality-rule scope filters fail-closed', () => {
         const defaultRule = {
             excluded_scope_categories: ['docs'],
