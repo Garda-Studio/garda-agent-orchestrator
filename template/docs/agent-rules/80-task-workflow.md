@@ -94,7 +94,8 @@ After an explicit decision, keep `CAND-001` with its decision reference and add 
   3. only the focused memory files relevant to the current task.
 - Do not read every project-memory file by default; use `preprompt task` suggestions or `compact.md` task routing to choose a small focused set.
 - Memory is orientation, not proof. Validate against source, tests, config, and mandatory gates before changing behavior.
-- Project-memory writes are not automatic task-start behavior. Update memory only when workflow mode and explicit operator approval allow it.
+- Project-memory writes are not automatic task-start behavior. Update memory only when workflow mode allows it and either existing user approval or the active task instruction authorises the update. Required project-memory maintenance within the active authorised task covers necessary in-scope updates; do not ask for the same approval again.
+- Obtain approval before writes outside that authorisation. Task start, memory-file existence, or suggested candidates alone do not authorise writes. Check mode remains advisory; actual updates and skipped candidates still require concrete evidence and rationale, and missing, stale, or invalid evidence and invalid preflight remain blocking under the existing mode policy.
 - When updating memory, write durable current-state contracts only: module ownership, workflow invariants, commands, decisions, risks, and active unknowns. Do not write repeated task narratives, transient failures, or default task-id heading sections.
 - Unknown or custom stack fallback: read `stack.md`, `commands.md`, and `module-map.md`, then inspect repository evidence instead of applying framework-specific assumptions.
 

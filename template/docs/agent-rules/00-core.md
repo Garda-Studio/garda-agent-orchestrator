@@ -21,7 +21,7 @@ Default response brevity: {{ASSISTANT_RESPONSE_BREVITY}}.
 3. The `project-memory/` directory is user-owned; lifecycle materialization may add missing seed files, but must not overwrite, merge, or delete existing files.
 4. When reading project memory, start with `README.md`, then `compact.md`, then only the focused memory files relevant to the task.
 5. Canonical focused files: `context.md`, `stack.md`, `architecture.md`, `module-map.md`, `commands.md`, `conventions.md`, `decisions.md`, `risks.md`. Add new files in lowercase kebab-case `.md` format when an existing category does not fit.
-6. Agents may read `project-memory/` at any time for context. Write access requires explicit user approval or a task instruction that authorises the update.
+6. Agents may read `project-memory/` at any time for context. Write access requires existing user approval or a task instruction that authorises the update. Required project-memory maintenance within the active authorised task covers necessary in-scope updates; do not ask for the same approval again. Obtain approval before writes outside that authorisation. Task start, memory-file existence, or suggested candidates alone do not authorise writes.
 7. Project-memory writes must record durable current-state contracts only: module ownership, workflow invariants, commands, decisions, risks, and active unknowns. Do not store repeated task narratives, transient failures, large command outputs, or duplicated known orchestrator issues. Task ids are optional provenance only and should not be the default heading structure.
 
 ## Mandatory Infrastructure Integrity

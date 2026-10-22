@@ -108,6 +108,40 @@ describe('routeProjectMemoryImpact', () => {
 });
 
 describe('assessProjectMemoryImpact', () => {
+    for (const mode of ['check', 'strict', 'update'] as const) {
+        it(`reuses scoped task authorization without granting writes or bypassing evidence in ${mode} mode`, () => {
+            withTempRepo((repoRoot) => {
+                const result = assessProjectMemoryImpact({
+                    repoRoot,
+                    taskId: 'T-425',
+                    modeOverride: mode,
+                    changedFiles: ['src/gates/project-memory-impact.ts']
+                });
+
+                assert.match(result.artifact.next_step, /existing user approval or the active task instruction requiring project-memory maintenance/);
+                assert.match(result.artifact.next_step, /necessary in-scope updates; do not ask again/);
+                assert.match(result.artifact.next_step, /Obtain user approval before writes outside that authorization/);
+                assert.match(result.artifact.next_step, /Task start, memory-file existence, or suggested candidates alone do not authorize writes/);
+                assert.match(result.artifact.next_step, /--confirm-updated/);
+                assert.equal(result.artifact.writes_allowed, false);
+                assert.equal(result.artifact.require_user_approval_for_writes, true);
+                assert.equal(result.updateEvidenceToWrite, null);
+                if (mode === 'check') {
+                    assert.equal(result.artifact.status, 'UPDATE_NEEDED');
+                    assert.equal(result.artifact.outcome, 'PASS');
+                    assert.match(result.artifact.next_step, /concrete rationale/);
+                    assert.match(result.artifact.next_step, /check mode remains advisory/);
+                } else {
+                    assert.equal(result.artifact.status, 'BLOCKED');
+                    assert.equal(result.artifact.outcome, 'FAIL');
+                    assert.ok(result.artifact.update_evidence.invalid_reasons.length > 0);
+                    assert.match(result.artifact.next_step, /--skip-unchanged-candidates-rationale/);
+                    assert.match(result.artifact.next_step, /Authorization does not replace valid preflight or update evidence/);
+                }
+            });
+        });
+    }
+
     it('returns OFF when maintenance mode is off', () => {
         withTempRepo((repoRoot) => {
             const result = assessProjectMemoryImpact({
