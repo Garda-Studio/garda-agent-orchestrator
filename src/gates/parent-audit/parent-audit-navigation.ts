@@ -11,7 +11,7 @@ import { parentRecordDigest, parentRecordVersionPath, readParentRecord, readPare
 import { inspectParentCompletion } from './parent-audit-state';
 import { readParentValidations } from './parent-audit-validation';
 import type { ParentReviewInput } from './parent-audit-types';
-import { assertParentReviewInputCurrent, type ParentReviewerStart } from './parent-audit-inputs';
+import { assertParentReviewInputCurrent, parentReviewerControllerTool, type ParentReviewerStart } from './parent-audit-inputs';
 
 export function resolveParentAuditNavigation(options: {
     repoRoot: string; taskId: string; taskEntry: TaskQueueEntry | null; taskEntries: Map<string, TaskQueueEntry>;
@@ -101,7 +101,7 @@ export function resolveParentAuditNavigation(options: {
     }
     if (!started || started.attempt_id !== input.attempt_id) return route('Launch a fresh independent aggregate reviewer.',
         `Launch a fresh subagent with exactly ReviewerLaunchInputArtifactPath: ${parentRecordVersionPath(root, input)}. After actual launch, record its identity. Input SHA256: ${parentRecordDigest(input)}.`,
-        'started', ` --reviewer-identity "agent:<actual-new-reviewer-id>" --input-sha256 "${parentRecordDigest(input)}" --controller-tool "collaboration.spawn_agent"`);
+        'started', ` --reviewer-identity "agent:<actual-new-reviewer-id>" --input-sha256 "${parentRecordDigest(input)}" --controller-tool "${parentReviewerControllerTool(input.runtime_identity.provider)}"`);
     return route('Accept the returned aggregate review.', `Wait for actual reviewer ${started.reviewer_identity} to return its JSON to ${input.output_path}.`,
         'complete', ` --reviewer-identity "${started.reviewer_identity}"`);
 }

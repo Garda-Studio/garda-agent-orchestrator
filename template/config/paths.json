@@ -1,6 +1,6 @@
 {
   "untracked_build_output_regexes": [
-    "(^|/)(?:target|bin|obj|build|dist|out|__pycache__|\\.venv|venv|node_modules|\\.gradle|\\.pytest_cache|\\.mypy_cache|coverage)/",
+    "(^|/)(?:target|bin|obj|build|dist|out|__pycache__|\\.venv|venv|node_modules|\\.gradle|\\.pytest_cache|\\.mypy_cache|coverage|_build|\\.build|\\.dart_tool|\\.zig-cache|zig-out)/",
     "\\.py[co]$"
   ],
   "metrics_path": "garda-agent-orchestrator/runtime/metrics.jsonl",

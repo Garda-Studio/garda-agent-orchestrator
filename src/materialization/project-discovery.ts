@@ -19,6 +19,9 @@ interface StackEvidence {
     matches: string[];
 }
 
+// Out-of-source CMake build into build/, which the default build-output exclusions keep out of task scope.
+const CMAKE_BUILD_COMMAND = 'cmake -S . -B build && cmake --build build';
+
 interface CompileGateCommandSurface {
     commands: string[];
 }
@@ -498,6 +501,12 @@ export function resolveSuggestedCompileGateCommands(
 
     surfaces.push(...resolveGradleCompileGateSurfaces(normalizedTargetRoot, runtimePlatform));
 
+    if (pathExists(path.join(normalizedTargetRoot, 'CMakeLists.txt'))) {
+        surfaces.push({
+            commands: [CMAKE_BUILD_COMMAND]
+        });
+    }
+
     return buildOrderedCompileGateCommands(surfaces);
 }
 
@@ -567,6 +576,10 @@ export function resolveSuggestedFullSuiteValidationCommands(
 
     if (hasAnyRootFileByExtension(normalizedTargetRoot, ['.sln', '.slnx', '.csproj', '.fsproj', '.vbproj'])) {
         candidates.push('dotnet test');
+    }
+
+    if (pathExists(path.join(normalizedTargetRoot, 'CMakeLists.txt'))) {
+        candidates.push('ctest --test-dir build --output-on-failure');
     }
 
     return [...new Set(candidates)];

@@ -424,3 +424,28 @@ describe('.NET solution formats', () => {
         }
     });
 });
+
+describe('CMake discovery suggestions', () => {
+    it('suggests an out-of-source cmake build and ctest for a root CMakeLists.txt', () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-discovery-cmake-'));
+        try {
+            fs.writeFileSync(path.join(tmpDir, 'CMakeLists.txt'), 'cmake_minimum_required(VERSION 3.20)\nproject(billing CXX)\n', 'utf8');
+            assert.deepEqual(resolveSuggestedCompileGateCommands(tmpDir), ['cmake -S . -B build && cmake --build build']);
+            assert.equal(resolveSuggestedFullSuiteValidationCommand(tmpDir), 'ctest --test-dir build --output-on-failure');
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    it('does not suggest cmake without a root CMakeLists.txt', () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-discovery-no-cmake-'));
+        try {
+            fs.mkdirSync(path.join(tmpDir, 'vendor'));
+            fs.writeFileSync(path.join(tmpDir, 'vendor', 'CMakeLists.txt'), 'project(dep)\n', 'utf8');
+            assert.ok(!resolveSuggestedCompileGateCommands(tmpDir).some(command => command.includes('cmake')));
+            assert.equal(resolveSuggestedFullSuiteValidationCommand(tmpDir), null);
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+});

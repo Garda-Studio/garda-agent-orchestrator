@@ -4,9 +4,9 @@
 
 ### More languages and build tools
 
-- Garda works with a wider range of languages and build tools. Project discovery, file classification and validation no longer depend on Node.js conventions. Unsupported toolchains receive clear setup guidance.
+- Garda works with a wider range of languages and build tools. Project discovery, file classification and validation no longer depend on Node.js conventions. Unsupported toolchains receive clear setup guidance. CMake projects get suggested build and `ctest` commands.
 - Use your own build and test commands, including focused tests and declared report files. Validation records what actually ran; independent review checks the results before task completion.
-- T-404: By default, generated build folders stay out of task scopes and reviews. Exclusions are configurable; tracked files always remain visible.
+- By default, generated build folders stay out of task scopes and reviews. Exclusions are configurable; tracked files always remain visible.
 - Validation handles Git line-ending conversion correctly, avoiding false content mismatches on Windows.
 - Test reports may be rewritten by the current run. When a report is stale, the error names the directory to clear.
 - File names with Cyrillic and other non-ASCII characters, spaces or quotes now work consistently in scopes, line counts and review diffs. Diffs display readable file names.
@@ -19,7 +19,7 @@
 - Reports refresh when project memory or relevant Git settings change.
 - Required project-memory updates reuse the task approval, avoiding repeated permission questions.
 - Prepare and inspect task plans before starting work. Ready plans attach automatically; invalid dependencies are reported.
-- `next-step` gives clearer recovery instructions for blocked steps, missing tools and incomplete validation.
+- `next-step` gives clearer recovery instructions for blocked steps, missing tools and incomplete validation. Printed decision commands run as shown, and a rejected test-case selector names the exact token to use.
 - Settings include task-scoped test selection. Backup management adds selection, deletion previews and explicit confirmation when recovery points would be lost.
 
 ### Faster everyday work

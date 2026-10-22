@@ -8,7 +8,7 @@ import { DEFAULT_GIT_TIMEOUT_MS } from './subprocess';
 
 export const UNTRACKED_BUILD_OUTPUT_CONFIG_KEY = 'untracked_build_output_regexes';
 export const DEFAULT_UNTRACKED_BUILD_OUTPUT_REGEXES: readonly string[] = Object.freeze([
-    '(^|/)(?:target|bin|obj|build|dist|out|__pycache__|\\.venv|venv|node_modules|\\.gradle|\\.pytest_cache|\\.mypy_cache|coverage)/',
+    '(^|/)(?:target|bin|obj|build|dist|out|__pycache__|\\.venv|venv|node_modules|\\.gradle|\\.pytest_cache|\\.mypy_cache|coverage|_build|\\.build|\\.dart_tool|\\.zig-cache|zig-out)/',
     '\\.py[co]$'
 ]);
 

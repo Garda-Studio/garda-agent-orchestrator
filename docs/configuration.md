@@ -55,8 +55,11 @@ node bin/garda.js gate validate-config
 case-insensitive regular expressions matched against repository-relative paths.
 Defaults exclude untracked files inside `target/`, `bin/`, `obj/`, `build/`,
 `dist/`, `out/`, `__pycache__/`, `.venv/`, `venv/`, `node_modules/`, `.gradle/`,
-`.pytest_cache/`, `.mypy_cache/` and `coverage/`, and untracked `*.pyc`/`*.pyo`.
-Tracked files inside these directories still count. Other untracked files,
+`.pytest_cache/`, `.mypy_cache/`, `coverage/`, `_build/`, `.build/`, `.dart_tool/`,
+`.zig-cache/` and `zig-out/`, and untracked `*.pyc`/`*.pyo`.
+Tracked files inside these directories still count, and so do new files once
+they are staged; stage new source files you create in these directories so
+reviewers see them. Other untracked files,
 including `Cargo.lock`, remain in scope. This policy covers task detection,
 scoped diffs and review state; raw WIP and repair capture keep their contents.
 In Garda's own source checkout, executable files under `dist/src/` remain in

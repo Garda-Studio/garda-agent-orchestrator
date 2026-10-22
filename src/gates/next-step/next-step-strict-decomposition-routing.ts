@@ -377,7 +377,8 @@ function buildStrictDecompositionDecisionCommand(params: {
         parts.push(`--expected-review-type ${quoteCommandValue(reviewType)}`);
     }
     parts.push(`--atomicity-constraint ${quoteCommandValue('<constraint or none>')}`);
-    parts.push(`[--work-package-contract-path ${quoteCommandValue('<required only for split-required>')}]`);
+    // The split-only --work-package-contract-path flag is explained in the reason: a bracketed optional
+    // tail inside the command made a verbatim run fail with an unexpected positional argument.
     parts.push('--repo-root "."');
     return parts.join(' ');
 }

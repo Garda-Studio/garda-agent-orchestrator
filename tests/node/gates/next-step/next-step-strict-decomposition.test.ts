@@ -639,9 +639,9 @@ describe('gates/next-step strict decomposition', () => {
         assert.ok(result.commands[0].command.includes('--task-profile "strict"'));
         assert.ok(result.commands[0].command.includes('--task-summary "Seeded next-step task"'));
         assert.ok(result.commands[0].command.includes('--expected-review-type "none"'));
-        assert.ok(result.commands[0].command.includes(
-            '[--work-package-contract-path "<required only for split-required>"]'
-        ));
+        // No bracketed optional syntax inside an executable command line.
+        assert.equal(/\[--/u.test(result.commands[0].command), false);
+        assert.equal(result.commands[0].command.includes('--work-package-contract-path'), false);
         assert.ok(result.reason.includes('when choosing split-required, add --work-package-contract-path'));
         assert.equal(text.includes('gate classify-change'), false);
         assert.equal(text.includes('gate compile-gate'), false);

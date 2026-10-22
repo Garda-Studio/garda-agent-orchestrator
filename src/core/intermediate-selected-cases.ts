@@ -35,6 +35,18 @@ function boundedText(value: unknown): value is string {
     return typeof value === 'string' && !!value.trim() && value.length <= 4096 && !/[\0\r\n]/u.test(value);
 }
 
+// Name the exact token that would satisfy the literal relation, for example a whole dotnet
+// `FullyQualifiedName~X` filter or a Maven `-Dtest=Class#method` value, without loosening it.
+function describeAbsentSelector(selector: string, values: readonly string[]): string {
+    const containing = [...new Set(values.filter(value => value !== selector && value.includes(selector)))]
+        .sort((left, right) => left.length - right.length).slice(0, 3).map(value => JSON.stringify(value.length > 160 ? `${value.slice(0, 157)}...` : value));
+    return 'Selected case selector is absent from the actual literal command. The selector must equal one whole '
+        + 'command token or the text after "=" in a token. '
+        + (containing.length > 0
+            ? `Use the full token instead: ${containing.join(' or ')}.`
+            : 'Put the selector into --command exactly as the selector value.');
+}
+
 /** Literal operands and explicit symbolic claims share one relation; neither proves case semantics. */
 export function captureIntermediateSelection(root: string, descriptor: ValidationCommandDescriptor,
     input?: unknown): IntermediateSelection {
@@ -47,7 +59,7 @@ export function captureIntermediateSelection(root: string, descriptor: Validatio
         if (!isPlainRecord(claim) || Object.keys(claim).some(key => !['source', 'case_id', 'selector'].includes(key))
             || !boundedText(claim.source) || !boundedText(claim.case_id) || !boundedText(claim.selector))
             throw new Error('Selected case requires a bounded source, case_id and literal selector.');
-        if (!values.includes(claim.selector)) throw new Error('Selected case selector is absent from the actual literal command.');
+        if (!values.includes(claim.selector)) throw new Error(describeAbsentSelector(claim.selector, values));
         return { source: relativeSource(root, claim.source), case_id: claim.case_id, selector: claim.selector };
     });
     const sources = new Map<string, ValidationFileIdentity>();

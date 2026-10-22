@@ -119,6 +119,11 @@ export function prepareParentAuditReview(root: string, taskId: string): ParentRe
     });
 }
 
+/** Controller tool the prepared handoff expects; only Codex launches through collaboration.spawn_agent. */
+export function parentReviewerControllerTool(provider: string): 'collaboration.spawn_agent' | 'provider-delegated-subagent' {
+    return provider === 'Codex' ? 'collaboration.spawn_agent' : 'provider-delegated-subagent';
+}
+
 export function recordParentReviewerStarted(root: string, taskId: string, identity: string, inputSha256: string, tool: string): ParentReviewerStart {
     return withParentAuditMutation(root, taskId, () => {
         const input = readParentRecord<ParentReviewInput>(root, taskId, 'review-input');

@@ -268,6 +268,10 @@ test('selected-source metadata rejects foreign, duplicate, oversized and linked 
     const selection = capture([claim]);
     assert.equal(selection.sources[0].path, SOURCE);
     assertCurrentIntermediateSelection(repoRoot, completeIntermediateSelection(repoRoot, selection));
+    // A partial selector stays rejected, and the error names the exact token that would satisfy it.
+    assert.throws(() => capture([{ ...claim, selector: CASE.slice(1) }]), (error: Error) =>
+        /selector is absent/u.test(error.message) && error.message.includes(`Use the full token instead: ${JSON.stringify(CASE)}`));
+    assert.throws(() => capture([{ ...claim, selector: 'unrelated-selector' }]), /exactly as the selector value/u);
     assert.throws(() => capture([{ ...claim, source: '../outside.case' }]), /contained/u);
     assert.throws(() => capture([{ ...claim, source: 'custom/missing.case' }]));
     assert.throws(() => capture([{ ...claim, extra: true }]), /requires/u);

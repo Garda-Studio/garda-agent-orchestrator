@@ -10,7 +10,8 @@ import { migrateLegacyManagedPathRegexes } from '../../../src/policy/default-pat
 import { filterBuildOutputScopePaths } from '../../../src/core/build-output-paths';
 
 const OUTPUTS = ['target', 'bin', 'obj', 'build', 'dist', 'out', '__pycache__', '.venv', 'venv',
-    'node_modules', '.gradle', '.pytest_cache', '.mypy_cache', 'coverage'];
+    'node_modules', '.gradle', '.pytest_cache', '.mypy_cache', 'coverage', '_build', '.build', '.dart_tool',
+    '.zig-cache', 'zig-out'];
 
 function fixture() {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-build-paths-'));
