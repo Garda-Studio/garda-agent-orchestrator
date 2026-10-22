@@ -4,10 +4,10 @@
     "name": "garda-agent-orchestrator",
     "version": "1.4.4"
   },
-  "packedFileManifestSha256": "b0a4f4a32894f7ca00237501267f8873b547bf35c16e058954cf261f0ac78dbd",
-  "tarballSha256": "8979df8a29323fcc751639ff1c147e8876dcc77a4ab239b0b3236cc3ba282866",
+  "packedFileManifestSha256": "6180ab3c61bdfdd5f8be5210dff138eabc5e3584eb3c4f423a467a0979692db2",
+  "tarballSha256": "c3a58cb04a6c3e68e72a9ad71ef4c45240bf2ac3ee5d881f97c714fce53a92b7",
   "tarballSha256ByPlatform": {
-    "win32": "8979df8a29323fcc751639ff1c147e8876dcc77a4ab239b0b3236cc3ba282866"
+    "win32": "c3a58cb04a6c3e68e72a9ad71ef4c45240bf2ac3ee5d881f97c714fce53a92b7"
   },
   "packedFileSha256": {
     ".gitattributes": "099d1a09ca2f02b2d7d071bcc19fdd2cda5c66f01f133abe9ff9d63294a1055c",
@@ -18,7 +18,7 @@
     "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
     "MANIFEST.md": "e36bfa3be80630f77e77f7569cb5c004f8d560c442e587b4c095df3bc0f9d44d",
     "NOTICE": "2673fbe9c004eb83749edf4ee9009315e8140fbc31904d74a4d201b0332e1705",
-    "README.md": "6b261d702b0607c3c9312003cd32768338c24409f676ed453cce82c8d3c4438c",
+    "README.md": "e786aee0de3d5ac9ddec487e3fde7c01e1e6a7a373af51fd04a84ab8fcba833b",
     "SECURITY.md": "ed561e4b42775dfdff979f4a8a860851eecd4b122de5941f5e4b379f4de0fb4e",
     "TRADEMARKS.md": "b83e45e9165be62597e8847644b2dafdcf3a90df6d40cd68ce115e447f5f6cd5",
     "VERSION": "d03d8b268b4171328ac2458ce8ca82d69a1fde38469d4e4faae4f8fa8d8a5e35",
@@ -1604,8 +1604,8 @@
   },
   "metrics": {
     "fileCount": 1591,
-    "unpackedSizeBytes": 28385715,
-    "installedSizeBytes": 28391311,
+    "unpackedSizeBytes": 28386741,
+    "installedSizeBytes": 28392337,
     "productionDependencyCount": 0,
     "lifecycleScripts": {
       "postpack": "node scripts/package-legacy-entrypoint-compat.cjs remove",
@@ -1633,8 +1633,10 @@
       "en.wikipedia.org",
       "garda-studio.com",
       "geminicli.com",
+      "git-scm.com",
       "github.com",
       "goose-docs.ai",
+      "i.ytimg.com",
       "json-schema.org",
       "junie.jetbrains.com",
       "kiro.dev",
@@ -1655,6 +1657,7 @@
       "www.linkedin.com",
       "www.sqlite.org",
       "www.unicode.org",
+      "www.youtube.com",
       "x.ai"
     ],
     "metadata": {
@@ -1697,5 +1700,5 @@
       "writeFile": 0
     }
   },
-  "rationale": "1.4.4 final candidate 1885485b: T-426/T-427 fixes, runnable decision commands, CMake discovery hints, checklist and selector guidance, additional build-output directories and changelog updates"
+  "rationale": "Merge master README: demo video links (youtube, i.ytimg.com) and Node/Git install guidance (git-scm.com)"
 }
