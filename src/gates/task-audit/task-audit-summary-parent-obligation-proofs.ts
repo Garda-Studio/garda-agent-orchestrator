@@ -20,6 +20,7 @@ import { inspectCompletionGateFinalizationLock } from '../locks/finalization-loc
 import { getShellSmokeEvidence } from '../diagnostics/shell-smoke-preflight';
 import type { DecomposedParentRequiredProof } from './task-audit-summary-types';
 import type { NativeChildAuditReader } from './task-audit-summary-no-op-source';
+import { readRegisteredParentObligations } from '../parent-audit/parent-audit-state';
 
 type Event = Readonly<Record<string, unknown>>;
 const ORIGINAL_SUITE_EVENTS = new Set(['FULL_SUITE_VALIDATION_PASSED', 'FULL_SUITE_VALIDATION_WARNED', 'FULL_SUITE_VALIDATION_FAILED']);
@@ -106,7 +107,7 @@ function readUnexecutedOriginalCommand(root: string, taskId: string, original: E
     return { command: suite.command.trim(), coverage_contract_sha256: null };
 }
 
-function qualifyWip(root: string, taskId: string, original: Event[]): void {
+export function qualifyWip(root: string, taskId: string, original: Event[]): void {
     const captures = original.filter(event => event.event_type === 'SPLIT_REQUIRED_WIP_CAPTURED');
     if (captures.length === 0) { readCleanOriginalPolicy(root, taskId, original); return; }
     for (const event of captures) {
@@ -185,17 +186,47 @@ function qualifyCommands(root: string, taskId: string, original: Event[], events
     }
 }
 
-interface ParentReadScope {
+export interface ParentReadScope {
     rootTaskId: string;
     sourceEpoch: string | null;
     readChildAudit?: NativeChildAuditReader;
     rechecks: Array<() => void>;
     proofRechecks: Array<() => void>;
+    childSources: Map<string, { queue: Buffer; sources: ReturnType<typeof readNativeChildSourceAcceptance>[] }>;
 }
 
-function readSourceEpoch(root: string): string {
+export function readParentSourceEpoch(root: string): string {
     return runGit(root, ['--no-replace-objects', 'show', '--no-patch', '--format=%H%n%T%n%P', 'HEAD'],
         { timeoutMs: 10000, maxBuffer: 4096 }).trim();
+}
+
+const activeParentReadScopes = new Map<string, ParentReadScope>();
+
+// Qualification is synchronous; one call-stack owner runs the final linear sweep and releases all cached reads.
+export function withNativeParentReadScope<T>(
+    repoRoot: string, taskId: string, read: (scope: ParentReadScope) => T,
+    qualified: (result: T) => boolean, readChildAudit?: NativeChildAuditReader
+): T {
+    const root = path.resolve(repoRoot), current = activeParentReadScopes.get(root);
+    if (current) {
+        current.readChildAudit ??= readChildAudit;
+        return read(current);
+    }
+    const scope: ParentReadScope = { rootTaskId: taskId, sourceEpoch: null, readChildAudit,
+        rechecks: [], proofRechecks: [], childSources: new Map() };
+    activeParentReadScopes.set(root, scope);
+    try {
+        const result = read(scope);
+        if (qualified(result)) {
+            scope.rechecks.forEach(check => check());
+            scope.proofRechecks.forEach(check => check());
+            scope.rechecks.forEach(check => check());
+            if (scope.sourceEpoch !== null && readParentSourceEpoch(root) !== scope.sourceEpoch) {
+                throw new Error('Native parent source epoch changed during qualification.');
+            }
+        }
+        return result;
+    } finally { activeParentReadScopes.delete(root); }
 }
 
 function assertNestedFinalized(root: string, taskId: string): void {
@@ -205,11 +236,13 @@ function assertNestedFinalized(root: string, taskId: string): void {
 
 function readParentObligations(repoRoot: string, taskId: string, scope: ParentReadScope): NativeParentObligationProofs | null {
     const root = path.resolve(repoRoot), id = assertValidTaskId(taskId), eventsRoot = joinOrchestratorPath(root, 'runtime/task-events');
+    const registered = readRegisteredParentObligations(root, id);
+    if (registered) return registered;
     return withTaskTimelineReadSnapshot(eventsRoot, id, () => {
         const files = [path.join(root, TASK_QUEUE_FILENAME), ...['strict-decomposition-decision', 'preflight'].map(kind => joinOrchestratorPath(root, 'runtime/reviews/' + id + '-' + kind + '.json'))];
         const inputs = files.map(file => readTransactionBytes(root, file));
         const native = readNativeDecomposedParentFacts(root, id, child => {
-            scope.sourceEpoch ??= readSourceEpoch(root);
+            scope.sourceEpoch ??= readParentSourceEpoch(root);
             // Native strict decisions already require parent-derived child IDs.
             const nested = readParentObligations(root, child, scope);
             if (!nested) {
@@ -229,7 +262,7 @@ function readParentObligations(repoRoot: string, taskId: string, scope: ParentRe
         if (!native) return null;
         const result: NativeParentObligationProofs = { status: 'BLOCKED', native, qualifiedProofs: [], violations: [...native.requirements.violations] };
         if (native.requirements.status !== 'REQUIRES_PROOF') return result;
-        scope.sourceEpoch ??= readSourceEpoch(root);
+        scope.sourceEpoch ??= readParentSourceEpoch(root);
         const qualify = (proof: DecomposedParentRequiredProof, action: () => void) => {
             try { action(); result.qualifiedProofs.push(proof); }
             catch (error: unknown) { result.violations.push(error instanceof Error ? error.message : String(error)); }
@@ -287,16 +320,15 @@ export function readNativeParentObligationProofs(
     repoRoot: string, taskId: string, readChildAudit?: NativeChildAuditReader
 ): NativeParentObligationProofs | null {
     const root = path.resolve(repoRoot), id = assertValidTaskId(taskId);
-    const scope: ParentReadScope = { rootTaskId: id, sourceEpoch: null, readChildAudit, rechecks: [], proofRechecks: [] };
-    const proof = readParentObligations(root, id, scope);
-    if (proof?.status === 'QUALIFIED') {
-        try {
-            scope.rechecks.forEach(check => check());
-            scope.proofRechecks.forEach(check => check());
-            if (readSourceEpoch(root) !== scope.sourceEpoch) throw new Error('Native parent source epoch changed during qualification.');
-        } catch (error: unknown) {
-            proof.status = 'BLOCKED'; proof.violations.push(error instanceof Error ? error.message : String(error));
-        }
+    const observed: { proof: NativeParentObligationProofs | null } = { proof: null };
+    try {
+        return withNativeParentReadScope(root, id, scope => {
+            observed.proof = readParentObligations(root, id, scope);
+            return observed.proof;
+        }, result => result?.status === 'QUALIFIED', readChildAudit);
+    } catch (error: unknown) {
+        if (observed.proof?.status !== 'QUALIFIED') throw error;
+        observed.proof.status = 'BLOCKED'; observed.proof.violations.push(error instanceof Error ? error.message : String(error));
+        return observed.proof;
     }
-    return proof;
 }

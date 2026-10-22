@@ -22,7 +22,8 @@ import {
     buildCoherentCycleRestartCommand
 } from '../completion/completion-reporting';
 import {
-    collectOrderedTimelineEvents
+    collectOrderedTimelineEvents,
+    type TimelineEventEntry
 } from '../completion/completion-evidence';
 import {
     getPostPreflightRulePackRebindDecision,
@@ -58,6 +59,7 @@ import {
     getTimelineEventDetailString
 } from './next-step-timeline-readers';
 import { isPlainRecord } from '../../core/records';
+import { isTaskEntryRulePackLoadedEvent } from '../preflight/pre-preflight-cycle-anchor';
 import {
     filterProtectedRestartScopeGeneratedRuntimeArtifacts,
     readCurrentProtectedScopeBeforePreflight
@@ -814,6 +816,67 @@ function getDefaultOutputFiltersPath(repoRoot: string): string {
     return path.resolve(repoRoot, buildBundleRelativePath(repoRoot, 'live/config/output-filters.json'));
 }
 
+function isOriginalEntryImplementationRefresh(events: TimelineEventEntry[], preflightSequence: number): boolean {
+    const latestTaskMode = findLatestTimelineEvent(
+        events,
+        (entry) => entry.event_type === 'TASK_MODE_ENTERED' && entry.sequence < preflightSequence
+    );
+    if (!latestTaskMode) {
+        return false;
+    }
+    const earlierBoundaries = events.filter(
+        (entry) => entry.sequence < preflightSequence && COHERENT_CYCLE_BOUNDARY_EVENTS.has(entry.event_type)
+    );
+    // Re-entry and review/completion recovery still require their native durable receipt.
+    return earlierBoundaries.length > 0 && earlierBoundaries.every(
+        (entry) => entry.event_type === 'IMPLEMENTATION_STARTED' && entry.sequence > latestTaskMode.sequence
+    );
+}
+
+export function readPendingPreflightRefresh(eventsRoot: string, taskId: string): {
+    nextGate: 'load-rule-pack' | 'handshake-diagnostics' | 'shell-smoke-preflight' | 'classify-change' | 'restart-coherent-cycle';
+    reason: string;
+} | null {
+    const errors: string[] = [];
+    const events = collectOrderedTimelineEvents(path.join(eventsRoot, `${taskId}.jsonl`), errors);
+    if (errors.length > 0 || events.length === 0) return null;
+    const boundary = findLatestTimelineEvent(events, entry => COHERENT_CYCLE_BOUNDARY_EVENTS.has(entry.event_type));
+    if (!boundary) return null;
+    if (!isOriginalEntryImplementationRefresh(events, events[events.length - 1].sequence + 1)) {
+        return {
+            nextGate: 'restart-coherent-cycle',
+            reason: 'The pending workspace refresh follows a review, completion or re-entry boundary. Rebuild its diagnostic prefix and durable restart evidence together before reclassification.'
+        };
+    }
+    const taskEntryRules = findLatestTimelineEvent(events, isTaskEntryRulePackLoadedEvent);
+    if (!taskEntryRules || taskEntryRules.sequence <= boundary.sequence) {
+        return {
+            nextGate: 'load-rule-pack',
+            reason: 'Refresh TASK_ENTRY rules after IMPLEMENTATION_STARTED so the new diagnostic prefix can supersede the previous shell-smoke evidence without resetting task mode.'
+        };
+    }
+    const handshake = findLatestTimelineEvent(events, entry =>
+        entry.event_type === 'HANDSHAKE_DIAGNOSTICS_RECORDED' && entry.sequence > boundary.sequence);
+    if (!handshake || handshake.outcome !== 'PASS') {
+        return {
+            nextGate: 'handshake-diagnostics',
+            reason: 'Refresh handshake after IMPLEMENTATION_STARTED before classifying the changed workspace in the original task entry.'
+        };
+    }
+    const shellSmoke = findLatestTimelineEvent(events, entry =>
+        entry.event_type === 'SHELL_SMOKE_PREFLIGHT_RECORDED' && entry.sequence > handshake.sequence);
+    if (!shellSmoke || shellSmoke.outcome !== 'PASS') {
+        return {
+            nextGate: 'shell-smoke-preflight',
+            reason: 'Refresh shell smoke after the current implementation handshake before reclassifying workspace scope.'
+        };
+    }
+    return {
+        nextGate: 'classify-change',
+        reason: 'Current implementation handshake and shell smoke cover the pending preflight refresh; retain the original task entry.'
+    };
+}
+
 export function readCoherentCycleReadiness(
     repoRoot: string,
     eventsRoot: string,
@@ -884,7 +947,7 @@ export function readCoherentCycleReadiness(
             events,
             (entry) => entry.event_type === 'COMPILE_GATE_PASSED' && entry.sequence > latestPreflight.sequence
         );
-        if (latestBoundary && latestCompilePass) {
+        if (latestBoundary && latestCompilePass && !isOriginalEntryImplementationRefresh(events, latestPreflight.sequence)) {
             const restartCompletedEvent = findLatestTimelineEvent(
                 events,
                 (entry) => RESTART_COMPLETED_EVENT_TYPES.has(entry.event_type) && entry.sequence > latestCompilePass.sequence

@@ -574,5 +574,19 @@
   "scope-budget-block-review-tokens": {
     "label": "budget di scope: token review - blocco BLOCK",
     "description": "blocco BLOCK: token review above threshold; next-step passa a split-required."
+  },
+  "parent-audit-enabled": {
+    "label": "Verifica e revisione della fase principale",
+    "description": "Per le attività suddivise durante il lavoro: una verifica complessiva dopo l’accettazione delle sottoattività. Tutti i problemi confluiscono in un’attività F, la cui accettazione chiude la principale. I gruppi manuali creati all’inizio si chiudono automaticamente. Vale per le suddivisioni future.",
+    "options": {
+      "true": {
+        "label": "Attivo",
+        "description": "Verificare il risultato complessivo una sola volta."
+      },
+      "false": {
+        "label": "Disattivo",
+        "description": "Chiudere automaticamente dopo l’accettazione delle sottoattività."
+      }
+    }
   }
 }

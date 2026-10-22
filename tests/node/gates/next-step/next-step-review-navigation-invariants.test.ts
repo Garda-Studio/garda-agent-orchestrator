@@ -251,7 +251,7 @@ describe('gates/next-step post-review navigation invariants', () => {
         assertNoUnexpectedReviewWork(result, { allowBuildReviewContext: true });
     });
 
-    it('refreshes preflight instead of restarting failed review when remediation adds expanded non-test files', () => {
+    it('restarts the coherent cycle before classifying expanded non-test remediation scope', () => {
         const repoRoot = makeTempRepo();
         initGitRepo(repoRoot);
         seedStartedTask(repoRoot, TASK_ID);
@@ -266,11 +266,12 @@ describe('gates/next-step post-review navigation invariants', () => {
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
         const command = commandText(result);
 
-        assert.equal(result.next_gate, 'classify-change', result.reason);
+        assert.equal(result.next_gate, 'restart-coherent-cycle', result.reason);
         assert.match(result.title, /expanded 'code' remediation scope/);
         assert.match(result.reason, /restart-review-cycle would fail its scope-boundary guard/);
-        assert.ok(command.includes('--changed-file "src/app.ts"'), command);
-        assert.ok(command.includes('--changed-file "src/extra.ts"'), command);
+        assert.match(command, /gate restart-coherent-cycle/u);
+        assert.match(command, /--changed-file ['"]src\/app\.ts['"]/u);
+        assert.match(command, /--changed-file ['"]src\/extra\.ts['"]/u);
         assertNoUnexpectedReviewWork(result);
     });
 

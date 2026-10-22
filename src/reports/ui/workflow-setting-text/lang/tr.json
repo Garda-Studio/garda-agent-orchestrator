@@ -574,5 +574,19 @@
   "scope-budget-block-review-tokens": {
     "label": "kapsam bütçesi: inceleme tokenleri - BLOCK engeli",
     "description": "BLOCK engeli: inceleme tokenleri above threshold; next-step split-required rotasına gider."
+  },
+  "parent-audit-enabled": {
+    "label": "Üst görevin tam denetimi ve incelemesi",
+    "description": "Çalışma sırasında bölünen görevlerde tüm alt görevler kabul edilince bir kez ortak inceleme yapılır. Bulgular tek bir F görevinde toplanır; kabulü üst görevi kapatır. Başlangıçta elle oluşturulan gruplar otomatik kapanır. Gelecekteki bölünmeler için geçerlidir.",
+    "options": {
+      "true": {
+        "label": "Açık",
+        "description": "Ortak sonucu bir kez bağımsız incele."
+      },
+      "false": {
+        "label": "Kapalı",
+        "description": "Tüm alt görevler kabul edilince otomatik kapat."
+      }
+    }
   }
 }

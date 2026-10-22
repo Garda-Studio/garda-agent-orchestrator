@@ -425,6 +425,10 @@ function handleSetLocked(
         aliasFlag: '--optional-checks'
     });
 
+    if (typeof options.parentAuditEnabled === 'string') {
+        nextConfig.parent_audit = { enabled: parseBooleanText(options.parentAuditEnabled, '--parent-audit-enabled') };
+        changedFields.push('parent_audit.enabled');
+    }
     if (fullSuiteEnabledSetting) {
         nextFullSuiteValidation.enabled = parseBooleanText(
             fullSuiteEnabledSetting.value,

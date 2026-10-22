@@ -431,6 +431,7 @@ import {
 import {
     isLatestCompletionCurrent,
     readCoherentCycleReadiness,
+    readPendingPreflightRefresh,
     readFailedGateRecovery,
     readPostPreflightRulePackReadiness
 } from './next-step-preflight-recovery';
@@ -3566,7 +3567,18 @@ export function resolveNextStepDecisionRoute(
         })
         : strictPreGuardWorkspaceReadiness;
 
-    const startupCycleReadiness = readStartupCycleReadiness(repoRoot, eventsRoot, taskId, taskModePath, {
+    const pendingPreflightRefresh = (reviewGateAlreadyPassed
+        ? effectivePreflightWorkspaceReadiness
+        : effectiveStrictPreGuardWorkspaceReadiness).ready ? null : readPendingPreflightRefresh(eventsRoot, taskId);
+    const taskEntryRulePackCommand = buildTaskEntryRulePackCommand(repoRoot, cliPrefix, taskId, taskMode, taskModePath);
+    const handshakeDiagnosticsCommand = `${cliPrefix} gate handshake-diagnostics --task-id "${taskId}" --repo-root "."`;
+    const shellSmokePreflightCommand = `${cliPrefix} gate shell-smoke-preflight --task-id "${taskId}" --repo-root "."`;
+    const startupCycleReadiness = pendingPreflightRefresh?.nextGate === 'load-rule-pack' ? {
+        ready: false,
+        nextGate: 'load-rule-pack' as const,
+        title: 'Refresh TASK_ENTRY rules before the implementation diagnostic prefix.',
+        reason: pendingPreflightRefresh.reason
+    } : readStartupCycleReadiness(repoRoot, eventsRoot, taskId, taskModePath, {
         enforceLateRulePackAfterReviewPhase:
             !preflight || !preflightCycleReadiness.ready || !effectivePreflightWorkspaceReadiness.ready
     });
@@ -3584,11 +3596,11 @@ export function resolveNextStepDecisionRoute(
         loadRulePackPassed: isGatePassed(summary, 'load-rule-pack'),
         rulePackStage: resolveRulePackStage(rulePack),
         preflightExists: Boolean(preflight),
-        taskEntryRulePackCommand: buildTaskEntryRulePackCommand(repoRoot, cliPrefix, taskId, taskMode, taskModePath),
+        taskEntryRulePackCommand,
         handshakeDiagnosticsPassed: isGatePassed(summary, 'handshake-diagnostics'),
-        handshakeDiagnosticsCommand: `${cliPrefix} gate handshake-diagnostics --task-id "${taskId}" --repo-root "."`,
+        handshakeDiagnosticsCommand,
         shellSmokePreflightPassed: isGatePassed(summary, 'shell-smoke-preflight'),
-        shellSmokePreflightCommand: `${cliPrefix} gate shell-smoke-preflight --task-id "${taskId}" --repo-root "."`
+        shellSmokePreflightCommand
     });
     if (!startupRoute) {
         const attachedPlanFailure = readAttachedTaskPlanIntegrityFailure(repoRoot, taskId, taskMode);
@@ -3806,6 +3818,42 @@ export function resolveNextStepDecisionRoute(
         )
     });
 
+    const scopeCoherentRestartCommand = failedCurrentReviewStateForPreflight || pendingPreflightRefresh?.nextGate === 'restart-coherent-cycle'
+        ? buildCoherentCycleRestartCommand(
+            repoRoot, taskId, preflightCommandPath, taskModePath, null, null,
+            {
+                requiresOperatorConfirmation: Boolean(
+                    taskMode?.orchestrator_work === true || taskMode?.workflow_config_work === true
+                ),
+                taskIntent: taskEntry?.title || getStringField(taskMode, 'task_summary', taskId),
+                changedFiles: getPreflightRefreshCommandChangedFiles({
+                    repoRoot, preflight, taskMode,
+                    includeFullFailedReviewRemediationScope: Boolean(failedCurrentReviewStateForPreflight),
+                    workspaceSnapshotRequest,
+                    fallbackChangedFiles: preGuardWorkspaceReadiness.currentChangedFiles
+                        ?? getPreflightRefreshChangedFiles(repoRoot, taskMode, preflight)
+                })
+            }
+        )
+        : '';
+    const workspaceRefreshCommand = buildAuthenticatedScopeClassifyChangeCommand({
+        repoRoot, cliPrefix, taskId, taskMode, taskModePath, preflightCommandPath,
+        includePlannedScope: false, taskQueueEntries: taskEntries,
+        changedFiles: getPreflightRefreshCommandChangedFiles({
+            repoRoot, preflight, taskMode,
+            includeFullFailedReviewRemediationScope: Boolean(failedCurrentReviewStateForPreflight),
+            workspaceSnapshotRequest,
+            fallbackChangedFiles: preGuardWorkspaceReadiness.currentChangedFiles
+                ?? getPreflightRefreshChangedFiles(repoRoot, taskMode, preflight)
+        })
+    });
+    const workspaceRefreshCommands = {
+        'load-rule-pack': taskEntryRulePackCommand,
+        'handshake-diagnostics': handshakeDiagnosticsCommand,
+        'shell-smoke-preflight': shellSmokePreflightCommand,
+        'classify-change': workspaceRefreshCommand,
+        'restart-coherent-cycle': scopeCoherentRestartCommand
+    };
     const preGuardRoute = resolvePreGuardDecisionRoute({
         preflightCycleReadiness,
         preflightCycleRefreshCommand: buildAuthenticatedScopeClassifyChangeCommand({
@@ -3835,27 +3883,11 @@ export function resolveNextStepDecisionRoute(
         },
         postReviewSourceMutationGuard,
         workspaceReadiness: preGuardWorkspaceReadiness,
-        workspaceRefreshCommand: buildAuthenticatedScopeClassifyChangeCommand({
-            repoRoot,
-            cliPrefix,
-            taskId,
-            taskMode,
-            taskModePath,
-            preflightCommandPath,
-            includePlannedScope: false,
-            taskQueueEntries: taskEntries,
-            changedFiles: getPreflightRefreshCommandChangedFiles({
-                repoRoot,
-                preflight,
-                taskMode,
-                includeFullFailedReviewRemediationScope: Boolean(failedCurrentReviewStateForPreflight),
-                workspaceSnapshotRequest,
-                fallbackChangedFiles: (reviewGateAlreadyPassed
-                    ? effectivePreflightWorkspaceReadiness.currentChangedFiles
-                    : effectiveStrictPreGuardWorkspaceReadiness.currentChangedFiles)
-                    ?? getPreflightRefreshChangedFiles(repoRoot, taskMode, preflight)
-            })
-        }),
+        workspaceRefreshCommand,
+        workspaceRefreshRecovery: pendingPreflightRefresh ? {
+            ...pendingPreflightRefresh,
+            command: workspaceRefreshCommands[pendingPreflightRefresh.nextGate]
+        } : null,
         failedReviewRemediation: failedCurrentReviewStateForPreflight && isTaskQueueActiveStatus(taskEntry?.status ?? null)
             ? {
                 reviewType: failedCurrentReviewStateForPreflight.reviewType,
@@ -3864,24 +3896,11 @@ export function resolveNextStepDecisionRoute(
                     || failedCurrentReviewStateForPreflight.failToken
                     || 'FAILED',
                 expandedNonTestFiles: failedReviewRemediationExpandedNonTestFiles,
+                expandedScopeRestartCommand: scopeCoherentRestartCommand,
                 closedCycleRestart: reviewGateAlreadyPassed
                     ? {
                         boundary: 'REVIEW_GATE_PASSED',
-                        command: buildCoherentCycleRestartCommand(
-                            repoRoot,
-                            taskId,
-                            preflightCommandPath,
-                            taskModePath,
-                            null,
-                            null,
-                            {
-                                requiresOperatorConfirmation: Boolean(
-                                    taskMode?.orchestrator_work === true
-                                    || taskMode?.workflow_config_work === true
-                                ),
-                                taskIntent: taskEntry?.title || getStringField(taskMode, 'task_summary', taskId)
-                            }
-                        )
+                        command: scopeCoherentRestartCommand
                     }
                     : null,
                 restartReviewCycleCommand: buildRestartReviewCycleCommand(

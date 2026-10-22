@@ -574,5 +574,19 @@
   "scope-budget-block-review-tokens": {
     "label": "scope-budget: review-tokens - BLOCK-blockering",
     "description": "BLOCK-blockering: review-tokens above threshold; next-step går till split-required."
+  },
+  "parent-audit-enabled": {
+    "label": "Fullständig granskning av huvuduppgiften",
+    "description": "För uppgifter som delas under arbetet görs en gemensam granskning efter att alla deluppgifter godkänts. Anmärkningar samlas i en F-uppgift; dess godkännande avslutar huvuduppgiften. Manuellt skapade grupper avslutas automatiskt. Gäller framtida uppdelningar.",
+    "options": {
+      "true": {
+        "label": "På",
+        "description": "Granska det samlade resultatet oberoende en gång."
+      },
+      "false": {
+        "label": "Av",
+        "description": "Avsluta automatiskt när alla deluppgifter godkänts."
+      }
+    }
   }
 }

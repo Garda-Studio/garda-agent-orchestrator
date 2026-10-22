@@ -22,6 +22,7 @@ import type {
 export type ParsedOptionsRecord = Record<string, string | boolean | string[] | undefined>;
 
 export type WorkflowFileConfigData = {
+    parent_audit?: WorkflowConfigData['parent_audit'];
     compile_gate?: WorkflowConfigData['compile_gate'];
     full_suite_validation: WorkflowConfigData['full_suite_validation'];
     review_execution_policy?: WorkflowConfigData['review_execution_policy'];
@@ -68,6 +69,7 @@ export interface WorkflowConfigState {
 }
 
 export interface WorkflowCommandResultBase {
+    parent_audit: WorkflowConfigData['parent_audit'];
     compact?: unknown;
     scope: 'repo-local';
     target_root: string;
@@ -142,6 +144,7 @@ export const WORKFLOW_SHARED_DEFINITIONS = {
 };
 
 export const WORKFLOW_SET_DEFINITIONS = {
+    '--parent-audit-enabled': { key: 'parentAuditEnabled', type: 'string' },
     ...COMPACT_CLI_OPTIONS,
     ...WORKFLOW_SHARED_DEFINITIONS,
     '--full-suite': { key: 'fullSuiteAlias', type: 'string' },

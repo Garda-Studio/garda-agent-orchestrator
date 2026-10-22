@@ -574,5 +574,19 @@
   "scope-budget-block-review-tokens": {
     "label": "スコープ予算: レビュートークン - BLOCK ブロック",
     "description": "BLOCK ブロック: レビュートークン above threshold; next-step split-required に進みます."
+  },
+  "parent-audit-enabled": {
+    "label": "親タスクの全体監査とレビュー",
+    "description": "作業中に分割したタスクは、全子タスクの受入後に一度だけ全体をレビューします。指摘は一つの F タスクにまとめ、その受入後に親を完了します。作成時に手動で分割したグループは常に自動完了します。今後の分割に適用されます。",
+    "options": {
+      "true": {
+        "label": "オン",
+        "description": "全体の結果を一度だけ独立してレビューします。"
+      },
+      "false": {
+        "label": "オフ",
+        "description": "全子タスクの受入後に自動完了します。"
+      }
+    }
   }
 }

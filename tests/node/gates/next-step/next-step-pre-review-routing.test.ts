@@ -142,6 +142,19 @@ test('resolveNextStepPreGuardRoute uses coherent restart after a closed review b
     assert.doesNotMatch(route.commands[0]?.command || '', /gate restart-review-cycle/u);
 });
 
+test('resolveNextStepPreGuardRoute repairs an incoherent diagnostic prefix before stale workspace reclassification', () => {
+    const command = 'node bin/garda.js gate restart-coherent-cycle --task-id "T-1"';
+    const route = resolveNextStepPreGuardRoute(basePreGuardOptions({
+        workspaceReadiness: { ready: false, reason: 'scope changed after the last preflight' },
+        coherentCycleReadiness: { ready: false, reason: 'handshake and shell smoke are missing inside the current cycle', command }
+    }));
+    assert.ok(route);
+    assert.equal(route.nextGate, 'restart-coherent-cycle');
+    assert.equal(route.commands.length, 1);
+    assert.equal(route.commands[0].command, command);
+    assert.doesNotMatch(route.commands[0].command, /gate classify-change/u);
+});
+
 test('resolveNextStepPreGuardRoute preserves POST_PREFLIGHT rebind route wording and command label', () => {
     const route = resolveNextStepPreGuardRoute(basePreGuardOptions({
         postPreflightRulePack: {

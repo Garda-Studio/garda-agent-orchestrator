@@ -574,5 +574,19 @@
   "scope-budget-block-review-tokens": {
     "label": "Scope-Budget: Review-Tokens - BLOCK-Blockade",
     "description": "BLOCK-Blockade: Review-Tokens above threshold; next-step führt zu split-required."
+  },
+  "parent-audit-enabled": {
+    "label": "Vollständige Prüfung der Elternaufgabe",
+    "description": "Bei während der Arbeit aufgeteilten Aufgaben folgt nach Annahme aller Kinder eine gemeinsame Prüfung. Befunde werden in einer F-Aufgabe gebündelt; deren Annahme schließt die Elternaufgabe. Manuell angelegte Gruppen schließen automatisch. Gilt für künftige Aufteilungen.",
+    "options": {
+      "true": {
+        "label": "Ein",
+        "description": "Gemeinsames Ergebnis einmal unabhängig prüfen."
+      },
+      "false": {
+        "label": "Aus",
+        "description": "Nach Annahme aller Kinder automatisch abschließen."
+      }
+    }
   }
 }

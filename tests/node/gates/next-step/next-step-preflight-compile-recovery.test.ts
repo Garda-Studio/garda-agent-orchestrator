@@ -999,6 +999,107 @@ describe('gates/next-step preflight compile recovery', () => {
         assert.ok(!['compile-gate', 'build-review-context', 'prepare-reviewer-launch', 'required-reviews-check'].includes(result.next_gate));
     });
 
+    it('refreshes diagnostics before classifying an implementation-only workspace change', () => {
+        const repoRoot = makeTempRepo();
+        initGitRepo(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        appendEvent(repoRoot, TASK_ID, 'IMPLEMENTATION_STARTED', 'INFO');
+        seedCompilePass(repoRoot, TASK_ID);
+        fs.writeFileSync(path.join(repoRoot, 'src/app.ts'), 'export const value = 2;\n');
+
+        let result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        assert.equal(result.next_gate, 'load-rule-pack', result.reason);
+        assert.match(result.commands[0].command, /--stage "TASK_ENTRY"/u);
+        seedRulePack(repoRoot, TASK_ID, 'TASK_ENTRY');
+        result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        assert.equal(result.next_gate, 'handshake-diagnostics', result.reason);
+        appendEvent(repoRoot, TASK_ID, 'HANDSHAKE_DIAGNOSTICS_RECORDED');
+        result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        assert.equal(result.next_gate, 'shell-smoke-preflight', result.reason);
+        appendEvent(repoRoot, TASK_ID, 'SHELL_SMOKE_PREFLIGHT_RECORDED');
+        result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        assert.equal(result.next_gate, 'classify-change', result.reason);
+
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        seedCompilePass(repoRoot, TASK_ID);
+        result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        assert.notEqual(result.next_gate, 'restart-coherent-cycle', result.reason);
+    });
+
+    it('routes a workspace refresh after review directly to coherent recovery', () => {
+        const repoRoot = makeTempRepo();
+        initGitRepo(repoRoot);
+        seedStartedTask(repoRoot, TASK_ID);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        appendEvent(repoRoot, TASK_ID, 'IMPLEMENTATION_STARTED', 'INFO');
+        seedCompilePass(repoRoot, TASK_ID);
+        appendEvent(repoRoot, TASK_ID, 'REVIEW_PHASE_STARTED', 'INFO', { review_type: 'code' });
+        fs.writeFileSync(path.join(repoRoot, 'src/app.ts'), 'export const value = 2;\n');
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        assert.equal(result.next_gate, 'restart-coherent-cycle', result.reason);
+        assert.match(result.commands[0].command, /gate restart-coherent-cycle/u);
+    });
+
+    it('accepts an implementation preflight refresh in the original task entry without a restart receipt', () => {
+        const repoRoot = makeTempRepo();
+        seedStartedTask(repoRoot, TASK_ID);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        appendEvent(repoRoot, TASK_ID, 'IMPLEMENTATION_STARTED', 'INFO');
+        seedCompilePass(repoRoot, TASK_ID);
+
+        appendEvent(repoRoot, TASK_ID, 'HANDSHAKE_DIAGNOSTICS_RECORDED');
+        appendEvent(repoRoot, TASK_ID, 'SHELL_SMOKE_PREFLIGHT_RECORDED');
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        appendEvent(repoRoot, TASK_ID, 'IMPLEMENTATION_STARTED', 'INFO');
+        seedCompilePass(repoRoot, TASK_ID);
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+
+        assert.notEqual(result.next_gate, 'restart-coherent-cycle', result.reason);
+        assert.equal(result.next_gate, 'required-reviews-check', result.reason);
+    });
+
+    it('requires a restart receipt after re-entry even when the earlier boundary was only implementation', () => {
+        const repoRoot = makeTempRepo();
+        seedStartedTask(repoRoot, TASK_ID);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        appendEvent(repoRoot, TASK_ID, 'IMPLEMENTATION_STARTED', 'INFO');
+        seedCompilePass(repoRoot, TASK_ID);
+
+        seedStartedTask(repoRoot, TASK_ID);
+        appendEvent(repoRoot, TASK_ID, 'IMPLEMENTATION_STARTED', 'INFO');
+        appendEvent(repoRoot, TASK_ID, 'HANDSHAKE_DIAGNOSTICS_RECORDED');
+        appendEvent(repoRoot, TASK_ID, 'SHELL_SMOKE_PREFLIGHT_RECORDED');
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        seedCompilePass(repoRoot, TASK_ID);
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+
+        assert.equal(result.next_gate, 'restart-coherent-cycle');
+        assert.ok(result.reason.includes('no persisted restart-completed event'), result.reason);
+    });
+
+    it('does not let a later implementation marker waive a review restart receipt', () => {
+        const repoRoot = makeTempRepo();
+        seedStartedTask(repoRoot, TASK_ID);
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        seedCompilePass(repoRoot, TASK_ID);
+        appendEvent(repoRoot, TASK_ID, 'REVIEW_PHASE_STARTED', 'INFO', { review_type: 'code' });
+        appendEvent(repoRoot, TASK_ID, 'IMPLEMENTATION_STARTED', 'INFO');
+
+        appendEvent(repoRoot, TASK_ID, 'HANDSHAKE_DIAGNOSTICS_RECORDED');
+        appendEvent(repoRoot, TASK_ID, 'SHELL_SMOKE_PREFLIGHT_RECORDED');
+        writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS });
+        seedCompilePass(repoRoot, TASK_ID);
+
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+
+        assert.equal(result.next_gate, 'restart-coherent-cycle');
+        assert.ok(result.reason.includes('no persisted restart-completed event'), result.reason);
+    });
+
     it('blocks restarted compile recovery when the persisted restart-completed event is missing', () => {
         const repoRoot = makeTempRepo();
         seedStartedTask(repoRoot, TASK_ID);
@@ -1290,7 +1391,7 @@ describe('gates/next-step preflight compile recovery', () => {
         assert.ok(!result.commands[0].command.includes('build-review-context'));
     });
 
-    it('refreshes explicit preflight before full-suite when the current git snapshot has a new file', () => {
+    it('restarts coherently before full-suite when accepted review scope gains a new file', () => {
         const repoRoot = makeTempRepo();
         writeJson(path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config', 'workflow-config.json'), {
             full_suite_validation: {
@@ -1328,12 +1429,12 @@ describe('gates/next-step preflight compile recovery', () => {
 
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
 
-        assert.equal(result.next_gate, 'classify-change');
+        assert.equal(result.next_gate, 'restart-coherent-cycle');
         assert.ok(result.reason.includes('stale preflight authorized file set [src/app.ts] differs from current git snapshot [package.json, src/app.ts]'));
         assert.ok(result.reason.includes('missing from preflight: [package.json]'));
         assert.ok(!result.commands[0].command.includes('full-suite-validation'));
-        assert.ok(result.commands[0].command.includes('--changed-file "src/app.ts"'));
-        assert.ok(result.commands[0].command.includes('--changed-file "package.json"'));
+        assert.match(result.commands[0].command, /--changed-file ['"]src\/app\.ts['"]/u);
+        assert.match(result.commands[0].command, /--changed-file ['"]package\.json['"]/u);
     });
 
     it('rejects cross-domain task deltas hidden by a materialized planned-only preflight', () => {

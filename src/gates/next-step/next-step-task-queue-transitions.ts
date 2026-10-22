@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { registerParentAtDecomposition } from '../parent-audit/parent-audit-contract';
 
 import {
     appendMandatoryTaskEvent
@@ -43,6 +44,7 @@ export function transitionSplitRequiredParentToDecomposed(params: {
 }): TaskQueueStatusSyncResult {
     const syncResult = syncTaskQueueStatusFromSplitRequiredToDecomposed(params.repoRoot, params.taskId);
     if (syncResult.outcome === 'updated') {
+        registerParentAtDecomposition(params.repoRoot, params.taskId);
         appendMandatoryTaskEvent(
             getOrchestratorRootFromEventsRoot(params.eventsRoot),
             params.taskId,
@@ -160,6 +162,7 @@ export function transitionStrictDecompositionParentToDecomposed(params: {
         params.expectedChildProfile || 'strict'
     );
     if (syncResult.outcome === 'updated') {
+        registerParentAtDecomposition(params.repoRoot, params.taskId);
         appendMandatoryTaskEvent(
             getOrchestratorRootFromEventsRoot(params.eventsRoot),
             params.taskId,

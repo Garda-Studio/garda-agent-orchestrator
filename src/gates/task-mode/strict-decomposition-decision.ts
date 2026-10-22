@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { parseParentCompletionPolicy, type ParentCompletionPolicy } from '../../core/parent-completion-policy';
 
 import { assertValidTaskId } from '../../gate-runtime/task-events';
 import {
@@ -39,6 +40,7 @@ export interface StrictDecompositionProposedChild {
 }
 
 export interface StrictDecompositionDecisionArtifact {
+    parent_completion_policy?: ParentCompletionPolicy;
     timestamp_utc: string;
     event_source: 'strict-decomposition-decision';
     task_id: string;
@@ -59,6 +61,7 @@ export interface StrictDecompositionDecisionArtifact {
 }
 
 export interface BuildStrictDecompositionDecisionArtifactOptions {
+    parentCompletionPolicy?: unknown;
     taskId: unknown;
     decision: unknown;
     taskSummary: unknown;
@@ -269,6 +272,8 @@ export function buildStrictDecompositionDecisionArtifact(
 
     return {
         timestamp_utc: new Date().toISOString(),
+        ...(decision === 'split-required' && options.parentCompletionPolicy !== undefined
+            ? { parent_completion_policy: parseParentCompletionPolicy(options.parentCompletionPolicy) } : {}),
         event_source: 'strict-decomposition-decision',
         task_id: taskId,
         status: 'PASSED',
@@ -427,7 +432,8 @@ export function getStrictDecompositionDecisionEvidence(
                         : ''
                 ))
                 : [],
-            workPackageContract: artifactObject.work_package_contract
+            workPackageContract: artifactObject.work_package_contract,
+            parentCompletionPolicy: artifactObject.parent_completion_policy
         });
         if (result.work_package_contract_sha256 !== rebuiltArtifact.work_package_contract_sha256) {
             throw new Error('WorkPackageContract sha256 is missing or mismatched.');

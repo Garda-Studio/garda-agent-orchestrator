@@ -574,5 +574,19 @@
   "scope-budget-block-review-tokens": {
     "label": "范围预算: 评审 token - BLOCK 阻止",
     "description": "BLOCK 阻止: 评审 token above threshold; next-step 进入 split-required."
+  },
+  "parent-audit-enabled": {
+    "label": "父任务完整审计与评审",
+    "description": "执行过程中拆分的任务，在所有子任务验收后进行一次整体评审。所有问题合并为一个 F 任务，其验收后父任务自动完成。创建时手动拆分的任务组始终自动完成。此设置仅适用于后续拆分。",
+    "options": {
+      "true": {
+        "label": "开启",
+        "description": "对整体结果进行一次独立评审。"
+      },
+      "false": {
+        "label": "关闭",
+        "description": "所有子任务验收后自动完成。"
+      }
+    }
   }
 }

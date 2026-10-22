@@ -218,6 +218,8 @@ export async function runRestartCoherentCycleCommand(
             snapshot: optionalSkillDeclineSnapshot
         });
         const compileResult = await runCompileGateCommand({
+            allowPlanDrift: options.allowPlanDrift,
+            allowPlanDriftReason: options.allowPlanDriftReason,
             repoRoot,
             taskId: resolvedTaskId,
             taskModePath: resolvedTaskModePath,

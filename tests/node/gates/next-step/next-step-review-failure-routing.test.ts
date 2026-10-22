@@ -3755,7 +3755,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
         assert.ok(!command.includes("--task-intent 'Seeded next-step task'"), command);
     });
 
-    it('refreshes preflight before restart-review-cycle when failed-review remediation expands non-test scope', () => {
+    it('restarts coherently before reclassification when failed-review remediation expands non-test scope', () => {
         const repoRoot = makeTempRepo();
         initGitRepo(repoRoot);
         seedStartedTask(repoRoot, TASK_ID);
@@ -3777,13 +3777,13 @@ describe('gates/next-step', { concurrency: 2 }, () => {
         const command = result.commands[0]?.command || '';
 
         assert.equal(result.status, 'BLOCKED');
-        assert.equal(result.next_gate, 'classify-change', result.reason);
+        assert.equal(result.next_gate, 'restart-coherent-cycle', result.reason);
         assert.equal(result.review.next_review_type, 'code');
         assert.match(result.title, /expanded 'code' remediation scope/);
         assert.match(result.reason, /restart-review-cycle would fail its scope-boundary guard/);
-        assert.ok(command.includes('gate classify-change'), command);
-        assert.ok(command.includes('--changed-file "src/app.ts"'), command);
-        assert.ok(command.includes('--changed-file "src/extra.ts"'), command);
+        assert.ok(command.includes('gate restart-coherent-cycle'), command);
+        assert.match(command, /--changed-file ['"]src\/app\.ts['"]/u);
+        assert.match(command, /--changed-file ['"]src\/extra\.ts['"]/u);
         assert.ok(!command.includes('gate restart-review-cycle'));
         assert.ok(!command.includes('gate build-review-context'));
         assert.ok(!command.includes('gate prepare-reviewer-launch'));
@@ -3819,10 +3819,10 @@ describe('gates/next-step', { concurrency: 2 }, () => {
         const command = result.commands[0]?.command || '';
 
         assert.equal(result.status, 'BLOCKED');
-        assert.equal(result.next_gate, 'classify-change', result.reason);
+        assert.equal(result.next_gate, 'restart-coherent-cycle', result.reason);
         assert.match(result.title, /expanded 'code' remediation scope/);
-        assert.ok(command.includes('--changed-file "src/app.ts"'), command);
-        assert.ok(command.includes('--changed-file "docs/cli-reference.md"'), command);
+        assert.match(command, /--changed-file ['"]src\/app\.ts['"]/u);
+        assert.match(command, /--changed-file ['"]docs\/cli-reference\.md['"]/u);
     });
 
     it('keeps task-owned manual-validation attachments on restart-review-cycle route', () => {

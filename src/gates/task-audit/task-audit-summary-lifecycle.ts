@@ -9,7 +9,7 @@ import { readTransactionBytes } from '../../core/file-transaction-journal';
 import { extractExplicitLinkedChildTaskIds } from '../next-step/next-step-task-queue';
 import { getStrictDecompositionDecisionEvidence } from '../task-mode/strict-decomposition-decision';
 import { deriveDecomposedParentAuditRequirements } from './task-audit-summary-decomposed-parent';
-import { readNativeChildSourceAcceptance, type NativeChildSourceAcceptance } from './task-audit-summary-decomposed-parent-proofs';
+import { readNativeChildSourceAcceptance, mergeNativeChildSources, type NativeChildSourceAcceptance } from './task-audit-summary-decomposed-parent-proofs';
 import type { DecomposedParentAuditFacts, DecomposedParentAuditRequirements, ParentAuditEventReference } from './task-audit-summary-types';
 import {
     captureTaskTimelineReadSnapshotSha256,
@@ -632,7 +632,7 @@ export function readNativeDecomposedParentFacts(repoRoot: string, taskId: string
             facts.childGraphComplete = children.every(child => entries.has(child) && isTaskQueueDoneStatus(entries.get(child)?.status ?? null));
             result.requirements = deriveDecomposedParentAuditRequirements(facts);
             if (result.requirements.status !== 'REQUIRES_PROOF') return result;
-            for (const child of children) result.childSources.push(...(observeChildSources
+            result.childSources = mergeNativeChildSources(children.map(child => observeChildSources
                 ? observeChildSources(child) : [readNativeChildSourceAcceptance(root, child)]));
             if (!readNativeParentInput(root, artifactPath).equals(artifactBytes)
                 || !readNativeParentInput(root, queuePath).equals(queueBytes)) throw new Error('Canonical parent inputs changed during selection.');

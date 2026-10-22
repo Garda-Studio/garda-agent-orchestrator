@@ -15,6 +15,7 @@
 
 - The local UI has a refreshed layout, readable task tables and a remembered light, dark or system theme.
 - Task details show progress, blockers, review attempts, final reports and a copyable next command.
+- Choose whether split tasks need a final combined audit. Manual task groups finish automatically; an enabled audit runs once and groups any fixes into one follow-up task.
 - Reports refresh when project memory or relevant Git settings change.
 - Prepare and inspect task plans before starting work. Ready plans attach automatically; invalid dependencies are reported.
 - `next-step` gives clearer recovery instructions for blocked steps, missing tools and incomplete validation.

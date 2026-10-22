@@ -574,5 +574,19 @@
   "scope-budget-block-review-tokens": {
     "label": "budżet zakresu: tokeny review - blokada BLOCK",
     "description": "blokada BLOCK: tokeny review above threshold; next-step przechodzi do split-required."
+  },
+  "parent-audit-enabled": {
+    "label": "Pełny audyt i przegląd zadania nadrzędnego",
+    "description": "Dla zadań podzielonych w trakcie pracy: jeden wspólny przegląd po przyjęciu wszystkich podzadań. Uwagi trafiają do jednego zadania F; jego przyjęcie zamyka rodzica. Grupy ręcznie utworzone na początku zamykają się automatycznie. Dotyczy przyszłych podziałów.",
+    "options": {
+      "true": {
+        "label": "Włączone",
+        "description": "Jednorazowy niezależny przegląd całości."
+      },
+      "false": {
+        "label": "Wyłączone",
+        "description": "Automatyczne zamknięcie po przyjęciu wszystkich podzadań."
+      }
+    }
   }
 }

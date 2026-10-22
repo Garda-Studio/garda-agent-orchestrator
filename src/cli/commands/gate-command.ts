@@ -1,4 +1,5 @@
 import { getAllShimmedGateNames } from '../../compat/shim-registry';
+import { handleParentAudit } from './gate-parent-audit-handlers';
 import {
     buildGateCommandOverviewText,
     buildGateHelpText,
@@ -75,7 +76,7 @@ export async function handleGate(commandArgv: string[]): Promise<void> {
         console.log(buildGateCommandOverviewText());
         console.log('');
         console.log('Available gates:');
-        for (const name of getAllShimmedGateNames()) {
+        for (const name of [...getAllShimmedGateNames(), 'parent-audit'].sort()) {
             console.log(`  ${name}`);
         }
         return;
@@ -93,6 +94,8 @@ export async function handleGate(commandArgv: string[]): Promise<void> {
     }
 
     switch (gateName) {
+        case 'parent-audit':
+            return handleParentAudit(gateArgv);
         case 'validate-manifest':
             return handleValidateManifest(gateArgv);
         case 'validate-config':

@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { resolveParentAuditNavigation } from '../parent-audit/parent-audit-navigation';
 
 import {
     isTaskQueueActiveStatus,
@@ -512,6 +513,8 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
     effects?: NextStepEffectController;
 }): NextStepDecisionRoutePayload | null {
     const effects = options.effects ?? createNextStepEffectPlanner();
+    const parentAuditRoute = resolveParentAuditNavigation(options);
+    if (parentAuditRoute) return { ...parentAuditRoute, presentArtifacts: options.corePresentArtifacts };
     const taskQueueStatus = options.taskEntry?.status || null;
     const splitRequiredStatusInTaskQueue = isTaskQueueSplitRequiredStatus(taskQueueStatus);
     const permanentSplitRequiredLatchEvidence = splitRequiredStatusInTaskQueue

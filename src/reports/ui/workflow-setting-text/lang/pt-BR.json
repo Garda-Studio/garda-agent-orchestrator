@@ -574,5 +574,19 @@
   "scope-budget-block-review-tokens": {
     "label": "orçamento de escopo: tokens de revisão - bloqueio BLOCK",
     "description": "bloqueio BLOCK: tokens de revisão above threshold; next-step encaminha para split-required."
+  },
+  "parent-audit-enabled": {
+    "label": "Auditoria e revisão da tarefa principal",
+    "description": "Para tarefas divididas durante o trabalho: uma revisão conjunta após aceitar todas as subtarefas. Os problemas ficam em uma única tarefa F; sua aceitação encerra a principal. Grupos manuais criados no início encerram automaticamente. Aplica-se a divisões futuras.",
+    "options": {
+      "true": {
+        "label": "Ativado",
+        "description": "Revisar o resultado conjunto uma única vez."
+      },
+      "false": {
+        "label": "Desativado",
+        "description": "Encerrar automaticamente após aceitar todas as subtarefas."
+      }
+    }
   }
 }

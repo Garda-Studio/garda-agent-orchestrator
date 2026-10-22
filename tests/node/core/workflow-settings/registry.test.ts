@@ -10,6 +10,7 @@ import { PROJECT_MEMORY_SETTING_REGISTRY } from '../../../../src/core/workflow-s
 import { PROTECTED_CONTROL_SETTING_REGISTRY } from '../../../../src/core/workflow-settings/protected-controls';
 import { REVIEW_CYCLE_SETTING_REGISTRY } from '../../../../src/core/workflow-settings/review-cycle';
 import { REVIEW_EXECUTION_SETTING_REGISTRY } from '../../../../src/core/workflow-settings/review-execution';
+import { PARENT_AUDIT_SETTING_REGISTRY } from '../../../../src/core/workflow-settings/parent-audit';
 import { SCOPE_BUDGET_CONTROL_SETTING_REGISTRY } from '../../../../src/core/workflow-settings/scope-budget-controls';
 import { SCOPE_BUDGET_THRESHOLD_SETTING_REGISTRY } from '../../../../src/core/workflow-settings/scope-budget-thresholds';
 import { WORKFLOW_SETTING_REGISTRY } from '../../../../src/core/workflow-settings/registry';
@@ -44,6 +45,7 @@ const EXPECTED_CONTRACT = [
     ["full-suite-out-of-scope-failure-policy", "full_suite_validation.out_of_scope_failure_policy", "--full-suite-out-of-scope-failure-policy", "enum", "AUDIT_AND_BLOCK", {"kind": "workflow", "section": "full-suite-validation"}],
     ["full-suite-placement", "full_suite_validation.placement", "--full-suite-placement", "enum", "after_compile_before_reviews", {"kind": "workflow", "section": "full-suite-validation"}],
     ["review-execution-policy", "review_execution_policy.mode", "--review-execution-policy", "enum", "strict_sequential", {"kind": "workflow", "section": "review-execution-policy"}],
+    ["parent-audit-enabled", "parent_audit.enabled", "--parent-audit-enabled", "boolean", false, {"kind": "workflow", "section": "parent-audit"}],
     ["scope-budget-enabled", "scope_budget_guard.enabled", "--scope-budget-enabled", "boolean", true, {"kind": "workflow", "section": "scope-budget-guard"}],
     ["scope-budget-action", "scope_budget_guard.action", "--scope-budget-action", "enum", "WARN_ONLY", {"kind": "workflow", "section": "scope-budget-guard"}],
     ["scope-budget-profiles", "scope_budget_guard.profiles", "--scope-budget-profiles", "enum_list", ["strict"], {"kind": "workflow", "section": "scope-budget-guard"}],
@@ -83,12 +85,12 @@ const EXPECTED_CONTRACT = [
 const families = [COMPACT_SETTING_REGISTRY, BACKUP_SETTING_REGISTRY, COMPILE_SETTING_REGISTRY,
     FULL_SUITE_SETTING_REGISTRY, OPTIONAL_QUALITY_SETTING_REGISTRY, PROJECT_MEMORY_SETTING_REGISTRY,
     PROTECTED_CONTROL_SETTING_REGISTRY, REVIEW_CYCLE_SETTING_REGISTRY, REVIEW_EXECUTION_SETTING_REGISTRY,
-    SCOPE_BUDGET_CONTROL_SETTING_REGISTRY, SCOPE_BUDGET_THRESHOLD_SETTING_REGISTRY];
+    SCOPE_BUDGET_CONTROL_SETTING_REGISTRY, SCOPE_BUDGET_THRESHOLD_SETTING_REGISTRY, PARENT_AUDIT_SETTING_REGISTRY];
 
 test('aggregate retains every accepted id, key, flag, type, default, owner and deterministic order', () => {
     assert.deepEqual(registry.entries.map(entry => [entry.id, entry.key, entry.cli.flag,
         entry.value_type, entry.default_value, entry.owner]), EXPECTED_CONTRACT);
-    assert.equal(registry.entries.length, 60);
+    assert.equal(registry.entries.length, 61);
     assert.ok(Object.isFrozen(registry));
     assert.ok(Object.isFrozen(registry.entries));
     assert.throws(() => (registry.entries as unknown[]).push({}), TypeError);
@@ -99,7 +101,7 @@ test('aggregate retains every accepted id, key, flag, type, default, owner and d
 
 test('all compact and family validators and materializers are reused without competing policy', () => {
     const ownerEntries = families.flatMap(family => family.entries);
-    assert.equal(ownerEntries.length, 60);
+    assert.equal(ownerEntries.length, 61);
     for (const ownerEntry of ownerEntries) {
         const entry = registry.require(ownerEntry.id);
         assert.equal(entry.validate, ownerEntry.validate);

@@ -574,5 +574,19 @@
   "scope-budget-block-review-tokens": {
     "label": "ngân sách phạm vi: token review - chặn BLOCK",
     "description": "chặn BLOCK: token review above threshold; next-step chuyển tới split-required."
+  },
+  "parent-audit-enabled": {
+    "label": "Kiểm toán và đánh giá tác vụ cha",
+    "description": "Với tác vụ được chia trong quá trình làm việc, đánh giá tổng thể một lần sau khi chấp nhận mọi tác vụ con. Các vấn đề được gom vào một tác vụ F; chấp nhận tác vụ này sẽ đóng tác vụ cha. Nhóm được tạo thủ công từ đầu luôn tự đóng. Áp dụng cho các lần chia sau.",
+    "options": {
+      "true": {
+        "label": "Bật",
+        "description": "Đánh giá độc lập kết quả tổng thể một lần."
+      },
+      "false": {
+        "label": "Tắt",
+        "description": "Tự đóng khi mọi tác vụ con được chấp nhận."
+      }
+    }
   }
 }

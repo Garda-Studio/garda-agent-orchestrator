@@ -161,7 +161,7 @@ function settingGroupId(setting) {
   if (key.startsWith('task_test_selection.')) return 'validation';
   if (key.startsWith('optional_quality_checks.')) return 'validation';
   if (key.startsWith('optional_skill_selection_policy.')) return 'validation';
-  if (key.startsWith('review_execution_policy.') || key.startsWith('review_cycle_guard.')) return 'review';
+  if (key.startsWith('review_execution_policy.') || key.startsWith('review_cycle_guard.') || key.startsWith('parent_audit.')) return 'review';
   if (key.startsWith('scope_budget_guard.')) return 'scope';
   if (key.startsWith('project_memory_maintenance.')) return 'memory';
   return 'safety';

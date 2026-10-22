@@ -515,5 +515,19 @@
   "scope-budget-block-review-tokens": {
     "label": "Review-token forecast block",
     "description": "Estimated review-token budget above this value is reported as BLOCK and next-step routes to split-required."
+  },
+  "parent-audit-enabled": {
+    "label": "Full parent audit and review",
+    "description": "For tasks split during execution, audit the combined result once after all children are accepted. Findings become one F-task; its acceptance completes the parent. Manual decomposition at creation always completes automatically. Applies to future decompositions.",
+    "options": {
+      "true": {
+        "label": "On",
+        "description": "Audit and independently review the combined result once."
+      },
+      "false": {
+        "label": "Off",
+        "description": "Complete automatically after every child is accepted."
+      }
+    }
   }
 }

@@ -82,6 +82,7 @@ export function normalizeWorkflowFileConfig(config: WorkflowFileConfigData): Wor
     const defaultConfig = buildDefaultWorkflowConfig() as WorkflowConfigData;
     return {
         ...config,
+        parent_audit: { ...(config.parent_audit ?? defaultConfig.parent_audit) },
         compile_gate: normalizeCompileGateConfig(config.compile_gate ?? defaultConfig.compile_gate),
         full_suite_validation: config.full_suite_validation,
         review_delegation: cloneReviewDelegationConfig(

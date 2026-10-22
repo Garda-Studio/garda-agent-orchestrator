@@ -16,6 +16,16 @@ defined in `src/core/workflow-command-guidance.ts`. This is display guidance;
 argument parsing, confirmation freshness checks and audited mutations retain
 their existing owners. Keep documentation examples aligned with that guidance.
 
+## Parent completion
+
+`parent_audit.enabled` defaults to `false`. The dashboard exposes **Full parent
+audit and review** under review settings. The CLI equivalent is
+`garda workflow set --parent-audit-enabled true|false`, with the operator confirmation
+arguments above. The setting is frozen at decomposition and affects future parents.
+Explicit manual groups complete automatically regardless of the switch. Audited
+runtime parents receive one combined review and, if needed, one grouped correction
+task. See [parent completion](parent-task-completion.md) for acceptance and recovery.
+
 ## Compact command controls
 
 The **Compact** UI group edits `workflow-config.json` through the existing confirmed, audited settings route. It shows observed cache bytes/runs and provides enable/disable controls for compact itself and the shipped Git, file and ripgrep adapters. Disabling a family prevents its producer from running. Retained output remains readable until task completion.

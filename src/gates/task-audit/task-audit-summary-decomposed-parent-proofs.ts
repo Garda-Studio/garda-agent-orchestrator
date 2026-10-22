@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { TextDecoder } from 'node:util';
+import { TextDecoder, isDeepStrictEqual } from 'node:util';
 import { bindContainedDestination, assertContainedDestination } from '../../core/contained-filesystem';
 import { isPlainRecord } from '../../core/records';
 import { runGit, runGitBinary } from '../../core/git-helpers';
@@ -36,6 +36,20 @@ export type NativeChildSourceAcceptance = NativeChildGitSource & {
     artifactSha256: string;
 } & ({ postCommitAudit: Record<string, unknown>; noOpAcceptanceAudit?: never }
     | { postCommitAudit?: never; noOpAcceptanceAudit: Record<string, unknown> });
+
+export function mergeNativeChildSources(groups: Iterable<Iterable<NativeChildSourceAcceptance>>): NativeChildSourceAcceptance[] {
+    const sources = new Map<string, NativeChildSourceAcceptance>();
+    for (const group of groups) {
+        for (const source of group) {
+            const previous = sources.get(source.taskId);
+            if (previous && !isDeepStrictEqual(previous, source)) {
+                throw new Error('Conflicting native child SOURCE observations: ' + source.taskId);
+            }
+            if (!previous) sources.set(source.taskId, source);
+        }
+    }
+    return [...sources.values()];
+}
 
 class MissingNativeChildSourceAcceptanceError extends Error {}
 
@@ -217,8 +231,24 @@ function verifyRawSourceAncestry(rows: string[][], head: string, accepted: strin
 
 /** Git corroboration alone does not authenticate task SOURCE records or accept a parent audit. */
 export function validateNativeChildGitSource(repoRoot: string, source: NativeChildGitSource): void {
+    if (!source || (source.parentCommitSha !== null && !GIT_OBJECT_PATTERN.test(source.parentCommitSha))) {
+        throw new Error('Git source proof requires exact commit, tree and parent object identity.');
+    }
+    validateExactGitSource(repoRoot, source, source.parentCommitSha === null ? [] : [source.parentCommitSha]);
+}
+
+/** Integrated HEADs may merge children; this does not broaden authenticated child SOURCE. */
+export function validateNativeParentGitSource(
+    repoRoot: string, source: Pick<NativeChildGitSource, 'commitSha' | 'treeSha'>, parentCommitShas: readonly string[]
+): void {
+    validateExactGitSource(repoRoot, source, parentCommitShas);
+}
+
+function validateExactGitSource(
+    repoRoot: string, source: Pick<NativeChildGitSource, 'commitSha' | 'treeSha'>, parentCommitShas: readonly string[]
+): void {
     if (!source || !GIT_OBJECT_PATTERN.test(source.commitSha) || !GIT_OBJECT_PATTERN.test(source.treeSha)
-        || (source.parentCommitSha !== null && !GIT_OBJECT_PATTERN.test(source.parentCommitSha))) {
+        || !Array.isArray(parentCommitShas) || parentCommitShas.some(sha => !GIT_OBJECT_PATTERN.test(sha))) {
         throw new Error('Git source proof requires exact commit, tree and parent object identity.');
     }
     const root = fs.realpathSync.native(repoRoot);
@@ -235,12 +265,12 @@ export function validateNativeChildGitSource(repoRoot: string, source: NativeChi
     }
     if (!grafts || fs.existsSync(path.resolve(root, grafts))) throw new Error('Git proof rejects graft ancestry.');
     if (!head || !GIT_OBJECT_PATTERN.test(head)
-        || [source.commitSha, source.treeSha, source.parentCommitSha].some(sha => sha !== null && sha.length !== head.length)) {
+        || [source.commitSha, source.treeSha, ...parentCommitShas].some(sha => sha.length !== head.length)) {
         throw new Error('Git source object identity does not match the repository format.');
     }
     const ancestry = runGit(root, ['--no-replace-objects', 'rev-list', '--parents', '--ancestry-path', '--full-history',
         `${source.commitSha}..${head}`], SOURCE_GIT_OPTIONS).trim();
-    const rows = [[source.commitSha, ...(source.parentCommitSha === null ? [] : [source.parentCommitSha])],
+    const rows = [[source.commitSha, ...parentCommitShas],
         ...ancestry.split('\n').filter(Boolean).map(line => line.trim().split(' '))];
     if (rows.some(row => row.some(sha => !GIT_OBJECT_PATTERN.test(sha)))) {
         throw new Error('Git ancestry contains invalid object identity.');
@@ -254,7 +284,7 @@ export function validateNativeChildGitSource(repoRoot: string, source: NativeChi
     }
 }
 
-function readParentAuditProofBytes(
+export function readParentAuditProofBytes(
     repoRoot: string, artifactPath: string, expectedSha256?: string
 ): Buffer {
     if (expectedSha256 !== undefined && (typeof expectedSha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(expectedSha256))) {

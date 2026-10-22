@@ -574,5 +574,19 @@
   "scope-budget-block-review-tokens": {
     "label": "스코프 예산: 리뷰 토큰 - BLOCK 차단",
     "description": "BLOCK 차단: 리뷰 토큰 above threshold; next-step split-required로 이동합니다."
+  },
+  "parent-audit-enabled": {
+    "label": "상위 작업 전체 감사 및 검토",
+    "description": "작업 중 분할한 작업은 모든 하위 작업 승인 후 한 번 전체 검토합니다. 지적 사항은 하나의 F 작업에 모이며, 승인되면 상위 작업이 완료됩니다. 생성 시 수동으로 분할한 그룹은 항상 자동 완료됩니다. 이후 분할부터 적용됩니다.",
+    "options": {
+      "true": {
+        "label": "켜기",
+        "description": "전체 결과를 한 번 독립적으로 검토합니다."
+      },
+      "false": {
+        "label": "끄기",
+        "description": "모든 하위 작업 승인 후 자동 완료합니다."
+      }
+    }
   }
 }

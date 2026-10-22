@@ -155,11 +155,11 @@ test('review-cycle adapter preserves six ordered definitions and its existing de
 test('typed full-suite projection preserves the entire existing report contract and interleaved order', () => {
     // Independent pre-migration contract: all 61 definitions at accepted source HEAD 9a7d0374.
     const existingDefinitions = WORKFLOW_SETTING_DEFINITIONS.filter(
-        entry => entry.id !== 'task-test-selection-require-operator-confirmation'
+        entry => entry.id !== 'task-test-selection-require-operator-confirmation' && entry.id !== 'parent-audit-enabled'
     );
     const digest = createHash('sha256').update(JSON.stringify(canonical(existingDefinitions))).digest('hex');
     assert.equal(existingDefinitions.length, 61);
-    assert.equal(WORKFLOW_SETTING_DEFINITIONS.length, 62);
+    assert.equal(WORKFLOW_SETTING_DEFINITIONS.length, 63);
     assert.equal(digest, '5b5a817e07d37c55b65bcbd419cab2852ac33e604dbeeb39394bcef6681db370');
     const ids = WORKFLOW_SETTING_DEFINITIONS.map(entry => entry.id);
     assert.ok(ids.indexOf('full-suite-enabled') < ids.indexOf('optional-checks-enabled'));
@@ -247,7 +247,8 @@ test('review-execution report retains choices and position without lane or froze
     }
     const ids = WORKFLOW_SETTING_DEFINITIONS.map(definition => definition.id);
     assert.equal(ids.indexOf(report.id), ids.indexOf('full-suite-placement') + 1);
-    assert.equal(ids.indexOf('scope-budget-enabled'), ids.indexOf(report.id) + 1);
+    assert.equal(ids.indexOf('parent-audit-enabled'), ids.indexOf(report.id) + 1);
+    assert.equal(ids.indexOf('scope-budget-enabled'), ids.indexOf(report.id) + 2);
 });
 
 test('report lookup keeps full-suite shapes while scalar and materialization authority stay in the registry', () => {

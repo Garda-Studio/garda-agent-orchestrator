@@ -1,4 +1,7 @@
 {
+  "parent_audit": {
+    "enabled": false
+  },
   "compile_gate": {
     "command": "__COMPILE_GATE_COMMAND_UNCONFIGURED__"
   },

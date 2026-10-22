@@ -184,6 +184,7 @@ export interface OrchestratorWorkPolicyConfig {
 }
 
 export interface WorkflowConfigData {
+    parent_audit: { enabled: boolean };
     compile_gate: CompileGateConfig;
     full_suite_validation: FullSuiteValidationConfig;
     review_execution_policy: ReviewExecutionPolicyConfig;
@@ -221,6 +222,7 @@ function findOwnCaseInsensitiveKey(record: Record<string, unknown>, expectedKey:
 }
 
 const DEFAULT_WORKFLOW_CONFIG: WorkflowConfigData = Object.freeze({
+    parent_audit: Object.freeze({ enabled: false }),
     compact: compactSettingsToConfig(),
     compile_gate: Object.freeze({
         command: UNCONFIGURED_COMPILE_GATE_COMMAND

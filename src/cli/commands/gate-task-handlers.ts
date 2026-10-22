@@ -152,6 +152,8 @@ export async function handleRestartCoherentCycle(gateArgv: string[]): Promise<vo
         '--output-filters-path': { key: 'outputFiltersPath', type: 'string' },
         '--fail-tail-lines': { key: 'failTailLines', type: 'string' },
         '--operator-confirmed': { key: 'operatorConfirmed', type: 'string' },
+        '--allow-plan-drift': { key: 'allowPlanDrift', type: 'boolean' },
+        '--allow-plan-drift-reason': { key: 'allowPlanDriftReason', type: 'string' },
         '--operator-confirmed-at-utc': { key: 'operatorConfirmedAtUtc', type: 'string' },
         '--emit-metrics': { key: 'emitMetrics', type: 'boolean' },
         '--repo-root': { key: 'repoRoot', type: 'string' }
@@ -174,6 +176,8 @@ export async function handleRestartReviewCycle(gateArgv: string[]): Promise<void
         '--impact-analysis-path': { key: 'impactAnalysisPath', type: 'string' },
         '--review-type': { key: 'reviewType', type: 'string' },
         '--review-evidence-only': { key: 'reviewEvidenceOnly', type: 'boolean' },
+        '--allow-plan-drift': { key: 'allowPlanDrift', type: 'boolean' },
+        '--allow-plan-drift-reason': { key: 'allowPlanDriftReason', type: 'string' },
         '--commands-path': { key: 'commandsPath', type: 'string' },
         '--output-filters-path': { key: 'outputFiltersPath', type: 'string' },
         '--fail-tail-lines': { key: 'failTailLines', type: 'string' },

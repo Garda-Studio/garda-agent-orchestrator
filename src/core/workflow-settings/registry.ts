@@ -8,6 +8,7 @@ import { PROJECT_MEMORY_SETTING_REGISTRY } from './project-memory';
 import { PROTECTED_CONTROL_SETTING_REGISTRY } from './protected-controls';
 import { REVIEW_CYCLE_SETTING_REGISTRY } from './review-cycle';
 import { REVIEW_EXECUTION_SETTING_REGISTRY } from './review-execution';
+import { PARENT_AUDIT_SETTING_REGISTRY } from './parent-audit';
 import { SCOPE_BUDGET_CONTROL_SETTING_REGISTRY } from './scope-budget-controls';
 import { SCOPE_BUDGET_THRESHOLD_SETTING_REGISTRY } from './scope-budget-thresholds';
 
@@ -21,6 +22,7 @@ export const WORKFLOW_SETTING_REGISTRY = createWorkflowSettingRegistry([
     ...COMPILE_SETTING_REGISTRY.entries,
     ...FULL_SUITE_SETTING_REGISTRY.entries.filter(entry => entry.id !== 'full-suite-enabled'),
     ...REVIEW_EXECUTION_SETTING_REGISTRY.entries,
+    ...PARENT_AUDIT_SETTING_REGISTRY.entries,
     SCOPE_BUDGET_CONTROL_SETTING_REGISTRY.require('scope-budget-enabled'),
     SCOPE_BUDGET_CONTROL_SETTING_REGISTRY.require('scope-budget-action'),
     SCOPE_BUDGET_CONTROL_SETTING_REGISTRY.require('scope-budget-profiles'),

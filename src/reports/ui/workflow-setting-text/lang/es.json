@@ -574,5 +574,19 @@
   "scope-budget-block-review-tokens": {
     "label": "presupuesto de alcance: tokens de revisión - bloqueo BLOCK",
     "description": "bloqueo BLOCK: tokens de revisión above threshold; next-step deriva a split-required."
+  },
+  "parent-audit-enabled": {
+    "label": "Auditoría y revisión de la tarea principal",
+    "description": "Para tareas divididas durante la ejecución: una revisión conjunta tras aceptar todas las subtareas. Los hallazgos se agrupan en una tarea F; su aceptación cierra la principal. Los grupos manuales creados inicialmente se cierran automáticamente. Se aplica a futuras divisiones.",
+    "options": {
+      "true": {
+        "label": "Activado",
+        "description": "Revisar el resultado conjunto una sola vez."
+      },
+      "false": {
+        "label": "Desactivado",
+        "description": "Cerrar automáticamente al aceptar todas las subtareas."
+      }
+    }
   }
 }

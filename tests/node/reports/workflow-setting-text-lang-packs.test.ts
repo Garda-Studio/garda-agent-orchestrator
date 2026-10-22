@@ -9,7 +9,8 @@ const WORKFLOW_SETTING_TEXT_CATALOG = buildWorkflowSettingTextCatalog();
 const EXPECTED_SETTING_IDS = listWorkflowSettingTextCatalogIds(WORKFLOW_SETTING_TEXT_CATALOG);
 
 test('workflow setting text catalog covers every workflow setting definition plus compile-gate fallback', () => {
-    assert.equal(EXPECTED_SETTING_IDS.length, 64);
+    assert.equal(EXPECTED_SETTING_IDS.length, 65);
+    assert.ok(EXPECTED_SETTING_IDS.includes('parent-audit-enabled'));
     assert.ok(EXPECTED_SETTING_IDS.includes('task-test-selection-require-operator-confirmation'));
     assert.ok(EXPECTED_SETTING_IDS.includes('local-commit-enabled'));
     assert.ok(EXPECTED_SETTING_IDS.includes('compact-enabled'));

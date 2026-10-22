@@ -70,10 +70,12 @@ export interface NextStepPreGuardRoutingOptions {
     } | null;
     workspaceReadiness: NextStepWorkspaceReadinessState;
     workspaceRefreshCommand: string;
+    workspaceRefreshRecovery?: { nextGate: string; reason: string; command: string } | null;
     failedReviewRemediation?: {
         reviewType: string;
         verdictToken: string;
         restartReviewCycleCommand: string;
+        expandedScopeRestartCommand?: string;
         closedCycleRestart?: {
             boundary: string;
             command: string;
@@ -157,16 +159,18 @@ export function resolveNextStepPreGuardRoute(
         if ((remediation.expandedNonTestFiles || []).length > 0) {
             return {
                 status: 'BLOCKED',
-                nextGate: 'classify-change',
-                title: `Refresh preflight for expanded '${remediation.reviewType}' remediation scope.`,
+                nextGate: 'restart-coherent-cycle',
+                title: `Restart the coherent cycle for expanded '${remediation.reviewType}' remediation scope.`,
                 reason:
                     `${options.workspaceReadiness.reason} ` +
                     `The stale scope follows a recorded failed '${remediation.reviewType}' review verdict '${remediation.verdictToken}', ` +
                     `but the current remediation added non-test files outside the failed-review scope: ${remediation.expandedNonTestFiles?.join(', ')}. ` +
-                    'restart-review-cycle would fail its scope-boundary guard for that expanded scope, so refresh classify-change for the current workspace before rebuilding compile/review evidence.',
-                commands: [
-                    buildCommand('Refresh preflight', options.workspaceRefreshCommand)
-                ]
+                    'restart-review-cycle would fail its scope-boundary guard for that expanded scope. ' +
+                    'Use the coherent restart to bind the expanded scope and run handshake and shell-smoke before reclassification; ' +
+                    'a standalone classify-change would leave the refreshed preflight outside the required diagnostic sequence.',
+                commands: remediation.expandedScopeRestartCommand
+                    ? [buildCommand('Restart coherent cycle', remediation.expandedScopeRestartCommand)]
+                    : []
             };
         }
         return {
@@ -184,6 +188,28 @@ export function resolveNextStepPreGuardRoute(
             commands: [
                 buildCommand('Restart failed-review remediation cycle', remediation.restartReviewCycleCommand)
             ]
+        };
+    }
+
+    if (!options.workspaceReadiness.ready && options.workspaceRefreshRecovery) {
+        return {
+            status: 'BLOCKED',
+            nextGate: options.workspaceRefreshRecovery.nextGate,
+            title: 'Prepare the diagnostic sequence before refreshing workspace scope.',
+            reason: `${options.workspaceRefreshRecovery.reason} ${options.workspaceReadiness.reason}`,
+            commands: [buildCommand('Refresh current task cycle', options.workspaceRefreshRecovery.command)]
+        };
+    }
+
+    if (!options.workspaceReadiness.ready && !options.coherentCycleReadiness.ready) {
+        return {
+            status: 'BLOCKED',
+            nextGate: 'restart-coherent-cycle',
+            title: 'Restore the coherent cycle before refreshing workspace scope.',
+            reason: `${options.coherentCycleReadiness.reason} ${options.workspaceReadiness.reason}`,
+            commands: options.coherentCycleReadiness.command
+                ? [buildCommand('Restart coherent cycle', options.coherentCycleReadiness.command)]
+                : []
         };
     }
 

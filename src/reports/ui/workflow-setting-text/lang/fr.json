@@ -574,5 +574,19 @@
   "scope-budget-block-review-tokens": {
     "label": "budget de périmètre: tokens de revue - blocage BLOCK",
     "description": "blocage BLOCK: tokens de revue above threshold; next-step route vers split-required."
+  },
+  "parent-audit-enabled": {
+    "label": "Audit et revue de la tâche parente",
+    "description": "Pour les tâches divisées en cours de travail : une revue globale après acceptation des sous-tâches. Les constats sont regroupés dans une tâche F dont l’acceptation clôt le parent. Les groupes manuels créés dès le départ se clôturent automatiquement. Concerne les futures divisions.",
+    "options": {
+      "true": {
+        "label": "Activé",
+        "description": "Examiner une seule fois le résultat global."
+      },
+      "false": {
+        "label": "Désactivé",
+        "description": "Clôturer automatiquement après acceptation des sous-tâches."
+      }
+    }
   }
 }

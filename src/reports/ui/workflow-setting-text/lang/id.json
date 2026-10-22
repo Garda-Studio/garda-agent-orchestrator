@@ -574,5 +574,19 @@
   "scope-budget-block-review-tokens": {
     "label": "scope budget: token review - blok BLOCK",
     "description": "blok BLOCK: token review above threshold; next-step diarahkan ke split-required."
+  },
+  "parent-audit-enabled": {
+    "label": "Audit dan tinjauan penuh tugas induk",
+    "description": "Untuk tugas yang dipecah saat pengerjaan: satu tinjauan gabungan setelah semua anak diterima. Temuan digabung dalam satu tugas F; penerimaannya menutup induk. Kelompok manual sejak pembuatan selalu selesai otomatis. Berlaku untuk pemecahan berikutnya.",
+    "options": {
+      "true": {
+        "label": "Aktif",
+        "description": "Tinjau hasil gabungan secara independen satu kali."
+      },
+      "false": {
+        "label": "Nonaktif",
+        "description": "Selesaikan otomatis setelah semua anak diterima."
+      }
+    }
   }
 }

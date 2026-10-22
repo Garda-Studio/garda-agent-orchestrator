@@ -2,6 +2,8 @@ import type { ReviewRemediationScopeBoundary } from '../../../../gates/review-re
 export type { ReviewRemediationScopeBoundary } from '../../../../gates/review-remediation/review-remediation-scope-boundary';
 
 export interface RestartCoherentCycleCommandOptions {
+    allowPlanDrift?: unknown;
+    allowPlanDriftReason?: string;
     repoRoot?: string;
     taskId?: unknown;
     taskModePath?: string;
@@ -20,6 +22,8 @@ export interface RestartCoherentCycleCommandOptions {
 }
 
 export interface RestartReviewCycleCommandOptions {
+    allowPlanDrift?: unknown;
+    allowPlanDriftReason?: string;
     repoRoot?: string;
     taskId?: unknown;
     taskModePath?: string;

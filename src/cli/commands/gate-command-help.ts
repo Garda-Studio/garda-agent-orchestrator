@@ -224,6 +224,12 @@ function buildPreflightGateHelpEntries(
                 true
             )
         },
+        'parent-audit': {
+            ...createGateHelpEntry('Inspect or advance explicit parent completion, one aggregate review and its grouped correction.', [
+                `${cliPrefix} gate parent-audit --task-id "${TASK_ID_PLACEHOLDER}" --phase "register|validate|prepare|started|failed|complete|inspect" --repo-root "."`,
+                `${cliPrefix} gate parent-audit --task-id "${TASK_ID_PLACEHOLDER}" --phase register --audit-enabled "true|false" --compatibility-reason "<retained parent intent>" --repo-root "."`
+            ], true)
+        },
         'list-split-required-wip': {
             ...createSingleUsageEntry(
                 'List task-owned WIP manifests captured when a parent was moved to SPLIT_REQUIRED.',
@@ -302,14 +308,14 @@ function buildPreflightGateHelpEntries(
         'restart-coherent-cycle': {
             ...createSingleUsageEntry(
                 'Refresh preflight and downstream compile evidence for the current task after scope drift. This reruns the configured compile gate and can take the full project compile duration. Confirmation flags are required when re-entering protected task mode requires fresh operator approval; an ordinary unprotected restart does not require them. Follow next-step for the applicable command.',
-                `${cliPrefix} gate restart-coherent-cycle --task-id "${TASK_ID_PLACEHOLDER}" --task-intent "<task summary>" --changed-file "src/<file>" [--operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>"] --repo-root "."`,
+                `${cliPrefix} gate restart-coherent-cycle --task-id "${TASK_ID_PLACEHOLDER}" --task-intent "<task summary>" --changed-file "src/<file>" [--allow-plan-drift --allow-plan-drift-reason "<approved reason>"] [--operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>"] --repo-root "."`,
                 true
             )
         },
         'restart-review-cycle': {
             ...createSingleUsageEntry(
                 'Refresh failed-review remediation evidence after a small blocker fix, requiring main-agent impact analysis and preserving review reuse boundaries.',
-                `${cliPrefix} gate restart-review-cycle --task-id "${TASK_ID_PLACEHOLDER}" --task-intent "<task summary>" --changed-file "src/<file>" --impact-analysis "<replace with main-agent remediation impact analysis>" --repo-root "."`,
+                `${cliPrefix} gate restart-review-cycle --task-id "${TASK_ID_PLACEHOLDER}" --task-intent "<task summary>" --changed-file "src/<file>" --impact-analysis "<replace with main-agent remediation impact analysis>" [--allow-plan-drift --allow-plan-drift-reason "<approved reason>"] --repo-root "."`,
                 true
             )
         },

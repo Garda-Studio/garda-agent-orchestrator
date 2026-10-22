@@ -48,7 +48,8 @@ export type DecomposedParentRequiredProof =
     | 'preserved-parent-wip'
     | 'full-suite-composition'
     | 'parent-memory-impact'
-    | 'historical-failure-resolution';
+    | 'historical-failure-resolution'
+    | 'aggregate-parent-review';
 
 export interface DecomposedParentAuditFacts {
     taskId: string;

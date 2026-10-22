@@ -1,5 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { resolveParentCompletionPolicy } from '../../../../core/parent-completion-policy';
+import { readParentAuditEnabled } from '../../../../gates/parent-audit/parent-audit-contract';
+import { isParentAuditFollowUp } from '../../../../gates/parent-audit/parent-audit-follow-up';
 import { EXIT_GATE_FAILURE } from '../../../exit-codes';
 import {
     appendMandatoryTaskEvent,
@@ -453,6 +456,8 @@ export function runRecordStrictDecompositionDecisionCommand(
     const artifact = buildStrictDecompositionDecisionArtifact({
         taskId,
         decision: options.decision,
+        parentCompletionPolicy: resolveParentCompletionPolicy('runtime',
+            readParentAuditEnabled(repoRoot) && !isParentAuditFollowUp(repoRoot, taskId)),
         taskProfile: options.taskProfile,
         taskSummary: options.taskSummary,
         reason: options.reason,
@@ -505,6 +510,7 @@ export function runRecordStrictDecompositionDecisionCommand(
         {
             artifact_path: gateHelpers.normalizePath(artifactPath),
             decision: artifact.decision,
+            artifact_sha256: gateHelpers.fileSha256(artifactPath),
             task_profile: artifact.task_profile,
             expected_review_types: artifact.expected_review_types,
             expected_review_types_declared_none: artifact.expected_review_types_declared_none,

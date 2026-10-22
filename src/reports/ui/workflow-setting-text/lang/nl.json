@@ -574,5 +574,19 @@
   "scope-budget-block-review-tokens": {
     "label": "scope-budget: review-tokens - BLOCK-blokkade",
     "description": "BLOCK-blokkade: review-tokens above threshold; next-step gaat naar split-required."
+  },
+  "parent-audit-enabled": {
+    "label": "Volledige controle van de bovenliggende taak",
+    "description": "Bij splitsing tijdens het werk volgt één gezamenlijke controle na acceptatie van alle deeltaken. Bevindingen komen in één F-taak; acceptatie daarvan sluit de hoofdtaak. Handmatig vooraf gemaakte groepen sluiten automatisch. Geldt voor toekomstige splitsingen.",
+    "options": {
+      "true": {
+        "label": "Aan",
+        "description": "Het gezamenlijke resultaat eenmaal onafhankelijk beoordelen."
+      },
+      "false": {
+        "label": "Uit",
+        "description": "Automatisch sluiten na acceptatie van alle deeltaken."
+      }
+    }
   }
 }

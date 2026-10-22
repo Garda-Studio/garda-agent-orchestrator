@@ -46,6 +46,8 @@ import {
     SPLIT_REQUIRED_STATUS
 } from './next-step-task-queue';
 import { isPlainRecord } from '../../core/records';
+import { readParentAuditEnabled, parseParentCompletionPolicy, resolveParentCompletionPolicy, type ParentCompletionPolicy } from '../../core/parent-completion-policy';
+import { isParentAuditFollowUp } from '../parent-audit/parent-audit-follow-up';
 
 export type SplitRequiredGuardKind = 'scope_budget' | 'review_cycle' | 'full_suite_repair';
 
@@ -114,6 +116,7 @@ function writeStableJsonIfChanged(filePath: string, payload: Record<string, unkn
 
 function buildSplitRequiredArtifact(params: {
     taskId: string;
+    parentCompletionPolicy?: ParentCompletionPolicy;
     timestampUtc: string;
     guardKind: SplitRequiredGuardKind;
     guardReason: string;
@@ -136,6 +139,7 @@ function buildSplitRequiredArtifact(params: {
         schema_version: 1,
         timestamp_utc: params.timestampUtc,
         task_id: params.taskId,
+        ...(params.parentCompletionPolicy ? { parent_completion_policy: params.parentCompletionPolicy } : {}),
         status: SPLIT_REQUIRED_STATUS,
         guard_kind: params.guardKind,
         guard_reason: params.guardReason,
@@ -946,9 +950,13 @@ function materializeSplitRequiredLatchTransaction(
             && typeof existing?.timestamp_utc === 'string'
             ? existing.timestamp_utc
             : new Date().toISOString();
+        const parentCompletionPolicy = existingCurrent || existingTransitionBound
+            ? existing?.parent_completion_policy === undefined ? undefined : parseParentCompletionPolicy(existing.parent_completion_policy)
+            : resolveParentCompletionPolicy('runtime', readParentAuditEnabled(params.repoRoot) && !isParentAuditFollowUp(params.repoRoot, params.taskId));
         if (!existingCurrent || taskStatusBeforeSync !== SPLIT_REQUIRED_STATUS) {
             writeStableJsonIfChanged(artifactPath, buildSplitRequiredArtifact({
                 taskId: params.taskId,
+                parentCompletionPolicy,
                 timestampUtc,
                 guardKind: params.guardKind,
                 guardReason: params.guardReason,
@@ -970,6 +978,7 @@ function materializeSplitRequiredLatchTransaction(
         if (!isSuccessfulSplitRequiredStatusSync(currentStatusSync)) {
             const failedArtifactSha256 = writeStableJsonIfChanged(artifactPath, buildSplitRequiredArtifact({
                 taskId: params.taskId,
+                parentCompletionPolicy,
                 timestampUtc,
                 guardKind: params.guardKind,
                 guardReason: params.guardReason,
@@ -1056,6 +1065,7 @@ function materializeSplitRequiredLatchTransaction(
                 if (statusCheckpointPending) {
                     writeStableJsonIfChanged(artifactPath, buildSplitRequiredArtifact({
                         taskId: params.taskId,
+                        parentCompletionPolicy,
                         timestampUtc,
                         guardKind: params.guardKind,
                         guardReason: params.guardReason,
@@ -1096,6 +1106,7 @@ function materializeSplitRequiredLatchTransaction(
                 injectFault('after_wip_capture');
                 const artifact = buildSplitRequiredArtifact({
                     taskId: params.taskId,
+                    parentCompletionPolicy,
                     timestampUtc,
                     guardKind: params.guardKind,
                     guardReason: params.guardReason,
@@ -1220,6 +1231,7 @@ function materializeSplitRequiredLatchTransaction(
                 try {
                     artifactSha256 = writeStableJsonIfChanged(artifactPath, buildSplitRequiredArtifact({
                         taskId: params.taskId,
+                        parentCompletionPolicy,
                         timestampUtc,
                         guardKind: params.guardKind,
                         guardReason: params.guardReason,

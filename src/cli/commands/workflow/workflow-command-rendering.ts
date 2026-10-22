@@ -243,6 +243,7 @@ export function buildWorkflowShowResult(
         bundle_root: roots.bundleRoot,
         config_path: roots.configPath,
         config_exists: state.exists,
+        parent_audit: state.config.parent_audit ?? buildDefaultWorkflowConfig().parent_audit,
         compact: state.config.compact ?? buildDefaultWorkflowConfig().compact,
         compile_gate: compileGate,
         full_suite_validation: state.config.full_suite_validation,
@@ -334,6 +335,7 @@ export function formatWorkflowShowOutput(result: WorkflowCommandResultBase & { a
     lines.push(`ConfigExists: ${result.config_exists}`);
     lines.push('');
     lines.push('Settings summary');
+    lines.push(`Full parent audit: ${result.parent_audit.enabled}; manual decomposition at creation completes automatically.`);
     lines.push(result.compile_gate_summary_line);
     lines.push(result.visible_summary_line);
     lines.push(result.review_execution_policy_summary_line);
