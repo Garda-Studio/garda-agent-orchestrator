@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { syncBundleItems } from '../../../src/cli/commands/cli-bundle-helpers';
 import { normalizeWorkflowFileConfig } from '../../../src/cli/commands/workflow/workflow-command-state';
-import { evaluateProtectedControlPlaneManifest } from '../../../src/gates/shared/helpers';
+import { evaluateProtectedControlPlaneManifest, writeProtectedControlPlaneManifest } from '../../../src/gates/shared/helpers';
 import { startLocalUiServer } from '../../../src/reports/ui';
 import { runUiActionCommand } from '../../../src/reports/ui/actions/action-common';
 import {
@@ -41,7 +41,10 @@ function fixture(): { root: string; bundle: string; config: string; audit: strin
     const originalInputs = fs.readFileSync(config);
     // Materialize executable assets only; the fixture's live inputs remain intact.
     syncBundleItems(process.cwd(), bundle);
+    // Installation publishes this manifest and cache before the UI accepts settings.
+    writeProtectedControlPlaneManifest(root);
     assert.deepEqual(fs.readFileSync(config), originalInputs);
+    assert.equal(evaluateProtectedControlPlaneManifest(root, null, true).status, 'MATCH');
     return {
         root,
         bundle,
