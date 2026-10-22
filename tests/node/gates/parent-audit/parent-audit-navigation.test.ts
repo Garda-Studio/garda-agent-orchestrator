@@ -2,7 +2,7 @@ import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { registerParentCompletionContract, readParentQueue } from '../../../../src/gates/parent-audit/parent-audit-contract';
+import { registerParentCompletionContract, readParentQueue, isCompletedReviewFollowUpBridge } from '../../../../src/gates/parent-audit/parent-audit-contract';
 import { resolveParentAuditNavigation } from '../../../../src/gates/parent-audit/parent-audit-navigation';
 import { createNextStepEffectPlanner } from '../../../../src/gates/next-step/next-step-effects';
 import { transitionDecomposedParentsToDone } from '../../../../src/gates/next-step/next-step-task-queue-transitions';
@@ -62,6 +62,15 @@ test('retained native parent cannot bypass SOURCE by erasing queue provenance be
     for (const taskId of [PARENT_ID, fixture.outer]) {
         assert.equal(readParentEvents(fixture.root, taskId).some(event => event.event_type === 'DECOMPOSED_PARENT_COMPLETED'), false);
     }
+});
+
+test('a retained native parent cannot impersonate a DONE ordinary review-follow-up bridge', async () => {
+    const fixture = await retainedNestedFixture(), queue = readParentQueue(fixture.root), entry = queue.entries.get(PARENT_ID)!;
+    const followUp = `${PARENT_ID}-F1`;
+    const disguised = { ...entry, status: 'DONE', notes: `Review follow-up tasks materialized: \`${followUp}\`; artifact \`retained.json\`.` };
+    queue.entries.set(PARENT_ID, disguised);
+    queue.entries.set(followUp, { ...entry, taskId: followUp, status: 'DONE', notes: 'Accepted follow-up.' });
+    assert.equal(isCompletedReviewFollowUpBridge(fixture.root, disguised, queue.entries), false);
 });
 
 test('outer grouping cannot skip a nested parent whose leaves are DONE but audit is pending', async () => {

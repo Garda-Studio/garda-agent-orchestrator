@@ -12,6 +12,8 @@ import {
 import { runCliMain } from '../../../../../../src/cli/main';
 import { beginValidationOutputRun, VALIDATION_REPO_ROOT_ENV, VALIDATION_TASK_ID_ENV } from '../../../../../../src/core/validation-output-retention';
 import { runTaskAuditSummaryCommand } from '../../../../../../src/cli/commands/gate-flows/task/task-summary-flow';
+import { registerParentCompletionContract } from '../../../../../../src/gates/parent-audit/parent-audit-contract';
+import { inspectParentCompletion } from '../../../../../../src/gates/parent-audit/parent-audit-state';
 
 import {
     captureExpectedAsyncError,
@@ -260,6 +262,26 @@ describe('cli/commands/gates', () => {
         );
 
         fs.rmSync(repoRoot, { recursive: true, force: true });
+    });
+
+    test('completion-gate preserves child completion while its registered parent awaits SOURCE acceptance', async () => {
+        const repoRoot = createTempRepo();
+        const parentTaskId = 'T-903-native-pending-parent', taskId = `${parentTaskId}-1`, sibling = `${parentTaskId}-2`;
+        try {
+            writeTaskQueueRows(repoRoot, [
+                `| ${parentTaskId} | DECOMPOSED | P1 | workflow | Parent | local | 2026-10-22 | default | Decomposition source: manual-operator; child tasks: ${taskId}, ${sibling}; |`,
+                `| ${taskId} | TODO | P1 | workflow | Child | local | 2026-10-22 | default | Complete the child. |`,
+                `| ${sibling} | DONE | P1 | workflow | Sibling | local | 2026-10-22 | default | Prior child. |`
+            ]);
+            const preflightPath = await prepareCompletionReadyTask(repoRoot, taskId, 'Keep parent SOURCE acceptance separate from child completion');
+            registerParentCompletionContract(repoRoot, parentTaskId);
+            await handleCompletionGate(['--preflight-path', preflightPath, '--task-id', taskId, '--repo-root', repoRoot]);
+            assert.equal(readTaskQueueStatusFromTaskFile(repoRoot, taskId), 'DONE');
+            assert.equal(readTaskTimelineEvents(repoRoot, taskId).some(event => event.event_type === 'COMPLETION_GATE_PASSED'), true);
+            assert.equal(readTaskQueueStatusFromTaskFile(repoRoot, parentTaskId), 'DECOMPOSED');
+            assert.equal(inspectParentCompletion(repoRoot, parentTaskId)?.ready, false);
+            assert.equal(readOptionalTaskTimelineEvents(repoRoot, parentTaskId).some(event => event.event_type === 'DECOMPOSED_PARENT_COMPLETED'), false);
+        } finally { fs.rmSync(repoRoot, { recursive: true, force: true }); }
     });
 
     test('completion-gate leaves a linked decomposed parent open when another explicit child is not DONE', async () => {

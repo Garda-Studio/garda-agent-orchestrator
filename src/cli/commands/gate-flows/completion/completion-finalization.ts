@@ -21,6 +21,8 @@ import {
 } from '../../../../gate-runtime/lifecycle-events';
 import { resolveTaskHistoryLedgerPath } from '../../../../gate-runtime/task-history-ledger';
 import { collectOrderedTimelineEvents } from '../../../../gates/completion/completion-evidence';
+import { inspectParentCompletion } from '../../../../gates/parent-audit/parent-audit-state';
+import { isCompletedReviewFollowUpBridge, requiresParentCompletionContract } from '../../../../gates/parent-audit/parent-audit-contract';
 import {
     extractExplicitLinkedChildTaskIds,
     isDecomposedParentTask,
@@ -418,6 +420,13 @@ function closeEligibleDecomposedParentsLinkedToCompletedTask(params: {
                     continue;
                 }
                 const syncTaskIds = [...new Set([...completionState.completedDecomposedTaskIds, parentTaskId])];
+                const parentAcceptancePending = syncTaskIds.some(id => {
+                    const entry = taskEntries.get(id);
+                    if (isCompletedReviewFollowUpBridge(params.repoRoot, entry, taskEntries)) return false;
+                    const inspection = inspectParentCompletion(params.repoRoot, id);
+                    return inspection ? !inspection.ready : requiresParentCompletionContract(params.repoRoot, id, entry?.notes ?? null);
+                });
+                if (parentAcceptancePending) continue;
                 captureDecomposedParentAutoCloseTimelineSnapshots({
                     eventsRoot: params.eventsRoot,
                     rollbackState,

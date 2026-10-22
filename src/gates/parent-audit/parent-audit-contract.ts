@@ -2,7 +2,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { isPlainRecord } from '../../core/records';
 import { parseValidationReportFiles, type ValidationReportFile } from '../../core/validation-report-contract';
-import { parseTaskQueueEntriesFromContent } from '../../core/task-queue-read';
+import { parseTaskQueueEntriesFromContent, type TaskQueueEntry } from '../../core/task-queue-read';
+import { isTaskQueueDoneStatus } from '../../core/active-task-state';
 import { parseParentCompletionPolicy, resolveParentCompletionPolicy, type ParentCompletionPolicy } from '../../core/parent-completion-policy';
 import { joinOrchestratorPath } from '../../core/orchestrator-paths';
 import { readTransactionBytes } from '../../core/file-transaction-journal';
@@ -47,6 +48,23 @@ export function requiresParentCompletionContract(root: string, taskId: string, n
     if (readDecomposedTaskProvenance(notes).source !== 'unrecorded') return true;
     const events = readParentEvents(root, taskId);
     return events.some(event => event.event_type === 'TASK_MODE_ENTERED') || Boolean(readDecompositionEvent(events));
+}
+
+/** An ordinary accepted task may bridge to its review follow-ups without becoming a decomposed parent. */
+export function isCompletedReviewFollowUpBridge(root: string, entry: TaskQueueEntry | undefined, entries: Map<string, TaskQueueEntry>): boolean {
+    if (!entry || !isTaskQueueDoneStatus(entry.status) || readDecomposedTaskProvenance(entry.notes).source !== 'unrecorded') return false;
+    const children = extractExplicitLinkedChildTaskIds(entry.notes, entries.keys(), entry.taskId);
+    const materialized = [...String(entry.notes || '').matchAll(/Review follow-up tasks materialized: (`[^`\r\n]+`(?:, `[^`\r\n]+`)*); artifact `[^`\r\n]+`\./gu)]
+        .flatMap(match => [...match[1].matchAll(/`([^`]+)`/gu)].map(item => item[1]));
+    if (!children.length || children.some(id => !id.startsWith(entry.taskId + '-F')
+        || !/^[1-9][0-9]*$/u.test(id.slice(entry.taskId.length + 2)) || !materialized.includes(id))) return false;
+    if (readParentCompletionContract(root, entry.taskId)) return false;
+    return !readParentEvents(root, entry.taskId).some(event =>
+        event.event_type === 'SPLIT_REQUIRED_LATCHED' || event.event_type === 'DECOMPOSED_PARENT_COMPLETED'
+        || event.event_type === 'PARENT_AUDIT_RECORD_PUBLISHED'
+        || (event.event_type === 'STRICT_DECOMPOSITION_DECISION_RECORDED' && isPlainRecord(event.details) && event.details.decision === 'split-required')
+        || (event.event_type === 'STATUS_CHANGED' && isPlainRecord(event.details)
+            && /DECOMPOSED|SPLIT_REQUIRED/u.test(String(event.details.new_status))));
 }
 
 function readAttachedPlan(root: string, entry: Record<string, unknown> | undefined) {

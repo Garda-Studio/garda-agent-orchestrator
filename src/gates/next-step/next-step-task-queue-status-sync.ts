@@ -3,7 +3,7 @@ import { writeTaskQueueFile } from '../../core/task-queue/task-queue-repository'
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { inspectParentCompletion } from '../parent-audit/parent-audit-state';
-import { requiresParentCompletionContract } from '../parent-audit/parent-audit-contract';
+import { isCompletedReviewFollowUpBridge, requiresParentCompletionContract } from '../parent-audit/parent-audit-contract';
 
 import {
     formatTaskQueueStatusCell,
@@ -415,6 +415,7 @@ export function syncDecomposedParentsToDone(
 
             const updatedTaskIds: string[] = [];
             for (const completedTaskId of freshTaskIds) {
+                if (isCompletedReviewFollowUpBridge(repoRoot, taskEntries.get(completedTaskId), taskEntries)) continue;
                 const nativeParent = inspectParentCompletion(repoRoot, completedTaskId);
                 if ((!nativeParent && requiresParentCompletionContract(repoRoot, completedTaskId, taskEntries.get(completedTaskId)?.notes ?? null))
                     || (nativeParent && !nativeParent.ready)) {

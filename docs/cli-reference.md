@@ -922,6 +922,7 @@ The examples below are selected invocations, rather than a second gate inventory
 | `task-events-summary` | Task timeline inspection |
 | `task-audit-summary` | Task audit and final report materialization |
 | `next-step` | Deterministic task navigator |
+| `parent-audit` | Parent completion policy, combined review and grouped follow-up |
 | `human-commit` | Authorized accepted-scope local commit |
 | `handshake-diagnostics` | Runtime and reviewer capability diagnostics |
 | `shell-smoke-preflight` | Local shell and CLI readiness checks |
