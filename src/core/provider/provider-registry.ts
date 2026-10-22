@@ -188,7 +188,8 @@ const PROVIDER_ENTRIES: readonly ProviderEntry[] = deepFreeze([
         delegatedReviewerLaunchInstruction: 'launch clean-context reviewers via Agent tool (`fork_context=false`).',
         bridge: null,
         environmentDetection: {
-            markers: ['CLAUDE_CODE_SSE_PORT'],
+            // CLAUDECODE=1 is set in every Claude Code agent shell; the SSE port exists only with an attached IDE.
+            markers: ['CLAUDECODE', 'CLAUDE_CODE_SSE_PORT'],
             priority: 40
         },
         aliases: ['claude', 'claude.md']
@@ -255,6 +256,11 @@ const PROVIDER_ENTRIES: readonly ProviderEntry[] = deepFreeze([
         reviewerCapabilityTier: 'delegation_required',
         delegatedReviewerLaunchInstruction: 'launch clean-context reviewers via delegated reviewer sub-agents with isolated context.',
         bridge: null,
+        environmentDetection: {
+            // Gemini CLI sets GEMINI_CLI=1 in the shells it runs.
+            markers: ['GEMINI_CLI'],
+            priority: 45
+        },
         aliases: ['gemini', 'gemini.md']
     },
     {

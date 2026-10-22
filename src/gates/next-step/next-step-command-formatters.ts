@@ -101,7 +101,9 @@ export function buildNextStepInstruction(
         case 'quality-checklist': {
             // Name the file here: a long Reason can push the path out of view.
             const answersPath = /answer in "?([^\s"]+\.json)"?/u.exec(result.reason || '')?.[1];
-            return `fill "status" and "answer" for every active rule in ${answersPath ? answersPath : 'the answers file named in Reason'}, ${rerun}`;
+            return `fill "status" (PASS, WARN or ACTION_REQUIRED) and "answer" for every active rule in `
+                + `${answersPath ? answersPath : 'the answers file named in Reason'}, `
+                + `cite trust-boundary negative-path evidence as "path#exact test name", ${rerun}`;
         }
         case 'run-intermediate-command':
             return `${focusedCommand} `

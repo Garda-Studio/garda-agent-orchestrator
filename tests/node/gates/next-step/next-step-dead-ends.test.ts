@@ -54,6 +54,9 @@ test('Next names the checklist answers file and binds focused checks to the curr
         reason: 'Rules a, b, c pending. Complete every active answer in "garda-agent-orchestrator/runtime/tmp/T-9-quality-checklist-answers.json" and rerun next-step.'
     })!;
     assert.match(checklist, /in garda-agent-orchestrator\/runtime\/tmp\/T-9-quality-checklist-answers\.json,/u);
+    assert.match(checklist, /PASS, WARN or ACTION_REQUIRED/u);
+    assert.match(checklist, /"path#exact test name"/u);
+    assert.ok(checklist.length <= 400, checklist);
     const focused = buildNextStepInstruction({ ...base, status: 'BLOCKED', next_gate: 'run-intermediate-command' })!;
     assert.match(focused, /--preflight-path "garda-agent-orchestrator\/runtime\/reviews\/T-9-preflight\.json"/u);
 });

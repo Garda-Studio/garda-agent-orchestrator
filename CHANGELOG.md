@@ -37,6 +37,7 @@
 ### Safer execution, updates and cleanup
 
 - Windows command timeouts and cancellation stop the process tree more reliably. Command chains stop at the first failure and share one timeout.
+- The agent auto-commit guard now recognises Claude Code (`CLAUDECODE`) and Gemini CLI (`GEMINI_CLI`) sessions, not only Codex, Cursor, Copilot, Qwen and Aider. Agents in guarded repositories commit through `gate human-commit`; operators can still set `GARDA_ALLOW_COMMIT=1`.
 - Diagnostics preserve captured output after interruption and redact home-directory paths correctly.
 - Update and rollback handling, file ownership checks and crash recovery are more robust. Update notices include an explicit update command.
 - New installations enable daily cleanup of eligible retained evidence. Existing preview preferences are preserved; scratch and retired WIP removal use separate previews and confirmations.
