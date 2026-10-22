@@ -4,15 +4,15 @@
     "name": "garda-agent-orchestrator",
     "version": "1.4.4"
   },
-  "packedFileManifestSha256": "cfcdddb5fcccee8336dffec7dcdb4b946149b4236e303a8d54517113dfe01b7c",
-  "tarballSha256": "13ac350faf5f4388a1d70fbd127eacda48da6524fb6db518854ffaa87ef24bde",
+  "packedFileManifestSha256": "b0a4f4a32894f7ca00237501267f8873b547bf35c16e058954cf261f0ac78dbd",
+  "tarballSha256": "8979df8a29323fcc751639ff1c147e8876dcc77a4ab239b0b3236cc3ba282866",
   "tarballSha256ByPlatform": {
-    "win32": "13ac350faf5f4388a1d70fbd127eacda48da6524fb6db518854ffaa87ef24bde"
+    "win32": "8979df8a29323fcc751639ff1c147e8876dcc77a4ab239b0b3236cc3ba282866"
   },
   "packedFileSha256": {
     ".gitattributes": "099d1a09ca2f02b2d7d071bcc19fdd2cda5c66f01f133abe9ff9d63294a1055c",
-    "AGENT_INIT_PROMPT.md": "93a62a657aff8d4a454a60e9702ef8d65c2577b2af3a826d236646463dba0863",
-    "CHANGELOG.md": "ff07bf0e723eef4a85bdd95ab7775f162f5b78b4d6225724bfe711c2f4e5b58e",
+    "AGENT_INIT_PROMPT.md": "bb6d4fd36fea84bec4c5c63ff5dbc33c694f4967e9a8dde085cf1f99aac17dc8",
+    "CHANGELOG.md": "6baa66be4fa30dfa7611e85a5161b89554f5efce7a35974730dce74f0b04e545",
     "CONTRIBUTING.md": "940e1e5d62fc8c700bc0c67d61db074038b9b9d7225c39b740d181b831036bab",
     "HOW_TO.md": "90bafc4fcb092768fccaf1086d788bfc910ff2cf856ece8520a8bfc687137f71",
     "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
@@ -278,7 +278,7 @@
     "dist/src/core/auth/local-commit-availability.js": "bf2b2a0df85b12a5b5fb34b960a18072d644f1eee099ddf249e1d09087732618",
     "dist/src/core/auth/protected-task-continuation.js": "45c91a175e63ed2e7b011c6a5964023ce23f3aaf0d3eb62ccb6723280b498bb1",
     "dist/src/core/bounded-jsonl-tail.js": "bf87ae0fab6a89ad68f51ecd64ca5c0b36b1e6d071440123221e7ea8328e3015",
-    "dist/src/core/build-output-paths.js": "e8058e60b3820b3830e346b308daa8717ed675e14ff5f59e57c398482e363040",
+    "dist/src/core/build-output-paths.js": "ae0a7875c8e1b8c8de90ecb71e10ef95fe8a659b1ba6c14b013ae4420e12503a",
     "dist/src/core/cli-path-input-policy.js": "3268f2acf63e5b2f4d0936998e311156456ad196e0571723f46fcc3650bcba20",
     "dist/src/core/command-line.js": "cf4654300c8377bbb65871d66b5389ca0f58f5107f9bcdc2254fb76d09bcdd30",
     "dist/src/core/command-quoting.js": "8c39d75e12d6cffd2fa0c733ec38441aba5e686704ccc57844f0e4ff0d27b3de",
@@ -306,7 +306,7 @@
     "dist/src/core/git-change-classification.js": "1b2c65cbefd635bed27799e07c98d0534a9385638786e35a62935a575230dbee",
     "dist/src/core/git-helpers.js": "0857a946e7464041b2b3d5cc87898abd975e00ef7efc8cabac429b13914d94a6",
     "dist/src/core/git-path-output.js": "e635fc5c8125faa4071c46b70c081285bea65770f5b9cea33e54fcdb1a828f50",
-    "dist/src/core/intermediate-selected-cases.js": "6b5c57bfb29d8733c3b4af0827a5794c771b7907992cba82fa1e3d4cf2b9dd05",
+    "dist/src/core/intermediate-selected-cases.js": "ab47be58f2f282b2dc90c2bb1b9d47af0b3817d7e85ff2f21bfe94f200432864",
     "dist/src/core/json.js": "7997f6c240ce0987c92383149d079dc34ae4ae7f15547db247595026690f3831",
     "dist/src/core/line-endings.js": "a5d17e4ec683d154cf62503a5ca2e5ae785dec45ade54b9c1e703638cff88650",
     "dist/src/core/managed-blocks.js": "fbfac1750ffdced8a459dfdf793f94d39ce57b5ca71caeb24b491af26a99abec",
@@ -337,7 +337,7 @@
     "dist/src/core/provider-registry.js": "f0bb50eb14de29246ac5ce9e2e42aa3e14595e21793dafa732a68941c2a35a97",
     "dist/src/core/provider/provider-client-catalog.js": "0dc8bc2414f8cff96d0c64b3a9d406a3396a04ec942daa0885647510ae401e38",
     "dist/src/core/provider/provider-client-context.js": "37d61e8045a924d4827ccf35f33683a84999fac96131f61148d2f1b25450d84c",
-    "dist/src/core/provider/provider-registry.js": "dda3c70544f7ec71ee7a3f879de74f21c381030bb8e24d1863f4a6063f78eefb",
+    "dist/src/core/provider/provider-registry.js": "d7fb305e136252f01adf54b80fa8336a7b2a320e1b22623edac3dbc4ab178145",
     "dist/src/core/public-bundle-assets.js": "54ceb275ff1eb2d4ea2c3f846d95a454a3d5a3a07602c6e5955845f6addfa7fd",
     "dist/src/core/records.js": "7ae158e6bcba50c8a7221a547f19339072f99805d2c464ca7bb79829a3d0bea0",
     "dist/src/core/recoverable-file-transaction.js": "63d0c46ba8520eae098cdae71afb496734a292181aa0fa4f5286be40f1773ae1",
@@ -566,7 +566,7 @@
     "dist/src/gates/next-step/index.js": "bee0a19d582bd4e8ebaa06118a0ff72abadddf54ba5f3734080af18c4eb02ffb",
     "dist/src/gates/next-step/next-step-closeout-routing.js": "f154c05356445dff8e8d01d972fa9305107471dd7ce575cab9d35ed005dd0496",
     "dist/src/gates/next-step/next-step-closeout-status-readers.js": "418b5b1e1eb6c367c7eb69a404449bec73a4dbf4838b1e5f596ab3869418d3e1",
-    "dist/src/gates/next-step/next-step-command-formatters.js": "36798c3c6189ddca6fc5ee77188e32f35f63a8f8269e601d0bda3717e59094d5",
+    "dist/src/gates/next-step/next-step-command-formatters.js": "d138383b3481a1ebe3cc9e612ee5948ce8928fe716095479cb755357f67b7db3",
     "dist/src/gates/next-step/next-step-compile-full-suite-readiness.js": "e5f0c291515ff70a01b6202cd6b868ce84c70a81767479d989347b47b35574f8",
     "dist/src/gates/next-step/next-step-compile-readiness.js": "a1dbb25c1ecd5ce69179ac9c6381ceb54804c93fdffdd5830f9d6bc62e01b35a",
     "dist/src/gates/next-step/next-step-decision-engine.js": "06dbd325e7d14d4352967aa074b912208309ee366cefd57c2787bb0dca19961f",
@@ -617,7 +617,7 @@
     "dist/src/gates/next-step/next-step-split-required-latch.js": "52deea87821e08bfa6d06824cc7a1816bc47939c1ef494f184845c7c63ce2dcd",
     "dist/src/gates/next-step/next-step-startup-readiness.js": "654cdc524cd2e25bc2d20ed6838fec74c57e9f69a6561bf83eadd5d4f22ee9a5",
     "dist/src/gates/next-step/next-step-startup-routing.js": "f19c886a733106b9ac1d132ad65fd19ab8ab327492cd20c8af8c97a3b89a6382",
-    "dist/src/gates/next-step/next-step-strict-decomposition-routing.js": "e7b7909f658d09d93f1edd678602cb3ddd5f53eb737ae872042a56dd6f288bb8",
+    "dist/src/gates/next-step/next-step-strict-decomposition-routing.js": "a63a8458e8bd45f64a551e5340d4fb4e1368aab03a82e71a49ff1a84139a3aa0",
     "dist/src/gates/next-step/next-step-strict-decomposition-wip.js": "f3cdf7b061a467619e3b710e96e134a0146fe2710627b988b3e85f830e071a0d",
     "dist/src/gates/next-step/next-step-task-owned-metadata.js": "406faa900723f69e592fc03a4ee278137b31e4719528654172dedbce64ebd6a5",
     "dist/src/gates/next-step/next-step-task-queue-status-sync.js": "6f3f0edde8e311b319ee68ebf2533aeee8a1f914137133aa53f07dfff70aefd1",
@@ -634,8 +634,8 @@
     "dist/src/gates/parent-audit/parent-audit-evidence.js": "c4c4895e2d20d89861c971eae50fb96f7fb07846486adcad3d25bf28b061959e",
     "dist/src/gates/parent-audit/parent-audit-follow-up.js": "6d6637dcce871adc83b122080ed74c5ecbfde94dd9e6c15b23dfd485d8bcfd03",
     "dist/src/gates/parent-audit/parent-audit-graph.js": "26cae7331c3860e73572d7cd05842fe50c017a484fb0d74d661582f44d6835e6",
-    "dist/src/gates/parent-audit/parent-audit-inputs.js": "d52387fba443d077e4fb0e93388b575f1aa80a4fccf18d4a712ef8aa30d75485",
-    "dist/src/gates/parent-audit/parent-audit-navigation.js": "1386e5b1a461e48200e38bcdf768c2dff718dba27a582e6479c203e605de4f6d",
+    "dist/src/gates/parent-audit/parent-audit-inputs.js": "d657e8433c5b01ae8f7d042f5179e6998f4a19291930f7298812638db7aba212",
+    "dist/src/gates/parent-audit/parent-audit-navigation.js": "ff462e35abf01f3fb378527b71f9c66c00c07a9ad83a03912f7a358857707a1b",
     "dist/src/gates/parent-audit/parent-audit-review.js": "9e6a6f8b478d90a6f35e13de7fdfd0b835c3cd61554fff72f2b91ca10f64ec17",
     "dist/src/gates/parent-audit/parent-audit-state.js": "dd0fc7ad9c0f4016b5e934f34f0e1c3cbcb2aa8f2fba053732ee9724474dfe8a",
     "dist/src/gates/parent-audit/parent-audit-types.js": "d43aa81f5bc89faa359e0f97c814ba25155591ff078fbb9bfd40f8c7c9683230",
@@ -1006,7 +1006,7 @@
     "dist/src/materialization/install/install-finalization-stage.js": "a84f403661f507de32c29dec7a7f3fa83e26bba550f6d0ef89824973dcc6e71d",
     "dist/src/materialization/install/install-settings-stage.js": "a2cc29df827e8f117fa7a6d17147e09a773a79692a30e335eb80b6cef8343e6f",
     "dist/src/materialization/install/install-task-stage.js": "1f93355f66fb46cb348e04c12f4c8cd41052ae877217cdf74bbabce2c2e91939",
-    "dist/src/materialization/project-discovery.js": "639bc8e8face6ce7d0087b88bead5f2ec25e1d68a02ae57752cc6b5f1c643518",
+    "dist/src/materialization/project-discovery.js": "44fa17deb1c412a4e46a129565b2b13edd184fb3afdfbe10054b4393c6348eda",
     "dist/src/materialization/project-memory-builder.js": "be534cf9a69466a78a35f256a5a531381afc1af35a23beae1376356f320859e8",
     "dist/src/materialization/project-memory-migration.js": "a3635af58c97a3b792726e8d2761846095c0ebca41634fc061aa09a9a7c87279",
     "dist/src/materialization/project-memory/project-memory-builder.js": "caed44e260d2bc689577af6ee4e6790d188a79174d3ec4414e1c45798f248169",
@@ -1369,7 +1369,7 @@
     "docs/branch-protection.md": "ee79716967c5fa6aa5283ff813718550d44652a628ac3ad05fe55d2ea5655c0f",
     "docs/cli-reference.md": "0973efa71249c997bb294924ad47f350e259e8b18cc317262445a819e5bd1feb",
     "docs/compatibility-matrix.md": "9629a5c313290ef1f4af53844f92329d1df37f79ac10c59ab883fb48197a31c9",
-    "docs/configuration.md": "577ee48c72fc67b35e621eedcb6413a523ff8a809a6658b28d3277e2caaf84e8",
+    "docs/configuration.md": "da57f9f6569957aee4bb4aab3bcef725eff0ece68e8ee4acdce616b5b22568d4",
     "docs/contributor-workflow.md": "b1011e5e0c46839d02026504545f2528f9fcfbd605f3fd62a7208c90ba815c7d",
     "docs/control-plane-isolation.md": "e523bcfd9e2999cf91d4c8a92f189664759df28702ecb847a835775b4c8cd93a",
     "docs/database/sqlite-persistence.md": "9b96dd871cec72c373f4186c349063635702ec07603360c63da33c95b90a5fe4",
@@ -1403,7 +1403,7 @@
     "template/config/isolation-mode.json": "7bbcee7132a0b96a5bb3194224c040d368a09483e8fa32102228f30cc81b6604",
     "template/config/optional-skill-selection-policy.json": "bed27b9936095c1d53a95e60354f25f83be0f9877dbbc84d26cb177099165e67",
     "template/config/output-filters.json": "14876e3c90598d06d3ba4d0358ea39b84b9eaa320d09b72ba292858386175d77",
-    "template/config/paths.json": "0f9c80a092c268a7aaec9e4911e878772d19a3260fee6f1be0d2487356d8b3a7",
+    "template/config/paths.json": "120795661e446afd33eac1d7d4e89ec226fe5bc05beb44df8a5ffe07cdec157c",
     "template/config/profiles.json": "5cb114fecb5adf1cd3d67c8228c610581ae0bb2d3b45ce95b3ed325258688d93",
     "template/config/review-artifact-storage.json": "f51c7ee664e40a4fa27b3548bcce59af78cd0821684395aeeb276744c54cd5ec",
     "template/config/review-capabilities.json": "0518229b88a781b96a41437d29f455b40030da4fe5bc705ef41799930fc98a2d",
@@ -1604,8 +1604,8 @@
   },
   "metrics": {
     "fileCount": 1591,
-    "unpackedSizeBytes": 28382583,
-    "installedSizeBytes": 28388179,
+    "unpackedSizeBytes": 28385715,
+    "installedSizeBytes": 28391311,
     "productionDependencyCount": 0,
     "lifecycleScripts": {
       "postpack": "node scripts/package-legacy-entrypoint-compat.cjs remove",
@@ -1697,5 +1697,5 @@
       "writeFile": 0
     }
   },
-  "rationale": "Refresh 1.4.4 after source a6a89f544eae1a85dcf721ec92a9adb221a2fb86 passed all 23 jobs of https://github.com/Garda-Studio/garda-agent-orchestrator/actions/runs/39750148883 (only Windows Node 24 Release Validation retried for the documented T-416 performance spread flake). Audited 15 added and 64 changed packed files implement T-424 parent completion, T-425 memory authorization, the shipped parent guide and reviewed CI recovery/locking compatibility repairs. All packed changes map to source changes; production dependencies, lifecycle scripts, URL hosts, executable surface, metadata and growth allowances remain unchanged."
+  "rationale": "1.4.4 final candidate 1885485b: T-426/T-427 fixes, runnable decision commands, CMake discovery hints, checklist and selector guidance, additional build-output directories and changelog updates"
 }
