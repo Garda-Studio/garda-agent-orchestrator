@@ -104,6 +104,7 @@
     "docs/node-runtime-contract.md",
     "docs/operator-consistency-runbook.md",
     "docs/orchestrator-work-and-isolation.md",
+    "docs/parent-task-completion.md",
     "docs/provider-client-evidence.md",
     "docs/providers.md",
     "docs/release-readiness.md",

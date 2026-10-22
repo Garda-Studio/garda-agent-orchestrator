@@ -559,10 +559,15 @@ test('published package files retain review defaults and public guidance', () =>
         'template/config/review-catalog.json',
         'template/docs/agent-rules/80-task-workflow.md',
         'docs/configuration.md',
+        'docs/parent-task-completion.md',
         'docs/cli-reference.md',
         'docs/compatibility-matrix.md'
     ]) {
         assert.ok(fs.existsSync(path.join(repoRoot, relativePath)), `${relativePath} should be package-visible`);
+        assert.ok(
+            manifest.files.some((entry) => relativePath === entry || relativePath.startsWith(`${entry}/`)),
+            `${relativePath} should be included in package files`
+        );
     }
 });
 
@@ -595,6 +600,7 @@ test('package-surface validation reproduces real offline npm packs and cleans co
         assert.equal(result.referenceKind, 'prior-artifact');
         assert.equal(measured.tarballSha256, prior.tarballSha256);
         assert.deepEqual(measured.packedFileSha256, prior.packedFileSha256);
+        assert.ok(measured.packedFileSha256['docs/parent-task-completion.md'], 'Packed guidance must include parent completion');
         assert.equal(measured.metrics.productionDependencyCount, 0);
         assert.equal(Object.keys(measured.packedFileSha256).length, measured.metrics.fileCount);
         assert.equal(fs.existsSync(compatibilityPath), false);
