@@ -9,6 +9,7 @@ import {
     normalizeStringArray
 } from './shared';
 import { REVIEW_CAPABILITY_KEYS } from '../core/review-capabilities';
+import { TRIGGER_NAME_TOKENS_CONFIG_KEY, normalizeTriggerNameTokens } from '../gates/preflight/trigger-name-tokens';
 import { normalizeReviewCatalog } from '../core/review-catalog';
 import { normalizeReviewDependencyGraphDeclaration } from '../core/review-dependency-graph';
 import { validateReviewRemediationModePolicy } from '../policy/review-remediation-mode-policy';
@@ -57,9 +58,13 @@ export function validatePathsConfig(input: unknown): Record<string, unknown> {
         'triggers',
         'code_like_regexes',
         UNTRACKED_BUILD_OUTPUT_CONFIG_KEY,
-        ORDINARY_DOC_PATHS_CONFIG_KEY
+        ORDINARY_DOC_PATHS_CONFIG_KEY,
+        TRIGGER_NAME_TOKENS_CONFIG_KEY
     ]);
     const normalized = cloneUnknownProperties(raw, knownKeys);
+
+    if (raw[TRIGGER_NAME_TOKENS_CONFIG_KEY] !== undefined)
+        normalized[TRIGGER_NAME_TOKENS_CONFIG_KEY] = normalizeTriggerNameTokens(raw[TRIGGER_NAME_TOKENS_CONFIG_KEY], `paths.${TRIGGER_NAME_TOKENS_CONFIG_KEY}`);
 
     if (raw[UNTRACKED_BUILD_OUTPUT_CONFIG_KEY] !== undefined)
         normalized[UNTRACKED_BUILD_OUTPUT_CONFIG_KEY] = normalizeUntrackedBuildOutputRegexes(raw[UNTRACKED_BUILD_OUTPUT_CONFIG_KEY]);

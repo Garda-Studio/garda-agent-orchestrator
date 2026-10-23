@@ -70,6 +70,22 @@ export const DEFAULT_API_TRIGGER_REGEXES: readonly string[] = Object.freeze([
     '\\.(proto|graphqls?|avsc|thrift)$'
 ]);
 
+/** Container, CI and infrastructure-as-code surfaces across common providers. */
+export const DEFAULT_INFRA_TRIGGER_REGEXES: readonly string[] = Object.freeze([
+    '(^|/)Dockerfile(\\..+)?$',
+    '(^|/)docker-compose(\\.[^/]+)?\\.ya?ml$',
+    '(^|/)(terraform|infra|infrastructure|helm|k8s|kubernetes)(/|$)',
+    '(^|/)\\.github/workflows/',
+    '(^|/)\\.gitlab-ci\\.ya?ml$',
+    '(^|/)Jenkinsfile(\\.[^/]+)?$',
+    '(^|/)azure-pipelines(\\.[^/]+)?\\.ya?ml$',
+    '(^|/)bitbucket-pipelines\\.ya?ml$',
+    '(^|/)\\.(circleci|buildkite|woodpecker)/',
+    '(^|/)\\.drone\\.ya?ml$',
+    '\\.(tf|tfvars|hcl)$',
+    '(^|/)(Chart|kustomization)\\.ya?ml$'
+]);
+
 export const DEFAULT_PERFORMANCE_TRIGGER_REGEXES: readonly string[] = Object.freeze([
     `(Cache|Redis|Elasticsearch|Search|Query|Benchmark|Profiling)[^/]*\\.${CODE_EXTENSION_GROUP}$`,
     '(^|/)(performance|perf|benchmarks?|benches)/'
@@ -178,6 +194,12 @@ export const LEGACY_MANAGED_PATH_REGEX_DEFAULTS: Readonly<Record<string, readonl
         '(Cache|Redis|Elasticsearch|Search|Query|Benchmark|Profiling)[^/]*\\.(java|kt|ts|js|py|go|cs|rb|php)$',
         '(^|/)(performance|perf|benchmark)/'
     ]],
+    'triggers.infra': [[
+        '(^|/)Dockerfile(\\..+)?$',
+        '(^|/)docker-compose(\\.[^/]+)?\\.ya?ml$',
+        '(^|/)(terraform|infra|infrastructure|helm|k8s|kubernetes)(/|$)',
+        '(^|/)\\.github/workflows/'
+    ]],
     'triggers.dependency': [[
         '(^|/)pom\\.xml$',
         '(^|/)build\\.gradle(\\.kts)?$',
@@ -231,6 +253,13 @@ export function migrateLegacyManagedPathRegexes(
     if (merged[UNTRACKED_BUILD_OUTPUT_CONFIG_KEY] === undefined && Array.isArray(template[UNTRACKED_BUILD_OUTPUT_CONFIG_KEY])) {
         merged[UNTRACKED_BUILD_OUTPUT_CONFIG_KEY] = [...template[UNTRACKED_BUILD_OUTPUT_CONFIG_KEY]];
         migrated.push(UNTRACKED_BUILD_OUTPUT_CONFIG_KEY);
+    }
+    // File-name word triggers (security and db) arrived in 1.4.4; workspaces without them get the template list.
+    const nameTokensKey = 'trigger_name_tokens';
+    const templateNameTokens = template[nameTokensKey];
+    if (merged[nameTokensKey] === undefined && templateNameTokens && typeof templateNameTokens === 'object' && !Array.isArray(templateNameTokens)) {
+        merged[nameTokensKey] = JSON.parse(JSON.stringify(templateNameTokens));
+        migrated.push(nameTokensKey);
     }
     for (const [dottedKey, legacyValues] of Object.entries(LEGACY_MANAGED_PATH_REGEX_DEFAULTS)) {
         const current = readPath(merged, dottedKey);

@@ -102,11 +102,26 @@ test('update migrates only uncustomized legacy managed path patterns', () => {
         }
     };
     const migrated = migrateLegacyManagedPathRegexes(merged, template);
-    assert.deepEqual(migrated.sort(), ['code_like_regexes', 'runtime_roots', 'triggers.dependency', 'untracked_build_output_regexes']);
+    assert.deepEqual(migrated.sort(), ['code_like_regexes', 'runtime_roots', 'trigger_name_tokens', 'triggers.dependency', 'untracked_build_output_regexes']);
     assert.deepEqual((merged as Record<string, unknown>).untracked_build_output_regexes, template.untracked_build_output_regexes);
+    assert.deepEqual((merged as Record<string, unknown>).trigger_name_tokens, template.trigger_name_tokens);
     assert.deepEqual(merged.runtime_roots, DEFAULT_RUNTIME_ROOTS);
     assert.deepEqual(merged.code_like_regexes, DEFAULT_CODE_LIKE_REGEXES);
     assert.deepEqual(merged.triggers.dependency, DEFAULT_DEPENDENCY_TRIGGER_REGEXES);
     assert.equal(merged.triggers.test, customTest);
     assert.equal(merged.triggers.db.at(-1), '(^|/)custom-db/');
+});
+
+test('update upgrades the uncustomized 1.4.3 infra trigger list and keeps configured name tokens', () => {
+    const template = JSON.parse(fs.readFileSync(path.join(getRepoRoot(), 'template', 'config', 'paths.json'), 'utf8'));
+    const customTokens = { security: ['shield'] };
+    const merged = {
+        trigger_name_tokens: customTokens,
+        triggers: { infra: [...LEGACY_MANAGED_PATH_REGEX_DEFAULTS['triggers.infra'][0]] }
+    };
+    const migrated = migrateLegacyManagedPathRegexes(merged, template);
+    assert.ok(migrated.includes('triggers.infra'));
+    assert.ok(!migrated.includes('trigger_name_tokens'));
+    assert.deepEqual(merged.triggers.infra, template.triggers.infra);
+    assert.equal(merged.trigger_name_tokens, customTokens);
 });

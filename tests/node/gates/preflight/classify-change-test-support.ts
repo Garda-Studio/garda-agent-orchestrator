@@ -22,6 +22,8 @@ export function makeConfig(overrides: Record<string, unknown> = {}) {
         test_refactor_structural_trigger_regexes: [],
         test_refactor_changed_lines_threshold: defaults.test_refactor_changed_lines_threshold,
         performance_trigger_regexes: defaults.triggers.performance,
+        security_trigger_name_tokens: defaults.trigger_name_tokens.security,
+        db_trigger_name_tokens: defaults.trigger_name_tokens.db,
         code_like_regexes: defaults.code_like_regexes,
         protected_control_plane_roots: defaults.protected_control_plane_roots,
         ordinary_doc_paths: defaults.ordinary_doc_paths

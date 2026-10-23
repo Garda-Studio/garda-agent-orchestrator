@@ -1,6 +1,7 @@
 import type { OrdinaryDocPathMatch } from '../../core/ordinary-doc-paths';
 import type { ResolvedClassificationConfig } from './classify-change-config';
 import { hasPerformanceSensitiveCacheIntent } from './classify-change-intent';
+import { matchesTriggerNameTokens } from './trigger-name-tokens';
 
 interface MatchConfiguredRootOptions {
     allowNestedRoot?: boolean;
@@ -90,9 +91,12 @@ export function detectPathTriggers(input: PathDetectionInput): PathDetectionResu
     const dbStrongChangedFiles = normalizedFiles.filter((p: string) => (
         callbacks.isStrongDatabaseChangedScope(p, sqlOrMigration, classificationConfig.db_trigger_regexes)
     ));
+    // Name words apply to code files only, so documentation such as payment-flow.md keeps its own routing.
+    const nameTokenCodeFile = (p: string) => callbacks.testMatch(p, codeLike) && !callbacks.testMatch(p, classificationConfig.test_trigger_regexes);
     const dbWeakSignalFiles = normalizedFiles.filter((p: string) => (
         dbStrongChangedFiles.indexOf(p) === -1
-        && callbacks.isConfiguredWeakDatabaseSignal(p, classificationConfig.db_trigger_regexes)
+        && (callbacks.isConfiguredWeakDatabaseSignal(p, classificationConfig.db_trigger_regexes)
+            || (nameTokenCodeFile(p) && matchesTriggerNameTokens(p, classificationConfig.db_trigger_name_tokens)))
     ));
     const dbAmbientSignalFiles = normalizedFiles.filter((p: string) => (
         dbStrongChangedFiles.indexOf(p) === -1
@@ -109,7 +113,8 @@ export function detectPathTriggers(input: PathDetectionInput): PathDetectionResu
                 : 'project_db_evidence_without_db_changed_scope'
         )
         : null;
-    const securityTriggered = normalizedFiles.some((p: string) => callbacks.testMatch(p, classificationConfig.security_trigger_regexes));
+    const securityTriggered = normalizedFiles.some((p: string) => callbacks.testMatch(p, classificationConfig.security_trigger_regexes)
+        || (nameTokenCodeFile(p) && matchesTriggerNameTokens(p, classificationConfig.security_trigger_name_tokens)));
     const apiTriggeredFiles = normalizedFiles.filter((p: string) => callbacks.testMatch(p, classificationConfig.api_trigger_regexes));
     const apiTriggered = apiTriggeredFiles.length > 0;
     const dependencyTriggered = normalizedFiles.some((p: string) => callbacks.testMatch(p, classificationConfig.dependency_trigger_regexes));

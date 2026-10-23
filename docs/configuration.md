@@ -647,6 +647,22 @@ Defines:
 - **Root directories** for source code classification.
 - **Trigger patterns** (regexes) that map file paths to required review types.
 - **Sensitive path markers** for security, auth, payment, database, migration, and infrastructure paths.
+- **File-name words** (`trigger_name_tokens`) that require a review for code files whatever the folder layout or language.
+
+### File-name word triggers
+
+Path regexes catch folders such as `security/` or `auth/`, but a security-relevant file often lives in a neutral folder: `config/SecurityConfig.java`, `filters/JwtFilter.kt`, `middleware/auth-middleware.ts`, `Services/TokenService.cs`, `payment_gateway.py`. For code files (per `code_like_regexes`, excluding test paths), Garda splits the file name into words for camelCase, PascalCase, snake_case, kebab-case and dotted names. A review is required when any word equals a configured word. Matching is whole-word: `TokenService` contains the word `token`, but `tokenizer` does not.
+
+```json
+"trigger_name_tokens": {
+  "security": ["auth", "security", "jwt", "token", "password", "session", "payment", "..."],
+  "db": ["entity", "entities"]
+}
+```
+
+`security` words add the security review. `db` words count as a database signal, like `Repository` or `Dao` names: the database review is required when the project also shows database evidence. Edit the lists to fit your project; a list replaces the default for that review type. Updates add the default lists only to workspaces that do not define `trigger_name_tokens`.
+
+The default `infra` triggers cover Docker, GitHub Actions, GitLab CI, Jenkins, Azure Pipelines, Bitbucket Pipelines, CircleCI, Buildkite, Woodpecker and Drone files, Terraform/HCL files and Helm/Kustomize manifests. Workspaces that still use the previous default list get the new list on update; customized lists are kept.
 
 ## Compact Command Hints
 

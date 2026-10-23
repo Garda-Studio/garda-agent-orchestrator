@@ -18,7 +18,8 @@ const PACKAGE_JSON = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'u
     files: string[];
 };
 const CUSTOM_REVIEW_ID = 'library-compatibility';
-const NPM_COMMAND_TIMEOUT_MS = 120_000;
+// Installing the packed 1591-file release on hosted Windows runners can exceed two minutes.
+const NPM_COMMAND_TIMEOUT_MS = 300_000;
 
 type CommandResult = Record<string, any>;
 

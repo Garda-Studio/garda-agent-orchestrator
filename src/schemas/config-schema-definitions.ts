@@ -239,6 +239,11 @@ export const pathsSchema: Record<string, unknown> = Object.freeze({
             additionalProperties: { type: 'array', items: { type: 'string', minLength: 1 } },
             minProperties: 1
         },
+        trigger_name_tokens: {
+            type: 'object',
+            description: 'Whole file-name words per review type (for example security, db) that trigger the review for code files regardless of folder layout; names are split on camelCase, snake_case, kebab-case and dots.',
+            additionalProperties: { type: 'array', items: { type: 'string', pattern: '^[A-Za-z0-9]+$' } }
+        },
         code_like_regexes: { type: 'array', items: { type: 'string', minLength: 1 }, description: 'Patterns matching code-like file extensions.' }
     },
     required: ['metrics_path', 'runtime_roots', 'fast_path_roots', 'triggers'],

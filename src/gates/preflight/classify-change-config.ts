@@ -24,10 +24,16 @@ import {
     DEFAULT_CODE_LIKE_REGEXES,
     DEFAULT_DB_TRIGGER_REGEXES,
     DEFAULT_DEPENDENCY_TRIGGER_REGEXES,
+    DEFAULT_INFRA_TRIGGER_REGEXES,
     DEFAULT_PERFORMANCE_TRIGGER_REGEXES,
     DEFAULT_RUNTIME_ROOTS
 } from '../../policy/default-path-regexes';
 import { resolveGateExecutionPath } from '../isolation/isolation-sandbox';
+import {
+    DEFAULT_TRIGGER_NAME_TOKENS,
+    normalizeTriggerNameTokens,
+    TRIGGER_NAME_TOKENS_CONFIG_KEY
+} from './trigger-name-tokens';
 import {
     getProtectedControlPlaneRoots,
     normalizePath,
@@ -59,6 +65,7 @@ export interface ClassificationConfig {
     sql_or_migration_regexes: string[];
     test_refactor_changed_lines_threshold: number;
     triggers: TriggerConfig;
+    trigger_name_tokens: Record<string, string[]>;
     code_like_regexes: string[];
     protected_control_plane_roots: string[];
     ordinary_doc_paths: string[];
@@ -84,6 +91,9 @@ export interface ResolvedClassificationConfig {
     test_trigger_regexes: string[];
     test_refactor_structural_trigger_regexes: string[];
     performance_trigger_regexes: string[];
+    /** Whole file-name words that trigger the lane for code-like files, independent of folder layout. */
+    security_trigger_name_tokens?: string[];
+    db_trigger_name_tokens?: string[];
     code_like_regexes: string[];
     protected_control_plane_roots: string[];
     ordinary_doc_paths: string[];
@@ -142,15 +152,14 @@ export function getDefaultClassificationConfig(repoRoot: string): Classification
             ],
             api: [...DEFAULT_API_TRIGGER_REGEXES],
             dependency: [...DEFAULT_DEPENDENCY_TRIGGER_REGEXES],
-            infra: [
-                '(^|/)Dockerfile(\\..+)?$',
-                '(^|/)docker-compose(\\.[^/]+)?\\.ya?ml$',
-                '(^|/)(terraform|infra|infrastructure|helm|k8s|kubernetes)(/|$)',
-                '(^|/)\\.github/workflows/'
-            ],
+            infra: [...DEFAULT_INFRA_TRIGGER_REGEXES],
             refactor: [...DEFAULT_REVIEW_TRIGGER_POLICY.refactor_path_regexes],
             test: [...DEFAULT_REVIEW_TRIGGER_POLICY.test_path_regexes],
             performance: [...DEFAULT_PERFORMANCE_TRIGGER_REGEXES]
+        },
+        trigger_name_tokens: {
+            security: [...DEFAULT_TRIGGER_NAME_TOKENS.security],
+            db: [...DEFAULT_TRIGGER_NAME_TOKENS.db]
         },
         code_like_regexes: [...DEFAULT_CODE_LIKE_REGEXES],
         protected_control_plane_roots: getProtectedControlPlaneRoots(repoRoot),
@@ -189,6 +198,10 @@ export function getClassificationConfig(
                         defaults.triggers[triggerKey] = rawTriggers[triggerKey] as string[];
                     }
                 }
+            }
+            if (raw[TRIGGER_NAME_TOKENS_CONFIG_KEY] !== undefined) {
+                const configured = normalizeTriggerNameTokens(raw[TRIGGER_NAME_TOKENS_CONFIG_KEY], `paths.${TRIGGER_NAME_TOKENS_CONFIG_KEY}`);
+                defaults.trigger_name_tokens = { ...defaults.trigger_name_tokens, ...configured };
             }
             source = 'paths_json';
         } catch (error: unknown) {
@@ -237,6 +250,8 @@ export function getClassificationConfig(
         test_trigger_regexes: [...reviewTriggerPolicy.test_path_regexes],
         test_refactor_structural_trigger_regexes: [...reviewTriggerPolicy.test_refactor_structural_path_regexes],
         performance_trigger_regexes: toStringArray(defaults.triggers.performance),
+        security_trigger_name_tokens: [...(defaults.trigger_name_tokens.security ?? [])],
+        db_trigger_name_tokens: [...(defaults.trigger_name_tokens.db ?? [])],
         code_like_regexes: toStringArray(defaults.code_like_regexes),
         protected_control_plane_roots: protectedControlPlaneRoots,
         ordinary_doc_paths: ordinaryDocPaths

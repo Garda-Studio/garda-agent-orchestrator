@@ -4,15 +4,15 @@
     "name": "garda-agent-orchestrator",
     "version": "1.4.4"
   },
-  "packedFileManifestSha256": "1ddd4a552918fcf758bb3f266285d5149b88772065dafa640a9b2e5cc81d5c4d",
-  "tarballSha256": "a965984780614f7b57410ac5d47a62047d047c3810a2a5078bdb67c46d489df1",
+  "packedFileManifestSha256": "56073fadce123eb599d331ec7686fc41344fa42e700521c8437b0de4b653381f",
+  "tarballSha256": "c950652c0e676914e7664a4198b8c1a06fd2a5cd5b424eddbf1a4febce90a21a",
   "tarballSha256ByPlatform": {
-    "win32": "a965984780614f7b57410ac5d47a62047d047c3810a2a5078bdb67c46d489df1"
+    "win32": "c950652c0e676914e7664a4198b8c1a06fd2a5cd5b424eddbf1a4febce90a21a"
   },
   "packedFileSha256": {
     ".gitattributes": "099d1a09ca2f02b2d7d071bcc19fdd2cda5c66f01f133abe9ff9d63294a1055c",
     "AGENT_INIT_PROMPT.md": "7bad23533c69447c07627cd53bafdb3c4597715e171904c392c0602fcfd8cbc6",
-    "CHANGELOG.md": "4a3830d0b616f6b87865799bab56cc6f48381fc293760d07526b47fe14335bc0",
+    "CHANGELOG.md": "27fd1f6c5c9bf8e0d722e15c786ccdddfa27f1e50f8a544f9836d9ef926d5de2",
     "CONTRIBUTING.md": "940e1e5d62fc8c700bc0c67d61db074038b9b9d7225c39b740d181b831036bab",
     "HOW_TO.md": "90bafc4fcb092768fccaf1086d788bfc910ff2cf856ece8520a8bfc687137f71",
     "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
@@ -28,7 +28,7 @@
     "bin/garda/process-delegation.js": "8de46ad82a42256e30cfa4fe3e073a634afc48f22c19026d471744d0a39bc61f",
     "bin/garda/root-discovery.js": "a2c381d229ea87e4959ff95573b837da557ad71adfb1a21a5e3ee30ec5ea8e07",
     "bin/garda/runtime-loading.js": "28e2333d62e1338ace5fdc7988082ea5b79c905639d51556fe2de1e328658aaa",
-    "dist/publish-runtime-manifest.json": "3a730b398f02a3d74ce0db314baf97dc4a5ea058bae1f69e1f160efc5b00cb25",
+    "dist/publish-runtime-manifest.json": "9a4bebe97186903d8414e8267ff5aa5b0f3af3d23e49caa7842d88aa10b75079",
     "dist/src/bin/garda.js": "ad9eb267227c0d0b1150a5427167764e9de4bc2a7850b897e7096a29eb50605d",
     "dist/src/bin/garda/delegation-policy.js": "742e3ebebee0b0edebead5c9286e9d82b178be34f12c8dfc296923b57b845fc8",
     "dist/src/bin/garda/launcher-constants.js": "864326fb551a84b1e9f0542be628b817db72432cb6808085c198756ff45e00db",
@@ -641,13 +641,13 @@
     "dist/src/gates/parent-audit/parent-audit-types.js": "d43aa81f5bc89faa359e0f97c814ba25155591ff078fbb9bfd40f8c7c9683230",
     "dist/src/gates/parent-audit/parent-audit-validation.js": "65c68c95c97a145554990fb1c9bc70a6fc1afec6932058f036fe80678fd33135",
     "dist/src/gates/preflight/build-scoped-diff.js": "051e4184868def4c005af3e29bd59c224e9861822984636c069eac3db76f5620",
-    "dist/src/gates/preflight/classify-change-config.js": "01069cd4f85b9e21601726fa9f00341bcf9020b1a774286134a136192b60be27",
+    "dist/src/gates/preflight/classify-change-config.js": "e5f024266311d07bac2ae0c7f8380c443c2ff47bcf3c6468a3f0bb48a9ec9b1e",
     "dist/src/gates/preflight/classify-change-db-evidence.js": "a549f88422248b1a7a19e2437927b2c673feadd3349c5235536d3ac63e32f138",
     "dist/src/gates/preflight/classify-change-doc-safety.js": "14539aaf2b809ff7c5beb04d60947cbbb6795f2489fbbb0a59c9eff90ef1eb5a",
     "dist/src/gates/preflight/classify-change-heuristics.js": "dc3cf38ab655c0a5b265a7f25020514ef8ce414f4d44d5c9f47ecf7a87898fa8",
     "dist/src/gates/preflight/classify-change-i18n-companion.js": "6501cc0b2976d6b493c834db2caf0c04076d5ca16b6e3a646bf038f9bf07179d",
     "dist/src/gates/preflight/classify-change-intent.js": "6d9908ab6a71ec34ac06f7b953bd1dc3e6918c8380df343ec92d0b2470e4036e",
-    "dist/src/gates/preflight/classify-change-path-detection.js": "abe19df9c3ec6279e8c5d4a5b97826fcd91d65a3de5bf7a0ed3eb3d2ee51f7f0",
+    "dist/src/gates/preflight/classify-change-path-detection.js": "53ad869178c49da561e526fe54d4c7896ae9acd03cc1f5abb12b06af609a2775",
     "dist/src/gates/preflight/classify-change-required-reviews.js": "d2865195eb76d9b64aa4ce0ac568a89f86428e3837d9227d25ca14f919ce9fe1",
     "dist/src/gates/preflight/classify-change-scope-category.js": "160d52ae586932be84997c06cdecd66dae835850d87ea3cec4cfc136408b4aef",
     "dist/src/gates/preflight/classify-change-task-required-reviews.js": "c90314dc2e1bb4d212372e24ebe55616216beb14cd637d043ccd7c97051dc9a3",
@@ -655,6 +655,7 @@
     "dist/src/gates/preflight/index.js": "8dee7a25b94eb68bd30bd0eaf21e76f6b414a66ddc6c8a672b4bfb80ed7370fe",
     "dist/src/gates/preflight/pre-preflight-cycle-anchor.js": "8e28211759ae357e0db9a718a225e548c752130d6aaedcb1bbfb83a211b01936",
     "dist/src/gates/preflight/preflight-code-change.js": "d01a97481395f61764ccfd987814b6a1e51704cab8c3232edcbca5133f3fd0e3",
+    "dist/src/gates/preflight/trigger-name-tokens.js": "594059da2d398db378ef65407f8d4cd4ff556eeca28f79a26a5e9c9c5c3d3217",
     "dist/src/gates/project-memory-impact/index.js": "1c750931564e0856db6c66e28af667428cfde7a530f80e721e8cb5e5b5002071",
     "dist/src/gates/project-memory-impact/project-memory-impact-artifacts.js": "3a1e3d489d23998f6fdb3a35c432cd59ceb25e8afc39887e740fd29f0c34ceac",
     "dist/src/gates/project-memory-impact/project-memory-impact-common.js": "fc243bc0b995890d129b50e74f45731b74fdd5e58c905dcf74d1c76e7ffe416c",
@@ -1017,7 +1018,7 @@
     "dist/src/materialization/rule-support-files.js": "74336f197153bb975ac78a4a01a9eef5db676578952a80adb5ef67cec8c6fc49",
     "dist/src/materialization/staged-side-effects.js": "1d56cf967c4a1b3a67d9217309654c031e082bc377b1932c7e19fe437da702f2",
     "dist/src/materialization/switch-mode.js": "f99ac1b1bf95a723edd7df33ee60347def50ec8d0044b8b45d42d6eea0b4e0e4",
-    "dist/src/policy/default-path-regexes.js": "7e9de9c6b4c3e534e645a8d061cecf7ca9120093a188d46f691bdff8d67ec4e8",
+    "dist/src/policy/default-path-regexes.js": "4790d1cd46d1db72fd1081e96dfbcd69335725686c75260ac19e04970419f15f",
     "dist/src/policy/effective-review-lane-set.js": "16f1bcfc7f5f0a1b612d73a0fd569b6d8f3fb53be5b07fbcae2c9367fdd81fdc",
     "dist/src/policy/effective-review-snapshot.js": "82dcf8267d831feb93ba4d9b54db9b70bfa3bc3103cf7d28d553a7ad72b4e190",
     "dist/src/policy/offline-mode.js": "aa7ade05115005bad0616cd0d285154cf37795b617e0500d681df7fa67198d4c",
@@ -1317,11 +1318,11 @@
     "dist/src/runtime/task-lifecycle-phase-runtime.js": "0307c1d2a48d6b401f74aa81ddd3580ce1956a907d45d0cdfdceae8f7208983f",
     "dist/src/runtime/toxin-metrics.js": "ce79bc27f13dc84f7081994aab9192ad069d78dc544f9f7a3f369d02498eb6ca",
     "dist/src/runtime/toxin-snapshot-cache.js": "d2af2cbef2a870965dfd47ffbd4a7bb83782ae88b1fae3dd109be2134eb57233",
-    "dist/src/schemas/config-artifacts-core.js": "d78e50c8af590be14d9ae6666770aa1830c282434dca2b8b7ffff6bf3b16ab9a",
+    "dist/src/schemas/config-artifacts-core.js": "bda8b1badf28a0ea5999e0b400d50daeed23384f96905c83c8737b5694ab7903",
     "dist/src/schemas/config-artifacts-shared.js": "5a17a0b2275bf78506fa30e8eb0edd5357a2163f8ba0201d52eb267d564bd96b",
     "dist/src/schemas/config-artifacts-workflow.js": "c15c76bbb27ece9b9a56188bafb05e88007808c46f88adb7b1641bec82c26f89",
     "dist/src/schemas/config-artifacts.js": "04f7e6d4c2dbd59148cf0edf6689de4cf8cbb7b4adb9104feec1709c231f0fbe",
-    "dist/src/schemas/config-schema-definitions.js": "1fea20342d457d136a3b8868bf839b55bb1202c4d7079a5ae45a0be8580b3fe2",
+    "dist/src/schemas/config-schema-definitions.js": "1c76fd72c0cca20976fa84197ea9507fdb734cb675a081784193e783fadfc0b2",
     "dist/src/schemas/config-schema-validation.js": "029616d7f896489bc3e0750d797ede645cc68c135abcb3e4cebc363f5e071f71",
     "dist/src/schemas/config-schemas.js": "8be6b7b80dab2526552f6c2cdd07c4b5287d3209c6ef4989e5db713a69a5b783",
     "dist/src/schemas/init-answers.js": "2a45d9f410e2ce6474422bc5bd6af2ec43a460bf61d3a6ff687925cb0a458200",
@@ -1369,7 +1370,7 @@
     "docs/branch-protection.md": "ee79716967c5fa6aa5283ff813718550d44652a628ac3ad05fe55d2ea5655c0f",
     "docs/cli-reference.md": "bebc80c2f6bbe214a8dca47a0fbb8b6d8c38df1638300525ede1127452f09425",
     "docs/compatibility-matrix.md": "9629a5c313290ef1f4af53844f92329d1df37f79ac10c59ab883fb48197a31c9",
-    "docs/configuration.md": "da57f9f6569957aee4bb4aab3bcef725eff0ece68e8ee4acdce616b5b22568d4",
+    "docs/configuration.md": "89f14535733aea0302b5943208596530a98b40ed1db3de8704533e848dc4fd80",
     "docs/contributor-workflow.md": "b1011e5e0c46839d02026504545f2528f9fcfbd605f3fd62a7208c90ba815c7d",
     "docs/control-plane-isolation.md": "e523bcfd9e2999cf91d4c8a92f189664759df28702ecb847a835775b4c8cd93a",
     "docs/database/sqlite-persistence.md": "9b96dd871cec72c373f4186c349063635702ec07603360c63da33c95b90a5fe4",
@@ -1403,7 +1404,7 @@
     "template/config/isolation-mode.json": "7bbcee7132a0b96a5bb3194224c040d368a09483e8fa32102228f30cc81b6604",
     "template/config/optional-skill-selection-policy.json": "bed27b9936095c1d53a95e60354f25f83be0f9877dbbc84d26cb177099165e67",
     "template/config/output-filters.json": "14876e3c90598d06d3ba4d0358ea39b84b9eaa320d09b72ba292858386175d77",
-    "template/config/paths.json": "2a565a92684221efa8ee51736baf2c7ff91115534e7d71367b15569307ee777b",
+    "template/config/paths.json": "a78637eaffcb0859f8ef3a3c29a27a10baa65f53b211b10232505bf57ccc4835",
     "template/config/profiles.json": "5cb114fecb5adf1cd3d67c8228c610581ae0bb2d3b45ce95b3ed325258688d93",
     "template/config/review-artifact-storage.json": "f51c7ee664e40a4fa27b3548bcce59af78cd0821684395aeeb276744c54cd5ec",
     "template/config/review-capabilities.json": "0518229b88a781b96a41437d29f455b40030da4fe5bc705ef41799930fc98a2d",
@@ -1603,9 +1604,9 @@
     "tsconfig.node-foundation.json": "bd42060a2b282ed055e487f79886ea9a9f0bd375cdf0a97608f0aea300e1c8ca"
   },
   "metrics": {
-    "fileCount": 1591,
-    "unpackedSizeBytes": 28403049,
-    "installedSizeBytes": 28408645,
+    "fileCount": 1592,
+    "unpackedSizeBytes": 28413509,
+    "installedSizeBytes": 28419105,
     "productionDependencyCount": 0,
     "lifecycleScripts": {
       "postpack": "node scripts/package-legacy-entrypoint-compat.cjs remove",
@@ -1700,5 +1701,5 @@
       "writeFile": 0
     }
   },
-  "rationale": "1.4.4: UI request error boundary, omitted tests in standard run, reviewed CI scripts digest, seal fix"
+  "rationale": "1.4.4: stack-neutral file-name review triggers, CI/IaC infra triggers, release smoke npm timeout"
 }
