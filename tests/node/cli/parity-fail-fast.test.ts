@@ -437,7 +437,7 @@ test('read-only check-update help warns on target parity drift and stays discove
         assert.ok(combined.includes('AllowedCommand: check-update'));
         assert.ok(combined.includes('ParityPolicy: warn'));
         assert.ok(combined.includes('check-update is read-only without --apply'));
-        assert.ok(combined.includes('Usage:'));
+        assert.ok(combined.includes('GARDA_COMMAND_HELP'));
         assert.ok(combined.includes('check-update'));
         assert.ok(!combined.includes('PARITY_BLOCKED'));
     } finally {

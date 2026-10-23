@@ -108,7 +108,7 @@ function buildBoundedLineEvidence(content: Buffer): {
         lineHashes.push(sha256Buffer(content.subarray(start)));
     }
     const decoded = content.toString('utf8');
-    const redacted = redactSecretText(decoded);
+    const redacted = redactSecretText(decoded, { preserveLineCount: true });
     const redactedLines = splitLinesPreservingEndings(redacted);
     if (redactedLines.length !== lineHashes.length) {
         return null;

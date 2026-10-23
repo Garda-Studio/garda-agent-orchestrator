@@ -157,7 +157,7 @@ export async function handleReinit(commandArgv: string[], packageJson: PackageJs
             ]
         }) === 'true';
         claudeOrchestratorFullAccess = await promptSingleSelect({
-            title: 'Set Claude access level for orchestrator files',
+            title: 'Allow Claude Code to run Garda, git diff/log and grep without asking each time (skip if you do not use Claude Code)',
             defaultLabel: claudeOrchestratorFullAccess ? 'Yes' : 'No',
             defaultValue: claudeOrchestratorFullAccess ? 'true' : 'false',
             options: [

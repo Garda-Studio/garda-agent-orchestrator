@@ -418,7 +418,7 @@ test('profile current shows active profile details', () => {
     assert.ok(output.includes('critical=fix_now'));
     assert.ok(output.includes('residual_risk=create_follow_up'));
     assert.ok(output.includes('ReviewTriggerPolicy:'));
-    assert.ok(output.includes('changed_lines_threshold=20'));
+    assert.ok(output.includes('changed_lines_threshold=50'));
 });
 
 test('profile current --json returns valid JSON', () => {
@@ -429,7 +429,7 @@ test('profile current --json returns valid JSON', () => {
     assert.equal(parsed.is_built_in, true);
     assert.equal(parsed.entry.depth, 2);
     assert.equal(parsed.review_trigger_policy.schema_version, 1);
-    assert.equal(parsed.review_trigger_policy.test_refactor_changed_lines_threshold, 20);
+    assert.equal(parsed.review_trigger_policy.test_refactor_changed_lines_threshold, 50);
     assert.ok(parsed.review_trigger_policy.refactor_path_regexes.length > 0);
 });
 

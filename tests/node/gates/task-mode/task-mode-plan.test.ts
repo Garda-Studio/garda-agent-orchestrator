@@ -1501,7 +1501,7 @@ test('runEnterTaskModeCommand records task-selected and runtime profiles separat
         assert.equal(artifact.profile_policy_snapshot.finding_policy.active_findings.medium, 'ignore');
         assert.equal(artifact.profile_policy_snapshot.finding_policy.residual_risks, 'ignore');
         assert.equal(artifact.profile_policy_snapshot.review_trigger_policy.schema_version, 1);
-        assert.equal(artifact.profile_policy_snapshot.review_trigger_policy.test_refactor_changed_lines_threshold, 20);
+        assert.equal(artifact.profile_policy_snapshot.review_trigger_policy.test_refactor_changed_lines_threshold, 50);
         assert.ok(artifact.profile_policy_snapshot.review_trigger_policy.refactor_path_regexes.length > 0);
         assert.ok(artifact.profile_policy_snapshot.review_trigger_policy.test_refactor_structural_path_regexes.length > 0);
         assert.match(artifact.profile_policy_snapshot.snapshot_hash, /^[a-f0-9]{64}$/);
@@ -1651,7 +1651,7 @@ test('runEnterTaskModeCommand reuses legacy strict finding-policy snapshots with
         const legacySummary = summarizeTaskProfilePolicySnapshot(legacyEvidence.profile_policy_snapshot);
         assert.equal(legacySummary.review_finding_policy.policy_id, 'strict');
         assert.equal(legacySummary.finding_policy.policy_id, 'profile_review_finding_dispositions_v1');
-        assert.equal(legacySummary.review_trigger_policy.test_refactor_changed_lines_threshold, 20);
+        assert.equal(legacySummary.review_trigger_policy.test_refactor_changed_lines_threshold, 50);
         assert.ok(legacySummary.review_trigger_policy.test_refactor_structural_path_regexes.length > 0);
         assert.equal(
             legacySummary.review_remediation_rerun_policy.rules.leaf_test.strategy,

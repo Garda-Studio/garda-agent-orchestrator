@@ -18,6 +18,10 @@
 - Choose whether split tasks need a final combined audit. Manual task groups finish automatically; an enabled audit runs once and groups any fixes into one follow-up task.
 - Reports refresh when project memory or relevant Git settings change.
 - Required project-memory updates reuse the task approval, avoiding repeated permission questions.
+- Agent initialization edits project rules and memory directly. The prompt no longer leads agents to open a task for setup, which the Garda self-guard blocked.
+- Agents no longer turn every request into a task. Questions, reviews, read-only checks and setup are handled directly; when a change needs a task that does not exist, the agent proposes one and waits for your decision.
+- Agent setup proposes ordinary documents from the files it finds in your repository and explains what the setting changes. Recommended skill packs are offered as a numbered list instead of a bare yes/no question. The Claude Code permission question now says what it allows.
+- `update`, `check-update` and `rollback` have their own `--help`. `workflow set --help` shows `--local-commit`, and `gate run-intermediate-command --help` shows `--timeout-ms`. A mistyped option suggests the closest one, and read-only `garda ui` explains how to enable actions.
 - Prepare and inspect task plans before starting work. Ready plans attach automatically; invalid dependencies are reported.
 - `next-step` gives clearer recovery instructions for blocked steps, missing tools and incomplete validation. Printed decision commands run as shown, and a rejected test-case selector names the exact token to use.
 - Settings include task-scoped test selection. Backup management adds selection, deletion previews and explicit confirmation when recovery points would be lost.
@@ -33,13 +37,17 @@
 - Review reuse, follow-ups, interrupted cycles and decomposed tasks retain their original source and evidence checks.
 - Task recovery better preserves unfinished work, staged renames and completed child work. Commit guards also work in linked Git worktrees.
 - Generated rules preserve user content and settings; malformed managed blocks and ambiguous task rows produce actionable errors.
+- After a failed review, a test-only fix re-runs the refactor review only when one test file changes by more than 50 lines (previously 20), a test file is added or removed, or a shared test helper changes. Existing workspaces keep their configured value.
+- Secret masking no longer merges neighbouring lines, so a small test fix near a `token=` string is no longer treated as an unmeasurable change that restarts every review.
 
 ### Safer execution, updates and cleanup
 
 - Windows command timeouts and cancellation stop the process tree more reliably. Command chains stop at the first failure and share one timeout.
 - The agent auto-commit guard now recognises Claude Code (`CLAUDECODE`) and Gemini CLI (`GEMINI_CLI`) sessions, not only Codex, Cursor, Copilot, Qwen and Aider. Agents in guarded repositories commit through `gate human-commit`; operators can still set `GARDA_ALLOW_COMMIT=1`.
+- Install and update replace the commit-guard block left by the product's former name, which blocked native commits even when they were allowed.
 - Diagnostics preserve captured output after interruption and redact home-directory paths correctly.
 - Update and rollback handling, file ownership checks and crash recovery are more robust. Update notices include an explicit update command.
+- `garda update git` no longer installs dependencies or runs build scripts from the cloned source. It applies only a commit that contains a prebuilt `bin/` and `dist/`. The official repository does not commit them, so use `garda update` (npm) for releases. `update git --check-only` and `--dry-run` still compare any ref.
 - New installations enable daily cleanup of eligible retained evidence. Existing preview preferences are preserved; scratch and retired WIP removal use separate previews and confirmations.
 - Manual CI and release validation check the selected commit. Packaging checks and shipped guides better match the supported workflows.
 - Additional fixes improve locking, report freshness, configuration validation and cross-platform test reliability.

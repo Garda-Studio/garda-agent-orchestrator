@@ -52,7 +52,8 @@ import {
 
 const LEGACY_COMMIT_GUARD_BUNDLE_NAMES = Object.freeze([
     ['ai', 'agent', 'orchestrator'].join('-'),
-    ['agent', 'orchestrator'].join('-')
+    ['agent', 'orchestrator'].join('-'),
+    ['Octopus', 'agent', 'orchestrator'].join('-')
 ]);
 
 function getCommitGuardManagedBlockPattern(global = false): RegExp {

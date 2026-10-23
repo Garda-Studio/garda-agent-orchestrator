@@ -289,11 +289,12 @@ function buildPreflightGateHelpEntries(
         },
         'run-intermediate-command': {
             ...createGateHelpEntry(
-                'Run an opt-in auditable intermediate validation command with full raw output artifact and compact visible output. --expect-failure is restricted to an exact TASK.md Notes marker "Test-first: expected-red", a current test-only preflight, and a focused changed test; a real nonzero test exit is recorded as successful expected-red evidence, while timeout, cancellation, or an unexpected pass fails closed.',
+                'Run an opt-in auditable intermediate validation command with full raw output artifact and compact visible output. --timeout-ms overrides the default 120000 ms command timeout for slow runs such as cold container pulls.--expect-failure is restricted to an exact TASK.md Notes marker "Test-first: expected-red", a current test-only preflight, and a focused changed test; a real nonzero test exit is recorded as successful expected-red evidence, while timeout, cancellation, or an unexpected pass fails closed.',
                 [
                     `${cliPrefix} gate run-intermediate-command --task-id "${TASK_ID_PLACEHOLDER}" --command-source targeted-test --command "<validation command producing reports/result.xml>" --report-file '{"path":"reports/result.xml","max_bytes":1048576}' --repo-root "."`,
                     `${cliPrefix} gate run-intermediate-command --task-id "${TASK_ID_PLACEHOLDER}" --command-source "<targeted-test|typecheck|validation|node-test>" --command "<validation command>" [--selected-case '{"source":"<test file>","case_id":"<case>","selector":"<selector>"}'] --preflight-path "${buildBundleRelativePath(bundleName, `runtime/reviews/${TASK_ID_PLACEHOLDER}-preflight.json`)}" --coverage-contract-sha256 "<coverage contract sha256>" --repo-root "."`,
                     `${cliPrefix} gate run-intermediate-command --task-id "${TASK_ID_PLACEHOLDER}" --recipe-id "<admitted-recipe-id>" --repo-root "."`,
+                    `${cliPrefix} gate run-intermediate-command --task-id "${TASK_ID_PLACEHOLDER}" --command-source validation --command "<slow validation command>" --timeout-ms 900000 --repo-root "."`,
                     `${cliPrefix} gate run-intermediate-command --task-id "${TASK_ID_PLACEHOLDER}" --command-source "<targeted-test|node-test>" --command "<focused changed test command>" --expect-failure --preflight-path "${buildBundleRelativePath(bundleName, `runtime/reviews/${TASK_ID_PLACEHOLDER}-preflight.json`)}" --repo-root "."`
                 ],
                 true

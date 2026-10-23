@@ -220,27 +220,33 @@ function isSourceLocationAssignment(key: string, separator: string, value: strin
  * Redact secret-looking values from free-form text while preserving enough
  * surrounding syntax for diagnostics to remain useful.
  */
-export function redactSecretText(text: string): string {
+export function redactSecretText(text: string, options: { preserveLineCount?: boolean } = {}): string {
     if (!text || typeof text !== 'string') {
         return text;
     }
+    // Line-aligned evidence must keep one output line per input line, even when a redacted value spans lines.
+    const keepLineBreaks = (match: string, replacement: string): string => {
+        if (!options.preserveLineCount) return replacement;
+        const missing = (match.match(/\n/g)?.length ?? 0) - (replacement.match(/\n/g)?.length ?? 0);
+        return missing > 0 ? replacement + '\n'.repeat(missing) : replacement;
+    };
 
     return text
-        .replace(PRIVATE_KEY_BLOCK_PATTERN, '<redacted-private-key>')
+        .replace(PRIVATE_KEY_BLOCK_PATTERN, (match) => keepLineBreaks(match, '<redacted-private-key>'))
         .replace(AUTHORIZATION_PATTERN, '$1$2 <redacted>')
         .replace(URL_PASSWORD_PATTERN, '$1<redacted>$3')
         .replace(TOKEN_LITERAL_PATTERN, '<redacted-token>')
         .replace(JSON_DOUBLE_QUOTED_FIELD_PATTERN, (match, prefix: string, key: string, _value: string, suffix: string) => {
-            return isSensitiveKey(key) ? `${prefix}<redacted>${suffix}` : match;
+            return isSensitiveKey(key) ? keepLineBreaks(match, `${prefix}<redacted>${suffix}`) : match;
         })
         .replace(JSON_SINGLE_QUOTED_FIELD_PATTERN, (match, prefix: string, key: string, _value: string, suffix: string) => {
-            return isSensitiveKey(key) ? `${prefix}<redacted>${suffix}` : match;
+            return isSensitiveKey(key) ? keepLineBreaks(match, `${prefix}<redacted>${suffix}`) : match;
         })
         .replace(ASSIGNMENT_QUOTED_FIELD_PATTERN, (match, key: string, separator: string, quote: string, value: string, suffix: string) => {
             if (splitKeyParts(key).includes('authorization') && /^(Bearer|Basic)$/i.test(value)) {
                 return match;
             }
-            return isSensitiveKey(key) ? `${key}${separator}${quote}<redacted>${suffix}` : match;
+            return isSensitiveKey(key) ? keepLineBreaks(match, `${key}${separator}${quote}<redacted>${suffix}`) : match;
         })
         .replace(ASSIGNMENT_UNQUOTED_FIELD_PATTERN, (match, key: string, separator: string, value: string) => {
             if (CANONICAL_REDACTED_UNQUOTED_VALUE_PATTERN.test(value)) {

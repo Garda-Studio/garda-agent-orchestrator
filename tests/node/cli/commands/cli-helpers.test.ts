@@ -122,6 +122,17 @@ test('parseOptions rejects unknown options', () => {
     );
 });
 
+test('parseOptions suggests the closest option for typos and points to --help', () => {
+    const definitions = { '--actions': { key: 'actions', type: 'boolean' as const }, '--port': { key: 'port', type: 'string' as const } };
+    assert.throws(
+        () => parseOptions(['--action'], definitions),
+        /Unknown option: --action\. Did you mean --actions\? Run the command with --help to see all options\./
+    );
+    assert.throws(() => parseOptions(['-action'], definitions), /Did you mean --actions\?/);
+    assert.throws(() => parseOptions(['action'], definitions), /Unexpected positional argument: action\. Did you mean --actions\?/);
+    assert.throws(() => parseOptions(['--zzzzzz'], definitions), (error: Error) => !error.message.includes('Did you mean'));
+});
+
 test('parseOptions rejects excess positionals', () => {
     assert.throws(
         () => parseOptions(['a', 'b'], {}, { allowPositionals: true, maxPositionals: 1 }),
@@ -1018,6 +1029,16 @@ test('buildCommandHelpText renders command-specific stats help', () => {
     assert.ok(text.includes('stats'));
     assert.ok(text.includes('--task-id "<task-id>"'));
     assert.ok(text.includes('garda stats --json'));
+});
+
+test('buildCommandHelpText renders update lifecycle help instead of the global help', () => {
+    const updateText = stripAnsi(buildCommandHelpText('update'));
+    assert.ok(updateText.includes('GARDA_COMMAND_HELP'));
+    assert.ok(updateText.includes('garda update git [--repo-url URL]'));
+    assert.ok(updateText.includes('the official repository does not, so use plain update for releases'));
+    assert.ok(!updateText.includes('Commands:'));
+    assert.ok(stripAnsi(buildCommandHelpText('check-update')).includes('check-update is read-only'));
+    assert.ok(stripAnsi(buildCommandHelpText('rollback')).includes('garda rollback --to-version 1.4.3'));
 });
 
 test('buildCommandHelpText explains uninstall task-file preservation and recovery policy', () => {

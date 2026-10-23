@@ -14,7 +14,8 @@ import {
 
 export const PROJECT_MEMORY_INIT_REFRESH_PROMPT = [
     'Initialize or refresh Garda project memory.',
-    'Inspect the repository through the normal orchestrator workflow, starting with `garda-agent-orchestrator/live/docs/project-memory/README.md` and `garda-agent-orchestrator/live/docs/project-memory/compact.md`.',
+    'Inspect the repository, starting with `garda-agent-orchestrator/live/docs/project-memory/README.md` and `garda-agent-orchestrator/live/docs/project-memory/compact.md`.',
+    'During agent-init onboarding, edit these files directly: do not add a TASK.md task or enter task mode for initialization, because agent-init refreshes the protected baseline itself. Inside an active task, keep these edits within that task.',
     PROJECT_MEMORY_MAP_READ_GUIDANCE,
     'Update only `garda-agent-orchestrator/live/docs/project-memory/*.md` files that are missing, stale, template-seeded, placeholder-only, incomplete, or no longer shaped as a compact project map.',
     PROJECT_MEMORY_MAP_WRITE_CONTRACT,

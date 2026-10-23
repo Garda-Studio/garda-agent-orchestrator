@@ -221,7 +221,7 @@ async function executeRuntimeRestore(
             violations: [],
             output_lines: [
                 'SPLIT_REQUIRED_WIP_RESTORED',
-                ...authenticated.output_lines.slice(1).map(redactSecretText)
+                ...authenticated.output_lines.slice(1).map((line) => redactSecretText(line))
             ]
         };
     } catch (error: unknown) {

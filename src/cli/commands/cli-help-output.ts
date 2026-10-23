@@ -42,6 +42,9 @@ export type CommandHelpName =
     | 'debug'
     | 'cleanup'
     | 'backup'
+    | 'update'
+    | 'check-update'
+    | 'rollback'
     | 'repair'
     | 'gc'
     | 'clean';
@@ -208,7 +211,8 @@ export const COMMAND_HELP: Readonly<Record<CommandHelpName, CommandHelpDescripto
             `${PRIMARY_CLI_NAME} workflow set --optional-check-rule-id custom_focus --optional-check-rule-exclude-test-only true ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}`,
             `${PRIMARY_CLI_NAME} workflow set --optional-skill-selection-mode mandatory ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}`,
             `${PRIMARY_CLI_NAME} workflow set --garda-self-guard on`,
-            `${PRIMARY_CLI_NAME} workflow set --garda-self-guard off ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}`
+            `${PRIMARY_CLI_NAME} workflow set --garda-self-guard off ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}`,
+            `${PRIMARY_CLI_NAME} workflow set --local-commit on ${WORKFLOW_SET_CONFIRMATION_EXAMPLE}`
         ]),
         hints: Object.freeze([
             'Default mode: workflow with no subcommand behaves like workflow show.',
@@ -226,6 +230,7 @@ export const COMMAND_HELP: Readonly<Record<CommandHelpName, CommandHelpDescripto
             'Task reset mutations are disabled by default and can be enabled with --task-reset on.',
             'Optional quality checks are advisory, default-enabled, routed before expensive gates when current implementation changes need checklist evidence, and configurable with --optional-checks on|off plus --optional-checks-review-failure-cadence-interval and --optional-check-rule-* without replacing mandatory compile/review/full-suite gates. Use --optional-check-rule-exclude-test-only true to skip one rule only for pure test changes.',
             'Garda self-guard defaults to on for application workspaces and blocks agent self-entry into --orchestrator-work.',
+            'Native local commits are off by default. --local-commit on (same as --local-commit-enabled true) lets completed and audited tasks commit through gate human-commit; off revokes it. It never grants push or CI.',
             'workflow set changes require --operator-confirmed yes and --operator-confirmed-at-utc after explicit operator approval, except a standalone --garda-self-guard on change. A true no-op needs no approval unless repairing task-reset audit evidence. Confirmation parsing trims whitespace and ignores letter case; use canonical yes in commands. Agents must not approve workflow-config mutations for themselves.'
         ])
     }),
@@ -445,6 +450,56 @@ export const COMMAND_HELP: Readonly<Record<CommandHelpName, CommandHelpDescripto
         hints: Object.freeze([
             'backup create writes a manual snapshot under runtime/update-rollbacks and includes rollback records for restore.',
             'Mutating backup create requires --confirm; use the live UI with --actions for guarded browser confirmation.'
+        ])
+    }),
+    update: Object.freeze({
+        summary: 'Check for a newer Garda bundle and apply it to this workspace (npm registry by default).',
+        usage: Object.freeze([
+            `${PRIMARY_CLI_NAME} update [--package-spec SPEC] [--source-path PATH] [--dry-run] [--no-prompt] [--target-root PATH] [--json]`,
+            `${PRIMARY_CLI_NAME} update git [--repo-url URL] [--branch NAME] [--check-only] [--dry-run] [--no-prompt] [--target-root PATH] [--json]`
+        ]),
+        examples: Object.freeze([
+            `${PRIMARY_CLI_NAME} update`,
+            `${PRIMARY_CLI_NAME} update --dry-run`,
+            `${PRIMARY_CLI_NAME} update --package-spec garda-agent-orchestrator@1.4.4`,
+            `${PRIMARY_CLI_NAME} check-update`
+        ]),
+        hints: Object.freeze([
+            'Default mode: update compares the installed bundle with the latest npm release, prints a summary, and applies it after confirmation.',
+            'Use --dry-run to preview, or check-update to compare without changing files.',
+            'update git needs a ref that commits prebuilt bin/ and dist/ files; the official repository does not, so use plain update for releases.',
+            'A pre-update snapshot is saved; rollback restores it.',
+            'After an update, run status: new agent-init checkpoints may ask your agent to confirm new settings.'
+        ])
+    }),
+    'check-update': Object.freeze({
+        summary: 'Compare the installed bundle with a newer npm package or local source without changing files.',
+        usage: Object.freeze([
+            `${PRIMARY_CLI_NAME} check-update [--package-spec SPEC] [--source-path PATH] [--target-root PATH] [--json]`,
+            `${PRIMARY_CLI_NAME} check-update --apply [--no-prompt] [--dry-run]`
+        ]),
+        examples: Object.freeze([
+            `${PRIMARY_CLI_NAME} check-update`,
+            `${PRIMARY_CLI_NAME} check-update --package-spec garda-agent-orchestrator@latest`
+        ]),
+        hints: Object.freeze([
+            'Default mode: check-update is read-only; --apply behaves like update.'
+        ])
+    }),
+    rollback: Object.freeze({
+        summary: 'Restore the latest pre-update snapshot or move the workspace to a specific Garda version.',
+        usage: Object.freeze([
+            `${PRIMARY_CLI_NAME} rollback [--snapshot-path PATH] [--dry-run] [--no-prompt] [--target-root PATH] [--json]`,
+            `${PRIMARY_CLI_NAME} rollback --to-version VERSION [--package-spec SPEC] [--source-path PATH]`
+        ]),
+        examples: Object.freeze([
+            `${PRIMARY_CLI_NAME} rollback --dry-run`,
+            `${PRIMARY_CLI_NAME} rollback --to-version 1.4.3`
+        ]),
+        hints: Object.freeze([
+            'Without --to-version, rollback restores the latest saved pre-update snapshot.',
+            'With --to-version, rollback acquires that version, syncs the bundle, and re-materializes the workspace.',
+            'Snapshots created before rollback metadata persistence cannot be restored automatically.'
         ])
     }),
     repair: Object.freeze({

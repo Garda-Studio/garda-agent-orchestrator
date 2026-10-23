@@ -2034,7 +2034,7 @@ test('buildReportDataContract exposes tasks, workflow config, and instruction ta
     assert.equal(report.profiles_tab.status, 'present');
     assert.equal(report.profiles_tab.active_profile, 'balanced');
     assert.equal(report.profiles_tab.review_trigger_policy?.schema_version, 1);
-    assert.equal(report.profiles_tab.review_trigger_policy?.test_refactor_changed_lines_threshold, 20);
+    assert.equal(report.profiles_tab.review_trigger_policy?.test_refactor_changed_lines_threshold, 50);
     assert.ok((report.profiles_tab.review_trigger_policy?.refactor_path_regexes.length || 0) > 0);
     assert.ok(report.profiles_tab.review_types.some((reviewType) => reviewType.id === 'test'));
     assert.ok(report.profiles_tab.profiles.some((profile) => (

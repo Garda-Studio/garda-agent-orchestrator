@@ -65,6 +65,14 @@ test('AGENT_INIT_PROMPT routes project-memory enrichment to source files', () =>
     assert.match(content, /placeholder-heavy memory requires explicit, actionable warning/i);
 });
 
+test('AGENT_INIT_PROMPT keeps onboarding edits out of task mode', () => {
+    const content = fs.readFileSync(path.join(findRepoRoot(), 'AGENT_INIT_PROMPT.md'), 'utf8');
+    assert.match(content, /These onboarding edits are not a task: edit the rule and project-memory files directly/);
+    assert.match(content, /Do not add a `TASK\.md` row, run `enter-task-mode`, or ask the user to relax the Garda self-guard/);
+    assert.match(PROJECT_MEMORY_INIT_REFRESH_PROMPT, /do not add a TASK\.md task or enter task mode for initialization/);
+    assert.ok(!content.includes('through the normal orchestrator workflow'));
+});
+
 test('CLI reference keeps project-memory init-refresh prompt synchronized', () => {
     const content = fs.readFileSync(path.join(findRepoRoot(), 'docs', 'cli-reference.md'), 'utf8');
     assert.ok(content.includes(PROJECT_MEMORY_INIT_REFRESH_PROMPT));
@@ -118,6 +126,9 @@ test('AGENT_INIT_PROMPT explains ordinary document paths before confirmation', (
     assert.match(content, /not a way to hide files from the agent/i);
     assert.match(content, /not a bypass for protected control-plane docs, runtime code, config\/dependency\/security\/API\/database surfaces, or mixed source changes/i);
     assert.match(content, /`agent-init --ordinary-doc-paths` argument/i);
+    assert.match(content, /Scan the repository yourself before asking/);
+    assert.match(content, /Show the found candidates as a numbered list with a short note for each, mark your recommended set/);
+    assert.match(content, /gets a light documentation check instead of code and test reviews/);
 });
 
 test('AGENT_INIT_PROMPT distinguishes optional packs from already available skills', () => {
@@ -136,6 +147,9 @@ test('AGENT_INIT_PROMPT distinguishes optional packs from already available skil
     assert.match(content, /Do you want to add additional specialist skills now\? \(yes\/no\)/i);
     assert.match(content, /If the user answers `no`, do not install anything; record that the question was shown by using `--skills-prompted yes`/i);
     assert.match(content, /`--skills-prompted false` or `--skills-prompted no` means the specialist-skills question was not completed/i);
+    assert.match(content, /show the `Suggested Optional Packs To Add` from `skills suggest` as a numbered list/);
+    assert.match(content, /Never ask the bare yes\/no question without the numbered list/);
+    assert.match(content, /if the user answers `yes` without numbers, install the recommended set/);
 });
 
 test('AGENT_INIT_PROMPT keeps the task execution contract navigator-first', () => {

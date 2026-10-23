@@ -2779,7 +2779,7 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
 
         fs.writeFileSync(
             path.join(repoRoot, testFile),
-            Array.from({ length: 25 }, (_, index) => `it("covers path ${index}", () => { assert.equal(${index}, ${index}); });`).join('\n') + '\n',
+            Array.from({ length: 60 }, (_, index) => `it("covers path ${index}", () => { assert.equal(${index}, ${index}); });`).join('\n') + '\n',
             'utf8'
         );
 
@@ -2824,8 +2824,8 @@ describe('cli/commands/gates – review-cycle remediation reuse policy', {
             ['code', 'security']
         );
         assert.equal(evidence.test_refactor_trigger_reason, 'test_domain_changed_lines_threshold');
-        assert.equal(evidence.test_refactor_changed_lines_threshold, 20);
-        assert.ok(Number(evidence.test_refactor_changed_lines_total) > 20);
+        assert.equal(evidence.test_refactor_changed_lines_threshold, 50);
+        assert.ok(Number(evidence.test_refactor_changed_lines_total) > 50);
         assert.deepEqual(
             [...resumedReuse.reusedReviewTypes].sort(),
             ['security']

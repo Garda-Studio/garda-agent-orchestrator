@@ -2,6 +2,11 @@ import { resolveBundleName } from './constants';
 
 export const RECOMMENDED_UI_ACTIONS_COMMAND = 'garda ui --actions';
 
+export const NOT_EVERY_REQUEST_IS_A_TASK_RULE =
+    'Not every request is a task: answer questions, explanations, reviews of existing code, read-only commands, status checks and Garda setup (`agent-init`) directly, without a `TASK.md` row or task mode. '
+    + 'Change code or config only through task mode for a `TASK.md` row that already exists or that the user explicitly asks to add. '
+    + 'If a change is needed and no row matches, propose a row (ID, title, scope) or a `CAND-<number>` candidate and wait for the user\'s decision; never add a row and enter it without that decision.';
+
 export function buildTaskStartNavigatorPrompt(taskId = '<task-id>'): string {
     return `Execute task ${taskId} from TASK.md strictly through the orchestrator. Use \`next-step\` as the navigator; when independent review is required, launch a sub-agent using your internal tools.`;
 }

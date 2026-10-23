@@ -39,7 +39,7 @@
     "\\.sql$",
     "(^|/)(db|database|migrations?|schema)(/|$)"
   ],
-  "test_refactor_changed_lines_threshold": 20,
+  "test_refactor_changed_lines_threshold": 50,
   "triggers": {
     "db": [
       "(^|/)(db|database|migrations?|schema)(/|$)",

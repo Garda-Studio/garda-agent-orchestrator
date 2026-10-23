@@ -459,3 +459,20 @@ test('redactSensitiveData keeps multiline string array elements in place', () =>
     assert.equal(result.secrets[0], 'line1\napi_key=<redacted>');
     assert.equal(result.secrets[1], 'ok');
 });
+
+test('redactSecretText can keep the line count for line-aligned evidence', () => {
+    const source = [
+        '        mvc.perform(get("/not-found?token=" + SECRET))',
+        '            .andExpect(status().isNotFound())',
+        '            .andExpect(jsonPath("$.title").value("Not Found"))',
+        'API_TOKEN="line one',
+        'line two"',
+        '-----BEGIN PRIVATE KEY-----',
+        'MIIEvQIBADANBg',
+        '-----END PRIVATE KEY-----'
+    ].join('\n');
+    const preserved = redactSecretText(source, { preserveLineCount: true });
+    assert.equal(preserved.split('\n').length, source.split('\n').length);
+    assert.doesNotMatch(preserved, /line one|line two|MIIEvQIBADANBg/);
+    assert.ok(redactSecretText(source).split('\n').length < source.split('\n').length);
+});

@@ -667,6 +667,65 @@ describe('runInstall — core deploy and invariants', () => {
         }
     });
 
+    it('removes a pre-rename Octopus commit guard block that precedes the current Garda block', () => {
+        const { projectRoot, bundleRoot } = setupTestWorkspace(repoRoot);
+        try {
+            const hookPath = path.join(projectRoot, '.git', 'hooks', 'pre-commit');
+            const octopusName = ['Octopus', 'agent', 'orchestrator'].join('-');
+            fs.mkdirSync(path.dirname(hookPath), { recursive: true });
+            fs.writeFileSync(
+                hookPath,
+                [
+                    '#!/usr/bin/env bash',
+                    '',
+                    `# ${octopusName}:commit-guard-start`,
+                    'if [ "${OCTOPUS_ALLOW_COMMIT:-}" = "1" ]; then',
+                    '  exit 0',
+                    'fi',
+                    'if [ -n "${CODEX_THREAD_ID:-}" ]; then',
+                    `  echo "  node ${octopusName}/bin/octopus.js gate human-commit"`,
+                    '  exit 1',
+                    'fi',
+                    `# ${octopusName}:commit-guard-end`,
+                    '',
+                    buildCommitGuardManagedBlock(),
+                    '',
+                    'echo "user hook remains"'
+                ].join('\n'),
+                'utf8'
+            );
+            const answersPath = writeInitAnswers(bundleRoot, {
+                AssistantLanguage: 'English',
+                AssistantBrevity: 'concise',
+                SourceOfTruth: 'Claude',
+                EnforceNoAutoCommit: 'true',
+                ClaudeOrchestratorFullAccess: 'false',
+                TokenEconomyEnabled: 'true',
+                CollectedVia: 'CLI_NONINTERACTIVE'
+            });
+
+            const result = runInstall({
+                targetRoot: projectRoot,
+                bundleRoot,
+                runInit: false,
+                assistantLanguage: 'English',
+                assistantBrevity: 'concise',
+                sourceOfTruth: 'Claude',
+                initAnswersPath: answersPath
+            });
+
+            const hookContent = fs.readFileSync(hookPath, 'utf8');
+            const expectedGuard = buildCommitGuardManagedBlock();
+            assert.ok(result.preCommitHookUpdated);
+            assert.equal(hookContent.split(expectedGuard).length - 1, 1);
+            assert.ok(hookContent.includes('echo "user hook remains"'));
+            assert.ok(!hookContent.includes(octopusName));
+            assert.ok(!hookContent.includes('OCTOPUS_ALLOW_COMMIT'));
+        } finally {
+            fs.rmSync(projectRoot, { recursive: true, force: true });
+        }
+    });
+
     it('updates .gitignore', () => {
         const { projectRoot, bundleRoot } = setupTestWorkspace(repoRoot);
         try {

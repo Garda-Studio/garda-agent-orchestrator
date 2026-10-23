@@ -211,7 +211,7 @@ export async function collectSetupAnswersInteractively(
         ]
     });
     const claudeOrchestratorFullAccess = await promptSingleSelect({
-        title: 'Set Claude access level for orchestrator files',
+        title: 'Allow Claude Code to run Garda, git diff/log and grep without asking each time (skip if you do not use Claude Code)',
         defaultLabel: defaults.claudeOrchestratorFullAccess ? 'Yes' : 'No',
         defaultValue: defaults.claudeOrchestratorFullAccess ? 'true' : 'false',
         options: [

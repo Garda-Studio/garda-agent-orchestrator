@@ -3,7 +3,7 @@ import { normalizeFileRoleBindings, type FileRoleBindings } from '../core/file-r
 import { DEFAULT_REFACTOR_PATH_REGEXES, DEFAULT_TEST_PATH_REGEXES } from './default-path-regexes';
 
 export const REVIEW_TRIGGER_POLICY_SCHEMA_VERSION = 1 as const;
-export const DEFAULT_TEST_REFACTOR_CHANGED_LINES_THRESHOLD = 20;
+export const DEFAULT_TEST_REFACTOR_CHANGED_LINES_THRESHOLD = 50;
 
 export interface ReviewTriggerPolicy {
     schema_version: typeof REVIEW_TRIGGER_POLICY_SCHEMA_VERSION;

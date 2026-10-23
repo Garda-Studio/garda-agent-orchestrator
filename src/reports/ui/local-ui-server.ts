@@ -1061,6 +1061,7 @@ export function formatLocalUiServerOutput(server: LocalUiServer): string {
         `Host: ${server.host}`,
         `Port: ${server.port}`,
         `Mode: ${server.actionsEnabled ? 'controlled-actions' : 'read-only'}`,
+        ...(server.actionsEnabled ? [] : ['Actions: off. To change settings or run actions from the browser, restart with: garda ui --actions']),
         `Language: ${server.language}`,
         `IdleShutdown: ${server.idleShutdownEnabled ? `enabled; idle=${server.idleMinutes}m; warning=${server.idleWarningSeconds}s` : 'disabled'}`,
         'Stop: Ctrl+C'

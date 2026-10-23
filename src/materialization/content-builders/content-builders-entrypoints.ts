@@ -1,5 +1,5 @@
 import { resolveBundleName } from '../../core/constants';
-import { buildTaskStartNavigatorPrompt } from '../../core/onboarding-contract';
+import { buildTaskStartNavigatorPrompt, NOT_EVERY_REQUEST_IS_A_TASK_RULE } from '../../core/onboarding-contract';
 import {
     buildFreshMainAgentStartBannerSentence,
     START_BANNER_GATE_LIST_RULE
@@ -75,6 +75,7 @@ export function buildRedirectManagedBlock(
         '',
         `Hard stop: read \`${canonicalFile}\` first and follow its routing links before responding to anything.`,
         `Hard stop: before any task execution, open \`${canonicalFile}\`, \`TASK.md\`, and \`.agents/workflows/start-task.md\`.`,
+        NOT_EVERY_REQUEST_IS_A_TASK_RULE,
         'Do not implement tasks directly without orchestration preflight and required review gates.',
         `Canonical task-start command: ${buildTaskStartNavigatorPrompt()}`,
         buildFreshMainAgentStartBannerSentence(),

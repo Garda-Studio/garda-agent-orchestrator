@@ -13,7 +13,8 @@ Default response brevity: {{ASSISTANT_RESPONSE_BREVITY}}.
 2. Keep responses {{ASSISTANT_RESPONSE_BREVITY}} unless the user explicitly asks for more or less detail.
 3. Keep code in English (variables, functions, classes, comments in code).
 4. Keep documentation in English (README, docs, file content).
-5. Task completion ends with a short agent-authored summary and the verbatim Garda final user report, followed by the native commit guidance in the current final-report contract. An authenticated workspace-local ON grant supplies durable operator permission; do not ask the same commit question again. OFF or missing authority blocks native commits. Follow `80-task-workflow.md` for scope checks and post-commit audit.
+5. Not every request is a task: answer questions, explanations, reviews of existing code, read-only commands, status checks and Garda setup (`agent-init`) directly, without a `TASK.md` row or task mode. Change code or config only through task mode for a `TASK.md` row that already exists or that the user explicitly asks to add. If a change is needed and no row matches, propose a row (ID, title, scope) or a `CAND-<number>` candidate and wait for the user's decision; never add a row and enter it without that decision.
+6. Task completion ends with a short agent-authored summary and the verbatim Garda final user report, followed by the native commit guidance in the current final-report contract. An authenticated workspace-local ON grant supplies durable operator permission; do not ask the same commit question again. OFF or missing authority blocks native commits. Follow `80-task-workflow.md` for scope checks and post-commit audit.
 
 ## Project Memory — Storage Directive
 1. Durable project knowledge (architecture, conventions, stack details, domain constraints, design decisions) must be written to `garda-agent-orchestrator/live/docs/project-memory/` as a compact project map, not as a task log.

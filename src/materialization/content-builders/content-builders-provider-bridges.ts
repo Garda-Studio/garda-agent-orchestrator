@@ -2,7 +2,8 @@ import { resolveBundleName } from '../../core/constants';
 import {
     buildDualCliActiveProfileGuidance,
     buildNextStepNavigatorGuidance,
-    buildTaskStartNavigatorPrompt
+    buildTaskStartNavigatorPrompt,
+    NOT_EVERY_REQUEST_IS_A_TASK_RULE
 } from '../../core/onboarding-contract';
 import {
     buildFreshMainAgentStartBannerSentence,
@@ -54,6 +55,7 @@ export function buildProviderOrchestratorAgentContent(
 Canonical source of truth for agent workflow rules: \`${canonicalFile}\`.
 
 This bridge is a router, not a second workflow.
+${NOT_EVERY_REQUEST_IS_A_TASK_RULE}
 Do not implement tasks directly without orchestration preflight and required review gates.
 If the workspace already contains modified files before task-mode entry, stop and isolate scope via \`--use-staged\` or explicit \`--changed-file ...\` preflight inputs before continuing.
 
@@ -98,6 +100,7 @@ ${MANAGED_END}`.trim();
 Canonical source of truth for agent workflow rules: \`${canonicalFile}\`.
 
 Hard stop: first open \`${canonicalFile}\`, \`TASK.md\`, and \`.agents/workflows/start-task.md\`.
+${NOT_EVERY_REQUEST_IS_A_TASK_RULE}
 Do not implement tasks directly without orchestration preflight and required review gates.
 Canonical task-start command: ${buildTaskStartNavigatorPrompt()}
 ${buildFreshMainAgentStartBannerSentence()}
@@ -123,7 +126,7 @@ ${buildTaskStartSnippetSection(runtimeProviderLabel, bridgePath)}
 
 ## Required Execution Contract
 1. Read \`${canonicalFile}\` and its routing links before making changes.
-2. Read \`TASK.md\` and select/create a task row before implementation.
+2. Read \`TASK.md\` and select the matching task row before implementation; if none matches, propose one and wait for the user.
 3. Execute task workflow only in orchestrator mode: ${buildTaskStartNavigatorPrompt()}
 4. ${buildFreshMainAgentStartBannerSentence()}
 5. ${START_BANNER_GATE_LIST_RULE}
@@ -197,6 +200,7 @@ This checklist is the shared start-task router for root entrypoints and provider
 It routes to the canonical Garda workflow and does not replace \`80-task-workflow.md\` or the orchestration skill.
 
 Before any code changes:
+- ${NOT_EVERY_REQUEST_IS_A_TASK_RULE}
 - Open \`${canonicalFile}\` and \`TASK.md\`.
 - If an active provider bridge exists, open it too before implementation.
 - ${buildFreshMainAgentStartBannerSentence()}

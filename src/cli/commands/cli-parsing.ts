@@ -45,6 +45,41 @@ export function extractGlobalFlags(argv: string[]): GlobalFlags {
     return { noColor, offline, forceNetwork, rest };
 }
 
+function editDistance(left: string, right: string): number {
+    const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+    for (let row = 1; row <= left.length; row += 1) {
+        let diagonal = previous[0];
+        previous[0] = row;
+        for (let column = 1; column <= right.length; column += 1) {
+            const above = previous[column];
+            previous[column] = Math.min(
+                previous[column] + 1,
+                previous[column - 1] + 1,
+                diagonal + (left[row - 1] === right[column - 1] ? 0 : 1)
+            );
+            diagonal = above;
+        }
+    }
+    return previous[right.length];
+}
+
+/** Closest known option for typos such as `--action`, `-action` or a bare `action`. */
+function findClosestOption(argument: string, definitions: OptionDefinitions): string | null {
+    const typed = `--${argument.replace(/^-+/, '').split('=', 1)[0].toLowerCase()}`;
+    let best: { name: string; distance: number } | null = null;
+    for (const name of Object.keys(definitions)) {
+        const distance = editDistance(typed, name.toLowerCase());
+        if (distance <= 2 && (!best || distance < best.distance)) best = { name, distance };
+    }
+    return best ? best.name : null;
+}
+
+export function describeUnknownOption(argument: string, definitions: OptionDefinitions): string {
+    const closest = findClosestOption(argument, definitions);
+    const suggestion = closest ? ` Did you mean ${closest}?` : '';
+    return `Unknown option: ${argument}.${suggestion} Run the command with --help to see all options.`;
+}
+
 export function parseOptions(
     argv: string[],
     definitions: OptionDefinitions,
@@ -62,7 +97,10 @@ export function parseOptions(
         if (argument === '-v' || argument === '--version') { options.version = true; continue; }
 
         if (!argument.startsWith('-')) {
-            if (!allowPositionals) throw new Error(`Unexpected positional argument: ${argument}`);
+            if (!allowPositionals) {
+                const closest = findClosestOption(argument, definitions);
+                throw new Error(`Unexpected positional argument: ${argument}${closest ? `. Did you mean ${closest}?` : ''}`);
+            }
             positionals.push(argument);
             if (positionals.length > maxPositionals) throw new Error('Too many positional arguments were provided.');
             continue;
@@ -72,7 +110,7 @@ export function parseOptions(
         const optionName = equalsIndex >= 0 ? argument.slice(0, equalsIndex) : argument;
         const inlineValue = equalsIndex >= 0 ? argument.slice(equalsIndex + 1) : undefined;
         const definition = definitions[optionName];
-        if (!definition) throw new Error(`Unknown option: ${argument}`);
+        if (!definition) throw new Error(describeUnknownOption(argument, definitions));
 
         if (definition.type === 'boolean') {
             if (inlineValue !== undefined) {

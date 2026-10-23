@@ -225,7 +225,7 @@ describe('full local lifecycle', () => {
                 'Set default response brevity',
                 'Set primary source-of-truth entrypoint',
                 'Set no-auto-commit guard mode',
-                'Set Claude access level for orchestrator files',
+                'Allow Claude Code to run Garda, git diff/log and grep without asking each time (skip if you do not use Claude Code)',
                 'Set default token economy mode'
             ]);
 
