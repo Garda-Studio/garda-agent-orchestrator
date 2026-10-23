@@ -2055,3 +2055,25 @@ test('local UI server refreshes cached report after workflow config audit-only r
         await cleanupLocalUiTestResources({ repoRoot, server });
     }
 });
+
+test('local UI answers 500 and keeps serving when runtime state becomes unreadable', async () => {
+    const repoRoot = makeLocalUiTempRepo();
+    writeLocalUiRepoFixture(repoRoot);
+    const server = await startLocalUiServer({ repoRoot, port: 0, idleShutdownEnabled: false });
+    try {
+        assert.equal((await fetch(`${server.url}api/report`)).status, 200);
+        const eventsDir = path.join(repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events');
+        if (fs.existsSync(eventsDir)) fs.renameSync(eventsDir, `${eventsDir}-preserved`);
+        fs.mkdirSync(path.dirname(eventsDir), { recursive: true });
+        fs.writeFileSync(eventsDir, 'corrupt directory shape', 'utf8');
+
+        const failed = await fetch(`${server.url}api/report`);
+        assert.equal(failed.status, 500);
+        assert.equal((await failed.json() as { code: string }).code, 'internal_error');
+
+        fs.rmSync(eventsDir, { force: true });
+        assert.equal((await fetch(`${server.url}api/report`)).status, 200);
+    } finally {
+        await cleanupLocalUiTestResources({ repoRoot, server });
+    }
+});

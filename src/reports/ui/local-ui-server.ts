@@ -673,7 +673,7 @@ export function createLocalUiServer(repoRoot: string, runtimeOptions?: Partial<L
             void closeServer(server);
         }
     });
-    server = http.createServer((request, response) => {
+    const handleRequest = (request: http.IncomingMessage, response: http.ServerResponse): void => {
         response.setHeader('x-content-type-options', 'nosniff');
         response.setHeader('x-frame-options', 'DENY');
         response.setHeader('content-security-policy', "frame-ancestors 'none'; base-uri 'none'; object-src 'none'");
@@ -898,6 +898,20 @@ export function createLocalUiServer(repoRoot: string, runtimeOptions?: Partial<L
             return;
         }
         sendText(response, 404, 'Not found.');
+    };
+    server = http.createServer((request, response) => {
+        // A failing request (for example unreadable runtime state) must not terminate the whole UI process.
+        try {
+            handleRequest(request, response);
+        } catch {
+            if (response.headersSent) {
+                response.destroy();
+            } else if (request.url?.startsWith('/api/')) {
+                sendApiError(response, 500, 'Local UI could not read workspace state. Run garda status or garda repair inspect.', 'internal_error');
+            } else {
+                sendText(response, 500, 'Local UI could not read workspace state. Run garda status or garda repair inspect.');
+            }
+        }
     });
     server.once('close', () => session.dispose());
     server.once('listening', () => { startupUpdateCheck = updates.check().catch(() => undefined); });

@@ -7,7 +7,7 @@ const path = require('node:path');
 const CI_WORKFLOW_SHA256 = 'ae6c9ec689175f147cf8f4fb7d0105fa5684064f9d7fb83b148b1d350e015f36';
 const SELECTOR_SHA256 = 'cb34c3544940e746ad023a8fa4c9e6de4b789fec05e1cdef106bbb7c0da034a5';
 // Accepted common-baseline scripts, including the current coverage commands.
-const CI_SCRIPTS_SHA256 = '4b4dbe27b0bb021eec5152cb0ff654bbb16bb30b1946f5539bf7f8008398f8f8';
+const CI_SCRIPTS_SHA256 = '10f4cd246af8267427af4e3510469c2eb7566718d7936db956215ca803ad3d19';
 const MAX_EVIDENCE_BYTES = 16 * 1024 * 1024;
 const MAX_EVIDENCE_AGE_MS = 24 * 60 * 60 * 1000;
 const CLOCK_SKEW_MS = 5 * 60 * 1000;

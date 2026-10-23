@@ -46,6 +46,8 @@
 - The agent auto-commit guard now recognises Claude Code (`CLAUDECODE`) and Gemini CLI (`GEMINI_CLI`) sessions, not only Codex, Cursor, Copilot, Qwen and Aider. Agents in guarded repositories commit through `gate human-commit`; operators can still set `GARDA_ALLOW_COMMIT=1`.
 - Install and update replace the commit-guard block left by the product's former name, which blocked native commits even when they were allowed.
 - Diagnostics preserve captured output after interruption and redact home-directory paths correctly.
+- The local UI answers an unreadable workspace state with an error response instead of stopping the server.
+- The standard test run now includes prompt, documentation-contract and fixture tests that were previously never executed.
 - Update and rollback handling, file ownership checks and crash recovery are more robust. Update notices include an explicit update command.
 - `garda update git` no longer installs dependencies or runs build scripts from the cloned source. It applies only a commit that contains a prebuilt `bin/` and `dist/`. The official repository does not commit them, so use `garda update` (npm) for releases. `update git --check-only` and `--dry-run` still compare any ref.
 - New installations enable daily cleanup of eligible retained evidence. Existing preview preferences are preserved; scratch and retired WIP removal use separate previews and confirmations.

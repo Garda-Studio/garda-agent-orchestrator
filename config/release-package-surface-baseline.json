@@ -4,15 +4,15 @@
     "name": "garda-agent-orchestrator",
     "version": "1.4.4"
   },
-  "packedFileManifestSha256": "6f46b136717a007aaf1f28fb37344d6b57bdc0101c84f95b622991edcee7411c",
-  "tarballSha256": "125e8727bc3975b9153c172705ca22b3129c747e29414bbc3b70a581724cb187",
+  "packedFileManifestSha256": "1ddd4a552918fcf758bb3f266285d5149b88772065dafa640a9b2e5cc81d5c4d",
+  "tarballSha256": "a965984780614f7b57410ac5d47a62047d047c3810a2a5078bdb67c46d489df1",
   "tarballSha256ByPlatform": {
-    "win32": "125e8727bc3975b9153c172705ca22b3129c747e29414bbc3b70a581724cb187"
+    "win32": "a965984780614f7b57410ac5d47a62047d047c3810a2a5078bdb67c46d489df1"
   },
   "packedFileSha256": {
     ".gitattributes": "099d1a09ca2f02b2d7d071bcc19fdd2cda5c66f01f133abe9ff9d63294a1055c",
     "AGENT_INIT_PROMPT.md": "7bad23533c69447c07627cd53bafdb3c4597715e171904c392c0602fcfd8cbc6",
-    "CHANGELOG.md": "cf6979572fe8395239a390b0df64371133edcd0d0d5d51485aad8da209e615f4",
+    "CHANGELOG.md": "4a3830d0b616f6b87865799bab56cc6f48381fc293760d07526b47fe14335bc0",
     "CONTRIBUTING.md": "940e1e5d62fc8c700bc0c67d61db074038b9b9d7225c39b740d181b831036bab",
     "HOW_TO.md": "90bafc4fcb092768fccaf1086d788bfc910ff2cf856ece8520a8bfc687137f71",
     "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
@@ -1200,7 +1200,7 @@
     "dist/src/reports/ui/lang-packs/garda-ui-uk.json": "cf1cd7cbfde2c4882b2a168acf1aeb7bf4c1a463970139c58c6586de1e3071cd",
     "dist/src/reports/ui/lang-packs/garda-ui-vi.json": "84fc890c7b97ab35cbbecbf92a2f058dcbaee4bbb3d4369b754d2c9759d74ca1",
     "dist/src/reports/ui/lang-packs/garda-ui-zh-CN.json": "72fce674a823eec1b730c27b1f21bd59f7a3471cfb402553ee04974cbbda10e2",
-    "dist/src/reports/ui/local-ui-server.js": "1ece901aaa1a79c7121302e75bdc5140bf4029c653ca683143927a357029aa2e",
+    "dist/src/reports/ui/local-ui-server.js": "759d9e0c832e3a60f123cd35e5cd122235f64cb7efbce344aad3c9c73b4772ff",
     "dist/src/reports/ui/project-memory-status-text/catalog.js": "14ebed83ff167d53890062fe3895fa08394026694331861b597afb528ab7ff9e",
     "dist/src/reports/ui/project-memory-status-text/lang/ar.json": "cb2dca9ad0951de77b842b71dd2826c5293d1195e576eadc35cb957dc7082c96",
     "dist/src/reports/ui/project-memory-status-text/lang/bn.json": "309b5576d3602bb54252edf0c95577a78ec5432da20ae0014400a6aefa223479",
@@ -1390,7 +1390,7 @@
     "docs/task-plan-workflow.md": "ede4b176ade5d25e135323f419641d581cecaff955a70d2dad666da56ba0b2a3",
     "docs/threat-model.md": "632cae1d4ff4cfe521b80edce95503ccb0d22a2380f886358c00e3e57fa59c34",
     "docs/work-example.md": "8ee6753ac44303f45934c2d66c4ef778ec17f1f34f5a814ad0449b7111f10841",
-    "package.json": "ce76f652701bfdc96d59b6d9296a3477ba095f4a8e719b729ae327401ca132c8",
+    "package.json": "0fda651760cd797e723669a52f435a4f98ad432f4424805b6a78adbc9ac1a770",
     "template/.agents/workflows/start-task.md": "3257ce056a620e8efa481f1914bb1fd75cbe184d119130d2ad8aee37a4d9ee72",
     "template/.antigravity/rules.md": "051561e479a60ab7fedee062e4761c1edc9b31184622f56b753bc4cfd2795eac",
     "template/.github/copilot-instructions.md": "2512cd26d1cab2413567f692f15063e4d5144c5a274cda7317a33b0cfc6cbcfb",
@@ -1604,8 +1604,8 @@
   },
   "metrics": {
     "fileCount": 1591,
-    "unpackedSizeBytes": 28400897,
-    "installedSizeBytes": 28406493,
+    "unpackedSizeBytes": 28403049,
+    "installedSizeBytes": 28408645,
     "productionDependencyCount": 0,
     "lifecycleScripts": {
       "postpack": "node scripts/package-legacy-entrypoint-compat.cjs remove",
@@ -1700,5 +1700,5 @@
       "writeFile": 0
     }
   },
-  "rationale": "1.4.4: onboarding fixes, legacy Octopus hook migration, redaction line alignment, test refactor threshold 50, CLI help and hints"
+  "rationale": "1.4.4: UI request error boundary, omitted tests in standard run, reviewed CI scripts digest, seal fix"
 }
