@@ -372,7 +372,8 @@ const ROOT_WRITER_COVERAGE = Object.freeze({
 } as const);
 
 const JOURNAL_OWNER_PATTERN = /(?:withLifecycleRuntimeMutationGeneration(?:ForPath)?|beginRuntimeMutationGeneration)/u;
-const BOUNDED_MUTATION_SURFACE_SHA256 = '5e98388df0952ac0f6294565949347dad1bcb379fd20ecea961c3fa9a35b17cf';
+// T-438 audited be35bac6's diagnostic text and legacy hook-name deltas; writer ownership is unchanged.
+const BOUNDED_MUTATION_SURFACE_SHA256 = 'd3ada52d66c3be00805824e69538f6213a5080c36eebbc7a48f1cf82fa8451e1';
 const READ_ONLY_FS_OPERATIONS = new Set([
     'access', 'accessSync', 'close', 'closeSync', 'exists', 'existsSync',
     'fstat', 'fstatSync', 'lstat', 'lstatSync', 'open', 'opendir', 'opendirSync',
