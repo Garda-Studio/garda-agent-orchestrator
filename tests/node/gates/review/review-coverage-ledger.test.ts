@@ -122,6 +122,36 @@ test('validateReviewCoverageLedger rejects missing, duplicate, generic, and unkn
     assert.ok(result.violations.some((entry) => entry.includes('generic evidence')));
 });
 
+test('validateReviewCoverageLedger ignores generic phrases inside quoted code and names the matched rule', () => {
+    const contract = buildReviewCoverageContract({
+        reviewType: 'code',
+        changedFiles: ['src/example.ts'],
+        categoryIds: ['correctness-edge-cases']
+    });
+    for (const observation of [
+        "PermissionScope.parse rejects the invalid scope 'EVERYTHING' before any grant is stored",
+        'PermissionScope.parse rejects `valueOf("EVERYTHING")` before any grant is stored',
+        'The fixture literal "no issues" is asserted verbatim by parseExample error handling'
+    ]) {
+        const lines = contract.obligations.map((obligation, index) => ledgerLine(
+            obligation.id,
+            `src/example.ts:${index + 1}`,
+            observation
+        ));
+        const result = validateReviewCoverageLedger(buildReviewOutput(lines), contract);
+        assert.equal(result.status, 'PASS', observation);
+        assert.deepEqual(result.violations, [], observation);
+    }
+    const generic = contract.obligations.map((obligation, index) => ledgerLine(
+        obligation.id,
+        `src/example.ts:${index + 1}`,
+        "parseExample handles everything that callers pass in, including the user's input"
+    ));
+    const result = validateReviewCoverageLedger(buildReviewOutput(generic), contract);
+    assert.equal(result.status, 'FAIL');
+    assert.ok(result.violations.some((entry) => entry.includes("generic phrase 'everything' outside quotes")));
+});
+
 test('validateReviewCoverageLedger accepts reviewed as an adjective in concrete evidence', () => {
     const contract = buildReviewCoverageContract({
         reviewType: 'code',

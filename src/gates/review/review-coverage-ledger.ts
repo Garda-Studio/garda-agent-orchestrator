@@ -668,12 +668,21 @@ function isGenericReviewStatusDeclaration(normalized: string): boolean {
         || GENERIC_NO_DEFECT_SUFFIX_PATTERN.test(normalizedSuffix);
 }
 
-function isGenericObservation(observation: string): boolean {
+const GENERIC_OBSERVATION_PHRASE_PATTERN = /\b(?:no issues|looks good|full scope|all files|everything)\b/u;
+// Quoted code, identifiers and string literals are evidence, not reviewer wording.
+const QUOTED_OBSERVATION_SEGMENT_PATTERN = /`[^`]*`|"[^"]*"|(?<![\p{L}\p{N}_])'[^']*'(?![\p{L}\p{N}_])/gu;
+
+function describeGenericObservation(observation: string): string | null {
     const normalized = String(observation || '').trim().toLowerCase();
-    return normalized.length < 24
-        || normalized.split(/\s+/u).length < 4
-        || isGenericReviewStatusDeclaration(normalized)
-        || /\b(?:no issues|looks good|full scope|all files|everything)\b/u.test(normalized);
+    if (normalized.length < 24) return 'it is shorter than 24 characters';
+    if (normalized.split(/\s+/u).length < 4) return 'it has fewer than 4 words';
+    if (isGenericReviewStatusDeclaration(normalized)) {
+        return 'it only declares review status without naming a concrete symbol, behavior or check';
+    }
+    const phrase = normalized.replace(QUOTED_OBSERVATION_SEGMENT_PATTERN, ' ').match(GENERIC_OBSERVATION_PHRASE_PATTERN)?.[0];
+    return phrase
+        ? `it uses the generic phrase '${phrase}' outside quotes (quote code and literals in backticks)`
+        : null;
 }
 
 function collectFindingIds(reviewContent: string): { ids: string[]; violations: string[] } {
@@ -853,8 +862,11 @@ export function validateReviewCoverageLedger(
                     );
                 }
             }
-            if (isGenericObservation(evidence.observation)) {
-                violations.push(`Coverage obligation '${entry.id}' contains generic evidence: '${evidence.observation}'.`);
+            const genericReason = describeGenericObservation(evidence.observation);
+            if (genericReason) {
+                violations.push(
+                    `Coverage obligation '${entry.id}' contains generic evidence because ${genericReason}: '${evidence.observation}'.`
+                );
             }
         }
         if (!hasTargetFileEvidence) {

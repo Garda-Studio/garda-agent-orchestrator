@@ -34,6 +34,7 @@
 ### More reliable reviews and recovery
 
 - Review instructions and findings are more consistent across review lanes. A built-in test-review skill is available on every stack.
+- Reviewer evidence that quotes code or string literals, such as a test value `'EVERYTHING'`, is no longer rejected as generic wording, and the rejection message now names the rule that matched.
 - Security review now also starts for code files whose names contain security words in any naming style, such as `SecurityConfig`, `JwtFilter`, `auth-middleware` or `payment_gateway`, even in neutral folders. ORM entity names count as a database signal, and infrastructure review covers GitLab CI, Jenkins, Azure, Bitbucket, CircleCI, Buildkite, Woodpecker, Drone, Terraform/HCL, Helm and Kustomize files. The word lists are configurable in `paths.json`.
 - Review reuse, follow-ups, interrupted cycles and decomposed tasks retain their original source and evidence checks.
 - Task recovery better preserves unfinished work, staged renames and completed child work. Commit guards also work in linked Git worktrees.

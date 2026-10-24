@@ -4,15 +4,15 @@
     "name": "garda-agent-orchestrator",
     "version": "1.4.4"
   },
-  "packedFileManifestSha256": "c907771d74517b2f17ba663597d07df4855b17884a12e654ad26dd1f8973151f",
-  "tarballSha256": "e805357b22a8ae59573fdccf06dc25af779795c7e6dcd82ed60ac036e48aecb6",
+  "packedFileManifestSha256": "30bbbbcc7f386a2c479aa7fbb0da42af33e3be897997fefa52fb05a93f852ff0",
+  "tarballSha256": "73731e282288217cbff10faca4c0a3f535126a6ab38afcdbe1c715d4c0fc32f1",
   "tarballSha256ByPlatform": {
-    "win32": "e805357b22a8ae59573fdccf06dc25af779795c7e6dcd82ed60ac036e48aecb6"
+    "win32": "73731e282288217cbff10faca4c0a3f535126a6ab38afcdbe1c715d4c0fc32f1"
   },
   "packedFileSha256": {
     ".gitattributes": "099d1a09ca2f02b2d7d071bcc19fdd2cda5c66f01f133abe9ff9d63294a1055c",
     "AGENT_INIT_PROMPT.md": "7bad23533c69447c07627cd53bafdb3c4597715e171904c392c0602fcfd8cbc6",
-    "CHANGELOG.md": "1968ce6c7d898d648a30d380187728c5bc30edc305d1028c15fd02b996ff147d",
+    "CHANGELOG.md": "2bbb593af4c267c29b614209fd7e0c23bfca103769adcf8e08102d862516ce45",
     "CONTRIBUTING.md": "940e1e5d62fc8c700bc0c67d61db074038b9b9d7225c39b740d181b831036bab",
     "HOW_TO.md": "90bafc4fcb092768fccaf1086d788bfc910ff2cf856ece8520a8bfc687137f71",
     "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
@@ -739,7 +739,7 @@
     "dist/src/gates/review/focused-intermediate-evidence.js": "a286b28a17b099e824bef071c6be9fe5982fcb9f3d98398f885a11bea20b4651",
     "dist/src/gates/review/index.js": "f3e36bc6dd7f94b6ae15648d48e6d5e14bf3a4c68da71119dc2650e99277943a",
     "dist/src/gates/review/native-case-semantics.js": "2dfbf9df516958d5940e0cb2df2e23336cd6bd82ef6388ade216f2a73a2c4a4b",
-    "dist/src/gates/review/review-coverage-ledger.js": "7a37df4f1f4ff6f3a1e60788025de1f1eb7953200beec4bfbf268189430f2dc0",
+    "dist/src/gates/review/review-coverage-ledger.js": "833a2328ae655a9abc42b76d1a5999310cc873dc683c792da7f67e7d54f66d94",
     "dist/src/gates/review/review-dependencies.js": "66593cdf8274d6e7492db9c0a8c63e4949f65b50b042154b93fdd9b89146ef7a",
     "dist/src/gates/review/review-evidence-contract.js": "0f28fea9fe2e75b0c9311f10a1846b6e2fa7c00a7ad9977e2def15ec09c1a260",
     "dist/src/gates/review/review-evidence-domain.js": "ce7b2e29bf4316620162ce77bc560db6d7cf32502a6e06c85267fca87ec26c51",
@@ -1605,8 +1605,8 @@
   },
   "metrics": {
     "fileCount": 1592,
-    "unpackedSizeBytes": 28414656,
-    "installedSizeBytes": 28420252,
+    "unpackedSizeBytes": 28415607,
+    "installedSizeBytes": 28421203,
     "productionDependencyCount": 0,
     "lifecycleScripts": {
       "postpack": "node scripts/package-legacy-entrypoint-compat.cjs remove",
@@ -1701,5 +1701,5 @@
       "writeFile": 0
     }
   },
-  "rationale": "Reuse operator consent on same-task re-entry: changed docs/active-task-confirmation.md, CHANGELOG.md and compiled ownership gate"
+  "rationale": "Quoted code in reviewer evidence is not generic wording; CHANGELOG and compiled coverage ledger changed"
 }
