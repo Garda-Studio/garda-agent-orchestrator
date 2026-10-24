@@ -65,6 +65,9 @@ const NODE_FOUNDATION_ISOLATED_TEST_PATHS = new Set<string>([
 ]);
 const NODE_FOUNDATION_SERIAL_TEST_PATHS = new Set<string>([
     'tests/node/bin/garda-delegation.test.ts',
+    // Both pack and install the full release tarball; in parallel they exceed the install budget on hosted Windows.
+    'tests/node/packaging/pack-smoke.test.ts',
+    'tests/node/packaging/review-catalog-release-smoke.test.ts',
     // Real archived-runtime updates; under parallel shard load one case can exceed the idle timeout.
     'tests/node/lifecycle/update-config-identity.test.ts',
     'tests/node/core/subprocess.test.ts',

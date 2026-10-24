@@ -1701,5 +1701,5 @@
       "writeFile": 0
     }
   },
-  "rationale": "1.4.4: stack-neutral file-name review triggers, CI/IaC infra triggers, release smoke npm timeout"
+  "rationale": "1.4.4: serialize packaging smoke tests"
 }
