@@ -4,15 +4,15 @@
     "name": "garda-agent-orchestrator",
     "version": "1.4.4"
   },
-  "packedFileManifestSha256": "56073fadce123eb599d331ec7686fc41344fa42e700521c8437b0de4b653381f",
-  "tarballSha256": "c950652c0e676914e7664a4198b8c1a06fd2a5cd5b424eddbf1a4febce90a21a",
+  "packedFileManifestSha256": "c907771d74517b2f17ba663597d07df4855b17884a12e654ad26dd1f8973151f",
+  "tarballSha256": "e805357b22a8ae59573fdccf06dc25af779795c7e6dcd82ed60ac036e48aecb6",
   "tarballSha256ByPlatform": {
-    "win32": "c950652c0e676914e7664a4198b8c1a06fd2a5cd5b424eddbf1a4febce90a21a"
+    "win32": "e805357b22a8ae59573fdccf06dc25af779795c7e6dcd82ed60ac036e48aecb6"
   },
   "packedFileSha256": {
     ".gitattributes": "099d1a09ca2f02b2d7d071bcc19fdd2cda5c66f01f133abe9ff9d63294a1055c",
     "AGENT_INIT_PROMPT.md": "7bad23533c69447c07627cd53bafdb3c4597715e171904c392c0602fcfd8cbc6",
-    "CHANGELOG.md": "27fd1f6c5c9bf8e0d722e15c786ccdddfa27f1e50f8a544f9836d9ef926d5de2",
+    "CHANGELOG.md": "1968ce6c7d898d648a30d380187728c5bc30edc305d1028c15fd02b996ff147d",
     "CONTRIBUTING.md": "940e1e5d62fc8c700bc0c67d61db074038b9b9d7225c39b740d181b831036bab",
     "HOW_TO.md": "90bafc4fcb092768fccaf1086d788bfc910ff2cf856ece8520a8bfc687137f71",
     "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
@@ -869,7 +869,7 @@
     "dist/src/gates/workflow-config/workflow-config-work-contracts.js": "d43aa81f5bc89faa359e0f97c814ba25155591ff078fbb9bfd40f8c7c9683230",
     "dist/src/gates/workflow-config/workflow-config-work-paths.js": "e0effd394d41473411af2e6d78f3ec99308020e729c356cacbd0e389e034128f",
     "dist/src/gates/workflow-config/workflow-config-work.js": "e867340b7ee17ea96abd5ef6de1deae4475ece10bc3fc029d68b8fc4942a7418",
-    "dist/src/gates/workspace/active-implementation-ownership.js": "88b1dfc91a2dcfde973c8553ee5f9ecd1aae945d07651140d85ce2419613d449",
+    "dist/src/gates/workspace/active-implementation-ownership.js": "d7930cf65c72512d3ca6f133a44d7e7567e39e512ef607e0bed24c6dec276330",
     "dist/src/gates/workspace/dirty-worktree-protection.js": "ca556cc263fbc2d2c1ea7102fb61f9283f686b8195d181b7fcccf620532a6f55",
     "dist/src/gates/workspace/index.js": "c6e9536554e22b62a7d562472b640ead060325457fed22404a729610212904b7",
     "dist/src/gates/workspace/workspace-snapshot-cache.js": "adef253f60dcc4afafe18ef02b854040990eb9f7bab1438ee93817669ad9d00c",
@@ -1605,8 +1605,8 @@
   },
   "metrics": {
     "fileCount": 1592,
-    "unpackedSizeBytes": 28413509,
-    "installedSizeBytes": 28419105,
+    "unpackedSizeBytes": 28414656,
+    "installedSizeBytes": 28420252,
     "productionDependencyCount": 0,
     "lifecycleScripts": {
       "postpack": "node scripts/package-legacy-entrypoint-compat.cjs remove",
@@ -1701,5 +1701,5 @@
       "writeFile": 0
     }
   },
-  "rationale": "1.4.4: serialize packaging smoke tests"
+  "rationale": "Reuse operator consent on same-task re-entry: changed docs/active-task-confirmation.md, CHANGELOG.md and compiled ownership gate"
 }

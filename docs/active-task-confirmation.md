@@ -21,8 +21,12 @@ The receiving task's planned files must not overlap an unfinished owner's
 planned scope. This includes containing directories and alternate paths to the
 same file. Confirmation does not grant shared ownership of those files.
 
-Re-entering alongside active owners requires fresh confirmation. Task-mode
-re-entry automatically preserves its original dirty-workspace baseline, even
+Re-entering the same task, for example through `restart-coherent-cycle` after a
+review fix added files, keeps the operator's confirmation while every current
+owner was approved and its task-mode artifact is unchanged. The new scope is
+checked again and must still not overlap any owner's planned files. A new or
+restarted owner requires fresh confirmation; explicitly supplied confirmation
+flags are always validated. Task-mode re-entry automatically preserves its original dirty-workspace baseline, even
 without `--upgrade-existing-task-mode`, when writing a different artifact path,
 or after every previously approved owner has completed. Later unrelated changes
 cannot become accepted baseline state through re-entry.

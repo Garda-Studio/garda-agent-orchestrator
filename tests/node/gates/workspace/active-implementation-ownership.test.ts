@@ -250,6 +250,45 @@ test('task-mode re-entry rejects stale approval for changed scope and preserves 
     assert.doesNotThrow(() => assertSingleActiveImplementationOwner(repoRoot, 'T-103', 'compile gate'));
 });
 
+test('task-mode re-entry keeps consent for a widened disjoint scope and asks again for overlap or a restarted owner', (t) => {
+    const repoRoot = createTempRepo(t);
+    seedInitAnswers(repoRoot);
+    fs.appendFileSync(path.join(repoRoot, '.gitignore'), '\nTASK.md\ngarda-agent-orchestrator/runtime/\n');
+    assert.equal(runEnterTaskMode({
+        repoRoot, taskId: 'T-101', taskSummary: 'Unfinished owner task', plannedChangedFiles: ['src/owner.ts']
+    }).exitCode, 0);
+    writeQueue(repoRoot, 'IN_PROGRESS', 'IN_PROGRESS');
+    const confirmedAtUtc = new Date().toISOString();
+    const options = {
+        repoRoot, taskId: 'T-103', taskSummary: 'Confirmed second task',
+        plannedChangedFiles: ['src/second.ts'], allowedActiveTasks: ['T-101'],
+        operatorConfirmed: 'yes', operatorConfirmedAtUtc: confirmedAtUtc
+    };
+    assert.equal(runEnterTaskMode(options).exitCode, 0);
+    const reentry = { repoRoot, taskId: 'T-103', taskSummary: 'Confirmed second task' };
+    const now = Date.now();
+    t.mock.method(Date, 'now', () => now + 2 * OPERATOR_CONFIRMATION_MAX_AGE_MS);
+    assert.equal(runEnterTaskMode({ ...reentry, plannedChangedFiles: ['src/second.ts', 'src/extra.ts'] }).exitCode, 0);
+    t.mock.restoreAll();
+    assert.deepEqual(getTaskModeEvidence(repoRoot, 'T-103').planned_changed_files, ['src/extra.ts', 'src/second.ts']);
+    assert.doesNotThrow(() => assertSingleActiveImplementationOwner(repoRoot, 'T-103', 'compile gate'));
+    const timeline = fs.readFileSync(path.join(repoRoot, 'garda-agent-orchestrator/runtime/task-events/T-103.jsonl'), 'utf8')
+        .trim().split('\n').map(line => JSON.parse(line)).filter(event => event.event_type === 'TASK_MODE_ENTERED');
+    assert.equal(timeline.at(-1).details.active_task_approval.operator_confirmed_at_utc, confirmedAtUtc);
+
+    assert.throws(() => runEnterTaskMode({ ...reentry, plannedChangedFiles: ['src/second.ts', 'src/owner.ts'] }),
+        /scope overlaps unfinished task T-101/u);
+    assert.deepEqual(getTaskModeEvidence(repoRoot, 'T-103').planned_changed_files, ['src/extra.ts', 'src/second.ts']);
+
+    assert.equal(runEnterTaskMode({
+        repoRoot, taskId: 'T-101', taskSummary: 'Restarted original owner',
+        plannedChangedFiles: ['src/owner.ts'], allowedActiveTasks: ['T-103'],
+        operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString()
+    }).exitCode, 0);
+    assert.throws(() => runEnterTaskMode({ ...reentry, plannedChangedFiles: ['src/second.ts', 'src/extra.ts'] }),
+        /Ask the operator/u);
+});
+
 test('approval renewal preserves the original baseline and detects replaced owner files', (t) => {
     const repoRoot = createTempRepo(t);
     seedInitAnswers(repoRoot);

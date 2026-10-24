@@ -39,6 +39,7 @@
 - Task recovery better preserves unfinished work, staged renames and completed child work. Commit guards also work in linked Git worktrees.
 - Generated rules preserve user content and settings; malformed managed blocks and ambiguous task rows produce actionable errors.
 - After a failed review, a test-only fix re-runs the refactor review only when one test file changes by more than 50 lines (previously 20), a test file is added or removed, or a shared test helper changes. Existing workspaces keep their configured value.
+- Restarting a task's cycle after a review fix no longer asks the operator again to work alongside unfinished tasks when those tasks are unchanged and the task's files, including newly added ones, still do not overlap theirs.
 - Secret masking no longer merges neighbouring lines, so a small test fix near a `token=` string is no longer treated as an unmeasurable change that restarts every review.
 
 ### Safer execution, updates and cleanup

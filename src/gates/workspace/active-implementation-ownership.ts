@@ -81,6 +81,16 @@ function approvalCoversOwners(repoRoot: string, taskId: string, owners: string[]
     });
 }
 
+function previousApprovalCoversCurrentOwners(
+    repoRoot: string, owners: string[], approval: ActiveTaskApproval | null
+): approval is ActiveTaskApproval {
+    if (!approval) return false;
+    return owners.every(owner => {
+        const mode = readImplementationTaskMode(repoRoot, owner);
+        return mode.evidence_status === 'PASS' && !!mode.evidence_hash && approval.owners[owner] === mode.evidence_hash;
+    });
+}
+
 export function findUnapprovedActiveImplementationOwners(
     repoRoot: string, taskId: string, entries?: ReadonlyMap<string, TaskQueueEntry>
 ): string[] {
@@ -109,23 +119,30 @@ export function resolveActiveTaskEntryApproval(input: {
 }): ActiveTaskApproval | null {
     const owners = findOtherActiveImplementationOwners(input.repoRoot, input.taskId, input.entries);
     if (owners.length === 0) return null;
-    // Entry writes a new receiver artifact. Only downstream gates may reuse a
-    // grant; re-entry must not carry consent into a new scope or baseline.
-    // Recovery may reuse the already disclosed owner list, but never consent.
+    // Re-entry of the same task (for example restart-coherent-cycle after a
+    // review fix added files) keeps the operator's grant while every current
+    // owner was approved with unchanged task-mode evidence. The new scope is
+    // still checked for overlap below; a new or restarted owner needs fresh consent.
     const previous = readActiveTaskApproval(input.repoRoot, input.taskId, input.artifactPath);
+    const reusableApproval = previousApprovalCoversCurrentOwners(input.repoRoot, owners, previous) ? previous : null;
     const requested = Array.isArray(input.allowedActiveTasks)
         ? [...new Set(input.allowedActiveTasks.map(value => String(value).trim()))].sort()
-        : approvalCoversOwners(input.repoRoot, input.taskId, owners, previous) ? owners : [];
+        : reusableApproval ? owners : [];
     if (JSON.stringify(requested) !== JSON.stringify(owners)) {
         throw new Error(`task-mode entry refused for ${input.taskId}: ` + activeTaskConfirmationMessage(input.taskId, owners));
     }
-    validateFreshOperatorConfirmation({
-        actionLabel: 'Starting work alongside unfinished tasks',
-        confirmed: parseOperatorConfirmationYes(input.operatorConfirmed),
-        confirmedAtUtc: String(input.operatorConfirmedAtUtc || '').trim(),
-        requireConfirmedAtUtc: true,
-        instruction: activeTaskConfirmationMessage(input.taskId, owners)
-    });
+    const confirmationSupplied = String(input.operatorConfirmed ?? '').trim() !== ''
+        || String(input.operatorConfirmedAtUtc ?? '').trim() !== '';
+    const reuseConsent = !!reusableApproval && !confirmationSupplied;
+    if (!reuseConsent) {
+        validateFreshOperatorConfirmation({
+            actionLabel: 'Starting work alongside unfinished tasks',
+            confirmed: parseOperatorConfirmationYes(input.operatorConfirmed),
+            confirmedAtUtc: String(input.operatorConfirmedAtUtc || '').trim(),
+            requireConfirmedAtUtc: true,
+            instruction: activeTaskConfirmationMessage(input.taskId, owners)
+        });
+    }
     if (input.plannedChangedFiles.length === 0) {
         throw new Error('Working alongside unfinished tasks requires an explicit --planned-changed-file scope.');
     }
@@ -140,7 +157,10 @@ export function resolveActiveTaskEntryApproval(input: {
         }
         return [owner, mode.evidence_hash];
     });
-    return { operator_confirmed_at_utc: String(input.operatorConfirmedAtUtc).trim(), owners: Object.fromEntries(ownerHashes) };
+    const confirmedAtUtc = reuseConsent && reusableApproval
+        ? reusableApproval.operator_confirmed_at_utc
+        : String(input.operatorConfirmedAtUtc).trim();
+    return { operator_confirmed_at_utc: confirmedAtUtc, owners: Object.fromEntries(ownerHashes) };
 }
 
 export function withImplementationOwnershipLock<T>(repoRoot: string, operation: (lock: LockHandle) => T): T {
