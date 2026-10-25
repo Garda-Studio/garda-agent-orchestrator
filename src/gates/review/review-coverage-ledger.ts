@@ -585,6 +585,7 @@ const GENERIC_REVIEW_STATUS_WORDS = new Set([
     'all',
     'and',
     'as',
+    'at',
     'api',
     'been',
     'behavior',
@@ -613,6 +614,7 @@ const GENERIC_REVIEW_STATUS_WORDS = new Set([
     'files',
     'fine',
     'following',
+    'found',
     'full',
     'fully',
     'good',
@@ -623,10 +625,13 @@ const GENERIC_REVIEW_STATUS_WORDS = new Set([
     'inspection',
     'inspected',
     'is',
+    'issue',
+    'issues',
     'it',
     'looks',
     'manually',
     'maintainability',
+    'me',
     'no',
     'none',
     'ok',
@@ -653,6 +658,7 @@ const GENERIC_REVIEW_STATUS_WORDS = new Set([
     'these',
     'this',
     'those',
+    'to',
     'thoroughly',
     'test',
     'testing',
@@ -713,34 +719,35 @@ function isGenericReviewStatusDeclaration(normalized: string): boolean {
 // 'full scope' and 'all files' are also technical terms (Keycloak client scopes, glob matchers);
 // a review-status sentence built only from them is still rejected through GENERIC_REVIEW_STATUS_WORDS.
 const GENERIC_OBSERVATION_PHRASE_PATTERN = /\b(?:no issues|looks good|everything)\b/u;
-// Only short quoted code tokens are exempt from the generic-phrase rule.
 const QUOTED_OBSERVATION_SEGMENT_PATTERN = /`[^`]*`|"[^"]*"|(?<![\p{L}\p{N}_])'[^']*'(?![\p{L}\p{N}_])/gu;
 
-const MAX_QUOTED_OBSERVATION_TOKEN_LENGTH = 120;
-const MAX_QUOTED_OBSERVATION_TOKEN_WORDS = 3;
+function isQuotedCodeOrIdentifier(token: string): boolean {
+    return /[()[\]{}=<>/+*\\]|[a-z0-9_]\.[a-z0-9_]|_|[a-z][A-Z]|^[A-Z][A-Z0-9_]*$/u.test(token);
+}
 
 function describeGenericObservation(observation: string): string | null {
-    const normalized = String(observation || '').trim().toLowerCase();
+    const original = String(observation || '').trim();
+    const normalized = original.toLowerCase();
     if (normalized.length < 24) return 'it is shorter than 24 characters';
     if (normalized.split(/\s+/u).length < 4) return 'it has fewer than 4 words';
     const unquoted = normalized.replace(QUOTED_OBSERVATION_SEGMENT_PATTERN, segment => segment.slice(1, -1));
     if (isGenericReviewStatusDeclaration(unquoted)) {
         return 'it only declares review status without naming a concrete symbol, behavior or check';
     }
-    let quotedLength = 0;
-    const phraseText = normalized.replace(QUOTED_OBSERVATION_SEGMENT_PATTERN, segment => {
-        quotedLength += segment.length;
+    const phraseText = original.replace(QUOTED_OBSERVATION_SEGMENT_PATTERN, (segment: string, offset: number) => {
         const token = segment.slice(1, -1).trim();
-        return token.length <= MAX_QUOTED_OBSERVATION_TOKEN_LENGTH
-            && token.split(/\s+/u).length <= MAX_QUOTED_OBSERVATION_TOKEN_WORDS ? ' ' : token;
-    });
-    const outsideWords = extractReviewStatusWords(normalized.replace(QUOTED_OBSERVATION_SEGMENT_PATTERN, ' '));
-    const mostlyQuotedGeneric = quotedLength * 2 >= normalized.length
-        && outsideWords.every(word => GENERIC_REVIEW_STATUS_WORDS.has(word));
-    const phrase = (mostlyQuotedGeneric ? unquoted : phraseText)
-        .match(GENERIC_OBSERVATION_PHRASE_PATTERN)?.[0];
+        const normalizedToken = token.toLowerCase();
+        // Explicit literal/output context identifies a quoted value, not the reviewer's conclusion.
+        const quoteContext = original.slice(0, offset).toLowerCase();
+        const quotedValue = /\b(?:literal|prints|emits|outputs)\s*:?\s*$/u.test(quoteContext);
+        const namedTest = /\b(?:test|case|spec)(?:\s+(?:named|called))?\s*:?\s*$/u.test(quoteContext)
+            || /^\s+(?:test|case|spec)\b/u.test(original.slice(offset + segment.length).toLowerCase());
+        const genericToken = GENERIC_OBSERVATION_PHRASE_PATTERN.test(normalizedToken);
+        return isQuotedCodeOrIdentifier(token) || quotedValue || namedTest || !genericToken ? ' ' : token;
+    }).toLowerCase();
+    const phrase = phraseText.match(GENERIC_OBSERVATION_PHRASE_PATTERN)?.[0];
     return phrase
-        ? `it uses the generic phrase '${phrase}' outside quotes or in a quoted sentence (only short code tokens are exempt)`
+        ? `it uses the generic phrase '${phrase}' outside quotes or as a quoted review conclusion`
         : null;
 }
 

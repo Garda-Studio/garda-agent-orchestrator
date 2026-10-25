@@ -153,6 +153,32 @@ test('validateReviewCoverageLedger ignores generic phrases inside quoted code an
     assert.ok(result.violations.some((entry) => entry.includes("generic phrase 'everything' outside quotes")));
 });
 
+test('validateReviewCoverageLedger distinguishes concrete quoted evidence from individually quoted approval', () => {
+    const contract = buildReviewCoverageContract({ reviewType: 'code', changedFiles: ['src/example.ts'], categoryIds: ['correctness-edge-cases'] });
+    const cases = [
+        ['FAIL', 'Overall the change "looks good" and has "no issues" at all.'],
+        ['FAIL', 'Overall the change `looks good` and has `no issues` at all.'],
+        ['FAIL', 'The patch "looks good" with "no issues" for callers.'],
+        ['FAIL', 'The patch has "absolutely no issues" for callers.'],
+        ['FAIL', 'The patch has "no issues for callers" at all.'],
+        ['FAIL', 'The patch "looks good; no issues" for callers.'],
+        ['PASS', 'Test `no issues when optional config is omitted` in config.test.ts covers the absent-config branch.'],
+        ['PASS', 'Test `returns everything when no filter is set` in filter.test.ts covers the empty-filter branch.'],
+        ['PASS', 'The `returns everything when no filter is set` test in filter.test.ts covers the empty-filter branch.'],
+        ['PASS', 'parseMode executes `if (flags.everything) return ALL_MODES;` before filtering individual flags.'],
+        ['PASS', 'The CLI prints "No issues found in 3 files" from report.ts:88 after collecting diagnostics.'],
+        ['PASS', 'The CLI prints: "No issues found in 3 files" from report.ts:88 after collecting diagnostics.'],
+        ['PASS', 'Keycloak "full scope" is disabled by clientScopeMapper before publishing grants.'],
+        ['PASS', 'The glob "all files" includes hidden paths through matchFiles in glob.ts.'],
+        ['PASS', "parseScope rejects 'EVERYTHING' before persisting permissions."]
+    ];
+    for (const [expected, observation] of cases) {
+        const lines = contract.obligations.map((obligation, index) => ledgerLine(obligation.id, `src/example.ts:${index + 1}`, observation));
+        const result = validateReviewCoverageLedger(buildReviewOutput(lines), contract);
+        assert.equal(result.status, expected, observation);
+    }
+});
+
 test('validateReviewCoverageLedger accepts reviewed as an adjective in concrete evidence', () => {
     const contract = buildReviewCoverageContract({
         reviewType: 'code',
