@@ -293,6 +293,30 @@ test('validateReviewCoverageLedger rejects passive and prefixed review-status de
     }
 });
 
+test('validateReviewCoverageLedger rejects general diff, patch and LGTM status variants', async (t) => {
+    const contract = buildReviewCoverageContract({ reviewType: 'code', changedFiles: ['src/example.ts'], categoryIds: ['correctness-edge-cases'] });
+    for (const observation of [
+        'Reviewed the patch thoroughly, LGTM.',
+        'Reviewed the diff; LGTM.',
+        'Checked all of the files and found no defects.',
+        'Reviewed the whole diff and found no defects.',
+        'LGTM for parser.ts, ship it.',
+        'LGTM for `parser.ts`, ship it.',
+        'LGTM for parser.ts (reviewed thoroughly), ship it.',
+        'LGTM for parser.ts - ship it.',
+        'LGTM for parser.ts(reviewed thoroughly), ship it.',
+        'Inspected the entire patch and found no defects.',
+        'The whole diff was reviewed; LGTM for parser.ts.'
+    ]) {
+        await t.test(observation, () => {
+            const lines = contract.obligations.map((obligation, index) => ledgerLine(obligation.id, `src/example.ts:${index + 1}`, observation));
+            const result = validateReviewCoverageLedger(buildReviewOutput(lines), contract);
+            assert.equal(result.status, 'FAIL', observation);
+            assert.ok(result.violations.some(entry => entry.includes('generic evidence')), observation);
+        });
+    }
+});
+
 test('validateReviewCoverageLedger accepts concrete evidence after review-status prefixes', () => {
     const contract = buildReviewCoverageContract({
         reviewType: 'code',
@@ -300,6 +324,16 @@ test('validateReviewCoverageLedger accepts concrete evidence after review-status
         categoryIds: ['documentation-impact']
     });
     const observations = [
+        'LGTM: parseExample rejects malformed identifiers before state mutation.',
+        'LGTM: checked `payload.key === expectedKey` for correctness.',
+        'LGTM: checked payload.key === expectedKey for correctness.',
+        'LGTM: checked `payload.mode === "diff"` for correctness.',
+        'LGTM: checked `assertEqual(payload.mode, "diff")` for correctness.',
+        'LGTM: checked `payload.count - expectedCount` for correctness.',
+        'LGTM: checked `payload.count ?? expectedCount` for correctness.',
+        'LGTM: checked payload.count - expectedCount for correctness.',
+        'LGTM: checked getMode("diff") for correctness.',
+        'Reviewed the patch; parseExample rejects malformed identifiers before state mutation.',
         'The changed code was reviewed; parseExample rejects malformed identifiers before state mutation.',
         'After inspection, the file was checked: evidence validation preserves CRLF line numbers.',
         'We thoroughly validated the implementation; exact target matching rejects unrelated F-000 evidence.',

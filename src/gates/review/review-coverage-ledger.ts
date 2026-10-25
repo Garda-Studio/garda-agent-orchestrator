@@ -575,9 +575,9 @@ export function formatReviewEvidenceLineCountSource(source: ReviewEvidenceLineCo
 }
 
 const REVIEW_STATUS_PREFIX_PATTERNS = Object.freeze([
-    /^(?:reviewed|checked|validated|inspected)\s+(?:(?:the\s+)?(?:full|whole|entire|all|every|each)\s+)?(?:the\s+)?(?:files?|scope|code)\b/u,
-    /^(?:(?:after|following|during)\s+(?:the\s+)?(?:review|inspection|validation|check),?\s+)?(?:(?:the|all)\s+)?(?:(?:changed|entire|whole)\s+)?(?:files?|scope|code|implementation|changes?)\s+(?:was|were|is|are|has\s+been|have\s+been)\s+(?:(?:carefully|fully|thoroughly|completely)\s+)*(?:reviewed|checked|validated|inspected)\b/u,
-    /^(?:we|i)\s+(?:(?:carefully|fully|thoroughly|completely)\s+)*(?:reviewed|checked|validated|inspected)\s+(?:the\s+)?(?:changed\s+)?(?:file|scope|code|implementation|changes?)\b/u
+    /^(?:reviewed|checked|validated|inspected)\s+(?:(?:the\s+)?(?:full|whole|entire|all(?:\s+of)?|every|each)\s+)?(?:the\s+)?(?:files?|scope|code|diff|patch|changes?)\b/u,
+    /^(?:(?:after|following|during)\s+(?:the\s+)?(?:review|inspection|validation|check),?\s+)?(?:(?:the|all)\s+)?(?:(?:changed|entire|whole)\s+)?(?:files?|scope|code|implementation|changes?|diff|patch)\s+(?:was|were|is|are|has\s+been|have\s+been)\s+(?:(?:carefully|fully|thoroughly|completely)\s+)*(?:reviewed|checked|validated|inspected)\b/u,
+    /^(?:we|i)\s+(?:(?:carefully|fully|thoroughly|completely)\s+)*(?:reviewed|checked|validated|inspected)\s+(?:the\s+)?(?:changed\s+)?(?:file|scope|code|implementation|changes?|diff|patch)\b/u
 ]);
 const GENERIC_REVIEW_STATUS_WORDS = new Set([
     'a',
@@ -607,6 +607,7 @@ const GENERIC_REVIEW_STATUS_WORDS = new Set([
     'defect',
     'defects',
     'coverage',
+    'diff',
     'during',
     'each',
     'every',
@@ -640,9 +641,11 @@ const GENERIC_REVIEW_STATUS_WORDS = new Set([
     'me',
     'no',
     'none',
+    'of',
     'ok',
     'okay',
     'overall',
+    'patch',
     'passed',
     'passes',
     'performance',
@@ -685,13 +688,13 @@ const GENERIC_REVIEW_STATUS_WORDS = new Set([
 const GENERIC_NO_DEFECT_SUFFIX_PATTERN =
     /^(?:(?:(?:and|with)\s+)?no(?:\s+[a-z0-9_-]+){0,4}\s+(?:defects?|findings?|issues?|problems?)(?:\s+(?:were\s+)?(?:detected|found|identified))?|(?:and\s+)?(?:detected|found|identified)\s+no(?:\s+[a-z0-9_-]+){0,4}\s+(?:defects?|findings?|issues?|problems?)|(?:and\s+)?there\s+(?:was|were)\s+no(?:\s+[a-z0-9_-]+){0,4}\s+(?:defects?|findings?|issues?|problems?)(?:\s+(?:detected|found|identified))?|without(?:\s+any)?(?:\s+[a-z0-9_-]+){0,4}\s+(?:defects?|findings?|issues?|problems?))$/u;
 const GENERIC_NO_DEFECT_DECLARATION_PATTERN =
-    /^(?:no(?:\s+[a-z0-9_-]+){0,4}\s+(?:defects?|findings?|issues?|problems?)(?:\s+(?:were\s+)?(?:detected|found|identified))?|(?:we|i)\s+(?:detected|found|identified)\s+no(?:\s+[a-z0-9_-]+){0,4}\s+(?:defects?|findings?|issues?|problems?)|there\s+(?:was|were)\s+no(?:\s+[a-z0-9_-]+){0,4}\s+(?:defects?|findings?|issues?|problems?)(?:\s+(?:detected|found|identified))?)(?:\s+(?:(?:after|following)\s+(?:(?:the\s+)?(?:review|inspection|validation|check)|(?:reviewing|checking|inspecting|validating)(?:\s+(?:the\s+)?(?:file|scope|code|implementation|changes?))?)|during\s+(?:the\s+)?(?:review|inspection|validation|check)))?$/u;
+    /^(?:no(?:\s+[a-z0-9_-]+){0,4}\s+(?:defects?|findings?|issues?|problems?)(?:\s+(?:were\s+)?(?:detected|found|identified))?|(?:we|i)\s+(?:detected|found|identified)\s+no(?:\s+[a-z0-9_-]+){0,4}\s+(?:defects?|findings?|issues?|problems?)|there\s+(?:was|were)\s+no(?:\s+[a-z0-9_-]+){0,4}\s+(?:defects?|findings?|issues?|problems?)(?:\s+(?:detected|found|identified))?)(?:\s+(?:(?:after|following)\s+(?:(?:the\s+)?(?:review|inspection|validation|check)|(?:reviewing|checking|inspecting|validating)(?:\s+(?:the\s+)?(?:file|scope|code|implementation|changes?|diff|patch))?)|during\s+(?:the\s+)?(?:review|inspection|validation|check)))?$/u;
 
 function extractReviewStatusWords(value: string): string[] {
     return value
         .replace(/^[\s,;:—–-]+|[.!?]+$/gu, '')
         .split(/[^a-z0-9_-]+/u)
-        .filter(Boolean);
+        .filter(word => /[a-z0-9]/u.test(word));
 }
 
 function usesOnlyGenericReviewStatusVocabulary(normalized: string): boolean {
@@ -728,11 +731,15 @@ function isGenericReviewStatusDeclaration(normalized: string): boolean {
 const GENERIC_OBSERVATION_PHRASE_PATTERN = /\b(?:no issues|looks good|everything)\b/u;
 const QUOTED_OBSERVATION_SEGMENT_PATTERN = /`[^`]*`|"[^"]*"|(?<![\p{L}\p{N}_])'[^']*'(?![\p{L}\p{N}_])/gu;
 
-function removeQuotedCodeTokens(value: string): string {
+function isQuotedCodeExpression(value: string): boolean {
     const operand = String.raw`(?:[a-zA-Z_$][\w.$]*|\d+(?:\.\d+)?)`;
     const operator = String.raw`(?:={1,3}|!={1,2}|[<>]=?|&&|\|\||\?\?|[-+*/%]=?)`;
     const expression = value.trim().replace(/^\((.*)\)$/u, '$1');
-    if (new RegExp(`^\\s*${operand}\\s*${operator}\\s*${operand}\\s*;?\\s*$`, 'u').test(expression)) return ' ';
+    return new RegExp(`^\\s*${operand}\\s*${operator}\\s*${operand}\\s*;?\\s*$`, 'u').test(expression);
+}
+
+function removeQuotedCodeTokens(value: string): string {
+    if (isQuotedCodeExpression(value)) return ' ';
     return value.replace(/[a-zA-Z_$][\w$]*(?:(?:[./\\]|::)[\w$-]+)*/gu, (token, offset: number) => {
         const uppercaseIdentifier = /^[A-Z][A-Z0-9_]*$/u.test(token)
             && (value.trim() === token || !GENERIC_REVIEW_STATUS_WORDS.has(token.toLowerCase())
@@ -751,15 +758,37 @@ function isConcreteQuotedTestName(value: string): boolean {
     return extractReviewStatusWords(prose).length > 0 && !usesOnlyGenericReviewStatusVocabulary(prose);
 }
 
+function removeReviewStatusReferences(value: string): string {
+    const text = value.replace(QUOTED_OBSERVATION_SEGMENT_PATTERN, segment => segment.slice(1, -1));
+    const operand = String.raw`(?:[a-zA-Z_$][\w.$]*|\d+(?:\.\d+)?|"[^"]*"|'[^']*')`;
+    const operator = String.raw`(?:={1,3}|!={1,2}|[<>]=?|&&|\|\||\?\?|[-+*/%]=?)`;
+    const expressions = [...text.matchAll(new RegExp(`\\b${operand}\\s*${operator}\\s*${operand}`, 'gu'))]
+        .filter(match => {
+            const suffix = text.slice(match.index + match[0].length);
+            return !/^\s+[a-zA-Z_$]/u.test(suffix)
+                || /^\s+(?:for|before|after|when|while|with)\b/u.test(suffix);
+        });
+    const callArguments = new RegExp(`^\\(\\s*(?:${operand}(?:\\s*,\\s*${operand})*)?\\s*\\)`, 'u');
+    return text.replace(/[a-zA-Z_$][\w$]*(?:(?:[./\\]|::)[\w$-]+)*/gu, (token, offset: number) => {
+        const expressionToken = expressions.some(match => offset >= match.index && offset < match.index + match[0].length)
+            || callArguments.test(text.slice(offset + token.length));
+        const reference = /[./\\_]|[a-z][A-Z]|^[A-Z][A-Z0-9_]*$/u.test(token);
+        return reference && !expressionToken ? ' ' : token;
+    });
+}
+
 function describeGenericObservation(observation: string): string | null {
     const original = String(observation || '').trim();
     const normalized = original.toLowerCase();
     if (normalized.length < 24) return 'it is shorter than 24 characters';
     if (normalized.split(/\s+/u).length < 4) return 'it has fewer than 4 words';
     const unquoted = normalized.replace(QUOTED_OBSERVATION_SEGMENT_PATTERN, segment => segment.slice(1, -1));
-    if (isGenericReviewStatusDeclaration(unquoted)) {
+    const statusWithoutReferences = removeReviewStatusReferences(original).toLowerCase();
+    if (isGenericReviewStatusDeclaration(unquoted)
+        || (/\blgtm\b/u.test(unquoted) && isGenericReviewStatusDeclaration(statusWithoutReferences))) {
         return 'it only declares review status without naming a concrete symbol, behavior or check';
     }
+
     const phraseText = original.replace(QUOTED_OBSERVATION_SEGMENT_PATTERN, (segment: string, offset: number) => {
         const token = segment.slice(1, -1).trim();
         // Explicit literal/output context identifies a quoted value, not the reviewer's conclusion.
