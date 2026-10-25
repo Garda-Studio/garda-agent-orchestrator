@@ -129,7 +129,7 @@ function resolveRoute(fixture: Fixture) {
 function buildRecipeFixture(mode = 'failed', testPath = 'specifications/case', options: {
     withRecipe?: boolean; fixtureReadiness?: boolean; nestedReport?: boolean;
     opaqueAssertion?: boolean; symbolic?: boolean; reviewSuite?: boolean; productionReadiness?: boolean; opaqueRecipe?: boolean;
-    productionOperand?: boolean; maxAttempts?: number;
+    productionOperand?: boolean; maxAttempts?: number; withChangelog?: boolean;
 } = {}): Fixture {
     const { withRecipe = true, fixtureReadiness = false, nestedReport = false } = options;
     const repoRoot = createRecipeTempRepo(); tempRoots.push(repoRoot);
@@ -196,9 +196,10 @@ function buildRecipeFixture(mode = 'failed', testPath = 'specifications/case', o
         taskSummary: 'Expected-red declared recipe', provider: 'Codex' });
     loadTaskEntryRulePack(repoRoot, TASK_ID); runHandshakeForTask(repoRoot, TASK_ID); runShellSmokeForTask(repoRoot, TASK_ID);
     fs.appendFileSync(path.join(repoRoot, testPath), '\naffected test\n');
+    if (options.withChangelog) fs.appendFileSync(path.join(repoRoot, 'CHANGELOG.md'), '\n- Test-first behavior note.\n');
     const preflightPath = path.join(bundle, `runtime/reviews/${TASK_ID}-preflight.json`);
     runClassifyChangeCommand({ repoRoot, taskId: TASK_ID, taskIntent: 'Expected-red declared recipe',
-        outputPath: preflightPath, changedFiles: [testPath], emitMetrics: false });
+        outputPath: preflightPath, changedFiles: options.withChangelog ? [testPath, 'CHANGELOG.md'] : [testPath], emitMetrics: false });
     return { repoRoot, reviewsRoot: path.join(bundle, 'runtime/reviews'), eventsRoot: path.join(bundle, 'runtime/task-events'),
         preflightPath, preflight: JSON.parse(fs.readFileSync(preflightPath, 'utf8')),
         taskEntry: { taskId: TASK_ID, status: 'IN_PROGRESS', area: 'workflow/test-first', title: 'Declared recipe expected red',
@@ -740,6 +741,24 @@ describe('next-step test-first expected-red routing', () => {
         assert.equal(route?.nextGate, 'implementation');
         assert.deepEqual(route?.commands, []);
         assert.match(route?.reason || '', /exact source, selected cases and actual nonzero execution/u);
+    });
+
+    it('accepts expected-red for the test source when the test-only scope also changes CHANGELOG.md', async () => {
+        const testPath = 'modules/safety/checkcase.custom';
+        const fixture = buildRecipeFixture('failed', testPath, { withRecipe: false, opaqueAssertion: true, withChangelog: true });
+        assert.equal(fixture.preflight.scope_category, 'test-only', JSON.stringify(fixture.preflight.changed_files));
+        assert.ok((fixture.preflight.changed_files as string[]).includes('CHANGELOG.md'));
+        const run = await runIntermediateCommandCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
+            commandSource: 'targeted-test', preflightPath: fixture.preflightPath, expectFailure: true,
+            command: `"${process.execPath}" opaque-checker "${testPath}"`,
+            selectedCases: [{ source: testPath, case_id: 'source readiness', selector: testPath }] });
+        assert.equal(run.exitCode, 0, run.outputLines.join('\n'));
+
+        const evidence = readExpectedRedExecutionEvidence({ ...fixture, taskId: TASK_ID,
+            preflightSha256: fileSha256(fixture.preflightPath) });
+        assert.equal(evidence?.obligations.length, 1, 'documentation in a test-only scope must not hide the test RED');
+        assert.equal(evidence?.obligations[0].source_identity.path, testPath);
+        assert.equal(resolveRoute(fixture)?.nextGate, 'implementation');
     });
 
     it('rejects modified output evidence and asks to record expected-red again', async () => {

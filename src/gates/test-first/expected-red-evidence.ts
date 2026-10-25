@@ -4,7 +4,8 @@ import { isPlainRecord } from '../../core/records';
 import { readValidationFile, validationDigest } from '../../core/project-validation-identity';
 import { assertCurrentIntermediateSelection, isIntermediateSelection, latestMatchingIntermediateAttempt } from '../../core/intermediate-selected-cases';
 import { readValidationEventSnapshot, type ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
-import { readBoundIntermediateCommandEvidence } from '../review/focused-intermediate-evidence';
+import { isFocusedReviewTestPath, readBoundIntermediateCommandEvidence } from '../review/focused-intermediate-evidence';
+import { declaredFileRole, isTestScopePath, normalizeFileRoleBindings } from '../../core/file-role-bindings';
 import { readNativeCaseObligations, retainedNativeCaseOutput, type NativeCaseExecution } from '../review/native-case-semantics';
 import type { QualityValidationObligation } from '../quality-checklist/quality-checklist-validation-phases';
 import { readReportedTestCases, getCurrentIntermediateTestTargets } from '../../cli/commands/gate-flows/command-run/intermediate-command-scope';
@@ -22,6 +23,17 @@ export interface ExpectedRedExecutionEvidence {
 
 export function taskRequiresExpectedRed(repoRoot: string, taskId: string): boolean {
     return hasTestFirstExpectedRedDeclaration(readTaskQueueEntries(repoRoot).get(taskId));
+}
+
+/** Test sources of a test-only scope; documentation such as CHANGELOG.md has no case to fail first. */
+function isExpectedRedTestSource(preflight: Record<string, unknown>, source: string): boolean {
+    const snapshot = isPlainRecord(preflight.profile_policy_snapshot) ? preflight.profile_policy_snapshot : {};
+    const policy = isPlainRecord(snapshot.review_trigger_policy) ? snapshot.review_trigger_policy : {};
+    const role = declaredFileRole(source, normalizeFileRoleBindings(policy.file_roles));
+    if (role) return role === 'test';
+    const testPatterns = Array.isArray(policy.test_path_regexes)
+        ? policy.test_path_regexes.filter((pattern): pattern is string => typeof pattern === 'string') : [];
+    return testPatterns.length > 0 ? isTestScopePath(source, testPatterns) : isFocusedReviewTestPath(source);
 }
 
 /** A current execution projection; assertion semantics remain pending the ordinary independent review. */
@@ -106,7 +118,8 @@ function projectExpectedRedExecutions(options: ExpectedRedEvidenceOptions, curre
                 result_status: 'UNRESOLVED', result_sha256: null, case_execution: execution });
         }
     }
-    if (!obligations.size || currentOnly && snapshot.changed_files.some(file => ![...obligations.values()].some(item => item.source_identity.path === file)))
+    if (!obligations.size || currentOnly && snapshot.changed_files.some(file => isExpectedRedTestSource(preflight, file)
+        && ![...obligations.values()].some(item => item.source_identity.path === file)))
         return null;
     if (readValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection).timeline_sha256 !== snapshot.timeline_sha256)
         throw new Error('Expected-red timeline changed during evidence projection.');
