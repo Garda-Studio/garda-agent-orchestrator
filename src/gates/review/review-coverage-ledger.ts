@@ -575,7 +575,7 @@ export function formatReviewEvidenceLineCountSource(source: ReviewEvidenceLineCo
 }
 
 const REVIEW_STATUS_PREFIX_PATTERNS = Object.freeze([
-    /^(?:reviewed|checked|validated|inspected)\s+(?:the\s+)?(?:(?:full|whole|entire|all)\s+)?(?:files?|scope|code)\b/u,
+    /^(?:reviewed|checked|validated|inspected)\s+(?:(?:the\s+)?(?:full|whole|entire|all|every|each)\s+)?(?:the\s+)?(?:files?|scope|code)\b/u,
     /^(?:(?:after|following|during)\s+(?:the\s+)?(?:review|inspection|validation|check),?\s+)?(?:(?:the|all)\s+)?(?:(?:changed|entire|whole)\s+)?(?:files?|scope|code|implementation|changes?)\s+(?:was|were|is|are|has\s+been|have\s+been)\s+(?:(?:carefully|fully|thoroughly|completely)\s+)*(?:reviewed|checked|validated|inspected)\b/u,
     /^(?:we|i)\s+(?:(?:carefully|fully|thoroughly|completely)\s+)*(?:reviewed|checked|validated|inspected)\s+(?:the\s+)?(?:changed\s+)?(?:file|scope|code|implementation|changes?)\b/u
 ]);
@@ -604,8 +604,12 @@ const GENERIC_REVIEW_STATUS_WORDS = new Set([
     'correct',
     'correctly',
     'correctness',
+    'defect',
+    'defects',
     'coverage',
     'during',
+    'each',
+    'every',
     'entire',
     'everything',
     'expected',
@@ -622,6 +626,7 @@ const GENERIC_REVIEW_STATUS_WORDS = new Set([
     'have',
     'i',
     'implementation',
+    'in',
     'inspection',
     'inspected',
     'is',
@@ -629,6 +634,7 @@ const GENERIC_REVIEW_STATUS_WORDS = new Set([
     'issues',
     'it',
     'looks',
+    'lgtm',
     'manually',
     'maintainability',
     'me',
@@ -649,6 +655,7 @@ const GENERIC_REVIEW_STATUS_WORDS = new Set([
     'reviewer',
     'robustness',
     'scope',
+    'ship',
     'security',
     'safety',
     'style',
