@@ -147,14 +147,6 @@ test('reconstructs remediation review execution authority only from an integrity
         ...preservedDecisionWithoutHash,
         decision_sha256: sha256RedactedJsonPayload(preservedDecisionWithoutHash)
     };
-    appendTaskEvent(bundleRoot, taskId, 'REVIEW_CYCLE_RESTARTED', 'PASS', 'Downstream review cycle restarted.', {
-        task_id: taskId,
-        event_type: 'REVIEW_CYCLE_RESTARTED',
-        status: 'PASSED',
-        preflight_sha256: preflightSha256,
-        authoritative_review_decision: boundPreservedDecision,
-        authoritative_review_classification: preservedClassification
-    });
     const reviewContextPath = path.join(reviewsRoot, 'custom', `${taskId}-code-review-context.json`);
     const receiptPath = path.join(reviewsRoot, `${taskId}-code-receipt.json`);
     const reviewArtifactPath = path.join(reviewsRoot, `${taskId}-code.md`);
@@ -163,6 +155,26 @@ test('reconstructs remediation review execution authority only from an integrity
     fs.writeFileSync(reviewContextPath, '{"schema_version":2,"context":true}\n', 'utf8');
     fs.writeFileSync(receiptPath, '{"review_output_format":"verdict_token"}\n', 'utf8');
     fs.writeFileSync(reviewArtifactPath, 'REVIEW PASSED\n', 'utf8');
+    const recordedDetails = {
+        task_id: taskId,
+        review_type: 'code',
+        preflight_sha256: preflightSha256,
+        review_context_path: reviewContextPath,
+        review_context_sha256: createHash('sha256').update(fs.readFileSync(reviewContextPath)).digest('hex'),
+        receipt_path: receiptPath,
+        receipt_sha256: createHash('sha256').update(fs.readFileSync(receiptPath)).digest('hex'),
+        review_artifact_path: reviewArtifactPath,
+        review_artifact_sha256: createHash('sha256').update(fs.readFileSync(reviewArtifactPath)).digest('hex')
+    };
+    appendTaskEvent(bundleRoot, taskId, 'REVIEW_RECORDED', 'PASS', 'Review recorded before restart.', recordedDetails);
+    appendTaskEvent(bundleRoot, taskId, 'REVIEW_CYCLE_RESTARTED', 'PASS', 'Downstream review cycle restarted.', {
+        task_id: taskId,
+        event_type: 'REVIEW_CYCLE_RESTARTED',
+        status: 'PASSED',
+        preflight_sha256: preflightSha256,
+        authoritative_review_decision: boundPreservedDecision,
+        authoritative_review_classification: preservedClassification
+    });
     const preservedOptions = {
         reviewsRoot,
         taskId,
@@ -175,13 +187,11 @@ test('reconstructs remediation review execution authority only from an integrity
         receiptPath
     };
     assert.equal(resolvePersistedRemediationReviewExecutionAuthority(preservedOptions), null);
-    // The current PASS reuse step records the replacement itself, so it may rely on the earlier
-    // restart that produced the preserved evidence.
     const reuseStepAuthority = resolvePersistedRemediationReviewExecutionAuthority({
         ...preservedOptions,
         acceptPreservedPendingReuse: true
     });
-    assert.equal(reuseStepAuthority?.authoritativeDecisionSha256, boundDecision.decision_sha256);
+    assert.equal(reuseStepAuthority, null, 'reuse cannot grant authority to evidence recorded before the newest restart');
     assert.equal(resolvePersistedRemediationReviewExecutionAuthority({
         ...preservedOptions,
         acceptPreservedPendingReuse: true,
@@ -216,6 +226,10 @@ test('reconstructs remediation review execution authority only from an integrity
         review_artifact_path: reviewArtifactPath,
         review_artifact_sha256: createHash('sha256').update(fs.readFileSync(reviewArtifactPath)).digest('hex')
     });
+    assert.equal(resolvePersistedRemediationReviewExecutionAuthority({
+        ...preservedOptions, acceptPreservedPendingReuse: true
+    })?.authoritativeDecisionSha256, boundDecision.decision_sha256,
+    'a fresh authenticated REVIEW_RECORDED permits the reuse step before its own telemetry');
     const preservedRecordedEvent = JSON.parse(
         fs.readFileSync(path.join(bundleRoot, 'runtime', 'task-events', `${taskId}.jsonl`), 'utf8')
             .trim().split('\n').at(-1)!
@@ -317,6 +331,19 @@ test('reconstructs remediation review execution authority only from an integrity
         ...preservedOptions,
         acceptPreservedPendingReuse: true
     }), null, 'an invalidated lane never inherits earlier authority');
+
+    appendTaskEvent(bundleRoot, taskId, 'REVIEW_CYCLE_RESTARTED', 'PASS', 'Downstream review cycle restarted.', {
+        task_id: taskId,
+        event_type: 'REVIEW_CYCLE_RESTARTED',
+        status: 'PASSED',
+        preflight_sha256: preflightSha256,
+        authoritative_review_decision: boundPreservedDecision,
+        authoritative_review_classification: preservedClassification
+    });
+    appendTaskEvent(bundleRoot, taskId, 'REVIEW_RECORDED', 'PASS', 'Review recorded after another preservation.', recordedDetails);
+    assert.equal(resolvePersistedRemediationReviewExecutionAuthority({
+        ...preservedOptions, acceptPreservedPendingReuse: true
+    }), null, 'a pending preservation cannot resurrect authority across an intermediate lane invalidation');
 
     const timelinePath = path.join(bundleRoot, 'runtime', 'task-events', `${taskId}.jsonl`);
     fs.appendFileSync(timelinePath, '{"forged":true}\n', 'utf8');

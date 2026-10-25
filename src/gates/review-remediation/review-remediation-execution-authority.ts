@@ -25,8 +25,8 @@ interface PersistedRemediationReviewExecutionAuthorityOptions {
     receiptPath?: string;
     /**
      * Set only by the current PASS reuse step, which is what records the replacement telemetry:
-     * a lane the newest restart preserved may then rely on the earlier restart that produced its
-     * evidence. Every other consumer still requires the recorded replacement.
+     * a preserved lane still needs fresh authenticated REVIEW_RECORDED evidence after the newest
+     * restart. Only the subsequent reuse-accepted telemetry may be absent at this step.
      */
     acceptPreservedPendingReuse?: boolean;
 }
@@ -102,6 +102,25 @@ function hasAuthenticatedFreshCurrentPassReplacement(options: {
     const normalizedClassificationSha256 = normalizeSha256(
         authorityOptions.reviewExecution.classification_sha256
     );
+    function matchesRecordedEvidence(reviewRecordedEvent: Readonly<Record<string, unknown>> | undefined): boolean {
+        const reviewRecordedDetails = isPlainRecord(reviewRecordedEvent?.details)
+            ? reviewRecordedEvent.details
+            : null;
+        return reviewRecordedEvent?.event_type === 'REVIEW_RECORDED'
+            && reviewRecordedEvent.actor === 'gate'
+            && reviewRecordedEvent.outcome === 'PASS'
+            && reviewRecordedDetails?.review_type === authorityOptions.reviewType
+            && normalizeSha256(reviewRecordedDetails.preflight_sha256) === normalizedPreflightSha256
+            && pathsEqual(String(reviewRecordedDetails.review_context_path || ''), reviewContextPath)
+            && normalizeSha256(reviewRecordedDetails.review_context_sha256) === currentHashes.reviewContext
+            && pathsEqual(String(reviewRecordedDetails.receipt_path || ''), receiptPath)
+            && normalizeSha256(reviewRecordedDetails.receipt_sha256) === currentHashes.receipt
+            && pathsEqual(String(reviewRecordedDetails.review_artifact_path || ''), reviewArtifactPath)
+            && normalizeSha256(
+                reviewRecordedDetails.review_artifact_sha256
+                || reviewRecordedDetails.review_artifact_snapshot_sha256
+            ) === currentHashes.reviewArtifact;
+    }
     const reviewRecordedEventsBySequence = new Map<number, Readonly<Record<string, unknown>>>();
     for (let eventIndex = options.restartIndex + 1; eventIndex < options.events.length; eventIndex += 1) {
         const event = options.events[eventIndex];
@@ -109,6 +128,7 @@ function hasAuthenticatedFreshCurrentPassReplacement(options: {
         const acceptedSequence = taskEventSequence(event);
         if (event.event_type === 'REVIEW_RECORDED' && acceptedSequence > options.restartSequence) {
             reviewRecordedEventsBySequence.set(acceptedSequence, event);
+            if (authorityOptions.acceptPreservedPendingReuse === true && matchesRecordedEvidence(event)) return true;
             continue;
         }
         const reviewRecordedSequence = Number(details?.review_recorded_sequence);
@@ -164,27 +184,9 @@ function hasAuthenticatedFreshCurrentPassReplacement(options: {
             continue;
         }
         const reviewRecordedEvent = reviewRecordedEventsBySequence.get(reviewRecordedSequence);
-        const reviewRecordedDetails = isPlainRecord(reviewRecordedEvent?.details)
-            ? reviewRecordedEvent.details
-            : null;
-        const reviewRecordedIntegrity = isPlainRecord(reviewRecordedEvent?.integrity)
-            ? reviewRecordedEvent.integrity
-            : null;
-        if (reviewRecordedEvent?.event_type === 'REVIEW_RECORDED'
-            && reviewRecordedEvent.actor === 'gate'
-            && reviewRecordedEvent.outcome === 'PASS'
-            && normalizeSha256(reviewRecordedIntegrity?.event_sha256) === reviewRecordedEventSha256
-            && reviewRecordedDetails?.review_type === authorityOptions.reviewType
-            && normalizeSha256(reviewRecordedDetails.preflight_sha256) === normalizedPreflightSha256
-            && pathsEqual(String(reviewRecordedDetails.review_context_path || ''), reviewContextPath)
-            && normalizeSha256(reviewRecordedDetails.review_context_sha256) === currentHashes.reviewContext
-            && pathsEqual(String(reviewRecordedDetails.receipt_path || ''), receiptPath)
-            && normalizeSha256(reviewRecordedDetails.receipt_sha256) === currentHashes.receipt
-            && pathsEqual(String(reviewRecordedDetails.review_artifact_path || ''), reviewArtifactPath)
-            && normalizeSha256(
-                reviewRecordedDetails.review_artifact_sha256
-                || reviewRecordedDetails.review_artifact_snapshot_sha256
-            ) === currentHashes.reviewArtifact) {
+        const reviewRecordedIntegrity = isPlainRecord(reviewRecordedEvent?.integrity) ? reviewRecordedEvent.integrity : null;
+        if (normalizeSha256(reviewRecordedIntegrity?.event_sha256) === reviewRecordedEventSha256
+            && matchesRecordedEvidence(reviewRecordedEvent)) {
             return true;
         }
     }
@@ -285,12 +287,12 @@ export function resolvePersistedRemediationReviewExecutionAuthority(
             && lane.invalidated === false
             && lane.satisfied === false
             && lane.reason_code === 'authoritative_reuse_pending';
-        const acceptedAfterRestart = preservedPending && (options.acceptPreservedPendingReuse === true || hasAuthenticatedFreshCurrentPassReplacement({
+        const acceptedAfterRestart = preservedPending && hasAuthenticatedFreshCurrentPassReplacement({
             events,
             restartIndex: index,
             restartSequence: taskEventSequence(event),
             authorityOptions: options
-        }));
+        });
         if (!acceptedAfterRestart) {
             return null;
         }
@@ -306,6 +308,8 @@ export function resolvePersistedRemediationReviewExecutionAuthority(
                     isPlainRecord(value) && value.review_type === options.reviewType
                 ))
                 : null;
+            if (priorEvent.event_type !== 'REVIEW_CYCLE_RESTARTED' || priorDetails?.task_id !== options.taskId
+                || priorDetails.event_type !== 'REVIEW_CYCLE_RESTARTED' || priorDetails.status !== 'PASSED') continue;
             if (
                 priorEvent.event_type === 'REVIEW_CYCLE_RESTARTED'
                 && priorDetails?.task_id === options.taskId
@@ -333,6 +337,8 @@ export function resolvePersistedRemediationReviewExecutionAuthority(
                     priorClassification as unknown as ReviewRemediationDecisionClassification
                 );
             }
+            if (!isPlainRecord(priorLane) || priorLane.invalidated === true
+                || priorLane.mode !== options.reviewExecution.mode) return null;
         }
         return null;
     }
