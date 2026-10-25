@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { endsProtectedTaskContinuation } from '../../core/auth/protected-task-continuation';
 import { isTaskQueueActiveStatus } from '../../core/active-task-state';
 import { readTaskQueueEntries, type TaskQueueEntry } from '../../core/task-queue-read';
 import { parseOperatorConfirmationYes, validateFreshOperatorConfirmation } from '../../core/operator-confirmation';
@@ -22,16 +23,21 @@ export function readImplementationTaskMode(repoRoot: string, taskId: string, art
         : mode;
 }
 
-function readActiveTaskApproval(repoRoot: string, taskId: string, artifactPath = ''): ActiveTaskApproval | null {
+function readActiveTaskApproval(repoRoot: string, taskId: string, artifactPath = '',
+    entries: ReadonlyMap<string, TaskQueueEntry> = readTaskQueueEntries(repoRoot)): ActiveTaskApproval | null {
+    if (!isTaskQueueActiveStatus(entries.get(taskId)?.status ?? null)) return null;
     const mode = readImplementationTaskMode(repoRoot, taskId, artifactPath);
     if (mode.evidence_status !== 'PASS' || !mode.evidence_hash) return null;
     const timelinePath = joinOrchestratorPath(repoRoot, `runtime/task-events/${taskId}.jsonl`);
     const inspection = inspectTaskEventFile(timelinePath, taskId);
     if (inspection.status !== 'PASS' && inspection.status !== 'PASS_WITH_LEGACY_PREFIX') return null;
-    const entries = readTaskTimelineJsonlEntries(timelinePath);
-    let eventIndex = entries.length - 1;
-    while (eventIndex >= 0 && entries[eventIndex].record?.event_type !== 'TASK_MODE_ENTERED') eventIndex--;
-    const event = entries[eventIndex]?.record;
+    const timelineEntries = readTaskTimelineJsonlEntries(timelinePath);
+    let eventIndex = timelineEntries.length - 1;
+    while (eventIndex >= 0 && timelineEntries[eventIndex].record?.event_type !== 'TASK_MODE_ENTERED') eventIndex--;
+    if (timelineEntries.slice(eventIndex + 1).some(entry => entry.record
+        && (endsProtectedTaskContinuation(String(entry.record.event_type), entry.record.details)
+            || entry.record.event_type === 'COMPLETION_GATE_PASSED'))) return null;
+    const event = timelineEntries[eventIndex]?.record;
     const details = event?.details as Record<string, unknown> | undefined;
     const approval = details?.active_task_approval as (ActiveTaskApproval & { task_mode_sha256?: string }) | undefined;
     if (!approval || approval.task_mode_sha256 !== mode.evidence_hash
@@ -95,7 +101,7 @@ export function findUnapprovedActiveImplementationOwners(
     repoRoot: string, taskId: string, entries?: ReadonlyMap<string, TaskQueueEntry>
 ): string[] {
     const owners = findOtherActiveImplementationOwners(repoRoot, taskId, entries);
-    return owners.length === 0 || approvalCoversOwners(repoRoot, taskId, owners, readActiveTaskApproval(repoRoot, taskId))
+    return owners.length === 0 || approvalCoversOwners(repoRoot, taskId, owners, readActiveTaskApproval(repoRoot, taskId, '', entries))
         ? [] : owners;
 }
 
@@ -123,7 +129,7 @@ export function resolveActiveTaskEntryApproval(input: {
     // review fix added files) keeps the operator's grant while every current
     // owner was approved with unchanged task-mode evidence. The new scope is
     // still checked for overlap below; a new or restarted owner needs fresh consent.
-    const previous = readActiveTaskApproval(input.repoRoot, input.taskId, input.artifactPath);
+    const previous = readActiveTaskApproval(input.repoRoot, input.taskId, input.artifactPath, input.entries);
     const reusableApproval = previousApprovalCoversCurrentOwners(input.repoRoot, owners, previous) ? previous : null;
     const requested = Array.isArray(input.allowedActiveTasks)
         ? [...new Set(input.allowedActiveTasks.map(value => String(value).trim()))].sort()
@@ -131,9 +137,14 @@ export function resolveActiveTaskEntryApproval(input: {
     if (JSON.stringify(requested) !== JSON.stringify(owners)) {
         throw new Error(`task-mode entry refused for ${input.taskId}: ` + activeTaskConfirmationMessage(input.taskId, owners));
     }
-    const confirmationSupplied = String(input.operatorConfirmed ?? '').trim() !== ''
+    const confirmationSupplied = input.allowedActiveTasks !== undefined
+        || String(input.operatorConfirmed ?? '').trim() !== ''
         || String(input.operatorConfirmedAtUtc ?? '').trim() !== '';
-    const reuseConsent = !!reusableApproval && !confirmationSupplied;
+    const receiver = reusableApproval ? readImplementationTaskMode(input.repoRoot, input.taskId, input.artifactPath) : null;
+    const baselineFiles = receiver?.dirty_workspace_baseline?.changed_files || [];
+    const newlyClaimedBaseline = receiver && findScopeOverlap(input.repoRoot, baselineFiles, input.plannedChangedFiles)
+        .some(file => findScopeOverlap(input.repoRoot, [file], receiver.planned_changed_files).length === 0);
+    const reuseConsent = !!reusableApproval && !confirmationSupplied && !newlyClaimedBaseline;
     if (!reuseConsent) {
         validateFreshOperatorConfirmation({
             actionLabel: 'Starting work alongside unfinished tasks',

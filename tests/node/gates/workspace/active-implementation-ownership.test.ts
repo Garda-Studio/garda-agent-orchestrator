@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -37,7 +37,7 @@ import {
     writePreflight
 } from '../../cli/commands/gate-test-seed-helpers';
 
-function writeQueue(repoRoot: string, ownerStatus: string, targetStatus = 'TODO'): void {
+function writeQueue(repoRoot: string, ownerStatus: string, targetStatus = 'IN_PROGRESS'): void {
     fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
         '## Active Queue',
         '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
@@ -48,6 +48,60 @@ function writeQueue(repoRoot: string, ownerStatus: string, targetStatus = 'TODO'
         ''
     ].join('\n'), 'utf8');
 }
+
+function seedConfirmedReceiver(t: TestContext, preserveDirty = false) {
+    const repoRoot = createTempRepo(t);
+    seedInitAnswers(repoRoot);
+    fs.appendFileSync(path.join(repoRoot, '.gitignore'), '\nTASK.md\ngarda-agent-orchestrator/runtime/\n');
+    initializeGitRepo(repoRoot);
+    assert.equal(runEnterTaskMode({ repoRoot, taskId: 'T-101', taskSummary: 'Unfinished owner task', plannedChangedFiles: ['src/owner.ts'] }).exitCode, 0);
+    writeQueue(repoRoot, 'IN_PROGRESS');
+    if (preserveDirty) fs.writeFileSync(path.join(repoRoot, 'src/preserved.ts'), 'export const preserved = 1;\n');
+    const reentry = { repoRoot, taskId: 'T-103', taskSummary: 'Confirmed receiver task', plannedChangedFiles: ['src/second.ts'] };
+    const fresh = { allowedActiveTasks: ['T-101'], operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() };
+    assert.equal(runEnterTaskMode({ ...reentry, ...fresh }).exitCode, 0);
+    return { repoRoot, reentry, fresh };
+}
+
+for (const [eventType, details] of [
+    ['TASK_DONE', {}], ['TASK_RESET', {}], ['TASK_DISCARDED', {}], ['COMPLETION_GATE_PASSED', {}],
+    ...['DONE', 'BLOCKED', 'TODO'].map(new_status => ['STATUS_CHANGED', { new_status }])
+] as Array<[string, Record<string, unknown>]>) {
+    test(`receiver consent expires after ${eventType} ${String(details.new_status || '')}`, t => {
+        const { repoRoot, reentry, fresh } = seedConfirmedReceiver(t);
+        appendTaskEvent(path.join(repoRoot, 'garda-agent-orchestrator'), 'T-103', eventType, 'PASS', 'End receiver lifecycle.', details);
+        writeQueue(repoRoot, 'IN_PROGRESS', 'IN_PROGRESS');
+        assert.deepEqual(findUnapprovedActiveImplementationOwners(repoRoot, 'T-103'), ['T-101']);
+        assert.throws(() => runEnterTaskMode(reentry), /Ask the operator/u);
+        assert.equal(runEnterTaskMode({ ...reentry, ...fresh, operatorConfirmedAtUtc: new Date().toISOString() }).exitCode, 0);
+    });
+}
+
+test('inactive receiver queue status cannot reuse consent even without an ending event', t => {
+    const { repoRoot } = seedConfirmedReceiver(t);
+    for (const status of ['TODO', 'BLOCKED', 'DONE']) {
+        writeQueue(repoRoot, 'IN_PROGRESS', status);
+        assert.deepEqual(findUnapprovedActiveImplementationOwners(repoRoot, 'T-103'), ['T-101'], status);
+    }
+});
+
+test('an explicit allow-active-task list requires fresh confirmation on receiver re-entry', t => {
+    const { repoRoot, reentry } = seedConfirmedReceiver(t);
+    const modePath = path.join(repoRoot, 'garda-agent-orchestrator/runtime/reviews/T-103-task-mode.json');
+    const before = fs.readFileSync(modePath, 'utf8');
+    assert.throws(() => runEnterTaskMode({ ...reentry, allowedActiveTasks: ['T-101'] }), /operator|confirm/iu);
+    assert.equal(fs.readFileSync(modePath, 'utf8'), before);
+});
+
+test('widening receiver scope into its preserved dirty baseline requires fresh confirmation', t => {
+    const { repoRoot, reentry, fresh } = seedConfirmedReceiver(t, true);
+    const baseline = getTaskModeEvidence(repoRoot, 'T-103').dirty_workspace_baseline;
+    assert.ok(baseline?.changed_files.includes('src/preserved.ts'));
+    const widened = { ...reentry, plannedChangedFiles: ['src/second.ts', 'src/preserved.ts'] };
+    assert.throws(() => runEnterTaskMode(widened), /operator|confirm/iu);
+    assert.equal(runEnterTaskMode({ ...widened, ...fresh, operatorConfirmedAtUtc: new Date().toISOString() }).exitCode, 0);
+    assert.deepEqual(getTaskModeEvidence(repoRoot, 'T-103').dirty_workspace_baseline, baseline);
+});
 
 test('task-mode entry rejects a second owner and a replaced no-op while queue-only parents remain waiting', (t) => {
     const repoRoot = createTempRepo(t);

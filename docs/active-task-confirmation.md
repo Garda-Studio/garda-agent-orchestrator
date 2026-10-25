@@ -34,3 +34,5 @@ cannot become accepted baseline state through re-entry.
 Existing changes outside the new task's scope remain protected by the captured
 dirty-workspace baseline. The approval does not complete, reset, or discard the
 unfinished tasks, and does not skip their validation or review gates.
+
+Consent reuse is limited to receivers in `IN_PROGRESS` or `IN_REVIEW` with no ending lifecycle event after their last entry. An explicit `--allow-active-task` list always requires fresh confirmation. Widening scope to include a preserved dirty-baseline file that the receiver did not previously own also requires fresh confirmation.
