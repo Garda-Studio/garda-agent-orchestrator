@@ -1,8 +1,8 @@
 import * as fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { selectRulePackFiles } from '../review-context/review-context-token-economy';
 import { fileSha256, normalizePath, resolvePathInsideRepo } from '../shared/helpers';
-import { stringSha256 } from '../../gate-runtime/hash';
 import { resolveGateExecutionPath } from '../isolation/isolation-sandbox';
 import {
     RULE_PACK_STAGE_KEYS,
@@ -209,18 +209,26 @@ export function normalizeLoadedRuleFiles(repoRoot: string, loadedRuleFiles: stri
     return unique.sort();
 }
 
-const GENERATED_PROJECT_MEMORY_RULE_FILE = '15-project-memory.md';
-const GENERATED_AT_LINE_PATTERN = /^Generated at: .*$/mu;
+const GENERATED_PROJECT_MEMORY_RULE_SUFFIX = '/live/docs/agent-rules/15-project-memory.md';
+// Latin-1 preserves byte offsets, including UTF-8 BOM/title bytes and invalid UTF-8 in the body.
+const GENERATED_MEMORY_HEADER_PATTERN = /^(?:\xEF\xBB\xBF)?(?:<!--[^\r\n]*-->\r?\n\r?\n)?# 15 \xC2\xB7 Project Memory Summary\r?\n\r?\n(Generated at: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)(?=\r?\n|$)/u;
 
-/**
- * Rule content hash. The generated project-memory summary carries a regeneration timestamp, so
- * an update that leaves project memory unchanged must not make loaded rules look stale.
+/** Normalize only the generated canonical header timestamp; every other byte remains evidence.
+ * The replacement is itself a valid header timestamp so malformed raw headers cannot collide.
  */
 export function ruleFileContentSha256(ruleFile: string): string | null {
-    if (path.basename(ruleFile).toLowerCase() !== GENERATED_PROJECT_MEMORY_RULE_FILE) return fileSha256(ruleFile);
+    const normalizedPath = normalizePath(path.resolve(ruleFile));
+    const comparablePath = process.platform === 'win32' ? normalizedPath.toLowerCase() : normalizedPath;
+    if (!comparablePath.endsWith(GENERATED_PROJECT_MEMORY_RULE_SUFFIX)) return fileSha256(ruleFile);
     try {
-        const content = fs.readFileSync(ruleFile, 'utf8').replace(GENERATED_AT_LINE_PATTERN, 'Generated at: <normalized>');
-        return stringSha256(content);
+        const bytes = fs.readFileSync(ruleFile);
+        const header = GENERATED_MEMORY_HEADER_PATTERN.exec(bytes.toString('latin1'));
+        const spanStart = header ? header[0].length - header[1].length : 0;
+        const content = header ? Buffer.concat([
+            bytes.subarray(0, spanStart), Buffer.from('Generated at: 1970-01-01T00:00:00.000Z', 'ascii'),
+            bytes.subarray(spanStart + header[1].length)
+        ]) : bytes;
+        return createHash('sha256').update(content).digest('hex');
     } catch {
         return null;
     }
