@@ -1,3 +1,4 @@
+import { hasAuthenticatedIntermediateGroupedReceiptSource } from './review-grouped-receipt-source';
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
@@ -234,6 +235,8 @@ function readTaskFollowUpMaterializationMode(reviewsRoot: string, taskId: string
 function validateFollowUpSatisfaction(options: {
     repoRoot: string;
     receiptPath: string;
+    receipt: Record<string, unknown>;
+    reusedExistingReview: boolean;
     dispositionArtifactPath: string;
     dispositionArtifactSha256: string;
     dispositionArtifact: ReviewFindingsDispositionArtifact;
@@ -300,8 +303,26 @@ function validateFollowUpSatisfaction(options: {
     const expectedReceiptPath = normalizePath(options.expectedReceiptPath || options.receiptPath);
     const expectedReceiptSha256 = normalizeHash(options.expectedReceiptSha256)
         || readReviewArtifactFileSha256(options.receiptPath);
-    assertEqual(violations, 'Review findings follow-up source receipt path', normalizeNonEmptyPath(sourceReceipt?.receipt_path), expectedReceiptPath);
-    assertEqual(violations, 'Review findings follow-up source receipt sha256', normalizeHash(sourceReceipt?.receipt_sha256), expectedReceiptSha256);
+    const materializationPolicy = toPlainRecord(artifact.materialization_policy);
+    const materializationMode = materializationPolicy?.mode;
+    const currentReusedReceiptMatches = materializationMode === 'grouped_by_parent'
+        && options.reusedExistingReview
+        && !!normalizeHash(sourceReceipt?.receipt_sha256)
+        && normalizeNonEmptyPath(sourceReceipt?.receipt_path) === normalizePath(options.receiptPath)
+        && normalizeHash(sourceReceipt?.receipt_sha256) === readReviewArtifactFileSha256(options.receiptPath);
+    const intermediateReceiptMatches = materializationMode === 'grouped_by_parent'
+        && hasAuthenticatedIntermediateGroupedReceiptSource({
+            repoRoot: options.repoRoot, taskId: options.taskId, reviewType: options.reviewType,
+            receipt: options.receipt, receiptPath: options.receiptPath,
+            receiptSha256: options.receipt.reused_existing_review === true
+                ? readReviewArtifactFileSha256(options.receiptPath)
+                : normalizeHash(options.expectedReceiptSha256) || readReviewArtifactFileSha256(options.receiptPath),
+            sourceReceiptPath: String(sourceReceipt?.receipt_path || ''), sourceReceiptSha256: normalizeHash(sourceReceipt?.receipt_sha256)
+        });
+    if (!currentReusedReceiptMatches && !intermediateReceiptMatches) {
+        assertEqual(violations, 'Review findings follow-up source receipt path', normalizeNonEmptyPath(sourceReceipt?.receipt_path), expectedReceiptPath);
+        assertEqual(violations, 'Review findings follow-up source receipt sha256', normalizeHash(sourceReceipt?.receipt_sha256), expectedReceiptSha256);
+    }
     const summary = toPlainRecord(artifact.summary);
     assertEqual(violations, 'Review findings follow-up obligation count', normalizeNonNegativeInteger(summary?.follow_up_obligation_count), followUpCount);
     assertEqual(violations, 'Review findings follow-up blocked task count', normalizeNonNegativeInteger(summary?.blocked_task_count), 0);
@@ -356,8 +377,6 @@ function validateFollowUpSatisfaction(options: {
     }
     const taskRows = resolveReviewFindingsTaskQueueRows(options);
     const taskRowsById = new Map(taskRows.map((row) => [row.taskId, row]));
-    const materializationPolicy = toPlainRecord(artifact.materialization_policy);
-    const materializationMode = materializationPolicy?.mode;
     const groupFingerprint = normalizeHash(materializationPolicy?.group_fingerprint);
     const groupedLaneBindingPrefix = materializationMode === 'grouped_by_parent'
         ? `review_follow_up_lane_binding=${options.reviewType}:${expectedFingerprints.length}:` +
@@ -544,6 +563,8 @@ function validateReviewFindingsDispositionEvidenceUnlocked(
     const followUp = validateFollowUpSatisfaction({
         repoRoot: options.repoRoot,
         receiptPath: options.receiptPath,
+        receipt: options.receipt,
+        reusedExistingReview: options.receipt.reused_existing_review === true,
         dispositionArtifactPath: reference.artifact_path,
         dispositionArtifactSha256: expectedArtifactSha256,
         dispositionArtifact: expectedArtifact,

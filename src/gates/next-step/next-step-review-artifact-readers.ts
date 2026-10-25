@@ -1,3 +1,4 @@
+import { hasAuthenticatedIntermediateGroupedReceiptSource } from '../review/review-grouped-receipt-source';
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -1043,7 +1044,12 @@ export function discoverGroupedFollowUpArtifactPaths(options: {
             || normalizeSha256(materializationPolicy.snapshot_hash) !== options.snapshotHash
             || !sourceReceiptPath || path.resolve(sourceReceiptPath) !== path.resolve(receiptPath)
             || (sourceReceiptSha256 !== receiptEvidence.receiptSha256
-                && sourceReceiptSha256 !== normalizeReviewReceiptEvidenceFields(receiptEvidence.receipt).reusedFromReceiptSha256)) {
+                && sourceReceiptSha256 !== normalizeReviewReceiptEvidenceFields(receiptEvidence.receipt).reusedFromReceiptSha256
+                && !hasAuthenticatedIntermediateGroupedReceiptSource({
+                    repoRoot: options.repoRoot, taskId: options.parentTaskId, reviewType,
+                    receipt: receiptEvidence.receipt, receiptPath: receiptEvidence.canonicalReceiptPath,
+                    receiptSha256: receiptEvidence.receiptSha256, sourceReceiptPath, sourceReceiptSha256
+                }))) {
             diagnostics.push(`Native grouped ${reviewType} follow-up artifact has inconsistent ownership metadata or receipt binding.`);
             continue;
         }
@@ -1225,7 +1231,7 @@ function resolveAuthenticatedReviewFollowUpArtifactScope(options: {
     const sourceValidation = followUpArtifact.source_validation as Record<string, unknown>;
     const dispositionEvidence = validateReviewFindingsDispositionEvidence({
         repoRoot: options.repoRoot, receipt: receiptResolution.evidence.receipt,
-        receiptPath: receiptResolution.evidence.receiptSnapshotPath,
+        receiptPath: receiptResolution.evidence.canonicalReceiptPath,
         reviewArtifactPath: receiptResolution.evidence.reviewArtifactPath,
         expectedTaskId: options.parentTaskId, expectedReviewType: options.reviewType,
         validationArtifact: sources.validationArtifact,

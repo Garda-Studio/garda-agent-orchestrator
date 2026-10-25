@@ -1,3 +1,4 @@
+import { hasAuthenticatedIntermediateGroupedReceiptSource } from './review-grouped-receipt-source';
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import { writeTaskQueueFile } from '../../core/task-queue/task-queue-repository';
 import { createHash, randomUUID } from 'node:crypto';
@@ -1545,7 +1546,12 @@ function groupedRowMatchesAuthenticatedReuse(params: {
         if (!reused.evidence) return false;
         const sourceReceiptSha256 = normalizeHash(sourceReceipt?.receipt_sha256);
         if (sourceReceiptSha256 !== reused.evidence.receiptSha256
-            && sourceReceiptSha256 !== normalizeReviewReceiptEvidenceFields(reused.evidence.receipt).reusedFromReceiptSha256) return false;
+            && sourceReceiptSha256 !== normalizeReviewReceiptEvidenceFields(reused.evidence.receipt).reusedFromReceiptSha256
+            && !hasAuthenticatedIntermediateGroupedReceiptSource({
+                repoRoot: params.repoRoot, taskId: params.parentTaskId, reviewType: binding.reviewType,
+                receipt: reused.evidence.receipt, receiptPath: reused.evidence.canonicalReceiptPath,
+                receiptSha256: reused.evidence.receiptSha256, sourceReceiptPath: receiptPath, sourceReceiptSha256
+            })) return false;
         const sources = resolveAuthenticatedReviewFollowUpSources({
             repoRoot: params.repoRoot, parentTaskId: params.parentTaskId, reviewType: binding.reviewType,
             followUpArtifact: artifact, followUpArtifactPath: artifactPath, receiptEvidence: reused.evidence,
