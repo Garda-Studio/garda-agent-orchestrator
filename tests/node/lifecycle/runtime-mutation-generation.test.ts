@@ -373,7 +373,8 @@ const ROOT_WRITER_COVERAGE = Object.freeze({
 
 const JOURNAL_OWNER_PATTERN = /(?:withLifecycleRuntimeMutationGeneration(?:ForPath)?|beginRuntimeMutationGeneration)/u;
 // T-438 audited be35bac6's diagnostic text and legacy hook-name deltas; writer ownership is unchanged.
-const BOUNDED_MUTATION_SURFACE_SHA256 = 'd3ada52d66c3be00805824e69538f6213a5080c36eebbc7a48f1cf82fa8451e1';
+// Audited 478a4f54's blocking append error-cause propagation; writer ownership and journal semantics are unchanged.
+const BOUNDED_MUTATION_SURFACE_SHA256 = '8e8010781eb2052329261c74e1e8320ec4c485f931c6ee24ea9e5feaaaaf7c64';
 const READ_ONLY_FS_OPERATIONS = new Set([
     'access', 'accessSync', 'close', 'closeSync', 'exists', 'existsSync',
     'fstat', 'fstatSync', 'lstat', 'lstatSync', 'open', 'opendir', 'opendirSync',

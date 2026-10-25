@@ -42,7 +42,7 @@ import {
 
 const TASK_ID = 'T-TEST-FIRST';
 const TEST_PATH = 'tests/node/gates/expected-red.test.ts';
-const READINESS_FIXTURE_PATH = 'tests/node/gates/readiness.fixture';
+const READINESS_FIXTURE_PATH = 'garda-agent-orchestrator/runtime/tmp/readiness.fixture';
 const FORCED_RED_PATH = 'garda-agent-orchestrator/runtime/tmp/forced-red';
 let tempRoots: string[] = [];
 
@@ -157,6 +157,8 @@ function buildRecipeFixture(mode = 'failed', testPath = 'specifications/case', o
         fs.mkdirSync(path.dirname(wrapper), {recursive:true});
         fs.writeFileSync(wrapper, 'require("../../opaque-checker");');
         if (fixtureReadiness) {
+            // Harness readiness is runtime state; it is not another changed test source.
+            fs.mkdirSync(path.dirname(path.join(repoRoot, READINESS_FIXTURE_PATH)), { recursive: true });
             fs.writeFileSync(path.join(repoRoot, READINESS_FIXTURE_PATH), 'blocked');
             fs.writeFileSync(path.join(repoRoot, 'opaque-checker'), [
                 'const fs=require("node:fs"),assert=require("node:assert/strict");',
@@ -452,7 +454,7 @@ describe('next-step test-first expected-red routing', () => {
         fs.appendFileSync(String((event.details as Record<string, unknown>).output_artifact_path), 'modified output');
         assert.equal(resolveRoute(fixture)?.nextGate, 'test-first-expected-failure');
     });
-    it('continues unchanged test-only RED to current GREEN after fixture implementation and rejects tampered proof', async () => {
+    it('continues unchanged test-only RED to current GREEN when the runtime fixture becomes ready and rejects tampered proof', async () => {
         const fixture = buildRecipeFixture('failed', TEST_PATH, { withRecipe: false, fixtureReadiness: true });
         const command = `"${process.execPath}" opaque-checker "${TEST_PATH}"`;
         const red = await runIntermediateCommandCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
@@ -464,7 +466,7 @@ describe('next-step test-first expected-red routing', () => {
         const classify = () => {
             runClassifyChangeCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
                 taskIntent: 'Complete test-only fixture readiness', outputPath: fixture.preflightPath,
-                changedFiles: [TEST_PATH, READINESS_FIXTURE_PATH], emitMetrics: false });
+                changedFiles: [TEST_PATH], emitMetrics: false });
             fixture.preflight = JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8'));
             assert.equal(fixture.preflight.scope_category, 'test-only');
         };
@@ -519,12 +521,33 @@ describe('next-step test-first expected-red routing', () => {
         assert.equal(changedTestGreen.exitCode, 0, changedTestGreen.outputLines.join('\n'));
         assert.equal(resolveRoute(fixture)?.nextGate, 'test-first-expected-failure', 'Changed tested source needs new RED.');
     });
+    it('requires RED for an unselected custom source added after historical RED before current GREEN', async () => {
+        const fixture = buildRecipeFixture('failed', TEST_PATH, { withRecipe: false, fixtureReadiness: true });
+        const command = `"${process.execPath}" opaque-checker "${TEST_PATH}"`;
+        const red = await runIntermediateCommandCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
+            commandSource: 'targeted-test', command, preflightPath: fixture.preflightPath, expectFailure: true });
+        assert.equal(red.exitCode, 0, red.outputLines.join('\n'));
+        assert.equal(resolveRoute(fixture)?.nextGate, 'implementation');
+        fs.writeFileSync(path.join(fixture.repoRoot, READINESS_FIXTURE_PATH), 'ready');
+        const extraTestPath = 'tests/node/gates/extra.custom';
+        fs.writeFileSync(path.join(fixture.repoRoot, extraTestPath), 'another changed test source');
+        runClassifyChangeCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
+            taskIntent: 'Classify an additional test source after retained RED', outputPath: fixture.preflightPath,
+            changedFiles: [TEST_PATH, extraTestPath], emitMetrics: false });
+        fixture.preflight = JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8'));
+        assert.equal(fixture.preflight.scope_category, 'test-only');
+        const green = await runIntermediateCommandCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
+            commandSource: 'targeted-test', command, preflightPath: fixture.preflightPath });
+        assert.equal(green.exitCode, 0, green.outputLines.join('\n'));
+        assert.equal(resolveRoute(fixture)?.nextGate, 'test-first-expected-failure',
+            'Historical RED for one test cannot exempt another current non-document source.');
+    });
     it('requires authentic RED before accepting a current test-only GREEN fixture run', async () => {
         const fixture = buildRecipeFixture('failed', TEST_PATH, { withRecipe: false, fixtureReadiness: true });
         fs.writeFileSync(path.join(fixture.repoRoot, READINESS_FIXTURE_PATH), 'ready');
         runClassifyChangeCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
             taskIntent: 'Complete test-only fixture readiness', outputPath: fixture.preflightPath,
-            changedFiles: [TEST_PATH, READINESS_FIXTURE_PATH], emitMetrics: false });
+            changedFiles: [TEST_PATH], emitMetrics: false });
         fixture.preflight = JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8'));
         const green = await runIntermediateCommandCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
             commandSource: 'targeted-test', command: `"${process.execPath}" opaque-checker "${TEST_PATH}"`,
@@ -541,7 +564,7 @@ describe('next-step test-first expected-red routing', () => {
         fs.writeFileSync(path.join(fixture.repoRoot, READINESS_FIXTURE_PATH), 'ready');
         runClassifyChangeCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
             taskIntent: 'Complete nested test-only fixture readiness', outputPath: fixture.preflightPath,
-            changedFiles: [TEST_PATH, READINESS_FIXTURE_PATH], emitMetrics: false });
+            changedFiles: [TEST_PATH], emitMetrics: false });
         fixture.preflight = JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8'));
         const externalState = path.join(fixture.repoRoot, FORCED_RED_PATH);
         fs.mkdirSync(path.dirname(externalState), { recursive: true });

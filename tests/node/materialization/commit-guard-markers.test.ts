@@ -14,7 +14,18 @@ function neutralEnv(extra: Record<string, string>): NodeJS.ProcessEnv {
     for (const [key, value] of Object.entries(process.env)) {
         if (!AGENT_ENV_PREFIXES.some(prefix => key.toUpperCase().startsWith(prefix))) env[key] = value;
     }
-    return { ...env, ...extra };
+    return gitHookEnv({ ...env, ...extra });
+}
+
+function gitHookEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    if (process.platform !== 'win32') return env;
+    const gitExecPath = childProcess.spawnSync('git', ['--exec-path'], { env, encoding: 'utf8' });
+    assert.equal(gitExecPath.status, 0, `Cannot resolve Git for Windows: ${gitExecPath.stderr}`);
+    const bashDir = path.resolve(gitExecPath.stdout.trim(), '../../../usr/bin');
+    assert.ok(fs.existsSync(path.join(bashDir, 'bash.exe')), `Git for Windows Bash is missing from ${bashDir}`);
+    // The hook's /usr/bin/env bash must use Git's interpreter even when System32 precedes it in PATH.
+    const pathKey = Object.keys(env).find(key => key.toUpperCase() === 'PATH') ?? 'PATH';
+    return { ...env, [pathKey]: `${bashDir}${path.delimiter}${env[pathKey] || ''}` };
 }
 
 // The installer resolves the hook through `git rev-parse --git-path`, which honours any hooksPath the
