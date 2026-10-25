@@ -850,7 +850,7 @@ describe('gates/next-step split-required latch status', () => {
     it('keeps strict-decomposition WIP capture and status transition inspection side-effect free', () => {
         const repoRoot = makeTempRepo();
         const taskPath = path.join(repoRoot, 'TASK.md');
-        fs.writeFileSync(taskPath, [
+        const linkedTaskQueue = [
             '# TASK.md',
             '',
             '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
@@ -859,7 +859,12 @@ describe('gates/next-step split-required latch status', () => {
             `| ${TASK_ID}-1 | TODO | P1 | workflow/parser | Implement parser boundary | gpt-5.4 | 2026-05-03 | strict | Parse the bounded child contract. Child of ${TASK_ID}. |`,
             `| ${TASK_ID}-2 | TODO | P1 | workflow/validation | Validate routing boundary | gpt-5.4 | 2026-05-03 | strict | Validate the independent routing contract. Child of ${TASK_ID}. |`,
             ''
-        ].join('\n'), 'utf8');
+        ].join('\n');
+        fs.writeFileSync(taskPath, linkedTaskQueue.split('\n')
+            .filter(line => !line.startsWith(`| ${TASK_ID}-1 |`) && !line.startsWith(`| ${TASK_ID}-2 |`))
+            .map(line => line.startsWith(`| ${TASK_ID} |`)
+                ? line.replace(/Child tasks:[^|]*/u, 'Awaiting child work packages. ') : line)
+            .join('\n'), 'utf8');
         fs.writeFileSync(
             path.join(repoRoot, '.gitignore'),
             'garda-agent-orchestrator/runtime/\n',
@@ -920,14 +925,53 @@ describe('gates/next-step split-required latch status', () => {
             .match(/--effect-plan-sha256\s+["']?([a-f0-9]{64})/u)?.[1] || '';
 
         assert.equal(inspection.next_gate, 'next-step-effect', inspection.reason);
-        assert.match(inspection.reason, /contains 2 ordered effect\(s\)/u);
+        assert.match(inspection.reason, /contains 1 ordered effect\(s\)/u);
+        assert.ok(inspection.reason.includes('Capture and suspend'));
+        assert.equal(inspection.reason.includes('Transition'), false);
         assert.equal(fs.readFileSync(taskPath, 'utf8'), taskBeforeInspection);
         assert.equal(fs.readFileSync(eventPath, 'utf8'), eventsBeforeInspection);
         assert.equal(fs.readFileSync(path.join(repoRoot, 'src', 'app.ts'), 'utf8'), sourceBeforeInspection);
         assert.equal(fs.existsSync(wipRoot), false);
 
-        const result = executeNextStepEffects({ taskId: TASK_ID, repoRoot }, planSha256);
+        const captured = executeNextStepEffects({ taskId: TASK_ID, repoRoot }, planSha256);
 
+        assert.equal(captured.status, 'BLOCKED', captured.reason);
+        assert.equal(captured.next_gate, 'strict-decomposition-split-routing');
+        assert.match(captured.reason, /missing linked proposed child tasks/u);
+        assert.equal(fs.readFileSync(taskPath, 'utf8'), taskBeforeInspection);
+        assert.equal(fs.existsSync(wipRoot), true);
+        assert.equal(execFileSync('git', ['status', '--short', '--', 'src/app.ts'], {
+            cwd: repoRoot, encoding: 'utf8'
+        }).trim(), '');
+        const captureEvents = fs.readFileSync(eventPath, 'utf8');
+        assert.ok(captureEvents.includes('"event_type":"SPLIT_REQUIRED_WIP_CAPTURED"'));
+        assert.equal(captureEvents.includes('"event_type":"STRICT_DECOMPOSITION_SPLIT_ROUTED"'), false);
+
+        // Publish child ownership only after the real capture effect has suspended parent work.
+        fs.writeFileSync(taskPath, linkedTaskQueue, 'utf8');
+        const taskBeforeTransitionInspection = fs.readFileSync(taskPath, 'utf8');
+        const sourceBeforeTransitionInspection = fs.readFileSync(path.join(repoRoot, 'src', 'app.ts'));
+        const snapshotWipFiles = () => fs.readdirSync(wipRoot, { recursive: true, encoding: 'utf8' }).sort()
+            .filter(relativePath => fs.statSync(path.join(wipRoot, relativePath)).isFile())
+            .map(relativePath => ({ relativePath, bytes: fs.readFileSync(path.join(wipRoot, relativePath)) }));
+        const wipBeforeTransitionInspection = snapshotWipFiles();
+        const transitionInspection = inspectNextStep({ taskId: TASK_ID, repoRoot });
+        const transitionPlanSha256 = (transitionInspection.commands[0]?.command || '')
+            .match(/--effect-plan-sha256\s+["']?([a-f0-9]{64})/u)?.[1] || '';
+
+        assert.equal(transitionInspection.next_gate, 'next-step-effect', transitionInspection.reason);
+        assert.match(transitionInspection.reason, /contains 1 ordered effect\(s\)/u);
+        assert.ok(transitionInspection.reason.includes('Transition'));
+        assert.equal(transitionInspection.reason.includes('Capture and suspend'), false);
+        assert.equal(fs.readFileSync(taskPath, 'utf8'), taskBeforeTransitionInspection);
+        assert.equal(fs.readFileSync(eventPath, 'utf8'), captureEvents);
+        assert.deepEqual(fs.readFileSync(path.join(repoRoot, 'src', 'app.ts')), sourceBeforeTransitionInspection);
+        assert.deepEqual(snapshotWipFiles(), wipBeforeTransitionInspection);
+
+        const result = executeNextStepEffects({ taskId: TASK_ID, repoRoot }, transitionPlanSha256);
+
+        assert.deepEqual(snapshotWipFiles(), wipBeforeTransitionInspection);
+        assert.deepEqual(fs.readFileSync(path.join(repoRoot, 'src', 'app.ts')), sourceBeforeTransitionInspection);
         assert.equal(result.status, 'DECOMPOSED', result.reason);
         assert.equal(result.next_gate, 'child-task');
         assert.ok(fs.readFileSync(taskPath, 'utf8').includes(`| ${TASK_ID} | 🟪 DECOMPOSED |`));

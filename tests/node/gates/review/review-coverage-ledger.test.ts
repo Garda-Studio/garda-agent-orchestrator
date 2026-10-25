@@ -215,6 +215,60 @@ test('validateReviewCoverageLedger rejects quoted approval even when it contains
     }
 });
 
+test('validateReviewCoverageLedger handles code operands and reference locations without prose exemptions', async (t) => {
+    const contract = buildReviewCoverageContract({ reviewType: 'code', changedFiles: ['src/example.ts'], categoryIds: ['correctness-edge-cases'] });
+    const cases = [
+        ['FAIL', 'LGTM for parser.ts:88, ship it.'],
+        ['FAIL', 'LGTM for parser.ts:88:12, ship it.'],
+        ['FAIL', 'LGTM for parser.ts:88-90, ship it.'],
+        ['FAIL', 'LGTM for parser.ts#L88-L90, ship it.'],
+        ['FAIL', 'LGTM for parser.ts(88,12), ship it.'],
+        ['PASS', 'parseMode reads `everything[0]` before validation.'],
+        ['PASS', 'parseMode reads `everything["active"]` before validation.'],
+        ['PASS', 'parseMode reads `everything[key]` before validation.'],
+        ['PASS', 'parseMode checks `everything === "all"` before validation.'],
+        ['PASS', 'parseMode checks `everything === \'all\'` before validation.'],
+        ['PASS', 'parseMode checks `everything[0] === "all"` before validation.'],
+        ['PASS', 'parseMode invokes `read("everything")` before validation.'],
+        ['PASS', 'parseMode invokes `everything ()` before validation.'],
+        ['PASS', 'parseMode appends `everything + "suffix"` before validation.'],
+        ['PASS', 'Test `returns everything when flags.active === true` in filter.test.ts covers the enabled branch.'],
+        ['PASS', 'Test `no issues when payload.count > 0` in filter.test.ts covers positive counts.'],
+        ['PASS', 'parseMode returns the literal "everything" for an absent selector.'],
+        ['PASS', 'The literal "everything" is returned by parseMode for absent filters.'],
+        ['PASS', 'LGTM: checked `payload.mode(88,12)` for correctness.'],
+        ['PASS', 'The counter check in parser.ts:88 rejects values above 32 before indexing the result.'],
+        ['FAIL', 'Reviewed parser.ts: "everything looks good at items[0]".'],
+        ['FAIL', 'Reviewed parser.ts: "everything[no issues] looks good".'],
+        ['FAIL', 'Reviewed parser.ts: "looks good (approved)".'],
+        ['FAIL', 'Reviewed parser.ts: "looks good (noIssues)".'],
+        ['FAIL', 'Reviewed parser.ts: "looks good()".'],
+        ['FAIL', 'Reviewed parser.ts: "no issues[0]".'],
+        ['FAIL', 'Reviewed parser.ts: "no issues()".'],
+        ['FAIL', 'Reviewed parser.ts: "looks good.ts".'],
+        ['FAIL', 'Reviewed parser.ts: "no issues.ts".'],
+        ['FAIL', 'Reviewed parser.ts: "looks good/no issues".'],
+        ['PASS', 'parseMode invokes `read("no issues")` before validation.'],
+        ['FAIL', 'Test `no issues when parser.ts looks good.ts` passes for the parser module.'],
+        ['FAIL', 'Test `no issues when parser.ts looks good()` passes for the parser module.'],
+        ['FAIL', 'Reviewed parser.ts: literal "everything looks good".'],
+        ['FAIL', 'Test `no issues when parser.ts` passes for the parser module.'],
+        ['FAIL', 'Test `no issues when parser.ts:88` passes for the parser module.'],
+        ['FAIL', 'Test `no issues when parser.ts#L88-L90` passes for the parser module.'],
+        ['FAIL', 'Test `no issues when parser.ts(88,12)` passes for the parser module.'],
+        ['FAIL', 'Test `no issues when parser.ts looks good` passes for the parser module.']
+    ];
+    for (const [expected, observation] of cases) {
+        await t.test(observation, () => {
+            const lines = contract.obligations.map((obligation, index) => ledgerLine(obligation.id, `src/example.ts:${index + 1}`, observation));
+            const result = validateReviewCoverageLedger(buildReviewOutput(lines), contract);
+            assert.equal(result.status, expected, observation);
+            if (expected === 'PASS') assert.deepEqual(result.violations, [], observation);
+            else assert.ok(result.violations.some(entry => entry.includes('generic evidence')), observation);
+        });
+    }
+});
+
 test('validateReviewCoverageLedger accepts reviewed as an adjective in concrete evidence', () => {
     const contract = buildReviewCoverageContract({
         reviewType: 'code',

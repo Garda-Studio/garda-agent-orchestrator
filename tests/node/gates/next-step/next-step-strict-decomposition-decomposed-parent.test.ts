@@ -21,7 +21,7 @@ function recordingEffects(kinds: string[]): NextStepEffectController {
     };
 }
 
-function routeFor(parentStatus: string) {
+function routeFor(parentStatus: string, linkedChildren = true) {
     const repoRoot = makeTempRepo();
     seedStartedTask(repoRoot, TASK_ID);
     const childIds = [`${TASK_ID}-1`, `${TASK_ID}-2`];
@@ -47,10 +47,11 @@ function routeFor(parentStatus: string) {
         taskId, status, area: 'workflow', title: taskId, profile: 'strict', notes
     });
     const taskEntries = new Map<string, TaskQueueEntry>([
-        [TASK_ID, entry(TASK_ID, parentStatus, `Child tasks: ${childIds.join(', ')}`)],
+        [TASK_ID, entry(TASK_ID, parentStatus, linkedChildren ? `Child tasks: ${childIds.join(', ')}` : 'Awaiting child task publication')],
         [childIds[0], entry(childIds[0], 'IN_PROGRESS', `Parent: ${TASK_ID}`)],
         [childIds[1], entry(childIds[1], 'TODO', `Parent: ${TASK_ID}`)]
     ]);
+    if (!linkedChildren) for (const childId of childIds) taskEntries.delete(childId);
     const kinds: string[] = [];
     const route = resolveStrictDecompositionContinuationRoute({
         repoRoot, eventsRoot: eventsRoot(repoRoot), taskEntries, taskId: TASK_ID, cliPrefix: 'node bin/garda.js',
@@ -91,8 +92,8 @@ describe('gates/next-step strict decomposition after the split', () => {
         assert.equal(fs.readFileSync(childFile, 'utf8'), childBytes);
     });
 
-    it('still offers the guarded parent WIP capture before the split', () => {
-        const { kinds } = routeFor('IN_PROGRESS');
+    it('still offers the guarded parent WIP capture before child links are published', () => {
+        const { kinds } = routeFor('IN_PROGRESS', false);
         assert.ok(kinds.includes('suspend-strict-decomposition-wip'), JSON.stringify(kinds));
     });
 });

@@ -731,35 +731,78 @@ function isGenericReviewStatusDeclaration(normalized: string): boolean {
 const GENERIC_OBSERVATION_PHRASE_PATTERN = /\b(?:no issues|looks good|everything)\b/u;
 const QUOTED_OBSERVATION_SEGMENT_PATTERN = /`[^`]*`|"[^"]*"|(?<![\p{L}\p{N}_])'[^']*'(?![\p{L}\p{N}_])/gu;
 
-function isQuotedCodeExpression(value: string): boolean {
-    const operand = String.raw`(?:[a-zA-Z_$][\w.$]*|\d+(?:\.\d+)?)`;
+function getReviewCodePatterns(): { operand: string; compoundOperand: string; operator: string } {
+    const identifier = String.raw`[a-zA-Z_$][\w$]*`;
+    const literal = String.raw`(?:\d+(?:\.\d+)?|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`;
+    const scalar = `(?:${identifier}|${literal})`;
     const operator = String.raw`(?:={1,3}|!={1,2}|[<>]=?|&&|\|\||\?\?|[-+*/%]=?)`;
+    const property = `\\s*\\.\\s*${identifier}`;
+    const simpleOperand = `${scalar}(?:${property}|\\s*\\[\\s*${scalar}\\s*\\])*`;
+    const simpleExpression = `${simpleOperand}(?:\\s*${operator}\\s*${simpleOperand})*`;
+    const accessOrCall = `(?:\\s*\\[\\s*${simpleExpression}\\s*\\]`
+        + `|\\s*\\(\\s*(?:${simpleExpression}(?:\\s*,\\s*${simpleExpression})*)?\\s*\\))`;
+    const suffix = `(?:${property}|${accessOrCall})`;
+    return {
+        operand: `${scalar}(?:${suffix})*`,
+        compoundOperand: `${identifier}(?:${property})*${accessOrCall}(?:${suffix})*`,
+        operator
+    };
+}
+
+function isQuotedCodeExpression(value: string): boolean {
+    const { operand, compoundOperand, operator } = getReviewCodePatterns();
     const expression = value.trim().replace(/^\((.*)\)$/u, '$1');
-    return new RegExp(`^\\s*${operand}\\s*${operator}\\s*${operand}\\s*;?\\s*$`, 'u').test(expression);
+    return new RegExp(`^\\s*(?:${operand}\\s*${operator}\\s*${operand}|${compoundOperand})\\s*;?\\s*$`, 'u')
+        .test(expression);
+}
+
+function wouldSplitGenericApproval(value: string, offset: number, length: number): boolean {
+    const end = offset + length;
+    return [...value.matchAll(/\b(?:looks good|no issues)\b/giu)].some(match => {
+        const phraseEnd = match.index + match[0].length;
+        return offset < phraseEnd && end > match.index
+            && !(offset <= match.index && end >= phraseEnd);
+    });
 }
 
 function removeQuotedCodeTokens(value: string): string {
     if (isQuotedCodeExpression(value)) return ' ';
-    return value.replace(/[a-zA-Z_$][\w$]*(?:(?:[./\\]|::)[\w$-]+)*/gu, (token, offset: number) => {
+    const { compoundOperand } = getReviewCodePatterns();
+    const prose = value.replace(new RegExp(`\\b${compoundOperand}`, 'gu'), (token, offset: number) => (
+        wouldSplitGenericApproval(value, offset, token.length) ? token : ' '
+    ));
+    return prose.replace(/[a-zA-Z_$][\w$]*(?:(?:[./\\]|::)[\w$-]+)*/gu, (token, offset: number) => {
         const uppercaseIdentifier = /^[A-Z][A-Z0-9_]*$/u.test(token)
-            && (value.trim() === token || !GENERIC_REVIEW_STATUS_WORDS.has(token.toLowerCase())
-                || /["']/u.test(value[offset - 1] || ''));
+            && (prose.trim() === token || !GENERIC_REVIEW_STATUS_WORDS.has(token.toLowerCase())
+                || /["']/u.test(prose[offset - 1] || ''));
         const codeToken = /[./\\_]|[a-z][A-Z]/u.test(token) || uppercaseIdentifier
-            || value[offset + token.length] === '('
-            || (value[offset - 1] === '(' && value[offset + token.length] === ')');
-        return codeToken ? ' ' : token;
+            || prose[offset + token.length] === '('
+            || (prose[offset - 1] === '(' && prose[offset + token.length] === ')');
+        return codeToken && !wouldSplitGenericApproval(prose, offset, token.length) ? ' ' : token;
     });
 }
 
 function isConcreteQuotedTestName(value: string): boolean {
     const condition = value.match(/^(?:returns?|rejects?|throws?|accepts?|handles?|preserves?|allows?|no issues)\b.+?\b(?:when|unless|if)\s+(.+)$/iu);
     if (!condition) return false;
-    const prose = removeQuotedCodeTokens(condition[1]).toLowerCase();
-    return extractReviewStatusWords(prose).length > 0 && !usesOnlyGenericReviewStatusVocabulary(prose);
+    const conditionValue = removeReviewReferenceLocations(condition[1]);
+    if (isQuotedCodeExpression(conditionValue)) return true;
+    const prose = removeQuotedCodeTokens(conditionValue).toLowerCase();
+    return !/\b(?:looks good|no issues)\b/u.test(prose) && extractReviewStatusWords(prose).length > 0
+        && !usesOnlyGenericReviewStatusVocabulary(prose);
+}
+
+function removeReviewReferenceLocations(value: string): string {
+    return value.replace(/\b([a-zA-Z_$][\w$]*(?:[./\\][\w$-]+)+)(?::\d+(?::\d+)?(?:-\d+(?::\d+)?)?|#L\d+(?:-L?\d+)?|\(\s*(\d+)\s*,\s*\d+\s*\))/giu,
+        (location, reference: string, tupleLine: string | undefined) => (
+            tupleLine !== undefined && !/\.[cm]?[jt]sx?$/iu.test(reference) ? location : reference
+        ));
 }
 
 function removeReviewStatusReferences(value: string): string {
-    const text = value.replace(QUOTED_OBSERVATION_SEGMENT_PATTERN, segment => segment.slice(1, -1));
+    const text = removeReviewReferenceLocations(value.replace(
+        QUOTED_OBSERVATION_SEGMENT_PATTERN, segment => segment.slice(1, -1)
+    ));
     const operand = String.raw`(?:[a-zA-Z_$][\w.$]*|\d+(?:\.\d+)?|"[^"]*"|'[^']*')`;
     const operator = String.raw`(?:={1,3}|!={1,2}|[<>]=?|&&|\|\||\?\?|[-+*/%]=?)`;
     const expressions = [...text.matchAll(new RegExp(`\\b${operand}\\s*${operator}\\s*${operand}`, 'gu'))]
@@ -795,7 +838,10 @@ function describeGenericObservation(observation: string): string | null {
         const quoteContext = original.slice(0, offset).toLowerCase();
         const valueContext = quoteContext.match(/\b(literal|prints|emits|outputs)\s*:?\s*$/u)?.[1];
         const afterQuote = original.slice(offset + segment.length).toLowerCase();
+        const returnedOrAssignedLiteral = /\b(?:returns?|assigns?|stores?|sets?)\s+(?:the\s+)?literal\s*:?\s*$/u.test(quoteContext)
+            || /^\s+(?:is\s+)?(?:returned|assigned|stored|set)\b/u.test(afterQuote);
         const quotedValue = valueContext !== undefined && (valueContext !== 'literal'
+            || returnedOrAssignedLiteral
             || /^\s+(?:is\s+)?(?:asserted|compared|matched|checked)\b/u.test(afterQuote));
         const namedTest = /\b(?:test|case|spec)(?:\s+(?:named|called))?\s*:?\s*$/u.test(quoteContext)
             || /^\s+(?:test|case|spec)\b/u.test(original.slice(offset + segment.length).toLowerCase());
