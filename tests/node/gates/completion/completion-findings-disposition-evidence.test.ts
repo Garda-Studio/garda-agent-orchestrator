@@ -10,6 +10,8 @@ import { runBuildReviewContextCommand } from '../../../../src/cli/commands/gate-
 import { appendTaskEvent } from '../../../../src/gate-runtime/task-events';
 import { runCompletionGate } from '../../../../src/gates/completion';
 import { materializeReviewFindingsFollowUpTasks } from '../../../../src/gates/review/review-findings-follow-up-tasks';
+import { validateReviewFindingsDispositionEvidence } from '../../../../src/gates/review/review-findings-disposition-evidence';
+import { resolveLockedReviewFindingPolicyFromPreflight } from '../../../../src/gates/review/review-finding-disposition';
 import {
     createTempRepo,
     getOrchestratorRoot,
@@ -343,6 +345,46 @@ describe('gates/completion — findings disposition evidence', () => {
             );
             const passed = runCompletionGate({ repoRoot: fixture.repoRoot, preflightPath: fixture.preflightPath, taskId });
             assert.equal(passed.status, 'PASSED', JSON.stringify(passed.violations, null, 2));
+        } finally {
+            fs.rmSync(fixture.repoRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('lets reuse defer grouped follow-up materialization but keeps closeout and per-finding mode strict', () => {
+        const taskId = 'T-979-30-grouped-follow-up-reuse';
+        const fixture = seedCompletionFixture({ taskId, findingSeverity: 'low' });
+        try {
+            const receiptPath = path.join(fixture.reviewsRoot, `${taskId}-code-receipt.json`);
+            const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8')) as Record<string, unknown>;
+            const validationPath = path.join(fixture.reviewsRoot, `${taskId}-code-findings-validation.json`);
+            const validationText = fs.readFileSync(validationPath, 'utf8');
+            const check = (allowPendingGroupedFollowUp: boolean) => validateReviewFindingsDispositionEvidence({
+                repoRoot: fixture.repoRoot,
+                receipt,
+                receiptPath,
+                reviewArtifactPath: path.join(fixture.reviewsRoot, `${taskId}-code.md`),
+                expectedTaskId: taskId,
+                expectedReviewType: 'code',
+                validationArtifact: JSON.parse(validationText),
+                validationArtifactPath: validationPath.replace(/\\/gu, '/'),
+                validationArtifactSha256: sha256Text(validationText),
+                policyResolution: resolveLockedReviewFindingPolicyFromPreflight(JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8'))),
+                allowPendingGroupedFollowUp
+            });
+            const missingFollowUp = (violations: string[]) => violations.some((violation) => (
+                violation.includes('Review findings follow-up artifact') && violation.includes('is missing')));
+
+            assert.ok(missingFollowUp(check(true).violations), 'per-finding mode keeps the materialization requirement');
+
+            const preflight = JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8')) as Record<string, unknown>;
+            preflight.profile_policy_snapshot = {
+                ...(preflight.profile_policy_snapshot as Record<string, unknown> || {}),
+                review_follow_up_policy: { schema_version: 1, materialization_mode: 'grouped_by_parent' }
+            };
+            writeJson(fixture.preflightPath, preflight);
+            const deferred = check(true);
+            assert.equal(missingFollowUp(deferred.violations), false, deferred.violations.join('\n'));
+            assert.ok(missingFollowUp(check(false).violations), 'closeout callers still require the grouped artifact');
         } finally {
             fs.rmSync(fixture.repoRoot, { recursive: true, force: true });
         }

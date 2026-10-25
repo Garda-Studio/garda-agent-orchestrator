@@ -175,6 +175,21 @@ test('reconstructs remediation review execution authority only from an integrity
         receiptPath
     };
     assert.equal(resolvePersistedRemediationReviewExecutionAuthority(preservedOptions), null);
+    // The current PASS reuse step records the replacement itself, so it may rely on the earlier
+    // restart that produced the preserved evidence.
+    const reuseStepAuthority = resolvePersistedRemediationReviewExecutionAuthority({
+        ...preservedOptions,
+        acceptPreservedPendingReuse: true
+    });
+    assert.equal(reuseStepAuthority?.authoritativeDecisionSha256, boundDecision.decision_sha256);
+    assert.equal(resolvePersistedRemediationReviewExecutionAuthority({
+        ...preservedOptions,
+        acceptPreservedPendingReuse: true,
+        reviewExecution: {
+            ...reviewExecution,
+            classification_sha256: createHash('sha256').update('wrong-classification').digest('hex')
+        }
+    }), null);
     appendTaskEvent(bundleRoot, taskId, 'REVIEW_CONTEXT_REUSE_ACCEPTED', 'PASS', 'Incomplete PASS accepted.', {
         review_type: 'code',
         current_pass_review_evidence: true,
@@ -298,6 +313,10 @@ test('reconstructs remediation review execution authority only from an integrity
         authoritative_review_classification: invalidatedClassification
     });
     assert.equal(resolvePersistedRemediationReviewExecutionAuthority(preservedOptions), null);
+    assert.equal(resolvePersistedRemediationReviewExecutionAuthority({
+        ...preservedOptions,
+        acceptPreservedPendingReuse: true
+    }), null, 'an invalidated lane never inherits earlier authority');
 
     const timelinePath = path.join(bundleRoot, 'runtime', 'task-events', `${taskId}.jsonl`);
     fs.appendFileSync(timelinePath, '{"forged":true}\n', 'utf8');

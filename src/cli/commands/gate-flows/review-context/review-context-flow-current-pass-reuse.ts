@@ -376,7 +376,8 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
             fullReviewScope: preflightDiffExpectations.expectedChangedFiles,
             reviewExecution: reviewExecution as unknown as ReviewRemediationReviewContract,
             reviewContextPath: options.reviewContextPath,
-            receiptPath
+            receiptPath,
+            acceptPreservedPendingReuse: true
         })
         : null;
     const reviewContextContractViolations = getReviewContextContractViolations({
@@ -517,7 +518,8 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
             expectedReceiptSha256: receipt.reused_existing_review === true
                 ? normalizeOptionalSha256(receipt.reused_from_receipt_sha256)
                 : null,
-            preferSnapshot: receipt.reused_existing_review === true
+            preferSnapshot: receipt.reused_existing_review === true,
+            allowPendingGroupedFollowUp: true
         });
         if (!dispositionEvidence.valid) {
             return reject(

@@ -66,6 +66,12 @@ export interface ReviewFindingsDispositionEvidenceCheckOptions {
     expectedReceiptPath?: string | null;
     expectedReceiptSha256?: string | null;
     preferSnapshot?: boolean;
+    /**
+     * Reuse inside an unfinished task. Grouped follow-ups are materialized only after every
+     * required lane passes, so a not-yet-created grouped artifact is not a violation here.
+     * An existing artifact is still verified; closeout, completion and audit never set this.
+     */
+    allowPendingGroupedFollowUp?: boolean;
     taskQueueRows?: readonly {
         taskId: string;
         notes?: string | null;
@@ -214,6 +220,17 @@ function isParentFollowUpTaskId(parentTaskId: string, taskId: string): boolean {
     return taskId.startsWith(prefix) && /^[1-9][0-9]*$/u.test(taskId.slice(prefix.length));
 }
 
+function readTaskFollowUpMaterializationMode(reviewsRoot: string, taskId: string): string | null {
+    try {
+        const preflight = JSON.parse(fs.readFileSync(path.join(reviewsRoot, `${taskId}-preflight.json`), 'utf8')) as unknown;
+        const snapshot = toPlainRecord(toPlainRecord(preflight)?.profile_policy_snapshot);
+        const policy = toPlainRecord(snapshot?.review_follow_up_policy);
+        return policy?.schema_version === 1 && typeof policy.materialization_mode === 'string' ? policy.materialization_mode : null;
+    } catch {
+        return null;
+    }
+}
+
 function validateFollowUpSatisfaction(options: {
     repoRoot: string;
     receiptPath: string;
@@ -231,6 +248,7 @@ function validateFollowUpSatisfaction(options: {
         taskId: string;
         notes?: string | null;
     }[];
+    allowPendingGroupedFollowUp?: boolean;
 }): { artifactPath: string | null; violations: string[] } {
     const followUpCount = options.dispositionArtifact.summary.follow_up_pending_count;
     if (followUpCount === 0) {
@@ -244,6 +262,10 @@ function validateFollowUpSatisfaction(options: {
             `${normalizePath(artifactPath)}.`
         );
         return { artifactPath, violations };
+    }
+    if (options.allowPendingGroupedFollowUp && !fs.existsSync(artifactPath)
+        && readTaskFollowUpMaterializationMode(path.dirname(artifactPath), options.taskId) === 'grouped_by_parent') {
+        return { artifactPath: null, violations: [] };
     }
     const artifact = readJsonRecord(artifactPath, 'Review findings follow-up artifact', violations);
     if (!artifact) {
@@ -532,7 +554,8 @@ function validateReviewFindingsDispositionEvidenceUnlocked(
         reviewType: options.expectedReviewType,
         expectedReceiptPath: options.expectedReceiptPath,
         expectedReceiptSha256: options.expectedReceiptSha256,
-        taskQueueRows: options.taskQueueRows
+        taskQueueRows: options.taskQueueRows,
+        allowPendingGroupedFollowUp: options.allowPendingGroupedFollowUp
     });
     violations.push(...followUp.violations);
     return {

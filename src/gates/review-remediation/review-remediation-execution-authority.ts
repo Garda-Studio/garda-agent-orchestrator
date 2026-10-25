@@ -23,6 +23,12 @@ interface PersistedRemediationReviewExecutionAuthorityOptions {
     reviewExecution: ReviewRemediationReviewContract;
     reviewContextPath?: string;
     receiptPath?: string;
+    /**
+     * Set only by the current PASS reuse step, which is what records the replacement telemetry:
+     * a lane the newest restart preserved may then rely on the earlier restart that produced its
+     * evidence. Every other consumer still requires the recorded replacement.
+     */
+    acceptPreservedPendingReuse?: boolean;
 }
 
 function normalizeSha256(value: unknown): string {
@@ -279,12 +285,12 @@ export function resolvePersistedRemediationReviewExecutionAuthority(
             && lane.invalidated === false
             && lane.satisfied === false
             && lane.reason_code === 'authoritative_reuse_pending';
-        const acceptedAfterRestart = preservedPending && hasAuthenticatedFreshCurrentPassReplacement({
+        const acceptedAfterRestart = preservedPending && (options.acceptPreservedPendingReuse === true || hasAuthenticatedFreshCurrentPassReplacement({
             events,
             restartIndex: index,
             restartSequence: taskEventSequence(event),
             authorityOptions: options
-        });
+        }));
         if (!acceptedAfterRestart) {
             return null;
         }

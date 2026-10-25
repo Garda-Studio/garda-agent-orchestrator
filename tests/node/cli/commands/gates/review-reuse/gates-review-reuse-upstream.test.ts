@@ -623,18 +623,19 @@ describe('cli/commands/gates - review reuse upstream reuse', () => {
         });
         assert.equal(compileResult.exitCode, 0);
 
-        const rejectedReuse = await runBuildReviewContextCommand({
+        // Grouped follow-ups (balanced profile) are materialized only at closeout, so reuse inside the
+        // unfinished task does not wait for them; required-review closeout still demands them.
+        const pendingFollowUpReuse = await runBuildReviewContextCommand({
             repoRoot,
             reviewType: 'code',
             depth: 2,
             preflightPath,
             outputPath: reviewContextPath
         });
-        assert.equal(rejectedReuse.reusedReviewEvidence, false);
-        assert.ok(rejectedReuse.outputLines.some((line) => (
+        assert.equal(pendingFollowUpReuse.reusedReviewEvidence, true, pendingFollowUpReuse.outputLines.join('\n'));
+        assert.ok(!pendingFollowUpReuse.outputLines.some((line) => (
             line.includes('prior findings disposition evidence is not satisfied')
-            && line.toLowerCase().includes('follow-up artifact')
-        )), rejectedReuse.outputLines.join('\n'));
+        )), pendingFollowUpReuse.outputLines.join('\n'));
 
         fs.writeFileSync(taskPath, materializedTaskText, 'utf8');
         fs.writeFileSync(followUpArtifactPath, followUpArtifactText, 'utf8');

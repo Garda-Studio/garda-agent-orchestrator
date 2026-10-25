@@ -239,7 +239,8 @@ function validateFindingsValidationForHistoricalReuse(options: {
         policyResolution,
         expectedReceiptPath: dispositionReceiptPath,
         expectedReceiptSha256: dispositionReceiptSha256,
-        preferSnapshot: options.preferSnapshot
+        preferSnapshot: options.preferSnapshot,
+        allowPendingGroupedFollowUp: true
     });
     if (!disposition.valid) {
         return `prior findings disposition evidence is not satisfied: ${disposition.violations.join(' ')}`;
