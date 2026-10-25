@@ -4523,20 +4523,23 @@ export function resolveNextStepDecisionRoute(
     }
 
     if (preflight && taskRequiresExpectedRed(repoRoot, taskId)) {
-        const semanticLane = resolveValidationSemanticReviewLanes(preflight.effective_review_snapshot as EffectiveReviewSnapshot)[0];
-        if (semanticLane) {
-            try {
+        try {
+            // Lane resolution can throw too (no capable code/test lane); like other non-RED
+            // errors it must reach the existing gate routes instead of crashing the navigator.
+            const semanticLane = resolveValidationSemanticReviewLanes(
+                preflight.effective_review_snapshot as EffectiveReviewSnapshot)[0];
+            if (semanticLane) {
                 resolveAuthoritativeReviewValidationObligations({ repoRoot, preflight, preflightPath,
                     taskModePath, reviewType: semanticLane });
-            } catch (error) {
-                if (error instanceof ExpectedRedEvidenceError) return buildDecisionRouteResult({
-                    status: 'BLOCKED', nextGate: error.needsGreen ? 'test-first-current-green' : 'test-first-expected-red-stale',
-                    title: error.needsGreen ? 'Record current GREEN before reviewing the retained RED.'
-                        : 'Retained expected-RED cannot support review; choose how to continue.',
-                    reason: error.message, commands: []
-                });
-                // Non-RED validation errors retain their existing gate recovery routes.
             }
+        } catch (error) {
+            if (error instanceof ExpectedRedEvidenceError) return buildDecisionRouteResult({
+                status: 'BLOCKED', nextGate: error.needsGreen ? 'test-first-current-green' : 'test-first-expected-red-stale',
+                title: error.needsGreen ? 'Record current GREEN before reviewing the retained RED.'
+                    : 'Retained expected-RED cannot support review; choose how to continue.',
+                reason: error.message, commands: []
+            });
+            // Non-RED validation errors retain their existing gate recovery routes.
         }
     }
 
