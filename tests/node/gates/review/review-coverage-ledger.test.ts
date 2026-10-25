@@ -725,3 +725,50 @@ test('reserved evidence-only ledger id is rejected for ordinary findings', () =>
     assert.equal(result.status, 'FAIL');
     assert.ok(result.violations.some((entry) => entry.includes("'F-000' is reserved")));
 });
+
+test('coverage contract check accepts a contract stored through secret redaction and names real differences', async () => {
+    const { redactSensitiveData } = await import('../../../../src/core/redaction');
+    const selector = 'neverFollowsTokenRedirectsOrLeaksProviderBodiesIntoExceptions';
+    const binding = {
+        id: 'case-1', recipe_id: 'native-task-command', target_id: selector, selector,
+        source_identity: { path: 'src/test/KeycloakClientTest.java', sha256: 'a'.repeat(64), size: 10, identity: 'file:1' },
+        snapshot_sha256: 'b'.repeat(64), execution: 'OBSERVED', attempt_id: 'attempt-1',
+        result_status: 'PASSED', result_sha256: 'c'.repeat(64)
+    } as unknown as Parameters<typeof buildReviewCoverageContract>[0]['validationObligations'] extends readonly (infer T)[] | undefined ? T : never;
+    const expected = { reviewType: 'code', changedFiles: ['src/test/KeycloakClientTest.java'], validationObligations: [binding] };
+    const contract = buildReviewCoverageContract(expected);
+    const stored = JSON.parse(JSON.stringify(redactSensitiveData(contract)));
+    assert.notDeepEqual(stored, JSON.parse(JSON.stringify(contract)), 'fixture must reproduce redaction of the selector');
+    assert.deepEqual(getReviewCoverageContractViolations(stored, expected), []);
+
+    const tampered = { ...stored, obligations: stored.obligations.map((entry: Record<string, unknown>) => (
+        entry.kind === 'file' ? { ...entry, target: 'src/other.java' } : entry)) };
+    const violations = getReviewCoverageContractViolations(tampered, expected);
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /First difference: obligation FILE-001 field target differs/u);
+    const forgedHash = { ...stored, contract_sha256: 'd'.repeat(64) };
+    assert.equal(getReviewCoverageContractViolations(forgedHash, expected).length, 1);
+});
+
+test('coverage evidence accepts technical terms full scope and all files in concrete observations', () => {
+    const contract = buildReviewCoverageContract({
+        reviewType: 'code',
+        changedFiles: ['src/example.ts'],
+        categoryIds: ['correctness-edge-cases']
+    });
+    const run = (observation: string) => validateReviewCoverageLedger(buildReviewOutput(contract.obligations.map((obligation, index) =>
+        ledgerLine(obligation.id, `src/example.ts:${index + 1}`, observation))), contract);
+    for (const observation of [
+        'The staff-invitations client disables full scope allowed, so issued tokens carry only the mapped realm roles',
+        'The provisioning glob matches all files under templates/ and skips hidden directories before upload'
+    ]) {
+        const result = run(observation);
+        assert.equal(result.status, 'PASS', observation);
+        assert.deepEqual(result.violations, [], observation);
+    }
+    for (const observation of ['Reviewed the full scope carefully and completely.', 'Checked all files thoroughly during review.']) {
+        const result = run(observation);
+        assert.equal(result.status, 'FAIL', observation);
+        assert.ok(result.violations.some((entry) => entry.includes('generic evidence')), observation);
+    }
+});

@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 import { stringSha256 } from '../../gate-runtime/hash';
+import { redactSensitiveData } from '../../core/redaction';
 import {
     extractMarkdownSectionLines,
     getFindingsBySeverity
@@ -223,14 +224,45 @@ export function getReviewCoverageContractViolations(
     }
     const actual = value as ReviewCoverageContract;
     const deterministic = buildReviewCoverageContract(expected);
-    if (JSON.stringify(actual) === JSON.stringify(deterministic)) {
+    const actualJson = JSON.stringify(actual);
+    if (actualJson === JSON.stringify(deterministic)) {
+        return [];
+    }
+    // Durable artifacts are written through secret redaction, so a selector such as
+    // `neverFollowsTokenRedirects` is stored as <redacted> while its hash stays exact.
+    const redactedDeterministic = redactSensitiveData(deterministic) as ReviewCoverageContract;
+    if (actual.contract_sha256 === deterministic.contract_sha256 && actualJson === JSON.stringify(redactedDeterministic)) {
         return [];
     }
     return [
         `Review coverage contract does not match the deterministic current-scope contract for ` +
         `'${deterministic.review_type}'. Expected sha256=${deterministic.contract_sha256}; ` +
-        `actual sha256=${String(actual.contract_sha256 || 'missing')}.`
+        `actual sha256=${String(actual.contract_sha256 || 'missing')}. ` +
+        `First difference: ${describeFirstCoverageContractDifference(actual, redactedDeterministic)}.`
     ];
+}
+
+function describeFirstCoverageContractDifference(actual: ReviewCoverageContract, expected: ReviewCoverageContract): string {
+    for (const field of ['schema_version', 'required', 'review_type', 'obligation_count'] as const) {
+        if (JSON.stringify(actual[field]) !== JSON.stringify(expected[field])) {
+            return `${field} is ${JSON.stringify(actual[field])}, expected ${JSON.stringify(expected[field])}`;
+        }
+    }
+    const actualObligations = Array.isArray(actual.obligations) ? actual.obligations : [];
+    const count = Math.max(actualObligations.length, expected.obligations.length);
+    for (let index = 0; index < count; index += 1) {
+        const left = actualObligations[index];
+        const right = expected.obligations[index];
+        if (JSON.stringify(left) !== JSON.stringify(right)) {
+            const id = String(right?.id || left?.id || `#${index + 1}`);
+            if (!left || !right) return `obligation ${id} is ${left ? 'unexpected' : 'missing'}`;
+            const key = [...new Set([...Object.keys(left), ...Object.keys(right)])]
+                .find(name => JSON.stringify((left as unknown as Record<string, unknown>)[name])
+                    !== JSON.stringify((right as unknown as Record<string, unknown>)[name]));
+            return `obligation ${id} field ${key || 'order'} differs`;
+        }
+    }
+    return 'object key order or extra fields differ';
 }
 
 export function isEmptyReviewCoverageContract(contract: ReviewCoverageContract | null | undefined): boolean {
@@ -574,6 +606,7 @@ const GENERIC_REVIEW_STATUS_WORDS = new Set([
     'files',
     'fine',
     'following',
+    'full',
     'fully',
     'good',
     'has',
@@ -668,7 +701,9 @@ function isGenericReviewStatusDeclaration(normalized: string): boolean {
         || GENERIC_NO_DEFECT_SUFFIX_PATTERN.test(normalizedSuffix);
 }
 
-const GENERIC_OBSERVATION_PHRASE_PATTERN = /\b(?:no issues|looks good|full scope|all files|everything)\b/u;
+// 'full scope' and 'all files' are also technical terms (Keycloak client scopes, glob matchers);
+// a review-status sentence built only from them is still rejected through GENERIC_REVIEW_STATUS_WORDS.
+const GENERIC_OBSERVATION_PHRASE_PATTERN = /\b(?:no issues|looks good|everything)\b/u;
 // Quoted code, identifiers and string literals are evidence, not reviewer wording.
 const QUOTED_OBSERVATION_SEGMENT_PATTERN = /`[^`]*`|"[^"]*"|(?<![\p{L}\p{N}_])'[^']*'(?![\p{L}\p{N}_])/gu;
 
