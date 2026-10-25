@@ -71,3 +71,13 @@ test('Next reruns an unbound selected case with that case pre-filled', () => {
     // A ready command carries real paths, so it gets more room than a text instruction.
     assert.ok(instruction.length <= 500);
 });
+
+test('Next gives a concrete fresh-run command after rejected or stale focused evidence', () => {
+    const instruction = buildNextStepInstruction({
+        ...base, status: 'BLOCKED', next_gate: 'project-validation-evidence',
+        reason: 'Native case execution is unavailable; focused intermediate evidence candidate seq=27/21 rejected: stale or foreign task/cycle binding.'
+    })!;
+    assert.match(instruction, /record a fresh current run: .*gate run-intermediate-command --task-id "T-9"/u);
+    assert.match(instruction, /--preflight-path "garda-agent-orchestrator\/runtime\/reviews\/T-9-preflight\.json"/u);
+    assert.ok(instruction.length <= 400, instruction);
+});

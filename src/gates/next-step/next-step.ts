@@ -688,6 +688,24 @@ function readLatestReviewGateOverrideSkippedReviewTypes(eventsRoot: string, task
     return new Set();
 }
 
+function readLastCompilePlanDriftExtraFiles(
+    reviewsRoot: string, taskId: string, preflight: Record<string, unknown> | null
+): string[] {
+    let evidence: unknown = null;
+    try {
+        evidence = JSON.parse(fs.readFileSync(path.join(reviewsRoot, `${taskId}-compile-gate.json`), 'utf8'));
+    } catch {
+        return [];
+    }
+    const drift = isPlainRecord(evidence) && evidence.status === 'FAILED' && isPlainRecord(evidence.plan_drift)
+        ? evidence.plan_drift : null;
+    if (drift?.status !== 'REPLAN_REQUIRED' || !Array.isArray(drift.extra_files)) return [];
+    const current = new Set(Array.isArray(preflight?.changed_files) ? preflight.changed_files.map(String) : []);
+    const extra = drift.extra_files.map(String);
+    // Only a drift that still matches the current scope is actionable.
+    return extra.length > 0 && extra.every(file => current.has(file)) ? extra : [];
+}
+
 function readLatestTaskEventSequence(
     eventsRoot: string,
     taskId: string,
@@ -4367,6 +4385,7 @@ export function resolveNextStepDecisionRoute(
                 )
                 : { ready: false, reason: 'No current preflight exists.' };
             return resolveNextStepCompileGateRoute({
+                planDriftExtraFiles: readLastCompilePlanDriftExtraFiles(reviewsRoot, taskId, preflight),
                 compileGatePassed: semanticCompileAccepted || isGatePassed(summary, 'compile-gate'),
                 ready: compileReadiness.ready,
                 reason: compileReadiness.reason,

@@ -200,3 +200,22 @@ test('resolveNextStepCompileGateRoute returns null only when compile gate passed
         compileCommand: 'compile'
     }), null);
 });
+
+test('resolveNextStepCompileGateRoute offers the plan-drift override after a plan drift failure', () => {
+    const options = {
+        compileGatePassed: false,
+        ready: false,
+        reason: 'Compile gate failed.',
+        restartTaskModeCommand: 'node bin/garda.js gate enter-task-mode --orchestrator-work',
+        refreshPreflightCommand: 'node bin/garda.js gate classify-change --task-id "T-1"',
+        compileCommand: 'node bin/garda.js gate compile-gate --task-id "T-1"'
+    };
+    const route = resolveNextStepCompileGateRoute({ ...options, planDriftExtraFiles: ['scripts/release-security-evidence.cjs'] });
+    assert.ok(route);
+    assert.equal(route.nextGate, 'compile-gate');
+    assert.equal(route.title, 'Resolve plan drift before compile.');
+    assert.match(route.reason, /scripts\/release-security-evidence\.cjs/u);
+    assert.match(route.commands[0].command, /--allow-plan-drift --allow-plan-drift-reason "<why these files belong to this task>"$/u);
+    const plain = resolveNextStepCompileGateRoute({ ...options, planDriftExtraFiles: [] });
+    assert.equal(plain?.commands[0].command, options.compileCommand);
+});

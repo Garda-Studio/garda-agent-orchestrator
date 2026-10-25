@@ -116,7 +116,8 @@ export function buildNextStepInstruction(
                 const selectedCase = JSON.stringify({ source: unboundCase[1], case_id: unboundCase[2], selector: '<selector>' });
                 return `${focusedCommand} --selected-case '${selectedCase}', ${rerun}`;
             }
-            return `fix what Reason names, rerun the project check with \`gate run-intermediate-command\`, ${rerun}`;
+            // Rejected or stale focused evidence: a fresh current run is the recovery, never copied output.
+            return `fix what Reason names, then record a fresh current run: ${focusedCommand}, ${rerun}`;
         }
         case 'await-project-validation':
             return `wait for the running project check to finish, ${rerun}`;

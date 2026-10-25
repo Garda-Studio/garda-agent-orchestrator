@@ -44,6 +44,8 @@ export interface NextStepCompileGateRoutingOptions extends NextStepReadinessStat
     restartTaskModeCommand: string;
     refreshPreflightCommand: string;
     compileCommand: string;
+    /** Files the last compile rejected as outside the frozen task plan. */
+    planDriftExtraFiles?: readonly string[];
 }
 
 export interface NextStepQualityChecklistRoutingOptions extends NextStepReadinessState {
@@ -376,6 +378,22 @@ export function resolveNextStepCompileGateRoute(
             reason: options.reason,
             commands: [
                 buildCommand('Restart task mode with orchestrator work', options.restartTaskModeCommand)
+            ]
+        };
+    }
+
+    if (options.planDriftExtraFiles?.length) {
+        return {
+            status: 'BLOCKED',
+            nextGate: 'compile-gate',
+            title: 'Resolve plan drift before compile.',
+            reason: `The last compile rejected ${options.planDriftExtraFiles.length} file(s) outside the approved task plan: `
+                + `${options.planDriftExtraFiles.join(', ')}. If they are required for this task, rerun compile with `
+                + '--allow-plan-drift and a concrete --allow-plan-drift-reason (at least 12 characters, why these files belong here). '
+                + 'Otherwise revert them; replacing the frozen plan needs the operator.',
+            commands: [
+                buildCommand('Run compile gate accepting the plan drift',
+                    `${options.compileCommand} --allow-plan-drift --allow-plan-drift-reason "<why these files belong to this task>"`)
             ]
         };
     }
