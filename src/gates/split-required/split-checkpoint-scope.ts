@@ -209,7 +209,7 @@ function deriveParentTaskId(taskId: string): string | null {
 }
 
 function explicitlyLinksChild(notes: string, childTaskId: string): boolean {
-    const childList = /\bchild tasks\s*:\s*([^.]*)/iu.exec(notes);
+    const childList = /\b(?:child tasks|children)\s*:\s*([^.]*)/iu.exec(notes);
     if (!childList) {
         return false;
     }

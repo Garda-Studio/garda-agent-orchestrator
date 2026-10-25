@@ -714,6 +714,10 @@ export async function handleTaskReset(gateArgv: string[]): Promise<void> {
         if (!options.taskId) {
             throw new Error(buildTaskResetMissingTaskIdMessage());
         }
-        return runTaskResetCommand(options);
+        const result = runTaskResetCommand(options);
+        if (options.asJson !== true) return result;
+        // --as-json: one machine-readable object; the human lines stay available in the object.
+        const { exitCode, ...payload } = result;
+        return { ...result, outputLines: [JSON.stringify({ ...payload, exit_code: exitCode }, null, 2)] };
     });
 }

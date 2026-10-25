@@ -21,6 +21,12 @@ describe('exact task identities in child links', () => {
             ['T-90', 'T-PARENT-F10']);
     });
 
+    it('accepts the Children: marker as an alias for Child tasks:', () => {
+        const ids = ['T-9', 'T-90'];
+        assert.deepEqual(extractExplicitLinkedChildTaskIds('Children: `T-9`, `T-90`.', ids), ['T-9', 'T-90']);
+        assert.deepEqual(extractExplicitLinkedChildTaskIds('No children here; see T-9 for context.', ids), []);
+    });
+
     it('keeps direct review follow-ups separate from numeric and nested infrastructure children', () => {
         const ids = ['T-PARENT-F1', 'T-PARENT-F10', 'T-PARENT-Future', 'T-PARENT-1', 'T-PARENT-F1-I1'];
         const mentions = ids.map(id => `\`${id}\``).join(', ');

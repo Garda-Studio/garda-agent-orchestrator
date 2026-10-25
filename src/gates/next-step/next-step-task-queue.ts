@@ -89,7 +89,7 @@ export interface SplitRequiredDecompositionState {
 
 const TASK_QUEUE_LEGACY_SPLIT_NOTE_PATTERN = /\b(?:paused\s+for\s+split|split\s+into|continue\s+via\s+child\s+tasks)\b/i;
 const TASK_QUEUE_CHILD_LINK_MARKER_PATTERN =
-    /\b(?:split\s+into|continue\s+via|execute|created?|linked)\b[^.;\n|]*\b(?:child(?:ren)?|leaf)\s+tasks?\b|\b(?:child(?:ren)?|leaf)\s+tasks?\s*:|\breview\s+follow-up\s+tasks?\s+materialized\s*:|\bchild\s+range\b/igu;
+    /\b(?:split\s+into|continue\s+via|execute|created?|linked)\b[^.;\n|]*\b(?:child(?:ren)?|leaf)\s+tasks?\b|\b(?:child(?:ren)?|leaf)\s+tasks?\s*:|\bchildren\s*:|\breview\s+follow-up\s+tasks?\s+materialized\s*:|\bchild\s+range\b/igu;
 const TASK_QUEUE_REVIEW_FOLLOW_UP_LINK_MARKER_PATTERN = /\breview\s+follow-up\s+tasks?\s+materialized\s*:/iu;
 const TASK_QUEUE_TASK_ID_PATTERN = TASK_ID_ALLOWED_PATTERN;
 const TASK_QUEUE_TASK_ID_REFERENCE_PATTERN = /(^|[^A-Za-z0-9-])([Tt]-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)(?=$|[^A-Za-z0-9-])/gu;

@@ -1222,3 +1222,31 @@ describe('runTaskResetCommand — confirmed one-action reset', () => {
         } finally { cleanup(fixture.repoRoot); }
     });
 });
+
+describe('handleTaskReset --as-json', () => {
+    it('prints one JSON object for a dry run', async () => {
+        const fixture = buildFakeRepo({ hasEventsFile: true, hasReviewArtifact: true });
+        const written: string[] = [];
+        const originalWrite = process.stdout.write.bind(process.stdout);
+        const originalLog = console.log;
+        process.stdout.write = ((chunk: string | Uint8Array) => {
+            written.push(String(chunk));
+            return true;
+        }) as typeof process.stdout.write;
+        console.log = (...args: unknown[]) => { written.push(`${args.map(String).join(' ')}\n`); };
+        try {
+            await handleTaskReset(['--task-id', fixture.taskId, '--reopen', '--dry-run', '--as-json',
+                '--events-root', fixture.eventsRoot, '--reviews-root', fixture.reviewsRoot, '--repo-root', fixture.repoRoot]);
+        } finally {
+            process.stdout.write = originalWrite;
+            console.log = originalLog;
+            cleanup(fixture.repoRoot);
+        }
+        const payload = JSON.parse(written.join('').trim()) as Record<string, unknown>;
+        assert.equal(payload.outcome, 'DRY_RUN');
+        assert.equal(payload.dryRun, true);
+        assert.equal(payload.targetStatus, 'TODO');
+        assert.equal(payload.exit_code, 0);
+        assert.ok(Array.isArray(payload.outputLines));
+    });
+});
