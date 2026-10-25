@@ -34,6 +34,27 @@ function findRepoRoot() {
     throw new Error('Cannot resolve repo root.');
 }
 
+describe('expected-RED operator guidance', () => {
+    it('materializes explicit approval and stale RED exits in both workflow rules', () => {
+        const repoRoot = findRepoRoot();
+        for (const name of ['40-commands.md', '80-task-workflow.md']) {
+            const source = selectRuleSources(name, {
+                targetRoot: repoRoot,
+                templateRuleRoot: path.join(repoRoot, 'template/docs/agent-rules'),
+                liveRuleRoot: path.join(repoRoot, 'live/docs/agent-rules')
+            }).find(candidate => candidate.origin === 'template');
+            assert.ok(source);
+            const rule = fs.readFileSync(source.path, 'utf8').replace(/\s+/gu, ' ');
+            assert.match(rule, /only after explicit operator approval/u);
+            assert.match(rule, /Changing a test after its RED was recorded.*invalidates that RED/u);
+            assert.match(rule, /fresh RED for the current test bytes/u);
+            assert.match(rule, /with operator approval remove.*Test-first: expected-red/u);
+            assert.match(rule, /tests, compile, full suite and every required review remain mandatory/u);
+            assert.match(rule, /Do not use.*task-reset.*for this/u);
+        }
+    });
+});
+
 describe('review catalog materialization contracts', () => {
     it('publishes a parseable v1 declaration and offers governed recipe safety guidance', () => {
         const repoRoot = findRepoRoot();

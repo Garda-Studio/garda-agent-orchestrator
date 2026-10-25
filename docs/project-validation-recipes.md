@@ -99,7 +99,7 @@ When the navigator selects an admitted recipe, use its exact recipe route:
 node bin/garda.js gate run-intermediate-command --task-id "<task-id>" --recipe-id "project-check" --repo-root "."
 ```
 
-Recipe mode accepts task/root, recipe ID and an eligible expected-red request. It forbids raw command, command-source, timeout, preflight, coverage and artifact overrides. `--expect-failure` remains subject to the existing task profile and exact changed test-only scope; expected failure is not terminal PASSED. Preserve current compile/full-suite gates and independent reviews rather than using a recipe as their blanket replacement.
+Recipe mode accepts task/root, recipe ID and an eligible expected-red request. It forbids raw command, command-source, timeout, preflight, coverage and artifact overrides. Add the `Test-first: expected-red` marker only after explicit operator approval. Changing a test after its RED was recorded (including a review finding fix) invalidates that RED. If retained RED is stale or predates task re-entry, record a fresh RED for the current test bytes when the implementation can still fail it, or with operator approval remove the `Test-first: expected-red` marker and continue the ordinary cycle; tests, compile, full suite and every required review remain mandatory. Do not use `task-reset` for this. `--expect-failure` remains subject to the existing task profile and exact changed test-only scope; expected failure is not terminal PASSED. Preserve current compile/full-suite gates and independent reviews rather than using a recipe as their blanket replacement.
 
 ## Read the four phases
 

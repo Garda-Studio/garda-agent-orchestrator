@@ -62,7 +62,7 @@ Rules:
 - This command never replaces `compile-gate`, `full-suite-validation`, required
   reviews, or completion evidence.
 - Test-first expected-red is an explicit exception to ordinary passing focused
-  validation: put the exact marker `Test-first: expected-red` in the task's
+  validation: only after explicit operator approval may the agent add the exact marker `Test-first: expected-red` in the task's
   `TASK.md` Notes, then follow the `next-step` command that adds
   `--expect-failure`. That mode accepts only a current test-only preflight and a
   concrete changed focused test. A real non-zero test exit is recorded with
@@ -71,6 +71,7 @@ Rules:
   evidence is recorded, `next-step` exposes implementation and still requires
   refreshed preflight, compile, full-suite, reviews, and completion after the
   production change.
+- Changing a test after its RED was recorded (including a review finding fix) invalidates that RED. If retained RED is stale or predates task re-entry, record a fresh RED for the current test bytes when the implementation can still fail it, or with operator approval remove the `Test-first: expected-red` marker and continue the ordinary cycle; tests, compile, full suite and every required review remain mandatory. Do not use `task-reset` for this.
 - If the command is not eligible for `run-intermediate-command`, use the Manual
   Validation Logs pattern below so chat output remains bounded and auditable.
 
