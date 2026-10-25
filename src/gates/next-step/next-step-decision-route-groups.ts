@@ -842,7 +842,12 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
     }
 
     if (!options.completionGatePassed && isDecomposedParentTask(options.taskEntry)) {
-        const strictDecompositionWip = effects.run({
+        const parentHasLinkedChildren = isTaskQueueDecomposedStatus(taskQueueStatus)
+            && hasLinkedChildTasks(options.taskEntries, options.taskId);
+        const strictDecompositionWip = parentHasLinkedChildren ? {
+            status: 'NOT_REQUIRED', manifest_path: null, manifest_sha256: null,
+            tracked_files: [], untracked_files: [], violations: []
+        } as ReturnType<typeof suspendStrictDecompositionWipIfRequired> : effects.run({
             kind: 'suspend-strict-decomposition-wip',
             summary: `Capture and suspend ${options.taskId} strict-decomposition parent WIP`,
             input: {

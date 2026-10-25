@@ -1,6 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as path from 'node:path';
+import * as fs from 'node:fs';
+import { initGitRepo } from '../git-fixtures';
+import { resolveNextStep } from './next-step-test-support';
 import type { TaskQueueEntry } from '../../../../src/core/task-queue-read';
 import type { NextStepEffectController } from '../../../../src/gates/next-step/next-step-effects';
 import { resolveStrictDecompositionContinuationRoute } from '../../../../src/gates/next-step/next-step-strict-decomposition-routing';
@@ -56,7 +59,7 @@ function routeFor(parentStatus: string) {
         requiredReviewTypes: ['code'], baseMissingArtifacts: [], basePresentArtifacts: [],
         effects: recordingEffects(kinds)
     });
-    return { route, kinds };
+    return { route, kinds, repoRoot, childIds };
 }
 
 describe('gates/next-step strict decomposition after the split', () => {
@@ -65,6 +68,27 @@ describe('gates/next-step strict decomposition after the split', () => {
         assert.ok(route, 'the split route continues to the child');
         assert.ok(!kinds.includes('suspend-strict-decomposition-wip'), JSON.stringify(kinds));
         assert.ok(!kinds.includes('transition-strict-decomposition-parent-to-decomposed'), JSON.stringify(kinds));
+    });
+
+    it('resolveNextStep leaves active child changes untouched when the terminal route sees a decomposed parent', () => {
+        const { repoRoot, childIds } = routeFor('DECOMPOSED');
+        fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
+            '## Active Queue',
+            '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+            '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+            `| ${TASK_ID} | DECOMPOSED | P1 | workflow | Parent | agent | 2026-10-25 | strict | Child tasks: ${childIds.join(', ')} |`,
+            `| ${childIds[0]} | IN_PROGRESS | P1 | workflow | Active child | agent | 2026-10-25 | strict | Parent: ${TASK_ID} |`,
+            `| ${childIds[1]} | TODO | P1 | workflow | Next child | agent | 2026-10-25 | strict | Parent: ${TASK_ID} |`, ''
+        ].join('\n'));
+        initGitRepo(repoRoot, { gitignoreContent: 'TASK.md\ngarda-agent-orchestrator/runtime/\n' });
+        const childFile = path.join(repoRoot, 'src/app.ts');
+        const childBytes = 'export const childImplementation = 2;\n';
+        fs.writeFileSync(childFile, childBytes);
+        const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+        assert.equal(result.next_gate, 'child-task', JSON.stringify(result));
+        assert.ok(result.commands[0]?.command.includes(childIds[0]), JSON.stringify(result.commands));
+        assert.ok(!JSON.stringify(result).includes('suspend-strict-decomposition-wip'), JSON.stringify(result));
+        assert.equal(fs.readFileSync(childFile, 'utf8'), childBytes);
     });
 
     it('still offers the guarded parent WIP capture before the split', () => {
