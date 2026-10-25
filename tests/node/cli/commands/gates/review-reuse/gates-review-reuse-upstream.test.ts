@@ -1,3 +1,4 @@
+import { hasAuthenticatedIntermediateGroupedReceiptSource } from '../../../../../../src/gates/review/review-grouped-receipt-source';
 import { authenticateCurrentReviewLaunch } from '../../gate-test-authenticated-review-helpers';
 import {
     describe,
@@ -838,6 +839,33 @@ describe('cli/commands/gates - review reuse upstream reuse', () => {
         const followUpArtifactPath = path.join(reviewsRoot, `${taskId}-code-findings-follow-ups.json`);
         assert.deepEqual(discoverGroupedFollowUpArtifactPaths(discoveryOptions).paths, [followUpArtifactPath],
             'the real materialized R1 source must authenticate before testing missing snapshots');
+        const proofOptions = {
+            repoRoot, taskId, reviewType: 'code', receipt: secondReceipt,
+            receiptPath: path.join(reviewsRoot, `${taskId}-code-receipt.json`),
+            receiptSha256: sha256File(path.join(reviewsRoot, `${taskId}-code-receipt.json`)),
+            sourceReceiptPath: path.join(reviewsRoot, `${taskId}-code-receipt.json`),
+            sourceReceiptSha256: firstReusedReceiptHash
+        };
+        assert.equal(hasAuthenticatedIntermediateGroupedReceiptSource(proofOptions), true,
+            'the real earlier R1 receipt must authenticate before testing event order');
+        const timelinePath = path.join(getOrchestratorRoot(repoRoot), 'runtime/task-events', `${taskId}.jsonl`);
+        const timelineBytes = fs.readFileSync(timelinePath);
+        const sourceEvent = readTaskTimelineEvents(repoRoot, taskId).find(event =>
+            event.event_type === 'REVIEW_RECORDED'
+            && (event.details as Record<string, unknown> | undefined)?.receipt_sha256 === firstReusedReceiptHash);
+        assert.ok(sourceEvent);
+        try {
+            appendTaskEvent(getOrchestratorRoot(repoRoot), taskId, 'REVIEW_RECORDED', 'PASS',
+                'Replay the source receipt after the current receipt.', sourceEvent.details || {});
+            assert.equal(hasAuthenticatedIntermediateGroupedReceiptSource(proofOptions), false,
+                'a later source event cannot prove an earlier intermediate receipt');
+            assert.deepEqual(discoverGroupedFollowUpArtifactPaths(discoveryOptions).paths, [],
+                'discovery must reject reversed intermediate-receipt chronology');
+        } finally {
+            fs.writeFileSync(timelinePath, timelineBytes);
+        }
+        assert.deepEqual(discoverGroupedFollowUpArtifactPaths(discoveryOptions).paths, [followUpArtifactPath],
+            'restored chronological receipt evidence must remain discoverable');
         const assertMissingReceiptSnapshotRejected = (snapshotPath: string, label: string): void => {
             const snapshotBytes = fs.readFileSync(snapshotPath);
             try {

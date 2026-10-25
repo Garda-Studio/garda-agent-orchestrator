@@ -26,6 +26,14 @@ function sha(value: unknown): string {
 
 /** Authenticate a materialized intermediate reused receipt without granting review authority. */
 export function hasAuthenticatedIntermediateGroupedReceiptSource(options: IntermediateGroupedReceiptSourceOptions): boolean {
+    try {
+        return authenticateIntermediateGroupedReceiptSource(options);
+    } catch {
+        return false;
+    }
+}
+
+function authenticateIntermediateGroupedReceiptSource(options: IntermediateGroupedReceiptSourceOptions): boolean {
     const current = options.receipt;
     const sourceSha = sha(options.sourceReceiptSha256);
     const currentSha = sha(options.receiptSha256);
@@ -52,8 +60,8 @@ export function hasAuthenticatedIntermediateGroupedReceiptSource(options: Interm
             if (currentIndex < 0 && matches(events[index], currentSha)) currentIndex = index;
             if (sourceIndex < 0 && matches(events[index], sourceSha)) sourceIndex = index;
         }
-        if (sourceIndex < 0 || currentIndex < 0 || currentIndex === sourceIndex) return false;
-        for (const event of events.slice(Math.min(sourceIndex, currentIndex) + 1, Math.max(sourceIndex, currentIndex))) {
+        if (sourceIndex < 0 || currentIndex < 0 || sourceIndex >= currentIndex) return false;
+        for (const event of events.slice(sourceIndex + 1, currentIndex)) {
             if (event.event_type !== 'REVIEW_CYCLE_RESTARTED' || event.actor !== 'gate') continue;
             const details = isPlainRecord(event.details) ? event.details : null;
             const decision = isPlainRecord(details?.authoritative_review_decision) ? details.authoritative_review_decision : null;

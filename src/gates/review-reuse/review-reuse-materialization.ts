@@ -555,8 +555,10 @@ function buildReusedReviewFindingsValidationEvidence(
             || getReceiptOutputContractString(options.receipt, 'raw_output_sha256'),
         expectedReviewArtifactSha256: options.historicalReviewArtifactSha256,
         expectedReviewContextSha256: options.expectedContextSha256,
-        expectedPreflightSha256: getReceiptRecordString(options.receipt, 'preflight_sha256'),
-        expectedScopeSha256: getReceiptRecordString(options.receipt, 'scope_sha256'),
+        expectedPreflightSha256: options.receipt.reused_existing_review === true
+            ? null : getReceiptRecordString(options.receipt, 'preflight_sha256'),
+        expectedScopeSha256: options.receipt.reused_existing_review === true
+            ? null : getReceiptRecordString(options.receipt, 'scope_sha256'),
         expectedReviewScopeSha256: options.expectedReviewScopeSha256,
         expectedCodeScopeSha256: options.expectedCodeScopeSha256,
         expectedReviewTreeStateSha256: options.expectedReviewTreeStateSha256,

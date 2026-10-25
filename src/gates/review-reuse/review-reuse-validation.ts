@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { resolveHistoricalGroupedReuseWindow } from './review-reuse-historical-window';
 import {
     buildReviewVerdictTokenSet,
     extractReviewVerdictSectionTokenMatch,
@@ -756,11 +757,25 @@ export function validateHistoricalReviewReuseCandidate(options: {
         ? sourceEventResolution.event?.details as Record<string, unknown>
         : null;
     if (receipt.reused_existing_review === true) {
+        const profileSnapshot = isRecord(options.preflightPayload.profile_policy_snapshot)
+            ? options.preflightPayload.profile_policy_snapshot : null;
+        const followUpPolicy = isRecord(profileSnapshot?.review_follow_up_policy)
+            ? profileSnapshot.review_follow_up_policy : null;
+        const groupedReuse = followUpPolicy?.schema_version === 1
+            && followUpPolicy.materialization_mode === 'grouped_by_parent';
+        const historicalWindow = groupedReuse ? resolveHistoricalGroupedReuseWindow({
+            repoRoot: options.repoRoot, taskId: options.taskId, reviewType: options.reviewType,
+            receipt, receiptSha256: sourceReceiptSha256, sourceEvent: sourceEventResolution.event,
+            timelineEvents: options.timelineEvents, latestCompilePassSequence: options.latestCompilePassSequence
+        }) : null;
+        if (groupedReuse && !historicalWindow) {
+            return { accepted: false, reason: 'historical grouped reused review has no authenticated uninterrupted compile window' };
+        }
         const strictReuseValidation = validateStrictReusedReviewEvidence({
             repoRoot: options.repoRoot,
             taskId: options.taskId,
             reviewType: options.reviewType,
-            events: options.timelineEvents,
+            events: historicalWindow?.events || options.timelineEvents,
             receiptPath: options.candidate.telemetryReceiptPath,
             receiptSha256: sourceReceiptSha256,
             reviewContextSha256: sourceReceiptContextSha256,
@@ -779,7 +794,7 @@ export function validateHistoricalReviewReuseCandidate(options: {
             reviewerExecutionMode,
             reviewerIdentity,
             reviewerProvenance: { ...historicalReviewerProvenance },
-            latestCompileEventSequence: options.latestCompilePassSequence
+            latestCompileEventSequence: historicalWindow?.compileSequence ?? options.latestCompilePassSequence
         });
         if (!strictReuseValidation.valid) {
             return {
