@@ -259,7 +259,7 @@ export function getRulePackEvidence(
         return result;
     }
 
-    const staleLoadedRuleFile = findStaleLoadedRuleFile(stageArtifact.loaded_rule_hashes, result.loaded_rule_files);
+    const staleLoadedRuleFile = findStaleLoadedRuleFile(repoRoot, stageArtifact.loaded_rule_hashes, result.loaded_rule_files);
     if (staleLoadedRuleFile) {
         result.stale_loaded_rule_file = staleLoadedRuleFile;
         result.evidence_status = 'EVIDENCE_LOADED_RULE_STALE';

@@ -209,17 +209,18 @@ export function normalizeLoadedRuleFiles(repoRoot: string, loadedRuleFiles: stri
     return unique.sort();
 }
 
-const GENERATED_PROJECT_MEMORY_RULE_SUFFIX = '/live/docs/agent-rules/15-project-memory.md';
 // Latin-1 preserves byte offsets, including UTF-8 BOM/title bytes and invalid UTF-8 in the body.
 const GENERATED_MEMORY_HEADER_PATTERN = /^(?:\xEF\xBB\xBF)?(?:<!--[^\r\n]*-->\r?\n\r?\n)?# 15 \xC2\xB7 Project Memory Summary\r?\n\r?\n(Generated at: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)(?=\r?\n|$)/u;
 
 /** Normalize only the generated canonical header timestamp; every other byte remains evidence.
  * The replacement is itself a valid header timestamp so malformed raw headers cannot collide.
  */
-export function ruleFileContentSha256(ruleFile: string): string | null {
+export function ruleFileContentSha256(repoRoot: string, ruleFile: string): string | null {
     const normalizedPath = normalizePath(path.resolve(ruleFile));
     const comparablePath = process.platform === 'win32' ? normalizedPath.toLowerCase() : normalizedPath;
-    if (!comparablePath.endsWith(GENERATED_PROJECT_MEMORY_RULE_SUFFIX)) return fileSha256(ruleFile);
+    const canonicalPath = normalizePath(path.resolve(getRulePackRulesRoot(repoRoot), '15-project-memory.md'));
+    const comparableCanonicalPath = process.platform === 'win32' ? canonicalPath.toLowerCase() : canonicalPath;
+    if (comparablePath !== comparableCanonicalPath) return fileSha256(ruleFile);
     try {
         const bytes = fs.readFileSync(ruleFile);
         const header = GENERATED_MEMORY_HEADER_PATTERN.exec(bytes.toString('latin1'));
@@ -234,9 +235,9 @@ export function ruleFileContentSha256(ruleFile: string): string | null {
     }
 }
 
-export function buildRuleFileHashes(ruleFiles: string[]): Record<string, string | null> {
+export function buildRuleFileHashes(repoRoot: string, ruleFiles: string[]): Record<string, string | null> {
     return Object.fromEntries(ruleFiles.map(function (ruleFile) {
-        return [ruleFile, ruleFileContentSha256(ruleFile)];
+        return [ruleFile, ruleFileContentSha256(repoRoot, ruleFile)];
     }));
 }
 
@@ -280,10 +281,10 @@ export function readRuleHash(record: unknown, ruleFile: string): string | null {
     return null;
 }
 
-export function findStaleLoadedRuleFile(loadedRuleHashes: unknown, loadedRuleFiles: readonly string[]): string | null {
+export function findStaleLoadedRuleFile(repoRoot: string, loadedRuleHashes: unknown, loadedRuleFiles: readonly string[]): string | null {
     return loadedRuleFiles.find(function (ruleFile) {
         const previousHash = readRuleHash(loadedRuleHashes, ruleFile);
-        const currentHash = ruleFileContentSha256(ruleFile);
+        const currentHash = ruleFileContentSha256(repoRoot, ruleFile);
         // Evidence recorded before timestamp normalization still matches the raw file hash.
         return !previousHash || !currentHash || (previousHash !== currentHash.toLowerCase()
             && previousHash !== String(fileSha256(ruleFile) || '').toLowerCase());

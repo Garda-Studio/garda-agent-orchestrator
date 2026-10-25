@@ -307,7 +307,7 @@ function writeTaskEntryRulePackArtifact(
     taskId: string,
     options: { ruleFiles: string[]; effectiveDepth: number; staleHash?: boolean }
 ): void {
-    const loadedRuleHashes = buildRuleFileHashes(options.ruleFiles);
+    const loadedRuleHashes = buildRuleFileHashes(repoRoot, options.ruleFiles);
     if (options.staleHash) {
         loadedRuleHashes[options.ruleFiles[0]] = 'deadbeef';
     }
@@ -330,7 +330,7 @@ function writeTaskEntryRulePackArtifact(
                 loaded_rule_files: options.ruleFiles,
                 missing_rule_files: [],
                 extra_rule_files: [],
-                required_rule_hashes: buildRuleFileHashes(options.ruleFiles),
+                required_rule_hashes: buildRuleFileHashes(repoRoot, options.ruleFiles),
                 loaded_rule_hashes: loadedRuleHashes,
                 required_rule_count: options.ruleFiles.length,
                 loaded_rule_count: options.ruleFiles.length,
@@ -392,8 +392,8 @@ function writeLegacyPostPreflightRulePackArtifact(
             loaded_rule_files: legacyRuleFiles,
             missing_rule_files: [],
             extra_rule_files: [],
-            required_rule_hashes: buildRuleFileHashes(legacyRuleFiles),
-            loaded_rule_hashes: buildRuleFileHashes(legacyRuleFiles),
+            required_rule_hashes: buildRuleFileHashes(repoRoot, legacyRuleFiles),
+            loaded_rule_hashes: buildRuleFileHashes(repoRoot, legacyRuleFiles),
             required_rule_count: legacyRuleFiles.length,
             loaded_rule_count: legacyRuleFiles.length,
             effective_depth: effectiveDepth,

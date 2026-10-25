@@ -465,7 +465,7 @@ export function getPostPreflightRulePackRebindDecision(
     }
 
     const loadedRuleHashes = stageArtifact.loaded_rule_hashes;
-    const staleRuleFile = findStaleLoadedRuleFile(loadedRuleHashes, loadedRuleFiles);
+    const staleRuleFile = findStaleLoadedRuleFile(repoRoot, loadedRuleHashes, loadedRuleFiles);
     if (staleRuleFile) {
         return {
             can_bind: false,

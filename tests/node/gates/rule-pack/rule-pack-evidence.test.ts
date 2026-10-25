@@ -3,8 +3,10 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { test } from 'node:test';
 
+import { buildRulePackArtifact } from '../../../../src/gates/rule-pack/rule-pack-artifact-build';
+import { getRulePackRulesRoot } from '../../../../src/gates/rule-pack/rule-pack-selection';
 import { getRulePackEvidence } from '../../../../src/gates/rule-pack/rule-pack-evidence';
-import { createRulePackFixture, TASK_ID } from './rule-pack-test-fixtures';
+import { createRulePackFixture, RULE_NAMES, TASK_ID } from './rule-pack-test-fixtures';
 
 test('rule-pack evidence accepts bound task-entry and post-preflight stages', (t) => {
     const fixture = createRulePackFixture(t);
@@ -83,4 +85,35 @@ test('post-preflight evidence rejects missing and mismatched preflight bindings'
     assert.equal(getRulePackEvidence(fixture.repoRoot, TASK_ID, 'POST_PREFLIGHT', {
         preflightPath: fixture.preflightPath
     }).evidence_status, 'EVIDENCE_PREFLIGHT_HASH_MISMATCH');
+});
+
+test('rule-pack evidence normalizes only the exact active rules-root memory file', (t) => {
+    const fixture = createRulePackFixture(t);
+    const rulesRoot = getRulePackRulesRoot(fixture.repoRoot);
+    const memoryPath = path.join(rulesRoot, '15-project-memory.md');
+    const nestedPath = path.join(rulesRoot, 'nested', 'live', 'docs', 'agent-rules', '15-project-memory.md');
+    const summary = (stamp: string) => `<!-- DO NOT EDIT -->\n\n# 15 · Project Memory Summary\n\nGenerated at: ${stamp}\n\n## Contract\n`;
+    const original = summary('2026-10-24T10:00:00.000Z');
+    const regenerated = summary('2026-10-25T10:00:00.000Z');
+    fs.mkdirSync(path.dirname(nestedPath), { recursive: true });
+    fs.writeFileSync(memoryPath, original);
+    fs.writeFileSync(nestedPath, original);
+    fixture.writeArtifact(buildRulePackArtifact({
+        repoRoot: fixture.repoRoot, taskId: TASK_ID, stage: 'POST_PREFLIGHT',
+        preflightPath: fixture.preflightPath, loadedRuleFiles: [...RULE_NAMES, nestedPath]
+    }));
+    fixture.append('RULE_PACK_LOADED', {
+        stage: 'POST_PREFLIGHT', artifact_path: fixture.artifactPath.replace(/\\/gu, '/'),
+        preflight_path: fixture.preflightPath.replace(/\\/gu, '/')
+    });
+    const inspect = () => getRulePackEvidence(fixture.repoRoot, TASK_ID, 'POST_PREFLIGHT', {
+        preflightPath: fixture.preflightPath
+    });
+    assert.equal(inspect().evidence_status, 'PASS');
+    fs.writeFileSync(memoryPath, regenerated);
+    assert.equal(inspect().evidence_status, 'PASS', JSON.stringify({ rulesRoot, evidence: inspect() }));
+    fs.writeFileSync(nestedPath, regenerated);
+    const stale = inspect();
+    assert.equal(stale.evidence_status, 'EVIDENCE_LOADED_RULE_STALE');
+    assert.equal(stale.stale_loaded_rule_file, nestedPath.replace(/\\/gu, '/'));
 });
