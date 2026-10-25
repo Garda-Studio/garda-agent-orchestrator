@@ -625,6 +625,7 @@ export function formatDoctorResult(result: DoctorResult): string {
         lines.push(buildProfileAwareQueueNextLine(result.targetRoot, getBundlePath(result.targetRoot), `node ${resolveBundleName()}/bin/garda.js`));
     }
     else { lines.push('Doctor: FAIL'); lines.push('Resolve listed issues and rerun doctor.'); }
+    lines.push(...(result.trackedBundleWarnings || []).map(warning => 'Warning: ' + warning));
     return lines.join('\n');
 }
 
@@ -633,7 +634,7 @@ export function formatDoctorResult(result: DoctorResult): string {
  * On success: single summary line. On failure: full output (delegates to formatDoctorResult).
  */
 export function formatDoctorResultCompact(result: DoctorResult): string {
-    if (!result.passed) {
+    if (!result.passed || result.trackedBundleWarnings?.length) {
         return formatDoctorResult(result);
     }
     const manifestStatus = result.manifestResult

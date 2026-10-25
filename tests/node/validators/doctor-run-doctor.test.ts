@@ -1,3 +1,4 @@
+import { runGit } from '../../../src/core/git-helpers';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
@@ -576,4 +577,17 @@ test('runDoctor fails when profiles.json has dangling active_profile', () => {
     } finally {
         ws.cleanup();
     }
+});
+
+
+test('G1 doctor warns on tracked bundle and provides a disk-preserving untrack command', () => {
+    const ws = createDoctorWorkspace();
+    try {
+        runGit(ws.tmpDir, ['init']);
+        runGit(ws.tmpDir, ['add', '-f', 'garda-agent-orchestrator/']);
+        const result = runDoctor({ targetRoot: ws.tmpDir, sourceOfTruth: 'Claude' });
+        assert.match(formatDoctorResult(result), /git rm -r --cached -- "garda-agent-orchestrator\/"/);
+        fs.writeFileSync(path.join(ws.tmpDir, 'package.json'), '{"name":"garda-agent-orchestrator"}');
+        assert.doesNotMatch(formatDoctorResult(runDoctor({ targetRoot: ws.tmpDir, sourceOfTruth: 'Claude' })), /Installed Garda bundle files are tracked/);
+    } finally { fs.rmSync(ws.tmpDir, { recursive: true, force: true }); }
 });

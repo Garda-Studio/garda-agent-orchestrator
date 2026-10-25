@@ -1,3 +1,4 @@
+import { trackedInstalledBundleWarnings } from '../../gates/protected-control-plane/installed-bundle-guard';
 import { writeContainedFile } from '../../core/contained-filesystem';
 import { withLifecycleRuntimeMutationGenerationForPath } from '../runtime-mutation-generation';
 import type { UpdatePipelineStageResult } from './update-execution';
@@ -45,6 +46,7 @@ export function buildUpdateReportLines(data: UpdateReportData): string[] {
 
     const lines = [
         '# Update Report',
+        ...trackedInstalledBundleWarnings(data.normalizedTarget).map(warning => `Warning: ${warning}`),
         '',
         `GeneratedAt: ${new Date().toISOString()}`,
         `TargetRoot: ${data.normalizedTarget}`,
@@ -215,6 +217,6 @@ export function buildUpdateResult(input: UpdateResultInput) {
         updateReportPath: input.dryRun ? 'not-generated-in-dry-run' : input.updateReportRelativePath,
         updateMessages: announcements.updateMessages,
         releaseNotes: announcements.releaseNotes,
-        updateAnnouncementWarnings: announcements.warnings
+        updateAnnouncementWarnings: [...announcements.warnings, ...trackedInstalledBundleWarnings(input.normalizedTarget)]
     };
 }

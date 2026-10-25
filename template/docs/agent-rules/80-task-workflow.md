@@ -1,5 +1,7 @@
 # Task Workflow
 
+In installed projects, never edit, stage or commit files under the Garda bundle, even with operator approval. Record Garda defects in the orchestrator problems log instead of patching Garda inside the project. Change live/config settings only through existing workflow commands. Garda source-checkout development remains supported through orchestrator-work.
+
 Primary entry point: selected source-of-truth entrypoint for this workspace.
 
 ## Canonical Workflow Source

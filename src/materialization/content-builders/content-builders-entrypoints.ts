@@ -95,6 +95,15 @@ export function buildRedirectManagedBlock(
 export function buildCommitGuardManagedBlock() {
     const agentEnvLines = COMMIT_GUARD_AGENT_MARKERS.map((m) => `  "${m}"`).join('\n');
     return `${COMMIT_GUARD_START}
+# Installed bundle ownership is independent of commit approval.
+if ! node -e 'try { process.exit(require(process.cwd()+"/package.json").name === "garda-agent-orchestrator" ? 0 : 1); } catch { process.exit(1); }'; then
+  git diff --cached --quiet -- ':(top)garda-agent-orchestrator/'
+  garda_bundle_status=$?
+  if [ "$garda_bundle_status" != "0" ]; then
+    echo "Commit blocked: installed Garda bundle files cannot be committed. Record Garda defects in the orchestrator problems log."
+    exit 1
+  fi
+fi
 # Commit blocked by Garda auto-commit guard only for detected agent sessions.
 if [ "\${${COMMIT_GUARD_ENV_NAME}:-}" = "1" ]; then
   exit 0

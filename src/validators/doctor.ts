@@ -1,3 +1,4 @@
+import { trackedInstalledBundleWarnings } from '../gates/protected-control-plane/installed-bundle-guard';
 import { TASK_QUEUE_FILENAME } from '../core/orchestration-constants';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -255,6 +256,7 @@ export interface DoctorResult {
     manifestResult: ReturnType<typeof validateManifest> | null;
     manifestError: string | null;
     timelineEvidence: DoctorTimelineEvidence[];
+    trackedBundleWarnings?: string[];
     timelineWarnings: string[];
     lockHealth: TaskEventLockScanResult;
     lockCleanup: TaskEventLockCleanupResult | null;
@@ -377,6 +379,7 @@ export function runDoctor(options: DoctorOptions): DoctorResult {
         manifestResult: manifestResult,
         manifestError: manifestError,
         timelineEvidence: timelineScan.evidence,
+        trackedBundleWarnings: trackedInstalledBundleWarnings(targetRoot),
         timelineWarnings: timelineScan.warnings,
         lockHealth: lockHealth,
         lockCleanup: lockCleanup,

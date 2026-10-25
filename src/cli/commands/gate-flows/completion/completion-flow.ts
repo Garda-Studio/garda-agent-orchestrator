@@ -1,3 +1,4 @@
+import { assertNoStagedInstalledBundle } from '../../../../gates/protected-control-plane/installed-bundle-guard';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -664,6 +665,7 @@ function publishNativeSourceAcceptance(
 
 export async function runHumanCommitCommand(gitArgs: unknown, options: HumanCommitOptions = {}): Promise<number> {
     const invocation = parseHumanCommitInvocation(gitArgs, options);
+    assertNoStagedInstalledBundle(invocation.cwd);
     const prepared = prepareNativeCommit(invocation.cwd);
     let accepted: ReturnType<typeof assertNativeCommitReadiness> | undefined;
     let publicationAttempted = false;

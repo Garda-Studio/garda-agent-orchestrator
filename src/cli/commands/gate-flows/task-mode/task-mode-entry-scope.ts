@@ -1,3 +1,4 @@
+import { assertNoInstalledBundleScope } from '../../../../gates/protected-control-plane/installed-bundle-guard';
 import * as path from 'node:path';
 import { getWorkflowConfigControlPlanePaths } from '../../../../gates/workflow-config/workflow-config-work';
 import * as gateHelpers from '../../../../gates/shared/helpers';
@@ -32,6 +33,7 @@ export function normalizePlannedChangedFiles(repoRoot: string, rawValues: unknow
 
 export function resolveTaskModeEntryScope(repoRoot: string, rawPlannedChangedFiles: unknown): TaskModeEntryScope {
     const plannedChangedFiles = normalizePlannedChangedFiles(repoRoot, rawPlannedChangedFiles);
+    assertNoInstalledBundleScope(repoRoot, plannedChangedFiles);
     const protectedPlannedFiles = plannedChangedFiles.filter((entry) =>
         gateHelpers.testPathPrefix(entry, gateHelpers.getProtectedControlPlaneRoots(repoRoot))
     );

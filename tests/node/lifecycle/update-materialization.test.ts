@@ -1,3 +1,4 @@
+import { runGit } from '../../../src/core/git-helpers';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
@@ -1986,5 +1987,20 @@ describe('runUpdate', () => {
         } finally {
             removePathRecursive(projectRoot);
         }
+    });
+});
+
+
+describe('G1 tracked installed bundle warning', () => {
+    it('runUpdate reports the exact untrack command without changing project Git', () => {
+        const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(findRepoRoot());
+        try {
+            runGit(projectRoot, ['init']); runGit(projectRoot, ['add', '-f', 'garda-agent-orchestrator/VERSION']);
+            const before = runGit(projectRoot, ['ls-files', '-z']);
+            const result = runUpdate({ targetRoot: projectRoot, bundleRoot, initAnswersPath: answersPath,
+                skipVerify: true, skipManifestValidation: true, dryRun: true });
+            assert.match(result.updateAnnouncementWarnings.join('\n'), /git rm -r --cached -- "garda-agent-orchestrator\/"/);
+            assert.equal(runGit(projectRoot, ['ls-files', '-z']), before);
+        } finally { fs.rmSync(projectRoot, { recursive: true, force: true }); }
     });
 });

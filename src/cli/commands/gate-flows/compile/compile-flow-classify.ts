@@ -1,3 +1,4 @@
+import { assertNoInstalledBundleScope } from '../../../../gates/protected-control-plane/installed-bundle-guard';
 import * as fs from 'node:fs';
 import { freezeProjectValidationAdmission } from '../../../../gates/project-validation/authority';
 import * as path from 'node:path';
@@ -365,6 +366,7 @@ export function runClassifyChangeCommand(options: ClassifyChangeCommandOptions):
     try {
     const explicitChangedFilesProvided = options.changedFiles !== undefined;
     const explicitChangedFiles = expandValueList(options.changedFiles, { splitDelimiters: true });
+    assertNoInstalledBundleScope(repoRoot, explicitChangedFiles);
     const includeUntracked = parseBooleanOption(options.includeUntracked, options.useStaged ? false : true);
     const requestedDetectionSource = String(options.detectionSource || '').trim().toLowerCase();
     const requestedSplitCheckpointRange = parseSplitCheckpointDetectionSource(requestedDetectionSource);
@@ -416,6 +418,7 @@ export function runClassifyChangeCommand(options: ClassifyChangeCommandOptions):
             { noCache: true, readOnly: true }
         )
         : ordinaryWorkspaceSnapshot!;
+    assertNoInstalledBundleScope(repoRoot, workspaceSnapshot.changed_files);
     const authorizedFiles = Array.isArray(workspaceSnapshot.authorized_files)
         ? workspaceSnapshot.authorized_files
         : workspaceSnapshot.changed_files;

@@ -729,3 +729,39 @@ test('legacy timestamp arguments cannot forge fresh confirmation', async () => {
     await assert.rejects(() => runHumanCommitCommand(['--operator-confirmed', 'yes', '--operator-confirmed-at-utc', 'not-a-time', '-m', 'test: invalid']), /valid ISO-8601/);
     await assert.rejects(() => runHumanCommitCommand(['--operator-confirmed', 'yes', '--operator-confirmed-at-utc', new Date(Date.now() - OPERATOR_CONFIRMATION_MAX_AGE_MS - 60_000).toISOString(), '-m', 'test: stale']), /confirmation is stale/);
 });
+
+
+test('G1 human-commit rejects staged installed bundle files despite explicit approval', async t => {
+    const root = fixture();
+    try {
+        const file = 'garda-agent-orchestrator/dist/formatter.js';
+        fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+        fs.writeFileSync(path.join(root, file), 'patched');
+        runGit(root, ['add', '-f', file]);
+        auditFixture(t, root);
+        await assert.rejects(runHumanCommitCommand(['--task-id', TASK_ID, '-m', 'patch',
+            '--operator-confirmed', 'yes', '--operator-confirmed-at-utc', new Date().toISOString()], { cwd: root }),
+        /Installed Garda bundle cannot be committed/);
+
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test('G1 installed commit hook rejects bundle staging even with GARDA_ALLOW_COMMIT=1', t => {
+    const root = fixture();
+    try {
+        const file = 'garda-agent-orchestrator/dist/formatter.js';
+        fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+        fs.writeFileSync(path.join(root, file), 'patched'); runGit(root, ['add', '-f', file]);
+        const hook = path.join(root, '.git/hooks/pre-commit');
+        fs.writeFileSync(hook, '#!/usr/bin/env bash\n' + buildCommitGuardManagedBlock() + '\n'); fs.chmodSync(hook, 0o755);
+        const previous = process.env.GARDA_ALLOW_COMMIT;
+        process.env.GARDA_ALLOW_COMMIT = '1';
+        try {
+            assert.throws(() => runGit(root, ['commit', '-m', 'direct bundle patch']), /installed Garda bundle files cannot be committed/);
+            fs.writeFileSync(path.join(root, 'package.json'), '{"name":"garda-agent-orchestrator"}');
+            runGit(root, ['add', 'package.json']);
+            assert.doesNotThrow(() => runGit(root, ['commit', '-m', 'source checkout development']));
+        } finally { if (previous === undefined) delete process.env.GARDA_ALLOW_COMMIT; else process.env.GARDA_ALLOW_COMMIT = previous; }
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
