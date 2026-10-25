@@ -1,3 +1,7 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { syncTaskQueueStatusDetailed } from '../../../src/cli/commands/gate-flows/task/task-queue-sync';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -205,4 +209,49 @@ test('duplicate IDs and malformed rows are reported with line numbers instead of
     assert.deepEqual(queue.diagnostics?.map(item => `${item.kind}@${item.lineIndex + 1}`), ['malformed_row@6', 'duplicate_id@7']);
     assert.throws(() => assertCanonicalActiveTaskQueueIntegrity(queue), /line 6 has 3 cells[\s\S]*line 7 repeats task ID T-1 from line 5/u);
     assert.doesNotThrow(() => assertCanonicalActiveTaskQueueIntegrity(parseCanonicalActiveTaskQueue(T200_HEAD + t200Row('T-3', 'TODO'))));
+});
+
+
+test('long Notes do not widen other TASK.md rows or separator', () => {
+    const header = '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |';
+    const short = '| T-2 | 🟦 TODO | P1 | app | Short | agent | 2026-10-25 | balanced | kept \\| pipe |';
+    const content = ['## Active Queue', header, '|---|---|---|---|---|---|---|---|---|',
+        `| T-1 | TODO | P1 | app | Long | agent | 2026-10-25 | balanced | ${'x'.repeat(8000)} |`, short].join('\n');
+    const rows = formatActiveTaskQueueTable(content).split('\n').slice(1);
+    assert.equal(rows[0], header);
+    assert.ok(rows[1].length < 100, `separator length: ${rows[1].length}`);
+    assert.equal(rows[3], short);
+    assert.ok(rows[2].length < 8100, `long row length: ${rows[2].length}`);
+    assert.equal(parseCanonicalActiveTaskQueue(rows.join('\n')).rows[0].notes.length, 8000);
+});
+
+for (const headed of [true, false]) test(`the next native status write compacts ${headed ? 'headed' : 'headingless'} padded legacy TASK.md without losing queue data`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-compact-queue-'));
+    try {
+        const header = ['ID', 'Status', 'Priority', 'Area', 'Title', 'Owner', 'Updated', 'Profile', 'Notes'];
+        const values = [
+            ['T-1', 'TODO', 'P1', 'app', 'Long', 'agent', '2026-10-25', 'balanced', 'x'.repeat(8000)],
+            ['T-2', 'TODO', 'P2', 'app', 'Short', 'agent', '2026-10-25', 'balanced', 'kept \\| pipe']
+        ];
+        const widths = header.map((value, i) => Math.max(value.length, ...values.map(row => row[i].length)));
+        const padded = (row: string[]) => `| ${row.map((value, i) => value.padEnd(widths[i])).join(' | ')} |`;
+        const legacy = ['# Queue', ...(headed ? ['## Active Queue'] : []), padded(header), `|${widths.map(width => '-'.repeat(width + 2)).join('|')}|`,
+            ...values.map(padded), ''].join('\r\n');
+        const before = parseCanonicalActiveTaskQueue(legacy);
+        assertCanonicalActiveTaskQueueIntegrity(before);
+        assert.equal(before.rows.length, 2);
+        const file = path.join(root, 'TASK.md');
+        fs.writeFileSync(file, legacy);
+        const result = syncTaskQueueStatusDetailed(root, 'T-2', 'IN_PROGRESS');
+        assert.equal(result.outcome, 'updated', result.error_message ?? 'status write failed');
+        const compact = fs.readFileSync(file, 'utf8');
+        const after = parseCanonicalActiveTaskQueue(compact);
+        assertCanonicalActiveTaskQueueIntegrity(after);
+        assert.deepEqual(after.rows.map(row => [row.taskId, row.title, row.notes]),
+            before.rows.map(row => [row.taskId, row.title, row.notes]));
+        assert.equal(readTaskQueueStatusToken(after.rows[1].status), 'IN_PROGRESS');
+        assert.ok(compact.length < legacy.length / 2, `compact ${compact.length}, legacy ${legacy.length}`);
+        assert.ok(compact.split('\r\n').find(line => line.startsWith('| T-2 '))!.length < 130);
+        assert.ok(compact.endsWith('\r\n'));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

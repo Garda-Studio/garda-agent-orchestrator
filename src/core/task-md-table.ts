@@ -276,8 +276,8 @@ export function assertCanonicalActiveTaskQueueIntegrity(queue: CanonicalActiveTa
     }
 }
 
-function formatTaskMdTableRowValues(values: readonly string[], widths: readonly number[]): string {
-    return `| ${values.map((value, index) => value.padEnd(widths[index])).join(' | ')} |`;
+function formatTaskMdTableRowValues(values: readonly string[]): string {
+    return `| ${values.join(' | ')} |`;
 }
 
 function formatTaskMdTableSeparator(widths: readonly number[]): string {
@@ -294,7 +294,7 @@ export function formatActiveTaskQueueTable(content: string): string {
         lines.pop();
     }
 
-    const range = findActiveQueueTableIndexes(lines);
+    const range = findActiveQueueTableIndexes(lines) || findFirstCanonicalQueueTableIndexes(lines);
     if (!range) {
         return content;
     }
@@ -320,15 +320,12 @@ export function formatActiveTaskQueueTable(content: string): string {
     }
 
     const headerValues = headerCells.map((cell) => cell.trimmed);
-    const widths = headerValues.map((header, columnIndex) => Math.max(
-        header.length,
-        ...parsedRows.map((row) => row[columnIndex].length)
-    ));
+    const widths = headerValues.map(header => header.length);
 
     const formattedLines = [
-        formatTaskMdTableRowValues(headerValues, widths),
+        formatTaskMdTableRowValues(headerValues),
         formatTaskMdTableSeparator(widths),
-        ...parsedRows.map((row) => formatTaskMdTableRowValues(row, widths))
+        ...parsedRows.map((row) => formatTaskMdTableRowValues(row))
     ];
 
     const nextLines = [

@@ -10,6 +10,7 @@ import {
     type ReviewFollowUpTaskClosurePolicyValue
 } from '../../../core/review-follow-up-task-closure-policy';
 import {
+    formatActiveTaskQueueTable,
     parseCanonicalActiveTaskQueue,
     replaceTaskMdTableCell
 } from '../../../core/task-md-table';
@@ -273,7 +274,7 @@ function persistPolicy(
             }
             const lines = snapshot.content.split(/\r?\n/u);
             lines[snapshot.taskLineIndex] = nextLine;
-            writeTaskQueueFile(snapshot.taskPath, lines.join(snapshot.newline));
+            writeTaskQueueFile(snapshot.taskPath, formatActiveTaskQueueTable(lines.join(snapshot.newline)));
             try {
                 const persistedSnapshot = readCanonicalTaskSnapshot(repoRoot, taskId);
                 if (

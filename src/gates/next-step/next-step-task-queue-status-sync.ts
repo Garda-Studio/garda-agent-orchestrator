@@ -191,7 +191,7 @@ function syncTaskQueueStatusToDecomposed(repoRoot: string, taskId: string, optio
             }
 
             try {
-                writeTaskQueueFile(taskPath, lines.join(newline));
+                writeTaskQueueFile(taskPath, formatActiveTaskQueueTable(lines.join(newline)));
                 return {
                     outcome: 'updated',
                     task_path: normalizePath(taskPath),
