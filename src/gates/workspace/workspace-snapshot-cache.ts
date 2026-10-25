@@ -15,8 +15,8 @@ import { getSafeWorktreePathState } from './worktree-path-state';
 import { normalizeGitChangeClassificationEvidence } from '../../core/git-change-classification';
 import { canonicalPathList, pathListSha256 } from '../shared/canonical-path-list';
 
-// Invalidate authenticated snapshots produced before runtime ownership was restricted to bundle roots.
-const CACHE_VERSION = 7;
+// Bind excluded build outputs separately. Version 8 is reserved by feature/2.0.
+const CACHE_VERSION = 9;
 const CACHE_INTEGRITY_SCHEMA_VERSION = 3;
 const CACHE_RELATIVE_PATH = path.join('runtime', 'cache', 'workspace-snapshot.json');
 const CACHE_AUTH_KEY_RELATIVE_PATH = path.join('garda-agent-orchestrator', 'workspace-snapshot-cache.key');
@@ -418,6 +418,12 @@ function authenticateWorkspaceSnapshot(
     ) {
         throw new Error('Workspace snapshot authentication failed: ignored generated-file binding is inconsistent.');
     }
+    const ignoredBuildOutputFiles = normalizeExplicitChangedFiles(snapshot.ignored_build_output_files);
+    if (!sameStringList(ignoredBuildOutputFiles, snapshot.ignored_build_output_files)
+        || snapshot.ignored_build_output_files_count !== ignoredBuildOutputFiles.length
+        || ignoredBuildOutputFiles.some(file => authorizedFiles.includes(file) || ignoredGeneratedRuntimeFiles.includes(file))) {
+        throw new Error('Workspace snapshot authentication failed: ignored build-output binding is inconsistent.');
+    }
     const normalizedClassification = normalizeGitChangeClassificationEvidence(snapshot.git_change_classification);
     if (
         snapshot.git_change_classification != null
@@ -484,7 +490,8 @@ function authenticateWorkspaceSnapshot(
     const requestParameterBindingMatches = params.detection_source === 'explicit_changed_files'
         ? params.explicit_changed_files_hash === stringSha256(normalizeExplicitRequestFiles(params.repo_root, [
             ...snapshot.authorized_files,
-            ...snapshot.ignored_generated_runtime_files
+            ...snapshot.ignored_generated_runtime_files,
+            ...snapshot.ignored_build_output_files
         ]).join('\n'))
         : snapshot.authorized_files_sha256 === snapshot.changed_files_sha256;
     if (

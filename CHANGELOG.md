@@ -6,7 +6,7 @@
 
 - Garda works with a wider range of languages and build tools. Project discovery, file classification and validation no longer depend on Node.js conventions. Unsupported toolchains receive clear setup guidance. CMake projects get suggested build and `ctest` commands.
 - Use your own build and test commands, including focused tests and declared report files. Validation records what actually ran; independent review checks the results before task completion.
-- By default, generated build folders stay out of task scopes and reviews. Exclusions are configurable; tracked files always remain visible.
+- By default, generated build folders stay out of task scopes and reviews. Exclusions are configurable; tracked files always remain visible. Explicit scope requests retain excluded build-output paths in separate authenticated metadata and show the exclusions, so untracked dist files no longer break request binding. Workspace snapshot cache format is now version 9 (version 8 is reserved by the 2.0 branch).
 - Validation handles Git line-ending conversion correctly, avoiding false content mismatches on Windows.
 - Test reports may be rewritten by the current run. When a report is stale, the error names the directory to clear.
 - File names with Cyrillic and other non-ASCII characters, spaces or quotes now work consistently in scopes, line counts and review diffs. Diffs display readable file names.

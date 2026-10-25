@@ -506,6 +506,13 @@ export function runClassifyChangeCommand(options: ClassifyChangeCommandOptions):
         result.workspace_hygiene_warnings = buildGeneratedRuntimeArtifactHygieneWarnings(ignoredGeneratedRuntimeFiles);
     }
 
+    const ignoredBuildOutputFiles = workspaceSnapshot.ignored_build_output_files;
+    result.metrics.ignored_build_output_files_count = ignoredBuildOutputFiles.length;
+    result.triggers.ignored_build_output_files = ignoredBuildOutputFiles;
+    if (ignoredBuildOutputFiles.length > 0) {
+        result.workspace_hygiene_warnings.push(`Excluded build output from task scope: ${ignoredBuildOutputFiles.join(', ')}.`);
+    }
+
     const protectedFilesSnapshot = gateHelpers.scanProtectedPathHashes(
         repoRoot,
         gateHelpers.getProtectedControlPlaneRoots(repoRoot)

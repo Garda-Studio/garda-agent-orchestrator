@@ -1,3 +1,4 @@
+import * as compileGate from '../../../../../../src/gates/compile/compile-gate';
 import { describe, it, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -173,4 +174,41 @@ describe('generated runtime ownership in native Git scope', () => {
             'dist/src/cli/main.js', 'dist/publish-runtime-manifest.json'
         ], { isSourceCheckout: true }).reviewableFiles, ['dist/src/cli/main.js']);
     });
+});
+
+
+describe('G5 explicit build-output request binding', () => {
+    for (const state of ['untracked', 'tracked', 'staged'] as const) {
+        it(`classify-change preserves binding for ${state} dist paths and reports exclusions`, t => {
+            const { repoRoot, taskId, target } = createFixture(t, 'dist', state);
+            writeFile(repoRoot, 'src/app.js', 'const app = 2;\n');
+            const result = JSON.parse(runClassifyChangeCommand({ repoRoot, taskId,
+                taskIntent: 'Adjust nested helper logic', changedFiles: ['src/app.js', target], includeUntracked: true }).outputText);
+            const excluded = state === 'untracked' ? [target] : [];
+            assert.deepEqual(result.triggers.ignored_build_output_files, excluded);
+            assert.equal(result.metrics.ignored_build_output_files_count, excluded.length);
+            assert.ok(!result.triggers.ignored_generated_runtime_files.includes(target));
+            assert.equal(result.changed_files.includes(target), state !== 'untracked');
+            if (state === 'untracked') assert.match(result.workspace_hygiene_warnings.join(' '), /Excluded build output/);
+            const cached = getWorkspaceSnapshotCached(repoRoot, 'explicit_changed_files', true, ['src/app.js', target]);
+            assert.deepEqual('ignored_build_output_files' in cached ? cached.ignored_build_output_files : undefined, excluded);
+        });
+    }
+    for (const mutation of ['remove', 'add', 'replace'] as const) {
+        it(`classify-change rejects a snapshot whose excluded request path was ${mutation}d`, t => {
+            const { repoRoot, taskId, target } = createFixture(t, 'dist', 'untracked');
+            writeFile(repoRoot, 'src/app.js', 'const app = 2;\n');
+            const nativeSnapshot = compileGate.getWorkspaceSnapshot;
+            t.mock.method(compileGate, 'getWorkspaceSnapshot', (...args: Parameters<typeof nativeSnapshot>) => {
+                if (args[1] === 'explicit_changed_files') {
+                    args[3] = mutation === 'remove' ? ['src/app.js']
+                        : mutation === 'add' ? ['src/app.js', target, 'dist/extra.js']
+                        : ['src/app.js', 'dist/replaced.js'];
+                }
+                return nativeSnapshot(...args);
+            });
+            assert.throws(() => runClassifyChangeCommand({ repoRoot, taskId, taskIntent: 'Adjust nested helper logic',
+                changedFiles: ['src/app.js', target], includeUntracked: true }), /request parameter binding is inconsistent/);
+        });
+    }
 });

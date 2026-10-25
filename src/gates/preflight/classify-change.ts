@@ -75,6 +75,7 @@ export interface ClassifyChangeMetrics {
     classification_config_path: string;
     changed_files_count: number;
     ignored_generated_runtime_files_count: number;
+    ignored_build_output_files_count?: number;
     changed_lines_total: number;
     additions_total: number;
     deletions_total: number;
@@ -149,6 +150,7 @@ export interface ClassifyChangeTriggers {
     ui_i18n_review_trigger_files: string[];
     ui_i18n_review_trigger_suppressed_files: string[];
     ignored_generated_runtime_files: string[];
+    ignored_build_output_files?: string[];
     protected_control_plane_snapshot_sha256?: string;
     protected_control_plane_manifest_status?: string;
     protected_control_plane_manifest_path?: string | null;

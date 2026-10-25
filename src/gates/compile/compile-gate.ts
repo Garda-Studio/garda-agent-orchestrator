@@ -699,6 +699,8 @@ export function getWorkspaceSnapshot(
             git_change_classification: null,
             authorized_files: snapshot.changed_files,
             authorized_files_count: snapshot.changed_files_count,
+            ignored_build_output_files: [] as string[],
+            ignored_build_output_files_count: 0,
             authorized_files_sha256: snapshot.changed_files_sha256
         };
     }
@@ -733,6 +735,11 @@ export function getWorkspaceSnapshot(
         .sort();
     const explicitSplit = splitGeneratedRuntimeControlPlaneArtifacts(allNormalizedExplicit, generatedRuntimeSplitOptions);
     const normalizedExplicit = filterBuildOutputScopePaths(repoRoot, explicitSplit.reviewableFiles);
+    const includedExplicitFiles = new Set(normalizedExplicit);
+    const ignoredBuildOutputFiles = source === 'explicit_changed_files'
+        ? explicitSplit.reviewableFiles.filter(file => !includedExplicitFiles.has(file)).sort()
+        : [];
+
     const ignoredGeneratedRuntimeFiles = [
         ...rawExplicitSplit.ignoredGeneratedRuntimeFiles,
         ...explicitSplit.ignoredGeneratedRuntimeFiles
@@ -827,6 +834,8 @@ export function getWorkspaceSnapshot(
             authorized_files_count: normalizedExplicit.length,
             authorized_files_sha256: authorizedFilesFingerprint,
             changed_files: normalizedChanged, changed_files_count: normalizedChanged.length,
+            ignored_build_output_files: ignoredBuildOutputFiles,
+            ignored_build_output_files_count: ignoredBuildOutputFiles.length,
             ignored_generated_runtime_files: [...new Set(ignoredGeneratedRuntimeFiles)].sort(),
             ignored_generated_runtime_files_count: new Set(ignoredGeneratedRuntimeFiles).size,
             additions_total: additionsTotal, deletions_total: deletionsTotal,
@@ -925,6 +934,8 @@ export function getWorkspaceSnapshot(
         authorized_files_count: normalizedChanged.length,
         authorized_files_sha256: filesFingerprint,
         changed_files: normalizedChanged, changed_files_count: normalizedChanged.length,
+        ignored_build_output_files: ignoredBuildOutputFiles,
+        ignored_build_output_files_count: ignoredBuildOutputFiles.length,
         ignored_generated_runtime_files: [...new Set(ignoredGeneratedRuntimeFiles)].sort(),
         ignored_generated_runtime_files_count: new Set(ignoredGeneratedRuntimeFiles).size,
         additions_total: additionsTotal, deletions_total: deletionsTotal,
