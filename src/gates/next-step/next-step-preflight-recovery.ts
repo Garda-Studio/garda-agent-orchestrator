@@ -1,9 +1,8 @@
+import { formatInstalledBundleMaintenanceGuidance } from '../protected-control-plane/installed-bundle-guard';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import {
-    buildGardaSelfGuardPolicyChangeCommand,
-    formatGardaSelfGuardProtectedControlPlaneGuidance,
     isGardaSelfGuardDenyAgentEntryForBundle
 } from '../../core/workflow-config';
 import {
@@ -627,9 +626,9 @@ export function readFailedGateRecovery(
                 title: 'Garda self-guard blocks agent-owned protected baseline recovery.',
                 reason:
                     `Latest PREFLIGHT_FAILED event (seq ${latestPreflightFailure.sequence}) reports protected pre-existing baseline drift. ` +
-                    formatGardaSelfGuardProtectedControlPlaneGuidance(),
-                label: 'Operator policy change',
-                command: buildGardaSelfGuardPolicyChangeCommand(cliPrefix)
+                    formatInstalledBundleMaintenanceGuidance(cliPrefix, taskId),
+                label: 'Inspect Garda installation',
+                command: `${cliPrefix} doctor --target-root "."`
             };
         }
         const workflowConfigRecovery = taskMode?.workflow_config_work === true;
@@ -672,9 +671,9 @@ export function readFailedGateRecovery(
                     reason:
                         `Latest PREFLIGHT_FAILED event (seq ${latestPreflightFailure.sequence}) reports dirty pre-task files, ` +
                         `but current protected control-plane scope is present: ${formatPathList(currentProtectedScope.protectedFiles)}. ` +
-                        formatGardaSelfGuardProtectedControlPlaneGuidance(),
-                    label: 'Operator policy change',
-                    command: buildGardaSelfGuardPolicyChangeCommand(cliPrefix)
+                        formatInstalledBundleMaintenanceGuidance(cliPrefix, taskId),
+                    label: 'Inspect Garda installation',
+                    command: `${cliPrefix} doctor --target-root "."`
                 };
             }
             return {
@@ -716,9 +715,9 @@ export function readFailedGateRecovery(
             title: 'Garda self-guard blocks agent-owned protected control-plane recovery.',
             reason:
                 `Latest PREFLIGHT_FAILED event (seq ${latestPreflightFailure.sequence}) contains a protected ${hasWorkflowConfigRecoverySignal ? 'workflow-config' : 'control-plane'} recovery signal. ` +
-                formatGardaSelfGuardProtectedControlPlaneGuidance(),
-            label: 'Operator policy change',
-            command: buildGardaSelfGuardPolicyChangeCommand(cliPrefix)
+                formatInstalledBundleMaintenanceGuidance(cliPrefix, taskId),
+            label: 'Inspect Garda installation',
+            command: `${cliPrefix} doctor --target-root "."`
         };
     }
     if (hasWorkflowConfigRecoverySignal && !taskMetadataAllowsWorkflowConfigWork(taskEntry)) {

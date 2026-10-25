@@ -810,8 +810,9 @@ describe('gates/next-step protected recovery', () => {
         assert.equal(result.next_gate, 'operator-maintenance');
         assert.match(result.reason, /Garda self-guard is on/);
         assert.ok(!result.commands[0].command.includes('--orchestrator-work'));
-        assert.ok(result.commands[0].command.includes('workflow set'));
-        assert.ok(result.commands[0].command.includes('--garda-self-guard off'));
+        assert.ok(result.commands[0].command.includes('doctor --target-root'));
+        assert.ok(!result.commands[0].command.includes('workflow set'));
+        assert.ok(!result.commands[0].command.includes('--garda-self-guard off'));
     });
 
     it('prefers protected-manifest classify recovery command over a stale classify rerun', () => {
@@ -1769,8 +1770,9 @@ describe('gates/next-step protected recovery', () => {
         assert.match(result.reason, /before classify-change/);
         assert.match(result.reason, /Garda self-guard is on/);
         assert.ok(!result.commands[0].command.includes('--orchestrator-work'));
-        assert.ok(result.commands[0].command.includes('workflow set'));
-        assert.ok(result.commands[0].command.includes('--garda-self-guard off'));
+        assert.ok(result.commands[0].command.includes('doctor --target-root'));
+        assert.ok(!result.commands[0].command.includes('workflow set'));
+        assert.ok(!result.commands[0].command.includes('--garda-self-guard off'));
         assert.ok(!result.commands[0].command.includes('gate classify-change'));
     });
 
@@ -1787,8 +1789,9 @@ describe('gates/next-step protected recovery', () => {
         assert.match(result.reason, /protected workflow-config recovery signal/);
         assert.match(result.reason, /Garda self-guard is on/);
         assert.ok(!result.commands[0].command.includes('--orchestrator-work'));
-        assert.ok(result.commands[0].command.includes('workflow set'));
-        assert.ok(result.commands[0].command.includes('--garda-self-guard off'));
+        assert.ok(result.commands[0].command.includes('doctor --target-root'));
+        assert.ok(!result.commands[0].command.includes('workflow set'));
+        assert.ok(!result.commands[0].command.includes('--garda-self-guard off'));
     });
 
     it('ignores stale workflow-config preflight failures after later successful preflight', () => {
@@ -2085,5 +2088,23 @@ describe('G3 current rebind scope', () => {
         const command = result.commands[0].command;
         for (const file of files) assert.ok(command.includes(`--planned-changed-file "${file}"`), command);
         assert.ok(!command.includes('unrelated.md'), command);
+    });
+});
+
+
+describe('G4 installed update maintenance remains fail-closed', () => {
+    it('resolveNextStep explains update drift and provides inspection without disabling self-guard', () => {
+        const repoRoot = makeTempRepo();
+        const file = path.join(repoRoot, 'garda-agent-orchestrator/dist/formatter.js');
+        fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, 'before update\n');
+        initGitRepo(repoRoot); seedStartedTask(repoRoot, TASK_ID);
+        fs.writeFileSync(file, 'after update\n');
+        const result = resolveNextStep({ repoRoot, taskId: TASK_ID });
+        assert.equal(result.next_gate, 'operator-maintenance', result.reason);
+        assert.match(result.reason, /operator garda update/);
+        assert.match(result.reason, /Untracking alone does not refresh retained baseline hashes/);
+        assert.match(result.reason, /git rm -r --cached/);
+        assert.match(result.commands[0].command, /doctor --target-root/);
+        assert.doesNotMatch(result.commands[0].command, /self-guard off|task-reset|repair-protected/);
     });
 });

@@ -1,3 +1,4 @@
+import { formatInstalledBundleMaintenanceGuidance } from '../protected-control-plane/installed-bundle-guard';
 import { ExpectedRedEvidenceError, taskRequiresExpectedRed } from '../test-first/expected-red-evidence';
 import { resolveAuthoritativeReviewValidationObligations } from '../review-context/review-context-coverage';
 import { resolveValidationSemanticReviewLanes } from '../../policy/effective-review-snapshot';
@@ -123,9 +124,7 @@ import {
     resolveBundleNameForTarget
 } from '../../core/constants';
 import {
-    buildGardaSelfGuardPolicyChangeCommand,
     buildDefaultWorkflowConfig,
-    formatGardaSelfGuardProtectedControlPlaneGuidance,
     isGardaSelfGuardDenyAgentEntryForBundle,
     type FullSuiteValidationPlacement
 } from '../../core/workflow-config';
@@ -3254,9 +3253,9 @@ export function resolveNextStepDecisionRoute(
                 title: 'Garda self-guard blocks agent-owned protected control-plane work.',
                 reason:
                     `The current workspace already contains protected Garda control-plane files before classify-change: ${protectedScopeList}. ` +
-                    formatGardaSelfGuardProtectedControlPlaneGuidance(),
+                    formatInstalledBundleMaintenanceGuidance(cliPrefix, taskId),
                 commands: [
-                    buildCommand('Operator policy change', buildGardaSelfGuardPolicyChangeCommand(cliPrefix))
+                    buildCommand('Inspect Garda installation', `${cliPrefix} doctor --target-root "."`)
                 ]
             };
         }
@@ -3971,8 +3970,8 @@ export function resolveNextStepDecisionRoute(
             touched: preflightTouchesProtectedControlPlane(preflight),
             taskModeHasOrchestratorWork: Boolean(taskMode?.orchestrator_work),
             selfGuardDeny: isGardaSelfGuardDenyAgentEntry(repoRoot),
-            selfGuardGuidance: formatGardaSelfGuardProtectedControlPlaneGuidance(),
-            selfGuardPolicyChangeCommand: buildGardaSelfGuardPolicyChangeCommand(cliPrefix),
+            selfGuardGuidance: formatInstalledBundleMaintenanceGuidance(cliPrefix, taskId),
+            maintenanceInspectionCommand: `${cliPrefix} doctor --target-root "."`,
             orchestratorWorkRestartCommand: buildOrchestratorWorkRestartCommand(repoRoot, cliPrefix, taskId, taskMode)
         },
         postReviewSourceMutationGuard,

@@ -39,3 +39,17 @@ export function trackedInstalledBundleWarnings(repoRoot: string): string[] {
     if (!files.length) return [];
     return [`Installed Garda bundle files are tracked by project Git (${files.length}). Preserve files on disk and untrack them with: git rm -r --cached -- "${DEFAULT_BUNDLE_NAME}/". Then commit the index removal. ${INSTALLED_BUNDLE_GUIDANCE}`];
 }
+
+
+export function formatInstalledBundleMaintenanceGuidance(cliPrefix: string, taskId: string): string {
+    return 'Garda self-guard is on and remains on. An operator garda update can change protected files pinned by an active task; '
+        + 'an update log alone does not authorize replacing the task baseline. Preserve application changes and runtime evidence. '
+        + `First inspect the installation with: ${cliPrefix} doctor --target-root ".". `
+        + 'Inspect tracked bundle files with: git ls-files -- "garda-agent-orchestrator/". '
+        + 'If any are tracked, ask the operator to untrack them while preserving disk files: git rm -r --cached -- "garda-agent-orchestrator/". '
+        + `After operator maintenance, rerun: ${cliPrefix} next-step "${taskId}" --repo-root ".". `
+        + 'Untracking alone does not refresh retained baseline hashes. If the same drift remains, stop and retain the evidence: '
+        + '1.4.4 has no authenticated update-to-task rebind while self-guard stays on. '
+        + 'The operator must choose recovery from the pre-update backup or a future supported rebind; do not patch bundle code, '
+        + 'disable self-guard, rewrite snapshots, or reset the task automatically.';
+}

@@ -26,7 +26,7 @@ export interface NextStepProtectedControlPlaneRoutingOptions {
     taskModeHasOrchestratorWork: boolean;
     selfGuardDeny: boolean;
     selfGuardGuidance: string;
-    selfGuardPolicyChangeCommand: string;
+    maintenanceInspectionCommand: string;
     orchestratorWorkRestartCommand: string;
 }
 
@@ -125,7 +125,7 @@ export function resolveNextStepPreGuardRoute(
                     'The current preflight touches protected Garda control-plane files. ' +
                     options.protectedControlPlane.selfGuardGuidance,
                 commands: [
-                    buildCommand('Operator policy change', options.protectedControlPlane.selfGuardPolicyChangeCommand)
+                    buildCommand('Inspect Garda installation', options.protectedControlPlane.maintenanceInspectionCommand)
                 ]
             };
         }

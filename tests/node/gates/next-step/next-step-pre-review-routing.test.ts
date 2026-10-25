@@ -19,7 +19,7 @@ function basePreGuardOptions(overrides?: Partial<NextStepPreGuardRoutingOptions>
             taskModeHasOrchestratorWork: false,
             selfGuardDeny: false,
             selfGuardGuidance: 'operator maintenance required',
-            selfGuardPolicyChangeCommand: 'node bin/garda.js workflow set --garda-self-guard off',
+            maintenanceInspectionCommand: 'node bin/garda.js doctor --target-root "."',
             orchestratorWorkRestartCommand: 'node bin/garda.js gate enter-task-mode --orchestrator-work'
         },
         workspaceReadiness: {
@@ -73,7 +73,7 @@ test('resolveNextStepPreGuardRoute routes protected control-plane scope through 
 
     assert.ok(route);
     assert.equal(route.nextGate, 'operator-maintenance');
-    assert.equal(route.commands[0].label, 'Operator policy change');
+    assert.equal(route.commands[0].label, 'Inspect Garda installation');
     assert.match(route.reason, /protected Garda control-plane files/);
 });
 

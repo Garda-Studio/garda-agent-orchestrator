@@ -935,7 +935,7 @@ test('resolvePreGuardDecisionRoute preserves stale-cycle refresh ahead of later 
             taskModeHasOrchestratorWork: false,
             selfGuardDeny: true,
             selfGuardGuidance: 'Operator maintenance required.',
-            selfGuardPolicyChangeCommand: 'node bin/garda.js workflow set --self-guard',
+            maintenanceInspectionCommand: 'node bin/garda.js workflow set --self-guard',
             orchestratorWorkRestartCommand: 'node bin/garda.js gate enter-task-mode --orchestrator-work'
         },
         workspaceReadiness: {
