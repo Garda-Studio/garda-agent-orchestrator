@@ -20,7 +20,13 @@ import {
     getReviewFindingsValidationArtifactPath
 } from '../../../../src/gates/review/review-findings-validation-artifact';
 import { resolveReviewContextExecutionEvidenceBindings } from '../../../../src/gates/review/review-evidence-contract';
-import type { ReviewFindingsDispositionArtifact } from '../../../../src/gates/review/review-findings-disposition-artifact';
+import {
+    buildReviewFindingsDispositionArtifact,
+    getReviewFindingsDispositionArtifactPath,
+    type ReviewFindingsDispositionArtifact
+} from '../../../../src/gates/review/review-findings-disposition-artifact';
+import { resolveLockedReviewFindingPolicyFromPreflight } from '../../../../src/gates/review/review-finding-disposition';
+import { resolvePersistedRemediationReviewExecutionAuthority } from '../../../../src/gates/review-remediation/review-remediation-execution-authority';
 import type { ReviewFindingsValidationArtifact } from '../../../../src/gates/review/review-findings-validation-artifact';
 import {
     buildReviewRemediationReviewContract,
@@ -989,6 +995,63 @@ describe('review remediation FULL/DELTA execution contract', () => {
             const accepted = buildReviewCoverageAuditSummary({ reviewsRoot, taskId: TASK_ID, requiredReviews: { test: true } });
             assert.equal(accepted.status, 'COMPLETE', JSON.stringify(accepted.entries[0]?.violations));
             assert.equal(accepted.entries[0]?.obligation_count, coverageContract.obligation_count);
+
+            const dispositionArtifactPath = getReviewFindingsDispositionArtifactPath(reviewArtifactPath);
+            const dispositionArtifactSha256 = writeJson(dispositionArtifactPath, buildReviewFindingsDispositionArtifact({
+                taskId: TASK_ID, reviewType: REVIEW_TYPE,
+                validationArtifact, validationArtifactPath, validationArtifactSha256,
+                policyResolution: resolveLockedReviewFindingPolicyFromPreflight({ changed_files: fullReviewScope })
+            }));
+            const receiptSha256 = sha256Text(fs.readFileSync(receiptPath, 'utf8'));
+            const recordedDetails = {
+                task_id: TASK_ID, review_type: REVIEW_TYPE, preflight_sha256: preflightSha256,
+                review_context_path: contextPath, review_context_sha256: contextSha256,
+                receipt_path: receiptPath, receipt_sha256: receiptSha256,
+                review_artifact_path: reviewArtifactPath, review_artifact_sha256: reviewArtifactSha256
+            };
+            appendTaskEvent(bundleRoot, TASK_ID, 'REVIEW_RECORDED', 'PASS', 'Fresh DELTA review recorded.', recordedDetails);
+            const reconstructAuthority = () => resolvePersistedRemediationReviewExecutionAuthority({
+                reviewsRoot, taskId: TASK_ID, reviewType: REVIEW_TYPE,
+                preflightPath, preflightSha256, fullReviewScope,
+                reviewExecution, reviewContextPath: contextPath, receiptPath,
+                acceptPreservedPendingReuse: true
+            });
+            const recordedOnlyAuthority = reconstructAuthority();
+            assert.ok(recordedOnlyAuthority);
+            assert.equal(recordedOnlyAuthority.acceptedCurrentPassReplacement, false,
+                'same-decision DELTA must not treat REVIEW_RECORDED alone as accepted replacement');
+            assert.deepEqual(getReviewRemediationReviewContractViolations(reviewExecution, recordedOnlyAuthority), []);
+            const baselineBytes = fs.readFileSync(fixture.delta.baseline.artifact_path);
+            fs.writeFileSync(fixture.delta.baseline.artifact_path, '{"superseded":true}\n', 'utf8');
+            const staleBaselineAuthority = reconstructAuthority();
+            assert.ok(staleBaselineAuthority);
+            assert.ok(getReviewRemediationReviewContractViolations(reviewExecution, staleBaselineAuthority)
+                .some((entry) => entry.includes('DELTA baseline is invalid')));
+
+            const timelinePath = path.join(bundleRoot, 'runtime', 'task-events', `${TASK_ID}.jsonl`);
+            const recordedEvent = JSON.parse(fs.readFileSync(timelinePath, 'utf8').trim().split('\n').at(-1)!) as {
+                integrity: { task_sequence: number; event_sha256: string }
+            };
+            appendTaskEvent(bundleRoot, TASK_ID, 'REVIEW_CONTEXT_REUSE_ACCEPTED', 'PASS', 'DELTA replacement accepted.', {
+                ...recordedDetails, preflight_path: preflightPath,
+                current_pass_review_evidence: true, review_reuse_evidence: 'FRESH', reused_existing_review: false,
+                findings_validation_required: true,
+                findings_validation_artifact_path: validationArtifactPath,
+                findings_validation_artifact_sha256: validationArtifactSha256,
+                findings_disposition_artifact_path: dispositionArtifactPath,
+                findings_disposition_artifact_sha256: dispositionArtifactSha256,
+                review_recorded_sequence: recordedEvent.integrity.task_sequence,
+                review_recorded_event_sha256: recordedEvent.integrity.event_sha256,
+                remediation_mode: 'DELTA', remediation_authority_eligible: true,
+                remediation_authoritative_decision_sha256: decision.decision_sha256,
+                remediation_classification_sha256: decision.classification_sha256
+            });
+            const acceptedReplacementAuthority = reconstructAuthority();
+            assert.ok(acceptedReplacementAuthority);
+            assert.equal(acceptedReplacementAuthority.acceptedCurrentPassReplacement, true);
+            assert.deepEqual(getReviewRemediationReviewContractViolations(reviewExecution, acceptedReplacementAuthority), [],
+                'fully authenticated accepted replacement must still tolerate a superseded mutable baseline');
+            fs.writeFileSync(fixture.delta.baseline.artifact_path, baselineBytes);
 
             writeJson(contextPath, {
                 ...context,

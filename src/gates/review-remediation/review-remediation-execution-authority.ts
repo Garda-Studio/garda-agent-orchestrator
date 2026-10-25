@@ -56,6 +56,7 @@ function hasAuthenticatedFreshCurrentPassReplacement(options: {
     restartIndex: number;
     restartSequence: number;
     authorityOptions: PersistedRemediationReviewExecutionAuthorityOptions;
+    acceptRecordedOnly?: boolean;
 }): boolean {
     const authorityOptions = options.authorityOptions;
     const reviewContextPath = authorityOptions.reviewContextPath || '';
@@ -128,7 +129,7 @@ function hasAuthenticatedFreshCurrentPassReplacement(options: {
         const acceptedSequence = taskEventSequence(event);
         if (event.event_type === 'REVIEW_RECORDED' && acceptedSequence > options.restartSequence) {
             reviewRecordedEventsBySequence.set(acceptedSequence, event);
-            if (authorityOptions.acceptPreservedPendingReuse === true && matchesRecordedEvidence(event)) return true;
+            if (options.acceptRecordedOnly === true && matchesRecordedEvidence(event)) return true;
             continue;
         }
         const reviewRecordedSequence = Number(details?.review_recorded_sequence);
@@ -291,7 +292,8 @@ export function resolvePersistedRemediationReviewExecutionAuthority(
             events,
             restartIndex: index,
             restartSequence: taskEventSequence(event),
-            authorityOptions: options
+            authorityOptions: options,
+            acceptRecordedOnly: options.acceptPreservedPendingReuse
         });
         if (!acceptedAfterRestart) {
             return null;
