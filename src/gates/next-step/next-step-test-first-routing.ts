@@ -23,6 +23,7 @@ import { readTaskOwnedIntermediateExecutionEvidence, type NativeIntermediateExec
 import { buildCommand, quoteCommandValue } from './next-step-command-formatters';
 import type { NextStepCommand } from './next-step';
 import type { TaskQueueEntry } from './next-step-task-queue';
+import { requiredExpectedRedFiles } from '../test-first/expected-red-scope';
 import { currentExpectedRedExecutionEvidence } from '../test-first/expected-red-evidence';
 
 const MAX_TIMELINE_BYTES = 2 * 1024 * 1024;
@@ -228,7 +229,9 @@ function inspectNativeExpectedFailureProgress(options: TestFirstExpectedFailureR
             options.repoRoot, command,
             [...changedFiles]
         );
-        if (!focusedTestPaths.some((testPath) => changedFiles.has(testPath))) {
+        if (!focusedTestPaths.some((testPath) => changedFiles.has(testPath))
+            || !requiredExpectedRedFiles(options.preflight || {}, options.repoRoot)
+                .every(file => typeof file === 'string' && focusedTestPaths.includes(file))) {
             continue;
         }
         try {

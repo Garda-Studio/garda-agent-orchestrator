@@ -4,6 +4,7 @@ import { readValidationFile, validationDigest } from '../../core/project-validat
 import { isPlainRecord } from '../../core/records';
 import { MAX_RETAINED_VALIDATION_OUTPUT_BYTES, readRetainedValidationReports } from '../../core/validation-report-evidence';
 import { summarizeValidationResults } from '../../core/project-validation-results';
+import { requiredExpectedRedFiles } from '../test-first/expected-red-scope';
 import { eligibleExpectedRedRecipes } from '../../core/project-validation-recipes';
 import { readTaskQueueEntries } from '../../core/task-queue-read';
 import { hasTestFirstExpectedRedDeclaration } from '../test-first/test-first-declaration';
@@ -35,7 +36,7 @@ export function assertValidationExpectedRed(repoRoot: string, taskId: string, re
         securityTriggerRegexes: config.security_trigger_regexes, apiTriggerRegexes: config.api_trigger_regexes, dependencyTriggerRegexes: config.dependency_trigger_regexes });
     if (preflight.scope_category !== 'test-only' || category.category !== 'test-only'
         || !hasTestFirstExpectedRedDeclaration(readTaskQueueEntries(repoRoot).get(taskId))) throw new Error('Expected-red requires current native test-only scope and TASK declaration');
-    if (!eligibleExpectedRedRecipes([snapshot.recipe], preflight.changed_files as unknown[]).some(recipe => recipe.id === recipeId)) throw new Error('Expected-red recipe lacks changed declared test targets');
+    if (!eligibleExpectedRedRecipes([snapshot.recipe], requiredExpectedRedFiles(preflight, repoRoot, config)).some(recipe => recipe.id === recipeId)) throw new Error('Expected-red recipe lacks changed declared test targets');
 }
 export function readValidationAttemptFacts(repoRoot: string, taskId: string, attemptId: string,
     inspection: ValidationEvidenceInspection = 'active', batch?: ValidationEvidenceBatch, expectedRedHistory = false) {

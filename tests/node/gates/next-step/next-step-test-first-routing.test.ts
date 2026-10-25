@@ -7,6 +7,7 @@ import { runIntermediateCommandCommand } from '../../../../src/cli/commands/gate
 import { buildFullSuiteValidationEvidence, getReviewContextFullSuiteValidationViolations } from '../../../../src/gates/review-context/review-context-validation-evidence';
 import { hasReportedFailedTestCase, readReportedTestCases } from '../../../../src/cli/commands/gate-flows/command-run/intermediate-command-scope';
 import { buildTestFirstExpectedFailureRoute } from '../../../../src/gates/next-step/next-step-test-first-routing';
+import { requiredExpectedRedFiles } from '../../../../src/gates/test-first/expected-red-scope';
 import { readExpectedRedExecutionEvidence } from '../../../../src/gates/test-first/expected-red-evidence';
 import { resolveAuthoritativeReviewValidationObligations } from '../../../../src/gates/review-context/review-context-coverage';
 import { getNativeCaseResolutionViolations } from '../../../../src/gates/review/native-case-semantics';
@@ -129,7 +130,7 @@ function resolveRoute(fixture: Fixture) {
 function buildRecipeFixture(mode = 'failed', testPath = 'specifications/case', options: {
     withRecipe?: boolean; fixtureReadiness?: boolean; nestedReport?: boolean;
     opaqueAssertion?: boolean; symbolic?: boolean; reviewSuite?: boolean; productionReadiness?: boolean; opaqueRecipe?: boolean;
-    productionOperand?: boolean; maxAttempts?: number; withChangelog?: boolean;
+    productionOperand?: boolean; maxAttempts?: number; withChangelog?: boolean; extraTestPath?: string;
 } = {}): Fixture {
     const { withRecipe = true, fixtureReadiness = false, nestedReport = false } = options;
     const repoRoot = createRecipeTempRepo(); tempRoots.push(repoRoot);
@@ -144,6 +145,10 @@ function buildRecipeFixture(mode = 'failed', testPath = 'specifications/case', o
         ...(options.productionOperand ? { file_roles: { 'src/app.ts': 'source' } } : {}) }));
     fs.mkdirSync(path.dirname(path.join(repoRoot, testPath)), {recursive: true});
     fs.writeFileSync(path.join(repoRoot, testPath), 'declared test');
+    if (options.extraTestPath) {
+        fs.mkdirSync(path.dirname(path.join(repoRoot, options.extraTestPath)), { recursive: true });
+        fs.writeFileSync(path.join(repoRoot, options.extraTestPath), 'another declared test');
+    }
     fs.writeFileSync(path.join(repoRoot, 'driver'), 'process.stdout.write(process.argv[2]==="opaque"?"opaque":"TAP version 13\\n"+(process.argv[2]==="failed"?"not ok":"ok")+" 1 - declared case\\n1..1\\n");process.exitCode=process.argv[2]==="failed"?7:0;');
     if (!withRecipe) {
         fs.writeFileSync(path.join(repoRoot, 'assertless-checker'), 'require("node:fs").readFileSync(process.argv[2],"utf8");process.exitCode=1;');
@@ -196,10 +201,11 @@ function buildRecipeFixture(mode = 'failed', testPath = 'specifications/case', o
         taskSummary: 'Expected-red declared recipe', provider: 'Codex' });
     loadTaskEntryRulePack(repoRoot, TASK_ID); runHandshakeForTask(repoRoot, TASK_ID); runShellSmokeForTask(repoRoot, TASK_ID);
     fs.appendFileSync(path.join(repoRoot, testPath), '\naffected test\n');
+    if (options.extraTestPath) fs.appendFileSync(path.join(repoRoot, options.extraTestPath), '\naffected extra test\n');
     if (options.withChangelog) fs.appendFileSync(path.join(repoRoot, 'CHANGELOG.md'), '\n- Test-first behavior note.\n');
     const preflightPath = path.join(bundle, `runtime/reviews/${TASK_ID}-preflight.json`);
     runClassifyChangeCommand({ repoRoot, taskId: TASK_ID, taskIntent: 'Expected-red declared recipe',
-        outputPath: preflightPath, changedFiles: options.withChangelog ? [testPath, 'CHANGELOG.md'] : [testPath], emitMetrics: false });
+        outputPath: preflightPath, changedFiles: [testPath, ...(options.withChangelog ? ['CHANGELOG.md'] : []), ...(options.extraTestPath ? [options.extraTestPath] : [])], emitMetrics: false });
     return { repoRoot, reviewsRoot: path.join(bundle, 'runtime/reviews'), eventsRoot: path.join(bundle, 'runtime/task-events'),
         preflightPath, preflight: JSON.parse(fs.readFileSync(preflightPath, 'utf8')),
         taskEntry: { taskId: TASK_ID, status: 'IN_PROGRESS', area: 'workflow/test-first', title: 'Declared recipe expected red',
@@ -741,6 +747,35 @@ describe('next-step test-first expected-red routing', () => {
         assert.equal(route?.nextGate, 'implementation');
         assert.deepEqual(route?.commands, []);
         assert.match(route?.reason || '', /exact source, selected cases and actual nonzero execution/u);
+    });
+
+    it('accepts recipe expected-red with ordinary CHANGELOG.md in the current scope', async () => {
+        const fixture = buildRecipeFixture('failed', 'specifications/case', { withChangelog: true });
+        assert.equal(fixture.preflight.scope_category, 'test-only');
+        const pending = resolveRoute(fixture);
+        assert.match(pending?.commands[0]?.command || '', /--recipe-id "declared"/u);
+        const red = await runIntermediateCommandCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
+            recipeId: 'declared', expectFailure: true });
+        assert.equal(red.exitCode, 0, red.outputLines.join('\n'));
+        assert.equal(resolveRoute(fixture)?.nextGate, 'implementation');
+    });
+
+    it('requires RED for an extra custom test source rather than treating every unrecognized file as documentation', async () => {
+        const testPath = 'specifications/first.custom';
+        const fixture = buildRecipeFixture('failed', testPath, { withRecipe: false, opaqueAssertion: true,
+            withChangelog: true, extraTestPath: 'specifications/extra.custom' });
+        assert.equal(fixture.preflight.scope_category, 'test-only');
+        const red = await runIntermediateCommandCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID,
+            commandSource: 'targeted-test', preflightPath: fixture.preflightPath, expectFailure: true,
+            command: `"${process.execPath}" opaque-checker "${testPath}"`,
+            selectedCases: [{ source: testPath, case_id: 'source readiness', selector: testPath }] });
+        assert.equal(red.exitCode, 0, red.outputLines.join('\n'));
+        assert.equal(readExpectedRedExecutionEvidence({ ...fixture, taskId: TASK_ID,
+            preflightSha256: fileSha256(fixture.preflightPath) }), null);
+        assert.equal(resolveRoute(fixture)?.nextGate, 'test-first-expected-failure');
+        assert.deepEqual(requiredExpectedRedFiles({ ...fixture.preflight,
+            changed_files: ['CHANGELOG.md', 'docs/declared.md', 'extra.unknown', 1], declared_test_paths: ['docs/declared.md']
+        }, fixture.repoRoot), ['docs/declared.md', 'extra.unknown', 1]);
     });
 
     it('accepts expected-red for the test source when the test-only scope also changes CHANGELOG.md', async () => {

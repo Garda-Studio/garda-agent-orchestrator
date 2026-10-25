@@ -1,6 +1,7 @@
 import { quoteCommandValue } from '../../core/command-quoting';
 import { isPlainRecord } from '../../core/records';
 import type { FrozenValidationRecipe } from '../../core/project-validation-contract';
+import { requiredExpectedRedFiles } from '../test-first/expected-red-scope';
 import { eligibleExpectedRedRecipes } from '../../core/project-validation-recipes';
 import { currentProjectValidationAuthority, freezeValidationRecipe, readProjectValidationAuthority } from './authority';
 import { latestValidationRecipeAttempt, readValidationEvents } from './attempt-evidence';
@@ -32,7 +33,7 @@ export function inspectRecipeExpectedRedRoute(options: {
         const authority = currentProjectValidationAuthority(options.repoRoot, options.preflight);
         if (!authority) return null;
         const recipes = eligibleExpectedRedRecipes(authority.approved.contract.recipes,
-            Array.isArray(options.preflight.changed_files) ? options.preflight.changed_files : []);
+            requiredExpectedRedFiles(options.preflight, options.repoRoot));
         const events = readValidationEvents(options.repoRoot, options.taskId);
         const cycleStart = events.map(event => event.event_type).lastIndexOf('TASK_MODE_ENTERED');
         if (cycleStart < 0) throw new Error('Expected-red requires current task-mode evidence');
