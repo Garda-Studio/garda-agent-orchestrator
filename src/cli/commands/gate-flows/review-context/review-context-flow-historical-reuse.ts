@@ -442,6 +442,7 @@ export async function tryReuseReviewEvidence(options: {
                 expectedContextReuseSha256: evidence.expectedContextReuseSha256,
                 historicalSchema3ContextReuseHashMatches:
                     evidence.historicalSchema3ContextReuseHashMatches,
+                authenticatedHistoricalGroupedWindow: evidence.authenticatedHistoricalGroupedWindow,
                 expectedReviewTreeStateSha256: evidence.expectedReviewTreeStateSha256,
                 expectedReviewScopeSha256: evidence.expectedReviewScopeSha256,
                 expectedCodeScopeSha256: evidence.expectedCodeScopeSha256,

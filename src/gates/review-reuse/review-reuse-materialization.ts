@@ -95,6 +95,7 @@ export interface MaterializeReusedReviewEvidenceOptions {
     expectedContextSha256: string | null;
     expectedContextReuseSha256: string | null;
     historicalSchema3ContextReuseHashMatches: boolean;
+    authenticatedHistoricalGroupedWindow?: boolean;
     expectedReviewTreeStateSha256: string | null;
     expectedReviewScopeSha256: string | null;
     expectedCodeScopeSha256: string | null;
@@ -546,6 +547,8 @@ function buildReusedReviewFindingsValidationEvidence(
     const sourceReviewArtifactPath = getReceiptBoundFindingsReviewArtifactPath(options.receipt)
         || options.candidate.sourceArtifactPath
         || options.artifactPath;
+    const allowHistoricalScopeBindings = options.receipt.reused_existing_review === true
+        && options.authenticatedHistoricalGroupedWindow === true;
     const sourceValidation = validateReviewFindingsValidationArtifactForReceipt({
         receipt: options.receipt as unknown as Record<string, unknown>,
         reviewArtifactPath: sourceReviewArtifactPath,
@@ -555,9 +558,9 @@ function buildReusedReviewFindingsValidationEvidence(
             || getReceiptOutputContractString(options.receipt, 'raw_output_sha256'),
         expectedReviewArtifactSha256: options.historicalReviewArtifactSha256,
         expectedReviewContextSha256: options.expectedContextSha256,
-        expectedPreflightSha256: options.receipt.reused_existing_review === true
+        expectedPreflightSha256: allowHistoricalScopeBindings
             ? null : getReceiptRecordString(options.receipt, 'preflight_sha256'),
-        expectedScopeSha256: options.receipt.reused_existing_review === true
+        expectedScopeSha256: allowHistoricalScopeBindings
             ? null : getReceiptRecordString(options.receipt, 'scope_sha256'),
         expectedReviewScopeSha256: options.expectedReviewScopeSha256,
         expectedCodeScopeSha256: options.expectedCodeScopeSha256,

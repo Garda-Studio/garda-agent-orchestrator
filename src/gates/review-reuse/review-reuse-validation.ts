@@ -76,6 +76,7 @@ export interface AcceptedReviewReuseCandidateEvidence {
     contextReuseHashMatches: boolean;
     receiptContextReuseHashMatches: boolean;
     historicalSchema3ContextReuseHashMatches: boolean;
+    authenticatedHistoricalGroupedWindow: boolean;
     testOnlyDeltaContextMismatch: boolean;
     remediationPreservedScopeMismatch: boolean;
     remediationPreservedScopeMismatchReason: string | null;
@@ -753,6 +754,7 @@ export function validateHistoricalReviewReuseCandidate(options: {
         return { accepted: false, reason: 'historical REVIEW_RECORDED telemetry does not match the prior receipt' };
     }
 
+    let authenticatedHistoricalGroupedWindow = false;
     let historicalRecordedEventDetails = isRecord(sourceEventResolution.event?.details)
         ? sourceEventResolution.event?.details as Record<string, unknown>
         : null;
@@ -803,6 +805,7 @@ export function validateHistoricalReviewReuseCandidate(options: {
                     + strictReuseValidation.reason
             };
         }
+        authenticatedHistoricalGroupedWindow = historicalWindow !== null;
         historicalRecordedEventDetails = strictReuseValidation.historicalReviewRecordedDetails;
     }
     const hiddenTimingTrust = evaluateHiddenReviewTimingTrust({
@@ -891,6 +894,7 @@ export function validateHistoricalReviewReuseCandidate(options: {
                     contextReuseHashMatches,
                     receiptContextReuseHashMatches,
                     historicalSchema3ContextReuseHashMatches,
+                    authenticatedHistoricalGroupedWindow,
                     testOnlyDeltaContextMismatch,
                     remediationPreservedScopeMismatch,
                     remediationPreservedScopeMismatchReason
@@ -927,6 +931,7 @@ export function validateHistoricalReviewReuseCandidate(options: {
             contextReuseHashMatches,
             receiptContextReuseHashMatches,
             historicalSchema3ContextReuseHashMatches,
+            authenticatedHistoricalGroupedWindow,
             testOnlyDeltaContextMismatch,
             remediationPreservedScopeMismatch,
             remediationPreservedScopeMismatchReason

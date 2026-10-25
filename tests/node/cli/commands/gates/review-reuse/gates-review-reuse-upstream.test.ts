@@ -1,3 +1,5 @@
+import { materializeReusedReviewEvidence } from '../../../../../../src/gates/review-reuse/review-reuse-materialization';
+import { normalizeReviewReceiptReviewerProvenance, type ReviewReceipt } from '../../../../../../src/gate-runtime/review-context';
 import { hasAuthenticatedIntermediateGroupedReceiptSource } from '../../../../../../src/gates/review/review-grouped-receipt-source';
 import { authenticateCurrentReviewLaunch } from '../../gate-test-authenticated-review-helpers';
 import {
@@ -12,6 +14,7 @@ import {
     runRequiredReviewsCheckCommand,
     runCliMainWithHandling,
     computeCodeReviewScopeFingerprint,
+    computeReviewContextReuseHash,
     computeReviewReuseCodeScopeFingerprint,
     computeReviewRelevantScopeFingerprint,
     resolveReviewContextReuseContractBindings,
@@ -532,6 +535,103 @@ describe('cli/commands/gates - review reuse upstream reuse', () => {
 
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });
+
+
+    for (const mismatchedBinding of ['preflight_sha256', 'scope_sha256'] as const) {
+        it(`rejects chained materialization outside an authenticated grouped window with mismatched ${mismatchedBinding}`, async (t) => {
+            const repoRoot = createTempRepo();
+            t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+            const taskId = `T-904a-chained-${mismatchedBinding.replaceAll('_', '-')}`;
+            seedTaskQueue(repoRoot, taskId);
+            seedInitAnswers(repoRoot, 'Qwen');
+            runEnterTaskMode({ repoRoot, taskId, taskSummary: 'Reject unbound chained review materialization' });
+            const reviewsRoot = getReviewsRoot(repoRoot);
+            const reviewContextPath = path.join(reviewsRoot, `${taskId}-code-review-context.json`);
+            const receiptPath = path.join(reviewsRoot, `${taskId}-code-receipt.json`);
+            const artifactPath = path.join(reviewsRoot, `${taskId}-code.md`);
+            const preflightOverrides = {
+                changed_files: ['src/app.ts'],
+                metrics: { changed_lines_total: 3 },
+                required_reviews: {
+                    code: true, db: false, security: false, refactor: false, api: false,
+                    test: false, performance: false, infra: false, dependency: false
+                }
+            };
+            const priorPreflightPath = writePreflight(
+                repoRoot, taskId, preflightOverrides, `${taskId}-prior-preflight.json`
+            );
+            seedReusableReviewEvidence(repoRoot, taskId, 'code', 'REVIEW PASSED', priorPreflightPath,
+                reviewContextPath, 'agent:code-reviewer');
+            const preflightPath = writePreflight(repoRoot, taskId, preflightOverrides);
+            writeCompilePassEvidence(repoRoot, taskId, preflightPath);
+            const firstReuse = await runBuildReviewContextCommand({
+                repoRoot, reviewType: 'code', depth: 2, preflightPath, outputPath: reviewContextPath
+            });
+            assert.equal(firstReuse.reusedReviewEvidence, true, firstReuse.outputLines.join('\n'));
+            const receiptRecord = JSON.parse(fs.readFileSync(receiptPath, 'utf8')) as Record<string, unknown>;
+            assert.equal(receiptRecord.reused_existing_review, true);
+            const receiptHash = (key: string): string | null => typeof receiptRecord[key] === 'string'
+                ? String(receiptRecord[key]) : null;
+            const provenance = normalizeReviewReceiptReviewerProvenance(receiptRecord.reviewer_provenance);
+            assert.ok(provenance);
+            const reference = receiptRecord.review_findings_validation as Record<string, unknown>;
+            const validation = JSON.parse(fs.readFileSync(String(reference.snapshot_path), 'utf8'));
+            const sourceBindings = validation.validation_result.bindings.scope;
+            const mismatchedReceipt = {
+                ...receiptRecord,
+                preflight_sha256: sourceBindings.preflight_sha256,
+                scope_sha256: sourceBindings.scope_sha256,
+                [mismatchedBinding]: 'f'.repeat(64)
+            } as unknown as ReviewReceipt;
+            assert.notEqual(sourceBindings[mismatchedBinding], mismatchedReceipt[mismatchedBinding]);
+            const preflightPayload = JSON.parse(fs.readFileSync(preflightPath, 'utf8'));
+            const currentContext = JSON.parse(fs.readFileSync(reviewContextPath, 'utf8'));
+            const timelinePath = path.join(getOrchestratorRoot(repoRoot), 'runtime', 'task-events', `${taskId}.jsonl`);
+            const receiptBefore = fs.readFileSync(receiptPath);
+            const timelineBefore = fs.readFileSync(timelinePath);
+            const events = readTaskTimelineEvents(repoRoot, taskId);
+            const latestCompile = findLastTimelineEventIndex(events, event => event.event_type === 'COMPILE_GATE_PASSED');
+            const latestRecorded = findLastTimelineEventIndex(events, event => event.event_type === 'REVIEW_RECORDED');
+            assert.ok(latestRecorded > latestCompile, 'R1 has no later compile establishing a historical grouped window');
+
+            // Exercise the actual locked writer with real R1 evidence; no historical window was authenticated.
+            const result = await materializeReusedReviewEvidence({
+                repoRoot, taskId, reviewType: 'code', preflightPath, preflightPayload,
+                reviewContextPath, artifactPath, receiptPath, nonTestReviewScope: true,
+                codeScopeFingerprint: computeReviewReuseCodeScopeFingerprint('code', preflightPayload, repoRoot),
+                reviewScopeFingerprint: computeReviewRelevantScopeFingerprint(preflightPayload, repoRoot),
+                currentPreflightHash: sha256File(preflightPath),
+                currentReviewContextSha256: sha256File(reviewContextPath),
+                currentReviewTreeStateSha256: getReviewTreeStateSha256FromFixtureContext(currentContext),
+                currentContextReuseSha256: computeReviewContextReuseHash(currentContext),
+                candidate: {
+                    telemetryReceiptPath: receiptPath, sourceReceiptPath: receiptPath,
+                    sourceReceiptSha256: sha256File(receiptPath), sourceArtifactPath: artifactPath,
+                    sourceKind: 'latest_receipt', sourceEvent: null, sourceDescription: 'real current-cycle R1 receipt'
+                },
+                reusedFromReceiptPath: receiptHash('reused_from_receipt_path'),
+                reusedFromReceiptSha256: receiptHash('reused_from_receipt_sha256'),
+                receipt: mismatchedReceipt,
+                reviewerExecutionMode: String(receiptRecord.reviewer_execution_mode),
+                reviewerIdentity: String(receiptRecord.reviewer_identity),
+                historicalReviewerProvenance: provenance,
+                expectedContextSha256: receiptHash('reused_from_review_context_sha256'),
+                expectedContextReuseSha256: receiptHash('reused_from_review_context_reuse_sha256'),
+                historicalSchema3ContextReuseHashMatches: Number(receiptRecord.reused_from_review_context_schema_version) === 3,
+                expectedReviewTreeStateSha256: receiptHash('reused_from_review_tree_state_sha256'),
+                expectedReviewScopeSha256: receiptHash('reused_from_review_scope_sha256'),
+                expectedCodeScopeSha256: receiptHash('reused_from_code_scope_sha256'),
+                contextContractBindingsRequired: true,
+                currentReviewContextContractBindings: resolveReviewContextReuseContractBindings(currentContext),
+                historicalReviewArtifactSha256: sha256File(artifactPath),
+                artifactText: fs.readFileSync(artifactPath, 'utf8')
+            });
+            assert.equal(result.materialized, false, `${mismatchedBinding}: ${result.reason}`);
+            assert.match(result.reason || '', new RegExp(`${mismatchedBinding}.*mismatch`, 'u'));
+            assert.deepEqual(fs.readFileSync(receiptPath), receiptBefore, 'rejected materialization must not replace R1');
+            assert.deepEqual(fs.readFileSync(timelinePath), timelineBefore, 'rejected materialization must not emit reuse evidence');
+        });
+    }
 
     for (const materializationMode of ['grouped_by_parent', 'per_finding'] as const) {
     it(materializationMode === 'grouped_by_parent'
