@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import { resolveReviewReuseClassificationConfig } from '../review-reuse/review-reuse';
 import { readCloseoutLinkageRecovery } from '../completion/completion-linkage-recovery';
+import { isValidatedCompletionFinalizationFailure } from '../completion/completion-finalization-retry';
 import { findUnapprovedActiveImplementationOwners } from '../workspace/active-implementation-ownership';
 import { assertWorkflowTransactionReadable } from '../../core/workflow-transaction-state';
 import * as path from 'node:path';
@@ -687,13 +688,18 @@ function readLatestReviewGateOverrideSkippedReviewTypes(eventsRoot: string, task
     return new Set();
 }
 
-function readLatestTaskEventSequence(eventsRoot: string, taskId: string, eventTypes: readonly string[]): number | null {
+function readLatestTaskEventSequence(
+    eventsRoot: string,
+    taskId: string,
+    eventTypes: readonly string[],
+    ignoreEvent?: (event: Readonly<Record<string, unknown>>) => boolean
+): number | null {
     const expectedTypes = new Set(eventTypes.map((eventType) => String(eventType || '').trim().toUpperCase()));
     const orderedEvents = readOrderedTaskEvents(path.join(eventsRoot, `${taskId}.jsonl`)).events;
     for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
         const event = orderedEvents[index];
         const eventType = String(event.event_type || '').trim().toUpperCase();
-        if (!expectedTypes.has(eventType)) {
+        if (!expectedTypes.has(eventType) || ignoreEvent?.(event)) {
             continue;
         }
         const sequence = Number(event.sequence);
@@ -2936,8 +2942,10 @@ export function resolveNextStepDecisionRoute(
     const latestCompilePassSequence = reviewGateAlreadyPassed
         ? readLatestTaskEventSequence(eventsRoot, taskId, ['COMPILE_GATE_PASSED'])
         : null;
+    // A failed finalization after validation PASS keeps the review cycle current; the
+    // exact completion-gate retry revalidates it.
     const latestCompletionFailureSequence = reviewGateAlreadyPassed
-        ? readLatestTaskEventSequence(eventsRoot, taskId, ['COMPLETION_GATE_FAILED'])
+        ? readLatestTaskEventSequence(eventsRoot, taskId, ['COMPLETION_GATE_FAILED'], isValidatedCompletionFinalizationFailure)
         : null;
     const linkageCloseoutRecoveryActive = reviewGateAlreadyPassed && latestCompletionFailureSequence != null
         && readCloseoutLinkageRecovery(repoRoot, taskId, preflightPath, path.join(eventsRoot, `${taskId}.jsonl`)) !== null;

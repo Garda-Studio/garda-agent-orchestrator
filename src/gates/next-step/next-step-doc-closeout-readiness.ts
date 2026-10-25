@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import { declaredFileRole, isTestScopePath } from '../../core/file-role-bindings';
 import { resolveReviewReuseClassificationConfig } from '../review-reuse/review-reuse';
+import { isValidatedCompletionFinalizationFailure } from '../completion/completion-finalization-retry';
 
 import {
     getInternalCloseoutEvidenceKind,
@@ -499,7 +500,11 @@ export function readPreflightCycleReadiness(
         events,
         (entry) => entry.event_type === 'COMPLETION_GATE_FAILED'
     );
-    if (latestCompletionFailure && latestPreflight.sequence < latestCompletionFailure.sequence) {
+    if (
+        latestCompletionFailure
+        && latestPreflight.sequence < latestCompletionFailure.sequence
+        && !isValidatedCompletionFinalizationFailure(latestCompletionFailure)
+    ) {
         if (options.allowStaleCompletionFailureForDocCloseout) {
             return {
                 ready: true,

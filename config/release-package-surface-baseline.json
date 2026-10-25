@@ -4,15 +4,15 @@
     "name": "garda-agent-orchestrator",
     "version": "1.4.4"
   },
-  "packedFileManifestSha256": "30bbbbcc7f386a2c479aa7fbb0da42af33e3be897997fefa52fb05a93f852ff0",
-  "tarballSha256": "73731e282288217cbff10faca4c0a3f535126a6ab38afcdbe1c715d4c0fc32f1",
+  "packedFileManifestSha256": "fbf8e46cbe6ab4c1e13eff386735c99e2c2b275d27f766f02a751340c17da278",
+  "tarballSha256": "421dc96d2d9c4bab8fb9c37d64b0bcf0b1068553a8aba828453144bbe2d34efa",
   "tarballSha256ByPlatform": {
-    "win32": "73731e282288217cbff10faca4c0a3f535126a6ab38afcdbe1c715d4c0fc32f1"
+    "win32": "421dc96d2d9c4bab8fb9c37d64b0bcf0b1068553a8aba828453144bbe2d34efa"
   },
   "packedFileSha256": {
     ".gitattributes": "099d1a09ca2f02b2d7d071bcc19fdd2cda5c66f01f133abe9ff9d63294a1055c",
     "AGENT_INIT_PROMPT.md": "7bad23533c69447c07627cd53bafdb3c4597715e171904c392c0602fcfd8cbc6",
-    "CHANGELOG.md": "2bbb593af4c267c29b614209fd7e0c23bfca103769adcf8e08102d862516ce45",
+    "CHANGELOG.md": "7bd08a2281ee94304019eb5a68aa2a853954b426c5ee9bde895e627ac067390d",
     "CONTRIBUTING.md": "940e1e5d62fc8c700bc0c67d61db074038b9b9d7225c39b740d181b831036bab",
     "HOW_TO.md": "90bafc4fcb092768fccaf1086d788bfc910ff2cf856ece8520a8bfc687137f71",
     "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
@@ -28,7 +28,7 @@
     "bin/garda/process-delegation.js": "8de46ad82a42256e30cfa4fe3e073a634afc48f22c19026d471744d0a39bc61f",
     "bin/garda/root-discovery.js": "a2c381d229ea87e4959ff95573b837da557ad71adfb1a21a5e3ee30ec5ea8e07",
     "bin/garda/runtime-loading.js": "28e2333d62e1338ace5fdc7988082ea5b79c905639d51556fe2de1e328658aaa",
-    "dist/publish-runtime-manifest.json": "9a4bebe97186903d8414e8267ff5aa5b0f3af3d23e49caa7842d88aa10b75079",
+    "dist/publish-runtime-manifest.json": "7e9ff4adf4d72294a400622383208ab965dc65c25c516554d634cec1e680b630",
     "dist/src/bin/garda.js": "ad9eb267227c0d0b1150a5427167764e9de4bc2a7850b897e7096a29eb50605d",
     "dist/src/bin/garda/delegation-policy.js": "742e3ebebee0b0edebead5c9286e9d82b178be34f12c8dfc296923b57b845fc8",
     "dist/src/bin/garda/launcher-constants.js": "864326fb551a84b1e9f0542be628b817db72432cb6808085c198756ff45e00db",
@@ -506,6 +506,7 @@
     "dist/src/gates/compile/index.js": "f84df3bfa9928745831df08a402da2c7007adc2276dba70aee860f2c84b311f7",
     "dist/src/gates/completion/completion-deferred-followups.js": "7c483520817762f5d28007d6a68aa9fcbeb377bf2c0661f0bab188bb6c3684a9",
     "dist/src/gates/completion/completion-evidence.js": "08ac6f695fe124b2874cb298e47e72d9ebcb81b1a442029a1b60e6ddc8174650",
+    "dist/src/gates/completion/completion-finalization-retry.js": "ee13cccfbd84ee1e51cab289017976109e9562bec08f863bdc4e4da926db217c",
     "dist/src/gates/completion/completion-full-suite-evidence.js": "0b8a0d06bc315f0d4e57f0d45875ae62c9f804fe3b4f8deb7e6cf238edec9e62",
     "dist/src/gates/completion/completion-linkage-recovery.js": "951820a9e12bbc03030dc6a8eb20e97c470401b09e11fd40b8262ef7cd79596f",
     "dist/src/gates/completion/completion-project-memory.js": "8720c1d1afbbbe79bafa8f7799fbb2a99583ca323f7cc75d7c2d5f49f2c01123",
@@ -571,7 +572,7 @@
     "dist/src/gates/next-step/next-step-compile-readiness.js": "a1dbb25c1ecd5ce69179ac9c6381ceb54804c93fdffdd5830f9d6bc62e01b35a",
     "dist/src/gates/next-step/next-step-decision-engine.js": "06dbd325e7d14d4352967aa074b912208309ee366cefd57c2787bb0dca19961f",
     "dist/src/gates/next-step/next-step-decision-route-groups.js": "b0417ae03e5e116aafa07100fbbec1aa835588d7b1d58b4e2ae592ac2c52e446",
-    "dist/src/gates/next-step/next-step-doc-closeout-readiness.js": "4db610017fb94a27a73d5e689d20a5b93906abc1108fc737a8bd2e566fa042ff",
+    "dist/src/gates/next-step/next-step-doc-closeout-readiness.js": "3afe5482f7653d54867f0db010f6b07f22db987ddb5366ac5ff719765dbcb519",
     "dist/src/gates/next-step/next-step-effects.js": "b087e09297a3988e817feea63e1ab304bf73afda03bf837c26b19f895c2d52a6",
     "dist/src/gates/next-step/next-step-focused-intermediate-evidence.js": "4ebd4f5a417d6f5246fa6268ad7bba930d1770ac06744a1698caac572b1ca8ed",
     "dist/src/gates/next-step/next-step-full-suite-routing.js": "465a3fddfc85e3c1c22b4f5e05d0d1e17d4b8c91798f260fad66fd066f4bac5e",
@@ -628,7 +629,7 @@
     "dist/src/gates/next-step/next-step-test-first-routing.js": "7e365db86d1f9132f32c1a07247f98c8cf6b30468ccd1ab44e5eb3e47d3add20",
     "dist/src/gates/next-step/next-step-timeline-readers.js": "4dd064fb99b20cc4d1d4a892f39e027bab2d3ed5fa8d651cd4b95a71c1bb59a7",
     "dist/src/gates/next-step/next-step-validation-routes.js": "09aa46e60f82a1320ca2dccb693f254c758f46f7257e576bf603a197aa6a8d10",
-    "dist/src/gates/next-step/next-step.js": "92dab0e7337238449e51dd8a7c8f0d45ae5c0425f115b6c772e77b8990ab6538",
+    "dist/src/gates/next-step/next-step.js": "92dd5fca3ef556007434b09955ef41eeaaa7da4510f636f46005d7b3edecb957",
     "dist/src/gates/parent-audit/parent-audit-auth.js": "2c7dac97c058ee965f2e40c774ca5d38bc50a9bc67f1ae58560dcbd5a356fb1f",
     "dist/src/gates/parent-audit/parent-audit-contract.js": "1b2f81fbab1f4c8be00c8e7b50bf19960048bb07a95dc85f37d549affaf10b5c",
     "dist/src/gates/parent-audit/parent-audit-evidence.js": "c4c4895e2d20d89861c971eae50fb96f7fb07846486adcad3d25bf28b061959e",
@@ -1604,9 +1605,9 @@
     "tsconfig.node-foundation.json": "bd42060a2b282ed055e487f79886ea9a9f0bd375cdf0a97608f0aea300e1c8ca"
   },
   "metrics": {
-    "fileCount": 1592,
-    "unpackedSizeBytes": 28415607,
-    "installedSizeBytes": 28421203,
+    "fileCount": 1593,
+    "unpackedSizeBytes": 28417591,
+    "installedSizeBytes": 28423187,
     "productionDependencyCount": 0,
     "lifecycleScripts": {
       "postpack": "node scripts/package-legacy-entrypoint-compat.cjs remove",
@@ -1701,5 +1702,5 @@
       "writeFile": 0
     }
   },
-  "rationale": "Quoted code in reviewer evidence is not generic wording; CHANGELOG and compiled coverage ledger changed"
+  "rationale": "Completion finalization retry: next-step routes a validated finalization failure to the exact completion-gate retry; new completion-finalization-retry module and CHANGELOG"
 }
