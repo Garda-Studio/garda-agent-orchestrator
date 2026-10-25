@@ -40,6 +40,7 @@ import type {
     NextStepStatus
 } from './next-step';
 import { isPlainRecord } from '../../core/records';
+import { isTaskQueueDecomposedStatus } from '../../core/task-queue/active-task-state';
 
 const STRICT_DECOMPOSITION_STRONG_RISK_TERMS = Object.freeze([
     'strict-decomposition',
@@ -459,7 +460,12 @@ export function resolveStrictDecompositionContinuationRoute(params: {
         return null;
     }
 
-    const wipSuspension = effects.run({
+    // A DECOMPOSED parent has completed its split. Worktree changes now belong to its children and
+    // must never be captured as parent WIP, so neither effect is offered again.
+    const parentDecomposed = isTaskQueueDecomposedStatus(params.taskEntries.get(params.taskId)?.status ?? null);
+    const wipSuspension = parentDecomposed ? {
+        status: 'NOT_REQUIRED', manifest_path: null, manifest_sha256: null, tracked_files: [], untracked_files: [], violations: []
+    } as ReturnType<typeof suspendStrictDecompositionWipIfRequired> : effects.run({
         kind: 'suspend-strict-decomposition-wip',
         summary: `Capture and suspend ${params.taskId} strict-decomposition parent WIP`,
         input: {
@@ -546,7 +552,9 @@ export function resolveStrictDecompositionContinuationRoute(params: {
         };
     }
 
-    const syncResult = effects.run({
+    const syncResult = parentDecomposed ? {
+        outcome: 'already_synced', error_message: null
+    } as ReturnType<typeof transitionStrictDecompositionParentToDecomposed> : effects.run({
         kind: 'transition-strict-decomposition-parent-to-decomposed',
         summary: `Transition ${params.taskId} to DECOMPOSED after strict WIP suspension`,
         input: {
