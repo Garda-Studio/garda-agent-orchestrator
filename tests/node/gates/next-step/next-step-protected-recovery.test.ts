@@ -1,3 +1,4 @@
+import { captureDirtyWorkspaceBaseline } from '../../../../src/gates/workspace/dirty-worktree-protection';
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
@@ -276,7 +277,7 @@ function appendEvent(
     };
 }
 
-function seedStartedTask(repoRoot: string, taskId: string): void {
+function seedStartedTask(repoRoot: string, taskId: string, overrides: Partial<Parameters<typeof buildTaskModeArtifact>[0]> = {}): void {
     writeJson(path.join(reviewsRoot(repoRoot), `${taskId}-task-mode.json`), buildTaskModeArtifact({
         taskId,
         entryMode: 'EXPLICIT_TASK_EXECUTION',
@@ -287,7 +288,8 @@ function seedStartedTask(repoRoot: string, taskId: string): void {
         provider: 'Codex',
         canonicalSourceOfTruth: 'Codex',
         executionProviderSource: 'explicit_provider',
-        runtimeIdentityStatus: 'resolved'
+        runtimeIdentityStatus: 'resolved',
+        ...overrides
     }));
     writeJson(path.join(reviewsRoot(repoRoot), `${taskId}-handshake.json`), { task_id: taskId, status: 'PASS' });
     writeJson(path.join(reviewsRoot(repoRoot), `${taskId}-shell-smoke.json`), { task_id: taskId, status: 'PASS' });
@@ -2057,5 +2059,31 @@ describe('gates/next-step protected recovery', () => {
         assert.ok(result.commands[0].command.includes('gate load-rule-pack'));
         assert.ok(!result.commands[0].command.includes('T-EVIL'));
         assert.ok(!result.commands[0].command.includes('injected.js'));
+    });
+});
+
+
+describe('G3 current rebind scope', () => {
+    it('resolveNextStep carries all four task changes with two planned files and preserves unrelated baseline', () => {
+        const repoRoot = makeTempRepo();
+        writeJson(path.join(repoRoot, 'package.json'), { name: 'garda-agent-orchestrator' });
+        const files = ['src/gates/one.ts', 'src/gates/two.ts', 'src/three.ts', 'src/four.ts'];
+        for (const file of [...files, 'unrelated.md']) {
+            const target = path.join(repoRoot, file); fs.mkdirSync(path.dirname(target), { recursive: true });
+            fs.writeFileSync(target, 'baseline\n');
+        }
+        initGitRepo(repoRoot);
+        fs.writeFileSync(path.join(repoRoot, 'unrelated.md'), 'operator work\n');
+        seedStartedTask(repoRoot, TASK_ID, { plannedChangedFiles: files.slice(0, 2), orchestratorWork: true,
+            dirtyWorkspaceBaseline: captureDirtyWorkspaceBaseline(repoRoot, files.slice(0, 2)) });
+        for (const file of files) fs.writeFileSync(path.join(repoRoot, file), 'task change\n');
+        appendEvent(repoRoot, TASK_ID, 'PREFLIGHT_FAILED', 'FAIL', {
+            error: 'Protected pre-existing workspace edits changed outside task scope. Restart task mode.'
+        });
+        const result = resolveNextStep({ repoRoot, taskId: TASK_ID });
+        assert.equal(result.next_gate, 'enter-task-mode', result.reason);
+        const command = result.commands[0].command;
+        for (const file of files) assert.ok(command.includes(`--planned-changed-file "${file}"`), command);
+        assert.ok(!command.includes('unrelated.md'), command);
     });
 });

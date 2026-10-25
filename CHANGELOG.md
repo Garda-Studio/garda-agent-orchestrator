@@ -13,6 +13,8 @@
 
 ### Clearer interface and task guidance
 
+- Task-mode rebind commands include planned paths and current task changes, preserving unchanged pre-entry work outside the task scope.
+
 - Protected task entry probes key-store writes before publishing task-mode evidence, so an existing filesystem permission failure preserves the active entry and can be retried after restoring access. Late publication-failure recovery remains fail-closed.
 
 - Installed Garda bundle code is rejected from task scopes and staged bundle files cannot be committed, even with approval. Doctor and update identify tracked bundle files and show how to untrack them; Garda source development remains supported.

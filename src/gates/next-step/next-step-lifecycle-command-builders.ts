@@ -1,3 +1,6 @@
+import { fileSha256, isOrchestratorSourceCheckout } from '../shared/helpers';
+import { isSourceCheckoutGeneratedRuntimeArtifactPath, splitGeneratedRuntimeControlPlaneArtifacts } from '../shared/generated-runtime-artifacts';
+import { normalizeDirtyWorkspaceBaseline } from '../workspace/dirty-worktree-protection';
 import { filterUntrackedBuildOutputPaths } from '../../core/build-output-paths';
 import * as childProcess from 'node:child_process';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -370,15 +373,19 @@ export function buildOrchestratorWorkRestartCommand(
     const plannedChangedFiles = Array.isArray(taskMode?.planned_changed_files)
         ? taskMode.planned_changed_files.map((entry) => normalizePath(entry)).filter(Boolean)
         : [];
-    const dirtyBaselineChangedFiles = getTaskModeDirtyWorkspaceBaselineChangedFiles(repoRoot, taskMode);
-    const currentChangedFiles = additionalPlannedChangedFiles
-        .map((entry) => normalizePath(entry))
-        .filter(Boolean);
-    const restartScopeFiles = currentChangedFiles.length > 0
-        ? currentChangedFiles
-        : dirtyBaselineChangedFiles.length > 0
-            ? dirtyBaselineChangedFiles
-            : plannedChangedFiles;
+    const baseline = normalizeDirtyWorkspaceBaseline(taskMode?.dirty_workspace_baseline, repoRoot);
+    const planned = new Set(plannedChangedFiles);
+    const baselineFiles = new Set(baseline?.changed_files || []);
+    const current = baseline ? readCurrentWorkspaceChangedFiles(repoRoot) : null;
+    const taskChangedFiles = current?.reliable ? current.changedFiles.filter(file => {
+        if (planned.has(file) || !baselineFiles.has(file)) return true;
+        const expected = baseline?.file_hashes[file];
+        return !expected || fileSha256(path.resolve(repoRoot, file)) !== expected;
+    }) : [];
+    const isSourceCheckout = isOrchestratorSourceCheckout(repoRoot);
+    const restartScopeFiles = splitGeneratedRuntimeControlPlaneArtifacts([
+        ...plannedChangedFiles, ...additionalPlannedChangedFiles, ...taskChangedFiles
+    ], { isSourceCheckout }).reviewableFiles.filter(file => !isSourceCheckoutGeneratedRuntimeArtifactPath(file, isSourceCheckout));
     const mergedPlannedChangedFiles = expandDirectoryPlaceholdersForCommand(repoRoot, restartScopeFiles);
     const workflowConfigFileSet = includeWorkflowConfigWork
         ? new Set<string>()
