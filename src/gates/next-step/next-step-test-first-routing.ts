@@ -1,3 +1,4 @@
+import { readRetainedRecipeExpectedRedRejection } from '../test-first/expected-red-recipe-evidence';
 import * as fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
@@ -24,7 +25,7 @@ import { buildCommand, quoteCommandValue } from './next-step-command-formatters'
 import type { NextStepCommand } from './next-step';
 import type { TaskQueueEntry } from './next-step-task-queue';
 import { requiredExpectedRedFiles } from '../test-first/expected-red-scope';
-import { currentExpectedRedExecutionEvidence } from '../test-first/expected-red-evidence';
+import { currentExpectedRedExecutionEvidence, readRetainedExpectedRedRejection, EXPECTED_RED_RECOVERY } from '../test-first/expected-red-evidence';
 
 const MAX_TIMELINE_BYTES = 2 * 1024 * 1024;
 const MAX_TIMELINE_EVENTS = 1024;
@@ -302,6 +303,12 @@ export function buildTestFirstExpectedFailureRoute(
     const recipeRoute = inspectRecipeExpectedRedRoute({ repoRoot: options.repoRoot, taskId: options.taskId,
         preflight: options.preflight, preflightSha256: fileSha256(options.preflightPath) });
     if (recipeRoute) {
+        if (!recipeRoute.expectedFailure && !recipeRoute.violation) {
+            const rejection = readRetainedRecipeExpectedRedRejection(options);
+            if (rejection) return { nextGate: 'test-first-expected-failure',
+                title: 'Retained expected-RED recipe is stale; choose how to continue.',
+                reason: `${rejection} ${EXPECTED_RED_RECOVERY}`, commands: [] };
+        }
         return {
             nextGate: recipeRoute.expectedFailure ? 'implementation' : 'test-first-expected-failure',
             title: recipeRoute.expectedFailure ? 'Implement the behavior after retaining the declared recipe failure.'
@@ -346,6 +353,9 @@ export function buildTestFirstExpectedFailureRoute(
             commands: []
         };
     }
+    const rejection = readRetainedExpectedRedRejection({ ...options, preflightSha256: fileSha256(options.preflightPath) });
+    if (rejection) return { nextGate: 'test-first-expected-failure',
+        title: 'Retained expected-RED is stale; choose how to continue.', reason: rejection, commands: [] };
     return {
         nextGate: 'test-first-expected-failure',
         title: 'Select the actual focused command and failed-case reporter.',

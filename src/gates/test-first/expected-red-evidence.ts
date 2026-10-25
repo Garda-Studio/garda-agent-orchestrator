@@ -6,7 +6,7 @@ import { assertCurrentIntermediateSelection, isIntermediateSelection, latestMatc
 import { readValidationEventSnapshot, type ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 import { readBoundIntermediateCommandEvidence } from '../review/focused-intermediate-evidence';
 import { requiredExpectedRedFiles } from './expected-red-scope';
-import { readNativeCaseObligations, retainedNativeCaseOutput, type NativeCaseExecution } from '../review/native-case-semantics';
+import { NativeCaseExecutionUnavailableError, readNativeCaseObligations, retainedNativeCaseOutput, type NativeCaseExecution } from '../review/native-case-semantics';
 import type { QualityValidationObligation } from '../quality-checklist/quality-checklist-validation-phases';
 import { readReportedTestCases, getCurrentIntermediateTestTargets } from '../../cli/commands/gate-flows/command-run/intermediate-command-scope';
 import { hasTestFirstExpectedRedDeclaration } from './test-first-declaration';
@@ -124,7 +124,7 @@ export function readExpectedRedExecutionEvidence(options: ExpectedRedEvidenceOpt
     return projectExpectedRedExecutions(options, true);
 }
 
-export function readExpectedRedReviewObligations(options: ExpectedRedEvidenceOptions,
+function projectExpectedRedReviewObligations(options: ExpectedRedEvidenceOptions,
     currentObligations: readonly QualityValidationObligation[] = []): QualityValidationObligation[] {
     const recipeRed = readRecipeExpectedRedObligations(options, currentObligations);
     const red = projectExpectedRedExecutions(options, false);
@@ -145,6 +145,45 @@ export function readExpectedRedReviewObligations(options: ExpectedRedEvidenceOpt
     if (readValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection).timeline_sha256 !== native.timeline_sha256)
         throw new Error('Expected-RED/GREEN timeline changed during review projection.');
     return [...red.obligations, ...green, ...recipeRed];
+}
+
+export const EXPECTED_RED_RECOVERY = 'Record a fresh RED for the current test bytes when the implementation can still fail it, '
+    + 'or with operator approval remove the `Test-first: expected-red` marker from TASK.md and continue the ordinary cycle; '
+    + 'tests, compile, full suite and every required review remain mandatory. Do not use task-reset for this.';
+
+export class ExpectedRedEvidenceError extends Error {
+    constructor(message: string, readonly needsGreen = false) { super(message); }
+}
+
+function expectedRedError(error: unknown): ExpectedRedEvidenceError {
+    return new ExpectedRedEvidenceError(`${String(error)} ${EXPECTED_RED_RECOVERY}`);
+}
+
+/** Diagnostics only: the existing projection still authenticates and selects every retained execution. */
+export function readRetainedExpectedRedRejection(options: ExpectedRedEvidenceOptions): string | null {
+    if (!taskRequiresExpectedRed(options.repoRoot, options.taskId)) return null;
+    let snapshot: ReturnType<typeof readValidationEventSnapshot>;
+    try { snapshot = readValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection); }
+    catch { return null; } // Startup/timeline failures retain their own blocking routes; no retained RED is proven here.
+    try {
+        const history = snapshot.events.filter(event => event.event_type === 'TEST_FIRST_EXPECTED_FAILURE_RECORDED');
+        if (!history.length || projectExpectedRedExecutions(options, false)) return null;
+        const entry = snapshot.events.map(event => event.event_type).lastIndexOf('TASK_MODE_ENTERED');
+        const predatesEntry = history.every(event => snapshot.events.indexOf(event) < entry);
+        return expectedRedError(`Retained expected-RED ${predatesEntry ? 'predates task re-entry' : 'is unavailable for the current selected sources'}: ${snapshot.changed_files.join(', ')}.`).message;
+    } catch (error) { return expectedRedError(error).message; }
+}
+
+export function readExpectedRedReviewObligations(options: ExpectedRedEvidenceOptions,
+    currentObligations: readonly QualityValidationObligation[] = []): QualityValidationObligation[] {
+    try { return projectExpectedRedReviewObligations(options, currentObligations); }
+    catch (error) {
+        const retainedRejection = readRetainedExpectedRedRejection(options);
+        if (retainedRejection) throw new ExpectedRedEvidenceError(retainedRejection);
+        if (error instanceof NativeCaseExecutionUnavailableError || /GREEN|successful execution/iu.test(String(error)))
+            throw new ExpectedRedEvidenceError(`${String(error)} Run and record current passing focused tests for the unchanged selected cases, then retry review.`, true);
+        throw expectedRedError(error);
+    }
 }
 
 export function currentExpectedRedExecutionEvidence(repoRoot: string, taskId: string): ExpectedRedExecutionEvidence | null {

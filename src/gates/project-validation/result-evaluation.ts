@@ -67,7 +67,7 @@ export function readValidationAttemptFacts(repoRoot: string, taskId: string, att
             || original.inputs.length !== currentSnapshot.inputs.length
             || original.recipe.inputs.some((input, index) => input.role !== 'source'
                 && validationDigest(original.inputs[index]) !== validationDigest(currentSnapshot.inputs[index])))
-            throw new Error('Historical expected-RED recipe source, authority or native execution binding changed.');
+            throw new Error(`Historical expected-RED recipe source, authority or native execution binding changed. Selected sources: ${original.recipe.targets.map(target => target.source).join(', ')}.`);
         snapshot = attempt.snapshot;
     }
     if (attempt.schema_version !== 1 || attempt.attempt_id !== attemptId || attempt.snapshot.task_id !== taskId

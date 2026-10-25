@@ -177,6 +177,6 @@ export function assertCurrentIntermediateSelection(root: string, value: unknown,
         if (validationDigest(source) !== validationDigest(after[index]))
             throw new Error('Selected command source identities changed during execution.');
         if (validationDigest(readValidationFile(root, source.path, MAX_SOURCE_BYTES).identity) !== validationDigest(source))
-            throw new Error('Selected command source identity is no longer current.');
+            throw new Error(`Selected command source identity is no longer current: ${source.path}.`);
     }
 }

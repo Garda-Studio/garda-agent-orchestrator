@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+// Executes native next-step effect plans before returning the actual routing decision.
+import { resolveNextStep } from './next-step-test-support';
+import { runRestartCoherentCycleCommand, runRecordStrictDecompositionDecisionCommand, runBuildReviewContextCommand, runCompileGateCommand, runFullSuiteValidationCommand, runLoadRulePackCommand } from '../../../../src/cli/commands/gates';
 import { runIntermediateCommandCommand } from '../../../../src/cli/commands/gates';
 import { buildFullSuiteValidationEvidence, getReviewContextFullSuiteValidationViolations } from '../../../../src/gates/review-context/review-context-validation-evidence';
 import { hasReportedFailedTestCase, readReportedTestCases } from '../../../../src/cli/commands/gate-flows/command-run/intermediate-command-scope';
@@ -130,13 +133,29 @@ function resolveRoute(fixture: Fixture) {
 function buildRecipeFixture(mode = 'failed', testPath = 'specifications/case', options: {
     withRecipe?: boolean; fixtureReadiness?: boolean; nestedReport?: boolean;
     opaqueAssertion?: boolean; symbolic?: boolean; reviewSuite?: boolean; productionReadiness?: boolean; opaqueRecipe?: boolean;
-    productionOperand?: boolean; maxAttempts?: number; withChangelog?: boolean; extraTestPath?: string;
+    navigation?: boolean; productionOperand?: boolean; maxAttempts?: number; withChangelog?: boolean; extraTestPath?: string;
 } = {}): Fixture {
     const { withRecipe = true, fixtureReadiness = false, nestedReport = false } = options;
     const repoRoot = createRecipeTempRepo(); tempRoots.push(repoRoot);
     const bundle = getOrchestratorRoot(repoRoot);
     fs.mkdirSync(path.join(bundle, 'live/config'), { recursive: true });
     const config = buildDefaultWorkflowConfig();
+    if (options.navigation) {
+        const router = path.join(repoRoot, '.agents/workflows/start-task.md');
+        fs.mkdirSync(path.dirname(router), { recursive: true });
+        fs.writeFileSync(router, '# Fixture task router\nFollow next-step.\n');
+        fs.mkdirSync(path.join(bundle, 'bin'), { recursive: true });
+        fs.writeFileSync(path.join(bundle, 'bin/garda.js'), 'console.log("1.4.4 fixture");');
+        fs.writeFileSync(path.join(bundle, 'VERSION'), '1.4.4\n');
+        config.optional_quality_checks.enabled = false;
+        config.compile_gate.command = `"${process.execPath}" --check src/app.ts`;
+        config.full_suite_validation.enabled = true;
+        config.full_suite_validation.placement = 'after_compile_before_reviews';
+        config.full_suite_validation.command = `"${process.execPath}" opaque-checker "${testPath}"`;
+        const skill = path.join(bundle, 'live/skills/code-review/SKILL.md');
+        fs.mkdirSync(path.dirname(skill), { recursive: true });
+        fs.writeFileSync(skill, '# Code review\nInspect the current change.\n');
+    }
     if (options.reviewSuite) config.full_suite_validation = { ...config.full_suite_validation, enabled: true,
         placement: 'after_compile_before_reviews', command: `"${process.execPath}" opaque-checker "${testPath}"` };
     fs.writeFileSync(path.join(bundle, 'live/config/workflow-config.json'), JSON.stringify(config));
@@ -196,12 +215,21 @@ function buildRecipeFixture(mode = 'failed', testPath = 'specifications/case', o
         targets: [{ id: 'case', source: testPath, selector: 'declared case' }], environment: {}, timeout_ms: 5000,
         max_attempts: options.maxAttempts ?? 2, max_output_bytes: 1024, max_input_bytes: 65536, required_capabilities: [], result_format: options.opaqueRecipe ? 'opaque' : 'tap' }] }));
     seedRecipeInit(repoRoot); seedRecipeTask(repoRoot, TASK_ID, 'TODO', 'default', 'Test-first: expected-red.', 'Declared recipe expected red');
+    if (options.navigation) fs.writeFileSync(path.join(repoRoot, '.gitignore'), 'TASK.md\ngarda-agent-orchestrator/runtime/\n');
     initializeGitRepo(repoRoot);
     if (withRecipe) handleWorkflow(['set', '--target-root', repoRoot, '--project-validation-contract', 'recipes.json', '--operator-confirmed', 'yes',
         '--operator-confirmed-at-utc', new Date().toISOString()], { name: 'garda-agent-orchestrator', version: '1.0.0' });
     runEnterTaskMode({ repoRoot, taskId: TASK_ID, entryMode: 'EXPLICIT_TASK_EXECUTION', requestedDepth: 2,
         taskSummary: 'Expected-red declared recipe', provider: 'Codex' });
     loadTaskEntryRulePack(repoRoot, TASK_ID); runHandshakeForTask(repoRoot, TASK_ID); runShellSmokeForTask(repoRoot, TASK_ID);
+    if (options.navigation) {
+        const decision = runRecordStrictDecompositionDecisionCommand({ repoRoot, taskId: TASK_ID, decision: 'atomic', taskProfile: 'balanced',
+            taskSummary: 'Expected-red declared recipe',
+            reason: 'The source readiness contract and its assertion form one indivisible behavior.',
+            scopeRisk: 'One production source and one test; code and test review remain required.',
+            expectedReviewTypes: ['code', 'test'], atomicityConstraints: ['The behavior and regression must land together.'] });
+        assert.equal(decision.exitCode, 0, decision.outputLines.join('\n'));
+    }
     fs.appendFileSync(path.join(repoRoot, testPath), '\naffected test\n');
     if (options.extraTestPath) fs.appendFileSync(path.join(repoRoot, options.extraTestPath), '\naffected extra test\n');
     if (options.withChangelog) fs.appendFileSync(path.join(repoRoot, 'CHANGELOG.md'), '\n- Test-first behavior note.\n');
@@ -221,6 +249,95 @@ afterEach(() => {
 });
 
 describe('next-step test-first expected-red routing', () => {
+    for (const reentry of [false, true]) it(`blocks ${reentry ? 'pre-entry' : 'changed'} retained RED through next-step and builds review after approved marker removal without reset`, async () => {
+        const testPath = 'modules/safety/checkcase.custom';
+        const fixture = buildRecipeFixture('failed', testPath, { withRecipe: false, opaqueAssertion: true,
+            productionReadiness: true, navigation: true });
+        const runOptions = { repoRoot: fixture.repoRoot, taskId: TASK_ID, commandSource: 'targeted-test',
+            command: `"${process.execPath}" opaque-checker "${testPath}"`, preflightPath: fixture.preflightPath,
+            selectedCases: [{ source: testPath, case_id: 'source readiness', selector: testPath }] };
+        const red = await runIntermediateCommandCommand({ ...runOptions, expectFailure: true });
+        assert.equal(red.exitCode, 0, red.outputLines.join('\n'));
+        fs.writeFileSync(path.join(fixture.repoRoot, 'src/app.ts'), 'ready');
+        if (!reentry) fs.appendFileSync(path.join(fixture.repoRoot, testPath), '\nreview finding correction\n');
+        runClassifyChangeCommand({ ...fixture, taskId: TASK_ID, taskIntent: 'Fix production readiness and review finding',
+            outputPath: fixture.preflightPath, changedFiles: [testPath, 'src/app.ts'], emitMetrics: false });
+        runLoadRulePackCommand({ ...fixture, taskId: TASK_ID, stage: 'POST_PREFLIGHT',
+            loadedRuleFiles: ['00-core.md', '15-project-memory.md', '40-commands.md', '80-task-workflow.md', '90-skill-catalog.md'], emitMetrics: false });
+        if (reentry) {
+            const restart = await runRestartCoherentCycleCommand({ ...fixture, taskId: TASK_ID,
+                taskIntent: 'Expected-red declared recipe', changedFiles: [testPath, 'src/app.ts'], emitMetrics: false });
+            assert.equal(restart.exitCode, 0, restart.outputLines.join('\n'));
+        }
+        const green = await runIntermediateCommandCommand(runOptions);
+        assert.equal(green.exitCode, 0, green.outputLines.join('\n'));
+        const compile = await runCompileGateCommand({ ...fixture, taskId: TASK_ID, emitMetrics: false });
+        assert.equal(compile.exitCode, 0, compile.outputLines.join('\n'));
+        const suite = await runFullSuiteValidationCommand({ ...fixture, taskId: TASK_ID });
+        assert.equal(suite.exitCode, 0, suite.outputText);
+        const next = () => resolveNextStep({ repoRoot: fixture.repoRoot, taskId: TASK_ID });
+        const blocked = next();
+        assert.equal(blocked.status, 'BLOCKED');
+        assert.equal(blocked.next_gate, 'test-first-expected-red-stale', blocked.reason);
+        assert.ok(blocked.reason.includes(testPath), blocked.reason);
+        if (reentry) assert.match(blocked.reason, /predates task re-entry/u);
+        assert.match(blocked.reason, /fresh RED for the current test bytes/u);
+        assert.match(blocked.reason, /with operator approval remove/u);
+        assert.ok(!blocked.commands.some(command => command.command.includes('task-reset')));
+        const review = () => runBuildReviewContextCommand({ ...fixture, reviewType: 'code', depth: 2 });
+        await assert.rejects(review, error => {
+            assert.ok(String(error).includes(testPath), String(error));
+            assert.match(String(error), /fresh RED for the current test bytes/u);
+            assert.match(String(error), /with operator approval remove/u);
+            return true;
+        });
+        const eventsBefore = readTaskTimelineEvents(fixture.repoRoot, TASK_ID);
+        const taskPath = path.join(fixture.repoRoot, 'TASK.md');
+        fs.writeFileSync(taskPath, fs.readFileSync(taskPath, 'utf8').replace('Test-first: expected-red.', 'Operator approved ordinary cycle.'));
+        assert.equal(next().next_gate, 'build-review-context', next().reason);
+        const context = await review();
+        assert.ok(fs.existsSync(context.outputPath));
+        const eventsAfter = readTaskTimelineEvents(fixture.repoRoot, TASK_ID);
+        assert.equal(eventsAfter.filter(event => event.event_type === 'TASK_MODE_ENTERED').length,
+            eventsBefore.filter(event => event.event_type === 'TASK_MODE_ENTERED').length);
+        assert.equal(eventsAfter.filter(event => /RESET/u.test(String(event.event_type))).length, 0);
+    });
+
+    it('explains stale recipe RED through next-step and accepts fresh replacement RED', async () => {
+        const testPath = 'specifications/case';
+        const fixture = buildRecipeFixture('failed', testPath, { navigation: true, maxAttempts: 3 });
+        const run = () => runIntermediateCommandCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID, recipeId: 'declared', expectFailure: true });
+        const publish = () => {
+            const answers = buildQualityChecklistAnswersTemplate({ repoRoot: fixture.repoRoot, taskId: TASK_ID, preflightPath: fixture.preflightPath })
+                .answers.map(answer => ({ ...answer, status: 'PASS', answer: 'Checked the declared source identity and retained recipe attempt.' }));
+            const result = runQualityChecklistCommand({ repoRoot: fixture.repoRoot, taskId: TASK_ID, preflightPath: fixture.preflightPath,
+                answersJson: JSON.stringify(answers), emitMetrics: false });
+            assert.equal(result.exitCode, 0, result.outputLines.join('\n'));
+        };
+        assert.equal((await run()).exitCode, 0);
+        fs.appendFileSync(path.join(fixture.repoRoot, testPath), '\nreview correction');
+        runClassifyChangeCommand({ ...fixture, taskId: TASK_ID, taskIntent: 'Expected-red declared recipe',
+            outputPath: fixture.preflightPath, changedFiles: [testPath], emitMetrics: false });
+        runLoadRulePackCommand({ ...fixture, taskId: TASK_ID, stage: 'POST_PREFLIGHT',
+            loadedRuleFiles: ['00-core.md', '15-project-memory.md', '40-commands.md', '80-task-workflow.md', '90-skill-catalog.md'], emitMetrics: false });
+        publish();
+        const next = () => resolveNextStep({ repoRoot: fixture.repoRoot, taskId: TASK_ID });
+        const blocked = next();
+        assert.equal(blocked.status, 'BLOCKED');
+        assert.ok(blocked.reason.includes(testPath), blocked.reason);
+        assert.match(blocked.reason, /with operator approval remove/u);
+        const resultEvent = readTaskTimelineEvents(fixture.repoRoot, TASK_ID)
+            .filter(event => event.event_type === 'PROJECT_VALIDATION_RESULTS_EVALUATED').at(-1)!;
+        const resultPath = path.resolve(fixture.repoRoot, String((resultEvent.details as Record<string, unknown>).artifact_path));
+        const resultBytes = fs.readFileSync(resultPath);
+        fs.unlinkSync(resultPath);
+        assert.match(next().reason, /with operator approval remove/u, 'Missing retained recipe output must yield recovery, not throw.');
+        fs.writeFileSync(resultPath, resultBytes);
+        assert.equal((await run()).exitCode, 0);
+        publish();
+        assert.equal(next().next_gate, 'implementation', next().reason);
+    });
+
     for (const symbolic of [false, true]) it(`retains opaque assertion facts for independent review with ${symbolic ? 'symbolic' : 'literal'} selection`, async () => {
         const testPath = 'modules/safety/checkcase.custom';
         const fixture = buildRecipeFixture('failed', testPath, { withRecipe: false, opaqueAssertion: true, symbolic, reviewSuite: true });
@@ -308,10 +425,15 @@ describe('next-step test-first expected-red routing', () => {
             fixture.preflight = JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8'));
         };
         classify();
-        const green = await runIntermediateCommandCommand(runOptions);
-        assert.equal(green.exitCode, 0, green.outputLines.join('\n'));
         const obligations = () => resolveAuthoritativeReviewValidationObligations({ ...fixture,
             reviewType: resolveValidationSemanticReviewLanes(fixture.preflight.effective_review_snapshot as EffectiveReviewSnapshot)[0] });
+        assert.throws(obligations, error => {
+            assert.match(String(error), /Run and record current passing focused tests/u);
+            assert.doesNotMatch(String(error), /with operator approval remove/u);
+            return true;
+        }, 'Valid retained RED without GREEN must request GREEN, not replacement RED.');
+        const green = await runIntermediateCommandCommand(runOptions);
+        assert.equal(green.exitCode, 0, green.outputLines.join('\n'));
         const paired = obligations();
         assert.equal(paired?.length, 2, 'The existing ordinary review must receive both actual executions.');
         const historical = paired!.find(item => item.case_execution?.expected_failure)!;

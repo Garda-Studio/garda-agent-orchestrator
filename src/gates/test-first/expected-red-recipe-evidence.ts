@@ -59,3 +59,32 @@ export function readRecipeExpectedRedObligations(options: {
         throw new Error('Expected-RED recipe timeline changed during projection.');
     return obligations;
 }
+
+/** Read-only diagnostic; it grants no acceptance or GREEN semantics. */
+export function readRetainedRecipeExpectedRedRejection(options: {
+    repoRoot: string; taskId: string; inspection?: ValidationEvidenceInspection;
+}): string | null {
+    try {
+        const native = readValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection);
+        const starts = new Map(native.events.filter(event => event.event_type === 'PROJECT_VALIDATION_STARTED')
+            .map(event => [event.details?.attempt_id, Number(event.integrity?.task_sequence)]));
+        const results = native.events.filter(event => event.event_type === 'PROJECT_VALIDATION_RESULTS_EVALUATED')
+            .sort((left, right) => (starts.get(right.details?.attempt_id) ?? Infinity) - (starts.get(left.details?.attempt_id) ?? Infinity)
+                || Number(right.integrity?.task_sequence) - Number(left.integrity?.task_sequence));
+        const seen = new Set<string>();
+        for (const event of results) {
+            const retained = readValidationFile(options.repoRoot, String(event.details?.artifact_path));
+            if (retained.identity.sha256 !== event.details?.artifact_sha256)
+                return `Retained expected-RED recipe result digest changed. Selected sources: ${native.changed_files.join(', ')}.`;
+            const result = JSON.parse(retained.bytes.toString('utf8')) as Record<string, unknown>;
+            if (result.expected_failure !== true || seen.has(String(result.recipe_id))) continue;
+            seen.add(String(result.recipe_id));
+            try {
+                readValidationResult({ ...options, attemptId: String(event.details?.attempt_id), expectedRedHistory: true });
+            } catch (error) {
+                return `${String(error)} Current selected sources: ${native.changed_files.join(', ')}. RED from before task re-entry cannot be retained.`;
+            }
+        }
+        return null;
+    } catch (error) { return `Retained expected-RED recipe cannot be inspected: ${String(error)}`; }
+}
