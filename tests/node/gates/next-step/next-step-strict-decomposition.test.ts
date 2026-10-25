@@ -1,3 +1,4 @@
+import { syncTaskQueueStatusDetailed } from '../../../../src/cli/commands/gate-flows/task/task-queue-sync';
 import { describe, it, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
@@ -932,9 +933,8 @@ describe('gates/next-step strict decomposition', () => {
             assert.equal(initialCapture.status, 'CAPTURED', initialCapture.violations.join('\n'));
             if (ignoredEvidencePath) assert.equal(initialCapture.untracked_files.includes(ignoredEvidencePath), false);
             // Already-DECOMPOSED legacy status is fixture input, not transition authority.
-            const queuePath = path.join(repoRoot, 'TASK.md');
-            fs.writeFileSync(queuePath, fs.readFileSync(queuePath, 'utf8')
-                .replace(`| ${TASK_ID} | TODO |`, `| ${TASK_ID} | DECOMPOSED |`));
+            const updated = syncTaskQueueStatusDetailed(repoRoot, TASK_ID, 'DECOMPOSED');
+            assert.equal(updated.outcome, 'updated', updated.error_message ?? TASK_ID);
         } else {
             suspendParentBeforeLinkingChildren(repoRoot);
             const initialRoute = resolveNextStep({ taskId: TASK_ID, repoRoot });
@@ -956,10 +956,9 @@ describe('gates/next-step strict decomposition', () => {
             }
         }
         snapshotDirectory(path.dirname(manifestPath));
-        const queuePath = path.join(repoRoot, 'TASK.md');
         // Queue status is a fixture input; acceptance authority is tested by its owning gates.
-        fs.writeFileSync(queuePath, fs.readFileSync(queuePath, 'utf8')
-            .replace(`| ${TASK_ID}-1 | TODO |`, `| ${TASK_ID}-1 | DONE |`));
+        const updated = syncTaskQueueStatusDetailed(repoRoot, `${TASK_ID}-1`, 'DONE');
+        assert.equal(updated.outcome, 'updated', updated.error_message ?? `${TASK_ID}-1`);
         fs.writeFileSync(childPath, 'export const child = 2;\n');
         runGitFixtureCommand(repoRoot, ['add', '--', 'src/child.ts']);
         runGitFixtureCommand(repoRoot, ['commit', '-m', 'Real child source commit after parent WIP suspension']);
@@ -1150,9 +1149,8 @@ describe('gates/next-step strict decomposition', () => {
             } else if (kind === 'missing-timeline') {
                 fs.unlinkSync(path.join(eventsRoot(repoRoot), `${TASK_ID}-1.jsonl`));
             } else if (kind === 'reopened-task') {
-                const queuePath = path.join(repoRoot, 'TASK.md');
-                fs.writeFileSync(queuePath, fs.readFileSync(queuePath, 'utf8')
-                    .replace(`| ${TASK_ID}-1 | DONE |`, `| ${TASK_ID}-1 | IN_PROGRESS |`));
+                const updated = syncTaskQueueStatusDetailed(repoRoot, `${TASK_ID}-1`, 'IN_PROGRESS');
+                assert.equal(updated.outcome, 'updated', updated.error_message ?? `${TASK_ID}-1`);
             } else if (kind === 'duplicate-task') {
                 fs.appendFileSync(path.join(repoRoot, 'TASK.md'),
                     `| ${TASK_ID}-1 | DONE | P1 | ambiguous | Duplicate fixture | test | 2026-10-07 | balanced | Uncertain ownership. |\n`);

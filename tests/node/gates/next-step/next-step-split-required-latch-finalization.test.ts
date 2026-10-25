@@ -1,3 +1,4 @@
+import { syncTaskQueueStatusDetailed } from '../../../../src/cli/commands/gate-flows/task/task-queue-sync';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { syncTaskQueueStatusFromSplitRequiredToDecomposed } from '../../../../src/gates/next-step/next-step-task-queue-status-sync';
@@ -90,10 +91,10 @@ describe('gates/next-step split-required latch finalization', () => {
         ].join('\n'), 'utf8');
         seedSplitRequiredLatchEvidence(repoRoot, 'T-652');
         const decomposedResult = resolveNextStep({ taskId: 'T-652', repoRoot });
-        const decomposedTaskMd = fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8')
-            .replace('| T-653 | TODO |', '| T-653 | DONE |')
-            .replace('| T-654 | TODO |', '| T-654 | DONE |');
-        fs.writeFileSync(path.join(repoRoot, 'TASK.md'), decomposedTaskMd, 'utf8');
+        for (const childId of ['T-653', 'T-654']) {
+            const updated = syncTaskQueueStatusDetailed(repoRoot, childId, 'DONE');
+            assert.equal(updated.outcome, 'updated', updated.error_message ?? childId);
+        }
         const doneResult = resolveNextStep({ taskId: 'T-652', repoRoot });
         const stableDoneResult = resolveNextStep({ taskId: 'T-652', repoRoot });
         const taskMd = fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8');
@@ -127,10 +128,10 @@ describe('gates/next-step split-required latch finalization', () => {
         seedSplitRequiredLatchEvidence(repoRoot, 'T-506');
 
         const decomposedResult = resolveNextStep({ taskId: 'T-506', repoRoot });
-        const decomposedTaskMd = fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8')
-            .replace('| T-506-1 | TODO |', '| T-506-1 | DONE |')
-            .replace('| T-506-2 | TODO |', '| T-506-2 | DONE |');
-        fs.writeFileSync(path.join(repoRoot, 'TASK.md'), decomposedTaskMd, 'utf8');
+        for (const childId of ['T-506-1', 'T-506-2']) {
+            const updated = syncTaskQueueStatusDetailed(repoRoot, childId, 'DONE');
+            assert.equal(updated.outcome, 'updated', updated.error_message ?? childId);
+        }
         const doneResult = resolveNextStep({ taskId: 'T-506', repoRoot });
         const taskMd = fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8');
         const events = fs.readFileSync(path.join(eventsRoot(repoRoot), 'T-506.jsonl'), 'utf8');

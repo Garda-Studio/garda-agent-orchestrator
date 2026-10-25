@@ -151,7 +151,9 @@ function buildRecipeFixture(mode = 'failed', testPath = 'specifications/case', o
         config.compile_gate.command = `"${process.execPath}" --check src/app.ts`;
         config.full_suite_validation.enabled = true;
         config.full_suite_validation.placement = 'after_compile_before_reviews';
-        config.full_suite_validation.command = `"${process.execPath}" opaque-checker "${testPath}"`;
+        config.full_suite_validation.command = options.opaqueRecipe
+            ? `"${process.execPath}" driver failed "declared case"`
+            : `"${process.execPath}" opaque-checker "${testPath}"`;
         const skill = path.join(bundle, 'live/skills/code-review/SKILL.md');
         fs.mkdirSync(path.dirname(skill), { recursive: true });
         fs.writeFileSync(skill, '# Code review\nInspect the current change.\n');
@@ -301,6 +303,63 @@ describe('next-step test-first expected-red routing', () => {
         assert.equal(eventsAfter.filter(event => event.event_type === 'TASK_MODE_ENTERED').length,
             eventsBefore.filter(event => event.event_type === 'TASK_MODE_ENTERED').length);
         assert.equal(eventsAfter.filter(event => /RESET/u.test(String(event.event_type))).length, 0);
+    });
+
+    it('names pre-entry recipe RED in mixed-scope navigation and review errors', async () => {
+        const testPath = 'specifications/case';
+        const fixture = buildRecipeFixture('failed', testPath, {
+            opaqueRecipe: true, productionReadiness: true, navigation: true });
+        const options = { repoRoot: fixture.repoRoot, taskId: TASK_ID, recipeId: 'declared' };
+        const red = await runIntermediateCommandCommand({ ...options, expectFailure: true });
+        assert.equal(red.exitCode, 0, red.outputLines.join('\n'));
+        assert.equal(readTaskTimelineEvents(fixture.repoRoot, TASK_ID)
+            .filter(event => event.event_type === 'TEST_FIRST_EXPECTED_FAILURE_RECORDED').length, 0,
+        'Only recipe RED history may explain this regression.');
+        fs.writeFileSync(path.join(fixture.repoRoot, 'src/app.ts'), 'ready');
+        runClassifyChangeCommand({ ...fixture, taskId: TASK_ID, taskIntent: 'Expected-red declared recipe',
+            outputPath: fixture.preflightPath, changedFiles: [testPath, 'src/app.ts'], emitMetrics: false });
+        runLoadRulePackCommand({ ...fixture, taskId: TASK_ID, stage: 'POST_PREFLIGHT',
+            loadedRuleFiles: ['00-core.md', '15-project-memory.md', '40-commands.md', '80-task-workflow.md', '90-skill-catalog.md'], emitMetrics: false });
+        const restart = await runRestartCoherentCycleCommand({ ...fixture, taskId: TASK_ID,
+            taskIntent: 'Expected-red declared recipe', changedFiles: [testPath, 'src/app.ts'], emitMetrics: false });
+        assert.equal(restart.exitCode, 0, restart.outputLines.join('\n'));
+        fixture.preflight = JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8'));
+        assert.equal(fixture.preflight.scope_category, 'mixed');
+        const attempt = await executeValidationRecipe(options);
+        assert.equal(attempt.exit_code, 0);
+        assert.equal((await evaluateValidationAttempt({ ...options, attemptId: attempt.attempt_id })).status, 'UNRESOLVED');
+        const answers = buildQualityChecklistAnswersTemplate({ ...fixture, taskId: TASK_ID }).answers
+            .map(answer => ({ ...answer, status: 'PASS', answer: 'Checked current recipe execution after coherent re-entry.' }));
+        const quality = runQualityChecklistCommand({ ...fixture, taskId: TASK_ID,
+            answersJson: JSON.stringify(answers), emitMetrics: false });
+        assert.equal(quality.exitCode, 0, quality.outputLines.join('\n'));
+        const compile = await runCompileGateCommand({ ...fixture, taskId: TASK_ID, emitMetrics: false });
+        assert.equal(compile.exitCode, 0, compile.outputLines.join('\n'));
+        const suite = await runFullSuiteValidationCommand({ ...fixture, taskId: TASK_ID });
+        assert.equal(suite.exitCode, 0, suite.outputText);
+        const next = () => resolveNextStep({ repoRoot: fixture.repoRoot, taskId: TASK_ID });
+        const blocked = next();
+        assert.equal(blocked.status, 'BLOCKED');
+        assert.equal(blocked.next_gate, 'test-first-expected-red-stale', blocked.reason);
+        const assertRecovery = (message: string) => {
+            assert.ok(message.includes(testPath), message);
+            assert.match(message, /before task re-entry|predates task re-entry/u);
+            assert.match(message, /fresh RED for the current test bytes/u);
+            assert.match(message, /with operator approval remove/u);
+        };
+        assertRecovery(blocked.reason);
+        assert.ok(!blocked.commands.some(command => command.command.includes('task-reset')));
+        const review = () => runBuildReviewContextCommand({ ...fixture, reviewType: 'code', depth: 2 });
+        await assert.rejects(review, error => { assertRecovery(String(error)); return true; });
+        const entriesBefore = readTaskTimelineEvents(fixture.repoRoot, TASK_ID)
+            .filter(event => event.event_type === 'TASK_MODE_ENTERED').length;
+        const taskPath = path.join(fixture.repoRoot, 'TASK.md');
+        fs.writeFileSync(taskPath, fs.readFileSync(taskPath, 'utf8').replace('Test-first: expected-red.', 'Operator approved ordinary cycle.'));
+        assert.equal(next().next_gate, 'build-review-context', next().reason);
+        assert.ok(fs.existsSync((await review()).outputPath));
+        const after = readTaskTimelineEvents(fixture.repoRoot, TASK_ID);
+        assert.equal(after.filter(event => event.event_type === 'TASK_MODE_ENTERED').length, entriesBefore);
+        assert.equal(after.filter(event => /RESET/u.test(String(event.event_type))).length, 0);
     });
 
     it('explains stale recipe RED through next-step and accepts fresh replacement RED', async () => {

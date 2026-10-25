@@ -10,7 +10,7 @@ import { NativeCaseExecutionUnavailableError, readNativeCaseObligations, retaine
 import type { QualityValidationObligation } from '../quality-checklist/quality-checklist-validation-phases';
 import { readReportedTestCases, getCurrentIntermediateTestTargets } from '../../cli/commands/gate-flows/command-run/intermediate-command-scope';
 import { hasTestFirstExpectedRedDeclaration } from './test-first-declaration';
-import { readRecipeExpectedRedObligations } from './expected-red-recipe-evidence';
+import { readRecipeExpectedRedObligations, readRetainedRecipeExpectedRedRejection } from './expected-red-recipe-evidence';
 
 export interface ExpectedRedExecutionEvidence {
     schema_version: 1;
@@ -180,6 +180,8 @@ export function readExpectedRedReviewObligations(options: ExpectedRedEvidenceOpt
     catch (error) {
         const retainedRejection = readRetainedExpectedRedRejection(options);
         if (retainedRejection) throw new ExpectedRedEvidenceError(retainedRejection);
+        const recipeRejection = readRetainedRecipeExpectedRedRejection(options);
+        if (recipeRejection) throw expectedRedError(recipeRejection);
         if (error instanceof NativeCaseExecutionUnavailableError || /GREEN|successful execution/iu.test(String(error)))
             throw new ExpectedRedEvidenceError(`${String(error)} Run and record current passing focused tests for the unchanged selected cases, then retry review.`, true);
         throw expectedRedError(error);
