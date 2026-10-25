@@ -69,7 +69,7 @@ function readQueueBytes(taskPath: string): Buffer | null {
 
 export function withTaskQueueTransaction<T>(
     taskPath: string,
-    onLockFailure: (message: string) => T,
+    onLockFailure: (message: string, error?: unknown) => T,
     operation: () => T
 ): T {
     let canonicalPath: string;
@@ -112,7 +112,7 @@ export function withTaskQueueTransaction<T>(
             }
         }
     } catch (error) {
-        return onLockFailure(`Could not acquire TASK.md status-sync lock: ${error instanceof Error ? error.message : String(error)}`);
+        return onLockFailure(`Could not acquire TASK.md status-sync lock: ${error instanceof Error ? error.message : String(error)}`, error);
     }
     if (nested) {
         return operation();

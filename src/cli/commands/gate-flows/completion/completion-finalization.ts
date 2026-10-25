@@ -29,6 +29,7 @@ import {
     resolveDecomposedParentCompletionState
 } from '../../../../gates/next-step/next-step-task-queue';
 import {
+    getDecomposedParentTransitionError,
     transitionDecomposedParentsToDone,
     type DecomposedParentBatchStatusSyncResult
 } from '../../../../gates/next-step/next-step-task-queue-transitions';
@@ -40,9 +41,11 @@ import {
     buildTaskAuditSummary,
     synchronizeFinalCloseoutArtifacts
 } from '../../../../gates/task-audit/task-audit-summary';
+import { runFinalCloseoutMaintenance } from '../../../../gates/task-audit/task-audit-summary-closeout-sync';
 import { withFilesystemLock } from '../../../../gate-runtime/task-events-locking';
 import { reconcileTimelineSummaryForTask } from '../../../../gate-runtime/timeline-summary';
 import {
+    getTaskQueueStatusSyncError,
     readTaskQueueStatus,
     syncTaskQueueStatusDetailed,
     type TaskQueueStatusSyncResult
@@ -372,7 +375,8 @@ function assertSuccessfulDecomposedParentAutoCloseOutcome(syncResult: Decomposed
     }
     throw new Error(
         `decomposed parent auto-close failed for ${syncResult.root_task_id}: `
-        + `${syncResult.error_message || syncResult.outcome}`
+        + `${syncResult.error_message || syncResult.outcome}`,
+        { cause: getDecomposedParentTransitionError(syncResult) }
     );
 }
 
@@ -472,7 +476,8 @@ function closeEligibleDecomposedParentsLinkedToCompletedTask(params: {
         if (rollbackErrors.length > 0) {
             throw new Error(
                 `${error instanceof Error ? error.message : String(error)} `
-                + `Parent auto-close rollback failed: ${rollbackErrors.join(' | ')}`
+                + `Parent auto-close rollback failed: ${rollbackErrors.join(' | ')}`,
+                { cause: error }
             );
         }
         throw error;
@@ -820,7 +825,7 @@ function materializeFinalCloseoutArtifactsForCompletionGate(options: {
         ignoreActiveCompletionFinalizationLock: true
     });
     options.assertRecoveryBindings?.();
-    synchronizeFinalCloseoutArtifacts(summary);
+    synchronizeFinalCloseoutArtifacts(summary, { deferTerminalCleanup: true });
     const finalCloseout = summary.final_closeout;
     const requiredArtifactPaths = [
         finalCloseout.artifact_paths.json,
@@ -996,7 +1001,7 @@ export async function reconcileSuccessfulCompletionFinalizationAsync(
                 ...syncResult,
                 error_message: rollbackErrors.join(' | ')
             };
-        throw new Error(
+        throw Object.assign(new Error(
             buildFinalizationRepairMessage(
                 repoRoot,
                 taskId,
@@ -1007,8 +1012,9 @@ export async function reconcileSuccessfulCompletionFinalizationAsync(
                 restoredCompletionPassRecorded,
                 restoredStatusDoneRecorded,
                 effectiveSyncResult
-            )
-        );
+            ),
+            { cause: getTaskQueueStatusSyncError(syncResult) }
+        ), { code: syncResult.error_code });
     }
 
     let statusEventRecorded = false;
@@ -1116,11 +1122,16 @@ export async function reconcileSuccessfulCompletionFinalizationAsync(
             );
         throw pendingFinalizationStep === 'FINAL_CLOSEOUT' && rollbackErrors.length === 0 && error instanceof CloseoutLinkageFailure
             ? new CloseoutLinkageFailure(repairMessage, error.defects)
-            : new Error(repairMessage);
+            : new Error(repairMessage, { cause: error });
     }
 
-    // Validation scratch survives any mandatory finalization rollback. Only after
+    // Review launch evidence and validation scratch survive any mandatory rollback. Only after
     // the child and parent transactions succeed may earlier failed attempts be removed.
+    try {
+        runFinalCloseoutMaintenance({ repoRoot, bundleRoot: orchestratorRoot, taskId });
+    } catch (error: unknown) {
+        console.warn(`Final closeout cleanup pending: ${error instanceof Error ? error.message : String(error)}`);
+    }
     for (const note of cleanupTaskValidationOutput(repoRoot, new Set([
         taskId, ...decomposedParentStatusSync.updated_task_ids
     ]))) console.warn(note);

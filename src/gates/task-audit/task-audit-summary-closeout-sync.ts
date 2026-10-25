@@ -12,7 +12,15 @@ import { updateEvidenceArtifactState } from './task-audit-summary-collectors';
 import { formatFinalCloseoutMarkdown, formatFinalUserReport } from './task-audit-summary-renderers';
 import { type TaskAuditSummaryResult } from './task-audit-summary';
 
-export function synchronizeFinalCloseoutArtifacts(summary: TaskAuditSummaryResult): TaskAuditSummaryResult {
+export function runFinalCloseoutMaintenance(options: { repoRoot: string; bundleRoot: string; taskId: string }): void {
+    cleanupTerminalReviewTempOutputs(options.repoRoot, options.taskId);
+    runDailyRetentionMaintenance({ targetRoot: options.repoRoot, bundleRoot: options.bundleRoot });
+}
+
+export function synchronizeFinalCloseoutArtifacts(
+    summary: TaskAuditSummaryResult,
+    options: { deferTerminalCleanup?: boolean } = {}
+): TaskAuditSummaryResult {
     const jsonPath = summary.final_closeout.artifact_paths.json;
     const markdownPath = summary.final_closeout.artifact_paths.markdown;
     const finalUserReportPath = summary.final_closeout.artifact_paths.final_user_report;
@@ -29,11 +37,13 @@ export function synchronizeFinalCloseoutArtifacts(summary: TaskAuditSummaryResul
         if (finalUserReportPath) {
             writeFileAtomically(finalUserReportPath, formatFinalUserReport(closeout) + '\n', { encoding: 'utf8' });
         }
-        cleanupTerminalReviewTempOutputs(path.resolve(path.dirname(jsonPath), '..', '..', '..'), summary.task_id);
-        runDailyRetentionMaintenance({
-            targetRoot: path.resolve(path.dirname(jsonPath), '..', '..', '..'),
-            bundleRoot
-        });
+        if (!options.deferTerminalCleanup) {
+            runFinalCloseoutMaintenance({
+                repoRoot: path.resolve(path.dirname(jsonPath), '..', '..', '..'),
+                bundleRoot,
+                taskId: summary.task_id
+            });
+        }
         summary.final_closeout = closeout;
         updateEvidenceArtifactState(summary.evidence, 'final-closeout-json', jsonPath, true);
         updateEvidenceArtifactState(summary.evidence, 'final-closeout-markdown', markdownPath, true);

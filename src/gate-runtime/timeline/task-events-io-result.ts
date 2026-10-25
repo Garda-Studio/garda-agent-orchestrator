@@ -2,6 +2,8 @@ import type { AggregateAppendMode } from './task-events-retention';
 import type { LockContentionLevel } from './task-events-locking';
 import type { AppendTaskEventResult, TaskEvent, TaskEventPaths } from './task-events-io-types';
 
+const blockingAppendErrors = new WeakMap<AppendTaskEventResult, unknown>();
+
 export function getErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
@@ -98,6 +100,12 @@ export function recordDerivedAppendWarning(result: AppendTaskEventResult, warnin
     }
 }
 
+export function recordBlockingAppendError(result: AppendTaskEventResult, error: unknown): void {
+    if (!blockingAppendErrors.has(result)) {
+        blockingAppendErrors.set(result, error);
+    }
+}
+
 export function getBlockingTaskEventAppendWarnings(result: AppendTaskEventResult): string[] {
     return result.warnings.filter((warning) => !result.derived_warnings.includes(warning));
 }
@@ -118,6 +126,8 @@ export function assertMandatoryAppendCommitted(result: AppendTaskEventResult, ev
         const diagnostics = blockingWarnings.length > 0
             ? blockingWarnings
             : (result.warnings.length > 0 ? result.warnings : [`commit_status=${result.commit_status}`]);
-        throw new Error(`Mandatory lifecycle event '${eventType}' append failed: ${diagnostics.join(' | ')}`);
+        throw new Error(`Mandatory lifecycle event '${eventType}' append failed: ${diagnostics.join(' | ')}`, {
+            cause: blockingAppendErrors.get(result)
+        });
     }
 }

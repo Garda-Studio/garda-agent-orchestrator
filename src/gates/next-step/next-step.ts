@@ -717,9 +717,8 @@ function readLatestTaskEventSequence(
     for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
         const event = orderedEvents[index];
         const eventType = String(event.event_type || '').trim().toUpperCase();
-        if (!expectedTypes.has(eventType) || ignoreEvent?.(event)) {
-            continue;
-        }
+        if (!expectedTypes.has(eventType)) continue;
+        if (ignoreEvent?.(event)) return null;
         const sequence = Number(event.sequence);
         return Number.isInteger(sequence) ? sequence : index;
     }

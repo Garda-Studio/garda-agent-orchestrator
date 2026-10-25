@@ -103,12 +103,24 @@ export interface TaskQueueStatusSyncResult {
     previous_status: string | null;
     next_status: string;
     error_message: string | null;
+    error_code?: string;
     status_contract: TaskQueueStatusContract;
+}
+
+const taskQueueStatusSyncErrors = new WeakMap<TaskQueueStatusSyncResult, unknown>();
+
+export function getTaskQueueStatusSyncError(result: TaskQueueStatusSyncResult): unknown {
+    return taskQueueStatusSyncErrors.get(result);
+}
+
+function retainTaskQueueStatusSyncError(result: TaskQueueStatusSyncResult, error: unknown): TaskQueueStatusSyncResult {
+    taskQueueStatusSyncErrors.set(result, error);
+    return result;
 }
 
 export function withTaskQueueStatusSyncLock<T>(
     taskPath: string,
-    onLockFailure: (message: string) => T,
+    onLockFailure: (message: string, error?: unknown) => T,
     operation: () => T
 ): T {
     return withTaskQueueTransaction(taskPath, onLockFailure, operation);
@@ -132,15 +144,17 @@ export function syncTaskQueueStatusDetailed(repoRoot: string, taskId: string, ne
 
     return withTaskQueueStatusSyncLock(
         taskPath,
-        (message) => ({
+        (message, error) => retainTaskQueueStatusSyncError({
             outcome: 'write_failed',
             task_path: gateHelpers.normalizePath(taskPath),
             task_id: taskId,
             previous_status: null,
             next_status: normalizedNextStatus,
             error_message: message,
+            ...(error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+                ? { error_code: error.code } : {}),
             status_contract: statusContract
-        }),
+        }, error),
         () => {
             const originalContent = fs.readFileSync(taskPath, 'utf8');
             const newline = originalContent.includes('\r\n') ? '\r\n' : '\n';
@@ -204,15 +218,17 @@ export function syncTaskQueueStatusDetailed(repoRoot: string, taskId: string, ne
             try {
                 writeTaskQueueFile(taskPath, nextContent);
             } catch (error: unknown) {
-                return {
+                return retainTaskQueueStatusSyncError({
                     outcome: 'write_failed',
                     task_path: gateHelpers.normalizePath(taskPath),
                     task_id: taskId,
                     previous_status: previousStatus,
                     next_status: normalizedNextStatus,
                     error_message: getErrorMessage(error),
+                    ...(error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+                        ? { error_code: error.code } : {}),
                     status_contract: statusContract
-                };
+                }, error);
             }
 
             return {

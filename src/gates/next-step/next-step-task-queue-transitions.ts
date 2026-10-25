@@ -18,6 +18,7 @@ import type {
     SplitRequiredLatchEvidence
 } from './next-step-split-required-latch';
 import {
+    getDecomposedParentStatusSyncError,
     rollbackDecomposedParentStatusSync,
     syncDecomposedParentsToDone,
     syncTaskQueueStatusFromStrictDecompositionToDecomposed,
@@ -32,6 +33,14 @@ export interface SplitRequiredLatchTransitionEvidence {
 }
 
 export type { DecomposedParentBatchStatusSyncResult } from './next-step-task-queue-status-sync';
+
+const decomposedParentTransitionErrors = new WeakMap<DecomposedParentBatchStatusSyncResult, unknown>();
+
+export function getDecomposedParentTransitionError(result: DecomposedParentBatchStatusSyncResult): unknown {
+    return decomposedParentTransitionErrors.has(result)
+        ? decomposedParentTransitionErrors.get(result)
+        : getDecomposedParentStatusSyncError(result);
+}
 
 function getOrchestratorRootFromEventsRoot(eventsRoot: string): string {
     return path.resolve(eventsRoot, '..', '..');
@@ -310,7 +319,7 @@ export function transitionDecomposedParentsToDone(params: {
             const skippedRollbackMessage = uncompensatedCommittedTaskIds.length > 0
                 ? ` Skipped rollback for task(s) with committed status events that could not be compensated: ${uncompensatedCommittedTaskIds.join(', ')}.`
                 : '';
-            return {
+            const failureResult: DecomposedParentBatchStatusSyncResult = {
                 ...syncResult,
                 outcome: 'write_failed',
                 updated_task_ids: remainingUpdatedTaskIds,
@@ -318,6 +327,8 @@ export function transitionDecomposedParentsToDone(params: {
                     `Mandatory lifecycle event append failed after TASK.md status sync: ${error instanceof Error ? error.message : String(error)}. ` +
                     `${compensationMessage} ${rollbackMessage}${skippedRollbackMessage}`
             };
+            decomposedParentTransitionErrors.set(failureResult, error);
+            return failureResult;
         }
     }
     return syncResult;

@@ -52,6 +52,12 @@ export interface DecomposedParentBatchStatusSyncResult {
     status_contracts: Record<string, TaskQueueStatusContract>;
 }
 
+const decomposedParentStatusSyncErrors = new WeakMap<DecomposedParentBatchStatusSyncResult, unknown>();
+
+export function getDecomposedParentStatusSyncError(result: DecomposedParentBatchStatusSyncResult): unknown {
+    return decomposedParentStatusSyncErrors.get(result);
+}
+
 function fileExists(filePath: string): boolean {
     try {
         return fs.existsSync(filePath);
@@ -247,9 +253,10 @@ function buildDecomposedParentBatchStatusSyncResult(params: {
     previousStatuses?: Record<string, string | null>;
     outcome: TaskQueueStatusSyncResult['outcome'];
     errorMessage?: string | null;
+    primaryError?: unknown;
 }): DecomposedParentBatchStatusSyncResult {
     const taskIds = [...new Set(params.taskIds)];
-    return {
+    const result: DecomposedParentBatchStatusSyncResult = {
         outcome: params.outcome,
         task_path: normalizePath(params.taskPath),
         root_task_id: params.rootTaskId,
@@ -262,6 +269,10 @@ function buildDecomposedParentBatchStatusSyncResult(params: {
             taskIds.map((taskId) => [taskId, buildTaskQueueStatusContract(taskId)])
         )
     };
+    if (params.primaryError !== undefined) {
+        decomposedParentStatusSyncErrors.set(result, params.primaryError);
+    }
+    return result;
 }
 
 export function rollbackDecomposedParentStatusSync(
@@ -336,12 +347,13 @@ export function syncDecomposedParentsToDone(
 
     return withTaskQueueStatusSyncLock(
         taskPath,
-        (message) => buildDecomposedParentBatchStatusSyncResult({
+        (message, error) => buildDecomposedParentBatchStatusSyncResult({
             taskPath,
             rootTaskId,
             taskIds: uniqueRequestedTaskIds,
             outcome: 'write_failed',
-            errorMessage: message
+            errorMessage: message,
+            primaryError: error
         }),
         () => {
             const originalContent = fs.readFileSync(taskPath, 'utf8');
@@ -518,7 +530,8 @@ export function syncDecomposedParentsToDone(
                     taskIds: freshTaskIds,
                     previousStatuses,
                     outcome: 'write_failed',
-                    errorMessage: error instanceof Error ? error.message : String(error)
+                    errorMessage: error instanceof Error ? error.message : String(error),
+                    primaryError: error
                 });
             }
         }

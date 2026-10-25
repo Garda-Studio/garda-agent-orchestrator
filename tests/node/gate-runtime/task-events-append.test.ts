@@ -1175,6 +1175,27 @@ test('appendTaskEvent returns null for empty taskId', () => {
     assert.equal(appendTaskEvent('/tmp', '', 'test', 'PASS', 'msg', null), null);
 });
 
+test('mandatory append preserves the primary blocking error as its cause in both append modes', async () => {
+    for (const append of [appendMandatoryTaskEvent, appendMandatoryTaskEventAsync]) {
+        const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-mandatory-append-cause-'));
+        const primaryError = Object.assign(new Error('native append blocked'), { code: 'EPERM' });
+        try {
+            await assert.rejects(async () => append(repoRoot, 'T-APPEND-CAUSE', 'STATUS_CHANGED', 'INFO', '', {}, {
+                lowNoiseRuntimeWrites: true,
+                validateBeforeCanonicalAppend: () => { throw primaryError; }
+            }), (error: unknown) => {
+                assert.ok(error instanceof Error);
+                assert.match(error.message, /Mandatory lifecycle event 'STATUS_CHANGED' append failed/);
+                assert.equal(error.cause, primaryError);
+                return true;
+            });
+            assert.equal(fs.existsSync(path.join(repoRoot, 'runtime', 'task-events', 'T-APPEND-CAUSE.jsonl')), false);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    }
+});
+
 test('appendMandatoryTaskEvent keeps canonical commit when aggregate append fails', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-append-aggregate-fail-'));
     try {

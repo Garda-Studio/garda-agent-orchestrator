@@ -37,6 +37,7 @@ import {
     getBlockingTaskEventAppendWarnings,
     markTaskEventCommitted,
     markTaskEventSkippedDuplicate,
+    recordBlockingAppendError,
     recordDerivedAppendWarning,
     taskEventAppendHasBlockingFailure
 } from './task-events-io-result';
@@ -129,7 +130,10 @@ function continuationAppendValidator(
     };
 }
 
-function handleAppendFailure(result: AppendTaskEventResult, warning: string, passThru: boolean): AppendTaskEventResult | null {
+function handleAppendFailure(
+    result: AppendTaskEventResult, warning: string, error: unknown, passThru: boolean
+): AppendTaskEventResult | null {
+    recordBlockingAppendError(result, error);
     result.warnings.push(warning);
     process.stderr.write(`WARNING: ${warning}\n`);
     return passThru ? result : null;
@@ -156,7 +160,7 @@ function handleTaskEventWriteFailure(
 ): AppendTaskEventResult | null {
     if (!taskEventPersisted) {
         abortUncommittedTaskEventMutation(mutationTicket);
-        return handleAppendFailure(result, buildAppendWarning('task-event append failed', error), passThru);
+        return handleAppendFailure(result, buildAppendWarning('task-event append failed', error), error, passThru);
     }
 
     markTaskEventCommitted(result, event);
@@ -171,6 +175,7 @@ function handleTaskEventWriteFailure(
             return handleAppendFailure(
                 result,
                 buildAppendWarning('task-event generation commit failed after canonical append', settlementError),
+                settlementError,
                 passThru
             );
         }

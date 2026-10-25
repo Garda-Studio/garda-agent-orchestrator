@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { isRetryableCompletionFinalizationError } from '../../gates/completion/completion-finalization-retry';
 import { cleanupCompactAtTaskBoundary } from '../../core/compact/lifecycle';
 import { compactGuidance } from '../../core/compact/guidance';
 import {
@@ -641,6 +642,7 @@ export async function handleCompletionGate(gateArgv: string[]): Promise<void> {
                                 timeline_path: completionResult.timeline_path,
                                 violations: completionResult.violations,
                                 finalization_error: error instanceof Error ? error.message : String(error),
+                                finalization_retryable: isRetryableCompletionFinalizationError(error),
                                 closeout_linkage_recovery: getCloseoutLinkageRecoveryProof(error, recoverySnapshot, repoRoot)
                             });
                         } catch (eventError: unknown) {
