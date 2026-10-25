@@ -195,7 +195,7 @@ function appendTaskMentionIfMissing(taskMentions: ChildTaskIdMention[], taskId: 
 }
 
 function isExplicitChildListMentionPosition(text: string, index: number): boolean {
-    const introPattern = /\b(?:(?:child(?:ren)?|leaf)\s+tasks?|child\s+range|review\s+follow-up\s+tasks?\s+materialized)\b\s*:*/igu;
+    const introPattern = /\b(?:(?:child(?:ren)?|leaf)\s+tasks?|children|child\s+range|review\s+follow-up\s+tasks?\s+materialized)\b\s*:*/igu;
     let introMatch: RegExpExecArray | null;
     let introEnd: number | null = null;
     while ((introMatch = introPattern.exec(text)) !== null) {
@@ -207,10 +207,20 @@ function isExplicitChildListMentionPosition(text: string, index: number): boolea
     if (introEnd == null) {
         return false;
     }
-    const listPrefix = text.slice(introEnd, index)
-        .replace(/`[A-Za-z0-9._-]+`/gu, ' ')
-        .replace(TASK_QUEUE_TASK_ID_REFERENCE_PATTERN, '$1 ');
-    return /^[\s,:()[\]\-–—]*(?:(?:and|or|through|to)[\s,:()[\]\-–—]*)*$/iu.test(listPrefix);
+    const listPrefix = text.slice(introEnd, index);
+    const firstTaskId = new RegExp(
+        TASK_QUEUE_TASK_ID_REFERENCE_PATTERN.source,
+        TASK_QUEUE_TASK_ID_REFERENCE_PATTERN.flags
+    ).exec(listPrefix);
+    const firstTaskIdIndex = firstTaskId
+        ? firstTaskId.index + firstTaskId[1].length
+        : listPrefix.length;
+    if (!/^[\s,:()[\]`*_\-–—]*$/u.test(listPrefix.slice(0, firstTaskIdIndex))) {
+        return false;
+    }
+    return /^[\s,:()[\]`*_\-–—]*(?:(?:and|or|through|to)[\s,:()[\]`*_\-–—]*)*$/iu.test(
+        listPrefix.replace(TASK_QUEUE_TASK_ID_REFERENCE_PATTERN, '$1 ')
+    );
 }
 
 function parseNumericTaskIdRangeEndpoint(taskId: string): NumericTaskIdRangeEndpoint | null {
@@ -296,6 +306,9 @@ function extractChildTaskMentions(notes: string | null, knownTaskIds: Iterable<s
     let rangeMatch: RegExpExecArray | null;
     while ((rangeMatch = rangePattern.exec(text)) !== null) {
         const leadingBoundary = rangeMatch[1] || '';
+        if (!isExplicitChildListMentionPosition(text, rangeMatch.index + leadingBoundary.length)) {
+            continue;
+        }
         const startEndpoint = parseNumericTaskIdRangeEndpoint(rangeMatch[2] || '');
         const endEndpoint = parseNumericTaskIdRangeEndpoint(rangeMatch[3] || '');
         if (!startEndpoint || !endEndpoint || startEndpoint.prefix !== endEndpoint.prefix) {
@@ -338,7 +351,9 @@ function extractChildTaskMentions(notes: string | null, knownTaskIds: Iterable<s
     while ((conventionalTaskIdMatch = conventionalTaskIdPattern.exec(text)) !== null) {
         const taskId = conventionalTaskIdMatch[2];
         const mentionIndex = conventionalTaskIdMatch.index + conventionalTaskIdMatch[1].length;
-        appendTaskMentionIfMissing(taskMentions, taskId, mentionIndex);
+        if (isExplicitChildListMentionPosition(text, mentionIndex)) {
+            appendTaskMentionIfMissing(taskMentions, taskId, mentionIndex);
+        }
     }
 
     const referencedTaskIdPattern = new RegExp(
@@ -363,8 +378,7 @@ function extractChildTaskMentions(notes: string | null, knownTaskIds: Iterable<s
         const taskIdMatch = taskIdPattern.exec(text);
         if (taskIdMatch) {
             const mentionIndex = taskIdMatch.index + taskIdMatch[1].length;
-            const isConventionalTaskId = /^[Tt]-\d+$/u.test(taskId);
-            if (!isConventionalTaskId && !isExplicitChildListMentionPosition(text, mentionIndex)) {
+            if (!isExplicitChildListMentionPosition(text, mentionIndex)) {
                 continue;
             }
             appendTaskMentionIfMissing(taskMentions, taskId, taskIdMatch.index + taskIdMatch[1].length);

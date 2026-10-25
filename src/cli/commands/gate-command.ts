@@ -88,7 +88,9 @@ export async function handleGate(commandArgv: string[]): Promise<void> {
         console.log(buildGateHelpText(gateName));
         return;
     }
-    const taskIdRemediationMessage = buildTaskIdSyntaxRemediationMessage(gateName, gateArgv);
+    const taskIdRemediationMessage = gateName === 'task-reset'
+        ? null
+        : buildTaskIdSyntaxRemediationMessage(gateName, gateArgv);
     if (taskIdRemediationMessage) {
         throw new Error(taskIdRemediationMessage);
     }

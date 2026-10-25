@@ -8,6 +8,8 @@ import { createHash } from 'node:crypto';
 import { buildDefaultWorkflowConfig } from '../../../../src/core/workflow-config';
 import { handleWorkflow } from '../../../../src/cli/commands/workflow-command';
 import { handleTaskReset } from '../../../../src/cli/commands/gate-task-handlers';
+import { EXIT_GENERAL_FAILURE, EXIT_USAGE_ERROR } from '../../../../src/cli/exit-codes';
+import { runCliWithCapturedOutput } from '../../cli/commands/gate-test-cli-capture';
 import { computeProtectedSnapshotDigest } from '../../../../src/gates/protected-control-plane/protected-control-plane';
 import {
     resolveTaskResetScope,
@@ -1224,6 +1226,97 @@ describe('runTaskResetCommand — confirmed one-action reset', () => {
 });
 
 describe('handleTaskReset --as-json', () => {
+    it('prints one JSON object for parse and command errors without an outer CLI failure marker', async () => {
+        const fixture = buildFakeRepo({ hasEventsFile: true, hasReviewArtifact: true });
+        const taskMdBefore = fs.readFileSync(path.join(fixture.repoRoot, 'TASK.md'), 'utf8');
+        try {
+            for (const scenario of [
+                { argv: ['--as-json'], message: /TaskId must not be empty/u, exitCode: EXIT_USAGE_ERROR },
+                { argv: ['--unknown', '--as-json'], message: /Unknown option: --unknown/u, exitCode: EXIT_USAGE_ERROR },
+                { argv: ['--as-json=true', '--unknown'], message: /Unknown option: --unknown/u, exitCode: EXIT_USAGE_ERROR },
+                { argv: ['--as-json', 'yes', '--unknown'], message: /Unknown option: --unknown/u, exitCode: EXIT_USAGE_ERROR },
+                { argv: [fixture.taskId, '--as-json'], message: /Unexpected positional argument: T-001.*Suggested command:/u,
+                    exitCode: EXIT_GENERAL_FAILURE },
+                { argv: ['--task', fixture.taskId, '--as-json'], message: /Unknown option: --task.*Suggested command:/u,
+                    exitCode: EXIT_USAGE_ERROR },
+                { argv: ['--task-id', 'T-999', '--reopen', '--dry-run', '--as-json'],
+                    message: /Task 'T-999' not found in TASK.md/u, exitCode: EXIT_GENERAL_FAILURE }
+            ]) {
+                const result = await runCliWithCapturedOutput([
+                    'gate', 'task-reset', ...scenario.argv, '--repo-root', fixture.repoRoot
+                ], { cwd: fixture.repoRoot });
+                const payload = JSON.parse(result.logs.join('\n')) as Record<string, unknown>;
+
+                assert.equal(payload.outcome, 'ERROR');
+                assert.match(String(payload.error), scenario.message);
+                assert.equal(payload.exit_code, scenario.exitCode);
+                assert.equal(result.exitCode, scenario.exitCode);
+                assert.deepEqual(result.errors, []);
+            }
+            assert.equal(fs.readFileSync(path.join(fixture.repoRoot, 'TASK.md'), 'utf8'), taskMdBefore);
+        } finally {
+            cleanup(fixture.repoRoot);
+        }
+    });
+
+    it('keeps task-ID syntax remediation in text mode and for other gates', async () => {
+        const fixture = buildFakeRepo();
+        try {
+            for (const scenario of [
+                { argv: ['task-reset', fixture.taskId], exitCode: EXIT_GENERAL_FAILURE },
+                { argv: ['task-reset', '--task', fixture.taskId], exitCode: EXIT_USAGE_ERROR },
+                { argv: ['task-events-summary', fixture.taskId, '--as-json'], exitCode: EXIT_GENERAL_FAILURE }
+            ]) {
+                const result = await runCliWithCapturedOutput([
+                    'gate', ...scenario.argv, '--repo-root', fixture.repoRoot
+                ], { cwd: fixture.repoRoot });
+
+                assert.equal(result.exitCode, scenario.exitCode);
+                assert.deepEqual(result.logs, []);
+                assert.match(result.errors.join('\n'), /GARDA_CLI_FAILED/u);
+                assert.match(result.errors.join('\n'), /Canonical task-id syntax.*Suggested command:/u);
+            }
+        } finally {
+            cleanup(fixture.repoRoot);
+        }
+    });
+
+    it('keeps text error handling when JSON output is absent or explicitly disabled', async () => {
+        const fixture = buildFakeRepo();
+        try {
+            for (const formatArgs of [[], ['--as-json=false'], ['--as-json', 'false']]) {
+                const result = await runCliWithCapturedOutput([
+                    'gate', 'task-reset', ...formatArgs, '--unknown', '--repo-root', fixture.repoRoot
+                ], { cwd: fixture.repoRoot });
+
+                assert.equal(result.exitCode, EXIT_USAGE_ERROR);
+                assert.deepEqual(result.logs, []);
+                assert.match(result.errors.join('\n'), /GARDA_CLI_FAILED/u);
+                assert.match(result.errors.join('\n'), /Unknown option: --unknown/u);
+            }
+        } finally {
+            cleanup(fixture.repoRoot);
+        }
+    });
+
+    it('keeps returned failure results and their exit codes in JSON', async () => {
+        const fixture = buildFakeRepo({ taskResetEnabled: false });
+        try {
+            const result = await runCliWithCapturedOutput([
+                'gate', 'task-reset', '--task-id', fixture.taskId, '--reopen', '--confirm', '--as-json',
+                '--repo-root', fixture.repoRoot
+            ], { cwd: fixture.repoRoot });
+            const payload = JSON.parse(result.logs.join('\n')) as Record<string, unknown>;
+
+            assert.equal(payload.outcome, 'TASK_RESET_DISABLED');
+            assert.equal(payload.exit_code, EXIT_GENERAL_FAILURE);
+            assert.equal(result.exitCode, EXIT_GENERAL_FAILURE);
+            assert.deepEqual(result.errors, []);
+        } finally {
+            cleanup(fixture.repoRoot);
+        }
+    });
+
     it('prints one JSON object for a dry run', async () => {
         const fixture = buildFakeRepo({ hasEventsFile: true, hasReviewArtifact: true });
         const written: string[] = [];

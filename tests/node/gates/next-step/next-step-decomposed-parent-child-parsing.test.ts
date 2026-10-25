@@ -168,6 +168,65 @@ afterEach(() => {
 });
 
 describe('gates/next-step decomposed parent child parsing', () => {
+    for (const notes of [
+        'Children: T-422-5, T-422-6.',
+        'Children: `T-422-5`, `T-422-6`.',
+        'Children: `T-422-5` through `T-422-7`.',
+        'Children: T-422-5 to T-422-7.',
+        'Children: none. Child tasks: `T-422-5`, `T-422-6`.',
+        'Children: see T-422-7. Children: `T-422-5`, `T-422-6`.'
+    ]) {
+        it(`routes hierarchical child lists through next-step: ${notes}`, () => {
+            const repoRoot = makeTempRepo();
+            fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
+                '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+                '|---|---|---|---|---|---|---|---|---|',
+                `| T-422 | DECOMPOSED | P1 | workflow | Parent | local | 2026-10-25 | balanced | ${notes} |`,
+                '| T-422-5 | DONE | P1 | workflow | First child | local | 2026-10-25 | balanced | Complete. |',
+                '| T-422-6 | TODO | P1 | workflow | Next child | local | 2026-10-25 | balanced | Next. |',
+                '| T-422-7 | TODO | P1 | workflow | Later child | local | 2026-10-25 | balanced | Later. |',
+                ''
+            ].join('\n'), 'utf8');
+
+            const result = resolveNextStep({ taskId: 'T-422', repoRoot });
+
+            assert.equal(result.status, 'DECOMPOSED');
+            assert.equal(result.next_gate, 'child-task');
+            assert.equal(result.commands.length, 1);
+            assert.match(result.commands[0].command, /next-step "T-422-6"/u);
+        });
+    }
+
+    for (const notes of [
+        'No children: see T-12.',
+        'No children: see `T-12`.',
+        'Children: see T-12 through T-14.',
+        'Children: see `T-12` through `T-14`.',
+        'Child tasks: see T-12.',
+        'Child tasks: `guide` and `T-12`.',
+        'Child tasks: and T-12.',
+        'Children: see T-422-5.'
+    ]) {
+        it(`does not infer child links from prose through next-step: ${notes}`, () => {
+            const repoRoot = makeTempRepo();
+            fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
+                '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+                '|---|---|---|---|---|---|---|---|---|',
+                `| T-422 | DECOMPOSED | P1 | workflow | Parent | local | 2026-10-25 | balanced | ${notes} |`,
+                '| T-12 | TODO | P1 | workflow | Unrelated numeric task | local | 2026-10-25 | balanced | Context. |',
+                '| T-14 | TODO | P1 | workflow | Unrelated range task | local | 2026-10-25 | balanced | Context. |',
+                '| T-422-5 | TODO | P1 | workflow | Unlinked suffix task | local | 2026-10-25 | balanced | Context. |',
+                ''
+            ].join('\n'), 'utf8');
+
+            const result = resolveNextStep({ taskId: 'T-422', repoRoot });
+
+            assert.equal(result.status, 'DECOMPOSED');
+            assert.equal(result.next_gate, null);
+            assert.deepEqual(result.commands, []);
+        });
+    }
+
     it('does not mark decomposed parents DONE when an explicit range child is missing', () => {
         const repoRoot = makeTempRepo();
         fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [

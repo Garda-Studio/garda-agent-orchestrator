@@ -550,7 +550,7 @@ describe('cli/commands/gates — dirty-workspace and isolation', () => {
         fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
             '| ID | Status | Priority | Area | Title | Assignee | Updated | Profile | Notes |',
             '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
-            `| ${parentTaskId} | DECOMPOSED | P1 | workflow | Parent | unassigned | 2026-07-12 | default | Split checkpoint \`${checkpointCommit}\` preserves parent work. Child tasks: \`${taskId}\`. |`,
+            `| ${parentTaskId} | DECOMPOSED | P1 | workflow | Parent | unassigned | 2026-07-12 | default | Split checkpoint \`${checkpointCommit}\` preserves parent work. Children: none. Child tasks: \`${taskId}\`. |`,
             `| ${taskId} | TODO | P1 | workflow | Child | unassigned | 2026-07-12 | default | Child of \`${parentTaskId}\`. Checkpoint: \`${checkpointCommit}\`. Checkpoint files: \`src/app.ts\`. |`
         ].join('\n'), 'utf8');
         seedInitAnswers(repoRoot);

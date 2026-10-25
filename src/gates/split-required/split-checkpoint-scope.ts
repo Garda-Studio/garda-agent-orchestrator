@@ -4,6 +4,7 @@ import { isTaskQueueDecomposedStatus } from '../../core/active-task-state';
 import { readTaskQueueEntries, type TaskQueueEntry } from '../../core/task-queue-read';
 import { DEFAULT_GIT_TIMEOUT_MS, spawnSyncWithTimeout } from '../../core/subprocess';
 import { parseNumstatZ, splitNulRecords } from '../../core/git-path-output';
+import { extractExplicitLinkedChildTaskIds } from '../next-step/next-step-task-queue';
 import {
     isPathRealpathInsideRoot,
     normalizePath,
@@ -209,12 +210,7 @@ function deriveParentTaskId(taskId: string): string | null {
 }
 
 function explicitlyLinksChild(notes: string, childTaskId: string): boolean {
-    const childList = /\b(?:child tasks|children)\s*:\s*([^.]*)/iu.exec(notes);
-    if (!childList) {
-        return false;
-    }
-    return [...String(childList[1] || '').matchAll(/`([^`]+)`/gu)]
-        .some((entry) => String(entry[1] || '').trim() === childTaskId);
+    return extractExplicitLinkedChildTaskIds(notes, [childTaskId]).includes(childTaskId);
 }
 
 function parseCommitHash(notes: string, pattern: RegExp): string | null {

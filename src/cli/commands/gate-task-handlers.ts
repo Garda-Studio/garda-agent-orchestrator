@@ -40,7 +40,8 @@ import {
 import {
     normalizePathValue,
     ensureDirectoryExists,
-    parseRequiredText
+    parseRequiredText,
+    tryParseBooleanText
 } from './cli-helpers';
 import type { ParsedOptionsRecord } from './shared-command-utils';
 import { runGateCliHandler } from './gate-cli-handler';
@@ -54,9 +55,10 @@ import {
 import { runTaskEventsSummaryCommand, runTaskAuditSummaryCommand } from './gate-flows/task/task-summary-flow';
 import { runTaskResetCommand } from './gate-flows/task/task-reset-flow';
 import { buildTaskResetMissingTaskIdMessage } from './task-reset-alias';
+import { buildTaskIdSyntaxRemediationMessage } from './gate-command-help';
 import { colorizeTaskAuditSummaryText } from './task-audit-human-format';
 import { colorizeTaskEventsSummaryText } from './task-events-human-format';
-import { EXIT_GATE_FAILURE } from '../exit-codes';
+import { classifyErrorExitCode, EXIT_GATE_FAILURE } from '../exit-codes';
 import { cachedUpdateAvailabilityNotice, prefetchUpdateAvailabilityNotice, scheduleUpdateAvailabilityCheck } from '../../lifecycle/update-availability/update-availability-worker';
 
 export async function handleEnterTaskMode(gateArgv: string[]): Promise<void> {
@@ -712,14 +714,43 @@ export async function handleTaskReset(gateArgv: string[]): Promise<void> {
         '--as-json': { key: 'asJson', type: 'boolean' },
         '--repo-root': { key: 'repoRoot', type: 'string' }
     };
-    return runGateCliHandler(gateArgv, defs, (options: ParsedOptionsRecord) => {
-        if (!options.taskId) {
-            throw new Error(buildTaskResetMissingTaskIdMessage());
+    try {
+        const taskIdRemediationMessage = buildTaskIdSyntaxRemediationMessage('task-reset', gateArgv);
+        if (taskIdRemediationMessage) {
+            throw new Error(taskIdRemediationMessage);
         }
-        const result = runTaskResetCommand(options);
-        if (options.asJson !== true) return result;
-        // --as-json: one machine-readable object; the human lines stay available in the object.
-        const { exitCode, ...payload } = result;
-        return { ...result, outputLines: [JSON.stringify({ ...payload, exit_code: exitCode }, null, 2)] };
-    });
+        await runGateCliHandler(gateArgv, defs, (options: ParsedOptionsRecord) => {
+            if (!options.taskId) {
+                throw new Error(buildTaskResetMissingTaskIdMessage());
+            }
+            const result = runTaskResetCommand(options);
+            if (options.asJson !== true) return result;
+            // --as-json: one machine-readable object; the human lines stay available in the object.
+            const { exitCode, ...payload } = result;
+            return { ...result, outputLines: [JSON.stringify({ ...payload, exit_code: exitCode }, null, 2)] };
+        });
+    } catch (error: unknown) {
+        if (!taskResetUsesJsonOutput(gateArgv)) {
+            throw error;
+        }
+        const exitCode = classifyErrorExitCode(error);
+        process.stdout.write(`${JSON.stringify({
+            outcome: 'ERROR',
+            error: error instanceof Error ? error.message : String(error),
+            exit_code: exitCode
+        }, null, 2)}\n`);
+        process.exitCode = exitCode;
+    }
+}
+
+function taskResetUsesJsonOutput(gateArgv: readonly string[]): boolean {
+    let asJson = false;
+    for (const [index, argument] of gateArgv.entries()) {
+        if (argument === '--as-json') {
+            asJson = tryParseBooleanText(gateArgv[index + 1], true);
+        } else if (argument.startsWith('--as-json=')) {
+            asJson = tryParseBooleanText(argument.slice('--as-json='.length), true);
+        }
+    }
+    return asJson;
 }
