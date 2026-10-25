@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { assertExistingPathIdentity, bindContainedDestination, ensureContainedDirectory, writeContainedFile } from '../contained-filesystem';
+import { assertExistingPathIdentity, bindContainedDestination, ensureContainedDirectory, removeContainedPath, writeContainedFile } from '../contained-filesystem';
 import { readTransactionBytes } from '../file-transaction-journal';
 import { parseOperatorConfirmationYes, validateFreshOperatorConfirmation } from '../operator-confirmation';
 import { assertValidTaskId, readTaskTimelineJsonlEntries } from '../../gate-runtime/timeline/task-events-helpers';
@@ -160,6 +160,20 @@ export function resolveProtectedTaskContinuation(input: {
         plannedChangedFiles: mode.planned_changed_files.map(String), orchestratorWork: mode.orchestrator_work === true,
         workflowConfigWork: mode.workflow_config_work === true }) });
     return record;
+}
+
+/** Probe native key-store writes before changing any canonical entry evidence. */
+export function assertProtectedTaskEntryStoreWritable(repoRoot: string): void {
+    const ctx = context(repoRoot);
+    const probePath = path.join(ctx.storage, `.entry-write-probe-${randomBytes(16).toString('hex')}`);
+    try {
+        ensureContainedDirectory(ctx.gitRoot, ctx.storage);
+        writeContainedFile(ctx.gitRoot, probePath, 'probe\n');
+        removeContainedPath(ctx.gitRoot, probePath);
+    } catch (cause) {
+        throw new Error('Protected task entry requires write access to .git/garda-private. '
+            + 'Restore filesystem write access and rerun the same entry command; no task-mode evidence was published by this attempt.', { cause });
+    }
 }
 
 export function publishProtectedTaskContinuation(input: {

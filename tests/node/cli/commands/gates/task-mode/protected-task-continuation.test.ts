@@ -1,3 +1,4 @@
+import { resolveNextStep } from '../../../../../../src/gates/next-step/next-step';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
@@ -413,4 +414,29 @@ test('forged serialized verification flags and copied records cannot authorize t
             protectedContinuationVerified: true, protectedContinuation: JSON.parse(fs.readFileSync(f.grantPath, 'utf8')) }));
         assert.throws(() => assertTaskModeProtectedEntryAllowed(untrusted), /operator confirmation/);
     } finally { f.cleanup(); }
+});
+
+
+test('G2 EPERM key-store probe preserves the active entry and next-step never demands reset', t => {
+    const f = fixture();
+    try {
+        const before = fs.readFileSync(f.artifactPath);
+        const timelinePath = path.join(f.repoRoot, 'garda-agent-orchestrator/runtime/task-events', `${TASK_ID}.jsonl`);
+        const timelineBefore = fs.readFileSync(timelinePath);
+        const nativeWrite = containedFilesystem.writeContainedFile;
+        t.mock.method(containedFilesystem, 'writeContainedFile', (...args: Parameters<typeof nativeWrite>) => {
+            if (String(args[1]).replace(/\\/gu, '/').includes('/garda-private/protected-task-entry/')) {
+                throw Object.assign(new Error('read-only Git metadata'), { code: 'EPERM' });
+            }
+            return nativeWrite(...args);
+        });
+        assert.throws(() => f.continue({ operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() }),
+            /write access to .git\/garda-private/);
+        assert.deepEqual(fs.readFileSync(f.artifactPath), before);
+        assert.deepEqual(fs.readFileSync(timelinePath), timelineBefore);
+        t.mock.restoreAll();
+        const next = resolveNextStep({ repoRoot: f.repoRoot, taskId: TASK_ID });
+        assert.notEqual(next.next_gate, 'task-reset');
+        assert.equal(f.continue({ operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() }).exitCode, 0);
+    } finally { t.mock.restoreAll(); f.cleanup(); }
 });

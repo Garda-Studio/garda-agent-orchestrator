@@ -1,3 +1,4 @@
+import { assertProtectedTaskEntryStoreWritable } from '../../../../core/auth/protected-task-continuation';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { resolveProtectedTaskContinuation, publishProtectedTaskContinuation } from '../../../../core/auth/protected-task-continuation';
@@ -528,6 +529,7 @@ function runEnterTaskModeWithOwnershipLock(
         workflowConfigFileHashes: workflowConfigFileHashesForArtifact,
         workflowConfigCompatibilityBaselineFiles
     });
+    if (orchestratorWork || workflowConfigWork) assertProtectedTaskEntryStoreWritable(repoRoot);
     writeJsonArtifact(artifactPath, taskModeArtifact);
 
     const metricsPath = options.metricsPath
