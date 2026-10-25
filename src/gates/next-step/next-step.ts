@@ -227,6 +227,7 @@ import {
 } from '../../core/task-queue-status-contract';
 import {
     isTaskQueueActiveStatus,
+    isTaskQueueDoneStatus,
     isTaskQueueSplitRequiredStatus
 } from '../../core/active-task-state';
 import { isDecomposedParentTask } from './next-step-task-queue';
@@ -2948,6 +2949,7 @@ export function resolveNextStepDecisionRoute(
         preflightPath
     });
     const taskQueueFollowUpFingerprintIndex = buildTaskQueueFollowUpFingerprintIndex(taskEntries, taskId);
+    const validationInspection = isTaskQueueDoneStatus(taskEntry?.status || null) ? 'retained_completed' : 'active';
     const reviewStates = requiredReviewTypes.map((reviewType) => (
         readReviewArtifactState(
             reviewsRoot,
@@ -2957,7 +2959,8 @@ export function resolveNextStepDecisionRoute(
             preflightSha256,
             preflight,
             repoRoot,
-            taskQueueFollowUpFingerprintIndex
+            taskQueueFollowUpFingerprintIndex,
+            validationInspection
         )
     ));
     const fullSuiteTimedOutRetryAvailable = fullSuiteFailedTimeoutRetryAvailable(
@@ -3128,6 +3131,7 @@ export function resolveNextStepDecisionRoute(
             preflightPath,
             preflightSha256,
             workflowConfig: workflowConfigRecord,
+            inspection: validationInspection,
             effects
         })
         : null;

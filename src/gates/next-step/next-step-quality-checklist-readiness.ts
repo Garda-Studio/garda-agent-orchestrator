@@ -1,3 +1,4 @@
+import type { ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -661,6 +662,7 @@ export function readQualityChecklistReadiness(options: {
     preflightPath: string;
     preflightSha256: string | null;
     workflowConfig: Record<string, unknown> | null;
+    inspection?: ValidationEvidenceInspection;
     effects?: NextStepEffectController;
 }): NextStepQualityChecklistReadiness {
     const effects = options.effects ?? createNextStepEffectPlanner();
@@ -686,7 +688,7 @@ export function readQualityChecklistReadiness(options: {
         if (!readiness.ready || readiness.evidenceStatus !== 'current'
             || readiness.status === 'ACTION_REQUIRED' || readiness.status === 'CONFIG_ERROR') return requiredReadiness;
         const analysis = readQualityValidationPhaseAnalysis({ repoRoot: options.repoRoot, taskId: options.taskId,
-            preflight: options.preflight!, preflightSha256: options.preflightSha256 });
+            preflight: options.preflight!, preflightSha256: options.preflightSha256, inspection: options.inspection });
         if (analysis.status === 'current' && analysis.validation_phases) return { ...requiredReadiness,
             validationPhases: analysis.validation_phases, effect: 'validation_pending',
             reason: 'Current declared validation phases retain pending independent semantic obligations.' };
@@ -696,7 +698,7 @@ export function readQualityChecklistReadiness(options: {
                 ? readinessOptions.artifact.answers.find(entry => isPlainRecord(entry)
                     && entry.rule_id === TRUST_BOUNDARY_ANALYSIS_RULE_ID) : null;
             const current = inspectQualityValidationPhases({ repoRoot: options.repoRoot, taskId: options.taskId,
-                preflight: options.preflight!, preflightSha256: options.preflightSha256,
+                preflight: options.preflight!, preflightSha256: options.preflightSha256, inspection: options.inspection,
                 matrixRequired: assessTrustBoundaryAnalysisApplicability(options.preflight).required,
                 matrix: answer?.trust_boundary_matrix });
             if (current && (current.phases.structural !== 'BOUND' || current.phases.execution === 'REJECTED'))

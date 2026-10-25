@@ -50,6 +50,13 @@ import { runBuildReviewContextCommand, runClassifyChangeCommand, runCompileGateC
     runFullSuiteValidationCommand, runLoadRulePackCommand } from '../../../../src/cli/commands/gates';
 import { executeValidationRecipe } from '../../../../src/gates/project-validation/execution';
 import { evaluateValidationAttempt } from '../../../../src/gates/project-validation/result-evaluation';
+import { runCliWithCapturedOutput } from '../../cli/commands/gate-test-cli-capture';
+import { buildNoFindingsJsonReviewReport } from '../../cli/commands/gates/review-result/gates-command-review-result-fixtures';
+import { launchArtifactInputArgsForTest } from '../../cli/commands/gates/review-launch/gates-command-review-launch-fixtures';
+import { readReviewArtifactState } from '../../../../src/gates/next-step/next-step-review-artifact-readers';
+import { validationDigest } from '../../../../src/core/project-validation-identity';
+import { retainedNativeCaseOutput } from '../../../../src/gates/review/native-case-semantics';
+import type { QualityValidationObligation } from '../../../../src/gates/quality-checklist/quality-checklist-validation-phases';
 import { readValidationEvents } from '../../../../src/gates/project-validation/attempt-evidence';
 import { inspectFullSuiteReports, startFullSuiteReports } from '../../../../src/gates/full-suite/full-suite-report-evidence';
 import { collectFullSuiteValidationEvidence } from '../../../../src/gates/completion/completion-full-suite-evidence';
@@ -58,7 +65,7 @@ import { createTempRepo, loadTaskEntryRulePack, runEnterTaskMode, runHandshakeFo
     runShellSmokeForTask, seedInitAnswers, seedTaskQueue } from '../../cli/commands/gates/preflight/gates-preflight-fixtures';
 
 function declaredNavigationFixture(disabled = false, delayed = false, twoRecipes = false,
-    reportMode?: 'fresh' | 'stale' | 'missing') {
+    reportMode?: 'fresh' | 'stale' | 'missing', passingCase = false) {
     const repoRoot = createTempRepo(), taskId = 'T-declared-navigation';
     const bundle = path.join(repoRoot, 'garda-agent-orchestrator');
     const configPath = path.join(bundle, 'live/config/workflow-config.json');
@@ -73,6 +80,11 @@ function declaredNavigationFixture(disabled = false, delayed = false, twoRecipes
     const codeSkillPath = path.join(bundle, 'live/skills/code-review/SKILL.md');
     fs.mkdirSync(path.dirname(codeSkillPath), { recursive: true });
     fs.writeFileSync(codeSkillPath, '# Fixture Code Review\nInspect current fixture changes.\n');
+    if (passingCase) {
+        const testSkillPath = path.join(bundle, 'live/skills/test-review/SKILL.md');
+        fs.mkdirSync(path.dirname(testSkillPath), { recursive: true });
+        fs.writeFileSync(testSkillPath, '# Fixture Test Review\nInspect the declared case assertion.\n');
+    }
     fs.mkdirSync(path.join(repoRoot, 'src/domain'), { recursive: true });
     fs.writeFileSync(path.join(repoRoot, 'src/domain/catalog.ts'), 'export const value = 1;\n');
     fs.writeFileSync(path.join(repoRoot, 'RootSuite'), "require('node:test')('declared case', () => {"
@@ -83,7 +95,10 @@ function declaredNavigationFixture(disabled = false, delayed = false, twoRecipes
         fs.mkdirSync(path.join(repoRoot, 'reports'));
         fs.writeFileSync(path.join(repoRoot, 'reports/suite.xml'), '<case id="declared case">old success</case>');
     }
-    fs.writeFileSync(path.join(repoRoot, 'driver'), delayed
+    fs.writeFileSync(path.join(repoRoot, 'driver'), passingCase
+        ? "require('node:assert/strict').match(require('node:fs').readFileSync('src/domain/catalog.ts','utf8'), /changed = 1/);"
+            + "process.stdout.write('TAP version 13\\n1..1\\nok 1 - declared case\\n');"
+        : delayed
         ? 'setTimeout(() => process.stdout.write("opaque output"), 1500);'
         : 'process.stdout.write("opaque output");');
     const manifest = { schema_version: 1, recipes: [{
@@ -139,6 +154,96 @@ function declaredNavigationFixture(disabled = false, delayed = false, twoRecipes
         execute: (signal?: AbortSignal, recipeId = 'neutral') => executeValidationRecipe({ repoRoot, taskId, recipeId, signal }),
         evaluate: (attemptId: string) => evaluateValidationAttempt({ repoRoot, taskId, attemptId }) };
 }
+
+describe('completed declared validation navigation', () => {
+    it('retains quality and accepted review summaries only with canonical completion evidence', async () => {
+        const f = declaredNavigationFixture(false, false, false, undefined, true);
+        try {
+            f.publish(); const attempt = await f.execute(); await f.evaluate(attempt.attempt_id); f.publish();
+            assert.equal((await f.compile()).exitCode, 0);
+            assert.equal((await f.suite()).exitCode, 0);
+            const initial = f.next();
+            assert.equal(initial.quality_checklist?.ready, true, JSON.stringify(initial.quality_checklist));
+            assert.equal(initial.quality_checklist?.evidence_status, 'current');
+            // Production contexts, routing and result ingestion; simulated external reviewer provenance only.
+            const lanes = initial.review.required_reviews.map(id => ({ id }));
+            assert.ok(lanes.length > 0);
+            for (const lane of lanes) {
+                const context = await runBuildReviewContextCommand({ repoRoot: f.repoRoot, reviewType: lane.id,
+                    depth: 2, preflightPath: f.preflightPath });
+                const identity = `agent:completed-summary-${lane.id}`;
+                const route = await runCliWithCapturedOutput(['gate', 'record-review-routing', '--repo-root', f.repoRoot,
+                    '--task-id', f.taskId, '--review-type', lane.id, '--reviewer-execution-mode', 'delegated_subagent',
+                    '--reviewer-identity', identity], { cwd: f.repoRoot });
+                assert.equal(route.exitCode, 0, route.errors.join('\n'));
+                const outputPath = path.join(path.dirname(f.preflightPath), `${f.taskId}-${lane.id}-output.json`);
+                const launchPath = path.join(path.dirname(f.preflightPath), '../tmp/reviews', f.taskId, lane.id, 'reviewer-launch.json');
+                for (const command of ['prepare-reviewer-launch', 'record-reviewer-delegation-started', 'complete-reviewer-launch']) {
+                    const launched = await runCliWithCapturedOutput(['gate', command, '--repo-root', f.repoRoot,
+                        '--task-id', f.taskId, '--review-type', lane.id, '--reviewer-execution-mode', 'delegated_subagent',
+                        '--reviewer-identity', identity, '--reviewer-launch-artifact-path', launchPath,
+                        ...(command === 'prepare-reviewer-launch' ? [] : [
+                            '--provider-invocation-id', `unit-completed-summary-${lane.id}`,
+                            '--attestation-source', 'multi_agent_v1.spawn_agent',
+                            ...launchArtifactInputArgsForTest(launchPath), '--fork-context', 'false']),
+                        ...(command === 'complete-reviewer-launch' ? ['--record-invocation'] : [])], { cwd: f.repoRoot });
+                    assert.equal(launched.exitCode, 0, [...launched.errors, ...launched.logs].join('\n'));
+                    // Keep the real minimum delegation window; do not bypass timing trust in this fixture.
+                    if (command === 'record-reviewer-delegation-started') await new Promise(resolve => setTimeout(resolve, 10_050));
+                }
+                const payload = buildNoFindingsJsonReviewReport(context.outputPath, f.taskId, lane.id);
+                const reviewContext = JSON.parse(fs.readFileSync(context.outputPath, 'utf8'));
+                const obligations = reviewContext.coverage_contract.obligations as Array<{
+                    id: string; kind: string; target: string; validation_binding?: QualityValidationObligation }>;
+                const evidenceFile = lane.id === 'code' ? 'src/domain/catalog.ts' : 'RootSuite';
+                payload.validation_notes = [{ id: 'N-001', topic: 'declared-case',
+                    note: 'The declared case asserts the changed export before emitting its passing TAP record.',
+                    evidence: [{ location: `${evidenceFile}:1`, observation: 'The test reads catalog.ts and asserts changed = 1.' }] }];
+                payload.coverage_ledger = { coverage_contract_sha256: reviewContext.coverage_contract.contract_sha256,
+                    entries: obligations.map(obligation => {
+                        const binding = obligation.validation_binding, execution = binding?.case_execution;
+                        return { obligation_id: obligation.id, finding_ids: [],
+                            evidence: [{ location: `${binding ? binding.source_identity.path : obligation.kind === 'file' ? obligation.target : evidenceFile}:1`,
+                                observation: 'The declared case reads catalog.ts and asserts the changed export equals 1 before success.' }],
+                            ...(execution ? { case_resolution: { binding_sha256: validationDigest(binding),
+                                execution_sha256: execution.record_sha256, output_sha256: execution.output_sha256,
+                                outcome: 'PASSED', evidence_quote: retainedNativeCaseOutput(f.repoRoot, execution).text.trim(),
+                                reasoning: 'The retained TAP output records the declared case after its source assertion succeeds.' } } : {}) };
+                    }) };
+                fs.writeFileSync(outputPath, JSON.stringify(payload));
+                const recorded = await runCliWithCapturedOutput(['gate', 'record-review-result', '--repo-root', f.repoRoot,
+                    '--task-id', f.taskId, '--review-type', lane.id, '--preflight-path', f.preflightPath,
+                    '--review-output-path', outputPath, '--reviewer-execution-mode', 'delegated_subagent',
+                    '--reviewer-identity', identity], { cwd: f.repoRoot });
+                assert.equal(recorded.exitCode, 0, [...recorded.errors, ...recorded.logs].join('\n'));
+            }
+            const active = f.next();
+            assert.equal(active.quality_checklist?.ready, true, JSON.stringify(active.quality_checklist));
+            assert.equal(active.review.next_review_type, null, JSON.stringify({ review: active.review, reason: active.reason,
+                state: readReviewArtifactState(path.dirname(f.preflightPath), f.taskId, 'code', f.preflightPath,
+                    fileSha256(f.preflightPath), JSON.parse(fs.readFileSync(f.preflightPath, 'utf8')), f.repoRoot) }));
+            assert.deepEqual(active.review.blocked_review_lanes, []);
+            // Model closure metadata, not a real delegated review or complete task acceptance.
+            seedTaskQueue(f.repoRoot, f.taskId, 'DONE', 'default', '', 'Declared validation navigation');
+            const unbound = f.next();
+            assert.equal(unbound.quality_checklist?.ready, false);
+            assert.equal(unbound.quality_checklist?.evidence_status, 'invalid');
+            appendEvent(f.repoRoot, f.taskId, 'COMPLETION_GATE_PASSED', 'PASS',
+                { status: 'PASSED', outcome: 'PASS', preflight_path: f.preflightPath, violations: [] });
+            const completed = f.next();
+            assert.equal(completed.quality_checklist?.ready, true, JSON.stringify(completed.quality_checklist));
+            assert.equal(completed.quality_checklist?.evidence_status, 'current');
+            assert.equal(completed.review.next_review_type, null, JSON.stringify(completed.review));
+            assert.deepEqual(completed.review.blocked_review_lanes, []);
+            // The retained reader still validates bytes, and is never used by an active execution.
+            fs.appendFileSync(path.join(f.repoRoot, 'RootSuite'), '\n// changed after completion');
+            const stale = f.next();
+            assert.equal(stale.quality_checklist?.ready, false);
+            assert.notEqual(stale.quality_checklist?.evidence_status, 'current');
+            assert.notEqual(stale.review.next_review_type, null);
+        } finally { await f.cleanup(); }
+    });
+});
 
 describe('native full-suite declared report channel', () => {
     for (const mode of ['fresh', 'stale', 'missing'] as const) it(`retains ${mode} file observations through native navigation`, async () => {

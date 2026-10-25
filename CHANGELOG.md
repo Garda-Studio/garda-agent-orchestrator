@@ -15,6 +15,7 @@
 
 - The local UI has a refreshed layout, readable task tables and a remembered light, dark or system theme.
 - TASK.md queue writers use compact rows and header-sized separators, so a long Notes cell no longer pads every other row. Legacy padded tables remain readable and compact on the next queue write; integrity checks and escaped pipes are preserved.
+- Completed-task navigation inspects retained validation evidence with its canonical completion binding, preserving current quality and accepted review summaries. Active tasks keep strict active validation; missing completion evidence or changed sources still fail closed.
 - Task details show progress, blockers, review attempts, final reports and a copyable next command.
 - Choose whether split tasks need a final combined audit. Manual task groups finish automatically; an enabled audit runs once and groups any fixes into one follow-up task.
 - Reports refresh when project memory or relevant Git settings change.

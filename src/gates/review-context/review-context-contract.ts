@@ -1,3 +1,4 @@
+import type { ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 import * as fs from 'node:fs';
 import { extractFilePathFromDiffLine, parseUnifiedDiff } from '../../gate-runtime/scoped-diff';
 import { fileSha256, normalizePath, parseBool } from '../shared/helpers';
@@ -675,6 +676,7 @@ function getScopedDiffExpectedViolations(options: {
 }
 
 export interface ReviewContextContractValidationOptions {
+    inspection?: ValidationEvidenceInspection;
     contextPath: string;
     reviewContext: Record<string, unknown> | null;
     expectedTaskId?: string | null;
@@ -990,7 +992,7 @@ export function getReviewContextContractViolations(
             try {
                 validationObligations = resolveAuthoritativeReviewValidationObligations({
                     repoRoot: options.repoRoot, preflight: options.expectedPreflightPayload,
-                    reviewType: expectedReviewType, preflightPath: expectedPreflightPath ?? undefined });
+                    reviewType: expectedReviewType, preflightPath: expectedPreflightPath ?? undefined, inspection: options.inspection });
             } catch (error) {
                 violations.push(`Declared review coverage rejected: ${error instanceof Error ? error.message : String(error)}`);
             }

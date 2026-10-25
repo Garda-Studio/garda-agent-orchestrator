@@ -1,3 +1,4 @@
+import type { ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 import { hasAuthenticatedIntermediateGroupedReceiptSource } from '../review/review-grouped-receipt-source';
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import * as fs from 'node:fs';
@@ -1929,7 +1930,8 @@ export function readReviewArtifactState(
     preflightSha256: string | null,
     preflightPayload: Record<string, unknown> | null,
     repoRoot?: string,
-    taskQueueFollowUpFingerprintIndex?: TaskQueueFollowUpFingerprintIndex | null
+    taskQueueFollowUpFingerprintIndex?: TaskQueueFollowUpFingerprintIndex | null,
+    inspection: ValidationEvidenceInspection = 'active'
 ): ReviewArtifactState {
     const contextPath = path.join(reviewsRoot, `${taskId}-${reviewType}-review-context.json`);
     const artifactPath = path.join(reviewsRoot, `${taskId}-${reviewType}.md`);
@@ -2050,6 +2052,7 @@ export function readReviewArtifactState(
                     : null;
                 const contractViolations = getReviewContextContractViolations({
                     contextPath,
+                    inspection,
                     reviewContext: context,
                     expectedTaskId: taskId,
                     expectedReviewType: reviewType,
