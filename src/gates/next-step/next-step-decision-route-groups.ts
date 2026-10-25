@@ -14,6 +14,7 @@ import {
     describeDecomposedTaskProvenance,
     extractExplicitLinkedChildTaskIds,
     hasLinkedChildTasks,
+    hasExplicitLinkedChildTasks,
     isDecomposedParentTask,
     resolveDecomposedParentCompletionState,
     resolveNextUnfinishedChildRoute,
@@ -842,9 +843,7 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
     }
 
     if (!options.completionGatePassed && isDecomposedParentTask(options.taskEntry)) {
-        const parentHasLinkedChildren = extractExplicitLinkedChildTaskIds(
-            options.taskEntry?.notes || null, options.taskEntries.keys(), options.taskId
-        ).length > 0;
+        const parentHasLinkedChildren = hasExplicitLinkedChildTasks(options.taskEntries, options.taskId);
         const strictDecompositionWip = parentHasLinkedChildren ? {
             status: 'NOT_REQUIRED', manifest_path: null, manifest_sha256: null,
             tracked_files: [], untracked_files: [], violations: []

@@ -875,6 +875,25 @@ describe('gates/next-step strict decomposition', () => {
         assert.equal(fs.readFileSync(path.join(repoRoot, 'src/app.ts'), 'utf8').replace(/\r\n/gu, '\n'), 'export const value = 1;\n');
     });
 
+    function suspendParentBeforeLinkingChildren(repoRoot: string): void {
+        const queuePath = path.join(repoRoot, 'TASK.md');
+        const linkedQueue = fs.readFileSync(queuePath, 'utf8');
+        const childlessQueue = linkedQueue.split('\n')
+            .filter(line => !line.startsWith(`| ${TASK_ID}-1 |`) && !line.startsWith(`| ${TASK_ID}-2 |`))
+            .map(line => line.startsWith(`| ${TASK_ID} |`)
+                ? line.replace(/Child tasks:[^|]*/u, 'Awaiting child work packages. ') : line)
+            .join('\n');
+        fs.writeFileSync(queuePath, childlessQueue);
+        try {
+            const captureRoute = resolveNextStep({ taskId: TASK_ID, repoRoot });
+            assert.equal(captureRoute.status, 'BLOCKED', captureRoute.reason);
+            assert.equal(captureRoute.next_gate, 'strict-decomposition-split-routing');
+            assert.equal(listSplitRequiredWip({ repoRoot, taskId: TASK_ID }).status, 'FOUND');
+        } finally {
+            fs.writeFileSync(queuePath, linkedQueue);
+        }
+    }
+
     function seedSuspendedParentAfterChildCommit(
         ignoredEvidencePath?: string, declaredPaths: string[] = [], qualityChecksEnabled = false
     ) {
@@ -917,6 +936,7 @@ describe('gates/next-step strict decomposition', () => {
             fs.writeFileSync(queuePath, fs.readFileSync(queuePath, 'utf8')
                 .replace(`| ${TASK_ID} | TODO |`, `| ${TASK_ID} | DECOMPOSED |`));
         } else {
+            suspendParentBeforeLinkingChildren(repoRoot);
             const initialRoute = resolveNextStep({ taskId: TASK_ID, repoRoot });
             assert.equal(initialRoute.status, 'DECOMPOSED', initialRoute.reason);
             assert.equal(initialRoute.next_gate, 'child-task');
@@ -1376,6 +1396,7 @@ describe('gates/next-step strict decomposition', () => {
         const preflightPath = writeFrozenPreflightScope(repoRoot, TASK_ID, ['src/app.ts'], profileSnapshot);
         seedRulePack(repoRoot, TASK_ID, 'POST_PREFLIGHT',
             path.join(reviewsRoot(repoRoot), `${TASK_ID}-task-mode.json`), preflightPath);
+        suspendParentBeforeLinkingChildren(repoRoot);
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
 
         assert.equal(result.status, 'DECOMPOSED', formatNextStepText(result));
@@ -1444,6 +1465,7 @@ describe('gates/next-step strict decomposition', () => {
         fs.writeFileSync(path.join(repoRoot, 'src', 'app.ts'), 'export const value = 2;\n', 'utf8');
         writePreflightScope(repoRoot, TASK_ID, ['src/app.ts']);
 
+        suspendParentBeforeLinkingChildren(repoRoot);
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
         const text = formatNextStepText(result);
         const taskMd = fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8');
@@ -1476,7 +1498,7 @@ describe('gates/next-step strict decomposition', () => {
             '',
             '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
             '|---|---|---|---|---|---|---|---|---|',
-            parentRow,
+            parentRow.replace(/Child tasks:[^|]*/u, 'Awaiting child work packages. '),
             ''
         ].join('\n'), 'utf8');
         seedStartedTask(repoRoot, TASK_ID);
@@ -1603,6 +1625,61 @@ describe('gates/next-step strict decomposition', () => {
                 assert.equal(runGitFixtureCommand(repoRoot, ['status', '--short', '--', 'src/app.ts']).stdout, sourceStatusBefore);
             });
 
+        }
+    }
+
+    for (const parentStatus of ['BLOCKED', 'IN_PROGRESS']) {
+        for (const inParentScope of [true, false]) {
+            it(`preserves linked child WIP through strict continuation (${parentStatus}, parent scope: ${inParentScope})`, () => {
+                const repoRoot = makeTempRepo();
+                fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
+                    '# TASK.md',
+                    '',
+                    '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+                    '|---|---|---|---|---|---|---|---|---|',
+                    `| ${TASK_ID} | ${parentStatus} | P1 | workflow/strict-decomposition-split-routing | Route strict split decisions to children | gpt-5.4 | 2026-05-20 | strict | Paused for split. Child tasks: \`${TASK_ID}-1\` and \`${TASK_ID}-2\`. |`,
+                    `| ${TASK_ID}-1 | IN_PROGRESS | P1 | workflow/strict-decomposition-split-routing | Validate split evidence | gpt-5.4 | 2026-05-20 | strict | Child of ${TASK_ID}. |`,
+                    `| ${TASK_ID}-2 | TODO | P1 | workflow/strict-decomposition-split-routing | Route child execution | gpt-5.4 | 2026-05-20 | strict | Child of ${TASK_ID}. |`,
+                    ''
+                ].join('\n'), 'utf8');
+                if (parentStatus === 'BLOCKED') {
+                    // A prior completion skips the terminal guard; the newer entry keeps closeout stale.
+                    appendEvent(repoRoot, TASK_ID, 'COMPLETION_GATE_PASSED');
+                }
+                seedStartedTask(repoRoot, TASK_ID);
+                writeStrictDecompositionDecision(repoRoot, TASK_ID, {
+                    decision: 'split-required',
+                    taskSummary: 'Seeded next-step task',
+                    proposedChildTaskIds: [`${TASK_ID}-1`, `${TASK_ID}-2`]
+                });
+                initGitRepo(repoRoot);
+                fs.writeFileSync(path.join(repoRoot, 'src', 'app.ts'), 'export const value = 2;\n', 'utf8');
+                writePreflightScope(repoRoot, TASK_ID, inParentScope ? ['src/app.ts'] : ['src/parent.ts']);
+                const sourcePath = path.join(repoRoot, 'src', 'app.ts');
+                const sourceBefore = fs.readFileSync(sourcePath);
+                const sourceStatusBefore = runGitFixtureCommand(repoRoot, ['status', '--short', '--', 'src/app.ts']).stdout;
+                assert.notEqual(sourceStatusBefore.trim(), '');
+
+                // This invokes the public resolver and executes every guarded effect before returning.
+                const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+                const wip = listSplitRequiredWip({ repoRoot, taskId: TASK_ID });
+
+                assert.deepEqual(fs.readFileSync(sourcePath), sourceBefore);
+                assert.equal(runGitFixtureCommand(repoRoot, ['status', '--short', '--', 'src/app.ts']).stdout, sourceStatusBefore);
+                assert.equal(wip.status, 'EMPTY');
+                assert.deepEqual(wip.manifests, []);
+                if (parentStatus === 'BLOCKED') {
+                    // Preserving child bytes must not relax the independent parent status-transition guard.
+                    assert.equal(result.status, 'BLOCKED');
+                    assert.equal(result.next_gate, 'strict-decomposition-split-routing');
+                    assert.match(result.reason, /Expected previous status TODO or IN_PROGRESS or IN_REVIEW; found BLOCKED/u);
+                    assert.deepEqual(result.commands, []);
+                } else {
+                    assert.equal(result.status, 'DECOMPOSED', `${result.next_gate}: ${result.reason}`);
+                    assert.equal(result.next_gate, 'child-task');
+                    assert.ok(result.commands[0].command.includes(`next-step "${TASK_ID}-1"`));
+                }
+            });
         }
     }
 

@@ -7,6 +7,7 @@ import {
 } from './next-step-task-queue-transitions';
 import {
     formatStrictDecompositionSplitRoutingViolations,
+    hasExplicitLinkedChildTasks,
     resolveStrictDecompositionSplitRoutingState,
     type TaskQueueEntry
 } from './next-step-task-queue';
@@ -460,10 +461,10 @@ export function resolveStrictDecompositionContinuationRoute(params: {
         return null;
     }
 
-    // A DECOMPOSED parent has completed its split. Worktree changes now belong to its children and
-    // must never be captured as parent WIP, so neither effect is offered again.
+    // Explicit child links protect child WIP regardless of an edited or legacy parent status.
+    const parentHasLinkedChildren = hasExplicitLinkedChildTasks(params.taskEntries, params.taskId);
     const parentDecomposed = isTaskQueueDecomposedStatus(params.taskEntries.get(params.taskId)?.status ?? null);
-    const wipSuspension = parentDecomposed ? {
+    const wipSuspension = parentHasLinkedChildren ? {
         status: 'NOT_REQUIRED', manifest_path: null, manifest_sha256: null, tracked_files: [], untracked_files: [], violations: []
     } as ReturnType<typeof suspendStrictDecompositionWipIfRequired> : effects.run({
         kind: 'suspend-strict-decomposition-wip',

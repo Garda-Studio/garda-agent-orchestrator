@@ -452,6 +452,12 @@ export function extractExplicitLinkedChildTaskIds(
         .map((mention) => mention.taskId);
 }
 
+export function hasExplicitLinkedChildTasks(taskEntries: Map<string, TaskQueueEntry>, parentTaskId: string): boolean {
+    return extractExplicitLinkedChildTaskIds(
+        taskEntries.get(parentTaskId)?.notes || null, taskEntries.keys(), parentTaskId
+    ).length > 0;
+}
+
 export function resolveNextUnfinishedChildRoute(
     taskEntries: Map<string, TaskQueueEntry>,
     parentTaskId: string,
