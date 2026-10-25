@@ -109,15 +109,30 @@ export function buildNextStepInstruction(
             return `${focusedCommand} `
                 + `(name/class selectors: add --selected-case '{"source":"<test file>","case_id":"<test>","selector":"<selector>"}'), ${rerun}`;
         case 'project-validation-evidence': {
+            const reason = result.reason || '';
+            if (/project validation (?:authority|audited)|no audited project validation|unsupported audited|missing approved|invalid approved|approved identities|approved (?:dependency|executable identity)|recipe is not in the frozen authority/iu.test(reason)) {
+                return 'have the operator confirm or re-approve the project validation contract with '
+                    + `${cliPrefix} workflow set --project-validation-contract "<contract path>", `
+                    + `then refresh preflight with classify-change, ${rerun}`;
+            }
+            const rejectedRecipe = /\bRecipe (\S+) (?:retained\b|evidence rejected:)/iu.exec(reason);
+            if (rejectedRecipe) {
+                const recipeCommand = `${cliPrefix} gate run-intermediate-command --task-id ${quoteCommandValue(result.task_id)} `
+                    + `--recipe-id ${quoteCommandValue(rejectedRecipe[1])} --repo-root "."`;
+                return `fix the recipe failure named in Reason, then record a fresh current run: ${recipeCommand}, ${rerun}`;
+            }
             // A selected case without a bound execution: rerun the focused check bound to that case.
             const unboundCase = /latest matching command for (\S+) \/ (\S+) is not an authenticated successful execution/u
-                .exec(result.reason || '');
+                .exec(reason);
             if (unboundCase) {
                 const selectedCase = JSON.stringify({ source: unboundCase[1], case_id: unboundCase[2], selector: '<selector>' });
                 return `${focusedCommand} --selected-case '${selectedCase}', ${rerun}`;
             }
-            // Rejected or stale focused evidence: a fresh current run is the recovery, never copied output.
-            return `fix what Reason names, then record a fresh current run: ${focusedCommand}, ${rerun}`;
+            if (/native case execution|focused intermediate evidence/iu.test(reason)) {
+                return `fix what Reason names, then record a fresh current run: ${focusedCommand}, ${rerun}`;
+            }
+            return 'resolve the declared validation rejection in Reason; retry recipe evidence with its admitted --recipe-id, '
+                + `or have the operator re-approve a changed contract and refresh preflight, ${rerun}`;
         }
         case 'await-project-validation':
             return `wait for the running project check to finish, ${rerun}`;

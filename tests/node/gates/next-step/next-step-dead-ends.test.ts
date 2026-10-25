@@ -81,3 +81,46 @@ test('Next gives a concrete fresh-run command after rejected or stale focused ev
     assert.match(instruction, /--preflight-path "garda-agent-orchestrator\/runtime\/reviews\/T-9-preflight\.json"/u);
     assert.ok(instruction.length <= 400, instruction);
 });
+
+test('Next reruns rejected declared evidence through its admitted recipe', () => {
+    for (const reason of [
+        'Recipe focused-java retained FAILED.',
+        'Recipe focused-java evidence rejected: Error: Foreign validation quality snapshot'
+    ]) {
+        const instruction = buildNextStepInstruction({
+            ...base, status: 'BLOCKED', next_gate: 'project-validation-evidence', reason
+        })!;
+        assert.match(instruction, /gate run-intermediate-command --task-id "T-9" --recipe-id "focused-java"/u);
+        assert.doesNotMatch(instruction, /--command-source targeted-test/u);
+        assert.ok(instruction.length <= 400, instruction);
+    }
+});
+
+test('Next requests contract re-approval and preflight refresh for validation authority rejections', () => {
+    for (const reason of [
+        'Error: Project validation authority changed; refresh preflight after audited admission',
+        'Error: Project validation authority lacks an explicit recipe admission and current audited workflow configuration mutation',
+        'Error: Unsupported audited workflow configuration mutation origin',
+        'Recipe focused-java evidence rejected: Error: Approved dependency changed: driver.cjs',
+        'Recipe focused-java evidence rejected: Error: Approved executable identity changed'
+    ]) {
+        const instruction = buildNextStepInstruction({
+            ...base, status: 'BLOCKED', next_gate: 'project-validation-evidence', reason
+        })!;
+        assert.match(instruction, /operator confirm or re-approve the project validation contract/u);
+        assert.match(instruction, /workflow set --project-validation-contract "<contract path>"/u);
+        assert.match(instruction, /refresh preflight with classify-change/u);
+        assert.doesNotMatch(instruction, /gate run-intermediate-command|--command-source targeted-test/u);
+        assert.ok(instruction.length <= 400, instruction);
+    }
+});
+
+test('Next does not prescribe a native focused command for an unclassified declared validation rejection', () => {
+    const instruction = buildNextStepInstruction({
+        ...base, status: 'BLOCKED', next_gate: 'project-validation-evidence',
+        reason: 'Error: Validation quality preflight changed'
+    })!;
+    assert.match(instruction, /resolve the declared validation rejection in Reason/u);
+    assert.match(instruction, /admitted --recipe-id/u);
+    assert.doesNotMatch(instruction, /--command-source targeted-test/u);
+});

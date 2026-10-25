@@ -53,7 +53,7 @@ import {
     withReviewArtifactReadBarrier
 } from '../../gate-runtime/review-artifacts';
 import { withTaskIndexReadSnapshot } from '../../gate-runtime/reviews-index';
-import { assertValidTaskId, readTaskTimelineJsonlEntries, withTaskTimelineReadSnapshot } from '../../gate-runtime/task-events';
+import { assertValidTaskId, inspectTaskEventFile, readTaskTimelineJsonlEntries, withTaskTimelineReadSnapshot } from '../../gate-runtime/task-events';
 import {
     buildTaskAuditSummary,
     type TaskAuditSummaryResult
@@ -688,21 +688,83 @@ function readLatestReviewGateOverrideSkippedReviewTypes(eventsRoot: string, task
     return new Set();
 }
 
-function readLastCompilePlanDriftExtraFiles(
-    reviewsRoot: string, taskId: string, preflight: Record<string, unknown> | null
-): string[] {
+function readLastCompilePlanDriftExtraFiles(options: {
+    repoRoot: string;
+    reviewsRoot: string;
+    eventsRoot: string;
+    taskId: string;
+    preflight: Record<string, unknown> | null;
+    preflightPath: string;
+    preflightSha256: string | null;
+    taskMode: Record<string, unknown> | null;
+    taskModePath: string;
+}): string[] {
     let evidence: unknown = null;
     try {
-        evidence = JSON.parse(fs.readFileSync(path.join(reviewsRoot, `${taskId}-compile-gate.json`), 'utf8'));
+        evidence = JSON.parse(fs.readFileSync(path.join(options.reviewsRoot, `${options.taskId}-compile-gate.json`), 'utf8'));
     } catch {
         return [];
     }
-    const drift = isPlainRecord(evidence) && evidence.status === 'FAILED' && isPlainRecord(evidence.plan_drift)
-        ? evidence.plan_drift : null;
-    if (drift?.status !== 'REPLAN_REQUIRED' || !Array.isArray(drift.extra_files)) return [];
-    const current = new Set(Array.isArray(preflight?.changed_files) ? preflight.changed_files.map(String) : []);
-    const extra = drift.extra_files.map(String);
-    // Only a drift that still matches the current scope is actionable.
+    if (!isPlainRecord(evidence) || evidence.status !== 'FAILED' || evidence.outcome !== 'FAIL'
+        || evidence.event_source !== 'compile-gate' || !isPlainRecord(evidence.plan_drift)) return [];
+    const drift = evidence.plan_drift;
+    if (drift.status !== 'REPLAN_REQUIRED' || !Array.isArray(drift.extra_files)
+        || !drift.extra_files.every(file => typeof file === 'string')) return [];
+    const plan = isPlainRecord(options.taskMode?.plan) ? options.taskMode.plan : null;
+    const planSha256 = String(plan?.plan_sha256 || '').trim().toLowerCase();
+    const taskModeSha256 = fileSha256(options.taskModePath);
+    if (!options.preflightSha256 || !taskModeSha256 || !/^[a-f0-9]{64}$/u.test(planSha256)
+        || drift.plan_sha256 !== planSha256) return [];
+    const matchesCurrentPath = (value: unknown, expectedPath: string): boolean => {
+        if (typeof value !== 'string' || !value.trim()) return false;
+        try {
+            const resolved = resolvePathInsideRepo(value, options.repoRoot);
+            return !!resolved && path.relative(path.resolve(expectedPath), resolved) === '';
+        } catch {
+            return false;
+        }
+    };
+    const matchesCurrentBindings = (candidate: Record<string, unknown> | null): boolean => {
+        const taskMode = isPlainRecord(candidate?.task_mode) ? candidate.task_mode : null;
+        const boundPlan = isPlainRecord(taskMode?.plan) ? taskMode.plan : null;
+        return candidate?.task_id === options.taskId
+            && matchesCurrentPath(candidate.preflight_path, options.preflightPath)
+            && candidate.preflight_hash_sha256 === options.preflightSha256
+            && matchesCurrentPath(taskMode?.evidence_path, options.taskModePath)
+            && taskMode?.evidence_hash === taskModeSha256
+            && boundPlan?.plan_sha256 === planSha256;
+    };
+    if (!matchesCurrentBindings(evidence)) return [];
+
+    const bindingEvents: Readonly<Record<string, unknown>>[] = [];
+    const inspection = inspectTaskEventFile(path.join(options.eventsRoot, `${options.taskId}.jsonl`), options.taskId, {
+        onIntegrityEvent: (event) => {
+            if (['TASK_MODE_ENTERED', 'COMPILE_GATE_PASSED', 'COMPILE_GATE_FAILED'].includes(String(event.event_type))) {
+                bindingEvents.push(event);
+            }
+        }
+    });
+    if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(inspection.status)) return [];
+    const taskModeEntry = bindingEvents.filter(event => event.event_type === 'TASK_MODE_ENTERED').at(-1);
+    const lastCompile = bindingEvents.filter(event => event.event_type !== 'TASK_MODE_ENTERED').at(-1);
+    const entryIntegrity = isPlainRecord(taskModeEntry?.integrity) ? taskModeEntry.integrity : null;
+    const compileIntegrity = isPlainRecord(lastCompile?.integrity) ? lastCompile.integrity : null;
+    const entryDetails = isPlainRecord(taskModeEntry?.details) ? taskModeEntry.details : null;
+    const compileDetails = isPlainRecord(lastCompile?.details) ? lastCompile.details : null;
+    const recordedDrift = isPlainRecord(compileDetails?.plan_drift) ? compileDetails.plan_drift : null;
+    if (!entryIntegrity || !compileIntegrity
+        || taskModeEntry?.actor !== 'gate' || lastCompile?.actor !== 'gate'
+        || Number(compileIntegrity.task_sequence) <= Number(entryIntegrity.task_sequence)
+        || lastCompile?.event_type !== 'COMPILE_GATE_FAILED'
+        || !matchesCurrentPath(entryDetails?.artifact_path, options.taskModePath)
+        || entryDetails?.plan_sha256 !== planSha256
+        || !matchesCurrentBindings(compileDetails)
+        || recordedDrift?.status !== 'REPLAN_REQUIRED' || recordedDrift.plan_sha256 !== planSha256
+        || JSON.stringify(recordedDrift.extra_files) !== JSON.stringify(drift.extra_files)) return [];
+
+    const current = new Set(Array.isArray(options.preflight?.changed_files) ? options.preflight.changed_files.map(String) : []);
+    const extra = drift.extra_files as string[];
+    // A drift hint must still describe the authenticated compile in this task entry and scope.
     return extra.length > 0 && extra.every(file => current.has(file)) ? extra : [];
 }
 
@@ -4384,7 +4446,9 @@ export function resolveNextStepDecisionRoute(
                 )
                 : { ready: false, reason: 'No current preflight exists.' };
             return resolveNextStepCompileGateRoute({
-                planDriftExtraFiles: readLastCompilePlanDriftExtraFiles(reviewsRoot, taskId, preflight),
+                planDriftExtraFiles: readLastCompilePlanDriftExtraFiles({
+                    repoRoot, reviewsRoot, eventsRoot, taskId, preflight, preflightPath, preflightSha256, taskMode, taskModePath
+                }),
                 compileGatePassed: semanticCompileAccepted || isGatePassed(summary, 'compile-gate'),
                 ready: compileReadiness.ready,
                 reason: compileReadiness.reason,

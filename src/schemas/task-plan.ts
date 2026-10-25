@@ -455,9 +455,9 @@ export function detectPlanDrift(options: DetectPlanDriftOptions): PlanDriftResul
 
     if (allowPlanDrift) {
         const reason = (allowPlanDriftReason || '').trim();
-        if (!reason || reason.length < 12) {
+        if (!reason || reason.length < 12 || /<[^>]*>/u.test(reason)) {
             violations.push(
-                'Plan drift override requires --allow-plan-drift-reason with a concrete justification (>= 12 chars).'
+                'Plan drift override requires --allow-plan-drift-reason with a concrete justification (>= 12 chars, no <...> placeholders).'
             );
             return {
                 status: 'REPLAN_REQUIRED',

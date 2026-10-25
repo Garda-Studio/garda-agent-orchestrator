@@ -478,6 +478,22 @@ test('detectPlanDrift returns REPLAN_REQUIRED when override reason is missing', 
     assert.ok(result.violations[0].includes('>= 12 chars'));
 });
 
+test('detectPlanDrift rejects unreplaced plan-drift reason placeholders', () => {
+    for (const reason of [
+        '<why these files belong to this task>',
+        'Required supporting files: <task-specific justification>'
+    ]) {
+        const result = detectPlanDrift({
+            plan: approvedPlan(['src/a.ts']),
+            actualFiles: ['src/a.ts', 'src/extra.ts'],
+            allowPlanDrift: true,
+            allowPlanDriftReason: reason
+        });
+        assert.equal(result.status, 'REPLAN_REQUIRED', reason);
+        assert.match(result.violations[0], /no <\.\.\.> placeholders/u);
+    }
+});
+
 test('detectPlanDrift normalizes backslashes in paths', () => {
     const plan = approvedPlan(['src/a.ts']);
     const result = detectPlanDrift({ plan, actualFiles: ['src\\a.ts'] });

@@ -222,6 +222,7 @@ export async function runCompileGateCommand(options: CompileGateCommandOptions):
             taskModeEvidence
         });
         resolvedPreflightPath = sharedPreflight.resolvedPreflightPath;
+        preflightHash = gateHelpers.fileSha256(resolvedPreflightPath);
         preflightContext = sharedPreflight.preflightContext;
         rulePackEvidence = sharedPreflight.rulePackEvidence;
         taskModeEvidence = sharedPreflight.taskModeEvidence;
@@ -409,7 +410,6 @@ export async function runCompileGateCommand(options: CompileGateCommandOptions):
                 changed_files_count: preflightContext.changed_files.length,
                 changed_lines_total: preflightContext.changed_lines_total
             });
-            preflightHash = gateHelpers.fileSha256(resolvedPreflightPath);
             compileOutputInitialized = true;
 
             const compileExecution = await executeCompileCommands({
