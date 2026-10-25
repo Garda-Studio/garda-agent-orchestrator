@@ -160,6 +160,7 @@ function getReceiptBoundFindingsReviewArtifactPath(receipt: ReviewReceipt): stri
 }
 
 function validateFindingsValidationForHistoricalReuse(options: {
+    preflightPayload: Record<string, unknown>;
     repoRoot: string;
     receipt: ReviewReceipt;
     receiptPath: string;
@@ -240,7 +241,8 @@ function validateFindingsValidationForHistoricalReuse(options: {
         expectedReceiptPath: dispositionReceiptPath,
         expectedReceiptSha256: dispositionReceiptSha256,
         preferSnapshot: options.preferSnapshot,
-        allowPendingGroupedFollowUp: true
+        allowPendingGroupedFollowUp: true,
+        authenticatedPreflight: options.preflightPayload
     });
     if (!disposition.valid) {
         return `prior findings disposition evidence is not satisfied: ${disposition.violations.join(' ')}`;
@@ -639,6 +641,7 @@ export function validateHistoricalReviewReuseCandidate(options: {
             ?? verifiedArtifact.artifactPath
         ).trim();
         const findingsValidationReuseReason = validateFindingsValidationForHistoricalReuse({
+            preflightPayload: options.preflightPayload,
             repoRoot: options.repoRoot,
             receipt,
             receiptPath: sourceReceiptPath,

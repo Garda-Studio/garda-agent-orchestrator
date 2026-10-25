@@ -358,6 +358,7 @@ describe('gates/completion — findings disposition evidence', () => {
             const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8')) as Record<string, unknown>;
             const validationPath = path.join(fixture.reviewsRoot, `${taskId}-code-findings-validation.json`);
             const validationText = fs.readFileSync(validationPath, 'utf8');
+            let authenticatedPreflight = JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8')) as Record<string, unknown>;
             const check = (allowPendingGroupedFollowUp: boolean) => validateReviewFindingsDispositionEvidence({
                 repoRoot: fixture.repoRoot,
                 receipt,
@@ -368,8 +369,9 @@ describe('gates/completion — findings disposition evidence', () => {
                 validationArtifact: JSON.parse(validationText),
                 validationArtifactPath: validationPath.replace(/\\/gu, '/'),
                 validationArtifactSha256: sha256Text(validationText),
-                policyResolution: resolveLockedReviewFindingPolicyFromPreflight(JSON.parse(fs.readFileSync(fixture.preflightPath, 'utf8'))),
-                allowPendingGroupedFollowUp
+                policyResolution: resolveLockedReviewFindingPolicyFromPreflight(authenticatedPreflight),
+                allowPendingGroupedFollowUp,
+                authenticatedPreflight
             });
             const missingFollowUp = (violations: string[]) => violations.some((violation) => (
                 violation.includes('Review findings follow-up artifact') && violation.includes('is missing')));
@@ -382,9 +384,18 @@ describe('gates/completion — findings disposition evidence', () => {
                 review_follow_up_policy: { schema_version: 1, materialization_mode: 'grouped_by_parent' }
             };
             writeJson(fixture.preflightPath, preflight);
+            assert.ok(missingFollowUp(check(true).violations), 'an unauthenticated canonical policy edit cannot enable pending reuse');
+            authenticatedPreflight = preflight;
+            writeJson(fixture.preflightPath, { ...preflight, profile_policy_snapshot: {
+                ...(preflight.profile_policy_snapshot as Record<string, unknown>),
+                review_follow_up_policy: { schema_version: 1, materialization_mode: 'per_finding' }
+            } });
             const deferred = check(true);
             assert.equal(missingFollowUp(deferred.violations), false, deferred.violations.join('\n'));
             assert.ok(missingFollowUp(check(false).violations), 'closeout callers still require the grouped artifact');
+            const followUpPath = path.join(fixture.reviewsRoot, `${taskId}-code-findings-follow-ups.json`);
+            fs.symlinkSync(path.join(fixture.repoRoot, 'absent-follow-ups'), followUpPath, process.platform === 'win32' ? 'junction' : 'file');
+            assert.equal(check(true).valid, false, 'a dangling follow-up link is present and must never be treated as pending materialization');
         } finally {
             fs.rmSync(fixture.repoRoot, { recursive: true, force: true });
         }

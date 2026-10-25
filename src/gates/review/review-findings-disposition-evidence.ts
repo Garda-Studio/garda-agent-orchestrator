@@ -73,6 +73,8 @@ export interface ReviewFindingsDispositionEvidenceCheckOptions {
      * An existing artifact is still verified; closeout, completion and audit never set this.
      */
     allowPendingGroupedFollowUp?: boolean;
+    /** The preflight payload already authenticated by the calling reuse flow. */
+    authenticatedPreflight?: Record<string, unknown>;
     taskQueueRows?: readonly {
         taskId: string;
         notes?: string | null;
@@ -221,15 +223,10 @@ function isParentFollowUpTaskId(parentTaskId: string, taskId: string): boolean {
     return taskId.startsWith(prefix) && /^[1-9][0-9]*$/u.test(taskId.slice(prefix.length));
 }
 
-function readTaskFollowUpMaterializationMode(reviewsRoot: string, taskId: string): string | null {
-    try {
-        const preflight = JSON.parse(fs.readFileSync(path.join(reviewsRoot, `${taskId}-preflight.json`), 'utf8')) as unknown;
-        const snapshot = toPlainRecord(toPlainRecord(preflight)?.profile_policy_snapshot);
-        const policy = toPlainRecord(snapshot?.review_follow_up_policy);
-        return policy?.schema_version === 1 && typeof policy.materialization_mode === 'string' ? policy.materialization_mode : null;
-    } catch {
-        return null;
-    }
+function readFollowUpMaterializationMode(preflight: Record<string, unknown> | undefined): string | null {
+    const snapshot = toPlainRecord(preflight?.profile_policy_snapshot);
+    const policy = toPlainRecord(snapshot?.review_follow_up_policy);
+    return policy?.schema_version === 1 && typeof policy.materialization_mode === 'string' ? policy.materialization_mode : null;
 }
 
 function validateFollowUpSatisfaction(options: {
@@ -252,6 +249,7 @@ function validateFollowUpSatisfaction(options: {
         notes?: string | null;
     }[];
     allowPendingGroupedFollowUp?: boolean;
+    authenticatedPreflight?: Record<string, unknown>;
 }): { artifactPath: string | null; violations: string[] } {
     const followUpCount = options.dispositionArtifact.summary.follow_up_pending_count;
     if (followUpCount === 0) {
@@ -266,8 +264,9 @@ function validateFollowUpSatisfaction(options: {
         );
         return { artifactPath, violations };
     }
-    if (options.allowPendingGroupedFollowUp && !fs.existsSync(artifactPath)
-        && readTaskFollowUpMaterializationMode(path.dirname(artifactPath), options.taskId) === 'grouped_by_parent') {
+    if (options.allowPendingGroupedFollowUp
+        && readFollowUpMaterializationMode(options.authenticatedPreflight) === 'grouped_by_parent'
+        && !fs.lstatSync(artifactPath, { throwIfNoEntry: false })) {
         return { artifactPath: null, violations: [] };
     }
     const artifact = readJsonRecord(artifactPath, 'Review findings follow-up artifact', violations);
@@ -576,7 +575,8 @@ function validateReviewFindingsDispositionEvidenceUnlocked(
         expectedReceiptPath: options.expectedReceiptPath,
         expectedReceiptSha256: options.expectedReceiptSha256,
         taskQueueRows: options.taskQueueRows,
-        allowPendingGroupedFollowUp: options.allowPendingGroupedFollowUp
+        allowPendingGroupedFollowUp: options.allowPendingGroupedFollowUp,
+        authenticatedPreflight: options.authenticatedPreflight
     });
     violations.push(...followUp.violations);
     return {

@@ -519,7 +519,8 @@ export function tryAcceptCurrentPassReviewEvidence(options: {
                 ? normalizeOptionalSha256(receipt.reused_from_receipt_sha256)
                 : null,
             preferSnapshot: receipt.reused_existing_review === true,
-            allowPendingGroupedFollowUp: true
+            allowPendingGroupedFollowUp: true,
+            authenticatedPreflight: options.preflightPayload
         });
         if (!dispositionEvidence.valid) {
             return reject(

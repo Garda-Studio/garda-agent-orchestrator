@@ -633,7 +633,8 @@ function buildReusedReviewFindingsValidationEvidence(
         expectedReceiptPath: options.reusedFromReceiptPath,
         expectedReceiptSha256: options.reusedFromReceiptSha256,
         preferSnapshot: true,
-        allowPendingGroupedFollowUp: true
+        allowPendingGroupedFollowUp: true,
+        authenticatedPreflight: options.preflightPayload
     });
     if (!disposition.valid || !disposition.artifact || !disposition.artifact_sha256) {
         return {
