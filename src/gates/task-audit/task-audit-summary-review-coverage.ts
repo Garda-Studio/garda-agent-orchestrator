@@ -318,6 +318,7 @@ export function buildReviewCoverageAuditSummary(options: {
                     expectedReceiptPath: reusedExistingReview ? stringValue(receipt.reused_from_receipt_path) : null,
                     expectedReceiptSha256: reusedExistingReview ? stringValue(receipt.reused_from_receipt_sha256) : null,
                     preferSnapshot: true,
+                    authenticatedPreflight: preflight || undefined,
                     taskQueueRows
                 });
                 dispositionEvidence[reviewType] = findingsDisposition;

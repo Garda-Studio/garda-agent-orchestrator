@@ -73,7 +73,7 @@ export interface ReviewFindingsDispositionEvidenceCheckOptions {
      * An existing artifact is still verified; closeout, completion and audit never set this.
      */
     allowPendingGroupedFollowUp?: boolean;
-    /** The preflight payload already authenticated by the calling reuse flow. */
+    /** The current preflight payload already authenticated by the calling gate or reuse flow. */
     authenticatedPreflight?: Record<string, unknown>;
     taskQueueRows?: readonly {
         taskId: string;
@@ -223,10 +223,11 @@ function isParentFollowUpTaskId(parentTaskId: string, taskId: string): boolean {
     return taskId.startsWith(prefix) && /^[1-9][0-9]*$/u.test(taskId.slice(prefix.length));
 }
 
-function readFollowUpMaterializationMode(preflight: Record<string, unknown> | undefined): string | null {
+function readFollowUpMaterializationMode(preflight: Record<string, unknown> | undefined): 'grouped_by_parent' | 'per_finding' {
     const snapshot = toPlainRecord(preflight?.profile_policy_snapshot);
     const policy = toPlainRecord(snapshot?.review_follow_up_policy);
-    return policy?.schema_version === 1 && typeof policy.materialization_mode === 'string' ? policy.materialization_mode : null;
+    return policy?.schema_version === 1 && policy.materialization_mode === 'grouped_by_parent'
+        ? 'grouped_by_parent' : 'per_finding';
 }
 
 function validateFollowUpSatisfaction(options: {
@@ -304,12 +305,16 @@ function validateFollowUpSatisfaction(options: {
         || readReviewArtifactFileSha256(options.receiptPath);
     const materializationPolicy = toPlainRecord(artifact.materialization_policy);
     const materializationMode = materializationPolicy?.mode;
-    const currentReusedReceiptMatches = materializationMode === 'grouped_by_parent'
+    const expectedMaterializationMode = readFollowUpMaterializationMode(options.authenticatedPreflight);
+    assertEqual(violations, 'Review findings follow-up materialization mode', materializationMode, expectedMaterializationMode);
+    const authenticatedGroupedMode = expectedMaterializationMode === 'grouped_by_parent'
+        && materializationMode === expectedMaterializationMode;
+    const currentReusedReceiptMatches = authenticatedGroupedMode
         && options.reusedExistingReview
         && !!normalizeHash(sourceReceipt?.receipt_sha256)
         && normalizeNonEmptyPath(sourceReceipt?.receipt_path) === normalizePath(options.receiptPath)
         && normalizeHash(sourceReceipt?.receipt_sha256) === readReviewArtifactFileSha256(options.receiptPath);
-    const intermediateReceiptMatches = materializationMode === 'grouped_by_parent'
+    const intermediateReceiptMatches = authenticatedGroupedMode
         && hasAuthenticatedIntermediateGroupedReceiptSource({
             repoRoot: options.repoRoot, taskId: options.taskId, reviewType: options.reviewType,
             receipt: options.receipt, receiptPath: options.receiptPath,

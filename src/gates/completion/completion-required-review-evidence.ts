@@ -325,6 +325,7 @@ export function collectRequiredReviewEvidence(input: {
                             validationArtifactPath: validationArtifact.reference.artifact_path,
                             validationArtifactSha256: validationArtifact.artifact_sha256,
                             policyResolution,
+                            authenticatedPreflight: input.preflight,
                             expectedReceiptPath: reusedExistingReview
                                 ? getReceiptString(receipt, 'reused_from_receipt_path')
                                 : null,

@@ -331,7 +331,7 @@ function resolveCurrentReviewFollowUpMaterializationBinding(
     repoRoot: string,
     reviewsRoot: string,
     parentTaskId: string
-): CurrentReviewFollowUpMaterializationBinding | null {
+): (CurrentReviewFollowUpMaterializationBinding & { authenticatedPreflight: Record<string, unknown> }) | null {
     const preflightPath = path.join(reviewsRoot, `${parentTaskId}-preflight.json`);
     const compileGatePath = path.join(reviewsRoot, `${parentTaskId}-compile-gate.json`);
     const preflight = readReviewArtifactJsonRecord(preflightPath);
@@ -367,7 +367,8 @@ function resolveCurrentReviewFollowUpMaterializationBinding(
         ).trim()
         : '';
     if (
-        !mode
+        !preflight
+        || !mode
         || !snapshotHash
         || !compileTimestamp
         || !compilePreflightSha256
@@ -381,6 +382,7 @@ function resolveCurrentReviewFollowUpMaterializationBinding(
         compile_gate_timestamp: compileTimestamp
     });
     return {
+        authenticatedPreflight: preflight,
         mode,
         snapshotHash,
         cycleId,
@@ -1178,7 +1180,7 @@ function resolveAuthenticatedReviewFollowUpArtifactScope(options: {
     followUpArtifactPath: string;
     expectedFollowUpCount: number;
     materializationMode: ReviewFollowUpMaterializationMode;
-    currentMaterializationBinding: CurrentReviewFollowUpMaterializationBinding;
+    currentMaterializationBinding: CurrentReviewFollowUpMaterializationBinding & { authenticatedPreflight: Record<string, unknown> };
 }): { files: string[]; diagnostics: string[] } {
     const modeLabel = options.materializationMode === 'grouped_by_parent' ? 'Grouped' : 'Per-finding';
     const followUpArtifact = readReviewArtifactJsonRecord(options.followUpArtifactPath);
@@ -1241,6 +1243,7 @@ function resolveAuthenticatedReviewFollowUpArtifactScope(options: {
         expectedReceiptPath: receiptResolution.evidence.canonicalReceiptPath,
         expectedReceiptSha256: receiptResolution.evidence.receiptSha256,
         preferSnapshot: true,
+        authenticatedPreflight: options.currentMaterializationBinding.authenticatedPreflight,
         taskQueueRows: [...options.taskQueueEntries.values()].map((row) => ({ taskId: row.taskId, notes: row.notes }))
     });
     if (!dispositionEvidence.valid || !dispositionEvidence.follow_up_artifact_path

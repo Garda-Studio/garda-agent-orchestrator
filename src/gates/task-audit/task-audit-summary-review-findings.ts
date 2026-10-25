@@ -446,6 +446,7 @@ function buildCurrentFindingsLane(options: {
             validationArtifactPath: validation.reference.artifact_path,
             validationArtifactSha256: validation.artifact_sha256,
             policyResolution,
+            authenticatedPreflight: options.currentPreflight || undefined,
             expectedReceiptPath: reused ? stringValue(receipt.reused_from_receipt_path) : null,
             expectedReceiptSha256: reused ? stringValue(receipt.reused_from_receipt_sha256) : null,
             preferSnapshot: reused,

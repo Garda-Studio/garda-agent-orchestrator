@@ -532,10 +532,19 @@ describe('cli/commands/gates - review reuse upstream reuse', () => {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });
 
-    it('reuses current-cycle code review evidence and unblocks downstream test review when runtime code scope is unchanged', async () => {
+    for (const materializationMode of ['grouped_by_parent', 'per_finding'] as const) {
+    it(materializationMode === 'grouped_by_parent'
+        ? 'reuses current-cycle code review evidence and unblocks downstream test review when runtime code scope is unchanged'
+        : 'rejects forged grouped follow-up authority for a per-finding profile after real review reuse', async () => {
         const repoRoot = createTempRepo();
         const taskId = 'T-904a-reuse-code-review';
         seedBalancedTaskQueue(repoRoot, taskId);
+        if (materializationMode === 'per_finding') {
+            const profilesPath = path.join(repoRoot, 'garda-agent-orchestrator/live/config/profiles.json');
+            const profiles = JSON.parse(fs.readFileSync(profilesPath, 'utf8'));
+            profiles.built_in_profiles.balanced.review_follow_up_policy.materialization_mode = materializationMode;
+            fs.writeFileSync(profilesPath, JSON.stringify(profiles));
+        }
         seedInitAnswers(repoRoot, 'Codex');
         const workflow = JSON.parse(fs.readFileSync(path.join(repoRoot, 'garda-agent-orchestrator/live/config/workflow-config.json'), 'utf8')) as ReturnType<typeof buildDefaultWorkflowConfig>;
         workflow.full_suite_validation.enabled = false;
@@ -569,7 +578,7 @@ describe('cli/commands/gates - review reuse upstream reuse', () => {
                     dependency: false
                 }
             },
-            `${taskId}-prior-preflight.json`
+            materializationMode === 'per_finding' ? `${taskId}-preflight.json` : `${taskId}-prior-preflight.json`
         );
         const reviewContextPath = path.join(reviewsRoot, `${taskId}-code-review-context.json`);
         fs.mkdirSync(path.join(repoRoot, 'tests'), { recursive: true });
@@ -603,6 +612,10 @@ describe('cli/commands/gates - review reuse upstream reuse', () => {
             codeExecution.reviewerIdentity
         );
         addBalancedLowFindingToReusableCodeReview(repoRoot, taskId, priorPreflightPath);
+        if (materializationMode === 'per_finding') {
+            const originalMaterialization = materializeReviewFindingsFollowUpTasks({ repoRoot, taskId, reviewType: 'code' });
+            assert.equal(originalMaterialization.status, 'MATERIALIZED', originalMaterialization.violations.join('\n'));
+        }
         const preflightPath = runExplicitPreflight(
             repoRoot,
             taskId,
@@ -706,6 +719,66 @@ describe('cli/commands/gates - review reuse upstream reuse', () => {
             JSON.parse(fs.readFileSync(preflightPath, 'utf8')), repoRoot);
         assert.ok(reviewStateHasSatisfiedEvidence(repoRoot, path.join(getOrchestratorRoot(repoRoot), 'runtime/task-events'), taskId, testState),
             JSON.stringify({ state: testState, timing: getHiddenReviewTimingTrustRemediation(path.join(getOrchestratorRoot(repoRoot), 'runtime/task-events'), taskId, testState) }));
+        if (materializationMode === 'per_finding') {
+            const currentPreflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8'));
+            assert.equal(currentPreflight.profile_policy_snapshot.review_follow_up_policy.materialization_mode, 'per_finding');
+            const followUpPath = path.join(reviewsRoot, `${taskId}-code-findings-follow-ups.json`);
+            const originalFollowUpBytes = fs.readFileSync(followUpPath);
+            const taskPath = path.join(repoRoot, 'TASK.md');
+            const originalTaskBytes = fs.readFileSync(taskPath);
+            const checkReviews = () => runRequiredReviewsCheckCommand({ repoRoot, taskId, preflightPath,
+                codeReviewVerdict: 'REVIEW PASSED', testReviewVerdict: 'TEST REVIEW PASSED',
+                reviewAuthorshipAttestationJson: '{"code":true,"test":true}', outputFiltersPath, emitMetrics: false });
+            fs.writeFileSync(path.join(reviewsRoot, `${taskId}-doc-impact.json`), JSON.stringify({
+                task_id: taskId, status: 'PASSED', outcome: 'PASS', decision: 'NO_DOC_UPDATES',
+                rationale: 'Review follow-up reuse changes no public documentation.'
+            }));
+            appendTaskEvent(getOrchestratorRoot(repoRoot), taskId, 'DOC_IMPACT_ASSESSED', 'PASS', 'No documentation impact.', { decision: 'NO_DOC_UPDATES' });
+            const forged = JSON.parse(originalFollowUpBytes.toString('utf8'));
+            assert.equal(forged.materialization_policy.mode, 'per_finding');
+            assert.equal(forged.source_receipt.receipt_sha256, refreshedReceipt.reused_from_receipt_sha256);
+            forged.materialization_policy.mode = 'grouped_by_parent';
+            forged.materialization_policy.group_fingerprint = 'a'.repeat(64);
+            forged.source_receipt.receipt_sha256 = sha256File(path.join(reviewsRoot, `${taskId}-code-receipt.json`));
+            const fingerprints = forged.items.map((item: { fingerprint: string }) => item.fingerprint).sort();
+            const laneBinding = `review_follow_up_lane_binding=code:${fingerprints.length}:${sha256Json(fingerprints)}:forged`;
+            const groupedMarkers = `review_follow_up_group_fingerprint=${forged.materialization_policy.group_fingerprint} ${laneBinding}`;
+            const forgedTaskText = originalTaskBytes.toString('utf8').split('\n').map(line => (
+                line.startsWith(`| ${forged.items[0].task_id} |`)
+                    ? line.replace(/ \|$/, ` ${groupedMarkers} |`) : line
+            )).join('\n');
+            assert.ok(forgedTaskText.includes(groupedMarkers));
+            try {
+                fs.writeFileSync(taskPath, forgedTaskText);
+                fs.writeFileSync(followUpPath, `${JSON.stringify(forged, null, 2)}\n`);
+                const rejected = checkReviews();
+                assert.notEqual(rejected.exitCode, 0, 'a grouped label must not relax per-finding source receipt authority');
+                assert.match(rejected.outputLines.join('\n'), /follow-up materialization mode/u);
+                const rejectedCompletion = runCompletionGate({ repoRoot, taskId, preflightPath });
+                assert.equal(rejectedCompletion.status, 'FAILED');
+                assert.ok(rejectedCompletion.violations.some(violation => violation.includes('follow-up materialization mode')),
+                    rejectedCompletion.violations.join('\n'));
+                const rejectedAudit = buildTaskAuditSummary({ repoRoot, taskId });
+                assert.ok(rejectedAudit.review_coverage_summary?.entries.find(entry => entry.review_type === 'code')?.violations
+                    .some(violation => violation.includes('follow-up materialization mode')),
+                JSON.stringify(rejectedAudit.review_coverage_summary));
+                assert.ok(rejectedAudit.review_findings_audit?.lanes.find(lane => lane.review_type === 'code')?.disposition_violations
+                    .some(violation => violation.includes('follow-up materialization mode')),
+                JSON.stringify(rejectedAudit.review_findings_audit));
+            } finally {
+                fs.writeFileSync(followUpPath, originalFollowUpBytes);
+                fs.writeFileSync(taskPath, originalTaskBytes);
+            }
+            const restoredReviews = checkReviews();
+            assert.equal(restoredReviews.exitCode, 0, restoredReviews.outputLines.join('\n'));
+            const restoredCompletion = runCompletionGate({ repoRoot, taskId, preflightPath });
+            assert.equal(restoredCompletion.status, 'PASSED', restoredCompletion.violations.join('\n'));
+            const restoredAudit = buildTaskAuditSummary({ repoRoot, taskId });
+            assert.equal(restoredAudit.review_findings_audit?.lanes.find(lane => lane.review_type === 'code')?.disposition_status, 'SATISFIED');
+            assert.deepEqual(restoredAudit.review_coverage_summary?.entries.find(entry => entry.review_type === 'code')?.violations, []);
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+            return;
+        }
         const followUpMaterialization = materializeReviewFindingsFollowUpTasks({ repoRoot, taskId, reviewType: 'code' });
         assert.equal(followUpMaterialization.status, 'MATERIALIZED', followUpMaterialization.violations.join('\n'));
         const followUpArtifact = JSON.parse(fs.readFileSync(path.join(reviewsRoot, `${taskId}-code-findings-follow-ups.json`), 'utf8'));
@@ -857,6 +930,8 @@ describe('cli/commands/gates - review reuse upstream reuse', () => {
 
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });
+
+    }
 
     it('reuses prior code-review evidence for a pure test-only rerun', async () => {
         const repoRoot = createTempRepo();

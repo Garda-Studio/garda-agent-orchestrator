@@ -522,6 +522,7 @@ export function validateReviewArtifactGateEligibility(options: {
                                     validationArtifactPath: validationArtifact.reference.artifact_path,
                                     validationArtifactSha256: validationArtifact.artifact_sha256,
                                     policyResolution,
+                                    authenticatedPreflight: preflightPayload || undefined,
                                     expectedReceiptPath: reusedExistingReview
                                         ? typeof receipt.reused_from_receipt_path === 'string' ? receipt.reused_from_receipt_path : null
                                         : null,
