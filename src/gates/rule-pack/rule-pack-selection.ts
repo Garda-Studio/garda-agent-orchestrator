@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { selectRulePackFiles } from '../review-context/review-context-token-economy';
 import { fileSha256, normalizePath, resolvePathInsideRepo } from '../shared/helpers';
+import { stringSha256 } from '../../gate-runtime/hash';
 import { resolveGateExecutionPath } from '../isolation/isolation-sandbox';
 import {
     RULE_PACK_STAGE_KEYS,
@@ -208,9 +209,26 @@ export function normalizeLoadedRuleFiles(repoRoot: string, loadedRuleFiles: stri
     return unique.sort();
 }
 
+const GENERATED_PROJECT_MEMORY_RULE_FILE = '15-project-memory.md';
+const GENERATED_AT_LINE_PATTERN = /^Generated at: .*$/mu;
+
+/**
+ * Rule content hash. The generated project-memory summary carries a regeneration timestamp, so
+ * an update that leaves project memory unchanged must not make loaded rules look stale.
+ */
+export function ruleFileContentSha256(ruleFile: string): string | null {
+    if (path.basename(ruleFile).toLowerCase() !== GENERATED_PROJECT_MEMORY_RULE_FILE) return fileSha256(ruleFile);
+    try {
+        const content = fs.readFileSync(ruleFile, 'utf8').replace(GENERATED_AT_LINE_PATTERN, 'Generated at: <normalized>');
+        return stringSha256(content);
+    } catch {
+        return null;
+    }
+}
+
 export function buildRuleFileHashes(ruleFiles: string[]): Record<string, string | null> {
     return Object.fromEntries(ruleFiles.map(function (ruleFile) {
-        return [ruleFile, fileSha256(ruleFile)];
+        return [ruleFile, ruleFileContentSha256(ruleFile)];
     }));
 }
 
@@ -257,7 +275,9 @@ export function readRuleHash(record: unknown, ruleFile: string): string | null {
 export function findStaleLoadedRuleFile(loadedRuleHashes: unknown, loadedRuleFiles: readonly string[]): string | null {
     return loadedRuleFiles.find(function (ruleFile) {
         const previousHash = readRuleHash(loadedRuleHashes, ruleFile);
-        const currentHash = fileSha256(ruleFile);
-        return !previousHash || !currentHash || previousHash !== currentHash.toLowerCase();
+        const currentHash = ruleFileContentSha256(ruleFile);
+        // Evidence recorded before timestamp normalization still matches the raw file hash.
+        return !previousHash || !currentHash || (previousHash !== currentHash.toLowerCase()
+            && previousHash !== String(fileSha256(ruleFile) || '').toLowerCase());
     }) || null;
 }
