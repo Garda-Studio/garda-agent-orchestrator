@@ -131,7 +131,8 @@ test('validateReviewCoverageLedger ignores generic phrases inside quoted code an
     for (const observation of [
         "PermissionScope.parse rejects the invalid scope 'EVERYTHING' before any grant is stored",
         'PermissionScope.parse rejects `valueOf("EVERYTHING")` before any grant is stored',
-        'The fixture literal "no issues" is asserted verbatim by parseExample error handling'
+        'The fixture literal "no issues" is asserted verbatim by parseExample error handling',
+        'The `PermissionScope.parse` rejects `EVERYTHING` before `grant.create` stores the request'
     ]) {
         const lines = contract.obligations.map((obligation, index) => ledgerLine(
             obligation.id,
@@ -186,6 +187,14 @@ test('validateReviewCoverageLedger rejects passive and prefixed review-status de
         'This was checked carefully and works as expected.',
         'Review completed successfully without problems.',
         'Reviewed code with no defects found.',
+        'Reviewed all files and found no defects.',
+        'Checked the full scope, no defects found.',
+        'Reviewed the full scope carefully, nothing suspicious.',
+        '`Everything was reviewed and no issues were found`',
+        '"Everything was reviewed and no issues were found"',
+        "'Everything was reviewed and no issues were found'",
+        "'Everything' was 'reviewed' and 'no issues' were 'found'.",
+        '"Reviewed all files and found no defects."',
         'Reviewed code and found no defects.',
         'Reviewed code; no defects were found.',
         'Reviewed code; there were no defects identified.',
@@ -748,6 +757,11 @@ test('coverage contract check accepts a contract stored through secret redaction
     assert.match(violations[0], /First difference: obligation FILE-001 field target differs/u);
     const forgedHash = { ...stored, contract_sha256: 'd'.repeat(64) };
     assert.equal(getReviewCoverageContractViolations(forgedHash, expected).length, 1);
+    assert.match(getReviewCoverageContractViolations(forgedHash, expected)[0], /First difference: contract_sha256 differs/u);
+    const plainForgedHash = { ...contract, contract_sha256: 'd'.repeat(64) };
+    assert.match(getReviewCoverageContractViolations(plainForgedHash, expected)[0], /First difference: contract_sha256 differs/u);
+    const plainWrongCount = { ...contract, obligation_count: contract.obligation_count + 1 };
+    assert.match(getReviewCoverageContractViolations(plainWrongCount, expected)[0], /First difference: obligation_count/u);
 });
 
 test('coverage evidence accepts technical terms full scope and all files in concrete observations', () => {

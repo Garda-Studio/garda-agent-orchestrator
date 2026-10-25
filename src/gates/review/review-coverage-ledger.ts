@@ -238,13 +238,17 @@ export function getReviewCoverageContractViolations(
         `Review coverage contract does not match the deterministic current-scope contract for ` +
         `'${deterministic.review_type}'. Expected sha256=${deterministic.contract_sha256}; ` +
         `actual sha256=${String(actual.contract_sha256 || 'missing')}. ` +
-        `First difference: ${describeFirstCoverageContractDifference(actual, redactedDeterministic)}.`
+        `First difference: ${describeFirstCoverageContractDifference(actual, deterministic, redactedDeterministic)}.`
     ];
 }
 
-function describeFirstCoverageContractDifference(actual: ReviewCoverageContract, expected: ReviewCoverageContract): string {
+function describeFirstCoverageContractDifference(
+    actual: ReviewCoverageContract, expected: ReviewCoverageContract, redactedExpected: ReviewCoverageContract
+): string {
+    const matchesEither = (value: unknown, plain: unknown, redacted: unknown): boolean =>
+        JSON.stringify(value) === JSON.stringify(plain) || JSON.stringify(value) === JSON.stringify(redacted);
     for (const field of ['schema_version', 'required', 'review_type', 'obligation_count'] as const) {
-        if (JSON.stringify(actual[field]) !== JSON.stringify(expected[field])) {
+        if (!matchesEither(actual[field], expected[field], redactedExpected[field])) {
             return `${field} is ${JSON.stringify(actual[field])}, expected ${JSON.stringify(expected[field])}`;
         }
     }
@@ -253,15 +257,18 @@ function describeFirstCoverageContractDifference(actual: ReviewCoverageContract,
     for (let index = 0; index < count; index += 1) {
         const left = actualObligations[index];
         const right = expected.obligations[index];
-        if (JSON.stringify(left) !== JSON.stringify(right)) {
+        const redactedRight = redactedExpected.obligations[index];
+        if (!matchesEither(left, right, redactedRight)) {
             const id = String(right?.id || left?.id || `#${index + 1}`);
             if (!left || !right) return `obligation ${id} is ${left ? 'unexpected' : 'missing'}`;
             const key = [...new Set([...Object.keys(left), ...Object.keys(right)])]
-                .find(name => JSON.stringify((left as unknown as Record<string, unknown>)[name])
-                    !== JSON.stringify((right as unknown as Record<string, unknown>)[name]));
+                .find(name => !matchesEither((left as unknown as Record<string, unknown>)[name],
+                    (right as unknown as Record<string, unknown>)[name],
+                    (redactedRight as unknown as Record<string, unknown> | undefined)?.[name]));
             return `obligation ${id} field ${key || 'order'} differs`;
         }
     }
+    if (actual.contract_sha256 !== expected.contract_sha256) return 'contract_sha256 differs';
     return 'object key order or extra fields differ';
 }
 
@@ -568,7 +575,7 @@ export function formatReviewEvidenceLineCountSource(source: ReviewEvidenceLineCo
 }
 
 const REVIEW_STATUS_PREFIX_PATTERNS = Object.freeze([
-    /^(?:reviewed|checked|validated|inspected)\s+(?:the\s+)?(?:whole\s+)?(?:file|scope|code)\b/u,
+    /^(?:reviewed|checked|validated|inspected)\s+(?:the\s+)?(?:(?:full|whole|entire|all)\s+)?(?:files?|scope|code)\b/u,
     /^(?:(?:after|following|during)\s+(?:the\s+)?(?:review|inspection|validation|check),?\s+)?(?:(?:the|all)\s+)?(?:(?:changed|entire|whole)\s+)?(?:files?|scope|code|implementation|changes?)\s+(?:was|were|is|are|has\s+been|have\s+been)\s+(?:(?:carefully|fully|thoroughly|completely)\s+)*(?:reviewed|checked|validated|inspected)\b/u,
     /^(?:we|i)\s+(?:(?:carefully|fully|thoroughly|completely)\s+)*(?:reviewed|checked|validated|inspected)\s+(?:the\s+)?(?:changed\s+)?(?:file|scope|code|implementation|changes?)\b/u
 ]);
@@ -655,6 +662,8 @@ const GENERIC_REVIEW_STATUS_WORDS = new Set([
     'we',
     'were',
     'whole',
+    'nothing',
+    'suspicious',
     'without',
     'work',
     'worked',
@@ -704,19 +713,34 @@ function isGenericReviewStatusDeclaration(normalized: string): boolean {
 // 'full scope' and 'all files' are also technical terms (Keycloak client scopes, glob matchers);
 // a review-status sentence built only from them is still rejected through GENERIC_REVIEW_STATUS_WORDS.
 const GENERIC_OBSERVATION_PHRASE_PATTERN = /\b(?:no issues|looks good|everything)\b/u;
-// Quoted code, identifiers and string literals are evidence, not reviewer wording.
+// Only short quoted code tokens are exempt from the generic-phrase rule.
 const QUOTED_OBSERVATION_SEGMENT_PATTERN = /`[^`]*`|"[^"]*"|(?<![\p{L}\p{N}_])'[^']*'(?![\p{L}\p{N}_])/gu;
+
+const MAX_QUOTED_OBSERVATION_TOKEN_LENGTH = 120;
+const MAX_QUOTED_OBSERVATION_TOKEN_WORDS = 3;
 
 function describeGenericObservation(observation: string): string | null {
     const normalized = String(observation || '').trim().toLowerCase();
     if (normalized.length < 24) return 'it is shorter than 24 characters';
     if (normalized.split(/\s+/u).length < 4) return 'it has fewer than 4 words';
-    if (isGenericReviewStatusDeclaration(normalized)) {
+    const unquoted = normalized.replace(QUOTED_OBSERVATION_SEGMENT_PATTERN, segment => segment.slice(1, -1));
+    if (isGenericReviewStatusDeclaration(unquoted)) {
         return 'it only declares review status without naming a concrete symbol, behavior or check';
     }
-    const phrase = normalized.replace(QUOTED_OBSERVATION_SEGMENT_PATTERN, ' ').match(GENERIC_OBSERVATION_PHRASE_PATTERN)?.[0];
+    let quotedLength = 0;
+    const phraseText = normalized.replace(QUOTED_OBSERVATION_SEGMENT_PATTERN, segment => {
+        quotedLength += segment.length;
+        const token = segment.slice(1, -1).trim();
+        return token.length <= MAX_QUOTED_OBSERVATION_TOKEN_LENGTH
+            && token.split(/\s+/u).length <= MAX_QUOTED_OBSERVATION_TOKEN_WORDS ? ' ' : token;
+    });
+    const outsideWords = extractReviewStatusWords(normalized.replace(QUOTED_OBSERVATION_SEGMENT_PATTERN, ' '));
+    const mostlyQuotedGeneric = quotedLength * 2 >= normalized.length
+        && outsideWords.every(word => GENERIC_REVIEW_STATUS_WORDS.has(word));
+    const phrase = (mostlyQuotedGeneric ? unquoted : phraseText)
+        .match(GENERIC_OBSERVATION_PHRASE_PATTERN)?.[0];
     return phrase
-        ? `it uses the generic phrase '${phrase}' outside quotes (quote code and literals in backticks)`
+        ? `it uses the generic phrase '${phrase}' outside quotes or in a quoted sentence (only short code tokens are exempt)`
         : null;
 }
 
