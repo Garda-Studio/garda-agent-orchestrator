@@ -1561,6 +1561,51 @@ describe('gates/next-step strict decomposition', () => {
         assert.equal(runGitFixtureCommand(repoRoot, ['status', '--short', '--', 'src/app.ts']).stdout, sourceStatusBefore);
     });
 
+    for (const parentStatus of ['DECOMPOSED', 'BLOCKED']) {
+        for (const inParentScope of [true, false]) {
+            it(`preserves active child WIP after a sibling completes (${parentStatus}, parent scope: ${inParentScope})`, () => {
+                const repoRoot = makeTempRepo();
+                fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
+                    '# TASK.md',
+                    '',
+                    '| ID | Status | Priority | Area | Title | Owner | Updated | Profile | Notes |',
+                    '|---|---|---|---|---|---|---|---|---|',
+                    `| ${TASK_ID} | ${parentStatus} | P1 | workflow/strict-decomposition-split-routing | Route strict split decisions to children | gpt-5.4 | 2026-05-20 | strict | Paused for split. Child tasks: \`${TASK_ID}-1\` and \`${TASK_ID}-2\`. |`,
+                    `| ${TASK_ID}-1 | DONE | P1 | workflow/strict-decomposition-split-routing | Validate split evidence | gpt-5.4 | 2026-05-20 | strict | Child of ${TASK_ID}. |`,
+                    `| ${TASK_ID}-2 | IN_PROGRESS | P1 | workflow/strict-decomposition-split-routing | Route child execution | gpt-5.4 | 2026-05-20 | strict | Child of ${TASK_ID}. |`,
+                    ''
+                ].join('\n'), 'utf8');
+                seedStartedTask(repoRoot, TASK_ID);
+                writeStrictDecompositionDecision(repoRoot, TASK_ID, {
+                    decision: 'split-required',
+                    taskSummary: 'Seeded next-step task',
+                    proposedChildTaskIds: [`${TASK_ID}-1`, `${TASK_ID}-2`]
+                });
+                initGitRepo(repoRoot);
+                fs.writeFileSync(path.join(repoRoot, 'src', 'app.ts'), 'export const value = 2;\n', 'utf8');
+                writePreflightScope(repoRoot, TASK_ID, inParentScope ? ['src/app.ts'] : ['src/parent.ts']);
+
+                const sourcePath = path.join(repoRoot, 'src', 'app.ts');
+                const sourceBefore = fs.readFileSync(sourcePath);
+                const sourceStatusBefore = runGitFixtureCommand(repoRoot, ['status', '--short', '--', 'src/app.ts']).stdout;
+                assert.notEqual(sourceStatusBefore.trim(), '');
+
+                // The compatibility helper resolves the public route and executes every guarded effect.
+                const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
+                const wip = listSplitRequiredWip({ repoRoot, taskId: TASK_ID });
+
+                assert.equal(result.status, 'DECOMPOSED');
+                assert.equal(result.next_gate, 'child-task');
+                assert.ok(result.commands[0].command.includes(`next-step "${TASK_ID}-2"`));
+                assert.equal(wip.status, 'EMPTY');
+                assert.deepEqual(wip.manifests, []);
+                assert.deepEqual(fs.readFileSync(sourcePath), sourceBefore);
+                assert.equal(runGitFixtureCommand(repoRoot, ['status', '--short', '--', 'src/app.ts']).stdout, sourceStatusBefore);
+            });
+
+        }
+    }
+
     it('suspends legacy strict parent WIP before any child tasks are linked', () => {
         const repoRoot = makeTempRepo();
         fs.writeFileSync(path.join(repoRoot, 'TASK.md'), [
