@@ -728,8 +728,27 @@ function isGenericReviewStatusDeclaration(normalized: string): boolean {
 const GENERIC_OBSERVATION_PHRASE_PATTERN = /\b(?:no issues|looks good|everything)\b/u;
 const QUOTED_OBSERVATION_SEGMENT_PATTERN = /`[^`]*`|"[^"]*"|(?<![\p{L}\p{N}_])'[^']*'(?![\p{L}\p{N}_])/gu;
 
-function isQuotedCodeOrIdentifier(token: string): boolean {
-    return /[()[\]{}=<>/+*\\]|[a-z0-9_]\.[a-z0-9_]|_|[a-z][A-Z]|^[A-Z][A-Z0-9_]*$/u.test(token);
+function removeQuotedCodeTokens(value: string): string {
+    const operand = String.raw`(?:[a-zA-Z_$][\w.$]*|\d+(?:\.\d+)?)`;
+    const operator = String.raw`(?:={1,3}|!={1,2}|[<>]=?|&&|\|\||\?\?|[-+*/%]=?)`;
+    const expression = value.trim().replace(/^\((.*)\)$/u, '$1');
+    if (new RegExp(`^\\s*${operand}\\s*${operator}\\s*${operand}\\s*;?\\s*$`, 'u').test(expression)) return ' ';
+    return value.replace(/[a-zA-Z_$][\w$]*(?:(?:[./\\]|::)[\w$-]+)*/gu, (token, offset: number) => {
+        const uppercaseIdentifier = /^[A-Z][A-Z0-9_]*$/u.test(token)
+            && (value.trim() === token || !GENERIC_REVIEW_STATUS_WORDS.has(token.toLowerCase())
+                || /["']/u.test(value[offset - 1] || ''));
+        const codeToken = /[./\\_]|[a-z][A-Z]/u.test(token) || uppercaseIdentifier
+            || value[offset + token.length] === '('
+            || (value[offset - 1] === '(' && value[offset + token.length] === ')');
+        return codeToken ? ' ' : token;
+    });
+}
+
+function isConcreteQuotedTestName(value: string): boolean {
+    const condition = value.match(/^(?:returns?|rejects?|throws?|accepts?|handles?|preserves?|allows?|no issues)\b.+?\b(?:when|unless|if)\s+(.+)$/iu);
+    if (!condition) return false;
+    const prose = removeQuotedCodeTokens(condition[1]).toLowerCase();
+    return extractReviewStatusWords(prose).length > 0 && !usesOnlyGenericReviewStatusVocabulary(prose);
 }
 
 function describeGenericObservation(observation: string): string | null {
@@ -743,14 +762,18 @@ function describeGenericObservation(observation: string): string | null {
     }
     const phraseText = original.replace(QUOTED_OBSERVATION_SEGMENT_PATTERN, (segment: string, offset: number) => {
         const token = segment.slice(1, -1).trim();
-        const normalizedToken = token.toLowerCase();
         // Explicit literal/output context identifies a quoted value, not the reviewer's conclusion.
         const quoteContext = original.slice(0, offset).toLowerCase();
-        const quotedValue = /\b(?:literal|prints|emits|outputs)\s*:?\s*$/u.test(quoteContext);
+        const valueContext = quoteContext.match(/\b(literal|prints|emits|outputs)\s*:?\s*$/u)?.[1];
+        const afterQuote = original.slice(offset + segment.length).toLowerCase();
+        const quotedValue = valueContext !== undefined && (valueContext !== 'literal'
+            || /^\s+(?:is\s+)?(?:asserted|compared|matched|checked)\b/u.test(afterQuote));
         const namedTest = /\b(?:test|case|spec)(?:\s+(?:named|called))?\s*:?\s*$/u.test(quoteContext)
             || /^\s+(?:test|case|spec)\b/u.test(original.slice(offset + segment.length).toLowerCase());
-        const genericToken = GENERIC_OBSERVATION_PHRASE_PATTERN.test(normalizedToken);
-        return isQuotedCodeOrIdentifier(token) || quotedValue || namedTest || !genericToken ? ' ' : token;
+        const prose = removeQuotedCodeTokens(token);
+        const genericProse = GENERIC_OBSERVATION_PHRASE_PATTERN.test(prose.toLowerCase());
+        const concreteTestName = namedTest && isConcreteQuotedTestName(token);
+        return quotedValue || concreteTestName || !genericProse ? ' ' : prose;
     }).toLowerCase();
     const phrase = phraseText.match(GENERIC_OBSERVATION_PHRASE_PATTERN)?.[0];
     return phrase

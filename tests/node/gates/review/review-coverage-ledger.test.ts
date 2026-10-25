@@ -165,6 +165,15 @@ test('validateReviewCoverageLedger distinguishes concrete quoted evidence from i
         ['PASS', 'Test `no issues when optional config is omitted` in config.test.ts covers the absent-config branch.'],
         ['PASS', 'Test `returns everything when no filter is set` in filter.test.ts covers the empty-filter branch.'],
         ['PASS', 'The `returns everything when no filter is set` test in filter.test.ts covers the empty-filter branch.'],
+        ['PASS', 'parseMode checks `everything > 0` before validation.'],
+        ['PASS', 'parseMode computes `everything / 2` before validation.'],
+        ['PASS', 'parseMode computes `everything + selected` before validation.'],
+        ['PASS', 'parseMode assigns `everything = selected` before validation.'],
+        ['PASS', 'parseMode checks `everything === selected` before validation.'],
+        ['PASS', 'parseMode checks `everything === expected` before validation.'],
+        ['PASS', 'parseMode checks `(everything === expected)` before validation.'],
+        ['PASS', 'parseMode executes `if (everything) return ALL_MODES;` before validation.'],
+        ['PASS', 'parseMode checks `selected === everything` before validation.'],
         ['PASS', 'parseMode executes `if (flags.everything) return ALL_MODES;` before filtering individual flags.'],
         ['PASS', 'The CLI prints "No issues found in 3 files" from report.ts:88 after collecting diagnostics.'],
         ['PASS', 'The CLI prints: "No issues found in 3 files" from report.ts:88 after collecting diagnostics.'],
@@ -176,6 +185,33 @@ test('validateReviewCoverageLedger distinguishes concrete quoted evidence from i
         const lines = contract.obligations.map((obligation, index) => ledgerLine(obligation.id, `src/example.ts:${index + 1}`, observation));
         const result = validateReviewCoverageLedger(buildReviewOutput(lines), contract);
         assert.equal(result.status, expected, observation);
+    }
+});
+
+test('validateReviewCoverageLedger rejects quoted approval even when it contains code tokens or a test label', async (t) => {
+    const contract = buildReviewCoverageContract({ reviewType: 'code', changedFiles: ['src/example.ts'], categoryIds: ['correctness-edge-cases'] });
+    for (const observation of [
+        '`Everything looks good, no issues in parser.ts`',
+        'Reviewed parser.ts: "everything looks good (no issues)".',
+        'The parser change "looks good / no issues" overall.',
+        'Overall "the change looks good and has no issues in a.b at all".',
+        'Test "everything looks good" passes for the parser module.',
+        '`Everything looks good, no issues in parseMode()`',
+        '`Everything looks good, no issues in src/parser_file.ts`',
+        '`EVERYTHING LOOKS GOOD, NO ISSUES IN parser.ts`',
+        'Test "no issues when parser.ts looks good" passes for the parser module.',
+        'Test "returns everything when parser.ts looks good" passes for the parser module.',
+        'Test "no issues when parser.ts" passes for the parser module.',
+        'Reviewed parser.ts: literal "everything looks good (no issues)".',
+        'Reviewed parser.ts: "looks good / parser.ts".',
+        'Reviewed parser.ts: "looks good > parser.ts".'
+    ]) {
+        await t.test(observation, () => {
+            const lines = contract.obligations.map((obligation, index) => ledgerLine(obligation.id, `src/example.ts:${index + 1}`, observation));
+            const result = validateReviewCoverageLedger(buildReviewOutput(lines), contract);
+            assert.equal(result.status, 'FAIL', observation);
+            assert.ok(result.violations.some(entry => entry.includes('generic evidence')), observation);
+        });
     }
 });
 
