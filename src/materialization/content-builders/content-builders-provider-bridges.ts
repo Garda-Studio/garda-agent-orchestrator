@@ -106,7 +106,7 @@ Canonical task-start command: ${buildTaskStartNavigatorPrompt()}
 ${buildFreshMainAgentStartBannerSentence()}
 ${START_BANNER_GATE_LIST_RULE}
 If the workspace already contains modified files before task-mode entry, stop and isolate scope via \`--use-staged\` or explicit \`--changed-file ...\` preflight inputs before continuing.
-Ignored orchestration control-plane files (for example \`TASK.md\`, \`${resolveBundleName()}/runtime/**\`, and \`${resolveBundleName()}/live/docs/changes/CHANGELOG.md\`) are expected local artifacts; never \`git add -f\` them unless the user explicitly asks to version orchestrator internals.
+Ignored orchestration control-plane files (for example \`TASK.md\`, \`${resolveBundleName()}/runtime/**\`, and \`${resolveBundleName()}/live/docs/changes/CHANGELOG.md\`) are expected local artifacts; never \`git add -f\` them in an installed project, even with operator approval.
 This provider profile is a strict bridge to Garda skills and the Node gate router.
 Treat \`.agents/workflows/start-task.md\` as the shared router for every provider surface; it routes to canonical orchestration and does not replace \`80-task-workflow.md\`.
 Use compact command protocol from \`40-commands.md\`: first \`scan\`, then \`inspect\`, then verbose \`debug\` only by exception.
@@ -269,7 +269,7 @@ Canonical source of truth for agent workflow rules: \`${canonicalFile}\`.
 
 Hard stop: first open \`${reviewSkillBridgeHost.bridgePath}\`, \`${canonicalFile}\`, and \`TASK.md\`.
 Do not implement tasks directly without orchestration preflight and required review gates.
-Ignored orchestration control-plane files (for example \`TASK.md\`, \`${resolveBundleName()}/runtime/**\`, and \`${resolveBundleName()}/live/docs/changes/CHANGELOG.md\`) are expected local artifacts; never \`git add -f\` them unless the user explicitly asks to version orchestrator internals.
+Ignored orchestration control-plane files (for example \`TASK.md\`, \`${resolveBundleName()}/runtime/**\`, and \`${resolveBundleName()}/live/docs/changes/CHANGELOG.md\`) are expected local artifacts; never \`git add -f\` them in an installed project, even with operator approval.
 Use compact command protocol from \`40-commands.md\`: first \`scan\`, then \`inspect\`, then verbose \`debug\` only by exception.
 
 ## Skill Bridge Contract

@@ -1290,3 +1290,19 @@ describe('stripJsoncComments', () => {
         assert.equal(parsed.n, 1);
     });
 });
+
+describe('G1 provider bridge staging guidance', () => {
+    it('never grants a bundle staging exception in installed provider bridges', () => {
+        const bridges = ['.github/agents/orchestrator.md', '.windsurf/agents/orchestrator.md', '.junie/agents/orchestrator.md',
+            '.antigravity/agents/orchestrator.md'].map(bridgePath => buildProviderOrchestratorAgentContent('Provider', 'CLAUDE.md', bridgePath));
+        bridges.push(buildGitHubSkillBridgeAgentContent('Code Review Bridge', 'CLAUDE.md',
+            'garda-agent-orchestrator/live/skills/code-review/SKILL.md', 'required_reviews.code=true', 'always-on')!);
+        // Compact bridges without staging guidance defer to the canonical entrypoint rule.
+        const withStagingGuidance = bridges.filter(content => content.includes('git add -f'));
+        assert.ok(withStagingGuidance.length >= 2, String(withStagingGuidance.length));
+        for (const content of withStagingGuidance) {
+            assert.match(content, /never `git add -f` them in an installed project, even with operator approval/);
+        }
+        for (const content of bridges) assert.doesNotMatch(content, /unless the user explicitly (?:asks|requests)/);
+    });
+});

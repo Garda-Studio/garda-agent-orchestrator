@@ -10,6 +10,7 @@ import { OPERATOR_CONFIRMATION_MAX_AGE_MS } from '../../../../../../src/core/ope
 import { buildGateHelpText } from '../../../../../../src/cli/commands/gate-command-help';
 import { getNodeHumanCommitCommand } from '../../../../../../src/materialization/command-constants';
 import { buildCommitGuardManagedBlock } from '../../../../../../src/materialization/content-builders';
+import { assertNoStagedInstalledBundle } from '../../../../../../src/gates/protected-control-plane/installed-bundle-guard';
 import { buildScopeContentFingerprint } from '../../../../../../src/gates/compile/compile-gate';
 import { createTempRepo, runGit } from '../../gate-test-helpers';
 import { authenticateLocalCommitWorkflowAudit } from '../../../../../../src/core/auth/local-commit-availability';
@@ -776,20 +777,38 @@ test('G1 installed commit hook rejects bundle staging even with GARDA_ALLOW_COMM
 });
 
 
-test('G1 installed hook rejects staged bundle removals even with approval', () => {
+test('G1 installed guards accept untracking bundle files but reject removals mixed with bundle changes', () => {
     const root = fixture();
     const previous = process.env.GARDA_ALLOW_COMMIT;
     try {
-        const file = 'garda-agent-orchestrator/dist/formatter.js';
-        fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true }); fs.writeFileSync(path.join(root, file), 'preserve bundle');
-        runGit(root, ['add', '-f', file]); runGit(root, ['commit', '-m', 'historical tracked bundle fixture']);
+        const files = ['garda-agent-orchestrator/dist/formatter.js', 'garda-agent-orchestrator/src/core/formatter.ts'];
+        for (const file of files) {
+            fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true }); fs.writeFileSync(path.join(root, file), 'preserve bundle');
+        }
+        runGit(root, ['add', '-f', ...files]); runGit(root, ['commit', '-m', 'historical tracked bundle fixture']);
         const hook = path.join(root, '.git/hooks/pre-commit');
         fs.writeFileSync(hook, '#!/usr/bin/env bash\n' + buildCommitGuardManagedBlock() + '\n'); fs.chmodSync(hook, 0o755);
         process.env.GARDA_ALLOW_COMMIT = '1';
+
+        // The removal sorts first, so a guard that stopped at the first filtered entry would miss the later change.
+        runGit(root, ['rm', '--cached', '--', files[0]]);
+        fs.writeFileSync(path.join(root, files[1]), 'patched bundle'); runGit(root, ['add', '-f', files[1]]);
+        assert.throws(() => assertNoStagedInstalledBundle(root), /Installed Garda bundle cannot be committed: garda-agent-orchestrator\/src\/core\/formatter\.ts/);
+        assert.throws(() => runGit(root, ['commit', '-m', 'untrack and patch bundle']), /installed Garda bundle files cannot be committed/);
+
+        runGit(root, ['reset', '-q', '--', files[1]]);
+        const objectId = runGit(root, ['hash-object', '-w', '--', files[1]]).stdout.trim();
+        runGit(root, ['update-index', '--cacheinfo', '120000', objectId, files[1]]);
+        assert.throws(() => assertNoStagedInstalledBundle(root), /Installed Garda bundle cannot be committed: garda-agent-orchestrator\/src\/core\/formatter\.ts/);
+        assert.throws(() => runGit(root, ['commit', '-m', 'untrack and replace bundle file with symlink']), /installed Garda bundle files cannot be committed/);
+
+        runGit(root, ['reset', '-q', '--', files[1]]);
         runGit(root, ['rm', '-r', '--cached', '--', ':(top,icase)garda-agent-orchestrator']);
-        assert.throws(() => runGit(root, ['commit', '-m', 'untrack installed bundle']), /installed Garda bundle files cannot be committed/);
+        assert.doesNotThrow(() => assertNoStagedInstalledBundle(root));
+        assert.doesNotThrow(() => runGit(root, ['commit', '-m', 'untrack installed bundle']));
         assert.equal(runGit(root, ['ls-files', '--', 'garda-agent-orchestrator/']).stdout.trim(), '');
-        assert.equal(fs.readFileSync(path.join(root, file), 'utf8'), 'preserve bundle');
+        assert.equal(fs.readFileSync(path.join(root, files[0]), 'utf8'), 'preserve bundle');
+        assert.equal(fs.readFileSync(path.join(root, files[1]), 'utf8'), 'patched bundle');
     } finally {
         if (previous === undefined) delete process.env.GARDA_ALLOW_COMMIT; else process.env.GARDA_ALLOW_COMMIT = previous;
         fs.rmSync(root, { recursive: true, force: true });

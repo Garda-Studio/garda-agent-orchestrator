@@ -10,7 +10,7 @@ Primary entry point: selected source-of-truth entrypoint for this workspace.
 5. Reuse existing utilities and helpers.
 6. Respect gitignore boundaries for orchestration control-plane files; ignored `TASK.md`, `garda-agent-orchestrator/runtime/**`, and internal orchestrator docs are expected.
 7. Never use `git add -f` / `git add --force` to stage ignored orchestration files just to satisfy gates or documentation bookkeeping.
-8. If doc-impact or audit trail requires updates to ignored orchestrator files, write them on disk and continue without expanding the project commit scope unless the user explicitly asks for it.
+8. If doc-impact or audit trail requires updates to ignored orchestrator files, write them on disk and continue without expanding the project commit scope unless the user explicitly asks for it; files under the Garda bundle are never staged in an installed project.
 
 ## Command Output Discipline
 1. Default to compact command output for everyday shell usage; start with summary, bounded, structured, or path-scoped output.

@@ -218,7 +218,7 @@ Create or update plans only for tasks that have never started; retained start ev
    - Completion gate fails if a PASS review artifact still contains active findings or residual risks, or if any deferred entry omits `Justification:`.
    - Completion gate validates full-suite-validation cycle binding when enabled.
 23. Update required docs and changelog when behavior changed.
-   - Internal orchestration artifacts (`TASK.md`, `garda-agent-orchestrator/runtime/**`, `garda-agent-orchestrator/live/docs/changes/CHANGELOG.md`) may remain gitignored in deployed workspaces; update them on disk but do not `git add -f` them unless the user explicitly asks to version orchestrator internals.
+   - Internal orchestration artifacts (`TASK.md`, `garda-agent-orchestrator/runtime/**`, `garda-agent-orchestrator/live/docs/changes/CHANGELOG.md`) may remain gitignored in deployed workspaces; update them on disk but do not `git add -f` them in an installed project, even with operator approval.
 24. Record artifacts, evidence, and any non-status task notes in `TASK.md`.
    - If an orchestrator defect was encountered or fixed, emit `ORCHESTRATOR_DEFECT_ACKNOWLEDGED` through `gate log-task-event` with `defect_id`, `summary`, `resolution`, `problem_record_id`, and `follow_up_task_id` in `--details-json`.
    - Verify that the follow-up task row exists and that the canonical `TASK.md` orchestrator-problems section links the problem record to that follow-up. An in-place fix never replaces this durable capture.
@@ -391,4 +391,4 @@ Create or update plans only for tasks that have never started; retained start ev
   - Scope is too large or specialized reviews are required; remove override and run full review path.
 - Git noise in dirty workspace:
   - Stage task-specific project files and run preflight with `--use-staged`.
-  - Ignored orchestration control-plane files should stay unstaged unless the user explicitly asks to version them.
+  - Ignored orchestration control-plane files should stay unstaged unless the user explicitly asks to version them; files under the Garda bundle are never staged in an installed project.

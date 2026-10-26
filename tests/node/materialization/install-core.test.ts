@@ -56,6 +56,30 @@ describe('runInstall — core deploy and invariants', () => {
                 assert.match(rules, /even with operator approval/);
                 assert.doesNotMatch(rules, /unless the user explicitly (?:asks to version|requests versioning) orchestrator internals/);
             }
+            // Provider bridges and live skills are installed guidance too; none may keep the old staging exception.
+            const installedGuidance: string[] = [];
+            const walk = (directory: string) => {
+                for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+                    const absolute = path.join(directory, entry.name);
+                    const relative = path.relative(projectRoot, absolute).replace(/\\/gu, '/');
+                    const insideBundle = relative === 'garda-agent-orchestrator' || relative.startsWith('garda-agent-orchestrator/');
+                    const bundleGuidance = relative === 'garda-agent-orchestrator' || relative === 'garda-agent-orchestrator/live'
+                        || relative.startsWith('garda-agent-orchestrator/live/');
+                    if (entry.isDirectory()) {
+                        if (relative !== '.git' && (!insideBundle || bundleGuidance)) walk(absolute);
+                    } else if (entry.name.endsWith('.md') && (!insideBundle || bundleGuidance)) installedGuidance.push(relative);
+                }
+            };
+            walk(projectRoot);
+            for (const expected of ['garda-agent-orchestrator/live/skills/orchestration/SKILL.md',
+                'garda-agent-orchestrator/live/docs/agent-rules/50-structure-and-docs.md']) {
+                assert.ok(installedGuidance.includes(expected), installedGuidance.join(', '));
+            }
+            for (const relative of installedGuidance) {
+                const guidance = fs.readFileSync(path.join(projectRoot, relative), 'utf8');
+                assert.doesNotMatch(guidance, /unless the user explicitly (?:asks to version|requests versioning) orchestrator internals/, relative);
+                assert.doesNotMatch(guidance, /when the user explicitly requests orchestrator-source changes/, relative);
+            }
         } finally { fs.rmSync(projectRoot, { recursive: true, force: true }); }
     });
 

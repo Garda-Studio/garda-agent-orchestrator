@@ -98,11 +98,12 @@ export function buildCommitGuardManagedBlock() {
     const agentEnvLines = COMMIT_GUARD_AGENT_MARKERS.map((m) => `  "${m}"`).join('\n');
     return `${COMMIT_GUARD_START}
 # Installed bundle ownership is independent of commit approval.
+# Index removals only untrack bundle files; additions, modifications and type changes stay blocked.
 if ! node -e 'try { process.exit(require(process.cwd()+"/package.json").name === "garda-agent-orchestrator" ? 0 : 1); } catch { process.exit(1); }'; then
-  git diff --cached --quiet -- ':(top,icase)garda-agent-orchestrator'
+  git diff --cached --quiet --no-renames --diff-filter=d -- ':(top,icase)garda-agent-orchestrator'
   garda_bundle_status=$?
   if [ "$garda_bundle_status" != "0" ]; then
-    echo "Commit blocked: installed Garda bundle files cannot be committed. Record Garda defects in the orchestrator problems log."
+    echo "Commit blocked: installed Garda bundle files cannot be committed. Record Garda defects in the TASK.md orchestrator-problems section."
     exit 1
   fi
 fi

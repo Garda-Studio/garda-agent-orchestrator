@@ -2104,6 +2104,8 @@ describe('G4 installed update maintenance remains fail-closed', () => {
         assert.match(result.reason, /operator garda update/);
         assert.match(result.reason, /Untracking alone does not refresh retained baseline hashes/);
         assert.match(result.reason, /git rm -r --cached/);
+        assert.match(result.reason, /rollback --target-root "\." restores the latest update snapshot; it may clear the drift, but it also restores pre-update copies of TASK\.md/);
+        assert.doesNotMatch(result.reason, /\b1\.4\.4\b/);
         assert.match(result.commands[0].command, /doctor --target-root/);
         assert.doesNotMatch(result.commands[0].command, /self-guard off|task-reset|repair-protected/);
     });

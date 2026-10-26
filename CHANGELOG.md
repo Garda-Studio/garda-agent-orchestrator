@@ -13,14 +13,10 @@
 
 ### Clearer interface and task guidance
 
-- Protected update drift now guides agents to read-only installation inspection and operator maintenance while keeping self-guard on. Authenticated rebinding of an active task after a bundle update remains deferred.
-
+- Protected update drift now guides agents to read-only installation inspection and operator maintenance while keeping self-guard on, and names the rollback command for returning to the pre-update bundle. Authenticated rebinding of an active task after a bundle update remains deferred.
 - Task-mode rebind commands include planned paths and current task changes, preserving unchanged pre-entry work outside the task scope.
-
 - Protected task entry probes key-store writes before publishing task-mode evidence, so an existing filesystem permission failure preserves the active entry and can be retried after restoring access. Late publication-failure recovery remains fail-closed.
-
-- Installed Garda bundle code is rejected from task scopes and staged bundle paths cannot be committed, even with approval; case-varied bundle names are covered on every platform. Doctor and update identify tracked bundle files and show how to untrack them; Garda source development remains supported.
-
+- Installed Garda bundle code is rejected from task scopes and staged bundle additions or changes cannot be committed, even with approval; case-varied bundle names are covered on every platform. Project memory and the internal changelog stay editable on disk as the rules require. Doctor and update identify tracked bundle files and show how to untrack them, and the commit guard accepts committing that removal; Garda source development remains supported.
 - The local UI has a refreshed layout, readable task tables and a remembered light, dark or system theme.
 - TASK.md queue writers use compact rows and header-sized separators, so a long Notes cell no longer pads every other row. Legacy padded tables remain readable and compact on the next queue write; integrity checks and escaped pipes are preserved.
 - Completed-task navigation inspects retained validation evidence with its canonical completion binding, preserving current quality and accepted review summaries. Active tasks keep strict active validation; missing completion evidence or changed sources still fail closed.
