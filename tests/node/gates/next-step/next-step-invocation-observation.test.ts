@@ -18,6 +18,8 @@ test('Q2 real next-step shares scope bytes and rejects input replacements after 
     const stable = (result: ReturnType<typeof resolveNextStep>) => ({ ...result, generated_utc: '<time>' });
     const before = stable(withNextStepMeasurement(() => resolveNextStep(options), value => { measurement = value; }));
     const hashes = Object.entries(measurement!.work).filter(([key]) => key.startsWith('file_hash:') && /[\\/]src[\\/]file-\d+\.ts$/u.test(key));
+    assert.equal(measurement!.work['timeline_revalidate:' + path.join(eventsRoot(repoRoot), taskId + '.jsonl')], 1,
+        'Q6 validates this task timeline once at invocation exit; other task inputs retain separate checks.');
     assert.equal(hashes.length, 64);
     assert.ok(hashes.every(([, value]) => value === 1), JSON.stringify(hashes));
     const normalized = measureHistoryRoute({ ...options,

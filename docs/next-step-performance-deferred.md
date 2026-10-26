@@ -50,6 +50,21 @@ skill readers likewise retain their original no-follow/nonblocking descriptor
 capture and compare it with the shared content observation. Neither path claims
 that distinct capture contracts have been replaced by a weaker common reader.
 
+## Q6: remediation authority on verified invocation input
+
+Commit 36066aba already shared the integrity result and captured events. It still
+replayed every requested observer and revalidated after consumers. The invocation
+now retains an immutable verified view used by remediation authority without
+observer replay. Complete safe options plus the current timeline digest select
+an isolated authority result; authenticated appends cannot reuse the prior head.
+
+Only an active Q2/A1 observation suppresses the three duplicate snapshot freshness
+sites. The retained owner performs its original live validation at invocation exit,
+and the explicit append precondition remains live. Outside that observation the
+existing callback checks remain. Current receipt, context, report and classification
+inputs retain their native checks and final byte/path dependencies. Initial-full
+contracts keep their original no-timeline path. No cross-call verification is cached.
+
 ## P2: navigation audit projection
 
 Round 6 consumer inspection at 537beb12 found that the audit is consumed on every
@@ -129,10 +144,9 @@ existing fail-closed result if any of them change during a navigation call.
 
 ## P6: cross-call incremental timeline verification
 
-Within a call, cache the integrity result and its validated event set in the
-existing authenticated timeline snapshot. Observer delivery still captures the
-current snapshot binding and checks it after each callback, including throwing
-callbacks. The callback is never cached and receives the same event ordering.
+Within a call, the integrity result and validated event set share the authenticated
+timeline snapshot. Q6 above consolidates freshness only under the active A1 owner;
+standalone observer delivery retains its callback-time checks and event ordering.
 
 Across calls, retain full payload capture, parsing and integrity verification.
 A prefix checkpoint plus file size/mtime or inode does not prove the prefix is

@@ -1,7 +1,13 @@
-import { countNextStepWork } from '../../core/next-step-measurement';
+import { countNextStepWork, describeProcessInputs } from '../../core/next-step-measurement';
+import * as fs from 'node:fs';
+import { createHash } from 'node:crypto';
+import { cloneFrozenJson, cloneJson } from '../../core/immutable-json';
+import { readInvocationFileContent } from '../../core/invocation-file-observation';
+import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead } from '../../core/invocation-read-observation';
+import { readInvocationVerifiedTaskEventTimeline, type InvocationVerifiedTaskEventTimeline } from '../../gate-runtime/timeline/task-events-integrity';
 import * as path from 'node:path';
 
-import { readJsonFile } from '../../core/json';
+import { parseJsonText, readJsonFile } from '../../core/json';
 import { isPlainRecord } from '../../core/records';
 import { inspectTaskEventFile } from '../../gate-runtime/task-events';
 import type {
@@ -45,7 +51,18 @@ function taskEventSequence(event: Readonly<Record<string, unknown>>): number {
 
 function readJsonRecord(filePath: string): Readonly<Record<string, unknown>> | null {
     try {
-        const value = readJsonFile(filePath);
+        const content = readInvocationFileContent(filePath);
+        let value: unknown;
+        if (!content) value = readJsonFile(filePath);
+        else {
+            // Preserve the original unbounded UTF-8 reader for the rare oversized input.
+            const bytes = content.size <= 128 * 1024 * 1024 ? content.copyBytes() : fs.readFileSync(filePath);
+            if (content.size > 128 * 1024 * 1024
+                && createHash('sha256').update(bytes).digest('hex') !== content.sha256) {
+                throw new Error('Remediation authority JSON changed after its invocation observation: ' + filePath);
+            }
+            value = parseJsonText(bytes.toString('utf8'), filePath);
+        }
         return isPlainRecord(value) ? value : null;
     } catch {
         return null;
@@ -53,7 +70,7 @@ function readJsonRecord(filePath: string): Readonly<Record<string, unknown>> | n
 }
 
 function hasAuthenticatedFreshCurrentPassReplacement(options: {
-    events: readonly Readonly<Record<string, unknown>>[];
+    events: readonly { readonly event: Readonly<Record<string, unknown>> }[];
     restartIndex: number;
     restartSequence: number;
     authorityOptions: PersistedRemediationReviewExecutionAuthorityOptions;
@@ -126,7 +143,7 @@ function hasAuthenticatedFreshCurrentPassReplacement(options: {
     const reviewRecordedEventsBySequence = new Map<number, Readonly<Record<string, unknown>>>();
     for (let eventIndex = options.restartIndex + 1; eventIndex < options.events.length; eventIndex += 1) {
         countNextStepWork('visit:remediation_query_event');
-        const event = options.events[eventIndex];
+        const event = options.events[eventIndex].event;
         const details = isPlainRecord(event.details) ? event.details : null;
         const acceptedSequence = taskEventSequence(event);
         if (event.event_type === 'REVIEW_RECORDED' && acceptedSequence > options.restartSequence) {
@@ -218,8 +235,36 @@ function buildAuthority(
     };
 }
 
+const AUTHORITY_OBSERVATIONS = createInvocationReadMemoKey<ReviewRemediationReviewContractValidationAuthority | null>(
+    'persisted-remediation-review-execution-authority'
+);
+
 export function resolvePersistedRemediationReviewExecutionAuthority(
     options: PersistedRemediationReviewExecutionAuthorityOptions
+): ReviewRemediationReviewContractValidationAuthority | null {
+    if (!isInvocationReadObservationActive()) {
+        return derivePersistedRemediationReviewExecutionAuthority(options);
+    }
+    const key = describeProcessInputs(options);
+    if (key.opaque) return derivePersistedRemediationReviewExecutionAuthority(options);
+    if (options.reviewExecution.source === 'initial_full') {
+        return memoizeInvocationRead(AUTHORITY_OBSERVATIONS, 'initial:' + key.text,
+            () => derivePersistedRemediationReviewExecutionAuthority(options)).value;
+    }
+    const timelinePath = path.join(path.dirname(options.reviewsRoot), 'task-events', `${options.taskId}.jsonl`);
+    const verified = readInvocationVerifiedTaskEventTimeline(timelinePath, options.taskId);
+    if (!verified) return derivePersistedRemediationReviewExecutionAuthority(options);
+    // Authenticated appends replace the snapshot digest, so they never reuse an old authority result.
+    const memoKey = JSON.stringify([path.resolve(timelinePath), verified.sha256, key.text]);
+    const retained = memoizeInvocationRead(AUTHORITY_OBSERVATIONS, memoKey, () => cloneFrozenJson(
+        derivePersistedRemediationReviewExecutionAuthority(options, verified)
+    )).value;
+    return cloneJson(retained);
+}
+
+function derivePersistedRemediationReviewExecutionAuthority(
+    options: PersistedRemediationReviewExecutionAuthorityOptions,
+    verified?: InvocationVerifiedTaskEventTimeline
 ): ReviewRemediationReviewContractValidationAuthority | null {
     countNextStepWork('derive:resolvePersistedRemediationReviewExecutionAuthority');
     if (options.reviewExecution.source === 'initial_full') {
@@ -230,17 +275,18 @@ export function resolvePersistedRemediationReviewExecutionAuthority(
         'task-events',
         `${options.taskId}.jsonl`
     );
-    const events: Readonly<Record<string, unknown>>[] = [];
-    const inspection = inspectTaskEventFile(timelinePath, options.taskId, {
-        onIntegrityEvent: (event) => { countNextStepWork('visit:remediation_observer_event'); return events.push(event); }
+    const deliveredEvents: Array<{ event: Readonly<Record<string, unknown>> }> = [];
+    const inspection = verified?.result ?? inspectTaskEventFile(timelinePath, options.taskId, {
+        onIntegrityEvent: (event) => { countNextStepWork('visit:remediation_observer_event'); return deliveredEvents.push({ event }); }
     });
+    const events = verified?.events ?? deliveredEvents;
     if (!inspection.status.startsWith('PASS')) {
         return null;
     }
     const normalizedPreflightSha256 = options.preflightSha256.trim().toLowerCase();
     for (let index = events.length - 1; index >= 0; index -= 1) {
         countNextStepWork('visit:remediation_query_event');
-        const event = events[index];
+        const event = events[index].event;
         const details = isPlainRecord(event.details) ? event.details : null;
         if (
             event.event_type !== 'REVIEW_CYCLE_RESTARTED'
@@ -305,7 +351,7 @@ export function resolvePersistedRemediationReviewExecutionAuthority(
 
         for (let priorIndex = index - 1; priorIndex >= 0; priorIndex -= 1) {
             countNextStepWork('visit:remediation_query_event');
-            const priorEvent = events[priorIndex];
+            const priorEvent = events[priorIndex].event;
             const priorDetails = isPlainRecord(priorEvent.details) ? priorEvent.details : null;
             const priorDecision = isPlainRecord(priorDetails?.authoritative_review_decision)
                 ? priorDetails.authoritative_review_decision

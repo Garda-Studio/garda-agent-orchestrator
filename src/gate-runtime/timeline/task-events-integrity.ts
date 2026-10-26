@@ -1,3 +1,4 @@
+import { isInvocationReadObservationActive } from '../../core/invocation-read-observation';
 import { measureNextStepPhase } from '../../core/next-step-measurement';
 import {
     buildEventIntegrityHash,
@@ -377,16 +378,7 @@ export function inspectTaskEventFile(
     }
     let memoized: TaskTimelineMemoizedRead<CapturedIntegrityInspection>;
     try {
-        memoized = memoizeTaskTimelineSnapshot(
-            taskEventFile,
-            INTEGRITY_INSPECTION_MEMOIZATION_KEY,
-            `integrity-inspection-v3:${taskId}`,
-            () => {
-                const events: IntegrityEvent[] = [];
-                const result = inspectTaskEventFileUncached(taskEventFile, taskId, {}, events);
-                return { result, events };
-            }
-        );
+        memoized = captureIntegrityInspection(taskEventFile, taskId);
     } catch {
         return inspectTaskEventFileUncached(taskEventFile, taskId, options);
     }
@@ -405,4 +397,44 @@ export function inspectTaskEventFile(
         result.violations.push('Task timeline snapshot changed or became unavailable during this invocation.');
     }
     return result;
+}
+
+function captureIntegrityInspection(taskEventFile: string, taskId: string): TaskTimelineMemoizedRead<CapturedIntegrityInspection> {
+    return memoizeTaskTimelineSnapshot(
+        taskEventFile,
+        INTEGRITY_INSPECTION_MEMOIZATION_KEY,
+        `integrity-inspection-v3:${taskId}`,
+        () => {
+            const events: IntegrityEvent[] = [];
+            const result = inspectTaskEventFileUncached(taskEventFile, taskId, {}, events);
+            return { result, events };
+        }
+    );
+}
+
+export interface InvocationVerifiedTaskEventTimeline {
+    readonly sha256: string;
+    readonly result: TaskTimelineDeepReadonly<InspectTaskEventResult>;
+    readonly events: TaskTimelineDeepReadonly<IntegrityEvent[]>;
+}
+
+/** Internal immutable view: no observer replay or event copy, and only within A1's lifetime. */
+export function readInvocationVerifiedTaskEventTimeline(
+    taskEventFile: string, taskId: string
+): InvocationVerifiedTaskEventTimeline | null {
+    if (!isInvocationReadObservationActive()) return null;
+    if (!isTaskTimelineReadSnapshotActive(taskEventFile)) {
+        return withTaskTimelineFileReadSnapshot(taskEventFile, () => (
+            readInvocationVerifiedTaskEventTimeline(taskEventFile, taskId)
+        ));
+    }
+    let captured: TaskTimelineMemoizedRead<CapturedIntegrityInspection>;
+    try { captured = captureIntegrityInspection(taskEventFile, taskId); }
+    catch { return null; } // Retain the existing inspector's uncached fallback and rejection behavior.
+    if (!captured.valid || !captured.exists || !captured.value) return null;
+    return Object.freeze({
+        sha256: captureTaskTimelineReadSnapshotSha256(taskEventFile),
+        result: captured.value.result,
+        events: captured.value.events
+    });
 }

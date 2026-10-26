@@ -627,6 +627,8 @@ function captureTaskTimelineRead(snapshot: ActiveTaskTimelineReadSnapshot): Cach
 }
 
 function revalidateCachedRead(snapshot: ActiveTaskTimelineReadSnapshot, cachedRead: CachedTaskTimelineRead): void {
+    countNextStepWork('timeline_revalidate');
+    countNextStepWork('timeline_revalidate:' + snapshot.timelinePath);
     if (cachedRead.state === 'invalid') {
         return;
     }
@@ -688,7 +690,7 @@ export function assertTaskTimelinePathMatchesTaskId(filePath: string, taskId: st
 function getCachedRead(snapshot: ActiveTaskTimelineReadSnapshot): CachedTaskTimelineRead {
     if (!snapshot.cachedRead) {
         snapshot.cachedRead = captureTaskTimelineRead(snapshot);
-    } else {
+    } else if (!isInvocationReadObservationActive()) {
         revalidateCachedRead(snapshot, snapshot.cachedRead);
     }
     if (snapshot.cachedRead.state !== 'invalid') {
@@ -1340,7 +1342,7 @@ export function memoizeTaskTimelineSnapshot<T>(
         normalizedMemoKey,
         () => buildValue(cachedRead.text as string)
     );
-    revalidateCachedRead(snapshot, cachedRead);
+    if (!isInvocationReadObservationActive()) revalidateCachedRead(snapshot, cachedRead);
     if (
         snapshot.cachedRead !== cachedRead
         || cachedRead.state !== 'valid'
@@ -1413,7 +1415,7 @@ export function readTaskTimelineBoundedJsonlTail<T>(
         )
     );
     const clonedResult = cloneBoundedResult(result) as BoundedJsonlTailResult<T>;
-    revalidateCachedRead(snapshot, cachedRead);
+    if (!isInvocationReadObservationActive()) revalidateCachedRead(snapshot, cachedRead);
     if (
         snapshot.cachedRead !== cachedRead
         || cachedRead.state !== 'valid'

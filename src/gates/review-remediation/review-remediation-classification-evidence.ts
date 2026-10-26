@@ -4,6 +4,8 @@ import * as path from 'node:path';
 
 import { assertTransactionPath, readTransactionBytes } from '../../core/file-transaction-journal';
 import { parseJsonText } from '../../core/json';
+import { readInvocationFileContent, readInvocationPathObservation } from '../../core/invocation-file-observation';
+import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead } from '../../core/invocation-read-observation';
 import { isPlainRecord } from '../../core/records';
 import { assertCanonicalTaskId } from '../../core/task-ids';
 import { pathsEqual } from '../review-reuse/review-reuse-telemetry-normalization';
@@ -50,6 +52,29 @@ export function writeReviewClassificationSnapshot(options: {
     return { schema_version: 1, artifact_path: artifactPath.replace(/\\/gu, '/'), artifact_sha256: sha256 };
 }
 
+const CLASSIFICATION_BYTES = createInvocationReadMemoKey<Buffer | null>('remediation-classification-transaction-bytes');
+
+function readClassificationBytes(reviewsRoot: string, artifactPath: string): Buffer | null {
+    if (!isInvocationReadObservationActive()) {
+        return readTransactionBytes(reviewsRoot, artifactPath, MAX_CLASSIFICATION_SNAPSHOT_BYTES);
+    }
+    const key = JSON.stringify([path.resolve(reviewsRoot), path.resolve(artifactPath), MAX_CLASSIFICATION_SNAPSHOT_BYTES]);
+    const bytes = memoizeInvocationRead(CLASSIFICATION_BYTES, key, () => {
+        readInvocationPathObservation(reviewsRoot);
+        readInvocationPathObservation(artifactPath);
+        // Keep every transaction path, descriptor, link-count, byte-bound and after-read check.
+        const captured = readTransactionBytes(reviewsRoot, artifactPath, MAX_CLASSIFICATION_SNAPSHOT_BYTES);
+        if (captured) {
+            const content = readInvocationFileContent(artifactPath, MAX_CLASSIFICATION_SNAPSHOT_BYTES)!;
+            if (content.sha256 !== bytesSha256(captured) || content.size !== captured.length) {
+                throw new Error('Review classification snapshot changed after transaction reading.');
+            }
+        }
+        return captured;
+    }).value;
+    return bytes === null ? null : Buffer.from(bytes);
+}
+
 export function readRestartReviewClassification(options: {
     reviewsRoot: string;
     taskId: string;
@@ -67,7 +92,7 @@ export function readRestartReviewClassification(options: {
     }
     const artifactPath = snapshotPath(options.reviewsRoot, options.taskId, reference.artifact_sha256);
     if (!pathsEqual(reference.artifact_path, artifactPath)) throw new Error('Review classification snapshot path is not canonical.');
-    const bytes = readTransactionBytes(options.reviewsRoot, artifactPath, MAX_CLASSIFICATION_SNAPSHOT_BYTES);
+    const bytes = readClassificationBytes(options.reviewsRoot, artifactPath);
     if (!bytes || bytesSha256(bytes) !== reference.artifact_sha256) throw new Error('Review classification snapshot is missing or its hash does not match.');
     const artifact = parseJsonText(bytes.toString('utf8'), artifactPath);
     if (!isPlainRecord(artifact) || artifact.schema_version !== 1

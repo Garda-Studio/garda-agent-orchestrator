@@ -44,7 +44,7 @@
 
 - Opt-in next-step diagnostics count direct synchronous Node processes without invoking caller getters, proxy traps or serialization hooks.
 
-- Timeline integrity observers reuse verification within one navigation snapshot while retaining every callback-time freshness check. Each new invocation still verifies the full timeline.
+- Remediation authority reuses the invocation's verified timeline and complete contract derivation. The final dependency check rejects mid-call changes; standalone observers and append preconditions retain their live checks. Each new invocation verifies the full timeline.
 
 - The launcher enables Node’s compile cache outside the workspace, with ordinary compilation as a fallback. Gate handlers load on demand, and next-step no longer loads unrelated handler groups. Help and CLI output stay unchanged.
 
