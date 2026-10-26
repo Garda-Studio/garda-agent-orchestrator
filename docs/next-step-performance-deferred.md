@@ -74,3 +74,21 @@ exclusion protocol covering every dependent source and path component. A cache
 must include hash options, expected identity, resolved root, every symlink/junction
 component, target bytes and authorization dependencies. It must preserve the
 existing fail-closed result if any of them change during a navigation call.
+
+## P6: cross-call incremental timeline verification
+
+Within a call, cache the integrity result and its validated event set in the
+existing authenticated timeline snapshot. Observer delivery still captures the
+current snapshot binding and checks it after each callback, including throwing
+callbacks. The callback is never cached and receives the same event ordering.
+
+Across calls, retain full payload capture, parsing and integrity verification.
+A prefix checkpoint plus file size/mtime or inode does not prove the prefix is
+unchanged. Re-hashing the full prefix preserves detection but still costs O(N).
+A safe future design needs a trusted append-only authority outside the mutable
+workspace, bound to exact prefix bytes, task identity, schema and writer identity,
+with authenticated revocation for replacement, truncation and migration. The
+reader must reject or fully reverify on unavailable authority, any prefix/path
+change, restored metadata, schema changes and checkpoint replay. An untrusted
+sidecar or a record signed only from its own claims is insufficient. This design
+is deferred; no cross-call checkpoint is used in 1.4.4.

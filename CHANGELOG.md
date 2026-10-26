@@ -34,6 +34,8 @@
 
 ### Faster everyday work
 
+- Timeline integrity observers reuse verification within one navigation snapshot while retaining every callback-time freshness check. Each new invocation still verifies the full timeline.
+
 - The launcher enables Node’s compile cache outside the workspace, with ordinary compilation as a fallback. Gate handlers load on demand, and next-step no longer loads unrelated handler groups. Help and CLI output stay unchanged.
 
 - Repeated review-artifact reads reuse the parsed immutable JSON within an authenticated read snapshot; path, identity and publication checks still run on every read.

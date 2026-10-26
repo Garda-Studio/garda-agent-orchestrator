@@ -1,3 +1,4 @@
+import { inspectTaskEventFile, withTaskTimelineReadSnapshot } from '../../../../src/gate-runtime/task-events';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
@@ -13,7 +14,21 @@ test('long-history navigator instrumentation preserves its route and output and 
     assert.ok(fixture.timelineBytes > 1_500_000);
     const plain = resolveNextStep(fixture);
     let measurement: NextStepMeasurement | undefined;
-    const measured = withNextStepMeasurement(() => resolveNextStep(fixture), value => { measurement = value; });
+    const timelineRoot = path.join(fixture.repoRoot, 'garda-agent-orchestrator', 'runtime', 'task-events');
+    const observed: number[] = [];
+    const measured = withNextStepMeasurement(() => withTaskTimelineReadSnapshot(timelineRoot, fixture.taskId, () => {
+        const result = resolveNextStep(fixture);
+        for (let observer = 0; observer < 2; observer += 1) {
+            let count = 0;
+            const inspection = inspectTaskEventFile(path.join(timelineRoot, fixture.taskId + '.jsonl'), fixture.taskId,
+                { onIntegrityEvent: () => { count += 1; } });
+            assert.equal(inspection.status, 'PASS');
+            observed.push(count);
+        }
+        return result;
+    }), value => { measurement = value; });
+    assert.ok(observed[0] > 640);
+    assert.equal(observed[0], observed[1]);
     const stable = (result: typeof plain) => { const { generated_utc: _time, ...rest } = result; return rest; };
     assert.deepEqual(stable(measured), stable(plain));
     assert.equal(measurement?.work.audit, 1);

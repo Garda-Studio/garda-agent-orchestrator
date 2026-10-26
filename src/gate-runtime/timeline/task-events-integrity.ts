@@ -39,7 +39,16 @@ export interface InspectTaskEventOptions {
     onIntegrityEvent?: (event: Readonly<Record<string, unknown>>, lineNumber: number) => void;
 }
 
-const INTEGRITY_INSPECTION_MEMOIZATION_KEY = createTaskTimelineMemoizationKey<InspectTaskEventResult>(
+interface IntegrityEvent {
+    event: Readonly<Record<string, unknown>>;
+    lineNumber: number;
+}
+interface CapturedIntegrityInspection {
+    result: InspectTaskEventResult;
+    events: IntegrityEvent[];
+}
+
+const INTEGRITY_INSPECTION_MEMOIZATION_KEY = createTaskTimelineMemoizationKey<CapturedIntegrityInspection>(
     'integrity-inspection'
 );
 
@@ -115,7 +124,8 @@ export function normalizeIntegrityValue(value: unknown): unknown {
 function inspectTaskEventFileUncached(
     taskEventFile: string,
     taskId: string,
-    options: InspectTaskEventOptions = {}
+    options: InspectTaskEventOptions = {},
+    capturedEvents?: IntegrityEvent[]
 ): InspectTaskEventResult {
     return measureNextStepPhase('timeline_verify', () => {
     const result: InspectTaskEventResult = {
@@ -155,10 +165,7 @@ function inspectTaskEventFileUncached(
     let integrityStarted = false;
     let latestIntegritySchemaVersion: number | null = null;
     const seenHashes = new Set<string>();
-    const validatedIntegrityEvents: Array<{
-        event: Readonly<Record<string, unknown>>;
-        lineNumber: number;
-    }> = [];
+    const validatedIntegrityEvents = capturedEvents ?? [];
 
     try {
         forEachTaskTimelineJsonlEntry(taskEventFile, (timelineEntry) => {
@@ -270,7 +277,7 @@ function inspectTaskEventFileUncached(
             }
             seenHashes.add(eventSha256);
 
-            if (options.onIntegrityEvent) {
+            if (options.onIntegrityEvent || capturedEvents) {
                 validatedIntegrityEvents.push({ event, lineNumber });
             }
 
@@ -288,6 +295,17 @@ function inspectTaskEventFileUncached(
         return result;
     }
 
+    return deliverIntegrityEvents(result, taskEventFile, validatedIntegrityEvents, options);
+
+    });
+}
+
+function deliverIntegrityEvents(
+    result: InspectTaskEventResult,
+    taskEventFile: string,
+    validatedIntegrityEvents: readonly IntegrityEvent[],
+    options: InspectTaskEventOptions
+): InspectTaskEventResult {
     if (result.violations.length === 0 && options.onIntegrityEvent) {
         let expectedSnapshotSha256: string;
         try {
@@ -335,7 +353,6 @@ function inspectTaskEventFileUncached(
 
     return result;
 
-    });
 }
 
 function cloneInspectTaskEventResult(
@@ -358,27 +375,31 @@ export function inspectTaskEventFile(
             inspectTaskEventFile(taskEventFile, taskId, options)
         ));
     }
-    if (options.onIntegrityEvent) {
-        return inspectTaskEventFileUncached(taskEventFile, taskId, options);
-    }
-    let memoized: TaskTimelineMemoizedRead<InspectTaskEventResult>;
+    let memoized: TaskTimelineMemoizedRead<CapturedIntegrityInspection>;
     try {
         memoized = memoizeTaskTimelineSnapshot(
             taskEventFile,
             INTEGRITY_INSPECTION_MEMOIZATION_KEY,
-            `integrity-inspection-v2:${taskId}`,
-            () => inspectTaskEventFileUncached(taskEventFile, taskId)
+            `integrity-inspection-v3:${taskId}`,
+            () => {
+                const events: IntegrityEvent[] = [];
+                const result = inspectTaskEventFileUncached(taskEventFile, taskId, {}, events);
+                return { result, events };
+            }
         );
     } catch {
         return inspectTaskEventFileUncached(taskEventFile, taskId, options);
     }
     if (!memoized.active) {
-        return inspectTaskEventFileUncached(taskEventFile, taskId);
+        return inspectTaskEventFileUncached(taskEventFile, taskId, options);
     }
     if (memoized.valid && memoized.exists && memoized.value) {
-        return cloneInspectTaskEventResult(memoized.value);
+        const result = cloneInspectTaskEventResult(memoized.value.result);
+        return options.onIntegrityEvent
+            ? deliverIntegrityEvents(result, taskEventFile, memoized.value.events, options)
+            : result;
     }
-    const result = inspectTaskEventFileUncached(taskEventFile, taskId);
+    const result = inspectTaskEventFileUncached(taskEventFile, taskId, options);
     if (!memoized.valid) {
         result.status = 'FAILED';
         result.violations.push('Task timeline snapshot changed or became unavailable during this invocation.');
