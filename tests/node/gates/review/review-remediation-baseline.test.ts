@@ -7,6 +7,7 @@ import * as path from 'node:path';
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 
+import { withInvocationReadObservation } from '../../../../src/core/invocation-read-observation';
 import { serializeRedactedJson, sha256RedactedJsonPayload } from '../../../../src/core/redaction';
 import { buildReviewCoverageContract } from '../../../../src/gates/review/review-coverage-ledger';
 import type { ReviewFindingsDispositionArtifact } from '../../../../src/gates/review/review-findings-disposition-artifact';
@@ -306,6 +307,88 @@ afterEach(() => {
 });
 
 describe('review remediation baseline', () => {
+    for (const dependency of ['baseline', 'receipt', 'review_artifact', 'findings_validation', 'findings_disposition'] as const) {
+        it(`binds the ${dependency} bytes until the invocation final check`, () => {
+            const fixture = buildFixture(createTempRoot());
+            const options = {
+                artifactPath: fixture.baselinePath, expectedArtifactSha256: fixture.baselineSha256,
+                expectedTaskId: fixture.taskId, expectedReviewType: fixture.reviewType
+            };
+            const expected = validateReviewRemediationBaselineArtifact(options);
+            assert.equal(expected.valid, true, expected.violations.join('\n'));
+            const dependencyPath = dependency === 'baseline'
+                ? fixture.baselinePath : fixture.baseline.bindings[dependency].snapshot_path;
+            assert.throws(() => withInvocationReadObservation(() => {
+                assert.deepEqual(validateReviewRemediationBaselineArtifact(options), expected);
+                fs.appendFileSync(dependencyPath, '\n');
+            }), /Invocation (?:file|content) observation changed/u);
+        });
+
+        it(`binds missing ${dependency} without changing its legacy violation order`, () => {
+            const fixture = buildFixture(createTempRoot());
+            const dependencyPath = dependency === 'baseline'
+                ? fixture.baselinePath : fixture.baseline.bindings[dependency].snapshot_path;
+            const bytes = fs.readFileSync(dependencyPath);
+            fs.unlinkSync(dependencyPath);
+            const options = {
+                artifactPath: fixture.baselinePath, expectedArtifactSha256: fixture.baselineSha256,
+                expectedTaskId: fixture.taskId, expectedReviewType: fixture.reviewType
+            };
+            const expected = validateReviewRemediationBaselineArtifact(options);
+            assert.equal(expected.valid, false);
+            assert.deepEqual(withInvocationReadObservation(() => validateReviewRemediationBaselineArtifact(options)), expected);
+            assert.throws(() => withInvocationReadObservation(() => {
+                assert.deepEqual(validateReviewRemediationBaselineArtifact(options), expected);
+                fs.writeFileSync(dependencyPath, bytes);
+            }), /Invocation file observation changed/u);
+        });
+    }
+
+    it('keeps canonical lane artifacts outside the immutable baseline dependency set', () => {
+        const fixture = buildFixture(createTempRoot());
+        const result = withInvocationReadObservation(() => {
+            const validation = validateReviewRemediationBaselineArtifact({
+                artifactPath: fixture.baselinePath, expectedArtifactSha256: fixture.baselineSha256,
+                expectedTaskId: fixture.taskId, expectedReviewType: fixture.reviewType
+            });
+            for (const binding of [fixture.baseline.bindings.receipt, fixture.baseline.bindings.review_artifact,
+                fixture.baseline.bindings.findings_validation, fixture.baseline.bindings.findings_disposition]) {
+                fs.writeFileSync(binding.artifact_path, 'later canonical artifact\n');
+            }
+            return validation;
+        });
+        assert.equal(result.valid, true, result.violations.join('\n'));
+    });
+
+    it('accepts contained baseline symlinks and rejects their same-byte target swap at final check', (context) => {
+        const fixture = buildFixture(createTempRoot());
+        const alias = path.join(fixture.root, 'baseline-alias.json');
+        const replacement = path.join(fixture.root, 'baseline-replacement.json');
+        fs.copyFileSync(fixture.baselinePath, replacement);
+        try {
+            fs.symlinkSync(fixture.baselinePath, alias, 'file');
+        } catch (error: unknown) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code === 'EPERM' || code === 'EACCES') {
+                context.skip('Native file symlink creation is unavailable.');
+                return;
+            }
+            throw error;
+        }
+        const options = {
+            artifactPath: alias, expectedArtifactSha256: fixture.baselineSha256,
+            expectedTaskId: fixture.taskId, expectedReviewType: fixture.reviewType
+        };
+        const expected = validateReviewRemediationBaselineArtifact(options);
+        assert.equal(expected.valid, true, expected.violations.join('\n'));
+        assert.deepEqual(withInvocationReadObservation(() => validateReviewRemediationBaselineArtifact(options)), expected);
+        assert.throws(() => withInvocationReadObservation(() => {
+            assert.deepEqual(validateReviewRemediationBaselineArtifact(options), expected);
+            fs.unlinkSync(alias);
+            fs.symlinkSync(replacement, alias, 'file');
+        }), /Invocation file observation changed/u);
+    });
+
     it('builds and accepts one immutable receipt-bound fix_now baseline', () => {
         const fixture = buildFixture(createTempRoot());
         const result = validateReviewRemediationBaselineArtifact({

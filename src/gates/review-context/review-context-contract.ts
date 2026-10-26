@@ -1,6 +1,8 @@
-import { countNextStepWork } from '../../core/next-step-measurement';
+import { countNextStepWork, describeProcessInputs } from '../../core/next-step-measurement';
 import type { ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
-import * as fs from 'node:fs';
+import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead } from '../../core/invocation-read-observation';
+import { cloneFrozenJson, cloneJson } from '../../core/immutable-json';
+import { readReviewValidationBytes } from './review-validation-invocation';
 import { extractFilePathFromDiffLine, parseUnifiedDiff } from '../../gate-runtime/scoped-diff';
 import { fileSha256, normalizePath, parseBool } from '../shared/helpers';
 import { isPlainRecord } from '../../core/records';
@@ -280,7 +282,7 @@ function getScopedDiffOutputFileSetViolations(options: {
     const changedFilesText = formatChangedFilesForDiagnostic(expectedChangedFiles);
     let diffText = '';
     try {
-        diffText = fs.readFileSync(options.metadataOutputPath, 'utf8');
+        diffText = readReviewValidationBytes(options.metadataOutputPath).toString('utf8');
     } catch {
         return [];
     }
@@ -704,8 +706,49 @@ export interface ReviewContextContractValidationOptions {
     expectedReviewExecutionValidationAuthority?: ReviewRemediationReviewContractValidationAuthority | null;
 }
 
-export function getReviewContextContractViolations(
-    options: ReviewContextContractValidationOptions
+type ValidationObservation =
+    | { obligations: ReturnType<typeof resolveAuthoritativeReviewValidationObligations> }
+    | { error: string };
+interface ContractObservation { violations: string[]; validation: ValidationObservation | null }
+const CONTRACT_OBSERVATIONS = createInvocationReadMemoKey<ContractObservation>('review-context-contract-violations');
+
+function observeValidationObligations(options: ReviewContextContractValidationOptions): ValidationObservation {
+    try {
+        return { obligations: resolveAuthoritativeReviewValidationObligations({
+            repoRoot: options.repoRoot!, preflight: options.expectedPreflightPayload!,
+            reviewType: normalizeOptionalReviewType(options.expectedReviewType) || '',
+            preflightPath: normalizeOptionalString(options.expectedPreflightPath) ?? undefined,
+            inspection: options.inspection
+        }) };
+    } catch (error) { return { error: String(error instanceof Error ? error.message : error) }; }
+}
+
+export function getReviewContextContractViolations(options: ReviewContextContractValidationOptions): string[] {
+    if (!isInvocationReadObservationActive()) return deriveReviewContextContractViolations(options);
+    const key = describeProcessInputs(options);
+    if (key.opaque) return deriveReviewContextContractViolations(options);
+    let built = false;
+    const retained = memoizeInvocationRead(CONTRACT_OBSERVATIONS, key.text, () => {
+        built = true;
+        let validation: ValidationObservation | null = null;
+        const violations = deriveReviewContextContractViolations(options, value => { validation = value; });
+        return cloneFrozenJson({ violations, validation });
+    }).value;
+    if (!built && retained.validation) {
+        // This facade also synchronizes the live REVIEW_CONTRACTS registry. Keep its
+        // per-consumer effect while sharing the pure reduction and captured inputs.
+        const current = observeValidationObligations(options);
+        const before = describeProcessInputs(retained.validation), after = describeProcessInputs(current);
+        if (before.opaque || after.opaque || after.text !== before.text)
+            return deriveReviewContextContractViolations(options, undefined, current);
+    }
+    return cloneJson(retained.violations);
+}
+
+function deriveReviewContextContractViolations(
+    options: ReviewContextContractValidationOptions,
+    captureValidation?: (value: ValidationObservation) => void,
+    suppliedValidation?: ValidationObservation
 ): string[] {
     countNextStepWork('derive:getReviewContextContractViolations');
     const reviewContext = options.reviewContext;
@@ -991,13 +1034,10 @@ export function getReviewContextContractViolations(
         }
         let validationObligations;
         if (options.repoRoot && options.expectedPreflightPayload) {
-            try {
-                validationObligations = resolveAuthoritativeReviewValidationObligations({
-                    repoRoot: options.repoRoot, preflight: options.expectedPreflightPayload,
-                    reviewType: expectedReviewType, preflightPath: expectedPreflightPath ?? undefined, inspection: options.inspection });
-            } catch (error) {
-                violations.push(`Declared review coverage rejected: ${error instanceof Error ? error.message : String(error)}`);
-            }
+            const validation = suppliedValidation ?? observeValidationObligations(options);
+            captureValidation?.(validation);
+            if ('error' in validation) violations.push(`Declared review coverage rejected: ${validation.error}`);
+            else validationObligations = validation.obligations;
         }
         violations.push(...getReviewCoverageContractViolations(reviewContext.coverage_contract, {
             reviewType: expectedReviewType,

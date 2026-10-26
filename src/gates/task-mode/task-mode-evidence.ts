@@ -1,6 +1,9 @@
 import { countNextStepWork } from '../../core/next-step-measurement';
-import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { cloneFrozenJson, cloneJson } from '../../core/immutable-json';
+import { readInvocationPathObservation } from '../../core/invocation-file-observation';
+import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead } from '../../core/invocation-read-observation';
+import { readTaskModeInvocationText, resolveTaskModeInvocationPath, taskModeInvocationRepoKey } from './task-mode-invocation-observation';
 
 import {
     normalizeOrchestratorStartBanner,
@@ -28,7 +31,8 @@ import { normalizeTaskModePathList, resolveTaskModeArtifactPath } from './task-m
 import { applyLegacyTaskModeIdentityBackfill, resolveLegacyRouteIdentity } from './task-mode-legacy-identity';
 
 function getTaskTimelinePath(repoRoot: string, taskId: string): string {
-    return joinOrchestratorPath(repoRoot, path.join('runtime', 'task-events', `${taskId}.jsonl`));
+    return resolveTaskModeInvocationPath(JSON.stringify(['timeline', taskModeInvocationRepoKey(repoRoot), taskId]),
+        () => joinOrchestratorPath(repoRoot, path.join('runtime', 'task-events', `${taskId}.jsonl`)));
 }
 
 function isTrustedTaskModeArtifact(filePath: string): boolean {
@@ -39,7 +43,7 @@ function isTrustedTaskModeArtifact(filePath: string): boolean {
     }
 }
 
-function getLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): {
+interface TaskModeTimelineMetadata {
     artifact_path: string | null;
     declares_runtime_identity_metadata: boolean;
     declares_start_banner: boolean;
@@ -47,12 +51,27 @@ function getLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): {
     declares_profile_policy_snapshot: boolean;
     profile_policy_snapshot_hash: string | null;
     plan_binding: { guided: unknown; path: unknown; sha256: unknown } | null;
-} {
+    cycle_key: string;
+}
+
+const TASK_MODE_TIMELINE_METADATA = createInvocationReadMemoKey<TaskModeTimelineMetadata>('task-mode-timeline-metadata');
+const TASK_MODE_EVIDENCE = createInvocationReadMemoKey<TaskModeEvidenceResult>('task-mode-evidence');
+
+function getLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): TaskModeTimelineMetadata {
+    return memoizeInvocationRead(TASK_MODE_TIMELINE_METADATA, JSON.stringify([taskModeInvocationRepoKey(repoRoot), taskId]),
+        () => {
+            const metadata = captureLatestTaskModeTimelineMetadata(repoRoot, taskId);
+            return isInvocationReadObservationActive() ? cloneFrozenJson(metadata) : metadata;
+        }).value;
+}
+
+function captureLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): TaskModeTimelineMetadata {
     const timelinePath = getTaskTimelinePath(repoRoot, taskId);
     return withTaskTimelineReadSnapshot(path.dirname(timelinePath), taskId, () => {
         if (!taskTimelineAwareFileExists(timelinePath)) {
             return {
                 artifact_path: null,
+                cycle_key: 'missing',
                 declares_runtime_identity_metadata: false,
                 declares_start_banner: false,
                 start_banner: null,
@@ -98,6 +117,7 @@ function getLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): {
                     : null;
                 return {
                     artifact_path: artifactPath ? normalizePath(artifactPath) : null,
+                    cycle_key: JSON.stringify([index, parsed.integrity]),
                     declares_runtime_identity_metadata: declaresRuntimeIdentityMetadata,
                     declares_start_banner: declaresStartBanner,
                     start_banner: normalizeOrchestratorStartBanner(details?.start_banner),
@@ -115,6 +135,7 @@ function getLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): {
 
         return {
             artifact_path: null,
+            cycle_key: 'missing',
             declares_runtime_identity_metadata: false,
             declares_start_banner: false,
             start_banner: null,
@@ -125,8 +146,38 @@ function getLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): {
     });
 }
 
+interface CapturedTaskModeEvidence {
+    readonly evidence: TaskModeEvidenceResult;
+    readonly resolvedTaskId: string | null;
+    readonly validate: boolean;
+}
+
 export function getTaskModeEvidence(repoRoot: string, taskId: string | null, artifactPath = ''): TaskModeEvidenceResult {
-    countNextStepWork('derive:task_mode_evidence');
+    const active = isInvocationReadObservationActive();
+    const build = (prepared?: { resolvedPath: string; timelineMetadata: TaskModeTimelineMetadata }): TaskModeEvidenceResult => {
+        const captured = captureTaskModeEvidence(repoRoot, taskId, artifactPath, prepared);
+        if (!active) return deriveTaskModeEvidence(captured);
+        return Object.freeze(deriveTaskModeEvidence(cloneFrozenJson(captured)));
+    };
+    if (!active) return build();
+    if (!taskId) return cloneJson(build());
+    const resolvedTaskId = assertValidTaskId(taskId);
+    const repoKey = taskModeInvocationRepoKey(repoRoot);
+    const resolvedPath = resolveTaskModeInvocationPath(
+        JSON.stringify(['artifact', repoKey, resolvedTaskId, artifactPath]),
+        () => resolveTaskModeArtifactPath(repoRoot, resolvedTaskId, artifactPath));
+    readInvocationPathObservation(resolvedPath);
+    const timelineMetadata = getLatestTaskModeTimelineMetadata(repoRoot, resolvedTaskId);
+    const retained = memoizeInvocationRead(TASK_MODE_EVIDENCE,
+        JSON.stringify([repoKey, resolvedTaskId, resolvedPath, timelineMetadata.cycle_key]),
+        () => build({ resolvedPath, timelineMetadata })).value;
+    return cloneJson(retained);
+}
+
+function captureTaskModeEvidence(
+    repoRoot: string, taskId: string | null, artifactPath: string,
+    prepared?: { resolvedPath: string; timelineMetadata: TaskModeTimelineMetadata }
+): CapturedTaskModeEvidence {
     const result: TaskModeEvidenceResult = {
         task_id: taskId,
         evidence_path: null,
@@ -188,13 +239,13 @@ export function getTaskModeEvidence(repoRoot: string, taskId: string | null, art
 
     if (!taskId) {
         result.evidence_status = 'TASK_ID_MISSING';
-        return result;
+        return { evidence: result, resolvedTaskId: taskId, validate: false };
     }
 
     const resolvedTaskId = assertValidTaskId(taskId);
-    const resolvedPath = resolveTaskModeArtifactPath(repoRoot, resolvedTaskId, artifactPath);
+    const resolvedPath = prepared?.resolvedPath ?? resolveTaskModeArtifactPath(repoRoot, resolvedTaskId, artifactPath);
     result.evidence_path = normalizePath(resolvedPath);
-    const timelineMetadata = getLatestTaskModeTimelineMetadata(repoRoot, resolvedTaskId);
+    const timelineMetadata = prepared?.timelineMetadata ?? getLatestTaskModeTimelineMetadata(repoRoot, resolvedTaskId);
     result.timeline_artifact_path = timelineMetadata.artifact_path;
     result.timeline_declares_runtime_identity_metadata = timelineMetadata.declares_runtime_identity_metadata;
     result.timeline_declares_start_banner = timelineMetadata.declares_start_banner;
@@ -204,15 +255,15 @@ export function getTaskModeEvidence(repoRoot: string, taskId: string | null, art
 
     if (!isTrustedTaskModeArtifact(resolvedPath)) {
         result.evidence_status = 'EVIDENCE_FILE_MISSING';
-        return result;
+        return { evidence: result, resolvedTaskId: taskId, validate: false };
     }
 
     let artifactObject: Record<string, unknown>;
     try {
-        artifactObject = JSON.parse(fs.readFileSync(resolvedPath, 'utf8')) as Record<string, unknown>;
+        artifactObject = JSON.parse(readTaskModeInvocationText(resolvedPath)) as Record<string, unknown>;
     } catch {
         result.evidence_status = 'EVIDENCE_INVALID_JSON';
-        return result;
+        return { evidence: result, resolvedTaskId: taskId, validate: false };
     }
 
     result.evidence_hash = fileSha256(resolvedPath);
@@ -273,12 +324,12 @@ export function getTaskModeEvidence(repoRoot: string, taskId: string | null, art
     }
     if (rawPlan != null && !result.plan) {
         result.evidence_status = 'EVIDENCE_PLAN_METADATA_INVALID';
-        return result;
+        return { evidence: result, resolvedTaskId: taskId, validate: false };
     }
     const planBinding = timelineMetadata.plan_binding;
     if (!planBinding && result.plan) {
         result.evidence_status = 'EVIDENCE_PLAN_BINDING_MISSING';
-        return result;
+        return { evidence: result, resolvedTaskId: taskId, validate: false };
     }
     if (planBinding) {
         const bindingMatches = planBinding.guided === true
@@ -290,7 +341,7 @@ export function getTaskModeEvidence(repoRoot: string, taskId: string | null, art
                 && planBinding.path == null && planBinding.sha256 == null;
         if (!bindingMatches) {
             result.evidence_status = 'EVIDENCE_PLAN_BINDING_MISMATCH';
-            return result;
+            return { evidence: result, resolvedTaskId: taskId, validate: false };
         }
     }
     const rawMarkdownWorkingPlan = artifactObject.markdown_working_plan;
@@ -355,6 +406,15 @@ export function getTaskModeEvidence(repoRoot: string, taskId: string | null, art
         result.effective_depth_source = effectiveDepthSource;
     }
 
+    return { evidence: result, resolvedTaskId, validate: true };
+}
+
+/** All filesystem-dependent evidence is captured before this pure status derivation. */
+function deriveTaskModeEvidence(captured: CapturedTaskModeEvidence): TaskModeEvidenceResult {
+    countNextStepWork('derive:task_mode_evidence');
+    const result = { ...captured.evidence };
+    if (!captured.validate) return result;
+    const resolvedTaskId = captured.resolvedTaskId;
     if (result.evidence_task_id !== resolvedTaskId) {
         result.evidence_status = 'EVIDENCE_TASK_MISMATCH';
         return result;

@@ -882,3 +882,52 @@ test('preflight diff expectations require scoped diff only for active specialist
         scopedDiffsEnabled: true
     }), false);
 });
+
+
+// Exercise the public contract resolver used by routing, with distinct contracts
+// and caller-owned mutable objects rather than an internal memo helper.
+import { withInvocationReadObservation } from '../../../../src/core/invocation-read-observation';
+import { withNextStepMeasurement, type NextStepMeasurement } from '../../../../src/core/next-step-measurement';
+
+test('Q3 contract derivation is shared only for identical complete inputs', () => {
+    const context = baseContext();
+    let measurement!: NextStepMeasurement;
+    withNextStepMeasurement(() => withInvocationReadObservation(() => {
+        const first = validate(context);
+        assert.deepEqual(first, []);
+        (first as string[]).push('caller mutation');
+        assert.deepEqual(validate(context), []);
+        assert.ok(validate(context, { expectedTaskId: 'T-other' }).some(line => line.includes('T-other')));
+        context.task_id = 'T-mutated';
+        assert.ok(validate(context).some(line => line.includes('T-mutated')));
+        assert.deepEqual(validate(context, { expectedTaskId: 'T-mutated' }), []);
+    }), value => { measurement = value; });
+    assert.equal(measurement.work['derive:getReviewContextContractViolations'], 4);
+});
+
+test('Q3 review contract keeps inspection modes and required flags separate', () => {
+    let measurement!: NextStepMeasurement;
+    withNextStepMeasurement(() => withInvocationReadObservation(() => {
+        const context = baseContext({ review_type: undefined });
+        assert.deepEqual(validate(context, { requireReviewType: false, inspection: 'retained_completed' }), []);
+        assert.ok(validate(context, { requireReviewType: true, inspection: 'active' }).length > 0);
+        assert.deepEqual(validate(context, { requireReviewType: false, inspection: 'active' }), []);
+        assert.deepEqual(validate(context, { requireReviewType: false, inspection: 'retained_completed' }), []);
+    }), value => { measurement = value; });
+    assert.equal(measurement.work['derive:getReviewContextContractViolations'], 3);
+});
+
+test('Q3 generated skill contract observation rejects reference mutation before return', t => {
+    const fixture = createBuiltInSkillContext(t, ['lens.md']);
+    const selected = fixture.reviewContext.rule_context.selected_skill as unknown as {
+        reference_binding: { required_references: Array<{ reference_path: string }> }
+    };
+    const reference = selected.reference_binding.required_references[0].reference_path;
+    assert.throws(() => withInvocationReadObservation(() => {
+        assert.deepEqual(currentSkillViolations(fixture), []);
+        fs.appendFileSync(reference, 'changed');
+        // The same immutable derivation remains visible to consumers; A1 rejects output.
+        assert.deepEqual(currentSkillViolations(fixture), []);
+    }), /changed|stale|identity|replaced/i);
+    assert.ok(currentSkillViolations(fixture).some(line => line.includes('current catalog skill')));
+});

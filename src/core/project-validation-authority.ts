@@ -1,3 +1,4 @@
+import { readInvocationPathObservation } from './invocation-file-observation';
 import * as path from 'node:path';
 import { resolveBundleNameForTarget } from './constants';
 import { bindContainedDestination } from './contained-filesystem';
@@ -11,6 +12,7 @@ const MAXIMUM_CONTROL_BYTES = 8 * 1024 * 1024;
 export function readProjectValidationAuthority(repoRoot: string): { approved: ApprovedValidationContract; sha256: string } | null {
     const bundle = resolveBundleNameForTarget(repoRoot);
     const configPath = `${bundle}/live/config/workflow-config.json`;
+    readInvocationPathObservation(path.join(repoRoot, configPath));
     if (bindContainedDestination(repoRoot, path.join(repoRoot, configPath)).missingAt) return null;
     const file = readValidationFile(repoRoot, configPath, MAXIMUM_CONTROL_BYTES);
     let config: Record<string, unknown>;

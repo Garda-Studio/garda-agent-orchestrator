@@ -1,5 +1,7 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createInvocationReadMemoKey, memoizeInvocationRead } from '../../core/invocation-read-observation';
+import { countNextStepWork } from '../../core/next-step-measurement';
+import { readTaskModeInvocationText, resolveTaskModeInvocationPath, taskModeInvocationFileExists, taskModeInvocationRepoKey } from './task-mode-invocation-observation';
 
 import {
     getProviderEntriesByEntrypointFile,
@@ -8,6 +10,8 @@ import {
 import { getProviderOrchestratorProfileDefinitions } from '../../materialization/common';
 import { joinOrchestratorPath } from '../shared/helpers';
 import type { TaskModeEvidenceResult } from './task-mode-contracts';
+
+const LEGACY_CANONICAL_SOURCE = createInvocationReadMemoKey<string | null>('task-mode-legacy-canonical-source');
 
 function normalizeLegacySourceOfTruthValue(value: unknown): string | null {
     return normalizeProviderId(value);
@@ -22,11 +26,19 @@ function normalizeLegacyRoutePath(value: unknown): string | null {
 }
 
 function readLegacyCanonicalSourceOfTruth(repoRoot: string): string | null {
+    return memoizeInvocationRead(LEGACY_CANONICAL_SOURCE, taskModeInvocationRepoKey(repoRoot), () => {
+        countNextStepWork('derive:task_mode_legacy_identity_source');
+        return captureLegacyCanonicalSourceOfTruth(repoRoot);
+    }).value;
+}
+
+function captureLegacyCanonicalSourceOfTruth(repoRoot: string): string | null {
     const normalizedRepoRoot = path.resolve(repoRoot);
-    const initAnswersPath = joinOrchestratorPath(normalizedRepoRoot, path.join('runtime', 'init-answers.json'));
-    if (fs.existsSync(initAnswersPath) && fs.statSync(initAnswersPath).isFile()) {
+    const initAnswersPath = resolveTaskModeInvocationPath(JSON.stringify(['legacy-init', taskModeInvocationRepoKey(repoRoot)]),
+        () => joinOrchestratorPath(normalizedRepoRoot, path.join('runtime', 'init-answers.json')));
+    if (taskModeInvocationFileExists(initAnswersPath)) {
         try {
-            const initAnswers = JSON.parse(fs.readFileSync(initAnswersPath, 'utf8')) as Record<string, unknown>;
+            const initAnswers = JSON.parse(readTaskModeInvocationText(initAnswersPath)) as Record<string, unknown>;
             const sourceOfTruth = normalizeLegacySourceOfTruthValue(initAnswers.SourceOfTruth);
             if (sourceOfTruth) {
                 return sourceOfTruth;
@@ -36,10 +48,11 @@ function readLegacyCanonicalSourceOfTruth(repoRoot: string): string | null {
         }
     }
 
-    const liveVersionPath = joinOrchestratorPath(normalizedRepoRoot, path.join('live', 'version.json'));
-    if (fs.existsSync(liveVersionPath) && fs.statSync(liveVersionPath).isFile()) {
+    const liveVersionPath = resolveTaskModeInvocationPath(JSON.stringify(['legacy-version', taskModeInvocationRepoKey(repoRoot)]),
+        () => joinOrchestratorPath(normalizedRepoRoot, path.join('live', 'version.json')));
+    if (taskModeInvocationFileExists(liveVersionPath)) {
         try {
-            const liveVersion = JSON.parse(fs.readFileSync(liveVersionPath, 'utf8')) as Record<string, unknown>;
+            const liveVersion = JSON.parse(readTaskModeInvocationText(liveVersionPath)) as Record<string, unknown>;
             return normalizeLegacySourceOfTruthValue(liveVersion.SourceOfTruth);
         } catch {
             // Legacy compatibility fallback only.
@@ -103,7 +116,13 @@ export function applyLegacyTaskModeIdentityBackfill(repoRoot: string, result: Ta
         return;
     }
 
-    const workspaceCanonicalSourceOfTruth = readLegacyCanonicalSourceOfTruth(repoRoot);
+    applyCapturedLegacyTaskModeIdentityBackfill(readLegacyCanonicalSourceOfTruth(repoRoot), result);
+}
+
+/** Pure identity projection; fallback files are read only after the legacy guard above. */
+function applyCapturedLegacyTaskModeIdentityBackfill(
+    workspaceCanonicalSourceOfTruth: string | null, result: TaskModeEvidenceResult
+): void {
     const provider = normalizeLegacySourceOfTruthValue(result.provider);
     const routeIdentity = resolveLegacyRouteIdentity(result.routed_to);
     if (!workspaceCanonicalSourceOfTruth || !provider) {

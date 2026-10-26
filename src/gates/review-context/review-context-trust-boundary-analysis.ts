@@ -1,7 +1,11 @@
 import { countNextStepWork } from '../../core/next-step-measurement';
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
+import { createInvocationReadMemoKey } from '../../core/invocation-read-observation';
+import {
+    readReviewValidationBytes, readQualityArtifactLstat,
+    readQualityArtifactStat, readReviewValidationNode
+} from './review-validation-invocation';
 import { currentProjectValidationAuthority } from '../project-validation/authority';
 import { validationDigest } from '../../core/project-validation-identity';
 import { inspectQualityValidationPhases, type QualityValidationPhases } from '../quality-checklist/quality-checklist-validation-phases';
@@ -158,7 +162,26 @@ interface QualityAnalysisOptions {
     inspection?: ValidationEvidenceInspection;
 }
 
-function readBoundQualityAnalysis(options: QualityAnalysisOptions, requireObservedExecution: boolean): ReviewContextTrustBoundaryAnalysis {
+type BoundQualityEvidence = {
+    terminal: ReviewContextTrustBoundaryAnalysis;
+} | {
+    base: ReviewContextTrustBoundaryAnalysisBase;
+    violations: string[];
+    observedExecutionViolationIndex: number | null;
+    matrixSha256: string | null;
+    matrix: TrustBoundaryMatrixEntry[];
+    phases: QualityValidationPhases | null;
+};
+
+const QUALITY_EVIDENCE = createInvocationReadMemoKey<BoundQualityEvidence>('bound-quality-evidence-v1');
+const QUALITY_ANALYSIS = createInvocationReadMemoKey<ReviewContextTrustBoundaryAnalysis>('bound-quality-analysis-v1');
+
+function qualityEvidenceIdentity(options: QualityAnalysisOptions): unknown[] {
+    return [path.resolve(options.repoRoot), options.taskId, options.preflightSha256,
+        options.preflight, options.inspection ?? 'active'];
+}
+
+function captureBoundQualityEvidence(options: QualityAnalysisOptions): BoundQualityEvidence {
     countNextStepWork('derive:readBoundQualityAnalysis');
     const applicability = assessTrustBoundaryAnalysisApplicability(options.preflight);
     const base: ReviewContextTrustBoundaryAnalysisBase = {
@@ -171,23 +194,25 @@ function readBoundQualityAnalysis(options: QualityAnalysisOptions, requireObserv
         binding_event_sha256: null
     };
     let declared = false;
-    try { declared = currentProjectValidationAuthority(options.repoRoot, options.preflight) !== null; }
-    catch (error) { return invalidAnalysis({ ...base, required: true }, [`Declared validation authority rejected: ${String(error)}`]); }
+    try {
+        declared = currentProjectValidationAuthority(options.repoRoot, options.preflight) !== null;
+    }
+    catch (error) { return { terminal: invalidAnalysis({ ...base, required: true }, [`Declared validation authority rejected: ${String(error)}`]) }; }
     if (declared) {
         base.required = true;
         base.applicability_reasons = [...base.applicability_reasons, 'declared-validation-contract'];
     }
     if (!base.required) {
-        return {
+        return { terminal: {
             ...base,
             status: 'not_required',
             matrix_sha256: null,
             matrix: [],
             violations: []
-        };
+        } };
     }
     if (!options.taskId) {
-        return invalidAnalysis(base, ['Applicable trust-boundary analysis has no task id.']);
+        return { terminal: invalidAnalysis(base, ['Applicable trust-boundary analysis has no task id.']) };
     }
     const artifactPath = resolveDefaultQualityChecklistArtifactPath(options.repoRoot, options.taskId);
     const binding = readQualityChecklistArtifactBinding({
@@ -204,17 +229,17 @@ function readBoundQualityAnalysis(options: QualityAnalysisOptions, requireObserv
     };
     let artifactEntryExists = false;
     try {
-        fs.lstatSync(artifactPath);
+        readQualityArtifactLstat(artifactPath);
         artifactEntryExists = true;
     } catch (error: unknown) {
         if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
-            return invalidAnalysis(boundBase, [
+            return { terminal: invalidAnalysis(boundBase, [
                 `Quality-checklist artifact path is unreadable: ${error instanceof Error ? error.message : String(error)}`
-            ]);
+            ]) };
         }
     }
     if (!artifactEntryExists) {
-        return {
+        return { terminal: {
             ...boundBase,
             status: 'missing',
             matrix_sha256: null,
@@ -223,29 +248,29 @@ function readBoundQualityAnalysis(options: QualityAnalysisOptions, requireObserv
                 'Applicable trust-boundary analysis has no quality-checklist artifact.',
                 ...binding.violations
             ]
-        };
+        } };
     }
     if (!isPathRealpathInsideRoot(artifactPath, options.repoRoot)) {
-        return invalidAnalysis(boundBase, ['Quality-checklist artifact escapes the repository through a symlink or junction.']);
+        return { terminal: invalidAnalysis(boundBase, ['Quality-checklist artifact escapes the repository through a symlink or junction.']) };
     }
     let artifactIsFile = false;
     try {
-        artifactIsFile = fs.statSync(artifactPath).isFile();
+        artifactIsFile = readQualityArtifactStat(artifactPath).isFile();
     } catch (error: unknown) {
-        return invalidAnalysis(boundBase, [
+        return { terminal: invalidAnalysis(boundBase, [
             `Quality-checklist artifact metadata is unreadable: ${error instanceof Error ? error.message : String(error)}`
-        ]);
+        ]) };
     }
     if (!artifactIsFile) {
-        return invalidAnalysis(boundBase, ['Quality-checklist artifact must be a regular file.']);
+        return { terminal: invalidAnalysis(boundBase, ['Quality-checklist artifact must be a regular file.']) };
     }
     let artifactBytes: Buffer;
     try {
-        artifactBytes = fs.readFileSync(artifactPath);
+        artifactBytes = readReviewValidationBytes(artifactPath);
     } catch (error: unknown) {
-        return invalidAnalysis(boundBase, [
+        return { terminal: invalidAnalysis(boundBase, [
             `Quality-checklist artifact is unreadable: ${error instanceof Error ? error.message : String(error)}`
-        ]);
+        ]) };
     }
     const artifactSha256 = createHash('sha256').update(artifactBytes).digest('hex');
     const hashedBoundBase: ReviewContextTrustBoundaryAnalysisBase = {
@@ -256,13 +281,13 @@ function readBoundQualityAnalysis(options: QualityAnalysisOptions, requireObserv
     try {
         const parsed = JSON.parse(artifactBytes.toString('utf8'));
         if (!isRecord(parsed)) {
-            return invalidAnalysis(hashedBoundBase, ['Quality-checklist artifact must be a JSON object.']);
+            return { terminal: invalidAnalysis(hashedBoundBase, ['Quality-checklist artifact must be a JSON object.']) };
         }
         artifact = parsed;
     } catch (error: unknown) {
-        return invalidAnalysis(hashedBoundBase, [
+        return { terminal: invalidAnalysis(hashedBoundBase, [
             `Quality-checklist artifact is unreadable: ${error instanceof Error ? error.message : String(error)}`
-        ]);
+        ]) };
     }
     const violations: string[] = [...binding.violations];
     if (binding.recordedArtifactSha256 && artifactSha256 !== binding.recordedArtifactSha256) {
@@ -298,35 +323,59 @@ function readBoundQualityAnalysis(options: QualityAnalysisOptions, requireObserv
             matrixRequired: applicability.required, matrix: answer?.trust_boundary_matrix });
     } catch (error) { violations.push(`Declared validation phases rejected: ${String(error)}`); }
     const status = String(artifact.status || '').trim().toUpperCase();
+    let observedExecutionViolationIndex: number | null = null;
     if (declared || validation) {
         if (!validation || !isRecord(artifact.validation_phases)
             || validationDigest(artifact.validation_phases) !== validationDigest(validation.phases))
             violations.push('Quality-checklist validation phases are missing, changed or stale for the current canonical obligations.');
         if (status !== 'PENDING_VALIDATION') violations.push('Declared validation phases require PENDING_VALIDATION quality evidence.');
-        if (validation && (validation.phases.structural !== 'BOUND' || validation.phases.execution === 'REJECTED'
-            || (requireObservedExecution && validation.phases.execution !== 'OBSERVED')))
+        if (validation && (validation.phases.structural !== 'BOUND' || validation.phases.execution === 'REJECTED'))
             violations.push('Declared validation phases require bound structure and genuine current execution before review.');
+        else if (validation && validation.phases.execution !== 'OBSERVED')
+            observedExecutionViolationIndex = violations.length;
     } else if (status !== 'PASS' && status !== 'WARN') {
         violations.push(`Quality-checklist artifact status '${status || '<missing>'}' is not reviewer-ready.`);
     }
     const matrixAssessment = validation?.matrixAssessment ?? (applicability.required
         ? assessBoundTrustBoundaryMatrix(answer?.trust_boundary_matrix, { repoRoot: options.repoRoot }) : null);
     violations.push(...(matrixAssessment?.violations ?? []));
+    return { base: hashedBoundBase, violations, observedExecutionViolationIndex,
+        matrixSha256: matrixAssessment?.matrix_sha256 ?? null, matrix: matrixAssessment?.matrix ?? [],
+        phases: validation?.phases ?? null };
+}
+
+/** Pure mode projection; a soft result can never authorize a strict consumer. */
+function deriveBoundQualityAnalysis(evidence: BoundQualityEvidence, requireObservedExecution: boolean): ReviewContextTrustBoundaryAnalysis {
+    countNextStepWork(requireObservedExecution ? 'derive:trust_boundary_analysis' : 'derive:quality_phase_analysis');
+    if ('terminal' in evidence) return evidence.terminal;
+    const violations = [...evidence.violations];
+    if (requireObservedExecution && evidence.observedExecutionViolationIndex !== null) {
+        violations.splice(evidence.observedExecutionViolationIndex, 0,
+            'Declared validation phases require bound structure and genuine current execution before review.');
+    }
     if (violations.length > 0) {
-        return invalidAnalysis(hashedBoundBase, [...new Set(violations)]);
+        return invalidAnalysis(evidence.base, [...new Set(violations)]);
     }
     return {
-        ...hashedBoundBase,
+        ...evidence.base,
         status: 'current',
-        matrix_sha256: matrixAssessment?.matrix_sha256 ?? null,
-        matrix: matrixAssessment?.matrix ?? [],
-        ...(validation ? { validation_phases: validation.phases } : {}),
+        matrix_sha256: evidence.matrixSha256,
+        matrix: evidence.matrix,
+        ...(evidence.phases ? { validation_phases: evidence.phases } : {}),
         violations: []
     };
 }
 
+function readBoundQualityAnalysis(options: QualityAnalysisOptions, requireObservedExecution: boolean): ReviewContextTrustBoundaryAnalysis {
+    return readReviewValidationNode(QUALITY_ANALYSIS,
+        () => [qualityEvidenceIdentity(options), requireObservedExecution], () => {
+            const evidence = readReviewValidationNode(QUALITY_EVIDENCE, () => qualityEvidenceIdentity(options),
+                () => captureBoundQualityEvidence(options));
+            return deriveBoundQualityAnalysis(evidence, requireObservedExecution);
+        });
+}
+
 export function readReviewContextTrustBoundaryAnalysis(options: QualityAnalysisOptions): ReviewContextTrustBoundaryAnalysis {
-    countNextStepWork('derive:trust_boundary_analysis');
     return readBoundQualityAnalysis(options, true);
 }
 

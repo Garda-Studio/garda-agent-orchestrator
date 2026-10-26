@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { countNextStepWork } from '../../core/next-step-measurement';
 import { readTaskQueueEntries } from '../../core/task-queue-read';
 import { isPlainRecord } from '../../core/records';
 import { readValidationFile, validationDigest } from '../../core/project-validation-identity';
@@ -42,27 +43,28 @@ function projectExpectedRedExecutions(options: ExpectedRedEvidenceOptions, curre
     const snapshot = readValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection);
     if (snapshot.preflight_sha256 !== options.preflightSha256
         || path.resolve(snapshot.preflight_path) !== path.resolve(options.repoRoot, options.preflightPath)) return null;
-    const cycle = snapshot.events.slice(snapshot.events.map(event => event.event_type).lastIndexOf('TASK_MODE_ENTERED') + 1);
-    const attempts = cycle.filter(event => ['INTERMEDIATE_COMMAND_RUN', 'INTERMEDIATE_COMMAND_STARTED',
+    const cycle = snapshot.events.slice(snapshot.events.map(event => (countNextStepWork('visit:expected_red_event'), event.event_type)).lastIndexOf('TASK_MODE_ENTERED') + 1);
+    const attempts = cycle.filter(event => (countNextStepWork('visit:expected_red_event'), ['INTERMEDIATE_COMMAND_RUN', 'INTERMEDIATE_COMMAND_STARTED',
         'TEST_FIRST_EXPECTED_FAILURE_RECORDED'].includes(event.event_type)
         && (!currentOnly || event.details?.preflight_sha256 === snapshot.preflight_sha256
-            && Number(event.integrity?.task_sequence) > snapshot.preflight_sequence));
-    const redIds = new Set(attempts.filter(event => event.event_type === 'TEST_FIRST_EXPECTED_FAILURE_RECORDED')
-        .map(event => event.details?.execution_id));
-    const redAttempts = attempts.filter(event => event.event_type === 'TEST_FIRST_EXPECTED_FAILURE_RECORDED'
+            && Number(event.integrity?.task_sequence) > snapshot.preflight_sequence)));
+    const redIds = new Set(attempts.filter(event => (countNextStepWork('visit:expected_red_event'), event.event_type === 'TEST_FIRST_EXPECTED_FAILURE_RECORDED'))
+        .map(event => (countNextStepWork('visit:expected_red_event'), event.details?.execution_id)));
+    const redAttempts = attempts.filter(event => (countNextStepWork('visit:expected_red_event'), event.event_type === 'TEST_FIRST_EXPECTED_FAILURE_RECORDED'
         || event.event_type === 'INTERMEDIATE_COMMAND_STARTED'
-            && (event.details?.expected_failure === true || redIds.has(event.details?.execution_id)));
+            && (event.details?.expected_failure === true || redIds.has(event.details?.execution_id))));
     const relevantAttempts = currentOnly ? attempts : redAttempts;
     const obligations = new Map<string, QualityValidationObligation>();
     for (const event of [...attempts].reverse()) {
+        countNextStepWork('visit:expected_red_event');
         if (event.event_type !== 'TEST_FIRST_EXPECTED_FAILURE_RECORDED') continue;
         const recordedBinding = event.details?.selected_case_binding;
         const observed = isPlainRecord(recordedBinding) ? recordedBinding.before : undefined;
         if (isIntermediateSelection(observed)) {
             const claims = observed.cases.length ? observed.cases
-                : observed.sources.map(source => ({ source: source.path, case_id: undefined }));
-            if (!claims.some(claim => snapshot.changed_files.includes(claim.source)
-                && latestMatchingIntermediateAttempt(relevantAttempts, claim.source, claim.case_id) === event)) continue;
+                : observed.sources.map(source => (countNextStepWork('visit:expected_red_source'), ({ source: source.path, case_id: undefined })));
+            if (!claims.some(claim => (countNextStepWork('visit:expected_red_case'), snapshot.changed_files.includes(claim.source)
+                && latestMatchingIntermediateAttempt(relevantAttempts, claim.source, claim.case_id) === event))) continue;
         }
         const originalScope = String(event.details?.test_scope_sha256 ?? '');
         const { entry, violation } = readBoundIntermediateCommandEvidence({ ...options, event, expectedFailure: true,
@@ -72,8 +74,8 @@ function projectExpectedRedExecutions(options: ExpectedRedEvidenceOptions, curre
         if (!entry && !currentOnly) throw new Error(`Retained expected-RED execution rejected: ${violation}`);
         if (!entry?.selected_case_binding || !entry.execution_id) continue;
         const selection = entry.selected_case_binding.before;
-        const starts = attempts.filter(item => item.event_type === 'INTERMEDIATE_COMMAND_STARTED'
-            && item.details?.execution_id === entry.execution_id);
+        const starts = attempts.filter(item => (countNextStepWork('visit:expected_red_event'), item.event_type === 'INTERMEDIATE_COMMAND_STARTED'
+            && item.details?.execution_id === entry.execution_id));
         const start = starts[0];
         if (starts.length !== 1 || Number(start.integrity?.task_sequence) >= entry.event_task_sequence
             || start.details?.command !== entry.command || start.details?.artifact_path !== event.details?.artifact_path
@@ -90,13 +92,14 @@ function projectExpectedRedExecutions(options: ExpectedRedEvidenceOptions, curre
             const sources = getCurrentIntermediateTestTargets(options.repoRoot, entry.command, snapshot.changed_files, selection);
             const reported = readReportedTestCases(retainedNativeCaseOutput(options.repoRoot, execution).text);
             if (sources.length !== 1 || !reported?.length) continue;
-            cases = reported.map(item => ({ source: sources[0], case_id: item.id, selector: item.id }));
+            cases = reported.map(item => (countNextStepWork('visit:expected_red_case'), ({ source: sources[0], case_id: item.id, selector: item.id })));
         }
         for (const claim of cases) {
+            countNextStepWork('visit:expected_red_case');
             if (!snapshot.changed_files.includes(claim.source)
                 || latestMatchingIntermediateAttempt(relevantAttempts, claim.source, claim.case_id) !== event) continue;
             assertCurrentIntermediateSelection(options.repoRoot, entry.selected_case_binding, [claim.source]);
-            const source = selection.sources.find(item => item.path === claim.source);
+            const source = selection.sources.find(item => (countNextStepWork('visit:expected_red_source'), item.path === claim.source));
             if (!source) throw new Error('Expected-red selected source was not observed before execution.');
             const key = JSON.stringify([source.path, claim.case_id]);
             const binding = { task_id: options.taskId, preflight_sha256: snapshot.preflight_sha256,
@@ -109,13 +112,13 @@ function projectExpectedRedExecutions(options: ExpectedRedEvidenceOptions, curre
     }
     const requiredSources = new Set(requiredExpectedRedFiles(preflight, options.repoRoot));
     if (!obligations.size || currentOnly && snapshot.changed_files.some(file => requiredSources.has(file)
-        && ![...obligations.values()].some(item => item.source_identity.path === file)))
+        && ![...obligations.values()].some(item => (countNextStepWork('visit:expected_red_obligation'), item.source_identity.path === file))))
         return null;
     if (readValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection).timeline_sha256 !== snapshot.timeline_sha256)
         throw new Error('Expected-red timeline changed during evidence projection.');
     const value = { schema_version: 1 as const, task_id: options.taskId, preflight_sha256: snapshot.preflight_sha256,
         scope_content_sha256: snapshot.scope_content_sha256,
-        obligations: [...obligations.values()].sort((left, right) => left.id.localeCompare(right.id)) };
+        obligations: [...obligations.values()].sort((left, right) => (countNextStepWork('visit:expected_red_obligation', 2), left.id.localeCompare(right.id))) };
     return { ...value, sha256: validationDigest(value) };
 }
 
@@ -134,11 +137,12 @@ function projectExpectedRedReviewObligations(options: ExpectedRedEvidenceOptions
     }
     const native = readValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection);
     const green = readNativeCaseObligations({ ...options, preflightSha256: native.preflight_sha256,
-        scopeContentSha256: native.scope_content_sha256, sources: red.obligations.map(item => ({
-            source_identity: item.source_identity, case_id: item.target_id, selector: item.selector, syntax_status: 'UNRESOLVED' })) });
+        scopeContentSha256: native.scope_content_sha256, sources: red.obligations.map(item => (countNextStepWork('visit:expected_red_obligation'), ({
+            source_identity: item.source_identity, case_id: item.target_id, selector: item.selector, syntax_status: 'UNRESOLVED' }))) });
     for (const failed of red.obligations) {
-        const passed = green.find(item => item.target_id === failed.target_id
-            && validationDigest(item.source_identity) === validationDigest(failed.source_identity));
+        countNextStepWork('visit:expected_red_obligation');
+        const passed = green.find(item => (countNextStepWork('visit:expected_red_obligation'), item.target_id === failed.target_id
+            && validationDigest(item.source_identity) === validationDigest(failed.source_identity)));
         if (!passed?.case_execution || passed.case_execution.event_task_sequence <= failed.case_execution!.event_task_sequence)
             throw new Error('Expected-RED requires a later current GREEN for every unchanged selected case.');
     }
@@ -166,10 +170,10 @@ export function readRetainedExpectedRedRejection(options: ExpectedRedEvidenceOpt
     try { snapshot = readValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection); }
     catch { return null; } // Startup/timeline failures retain their own blocking routes; no retained RED is proven here.
     try {
-        const history = snapshot.events.filter(event => event.event_type === 'TEST_FIRST_EXPECTED_FAILURE_RECORDED');
+        const history = snapshot.events.filter(event => (countNextStepWork('visit:expected_red_event'), event.event_type === 'TEST_FIRST_EXPECTED_FAILURE_RECORDED'));
         if (!history.length || projectExpectedRedExecutions(options, false)) return null;
-        const entry = snapshot.events.map(event => event.event_type).lastIndexOf('TASK_MODE_ENTERED');
-        const predatesEntry = history.every(event => snapshot.events.indexOf(event) < entry);
+        const entry = snapshot.events.map(event => (countNextStepWork('visit:expected_red_event'), event.event_type)).lastIndexOf('TASK_MODE_ENTERED');
+        const predatesEntry = history.every(event => (countNextStepWork('visit:expected_red_event'), snapshot.events.indexOf(event) < entry));
         return expectedRedError(`Retained expected-RED ${predatesEntry ? 'predates task re-entry' : 'is unavailable for the current selected sources'}: ${snapshot.changed_files.join(', ')}.`).message;
     } catch (error) { return expectedRedError(error).message; }
 }

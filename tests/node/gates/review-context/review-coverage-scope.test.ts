@@ -460,3 +460,29 @@ for (const reviewType of ['code', 'test', 'security', 'refactor', 'architecture-
     }
 }
 }
+
+import { withInvocationReadObservation } from '../../../../src/core/invocation-read-observation';
+import { withNextStepMeasurement, type NextStepMeasurement } from '../../../../src/core/next-step-measurement';
+
+test('Q3 coverage selections and contracts derive once for repeated consumers and preserve lane boundaries', t => {
+    const repoRoot = createTempRepo(t);
+    const preflight = { task_id: TASK_ID, detection_source: 'explicit_changed_files', changed_files: ['src/app.ts'], scope_category: 'code' };
+    fs.mkdirSync(path.join(repoRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, 'src/app.ts'), 'export const value = 1;');
+    const options = { repoRoot, preflight, reviewType: 'code' };
+    const expected = buildAuthoritativeReviewCoverageContract(options);
+    let measurement!: NextStepMeasurement;
+    withNextStepMeasurement(() => withInvocationReadObservation(() => {
+        for (let consumer = 0; consumer < 5; consumer++) {
+            const scope = buildAuthoritativeReviewCoverageContract(options);
+            assert.deepEqual(scope, expected);
+            scope.changedFiles.push('caller-change');
+            scope.contract.obligations.length = 0;
+            assert.deepEqual(resolveReviewCoverageChangedFiles(options), expected.changedFiles);
+        }
+        const testScope = buildAuthoritativeReviewCoverageContract({ ...options, reviewType: 'test' });
+        assert.notEqual(testScope.contract.contract_sha256, expected.contract.contract_sha256);
+    }), value => { measurement = value; });
+    assert.equal(measurement.work['derive:review_coverage_changed_files'], 2);
+    assert.equal(measurement.work['derive:authoritative_coverage_scope'], 2);
+});

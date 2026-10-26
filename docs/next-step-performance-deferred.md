@@ -29,6 +29,27 @@ A real executeNextStepEffects regression proves one smudge, successful WIP captu
 and the subsequent decomposition transition. Extending the new observation across
 those effects requires an exact producer protocol that handles this scenario.
 
+## Q3: invocation review derivations
+
+Quality evidence, validation phases and obligations, task-mode evidence, dirty
+baseline normalization, review scope, lane bindings and context contracts now
+share private immutable nodes within the checked read invocation. Full semantic
+inputs select separate lane, strict/soft and active/retained-completed contracts;
+mutable public copies cannot change retained evidence. Descriptor-only keys leave
+opaque caller objects on their original computation path. The preflight facade
+still executes its existing per-consumer registry synchronization and checks.
+
+Skill entrypoint/reference selection and DELTA baseline reads retain their native
+path, bounded-reader and authentication checks. Q2 dependencies cover consumed
+bytes, kinds and missing paths through the final check. Native realpath and the
+raw stat fields used by workspace authentication remain distinct from completed
+filesystem identities. Large native readers keep their original byte acceptance:
+above the 128 MiB retained-content bound, a native read is compared with the Q2
+digest; this exceptional compatibility path performs two physical reads. Strict
+skill readers likewise retain their original no-follow/nonblocking descriptor
+capture and compare it with the shared content observation. Neither path claims
+that distinct capture contracts have been replaced by a weaker common reader.
+
 ## P2: navigation audit projection
 
 Round 6 consumer inspection at 537beb12 found that the audit is consumed on every

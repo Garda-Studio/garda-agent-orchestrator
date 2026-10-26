@@ -1,6 +1,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { types } from 'node:util';
+import { cloneFrozenJson, cloneJson } from '../../core/immutable-json';
+import { countNextStepWork } from '../../core/next-step-measurement';
+import { readInvocationPathObservation } from '../../core/invocation-file-observation';
+import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead } from '../../core/invocation-read-observation';
+import { taskModeInvocationRepoKey } from '../task-mode/task-mode-invocation-observation';
 
 import {
     buildGitChangeClassificationEvidence,
@@ -682,7 +688,141 @@ export function captureDirtyWorkspaceBaseline(
     };
 }
 
+const DIRTY_BASELINE_NORMALIZATIONS = createInvocationReadMemoKey<Map<string, DirtyWorkspaceBaseline>>(
+    'task-mode-dirty-baseline-normalizations'
+);
+const DIRTY_BASELINE_PATHS = createInvocationReadMemoKey<string | null>('task-mode-dirty-baseline-path-verdicts');
+
+/** Keep producer normalization live; only this read-side capture uses the invocation registry. */
+function captureDirtyBaselinePaths(repoRoot: string | undefined, value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    if (!repoRoot) return [...new Set(value.map(entry => {
+        countNextStepWork('visit:dirty_baseline_path');
+        return normalizePath(entry);
+    }).filter(Boolean))].sort();
+    const repoKey = taskModeInvocationRepoKey(repoRoot);
+    const observedPaths = value.map((entry): string | null => {
+        countNextStepWork('visit:dirty_baseline_path');
+        const rawPath = String(entry || '').trim();
+        if (!rawPath || rawPath.includes('\0')) return null;
+        const portablePath = rawPath.replace(/\\/g, '/');
+        if (path.isAbsolute(rawPath) || path.win32.isAbsolute(rawPath) || path.posix.isAbsolute(portablePath)
+            || /^[a-z]:/i.test(portablePath) || portablePath.split('/').some(segment => segment === '..')) return null;
+        const normalizedPath = normalizePath(portablePath);
+        if (!normalizedPath || normalizedPath === '.') return null;
+        const resolvedPath = resolveWorkspacePath(repoRoot, normalizedPath);
+        if (!resolvedPath) return null;
+        return memoizeInvocationRead(DIRTY_BASELINE_PATHS, JSON.stringify([repoKey, normalizedPath]), () => {
+            readInvocationPathObservation(resolvedPath);
+            // Use the original native containment predicate, including missing-ancestor behavior.
+            return isPathRealpathInsideRoot(resolvedPath, repoRoot, { allowMissing: true }) ? normalizedPath : null;
+        }).value;
+    });
+    return [...new Set(observedPaths.filter((entry): entry is string => entry !== null))].sort();
+}
+
+/** Capture fields and native path verdicts before exposing an immutable reduction input. */
+function captureDirtyBaselineNormalization(
+    baseline: Record<string, unknown>, repoRoot: string | undefined
+): DirtyWorkspaceBaseline {
+    const changedFiles = captureDirtyBaselinePaths(repoRoot, baseline.changed_files);
+    return cloneFrozenJson({
+        detection_source: String(baseline.detection_source || 'git_auto').trim() || 'git_auto',
+        include_untracked: baseline.include_untracked == null ? true : !!baseline.include_untracked,
+        changed_files: changedFiles,
+        changed_files_sha256: String(
+            baseline.changed_files_sha256 || stringSha256(changedFiles.join('\n')) || ''
+        ).trim().toLowerCase() || null,
+        scope_sha256: String(baseline.scope_sha256 || '').trim().toLowerCase() || null,
+        file_hashes: normalizeFileHashRecord(baseline.file_hashes, changedFiles),
+        entry_authorized_files: captureDirtyBaselinePaths(repoRoot, baseline.entry_authorized_files),
+        staged_files: captureDirtyBaselinePaths(repoRoot, baseline.staged_files),
+        staged_trust: normalizeStagedTrustEvidence(baseline.staged_trust, changedFiles),
+        git_change_classification: normalizeGitChangeClassificationEvidence(baseline.git_change_classification)
+    });
+}
+
+/** Pure reduction: filesystem containment and input fields are already immutable. */
+function deriveDirtyWorkspaceBaseline(captured: DirtyWorkspaceBaseline): DirtyWorkspaceBaseline {
+    countNextStepWork('derive:dirty_workspace_baseline');
+    const changedFiles = new Set<string>();
+    for (const file of captured.changed_files) {
+        countNextStepWork('visit:dirty_baseline_reduction_path');
+        changedFiles.add(file);
+    }
+    const retained = (files: string[]) => cloneFrozenJson(files.filter(file => {
+        countNextStepWork('visit:dirty_baseline_reduction_path');
+        return changedFiles.has(file);
+    }));
+    return Object.freeze({
+        ...captured,
+        entry_authorized_files: retained(captured.entry_authorized_files || []),
+        staged_files: retained(captured.staged_files || [])
+    });
+}
+
+/** Own-data keys avoid user getters/toJSON. Exotic inputs keep their original uncached behavior. */
+function dirtyBaselineDataKey(value: unknown): string | null {
+    const digest = createHash('sha256');
+    const ancestors = new Set<object>();
+    let remaining = 10_000;
+    const append = (entry: unknown, depth: number): boolean => {
+        if (depth > 64 || --remaining < 0) return false;
+        if (entry === null) { digest.update('null;'); return true; }
+        switch (typeof entry) {
+            case 'undefined': digest.update('undefined;'); return true;
+            case 'boolean': digest.update(entry ? 'true;' : 'false;'); return true;
+            case 'number': digest.update('number:' + (Object.is(entry, -0) ? '-0' : String(entry)) + ';'); return true;
+            case 'bigint': digest.update('bigint:' + entry.toString() + ';'); return true;
+            case 'string':
+                if (entry.length > 1024 * 1024) return false;
+                digest.update('string:' + JSON.stringify(entry) + ';'); return true;
+            case 'object': break;
+            default: return false;
+        }
+        if (types.isProxy(entry) || ancestors.has(entry)) return false;
+        const prototype = Object.getPrototypeOf(entry);
+        if (prototype !== Object.prototype && prototype !== Array.prototype && prototype !== null) return false;
+        if (Object.getOwnPropertySymbols(entry).length > 0) return false;
+        const descriptors = Object.getOwnPropertyDescriptors(entry);
+        if (Object.values(descriptors).some(descriptor => !('value' in descriptor))) return false;
+        countNextStepWork('visit:dirty_baseline_memo_key_object');
+        ancestors.add(entry);
+        digest.update(Array.isArray(entry) ? 'array{' : 'record{');
+        for (const [key, descriptor] of Object.entries(descriptors)) {
+            countNextStepWork('visit:dirty_baseline_memo_key_field');
+            digest.update(JSON.stringify(key) + ':');
+            if (!append(descriptor.value, depth + 1)) return false;
+        }
+        digest.update('}');
+        ancestors.delete(entry);
+        return true;
+    };
+    return append(value, 0) ? digest.digest('hex') : null;
+}
+
 export function normalizeDirtyWorkspaceBaseline(value: unknown, repoRoot?: string): DirtyWorkspaceBaseline | null {
+    if (!isInvocationReadObservationActive()) return normalizeDirtyWorkspaceBaselineNative(value, repoRoot);
+    const baseline = toPlainRecord(value);
+    if (!baseline) return null;
+    const dataKey = dirtyBaselineDataKey(baseline);
+    if (!dataKey) return normalizeDirtyWorkspaceBaselineNative(value, repoRoot);
+    // A rootless normalization intentionally accepts paths that a repo-bound projection rejects.
+    const modeKey = repoRoot ? 'root:' + taskModeInvocationRepoKey(repoRoot) : 'rootless';
+    const registry = memoizeInvocationRead(DIRTY_BASELINE_NORMALIZATIONS, '', () => new Map<string, DirtyWorkspaceBaseline>()).value;
+    const memoKey = JSON.stringify([modeKey, dataKey]);
+    let retained = registry.get(memoKey);
+    if (!retained) {
+        retained = deriveDirtyWorkspaceBaseline(captureDirtyBaselineNormalization(baseline, repoRoot));
+        registry.set(memoKey, retained);
+        // Fresh public copies of an unchanged normalized value share its private projection.
+        const normalizedKey = dirtyBaselineDataKey(retained);
+        if (normalizedKey) registry.set(JSON.stringify([modeKey, normalizedKey]), retained);
+    }
+    return cloneJson(retained);
+}
+
+function normalizeDirtyWorkspaceBaselineNative(value: unknown, repoRoot?: string): DirtyWorkspaceBaseline | null {
     const baseline = toPlainRecord(value);
     if (!baseline) {
         return null;

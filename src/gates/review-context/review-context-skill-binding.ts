@@ -4,6 +4,12 @@ import { createHash } from 'node:crypto';
 import { bindContainedDestination, assertContainedDestination } from '../../core/contained-filesystem';
 import { statFileIdentitySync } from '../../core/file-stat';
 import { parseJsonText } from '../../core/json';
+import {
+    observedInvocationValue, readInvocationFileContent, readInvocationPathObservation
+} from '../../core/invocation-file-observation';
+import {
+    createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead
+} from '../../core/invocation-read-observation';
 import { isPlainRecord } from '../../core/records';
 import { resolveBundleName } from '../../core/constants';
 import { hasSkillEntrypoint } from '../../core/review-capabilities';
@@ -25,7 +31,48 @@ function inputVersion(stat: fs.BigIntStats): string {
     return [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs, stat.birthtimeNs].join(':');
 }
 
-function readBoundedSkillInput(filePath: string, owningRoot: string, maximumBytes: number, label: string) {
+interface BoundedSkillInput {
+    readonly bytes: Buffer;
+    readonly sha256: string;
+}
+
+const BOUNDED_SKILL_INPUTS = createInvocationReadMemoKey<BoundedSkillInput>('bounded-review-skill-inputs');
+const SKILL_PATH_PREDICATES = createInvocationReadMemoKey<boolean>('review-skill-path-predicates');
+
+function skillPathExists(filePath: string): boolean {
+    return memoizeInvocationRead(SKILL_PATH_PREDICATES, 'exists:' + path.resolve(filePath), () => {
+        readInvocationPathObservation(filePath);
+        return fs.existsSync(filePath);
+    }).value;
+}
+
+function skillPathIsFile(filePath: string): boolean {
+    return memoizeInvocationRead(SKILL_PATH_PREDICATES, 'file:' + path.resolve(filePath), () => {
+        readInvocationPathObservation(filePath);
+        return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+    }).value;
+}
+
+function readBoundedSkillInput(filePath: string, owningRoot: string, maximumBytes: number, label: string): BoundedSkillInput {
+    if (!isInvocationReadObservationActive()) {
+        return readBoundedSkillInputNative(filePath, owningRoot, maximumBytes, label);
+    }
+    const memoId = JSON.stringify([path.resolve(owningRoot), path.resolve(filePath), maximumBytes, label]);
+    const retained = memoizeInvocationRead(BOUNDED_SKILL_INPUTS, memoId, () => {
+        readInvocationPathObservation(owningRoot);
+        readInvocationPathObservation(filePath);
+        const input = readBoundedSkillInputNative(filePath, owningRoot, maximumBytes, label);
+        const content = readInvocationFileContent(filePath, maximumBytes)!;
+        if (content.sha256 !== input.sha256 || content.size !== input.bytes.length) {
+            throw new Error(`${label} identity or contents changed after bounded reading.`);
+        }
+        // The checked bytes stay private; each parser receives an isolated copy.
+        return Object.freeze(input);
+    }).value;
+    return { bytes: Buffer.from(retained.bytes), sha256: retained.sha256 };
+}
+
+function readBoundedSkillInputNative(filePath: string, owningRoot: string, maximumBytes: number, label: string) {
     let binding;
     try {
         binding = bindContainedDestination(owningRoot, filePath);
@@ -90,7 +137,9 @@ function normalizeRequiredReferenceNames(value: unknown): string[] {
 function resolveRequiredReferences(skillRoot: string): ReviewSkillReferenceBinding | undefined {
     const metadataPath = path.join(skillRoot, 'skill.json');
     try {
-        fs.lstatSync(metadataPath);
+        const observation = readInvocationPathObservation(metadataPath);
+        if (observation) observedInvocationValue(observation.stat);
+        else fs.lstatSync(metadataPath);
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
         throw error;
@@ -151,7 +200,7 @@ export function resolveCatalogReviewSkillBinding(
     }
     const resolvedSkillsRoot = path.join(resolvedRepoRoot, resolveBundleName(), 'live', 'skills');
     if (
-        fs.existsSync(resolvedSkillsRoot)
+        skillPathExists(resolvedSkillsRoot)
         && !isPathRealpathInsideRoot(resolvedSkillsRoot, resolvedRepoRoot)
     ) {
         throw new Error(
@@ -166,10 +215,10 @@ export function resolveCatalogReviewSkillBinding(
     const skillRoot = path.join(resolvedSkillsRoot, skillId);
     const skillMdPath = path.join(skillRoot, 'SKILL.md');
     const skillJsonPath = path.join(skillRoot, 'skill.json');
-    const skillPath = fs.existsSync(skillMdPath) && fs.statSync(skillMdPath).isFile()
+    const skillPath = skillPathIsFile(skillMdPath)
         ? skillMdPath
         : skillJsonPath;
-    const skillExists = fs.existsSync(skillPath) && fs.statSync(skillPath).isFile();
+    const skillExists = skillPathIsFile(skillPath);
     if (!skillExists) {
         throw new Error(
             `Review context cannot be built because immutable lane skill candidates are missing an entrypoint: ` +

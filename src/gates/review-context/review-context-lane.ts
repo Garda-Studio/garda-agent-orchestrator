@@ -1,3 +1,6 @@
+import { countNextStepWork, describeProcessInputs } from '../../core/next-step-measurement';
+import { createInvocationReadMemoKey, isInvocationReadObservationActive } from '../../core/invocation-read-observation';
+import { readReviewValidationNode } from './review-validation-invocation';
 import { stringSha256 } from '../../gate-runtime/hash';
 import {
     REVIEW_COVERAGE_CATEGORY_IDS,
@@ -122,13 +125,37 @@ function buildLaneBinding(
     };
 }
 
-export function resolveReviewContextLaneBinding(
+const SNAPSHOT_VALIDATION = createInvocationReadMemoKey<string[]>('effective-review-snapshot-validation');
+const LANE_BINDING = createInvocationReadMemoKey<ReviewContextLaneBinding>('review-context-lane-binding');
+
+function readSnapshotViolations(snapshot: unknown): string[] {
+    const build = () => {
+        countNextStepWork('derive:effective_review_snapshot_validation');
+        const lanes = isPlainRecord(snapshot) && Array.isArray(snapshot.lanes) ? snapshot.lanes : [];
+        countNextStepWork('visit:effective_review_snapshot_lane', lanes.length);
+        return getEffectiveReviewSnapshotViolations(snapshot);
+    };
+    if (!isInvocationReadObservationActive()) return build();
+    const key = describeProcessInputs(snapshot);
+    return key.opaque ? build() : readReviewValidationNode(SNAPSHOT_VALIDATION, () => key.text, build);
+}
+
+export function resolveReviewContextLaneBinding(preflight: Record<string, unknown>, reviewType: string): ReviewContextLaneBinding {
+    const build = () => deriveReviewContextLaneBinding(preflight, reviewType);
+    if (!isInvocationReadObservationActive()) return build();
+    // All contract fields participate; descriptor-only inspection never invokes caller hooks.
+    const key = describeProcessInputs([preflight, reviewType]);
+    return key.opaque ? build() : readReviewValidationNode(LANE_BINDING, () => key.text, build);
+}
+
+function deriveReviewContextLaneBinding(
     preflight: Record<string, unknown>,
     reviewType: string
 ): ReviewContextLaneBinding {
+    countNextStepWork('derive:review_context_lane_binding');
     const normalizedReviewType = String(reviewType || '').trim().toLowerCase();
     const rawSnapshot = preflight.effective_review_snapshot;
-    const violations = getEffectiveReviewSnapshotViolations(rawSnapshot);
+    const violations = readSnapshotViolations(rawSnapshot);
     const snapshot = isPlainRecord(rawSnapshot)
         ? rawSnapshot as unknown as EffectiveReviewSnapshot
         : null;

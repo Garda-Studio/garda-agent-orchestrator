@@ -12,6 +12,7 @@ import { hasReportedFailedTestCase, readReportedTestCases } from '../../../../sr
 import { buildTestFirstExpectedFailureRoute } from '../../../../src/gates/next-step/next-step-test-first-routing';
 import { requiredExpectedRedFiles } from '../../../../src/gates/test-first/expected-red-scope';
 import { readExpectedRedExecutionEvidence } from '../../../../src/gates/test-first/expected-red-evidence';
+import { withNextStepMeasurement, type NextStepMeasurement } from '../../../../src/core/next-step-measurement';
 import { resolveAuthoritativeReviewValidationObligations } from '../../../../src/gates/review-context/review-context-coverage';
 import { getNativeCaseResolutionViolations } from '../../../../src/gates/review/native-case-semantics';
 import { validationDigest } from '../../../../src/core/project-validation-identity';
@@ -278,7 +279,10 @@ describe('next-step test-first expected-red routing', () => {
         const suite = await runFullSuiteValidationCommand({ ...fixture, taskId: TASK_ID });
         assert.equal(suite.exitCode, 0, suite.outputText);
         const next = () => resolveNextStep({ repoRoot: fixture.repoRoot, taskId: TASK_ID });
-        const blocked = next();
+        let redMeasurement: NextStepMeasurement | undefined;
+        const blocked = withNextStepMeasurement(next, value => { redMeasurement = value; });
+        assert.ok((redMeasurement!.work['visit:expected_red_event'] ?? 0) > 0,
+            'Actual retained native RED event visits must remain visible inside a shared derivation.');
         assert.equal(blocked.status, 'BLOCKED');
         assert.equal(blocked.next_gate, 'test-first-expected-red-stale', blocked.reason);
         assert.ok(blocked.reason.includes(testPath), blocked.reason);
@@ -381,7 +385,10 @@ describe('next-step test-first expected-red routing', () => {
             loadedRuleFiles: ['00-core.md', '15-project-memory.md', '40-commands.md', '80-task-workflow.md', '90-skill-catalog.md'], emitMetrics: false });
         publish();
         const next = () => resolveNextStep({ repoRoot: fixture.repoRoot, taskId: TASK_ID });
-        const blocked = next();
+        let redMeasurement: NextStepMeasurement | undefined;
+        const blocked = withNextStepMeasurement(next, value => { redMeasurement = value; });
+        assert.ok((redMeasurement!.work['visit:expected_red_recipe_event'] ?? 0) > 0,
+            'Actual retained recipe RED event visits must remain visible inside a shared derivation.');
         assert.equal(blocked.status, 'BLOCKED');
         assert.ok(blocked.reason.includes(testPath), blocked.reason);
         assert.match(blocked.reason, /with operator approval remove/u);

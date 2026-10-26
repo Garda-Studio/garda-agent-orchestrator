@@ -32,6 +32,10 @@ test('Q2 real next-step shares scope bytes and rejects input replacements after 
     }
     assert.ok(aclKeys.every(key => !key.toLowerCase().includes(repoRoot.toLowerCase())),
         'History comparison must retain ACL object and phase counts without the random fixture root.');
+    const nativePathKeys = Object.keys(normalized.counters).filter(key => key.startsWith('native_realpath_'));
+    assert.ok(nativePathKeys.length > 0);
+    assert.ok(nativePathKeys.every(key => !key.replaceAll('\\', '/').toLowerCase().includes(repoRoot.replaceAll('\\', '/').toLowerCase())),
+        'History comparison retains native path-check counts independently of temporary workspace names.');
     for (const file of [
         path.join(eventsRoot(repoRoot), taskId + '.jsonl'),
         path.join(reviewsRoot(repoRoot), taskId + '-preflight.json'),

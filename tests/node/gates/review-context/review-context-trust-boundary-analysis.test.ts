@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { withInvocationReadObservation, registerInvocationDependency } from '../../../../src/core/invocation-read-observation';
+import { withNextStepMeasurement, type NextStepMeasurement } from '../../../../src/core/next-step-measurement';
+import { authenticateWorkflowMigration } from '../../../../src/core/auth/local-commit-availability';
 
 import {
     appendMandatoryTaskEvent
@@ -41,11 +44,12 @@ import { readValidationReviewObligations } from '../../../../src/gates/review/va
 import { buildReviewContext, getRulePack } from '../../../../src/gates/review-context/build-review-context';
 import { getReviewContextContractViolations, buildReviewContextPreflightDiffExpectations } from '../../../../src/gates/review-context/review-context-contract';
 import { buildReviewCoverageContract } from '../../../../src/gates/review/review-coverage-ledger';
-import { buildAuthoritativeReviewCoverageContract } from '../../../../src/gates/review-context/review-context-coverage';
+import { buildAuthoritativeReviewCoverageContract, resolveAuthoritativeReviewValidationObligations } from '../../../../src/gates/review-context/review-context-coverage';
 import { getReusedReviewCoverageContractViolations } from '../../../../src/gates/review-reuse/review-reuse-materialization';
 import { buildFocusedRecoveryCoverageContractSha256 } from '../../../../src/gates/next-step/next-step';
 import { buildReviewCoverageAuditSummary } from '../../../../src/gates/task-audit/task-audit-summary-review-coverage';
 import { checkRequiredReviews, validatePreflightForReview } from '../../../../src/gates/required-reviews/required-reviews-check';
+import { REVIEW_CONTRACTS } from '../../../../src/gates/required-reviews/required-reviews-check-contracts';
 import { collectRequiredReviewEvidence } from '../../../../src/gates/completion/completion-required-review-evidence';
 import { getValidationTerminalViolations } from '../../../../src/gates/review/validation-terminal';
 import { writeSchema4ReviewPackage } from '../review/review-execution-lineage-test-fixture';
@@ -210,6 +214,197 @@ function writeCurrentArtifact(fixture: ReturnType<typeof createGateFixture>, pre
 }
 
 describe('review-context trust-boundary handoff', () => {
+    it('Q3 RED-only coverage stays lazy for an ineligible lane', async () => {
+        const f = declaredReviewFixture('domain', { declared: false });
+        try {
+            seedTaskQueue(f.repoRoot, f.taskId, 'IN_PROGRESS', 'default', 'Test-first: expected-red.', 'Declared review evidence');
+            const options = { ...f, preflight: JSON.parse(fs.readFileSync(f.preflightPath, 'utf8')) };
+            let measurement: NextStepMeasurement | undefined;
+            withNextStepMeasurement(() => withInvocationReadObservation(() => {
+                assert.equal(resolveAuthoritativeReviewValidationObligations({ ...options, reviewType: 'infra' }), undefined);
+                // No retained RED exists. Its failure belongs only to eligible semantic review lanes.
+                assert.throws(() => resolveAuthoritativeReviewValidationObligations({ ...options, reviewType: 'code' }), /Expected-RED|expected-RED/u);
+                assert.equal(resolveAuthoritativeReviewValidationObligations({ ...options, reviewType: 'infra' }), undefined);
+                assert.throws(() => resolveAuthoritativeReviewValidationObligations({ ...options, reviewType: 'code' }), /Expected-RED|expected-RED/u);
+            }), value => { measurement = value; });
+            assert.equal(measurement!.work['derive:expected_red_review_obligations'], 1);
+        } finally { await f.cleanup(); }
+    });
+
+    it('Q3 shared coverage does not suppress live preflight contract synchronization', async () => {
+        const f = declaredReviewFixture('domain', { passing: true });
+        const originalContracts = REVIEW_CONTRACTS.map(([lane, verdict]): [string, string] => [lane, verdict]);
+        try {
+            assert.equal((await f.execute()).status, 'PASSED');
+            assert.equal(f.publish().exitCode, 0);
+            const options = { ...f, preflight: JSON.parse(fs.readFileSync(f.preflightPath, 'utf8')), reviewType: 'code' };
+            withInvocationReadObservation(() => {
+                const first = resolveAuthoritativeReviewValidationObligations(options);
+                assert.ok(first?.length);
+                REVIEW_CONTRACTS.push(['q3-caller-poison', 'UNEXPECTED VERDICT']);
+                assert.deepEqual(resolveAuthoritativeReviewValidationObligations(options), first);
+                assert.equal(REVIEW_CONTRACTS.some(([lane]) => lane === 'q3-caller-poison'), false);
+            });
+        } finally {
+            REVIEW_CONTRACTS.splice(0, REVIEW_CONTRACTS.length, ...originalContracts);
+            await f.cleanup();
+        }
+    });
+
+    it('Q3 quality graph retains workflow-migration key rotation and missing-key dependencies', async () => {
+        const f = declaredReviewFixture('domain', { passing: true });
+        try {
+            assert.equal((await f.execute()).status, 'PASSED');
+            assert.equal(f.publish().exitCode, 0);
+            const configPath = path.join(f.orchestratorRoot, 'live/config/workflow-config.json');
+            const preflight = JSON.parse(fs.readFileSync(f.preflightPath, 'utf8'));
+            const configHash = fileSha256(configPath);
+            const migration = authenticateWorkflowMigration(f.repoRoot, {
+                event_source: 'workflow-config-set', command: 'lifecycle configuration migration',
+                mutation_source: 'lifecycle', migration_version: 1, permissions_preserved: true,
+                config_path: configPath, before_sha256: configHash, after_sha256: configHash,
+                changed_fields: [], project_validation_preserved_sha256: preflight.project_validation.contract_sha256
+            });
+            fs.appendFileSync(path.join(f.orchestratorRoot, 'runtime/workflow-config-audit.jsonl'), JSON.stringify(migration) + '\n');
+            const keyPath = path.join(f.repoRoot, '.git/garda-private/workflow-migration-key');
+            const originalKey = fs.readFileSync(keyPath);
+            const expected = f.read();
+            assert.equal(expected.status, 'current');
+            try {
+                assert.throws(() => withInvocationReadObservation(() => {
+                    registerInvocationDependency({}, () => fs.writeFileSync(keyPath, '0'.repeat(64) + '\n'));
+                    assert.deepEqual(f.read(), expected);
+                    assert.deepEqual(f.read(), expected);
+                }), /Invocation file observation changed/u);
+                assert.equal(f.read().status, 'invalid');
+                fs.unlinkSync(keyPath);
+                assert.throws(() => withInvocationReadObservation(() => {
+                    registerInvocationDependency({}, () => fs.writeFileSync(keyPath, originalKey));
+                    assert.equal(f.read().status, 'invalid');
+                    assert.equal(f.read().status, 'invalid');
+                }), /Invocation file observation changed/u);
+                assert.deepEqual(f.read(), expected);
+            } finally { fs.writeFileSync(keyPath, originalKey); }
+        } finally { await f.cleanup(); }
+    });
+
+    it('Q3 shares real quality evidence but keeps soft and strict verdicts separate in either order', async () => {
+        const f = declaredReviewFixture();
+        try {
+            assert.equal(f.publish().exitCode, 0);
+            const expectedSoft = f.readNavigation(), expectedStrict = f.read();
+            assert.equal(expectedSoft.status, 'current');
+            assert.equal(expectedSoft.validation_phases?.execution, 'PENDING');
+            assert.equal(expectedStrict.status, 'invalid');
+            for (const strictFirst of [false, true]) {
+                let measurement: NextStepMeasurement | undefined;
+                withNextStepMeasurement(() => withInvocationReadObservation(() => {
+                    const first = strictFirst ? f.read() : f.readNavigation();
+                    assert.deepEqual(first, strictFirst ? expectedStrict : expectedSoft);
+                    // Public consumers can mutate their returned graphs without poisoning later readers.
+                    first.violations.push('caller-owned diagnostic');
+                    if (first.validation_phases) first.validation_phases.obligations.length = 0;
+                    assert.deepEqual(f.readNavigation(), expectedSoft);
+                    assert.deepEqual(f.read(), expectedStrict);
+                    assert.deepEqual(f.readNavigation(), expectedSoft);
+                }), value => { measurement = value; });
+                assert.equal(measurement!.work['derive:readBoundQualityAnalysis'], 1);
+                assert.equal(measurement!.work['derive:quality_validation_phases'], 1);
+                assert.equal(measurement!.work['derive:trust_boundary_analysis'], 1);
+                assert.equal(measurement!.work['derive:quality_phase_analysis'], 1);
+            }
+        } finally { await f.cleanup(); }
+    });
+
+    it('Q3 audit and obligation readers share the declared graph across real lane contracts', async () => {
+        const f = declaredReviewFixture('domain', { passing: true });
+        try {
+            assert.equal((await f.execute()).status, 'PASSED');
+            assert.equal(f.publish().exitCode, 0);
+            const expected = readValidationReviewObligations(f);
+            const reviewsRoot = path.join(f.orchestratorRoot, 'runtime/reviews');
+            const laneContracts: Array<Record<string, boolean>> = [
+                { code: true }, { code: true, test: true, db: true, security: true, infra: true }
+            ];
+            for (const requiredReviews of laneContracts) {
+                const before = buildReviewCoverageAuditSummary({ reviewsRoot, taskId: f.taskId, requiredReviews });
+                let measurement: NextStepMeasurement | undefined;
+                withNextStepMeasurement(() => withInvocationReadObservation(() => {
+                    assert.deepEqual(buildReviewCoverageAuditSummary({ reviewsRoot, taskId: f.taskId, requiredReviews }), before);
+                    const first = readValidationReviewObligations(f);
+                    assert.deepEqual(first, expected);
+                    first.obligations[0].source_identity.sha256 = '0'.repeat(64);
+                    first.semantic_review_lanes.length = 0;
+                    assert.deepEqual(readValidationReviewObligations(f), expected);
+                }), value => { measurement = value; });
+                assert.equal(measurement!.work['derive:readValidationReviewObligations'], 1);
+                assert.equal(measurement!.work['derive:resolveAuthoritativeReviewValidationObligations'], 1);
+                assert.equal(measurement!.work['derive:readBoundQualityAnalysis'], 1);
+                assert.equal(measurement!.work['derive:quality_validation_phases'], 1);
+            }
+        } finally { await f.cleanup(); }
+    });
+
+    it('Q3 final dependency check rejects changes after the last quality graph consumer', async () => {
+        const f = declaredReviewFixture('domain', { passing: true });
+        try {
+            assert.equal((await f.execute()).status, 'PASSED');
+            assert.equal(f.publish().exitCode, 0);
+            const expected = f.read();
+            assert.equal(expected.status, 'current');
+            for (const file of [f.artifactPath, path.join(f.repoRoot, 'RootSuite'),
+                path.join(f.orchestratorRoot, 'live/config/workflow-config.json')]) {
+                const original = fs.readFileSync(file);
+                try {
+                    assert.throws(() => withInvocationReadObservation(() => {
+                        registerInvocationDependency({}, () => fs.appendFileSync(file, '\n'));
+                        assert.deepEqual(f.read(), expected);
+                        assert.deepEqual(f.read(), expected);
+                    }), /(?:Invocation file observation changed|Validation .*changed|Destination .*changed)/u);
+                } finally { fs.writeFileSync(file, original); }
+            }
+        } finally { await f.cleanup(); }
+    });
+
+    it('Q3 retains missing quality paths while leaving unused quality artifacts unread', async () => {
+        const f = declaredReviewFixture('domain');
+        try {
+            assert.equal(f.publish().exitCode, 0);
+            const original = fs.readFileSync(f.artifactPath);
+            fs.unlinkSync(f.artifactPath);
+            assert.throws(() => withInvocationReadObservation(() => {
+                registerInvocationDependency({}, () => fs.writeFileSync(f.artifactPath, original));
+                assert.equal(f.read().status, 'missing');
+            }), /Invocation file observation changed/u);
+        } finally { await f.cleanup(); }
+        const unused = declaredReviewFixture('domain', { declared: false });
+        try {
+            fs.writeFileSync(unused.artifactPath, 'invalid unused JSON');
+            withInvocationReadObservation(() => {
+                registerInvocationDependency({}, () => fs.writeFileSync(unused.artifactPath, 'changed unused JSON'));
+                assert.equal(unused.read().status, 'not_required');
+            });
+        } finally { await unused.cleanup(); }
+    });
+
+    it('Q3 retained completion inspection never authorizes active execution inspection', async () => {
+        const f = declaredReviewFixture('domain', { passing: true });
+        try {
+            assert.equal((await f.execute()).status, 'PASSED');
+            assert.equal(f.publish().exitCode, 0);
+            const expected = readValidationReviewObligations(f);
+            seedTaskQueue(f.repoRoot, f.taskId, 'DONE', 'default', '', 'Declared review evidence');
+            appendMandatoryTaskEvent(f.orchestratorRoot, f.taskId, 'COMPLETION_GATE_PASSED', 'PASS',
+                'Closed-state inspection fixture.', { status: 'PASSED', outcome: 'PASS', preflight_path: f.preflightPath, violations: [] });
+            for (const retainedFirst of [false, true]) withInvocationReadObservation(() => {
+                if (retainedFirst) assert.deepEqual(readValidationReviewObligations({ ...f, inspection: 'retained_completed' }), expected);
+                assert.throws(() => readValidationReviewObligations(f), /active native task/u);
+                assert.deepEqual(readValidationReviewObligations({ ...f, inspection: 'retained_completed' }), expected);
+                assert.throws(() => readValidationReviewObligations(f), /active native task/u);
+            });
+        } finally { await f.cleanup(); }
+    });
+
     it('rejects matrix-only declared case even when its source and another case are current', async () => {
         const f = declaredReviewFixture('security', { passing: true });
         try {

@@ -7,6 +7,12 @@ import { assertWorkflowTransactionReadable } from '../workflow-transaction-state
 import { validateWorkflowConfig } from '../../schemas/config-artifacts';
 import { isPlainRecord } from '../records';
 import { statFileIdentitySync } from '../file-stat';
+import { observedInvocationValue, readInvocationFileContent, readInvocationPathObservation } from '../invocation-file-observation';
+import type { InvocationObservedValue } from '../invocation-file-observation';
+import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead,
+    registerInvocationDependency } from '../invocation-read-observation';
+import { readNativeRealpath } from '../paths';
+import { countNextStepWork } from '../next-step-measurement';
 
 export interface LocalCommitAvailability {
     enabled: boolean;
@@ -31,6 +37,43 @@ const MAX_AUDIT_WINDOW_BYTES = 8 * 1024 * 1024;
 const MAX_AUDIT_LINE_BYTES = 64 * 1024;
 const AUDIT_READ_CHUNK_BYTES = 64 * 1024;
 
+type PermissionWorkspaceIdentity = Pick<fs.BigIntStats, 'dev' | 'ino' | 'birthtimeNs'>;
+const PERMISSION_WORKSPACE_IDENTITIES = createInvocationReadMemoKey<InvocationObservedValue<PermissionWorkspaceIdentity>>(
+    'permission-native-workspace-identities'
+);
+
+function capturePermissionWorkspaceIdentity(root: string): InvocationObservedValue<PermissionWorkspaceIdentity> {
+    try {
+        // The authentication protocol uses raw stat values, including a zero Windows dev.
+        // Descriptor-completed Q2 identities protect paths but are not HMAC payload fields.
+        const identity = fs.statSync(root, { bigint: true });
+        return Object.freeze({ value: Object.freeze({ dev: identity.dev, ino: identity.ino, birthtimeNs: identity.birthtimeNs }) });
+    } catch (error: unknown) {
+        return Object.freeze({ error });
+    }
+}
+
+function readPermissionWorkspaceIdentity(root: string, observeReads: boolean): PermissionWorkspaceIdentity {
+    if (!observeReads || !isInvocationReadObservationActive()) return fs.statSync(root, { bigint: true });
+    return observedInvocationValue(memoizeInvocationRead(PERMISSION_WORKSPACE_IDENTITIES, root, () => {
+        readInvocationPathObservation(root);
+        countNextStepWork('permission_workspace_identity_observation:' + root);
+        const original = capturePermissionWorkspaceIdentity(root);
+        registerInvocationDependency(original, () => {
+            countNextStepWork('permission_workspace_identity_final_validation:' + root);
+            const current = capturePermissionWorkspaceIdentity(root);
+            const unchanged = 'error' in original || 'error' in current
+                ? 'error' in original && 'error' in current
+                    && String((original.error as NodeJS.ErrnoException)?.code || original.error)
+                        === String((current.error as NodeJS.ErrnoException)?.code || current.error)
+                : original.value.dev === current.value.dev && original.value.ino === current.value.ino
+                    && original.value.birthtimeNs === current.value.birthtimeNs;
+            if (!unchanged) throw new Error('Invocation permission workspace identity changed: ' + root);
+        });
+        return original;
+    }).value);
+}
+
 function sha256(value: string): string {
     return createHash('sha256').update(value, 'utf8').digest('hex');
 }
@@ -40,27 +83,44 @@ function normalizedPath(value: string): string {
     return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
-function resolvePermissionContext(repoRoot: string, keyRelativePath = KEY_RELATIVE_PATH): PermissionContext {
-    const root = fs.realpathSync.native(path.resolve(repoRoot));
+function readPermissionText(filePath: string, observeReads: boolean): string {
+    const content = observeReads ? readInvocationFileContent(filePath) : null;
+    if (!content) return fs.readFileSync(filePath, 'utf8');
+    if (content.size <= 128 * 1024 * 1024) return content.copyBytes().toString('utf8');
+    // Preserve the native reader's size contract; Q2 retains only a digest above its byte bound.
+    const bytes = fs.readFileSync(filePath);
+    if (createHash('sha256').update(bytes).digest('hex') !== content.sha256)
+        throw new Error('Permission input changed during invocation capture.');
+    return bytes.toString('utf8');
+}
+
+function resolvePermissionContext(repoRoot: string, keyRelativePath = KEY_RELATIVE_PATH, observeReads = false): PermissionContext {
+    const resolvedRoot = path.resolve(repoRoot);
+    const root = observeReads ? readNativeRealpath(resolvedRoot) : fs.realpathSync.native(resolvedRoot);
     const gitPath = path.join(root, '.git');
-    const gitStat = fs.lstatSync(gitPath);
+    const gitObservation = observeReads ? readInvocationPathObservation(gitPath) : null;
+    const gitStat = gitObservation ? observedInvocationValue(gitObservation.stat) : fs.lstatSync(gitPath);
     if (gitStat.isSymbolicLink()) throw new Error('Local commit permission rejects symbolic Git metadata.');
-    const pointer = gitStat.isFile() ? fs.readFileSync(gitPath, 'utf8').trim().match(/^gitdir:\s*(.+)$/u) : null;
+    const pointer = gitStat.isFile() ? readPermissionText(gitPath, observeReads).trim().match(/^gitdir:\s*(.+)$/u) : null;
     const gitDirectory = gitStat.isDirectory() ? gitPath : pointer ? path.resolve(root, pointer[1]) : '';
-    if (!gitDirectory || !fs.lstatSync(gitDirectory).isDirectory()) throw new Error('Local commit permission requires a Git workspace.');
-    const canonicalGitDirectory = fs.realpathSync.native(gitDirectory);
+    const directoryObservation = observeReads && gitDirectory ? readInvocationPathObservation(gitDirectory) : null;
+    if (!gitDirectory || !(directoryObservation ? observedInvocationValue(directoryObservation.stat) : fs.lstatSync(gitDirectory)).isDirectory())
+        throw new Error('Local commit permission requires a Git workspace.');
+    const canonicalGitDirectory = observeReads ? readNativeRealpath(gitDirectory) : fs.realpathSync.native(gitDirectory);
     const keyPath = path.join(canonicalGitDirectory, keyRelativePath);
+    if (observeReads) readInvocationPathObservation(keyPath);
     bindContainedDestination(canonicalGitDirectory, keyPath);
-    const identity = fs.statSync(root, { bigint: true });
+    const identity = readPermissionWorkspaceIdentity(root, observeReads);
     return { gitDirectory: canonicalGitDirectory, keyPath,
         workspaceIdentity: sha256(JSON.stringify([normalizedPath(root), normalizedPath(canonicalGitDirectory),
             String(identity.dev), String(identity.ino), String(identity.birthtimeNs)])) };
 }
 
-function readPermissionKey(context: PermissionContext): Buffer | null {
-    if (!fs.existsSync(context.keyPath)) return null;
+function readPermissionKey(context: PermissionContext, observeReads = false): Buffer | null {
+    const observation = observeReads ? readInvocationPathObservation(context.keyPath) : null;
+    if (observation ? 'error' in observation.targetStat : !fs.existsSync(context.keyPath)) return null;
     bindContainedDestination(context.gitDirectory, context.keyPath);
-    const value = fs.readFileSync(context.keyPath, 'utf8').trim();
+    const value = readPermissionText(context.keyPath, observeReads).trim();
     if (!SHA256_PATTERN.test(value)) throw new Error('Local commit authentication key is invalid.');
     return Buffer.from(value, 'hex');
 }
@@ -131,8 +191,8 @@ export function isAuthenticatedWorkflowMigration(repoRoot: string, record: Recor
         || record.mutation_source !== 'lifecycle' || record.migration_version !== 1
         || record.permissions_preserved !== true) return false;
     try {
-        const context = resolvePermissionContext(repoRoot, MIGRATION_KEY_RELATIVE_PATH);
-        const key = readPermissionKey(context);
+        const context = resolvePermissionContext(repoRoot, MIGRATION_KEY_RELATIVE_PATH, true);
+        const key = readPermissionKey(context, true);
         const authentication = record.workflow_migration_authentication;
         if (!key || !isPlainRecord(authentication)
             || authentication.workspace_identity_sha256 !== context.workspaceIdentity

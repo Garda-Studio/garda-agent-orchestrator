@@ -1,9 +1,11 @@
 import { countNextStepWork, countNextStepArrayCopy } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 
+import { readInvocationPathObservation } from '../../core/invocation-file-observation';
 import { sha256RedactedJsonPayload } from '../../core/redaction';
 import { fileSha256 } from '../../gate-runtime/hash';
 import type { ReviewFindingPolicy } from '../../policy/profile-resolver';
+import { readReviewValidationBytes } from '../review-context/review-validation-invocation';
 import { normalizePath } from '../shared/helpers';
 import {
     getReviewCoverageContractViolations,
@@ -577,6 +579,7 @@ function validateBoundFileHash(
     violations: string[]
 ): void {
     try {
+        readInvocationPathObservation(filePath);
         if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
             violations.push(`${subject} '${filePath}' is missing.`);
             return;
@@ -801,6 +804,7 @@ function readAuthenticatedSnapshot(
         return null;
     }
     try {
+        readInvocationPathObservation(snapshotPath);
         if (
             !fs.existsSync(snapshotPath)
             || !fs.statSync(snapshotPath).isFile()
@@ -814,7 +818,7 @@ function readAuthenticatedSnapshot(
         return null;
     }
     try {
-        return JSON.parse(fs.readFileSync(snapshotPath, 'utf8')) as unknown;
+        return JSON.parse(readReviewValidationBytes(snapshotPath).toString('utf8')) as unknown;
     } catch {
         violations.push(`${subject} snapshot '${snapshotPath}' is not valid JSON.`);
         return null;
@@ -1092,6 +1096,8 @@ export function validateReviewRemediationBaselineArtifact(
     options: ReviewRemediationBaselineValidationOptions
 ): ReviewRemediationBaselineValidationResult {
     const artifactPath = normalizePath(options.artifactPath);
+    // Observe absence and aliases without changing the legacy exists/stat error contract.
+    readInvocationPathObservation(artifactPath);
     if (!fs.existsSync(artifactPath) || !fs.statSync(artifactPath).isFile()) {
         return {
             valid: false,
@@ -1105,7 +1111,7 @@ export function validateReviewRemediationBaselineArtifact(
     validateExpectedHash(violations, 'remediation baseline artifact hash', artifactSha256, options.expectedArtifactSha256);
     let parsed: unknown;
     try {
-        parsed = JSON.parse(fs.readFileSync(artifactPath, 'utf8')) as unknown;
+        parsed = JSON.parse(readReviewValidationBytes(artifactPath).toString('utf8')) as unknown;
     } catch {
         return {
             valid: false,

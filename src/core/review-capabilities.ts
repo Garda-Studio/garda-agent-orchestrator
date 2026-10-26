@@ -1,4 +1,9 @@
 import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { readInvocationPathObservation } from './invocation-file-observation';
+import { createInvocationReadMemoKey, memoizeInvocationRead } from './invocation-read-observation';
+
+const SKILL_ENTRYPOINT_FILES = createInvocationReadMemoKey<boolean>('review-skill-entrypoint-files');
 
 export const REVIEW_CAPABILITY_KEYS = Object.freeze([
     'code',
@@ -121,10 +126,13 @@ export function listKnownReviewSkillDirectories(): string[] {
 export function hasSkillEntrypoint(skillRoot: string): boolean {
     const skillMdPath = `${skillRoot}/SKILL.md`;
     const skillJsonPath = `${skillRoot}/skill.json`;
-    return (
-        (fs.existsSync(skillMdPath) && fs.statSync(skillMdPath).isFile())
-        || (fs.existsSync(skillJsonPath) && fs.statSync(skillJsonPath).isFile())
-    );
+    const isFile = (filePath: string): boolean => memoizeInvocationRead(
+        SKILL_ENTRYPOINT_FILES, path.resolve(filePath), () => {
+            readInvocationPathObservation(filePath);
+            return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+        }
+    ).value;
+    return isFile(skillMdPath) || isFile(skillJsonPath);
 }
 
 function ensurePlainObject(value: unknown, label: string): Record<string, unknown> {

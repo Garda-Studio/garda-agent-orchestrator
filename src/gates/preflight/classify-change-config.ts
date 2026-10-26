@@ -1,3 +1,8 @@
+import { createHash } from 'node:crypto';
+import { cloneFrozenJson, cloneJson } from '../../core/immutable-json';
+import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead } from '../../core/invocation-read-observation';
+import { readInvocationFileContent, readInvocationPathObservation } from '../../core/invocation-file-observation';
+import { countNextStepWork, describeProcessInputs } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { mergeFileRoleBindings, type FileRoleBindings } from '../../core/file-role-bindings';
@@ -170,18 +175,41 @@ export function getDefaultClassificationConfig(repoRoot: string): Classification
 /**
  * Load classification config from paths.json with defaults.
  */
-export function getClassificationConfig(
+const CLASSIFICATION_CONFIG = createInvocationReadMemoKey<ResolvedClassificationConfig>('resolved-classification-config');
+
+export function getClassificationConfig(repoRoot: string, options: GetClassificationConfigOptions = {}): ResolvedClassificationConfig {
+    if (!isInvocationReadObservationActive()) return deriveClassificationConfig(repoRoot, options);
+    const identity = describeProcessInputs([path.resolve(repoRoot), options]);
+    countNextStepWork('classification_config_key_characters', identity.text.length);
+    if (identity.opaque) return deriveClassificationConfig(repoRoot, options);
+    return cloneJson(memoizeInvocationRead(CLASSIFICATION_CONFIG, identity.text,
+        () => cloneFrozenJson(deriveClassificationConfig(repoRoot, options))).value);
+}
+
+function readClassificationConfigText(configPath: string): string {
+    const content = readInvocationFileContent(configPath);
+    if (!content) return fs.readFileSync(configPath, 'utf8');
+    if (content.size <= 128 * 1024 * 1024) return content.copyBytes().toString('utf8');
+    const bytes = fs.readFileSync(configPath);
+    if (createHash('sha256').update(bytes).digest('hex') !== content.sha256)
+        throw new Error('Classification config changed after observation: ' + configPath);
+    return bytes.toString('utf8');
+}
+
+function deriveClassificationConfig(
     repoRoot: string,
     options: GetClassificationConfigOptions = {}
 ): ResolvedClassificationConfig {
+    countNextStepWork('derive:classification_config');
     const defaults = getDefaultClassificationConfig(repoRoot);
     const configPath = resolveGateExecutionPath(repoRoot, 'live/config/paths.json');
     let source = 'defaults';
     let rawPathsConfig: Record<string, unknown> = {};
 
+    readInvocationPathObservation(configPath);
     if (fs.existsSync(configPath)) {
         try {
-            const raw = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+            const raw = JSON.parse(readClassificationConfigText(configPath)) as Record<string, unknown>;
             rawPathsConfig = raw;
             for (const key of [
                 'metrics_path', 'runtime_roots', 'fast_path_roots',

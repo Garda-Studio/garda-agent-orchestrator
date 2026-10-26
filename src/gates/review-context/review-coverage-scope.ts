@@ -1,14 +1,29 @@
+import { createInvocationReadMemoKey } from '../../core/invocation-read-observation';
+import { countNextStepWork } from '../../core/next-step-measurement';
+import { readReviewValidationNode } from './review-validation-invocation';
 import {
     computeReviewRelevantScopeFingerprint,
     computeReviewRelevantScopeWithoutCloseout,
     computeReviewReuseCodeScopeFingerprint
 } from '../review-reuse/review-reuse';
 
-export function resolveReviewCoverageChangedFiles(options: {
+interface CoverageChangedFileOptions {
     reviewType: string;
     preflight: Record<string, unknown>;
     repoRoot: string;
-}): string[] {
+}
+const COVERAGE_CHANGED_FILES = createInvocationReadMemoKey<string[]>('review-coverage-changed-files');
+
+export function resolveReviewCoverageChangedFiles(options: CoverageChangedFileOptions): string[] {
+    return readReviewValidationNode(COVERAGE_CHANGED_FILES, () => options, () => {
+        countNextStepWork('derive:review_coverage_changed_files');
+        const files = deriveReviewCoverageChangedFiles(options);
+        countNextStepWork('visit:review_coverage_selected_file', files.length);
+        return files;
+    });
+}
+
+function deriveReviewCoverageChangedFiles(options: CoverageChangedFileOptions): string[] {
     const reviewType = String(options.reviewType || '').trim().toLowerCase();
     if (reviewType === 'test') {
         const scope = computeReviewRelevantScopeFingerprint(

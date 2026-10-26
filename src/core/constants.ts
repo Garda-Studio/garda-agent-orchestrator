@@ -1,3 +1,5 @@
+import { readInvocationPathObservation } from './invocation-file-observation';
+import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead, registerInvocationDependency } from './invocation-read-observation';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { getProviderIds, getProviderEntrypointMap, getProviderEntrypointFiles } from './provider-registry';
@@ -38,20 +40,34 @@ export function resolveBundleName(_override?: string): string {
     return DEFAULT_BUNDLE_NAME;
 }
 
+const BUNDLE_ROOT_OBSERVATIONS = createInvocationReadMemoKey<boolean>('bundle-root-selection');
+const BUNDLE_NAME_OBSERVATIONS = createInvocationReadMemoKey<string>('bundle-name-selection');
+
+function bundleInputExists(filePath: string): boolean {
+    readInvocationPathObservation(filePath);
+    return fs.existsSync(filePath);
+}
+
 export function isBundleRootLike(candidateRoot: string): boolean {
+    if (!isInvocationReadObservationActive()) return inspectBundleRootLike(candidateRoot);
+    return memoizeInvocationRead(BUNDLE_ROOT_OBSERVATIONS, path.resolve(candidateRoot),
+        () => inspectBundleRootLike(candidateRoot)).value;
+}
+
+function inspectBundleRootLike(candidateRoot: string): boolean {
     try {
         const normalizedRoot = path.resolve(candidateRoot);
-        if (!fs.existsSync(normalizedRoot) || !fs.statSync(normalizedRoot).isDirectory()) {
+        if (!bundleInputExists(normalizedRoot) || !fs.statSync(normalizedRoot).isDirectory()) {
             return false;
         }
-        if (!fs.existsSync(path.join(normalizedRoot, 'VERSION'))) {
+        if (!bundleInputExists(path.join(normalizedRoot, 'VERSION'))) {
             return false;
         }
-        if (!fs.existsSync(path.join(normalizedRoot, 'package.json'))) {
+        if (!bundleInputExists(path.join(normalizedRoot, 'package.json'))) {
             return false;
         }
         return CLI_ENTRYPOINT_CANDIDATES.some(function (entrypoint) {
-            return fs.existsSync(path.join(normalizedRoot, entrypoint));
+            return bundleInputExists(path.join(normalizedRoot, entrypoint));
         });
     } catch {
         return false;
@@ -59,6 +75,32 @@ export function isBundleRootLike(candidateRoot: string): boolean {
 }
 
 export function resolveBundleNameForTarget(targetRoot: string, _override?: string): string {
+    if (!isInvocationReadObservationActive()) return inspectBundleNameForTarget(targetRoot);
+    return memoizeInvocationRead(BUNDLE_NAME_OBSERVATIONS, path.resolve(targetRoot),
+        () => inspectBundleNameForTarget(targetRoot)).value;
+}
+
+function readMatchingBundleDirectory(targetRoot: string, preferredName: string): string | null {
+    readInvocationPathObservation(targetRoot);
+    const read = (): { name: string | null; error: string | null } => {
+        try {
+            const name = fs.readdirSync(targetRoot, { withFileTypes: true }).find(entry =>
+                entry.isDirectory() && entry.name.toLowerCase() === preferredName.toLowerCase())?.name ?? null;
+            return { name, error: null };
+        } catch (error) {
+            return { name: null, error: String((error as NodeJS.ErrnoException).code ?? error) };
+        }
+    };
+    const observed = read();
+    registerInvocationDependency(observed, () => {
+        const current = read();
+        if (current.name !== observed.name || current.error !== observed.error)
+            throw new Error('Invocation bundle directory selection changed: ' + targetRoot);
+    });
+    return observed.name;
+}
+
+function inspectBundleNameForTarget(targetRoot: string): string {
     const preferredName = resolveBundleName();
 
     const normalizedTarget = path.resolve(targetRoot);
@@ -68,15 +110,10 @@ export function resolveBundleNameForTarget(targetRoot: string, _override?: strin
     }
 
     try {
-        const entries = fs.readdirSync(normalizedTarget, { withFileTypes: true });
-        const matchingEntry = entries.find(function (entry) {
-            return entry.isDirectory() && entry.name.toLowerCase() === preferredName.toLowerCase();
-        });
-        if (matchingEntry) {
-            const matchedRoot = path.join(normalizedTarget, matchingEntry.name);
-            if (isBundleRootLike(matchedRoot)) {
-                return matchingEntry.name;
-            }
+        const matchingName = readMatchingBundleDirectory(normalizedTarget, preferredName);
+        if (matchingName) {
+            const matchedRoot = path.join(normalizedTarget, matchingName);
+            if (isBundleRootLike(matchedRoot)) return matchingName;
         }
     } catch {
         // Fall back to the preferred name below.

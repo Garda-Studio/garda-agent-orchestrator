@@ -680,3 +680,25 @@ describe('catalog-backed review context lane binding', () => {
         }
     });
 });
+
+
+import { withInvocationReadObservation } from '../../../../src/core/invocation-read-observation';
+import { withNextStepMeasurement, type NextStepMeasurement } from '../../../../src/core/next-step-measurement';
+
+it('Q3 lane consumers share snapshot validation and keep mutable isolated bindings', () => {
+    const preflight = structuredClone(buildCustomPreflight());
+    let measurement!: NextStepMeasurement;
+    withNextStepMeasurement(() => withInvocationReadObservation(() => {
+        const first = resolveReviewContextLaneBinding(preflight, 'architecture-boundary');
+        const expected = structuredClone(first);
+        first.skill_ids.push('caller-mutation');
+        (first.reviewer_role.focus_tags as string[]).length = 0;
+        assert.deepEqual(resolveReviewContextLaneBinding(preflight, 'architecture-boundary'), expected);
+        // Same snapshot, another lane contract: snapshot checks are shared even on rejection.
+        assert.throws(() => resolveReviewContextLaneBinding(preflight, 'unknown-lane'), /unknown/);
+        preflight.required_reviews = { ...(preflight.required_reviews as Record<string, boolean>), 'architecture-boundary': false };
+        assert.throws(() => resolveReviewContextLaneBinding(preflight, 'architecture-boundary'), /required_reviews/);
+    }), value => { measurement = value; });
+    assert.equal(measurement.work['derive:effective_review_snapshot_validation'], 1);
+    assert.equal(measurement.work['derive:review_context_lane_binding'], 3);
+});

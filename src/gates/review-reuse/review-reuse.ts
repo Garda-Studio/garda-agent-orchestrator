@@ -1,3 +1,9 @@
+import { types } from 'node:util';
+import { createHash } from 'node:crypto';
+import { cloneFrozenJson, cloneJson } from '../../core/immutable-json';
+import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead } from '../../core/invocation-read-observation';
+import { observedInvocationValue, readInvocationFileContent, readInvocationPathObservation } from '../../core/invocation-file-observation';
+import { countNextStepWork, describeProcessInputs } from '../../core/next-step-measurement';
 import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -530,9 +536,17 @@ function readCurrentWorkflowConfigText(
 
     const absolutePath = path.resolve(repoRoot, ...relativePath.split('/'));
     try {
-        if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) {
-            return null;
+        const observedPath = readInvocationPathObservation(absolutePath);
+        if (observedPath) {
+            if (!observedInvocationValue(observedPath.targetStat).isFile()) return null;
+            const content = readInvocationFileContent(absolutePath)!;
+            if (content.size <= 128 * 1024 * 1024) return content.copyBytes().toString('utf8');
+            const bytes = fs.readFileSync(absolutePath);
+            if (createHash('sha256').update(bytes).digest('hex') !== content.sha256)
+                throw new Error('Workflow config changed after observation: ' + absolutePath);
+            return bytes.toString('utf8');
         }
+        if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) return null;
         return fs.readFileSync(absolutePath, 'utf8');
     } catch {
         return null;
@@ -565,16 +579,6 @@ export function isReviewReuseNeutralWorkflowConfigChange(
     }
 }
 
-function collectReviewReuseNeutralConfigFiles(
-    preflight: Record<string, unknown>,
-    repoRoot: string,
-    allChangedFiles: readonly string[]
-): string[] {
-    return allChangedFiles
-        .filter((filePath) => isReviewReuseNeutralWorkflowConfigChange(preflight, repoRoot, filePath))
-        .sort();
-}
-
 function getTaskOwnedManualValidationEvidenceTail(preflight: Record<string, unknown>, filePath: string): string | null {
     const taskId = String(preflight.task_id || '').trim();
     if (!taskId) {
@@ -600,7 +604,7 @@ function collectReviewReuseNeutralEvidenceFiles(
     preflight: Record<string, unknown>,
     repoRoot: string,
     allChangedFiles: readonly string[],
-    stagedBlobFingerprints?: StagedBlobFingerprints
+    stagedBlobFingerprints?: Pick<StagedBlobFingerprints, 'get'>
 ): string[] {
     return allChangedFiles
         .filter((filePath) => {
@@ -623,17 +627,11 @@ function collectReviewReuseNeutralEvidenceFiles(
         .sort();
 }
 
-function collectReviewReuseNeutralCloseoutFiles(allChangedFiles: readonly string[]): string[] {
-    return allChangedFiles
-        .filter((filePath) => isReviewReuseNeutralCloseoutEvidencePath(filePath))
-        .sort();
-}
-
 function getScopedContentFingerprint(
     repoRoot: string,
     preflight: Record<string, unknown>,
     relativePath: string,
-    stagedBlobFingerprints?: StagedBlobFingerprints
+    stagedBlobFingerprints?: Pick<StagedBlobFingerprints, 'get'>
 ): { fingerprint: string | null; missing: boolean } {
     if (usesStagedContent(preflight)) {
         const stagedFingerprint = stagedBlobFingerprints?.get(relativePath) || null;
@@ -690,7 +688,24 @@ function getScopedContentFingerprint(
     return { fingerprint: null, missing: true };
 }
 
-function computeCodeReviewScopeFingerprintInternal(
+// Opaque inputs retain native getter, iterator and custom Map.get semantics.
+function collectReviewReuseNeutralConfigFiles(
+    preflight: Record<string, unknown>,
+    repoRoot: string,
+    allChangedFiles: readonly string[]
+): string[] {
+    return allChangedFiles
+        .filter((filePath) => isReviewReuseNeutralWorkflowConfigChange(preflight, repoRoot, filePath))
+        .sort();
+}
+
+function collectReviewReuseNeutralCloseoutFiles(allChangedFiles: readonly string[]): string[] {
+    return allChangedFiles
+        .filter((filePath) => isReviewReuseNeutralCloseoutEvidencePath(filePath))
+        .sort();
+}
+
+function computeNativeCodeReviewScopeFingerprint(
     preflight: Record<string, unknown>,
     repoRoot: string,
     options: {
@@ -773,64 +788,7 @@ function computeCodeReviewScopeFingerprintInternal(
     };
 }
 
-export function computeCodeReviewScopeFingerprint(
-    preflight: Record<string, unknown>,
-    repoRoot: string
-): CodeReviewScopeFingerprint {
-    return computeCodeReviewScopeFingerprintInternal(preflight, repoRoot);
-}
-
-export function computeReviewReuseCodeScopeFingerprint(
-    reviewType: string,
-    preflight: Record<string, unknown>,
-    repoRoot: string,
-    classificationConfig?: ResolvedClassificationConfig,
-    stagedBlobFingerprints?: StagedBlobFingerprints
-): CodeReviewScopeFingerprint {
-    const normalizedReviewType = String(reviewType || '').trim().toLowerCase();
-    const scopeOptions = {
-        excludeNonRuntimePerformanceSupportFiles: normalizedReviewType === 'code',
-        classificationConfig,
-        stagedBlobFingerprints
-    };
-    const scope = computeCodeReviewScopeFingerprintInternal(preflight, repoRoot, scopeOptions);
-    const reviewPreflight = resolveReviewPreflightWithoutCloseout(preflight);
-    const reviewScope = reviewPreflight.changed_files.length === scope.all_changed_files.length
-        ? scope
-        : computeCodeReviewScopeFingerprintInternal(reviewPreflight, repoRoot, scopeOptions);
-    if (!reviewScope.test_only || reviewScope.all_changed_files.length === 0) {
-        return scope;
-    }
-    // A test-only lane must bind the same test bytes assigned by its coverage contract.
-    return {
-        ...reviewScope,
-        code_scope_sha256: computeReviewRelevantScopeFingerprint(
-            reviewPreflight, repoRoot, classificationConfig, stagedBlobFingerprints
-        ).review_scope_sha256
-    };
-}
-
-function resolveReviewPreflightWithoutCloseout(
-    preflight: Record<string, unknown>
-): Record<string, unknown> & { changed_files: string[] } {
-    const changedFiles = Array.isArray(preflight.changed_files)
-        ? preflight.changed_files.map((entry) => normalizePath(entry)).filter((file) => file && !isCloseoutEvidencePath(file))
-        : [];
-    return { ...preflight, changed_files: changedFiles };
-}
-
-export function computeReviewRelevantScopeWithoutCloseout(
-    preflight: Record<string, unknown>,
-    repoRoot: string,
-    classificationConfig?: ResolvedClassificationConfig,
-    stagedBlobFingerprints?: StagedBlobFingerprints
-): ReviewRelevantScopeFingerprint {
-    return computeReviewRelevantScopeFingerprint(
-        resolveReviewPreflightWithoutCloseout(preflight), repoRoot, classificationConfig, stagedBlobFingerprints
-    );
-}
-
-export function computeReviewRelevantScopeFingerprint(
+function computeNativeReviewRelevantScopeFingerprint(
     preflight: Record<string, unknown>,
     repoRoot: string,
     classificationConfig?: ResolvedClassificationConfig,
@@ -870,6 +828,322 @@ export function computeReviewRelevantScopeFingerprint(
             relativePath,
             resolvedStagedBlobFingerprints
         );
+        if (scopedFingerprint.missing) {
+            missingReviewRelevantFiles.push(relativePath);
+        }
+        return `${relativePath}:${scopedFingerprint.fingerprint || 'MISSING'}`;
+    });
+
+    return {
+        all_changed_files: allChangedFiles,
+        review_relevant_changed_files: sortedReviewRelevantFiles,
+        docs_only_changed_files: [...docsOnlyChangedFiles].sort(),
+        review_reuse_neutral_config_files: reviewReuseNeutralConfigFiles,
+        review_reuse_neutral_evidence_files: [],
+        review_reuse_neutral_closeout_files: reviewReuseNeutralCloseoutFiles,
+        missing_review_relevant_files: missingReviewRelevantFiles,
+        review_scope_sha256: stringSha256(fingerprintEntries.join('\n')),
+        docs_only: sortedReviewRelevantFiles.length === 0 && docsOnlyChangedFiles.length === allChangedFiles.length,
+        documentation_review: docsOnlyChangedFiles.length > 0 && allChangedFiles.every((file) =>
+            !isCloseoutEvidencePath(file) && (docsOnlyChangedFiles.includes(file) || isTestScopePath(file,
+                resolvedClassificationConfig.test_trigger_regexes, resolvedClassificationConfig.file_roles)))
+    };
+}
+
+interface CommonReviewScopeFacts {
+    classificationConfig: ResolvedClassificationConfig;
+    allChangedFiles: string[];
+    stagedFingerprints: Record<string, string> | null;
+    docsOnlyChangedFiles: string[];
+    reviewReuseNeutralConfigFiles: string[];
+    reviewReuseNeutralCloseoutFiles: string[];
+}
+interface CodeReviewScopeFacts {
+    testChangedFiles: string[];
+    performanceSupportChangedFiles: string[];
+    reviewReuseNeutralEvidenceFiles: string[];
+}
+type ScopeFingerprintOptions = {
+    excludeNonRuntimePerformanceSupportFiles?: boolean;
+    classificationConfig?: ResolvedClassificationConfig;
+    stagedBlobFingerprints?: StagedBlobFingerprints;
+};
+const WITHOUT_CLOSEOUT_SCOPE = createInvocationReadMemoKey<Record<string, unknown> & { changed_files: string[] }>('review-without-closeout-scope');
+const COMMON_SCOPE_FACTS = createInvocationReadMemoKey<CommonReviewScopeFacts>('review-common-scope-facts');
+const CODE_SCOPE_FACTS = createInvocationReadMemoKey<CodeReviewScopeFacts>('review-code-scope-facts');
+const CODE_SCOPE_PROJECTIONS = createInvocationReadMemoKey<CodeReviewScopeFingerprint>('review-code-scope-projection');
+const RELEVANT_SCOPE_PROJECTIONS = createInvocationReadMemoKey<ReviewRelevantScopeFingerprint>('review-relevant-scope-projection');
+const SCOPE_FILE_FINGERPRINTS = createInvocationReadMemoKey<{ fingerprint: string | null; missing: boolean }>('review-scope-file-fingerprint');
+
+const nativeMapGet = Map.prototype.get;
+const nativeMapForEach = Map.prototype.forEach;
+const nativeMapIterator = Map.prototype[Symbol.iterator];
+
+function scopeInputKey(preflight: Record<string, unknown>, repoRoot: string,
+    config?: ResolvedClassificationConfig, staged?: StagedBlobFingerprints): string | null {
+    let entries: Array<[string, string]> | null = null;
+    if (staged !== undefined) {
+        if (types.isProxy(staged) || !types.isMap(staged) || Object.getPrototypeOf(staged) !== Map.prototype
+            || Reflect.ownKeys(staged).length > 0
+            || Object.getOwnPropertyDescriptor(Map.prototype, 'get')?.value !== nativeMapGet
+            || Object.getOwnPropertyDescriptor(Map.prototype, 'forEach')?.value !== nativeMapForEach
+            || Object.getOwnPropertyDescriptor(Map.prototype, Symbol.iterator)?.value !== nativeMapIterator) return null;
+        entries = [];
+        Reflect.apply(nativeMapForEach, staged, [(value: string, key: string) => {
+            countNextStepWork('visit:review_scope_key_staged_entry'); entries!.push([key, value]);
+        }]);
+    }
+    const identity = describeProcessInputs([path.resolve(repoRoot), preflight, config, entries]);
+    countNextStepWork('review_scope_key_characters', identity.text.length);
+    return identity.opaque ? null : identity.text;
+}
+
+function readCommonReviewScopeFacts(preflight: Record<string, unknown>, repoRoot: string,
+    config?: ResolvedClassificationConfig, staged?: StagedBlobFingerprints): CommonReviewScopeFacts {
+    const build = (): CommonReviewScopeFacts => {
+        countNextStepWork('derive:review_common_scope_facts');
+        const classificationConfig = resolveReviewReuseClassificationConfig(preflight, repoRoot, config);
+        const allChangedFiles = Array.isArray(preflight.changed_files)
+            ? preflight.changed_files.map(entry => {
+                countNextStepWork('visit:review_scope_normalized_file'); return normalizePath(entry);
+            }).filter(Boolean) : [];
+        const stagedMap = usesStagedContent(preflight) ? staged || readStagedBlobFingerprints(repoRoot, allChangedFiles) : null;
+        const docsOnlyChangedFiles: string[] = [], reviewReuseNeutralConfigFiles: string[] = [], reviewReuseNeutralCloseoutFiles: string[] = [];
+        for (const file of allChangedFiles) {
+            countNextStepWork('visit:review_common_scope_file');
+            if (isSafeOrdinaryDocumentationPath(file, classificationConfig) && !isCloseoutEvidencePath(file)) docsOnlyChangedFiles.push(file);
+            if (isReviewReuseNeutralWorkflowConfigChange(preflight, repoRoot, file)) reviewReuseNeutralConfigFiles.push(file);
+            if (isReviewReuseNeutralCloseoutEvidencePath(file)) reviewReuseNeutralCloseoutFiles.push(file);
+        }
+        countNextStepWork('visit:review_scope_staged_entry', stagedMap?.size || 0);
+        const stagedFingerprints = stagedMap ? Object.fromEntries(stagedMap) : null;
+        return { classificationConfig, allChangedFiles, stagedFingerprints, docsOnlyChangedFiles,
+            reviewReuseNeutralConfigFiles: reviewReuseNeutralConfigFiles.sort(),
+            reviewReuseNeutralCloseoutFiles: reviewReuseNeutralCloseoutFiles.sort() };
+    };
+    if (!isInvocationReadObservationActive()) return build();
+    const key = scopeInputKey(preflight, repoRoot, config, staged);
+    return key === null ? build() : memoizeInvocationRead(COMMON_SCOPE_FACTS, key,
+        () => cloneFrozenJson(build())).value;
+}
+
+// This node is lazy: relevant/test scopes never inspect code-only manual evidence.
+function readCodeReviewScopeFacts(preflight: Record<string, unknown>, repoRoot: string,
+    common: CommonReviewScopeFacts, options: ScopeFingerprintOptions): CodeReviewScopeFacts {
+    const build = (): CodeReviewScopeFacts => {
+        countNextStepWork('derive:review_code_scope_facts');
+        const testChangedFiles: string[] = [], performanceSupportChangedFiles: string[] = [];
+        for (const file of common.allChangedFiles) {
+            countNextStepWork('visit:review_code_scope_file');
+            if (isTestScopePath(file, common.classificationConfig.test_trigger_regexes, common.classificationConfig.file_roles)) testChangedFiles.push(file);
+            if (isNonRuntimePerformanceSupportPath(file, common.classificationConfig)) performanceSupportChangedFiles.push(file);
+        }
+        countNextStepWork('visit:review_scope_evidence_file', common.allChangedFiles.length);
+        const staged = stagedFingerprintLookup(common.stagedFingerprints);
+        return { testChangedFiles, performanceSupportChangedFiles,
+            reviewReuseNeutralEvidenceFiles: collectReviewReuseNeutralEvidenceFiles(preflight, repoRoot, common.allChangedFiles, staged) };
+    };
+    if (!isInvocationReadObservationActive()) return build();
+    const key = scopeInputKey(preflight, repoRoot, options.classificationConfig, options.stagedBlobFingerprints);
+    return key === null ? build() : memoizeInvocationRead(CODE_SCOPE_FACTS, key,
+        () => cloneFrozenJson(build())).value;
+}
+
+function stagedFingerprintLookup(fingerprints: Record<string, string> | null): Pick<StagedBlobFingerprints, 'get'> | undefined {
+    return fingerprints ? { get: file => Object.prototype.hasOwnProperty.call(fingerprints, file) ? fingerprints[file] : undefined } : undefined;
+}
+
+function captureSelectedScopeFingerprints(repoRoot: string, preflight: Record<string, unknown>,
+    files: readonly string[], stagedFingerprints: Record<string, string> | null): Array<{ fingerprint: string | null; missing: boolean }> {
+    const staged = stagedFingerprintLookup(stagedFingerprints);
+    return files.map(file => {
+        countNextStepWork('visit:review_selected_scope_file');
+        if (!isInvocationReadObservationActive()) return getScopedContentFingerprint(repoRoot, preflight, file, staged);
+        const key = JSON.stringify([path.resolve(repoRoot), getDetectionSource(preflight), file, staged?.get(file) || null]);
+        return memoizeInvocationRead(SCOPE_FILE_FINGERPRINTS, key, () => {
+            countNextStepWork('derive:review_scope_file_fingerprint');
+            return cloneFrozenJson(getScopedContentFingerprint(repoRoot, preflight, file, staged));
+        }).value;
+    });
+}
+
+function computeCodeReviewScopeFingerprintInternal(preflight: Record<string, unknown>, repoRoot: string,
+    options: ScopeFingerprintOptions = {}): CodeReviewScopeFingerprint {
+    if (!isInvocationReadObservationActive()) return computeNativeCodeReviewScopeFingerprint(preflight, repoRoot, options);
+    const inputs = scopeInputKey(preflight, repoRoot, options.classificationConfig, options.stagedBlobFingerprints);
+    if (inputs === null) return computeNativeCodeReviewScopeFingerprint(preflight, repoRoot, options);
+    const key = inputs + ':' + String(options.excludeNonRuntimePerformanceSupportFiles === true);
+    return cloneJson(memoizeInvocationRead(CODE_SCOPE_PROJECTIONS, key,
+        () => cloneFrozenJson(deriveCodeReviewScopeFingerprint(preflight, repoRoot, options))).value);
+}
+
+function deriveCodeReviewScopeFingerprint(
+    preflight: Record<string, unknown>,
+    repoRoot: string,
+    options: {
+        excludeNonRuntimePerformanceSupportFiles?: boolean;
+        classificationConfig?: ResolvedClassificationConfig;
+        stagedBlobFingerprints?: StagedBlobFingerprints;
+    } = {}
+): CodeReviewScopeFingerprint {
+    countNextStepWork('derive:review_code_scope_projection');
+    const common = readCommonReviewScopeFacts(preflight, repoRoot, options.classificationConfig, options.stagedBlobFingerprints);
+    const { allChangedFiles, docsOnlyChangedFiles, reviewReuseNeutralConfigFiles, reviewReuseNeutralCloseoutFiles } = common;
+    const code = readCodeReviewScopeFacts(preflight, repoRoot, common, options);
+    const { testChangedFiles, performanceSupportChangedFiles, reviewReuseNeutralEvidenceFiles } = code;
+    const performanceSupportSet = new Set(
+        options.excludeNonRuntimePerformanceSupportFiles ? performanceSupportChangedFiles : []
+    );
+    const reviewReuseNeutralConfigSet = new Set(reviewReuseNeutralConfigFiles);
+    const reviewReuseNeutralEvidenceSet = new Set(reviewReuseNeutralEvidenceFiles);
+    const reviewReuseNeutralCloseoutSet = new Set(reviewReuseNeutralCloseoutFiles);
+    const nonTestChangedFiles = allChangedFiles.filter((filePath) => (countNextStepWork('visit:review_code_scope_selection'), (
+        !testChangedFiles.includes(filePath)
+        && !docsOnlyChangedFiles.includes(filePath)
+        && !performanceSupportSet.has(filePath)
+        && !reviewReuseNeutralConfigSet.has(filePath)
+        && !reviewReuseNeutralEvidenceSet.has(filePath)
+        && !reviewReuseNeutralCloseoutSet.has(filePath)
+    )));
+    const sortedNonTestFiles = [...nonTestChangedFiles].sort();
+    const fingerprints = captureSelectedScopeFingerprints(repoRoot, preflight, sortedNonTestFiles, common.stagedFingerprints);
+    return projectCodeReviewScopeFingerprint(common, code, sortedNonTestFiles, fingerprints);
+}
+
+function projectCodeReviewScopeFingerprint(common: CommonReviewScopeFacts, code: CodeReviewScopeFacts,
+    sortedNonTestFiles: string[], fingerprints: Array<{ fingerprint: string | null; missing: boolean }>): CodeReviewScopeFingerprint {
+    const { allChangedFiles, docsOnlyChangedFiles, reviewReuseNeutralConfigFiles, reviewReuseNeutralCloseoutFiles } = common;
+    const { testChangedFiles, performanceSupportChangedFiles, reviewReuseNeutralEvidenceFiles } = code;
+    const missingNonTestFiles: string[] = [];
+    const fingerprintEntries = sortedNonTestFiles.map((relativePath, index) => {
+        countNextStepWork('visit:review_scope_fingerprint_reduction');
+        const scopedFingerprint = fingerprints[index];
+        if (scopedFingerprint.missing) {
+            missingNonTestFiles.push(relativePath);
+        }
+        return `${relativePath}:${scopedFingerprint.fingerprint || 'MISSING'}`;
+    });
+
+    return {
+        all_changed_files: allChangedFiles,
+        non_test_changed_files: sortedNonTestFiles,
+        docs_only_changed_files: [...docsOnlyChangedFiles].sort(),
+        performance_support_changed_files: [...performanceSupportChangedFiles].sort(),
+        review_reuse_neutral_config_files: reviewReuseNeutralConfigFiles,
+        review_reuse_neutral_evidence_files: reviewReuseNeutralEvidenceFiles,
+        review_reuse_neutral_closeout_files: reviewReuseNeutralCloseoutFiles,
+        missing_non_test_files: missingNonTestFiles,
+        code_scope_sha256: stringSha256(fingerprintEntries.join('\n')),
+        test_only: sortedNonTestFiles.length === 0 && testChangedFiles.length === allChangedFiles.length,
+        docs_only: sortedNonTestFiles.length === 0 && docsOnlyChangedFiles.length === allChangedFiles.length,
+        documentation_review: docsOnlyChangedFiles.length > 0 && allChangedFiles.every((file) =>
+            !isCloseoutEvidencePath(file) && (docsOnlyChangedFiles.includes(file) || testChangedFiles.includes(file)))
+    };
+}
+
+export function computeCodeReviewScopeFingerprint(
+    preflight: Record<string, unknown>,
+    repoRoot: string
+): CodeReviewScopeFingerprint {
+    return computeCodeReviewScopeFingerprintInternal(preflight, repoRoot);
+}
+
+export function computeReviewReuseCodeScopeFingerprint(
+    reviewType: string,
+    preflight: Record<string, unknown>,
+    repoRoot: string,
+    classificationConfig?: ResolvedClassificationConfig,
+    stagedBlobFingerprints?: StagedBlobFingerprints
+): CodeReviewScopeFingerprint {
+    const normalizedReviewType = String(reviewType || '').trim().toLowerCase();
+    const scopeOptions = {
+        excludeNonRuntimePerformanceSupportFiles: normalizedReviewType === 'code',
+        classificationConfig,
+        stagedBlobFingerprints
+    };
+    const scope = computeCodeReviewScopeFingerprintInternal(preflight, repoRoot, scopeOptions);
+    const reviewPreflight = resolveReviewPreflightWithoutCloseout(preflight);
+    const reviewScope = reviewPreflight.changed_files.length === scope.all_changed_files.length
+        ? scope
+        : computeCodeReviewScopeFingerprintInternal(reviewPreflight, repoRoot, scopeOptions);
+    if (!reviewScope.test_only || reviewScope.all_changed_files.length === 0) {
+        return scope;
+    }
+    // A test-only lane must bind the same test bytes assigned by its coverage contract.
+    return {
+        ...reviewScope,
+        code_scope_sha256: computeReviewRelevantScopeFingerprint(
+            reviewPreflight, repoRoot, classificationConfig, stagedBlobFingerprints
+        ).review_scope_sha256
+    };
+}
+
+function resolveReviewPreflightWithoutCloseout(preflight: Record<string, unknown>): Record<string, unknown> & { changed_files: string[] } {
+    const build = () => {
+        countNextStepWork('derive:review_without_closeout_scope');
+        const changedFiles = Array.isArray(preflight.changed_files)
+            ? preflight.changed_files.map(entry => {
+                countNextStepWork('visit:review_without_closeout_file'); return normalizePath(entry);
+            }).filter(file => file && !isCloseoutEvidencePath(file)) : [];
+        return { ...preflight, changed_files: changedFiles };
+    };
+    if (!isInvocationReadObservationActive()) return build();
+    const identity = describeProcessInputs(preflight);
+    countNextStepWork('review_scope_key_characters', identity.text.length);
+    if (identity.opaque) return build();
+    return memoizeInvocationRead(WITHOUT_CLOSEOUT_SCOPE, identity.text, () => cloneFrozenJson(build())).value;
+}
+
+export function computeReviewRelevantScopeWithoutCloseout(
+    preflight: Record<string, unknown>,
+    repoRoot: string,
+    classificationConfig?: ResolvedClassificationConfig,
+    stagedBlobFingerprints?: StagedBlobFingerprints
+): ReviewRelevantScopeFingerprint {
+    return computeReviewRelevantScopeFingerprint(
+        resolveReviewPreflightWithoutCloseout(preflight), repoRoot, classificationConfig, stagedBlobFingerprints
+    );
+}
+
+export function computeReviewRelevantScopeFingerprint(preflight: Record<string, unknown>, repoRoot: string,
+    classificationConfig?: ResolvedClassificationConfig, stagedBlobFingerprints?: StagedBlobFingerprints): ReviewRelevantScopeFingerprint {
+    if (!isInvocationReadObservationActive()) return computeNativeReviewRelevantScopeFingerprint(preflight, repoRoot, classificationConfig, stagedBlobFingerprints);
+    const key = scopeInputKey(preflight, repoRoot, classificationConfig, stagedBlobFingerprints);
+    if (key === null) return computeNativeReviewRelevantScopeFingerprint(preflight, repoRoot, classificationConfig, stagedBlobFingerprints);
+    return cloneJson(memoizeInvocationRead(RELEVANT_SCOPE_PROJECTIONS, key,
+        () => cloneFrozenJson(deriveReviewRelevantScopeFingerprint(preflight, repoRoot, classificationConfig, stagedBlobFingerprints))).value);
+}
+
+function deriveReviewRelevantScopeFingerprint(
+    preflight: Record<string, unknown>,
+    repoRoot: string,
+    classificationConfig?: ResolvedClassificationConfig,
+    stagedBlobFingerprints?: StagedBlobFingerprints
+): ReviewRelevantScopeFingerprint {
+    countNextStepWork('derive:review_relevant_scope_projection');
+    const common = readCommonReviewScopeFacts(preflight, repoRoot, classificationConfig, stagedBlobFingerprints);
+    const { allChangedFiles, docsOnlyChangedFiles, reviewReuseNeutralConfigFiles, reviewReuseNeutralCloseoutFiles } = common;
+    const docsOnlySet = new Set(docsOnlyChangedFiles);
+    const reviewReuseNeutralConfigSet = new Set(reviewReuseNeutralConfigFiles);
+    const reviewReuseNeutralCloseoutSet = new Set(reviewReuseNeutralCloseoutFiles);
+    const reviewRelevantFiles = allChangedFiles.filter((filePath) => (countNextStepWork('visit:review_relevant_scope_selection'), (
+        !docsOnlySet.has(filePath)
+        && !reviewReuseNeutralConfigSet.has(filePath)
+        && !reviewReuseNeutralCloseoutSet.has(filePath)
+    )));
+    const sortedReviewRelevantFiles = [...reviewRelevantFiles].sort();
+    const fingerprints = captureSelectedScopeFingerprints(repoRoot, preflight, sortedReviewRelevantFiles, common.stagedFingerprints);
+    return projectReviewRelevantScopeFingerprint(common, sortedReviewRelevantFiles, fingerprints);
+}
+
+function projectReviewRelevantScopeFingerprint(common: CommonReviewScopeFacts, sortedReviewRelevantFiles: string[],
+    fingerprints: Array<{ fingerprint: string | null; missing: boolean }>): ReviewRelevantScopeFingerprint {
+    const { allChangedFiles, docsOnlyChangedFiles, reviewReuseNeutralConfigFiles, reviewReuseNeutralCloseoutFiles } = common;
+    const resolvedClassificationConfig = common.classificationConfig;
+    const missingReviewRelevantFiles: string[] = [];
+    const fingerprintEntries = sortedReviewRelevantFiles.map((relativePath, index) => {
+        countNextStepWork('visit:review_scope_fingerprint_reduction');
+        const scopedFingerprint = fingerprints[index];
         if (scopedFingerprint.missing) {
             missingReviewRelevantFiles.push(relativePath);
         }

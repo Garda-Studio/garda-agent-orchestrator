@@ -1,5 +1,42 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { countNextStepWork } from './next-step-measurement';
+import { observedInvocationValue, readInvocationPathObservation, type InvocationObservedValue } from './invocation-file-observation';
+import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead, registerInvocationDependency } from './invocation-read-observation';
+
+const NATIVE_REALPATH_OBSERVATIONS = createInvocationReadMemoKey<InvocationObservedValue<string>>('native-realpath-containment');
+
+function captureNativeRealpath(pathValue: string): InvocationObservedValue<string> {
+    try { return Object.freeze({ value: fs.realpathSync.native(pathValue) }); }
+    catch (error: unknown) { return Object.freeze({ error }); }
+}
+
+function nativeRealpathErrorCode(error: unknown): string {
+    return String((error as NodeJS.ErrnoException)?.code || error);
+}
+
+/** Native realpath has its own result and error semantics; never substitute Q2's JS realpath. */
+export function readNativeRealpath(pathValue: string): string {
+    if (!isInvocationReadObservationActive()) return fs.realpathSync.native(pathValue);
+    const resolved = path.resolve(pathValue);
+    const observation = memoizeInvocationRead(NATIVE_REALPATH_OBSERVATIONS, resolved, () => {
+        readInvocationPathObservation(resolved);
+        countNextStepWork('native_realpath_observation:' + resolved);
+        const original = captureNativeRealpath(pathValue);
+        registerInvocationDependency(original, () => {
+            countNextStepWork('native_realpath_final_validation:' + resolved);
+            const current = captureNativeRealpath(pathValue);
+            const unchanged = 'error' in original || 'error' in current
+                ? 'error' in original && 'error' in current
+                    && nativeRealpathErrorCode(original.error) === nativeRealpathErrorCode(current.error)
+                : original.value === current.value;
+            if (!unchanged) throw new Error('Invocation native realpath changed: ' + resolved);
+        });
+        return original;
+    }).value;
+    return observedInvocationValue(observation);
+}
+
 
 export interface RealpathContainmentOptions {
     allowMissing?: boolean;
@@ -25,7 +62,9 @@ function normalizeComparisonPath(value: string, platform: string, includeTrailin
 
 function pathEntryExists(pathValue: string): boolean {
     try {
-        fs.lstatSync(pathValue);
+        const observation = readInvocationPathObservation(pathValue);
+        if (observation) observedInvocationValue(observation.stat);
+        else fs.lstatSync(pathValue);
         return true;
     } catch (error: unknown) {
         const errorCode = String((error as NodeJS.ErrnoException)?.code || '');
@@ -59,7 +98,7 @@ export function isPathRealpathInsideRoot(
 
     let rootRealPath: string;
     try {
-        rootRealPath = fs.realpathSync.native(resolvedRoot);
+        rootRealPath = readNativeRealpath(resolvedRoot);
     } catch {
         return false;
     }
@@ -80,7 +119,7 @@ export function isPathRealpathInsideRoot(
     }
 
     try {
-        return isPathInsideRoot(rootRealPath, fs.realpathSync.native(existingAncestor));
+        return isPathInsideRoot(rootRealPath, readNativeRealpath(existingAncestor));
     } catch {
         return false;
     }

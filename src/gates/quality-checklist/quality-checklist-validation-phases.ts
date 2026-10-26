@@ -10,6 +10,9 @@ import { NativeCaseExecutionUnavailableError, readNativeCaseObligations } from '
 import { readValidationEventSnapshot } from '../project-validation/attempt-evidence';
 import { readValidationFile } from '../../core/project-validation-identity';
 import * as path from 'node:path';
+import { createInvocationReadMemoKey } from '../../core/invocation-read-observation';
+import { countNextStepWork } from '../../core/next-step-measurement';
+import { readReviewValidationNode } from '../review-context/review-validation-invocation';
 
 type ExecutionObservation = 'PENDING' | 'OBSERVED' | 'REJECTED';
 export interface QualityValidationObligation {
@@ -64,11 +67,17 @@ function inspectNativePhases(options: QualityValidationPhaseInspectionOptions) {
             }
         }
     }
+    return deriveNativePhases(options.taskId, native.preflight_sha256, matrixAssessment, obligations, execution, diagnostics);
+}
+
+function deriveNativePhases(taskId: string, preflightSha256: string,
+    matrixAssessment: ReturnType<typeof assessBoundTrustBoundaryMatrix>, obligations: QualityValidationObligation[],
+    execution: ExecutionObservation, diagnostics: string[]) {
     const first = obligations[0];
-    const executions: QualityRecipeExecution[] = [{ recipe_id: 'native-task-command', snapshot_sha256: native.preflight_sha256,
+    const executions: QualityRecipeExecution[] = [{ recipe_id: 'native-task-command', snapshot_sha256: preflightSha256,
         execution, attempt_id: first?.attempt_id ?? null, result_status: first?.result_status ?? null,
         result_sha256: first?.result_sha256 ?? null }];
-    const payload = { schema_version: 1 as const, task_id: options.taskId, preflight_sha256: native.preflight_sha256,
+    const payload = { schema_version: 1 as const, task_id: taskId, preflight_sha256: preflightSha256,
         authority_sha256: matrixAssessment.source_bindings_sha256, structural: matrixAssessment.structural_status!, execution,
         semantic: 'PENDING_INDEPENDENT_REVIEW' as const, matrix_sha256: matrixAssessment.matrix_sha256,
         obligations, executions, execution_diagnostics: diagnostics, execution_kind: 'task-command' as const };
@@ -127,20 +136,14 @@ function inspectDeclaredPhases(options: QualityValidationPhaseInspectionOptions,
     const obligations: QualityValidationObligation[] = [], diagnostics: string[] = [];
     const executions: QualityRecipeExecution[] = [];
     for (const snapshot of snapshots) {
+        countNextStepWork('visit:quality_validation_recipe');
         const latest = latestValidationRecipeAttempt(events.slice(start + 1), snapshot.recipe.id);
         const { observation, caseExecution, diagnostic } = observeExecution({ repoRoot, taskId, snapshot, latest,
             scopeContentSha256: String((preflight.metrics as Record<string, unknown>)?.scope_content_sha256 ?? ''),
             inspection: options.inspection, batch });
         executions.push({ recipe_id: snapshot.recipe.id, snapshot_sha256: snapshot.snapshot_sha256, ...observation });
         if (diagnostic) diagnostics.push(diagnostic);
-        for (const target of snapshot.recipe.targets) {
-            const source = snapshot.inputs.find(input => input.path === target.source);
-            if (!source) throw new Error('Declared validation target lacks a captured source');
-            const binding = { recipe_id: snapshot.recipe.id, target_id: target.id, selector: target.selector,
-                source_identity: source, snapshot_sha256: snapshot.snapshot_sha256 };
-            obligations.push({ id: validationDigest({ ...binding, ...(caseExecution ? { case_execution: caseExecution } : {}) }),
-                ...binding, ...observation, ...(caseExecution ? { case_execution: caseExecution } : {}) });
-        }
+        obligations.push(...deriveRecipeObligations(snapshot, observation, caseExecution));
     }
     const sources = [...new Map(obligations.map(obligation => [JSON.stringify(obligation.source_identity), obligation.source_identity])).values()];
     const referencedPaths = new Set(assessTrustBoundaryMatrix(options.matrix).matrix.flatMap(boundary =>
@@ -149,6 +152,25 @@ function inspectDeclaredPhases(options: QualityValidationPhaseInspectionOptions,
     const matrixAssessment = options.matrixRequired ? assessBoundTrustBoundaryMatrix(options.matrix, {
         repoRoot, expectedSources: sources.filter(source => referencedPaths.has(source.path))
     }) : null;
+    return deriveDeclaredPhases(options, authority.sha256, obligations, executions, diagnostics, matrixAssessment);
+}
+
+function deriveRecipeObligations(snapshot: FrozenValidationRecipe,
+    observation: ReturnType<typeof observeExecution>['observation'], caseExecution: NativeCaseExecution | undefined): QualityValidationObligation[] {
+    return snapshot.recipe.targets.map(target => {
+        countNextStepWork('visit:quality_validation_target');
+        const source = snapshot.inputs.find(input => input.path === target.source);
+        if (!source) throw new Error('Declared validation target lacks a captured source');
+        const binding = { recipe_id: snapshot.recipe.id, target_id: target.id, selector: target.selector,
+            source_identity: source, snapshot_sha256: snapshot.snapshot_sha256 };
+        return { id: validationDigest({ ...binding, ...(caseExecution ? { case_execution: caseExecution } : {}) }),
+            ...binding, ...observation, ...(caseExecution ? { case_execution: caseExecution } : {}) };
+    });
+}
+
+function deriveDeclaredPhases(options: QualityValidationPhaseInspectionOptions, authoritySha256: string,
+    obligations: QualityValidationObligation[], executions: QualityRecipeExecution[], diagnostics: string[],
+    matrixAssessment: ReturnType<typeof assessBoundTrustBoundaryMatrix> | null) {
     if (matrixAssessment) {
         for (const source of matrixAssessment.source_evidence ?? []) {
             if (!obligations.some(target => target.source_identity.path === source.source_identity.path
@@ -159,17 +181,27 @@ function inspectDeclaredPhases(options: QualityValidationPhaseInspectionOptions,
     }
     const execution: ExecutionObservation = executions.some(recipe => recipe.execution === 'REJECTED') ? 'REJECTED'
         : executions.length > 0 && executions.every(recipe => recipe.execution === 'OBSERVED') ? 'OBSERVED' : 'PENDING';
-    const payload = { schema_version: 1 as const, task_id: taskId, preflight_sha256: options.preflightSha256!,
-        authority_sha256: authority.sha256, structural: matrixAssessment?.structural_status ?? 'BOUND' as const,
+    const payload = { schema_version: 1 as const, task_id: options.taskId, preflight_sha256: options.preflightSha256!,
+        authority_sha256: authoritySha256, structural: matrixAssessment?.structural_status ?? 'BOUND' as const,
         execution, semantic: 'PENDING_INDEPENDENT_REVIEW' as const, matrix_sha256: matrixAssessment?.matrix_sha256 ?? null,
         obligations, executions, execution_diagnostics: diagnostics };
     return { matrixAssessment, phases: { ...payload, sha256: validationDigest(payload) } satisfies QualityValidationPhases };
 }
 
-export function inspectQualityValidationPhases(options: QualityValidationPhaseInspectionOptions) {
+function captureQualityValidationPhases(options: QualityValidationPhaseInspectionOptions) {
+    countNextStepWork('derive:quality_validation_phases');
     const authority = currentProjectValidationAuthority(options.repoRoot, options.preflight);
     if (!authority) return options.matrixRequired ? inspectNativePhases(options) : null;
     if (options.preflight.task_id !== options.taskId) throw new Error('Foreign validation quality preflight');
     return withValidationEvidenceBatch({ ...options, recipeIds: authority.approved.contract.recipes.map(recipe => recipe.id) },
         batch => inspectDeclaredPhases(options, authority, batch));
+}
+
+const QUALITY_PHASES = createInvocationReadMemoKey<ReturnType<typeof captureQualityValidationPhases>>('quality-validation-phases-v1');
+
+export function inspectQualityValidationPhases(options: QualityValidationPhaseInspectionOptions) {
+    return readReviewValidationNode(QUALITY_PHASES, () => [
+        path.resolve(options.repoRoot), options.taskId, options.preflightSha256, options.preflight,
+        options.matrixRequired, options.matrix, options.inspection ?? 'active'
+    ], () => captureQualityValidationPhases(options));
 }

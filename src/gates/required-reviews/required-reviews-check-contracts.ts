@@ -24,6 +24,7 @@ import {
 import { readSkillsHeadlinesIfPresent } from '../../runtime/skill-headlines-store';
 import { assertValidTaskId } from '../../gate-runtime/task-events';
 import { fileSha256, resolvePathInsideRepo } from '../shared/helpers';
+import { readReviewValidationBytes } from '../review-context/review-validation-invocation';
 
 const BUILT_IN_REVIEW_CONTRACTS = [
     ['code', 'REVIEW PASSED'],
@@ -182,7 +183,7 @@ export function validatePreflightForReview(
 ) {
     let preflight;
     try {
-        preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8'));
+        preflight = JSON.parse(readReviewValidationBytes(preflightPath).toString('utf8'));
     } catch {
         throw new Error(`Preflight artifact is not valid JSON: ${preflightPath}`);
     }
@@ -288,7 +289,7 @@ export function validatePreflightForReview(
                 if (!taskModePath) {
                     throw new Error('Task-mode artifact path must resolve inside the repository root.');
                 }
-                const taskMode = JSON.parse(fs.readFileSync(taskModePath, 'utf8'));
+                const taskMode = JSON.parse(readReviewValidationBytes(taskModePath).toString('utf8'));
                 const frozenProfileSnapshot = taskMode.profile_policy_snapshot;
                 if (frozenProfileSnapshot == null) {
                     if (taskMode.profile_policy_snapshot_required === true) {
