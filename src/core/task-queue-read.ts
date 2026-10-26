@@ -1,3 +1,4 @@
+import { readInvocationPathObservation, readInvocationFileContent } from './invocation-file-observation';
 import { TASK_QUEUE_FILENAME } from './orchestration-constants';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -81,6 +82,18 @@ export function readTaskQueueEntries(
     options: ReadTaskQueueEntriesOptions = {}
 ): Map<string, TaskQueueEntry> {
     const taskPath = path.join(repoRoot, TASK_QUEUE_FILENAME);
+    const observed = readInvocationPathObservation(taskPath);
+    if (observed) {
+        const target = observed.targetStat;
+        if (options.missingFile !== 'throw' && ('error' in target || !target.value.isFile())) {
+            return new Map<string, TaskQueueEntry>();
+        }
+        // Invalid paths preserve the native read error; ordinary bytes share the invocation observation.
+        const content = 'value' in target && target.value.isFile()
+            ? readInvocationFileContent(taskPath)!.copyBytes().toString('utf8')
+            : fs.readFileSync(taskPath, 'utf8');
+        return parseTaskQueueEntriesFromContent(content);
+    }
     const snapshot = taskQueueReadSnapshots.getStore();
     const resolvedPath = path.resolve(taskPath);
     const key = process.platform === 'win32' ? resolvedPath.toLowerCase() : resolvedPath;

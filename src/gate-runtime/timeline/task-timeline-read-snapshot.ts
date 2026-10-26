@@ -1,3 +1,4 @@
+import { registerInvocationDependency, isInvocationReadObservationActive, createInvocationReadMemoKey, memoizeInvocationRead } from '../../core/invocation-read-observation';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import { createHash, type Hash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -89,6 +90,12 @@ export function createTaskTimelineMemoizationKey<T>(description: string): TaskTi
 }
 
 const taskTimelineReadSnapshotStorage = new AsyncLocalStorage<Map<string, ActiveTaskTimelineReadSnapshot>>();
+const INVOCATION_TIMELINE_SNAPSHOTS = createInvocationReadMemoKey<Map<string, ActiveTaskTimelineReadSnapshot>>('retained-timeline-owners');
+function retainedInvocationTimelineSnapshots(): Map<string, ActiveTaskTimelineReadSnapshot> | null {
+    return isInvocationReadObservationActive()
+        ? memoizeInvocationRead(INVOCATION_TIMELINE_SNAPSHOTS, '', () => new Map<string, ActiveTaskTimelineReadSnapshot>()).value
+        : null;
+}
 
 // A task timeline is canonical lifecycle evidence, so snapshot consumers need
 // the complete payload. Keep that payload bounded independently from callers
@@ -179,6 +186,7 @@ function rememberWindowsAclAuthority(
 
 function hasTrustedWindowsWriteAuthority(filePath: string, identity: fs.Stats): boolean {
     identity = completePathFileIdentitySync(filePath, identity);
+    if (isInvocationReadObservationActive()) return inspectTrustedWindowsWriteAuthority(path.resolve(filePath));
     const cacheKey = normalizeSnapshotKey(filePath);
     const cached = windowsAclAuthorityCache.get(cacheKey);
     if (
@@ -657,7 +665,8 @@ function revalidateCachedRead(snapshot: ActiveTaskTimelineReadSnapshot, cachedRe
 }
 
 function getActiveSnapshot(filePath: string): ActiveTaskTimelineReadSnapshot | null {
-    return taskTimelineReadSnapshotStorage.getStore()?.get(normalizeSnapshotKey(filePath)) || null;
+    return taskTimelineReadSnapshotStorage.getStore()?.get(normalizeSnapshotKey(filePath))
+        || retainedInvocationTimelineSnapshots()?.get(normalizeSnapshotKey(filePath)) || null;
 }
 
 export function isTaskTimelineReadSnapshotActive(filePath: string): boolean {
@@ -682,6 +691,17 @@ function getCachedRead(snapshot: ActiveTaskTimelineReadSnapshot): CachedTaskTime
     } else {
         revalidateCachedRead(snapshot, snapshot.cachedRead);
     }
+    if (snapshot.cachedRead.state !== 'invalid') {
+        // Retain the owner after nested snapshot release. Authenticated appends
+        // replace cachedRead only after proving their exact post-write bytes.
+        registerInvocationDependency(snapshot, () => {
+            if (!snapshot.cachedRead) throw new Error(`Task timeline snapshot is unavailable: ${snapshot.timelinePath}`);
+            revalidateCachedRead(snapshot, snapshot.cachedRead);
+            if (snapshot.cachedRead.state === 'invalid') {
+                throw new Error(`Task timeline snapshot is unavailable: ${snapshot.timelinePath}`);
+            }
+        });
+    }
     return snapshot.cachedRead;
 }
 
@@ -701,7 +721,7 @@ function invokeWithinTaskTimelineSnapshot<T>(
 ): T {
     const release = () => {
         snapshot.depth -= 1;
-        if (snapshot.depth <= 0) {
+        if (snapshot.depth <= 0 && !isInvocationReadObservationActive()) {
             activeSnapshots.delete(snapshotKey);
         }
     };
@@ -726,7 +746,7 @@ export function withTaskTimelineFileReadSnapshot<T>(filePath: string, callback: 
     const snapshotKey = normalizeSnapshotKey(timelinePath);
     const activeSnapshots = taskTimelineReadSnapshotStorage.getStore();
     if (!activeSnapshots) {
-        const invocationSnapshots = new Map<string, ActiveTaskTimelineReadSnapshot>();
+        const invocationSnapshots = retainedInvocationTimelineSnapshots() || new Map<string, ActiveTaskTimelineReadSnapshot>();
         return taskTimelineReadSnapshotStorage.run(invocationSnapshots, () => (
             withTaskTimelineFileReadSnapshot(timelinePath, callback)
         ));

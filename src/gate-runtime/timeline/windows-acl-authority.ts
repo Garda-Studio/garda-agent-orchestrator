@@ -1,3 +1,8 @@
+import * as fs from 'node:fs';
+import { createHash } from 'node:crypto';
+import { lstatFileIdentitySync } from '../../core/file-stat';
+import { countNextStepWork } from '../../core/next-step-measurement';
+import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead, registerInvocationDependency } from '../../core/invocation-read-observation';
 import * as childProcess from 'node:child_process';
 import * as path from 'node:path';
 import { getWindowsNativeEnvironment, getWindowsSystemDirectory, WINDOWS_NATIVE_POWERSHELL_BOOTSTRAP } from '../../core/windows-native-environment';
@@ -96,7 +101,114 @@ function resolveTrustedPrincipalNames(): ReadonlySet<string> | null {
     }
 }
 
+
+const EXPLICIT_SIDS_EVIDENCE_SCRIPT = WINDOWS_NATIVE_POWERSHELL_BOOTSTRAP + [
+    "$ErrorActionPreference = 'Stop'",
+    '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)',
+    '$acl = Microsoft.PowerShell.Security\\Get-Acl -LiteralPath $env:GARDA_ACL_TARGET',
+    "$trusted = @('S-1-5-18', 'S-1-5-32-544', [Security.Principal.WindowsIdentity]::GetCurrent().User.Value)",
+    '$writeMask = 0x500D0156',
+    '$trustedResult = $true',
+    'foreach ($entry in $acl.Access) {',
+    '    if ($entry.IsInherited -or $entry.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or',
+    '        ($entry.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }',
+    '    if (([long]$entry.FileSystemRights -band $writeMask) -eq 0) { continue }',
+    '    $sid = $entry.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value',
+    '    if ($trusted -notcontains $sid) { $trustedResult = $false; break }',
+    '}',
+    'Microsoft.PowerShell.Utility\\ConvertTo-Json -InputObject @{ trusted = $trustedResult; descriptor = $acl.Sddl } -Compress'
+].join('\n');
+
+interface WindowsAclObjectIdentity {
+    readonly dev: bigint;
+    readonly ino: bigint;
+    readonly mode: bigint;
+    readonly birthtimeNs: bigint;
+    readonly realPath: string;
+}
+
+interface WindowsAclObservation {
+    readonly filePath: string;
+    readonly identity: WindowsAclObjectIdentity;
+    readonly outputSha256: string | null;
+    readonly fallbackDescriptor: string | null;
+    readonly trusted: boolean;
+}
+
+const INVOCATION_ACL_OBSERVATIONS = createInvocationReadMemoKey<WindowsAclObservation>('windows-acl-observations');
+
+function aclObjectIdentity(filePath: string): WindowsAclObjectIdentity {
+    const stat = lstatFileIdentitySync(filePath, { bigint: true });
+    return Object.freeze({ dev: stat.dev, ino: stat.ino, mode: stat.mode, birthtimeNs: stat.birthtimeNs,
+        realPath: fs.realpathSync.native(filePath) });
+}
+
+function sameAclObject(left: WindowsAclObjectIdentity, right: WindowsAclObjectIdentity): boolean {
+    return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode
+        && left.birthtimeNs === right.birthtimeNs && left.realPath === right.realPath;
+}
+
+function inspectAclObservation(filePath: string, phase: 'initial' | 'final'): WindowsAclObservation {
+    const identity = aclObjectIdentity(filePath);
+    for (let attempt = 0; attempt < ACL_INSPECTION_MAX_ATTEMPTS; attempt += 1) {
+        countNextStepWork('acl_probe:' + phase + ':' + filePath);
+        const result = childProcess.spawnSync(path.join(getWindowsSystemDirectory(), 'icacls.exe'), [filePath], {
+            maxBuffer: 256 * 1024, timeout: ACL_INSPECTION_TIMEOUT_MS, windowsHide: true
+        });
+        const bytes = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(String(result.stdout || ''));
+        const output = bytes.toString('utf8');
+        if (result.status !== 0 || result.error || !output.split(/\r?\n/u).some(line => line.lastIndexOf(':(') >= 0)) continue;
+        let trusted = !windowsAclOutputHasExplicitWriteGrant(output);
+        let fallbackDescriptor: string | null = null;
+        if (!trusted) {
+            const names = resolveTrustedPrincipalNames();
+            trusted = !!names && windowsAclOutputHasOnlyTrustedExplicitGrants(output, filePath, names);
+            if (!trusted) {
+                countNextStepWork('acl_sid_probe:' + phase + ':' + filePath);
+                const evidence = inspectNativeSids(EXPLICIT_SIDS_EVIDENCE_SCRIPT, filePath);
+                try {
+                    const parsed: unknown = evidence ? JSON.parse(evidence) : null;
+                    if (!parsed || typeof parsed !== 'object' || !('trusted' in parsed) || typeof parsed.trusted !== 'boolean'
+                        || !('descriptor' in parsed) || typeof parsed.descriptor !== 'string' || !parsed.descriptor) {
+                        throw new Error('Native ACL descriptor evidence is unavailable.');
+                    }
+                    trusted = parsed.trusted;
+                    fallbackDescriptor = parsed.descriptor;
+                } catch {
+                    return Object.freeze({ filePath, identity, trusted: false, outputSha256: null, fallbackDescriptor: null });
+                }
+            }
+        }
+        if (!sameAclObject(identity, aclObjectIdentity(filePath))) throw new Error('Invocation Windows ACL object changed: ' + filePath);
+        return Object.freeze({ filePath, identity, trusted, fallbackDescriptor,
+            outputSha256: createHash('sha256').update(bytes).digest('hex') });
+    }
+    return Object.freeze({ filePath, identity, trusted: false, outputSha256: null, fallbackDescriptor: null });
+}
+
+function inspectInvocationWindowsWriteAuthority(filePath: string): boolean {
+    const absolute = path.resolve(filePath), memoId = absolute.toLowerCase();
+    const observation = memoizeInvocationRead(INVOCATION_ACL_OBSERVATIONS, memoId, () => {
+        const original = inspectAclObservation(absolute, 'initial');
+        registerInvocationDependency(original, () => {
+            const current = inspectAclObservation(original.filePath, 'final');
+            // Unchanged indeterminate evidence retains the original fail-closed verdict.
+            if (original.outputSha256 !== current.outputSha256
+                || original.fallbackDescriptor !== current.fallbackDescriptor
+                || original.trusted !== current.trusted || !sameAclObject(original.identity, current.identity)) {
+                throw new Error('Invocation Windows ACL observation changed: ' + original.filePath);
+            }
+        });
+        return original;
+    }).value;
+    if (absolute !== observation.filePath && !sameAclObject(observation.identity, aclObjectIdentity(absolute))) {
+        throw new Error('Invocation Windows ACL alias changed: ' + absolute);
+    }
+    return observation.trusted;
+}
+
 export function inspectTrustedWindowsWriteAuthority(filePath: string): boolean {
+    if (isInvocationReadObservationActive()) return inspectInvocationWindowsWriteAuthority(filePath);
     for (let attempt = 0; attempt < ACL_INSPECTION_MAX_ATTEMPTS; attempt += 1) {
 
         const result = childProcess.spawnSync(path.join(getWindowsSystemDirectory(), 'icacls.exe'), [filePath], {

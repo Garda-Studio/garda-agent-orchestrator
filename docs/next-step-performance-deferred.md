@@ -8,6 +8,27 @@ Across invocations, only an authenticated Q4 record bound to freshly checked
 input digests and all relevant identities may supply a derived result. The P6
 cross-invocation timeline checkpoint remains deferred.
 
+## Q2: checked invocation observations
+
+Read-only navigation now shares scope path and byte observations, equivalent Git
+reads and separate ACL evidence for each inspected object. Retained timeline and
+review owners participate in the final dependency check even after their nested
+snapshot closes. Each invocation starts fresh; metadata is not a cross-call cache.
+The real 64-file fixture performs 64 scope observations and 64 hashes with one or
+five review lanes. Standalone gates retain their existing read paths.
+
+The new observation does not span the executing resolver of --execute-effects.
+A concrete native WIP regression has a required Git clean filter that keeps the
+first line and a smudge filter that appends a random UUID. Predicting checkout
+bytes with cat-file --filters invokes smudge once, then checkout invokes it again;
+the exact-write prototype falsely rejects the valid operation and adds a filter
+invocation. Capturing arbitrary post-checkout bytes instead can bless a foreign
+second-line write hidden by clean. The prototype is not shipped. The existing
+plan verification and live action checks remain; no execution check is removed.
+A real executeNextStepEffects regression proves one smudge, successful WIP capture
+and the subsequent decomposition transition. Extending the new observation across
+those effects requires an exact producer protocol that handles this scenario.
+
 ## P2: navigation audit projection
 
 Round 6 consumer inspection at 537beb12 found that the audit is consumed on every

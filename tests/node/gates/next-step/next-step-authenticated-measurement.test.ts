@@ -34,9 +34,7 @@ for (const lanes of [1, 5]) test('Q1 scope observation at ' + lanes + ' lanes', 
     retainSample(sample);
     const route = sample.routes.find(route => route.route === 'required-reviews-check')!;
     const checks = route.counters['scope_path_state:scope'] || 0, hashes = route.counters['file_hash:scope'] || 0;
-    await context.test('scope checks and hashes equal 64 files', {
-        todo: 'Round 6b RED: repeated scope observations ' + JSON.stringify({ lanes, checks, hashes })
-    }, () => { assert.equal(checks, 64); assert.equal(hashes, 64); });
+    await context.test('scope checks and hashes equal 64 files', () => { assert.equal(checks, 64); assert.equal(hashes, 64); });
 });
 
 test('Q1 authenticated history budget uses real navigation routes', { timeout: 3_600_000 }, async context => {

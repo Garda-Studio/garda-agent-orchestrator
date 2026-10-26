@@ -1,8 +1,10 @@
+import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead, registerInvocationDependency } from './invocation-read-observation';
+import { observedInvocationValue, readInvocationFileContent, readInvocationPathObservation } from './invocation-file-observation';
 import { countNextStepWork } from './next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
-import { assertExistingPathIdentity, bindContainedDestination } from './contained-filesystem';
+import { assertExistingPathIdentity, bindContainedDestination, type ContainedDestination } from './contained-filesystem';
 import type { ApprovedValidationContract, ValidationFileIdentity, ValidationRecipe } from './project-validation-contract';
 import { parseProjectValidationContract } from './project-validation-recipes';
 import { validationRelativePath } from './validation-relative-path';
@@ -24,9 +26,64 @@ export interface ValidationFileObservation {
     created_ns: string;
 }
 
+const INVOCATION_VALIDATION_BINDINGS = createInvocationReadMemoKey<ContainedDestination>('validation-file-bindings');
+const INVOCATION_VALIDATION_BOUND_CHECKS = createInvocationReadMemoKey<boolean>('validation-file-bound-checks');
+
+function observedValidationBinding(root: string, target: string): ContainedDestination {
+    const resolvedRoot = path.resolve(root), resolvedTarget = path.resolve(target);
+    const memoId = JSON.stringify([resolvedRoot, resolvedTarget]);
+    return memoizeInvocationRead(INVOCATION_VALIDATION_BINDINGS, memoId, () => {
+        const relative = path.relative(resolvedRoot, resolvedTarget);
+        if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
+            throw new Error('Destination resolves outside permitted root: ' + resolvedTarget);
+        }
+        const components = relative ? relative.split(path.sep) : [];
+        const existing: Array<ContainedDestination['existing'][number]> = [];
+        let current = resolvedRoot, missingAt: string | null = null;
+        for (let index = -1; index < components.length; index += 1) {
+            if (index >= 0) current = path.join(current, components[index]);
+            let stat: fs.BigIntStats;
+            try { stat = observedInvocationValue(readInvocationPathObservation(current)!.identity); }
+            catch (error: unknown) {
+                if ((error as NodeJS.ErrnoException).code === 'ENOENT') { missingAt = current; break; }
+                throw error;
+            }
+            if (stat.isSymbolicLink()) throw new Error('Refusing to overwrite symlink or junction destination: ' + current);
+            if ((index === -1 || index < components.length - 1) && !stat.isDirectory()) throw new Error('Destination parent is not a directory: ' + current);
+            if (stat.isFile() && stat.nlink !== 1n) throw new Error('Destination crosses a hard-linked file: ' + current);
+            if (!stat.isDirectory() && !stat.isFile()) throw new Error('Destination has an unsupported path type: ' + current);
+            if (stat.birthtimeNs <= 0n) throw new Error('Destination creation identity is unavailable: ' + current);
+            existing.push(Object.freeze({ path: current, dev: stat.dev, ino: stat.ino, mode: stat.mode, birthtimeNs: stat.birthtimeNs }));
+        }
+        if (existing.length === 0) throw new Error('Destination root does not exist: ' + resolvedRoot);
+        const binding = Object.freeze({ root: resolvedRoot, path: resolvedTarget, existing: Object.freeze(existing), missingAt });
+        registerInvocationDependency(binding, () => assertExistingPathIdentity(binding));
+        return binding;
+    }).value;
+}
+
+function readInvocationValidationFile(root: string, relative: string, maximumBytes: number): ValidationFileObservation & { bytes: Buffer } {
+    const target = path.resolve(root, relative), binding = observedValidationBinding(root, target);
+    const before = observedInvocationValue(readInvocationPathObservation(target)!.targetIdentity);
+    const bound = binding.existing.at(-1);
+    if (binding.missingAt || !bound || before.dev !== bound.dev || before.ino !== bound.ino || before.birthtimeNs !== bound.birthtimeNs) {
+        throw new Error('Validation descriptor does not match the bound file: ' + relative);
+    }
+    if (!before.isFile() || before.nlink !== 1n || before.size > BigInt(maximumBytes)) throw new Error('Invalid validation input or byte bound: ' + relative);
+    const content = readInvocationFileContent(target, maximumBytes)!;
+    memoizeInvocationRead(INVOCATION_VALIDATION_BOUND_CHECKS, JSON.stringify([binding.root, target]), () => {
+        assertExistingPathIdentity(binding);
+        return true;
+    });
+    return { bytes: content.copyBytes(), modified_ns: before.mtimeNs.toString(), changed_ns: before.ctimeNs.toString(),
+        created_ns: before.birthtimeNs.toString(), identity: { path: relative, sha256: content.sha256, size: content.size,
+            identity: before.dev + ':' + before.ino + ':' + before.birthtimeNs } };
+}
+
 export function readObservedValidationFile(root: string, relative: string, maximumBytes = MAXIMUM_FILE_BYTES): ValidationFileObservation & { bytes: Buffer } {
     relative = validationRelativePath(relative);
     if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 0 || maximumBytes > MAXIMUM_FILE_BYTES) throw new Error('Invalid validation file byte bound');
+    if (isInvocationReadObservationActive()) return readInvocationValidationFile(root, relative, maximumBytes);
     const target = path.resolve(root, relative);
     const binding = bindContainedDestination(root, target);
     const descriptor = fs.openSync(target, 'r');

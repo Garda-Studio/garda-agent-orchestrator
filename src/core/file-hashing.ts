@@ -1,3 +1,5 @@
+import { isInvocationReadObservationActive } from './invocation-read-observation';
+import { invocationExpectedStatMatches, readInvocationFileContent, readInvocationPathObservation } from './invocation-file-observation';
 import { countNextStepWork } from './next-step-measurement';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
@@ -38,6 +40,13 @@ export function stringSha256(value: unknown): string | null {
  */
 export function fileSha256(filePath: string, expectedStat?: fs.Stats): string | null {
     if (!filePath) return null;
+    if (isInvocationReadObservationActive()) {
+        try {
+            const observation = readInvocationPathObservation(filePath)!;
+            if (expectedStat && !invocationExpectedStatMatches(observation, expectedStat)) return null;
+            return readInvocationFileContent(filePath)?.sha256 || null;
+        } catch { return null; }
+    }
     countNextStepWork('file_hash:' + filePath);
     let descriptor: number | null = null;
     try {

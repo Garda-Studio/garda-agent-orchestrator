@@ -1,3 +1,6 @@
+import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead, registerInvocationDependency } from '../../core/invocation-read-observation';
+import { observedInvocationValue, readInvocationPathObservation } from '../../core/invocation-file-observation';
+
 import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -81,22 +84,87 @@ function symlinkStillMatches(
     }
 }
 
+const SCOPE_PATH_OBSERVATIONS = createInvocationReadMemoKey<boolean>('scope-path-observation-acquisition');
+const SCOPE_PATH_RESULTS = createInvocationReadMemoKey<Readonly<SafeWorktreePathState>>('scope-path-contract-results');
+const SCOPE_LINK_CHECKS = createInvocationReadMemoKey<boolean>('scope-link-checks');
+const SCOPE_DIRECTORY_PROJECTIONS = createInvocationReadMemoKey<boolean>('scope-directory-projections');
+
+function scopePathStat(filePath: string): fs.Stats {
+    const observation = readInvocationPathObservation(filePath);
+    return observation ? observedInvocationValue(observation.stat) : fs.lstatSync(filePath);
+}
+
+function scopeTargetStat(filePath: string): fs.Stats {
+    const observation = readInvocationPathObservation(filePath);
+    return observation ? observedInvocationValue(observation.targetStat) : fs.statSync(filePath);
+}
+
+function scopeRealPath(filePath: string): string {
+    const observation = readInvocationPathObservation(filePath);
+    return observation ? observedInvocationValue(observation.realPath) : fs.realpathSync(filePath);
+}
+
+function scopeLinkTarget(filePath: string): string {
+    const observation = readInvocationPathObservation(filePath);
+    return observation ? observedInvocationValue(observation.linkTarget)! : fs.readlinkSync(filePath);
+}
+
+function observedSymlinkStillMatches(linkPath: string, stat: fs.Stats, target: string, realPath: string): boolean {
+    return memoizeInvocationRead(SCOPE_LINK_CHECKS, path.resolve(linkPath),
+        () => symlinkStillMatches(linkPath, stat, target, realPath)).value;
+}
+
+function retainDirectoryProjection(filePath: string, stat: fs.Stats, followLink = false): void {
+    if (!isInvocationReadObservationActive() || !stat.isDirectory()) return;
+    memoizeInvocationRead(SCOPE_DIRECTORY_PROJECTIONS, JSON.stringify([path.resolve(filePath), followLink]), () => {
+        const owner = { mode: stat.mode, size: stat.size };
+        registerInvocationDependency(owner, () => {
+            const current = followLink ? fs.statSync(filePath) : fs.lstatSync(filePath);
+            if (!current.isDirectory() || current.mode !== owner.mode || current.size !== owner.size) {
+                throw new Error('Invocation directory projection changed: ' + filePath);
+            }
+        });
+
+        return true;
+    });
+}
+
 export function getSafeWorktreePathState(
     repoRoot: string,
     relativeFile: string,
     options: SafeWorktreePathStateOptions = {}
 ): SafeWorktreePathState {
+    if (!isInvocationReadObservationActive()) return captureSafeWorktreePathState(repoRoot, relativeFile, options);
     const resolvedPath = resolveRepoRelativePath(repoRoot, relativeFile);
-    countNextStepWork('scope_path_state:' + (resolvedPath || relativeFile));
+    const resolvedRoot = path.resolve(repoRoot);
+    const observationKey = JSON.stringify([resolvedRoot, resolvedPath || relativeFile]);
+    memoizeInvocationRead(SCOPE_PATH_OBSERVATIONS, observationKey, () => {
+        readInvocationPathObservation(resolvedRoot);
+        if (resolvedPath) readInvocationPathObservation(resolvedPath);
+        countNextStepWork('scope_path_state:' + (resolvedPath || relativeFile));
+        return true;
+    });
+    const contractKey = JSON.stringify([observationKey, options.repoRealPath || null,
+        options.includeContentHashes !== false, options.distinguishAccessErrors === true]);
+    const state = memoizeInvocationRead(SCOPE_PATH_RESULTS, contractKey, () =>
+        Object.freeze(captureSafeWorktreePathState(repoRoot, relativeFile, options))).value;
+    return { ...state };
+}
+
+function captureSafeWorktreePathState(
+    repoRoot: string, relativeFile: string, options: SafeWorktreePathStateOptions
+): SafeWorktreePathState {
+    const resolvedPath = resolveRepoRelativePath(repoRoot, relativeFile);
+    if (!isInvocationReadObservationActive()) countNextStepWork('scope_path_state:' + (resolvedPath || relativeFile));
     if (!resolvedPath) {
         return normalizePath(relativeFile) ? { status: 'outside_repo' } : { status: 'missing' };
     }
     try {
-        const stat = fs.lstatSync(resolvedPath);
-        const repoRealPath = options.repoRealPath || fs.realpathSync(repoRoot);
+        const stat = scopePathStat(resolvedPath);
+        const repoRealPath = options.repoRealPath || scopeRealPath(repoRoot);
         const includeContentHashes = options.includeContentHashes !== false;
         if (stat.isSymbolicLink()) {
-            const linkTarget = fs.readlinkSync(resolvedPath);
+            const linkTarget = scopeLinkTarget(resolvedPath);
             const linkBase = {
                 mode: stat.mode,
                 size: stat.size,
@@ -104,11 +172,11 @@ export function getSafeWorktreePathState(
                 link_target: linkTarget
             };
             try {
-                const worktreeRealPath = fs.realpathSync(resolvedPath);
+                const worktreeRealPath = scopeRealPath(resolvedPath);
                 if (!isPathInsideRoot(worktreeRealPath, repoRealPath)) {
                     return { status: 'outside_repo' };
                 }
-                const targetStat = fs.statSync(resolvedPath);
+                const targetStat = scopeTargetStat(resolvedPath);
                 const targetPath = normalizePath(path.relative(repoRealPath, worktreeRealPath)) || null;
                 const targetBase = {
                     ...linkBase,
@@ -122,7 +190,7 @@ export function getSafeWorktreePathState(
                         : null;
                     if (
                         (includeContentHashes && !targetSha256)
-                        || !symlinkStillMatches(resolvedPath, stat, linkTarget, worktreeRealPath)
+                        || !observedSymlinkStillMatches(resolvedPath, stat, linkTarget, worktreeRealPath)
                     ) {
                         return {
                             ...targetBase,
@@ -137,13 +205,14 @@ export function getSafeWorktreePathState(
                         target_sha256: targetSha256
                     };
                 }
-                if (!symlinkStillMatches(resolvedPath, stat, linkTarget, worktreeRealPath)) {
+                if (!observedSymlinkStillMatches(resolvedPath, stat, linkTarget, worktreeRealPath)) {
                     return {
                         ...targetBase,
                         status: 'unreviewable_symlink',
                         target_status: 'unreviewable'
                     };
                 }
+                retainDirectoryProjection(resolvedPath, targetStat, true);
                 return {
                     ...targetBase,
                     status: 'unreviewable_symlink',
@@ -161,7 +230,7 @@ export function getSafeWorktreePathState(
                 };
             }
         }
-        const worktreeRealPath = fs.realpathSync(resolvedPath);
+        const worktreeRealPath = scopeRealPath(resolvedPath);
         if (!isPathInsideRoot(worktreeRealPath, repoRealPath)) {
             return { status: 'outside_repo' };
         }
@@ -183,6 +252,7 @@ export function getSafeWorktreePathState(
             };
         }
         if (stat.isDirectory()) {
+            retainDirectoryProjection(resolvedPath, stat);
             return { ...base, status: 'directory' };
         }
         return { ...base, status: 'special' };

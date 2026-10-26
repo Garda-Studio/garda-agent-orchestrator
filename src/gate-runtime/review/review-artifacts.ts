@@ -1,3 +1,4 @@
+import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead, registerInvocationDependency } from '../../core/invocation-read-observation';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -737,6 +738,11 @@ function registerReviewArtifactReadSnapshotRoute(
         existingRoute.invalid = existingRoute.invalid
             || invalid
             || existingRoute.canonicalRootKey !== canonicalRootKey;
+        registerInvocationDependency(existingRoute, () => {
+            refreshReviewArtifactReadSnapshotRoute(lexicalRootKey, existingRoute);
+            if (existingRoute.invalid) throw new Error('Review artifact read snapshot was invalidated by a changed root.');
+        });
+        registerInvocationDependency(snapshot, () => { if (snapshot.budgetError) throw snapshot.budgetError; });
         return;
     }
     snapshot.routes.set(lexicalRootKey, {
@@ -745,6 +751,12 @@ function registerReviewArtifactReadSnapshotRoute(
         invalid,
         lexicalRootPath: path.resolve(lexicalRootPath)
     });
+    const route = snapshot.routes.get(lexicalRootKey)!;
+    registerInvocationDependency(route, () => {
+        refreshReviewArtifactReadSnapshotRoute(lexicalRootKey, route);
+        if (route.invalid) throw new Error('Review artifact read snapshot was invalidated by a changed root.');
+    });
+    registerInvocationDependency(snapshot, () => { if (snapshot.budgetError) throw snapshot.budgetError; });
 }
 
 export function withReviewArtifactReadSnapshot<T>(
@@ -861,6 +873,7 @@ function refreshReviewArtifactReadSnapshotRoute(
         resolveReviewArtifactCanonicalCandidatePath(route.lexicalRootPath)
     );
     if (currentCanonicalRootKey !== route.canonicalRootKey) {
+        route.invalid = true;
         invalidateReviewArtifactReadSnapshotRoute(lexicalRootKey);
     }
 }
@@ -952,10 +965,78 @@ function invalidReviewArtifactRead(active: boolean, exists = false): ReviewArtif
     return { active, content: null, exists, sha256: null, valid: false };
 }
 
+interface InvocationReviewArtifactObservation {
+    filePath: string;
+    canonicalPath: string;
+    exists: boolean;
+    identity: fs.Stats | null;
+    initialErrorCode: string | null;
+    cached: CachedReviewArtifactRead;
+    initiallyValid: boolean;
+    invalidated: boolean;
+}
+
+const INVOCATION_REVIEW_READS = createInvocationReadMemoKey<Map<string, Map<ReviewArtifactReadSnapshotState, InvocationReviewArtifactObservation>>>('review-artifact-paths');
+
+function reviewObservationErrorCode(error: unknown): string {
+    return error && typeof error === 'object' && 'code' in error ? String(error.code) : String(error);
+}
+
+function retainInvocationReviewArtifactRead(
+    snapshot: ReviewArtifactReadSnapshotState, cached: CachedReviewArtifactRead, canonicalPath: string, filePath: string
+): void {
+    if (!isInvocationReadObservationActive()) return;
+    const observations = memoizeInvocationRead(INVOCATION_REVIEW_READS, '', () => new Map<string, Map<ReviewArtifactReadSnapshotState, InvocationReviewArtifactObservation>>()).value;
+    const key = normalizeReviewArtifactReadSnapshotKey(filePath);
+    let owners = observations.get(key);
+    if (!owners) { owners = new Map(); observations.set(key, owners); }
+    const previous = owners.get(snapshot);
+    if (previous) {
+        if (previous.canonicalPath !== canonicalPath || previous.initiallyValid !== cached.valid
+            || previous.exists !== cached.exists || (previous.initiallyValid && previous.cached.sha256 !== cached.sha256)) {
+            previous.invalidated = true;
+        }
+        return;
+    }
+    let identity = cached.identity || null;
+    let initialErrorCode: string | null = null;
+    if (!identity) {
+        try { identity = lstatFileIdentitySync(filePath); }
+        catch (error: unknown) { initialErrorCode = reviewObservationErrorCode(error); }
+    }
+    const observation: InvocationReviewArtifactObservation = {
+        filePath, canonicalPath, exists: cached.exists, identity, initialErrorCode,
+        cached, initiallyValid: cached.valid, invalidated: false
+    };
+    owners.set(snapshot, observation);
+    const validate = (): void => {
+        if (snapshot.budgetError) throw snapshot.budgetError;
+        let changed = observation.invalidated || (observation.initiallyValid && !observation.cached.valid);
+        try {
+            const current = lstatFileIdentitySync(observation.filePath);
+            changed ||= !observation.exists || !observation.identity
+                || !sameReviewArtifactFileIdentity(observation.identity, current)
+                || normalizeReviewArtifactReadSnapshotKey(resolveReviewArtifactCanonicalCandidatePath(observation.filePath))
+                    !== observation.canonicalPath;
+        } catch (error: unknown) {
+            changed ||= observation.identity !== null || reviewObservationErrorCode(error) !== observation.initialErrorCode;
+        }
+        changed ||= normalizeReviewArtifactReadSnapshotKey(resolveReviewArtifactCanonicalCandidatePath(observation.filePath))
+            !== observation.canonicalPath;
+        if (changed) {
+            observation.invalidated = true;
+            throw new Error('Review artifact read snapshot was invalidated by a changed input: ' + observation.filePath);
+        }
+    };
+    registerInvocationDependency(observation, validate);
+
+}
+
 function cacheInvalidReviewArtifactRead(
     snapshot: ReviewArtifactReadSnapshotState,
     cacheKey: string,
-    exists: boolean
+    exists: boolean,
+    filePath: string
 ): ReviewArtifactFileReadSnapshot {
     const invalid = invalidReviewArtifactRead(true, exists);
     snapshot.reads.set(cacheKey, {
@@ -964,6 +1045,7 @@ function cacheInvalidReviewArtifactRead(
         sha256: null,
         valid: false
     });
+    retainInvocationReviewArtifactRead(snapshot, snapshot.reads.get(cacheKey)!, cacheKey, filePath);
     return invalid;
 }
 
@@ -1078,6 +1160,7 @@ function readReviewArtifactCanonicalSnapshot(filePath: string): ReviewArtifactFi
                 }
             }
         }
+        retainInvocationReviewArtifactRead(snapshot, cached, cacheKey, resolvedPath);
         return {
             active: true,
             content: cached.content,
@@ -1091,21 +1174,21 @@ function readReviewArtifactCanonicalSnapshot(filePath: string): ReviewArtifactFi
     try {
         const beforeRead = fs.lstatSync(resolvedPath);
         if (!beforeRead.isFile() || beforeRead.isSymbolicLink()) {
-            return cacheInvalidReviewArtifactRead(snapshot, cacheKey, true);
+            return cacheInvalidReviewArtifactRead(snapshot, cacheKey, true, resolvedPath);
         }
         const realPath = fs.realpathSync.native(resolvedPath);
         if (!isPathInsideReviewArtifactSnapshot(realPath, snapshot.realRootPath)) {
-            return cacheInvalidReviewArtifactRead(snapshot, cacheKey, true);
+            return cacheInvalidReviewArtifactRead(snapshot, cacheKey, true, resolvedPath);
         }
         assertReviewArtifactByteBudget(snapshot, beforeRead.size);
         const completeIdentity = completePathFileIdentitySync(resolvedPath, beforeRead);
         const content = readReviewArtifactBytesBounded(resolvedPath, completeIdentity);
         if (!content) {
-            return cacheInvalidReviewArtifactRead(snapshot, cacheKey, true);
+            return cacheInvalidReviewArtifactRead(snapshot, cacheKey, true, resolvedPath);
         }
         const afterRead = lstatFileIdentitySync(resolvedPath);
         if (!sameReviewArtifactFileIdentity(completeIdentity, afterRead)) {
-            return cacheInvalidReviewArtifactRead(snapshot, cacheKey, true);
+            return cacheInvalidReviewArtifactRead(snapshot, cacheKey, true, resolvedPath);
         }
         const sha256 = createHash('sha256').update(content).digest('hex').toLowerCase();
         snapshot.reads.set(cacheKey, {
@@ -1116,12 +1199,13 @@ function readReviewArtifactCanonicalSnapshot(filePath: string): ReviewArtifactFi
             valid: true
         });
         snapshot.retainedBytes += content.length;
+        retainInvocationReviewArtifactRead(snapshot, snapshot.reads.get(cacheKey)!, cacheKey, resolvedPath);
         return { active: true, content, exists: true, sha256, valid: true };
     } catch (error: unknown) {
         if (error instanceof ReviewArtifactReadBudgetError) {
             throw error;
         }
-        return cacheInvalidReviewArtifactRead(snapshot, cacheKey, reviewArtifactReadPathExists(error));
+        return cacheInvalidReviewArtifactRead(snapshot, cacheKey, reviewArtifactReadPathExists(error), resolvedPath);
     }
 }
 
@@ -1335,6 +1419,10 @@ function runReviewArtifactReadBarrierParticipant<T>(
     barrier: ReviewArtifactReadBarrierState,
     options: ReviewArtifactLockOptions
 ): T {
+    registerInvocationDependency(barrier, () => {
+        if (barrier.invalidated) throw new Error('Review artifact read snapshot was invalidated by a concurrent review publication.');
+        assertReviewArtifactGenerationUnchanged(reviewsDir, barrier.expectedGeneration, options);
+    });
     barrier.activeParticipants += 1;
     const authority: ReviewArtifactReadBarrierParticipantAuthority = {
         active: true,
@@ -1483,6 +1571,10 @@ export function withReviewArtifactReadBarrier<T>(
         invalidated: false
     };
     registerReviewArtifactReadBarrierKeys(barrierState, reviewsDir);
+    registerInvocationDependency(barrierState, () => {
+        if (barrierState.invalidated) throw new Error('Review artifact read snapshot was invalidated by a concurrent review publication.');
+        assertReviewArtifactGenerationUnchanged(reviewsDir, barrierState.expectedGeneration, options);
+    });
     return runReviewArtifactReadBarrierParticipant(reviewsDir, callback, barrierState, options);
 }
 

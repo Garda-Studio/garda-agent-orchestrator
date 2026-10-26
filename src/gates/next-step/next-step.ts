@@ -1,3 +1,5 @@
+import { withInvocationGitReadObservation } from '../../core/invocation-git-observation';
+import { withInvocationReadObservation } from '../../core/invocation-read-observation';
 import { countNextStepWork, countNextStepArrayCopy, measureNextStepPhase, withNextStepMeasurement } from '../../core/next-step-measurement';
 import { formatInstalledBundleMaintenanceGuidance } from '../protected-control-plane/installed-bundle-guard';
 import { ExpectedRedEvidenceError, taskRequiresExpectedRed } from '../test-first/expected-red-evidence';
@@ -5524,7 +5526,7 @@ function inspectNextStepEffects(options: NextStepPresentationOptions): {
     plan: NextStepEffectPlan | null;
 } {
     const effects = createNextStepEffectPlanner();
-    const result = withTaskQueueReadSnapshot(() => resolveNextStepWithEffectController(options, effects));
+    const result = withInvocationGitReadObservation(() => withInvocationReadObservation(() => withTaskQueueReadSnapshot(() => resolveNextStepWithEffectController(options, effects))));
     return { result, plan: effects.pendingPlan() };
 }
 

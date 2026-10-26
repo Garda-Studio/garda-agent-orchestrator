@@ -18,7 +18,7 @@ export interface HistoryRouteMeasurement {
 
 function normalizedPath(value: string): string { return path.resolve(value).replace(/\\/gu, '/').toLowerCase(); }
 
-export function measureHistoryRoute(state: AuthenticatedHistoryFixture, route: string): HistoryRouteMeasurement {
+export function measureHistoryRoute(state: Pick<AuthenticatedHistoryFixture, 'repoRoot' | 'taskId' | 'files' | 'historicalArtifacts' | 'artifactCycles'>, route: string): HistoryRouteMeasurement {
     let measured: NextStepMeasurement | undefined;
     const started = performance.now();
     const result = withNextStepMeasurement(() => resolveNextStep(state), measurement => { measured = measurement; });
@@ -31,7 +31,7 @@ export function measureHistoryRoute(state: AuthenticatedHistoryFixture, route: s
     const add = (key: string, count: number) => { counters[key] = (counters[key] || 0) + count; };
     for (const [key, count] of Object.entries(measured.work)) {
         if (key.startsWith('process:')) { add(key.split(':').slice(0, 3).join(':'), count); continue; }
-        const match = /^(payload_read|artifact_bytes|artifact_json_parse|file_hash|scope_path_state|timeline_capture|timeline_payload_read):(.+)$/u.exec(key);
+        const match = /^(payload_read|artifact_bytes|artifact_json_parse|file_hash|scope_path_state|timeline_capture|timeline_payload_read|acl_probe:(?:initial|final)|acl_sid_probe:(?:initial|final)):(.+)$/u.exec(key);
         if (!match) { add(key, count); continue; }
         const [, operation, file] = match;
         if (scope.has(normalizedPath(file))) { add(operation + ':scope', count); continue; }

@@ -38,6 +38,8 @@
 
 ### Faster everyday work
 
+- Read-only next-step navigation shares checked scope bytes, path observations, Git results and per-object Windows ACL evidence within each invocation. A final dependency check rejects changed inputs before returning the decision; action execution retains its existing live checks.
+
 - Opt-in next-step diagnostics count direct synchronous Node processes without invoking caller getters, proxy traps or serialization hooks.
 
 - Timeline integrity observers reuse verification within one navigation snapshot while retaining every callback-time freshness check. Each new invocation still verifies the full timeline.
