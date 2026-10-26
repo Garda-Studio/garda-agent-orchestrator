@@ -42,6 +42,7 @@ export type ReviewOutputCorrectionDiagnosticCode =
     | 'EXECUTION_BINDING'
     | 'FINDINGS_SEMANTICS'
     | 'PROVENANCE_BINDING'
+    | 'EVIDENCE_QUOTE_NOT_FOUND'
     | 'UNCLASSIFIED_VALIDATION';
 
 export interface ReviewOutputCorrectionDiagnostic {
@@ -385,6 +386,14 @@ export function classifyReviewOutputCorrectionDiagnostics(
 ): ReviewOutputCorrectionDiagnostic[] {
     return violations.map((rawViolation) => {
         const message = String(rawViolation || '').trim() || 'Review output validation failed without details.';
+        if (/the independent quotation is absent from actual retained output\./u.test(message)) {
+            return {
+                code: 'EVIDENCE_QUOTE_NOT_FOUND' as const,
+                category: 'semantic' as const,
+                message,
+                mechanically_correctable: false
+            };
+        }
         const mechanical = MECHANICAL_PATTERNS.find(([pattern]) => pattern.test(message));
         if (mechanical && !SEMANTIC_PATTERN.test(message.replace(mechanical[0], ''))) {
             return {

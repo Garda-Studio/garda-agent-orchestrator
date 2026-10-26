@@ -11,8 +11,9 @@ import { createTempRepo, initializeGitRepo, loadTaskEntryRulePack, runEnterTaskM
 const TASK_ID = 'T-UNIVERSAL-COMMAND';
 const SOURCE = 'custom/Оплата.case';
 const RUNNER = 'custom/check.cjs';
+const EXECUTION_MARKER = 'garda-agent-orchestrator/runtime/tmp/universal-command-executed.txt';
 
-function fixture(mutate = false) {
+function fixture(mutate = false, markExecution = false) {
     const repoRoot = createTempRepo();
     seedTaskQueue(repoRoot, TASK_ID); seedInitAnswers(repoRoot); initializeGitRepo(repoRoot);
     const entry = runEnterTaskMode({ repoRoot, taskId: TASK_ID, entryMode: 'EXPLICIT_TASK_EXECUTION',
@@ -26,6 +27,10 @@ function fixture(mutate = false) {
         "const fs = require('node:fs');",
         `const value = fs.readFileSync(${JSON.stringify(SOURCE)}, 'utf8');`,
         "console.log('observed:' + value.trim());",
+        ...(markExecution ? [
+            `fs.mkdirSync(${JSON.stringify(path.posix.dirname(EXECUTION_MARKER))}, { recursive: true });`,
+            `fs.writeFileSync(${JSON.stringify(EXECUTION_MARKER)}, 'executed');`
+        ] : []),
         ...(mutate ? [`fs.appendFileSync(${JSON.stringify(SOURCE)}, 'changed');`] : []), ''
     ].join('\n'));
     const reviewsRoot = path.join(repoRoot, 'garda-agent-orchestrator/runtime/reviews');
@@ -104,3 +109,21 @@ it('rejects retained old preflight evidence after same-cycle classification publ
     assert.deepEqual(fs.readFileSync(f.preflightPath), original);
     assert.equal(f.read().entries.length, 0);
 });
+
+for (const failure of ['stale', 'missing'] as const) {
+    it(`explains a supplied ${failure} preflight and how to refresh it without running the command`, async t => {
+        const f = fixture(false, true); t.after(() => fs.rmSync(f.repoRoot, { recursive: true, force: true }));
+        const preflightHash = createHash('sha256').update(fs.readFileSync(f.preflightPath)).digest('hex');
+        if (failure === 'stale') fs.appendFileSync(path.join(f.repoRoot, SOURCE), 'changed source\n');
+        else fs.unlinkSync(f.preflightPath);
+        const result = await runIntermediateCommandCommand({ repoRoot: f.repoRoot, taskId: TASK_ID,
+            commandSource: 'targeted-test', command: `node ${RUNNER} --select rejectsEmptyPayment`, preflightPath: f.preflightPath });
+        const text = result.outputLines.join('\n');
+        assert.notEqual(result.exitCode, 0, text);
+        assert.doesNotMatch(text, /Add --preflight-path/u);
+        assert.match(text, failure === 'stale' ? /scope|content|changed/iu : /Supplied preflight is missing \(ENOENT\)/u);
+        assert.match(text, /next-step "T-UNIVERSAL-COMMAND" --repo-root "."/u);
+        assert.equal(f.read(preflightHash).entries.length, 0);
+        assert.equal(fs.existsSync(path.join(f.repoRoot, EXECUTION_MARKER)), false);
+    });
+}

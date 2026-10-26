@@ -182,11 +182,11 @@ export function validateReviewFindingsContract(
     const coverageViolations = coverageValidation?.status === 'FAIL'
         ? coverageValidation.violations
         : [];
-    const violations = [
+    const violations = [...new Set([
         ...validation.violations,
         ...(coverageContractSha256Violation ? [coverageContractSha256Violation] : []),
         ...coverageViolations
-    ];
+    ])];
 
     return {
         detected: true,

@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import * as fs from 'node:fs';
 import { parseCommandChain } from '../../../../core/command-line';
 import { inspectValidationCommand } from '../../../../core/validation-command-contract';
 import { selectionMatchesCase, type IntermediateSelection } from '../../../../core/intermediate-selected-cases';
@@ -106,7 +107,18 @@ export function observeNativeIntermediateScope(repoRoot: string, taskId: string,
         return { preflight_sha256: snapshot.preflight_sha256, scope_content_sha256: snapshot.scope_content_sha256,
             changed_files: snapshot.changed_files, error: null };
     } catch (error) {
-        return { preflight_sha256: null, scope_content_sha256: null, changed_files: [],
-            error: error instanceof Error ? error.message.split('\n')[0].slice(0, 240) : 'Native command scope unavailable.' };
+        let message = error instanceof Error ? error.message.split('\n')[0].slice(0, 240) : 'Native command scope unavailable.';
+        // Observation has already failed. This probe only explains that rejection;
+        // it cannot supply authority or turn a failed scope into an accepted one.
+        if (preflightPath) {
+            try {
+                if (!fs.lstatSync(preflightPath).isFile()) message = 'Supplied preflight is not a regular file. ' + message;
+            } catch (pathError) {
+                const code = (pathError as NodeJS.ErrnoException).code;
+                if (code === 'ENOENT' || code === 'ENOTDIR') message = `Supplied preflight is missing (${code}). ` + message;
+                else if (code === 'EACCES' || code === 'EPERM') message = `Supplied preflight is unreadable (${code}). ` + message;
+            }
+        }
+        return { preflight_sha256: null, scope_content_sha256: null, changed_files: [], error: message };
     }
 }

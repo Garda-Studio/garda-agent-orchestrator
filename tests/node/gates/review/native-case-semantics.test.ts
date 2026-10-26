@@ -6,6 +6,8 @@ import { runClassifyChangeCommand, runIntermediateCommandCommand } from '../../.
 import { readValidationFile, validationDigest } from '../../../../src/core/project-validation-identity';
 import { readNativeCaseObligations, getNativeCaseResolutionViolations } from '../../../../src/gates/review/native-case-semantics';
 import { buildNativeCaseReviewCoverageContract } from '../../../../src/gates/review-context/review-context-coverage';
+import { classifyReviewOutputCorrectionDiagnostics } from '../../../../src/gates/review/review-output-correction';
+import { validateReviewFindingsContract } from '../../../../src/gates/review/review-findings-artifact-verdict';
 import { validateReviewFindingsReport } from '../../../../src/gates/review/review-findings-schema';
 import { buildReviewerFindingsOutputTemplateJson } from '../../../../src/gates/review/reviewer-findings-prompt-contract';
 import { buildReviewRemediationReviewContract } from '../../../../src/gates/review-remediation/review-remediation-review-contract';
@@ -383,6 +385,27 @@ test('rejects forged and changed native case evidence for opaque XML and Unicode
         expectedTreeStateSha256: hash, expectedReviewExecutionContract: reviewExecution });
     const accepted = validateReport(report);
     assert.equal(accepted.valid, true, accepted.violations.join('\n'));
+    for (const quote of ['invented result', 'x'.repeat(4097), '😀'.repeat(4097)]) {
+        const rejectedReport = structuredClone(report);
+        const entry = rejectedReport.coverage_ledger.entries.find((item: { case_resolution?: unknown }) => item.case_resolution);
+        entry.case_resolution.evidence_quote = quote;
+        const rejected = validateReviewFindingsContract({ content: JSON.stringify(rejectedReport), repoRoot: f.repoRoot,
+            expectedTaskId: TASK, expectedReviewType: 'test', coverageContract: contract,
+            expectedReviewContextSha256: hash, expectedTreeStateSha256: hash,
+            expectedReviewExecutionContract: reviewExecution });
+        assert.equal(rejected.valid, false);
+        if (quote === 'invented result') {
+            const violations = rejected.violations.filter(item => item.includes('quotation is absent'));
+            assert.equal(violations.length, 1, rejected.violations.join('\n'));
+            const diagnostic = classifyReviewOutputCorrectionDiagnostics(violations)[0];
+            assert.equal(diagnostic.code, 'EVIDENCE_QUOTE_NOT_FOUND');
+            assert.match(diagnostic.message, /one contiguous excerpt/u);
+            assert.equal(diagnostic.mechanically_correctable, false);
+            assert.equal(diagnostic.category, 'semantic');
+        } else {
+            assert.ok(rejected.violations.some(item => /evidence_quote.*4097.*4096/u.test(item)), rejected.violations.join('\n'));
+        }
+    }
     assert.equal(validateReport({ ...report, outcome: 'PASSED' }).valid, false);
     assert.equal(validateReport({ ...report, reviewer_notes: [{ outcome: 'PASSED' }] }).valid, false);
     const foreignResolution = structuredClone(report);

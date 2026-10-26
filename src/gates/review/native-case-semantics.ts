@@ -176,7 +176,11 @@ export function getNativeCaseResolutionViolations(options: {
         const matches = entriesById.get(id) ?? [];
         const resolution = matches[0]?.case_resolution;
         if (matches.length !== 1 || !resolutionShape(resolution)) {
-            violations.push(`${id}: current independent case resolution is missing or malformed.`); continue;
+            if (matches.length === 1 && isPlainRecord(resolution) && typeof resolution.evidence_quote === 'string'
+                && !withinCharacterLimit(resolution.evidence_quote, MAX_QUOTE_CHARS)) {
+                violations.push(`${id}: evidence_quote has ${Array.from(resolution.evidence_quote).length} characters; the limit is ${MAX_QUOTE_CHARS}.`);
+            } else violations.push(`${id}: current independent case resolution is missing or malformed.`);
+            continue;
         }
         if (resolution.binding_sha256 !== validationDigest(binding) || resolution.execution_sha256 !== execution.record_sha256
             || resolution.output_sha256 !== execution.output_sha256 || binding.execution !== 'OBSERVED')
@@ -212,7 +216,7 @@ export function getNativeCaseResolutionViolations(options: {
             const key = validationDigest(execution);
             if (!outputs.has(key)) outputs.set(key, { ...retainedNativeCaseOutput(options.repoRoot, execution), digest: execution.output_sha256 });
             if (!outputs.get(key)!.text.includes(resolution.evidence_quote))
-                violations.push(`${id}: the independent quotation is absent from actual retained output.`);
+                violations.push(`${id}: the independent quotation is absent from actual retained output. Use one contiguous excerpt of the retained output.`);
         } catch (error) { violations.push(`${id}: retained case evidence rejected: ${String(error)}`); }
     }
     if (options.requireExpectedRed && [...expectedExecutions].some(execution => !assertionFailures.has(execution)))

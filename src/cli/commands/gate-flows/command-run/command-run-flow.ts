@@ -35,6 +35,7 @@ import {
 } from '../../../../gates/shared/focused-intermediate-command-grammar';
 import { hasTestFirstExpectedRedDeclaration } from '../../../../gates/test-first/test-first-declaration';
 import { executeCommandAsync, splitCommandLine } from '../../../gate-cli/gates-subprocess';
+import { buildNextStepRecoveryCommand } from '../compile/compile-flow-shared-evidence';
 import { runRecipeCommand } from './recipe-command-flow';
 import { getCurrentIntermediateTestTargets, hasReportedFailedTestCase, isLiteralIntermediateInvocation, observeNativeIntermediateScope } from './intermediate-command-scope';
 
@@ -681,7 +682,10 @@ export async function runIntermediateCommandCommand(
         const message = 'Command is not eligible for auditable intermediate compaction for the selected source. '
             + (nativeScopeBefore.scope_content_sha256
                 ? 'Use one literal project command without shell operators, redirection or environment assignments.'
-                : 'Add --preflight-path to run the literal project command against the current preflight, '
+                : preflightPath
+                    ? `${nativeScopeBefore.error || 'The supplied preflight could not be authenticated.'} `
+                        + `Refresh the preflight: run ${buildNextStepRecoveryCommand(repoRoot, taskId)} and follow its classification guidance before retrying.`
+                    : 'Add --preflight-path to run the literal project command against the current preflight, '
                     + 'or use a conventional focused form (for example `mvn -q -Dtest=<Class> test`, '
                     + '`gradle test --tests <Class> --console=plain`, `python -m pytest <file>`, `go test ./<package>`).');
         return {
