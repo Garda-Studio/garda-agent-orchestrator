@@ -1,3 +1,5 @@
+import { measureNextStepPhase } from '../../core/next-step-measurement';
+import { withNextStepMeasurement } from '../../core/next-step-measurement';
 import { formatInstalledBundleMaintenanceGuidance } from '../protected-control-plane/installed-bundle-guard';
 import { ExpectedRedEvidenceError, taskRequiresExpectedRed } from '../test-first/expected-red-evidence';
 import { resolveAuthoritativeReviewValidationObligations } from '../review-context/review-context-coverage';
@@ -2693,6 +2695,7 @@ export function resolveNextStepDecisionRoute(
     effects: NextStepEffectController = createNextStepEffectPlanner(),
     onCloseoutCandidate?: () => void
 ): NextStepResult {
+    return measureNextStepPhase('decision', () => {
     const {
         repoRoot,
         taskId,
@@ -5456,6 +5459,8 @@ export function resolveNextStepDecisionRoute(
         reason: postReviewDecision.reason,
         commands: postReviewDecision.commands
     });
+
+    });
 }
 
 function resolveNextStepWithEffectController(
@@ -5506,7 +5511,10 @@ function inspectNextStepEffects(options: NextStepPresentationOptions): {
 }
 
 export function resolveNextStep(options: NextStepPresentationOptions): NextStepResult {
+    return withNextStepMeasurement(() => {
     return inspectNextStepEffects(options).result;
+
+    });
 }
 
 export function executeNextStepEffects(

@@ -1,3 +1,4 @@
+import { measureNextStepPhase } from '../../core/next-step-measurement';
 import {
     buildEventIntegrityHash,
     forEachTaskTimelineJsonlEntry,
@@ -116,6 +117,7 @@ function inspectTaskEventFileUncached(
     taskId: string,
     options: InspectTaskEventOptions = {}
 ): InspectTaskEventResult {
+    return measureNextStepPhase('timeline_verify', () => {
     const result: InspectTaskEventResult = {
         source_path: String(taskEventFile).replace(/\\/g, '/'),
         status: 'UNKNOWN',
@@ -332,6 +334,8 @@ function inspectTaskEventFileUncached(
     }
 
     return result;
+
+    });
 }
 
 function cloneInspectTaskEventResult(

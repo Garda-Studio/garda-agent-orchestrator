@@ -108,6 +108,12 @@ test('next-step benchmark accepts the real CLI output contract', { timeout: 30_0
         subsequent_ms: number[];
         output_equivalent: boolean;
     };
+    const measured = JSON.parse(run.stdout) as { phase_samples: Array<{ phases_ms: Record<string, number>; work: Record<string, number> }> };
+    assert.equal(measured.phase_samples.length, 6);
+    for (const sample of measured.phase_samples) {
+        assert.ok(sample.phases_ms.total >= 0);
+        assert.equal(sample.work.audit, 1);
+    }
     assert.equal(report.task_id, 'T-BENCH-UNDECLARED');
     assert.equal(report.route, 'enter-task-mode');
     assert.equal(report.process_count, 6);

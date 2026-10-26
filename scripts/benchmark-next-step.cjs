@@ -16,6 +16,7 @@ if (!taskId || !Number.isInteger(sampleCount) || sampleCount < 6 || sampleCount 
 
 const cliPath = path.resolve(__dirname, '..', 'bin', 'garda.js');
 const durationsMs = [];
+const phaseSamples = [];
 let expectedOutput = null;
 let route = null;
 for (let index = 0; index < sampleCount; index += 1) {
@@ -24,6 +25,7 @@ for (let index = 0; index < sampleCount; index += 1) {
         cliPath, 'next-step', taskId, '--repo-root', repoRoot, '--as-json'
     ], {
         cwd: repoRoot,
+        env: { ...process.env, GARDA_NEXT_STEP_TIMING: '1' },
         encoding: 'utf8',
         maxBuffer: 16 * 1024 * 1024
     });
@@ -32,6 +34,8 @@ for (let index = 0; index < sampleCount; index += 1) {
         process.stderr.write(run.stderr || String(run.error || `next-step exited ${run.status}`));
         process.exit(run.status || 1);
     }
+    const timingLine = run.stderr.split(/\r?\n/u).find(line => line.startsWith('GARDA_NEXT_STEP_TIMING '));
+    phaseSamples.push(timingLine ? JSON.parse(timingLine.slice('GARDA_NEXT_STEP_TIMING '.length)) : null);
     const parsed = JSON.parse(run.stdout);
     const { generated_utc: _generatedUtc, ...stableOutput } = parsed;
     const normalizedOutput = JSON.stringify(stableOutput);
@@ -55,6 +59,10 @@ const result = {
     node_version: process.version,
     process_count: sampleCount,
     first_ms: durationsMs[0],
+    cold_process_ms: durationsMs[0],
+    warm_process_median_ms: medianMs,
+    phase_samples: phaseSamples,
+    phase_note: 'Inclusive phases overlap; cold means first process, not flushed OS caches.',
     subsequent_ms: durationsMs.slice(1),
     subsequent_median_ms: medianMs,
     subsequent_range_ms: [laterSamples[0], laterSamples[laterSamples.length - 1]],

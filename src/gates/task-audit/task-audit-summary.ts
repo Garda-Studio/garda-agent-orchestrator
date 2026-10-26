@@ -1,3 +1,4 @@
+import { measureNextStepPhase } from '../../core/next-step-measurement';
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import { isTaskQueueDecomposedStatus } from '../../core/active-task-state';
 import * as fs from 'node:fs';
@@ -366,6 +367,7 @@ function filterNotRequiredEvidenceArtifacts(
 }
 
 export function buildTaskAuditSummary(options: TaskAuditSummaryOptions): TaskAuditSummaryResult {
+    return measureNextStepPhase('audit', () => {
     const repoRoot = path.resolve(options.repoRoot);
     const safeTaskId = assertValidTaskId(options.taskId);
     const eventsRoot = resolveEventsRoot(repoRoot, options.eventsRoot);
@@ -387,6 +389,8 @@ export function buildTaskAuditSummary(options: TaskAuditSummaryOptions): TaskAud
             ))
         ))
     ));
+
+    });
 }
 
 function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): TaskAuditSummaryResult {

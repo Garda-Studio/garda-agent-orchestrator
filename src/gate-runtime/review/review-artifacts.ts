@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import * as fs from 'node:fs';
@@ -995,6 +996,7 @@ function assertReviewArtifactByteBudget(snapshot: ReviewArtifactReadSnapshotStat
 }
 
 function readReviewArtifactBytesBounded(filePath: string, identity: fs.Stats): Buffer | null {
+    countNextStepWork('artifact_bytes:' + filePath);
     const handle = fs.openSync(filePath, 'r');
     try {
         const openedIdentity = fs.fstatSync(handle);

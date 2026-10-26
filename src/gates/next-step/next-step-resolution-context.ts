@@ -1,3 +1,4 @@
+import { measureNextStepPhase } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -67,6 +68,7 @@ function assertRuntimeRootInsideRepo(repoRoot: string, runtimeRoot: string, labe
 }
 
 export function createNextStepResolutionContext(options: NextStepOptions): NextStepResolutionContext {
+    return measureNextStepPhase('context', () => {
     const repoRoot = path.resolve(options.repoRoot || '.');
     const taskId = assertValidTaskId(options.taskId);
     const reviewsRoot = resolveReviewsRoot(repoRoot, options.reviewsRoot);
@@ -103,4 +105,6 @@ export function createNextStepResolutionContext(options: NextStepOptions): NextS
         preflightSha256,
         taskEventsPath: path.join(eventsRoot, `${taskId}.jsonl`)
     };
+
+    });
 }

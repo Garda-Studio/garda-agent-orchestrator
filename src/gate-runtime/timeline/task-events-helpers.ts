@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 
@@ -163,6 +164,7 @@ function splitTaskTimelineJsonlLines(content: string): string[] {
 }
 
 function buildTaskTimelineJsonlEntries(content: string): TaskTimelineParsedJsonlEntries {
+    countNextStepWork('timeline_parse');
     const rawLines = splitTaskTimelineJsonlLines(content);
     const entries: TaskTimelineJsonlEntry[] = [];
     const structureBudget: TaskTimelineJsonStructureBudget = {

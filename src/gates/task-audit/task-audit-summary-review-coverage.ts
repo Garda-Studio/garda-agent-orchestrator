@@ -1,3 +1,4 @@
+import { measureNextStepPhase } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import { getValidationTerminalViolations } from '../review/validation-terminal';
 import {
@@ -114,6 +115,7 @@ export function buildReviewCoverageAuditSummary(options: {
     orderedEvents?: readonly Record<string, unknown>[];
     taskQueueEntries?: ReadonlyMap<string, TaskQueueEntry>;
 }): ReviewCoverageAuditSummary {
+    return measureNextStepPhase('review_coverage', () => {
     const entries: ReviewCoverageAuditEntry[] = [];
     const dispositionEvidence: Record<string, ReturnType<typeof validateReviewFindingsDispositionEvidence> | null> = {};
     const repoRoot = path.resolve(options.reviewsRoot, '..', '..', '..');
@@ -397,4 +399,6 @@ export function buildReviewCoverageAuditSummary(options: {
             `incomplete_reviews=${incomplete.map((entry) => entry.review_type).join(',') || 'none'}; ` +
             `omitted=${omitted.join(',') || 'none'}` + (validationViolations.length ? `; ${validationViolations.join(' | ')}` : '')
     };
+
+    });
 }

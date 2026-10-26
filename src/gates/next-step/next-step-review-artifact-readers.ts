@@ -1,3 +1,4 @@
+import { measureNextStepPhase } from '../../core/next-step-measurement';
 import type { ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 import { hasAuthenticatedIntermediateGroupedReceiptSource } from '../review/review-grouped-receipt-source';
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
@@ -1933,6 +1934,7 @@ export function readReviewArtifactState(
     taskQueueFollowUpFingerprintIndex?: TaskQueueFollowUpFingerprintIndex | null,
     inspection: ValidationEvidenceInspection = 'active'
 ): ReviewArtifactState {
+    return measureNextStepPhase('review:' + taskId + ':' + reviewType, () => {
     const contextPath = path.join(reviewsRoot, `${taskId}-${reviewType}-review-context.json`);
     const artifactPath = path.join(reviewsRoot, `${taskId}-${reviewType}.md`);
     const receiptPath = path.join(reviewsRoot, `${taskId}-${reviewType}-receipt.json`);
@@ -2742,6 +2744,8 @@ export function readReviewArtifactState(
         recordedAtUtc,
         reviewOutputSourceMtimeUtc
     };
+
+    });
 }
 
 export function reviewReceiptDomainScopeMatchesCurrentPreflight(
