@@ -34,6 +34,8 @@
 
 ### Faster everyday work
 
+- Repeated review-artifact reads reuse the parsed immutable JSON within an authenticated read snapshot; path, identity and publication checks still run on every read.
+
 - Opt-in `GARDA_NEXT_STEP_TIMING=1` reports inclusive navigation phase timings and work counts to stderr without changing navigator text or JSON. The benchmark reports first-process and warm-process timings with phase samples.
 
 - Garda Compact keeps large command output manageable: preview Git results, files and searches, then page through or search the retained output.

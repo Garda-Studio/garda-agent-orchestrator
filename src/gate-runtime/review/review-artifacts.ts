@@ -99,6 +99,10 @@ interface InProcessReviewArtifactTransactionContext {
 
 const reviewArtifactTransactionContext = new AsyncLocalStorage<InProcessReviewArtifactTransactionContext>();
 
+// Keys are private immutable payload buffers. A new snapshot always captures a new
+// buffer; identity/path/generation checks still run before these derived reads.
+const parsedReviewArtifactPayloads = new WeakMap<Buffer, { valid: boolean; value: unknown }>();
+
 interface CachedReviewArtifactRead {
     content: Buffer | null;
     exists: boolean;
@@ -1146,21 +1150,18 @@ export function readReviewArtifactJsonSnapshot(filePath: string): ReviewArtifact
             value: null
         };
     }
-    try {
-        return {
-            active: true,
-            sha256: fileSnapshot.sha256,
-            valid: true,
-            value: freezeReviewArtifactJson(JSON.parse(fileSnapshot.content.toString('utf8')) as unknown)
-        };
-    } catch {
-        return {
-            active: true,
-            sha256: fileSnapshot.sha256,
-            valid: false,
-            value: null
-        };
+    let parsed = parsedReviewArtifactPayloads.get(fileSnapshot.content);
+    if (!parsed) {
+        countNextStepWork('artifact_json_parse:' + filePath);
+        try {
+            parsed = { valid: true, value: freezeReviewArtifactJson(JSON.parse(fileSnapshot.content.toString('utf8')) as unknown) };
+        } catch {
+            parsed = { valid: false, value: null };
+        }
+        parsedReviewArtifactPayloads.set(fileSnapshot.content, parsed);
     }
+    return { active: true, sha256: fileSnapshot.sha256, valid: parsed.valid,
+        value: parsed.valid ? freezeReviewArtifactJson(structuredClone(parsed.value)) : null };
 }
 
 export function readReviewArtifactJsonFile(filePath: string): unknown {

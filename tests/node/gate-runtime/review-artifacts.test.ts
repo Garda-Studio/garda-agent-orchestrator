@@ -1486,7 +1486,7 @@ test('aggregate snapshot byte budget rejects the next receipt before allocation 
     }
 });
 
-test('review read barrier reuses one immutable byte read without retaining parsed JSON', () => {
+test('review read barrier reuses immutable bytes and isolates returned JSON views', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-review-read-snapshot-'));
     const reviewsDir = createReviewsDir(tempDir);
     const receiptPath = path.join(reviewsDir, 'T-022-code-receipt.json');
@@ -2706,4 +2706,38 @@ test('context lock prevents rebuild after post-write assertion until reuse trans
         }
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
+});
+
+test('parsed review payload reuse rejects changed inputs and never crosses read snapshots', (context) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-json-derived-cache-'));
+    context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const reviewsDir = createReviewsDir(root);
+    const artifact = path.join(reviewsDir, 'T-CACHE-preflight.json');
+    fs.writeFileSync(artifact, '{"value":1}');
+    withReviewArtifactReadSnapshot(reviewsDir, () => {
+        const first = readReviewArtifactJsonSnapshot(artifact);
+        const second = readReviewArtifactJsonSnapshot(artifact);
+        assert.equal(first.valid, true);
+        assert.deepEqual(second, first);
+        assert.ok(Object.isFrozen(first.value));
+        const exposed = readReviewArtifactFileSnapshot(artifact).content!;
+        exposed.fill(0);
+        assert.deepEqual(readReviewArtifactJsonSnapshot(artifact).value, { value: 1 });
+        fs.renameSync(artifact, `${artifact}.old`);
+        fs.writeFileSync(artifact, '{"value":2}');
+        assert.equal(readReviewArtifactJsonSnapshot(artifact).valid, false);
+    });
+    withReviewArtifactReadSnapshot(reviewsDir, () => {
+        assert.deepEqual(readReviewArtifactJsonSnapshot(artifact).value, { value: 2 });
+    });
+    fs.writeFileSync(artifact, '{invalid');
+    withReviewArtifactReadSnapshot(reviewsDir, () => {
+        assert.equal(readReviewArtifactJsonSnapshot(artifact).valid, false);
+        assert.equal(readReviewArtifactJsonSnapshot(artifact).valid, false);
+    });
+    fs.writeFileSync(artifact, 'null');
+    withReviewArtifactReadSnapshot(reviewsDir, () => {
+        assert.equal(readReviewArtifactJsonSnapshot(artifact).valid, true);
+        assert.equal(readReviewArtifactJsonSnapshot(artifact).value, null);
+    });
 });

@@ -20,7 +20,7 @@ test('long-history navigator instrumentation preserves its route and output and 
     assert.equal(measurement?.work.timeline_verify, 1);
     assert.equal(measurement?.work.timeline_parse, 1);
     for (const [key, count] of Object.entries(measurement?.work || {})) {
-        if (key.startsWith('artifact_bytes:') || key.startsWith('git:') || key.startsWith('git_binary:') || key.startsWith('icacls:')) {
+        if (key.startsWith('artifact_bytes:') || key.startsWith('artifact_json_parse:') || key.startsWith('git:') || key.startsWith('git_binary:') || key.startsWith('icacls:')) {
             assert.equal(count, 1, key);
         }
     }
