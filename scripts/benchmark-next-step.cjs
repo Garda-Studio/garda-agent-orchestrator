@@ -25,7 +25,8 @@ for (let index = 0; index < sampleCount; index += 1) {
         cliPath, 'next-step', taskId, '--repo-root', repoRoot, '--as-json'
     ], {
         cwd: repoRoot,
-        env: { ...process.env, GARDA_NEXT_STEP_TIMING: '1' },
+        env: { ...process.env, GARDA_NEXT_STEP_TIMING: '1',
+            ...(index === 0 ? { NODE_DISABLE_COMPILE_CACHE: '1' } : {}) },
         encoding: 'utf8',
         maxBuffer: 16 * 1024 * 1024
     });
@@ -62,7 +63,7 @@ const result = {
     cold_process_ms: durationsMs[0],
     warm_process_median_ms: medianMs,
     phase_samples: phaseSamples,
-    phase_note: 'Inclusive phases overlap; cold means first process, not flushed OS caches.',
+    phase_note: 'Inclusive phases overlap; cold disables Node compile cache, not OS caches.',
     subsequent_ms: durationsMs.slice(1),
     subsequent_median_ms: medianMs,
     subsequent_range_ms: [laterSamples[0], laterSamples[laterSamples.length - 1]],

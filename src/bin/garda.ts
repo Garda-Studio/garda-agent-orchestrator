@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import './garda/compile-cache';
+
 import { findPackageRoot } from './garda/root-discovery';
 import { resolveDelegatedLauncherTarget } from './garda/delegation-policy';
 import { delegateToLocalCli } from './garda/process-delegation';

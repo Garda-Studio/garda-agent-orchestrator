@@ -1,69 +1,11 @@
 import { getAllShimmedGateNames } from '../../compat/shim-registry';
-import { handleParentAudit } from './gate-parent-audit-handlers';
+
 import {
     buildGateCommandOverviewText,
     buildGateHelpText,
     buildTaskIdSyntaxRemediationMessage,
     hasStandaloneGateHelpFlag
 } from './gate-command-help';
-import { handleValidateManifest, handleValidateConfig } from './gate-validate-handlers';
-import {
-    handleClassifyChange,
-    handleCompileGate,
-    handleBuildScopedDiff,
-    handleBuildReviewContext,
-    handleActivateOptionalSkill,
-    handleDeclineOptionalSkill
-} from './gate-build-handlers';
-import {
-    handleRequiredReviewsCheck,
-    handleDocImpactGate,
-    handleRecordReviewResult,
-    handleRecordReviewRouting,
-    handlePrepareReviewerLaunch,
-    handleRecordReviewerDelegationStarted,
-    handleRecordReviewerLaunchFailed,
-    handleCompleteReviewerLaunch,
-    handleRecordReviewInvocation,
-    handleRecordReviewReceipt,
-    handleRecordReviewOutputCorrectionInvocation,
-    handleRecordReviewOutputCorrectionResponse,
-    handleRecordReviewOutputCorrectionTransport,
-    handleMaterializeReviewFollowUpTasks
-} from './gate-review-handlers';
-import {
-    handleBindRulePackToPreflight,
-    handleEnterTaskMode,
-    handleRecoverTaskModeProtectedManifest,
-    handleLoadRulePack,
-    handleRestartCoherentCycle,
-    handleRestartReviewCycle,
-    handleRecordNoOp,
-    handleRecordReviewCycleContinuation,
-    handleRecordReviewCycleSplitDecision,
-    handleRecordStrictDecompositionDecision,
-    handleListSplitRequiredWip,
-    handleRestoreSplitRequiredWip,
-    handleRetireSplitRequiredWip,
-    handleHandshakeDiagnostics,
-    handleShellSmokePreflight,
-    handleCommandTimeoutDiagnostics,
-    handleQualityChecklist,
-    handleRunIntermediateCommand,
-    handleProjectMemoryImpact,
-    handleLogTaskEvent,
-    handleTaskEventsSummary,
-    handleTaskAuditSummary,
-        handleNextStep,
-        handleFullSuiteValidation,
-        handleFullSuiteRunMarkerRecovery,
-        handleMaterializeFullSuiteRepairTask,
-        handleRestoreFullSuiteRepairWip,
-        handleCompletionGate,
-        handleHumanCommit,
-        handleTaskReset
-} from './gate-task-handlers';
-import { handleValidateIsolation, handlePrepareIsolation } from './gate-isolation-handlers';
 
 export async function handleGate(commandArgv: string[]): Promise<void> {
     if (commandArgv[0] === 'help') {
@@ -97,115 +39,115 @@ export async function handleGate(commandArgv: string[]): Promise<void> {
 
     switch (gateName) {
         case 'parent-audit':
-            return handleParentAudit(gateArgv);
+            return (await import('./gate-parent-audit-handlers')).handleParentAudit(gateArgv);
         case 'validate-manifest':
-            return handleValidateManifest(gateArgv);
+            return (await import('./gate-validate-handlers')).handleValidateManifest(gateArgv);
         case 'validate-config':
-            return handleValidateConfig(gateArgv);
+            return (await import('./gate-validate-handlers')).handleValidateConfig(gateArgv);
         case 'classify-change':
-            return handleClassifyChange(gateArgv);
+            return (await import('./gate-build-handlers')).handleClassifyChange(gateArgv);
         case 'enter-task-mode':
-            return handleEnterTaskMode(gateArgv);
+            return (await import('./gate-task-handlers')).handleEnterTaskMode(gateArgv);
         case 'recover-task-mode-protected-manifest':
-            return handleRecoverTaskModeProtectedManifest(gateArgv);
+            return (await import('./gate-task-handlers')).handleRecoverTaskModeProtectedManifest(gateArgv);
         case 'restart-coherent-cycle':
-            return handleRestartCoherentCycle(gateArgv);
+            return (await import('./gate-task-handlers')).handleRestartCoherentCycle(gateArgv);
         case 'restart-review-cycle':
-            return handleRestartReviewCycle(gateArgv);
+            return (await import('./gate-task-handlers')).handleRestartReviewCycle(gateArgv);
         case 'load-rule-pack':
-            return handleLoadRulePack(gateArgv);
+            return (await import('./gate-task-handlers')).handleLoadRulePack(gateArgv);
         case 'bind-rule-pack-to-preflight':
-            return handleBindRulePackToPreflight(gateArgv);
+            return (await import('./gate-task-handlers')).handleBindRulePackToPreflight(gateArgv);
         case 'record-no-op':
-            return handleRecordNoOp(gateArgv);
+            return (await import('./gate-task-handlers')).handleRecordNoOp(gateArgv);
         case 'record-review-cycle-continuation':
-            return handleRecordReviewCycleContinuation(gateArgv);
+            return (await import('./gate-task-handlers')).handleRecordReviewCycleContinuation(gateArgv);
         case 'record-review-cycle-split-decision':
-            return handleRecordReviewCycleSplitDecision(gateArgv);
+            return (await import('./gate-task-handlers')).handleRecordReviewCycleSplitDecision(gateArgv);
         case 'record-strict-decomposition-decision':
-            return handleRecordStrictDecompositionDecision(gateArgv);
+            return (await import('./gate-task-handlers')).handleRecordStrictDecompositionDecision(gateArgv);
         case 'list-split-required-wip':
-            return handleListSplitRequiredWip(gateArgv);
+            return (await import('./gate-task-handlers')).handleListSplitRequiredWip(gateArgv);
         case 'restore-split-required-wip':
-            return handleRestoreSplitRequiredWip(gateArgv);
+            return (await import('./gate-task-handlers')).handleRestoreSplitRequiredWip(gateArgv);
         case 'retire-split-required-wip':
-            return handleRetireSplitRequiredWip(gateArgv);
+            return (await import('./gate-task-handlers')).handleRetireSplitRequiredWip(gateArgv);
         case 'handshake-diagnostics':
-            return handleHandshakeDiagnostics(gateArgv);
+            return (await import('./gate-task-handlers')).handleHandshakeDiagnostics(gateArgv);
         case 'shell-smoke-preflight':
-            return handleShellSmokePreflight(gateArgv);
+            return (await import('./gate-task-handlers')).handleShellSmokePreflight(gateArgv);
         case 'command-timeout-diagnostics':
-            return handleCommandTimeoutDiagnostics(gateArgv);
+            return (await import('./gate-task-handlers')).handleCommandTimeoutDiagnostics(gateArgv);
         case 'quality-checklist':
-            return handleQualityChecklist(gateArgv);
+            return (await import('./gate-task-handlers')).handleQualityChecklist(gateArgv);
         case 'run-intermediate-command':
-            return handleRunIntermediateCommand(gateArgv);
+            return (await import('./gate-task-handlers')).handleRunIntermediateCommand(gateArgv);
         case 'project-memory-impact':
-            return handleProjectMemoryImpact(gateArgv);
+            return (await import('./gate-task-handlers')).handleProjectMemoryImpact(gateArgv);
         case 'compile-gate':
-            return handleCompileGate(gateArgv);
+            return (await import('./gate-build-handlers')).handleCompileGate(gateArgv);
         case 'build-scoped-diff':
-            return handleBuildScopedDiff(gateArgv);
+            return (await import('./gate-build-handlers')).handleBuildScopedDiff(gateArgv);
         case 'build-review-context':
-            return handleBuildReviewContext(gateArgv);
+            return (await import('./gate-build-handlers')).handleBuildReviewContext(gateArgv);
         case 'activate-optional-skill':
-            return handleActivateOptionalSkill(gateArgv);
+            return (await import('./gate-build-handlers')).handleActivateOptionalSkill(gateArgv);
         case 'decline-optional-skill':
-            return handleDeclineOptionalSkill(gateArgv);
+            return (await import('./gate-build-handlers')).handleDeclineOptionalSkill(gateArgv);
         case 'task-events-summary':
-            return handleTaskEventsSummary(gateArgv);
+            return (await import('./gate-task-handlers')).handleTaskEventsSummary(gateArgv);
         case 'task-audit-summary':
-            return handleTaskAuditSummary(gateArgv);
+            return (await import('./gate-task-handlers')).handleTaskAuditSummary(gateArgv);
         case 'next-step':
-            return handleNextStep(gateArgv);
+            return (await import('./gate-next-step-handler')).handleNextStep(gateArgv);
         case 'log-task-event':
-            return handleLogTaskEvent(gateArgv);
+            return (await import('./gate-task-handlers')).handleLogTaskEvent(gateArgv);
         case 'required-reviews-check':
-            return handleRequiredReviewsCheck(gateArgv);
+            return (await import('./gate-review-handlers')).handleRequiredReviewsCheck(gateArgv);
         case 'doc-impact-gate':
-            return handleDocImpactGate(gateArgv);
+            return (await import('./gate-review-handlers')).handleDocImpactGate(gateArgv);
         case 'full-suite-validation':
-            return handleFullSuiteValidation(gateArgv);
+            return (await import('./gate-task-handlers')).handleFullSuiteValidation(gateArgv);
         case 'full-suite-run-marker-recovery':
-            return handleFullSuiteRunMarkerRecovery(gateArgv);
+            return (await import('./gate-task-handlers')).handleFullSuiteRunMarkerRecovery(gateArgv);
         case 'materialize-full-suite-repair-task':
-            return handleMaterializeFullSuiteRepairTask(gateArgv);
+            return (await import('./gate-task-handlers')).handleMaterializeFullSuiteRepairTask(gateArgv);
         case 'restore-full-suite-repair-wip':
-            return handleRestoreFullSuiteRepairWip(gateArgv);
+            return (await import('./gate-task-handlers')).handleRestoreFullSuiteRepairWip(gateArgv);
         case 'record-review-result':
-            return handleRecordReviewResult(gateArgv);
+            return (await import('./gate-review-handlers')).handleRecordReviewResult(gateArgv);
         case 'record-review-output-correction-transport':
-            return handleRecordReviewOutputCorrectionTransport(gateArgv);
+            return (await import('./gate-review-handlers')).handleRecordReviewOutputCorrectionTransport(gateArgv);
         case 'record-review-output-correction-response':
-            return handleRecordReviewOutputCorrectionResponse(gateArgv);
+            return (await import('./gate-review-handlers')).handleRecordReviewOutputCorrectionResponse(gateArgv);
         case 'record-review-output-correction-invocation':
-            return handleRecordReviewOutputCorrectionInvocation(gateArgv);
+            return (await import('./gate-review-handlers')).handleRecordReviewOutputCorrectionInvocation(gateArgv);
         case 'completion-gate':
-            return handleCompletionGate(gateArgv);
+            return (await import('./gate-task-handlers')).handleCompletionGate(gateArgv);
         case 'record-review-routing':
-            return handleRecordReviewRouting(gateArgv);
+            return (await import('./gate-review-handlers')).handleRecordReviewRouting(gateArgv);
         case 'prepare-reviewer-launch':
-            return handlePrepareReviewerLaunch(gateArgv);
+            return (await import('./gate-review-handlers')).handlePrepareReviewerLaunch(gateArgv);
         case 'record-reviewer-delegation-started':
-            return handleRecordReviewerDelegationStarted(gateArgv);
+            return (await import('./gate-review-handlers')).handleRecordReviewerDelegationStarted(gateArgv);
         case 'record-reviewer-launch-failed':
-            return handleRecordReviewerLaunchFailed(gateArgv);
+            return (await import('./gate-review-handlers')).handleRecordReviewerLaunchFailed(gateArgv);
         case 'complete-reviewer-launch':
-            return handleCompleteReviewerLaunch(gateArgv);
+            return (await import('./gate-review-handlers')).handleCompleteReviewerLaunch(gateArgv);
         case 'record-review-invocation':
-            return handleRecordReviewInvocation(gateArgv);
+            return (await import('./gate-review-handlers')).handleRecordReviewInvocation(gateArgv);
         case 'record-review-receipt':
-            return handleRecordReviewReceipt(gateArgv);
+            return (await import('./gate-review-handlers')).handleRecordReviewReceipt(gateArgv);
         case 'materialize-review-follow-up-tasks':
-            return handleMaterializeReviewFollowUpTasks(gateArgv);
+            return (await import('./gate-review-handlers')).handleMaterializeReviewFollowUpTasks(gateArgv);
         case 'human-commit':
-            return handleHumanCommit(gateArgv);
+            return (await import('./gate-task-handlers')).handleHumanCommit(gateArgv);
         case 'validate-isolation':
-            return handleValidateIsolation(gateArgv);
+            return (await import('./gate-isolation-handlers')).handleValidateIsolation(gateArgv);
         case 'prepare-isolation':
-            return handlePrepareIsolation(gateArgv);
+            return (await import('./gate-isolation-handlers')).handlePrepareIsolation(gateArgv);
         case 'task-reset':
-            return handleTaskReset(gateArgv);
+            return (await import('./gate-task-handlers')).handleTaskReset(gateArgv);
         default:
             throw new Error(`Unknown gate: ${gateName}`);
     }
