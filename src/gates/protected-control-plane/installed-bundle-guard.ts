@@ -10,7 +10,8 @@ const INSTALLED_BUNDLE_TASK_DOCUMENT_FILE = `${DEFAULT_BUNDLE_NAME}/live/docs/ch
 const BUNDLE_PATHSPEC = `:(top,icase)${DEFAULT_BUNDLE_NAME}`;
 
 export const INSTALLED_BUNDLE_GUIDANCE = 'Never edit, stage or commit Garda\'s own bundle files in an installed project, even with operator approval. '
-    + `Only ${INSTALLED_BUNDLE_TASK_DOCUMENT_DIRECTORY}/ and ${INSTALLED_BUNDLE_TASK_DOCUMENT_FILE} are task-maintained, on disk only. `
+    + `The task-maintained documents are ${INSTALLED_BUNDLE_TASK_DOCUMENT_DIRECTORY}/ and ${INSTALLED_BUNDLE_TASK_DOCUMENT_FILE}, on disk only. `
+    + 'Write files under `garda-agent-orchestrator/runtime/` only where a gate or next-step instructs (for example quality-checklist answers); never stage or commit them. '
     + 'Record Garda defects in the TASK.md orchestrator-problems section; fix them in Garda source checkout. Change live/config settings only through the workflow commands.';
 
 export function installedBundleScopePaths(repoRoot: string, files: readonly string[]): string[] {

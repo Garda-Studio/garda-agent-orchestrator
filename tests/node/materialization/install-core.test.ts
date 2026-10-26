@@ -56,6 +56,11 @@ describe('runInstall — core deploy and invariants', () => {
                 assert.match(rules, /even with operator approval/);
                 assert.doesNotMatch(rules, /unless the user explicitly (?:asks to version|requests versioning) orchestrator internals/);
             }
+            for (const relative of ['CLAUDE.md', ...['00-core.md', '40-commands.md', '80-task-workflow.md']
+                .map(name => 'garda-agent-orchestrator/live/docs/agent-rules/' + name)]) {
+                assert.match(fs.readFileSync(path.join(projectRoot, relative), 'utf8'),
+                    /Write files under `garda-agent-orchestrator\/runtime\/` only where a gate or next-step instructs.*never stage or commit them/);
+            }
             // Provider bridges and live skills are installed guidance too; none may keep the old staging exception.
             const installedGuidance: string[] = [];
             const walk = (directory: string) => {

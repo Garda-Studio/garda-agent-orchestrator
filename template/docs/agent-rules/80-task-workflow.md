@@ -1,6 +1,6 @@
 # Task Workflow
 
-In installed projects, never edit, stage or commit Garda's own bundle files (code, `bin/`, `dist/`, `src/`, templates, managed rules and settings), even with operator approval. Exception: when the rules require it, update `garda-agent-orchestrator/live/docs/project-memory/` and `garda-agent-orchestrator/live/docs/changes/CHANGELOG.md` on disk; never stage or commit them. Record Garda defects in the `TASK.md` orchestrator-problems section instead of patching Garda inside the project. Change live/config settings only through existing workflow commands. Garda source-checkout development remains supported through orchestrator-work.
+In installed projects, never edit, stage or commit Garda's own bundle files (code, `bin/`, `dist/`, `src/`, templates, managed rules and settings), even with operator approval. Exception: when the rules require it, update `garda-agent-orchestrator/live/docs/project-memory/` and `garda-agent-orchestrator/live/docs/changes/CHANGELOG.md` on disk; never stage or commit them. Write files under `garda-agent-orchestrator/runtime/` only where a gate or next-step instructs (for example quality-checklist answers); never stage or commit them. Record Garda defects in the `TASK.md` orchestrator-problems section instead of patching Garda inside the project. Change live/config settings only through existing workflow commands. Garda source-checkout development remains supported through orchestrator-work.
 
 Primary entry point: selected source-of-truth entrypoint for this workspace.
 
