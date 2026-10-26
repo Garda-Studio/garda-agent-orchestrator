@@ -4,6 +4,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { withInvocationReadObservation } from '../../../../src/core/invocation-read-observation';
+import { readReviewContextTrustBoundaryAnalysis } from '../../../../src/gates/review-context/review-context-trust-boundary-analysis';
+import { inspectQualityValidationPhases } from '../../../../src/gates/quality-checklist/quality-checklist-validation-phases';
 import { readReviewValidationBytes } from '../../../../src/gates/review-context/review-validation-invocation';
 
 test('Q3 quality capture preserves the native byte reader above the retained Q2 bound', () => {
@@ -41,4 +43,43 @@ test('Q3 quality capture preserves contained symbolic-link reads', t => {
         }
         withInvocationReadObservation(() => assert.deepEqual(readReviewValidationBytes(alias), bytes));
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test('Q3 quality analysis does not project accessor options into an ordinary memo key', t => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-q3-quality-options-'));
+    t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+    const applicable = { triggers: { security: true } }, plain = { repoRoot, taskId: null, preflightSha256: null, preflight: applicable };
+    const native = readReviewContextTrustBoundaryAnalysis(plain);
+    assert.equal(native.status, 'invalid');
+    const invoke = () => {
+        let reads = 0;
+        const accessor = { ...plain, get preflight() { reads += 1; return reads <= 2 ? applicable : {}; } };
+        return { result: readReviewContextTrustBoundaryAnalysis(accessor), reads };
+    };
+    const expected = invoke();
+    withInvocationReadObservation(() => {
+        assert.deepEqual(invoke(), expected);
+        assert.deepEqual(readReviewContextTrustBoundaryAnalysis(plain), native);
+    });
+});
+
+test('Q3 quality phase options retain native accessor evaluation and cannot seed a false hit', t => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-q3-phase-options-'));
+    t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+    const bound = { project_validation: { authority_sha256: 'a'.repeat(64) } };
+    const plain = { repoRoot, taskId: 'T-Q3-PHASE', preflightSha256: null, preflight: bound, matrixRequired: false, matrix: null };
+    const invoke = () => {
+        let reads = 0;
+        const accessor = { ...plain, get preflight() { reads += 1; return reads === 1 ? bound : {}; } };
+        let error: unknown;
+        try { inspectQualityValidationPhases(accessor); } catch (caught) { error = caught; }
+        assert.ok(error instanceof Error);
+        return { reads, message: error.message };
+    };
+    const expected = invoke();
+    withInvocationReadObservation(() => {
+        assert.deepEqual(invoke(), expected);
+        assert.throws(() => inspectQualityValidationPhases(plain), /authority changed/u);
+    });
 });

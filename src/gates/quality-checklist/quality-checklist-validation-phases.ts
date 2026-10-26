@@ -10,8 +10,8 @@ import { NativeCaseExecutionUnavailableError, readNativeCaseObligations } from '
 import { readValidationEventSnapshot } from '../project-validation/attempt-evidence';
 import { readValidationFile } from '../../core/project-validation-identity';
 import * as path from 'node:path';
-import { createInvocationReadMemoKey } from '../../core/invocation-read-observation';
-import { countNextStepWork } from '../../core/next-step-measurement';
+import { createInvocationReadMemoKey, isInvocationReadObservationActive } from '../../core/invocation-read-observation';
+import { countNextStepWork, describeProcessInputs } from '../../core/next-step-measurement';
 import { readReviewValidationNode } from '../review-context/review-validation-invocation';
 
 type ExecutionObservation = 'PENDING' | 'OBSERVED' | 'REJECTED';
@@ -200,6 +200,9 @@ function captureQualityValidationPhases(options: QualityValidationPhaseInspectio
 const QUALITY_PHASES = createInvocationReadMemoKey<ReturnType<typeof captureQualityValidationPhases>>('quality-validation-phases-v1');
 
 export function inspectQualityValidationPhases(options: QualityValidationPhaseInspectionOptions) {
+    // Opaque caller inputs retain native evaluation order and cannot seed a projected key.
+    if (!isInvocationReadObservationActive() || describeProcessInputs(options).opaque)
+        return captureQualityValidationPhases(options);
     return readReviewValidationNode(QUALITY_PHASES, () => [
         path.resolve(options.repoRoot), options.taskId, options.preflightSha256, options.preflight,
         options.matrixRequired, options.matrix, options.inspection ?? 'active'

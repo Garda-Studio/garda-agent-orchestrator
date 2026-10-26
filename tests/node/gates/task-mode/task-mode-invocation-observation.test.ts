@@ -408,3 +408,23 @@ test('core containment preserves unchanged native errors and non-missing lstat e
     assert.equal(isPathRealpathInsideRoot(state.repo, candidate), false);
     assert.equal(withInvocationReadObservation(() => isPathRealpathInsideRoot(state.repo, candidate)), false);
 });
+
+
+test('dirty baseline memo binds staged trust property enumerability', () => {
+    const files = { 'a.ts': { schema_version: 1, status: 'present', mode: '100644', object_id_sha256: 'a'.repeat(64) } };
+    const baseline = { changed_files: ['a.ts'], staged_files: ['a.ts'], file_hashes: {},
+        staged_trust: { schema_version: 1, salt: 'fixture-salt', files } };
+    const before = normalizeDirtyWorkspaceBaseline(baseline);
+    assert.ok(before?.staged_trust?.files['a.ts']);
+    Object.defineProperty(files, 'a.ts', { enumerable: false });
+    const after = normalizeDirtyWorkspaceBaseline(baseline);
+    assert.deepEqual(after?.staged_trust?.files, {});
+    Object.defineProperty(files, 'a.ts', { enumerable: true });
+    withInvocationReadObservation(() => {
+        assert.deepEqual(normalizeDirtyWorkspaceBaseline(baseline), before);
+        Object.defineProperty(files, 'a.ts', { enumerable: false });
+        assert.deepEqual(normalizeDirtyWorkspaceBaseline(baseline), after);
+        Object.defineProperty(files, 'a.ts', { enumerable: true });
+        assert.deepEqual(normalizeDirtyWorkspaceBaseline(baseline), before);
+    });
+});

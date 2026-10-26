@@ -791,7 +791,7 @@ function dirtyBaselineDataKey(value: unknown): string | null {
         digest.update(Array.isArray(entry) ? 'array{' : 'record{');
         for (const [key, descriptor] of Object.entries(descriptors)) {
             countNextStepWork('visit:dirty_baseline_memo_key_field');
-            digest.update(JSON.stringify(key) + ':');
+            digest.update(JSON.stringify(key) + ':enumerable=' + String(descriptor.enumerable) + ':');
             if (!append(descriptor.value, depth + 1)) return false;
         }
         digest.update('}');

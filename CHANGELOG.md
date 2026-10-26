@@ -38,7 +38,7 @@
 
 ### Faster everyday work
 
-- Within read-only navigation, review consumers share captured quality, validation, task-mode, scope and contract derivations. Lane, inspection and strictness contracts stay separate; input changes are rejected before output and public results remain isolated.
+- Within read-only navigation, review consumers share captured quality, validation, task-mode, scope and contract derivations. Lane, inspection and strictness contracts stay separate; input changes are rejected before output and public results remain isolated. Accessor-bearing inputs keep native evaluation, and dirty-baseline memo keys bind property enumerability.
 
 - Read-only next-step navigation shares checked scope bytes, path observations, Git results and per-object Windows ACL evidence within each invocation. A final dependency check rejects changed inputs before returning the decision; action execution retains its existing live checks.
 

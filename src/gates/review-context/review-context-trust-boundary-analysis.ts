@@ -1,7 +1,7 @@
-import { countNextStepWork } from '../../core/next-step-measurement';
+import { countNextStepWork, describeProcessInputs } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
-import { createInvocationReadMemoKey } from '../../core/invocation-read-observation';
+import { createInvocationReadMemoKey, isInvocationReadObservationActive } from '../../core/invocation-read-observation';
 import {
     readReviewValidationBytes, readQualityArtifactLstat,
     readQualityArtifactStat, readReviewValidationNode
@@ -367,6 +367,9 @@ function deriveBoundQualityAnalysis(evidence: BoundQualityEvidence, requireObser
 }
 
 function readBoundQualityAnalysis(options: QualityAnalysisOptions, requireObservedExecution: boolean): ReviewContextTrustBoundaryAnalysis {
+    // Inspect caller descriptors before projecting fields: projection must not invoke getters.
+    if (!isInvocationReadObservationActive() || describeProcessInputs(options).opaque)
+        return deriveBoundQualityAnalysis(captureBoundQualityEvidence(options), requireObservedExecution);
     return readReviewValidationNode(QUALITY_ANALYSIS,
         () => [qualityEvidenceIdentity(options), requireObservedExecution], () => {
             const evidence = readReviewValidationNode(QUALITY_EVIDENCE, () => qualityEvidenceIdentity(options),
