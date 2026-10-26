@@ -1,3 +1,5 @@
+import { readTaskTimelineRouteQuery } from '../../gate-runtime/timeline/task-events-integrity';
+import { routeRoutingAfter, routeQueryForEntries, routeTelemetryIndices, routeLatestSequence } from '../../gate-runtime/timeline/task-route-query';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import {
@@ -47,7 +49,10 @@ export function findMatchingReviewerDelegationStartedTelemetry(options: {
 }): MatchingReviewerDelegationStartedTelemetry | null {
     const normalizedReviewContextSha256 = options.reviewContextSha256.toLowerCase();
     const normalizedRoutingEventSha256 = options.routingEventSha256.toLowerCase();
-    for (let index = options.lines.length - 1; index >= 0; index -= 1) {
+    const route = routeQueryForEntries(options.lines);
+    const indices = route ? routeTelemetryIndices(route, ['REVIEWER_DELEGATION_STARTED'], options.reviewType,
+        normalizedReviewContextSha256, normalizedRoutingEventSha256) : nativeReverseTelemetryIndices(options.lines);
+    for (const index of indices) {
         try {
             const event = options.lines[index].record;
             if (!event) {
@@ -108,7 +113,13 @@ export function hasControllerResumeAfterSequence(lines: readonly TaskTimelineJso
         'HANDSHAKE_DIAGNOSTICS_RECORDED',
         'SHELL_SMOKE_PREFLIGHT_RECORDED'
     ]);
+    const route = routeQueryForEntries(lines);
+    if (route) {
+        const latest = routeLatestSequence(route, [...resumeEventTypes]);
+        return latest != null && latest > sequence;
+    }
     for (let index = lines.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:route_query_native_controller_resume');
         try {
             const event = lines[index].record;
             if (!event) {
@@ -152,7 +163,10 @@ export function hasMatchingReviewerProviderFailureTelemetry(options: {
     }
     const normalizedReviewContextSha256 = options.reviewContextSha256.toLowerCase();
     const normalizedRoutingEventSha256 = options.routingEventSha256.toLowerCase();
-    for (let index = options.lines.length - 1; index >= 0; index -= 1) {
+    const route = routeQueryForEntries(options.lines);
+    const indices = route ? routeTelemetryIndices(route, REVIEWER_PROVIDER_FAILURE_EVENT_TYPES, options.reviewType,
+        normalizedReviewContextSha256, normalizedRoutingEventSha256) : nativeReverseTelemetryIndices(options.lines);
+    for (const index of indices) {
         try {
             const event = options.lines[index].record;
             if (!event) {
@@ -254,7 +268,10 @@ export function hasMatchingReviewerLaunchCompletedTelemetry(options: {
     const normalizedReviewContextSha256 = options.reviewContextSha256.toLowerCase();
     const normalizedRoutingEventSha256 = options.routingEventSha256.toLowerCase();
     const normalizedLaunchArtifactSha256 = options.launchArtifactSha256.toLowerCase();
-    for (let index = options.lines.length - 1; index >= 0; index -= 1) {
+    const route = routeQueryForEntries(options.lines);
+    const indices = route ? routeTelemetryIndices(route, ['REVIEWER_LAUNCH_COMPLETED'], options.reviewType,
+        normalizedReviewContextSha256, normalizedRoutingEventSha256) : nativeReverseTelemetryIndices(options.lines);
+    for (const index of indices) {
         try {
             const event = options.lines[index].record;
             if (!event) {
@@ -328,6 +345,8 @@ function lookupDelegatedReviewRoutingShaAfterCompile(
     latestCompileSequence: number
 ): string | null {
     const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
+    const route = readTaskTimelineRouteQuery(timelinePath, taskId);
+    if (route) return routeRoutingAfter(route, reviewType, reviewerIdentity, latestCompileSequence);
     const entries = readTaskTimelineJsonlEntries(timelinePath);
     for (let index = entries.length - 1; index >= 0; index -= 1) {
         countNextStepWork('visit:next-step-reviewer-launch-evidence-telemetry:event:331');
@@ -410,4 +429,10 @@ export function timelineHasDelegatedReviewRoutingAfterCompile(
     reviewerIdentity: string
 ): boolean {
     return getDelegatedReviewRoutingShaAfterCompile(eventsRoot, taskId, reviewType, reviewerIdentity) != null;
+}
+
+function* nativeReverseTelemetryIndices(lines: readonly TaskTimelineJsonlEntry[]): Iterable<number> {
+    for (let index = lines.length - 1; index >= 0; index--) {
+        countNextStepWork('visit:route_query_native_telemetry_fallback'); yield index;
+    }
 }

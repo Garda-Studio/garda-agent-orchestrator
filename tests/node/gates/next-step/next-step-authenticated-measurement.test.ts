@@ -1,3 +1,4 @@
+import '../../../../src/bin/garda/derivation-source-receipts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
@@ -6,6 +7,7 @@ import * as path from 'node:path';
 import { collectAuthenticatedHistorySample, type HistorySample } from './next-step-authenticated-samples-fixture';
 import { comparableHistoryCounters, measureHistoryRoute } from './next-step-authenticated-budget-fixture';
 import { createAuthenticatedNextStepHistoryFixture } from './next-step-authenticated-history-fixture';
+import { buildTaskAuditSummary } from '../../../../src/gates/task-audit/task-audit-summary';
 import { readReviewCycleGuardEvaluation } from '../../../../src/gates/next-step/next-step-review-cycle-guard-evaluation';
 
 interface CounterDifference { route: string; counter: string; short: number; long: number; }
@@ -46,6 +48,20 @@ test('Q1 authenticated history budget uses real navigation routes', { timeout: 3
     }
     const short = samples.find(sample => sample.cycles === 2)!;
     const long = samples.find(sample => sample.cycles === 16)!;
+    await context.test('indexed route selectors retain constant work on real authenticated history', () => {
+        for (let index = 0; index < short.routes.length; index++) {
+            const a = short.routes[index], b = long.routes[index];
+            for (const key of ['visit:next-step-reviewer-launch-evidence-shared:35',
+                'visit:next-step-review-invocation-evidence:50', 'visit:next-step-review-evidence:187',
+                'visit:next-step-review-evidence:632', 'visit:next-step-reviewer-launch-evidence:event:1181']) {
+                assert.equal(a.counters[key] || 0, 0, a.route + ':' + key);
+                assert.equal(b.counters[key] || 0, 0, b.route + ':' + key);
+            }
+            for (const key of ['visit:route_query_preflight_witness', 'visit:route_query_preflight_prefix_witness',
+                'visit:route_query_witness_comparison', 'visit:route_query_attestation_candidate'])
+                assert.equal(b.counters[key] || 0, a.counters[key] || 0, b.route + ':' + key);
+        }
+    });
     const changed = differences(short, long);
     const growing = [...new Set(changed.filter(entry => entry.long > entry.short).map(entry => entry.counter))];
     context.diagnostic('Q1 growing counters: ' + JSON.stringify(growing));
@@ -62,7 +78,7 @@ test('Q1 authenticated history budget uses real navigation routes', { timeout: 3
 });
 
 
-test('Q1 closed-cycle receipt integrity still changes the real navigation route', { timeout: 600_000 }, async context => {
+test('Q1 archived receipt corruption preserves navigation but blocks full audit', { timeout: 600_000 }, async context => {
     const fixture = await createAuthenticatedNextStepHistoryFixture(2, 3);
     const before = measureHistoryRoute(fixture, 'required-reviews-check');
     assert.equal(before.nextGate, 'required-reviews-check', before.reason);
@@ -82,8 +98,12 @@ test('Q1 closed-cycle receipt integrity still changes the real navigation route'
         assert.equal(guard.evaluation.should_block, true);
         assert.ok(guard.evaluation.violations.some(violation => violation.metric === 'timeline_integrity'));
         const changed = measureHistoryRoute(fixture, 'tampered-closed-receipt');
-        assert.notEqual(changed.nextGate, before.nextGate,
-            'Removing the closed receipt read would remove an existing navigation rejection.');
+        assert.equal(changed.nextGate, before.nextGate,
+            'Unused closed archive corruption is rejected by the full audit under A8.');
+        assert.equal(changed.auditStatus, before.auditStatus);
+        const audit = buildTaskAuditSummary(fixture);
+        assert.equal(audit.status, 'BLOCKED');
+        assert.ok(audit.blockers.some(blocker => /history integrity|committed receipt|snapshot/iu.test(blocker.reason)));
         context.diagnostic(JSON.stringify({ before: { nextGate: before.nextGate, auditStatus: before.auditStatus },
             tampered: { nextGate: changed.nextGate, status: changed.status, auditStatus: changed.auditStatus,
                 reason: changed.reason }, violations: guard.evaluation.violations }));

@@ -1,3 +1,8 @@
+import { withInvocationReadObservation } from '../../../../src/core/invocation-read-observation';
+import { withNextStepMeasurement, type NextStepMeasurement } from '../../../../src/core/next-step-measurement';
+import { appendTaskEvent } from '../../../../src/gate-runtime/task-events';
+import { taskCadenceHeadPath } from '../../../../src/gate-runtime/timeline/task-cadence-runtime';
+import { admitNativeReviewCadence } from '../../../../src/gates/review-attempts/review-cadence-admission';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
@@ -2274,4 +2279,69 @@ describe('gates/next-step quality checklist routing', () => {
         assert.match(result.quality_checklist?.visible_summary_line || '', /evidence=stale/u);
         assert.match(result.reason, /preflight .*differs from current/u);
     });
+});
+
+
+describe('authenticated cadence navigation selection', () => {
+    for (const unavailable of ['missing', 'invalid'] as const) {
+        it(`uses the native admitted cadence projection and preserves readiness with a ${unavailable} certificate`, t => {
+            const repoRoot = makeTempRepo();
+            writeWorkflowConfig(repoRoot);
+            seedStartedTask(repoRoot, TASK_ID);
+            initializeWorkspaceBaseline(repoRoot, ['src/cadence-current.ts']);
+            writeWorkspaceChange(repoRoot, 'src/app.ts');
+            writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true });
+            writeQualityChecklistArtifact(repoRoot, TASK_ID, 'PASS');
+            restoreWorkspaceChanges(repoRoot, 'src/app.ts');
+            writeWorkspaceChange(repoRoot, 'src/cadence-current.ts');
+            writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true }, {
+                changedFiles: ['src/cadence-current.ts']
+            });
+            const report = path.join(reviewsRoot(repoRoot), 'closed-cadence-report.md');
+            fs.writeFileSync(report, '## Verdict\nREVIEW FAILED\n');
+            const bundle = path.join(repoRoot, 'garda-agent-orchestrator');
+            const timeline = path.join(bundle, 'runtime', 'task-events', TASK_ID + '.jsonl');
+            let publication: NextStepMeasurement | undefined;
+            const result = withNextStepMeasurement(() => appendTaskEvent(bundle, TASK_ID,
+                'REVIEW_RECORDED', 'PASS', 'Native cadence failure.', admitNativeReviewCadence(repoRoot, TASK_ID, {
+                    review_type: 'code', review_artifact_snapshot_path: report,
+                    review_artifact_snapshot_sha256: fileSha256(report)
+                }), { passThru: true, lowNoiseRuntimeWrites: true }), value => { publication = value; });
+            assert.equal(result?.commit_status, 'committed');
+            assert.equal(publication!.work.cadence_head_published, 1, 'Normal native writer must publish the optimization');
+            const headPath = taskCadenceHeadPath(timeline, TASK_ID);
+            assert.equal(fs.existsSync(headPath), true);
+            const options = currentQualityChecklistReadinessOptions(repoRoot);
+            const inspect = () => readQualityChecklistReadiness({ ...options, effects: createNextStepEffectPlanner() });
+            const native = inspect();
+            const decision = (value: typeof native) => ({ status: value.status, effect: value.effect,
+                ready: value.ready, required: value.required, reason: value.reason,
+                evidenceStatus: value.evidenceStatus, interval: value.reviewFailureCadenceInterval });
+            assert.equal(native.status, 'SKIPPED_CADENCE');
+            const nativeFs = require('node:fs') as typeof fs, originalRead = nativeFs.readFileSync;
+            let archiveReads = 0;
+            const readMock = t.mock.method(nativeFs, 'readFileSync', (...args: Parameters<typeof fs.readFileSync>) => {
+                if (path.resolve(String(args[0])) === path.resolve(report)) archiveReads += 1;
+                return originalRead(...args);
+            });
+            try {
+                let fastMeasurement: NextStepMeasurement | undefined;
+                const fast = withNextStepMeasurement(() => withInvocationReadObservation(inspect),
+                    value => { fastMeasurement = value; });
+                assert.deepEqual(decision(fast), decision(native));
+                assert.equal(fastMeasurement!.work.cadence_fast_path, 1);
+                assert.equal(fastMeasurement!.work.cadence_legacy_fallback || 0, 0);
+                assert.equal(archiveReads, 0, 'Covered cadence must not read closed Markdown');
+                if (unavailable === 'missing') fs.unlinkSync(headPath);
+                else fs.writeFileSync(headPath, '{invalid cadence certificate');
+                let fallbackMeasurement: NextStepMeasurement | undefined;
+                const fallback = withNextStepMeasurement(() => withInvocationReadObservation(inspect),
+                    value => { fallbackMeasurement = value; });
+                assert.deepEqual(decision(fallback), decision(native));
+                assert.equal(fallbackMeasurement!.work.cadence_fast_path || 0, 0);
+                assert.equal(fallbackMeasurement!.work.cadence_legacy_fallback, 1);
+                assert.ok(archiveReads > 0, 'Unavailable certificate must execute the original Markdown-based cadence rule');
+            } finally { readMock.mock.restore(); }
+        });
+    }
 });

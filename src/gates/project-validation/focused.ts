@@ -1,3 +1,5 @@
+import { isInvocationReadObservationActive } from '../../core/invocation-read-observation';
+import { readCurrentValidationSnapshot, readLatestValidationRecipeAttempt } from './attempt-evidence';
 import { quoteCommandValue } from '../../core/command-quoting';
 import { isPlainRecord } from '../../core/records';
 import type { FrozenValidationRecipe } from '../../core/project-validation-contract';
@@ -34,8 +36,9 @@ export function inspectRecipeExpectedRedRoute(options: {
         if (!authority) return null;
         const recipes = eligibleExpectedRedRecipes(authority.approved.contract.recipes,
             requiredExpectedRedFiles(options.preflight, options.repoRoot));
-        const events = readValidationEvents(options.repoRoot, options.taskId);
-        const cycleStart = events.map(event => event.event_type).lastIndexOf('TASK_MODE_ENTERED');
+        const projected = isInvocationReadObservationActive() ? readCurrentValidationSnapshot(options.repoRoot, options.taskId) : null;
+        const events = projected ? null : readValidationEvents(options.repoRoot, options.taskId);
+        const cycleStart = projected?.query.modeIndex ?? events!.map(event => event.event_type).lastIndexOf('TASK_MODE_ENTERED');
         if (cycleStart < 0) throw new Error('Expected-red requires current task-mode evidence');
         const recipeIds: string[] = []; let expectedFailure = false;
         for (const recipe of recipes) {
@@ -43,7 +46,8 @@ export function inspectRecipeExpectedRedRoute(options: {
             const snapshot = freezeValidationRecipe(options.repoRoot, options.taskId, recipe.id);
             if (snapshot.preflight_sha256 !== options.preflightSha256) throw new Error('Expected-red preflight changed');
             recipeIds.push(recipe.id);
-            const latest = latestValidationRecipeAttempt(events, recipe.id);
+            const latest = projected ? readLatestValidationRecipeAttempt(options.repoRoot, options.taskId, recipe.id)
+                : latestValidationRecipeAttempt(events!, recipe.id);
             if (latest?.event_type !== 'PROJECT_VALIDATION_RESULTS_EVALUATED') continue;
             try {
                 const { attempt, result } = readValidationResult({ repoRoot: options.repoRoot, taskId: options.taskId,
@@ -61,7 +65,8 @@ export function inspectRecipeExpectedRedRoute(options: {
     }
 }
 function latestRecipeAttemptEvent(repoRoot: string, taskId: string, recipeId: string) {
-    return latestValidationRecipeAttempt(readValidationEvents(repoRoot, taskId), recipeId);
+    return isInvocationReadObservationActive() ? readLatestValidationRecipeAttempt(repoRoot, taskId, recipeId)
+        : latestValidationRecipeAttempt(readValidationEvents(repoRoot, taskId), recipeId);
 }
 function successfulFocusedProcess({ attempt, result }: ReturnType<typeof readValidationResult>): boolean {
     return ['PASSED', 'UNRESOLVED'].includes(result.status) && attempt.exit_code === 0

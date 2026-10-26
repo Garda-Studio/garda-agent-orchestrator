@@ -1,8 +1,16 @@
+import { beginClosedReviewVerifiedPass, type ClosedReviewVerifiedCapture } from './task-closed-review-query';
+import { beginCadenceVerifiedPass } from './task-cadence-runtime';
+import type { ReviewCadenceWindow } from '../../gates/review-attempts/review-cadence-window';
+import { beginValidationTimelineQueryPass, bindValidationTimelineQuery, type ValidationTimelineQuery } from './validation-timeline-query';
+import { beginNavigationTimelineQueryPass, type NavigationTimelineQuery } from './task-navigation-query';
+import { beginRouteVerifiedPass, type TaskRouteQuery } from './task-route-query';
 import { isInvocationReadObservationActive } from '../../core/invocation-read-observation';
 import { measureNextStepPhase } from '../../core/next-step-measurement';
 import {
     buildEventIntegrityHash,
     forEachTaskTimelineJsonlEntry,
+    readTaskTimelineEntryStartByte,
+    readTaskTimelineValidationJsonLinesCompatible,
     LEGACY_TASK_EVENT_INTEGRITY_SCHEMA_VERSION,
     TASK_EVENT_INTEGRITY_SCHEMA_VERSION,
     toTrimmedLowerCaseString,
@@ -11,6 +19,8 @@ import {
 import {
     assertTaskTimelineReadSnapshotCurrent,
     captureTaskTimelineReadSnapshotSha256,
+    captureTaskTimelineReadSnapshotByteLength,
+    readTaskTimelineSnapshotByteLength,
     createTaskTimelineMemoizationKey,
     isTaskTimelineReadSnapshotActive,
     memoizeTaskTimelineSnapshot,
@@ -47,6 +57,11 @@ interface IntegrityEvent {
 interface CapturedIntegrityInspection {
     result: InspectTaskEventResult;
     events: IntegrityEvent[];
+    closedReviews: ClosedReviewVerifiedCapture | null;
+    cadence: ReviewCadenceWindow | null;
+    validationQueries: ValidationTimelineQuery | null;
+    navigationQueries: NavigationTimelineQuery | null;
+    routeQueries: TaskRouteQuery | null;
 }
 
 const INTEGRITY_INSPECTION_MEMOIZATION_KEY = createTaskTimelineMemoizationKey<CapturedIntegrityInspection>(
@@ -126,7 +141,8 @@ function inspectTaskEventFileUncached(
     taskEventFile: string,
     taskId: string,
     options: InspectTaskEventOptions = {},
-    capturedEvents?: IntegrityEvent[]
+    capturedEvents?: IntegrityEvent[],
+    capturedQueries?: Omit<CapturedIntegrityInspection, 'result' | 'events'>
 ): InspectTaskEventResult {
     return measureNextStepPhase('timeline_verify', () => {
     const result: InspectTaskEventResult = {
@@ -167,6 +183,12 @@ function inspectTaskEventFileUncached(
     let latestIntegritySchemaVersion: number | null = null;
     const seenHashes = new Set<string>();
     const validatedIntegrityEvents = capturedEvents ?? [];
+    let closedReviews = capturedQueries ? beginClosedReviewVerifiedPass(taskId) : null;
+    let cadence = capturedQueries ? beginCadenceVerifiedPass(taskEventFile, taskId) : null;
+    let validationQueries = capturedQueries ? beginValidationTimelineQueryPass() : null;
+    let navigation = capturedQueries ? beginNavigationTimelineQueryPass() : null;
+    let routePass = capturedQueries ? beginRouteVerifiedPass() : null;
+    let cadenceOffsetsAvailable = true;
 
     try {
         forEachTaskTimelineJsonlEntry(taskEventFile, (timelineEntry) => {
@@ -174,6 +196,20 @@ function inspectTaskEventFileUncached(
             result.events_scanned++;
 
             const event = timelineEntry.record;
+            // These field updates are fused into the one mandatory timeline_events pass.
+            // All collectors receive the same native nonempty ordinal, including malformed rows.
+            const nonemptyOrdinal = result.events_scanned - 1;
+            const startByte = readTaskTimelineEntryStartByte(timelineEntry);
+            // Optional projection coercions must not change canonical integrity acceptance.
+            // A failed collector is discarded; its consumers retain their native fallback.
+            try { closedReviews?.accept(event, nonemptyOrdinal); } catch { closedReviews = null; }
+            try { validationQueries?.accept(event, nonemptyOrdinal); } catch { validationQueries = null; }
+            try { navigation?.accept(event); } catch { navigation = null; }
+            try { routePass?.accept(event, nonemptyOrdinal, startByte); } catch { routePass = null; }
+            if (cadence) {
+                if (startByte === undefined) cadenceOffsetsAvailable = false;
+                else { try { cadence.accept(startByte, event, !event); } catch { cadence = null; } }
+            }
             if (!event) {
                 result.parse_errors++;
                 result.violations.push(`Task timeline contains invalid JSON at line ${lineNumber}.`);
@@ -296,7 +332,17 @@ function inspectTaskEventFileUncached(
         return result;
     }
 
-    return deliverIntegrityEvents(result, taskEventFile, validatedIntegrityEvents, options);
+    const delivered = deliverIntegrityEvents(result, taskEventFile, validatedIntegrityEvents, options);
+    if (capturedQueries) {
+        const authenticated = ['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(delivered.status);
+        capturedQueries.closedReviews = closedReviews?.finish(authenticated) ?? null;
+        capturedQueries.cadence = cadence && cadenceOffsetsAvailable
+            ? cadence.finish(captureTaskTimelineReadSnapshotByteLength(taskEventFile), delivered.status.startsWith('PASS')) : null;
+        capturedQueries.validationQueries = validationQueries?.finish(authenticated) ?? null;
+        capturedQueries.navigationQueries = navigation?.finish(delivered.status.startsWith('PASS')) ?? null;
+        capturedQueries.routeQueries = routePass?.finish(delivered.status, readTaskTimelineSnapshotByteLength(taskEventFile)) ?? null;
+    }
+    return delivered;
 
     });
 }
@@ -406,8 +452,12 @@ function captureIntegrityInspection(taskEventFile: string, taskId: string): Task
         `integrity-inspection-v3:${taskId}`,
         () => {
             const events: IntegrityEvent[] = [];
-            const result = inspectTaskEventFileUncached(taskEventFile, taskId, {}, events);
-            return { result, events };
+            const queries: Omit<CapturedIntegrityInspection, 'result' | 'events'> = {
+                closedReviews: null, cadence: null, validationQueries: null,
+                navigationQueries: null, routeQueries: null
+            };
+            const result = inspectTaskEventFileUncached(taskEventFile, taskId, {}, events, queries);
+            return { result, events, ...queries };
         }
     );
 }
@@ -437,4 +487,62 @@ export function readInvocationVerifiedTaskEventTimeline(
         result: captured.value.result,
         events: captured.value.events
     });
+}
+
+
+export function readTaskTimelineClosedReviewQuery(taskEventFile: string, taskId: string): TaskTimelineDeepReadonly<ClosedReviewVerifiedCapture> | null {
+    if (!isTaskTimelineReadSnapshotActive(taskEventFile)) {
+        return withTaskTimelineFileReadSnapshot(taskEventFile, () => readTaskTimelineClosedReviewQuery(taskEventFile, taskId));
+    }
+    const captured = captureIntegrityInspection(taskEventFile, taskId);
+    return captured.valid && captured.exists ? captured.value?.closedReviews ?? null : null;
+}
+
+
+export function readTaskTimelineCadenceWindow(taskEventFile: string, taskId: string): TaskTimelineDeepReadonly<ReviewCadenceWindow> | null {
+    if (!isInvocationReadObservationActive()) return null;
+    if (!isTaskTimelineReadSnapshotActive(taskEventFile)) {
+        return withTaskTimelineFileReadSnapshot(taskEventFile, () => readTaskTimelineCadenceWindow(taskEventFile, taskId));
+    }
+    try {
+        const captured = captureIntegrityInspection(taskEventFile, taskId);
+        return captured.valid && captured.exists && captured.value?.result.status.startsWith('PASS')
+            && captured.value.cadence?.available ? captured.value.cadence : null;
+    } catch { return null; } // Preserve the exact native cadence reader fallback on an unusable capture.
+}
+
+
+export function readTaskTimelineValidationQuery(taskEventFile: string, taskId: string,
+    requireLegacyJsonLines = false): { readonly sha256: string; readonly query: TaskTimelineDeepReadonly<ValidationTimelineQuery> } | null {
+    if (!isTaskTimelineReadSnapshotActive(taskEventFile)) return withTaskTimelineFileReadSnapshot(taskEventFile,
+        () => readTaskTimelineValidationQuery(taskEventFile, taskId, requireLegacyJsonLines));
+    let captured: TaskTimelineMemoizedRead<CapturedIntegrityInspection>;
+    try { captured = captureIntegrityInspection(taskEventFile, taskId); }
+    catch { return null; }
+    if (!captured.valid || !captured.exists || !captured.value?.validationQueries) return null;
+    if (requireLegacyJsonLines && !readTaskTimelineValidationJsonLinesCompatible(taskEventFile)) return null;
+    const sha256 = captureTaskTimelineReadSnapshotSha256(taskEventFile);
+    bindValidationTimelineQuery(captured.value.validationQueries, taskEventFile, sha256);
+    return Object.freeze({ sha256, query: captured.value.validationQueries });
+}
+
+
+export function readTaskTimelineNavigationQuery(taskEventFile: string, taskId: string): NavigationTimelineQuery | null {
+    if (!isInvocationReadObservationActive()) return null;
+    if (!isTaskTimelineReadSnapshotActive(taskEventFile)) {
+        return withTaskTimelineFileReadSnapshot(taskEventFile, () => readTaskTimelineNavigationQuery(taskEventFile, taskId));
+    }
+    const captured = captureIntegrityInspection(taskEventFile, taskId);
+    return captured.valid && captured.exists ? captured.value?.navigationQueries ?? null : null;
+}
+
+
+export function readTaskTimelineRouteQuery(taskEventFile: string, taskId: string): TaskRouteQuery | null {
+    if (!isInvocationReadObservationActive()) return null;
+    if (!isTaskTimelineReadSnapshotActive(taskEventFile)) return withTaskTimelineFileReadSnapshot(taskEventFile,
+        () => readTaskTimelineRouteQuery(taskEventFile, taskId));
+    try {
+        const captured = captureIntegrityInspection(taskEventFile, taskId);
+        return captured.valid && captured.exists ? captured.value?.routeQueries ?? null : null;
+    } catch { return null; }
 }

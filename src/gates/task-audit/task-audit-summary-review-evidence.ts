@@ -1,3 +1,4 @@
+import { navigationQueryForEvents, navigationLatestEvent, navigationLatestReview } from '../../gate-runtime/timeline/task-navigation-query';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -116,6 +117,19 @@ function shouldValidateRequiredReviewArtifactForCurrentCycle(
     }
 
     const compileGateTime = parseTimestamp(currentCycle.compile_gate_timestamp).getTime();
+    const query = navigationQueryForEvents(events);
+    if (query?.ordered) {
+        const current = (event: Readonly<Record<string, unknown>> | null) => {
+            if (!event) return false;
+            const time = parseTimestamp(event.timestamp_utc).getTime();
+            return !(time > 0 && compileGateTime > 0 && time < compileGateTime);
+        };
+        if (current(navigationLatestReview(query, reviewType))) return true;
+        for (const type of ['REVIEW_GATE_PASSED', 'REVIEW_GATE_PASSED_WITH_OVERRIDE', 'REVIEW_GATE_FAILED', 'COMPLETION_GATE_PASSED', 'COMPLETION_GATE_FAILED']) {
+            if (current(navigationLatestEvent(query, type, true))) return true;
+        }
+        return false;
+    }
     for (let index = events.length - 1; index >= 0; index -= 1) {
         countNextStepWork('visit:task-audit-summary-review-evidence:event:118');
         const event = events[index];

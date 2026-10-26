@@ -1,3 +1,6 @@
+import { captureClosedReviewGate } from '../review-attempts/review-closed-cycle-capture';
+import { publishClosedReviewAfterGate } from '../review-attempts/review-closed-cycle-gate-hooks';
+import { admitNativeReviewCadence } from '../review-attempts/review-cadence-admission';
 import * as fs from 'node:fs';
 import { sha256RedactedJsonPayload } from '../../core/redaction';
 import { stringSha256 } from '../../gate-runtime/hash';
@@ -428,7 +431,7 @@ async function persistReusedReviewEvidence(
     const orchestratorRoot = gateHelpers.joinOrchestratorPath(options.repoRoot, '');
 
     try {
-        await writeReviewArtifactsWithRollback([
+        const admittedReview = await writeReviewArtifactsWithRollback([
             {
                 artifactPath: options.artifactPath,
                 contentType: 'text',
@@ -517,18 +520,20 @@ async function persistReusedReviewEvidence(
                 orchestratorRoot,
                 options.taskId,
                 options.reviewType,
-                buildReuseRecordedEventDetails({
+                admitNativeReviewCadence(options.repoRoot, options.taskId, buildReuseRecordedEventDetails({
                     options,
                     refreshedReceipt,
                     receiptPayloadSha256,
                     receiptSnapshotPath,
                     artifactSnapshotPath
-                })
+                }))
             );
             if (!recordedEvent || taskEventAppendHasBlockingFailure(recordedEvent, false)) {
                 throw new Error('REVIEW_RECORDED telemetry could not be persisted for review reuse.');
             }
+            return recordedEvent;
         });
+        publishClosedReviewAfterGate(captureClosedReviewGate, { repoRoot: options.repoRoot, taskId: options.taskId, kind: 'reuse' }, admittedReview);
         return { materialized: true, reason: null };
     } catch {
         return {

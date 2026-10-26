@@ -1,3 +1,5 @@
+import { captureClosedReviewGate } from '../../../../gates/review-attempts/review-closed-cycle-capture';
+import { publishClosedReviewAfterGate } from '../../../../gates/review-attempts/review-closed-cycle-gate-hooks';
 import { splitGeneratedRuntimeControlPlaneArtifacts } from '../../../../gates/shared/generated-runtime-artifacts';
 import { assertNoInstalledBundleScope } from '../../../../gates/protected-control-plane/installed-bundle-guard';
 import * as fs from 'node:fs';
@@ -1239,7 +1241,7 @@ export function runClassifyChangeCommand(options: ClassifyChangeCommandOptions):
     if (resolvedTaskId) {
         const codeChanged = detectCodeChanged(result as unknown as Record<string, unknown>, repoRoot);
         try {
-            appendMandatoryTaskEvent(
+            const admittedPreflight = appendMandatoryTaskEvent(
                 orchestratorRoot,
                 resolvedTaskId,
                 'PREFLIGHT_CLASSIFIED',
@@ -1267,6 +1269,7 @@ export function runClassifyChangeCommand(options: ClassifyChangeCommandOptions):
                     depth_escalation: result.depth_escalation || null
                 }
             );
+            publishClosedReviewAfterGate(captureClosedReviewGate, { repoRoot, taskId: resolvedTaskId, kind: 'preflight' }, admittedPreflight);
         } catch (error: unknown) {
             removeArtifactIfExists(outputPath);
             throw new Error(

@@ -1,4 +1,8 @@
+import { readTaskTimelineNavigationQuery } from '../../gate-runtime/timeline/task-events-integrity';
+import { navigationRawEvents, navigationQueryForEvents, navigationLatestEvent, navigationEventSequence,
+    type NavigationTimelineQuery } from '../../gate-runtime/timeline/task-navigation-query';
 import { countNextStepArrayCopy, measureNextStepPhase, countNextStepWork } from '../../core/next-step-measurement';
+import { getReviewHistoryIntegrityViolations } from '../review-attempts/review-history-integrity';
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import { isTaskQueueDecomposedStatus } from '../../core/active-task-state';
 import * as fs from 'node:fs';
@@ -66,6 +70,7 @@ import {
     hasCurrentCycleReviewProgress,
     hasCurrentCycleProjectMemoryImpactEvent,
     readOrderedTaskEvents,
+    readNavigationOrderedTaskEvents,
     resolveFullSuiteValidationRequirementForCurrentCycle
 } from './task-audit-summary-lifecycle';
 import {
@@ -139,17 +144,17 @@ const AGGREGATE_STARTUP_GATES = new Set([
 ]);
 
 function buildNativeAggregateAudit(options: TaskAuditSummaryOptions, events: Readonly<Record<string, unknown>>[],
-    taskMetadata: ReturnType<typeof readTaskQueueMetadata>): TaskAuditSummaryResult | null {
+    taskMetadata: ReturnType<typeof readTaskQueueMetadata>, inspectReviewHistory: boolean, navigationQuery: NavigationTimelineQuery | null = null): TaskAuditSummaryResult | null {
     const repoRoot = path.resolve(options.repoRoot), taskId = options.taskId;
     const eventsRoot = resolveEventsRoot(repoRoot, options.eventsRoot), reviewsRoot = resolveReviewsRoot(repoRoot, options.reviewsRoot);
-    const parentMarker = events.some(event => (countNextStepWork('visit:task-audit-summary:145'), event.event_type === 'DECOMPOSED_PARENT_COMPLETED'
+    const parentMarker = navigationQuery?.hasParentMarker ?? events.some(event => (countNextStepWork('visit:task-audit-summary:145'), event.event_type === 'DECOMPOSED_PARENT_COMPLETED'
         || (event.event_type === 'STRICT_DECOMPOSITION_DECISION_RECORDED'
             && (event.details as Record<string, unknown> | undefined)?.decision === 'split-required')));
     if (!taskMetadata && !parentMarker) return null;
     let proof: ReturnType<typeof readNativeParentObligationProofs> = null;
     const blockers: TaskAuditSummaryResult['blockers'] = [];
     try { proof = readNativeParentObligationProofs(repoRoot, taskId,
-        childTaskId => buildTaskAuditSummary({ repoRoot, taskId: childTaskId })); }
+        childTaskId => buildTaskAuditSummaryForPurpose({ repoRoot, taskId: childTaskId }, inspectReviewHistory)); }
     catch (error: unknown) { blockers.push({ gate: 'decomposed-parent-obligations', reason: error instanceof Error ? error.message : String(error) }); }
     const canonicalParentMarker = Boolean(proof?.native.facts.decomposition || proof?.native.facts.completion);
     if (!parentMarker && !canonicalParentMarker && proof && !isTaskQueueDecomposedStatus(proof.native.facts.taskStatus)) return null;
@@ -161,6 +166,10 @@ function buildNativeAggregateAudit(options: TaskAuditSummaryOptions, events: Rea
     const timeline = path.join(eventsRoot, taskId + '.jsonl'), inspection = inspectTaskEventFile(timeline, taskId);
     if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(inspection.status) || inspection.violations.length) {
         blockers.push({ gate: 'integrity', reason: 'Native aggregate timeline integrity is ' + inspection.status + '.' });
+    }
+    if (inspectReviewHistory && ['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(inspection.status) && !inspection.violations.length) {
+        blockers.push(...getReviewHistoryIntegrityViolations({ repoRoot, reviewsRoot, taskId, timelineEvents: events })
+            .map(reason => ({ gate: 'review-history-integrity', reason })));
     }
     if (proof?.status !== 'QUALIFIED' && blockers.length === 0) {
         blockers.push({ gate: 'decomposed-parent-obligations', reason: 'Original native parent obligations are not qualified.' });
@@ -368,6 +377,15 @@ function filterNotRequiredEvidenceArtifacts(
 }
 
 export function buildTaskAuditSummary(options: TaskAuditSummaryOptions): TaskAuditSummaryResult {
+    return buildTaskAuditSummaryForPurpose(options, true);
+}
+
+/** Navigator projection only; explicit audit and completion always use buildTaskAuditSummary. */
+export function buildNavigationTaskAuditSummary(options: TaskAuditSummaryOptions): TaskAuditSummaryResult {
+    return buildTaskAuditSummaryForPurpose(options, false);
+}
+
+function buildTaskAuditSummaryForPurpose(options: TaskAuditSummaryOptions, inspectReviewHistory: boolean): TaskAuditSummaryResult {
     return measureNextStepPhase('audit', () => {
     const repoRoot = path.resolve(options.repoRoot);
     const safeTaskId = assertValidTaskId(options.taskId);
@@ -386,7 +404,7 @@ export function buildTaskAuditSummary(options: TaskAuditSummaryOptions): TaskAud
     return withTaskTimelineReadSnapshot(eventsRoot, safeTaskId, () => (
         withReviewArtifactReadBarrier(reviewsRoot, () => (
             withTaskIndexReadSnapshot(reviewsRoot, safeTaskId, () => (
-                buildTaskAuditSummaryFromSnapshot(options)
+                buildTaskAuditSummaryFromSnapshot(options, inspectReviewHistory)
             ))
         ))
     ));
@@ -394,7 +412,7 @@ export function buildTaskAuditSummary(options: TaskAuditSummaryOptions): TaskAud
     });
 }
 
-function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): TaskAuditSummaryResult {
+function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, inspectReviewHistory: boolean): TaskAuditSummaryResult {
     const repoRoot = path.resolve(options.repoRoot);
     const workspaceSnapshotRequest = resolveWorkspaceSnapshotRequest(
         repoRoot,
@@ -410,15 +428,26 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): Ta
     const taskPath = path.join(repoRoot, TASK_QUEUE_FILENAME);
     const taskFileExists = fs.existsSync(taskPath) && fs.statSync(taskPath).isFile();
     const taskEventFile = path.join(eventsRoot, `${safeTaskId}.jsonl`);
-    const orderedEvents = readOrderedTaskEvents(taskEventFile);
+    const navigationQuery = inspectReviewHistory ? null : readTaskTimelineNavigationQuery(taskEventFile, safeTaskId);
+    const orderedEvents = inspectReviewHistory ? readOrderedTaskEvents(taskEventFile)
+        : readNavigationOrderedTaskEvents(taskEventFile, safeTaskId);
     const events = orderedEvents.events;
-    const fileOrderedEvents = readTaskTimelineJsonlEntries(taskEventFile)
+    const readNativeFileOrderedEvents = () => readTaskTimelineJsonlEntries(taskEventFile)
         .map((entry) => (countNextStepWork('visit:task-audit-summary:414'), entry.record))
         .filter((entry): entry is Readonly<Record<string, unknown>> => (countNextStepWork('visit:task-audit-summary:414'), entry !== null))
         .map((entry) => (countNextStepWork('visit:task-audit-summary:414'), ({ ...entry })));
-    const aggregate = buildNativeAggregateAudit(options, fileOrderedEvents, taskMetadata);
+    let fileOrderedEvents = navigationQuery
+        ? navigationRawEvents(navigationQuery) as Readonly<Record<string, unknown>>[] : readNativeFileOrderedEvents();
+    const aggregate = buildNativeAggregateAudit(options, fileOrderedEvents, taskMetadata, inspectReviewHistory, navigationQuery);
     if (aggregate) return aggregate;
-    const resolvedCompileCycle = resolveTaskCycleBindingSnapshot(safeTaskId, events, repoRoot, reviewsRoot);
+    let compileEvents = events;
+    if (navigationQuery?.ordered) {
+        const passed = navigationLatestEvent(navigationQuery, 'COMPILE_GATE_PASSED', true);
+        const failed = navigationLatestEvent(navigationQuery, 'COMPILE_GATE_FAILED', true);
+        const latest = passed && failed ? (navigationEventSequence(passed) > navigationEventSequence(failed) ? passed : failed) : passed || failed;
+        compileEvents = latest ? [latest] : [];
+    }
+    const resolvedCompileCycle = resolveTaskCycleBindingSnapshot(safeTaskId, compileEvents, repoRoot, reviewsRoot);
     const preflightForLifecycle = safeReadJson(path.join(reviewsRoot, `${safeTaskId}-preflight.json`));
     const noOpEvidenceForLifecycle = getNoOpEvidence(
         repoRoot,
@@ -428,6 +457,8 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): Ta
     );
     const auditedNoOpLifecycle = isFullSuiteNotRequiredForZeroDiffNoReviewableScope(preflightForLifecycle || {})
         && noOpEvidenceForLifecycle.evidence_status === 'PASS';
+    // Native no-op filtering relies on separately copied raw record identities; preserve that boundary.
+    if (auditedNoOpLifecycle && navigationQuery) fileOrderedEvents = readNativeFileOrderedEvents();
     const currentCycle = auditedNoOpLifecycle ? null : resolvedCompileCycle;
     const noOpEventSha256 = auditedNoOpLifecycle
         ? getCurrentNoOpEventSha256(repoRoot, safeTaskId, noOpEvidenceForLifecycle, eventsRoot)
@@ -441,8 +472,8 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): Ta
             return integrity?.event_sha256 === noOpEventSha256;
         })
         : null;
-    let latestTaskEntryIndex = -1;
-    for (let index = fileOrderedEvents.length - 1; index >= 0; index -= 1) {
+    let latestTaskEntryIndex = navigationQuery?.latestTaskEntryIndex ?? -1;
+    for (let index = navigationQuery ? -1 : fileOrderedEvents.length - 1; index >= 0; index -= 1) {
         countNextStepWork('visit:task-audit-summary:443');
         if (fileOrderedEvents[index].event_type === 'TASK_MODE_ENTERED') {
             latestTaskEntryIndex = index;
@@ -482,7 +513,10 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): Ta
         preflightPath: path.join(reviewsRoot, `${safeTaskId}-preflight.json`)
     });
     const hasCurrentProjectMemoryImpactEvent = hasCurrentCycleProjectMemoryImpactEvent(lifecycleEvents, currentCycle, repoRoot);
-    const hasCompletionPassEvent = lifecycleEvents.some((event) => (countNextStepWork('visit:task-audit-summary:482'), String(event.event_type || '').trim().toUpperCase() === 'COMPLETION_GATE_PASSED'));
+    const lifecycleQuery = navigationQueryForEvents(lifecycleEvents);
+    const hasCompletionPassEvent = lifecycleQuery?.ordered
+        ? !!navigationLatestEvent(lifecycleQuery, 'COMPLETION_GATE_PASSED', true)
+        : lifecycleEvents.some((event) => (countNextStepWork('visit:task-audit-summary:482'), String(event.event_type || '').trim().toUpperCase() === 'COMPLETION_GATE_PASSED'));
     const projectMemoryImpactRequired = projectMemoryImpactEvidence.required
         && (!hasCompletionPassEvent || hasCurrentProjectMemoryImpactEvent);
     const workspaceStatusSnapshot = getTaskCycleStatusSnapshot(
@@ -515,6 +549,10 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): Ta
     );
     const gates = countNextStepArrayCopy('visit:task-audit-summary:copy:516', [...lifecycleStatus.gates]);
     const blockers = countNextStepArrayCopy('visit:task-audit-summary:copy:517', [...lifecycleStatus.blockers]);
+    if (inspectReviewHistory && ['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(integrityStatus)) {
+        blockers.push(...getReviewHistoryIntegrityViolations({ repoRoot, reviewsRoot, taskId: safeTaskId, timelineEvents: events })
+            .map(reason => ({ gate: 'review-history-integrity', reason })));
+    }
     if (auditedNoOpLifecycle && !noOpEventSha256) {
         blockers.push({
             gate: 'record-no-op',
@@ -826,7 +864,7 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions): Ta
         'DOC_IMPACT_ASSESSED',
         PROJECT_MEMORY_IMPACT_ASSESSED_EVENT
     ]);
-    const requireSupportingGateCompleteness = events.some((event) =>
+    const requireSupportingGateCompleteness = navigationQuery?.ordered ? navigationQuery.hasSupportingLifecycleAnchor : events.some((event) =>
         (countNextStepWork('visit:task-audit-summary:825'), supportingLifecycleAnchorEvents.has(String(event.event_type || '')))
     );
     const supportingGateGaps = requireSupportingGateCompleteness

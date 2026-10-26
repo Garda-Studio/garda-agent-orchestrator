@@ -1,3 +1,7 @@
+import '../../../../src/bin/garda/derivation-source-receipts';
+import { captureClosedReviewGate, prepareClosedReviewCurrentIndex } from '../../../../src/gates/review-attempts/review-closed-cycle-capture';
+import { publishClosedReviewHistory } from '../../../../src/gates/review-attempts/review-closed-cycle-storage';
+import { readTaskTimelineClosedReviewQuery } from '../../../../src/gate-runtime/timeline/task-events-integrity';
 import { getReviewExecutionPreparationOrder } from '../../../../src/core/review-execution-policy';
 import { classifyHistoryRemediation } from './next-step-authenticated-remediation-fixture';
 import { buildDefaultReviewRemediationModePolicy } from '../../../../src/policy/review-remediation-mode-policy';
@@ -141,6 +145,10 @@ export async function createAuthenticatedNextStepHistoryFixture(cycles = 16, lan
             state.baselinePath = retainBaseline(state, lane);
             if (lane === 'test') state.testBaselinePath = state.baselinePath;
         }
+        // Direct fixture writes must finish the same index-owner boundary as native writers.
+        // Retaining a baseline may rewrite an existing snapshot with identical bytes but a
+        // new file identity; a previously built index must not retain its old metadata.
+        prepareClosedReviewCurrentIndex(repoRoot);
         const expectDelta = state.lanes.length === 3 && cycle === cycles - 1;
         if (state.lanes.length === 3) {
             for (const file of files.slice(1, expectDelta ? 2 : 6))
@@ -169,6 +177,14 @@ export async function createAuthenticatedNextStepHistoryFixture(cycles = 16, lan
             beforeReceipt: lane === lanes[0] ? () => onActive?.(state) : undefined,
             caseResolutions: fixture.buildCurrentReviewCycleCaseResolutions(repoRoot, taskId) });
     const timeline = path.join(fixture.getOrchestratorRoot(repoRoot), 'runtime/task-events', taskId + '.jsonl');
+    // The seed helper emits fully bound native review evidence directly. Run the same
+    // authenticating producer after those completed writes; never fabricate a derived record.
+    prepareClosedReviewCurrentIndex(repoRoot);
+    const query = readTaskTimelineClosedReviewQuery(timeline, taskId);
+    assert.equal(query?.query.sourceEventType, 'REVIEW_RECORDED');
+    publishClosedReviewHistory(captureClosedReviewGate({ repoRoot, taskId, kind: 'record',
+        sourceEventSha256: query!.query.source.sha256 }));
+    prepareClosedReviewCurrentIndex(repoRoot);
     state.timelineBytes = fs.statSync(timeline).size;
     return state;
 }

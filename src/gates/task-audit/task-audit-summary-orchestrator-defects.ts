@@ -1,3 +1,4 @@
+import { navigationQueryForEvents, navigationAcknowledgements } from '../../gate-runtime/timeline/task-navigation-query';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -125,7 +126,7 @@ function readTaskContent(repoRoot: string): string | null {
 
 function collectLatestAcknowledgements(events: readonly TaskAuditEvent[]): ParsedAcknowledgement[] {
     const latestByDefectId = new Map<string, ParsedAcknowledgement>();
-    events.forEach((event, eventIndex) => {
+    const collect = (event: TaskAuditEvent, eventIndex: number) => {
         countNextStepWork('visit:task-audit-summary-orchestrator-defects:event:127');
         if (String(event.event_type || '').trim().toUpperCase() !== ORCHESTRATOR_DEFECT_ACKNOWLEDGED_EVENT) {
             return;
@@ -145,7 +146,10 @@ function collectLatestAcknowledgements(events: readonly TaskAuditEvent[]): Parse
             }
         };
         latestByDefectId.set(acknowledgement.key, acknowledgement);
-    });
+    };
+    const query = navigationQueryForEvents(events);
+    if (query?.ordered) for (const entry of navigationAcknowledgements(query)) collect(entry.event, entry.index);
+    else events.forEach(collect);
     return [...latestByDefectId.values()].sort((left, right) => left.eventIndex - right.eventIndex);
 }
 

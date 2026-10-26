@@ -1,3 +1,4 @@
+import type { ClosedReviewGateCapture } from '../../../../gates/review-attempts/review-closed-cycle-gate-hooks';
 import type {
     getReviewArtifactFindingsEvidence,
     normalizeCanonicalReviewSectionHeadings
@@ -35,6 +36,7 @@ export interface ReviewMaterializationAnalysis {
 }
 
 export interface ReviewResultHandlersDependencies {
+    closedReviewGateCapture: ClosedReviewGateCapture;
     analyzeEarlyReviewMaterialization: (options: {
         artifactPath: string;
         reviewContent: string;

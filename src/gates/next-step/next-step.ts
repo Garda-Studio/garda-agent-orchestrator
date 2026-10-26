@@ -62,7 +62,7 @@ import {
 import { withTaskIndexReadSnapshot } from '../../gate-runtime/reviews-index';
 import { assertValidTaskId, inspectTaskEventFile, readTaskTimelineJsonlEntries, withTaskTimelineReadSnapshot } from '../../gate-runtime/task-events';
 import {
-    buildTaskAuditSummary,
+    buildNavigationTaskAuditSummary,
     type TaskAuditSummaryResult
 } from '../task-audit/task-audit-summary';
 import {
@@ -2831,7 +2831,7 @@ export function resolveNextStepDecisionRoute(
         });
     }
     const workspaceSnapshotRequest = createWorkspaceSnapshotRequest(repoRoot);
-    const summary = buildTaskAuditSummary({
+    const summary = buildNavigationTaskAuditSummary({
         taskId,
         repoRoot,
         eventsRoot,

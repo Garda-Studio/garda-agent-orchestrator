@@ -1,3 +1,5 @@
+import { readTaskTimelineRouteQuery } from '../../gate-runtime/timeline/task-events-integrity';
+import { routeExactEvent } from '../../gate-runtime/timeline/task-route-query';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import { readTaskTimelineJsonlEntries } from '../../gate-runtime/timeline/task-events-helpers';
@@ -62,7 +64,9 @@ function timelineHasMatchingDelegatedReviewInvocationAttestationFromSnapshot(
     eventsRoot: string,
     expectation: DelegatedReviewInvocationExpectation
 ): boolean {
-    const events = readTimelineEvents(eventsRoot, expectation.taskId);
+    const route = readTaskTimelineRouteQuery(path.join(eventsRoot, `${expectation.taskId}.jsonl`), expectation.taskId);
+    const candidate = route ? routeExactEvent(route, expectation.taskSequence, expectation.eventSha256) : null;
+    const events = route ? (candidate ? [candidate] : []) : readTimelineEvents(eventsRoot, expectation.taskId);
     if (!events) {
         return false;
     }

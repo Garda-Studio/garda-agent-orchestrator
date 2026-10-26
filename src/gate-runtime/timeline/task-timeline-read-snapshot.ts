@@ -1311,6 +1311,19 @@ export function memoizeTaskTimelineSnapshot<T>(
     buildValue: (content: string) => T,
     maxByteLength?: number
 ): TaskTimelineMemoizedRead<T> {
+    return memoizeTaskTimelineSnapshotValue(filePath, key, memoKey, cachedRead => {
+        cachedRead.text ??= (cachedRead.content as Buffer).toString('utf8');
+        return buildValue(cachedRead.text);
+    }, maxByteLength);
+}
+
+function memoizeTaskTimelineSnapshotValue<T>(
+    filePath: string,
+    key: TaskTimelineMemoizationKey<T>,
+    memoKey: string,
+    buildValue: (cachedRead: CachedTaskTimelineRead) => T,
+    maxByteLength?: number
+): TaskTimelineMemoizedRead<T> {
     const normalizedMemoKey = String(memoKey || '').trim();
     if (!normalizedMemoKey) {
         throw new Error('Task timeline memoization entry key is required.');
@@ -1335,12 +1348,11 @@ export function memoizeTaskTimelineSnapshot<T>(
     if (maxByteLength != null && cachedRead.content.length > maxByteLength) {
         throw new Error(`Task timeline exceeds the ${maxByteLength} byte read limit: ${filePath}`);
     }
-    cachedRead.text ??= cachedRead.content.toString('utf8');
     const value = memoizeCachedTaskTimelineValue(
         cachedRead,
         key,
         normalizedMemoKey,
-        () => buildValue(cachedRead.text as string)
+        () => buildValue(cachedRead)
     );
     if (!isInvocationReadObservationActive()) revalidateCachedRead(snapshot, cachedRead);
     if (
@@ -1424,4 +1436,66 @@ export function readTaskTimelineBoundedJsonlTail<T>(
         return failChangedSnapshot(cachedRead, snapshot.timelinePath);
     }
     return clonedResult;
+}
+
+export interface TaskTimelineByteLine {
+    readonly rawLine: string;
+    readonly lineNumber: number;
+    readonly startByte: number;
+}
+
+export interface TaskTimelineByteLineVisitResult {
+    readonly lineCount: number;
+    readonly trailingWhitespaceCompatible: boolean;
+}
+
+/** Internal parser adapter; consumers receive immutable text/offsets, never the private mutable Buffer. */
+export function memoizeTaskTimelineSnapshotByteLines<T>(
+    filePath: string, key: TaskTimelineMemoizationKey<T>, memoKey: string,
+    buildValue: (visitLines: (visit: (line: TaskTimelineByteLine) => void) => TaskTimelineByteLineVisitResult) => T,
+    maxByteLength: number, maxLines: number
+): TaskTimelineMemoizedRead<T> {
+    const snapshot = getActiveSnapshot(filePath);
+    if (!snapshot) return { active: false, exists: false, valid: false, byteLength: null, value: null };
+    return memoizeTaskTimelineSnapshotValue(filePath, key, memoKey, captured => buildValue(visit => {
+        const source = captured.content;
+        if (!source) throw new Error(`Task timeline snapshot is unavailable: ${filePath}`);
+        const ends: number[] = [];
+        let start = 0;
+        for (let newline = source.indexOf(0x0a); newline >= 0; newline = source.indexOf(0x0a, start)) {
+            ends.push(newline);
+            if (ends.length > maxLines) throw new Error(`Task timeline exceeds the ${maxLines} line limit.`);
+            start = newline + 1;
+        }
+        // Match splitTaskTimelineJsonlLines: discard only the final whitespace-only fragment.
+        const finalFragment = source.subarray(start).toString('utf8');
+        const hasFinalRecord = !!finalFragment.trim();
+        if (hasFinalRecord) ends.push(source.length);
+        if (ends.length > maxLines) throw new Error(`Task timeline exceeds the ${maxLines} line limit.`);
+        start = 0;
+        for (let index = 0; index < ends.length; index += 1) {
+            visit({ rawLine: source.subarray(start, ends[index]).toString('utf8'), lineNumber: index + 1, startByte: start });
+            start = ends[index] + 1;
+        }
+        return { lineCount: ends.length,
+            trailingWhitespaceCompatible: hasFinalRecord || finalFragment.length === 0 };
+    }), maxByteLength);
+}
+
+export function captureTaskTimelineReadSnapshotByteLength(filePath: string): number {
+    const snapshot = getActiveSnapshot(filePath);
+    if (!snapshot) throw new Error(`Task timeline read snapshot is not active: ${path.resolve(filePath)}`);
+    const captured = getCachedRead(snapshot);
+    if (captured.state === 'invalid') throw new Error(`Task timeline snapshot is unavailable: ${snapshot.timelinePath}`);
+    return captured.content?.length || 0;
+}
+
+// Add inside task-timeline-read-snapshot.ts; no Buffer leaves the snapshot.
+export function readTaskTimelineSnapshotByteLength(filePath: string): number | null {
+    const snapshot = getActiveSnapshot(filePath);
+    if (!snapshot) return null;
+    try {
+        const cached = getCachedRead(snapshot);
+        return cached.state === 'valid' && cached.content ? cached.content.length : null;
+    } catch { return null; }
 }

@@ -1,4 +1,6 @@
 import { countNextStepWork } from '../../core/next-step-measurement';
+import { readInvocationFileContent, readInvocationPathObservation } from '../../core/invocation-file-observation';
+import { readNativeRealpath } from '../../core/paths';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as zlib from 'node:zlib';
@@ -385,16 +387,24 @@ function escapeRegex(value: string): string {
 function resolveContainedRegularReviewArtifact(
     reviewsDir: string,
     fileName: string,
-    reviewsRootRealPath: string | null = null
+    reviewsRootRealPath: string | null = null,
+    observeReads = false
 ): { artifactPath: string; stat: fs.Stats } | null {
     const artifactPath = path.join(reviewsDir, fileName);
     try {
+        if (observeReads) {
+            readInvocationPathObservation(reviewsDir);
+            readInvocationPathObservation(artifactPath);
+        }
         const stat = fs.lstatSync(artifactPath);
         if (!stat.isFile() || stat.isSymbolicLink()) {
             return null;
         }
         const reviewsRoot = reviewsRootRealPath || fs.realpathSync(reviewsDir);
         const artifactRealPath = fs.realpathSync(artifactPath);
+        // Native directory membership uses the stored filename, including its spelling.
+        // Do not accept a case-insensitive alias as an exact catalog entry.
+        if (observeReads && path.basename(readNativeRealpath(artifactPath)) !== fileName) return null;
         const relativePath = path.relative(reviewsRoot, artifactRealPath);
         if (
             relativePath === '..'
@@ -420,14 +430,23 @@ function resolveReviewsRootRealPath(reviewsDir: string): string | null {
 function readReviewArtifactText(
     reviewsDir: string,
     fileName: string,
-    reviewsRootRealPath: string | null = null
+    reviewsRootRealPath: string | null = null,
+    observeReads = false
 ): string {
-    const artifact = resolveContainedRegularReviewArtifact(reviewsDir, fileName, reviewsRootRealPath);
+    const artifact = resolveContainedRegularReviewArtifact(reviewsDir, fileName, reviewsRootRealPath, observeReads);
     if (!artifact) {
         throw new Error(`Review artifact must be a regular file inside the reviews root: ${fileName}`);
     }
     if (artifact.stat.size > MAX_REVIEW_ARTIFACT_INPUT_BYTES) {
         throw new Error(`Review artifact exceeds the bounded input size: ${fileName}`);
+    }
+    if (observeReads) {
+        const observed = readInvocationFileContent(artifact.artifactPath, MAX_REVIEW_ARTIFACT_INPUT_BYTES);
+        if (observed) {
+            const bytes = observed.copyBytes();
+            return (fileName.endsWith('.gz')
+                ? zlib.gunzipSync(bytes, { maxOutputLength: MAX_COMPRESSED_ARTIFACT_OUTPUT_BYTES }) : bytes).toString('utf8');
+        }
     }
     if (!fileName.endsWith('.gz')) {
         return fs.readFileSync(artifact.artifactPath, 'utf8');
@@ -494,7 +513,8 @@ function buildImmutableReviewArtifactTypePattern(reviewTypeIds: readonly string[
 function collectSnapshotBackedReviewTypeIdsFromFileNames(
     reviewsDir: string,
     fileNames: readonly string[],
-    reviewsRootRealPath: string | null = null
+    reviewsRootRealPath: string | null = null,
+    observeReads = false
 ): ReadonlyMap<string, readonly string[]> {
     const reviewTypeIdsByTask = new Map<string, readonly string[]>();
     for (const fileName of fileNames) {
@@ -505,7 +525,7 @@ function collectSnapshotBackedReviewTypeIdsFromFileNames(
         }
         try {
             const preflight = JSON.parse(
-                readReviewArtifactText(reviewsDir, fileName, reviewsRootRealPath)
+                readReviewArtifactText(reviewsDir, fileName, reviewsRootRealPath, observeReads)
             ) as Record<string, unknown>;
             if (String(preflight.task_id || '').trim() !== taskId) {
                 continue;
@@ -758,7 +778,8 @@ function buildArtifactTaskBindingCandidates(fileName: string): readonly string[]
 function readDeclaredArtifactTaskId(
     reviewsDir: string,
     fileName: string,
-    reviewsRootRealPath: string | null = null
+    reviewsRootRealPath: string | null = null,
+    observeReads = false
 ): string | null {
     const candidateFileNames = buildArtifactTaskBindingCandidates(fileName);
     for (const candidateFileName of candidateFileNames) {
@@ -770,7 +791,7 @@ function readDeclaredArtifactTaskId(
         }
         try {
             const payload = JSON.parse(
-                readReviewArtifactText(reviewsDir, candidateFileName, reviewsRootRealPath)
+                readReviewArtifactText(reviewsDir, candidateFileName, reviewsRootRealPath, observeReads)
             ) as Record<string, unknown>;
             const taskId = String(payload.task_id || '').trim();
             if (isCanonicalTaskId(taskId)) {
@@ -787,7 +808,8 @@ function parseSnapshotAuthorizedReviewArtifactFromDisk(
     fileName: string,
     reviewTypeIdsByTask: ReadonlyMap<string, readonly string[]>,
     reviewsDir: string,
-    reviewsRootRealPath: string | null = null
+    reviewsRootRealPath: string | null = null,
+    observeReads = false
 ): { taskId: string; artifactType: string } | null {
     const unbound = parseSnapshotAuthorizedReviewArtifactFileNameDetails(
         fileName,
@@ -799,7 +821,8 @@ function parseSnapshotAuthorizedReviewArtifactFromDisk(
     const declaredTaskId = readDeclaredArtifactTaskId(
         reviewsDir,
         fileName,
-        reviewsRootRealPath
+        reviewsRootRealPath,
+        observeReads
     );
     if (!declaredTaskId) {
         return null;
@@ -1123,6 +1146,72 @@ export function loadTaskIndex(reviewsDir: string, taskId: string): ReviewsIndexL
         activeReadSnapshot.index = cloneReviewsIndex(result.index);
     }
     return result;
+}
+
+/** This marker deliberately fails native readIndexFile's version check. */
+export const EXACT_CURRENT_REVIEW_INDEX_MARKER = '{"version":0,"mode":"exact-current"}\n';
+
+/** A valid/unknown cache must retain its native membership semantics, including omissions. */
+export function canReadCurrentReviewArtifactEntries(reviewsDir: string, taskId: string): boolean {
+    const safeTaskId = assertCanonicalTaskId(taskId);
+    if (currentProcessOwnsReviewTransactionLock(reviewsDir)
+        || inProcessReviewTransactionSnapshots.has(resolveReviewTransactionLockPath(reviewsDir))
+        || inProcessTaskIndexReadSnapshots.get(resolveTaskIndexReadSnapshotKey(reviewsDir, safeTaskId))?.index) return false;
+    const indexPath = resolveIndexPath(reviewsDir);
+    readInvocationPathObservation(indexPath);
+    if (!fs.existsSync(indexPath)) return true;
+    try {
+        const stat = fs.statSync(indexPath);
+        if (!stat.isFile() || stat.size !== Buffer.byteLength(EXACT_CURRENT_REVIEW_INDEX_MARKER)) return false;
+        const observed = readInvocationFileContent(indexPath, Buffer.byteLength(EXACT_CURRENT_REVIEW_INDEX_MARKER));
+        const bytes = observed ? observed.copyBytes() : fs.readFileSync(indexPath);
+        return bytes.toString('utf8') === EXACT_CURRENT_REVIEW_INDEX_MARKER;
+    } catch {
+        return false;
+    }
+}
+
+/** Exact candidate membership in the native rebuilt catalog; never trust the requested task as authority. */
+export function readCurrentReviewArtifactIndexEntry(reviewsDir: string, taskId: string, fileName: string): ReviewsIndexEntry | { nativeFallback: true } | null {
+    const safeTaskId = assertCanonicalTaskId(taskId);
+    if (!fileName.startsWith(`${safeTaskId}-`) || path.basename(fileName) !== fileName) return null;
+    return withReviewTransactionReadBarrier(reviewsDir, () => {
+        if (!canReadCurrentReviewArtifactEntries(reviewsDir, safeTaskId)) return null;
+        readInvocationPathObservation(reviewsDir);
+        // Native rebuilding requires directory listing access, not merely access to a named child.
+        // Read one directory entry to preserve that permission check without enumerating history.
+        try {
+            const directory = fs.opendirSync(reviewsDir, { bufferSize: 1 });
+            try { directory.readSync(); } finally { directory.closeSync(); }
+            countNextStepWork('review_index_current_directory_probe');
+        } catch {
+            // opendir/readSync can have different platform error behavior than native readdir.
+            // Defer to the original catalog rather than turn an uncertain probe into rejection.
+            return { nativeFallback: true } as const;
+        }
+        const reviewsRootRealPath = resolveReviewsRootRealPath(reviewsDir);
+        if (!reviewsRootRealPath) return null;
+        const authorityFileNames: string[] = [];
+        // Only task prefixes of this exact filename can affect collectMatchingTaskIds.
+        // Include parent/child interpretations, not just the caller's desired task.
+        let separator = fileName.indexOf('-', 2);
+        while (separator > 0 && separator <= TASK_ID_MAX_LENGTH) {
+            const candidateTaskId = fileName.slice(0, separator);
+            if (isCanonicalTaskId(candidateTaskId) && taskIdsShareHierarchy(safeTaskId, candidateTaskId))
+                authorityFileNames.push(`${candidateTaskId}-preflight.json`);
+            separator = fileName.indexOf('-', separator + 1);
+        }
+        const authority = collectSnapshotBackedReviewTypeIdsFromFileNames(
+            reviewsDir, authorityFileNames, reviewsRootRealPath, true
+        );
+        const parsed = parseSnapshotAuthorizedReviewArtifactFromDisk(fileName, authority, reviewsDir, reviewsRootRealPath, true);
+        if (!parsed || parsed.taskId !== safeTaskId) return null;
+        const artifact = resolveContainedRegularReviewArtifact(reviewsDir, fileName, reviewsRootRealPath, true);
+        if (!artifact) return null;
+        countNextStepWork('review_index_current_entry');
+        return { fileName, taskId: parsed.taskId, artifactType: parsed.artifactType,
+            mtimeMs: artifact.stat.mtimeMs, sizeBytes: artifact.stat.size };
+    }, { readOnly: true });
 }
 
 function loadTaskIndexUncached(reviewsDir: string, safeTaskId: string): ReviewsIndexLoadResult {

@@ -1,3 +1,5 @@
+import { readTaskTimelineRouteQuery } from '../../gate-runtime/timeline/task-events-integrity';
+import { routeInvocationCandidates, bindRouteEntryView, routeQueryForEntries, routeEventIndexBySha, routePreparedLaunchIndices, routeArtifactBindingIndices } from '../../gate-runtime/timeline/task-route-query';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 
@@ -123,6 +125,7 @@ function findPreparedReviewerLaunchInputPin(options: {
         return null;
     }
     for (let index = options.preparedEventIndex + 1; index < options.lines.length; index += 1) {
+        countNextStepWork('visit:route_query_native_launch_scan');
         try {
             const event = options.lines[index].record;
             if (!event) {
@@ -228,7 +231,12 @@ function resolveLaunchArtifactPathForPreparedEvent(options: {
             candidates.push(resolved);
         }
     };
-    for (let index = options.lines.length - 1; index > options.preparedEventIndex; index -= 1) {
+    const route = routeQueryForEntries(options.lines);
+    const indices = route ? routeArtifactBindingIndices(route, options.taskId, options.reviewType,
+        options.reviewContextSha256, options.routingEventSha256, options.preparedEventIndex)
+        : nativeReverseEntryIndices(options.lines);
+    for (const index of indices) {
+        if (index <= options.preparedEventIndex) break;
         try {
             const event = options.lines[index].record;
             if (!event) {
@@ -343,7 +351,10 @@ function timelineHasMatchingReviewerRoutingEventSha(options: {
     plannedReviewerIdentity: string;
     routingEventSha256: string;
 }): boolean {
-    return options.lines.some((line) => {
+    const route = routeQueryForEntries(options.lines);
+    const matchingIndex = route ? routeEventIndexBySha(route, options.routingEventSha256) : -1;
+    const candidates = route ? (matchingIndex < 0 ? [] : [options.lines[matchingIndex]]) : options.lines;
+    return candidates.some((line) => {
         try {
             const event = line.record;
             if (!event) {
@@ -375,7 +386,10 @@ function findReviewerRoutingEventIndexBySha(
     reviewType: string,
     routingEventSha256: string
 ): number {
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const route = routeQueryForEntries(lines);
+    const matchedIndex = route ? routeEventIndexBySha(route, routingEventSha256) : -1;
+    for (let index = route ? matchedIndex : lines.length - 1; index >= 0; index = route ? -1 : index - 1) {
+        countNextStepWork('visit:route_query_routing_sha_candidate');
         try {
             const event = lines[index].record;
             if (!event) {
@@ -422,8 +436,11 @@ export function timelineHasDelegatedReviewRoutingAfterCompile(
             return false;
         }
         const lines = readTaskTimelineJsonlEntries(timelinePath);
+    const launchQuery = readTaskTimelineRouteQuery(timelinePath, taskId);
+    if (launchQuery) bindRouteEntryView(launchQuery, lines);
         const routingEventIndex = findReviewerRoutingEventIndexBySha(lines, reviewType, routingEventSha256);
         for (let index = lines.length - 1; index > routingEventIndex; index -= 1) {
+            countNextStepWork('visit:route_query_native_launch_scan');
             try {
                 const event = lines[index].record;
                 if (!event) {
@@ -491,8 +508,11 @@ function getCurrentReviewerLaunchArtifactEvidenceForInvocationFromSnapshot(
         return missing;
     }
     const lines = readTaskTimelineJsonlEntries(timelinePath);
+    const launchQuery = readTaskTimelineRouteQuery(timelinePath, taskId);
+    if (launchQuery) bindRouteEntryView(launchQuery, lines);
     let latestRestartBoundaryIndex = -1;
     for (let index = lines.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:route_query_native_launch_scan');
         try {
             const event = lines[index].record;
             if (!event) {
@@ -522,6 +542,7 @@ function getCurrentReviewerLaunchArtifactEvidenceForInvocationFromSnapshot(
         }))
         : [];
     for (let index = lines.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:route_query_native_launch_scan');
         try {
             const event = lines[index].record;
             if (!event) {
@@ -575,7 +596,10 @@ function getCurrentReviewerLaunchArtifactEvidenceForInvocationFromSnapshot(
     }
     for (const invocationCandidate of invocationCandidates) {
         const { reviewContextSha256, routingEventSha256 } = invocationCandidate;
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const preparedIndices = launchQuery
+        ? routePreparedLaunchIndices(launchQuery, state.reviewType, reviewContextSha256, routingEventSha256)
+        : nativeReverseEntryIndices(lines);
+    for (const index of preparedIndices) {
         try {
             const event = lines[index].record;
             if (!event) {
@@ -1179,8 +1203,10 @@ function timelineHasDelegatedReviewInvocationForCurrentContextFromSnapshot(
     if (!routingEventSha256) {
         return false;
     }
-    const events = readTaskTimelineJsonlEntries(timelinePath)
-        .flatMap((entry) => (countNextStepWork('visit:next-step-reviewer-launch-evidence:event:1181'), entry.record ? [entry.record] : []));
+    const route = readTaskTimelineRouteQuery(timelinePath, taskId);
+    const events = route ? routeInvocationCandidates(route, state.reviewType, routingEventSha256)
+        : readTaskTimelineJsonlEntries(timelinePath)
+            .flatMap((entry) => (countNextStepWork('visit:next-step-reviewer-launch-evidence:event:1181'), entry.record ? [entry.record] : []));
     let routingSequence: number | null = null;
     for (let index = events.length - 1; index >= 0; index -= 1) {
         countNextStepWork('visit:next-step-reviewer-launch-evidence:event:1184');
@@ -1386,4 +1412,10 @@ export function buildProviderNativeReviewerLaunchTargetSummary(taskMode: Record<
         `ProviderLaunchTarget: ${providerEntry.reviewerLaunchLabel || providerEntry.displayLabel}; ` +
         `${providerEntry.delegatedReviewerLaunchInstruction || 'launch a clean-context delegated reviewer subagent with isolated context.'}`
     );
+}
+
+function* nativeReverseEntryIndices(lines: readonly TaskTimelineJsonlEntry[]): Iterable<number> {
+    for (let index = lines.length - 1; index >= 0; index--) {
+        countNextStepWork('visit:route_query_native_prepared_fallback'); yield index;
+    }
 }

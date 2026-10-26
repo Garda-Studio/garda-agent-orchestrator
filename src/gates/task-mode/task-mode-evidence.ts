@@ -1,4 +1,5 @@
 import { countNextStepWork } from '../../core/next-step-measurement';
+import { readTaskTimelineValidationQuery } from '../../gate-runtime/timeline/task-events-integrity';
 import * as path from 'node:path';
 import { cloneFrozenJson, cloneJson } from '../../core/immutable-json';
 import { readInvocationPathObservation } from '../../core/invocation-file-observation';
@@ -54,43 +55,11 @@ interface TaskModeTimelineMetadata {
     cycle_key: string;
 }
 
-const TASK_MODE_TIMELINE_METADATA = createInvocationReadMemoKey<TaskModeTimelineMetadata>('task-mode-timeline-metadata');
-const TASK_MODE_EVIDENCE = createInvocationReadMemoKey<TaskModeEvidenceResult>('task-mode-evidence');
 
-function getLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): TaskModeTimelineMetadata {
-    return memoizeInvocationRead(TASK_MODE_TIMELINE_METADATA, JSON.stringify([taskModeInvocationRepoKey(repoRoot), taskId]),
-        () => {
-            const metadata = captureLatestTaskModeTimelineMetadata(repoRoot, taskId);
-            return isInvocationReadObservationActive() ? cloneFrozenJson(metadata) : metadata;
-        }).value;
-}
-
-function captureLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): TaskModeTimelineMetadata {
-    const timelinePath = getTaskTimelinePath(repoRoot, taskId);
-    return withTaskTimelineReadSnapshot(path.dirname(timelinePath), taskId, () => {
-        if (!taskTimelineAwareFileExists(timelinePath)) {
-            return {
-                artifact_path: null,
-                cycle_key: 'missing',
-                declares_runtime_identity_metadata: false,
-                declares_start_banner: false,
-                start_banner: null,
-                declares_profile_policy_snapshot: false,
-                profile_policy_snapshot_hash: null,
-                plan_binding: null
-            };
-        }
-
-        const entries = readTaskTimelineJsonlEntries(timelinePath);
-        for (let index = entries.length - 1; index >= 0; index -= 1) {
-            countNextStepWork('visit:task_mode_timeline_event');
-            const parsed = entries[index].record;
-            if (!parsed) {
-                continue;
-            }
-            try {
+function projectTaskModeTimelineMetadata(parsed: Readonly<Record<string, unknown>>, index: number): TaskModeTimelineMetadata | null {
+    try {
                 if (String(parsed.event_type || '').trim().toUpperCase() !== 'TASK_MODE_ENTERED') {
-                    continue;
+                    return null;
                 }
                 const details = parsed.details && typeof parsed.details === 'object' && !Array.isArray(parsed.details)
                     ? parsed.details as Record<string, unknown>
@@ -129,8 +98,54 @@ function captureLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string)
                     )) ? { guided: details?.plan_guided, path: details?.plan_path, sha256: details?.plan_sha256 } : null
                 };
             } catch {
+                return null;
+            }
+}
+
+const TASK_MODE_TIMELINE_METADATA = createInvocationReadMemoKey<TaskModeTimelineMetadata>('task-mode-timeline-metadata');
+const TASK_MODE_EVIDENCE = createInvocationReadMemoKey<TaskModeEvidenceResult>('task-mode-evidence');
+
+function getLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): TaskModeTimelineMetadata {
+    return memoizeInvocationRead(TASK_MODE_TIMELINE_METADATA, JSON.stringify([taskModeInvocationRepoKey(repoRoot), taskId]),
+        () => {
+            const metadata = captureLatestTaskModeTimelineMetadata(repoRoot, taskId);
+            return isInvocationReadObservationActive() ? cloneFrozenJson(metadata) : metadata;
+        }).value;
+}
+
+function captureLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): TaskModeTimelineMetadata {
+    const timelinePath = getTaskTimelinePath(repoRoot, taskId);
+    return withTaskTimelineReadSnapshot(path.dirname(timelinePath), taskId, () => {
+        if (!taskTimelineAwareFileExists(timelinePath)) {
+            return {
+                artifact_path: null,
+                cycle_key: 'missing',
+                declares_runtime_identity_metadata: false,
+                declares_start_banner: false,
+                start_banner: null,
+                declares_profile_policy_snapshot: false,
+                profile_policy_snapshot_hash: null,
+                plan_binding: null
+            };
+        }
+
+        // Standalone task-mode keeps its original permissive legacy reader.
+        // Only the A1 navigator can reuse this already-authenticated projection.
+        const projection = isInvocationReadObservationActive() ? readTaskTimelineValidationQuery(timelinePath, taskId) : null;
+        if (projection && !projection.query.taskModeNormalizationFailed && projection.query.latestTaskMode) {
+            const latest = projection.query.latestTaskMode;
+            const metadata = projectTaskModeTimelineMetadata(latest.event, latest.ordinal);
+            if (metadata) return metadata;
+        }
+        const entries = readTaskTimelineJsonlEntries(timelinePath);
+        for (let index = entries.length - 1; index >= 0; index -= 1) {
+            countNextStepWork('visit:task_mode_timeline_event');
+            const parsed = entries[index].record;
+            if (!parsed) {
                 continue;
             }
+            const metadata = projectTaskModeTimelineMetadata(parsed, index);
+            if (metadata) return metadata;
         }
 
         return {

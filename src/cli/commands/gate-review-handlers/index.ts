@@ -1,3 +1,4 @@
+import { captureClosedReviewGate } from '../../../gates/review-attempts/review-closed-cycle-capture';
 import {
     normalizeCanonicalReviewSectionHeadings
 } from '../../../gates/completion/completion';
@@ -199,6 +200,7 @@ export const {
 } = reviewRoutingLaunchHandlers;
 
 const reviewResultHandlers = createReviewResultHandlers({
+    closedReviewGateCapture: captureClosedReviewGate,
     analyzeEarlyReviewMaterialization,
     assertExplicitReviewContextRuntimeIdentity,
     assertReviewContextContractOrThrow,

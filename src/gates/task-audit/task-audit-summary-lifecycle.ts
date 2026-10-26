@@ -1,3 +1,6 @@
+import { readTaskTimelineNavigationQuery } from '../../gate-runtime/timeline/task-events-integrity';
+import { navigationOrderedEvents, navigationQueryForEvents, navigationLatestEvent, navigationLatestReview,
+    navigationDependencyWitnesses, navigationEventSequence, FULL_SUITE_TYPES } from '../../gate-runtime/timeline/task-navigation-query';
 import { countNextStepArrayCopy, countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import { assertValidTaskId, inspectTaskEventFile, readTaskTimelineJsonlEntries, withTaskTimelineReadSnapshot } from '../../gate-runtime/task-events';
@@ -170,6 +173,15 @@ export function readOrderedTaskEvents(taskEventFile: string): OrderedTaskEvents 
     return parseOrderedTaskEvents(taskEventFile);
 }
 
+/** Internal navigation can share the verified monotonic view; public/full-audit arrays stay native. */
+export function readNavigationOrderedTaskEvents(taskEventFile: string, taskId: string): OrderedTaskEvents {
+    const query = readTaskTimelineNavigationQuery(taskEventFile, taskId);
+    const events = query && navigationOrderedEvents(query);
+    if (!query || !events) return readOrderedTaskEvents(taskEventFile);
+    return { events: events as TaskAuditEvent[], count: query.count,
+        firstEventUtc: query.firstEventUtc, lastEventUtc: query.lastEventUtc };
+}
+
 function findLatestEventForTypes(
     eventTypes: string[],
     events: TaskAuditEvent[],
@@ -177,6 +189,23 @@ function findLatestEventForTypes(
 ): { event: TaskAuditEvent; eventType: string } | null {
     if (events.length === 0 || eventTypes.length === 0) {
         return null;
+    }
+    const query = navigationQueryForEvents(events);
+    if (query?.ordered) {
+        let selected: { event: TaskAuditEvent; eventType: string } | null = null;
+        let ambiguous = false;
+        for (const eventType of eventTypes) {
+            const event = navigationLatestEvent(query, eventType) as TaskAuditEvent | null;
+            if (!event) continue;
+            if (predicate && !predicate(eventType, event)) {
+                // Other lifecycle predicates only exclude timestamps before the compile anchor.
+                // A rejected full-suite binding can hide an older preserved-scope match: keep native fallback.
+                if (eventType.startsWith('FULL_SUITE_VALIDATION_')) ambiguous = true;
+                continue;
+            }
+            if (!selected || navigationEventSequence(event) > navigationEventSequence(selected.event)) selected = { event, eventType };
+        }
+        if (!ambiguous) return selected;
     }
     const wantedTypes = new Set(eventTypes);
     let latestSequenced: { event: TaskAuditEvent; eventType: string; sequence: number } | null = null;
@@ -250,6 +279,8 @@ function readTaskEventSequence(event: TaskAuditEvent): number | null {
 }
 
 export function hasCurrentCycleReviewProgress(events: ReadonlyArray<TaskAuditEvent>): boolean {
+    const query = navigationQueryForEvents(events);
+    if (query?.ordered) return query.hasReviewProgressAfterCompile;
     let latestCompileIndex = -1;
     let latestCompileSequence: number | null = null;
     for (let index = 0; index < events.length; index += 1) {
@@ -320,10 +351,13 @@ export function buildCompletionReviewOrderBlocker(
     if (!Object.values(requiredReviews).some((required) => (countNextStepWork('visit:task-audit-summary-lifecycle:314'), required === true))) {
         return null;
     }
+    const query = navigationQueryForEvents(events);
     if (reviewDependencyGraph) {
+        // Validate the public graph before touching its fields in the compact selector.
+        if (query?.ordered) getReviewDependencyTimelineOrderViolations(reviewDependencyGraph, []);
         const dependencyOrderViolation = getReviewDependencyTimelineOrderViolations(
             reviewDependencyGraph,
-            events.map((event, index) => (countNextStepWork('visit:task-audit-summary-lifecycle:320'), ({
+            query?.ordered ? navigationDependencyWitnesses(query, reviewDependencyGraph) : events.map((event, index) => (countNextStepWork('visit:task-audit-summary-lifecycle:320'), ({
                 event_type: String(event.event_type || '').trim().toUpperCase(),
                 sequence: readTaskEventSequence(event) ?? index + 1,
                 details: event.details && typeof event.details === 'object'
@@ -353,9 +387,10 @@ export function buildCompletionReviewOrderBlocker(
         )
     );
     if (reviewGatePass) {
-        for (let index = events.length - 1; index >= 0; index -= 1) {
+        const candidates = query?.ordered ? latestRequiredReviewCandidates(query, requiredReviews) : events;
+        for (let index = candidates.length - 1; index >= 0; index -= 1) {
             countNextStepWork('visit:task-audit-summary-lifecycle:350');
-            const event = events[index];
+            const event = candidates[index];
             if (!taskEventOccursAfter(event, reviewGatePass.event, currentCycle)) {
                 continue;
             }
@@ -384,9 +419,10 @@ export function buildCompletionReviewOrderBlocker(
     if (!completionPass) {
         return null;
     }
-    for (let index = events.length - 1; index >= 0; index -= 1) {
+    const completionCandidates = query?.ordered ? latestRequiredReviewCandidates(query, requiredReviews, true) : events;
+    for (let index = completionCandidates.length - 1; index >= 0; index -= 1) {
         countNextStepWork('visit:task-audit-summary-lifecycle:380');
-        const event = events[index];
+        const event = completionCandidates[index];
         if (!taskEventOccursAfter(event, completionPass.event, currentCycle)) {
             continue;
         }
@@ -409,12 +445,44 @@ export function buildCompletionReviewOrderBlocker(
     return null;
 }
 
+function latestRequiredReviewCandidates(query: NonNullable<ReturnType<typeof navigationQueryForEvents>>,
+    requiredReviews: Record<string, boolean>, includeGates = false): TaskAuditEvent[] {
+    const candidates: TaskAuditEvent[] = [];
+    for (const lane of Object.keys(requiredReviews)) {
+        countNextStepWork('visit:audit_required_review_query_lane');
+        const event = requiredReviews[lane] ? navigationLatestReview(query, lane) : null;
+        if (event) candidates.push(event as TaskAuditEvent);
+    }
+    if (includeGates) for (const type of ['REVIEW_GATE_PASSED', 'REVIEW_GATE_PASSED_WITH_OVERRIDE', 'REVIEW_GATE_FAILED']) {
+        const event = navigationLatestEvent(query, type, true); if (event) candidates.push(event as TaskAuditEvent);
+    }
+    return candidates.sort((left, right) => { countNextStepWork('visit:audit_required_review_comparison');
+        return navigationEventSequence(left) - navigationEventSequence(right); });
+}
+
 export function resolveFullSuiteValidationRequirementForCurrentCycle(
     events: TaskAuditEvent[],
     currentCycle: TaskCycleBindingSnapshot | null,
     repoRoot: string,
     liveFullSuiteValidationEnabled: boolean
 ): boolean {
+    const query = navigationQueryForEvents(events);
+    if (query?.ordered) {
+        let latest: TaskAuditEvent | null = null, ambiguous = false;
+        for (const type of FULL_SUITE_TYPES) {
+            const event = navigationLatestEvent(query, type, true) as TaskAuditEvent | null;
+            if (!event) continue;
+            if (currentCycle?.compile_gate_timestamp && !shouldIncludeFullSuiteTelemetryForCurrentCycle(type,
+                event.timestamp_utc, event.details as Record<string, unknown> | null, currentCycle, repoRoot)) { ambiguous = true; continue; }
+            if (!latest || navigationEventSequence(event) > navigationEventSequence(latest)) latest = event;
+        }
+        if (!ambiguous) {
+            if (latest) return resolveFullSuiteValidationRequirementForOrderedTaskEvents([String(latest.event_type)], liveFullSuiteValidationEnabled).required;
+            if (currentCycle?.compile_gate_timestamp) return liveFullSuiteValidationEnabled;
+            return resolveFullSuiteValidationRequirementForOrderedTaskEvents(
+                navigationLatestEvent(query, 'COMPLETION_GATE_PASSED', true) ? ['COMPLETION_GATE_PASSED'] : [], liveFullSuiteValidationEnabled).required;
+        }
+    }
     if (!currentCycle?.compile_gate_timestamp) {
         return resolveFullSuiteValidationRequirementForOrderedTaskEvents(
             events.map((event) => (countNextStepWork('visit:task-audit-summary-lifecycle:412'), String(event.event_type || ''))),
@@ -455,6 +523,14 @@ export function hasCurrentCycleProjectMemoryImpactEvent(
         pass_event: PROJECT_MEMORY_IMPACT_ASSESSED_EVENT,
         fail_events: [PROJECT_MEMORY_IMPACT_BLOCKED_EVENT]
     };
+    const query = navigationQueryForEvents(events);
+    if (query?.ordered) {
+        for (const type of [PROJECT_MEMORY_IMPACT_ASSESSED_EVENT, PROJECT_MEMORY_IMPACT_BLOCKED_EVENT]) {
+            const event = navigationLatestEvent(query, type, true);
+            if (event && isEventRelevantForLifecycleGate(gateSpec, type, event, currentCycle, repoRoot)) return true;
+        }
+        return false;
+    }
     return events.some((event) => {
         countNextStepWork('visit:task-audit-summary-lifecycle:450');
         const eventType = String(event.event_type || '').trim().toUpperCase();
@@ -589,6 +665,10 @@ export function readNativeDecomposedParentFacts(repoRoot: string, taskId: string
     const children = extractExplicitLinkedChildTaskIds(parent.notes, entries.keys(), id);
     const eventsRoot = joinOrchestratorPath(root, 'runtime/task-events'), timeline = path.join(eventsRoot, id + '.jsonl');
     return withTaskTimelineReadSnapshot(eventsRoot, id, () => {
+        // Preserve canonical queue read/parse, parent existence and explicit-child extraction above.
+        // A verified marker absence only skips the history scans for this ordinary leaf.
+        const query = readTaskTimelineNavigationQuery(timeline, id);
+        if (query && !query.hasParentMarker && !isTaskQueueDecomposedStatus(parent.status)) return null;
         const events = readTaskTimelineJsonlEntries(timeline).map(entry => (countNextStepWork('visit:task-audit-summary-lifecycle:582'), entry.record)).filter(isPlainRecord);
         const decomposition = countNextStepArrayCopy('visit:task-audit-summary-lifecycle:copy:594', countNextStepArrayCopy('visit:task-audit-summary-lifecycle:copy:594', [...events]).reverse()).find(event => (countNextStepWork('visit:task-audit-summary-lifecycle:583'), event.event_type === 'STRICT_DECOMPOSITION_DECISION_RECORDED'));
         const completion = countNextStepArrayCopy('visit:task-audit-summary-lifecycle:copy:595', countNextStepArrayCopy('visit:task-audit-summary-lifecycle:copy:595', [...events]).reverse()).find(event => (countNextStepWork('visit:task-audit-summary-lifecycle:584'), event.event_type === 'DECOMPOSED_PARENT_COMPLETED'));

@@ -1,4 +1,5 @@
 import { countNextStepWork, describeProcessInputs } from '../../core/next-step-measurement';
+import { readTaskTimelineValidationQuery } from '../../gate-runtime/timeline/task-events-integrity';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { createInvocationReadMemoKey, isInvocationReadObservationActive } from '../../core/invocation-read-observation';
@@ -101,6 +102,10 @@ function readQualityChecklistArtifactBinding(options: {
 
     let latestEvent: Record<string, unknown> | null = null;
     try {
+        const projection = readTaskTimelineValidationQuery(taskEventsPath, options.taskId);
+        if (projection && !projection.query.qualityNormalizationFailed) {
+            latestEvent = projection.query.latestQuality?.event as Record<string, unknown> | undefined ?? null;
+        } else {
         countNextStepWork('quality_timeline_parse');
         forEachJsonlLine(taskEventsPath, (rawLine: string) => {
             countNextStepWork('visit:quality_timeline_event');
@@ -109,6 +114,7 @@ function readQualityChecklistArtifactBinding(options: {
                 latestEvent = event;
             }
         });
+        }
     } catch (error: unknown) {
         return {
             recordedArtifactSha256: null,

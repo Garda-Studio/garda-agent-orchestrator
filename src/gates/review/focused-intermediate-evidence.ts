@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -11,7 +12,7 @@ import { assertCurrentIntermediateSelection, intermediateInvocationIdentity, int
 import { declaredFileRole, isTestScopePath, normalizeFileRoleBindings } from '../../core/file-role-bindings';
 import { inspectTaskEventFile } from '../../gate-runtime/task-events';
 import {
-    readOrderedTaskEvents,
+    readNavigationOrderedTaskEvents,
     type TaskAuditEvent
 } from '../task-audit/task-audit-summary-lifecycle';
 import {
@@ -522,7 +523,7 @@ function readIntermediateEvidence(options: IntermediateEvidenceOptions, executio
             truncated: false
         };
     }
-    const events = readOrderedTaskEvents(timelinePath).events;
+    const events = readNavigationOrderedTaskEvents(timelinePath, options.taskId).events;
     if (events.length > maxTimelineEvents) {
         return {
             entries: [],
@@ -534,6 +535,7 @@ function readIntermediateEvidence(options: IntermediateEvidenceOptions, executio
         };
     }
     const latestTaskModeSequence = events.reduce<number | null>((latest, event) => {
+        countNextStepWork('visit:focused_intermediate_task_mode_event');
         if (String(event.event_type || '').trim() !== 'TASK_MODE_ENTERED') {
             return latest;
         }
@@ -564,6 +566,7 @@ function readIntermediateEvidence(options: IntermediateEvidenceOptions, executio
     let eligibleCount = 0;
     let scanLimitReached = false;
     for (let index = events.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:focused_intermediate_event');
         const event = events[index];
         if (!['INTERMEDIATE_COMMAND_RUN', 'PROJECT_VALIDATION_RESULTS_EVALUATED'].includes(String(event.event_type || '').trim())) {
             continue;
@@ -611,6 +614,7 @@ function readIntermediateEvidence(options: IntermediateEvidenceOptions, executio
             try {
                 const entry = bound.entry;
                 const attempts = events.filter(attempt => {
+                    countNextStepWork('visit:focused_intermediate_attempt_event');
                     const data = isPlainRecord(attempt.details) ? attempt.details : {};
                     return ['INTERMEDIATE_COMMAND_RUN', 'INTERMEDIATE_COMMAND_STARTED'].includes(String(attempt.event_type))
                         && attempt.task_id === options.taskId
@@ -649,6 +653,7 @@ function readIntermediateEvidence(options: IntermediateEvidenceOptions, executio
         }
         if (entries.length >= maxEntries) {
             for (let surplusIndex = index - 1; surplusIndex >= 0; surplusIndex -= 1) {
+                countNextStepWork('visit:focused_intermediate_surplus_event');
                 const surplusEvent = events[surplusIndex];
                 if (!['INTERMEDIATE_COMMAND_RUN', 'PROJECT_VALIDATION_RESULTS_EVALUATED'].includes(String(surplusEvent.event_type || '').trim())) {
                     continue;

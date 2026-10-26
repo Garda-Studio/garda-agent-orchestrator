@@ -1,3 +1,4 @@
+import { prepareCadenceAppend, commitCadenceAppend } from './task-cadence-runtime';
 import * as path from 'node:path';
 
 import { assertCanonicalTaskId } from '../../core/task-ids';
@@ -135,8 +136,10 @@ export function appendTaskEventLineSync(
     const serializedLine = JSON.stringify(event);
     assertTaskTimelineJsonlAppendWithinLimits(taskFilePath, serializedLine);
     validateCanonicalAppendSynchronously(validateBeforeCanonicalAppend);
+    const cadencePublication = prepareCadenceAppend(taskFilePath, safeTaskId, { ...event });
     appendTaskTimelineLineSync(taskFilePath, serializedLine, appendAuthority);
     onCanonicalAppend?.();
+    commitCadenceAppend(cadencePublication);
     refreshTaskEventAppendIndexAfterAppend(taskFilePath, safeTaskId, event);
     return serializedLine;
 }
@@ -188,8 +191,10 @@ export async function appendTaskEventLineAsync(
         await sleepMsAsync(preWriteDelayMs);
     }
     validateCanonicalAppendSynchronously(validateBeforeCanonicalAppend);
+    const cadencePublication = prepareCadenceAppend(taskFilePath, safeTaskId, { ...event });
     appendTaskTimelineLineSync(taskFilePath, serializedLine, appendAuthority);
     onCanonicalAppend?.();
+    commitCadenceAppend(cadencePublication);
     refreshTaskEventAppendIndexAfterAppend(taskFilePath, safeTaskId, event);
     return serializedLine;
 }

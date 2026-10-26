@@ -1,3 +1,5 @@
+import { isInvocationReadObservationActive } from '../../core/invocation-read-observation';
+import { readCurrentValidationSnapshot } from './attempt-evidence';
 import * as path from 'node:path';
 import type { ValidationAttempt } from '../../core/project-validation-contract';
 import { readValidationFile, validationDigest } from '../../core/project-validation-identity';
@@ -20,7 +22,8 @@ import { readValidationEvents, readValidationRecipeSnapshot, recordValidationEve
     type ValidationEvidenceBatch, type ValidationEvidenceInspection } from './attempt-evidence';
 
 export function assertValidationExpectedRed(repoRoot: string, taskId: string, recipeId: string): void {
-    readValidationEvents(repoRoot, taskId);
+    if (isInvocationReadObservationActive()) readCurrentValidationSnapshot(repoRoot, taskId);
+    else readValidationEvents(repoRoot, taskId);
     const snapshot = freezeValidationRecipe(repoRoot, taskId, recipeId);
     const preflight = JSON.parse(readValidationFile(repoRoot, validationPaths(repoRoot, taskId).preflight).bytes.toString('utf8')) as Record<string, unknown>;
     const taskMode = getTaskModeEvidence(repoRoot, taskId);

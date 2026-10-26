@@ -1,3 +1,7 @@
+import { isInvocationReadObservationActive } from '../../core/invocation-read-observation';
+import { cloneJson } from '../../core/immutable-json';
+import { readTaskTimelineValidationQuery } from '../../gate-runtime/timeline/task-events-integrity';
+import { beginValidationTimelineQueryPass, type ValidationTimelineQuery } from '../../gate-runtime/timeline/validation-timeline-query';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -38,7 +42,7 @@ declare const batchIdentity: unique symbol;
 export type ValidationEvidenceBatch = { readonly [batchIdentity]: true };
 interface ValidationEvidenceBatchState {
     repoRoot: string; taskId: string; inspection: ValidationEvidenceInspection;
-    events: ValidationEvent[]; recipes: Map<string, FrozenValidationRecipe>;
+    events: ValidationEvent[] | null; current: CurrentValidationSnapshot; recipes: Map<string, FrozenValidationRecipe>;
 }
 const activeBatches = new WeakMap<ValidationEvidenceBatch, ValidationEvidenceBatchState>();
 
@@ -62,12 +66,16 @@ export function withValidationEvidenceBatch<T>(options: {
     repoRoot: string; taskId: string; recipeIds: readonly string[]; inspection?: ValidationEvidenceInspection;
 }, inspect: (batch: ValidationEvidenceBatch) => T): T {
     const { repoRoot, taskId } = options, inspection = options.inspection ?? 'active';
-    const observation = readValidationEventSnapshot(repoRoot, taskId, inspection);
+    const active = isInvocationReadObservationActive();
+    const observation = active ? readCurrentValidationSnapshot(repoRoot, taskId, inspection)
+        : readValidationEventSnapshot(repoRoot, taskId, inspection);
     const observationSha256 = validationDigest(observation);
     const recipes = new Map(options.recipeIds.map(id => [id, freezeValidationRecipe(repoRoot, taskId, id)]));
     const recipeHashes = new Map([...recipes].map(([id, recipe]) => [id, recipe.snapshot_sha256]));
     const batch = Object.freeze({}) as ValidationEvidenceBatch;
-    activeBatches.set(batch, { repoRoot: path.resolve(repoRoot), taskId, inspection, events: observation.events, recipes });
+    activeBatches.set(batch, { repoRoot: path.resolve(repoRoot), taskId, inspection,
+        events: 'events' in observation ? observation.events : null,
+        current: 'query' in observation ? observation : compactLegacyValidationSnapshot(observation), recipes });
     try {
         const result = inspect(batch);
         if (result && typeof (result as { then?: unknown }).then === 'function')
@@ -76,7 +84,8 @@ export function withValidationEvidenceBatch<T>(options: {
             if (freezeValidationRecipe(repoRoot, taskId, id).snapshot_sha256 !== hash)
                 throw new Error('Validation recipe or source identities changed during batch inspection');
         }
-        if (validationDigest(readValidationEventSnapshot(repoRoot, taskId, inspection)) !== observationSha256)
+        if (validationDigest(active ? readCurrentValidationSnapshot(repoRoot, taskId, inspection)
+            : readValidationEventSnapshot(repoRoot, taskId, inspection)) !== observationSha256)
             throw new Error('Validation timeline or scope changed during batch inspection');
         return result;
     } finally { activeBatches.delete(batch); }
@@ -223,10 +232,99 @@ export function readValidationEventSnapshot(repoRoot: string, taskId: string,
         timeline_sha256: timeline.identity.sha256 };
 }
 
+export type CurrentValidationSnapshot = Omit<ReturnType<typeof readValidationEventSnapshot>, 'events'>
+    & { query: ValidationTimelineQuery };
+
+function compactLegacyValidationSnapshot(snapshot: ReturnType<typeof readValidationEventSnapshot>): CurrentValidationSnapshot {
+    const { events, ...metadata } = snapshot;
+    const pass = beginValidationTimelineQueryPass();
+    events.forEach((event, ordinal) => {
+        countNextStepWork('visit:validation_legacy_projection_event'); pass.accept(event as Record<string, unknown>, ordinal);
+    });
+    return { ...metadata, query: pass.finish(true)! };
+}
+
+/** Internal compact path: public full-history arrays retain their original contract. */
+export function readCurrentValidationSnapshot(repoRoot: string, taskId: string,
+    inspection: ValidationEvidenceInspection = 'active'): CurrentValidationSnapshot {
+    const legacy = (): CurrentValidationSnapshot => compactLegacyValidationSnapshot(readValidationEventSnapshot(repoRoot, taskId, inspection));
+    if (!isInvocationReadObservationActive()) return legacy();
+    const paths = validationPaths(repoRoot, taskId);
+    const status = readTaskQueueStatusToken(readTaskQueueEntries(repoRoot).get(taskId)?.status ?? null);
+    if (inspection === 'retained_completed') {
+        if (status !== 'DONE') throw new Error('Retained validation inspection requires a completed native task');
+    } else if (inspection !== 'active' || (status !== 'IN_PROGRESS' && status !== 'IN_REVIEW')) {
+        throw new Error('Validation requires an active native task');
+    }
+    const preflightPath = resolveNativePreflightPath(repoRoot, taskId);
+    const timeline = readValidationFile(repoRoot, paths.timeline, MAXIMUM_CONTROL_BYTES);
+    const eventInspection = inspectTaskEventFile(path.join(repoRoot, paths.timeline), taskId);
+    if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(eventInspection.status)) throw new Error('Validation timeline integrity failed');
+    const projected = readTaskTimelineValidationQuery(path.join(repoRoot, paths.timeline), taskId, true);
+    if (!projected) return legacy();
+    if (projected.sha256 !== timeline.identity.sha256) throw new Error('Validation timeline changed during inspection');
+    const query = projected.query;
+    if (query.eventCount > MAXIMUM_EVENTS) throw new Error('Validation timeline exceeds event bound');
+    const { modeIndex, classifiedIndex, classifiedEvent } = query;
+    const preflightSequence = (classifiedEvent?.integrity as Record<string, unknown> | undefined)?.task_sequence;
+    if (modeIndex < 0 || classifiedIndex <= modeIndex || !Number.isSafeInteger(preflightSequence) || Number(preflightSequence) < 1)
+        throw new Error('Validation requires the current task-mode canonical preflight');
+    if (inspection === 'retained_completed') {
+        const completion = query.firstCompletion?.details as Record<string, unknown> | undefined;
+        if (query.completionCount !== 1 || completion?.status !== 'PASSED' || completion.outcome !== 'PASS'
+            || typeof completion.preflight_path !== 'string' || path.resolve(completion.preflight_path) !== path.resolve(preflightPath))
+            throw new Error('Retained validation inspection lacks current canonical completion binding');
+    }
+    const classified = classifiedEvent!.details as Record<string, unknown> | undefined;
+    const preflightRelative = path.relative(path.resolve(repoRoot), preflightPath).replace(/\\/gu, '/');
+    const retainedPreflight = readValidationFile(repoRoot, preflightRelative, MAXIMUM_CONTROL_BYTES);
+    const preflight = JSON.parse(retainedPreflight.bytes.toString('utf8')) as Record<string, unknown>;
+    const metrics = preflight.metrics as Record<string, unknown> | undefined;
+    if (preflight.task_id !== taskId || !Array.isArray(preflight.changed_files) || !metrics || !classified
+        || metrics.scope_sha256 !== classified.scope_sha256 || metrics.scope_content_sha256 !== classified.scope_content_sha256
+        || metrics.changed_files_sha256 !== pathListSha256(preflight.changed_files as string[]))
+        throw new Error('Validation preflight scope binding changed');
+    const contentFingerprint = classifiedContentFingerprint(repoRoot, String(preflight.detection_source), preflight.changed_files as string[]);
+    if (!contentFingerprint || contentFingerprint !== classified.scope_content_sha256)
+        throw new Error('Validation preflight scope binding changed');
+    if (readValidationFile(repoRoot, paths.timeline, MAXIMUM_CONTROL_BYTES).identity.sha256 !== timeline.identity.sha256) throw new Error('Validation timeline changed during inspection');
+    if (readValidationFile(repoRoot, preflightRelative, MAXIMUM_CONTROL_BYTES).identity.sha256 !== retainedPreflight.identity.sha256)
+        throw new Error('Validation preflight changed during inspection');
+    return { query, preflight_path: preflightPath, preflight_sha256: retainedPreflight.identity.sha256,
+        changed_files: preflight.changed_files as string[],
+        scope_content_sha256: contentFingerprint, preflight_sequence: Number(preflightSequence),
+        timeline_sha256: timeline.identity.sha256 };
+}
+
 export function readValidationEvents(repoRoot: string, taskId: string,
     inspection: ValidationEvidenceInspection = 'active', batch?: ValidationEvidenceBatch): ValidationEvent[] {
-    if (batch) return readBatchState(repoRoot, taskId, inspection, batch).events;
+    if (batch) {
+        const state = readBatchState(repoRoot, taskId, inspection, batch);
+        state.events ??= readValidationEventSnapshot(repoRoot, taskId, inspection).events;
+        return state.events;
+    }
     return readValidationEventSnapshot(repoRoot, taskId, inspection).events;
+}
+
+/** Same selection semantics as latestValidationRecipeAttempt, without a history array. */
+export function readLatestValidationRecipeAttempt(repoRoot: string, taskId: string, recipeId: string,
+    inspection: ValidationEvidenceInspection = 'active', batch?: ValidationEvidenceBatch,
+    afterClassification = false): ValidationEvent | undefined {
+    const query = batch ? readBatchState(repoRoot, taskId, inspection, batch).current.query
+        : readCurrentValidationSnapshot(repoRoot, taskId, inspection).query;
+    if (!query.recipeQueryCompatible) {
+        const events = readValidationEvents(repoRoot, taskId, inspection, batch);
+        const start = afterClassification ? Math.max(query.modeIndex, query.classifiedIndex) : -1;
+        return latestValidationRecipeAttempt(start >= 0 ? events.slice(start + 1) : events, recipeId);
+    }
+    const event = (afterClassification ? query.recipeAttemptsAfterClassification : query.recipeAttemptsAfterMode)[recipeId];
+    return event ? cloneJson(event) as ValidationEvent : undefined;
+}
+
+export function readCurrentValidationSnapshotInBatch(repoRoot: string, taskId: string,
+    inspection: ValidationEvidenceInspection = 'active', batch?: ValidationEvidenceBatch): CurrentValidationSnapshot {
+    return batch ? readBatchState(repoRoot, taskId, inspection, batch).current
+        : readCurrentValidationSnapshot(repoRoot, taskId, inspection);
 }
 
 export async function recordValidationEvent(repoRoot: string, taskId: string, type: string, details: Record<string, unknown>): Promise<void> {

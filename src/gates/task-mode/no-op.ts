@@ -1,4 +1,6 @@
 import { countNextStepWork } from '../../core/next-step-measurement';
+import { isInvocationReadObservationActive } from '../../core/invocation-read-observation';
+import { readTaskTimelineValidationQuery } from '../../gate-runtime/timeline/task-events-integrity';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -110,18 +112,34 @@ export function resolveCurrentNoOpPreflightPath(repoRoot: string, taskId: string
         if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(integrity.status)) {
             throw new Error('Current preflight requires an authenticated native task timeline.');
         }
-        const events = readTaskTimelineJsonlEntries(timelinePath).map((entry) => (countNextStepWork('visit:no-op:112'), entry.record));
-        const eventTypes = events.map((event) => (countNextStepWork('visit:no-op:113'), event?.event_type));
-        const entryIndex = eventTypes.lastIndexOf('TASK_MODE_ENTERED');
-        const preflightIndex = eventTypes.lastIndexOf('PREFLIGHT_CLASSIFIED');
-        if (entryIndex < 0 || preflightIndex <= entryIndex || events[entryIndex]?.outcome !== 'PASS') {
+        const query = integrity.status === 'PASS' && isInvocationReadObservationActive()
+            ? readTaskTimelineValidationQuery(timelinePath, resolvedTaskId)?.query : null;
+        let entryIndex: number, preflightIndex: number;
+        let eventTypes: unknown[] | null = null;
+        let entryEvent: Readonly<Record<string, unknown>> | null;
+        let preflightEvent: Readonly<Record<string, unknown>> | null;
+        if (query) {
+            countNextStepWork('no_op_preflight_projection_selection');
+            entryIndex = query.modeIndex;
+            preflightIndex = query.classifiedIndex;
+            entryEvent = query.modeEvent;
+            preflightEvent = query.classifiedEvent;
+        } else {
+            const events = readTaskTimelineJsonlEntries(timelinePath).map((entry) => (countNextStepWork('visit:no-op:112'), entry.record));
+            eventTypes = events.map((event) => (countNextStepWork('visit:no-op:113'), event?.event_type));
+            entryIndex = eventTypes.lastIndexOf('TASK_MODE_ENTERED');
+            preflightIndex = eventTypes.lastIndexOf('PREFLIGHT_CLASSIFIED');
+            entryEvent = events[entryIndex] ?? null;
+            preflightEvent = events[preflightIndex] ?? null;
+        }
+        if (entryIndex < 0 || preflightIndex <= entryIndex || entryEvent?.outcome !== 'PASS') {
             throw new Error('A successful preflight must be classified in the current task-mode cycle.');
         }
-        if (eventTypes.lastIndexOf('PREFLIGHT_FAILED') > preflightIndex
-            || eventTypes.lastIndexOf('PREFLIGHT_STARTED') > preflightIndex) {
+        if ((query ? query.preflightFailedIndex : eventTypes!.lastIndexOf('PREFLIGHT_FAILED')) > preflightIndex
+            || (query ? query.preflightStartedIndex : eventTypes!.lastIndexOf('PREFLIGHT_STARTED')) > preflightIndex) {
             throw new Error('The current preflight is superseded by a failed or unfinished classification.');
         }
-        const details = events[preflightIndex]?.details as Record<string, unknown> | undefined;
+        const details = preflightEvent?.details as Record<string, unknown> | undefined;
         const currentPath = resolvePathInsideRepo(String(details?.output_path || details?.outputPath || ''), repoRoot, {
             enforceInside: true
         });

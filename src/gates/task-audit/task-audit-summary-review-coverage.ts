@@ -1,3 +1,4 @@
+import { navigationQueryForEvents, navigationHasCoverageBinding } from '../../gate-runtime/timeline/task-navigation-query';
 import { countNextStepWork, countNextStepArrayCopy, measureNextStepPhase } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import { getValidationTerminalViolations } from '../review/validation-terminal';
@@ -145,7 +146,10 @@ export function buildReviewCoverageAuditSummary(options: {
             const contextSha256 = safeReviewArtifactFileSha256(contextPath);
             const receiptContextSha256 = String(receipt?.review_context_sha256 || '').trim().toLowerCase();
             const receiptPreflightSha256 = String(receipt?.preflight_sha256 || '').trim().toLowerCase();
-            const recordedEventMatches = (options.orderedEvents || []).some((event) => {
+            const query = options.orderedEvents ? navigationQueryForEvents(options.orderedEvents) : null;
+            const recordedEventMatches = query?.ordered
+                ? navigationHasCoverageBinding(query, reviewType, contextSha256 || '', preflightSha256 || '')
+                : (options.orderedEvents || []).some((event) => {
                 countNextStepWork('visit:task-audit-summary-review-coverage:event:148');
                 if (String(event.event_type || '').trim() !== 'REVIEW_RECORDED') {
                     return false;

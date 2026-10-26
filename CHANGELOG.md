@@ -38,6 +38,9 @@
 
 ### Faster everyday work
 
+- Navigation consumes authenticated outcomes of closed review cycles. Current referenced evidence is still authenticated; explicit audit and completion reject corrupted archived evidence. Missing or mismatched outcomes use the existing checks.
+- Navigation and validation share event selections collected during full timeline verification, preserving ordering, cancellation and current evidence checks.
+
 - Within read-only navigation, review consumers share captured quality, validation, task-mode, scope and contract derivations. Lane, inspection and strictness contracts stay separate; input changes are rejected before output and public results remain isolated. Accessor-bearing inputs keep native evaluation, and dirty-baseline memo keys bind property enumerability.
 
 - Read-only next-step navigation shares checked scope bytes, path observations, Git results and per-object Windows ACL evidence within each invocation. A final dependency check rejects changed inputs before returning the decision; action execution retains its existing live checks.

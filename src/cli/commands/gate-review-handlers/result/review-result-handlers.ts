@@ -1,3 +1,5 @@
+import { publishClosedReviewAfterGate, type ClosedReviewGateCapture } from '../../../../gates/review-attempts/review-closed-cycle-gate-hooks';
+import { admitNativeReviewCadence } from '../../../../gates/review-attempts/review-cadence-admission';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -1837,6 +1839,7 @@ function hasReviewOutputCorrectionInvocationAttestation(options: {
 }
 
 async function writeReviewReceiptSnapshotsAndTelemetry(options: {
+    closedReviewGateCapture: ClosedReviewGateCapture;
     repoRoot: string;
     taskId: string;
     reviewType: string;
@@ -1941,7 +1944,7 @@ async function writeReviewReceiptSnapshotsAndTelemetry(options: {
             content: artifactContent
         }
     ];
-    await writeReviewArtifactsWithRollback(writes, async () => {
+    const admittedReview = await writeReviewArtifactsWithRollback(writes, async () => {
         assertReviewArtifactFileSha256(receiptPath, options.receiptPayloadSha256, 'Review receipt');
         assertReviewArtifactFileSha256(receiptSnapshotPath, options.receiptPayloadSha256, 'Review receipt snapshot');
         assertReviewArtifactFileSha256(options.artifactPath, options.artifactSha256, 'Review artifact');
@@ -2026,7 +2029,7 @@ async function writeReviewReceiptSnapshotsAndTelemetry(options: {
                 throw new Error(`Review output correction acceptance telemetry failed for '${options.reviewType}'.`);
             }
         }
-        const recordedEvent = await emitReviewRecordedEventAsync(orchestratorRoot, options.taskId, options.reviewType, {
+        const recordedEvent = await emitReviewRecordedEventAsync(orchestratorRoot, options.taskId, options.reviewType, admitNativeReviewCadence(options.repoRoot, options.taskId, {
             ...buildBoundedReviewRecordedTelemetryDetails(options.receipt),
             receipt_path: normalizePath(receiptPath),
             receipt_sha256: options.receiptPayloadSha256,
@@ -2044,14 +2047,16 @@ async function writeReviewReceiptSnapshotsAndTelemetry(options: {
                     remediation_baseline_snapshot_sha256: options.remediationBaselineEvidence.artifactSha256
                 }
                 : {})
-        });
+        }));
         if (!recordedEvent || taskEventAppendHasBlockingFailure(recordedEvent, false)) {
             throw new Error(
                 `Review receipts require REVIEW_RECORDED telemetry for '${options.reviewType}'. ` +
                 'The lifecycle event could not be persisted.'
             );
         }
+        return recordedEvent;
     });
+    publishClosedReviewAfterGate(options.closedReviewGateCapture, { repoRoot: options.repoRoot, taskId: options.taskId, kind: 'record' }, admittedReview);
     return receiptPath;
 }
 
@@ -2541,6 +2546,7 @@ async function recordReviewReceiptFromArtifacts(options: {
         : null;
     try {
         return await writeReviewReceiptSnapshotsAndTelemetry({
+            closedReviewGateCapture: dependencies.closedReviewGateCapture,
             repoRoot: options.repoRoot,
             taskId: options.taskId,
             reviewType: options.reviewType,

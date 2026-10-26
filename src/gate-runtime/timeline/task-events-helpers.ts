@@ -11,6 +11,9 @@ import {
     isTaskTimelineReadSnapshotActive,
     MAX_TASK_TIMELINE_SNAPSHOT_BYTES,
     memoizeTaskTimelineSnapshot,
+    memoizeTaskTimelineSnapshotByteLines,
+    type TaskTimelineByteLine,
+    type TaskTimelineByteLineVisitResult,
     withTaskTimelineFileReadSnapshot
 } from './task-timeline-read-snapshot';
 const JSONL_READ_CHUNK_SIZE = 64 * 1024;
@@ -27,6 +30,12 @@ export interface TaskTimelineJsonlEntry {
     readonly rawLine: string;
     readonly lineNumber: number;
     readonly record: Readonly<Record<string, unknown>> | null;
+}
+
+const taskTimelineEntryStartBytes = new WeakMap<object, number>();
+/** Internal metadata for an exact retained parsed entry; public entry shape is unchanged. */
+export function readTaskTimelineEntryStartByte(entry: TaskTimelineJsonlEntry): number | undefined {
+    return taskTimelineEntryStartBytes.get(entry);
 }
 
 interface TaskTimelineJsonlLines {
@@ -187,6 +196,32 @@ function buildTaskTimelineJsonlEntries(content: string): TaskTimelineParsedJsonl
     };
 }
 
+const validationJsonLinesCompatible = new WeakMap<object, boolean>();
+
+/** Private parser metadata; no second text scan and no change to the public entry shape. */
+export function readTaskTimelineValidationJsonLinesCompatible(filePath: string): boolean {
+    const entries = readTaskTimelineJsonlEntries(filePath);
+    return validationJsonLinesCompatible.get(entries) === true;
+}
+
+function buildTaskTimelineByteEntries(visitLines: (visit: (line: TaskTimelineByteLine) => void) => TaskTimelineByteLineVisitResult): TaskTimelineParsedJsonlEntries {
+    countNextStepWork('timeline_parse');
+    const entries: TaskTimelineJsonlEntry[] = [];
+    const structureBudget: TaskTimelineJsonStructureBudget = { containerCount: 0, structuralTokenCount: 0 };
+    let compatible = true;
+    const visited = visitLines(line => {
+        countNextStepWork('timeline_events');
+        if (line.rawLine.trim()) {
+            const entry = parseTaskTimelineJsonlEntry(line.rawLine, line.lineNumber, structureBudget);
+            taskTimelineEntryStartBytes.set(entry, line.startByte);
+            entries.push(entry);
+        } else if (line.rawLine !== '' && line.rawLine !== '\r') compatible = false;
+    });
+    validationJsonLinesCompatible.set(entries, compatible && visited.trailingWhitespaceCompatible);
+    return { lineCount: visited.lineCount, entries, containerCount: structureBudget.containerCount,
+        structuralTokenCount: structureBudget.structuralTokenCount };
+}
+
 export function parseTaskTimelineJsonlContent(
     content: string
 ): readonly TaskTimelineJsonlEntry[] {
@@ -206,12 +241,13 @@ export function assertTaskTimelineJsonlAppendWithinLimits(
         throw new Error('Task timeline append must contain exactly one JSONL record.');
     }
 
-    const memoized = memoizeTaskTimelineSnapshot(
+    const memoized = memoizeTaskTimelineSnapshotByteLines(
         filePath,
         PARSED_JSONL_ENTRIES_MEMOIZATION_KEY,
         'default',
-        buildTaskTimelineJsonlEntries,
-        MAX_TASK_TIMELINE_SNAPSHOT_BYTES
+        buildTaskTimelineByteEntries,
+        MAX_TASK_TIMELINE_SNAPSHOT_BYTES,
+        MAX_TASK_TIMELINE_JSONL_LINES
     );
     if (!memoized.active || !memoized.valid) {
         throw new Error(`Task timeline snapshot changed while reading: ${filePath}`);
@@ -258,12 +294,13 @@ export function readTaskTimelineJsonlEntries(filePath: string): readonly TaskTim
     if (!isTaskTimelineReadSnapshotActive(filePath)) {
         return withTaskTimelineFileReadSnapshot(filePath, () => readTaskTimelineJsonlEntries(filePath));
     }
-    const memoized = memoizeTaskTimelineSnapshot(
+    const memoized = memoizeTaskTimelineSnapshotByteLines(
         filePath,
         PARSED_JSONL_ENTRIES_MEMOIZATION_KEY,
         'default',
-        buildTaskTimelineJsonlEntries,
-        MAX_TASK_TIMELINE_SNAPSHOT_BYTES
+        buildTaskTimelineByteEntries,
+        MAX_TASK_TIMELINE_SNAPSHOT_BYTES,
+        MAX_TASK_TIMELINE_JSONL_LINES
     );
     if (memoized.active) {
         if (!memoized.valid) {
@@ -294,12 +331,13 @@ export function forEachTaskTimelineJsonlEntry(
         ));
     }
     const normalizedMaxBytes = normalizeTaskTimelineReadLimit(maxBytes);
-    const memoized = memoizeTaskTimelineSnapshot(
+    const memoized = memoizeTaskTimelineSnapshotByteLines(
         filePath,
         PARSED_JSONL_ENTRIES_MEMOIZATION_KEY,
         'default',
-        buildTaskTimelineJsonlEntries,
-        normalizedMaxBytes
+        buildTaskTimelineByteEntries,
+        normalizedMaxBytes,
+        MAX_TASK_TIMELINE_JSONL_LINES
     );
     if (memoized.active) {
         if (!memoized.valid) {

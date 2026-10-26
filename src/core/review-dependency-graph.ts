@@ -154,7 +154,7 @@ function findLatestTimelineEventLike(
     return latest;
 }
 
-function isAcceptedReviewTimelineRecord(event: ReviewDependencyTimelineEventLike): boolean {
+export function isAcceptedReviewTimelineRecord(event: ReviewDependencyTimelineEventLike): boolean {
     const details = event.details;
     const validation = isPlainRecord(details?.review_findings_validation)
         ? details.review_findings_validation

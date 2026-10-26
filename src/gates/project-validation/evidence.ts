@@ -1,3 +1,5 @@
+import { readCurrentValidationAttemptFacts } from './current-attempt-facts';
+import { readCurrentValidationSnapshot } from './attempt-evidence';
 import { readValidationFile, validationDigest } from '../../core/project-validation-identity';
 import { isPlainRecord } from '../../core/records';
 import { freezeValidationRecipe } from './authority';
@@ -9,9 +11,13 @@ type ValidationResult = Awaited<ReturnType<typeof evaluateValidationAttempt>>;
 export function readValidationResult(options: { repoRoot: string; taskId: string; attemptId: string;
     inspection?: ValidationEvidenceInspection; batch?: ValidationEvidenceBatch; expectedRedHistory?: true }) {
     const { repoRoot, taskId, attemptId } = options;
-    const facts = readValidationAttemptFacts(repoRoot, taskId, attemptId, options.inspection, options.batch, options.expectedRedHistory),
+    const facts = readCurrentValidationAttemptFacts(repoRoot, taskId, attemptId, options.inspection, options.batch, options.expectedRedHistory)
+        ?? readValidationAttemptFacts(repoRoot, taskId, attemptId, options.inspection, options.batch, options.expectedRedHistory),
         { snapshot, currentSnapshot, attempt } = facts;
-    const evaluated = facts.events.filter(event => event.event_type === 'PROJECT_VALIDATION_RESULTS_EVALUATED' && event.details?.attempt_id === attemptId);
+    const evaluated = 'timelineQuery' in facts
+        ? { length: facts.multiplicity.evaluated.count, 0: facts.multiplicity.evaluated.first?.event as {
+            details?: Record<string, unknown> } }
+        : facts.events.filter(event => event.event_type === 'PROJECT_VALIDATION_RESULTS_EVALUATED' && event.details?.attempt_id === attemptId);
     if (evaluated.length !== 1) throw new Error('Missing or ambiguous canonical validation result');
     const details = evaluated[0].details!, resultPath = `${facts.directory}/result.json`;
     if (details.artifact_path !== resultPath) throw new Error('Foreign retained validation result path');
@@ -29,7 +35,9 @@ export function readValidationResult(options: { repoRoot: string; taskId: string
         throw new Error('Foreign or stale validation result binding');
     // A live batch owner revalidates every recipe and the native timeline before returning the combined result.
     if (!options.batch && (freezeValidationRecipe(repoRoot, taskId, snapshot.recipe.id).snapshot_sha256 !== currentSnapshot.snapshot_sha256
-        || validationDigest(readValidationEvents(repoRoot, taskId, options.inspection)) !== validationDigest(facts.events)))
+        || ('timelineQuery' in facts
+            ? readCurrentValidationSnapshot(repoRoot, taskId, options.inspection).timeline_sha256 !== facts.timelineQuery.timeline_sha256
+            : validationDigest(readValidationEvents(repoRoot, taskId, options.inspection)) !== validationDigest(facts.events))))
         throw new Error('Validation identities or timeline changed during result inspection');
     return { snapshot, attempt, result: { ...record, result_path: resultPath, result_sha256: file.identity.sha256 } as ValidationResult };
 }

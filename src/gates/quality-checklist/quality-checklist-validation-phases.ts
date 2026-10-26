@@ -2,12 +2,12 @@ import type { FrozenValidationRecipe, ValidationFileIdentity } from '../../core/
 import { validationDigest } from '../../core/project-validation-identity';
 import { assessBoundTrustBoundaryMatrix, assessTrustBoundaryMatrix } from '../../core/trust-boundary-analysis';
 import { currentProjectValidationAuthority } from '../project-validation/authority';
-import { latestValidationRecipeAttempt, readValidationEvents, readValidationRecipeSnapshot, withValidationEvidenceBatch,
+import { readLatestValidationRecipeAttempt, readValidationEvents, readValidationRecipeSnapshot, withValidationEvidenceBatch,
     type ValidationEvidenceBatch, type ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 import { readValidationResult } from '../project-validation/evidence';
 import type { NativeCaseExecution } from '../review/native-case-semantics';
 import { NativeCaseExecutionUnavailableError, readNativeCaseObligations } from '../review/native-case-semantics';
-import { readValidationEventSnapshot } from '../project-validation/attempt-evidence';
+import { readCurrentValidationSnapshot } from '../project-validation/attempt-evidence';
 import { readValidationFile } from '../../core/project-validation-identity';
 import * as path from 'node:path';
 import { createInvocationReadMemoKey, isInvocationReadObservationActive } from '../../core/invocation-read-observation';
@@ -39,7 +39,7 @@ interface QualityValidationPhaseInspectionOptions {
 }
 
 function inspectNativePhases(options: QualityValidationPhaseInspectionOptions) {
-    const native = readValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection);
+    const native = readCurrentValidationSnapshot(options.repoRoot, options.taskId, options.inspection);
     const relative = path.relative(path.resolve(options.repoRoot), native.preflight_path).replace(/\\/gu, '/');
     const retained = readValidationFile(options.repoRoot, relative);
     if (native.preflight_sha256 !== options.preflightSha256
@@ -129,15 +129,11 @@ function inspectDeclaredPhases(options: QualityValidationPhaseInspectionOptions,
         readValidationRecipeSnapshot(repoRoot, taskId, recipe.id, options.inspection, batch));
     if (snapshots.some(snapshot => snapshot.preflight_sha256 !== options.preflightSha256))
         throw new Error('Validation quality preflight changed');
-    const events = readValidationEvents(repoRoot, taskId, options.inspection, batch);
-    const start = Math.max(events.map(event => event.event_type).lastIndexOf('TASK_MODE_ENTERED'),
-        events.map(event => event.event_type).lastIndexOf('PREFLIGHT_CLASSIFIED'));
-    if (start < 0) throw new Error('Validation quality has no current task cycle');
     const obligations: QualityValidationObligation[] = [], diagnostics: string[] = [];
     const executions: QualityRecipeExecution[] = [];
     for (const snapshot of snapshots) {
         countNextStepWork('visit:quality_validation_recipe');
-        const latest = latestValidationRecipeAttempt(events.slice(start + 1), snapshot.recipe.id);
+        const latest = readLatestValidationRecipeAttempt(repoRoot, taskId, snapshot.recipe.id, options.inspection, batch, true);
         const { observation, caseExecution, diagnostic } = observeExecution({ repoRoot, taskId, snapshot, latest,
             scopeContentSha256: String((preflight.metrics as Record<string, unknown>)?.scope_content_sha256 ?? ''),
             inspection: options.inspection, batch });

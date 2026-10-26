@@ -1,3 +1,5 @@
+import type { TimelineEventEntry } from '../completion/completion-evidence';
+import { readRouteOrderedWitnesses } from './next-step-route-query-readers';
 import { countNextStepWork, countNextStepArrayCopy } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -34,9 +36,6 @@ import {
 } from '../split-required/split-required-wip';
 import { resolveWipRoot } from '../split-required/split-required-wip-contracts';
 import { reuseRetainedWipForDecomposition } from '../split-required/split-required-wip-decomposition';
-import {
-    collectOrderedTimelineEvents
-} from '../completion/completion-evidence';
 import type {
     ReviewCycleContinuationAssessment
 } from '../review-cycle/review-cycle-continuation';
@@ -324,7 +323,7 @@ function readPersistedSplitRequiredEventState(params: {
         return { latchEventRecorded: false, statusEventRecorded: false };
     }
     const timelineErrors: string[] = [];
-    const timeline = collectOrderedTimelineEvents(
+    const timeline = readOrderedRouteEvents(
         path.join(params.eventsRoot, `${params.taskId}.jsonl`),
         timelineErrors
     );
@@ -507,7 +506,7 @@ export function readSplitRequiredLatchEvidence(params: {
     }
 
     const timelineErrors: string[] = [];
-    const timeline = collectOrderedTimelineEvents(path.join(params.eventsRoot, `${params.taskId}.jsonl`), timelineErrors);
+    const timeline = readOrderedRouteEvents(path.join(params.eventsRoot, `${params.taskId}.jsonl`), timelineErrors);
     const normalizedArtifactPath = normalizePath(artifactPath);
     const hasLatchEvent = timeline.some((event) => {
         countNextStepWork('visit:next-step-split-required-latch:event:511');
@@ -571,7 +570,7 @@ export function hasSplitRequiredClearedEvidence(params: {
     }
 
     const timelineErrors: string[] = [];
-    const timeline = collectOrderedTimelineEvents(path.join(params.eventsRoot, `${params.taskId}.jsonl`), timelineErrors);
+    const timeline = readOrderedRouteEvents(path.join(params.eventsRoot, `${params.taskId}.jsonl`), timelineErrors);
     const normalizedArtifactPath = normalizePath(params.latchEvidence.artifact_path);
     const latchEvent = countNextStepArrayCopy('visit:next-step-split-required-latch:copy:573', countNextStepArrayCopy('visit:next-step-split-required-latch:copy:573', [...timeline]).reverse()).find((event) => {
         countNextStepWork('visit:next-step-split-required-latch:event:573');
@@ -676,7 +675,7 @@ export function assessReviewCycleContinuationSplitLatchClearance(params: {
     }
 
     const timelineErrors: string[] = [];
-    const timeline = collectOrderedTimelineEvents(
+    const timeline = readOrderedRouteEvents(
         path.join(params.eventsRoot, `${params.taskId}.jsonl`),
         timelineErrors
     );
@@ -751,7 +750,7 @@ export function hasReviewCycleContinuationClearedEvidence(params: {
         return false;
     }
     const timelineErrors: string[] = [];
-    const timeline = collectOrderedTimelineEvents(
+    const timeline = readOrderedRouteEvents(
         path.join(params.eventsRoot, `${params.taskId}.jsonl`),
         timelineErrors
     );
@@ -799,7 +798,7 @@ export function hasCompletedDecomposedParentAfterSplitRequiredClear(params: {
     }
 
     const timelineErrors: string[] = [];
-    const timeline = collectOrderedTimelineEvents(path.join(params.eventsRoot, `${params.taskId}.jsonl`), timelineErrors);
+    const timeline = readOrderedRouteEvents(path.join(params.eventsRoot, `${params.taskId}.jsonl`), timelineErrors);
     const normalizedArtifactPath = normalizePath(params.latchEvidence.artifact_path);
     const latchEvent = countNextStepArrayCopy('visit:next-step-split-required-latch:copy:794', countNextStepArrayCopy('visit:next-step-split-required-latch:copy:794', [...timeline]).reverse()).find((event) => {
         countNextStepWork('visit:next-step-split-required-latch:event:794');
@@ -843,7 +842,7 @@ export function hasGateOwnedDecomposedParentCompletionEvidence(params: {
     taskId: string;
 }): boolean {
     const timelineErrors: string[] = [];
-    const timeline = collectOrderedTimelineEvents(path.join(params.eventsRoot, `${params.taskId}.jsonl`), timelineErrors);
+    const timeline = readOrderedRouteEvents(path.join(params.eventsRoot, `${params.taskId}.jsonl`), timelineErrors);
     const completionEvent = countNextStepArrayCopy('visit:next-step-split-required-latch:copy:834', countNextStepArrayCopy('visit:next-step-split-required-latch:copy:834', [...timeline]).reverse()).find((event) => {
         countNextStepWork('visit:next-step-split-required-latch:event:834');
         const details = event.details || {};
@@ -1292,4 +1291,8 @@ function materializeSplitRequiredLatchTransaction(
             wipCapture: persistedWipCapture
         }, false, params.faultInjection);
     });
+}
+
+function readOrderedRouteEvents(timelinePath: string, errors: string[]): TimelineEventEntry[] {
+    return readRouteOrderedWitnesses(timelinePath, errors, 'split');
 }

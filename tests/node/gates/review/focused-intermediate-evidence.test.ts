@@ -1,3 +1,5 @@
+import { withInvocationReadObservation } from '../../../../src/core/invocation-read-observation';
+import { withNextStepMeasurement, type NextStepMeasurement } from '../../../../src/core/next-step-measurement';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as crypto from 'node:crypto';
@@ -695,4 +697,18 @@ describe('task-owned focused intermediate evidence', () => {
             fs.rmSync(fixture.repoRoot, { recursive: true, force: true });
         }
     });
+});
+
+it('Q5 focused evidence shares the verified immutable navigation timeline', () => {
+    const f = makeFixture();
+    try {
+        appendEvidence(f);
+        const read = () => readTaskOwnedFocusedIntermediateEvidence({ ...f, taskId: TASK_ID, changedFiles: [TEST_PATH] });
+        const native = read();
+        let measurement: NextStepMeasurement | undefined;
+        const observed = withNextStepMeasurement(() => withInvocationReadObservation(read), result => { measurement = result; });
+        assert.deepEqual(observed, native);
+        assert.equal(measurement?.work['visit:audit_ordered_event_copy'] || 0, 0);
+        assert.equal(measurement?.work['visit:audit_ordered_event_comparison'] || 0, 0);
+    } finally { fs.rmSync(f.repoRoot, { recursive: true, force: true }); }
 });

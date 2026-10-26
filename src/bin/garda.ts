@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import './garda/derivation-source-receipts';
 import './garda/compile-cache';
 
 import { findPackageRoot } from './garda/root-discovery';

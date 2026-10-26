@@ -1,3 +1,5 @@
+import { readTaskTimelineCadenceWindow } from '../../gate-runtime/timeline/task-events-integrity';
+import { selectReviewCadence } from '../review-attempts/review-cadence-window';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import type { ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 import * as fs from 'node:fs';
@@ -464,10 +466,14 @@ function reviewFailureCadence(repoRoot: string, taskId: string, reviewFailureCad
     failureCount: number;
     testResetPending: boolean;
 } {
-    const events = readTaskTimelineEventLikes(
-        joinOrchestratorPath(repoRoot, path.join('runtime', 'task-events')),
-        taskId
-    );
+    const eventsRoot = joinOrchestratorPath(repoRoot, path.join('runtime', 'task-events'));
+    const captured = readTaskTimelineCadenceWindow(path.join(eventsRoot, `${taskId}.jsonl`), taskId);
+    if (captured) {
+        countNextStepWork('cadence_fast_path');
+        return selectReviewCadence(declaredRequired ? captured.declaredRequired : captured.ordinary, reviewFailureCadenceInterval);
+    }
+    countNextStepWork('cadence_legacy_fallback');
+    const events = readTaskTimelineEventLikes(eventsRoot, taskId);
     const checklistPasses: number[] = [];
     const reviewFailures: Array<{ index: number; reviewType: string }> = [];
     events.forEach((event, index) => {

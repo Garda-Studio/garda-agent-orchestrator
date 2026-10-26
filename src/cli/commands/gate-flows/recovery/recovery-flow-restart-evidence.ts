@@ -1,3 +1,5 @@
+import { captureClosedReviewGate } from '../../../../gates/review-attempts/review-closed-cycle-capture';
+import { publishClosedReviewAfterGate } from '../../../../gates/review-attempts/review-closed-cycle-gate-hooks';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { isPlainRecord } from '../../../../core/records';
@@ -129,7 +131,7 @@ export function appendRestartCompletedEvidence(input: {
         ...baseDetails
     });
     const restartArtifactSha256 = requireRestartArtifactSha256(artifactPath, 'restart-cycle');
-    appendMandatoryTaskEvent(
+    const admittedRestart = appendMandatoryTaskEvent(
         resolveOrchestratorRoot(input.repoRoot),
         input.taskId,
         input.eventType,
@@ -142,6 +144,7 @@ export function appendRestartCompletedEvidence(input: {
         },
         { actor: 'orchestrator' }
     );
+    publishClosedReviewAfterGate(captureClosedReviewGate, { repoRoot: input.repoRoot, taskId: input.taskId, kind: 'restart' }, admittedRestart);
     return artifactPath;
 }
 

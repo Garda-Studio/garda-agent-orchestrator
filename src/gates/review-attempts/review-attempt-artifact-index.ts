@@ -8,11 +8,14 @@ import { assertCanonicalTaskId } from '../../core/task-ids';
 import {
     readReviewArtifactFileSha256,
     readReviewArtifactJsonSnapshot,
-    readReviewArtifactTextSnapshot
+    readReviewArtifactTextSnapshot,
+    withReviewArtifactReadBarrier
 } from '../../gate-runtime/review-artifacts';
 import {
     entriesForTask,
     loadTaskIndex,
+    canReadCurrentReviewArtifactEntries,
+    readCurrentReviewArtifactIndexEntry,
     type ReviewsIndexEntry
 } from '../../gate-runtime/reviews-index';
 
@@ -30,10 +33,9 @@ export interface ReviewAttemptJsonSnapshot {
     sha256: string | null;
 }
 
-export interface ReviewAttemptArtifactIndex {
+export interface ReviewAttemptSnapshotReader {
     readonly reviews_root: string;
     readonly task_id: string;
-    listReceiptSnapshotFileNames(reviewType: string): readonly string[];
     readTextSnapshot(
         candidatePath: unknown,
         expectedFileName: string,
@@ -44,6 +46,10 @@ export interface ReviewAttemptArtifactIndex {
         expectedFileName: string,
         expectedSha256: unknown
     ): ReviewAttemptJsonSnapshot;
+}
+
+export interface ReviewAttemptArtifactIndex extends ReviewAttemptSnapshotReader {
+    listReceiptSnapshotFileNames(reviewType: string): readonly string[];
 }
 
 interface CachedSnapshotRead {
@@ -93,10 +99,52 @@ export function createReviewAttemptArtifactIndex(
     reviewsRoot: string,
     taskId: string
 ): ReviewAttemptArtifactIndex {
+    return createReviewAttemptArtifactIndexInternal(reviewsRoot, taskId, false);
+}
+
+class CurrentReviewIndexNativeFallback extends Error {}
+
+/** Null means retain the existing complete catalog path. No history enumeration API is exposed. */
+export function createCurrentReviewAttemptArtifactIndex(reviewsRoot: string, taskId: string): ReviewAttemptSnapshotReader | null {
+    if (!canReadCurrentReviewArtifactEntries(reviewsRoot, taskId)) return null;
+    const reader = createReviewAttemptArtifactIndexInternal(reviewsRoot, taskId, true);
+    const stillCurrent = () => canReadCurrentReviewArtifactEntries(reviewsRoot, taskId);
+    return Object.freeze({ reviews_root: reader.reviews_root, task_id: reader.task_id,
+        readTextSnapshot(candidatePath: unknown, expectedFileName: string, expectedSha256: unknown): ReviewAttemptTextSnapshot {
+            return withReviewArtifactReadBarrier(reviewsRoot, () => {
+                const native = () => createReviewAttemptArtifactIndex(reviewsRoot, taskId)
+                    .readTextSnapshot(candidatePath, expectedFileName, expectedSha256);
+                if (!stillCurrent()) return native();
+                try {
+                    const result = reader.readTextSnapshot(candidatePath, expectedFileName, expectedSha256);
+                    return stillCurrent() ? result : native();
+                } catch (error: unknown) {
+                    if (error instanceof CurrentReviewIndexNativeFallback) return native();
+                    throw error;
+                }
+            });
+        },
+        readJsonSnapshot(candidatePath: unknown, expectedFileName: string, expectedSha256: unknown): ReviewAttemptJsonSnapshot {
+            return withReviewArtifactReadBarrier(reviewsRoot, () => {
+                const native = () => createReviewAttemptArtifactIndex(reviewsRoot, taskId)
+                    .readJsonSnapshot(candidatePath, expectedFileName, expectedSha256);
+                if (!stillCurrent()) return native();
+                try {
+                    const result = reader.readJsonSnapshot(candidatePath, expectedFileName, expectedSha256);
+                    return stillCurrent() ? result : native();
+                } catch (error: unknown) {
+                    if (error instanceof CurrentReviewIndexNativeFallback) return native();
+                    throw error;
+                }
+            });
+        }
+    });
+}
+
+function createReviewAttemptArtifactIndexInternal(reviewsRoot: string, taskId: string, currentOnly: boolean): ReviewAttemptArtifactIndex {
     const resolvedReviewsRoot = path.resolve(reviewsRoot);
     const safeTaskId = assertCanonicalTaskId(taskId);
-    const loadedIndex = loadTaskIndex(resolvedReviewsRoot, safeTaskId);
-    const taskEntries = entriesForTask(loadedIndex.index, safeTaskId);
+    const taskEntries = currentOnly ? [] : entriesForTask(loadTaskIndex(resolvedReviewsRoot, safeTaskId).index, safeTaskId);
     const entriesByFileName = new Map<string, ReviewsIndexEntry>();
     const duplicateFileNames = new Set<string>();
     for (const entry of taskEntries) {
@@ -109,6 +157,13 @@ export function createReviewAttemptArtifactIndex(
     }
 
     const cachedReads = new Map<string, CachedSnapshotRead>();
+
+    const readCurrentEntry = (fileName: string): ReviewsIndexEntry | null => {
+        const entry = readCurrentReviewArtifactIndexEntry(resolvedReviewsRoot, safeTaskId, fileName);
+        if (!entry || !('nativeFallback' in entry)) return entry;
+        countNextStepWork('attempt_current_native_fallback');
+        throw new CurrentReviewIndexNativeFallback();
+    };
 
     const readSnapshot = (
         candidatePath: unknown,
@@ -144,7 +199,9 @@ export function createReviewAttemptArtifactIndex(
             }
             return { expectedPath, ...cached };
         }
-        const indexEntry = entriesByFileName.get(expectedFileName);
+        const indexEntry = currentOnly
+            ? readCurrentEntry(expectedFileName)
+            : entriesByFileName.get(expectedFileName);
         if (!indexEntry || duplicateFileNames.has(expectedFileName)) {
             const missing = { valid: false, sha256: null };
             cachedReads.set(cacheKey, missing);
@@ -183,6 +240,7 @@ export function createReviewAttemptArtifactIndex(
         reviews_root: resolvedReviewsRoot,
         task_id: safeTaskId,
         listReceiptSnapshotFileNames(reviewType: string): readonly string[] {
+            if (currentOnly) throw new Error('Exact current review readers cannot enumerate historical receipts.');
             const normalizedReviewType = normalizeReviewType(reviewType);
             const prefix = `${safeTaskId}-${normalizedReviewType}-receipt-`;
             return Object.freeze(taskEntries

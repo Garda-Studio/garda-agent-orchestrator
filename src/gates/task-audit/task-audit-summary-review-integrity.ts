@@ -1,3 +1,5 @@
+import { navigationQueryForEvents, navigationLatestEvent, navigationLatestReview,
+    navigationEventAtSequence, navigationEventSequence } from '../../gate-runtime/timeline/task-navigation-query';
 import { countNextStepArrayCopy, countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -86,6 +88,14 @@ function findLatestEventTaskSequenceForTypes(
     }
     const normalizedEventTypes = new Set(eventTypes.map((eventType) => (countNextStepWork('visit:task-audit-summary-review-integrity:86'), eventType.trim().toUpperCase())));
     let latestSequence: number | null = null;
+    const query = navigationQueryForEvents(events);
+    if (query?.ordered) {
+        for (const type of normalizedEventTypes) {
+            const event = navigationLatestEvent(query, type, true);
+            if (event) latestSequence = Math.max(latestSequence ?? -Infinity, navigationEventSequence(event));
+        }
+        return latestSequence;
+    }
     for (const event of events) {
         countNextStepWork('visit:task-audit-summary-review-integrity:88');
         if (!normalizedEventTypes.has(String(event.event_type || '').trim().toUpperCase())) {
@@ -120,24 +130,10 @@ function findFreshReviewTelemetryIssue(options: {
     if (options.latestReviewGateTaskSequence <= options.latestCompileTaskSequence) {
         return `${options.reviewType}: current required-reviews gate telemetry is not after the current compile telemetry`;
     }
-    let lastReason: string | null = null;
-    for (const event of countNextStepArrayCopy('visit:task-audit-summary-review-integrity:copy:124', [...options.events]).sort((left, right) =>
-        (countNextStepWork('visit:task-audit-summary-review-integrity:122'), (readEventTaskSequence(right) ?? 0) - (readEventTaskSequence(left) ?? 0))
-    )) {
-        countNextStepWork('visit:task-audit-summary-review-integrity:122');
-        if (String(event.event_type || '').trim().toUpperCase() !== 'REVIEW_RECORDED') {
-            continue;
-        }
-        const taskSequence = readEventTaskSequence(event);
-        if (taskSequence != null && taskSequence <= options.latestCompileTaskSequence) {
-            continue;
-        }
-        if (taskSequence != null && taskSequence >= options.latestReviewGateTaskSequence) {
-            return `${options.reviewType}: review recorded after current required-reviews gate`;
-        }
-        const match = validateHistoricalReviewRecordedTelemetryEventMatch({
+    const repoRoot = options.repoRoot, maxTaskSequenceExclusive = options.latestReviewGateTaskSequence;
+    const matchEvent = (event: ReviewReuseTelemetryEventLike) => validateHistoricalReviewRecordedTelemetryEventMatch({
             event,
-            repoRoot: options.repoRoot,
+            repoRoot,
             taskId: options.taskId,
             reviewType: options.reviewType,
             receiptPath: options.receiptPath,
@@ -155,9 +151,40 @@ function findFreshReviewTelemetryIssue(options: {
             reviewerExecutionMode: options.reviewerExecutionMode,
             reviewerIdentity: options.reviewerIdentity,
             reviewerProvenance: options.reviewerProvenance,
-            maxTaskSequenceExclusive: options.latestReviewGateTaskSequence,
+            maxTaskSequenceExclusive,
             verifyReceiptSnapshot: true
         });
+    const query = navigationQueryForEvents(options.events);
+    if (query?.ordered) {
+        // Native rejection is global: ANY lane recorded after the gate invalidates fresh attestation.
+        const latestAny = navigationLatestEvent(query, 'REVIEW_RECORDED', true);
+        if (latestAny && navigationEventSequence(latestAny) >= options.latestReviewGateTaskSequence)
+            return `${options.reviewType}: review recorded after current required-reviews gate`;
+        const current = navigationLatestReview(query, options.reviewType, true);
+        if (current && navigationEventSequence(current) > options.latestCompileTaskSequence) {
+            const match = matchEvent(current);
+            if (match.matched) return findFreshReviewerInvocationTelemetryIssue({ ...options,
+                events: options.events, latestReviewRecordedTaskSequence: navigationEventSequence(current) });
+        }
+        // A nonmatching latest record does not prove that an older receipt binding is absent.
+        // Keep the exact original scan, validation reads and final diagnostic on this path.
+    }
+    let lastReason: string | null = null;
+    for (const event of countNextStepArrayCopy('visit:task-audit-summary-review-integrity:copy:124', [...options.events]).sort((left, right) =>
+        (countNextStepWork('visit:task-audit-summary-review-integrity:122'), (readEventTaskSequence(right) ?? 0) - (readEventTaskSequence(left) ?? 0))
+    )) {
+        countNextStepWork('visit:task-audit-summary-review-integrity:122');
+        if (String(event.event_type || '').trim().toUpperCase() !== 'REVIEW_RECORDED') {
+            continue;
+        }
+        const taskSequence = readEventTaskSequence(event);
+        if (taskSequence != null && taskSequence <= options.latestCompileTaskSequence) {
+            continue;
+        }
+        if (taskSequence != null && taskSequence >= options.latestReviewGateTaskSequence) {
+            return `${options.reviewType}: review recorded after current required-reviews gate`;
+        }
+        const match = matchEvent(event);
         if (match.matched) {
             return findFreshReviewerInvocationTelemetryIssue({
                 ...options,
@@ -192,7 +219,10 @@ function findFreshReviewerInvocationTelemetryIssue(options: {
     ) {
         return `${options.reviewType}: reviewer invocation provenance does not match receipt`;
     }
-    for (const event of options.events) {
+    const query = navigationQueryForEvents(options.events);
+    const selected = query?.ordered ? navigationEventAtSequence(query, Number(provenance.task_sequence)) : null;
+    const candidates = query?.ordered ? (selected ? [selected] : []) : options.events;
+    for (const event of candidates) {
         countNextStepWork('visit:task-audit-summary-review-integrity:192');
         if (String(event.event_type || '').trim().toUpperCase() !== 'REVIEWER_INVOCATION_ATTESTED') { continue; }
         const integrity = isPlainRecord(event.integrity) ? event.integrity : {};

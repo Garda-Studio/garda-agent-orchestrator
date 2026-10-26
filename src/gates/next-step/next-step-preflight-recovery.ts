@@ -1,3 +1,4 @@
+import { readRouteOrderedWitnesses } from './next-step-route-query-readers';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import { formatInstalledBundleMaintenanceGuidance } from '../protected-control-plane/installed-bundle-guard';
 import * as fs from 'node:fs';
@@ -22,7 +23,6 @@ import {
     buildCoherentCycleRestartCommand
 } from '../completion/completion-reporting';
 import {
-    collectOrderedTimelineEvents,
     type TimelineEventEntry
 } from '../completion/completion-evidence';
 import {
@@ -573,7 +573,7 @@ export function readFailedGateRecovery(
 
     const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
     const timelineErrors: string[] = [];
-    const events = collectOrderedTimelineEvents(timelinePath, timelineErrors);
+    const events = readOrderedRouteEvents(timelinePath, timelineErrors);
     if (timelineErrors.length > 0 || events.length === 0) {
         return null;
     }
@@ -838,7 +838,7 @@ export function readPendingPreflightRefresh(eventsRoot: string, taskId: string):
     reason: string;
 } | null {
     const errors: string[] = [];
-    const events = collectOrderedTimelineEvents(path.join(eventsRoot, `${taskId}.jsonl`), errors);
+    const events = readOrderedRouteEvents(path.join(eventsRoot, `${taskId}.jsonl`), errors);
     if (errors.length > 0 || events.length === 0) return null;
     const boundary = findLatestTimelineEvent(events, entry => COHERENT_CYCLE_BOUNDARY_EVENTS.has(entry.event_type));
     if (!boundary) return null;
@@ -888,7 +888,7 @@ export function readCoherentCycleReadiness(
 ): CoherentCycleReadiness {
     const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
     const timelineErrors: string[] = [];
-    const events = collectOrderedTimelineEvents(timelinePath, timelineErrors);
+    const events = readOrderedRouteEvents(timelinePath, timelineErrors);
     if (timelineErrors.length > 0 || events.length === 0) {
         return {
             ready: true,
@@ -1139,7 +1139,7 @@ export function resolveActiveTaskModeArtifactPath(
     const defaultTaskModePath = path.join(reviewsRoot, `${taskId}-task-mode.json`);
     const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
     const timelineErrors: string[] = [];
-    const events = collectOrderedTimelineEvents(timelinePath, timelineErrors);
+    const events = readOrderedRouteEvents(timelinePath, timelineErrors);
     if (timelineErrors.length > 0 || events.length === 0) {
         return defaultTaskModePath;
     }
@@ -1159,7 +1159,7 @@ export function resolveActiveTaskModeArtifactPath(
 function getLatestTimelineSequence(eventsRoot: string, taskId: string, eventType: string): number | null {
     const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
     const errors: string[] = [];
-    const events = collectOrderedTimelineEvents(timelinePath, errors);
+    const events = readOrderedRouteEvents(timelinePath, errors);
     let latestSequence: number | null = null;
     for (const event of events) {
         countNextStepWork('visit:next-step-preflight-recovery:event:1163');
@@ -1182,4 +1182,8 @@ export function isLatestCompletionCurrent(eventsRoot: string, taskId: string): b
     }
     const latestTaskModeSequence = getLatestTimelineSequence(eventsRoot, taskId, 'TASK_MODE_ENTERED');
     return latestTaskModeSequence == null || latestCompletionSequence >= latestTaskModeSequence;
+}
+
+function readOrderedRouteEvents(timelinePath: string, errors: string[]): TimelineEventEntry[] {
+    return readRouteOrderedWitnesses(timelinePath, errors, 'preflight');
 }

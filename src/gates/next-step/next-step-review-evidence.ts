@@ -1,3 +1,5 @@
+import { readTaskTimelineRouteQuery } from '../../gate-runtime/timeline/task-events-integrity';
+import { routePreparedAfter, routeLatestLane, routeLatestReuse, routeHasBoundedEvents, type TaskRouteQuery } from '../../gate-runtime/timeline/task-route-query';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 
@@ -185,6 +187,8 @@ export function timelineHasReviewContextPreparedAfterCompile(
         if (latestCompileSequence == null) {
             return false;
         }
+        const route = readTaskTimelineRouteQuery(timelinePath, taskId);
+        if (route) return routePreparedAfter(route, reviewType, contextPath, latestCompileSequence);
         const expectedContextPath = normalizePath(contextPath).toLowerCase();
         for (const timelineEntry of readTaskTimelineJsonlEntries(timelinePath)) {
             countNextStepWork('visit:next-step-review-evidence:187');
@@ -399,7 +403,8 @@ export function findStrictSequentialUpstreamNeedingCurrentCycleReuse(params: {
     if (latestCompileSequence == null) {
         return null;
     }
-    const timelineEvents = readTaskTimelineEventLikes(params.eventsRoot, params.taskId);
+    const timelineEvents = readTaskTimelineRouteQuery(path.join(params.eventsRoot, `${params.taskId}.jsonl`), params.taskId)
+        ?? readTaskTimelineEventLikes(params.eventsRoot, params.taskId);
     const stateByReviewType = new Map(params.reviewStates.map((state) => (countNextStepWork('visit:next-step-review-evidence:400'), [state.reviewType, state])));
     const upstreamReviewTypes = getReviewExecutionDependencies(
         params.targetReviewType,
@@ -431,7 +436,7 @@ export function findStrictSequentialUpstreamNeedingCurrentCycleReuse(params: {
         if (params.targetReviewType === 'test' && upstreamSatisfiedEvidence) {
             continue;
         }
-        const upstreamRecordedSequence = getLatestReviewEventSequence(
+        const upstreamRecordedSequence = getIndexedLatestReviewEventSequence(
             timelineEvents,
             'REVIEW_RECORDED',
             upstreamReviewType
@@ -500,7 +505,8 @@ export function findReviewGateStaleUpstreamRecovery(params: {
     )) {
         return null;
     }
-    const timelineEvents = readTaskTimelineEventLikes(params.eventsRoot, params.taskId);
+    const timelineEvents = readTaskTimelineRouteQuery(path.join(params.eventsRoot, `${params.taskId}.jsonl`), params.taskId)
+        ?? readTaskTimelineEventLikes(params.eventsRoot, params.taskId);
     const stateByReviewType = new Map(params.reviewStates.map((state) => (countNextStepWork('visit:next-step-review-evidence:500'), [state.reviewType, state])));
     for (const downstreamReviewType of params.requiredReviewTypes) {
         countNextStepWork('visit:next-step-review-evidence:501');
@@ -585,8 +591,9 @@ export function findDownstreamReviewNeedingDependencyRebind(params: {
     reviewStates: readonly ReviewArtifactState[];
 }): { downstreamState: ReviewArtifactState; upstreamReviewType: string } | null {
     return withNextStepReviewEvidenceSnapshot(params.eventsRoot, params.taskId, () => {
-    const timelineEvents = readTaskTimelineEventLikes(params.eventsRoot, params.taskId);
-    if (timelineEvents.length === 0) {
+    const timelineEvents = readTaskTimelineRouteQuery(path.join(params.eventsRoot, `${params.taskId}.jsonl`), params.taskId)
+        ?? readTaskTimelineEventLikes(params.eventsRoot, params.taskId);
+    if (Array.isArray(timelineEvents) ? timelineEvents.length === 0 : !routeHasBoundedEvents(timelineEvents as TaskRouteQuery)) {
         return null;
     }
     const stateByReviewType = new Map(params.reviewStates.map((state) => (countNextStepWork('visit:next-step-review-evidence:585'), [state.reviewType, state])));
@@ -607,7 +614,7 @@ export function findDownstreamReviewNeedingDependencyRebind(params: {
         );
         for (const upstreamReviewType of upstreamReviewTypes) {
             countNextStepWork('visit:next-step-review-evidence:600');
-            const upstreamRecordedSequence = getLatestReviewEventSequence(timelineEvents, 'REVIEW_RECORDED', upstreamReviewType);
+            const upstreamRecordedSequence = getIndexedLatestReviewEventSequence(timelineEvents, 'REVIEW_RECORDED', upstreamReviewType);
             if (upstreamRecordedSequence != null && upstreamRecordedSequence > downstreamRebindSequence) {
                 return { downstreamState, upstreamReviewType };
             }
@@ -618,10 +625,10 @@ export function findDownstreamReviewNeedingDependencyRebind(params: {
 }
 
 function getLatestDownstreamReviewRebindSequence(
-    timelineEvents: readonly ReviewReuseTelemetryEventLike[],
+    timelineEvents: readonly ReviewReuseTelemetryEventLike[] | TaskRouteQuery,
     state: ReviewArtifactState
 ): number | null {
-    const reviewPhaseSequence = getLatestReviewEventSequence(timelineEvents, 'REVIEW_PHASE_STARTED', state.reviewType);
+    const reviewPhaseSequence = getIndexedLatestReviewEventSequence(timelineEvents, 'REVIEW_PHASE_STARTED', state.reviewType);
     const reuseAcceptedSequence = getLatestReviewContextReuseAcceptedSequence(timelineEvents, state);
     if (reviewPhaseSequence == null) {
         return reuseAcceptedSequence;
@@ -633,9 +640,10 @@ function getLatestDownstreamReviewRebindSequence(
 }
 
 function getLatestReviewContextReuseAcceptedSequence(
-    timelineEvents: readonly ReviewReuseTelemetryEventLike[],
+    timelineEvents: readonly ReviewReuseTelemetryEventLike[] | TaskRouteQuery,
     state: ReviewArtifactState
 ): number | null {
+    if (!Array.isArray(timelineEvents)) return routeLatestReuse(timelineEvents as TaskRouteQuery, state.reviewType, state.contextPath);
     const expectedContextPath = normalizePath(state.contextPath).toLowerCase();
     let latestSequence: number | null = null;
     for (const event of timelineEvents) {
@@ -663,4 +671,10 @@ function getLatestReviewContextReuseAcceptedSequence(
             : Math.max(latestSequence, sequence);
     }
     return latestSequence;
+}
+
+function getIndexedLatestReviewEventSequence(events: readonly ReviewReuseTelemetryEventLike[] | TaskRouteQuery,
+    eventType: string, lane: string): number | null {
+    return Array.isArray(events) ? getLatestReviewEventSequence(events, eventType, lane)
+        : routeLatestLane(events as TaskRouteQuery, eventType, lane);
 }

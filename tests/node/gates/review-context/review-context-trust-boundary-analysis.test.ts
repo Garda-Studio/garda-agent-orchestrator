@@ -1,3 +1,4 @@
+import { readValidationResult } from '../../../../src/gates/project-validation/evidence';
 import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -1005,4 +1006,48 @@ describe('review-context trust-boundary handoff', () => {
             fixture.cleanup();
         }
     });
+});
+
+it('Q5 declared quality consumes canonical current queries without parsing or scanning history again', async () => {
+    const f = declaredReviewFixture('security', { passing: true });
+    try {
+        await f.execute();
+        f.publish();
+        const native = f.read();
+        let measured: NextStepMeasurement | undefined;
+        const actual = withNextStepMeasurement(() => withInvocationReadObservation(() => {
+            const strict = f.read();
+            f.readNavigation();
+            return strict;
+        }), value => { measured = value; });
+        assert.deepEqual(actual, native);
+        for (const key of ['visit:validation_timeline_parse_event', 'visit:validation_timeline_query_event',
+            'visit:quality_timeline_event', 'visit:task_mode_timeline_event'])
+            assert.equal(measured?.work[key] ?? 0, 0, key);
+        assert.ok((measured?.work.timeline_verify ?? 0) > 0);
+        assert.ok((measured?.work.validation_attempt_multiplicity_lookup ?? 0) > 0);
+    } finally { await f.cleanup(); }
+});
+
+it('Q5 current result preserves closed-cycle duplicate completion rejection through the real facade', async () => {
+    const f = declaredReviewFixture('security', { passing: true });
+    try {
+        const evaluated = await f.execute();
+        const timelinePath = path.join(f.orchestratorRoot, 'runtime/task-events', `${f.taskId}.jsonl`);
+        const events = fs.readFileSync(timelinePath, 'utf8').trimEnd().split('\n')
+            .map(line => JSON.parse(line) as { event_type: string; details: Record<string, unknown> });
+        const mode = events.filter(event => event.event_type === 'TASK_MODE_ENTERED').at(-1)!;
+        const classified = events.filter(event => event.event_type === 'PREFLIGHT_CLASSIFIED').at(-1)!;
+        const completed = events.find(event => event.event_type === 'PROJECT_VALIDATION_COMPLETED'
+            && event.details.attempt_id === evaluated.attempt_id)!;
+        // Native append creates an integrity-valid second cycle. Reusing an old
+        // attempt id must not erase its earlier completion multiplicity.
+        for (const event of [mode, classified, completed])
+            appendMandatoryTaskEvent(f.orchestratorRoot, f.taskId, event.event_type, 'PASS',
+                'Duplicate-history regression', event.details, { lowNoiseRuntimeWrites: true });
+        const read = () => readValidationResult({ repoRoot: f.repoRoot, taskId: f.taskId,
+            attemptId: evaluated.attempt_id });
+        assert.throws(read, /Missing or ambiguous canonical completed attempt/);
+        assert.throws(() => withInvocationReadObservation(read), /Missing or ambiguous canonical completed attempt/);
+    } finally { await f.cleanup(); }
 });

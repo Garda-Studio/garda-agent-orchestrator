@@ -1,3 +1,5 @@
+import { readTaskTimelineRouteQuery } from '../../gate-runtime/timeline/task-events-integrity';
+import { routeLatestSequence } from '../../gate-runtime/timeline/task-route-query';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import type { BoundedJsonlTailResult } from '../../core/bounded-jsonl-tail';
@@ -83,6 +85,8 @@ export function getLatestTaskSequenceForEventTypes(
         if (!fileExists(timelinePath)) {
             return null;
         }
+        const route = readTaskTimelineRouteQuery(timelinePath, taskId);
+        if (route) return routeLatestSequence(route, eventTypes, true);
         const window = readTaskTimelineEventWindow(eventsRoot, taskId);
         if (window.invalidJson) {
             return null;
