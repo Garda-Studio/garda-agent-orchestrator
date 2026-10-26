@@ -917,6 +917,11 @@ function runShellSmokeForTask(repoRoot: string, taskId: string, provider = 'Code
 describe('cli/commands/gates', () => {
     it('fails preflight before writing an artifact when protected control-plane scope lacks orchestrator work', () => {
         const repoRoot = createTempRepo();
+        // This test changes Garda-owned rules: use the source-development contract.
+        fs.writeFileSync(path.join(repoRoot, 'package.json'), JSON.stringify({
+            ...(fs.existsSync(path.join(repoRoot, 'package.json')) ? JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')) : {}),
+            name: 'garda-agent-orchestrator'
+        }));
         const taskId = 'T-901-preflight-protected';
         const protectedFile = 'garda-agent-orchestrator/live/docs/agent-rules/40-commands.md';
         const nonProtectedFile = 'src/app.ts';
@@ -977,6 +982,11 @@ describe('cli/commands/gates', () => {
 
     it('preserves explicit planned scope when protected recovery differs from the dirty workspace', () => {
         const repoRoot = createTempRepo();
+        // This test changes Garda-owned rules: use the source-development contract.
+        fs.writeFileSync(path.join(repoRoot, 'package.json'), JSON.stringify({
+            ...(fs.existsSync(path.join(repoRoot, 'package.json')) ? JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')) : {}),
+            name: 'garda-agent-orchestrator'
+        }));
         const taskId = 'T-901-explicit-protected-scope';
         const protectedFile = 'garda-agent-orchestrator/live/docs/agent-rules/40-commands.md';
         const nonProtectedFile = 'src/app.ts';
@@ -1679,6 +1689,11 @@ describe('cli/commands/gates', () => {
 
     it('classify-change restart command keeps explicitly supplied protected files in planned scope', () => {
         const repoRoot = createTempRepo();
+        // This test changes Garda-owned rules: use the source-development contract.
+        fs.writeFileSync(path.join(repoRoot, 'package.json'), JSON.stringify({
+            ...(fs.existsSync(path.join(repoRoot, 'package.json')) ? JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')) : {}),
+            name: 'garda-agent-orchestrator'
+        }));
         const taskId = 'T-901-merge-planned-scope';
         const protectedFile = 'garda-agent-orchestrator/live/docs/agent-rules/40-commands.md';
         const nonProtectedFile = 'src/app.ts';
@@ -1738,6 +1753,11 @@ describe('cli/commands/gates', () => {
 
     it('classify-change restart command excludes mutable optional task-mode metadata from copy-paste remediation', () => {
         const repoRoot = createTempRepo();
+        // This test changes Garda-owned rules: use the source-development contract.
+        fs.writeFileSync(path.join(repoRoot, 'package.json'), JSON.stringify({
+            ...(fs.existsSync(path.join(repoRoot, 'package.json')) ? JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')) : {}),
+            name: 'garda-agent-orchestrator'
+        }));
         const taskId = 'T-901-exact-rerun-metadata';
         const protectedFile = 'garda-agent-orchestrator/live/docs/agent-rules/40-commands.md';
         const planPath = path.join(repoRoot, 'runtime-plan.json');

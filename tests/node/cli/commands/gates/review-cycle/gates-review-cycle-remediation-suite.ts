@@ -1161,6 +1161,7 @@ describe('cli/commands/gates – review-cycle remediation reuse basics', {
 }, () => {
     it('restart-review-cycle reuses unaffected lanes and rejects forged persisted remediation authority', { concurrency: false }, async () => {
         const repoRoot = createTempRepo();
+        markAsSourceCheckout(repoRoot);
         const taskId = 'T-903b-restart-review-cycle-reuse';
         seedRemediationRepoBase(repoRoot);
         writeCurrentReviewCycleValidationSource(repoRoot);
@@ -1439,6 +1440,7 @@ describe('cli/commands/gates – review-cycle remediation reuse basics', {
 
     it('restart-review-cycle blocks review reuse for fail-closed remediation classifications', { concurrency: false }, async () => {
         const repoRoot = createTempRepo();
+        markAsSourceCheckout(repoRoot);
         const taskId = 'T-903b-restart-review-cycle-fail-closed-reuse';
         seedRemediationRepoBase(repoRoot);
         writeCurrentReviewCycleValidationSource(repoRoot);
@@ -1661,8 +1663,9 @@ describe('cli/commands/gates – review-cycle remediation reuse basics', {
         fs.rmSync(repoRoot, { recursive: true, force: true });
     });
 
-    it('restart-review-cycle allows task-scoped manual-validation evidence refresh files', { concurrency: false }, async () => {
+    it('restart-review-cycle allows task-scoped manual-validation evidence refresh files in Garda source development', { concurrency: false }, async () => {
         const repoRoot = createTempRepo();
+        markAsSourceCheckout(repoRoot);
         const taskId = 'T-903b-restart-review-cycle-manual-validation';
         seedRemediationRepoBase(repoRoot);
         writeReviewCapabilitiesConfig(repoRoot);

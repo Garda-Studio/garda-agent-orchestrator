@@ -2880,6 +2880,7 @@ describe('cli/commands/gates – review-cycle restart suite', () => {
 
     it('restart-review-cycle refreshes the current diff with a custom task-mode artifact path', { concurrency: false }, async () => {
         const repoRoot = createTempRepo();
+        markAsSourceCheckout(repoRoot);
         const taskId = 'T-903b-restart-review-cycle-custom-task-mode';
         const customTaskModePath = path.join(repoRoot, 'custom-artifacts', `${taskId}-task-mode.json`);
         seedRemediationRepoBase(repoRoot);
@@ -2976,6 +2977,7 @@ describe('cli/commands/gates – review-cycle restart suite', () => {
 
     it('restart-review-cycle escalates to restart-coherent-cycle after a prior review gate closed the latest cycle', { concurrency: false }, async () => {
         const repoRoot = createTempRepo();
+        markAsSourceCheckout(repoRoot);
         const taskId = 'T-903b-restart-review-cycle-after-review-gate';
         seedRemediationRepoBase(repoRoot);
         writeCurrentReviewCycleValidationSource(repoRoot);

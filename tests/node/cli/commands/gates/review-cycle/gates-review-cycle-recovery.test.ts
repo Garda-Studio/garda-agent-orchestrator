@@ -9,6 +9,7 @@ import {
     it,
     loadPostPreflightRulePack,
     loadTaskEntryRulePack,
+    markAsSourceCheckout,
     path,
     readTaskTimelineEvents,
     runBuildReviewContextCommand,
@@ -32,6 +33,7 @@ import { resolveNextStep } from '../../../../../../src/gates/next-step/next-step
 describe('cli/commands/gates – review-cycle recovery suite', () => {
     it('restart-review-cycle refuses to rebuild from a fresh task-mode cycle that never restored TASK_ENTRY rule-pack evidence', { concurrency: false }, async () => {
         const repoRoot = createTempRepo();
+        markAsSourceCheckout(repoRoot);
         const taskId = 'T-903b-restart-review-cycle-missing-task-entry';
         seedRemediationRepoBase(repoRoot);
         initializeGitRepo(repoRoot);
