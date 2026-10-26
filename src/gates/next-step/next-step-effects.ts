@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import { createHash } from 'node:crypto';
 
 export interface NextStepEffectDefinition<T> {
@@ -47,9 +48,9 @@ function canonicalize(value: unknown): unknown {
     if (typeof value === 'object') {
         return Object.fromEntries(
             Object.entries(value as Record<string, unknown>)
-                .filter(([, entry]) => entry !== undefined)
-                .sort(([left], [right]) => left.localeCompare(right))
-                .map(([key, entry]) => [key, canonicalize(entry)])
+                .filter(([, entry]) => (countNextStepWork('visit:next-step-effects:event:49'), entry !== undefined))
+                .sort(([left], [right]) => (countNextStepWork('visit:next-step-effects:event:49'), left.localeCompare(right)))
+                .map(([key, entry]) => (countNextStepWork('visit:next-step-effects:event:49'), [key, canonicalize(entry)]))
         );
     }
     return String(value);
@@ -77,7 +78,7 @@ function buildPlan(entries: readonly NextStepEffectPlanEntry[]): NextStepEffectP
     if (entries.length === 0) {
         return null;
     }
-    const effects = entries.map((entry) => ({ ...entry }));
+    const effects = entries.map((entry) => (countNextStepWork('visit:next-step-effects:event:80'), ({ ...entry })));
     return {
         schema_version: 1,
         effects,

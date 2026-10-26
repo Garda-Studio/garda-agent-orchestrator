@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import type { FinalCloseoutArtifact, TaskAuditSummaryResult } from './task-audit-summary';
 import type { ReviewAttemptSummary } from './task-audit-summary-collectors';
 import type { ReviewFindingsAuditSummary } from './task-audit-summary-review-findings';
@@ -42,7 +43,7 @@ function buildLocalizedCloseoutReviewMode(
         trustPrefix = `review integrity=${reviewIntegrityAttestation.status}`;
     }
     const reviewResults = Object.entries(closeout.implementation_summary.review_verdicts)
-        .map(([reviewType, verdict]) => `${reviewType}=${formatReviewResultStatus(verdict)}`);
+        .map(([reviewType, verdict]) => (countNextStepWork('visit:task-audit-summary-renderers:event:44'), `${reviewType}=${formatReviewResultStatus(verdict)}`));
     if (reviewResults.length === 0) {
         return trustPrefix;
     }
@@ -146,6 +147,7 @@ function appendReviewFindingsAuditLines(
         );
     }
     for (const cycle of summary.remediation_cycles) {
+        countNextStepWork('visit:task-audit-summary-renderers:event:148');
         lines.push(
             `${indent}Remediation cycle ${cycle.timestamp_utc || 'unknown'}: reason=${cycle.reason || 'unknown'}; ` +
             `invalidated=${cycle.invalidated_review_types.join(',') || 'none'}; ` +
@@ -237,9 +239,10 @@ function getOrderedRequiredReviewTypes(summary: TaskAuditSummaryResult): string[
     const policyMode = summary.final_closeout.workflow?.review_execution_policy_mode as EffectiveReviewExecutionPolicyMode | undefined;
     const preparationOrder = getReviewExecutionPreparationOrder(policyMode || 'legacy_test_downstream');
     return Object.entries(summary.required_reviews)
-        .filter(([, required]) => required)
-        .map(([reviewType]) => reviewType)
+        .filter(([, required]) => (countNextStepWork('visit:task-audit-summary-renderers:event:239'), required))
+        .map(([reviewType]) => (countNextStepWork('visit:task-audit-summary-renderers:event:239'), reviewType))
         .sort((left, right) => {
+            countNextStepWork('visit:task-audit-summary-renderers:event:239');
             const leftRank = preparationOrder.indexOf(left);
             const rightRank = preparationOrder.indexOf(right);
             if (leftRank !== rightRank) {
@@ -257,7 +260,7 @@ export function formatFinalCloseoutMarkdown(closeout: FinalCloseoutArtifact): st
         : 'profile=unknown';
     const pathModeText = closeout.implementation_summary.path_mode || 'unknown';
     const reviewResults = Object.entries(closeout.implementation_summary.review_verdicts)
-        .map(([reviewType, verdict]) => `\`${reviewType}: ${formatReviewResultStatus(verdict)}\``);
+        .map(([reviewType, verdict]) => (countNextStepWork('visit:task-audit-summary-renderers:event:259'), `\`${reviewType}: ${formatReviewResultStatus(verdict)}\``));
     const reviewResultText = reviewResults.length > 0 ? reviewResults.join(', ') : '`none required`';
     const docsUpdatedText = closeout.implementation_summary.docs_updated ? '`yes`' : '`no`';
 
@@ -306,6 +309,7 @@ export function formatFinalCloseoutMarkdown(closeout: FinalCloseoutArtifact): st
     if (closeout.review_coverage_summary) {
         lines.push(closeout.review_coverage_summary.visible_summary_line);
         for (const entry of closeout.review_coverage_summary.entries) {
+            countNextStepWork('visit:task-audit-summary-renderers:event:308');
             lines.push(
                 `Review coverage ${entry.review_type}: status=${entry.status}; ` +
                 `mode=${entry.review_execution_mode || 'legacy_unknown'}; ` +
@@ -349,6 +353,7 @@ export function formatFinalCloseoutMarkdown(closeout: FinalCloseoutArtifact): st
     if (closeout.orchestrator_defect_capture) {
         lines.push(closeout.orchestrator_defect_capture.visible_summary_line);
         for (const record of closeout.orchestrator_defect_capture.records) {
+            countNextStepWork('visit:task-audit-summary-renderers:event:351');
             lines.push(
                 `Orchestrator defect ${record.defect_id || 'unknown'}: status=${record.status}; `
                 + `resolution=${record.resolution || 'missing'}; `
@@ -457,6 +462,7 @@ export function formatTaskAuditSummaryText(summary: TaskAuditSummaryResult): str
     if (summary.review_coverage_summary) {
         lines.push(summary.review_coverage_summary.visible_summary_line);
         for (const entry of summary.review_coverage_summary.entries) {
+            countNextStepWork('visit:task-audit-summary-renderers:event:459');
             lines.push(
                 `  - ${entry.review_type}: status=${entry.status}; ` +
                 `mode=${entry.review_execution_mode || 'legacy_unknown'}; ` +
@@ -587,6 +593,7 @@ export function formatTaskAuditSummaryText(summary: TaskAuditSummaryResult): str
     if (summary.final_closeout.review_timing_audit?.visible_summary_line) {
         lines.push(`  ${summary.final_closeout.review_timing_audit.visible_summary_line}`);
         for (const entry of summary.final_closeout.review_timing_audit.entries) {
+            countNextStepWork('visit:task-audit-summary-renderers:event:589');
             lines.push(
                 `    - ${entry.review_type}: reviewer=${entry.reviewer_identity || 'unknown'} ` +
                 `provider=${entry.provider || 'unknown'} ` +
@@ -635,6 +642,7 @@ export function formatTaskAuditSummaryText(summary: TaskAuditSummaryResult): str
     if (summary.final_closeout.orchestrator_defect_capture) {
         lines.push(`  ${summary.final_closeout.orchestrator_defect_capture.visible_summary_line}`);
         for (const record of summary.final_closeout.orchestrator_defect_capture.records) {
+            countNextStepWork('visit:task-audit-summary-renderers:event:637');
             lines.push(
                 `  OrchestratorDefect: id=${record.defect_id || 'unknown'}; status=${record.status}; `
                 + `resolution=${record.resolution || 'missing'}; `
@@ -656,6 +664,7 @@ export function formatTaskAuditSummaryText(summary: TaskAuditSummaryResult): str
     lines.push(`  ${(summary.final_closeout.task_queue_status_contract || buildTaskQueueStatusContract(summary.task_id)).visible_summary_line}`);
     lines.push('FinalReportOrder:');
     for (const [index, entry] of summary.final_report_contract.required_order.entries()) {
+        countNextStepWork('visit:task-audit-summary-renderers:event:658');
         const suffix = entry === 'implementation summary' ? ` (include ${summary.final_report_contract.implementation_summary_requirements.join(', ')})` : '';
         lines.push(`  ${index + 1}. ${entry}${suffix}`);
     }

@@ -1,3 +1,4 @@
+import { countNextStepWork, countNextStepArrayCopy } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { runGit } from '../../core/git-helpers';
@@ -25,7 +26,7 @@ interface NoOpSourceServices {
 const SUITE_EVENTS = new Set(['FULL_SUITE_VALIDATION_PASSED', 'FULL_SUITE_VALIDATION_FAILED', 'FULL_SUITE_VALIDATION_WARNED']);
 
 function latestIndex(events: Event[], predicate: (event: Event) => boolean): number {
-    for (let index = events.length - 1; index >= 0; index--) if (predicate(events[index])) return index;
+    for (let index = events.length - 1; index >= 0; index--) { countNextStepWork('visit:task-audit-summary-no-op-source:event:28'); if (predicate(events[index])) return index; }
     return -1;
 }
 
@@ -34,8 +35,8 @@ function currentNoOpContract(root: string, taskId: string, timeline: string) {
     if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(inspection.status) || inspection.violations.length) {
         throw new Error('No-op source qualification requires an intact native child timeline.');
     }
-    const events = readTaskTimelineJsonlEntries(timeline).map(entry => entry.record).filter(isPlainRecord);
-    if (events.some(event => event.event_type === 'TASK_SOURCE_COMMIT_ACCEPTED')) {
+    const events = readTaskTimelineJsonlEntries(timeline).map(entry => (countNextStepWork('visit:task-audit-summary-no-op-source:event:37'), entry.record)).filter(isPlainRecord);
+    if (events.some(event => (countNextStepWork('visit:task-audit-summary-no-op-source:event:38'), event.event_type === 'TASK_SOURCE_COMMIT_ACCEPTED'))) {
         throw new Error('Native SOURCE evidence appeared before no-op reconstruction; retry strict SOURCE verification.');
     }
     const entry = latestIndex(events, event => event.event_type === 'TASK_MODE_ENTERED');
@@ -45,7 +46,7 @@ function currentNoOpContract(root: string, taskId: string, timeline: string) {
     const noOpIndex = latestIndex(events, event => event.event_type === 'NO_OP_RECORDED');
     const completion = latestIndex(events, event => event.event_type === 'COMPLETION_GATE_PASSED');
     if (entry < 0 || noOpIndex <= entry || completion <= noOpIndex || events[completion].outcome !== 'PASS'
-        || events.slice(entry).some(event => event.event_type === 'TASK_DISCARDED' || event.event_type === 'TASK_RESET')
+        || countNextStepArrayCopy('visit:task-audit-summary-no-op-source:copy:48', events.slice(entry)).some(event => (countNextStepWork('visit:task-audit-summary-no-op-source:event:48'), event.event_type === 'TASK_DISCARDED' || event.event_type === 'TASK_RESET'))
         || noOp.evidence_status !== 'PASS' || !noOpEvent) {
         throw new Error('Source qualification requires a current native-complete audited no-op child.');
     }

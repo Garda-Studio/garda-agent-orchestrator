@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import { sha256RedactedJsonPayload } from '../../core/redaction';
 import { isPlainRecord } from '../../core/records';
 import { normalizePath } from '../shared/helpers';
@@ -930,6 +931,7 @@ export function getReviewRemediationReviewContractViolations(
                 delta_base_snapshot_sha256: contract.base.delta_base_snapshot_sha256,
                 current_snapshot_sha256: contract.delta.current_snapshot_sha256
             })) {
+                countNextStepWork('visit:review-remediation-review-contract:event:922');
                 if (!SHA256_PATTERN.test(String(hash || ''))) {
                     violations.push(`DELTA review_execution ${label} is invalid.`);
                 }

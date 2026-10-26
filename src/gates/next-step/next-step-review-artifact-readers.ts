@@ -1,4 +1,4 @@
-import { measureNextStepPhase } from '../../core/next-step-measurement';
+import { countNextStepWork, countNextStepArrayCopy, measureNextStepPhase } from '../../core/next-step-measurement';
 import type { ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 import { hasAuthenticatedIntermediateGroupedReceiptSource } from '../review/review-grouped-receipt-source';
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
@@ -359,10 +359,10 @@ function resolveCurrentReviewFollowUpMaterializationBinding(
     // Missing compile evidence remains fail-closed below.
     const latestCompileEvent = timelineWindow.invalidJson
         ? null
-        : [...timelineWindow.events].reverse().find((event) => (
+        : countNextStepArrayCopy('visit:next-step-review-artifact-readers:copy:362', countNextStepArrayCopy('visit:next-step-review-artifact-readers:copy:362', [...timelineWindow.events]).reverse()).find((event) => (countNextStepWork('visit:next-step-review-artifact-readers:event:362'), (
             String(event.event_type || '').trim().toUpperCase() === 'COMPILE_GATE_PASSED'
             && String((event as unknown as Record<string, unknown>).outcome || '').trim().toUpperCase() === 'PASS'
-        )) || null;
+        ))) || null;
     const compileTimestamp = compileGate?.status === 'PASSED' && compileGate?.task_id === parentTaskId
         ? String(
             (latestCompileEvent as unknown as Record<string, unknown> | null)?.timestamp_utc || ''
@@ -476,7 +476,8 @@ function latestSuccessfulCompileBefore(
     events: readonly ReviewReuseTelemetryEventLike[],
     beforeTaskSequence: number
 ): SuccessfulCompileBoundary | null {
-    const event = [...events].reverse().find((candidate) => {
+    const event = countNextStepArrayCopy('visit:next-step-review-artifact-readers:copy:479', countNextStepArrayCopy('visit:next-step-review-artifact-readers:copy:479', [...events]).reverse()).find((candidate) => {
+        countNextStepWork('visit:next-step-review-artifact-readers:event:479');
         const candidateSequence = Number(
             isPlainRecord(candidate.integrity) ? candidate.integrity.task_sequence : null
         );
@@ -521,6 +522,7 @@ function reviewInvocationMatchesReceiptProvenance(options: {
         return false;
     }
     return options.events.some((event) => {
+        countNextStepWork('visit:next-step-review-artifact-readers:event:523');
         if (String(event.event_type || '').trim().toUpperCase() !== 'REVIEWER_INVOCATION_ATTESTED') {
             return false;
         }
@@ -600,7 +602,8 @@ export function resolveAuthenticatedReviewReceiptSnapshot(options: {
                 ]
             };
         }
-        const candidates = [...window.events].reverse().filter((event) => {
+        const candidates = countNextStepArrayCopy('visit:next-step-review-artifact-readers:copy:603', countNextStepArrayCopy('visit:next-step-review-artifact-readers:copy:603', [...window.events]).reverse()).filter((event) => {
+            countNextStepWork('visit:next-step-review-artifact-readers:event:603');
             if (String(event.event_type || '').trim().toUpperCase() !== 'REVIEW_RECORDED') {
                 return false;
             }
@@ -951,9 +954,9 @@ export function discoverGroupedFollowUpArtifactPaths(options: {
         };
     }
     const prefix = `${options.parentTaskId}-`;
-    const nativeNames = new Set(entries.filter((entry) => (
+    const nativeNames = new Set(entries.filter((entry) => (countNextStepWork('visit:next-step-review-artifact-readers:event:954'), (
         entry.name.startsWith(prefix) && entry.name.endsWith('-findings-follow-ups.json')
-    )).map((entry) => entry.name));
+    ))).map((entry) => (countNextStepWork('visit:next-step-review-artifact-readers:event:954'), entry.name)));
     const candidateNames = new Set(nativeNames);
     const paths: string[] = [];
     const diagnostics: string[] = [];
@@ -976,6 +979,7 @@ export function discoverGroupedFollowUpArtifactPaths(options: {
     // Integrity-bound current receipt events establish expected lanes even when
     // mutable artifact files and both TASK.md registries have been erased.
     for (const event of window.events) {
+        countNextStepWork('visit:next-step-review-artifact-readers:event:978');
         const details = isPlainRecord(event.details) ? event.details : null;
         const sequence = Number(isPlainRecord(event.integrity) ? event.integrity.task_sequence : null);
         const reviewType = String(details?.review_type ?? details?.reviewType ?? '').trim().toLowerCase();
@@ -1246,7 +1250,7 @@ function resolveAuthenticatedReviewFollowUpArtifactScope(options: {
         expectedReceiptSha256: receiptResolution.evidence.receiptSha256,
         preferSnapshot: true,
         authenticatedPreflight: options.currentMaterializationBinding.authenticatedPreflight,
-        taskQueueRows: [...options.taskQueueEntries.values()].map((row) => ({ taskId: row.taskId, notes: row.notes }))
+        taskQueueRows: countNextStepArrayCopy('visit:next-step-review-artifact-readers:copy:1249', [...options.taskQueueEntries.values()]).map((row) => (countNextStepWork('visit:next-step-review-artifact-readers:event:1249'), ({ taskId: row.taskId, notes: row.notes })))
     });
     if (!dispositionEvidence.valid || !dispositionEvidence.follow_up_artifact_path
         || path.resolve(dispositionEvidence.follow_up_artifact_path) !== path.resolve(options.followUpArtifactPath)) {
@@ -1516,7 +1520,8 @@ function resolveAuthenticatedGroupedReviewFollowUpScopeUnlocked(
 
     const diagnostics: string[] = [];
     const scopeFiles: string[] = [];
-    for (const [reviewType, binding] of [...laneBindings.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    for (const [reviewType, binding] of countNextStepArrayCopy('visit:next-step-review-artifact-readers:copy:1519', [...laneBindings.entries()]).sort(([left], [right]) => (countNextStepWork('visit:next-step-review-artifact-readers:event:1519'), left.localeCompare(right)))) {
+        countNextStepWork('visit:next-step-review-artifact-readers:event:1519');
         const followUpArtifactPath = resolveFollowUpArtifactPath(repoRoot, binding.artifactPath);
         if (!followUpArtifactPath) {
             diagnostics.push(`Grouped ${reviewType} follow-up artifact path is missing, unsafe, or unreadable.`);
@@ -1593,6 +1598,7 @@ export function buildTaskQueueFollowUpFingerprintIndex(
     const groupedFingerprintByTask = new Map<string, string>();
     const perFindingByTask = new Map<string, string>();
     for (const row of taskEntries.values()) {
+        countNextStepWork('visit:next-step-review-artifact-readers:event:1595');
         if (!isParentFollowUpTaskId(parentTaskId, row.taskId)) {
             continue;
         }
@@ -2550,6 +2556,7 @@ export function readReviewArtifactState(
                         taskId
                     );
                     const originalInvocation = timelineEvents.find((event) => {
+                        countNextStepWork('visit:next-step-review-artifact-readers:event:2552');
                         const integrity = isPlainRecord(event.integrity) ? event.integrity : null;
                         return event.event_type === 'REVIEWER_INVOCATION_ATTESTED'
                             && String(integrity?.event_sha256 || '').trim().toLowerCase()
@@ -2579,7 +2586,8 @@ export function readReviewArtifactState(
                         authenticatedOriginalProviderInvocationId;
                     const correctionProducerInvocation = correction.artifact.recovery.selected_transport
                         === 'correction_only_invocation'
-                        ? [...timelineEvents].reverse().find((event) => {
+                        ? countNextStepArrayCopy('visit:next-step-review-artifact-readers:copy:2582', countNextStepArrayCopy('visit:next-step-review-artifact-readers:copy:2582', [...timelineEvents]).reverse()).find((event) => {
+                            countNextStepWork('visit:next-step-review-artifact-readers:event:2582');
                             const details = isPlainRecord(event.details) ? event.details : null;
                             return event.event_type === 'REVIEWER_INVOCATION_ATTESTED'
                                 && String(details?.invocation_role || '').trim() === 'review_output_correction'

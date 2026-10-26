@@ -1,0 +1,68 @@
+import * as path from 'node:path';
+import { withNextStepMeasurement, type NextStepMeasurement } from '../../../../src/core/next-step-measurement';
+import { resolveNextStep } from '../../../../src/gates/next-step';
+import type { AuthenticatedHistoryFixture } from './next-step-authenticated-history-fixture';
+
+export interface HistoryRouteMeasurement {
+    route: string;
+    nextGate: string | null;
+    reason: string;
+    status: string;
+    auditStatus: string;
+    elapsedMs: number;
+    phasesMs: Record<string, number>;
+    counters: Record<string, number>;
+    artifactsByPath: Record<string, number>;
+    artifactsByCycle: Record<string, number>;
+}
+
+function normalizedPath(value: string): string { return path.resolve(value).replace(/\\/gu, '/').toLowerCase(); }
+
+export function measureHistoryRoute(state: AuthenticatedHistoryFixture, route: string): HistoryRouteMeasurement {
+    let measured: NextStepMeasurement | undefined;
+    const started = performance.now();
+    const result = withNextStepMeasurement(() => resolveNextStep(state), measurement => { measured = measurement; });
+    const elapsedMs = performance.now() - started;
+    if (!measured) throw new Error('Real next-step measurement was not captured.');
+    const scope = new Set(state.files.map(file => normalizedPath(path.join(state.repoRoot, file))));
+    const oldArtifacts = new Set(state.historicalArtifacts.map(normalizedPath));
+    const counters: Record<string, number> = {}, artifactsByPath: Record<string, number> = {}, artifactsByCycle: Record<string, number> = {};
+    const cycles = new Map(Object.entries(state.artifactCycles).map(([file, cycle]) => [normalizedPath(file), cycle]));
+    const add = (key: string, count: number) => { counters[key] = (counters[key] || 0) + count; };
+    for (const [key, count] of Object.entries(measured.work)) {
+        if (key.startsWith('process:')) { add(key.split(':').slice(0, 3).join(':'), count); continue; }
+        const match = /^(payload_read|artifact_bytes|artifact_json_parse|file_hash|scope_path_state|timeline_capture|timeline_payload_read):(.+)$/u.exec(key);
+        if (!match) { add(key, count); continue; }
+        const [, operation, file] = match;
+        if (scope.has(normalizedPath(file))) { add(operation + ':scope', count); continue; }
+        if (operation.startsWith('timeline_')) {
+            const current = path.basename(file) === state.taskId + '.jsonl';
+            add(operation + (current ? ':task' : ':other'), count);
+            continue;
+        }
+        const relative = path.relative(state.repoRoot, file).replace(/\\/gu, '/');
+        const stableClass = relative.replaceAll(state.taskId, '<task>')
+            .replace(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/giu, '<id>')
+            .replace(/[a-f0-9]{64}/giu, '<sha>')
+            .replace(/(\.lock\.(?:release-intent\.clearing|releasing))-\d+-\d+-<id>/gu, '$1-<pid>-<time>-<id>');
+        const cycle = cycles.get(normalizedPath(file));
+        const age = cycle !== undefined || oldArtifacts.has(normalizedPath(file)) ? 'closed' : 'current';
+        add(operation + ':' + age + ':' + stableClass, count);
+        if (operation.startsWith('artifact_') || operation === 'payload_read') {
+            artifactsByPath[operation + ':' + relative] = count;
+            const cycleKey = operation + ':cycle-' + (cycle ?? 'current') + ':' + stableClass;
+            artifactsByCycle[cycleKey] = (artifactsByCycle[cycleKey] || 0) + count;
+        }
+    }
+    counters.json_parse_outside_verified_timeline = (counters.json_parse_total || 0) - (counters.json_parse_verified_timeline_event || 0);
+    delete counters.json_parse_total;
+    delete counters.json_parse_verified_timeline_event;
+    return { route, nextGate: result.next_gate, reason: result.reason, status: result.status, auditStatus: result.audit_status,
+        elapsedMs, phasesMs: measured.phases_ms, counters: Object.fromEntries(Object.entries(counters).sort()), artifactsByPath, artifactsByCycle };
+}
+
+export function comparableHistoryCounters(measurement: HistoryRouteMeasurement): Record<string, number> {
+    // Full timeline integrity still consumes all bytes/events exactly once.
+    return Object.fromEntries(Object.entries(measurement.counters)
+        .filter(([key]) => key !== 'timeline_bytes' && key !== 'timeline_events'));
+}

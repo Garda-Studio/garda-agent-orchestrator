@@ -1,3 +1,4 @@
+import { countNextStepWork, countNextStepArrayCopy } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -37,6 +38,7 @@ function latestEventDetails(eventsRoot: string, taskId: string, eventType: strin
     if (inspection.status !== 'PASS' && inspection.status !== 'PASS_WITH_LEGACY_PREFIX') return null;
     const entries = readTaskTimelineJsonlEntries(timelinePath);
     for (let index = entries.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:next-step-startup-routing:event:39');
         const event = entries[index].record;
         if (event?.event_type === eventType && event.outcome === outcome) {
             return event.details && typeof event.details === 'object' && !Array.isArray(event.details)
@@ -164,12 +166,12 @@ export function readFailedTaskModePublicationRecoveryRoute(
     const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
     const inspection = inspectTaskEventFile(timelinePath, taskId);
     if (inspection.status !== 'PASS' && inspection.status !== 'PASS_WITH_LEGACY_PREFIX') return null;
-    const events = readTaskTimelineJsonlEntries(timelinePath).map(entry => entry.record).reverse();
-    const entryIndex = events.findIndex(event => event?.event_type === 'TASK_MODE_ENTERED' && event.outcome === 'PASS');
+    const events = countNextStepArrayCopy('visit:next-step-startup-routing:copy:167', readTaskTimelineJsonlEntries(timelinePath).map(entry => (countNextStepWork('visit:next-step-startup-routing:event:167'), entry.record)).reverse());
+    const entryIndex = events.findIndex(event => (countNextStepWork('visit:next-step-startup-routing:event:168'), event?.event_type === 'TASK_MODE_ENTERED' && event.outcome === 'PASS'));
     const entryDetails = events[entryIndex]?.details;
     if (entryIndex < 0 || !isPlainRecord(events[entryIndex]?.integrity) || !isPlainRecord(entryDetails)
         || path.resolve(String(entryDetails.artifact_path || '')) !== path.resolve(taskModePath)) return null;
-    const failure = events.slice(0, entryIndex).find(event => event?.event_type === 'TASK_MODE_ENTRY_FAILED' && event.outcome === 'FAIL');
+    const failure = countNextStepArrayCopy('visit:next-step-startup-routing:copy:172', events.slice(0, entryIndex)).find(event => (countNextStepWork('visit:next-step-startup-routing:event:172'), event?.event_type === 'TASK_MODE_ENTRY_FAILED' && event.outcome === 'FAIL'));
     if (!failure || !isPlainRecord(failure.integrity)) return null;
     const failureDetails = isPlainRecord(failure.details) ? failure.details : null;
     return {

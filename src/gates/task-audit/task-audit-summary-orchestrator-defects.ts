@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -125,6 +126,7 @@ function readTaskContent(repoRoot: string): string | null {
 function collectLatestAcknowledgements(events: readonly TaskAuditEvent[]): ParsedAcknowledgement[] {
     const latestByDefectId = new Map<string, ParsedAcknowledgement>();
     events.forEach((event, eventIndex) => {
+        countNextStepWork('visit:task-audit-summary-orchestrator-defects:event:127');
         if (String(event.event_type || '').trim().toUpperCase() !== ORCHESTRATOR_DEFECT_ACKNOWLEDGED_EVENT) {
             return;
         }
@@ -242,8 +244,8 @@ export function buildOrchestratorDefectCaptureSummary(options: {
         problemRecordBlocks,
         taskContent !== null
     ));
-    const violations = records.flatMap((record) => record.violations);
-    const capturedCount = records.filter((record) => record.status === 'CAPTURED').length;
+    const violations = records.flatMap((record) => (countNextStepWork('visit:task-audit-summary-orchestrator-defects:event:245'), record.violations));
+    const capturedCount = records.filter((record) => (countNextStepWork('visit:task-audit-summary-orchestrator-defects:event:246'), record.status === 'CAPTURED')).length;
     const status = violations.length === 0 ? 'CAPTURED' : 'INVALID';
     return {
         status,

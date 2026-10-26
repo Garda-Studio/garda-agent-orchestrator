@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 
 import {
@@ -61,6 +62,7 @@ function readCompleteReviewTimelineEvidence(eventsRoot: string, taskId: string):
     const events: ReviewReuseTelemetryEventLike[] = [];
     let latestCompileSequence: number | null = null;
     for (const entry of readTaskTimelineJsonlEntries(path.join(eventsRoot, `${taskId}.jsonl`))) {
+        countNextStepWork('visit:next-step-review-evidence:63');
         if (!entry.record) return null;
         events.push(entry.record);
         if (entry.record.event_type === 'COMPILE_GATE_PASSED') {
@@ -185,6 +187,7 @@ export function timelineHasReviewContextPreparedAfterCompile(
         }
         const expectedContextPath = normalizePath(contextPath).toLowerCase();
         for (const timelineEntry of readTaskTimelineJsonlEntries(timelinePath)) {
+            countNextStepWork('visit:next-step-review-evidence:187');
             const event = timelineEntry.record;
             if (!event) {
                 return false;
@@ -247,7 +250,7 @@ export function reviewStateHasSatisfiedEvidence(
 
 function getStringArrayField(value: unknown): string[] {
     return Array.isArray(value)
-        ? value.map((entry) => String(entry || '').trim()).filter(Boolean)
+        ? value.map((entry) => (countNextStepWork('visit:next-step-review-evidence:250'), String(entry || '').trim())).filter(Boolean)
         : [];
 }
 
@@ -257,10 +260,10 @@ function latestReviewGateFailureIsAuthorshipAttestationOnly(
     latestReviewGateFailureSequence: number
 ): boolean {
     const event = readTaskTimelineEventLikes(eventsRoot, taskId)
-        .find((candidate) => (
+        .find((candidate) => (countNextStepWork('visit:next-step-review-evidence:259'), (
             String(candidate.event_type || '').trim() === 'REVIEW_GATE_FAILED'
             && getTimelineEventTaskSequence(candidate) === latestReviewGateFailureSequence
-        ));
+        )));
     if (!event || !isPlainRecord(event.details)) {
         return false;
     }
@@ -280,7 +283,7 @@ function latestReviewGateFailureIsAuthorshipAttestationOnly(
         ...getStringArrayField(attestation.violations)
     ];
     return violations.length > 0
-        && violations.every((violation) => /\bReview authorship attestation\b/i.test(violation));
+        && violations.every((violation) => (countNextStepWork('visit:next-step-review-evidence:283'), /\bReview authorship attestation\b/i.test(violation)));
 }
 
 export function getHiddenReviewTimingTrustRemediation(
@@ -356,7 +359,7 @@ export function reviewStateHasCurrentRecordedEvidence(
             return false;
         }
         const nonVerdictViolations = state.violations.filter(
-            (violation) => !isFailedReviewOutcomeViolation(state, violation)
+            (violation) => (countNextStepWork('visit:next-step-review-evidence:358'), !isFailedReviewOutcomeViolation(state, violation))
         );
         if (nonVerdictViolations.length > 0) {
             return false;
@@ -397,13 +400,14 @@ export function findStrictSequentialUpstreamNeedingCurrentCycleReuse(params: {
         return null;
     }
     const timelineEvents = readTaskTimelineEventLikes(params.eventsRoot, params.taskId);
-    const stateByReviewType = new Map(params.reviewStates.map((state) => [state.reviewType, state]));
+    const stateByReviewType = new Map(params.reviewStates.map((state) => (countNextStepWork('visit:next-step-review-evidence:400'), [state.reviewType, state])));
     const upstreamReviewTypes = getReviewExecutionDependencies(
         params.targetReviewType,
         params.requiredReviews,
         params.policyMode
     );
     for (const upstreamReviewType of upstreamReviewTypes) {
+        countNextStepWork('visit:next-step-review-evidence:406');
         const upstreamState = stateByReviewType.get(upstreamReviewType);
         if (
             !upstreamState?.ready
@@ -497,8 +501,9 @@ export function findReviewGateStaleUpstreamRecovery(params: {
         return null;
     }
     const timelineEvents = readTaskTimelineEventLikes(params.eventsRoot, params.taskId);
-    const stateByReviewType = new Map(params.reviewStates.map((state) => [state.reviewType, state]));
+    const stateByReviewType = new Map(params.reviewStates.map((state) => (countNextStepWork('visit:next-step-review-evidence:500'), [state.reviewType, state])));
     for (const downstreamReviewType of params.requiredReviewTypes) {
+        countNextStepWork('visit:next-step-review-evidence:501');
         const downstreamState = stateByReviewType.get(downstreamReviewType);
         if (!downstreamState || !reviewStateHasSatisfiedEvidence(params.repoRoot, params.eventsRoot, params.taskId, downstreamState)) {
             continue;
@@ -509,6 +514,7 @@ export function findReviewGateStaleUpstreamRecovery(params: {
             params.policyMode
         );
         for (const upstreamReviewType of upstreamReviewTypes) {
+            countNextStepWork('visit:next-step-review-evidence:511');
             const upstreamState = stateByReviewType.get(upstreamReviewType);
             if (
                 !upstreamState
@@ -549,8 +555,9 @@ export function findReviewGateStaleContextPrecheckRecovery(params: {
     reviewStates: readonly ReviewArtifactState[];
 }): { state: ReviewArtifactState; reviewType: string } | null {
     return withNextStepReviewEvidenceSnapshot(params.eventsRoot, params.taskId, () => {
-    const stateByReviewType = new Map(params.reviewStates.map((state) => [state.reviewType, state]));
+    const stateByReviewType = new Map(params.reviewStates.map((state) => (countNextStepWork('visit:next-step-review-evidence:552'), [state.reviewType, state])));
     for (const reviewType of params.requiredReviewTypes) {
+        countNextStepWork('visit:next-step-review-evidence:553');
         const state = stateByReviewType.get(reviewType);
         if (
             !state?.ready
@@ -582,8 +589,9 @@ export function findDownstreamReviewNeedingDependencyRebind(params: {
     if (timelineEvents.length === 0) {
         return null;
     }
-    const stateByReviewType = new Map(params.reviewStates.map((state) => [state.reviewType, state]));
+    const stateByReviewType = new Map(params.reviewStates.map((state) => (countNextStepWork('visit:next-step-review-evidence:585'), [state.reviewType, state])));
     for (const reviewType of params.requiredReviewTypes) {
+        countNextStepWork('visit:next-step-review-evidence:586');
         const downstreamState = stateByReviewType.get(reviewType);
         if (!downstreamState?.ready || !downstreamState.contextExists) {
             continue;
@@ -598,6 +606,7 @@ export function findDownstreamReviewNeedingDependencyRebind(params: {
             params.policyMode
         );
         for (const upstreamReviewType of upstreamReviewTypes) {
+            countNextStepWork('visit:next-step-review-evidence:600');
             const upstreamRecordedSequence = getLatestReviewEventSequence(timelineEvents, 'REVIEW_RECORDED', upstreamReviewType);
             if (upstreamRecordedSequence != null && upstreamRecordedSequence > downstreamRebindSequence) {
                 return { downstreamState, upstreamReviewType };
@@ -630,6 +639,7 @@ function getLatestReviewContextReuseAcceptedSequence(
     const expectedContextPath = normalizePath(state.contextPath).toLowerCase();
     let latestSequence: number | null = null;
     for (const event of timelineEvents) {
+        countNextStepWork('visit:next-step-review-evidence:632');
         if (event.event_type !== 'REVIEW_CONTEXT_REUSE_ACCEPTED') {
             continue;
         }

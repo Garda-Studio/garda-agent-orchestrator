@@ -125,6 +125,7 @@ function hasAuthenticatedFreshCurrentPassReplacement(options: {
     }
     const reviewRecordedEventsBySequence = new Map<number, Readonly<Record<string, unknown>>>();
     for (let eventIndex = options.restartIndex + 1; eventIndex < options.events.length; eventIndex += 1) {
+        countNextStepWork('visit:remediation_query_event');
         const event = options.events[eventIndex];
         const details = isPlainRecord(event.details) ? event.details : null;
         const acceptedSequence = taskEventSequence(event);
@@ -231,13 +232,14 @@ export function resolvePersistedRemediationReviewExecutionAuthority(
     );
     const events: Readonly<Record<string, unknown>>[] = [];
     const inspection = inspectTaskEventFile(timelinePath, options.taskId, {
-        onIntegrityEvent: (event) => events.push(event)
+        onIntegrityEvent: (event) => { countNextStepWork('visit:remediation_observer_event'); return events.push(event); }
     });
     if (!inspection.status.startsWith('PASS')) {
         return null;
     }
     const normalizedPreflightSha256 = options.preflightSha256.trim().toLowerCase();
     for (let index = events.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:remediation_query_event');
         const event = events[index];
         const details = isPlainRecord(event.details) ? event.details : null;
         if (
@@ -302,6 +304,7 @@ export function resolvePersistedRemediationReviewExecutionAuthority(
         }
 
         for (let priorIndex = index - 1; priorIndex >= 0; priorIndex -= 1) {
+            countNextStepWork('visit:remediation_query_event');
             const priorEvent = events[priorIndex];
             const priorDetails = isPlainRecord(priorEvent.details) ? priorEvent.details : null;
             const priorDecision = isPlainRecord(priorDetails?.authoritative_review_decision)

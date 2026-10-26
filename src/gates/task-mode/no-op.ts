@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -78,7 +79,7 @@ export function normalizeNoOpClassification(value: unknown): NoOpClassification 
     if (aliasMatch) {
         return aliasMatch;
     }
-    const canonicalMatch = NO_OP_CLASSIFICATIONS.find((candidate) => candidate.toLowerCase() === normalized);
+    const canonicalMatch = NO_OP_CLASSIFICATIONS.find((candidate) => (countNextStepWork('visit:no-op:81'), candidate.toLowerCase() === normalized));
     if (canonicalMatch) {
         return canonicalMatch;
     }
@@ -109,8 +110,8 @@ export function resolveCurrentNoOpPreflightPath(repoRoot: string, taskId: string
         if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(integrity.status)) {
             throw new Error('Current preflight requires an authenticated native task timeline.');
         }
-        const events = readTaskTimelineJsonlEntries(timelinePath).map((entry) => entry.record);
-        const eventTypes = events.map((event) => event?.event_type);
+        const events = readTaskTimelineJsonlEntries(timelinePath).map((entry) => (countNextStepWork('visit:no-op:112'), entry.record));
+        const eventTypes = events.map((event) => (countNextStepWork('visit:no-op:113'), event?.event_type));
         const entryIndex = eventTypes.lastIndexOf('TASK_MODE_ENTERED');
         const preflightIndex = eventTypes.lastIndexOf('PREFLIGHT_CLASSIFIED');
         if (entryIndex < 0 || preflightIndex <= entryIndex || events[entryIndex]?.outcome !== 'PASS') {
@@ -286,10 +287,11 @@ export function getCurrentNoOpEventSha256(
     }
     const timelinePath = path.join(eventsRoot, `${assertValidTaskId(taskId)}.jsonl`);
     const events = readTaskTimelineJsonlEntries(timelinePath)
-        .map((entry) => entry.record)
-        .filter((entry): entry is Readonly<Record<string, unknown>> => entry !== null);
+        .map((entry) => (countNextStepWork('visit:no-op:288'), entry.record))
+        .filter((entry): entry is Readonly<Record<string, unknown>> => (countNextStepWork('visit:no-op:288'), entry !== null));
     const lastIndexOfEvent = (eventType: string): number => {
         for (let index = events.length - 1; index >= 0; index -= 1) {
+            countNextStepWork('visit:no-op:292');
             if (events[index].event_type === eventType) {
                 return index;
             }

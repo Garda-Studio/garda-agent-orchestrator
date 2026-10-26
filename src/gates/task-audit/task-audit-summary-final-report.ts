@@ -1,3 +1,4 @@
+import { countNextStepWork, countNextStepArrayCopy } from '../../core/next-step-measurement';
 import type { FinalCloseoutArtifact } from './task-audit-summary';
 import {
     getReviewIntegrityAttestation,
@@ -103,6 +104,7 @@ function selectPreferredFinalUserReportTimingEntries(
     const selected: Array<{ entry: ReviewTimingAuditEntry; index: number }> = [];
     let totalEligibleEntries = 0;
     for (let index = 0; index < timingEntries.length; index += 1) {
+        countNextStepWork('visit:task-audit-summary-final-report:event:105');
         const entry = timingEntries[index];
         if (entry.review_type !== reviewType || entry.reused_existing_review) {
             continue;
@@ -201,9 +203,9 @@ function buildUnescapedFinalUserReportReviewLine(
     );
     const attemptCount = recordedAttemptCount ?? timingSelection.totalEligibleEntries;
     const authenticatedTimedCount = Math.min(attemptCount, timingSelection.totalEligibleEntries);
-    const durations = timingSelection.entries
-        .slice(0, attemptCount)
-        .map((entry) => formatDurationMsAsMinutesSeconds(entry.delegation_to_result_ms));
+    const durations = countNextStepArrayCopy('visit:task-audit-summary-final-report:copy:204', timingSelection.entries
+        .slice(0, attemptCount))
+        .map((entry) => (countNextStepWork('visit:task-audit-summary-final-report:event:204'), formatDurationMsAsMinutesSeconds(entry.delegation_to_result_ms)));
     const omittedDurationCount = Math.max(0, authenticatedTimedCount - durations.length);
     if (omittedDurationCount > 0) {
         durations.push(`${omittedDurationCount} more duration(s); see machine-readable closeout evidence`);
@@ -218,7 +220,7 @@ function buildUnescapedFinalUserReportReviewLine(
 
 function buildReviewTimingWarning(closeout: FinalCloseoutArtifact, attestation: ReviewIntegrityAttestation): string {
     const hasSuspiciousEntry = (closeout.review_timing_audit?.entries || [])
-        .some((entry) => !entry.reused_existing_review && entry.hidden_timing_status === 'DISTRUSTED');
+        .some((entry) => (countNextStepWork('visit:task-audit-summary-final-report:event:220'), !entry.reused_existing_review && entry.hidden_timing_status === 'DISTRUSTED'));
     if (hasSuspiciousEntry) {
         return 'WARNING: review accepted, but timing looked unusual; operator may double-check.';
     }
@@ -395,6 +397,7 @@ export function formatFinalUserReport(closeout: FinalCloseoutArtifact): string {
     const reviewSection = createFinalUserReportSection();
     reviewSection.totalEntries = reviewEntries.totalEntries;
     for (const [reviewType, verdict] of reviewEntries.preview) {
+        countNextStepWork('visit:task-audit-summary-final-report:event:397');
         reviewSection.preview.push(buildUnescapedFinalUserReportReviewLine(
             reviewType,
             verdict,
@@ -434,6 +437,7 @@ export function formatFinalUserReport(closeout: FinalCloseoutArtifact): string {
     pushReportSection(lines, 'Residual risks', findingSections.residualRisks, 'residual risk');
     const processWarnings = createFinalUserReportSection();
     for (const entry of closeout.review_findings_audit?.correction_transports || []) {
+        countNextStepWork('visit:task-audit-summary-final-report:event:436');
         if (
             entry.event_type === 'REVIEW_OUTPUT_CORRECTION_FULL_REVIEW_REQUIRED'
             || entry.transport === 'full_reviewer_relaunch'

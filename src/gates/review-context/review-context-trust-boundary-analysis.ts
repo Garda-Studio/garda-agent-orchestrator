@@ -97,7 +97,9 @@ function readQualityChecklistArtifactBinding(options: {
 
     let latestEvent: Record<string, unknown> | null = null;
     try {
+        countNextStepWork('quality_timeline_parse');
         forEachJsonlLine(taskEventsPath, (rawLine: string) => {
+            countNextStepWork('visit:quality_timeline_event');
             const event = JSON.parse(rawLine) as Record<string, unknown>;
             if (String(event.event_type || '').trim().toUpperCase() === 'QUALITY_CHECKLIST_RECORDED') {
                 latestEvent = event;
@@ -324,6 +326,7 @@ function readBoundQualityAnalysis(options: QualityAnalysisOptions, requireObserv
 }
 
 export function readReviewContextTrustBoundaryAnalysis(options: QualityAnalysisOptions): ReviewContextTrustBoundaryAnalysis {
+    countNextStepWork('derive:trust_boundary_analysis');
     return readBoundQualityAnalysis(options, true);
 }
 

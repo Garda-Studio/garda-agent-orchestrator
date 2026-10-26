@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { toPosix } from '../shared/helpers';
@@ -93,6 +94,7 @@ function findReviewerInvocationEvent(
         return null;
     }
     for (let index = events.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:task-audit-summary-review-timing-audit:event:95');
         const event = events[index];
         if (String(event.event_type || '').trim().toUpperCase() !== 'REVIEWER_INVOCATION_ATTESTED') {
             continue;
@@ -114,6 +116,7 @@ function findReviewerInvocationEvent(
 function latestCompileSequence(events: readonly TaskAuditEvent[]): number | null {
     let latest: number | null = null;
     for (const event of events) {
+        countNextStepWork('visit:task-audit-summary-review-timing-audit:event:116');
         if (String(event.event_type || '').trim().toUpperCase() !== 'COMPILE_GATE_PASSED') {
             continue;
         }
@@ -292,6 +295,7 @@ export function buildReviewTimingAuditSummary(
         return null;
     }
     const compactEntries = entries.map((entry) => {
+        countNextStepWork('visit:task-audit-summary-review-timing-audit:event:294');
         const resultMs = entry.delegation_to_result_ms == null ? 'unknown' : `${entry.delegation_to_result_ms}ms`;
         const sourceMs = entry.delegation_to_source_mtime_ms == null ? 'unknown' : `${entry.delegation_to_source_mtime_ms}ms`;
         const finalizeMs = entry.gate_finalize_ms == null ? 'unknown' : `${entry.gate_finalize_ms}ms`;
@@ -319,6 +323,7 @@ export function readReviewExecutionPolicyModeFromCurrentCycleTimeline(
         : 0;
 
     for (let index = events.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:task-audit-summary-review-timing-audit:event:321');
         const event = events[index];
         const eventType = String(event.event_type || '').trim().toUpperCase();
         if (eventType !== 'PREFLIGHT_CLASSIFIED') {

@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import { readRetainedRecipeExpectedRedRejection } from '../test-first/expected-red-recipe-evidence';
 import * as fs from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -119,6 +120,7 @@ function inspectNativeExpectedFailureProgress(options: TestFirstExpectedFailureR
         return null;
     }
     const latestTaskModeSequence = events.reduce<number | null>((latest, event) => {
+        countNextStepWork('visit:next-step-test-first-routing:event:121');
         if (String(event.event_type || '').trim() !== 'TASK_MODE_ENTERED') {
             return latest;
         }
@@ -137,12 +139,14 @@ function inspectNativeExpectedFailureProgress(options: TestFirstExpectedFailureR
     let greenEntries: NativeIntermediateExecutionEntry[] | undefined;
     const latestCommandSequence = new Map<string, number>();
     for (const event of events) {
+        countNextStepWork('visit:next-step-test-first-routing:event:139');
         if (event.event_type !== 'INTERMEDIATE_COMMAND_RUN' && event.event_type !== EXPECTED_FAILURE_EVENT) continue;
         const details = isPlainRecord(event.details) ? event.details : {};
         latestCommandSequence.set(JSON.stringify([details.command_source, details.command]), getTaskSequence(event) ?? -1);
     }
     let hasCurrentRed = false;
     for (let index = events.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:next-step-test-first-routing:event:145');
         const event = events[index];
         if (String(event.event_type || '').trim() !== EXPECTED_FAILURE_EVENT) {
             continue;
@@ -263,6 +267,7 @@ function inspectNativeExpectedFailureProgress(options: TestFirstExpectedFailureR
                 expectedPreflightSha256: preflightSha256, expectedScopeContentSha256: testScopeSha256
             }).entries;
             for (const green of greenEntries) {
+                countNextStepWork('visit:next-step-test-first-routing:event:265');
                 if (green.command !== command || green.command_source !== commandSource
                     || green.event_task_sequence <= sequence
                     || green.event_task_sequence !== latestCommandSequence.get(JSON.stringify([commandSource, command]))) continue;

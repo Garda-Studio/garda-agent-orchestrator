@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import {
     isTaskQueueBlockedStatus,
     isTaskQueueDecomposedStatus,
@@ -474,7 +475,7 @@ export function resolveNextUnfinishedChildRoute(
     visited.add(parentTaskId);
     const parentEntry = taskEntries.get(parentTaskId);
     const childTaskIds = childTaskIdExtractor(parentEntry?.notes || null, taskEntries.keys(), parentTaskId)
-        .filter((childTaskId) => childTaskId !== parentTaskId);
+        .filter((childTaskId) => (countNextStepWork('visit:next-step-task-queue:event:476'), childTaskId !== parentTaskId));
     if (!hasValidDecompositionChildSetForProvenance(parentEntry?.notes || null, childTaskIds)) {
         return null;
     }
@@ -569,7 +570,7 @@ export function resolveDecomposedParentCompletionState(
     visited.add(parentTaskId);
     const parentEntry = taskEntries.get(parentTaskId);
     const childTaskIds = childTaskIdExtractor(parentEntry?.notes || null, taskEntries.keys(), parentTaskId)
-        .filter((childTaskId) => childTaskId !== parentTaskId);
+        .filter((childTaskId) => (countNextStepWork('visit:next-step-task-queue:event:571'), childTaskId !== parentTaskId));
 
     if (childTaskIds.length === 0
         || !hasValidDecompositionChildSetForProvenance(parentEntry?.notes || null, childTaskIds)) {
@@ -591,7 +592,7 @@ export function resolveDecomposedParentCompletionState(
             continue;
         }
         const childLinkedTaskIds = childTaskIdExtractor(childEntry.notes || null, taskEntries.keys(), childTaskId)
-            .filter((nestedChildTaskId) => nestedChildTaskId !== childTaskId);
+            .filter((nestedChildTaskId) => (countNextStepWork('visit:next-step-task-queue:event:593'), nestedChildTaskId !== childTaskId));
         if (childLinkedTaskIds.length > 0 && (
             isTaskQueueDoneStatus(childEntry.status)
             || isTaskQueueDecomposedStatus(childEntry.status)
@@ -746,7 +747,7 @@ export function resolveSplitRequiredDecompositionState(
         taskEntries.keys(),
         parentTaskId
     )
-        .filter((childTaskId) => childTaskId !== parentTaskId);
+        .filter((childTaskId) => (countNextStepWork('visit:next-step-task-queue:event:744'), childTaskId !== parentTaskId));
     const missingChildTaskIds = linkedChildTaskIds.filter((childTaskId) => !taskEntries.has(childTaskId));
     const quality = childSetQuality(taskEntries, linkedChildTaskIds);
     const ready = linkedChildTaskIds.length >= 2
@@ -788,7 +789,7 @@ export function resolveStrictDecompositionSplitRoutingState(
         taskEntries.keys(),
         parentTaskId
     )
-        .filter((childTaskId) => childTaskId !== parentTaskId);
+        .filter((childTaskId) => (countNextStepWork('visit:next-step-task-queue:event:786'), childTaskId !== parentTaskId));
     const linkedChildTaskIdSet = new Set(linkedChildTaskIds);
     const proposedChildTaskIdSet = new Set(proposedChildTaskIds);
     const nonParentDerivedChildTaskIds = [...new Set([...proposedChildTaskIds, ...linkedChildTaskIds])]

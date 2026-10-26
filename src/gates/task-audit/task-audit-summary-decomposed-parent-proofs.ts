@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash, timingSafeEqual } from 'node:crypto';
@@ -427,7 +428,7 @@ function validateCompositionRecord(record: Record<string, unknown>, native: Retu
         || (event.coverage_contract_sha256 ?? null) !== request.coverageContractSha256
         || !isPlainRecord(composition) || composition.schema_version !== 1 || composition.status !== 'STABLE_CLEAN'
         || !before || !after
-        || Object.entries(source).some(([key, value]) => before[key] !== value || after[key] !== value)
+        || Object.entries(source).some(([key, value]) => (countNextStepWork('visit:task-audit-summary-decomposed-parent-proofs:event:430'), before[key] !== value || after[key] !== value))
         || event.source_composition_sha256 !== createHash('sha256').update(JSON.stringify(composition)).digest('hex')) {
         throw new Error('Native composition task, command, coverage, success or final-source binding is invalid.');
     }

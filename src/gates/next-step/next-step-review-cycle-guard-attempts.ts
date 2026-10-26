@@ -1,3 +1,4 @@
+import { countNextStepWork, countNextStepArrayCopy } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -551,7 +552,7 @@ function readReviewCycleGuardAttemptsUnlocked(
                 pending = pending.slice(newlineIndex + 1);
                 if (handleLine(line)) {
                     return {
-                        attempts: [...attemptsByKey.values()].sort((left, right) => left.lastSequence - right.lastSequence),
+                        attempts: countNextStepArrayCopy('visit:next-step-review-cycle-guard-attempts:copy:554', [...attemptsByKey.values()]).sort((left, right) => (countNextStepWork('visit:next-step-review-cycle-guard-attempts:event:554'), left.lastSequence - right.lastSequence)),
                         timelineValid: !malformedReviewCycleEvent,
                         latestFailedReview
                     };
@@ -561,7 +562,7 @@ function readReviewCycleGuardAttemptsUnlocked(
         } while (bytesRead > 0);
         if (pending.trim() && handleLine(pending.replace(/\r$/, ''))) {
             return {
-                attempts: [...attemptsByKey.values()].sort((left, right) => left.lastSequence - right.lastSequence),
+                attempts: countNextStepArrayCopy('visit:next-step-review-cycle-guard-attempts:copy:564', [...attemptsByKey.values()]).sort((left, right) => (countNextStepWork('visit:next-step-review-cycle-guard-attempts:event:564'), left.lastSequence - right.lastSequence)),
                 timelineValid: !malformedReviewCycleEvent,
                 latestFailedReview
             };
@@ -571,7 +572,7 @@ function readReviewCycleGuardAttemptsUnlocked(
     }
 
     return {
-        attempts: [...attemptsByKey.values()].sort((left, right) => left.lastSequence - right.lastSequence),
+        attempts: countNextStepArrayCopy('visit:next-step-review-cycle-guard-attempts:copy:574', [...attemptsByKey.values()]).sort((left, right) => (countNextStepWork('visit:next-step-review-cycle-guard-attempts:event:574'), left.lastSequence - right.lastSequence)),
         timelineValid: !malformedReviewCycleEvent,
         latestFailedReview
     };

@@ -1,3 +1,4 @@
+import { countNextStepArrayCopy, countNextStepWork } from '../../core/next-step-measurement';
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 
@@ -153,11 +154,11 @@ function scopeCorrectionTransports(options: {
         && isSha256(options.currentPreflightSha256 || null)
         && options.currentCycle?.preflight_sha256 === options.currentPreflightSha256;
     const compileEvents = trustedCurrentReviews && options.currentCycle?.compile_gate_timestamp
-        ? options.timelineEvents.filter((event) => isPlainRecord(event)
+        ? options.timelineEvents.filter((event) => (countNextStepWork('visit:task-audit-summary-review-findings:event:157'), isPlainRecord(event)
             && event.event_type === 'COMPILE_GATE_PASSED'
             && event.timestamp_utc === options.currentCycle?.compile_gate_timestamp
             && (event.task_id === options.taskId
-                || (isPlainRecord(event.details) && event.details.task_id === options.taskId)))
+                || (isPlainRecord(event.details) && event.details.task_id === options.taskId))))
         : [];
     const compile = compileEvents.length === 1 ? compileEvents[0] : null;
     const compileIntegrity = isPlainRecord(compile?.integrity) ? compile.integrity : {};
@@ -167,6 +168,7 @@ function scopeCorrectionTransports(options: {
         && Number.isInteger(compileSequence) && compileSequence > 0 && isSha256(compileSha256);
     const eventHashCounts = new Map<string, number>();
     for (const event of options.timelineEvents) {
+        countNextStepWork('visit:findings_event');
         const integrity = isPlainRecord(event.integrity) ? event.integrity : {};
         const hash = stringValue(integrity.event_sha256);
         if (hash) eventHashCounts.set(hash, (eventHashCounts.get(hash) || 0) + 1);
@@ -196,6 +198,7 @@ function scopeCorrectionTransports(options: {
             && normalizePath(path.resolve(options.repoRoot, String(restart.compile_evidence_path || '')))
                 === normalizePath(path.resolve(compilePath))) {
             for (const event of options.timelineEvents) {
+                countNextStepWork('visit:findings_event');
                 const binding = correctionAuditEventBinding(event);
                 const details = isPlainRecord(event.details) ? event.details : {};
                 if (!isPlainRecord(event) || event.event_type !== 'REVIEW_CYCLE_RESTARTED' || event.task_id !== options.taskId
@@ -221,6 +224,7 @@ function scopeCorrectionTransports(options: {
         }
     }
     return options.transports.map((entry) => {
+        countNextStepWork('visit:task-audit-summary-review-findings:event:226');
         const restart = restartedLanes.get(entry.review_type);
         const superseded = hasBoundCompile && eventHashCounts.get(compileSha256 || '') === 1
             && entry.task_id === options.taskId && typeof entry.task_sequence === 'number'
@@ -451,7 +455,7 @@ function buildCurrentFindingsLane(options: {
             expectedReceiptSha256: reused ? stringValue(receipt.reused_from_receipt_sha256) : null,
             preferSnapshot: reused,
             taskQueueRows: options.taskQueueEntries
-                ? [...options.taskQueueEntries.values()]
+                ? countNextStepArrayCopy('visit:task-audit-summary-review-findings:copy:457', [...options.taskQueueEntries.values()])
                 : undefined
         })
         : null;
@@ -510,6 +514,7 @@ function buildCurrentFindingsLane(options: {
 
 function collectValidationFailures(events: readonly ReviewReuseTelemetryEventLike[]): ReviewFindingsValidationFailureAudit[] {
     return events.flatMap((event) => {
+        countNextStepWork('visit:task-audit-summary-review-findings:event:515');
         if (String(event.event_type || '').trim().toUpperCase() !== 'REVIEWER_LAUNCH_FAILED') {
             return [];
         }
@@ -530,6 +535,7 @@ function collectValidationFailures(events: readonly ReviewReuseTelemetryEventLik
 
 function collectRemediationCycles(events: readonly ReviewReuseTelemetryEventLike[]): ReviewFindingsRemediationCycleAudit[] {
     return events.flatMap((event) => {
+        countNextStepWork('visit:task-audit-summary-review-findings:event:535');
         if (String(event.event_type || '').trim().toUpperCase() !== 'REVIEW_CYCLE_RESTARTED') {
             return [];
         }
@@ -652,6 +658,7 @@ function filterCorrectionEvents(
 ): IndexedCorrectionEvent[] {
     const matches: IndexedCorrectionEvent[] = [];
     for (const event of events) {
+        countNextStepWork('visit:findings_event');
         workMetrics.evidence_candidates_examined += 1;
         if (predicate(event)) {
             matches.push(event);
@@ -666,6 +673,7 @@ function findCorrectionEvent(
     predicate: (event: IndexedCorrectionEvent) => boolean
 ): IndexedCorrectionEvent | undefined {
     for (const event of events) {
+        countNextStepWork('visit:findings_event');
         workMetrics.evidence_candidates_examined += 1;
         if (predicate(event)) {
             return event;
@@ -680,6 +688,7 @@ function hasCorrectionSelection(
     predicate: (event: IndexedCorrectionEvent) => boolean
 ): boolean {
     for (const event of events) {
+        countNextStepWork('visit:findings_event');
         workMetrics.selection_candidates_examined += 1;
         if (predicate(event)) {
             return true;
@@ -743,7 +752,7 @@ function bindNativeCorrectionInvocation(options: {
         provider_response_event_sha256: eventSha256
     };
     if (Object.entries(derived).some(([key, value]) =>
-        Object.prototype.hasOwnProperty.call(details, key) && details[key] !== value)) return null;
+        (countNextStepWork('visit:task-audit-summary-review-findings:event:751'), Object.prototype.hasOwnProperty.call(details, key) && details[key] !== value))) return null;
     return { ...details, ...derived };
 }
 
@@ -766,6 +775,7 @@ function collectCorrectionTransportEvents(
     const latestSelectionIndexByReviewType = new Map<string, number>();
 
     for (const [eventIndex, event] of events.entries()) {
+        countNextStepWork('visit:findings_event');
         options.workMetrics.timeline_events_indexed += 1;
         const eventType = String(event.event_type || '').trim().toUpperCase();
         const details = isPlainRecord(event.details) ? event.details : {};
@@ -1762,6 +1772,7 @@ function collectCorrectionTransports(
         transport,
         details
     } of transportEvents) {
+        countNextStepWork('visit:task-audit-summary-review-findings:event:1765');
         const correctionPackageSha256 = stringValue(details.correction_package_sha256);
         const previousPackageSha256 = stringValue(details.previous_correction_package_sha256);
         const providerCapabilitiesSha256 = stringValue(details.provider_capabilities_sha256);
@@ -2215,14 +2226,14 @@ export function buildReviewFindingsAuditSummary(options: {
         + lane.remaining_blocker_ids.length
         + (lane.validation_violations.length > 0 ? 1 : 0)
         + (lane.remaining_blocker_ids.length === 0 && lane.disposition_violations.length > 0 ? 1 : 0)
-    ), 0) + correctionTransports.filter((entry) => (
+    ), 0) + correctionTransports.filter((entry) => (countNextStepWork('visit:task-audit-summary-review-findings:event:2225'), (
         !entry.evidence_valid && entry.audit_scope !== 'SUPERSEDED_CYCLE'
-    )).length;
-    const supersededInvalidTransportCount = correctionTransports.filter((entry) => (
+    ))).length;
+    const supersededInvalidTransportCount = correctionTransports.filter((entry) => (countNextStepWork('visit:task-audit-summary-review-findings:event:2228'), (
         !entry.evidence_valid && entry.audit_scope === 'SUPERSEDED_CYCLE'
-    )).length;
+    ))).length;
     const reusedReviewCount = Object.values(options.reviewAttemptSummary?.fresh_reused_by_review_type || {})
-        .reduce((count, entry) => count + entry.reused, 0);
+        .reduce((count, entry) => (countNextStepWork('visit:task-audit-summary-review-findings:event:2231'), count + entry.reused), 0);
     const freshReviewCount = options.reviewAttemptSummary?.total_attempts || 0;
     const hasIncompleteLane = lanes.some((lane) => (
         lane.validation_status === 'MISSING_OR_INVALID'

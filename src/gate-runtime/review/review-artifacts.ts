@@ -662,6 +662,7 @@ function freezeReviewArtifactJson(value: unknown): unknown {
     if (!value || typeof value !== 'object' || Object.isFrozen(value)) {
         return value;
     }
+    countNextStepWork('visit:artifact_json_frozen_object');
     for (const nested of Object.values(value)) {
         freezeReviewArtifactJson(nested);
     }
@@ -676,6 +677,7 @@ function cloneFrozenReviewArtifactJson(value: unknown): unknown {
     const pending = [{ source: value, target: root }];
     while (pending.length) {
         const { source, target } = pending.pop()!;
+        countNextStepWork('visit:artifact_json_cloned_object');
         for (const [key, nested] of Object.entries(source)) {
             const child: unknown = nested !== null && typeof nested === 'object'
                 ? (Array.isArray(nested) ? [] : {}) : nested;

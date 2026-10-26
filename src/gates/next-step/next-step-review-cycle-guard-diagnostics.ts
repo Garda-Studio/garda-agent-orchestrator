@@ -1,3 +1,4 @@
+import { countNextStepWork, countNextStepArrayCopy } from '../../core/next-step-measurement';
 import {
     type ReviewCycleGuardEvaluation as CoreReviewCycleGuardEvaluation
 } from '../../core/review-cycle-guard';
@@ -44,7 +45,7 @@ function recordReviewCycleFreshReuse(
 
 function sortReviewCycleCountRecord<T>(record: Record<string, T>): Record<string, T> {
     return Object.fromEntries(
-        Object.entries(record).sort(([left], [right]) => left.localeCompare(right))
+        Object.entries(record).sort(([left], [right]) => (countNextStepWork('visit:next-step-review-cycle-guard-diagnostics:event:47'), left.localeCompare(right)))
     );
 }
 
@@ -72,6 +73,7 @@ export function buildReviewCycleAttemptDiagnostics(
     let currentScopeFailedNonTestReviewCount = 0;
 
     for (const attempt of attempts) {
+        countNextStepWork('visit:next-step-review-cycle-guard-diagnostics:event:74');
         const reviewType = attempt.reviewType.trim().toLowerCase();
         if (!reviewType) {
             continue;
@@ -149,21 +151,21 @@ export function buildReviewCycleAttemptDiagnostics(
         }
     }
 
-    const sortedScopeHashCountEntries = [...scopeHashCountsByType.entries()]
-        .sort(([left], [right]) => left.localeCompare(right));
+    const sortedScopeHashCountEntries = countNextStepArrayCopy('visit:next-step-review-cycle-guard-diagnostics:copy:152', [...scopeHashCountsByType.entries()])
+        .sort(([left], [right]) => (countNextStepWork('visit:next-step-review-cycle-guard-diagnostics:event:152'), left.localeCompare(right)));
     const scopeHashCountByReviewType = Object.fromEntries(
-        sortedScopeHashCountEntries.map(([reviewType, scopeHashCounts]) => [reviewType, scopeHashCounts.size])
+        sortedScopeHashCountEntries.map(([reviewType, scopeHashCounts]) => (countNextStepWork('visit:next-step-review-cycle-guard-diagnostics:event:155'), [reviewType, scopeHashCounts.size]))
     );
     const topScopeHashesByReviewType = Object.fromEntries(
         sortedScopeHashCountEntries
-            .map(([reviewType, scopeHashCounts]) => [
+            .map(([reviewType, scopeHashCounts]) => (countNextStepWork('visit:next-step-review-cycle-guard-diagnostics:event:158'), [
                 reviewType,
-                [...scopeHashCounts.entries()]
+                countNextStepArrayCopy('visit:next-step-review-cycle-guard-diagnostics:copy:161', countNextStepArrayCopy('visit:next-step-review-cycle-guard-diagnostics:copy:161', [...scopeHashCounts.entries()])
                     .sort(([leftHash, leftCounts], [rightHash, rightCounts]) =>
-                        rightCounts.total - leftCounts.total || leftHash.localeCompare(rightHash)
+                        (countNextStepWork('visit:next-step-review-cycle-guard-diagnostics:event:161'), rightCounts.total - leftCounts.total || leftHash.localeCompare(rightHash))
                     )
-                    .slice(0, 5)
-                    .map(([scopeHash, counts]) => ({
+                    .slice(0, 5))
+                    .map(([scopeHash, counts]) => (countNextStepWork('visit:next-step-review-cycle-guard-diagnostics:event:161'), ({
                         scope_hash: scopeHash,
                         total: counts.total,
                         failed: counts.failed,
@@ -172,12 +174,12 @@ export function buildReviewCycleAttemptDiagnostics(
                         fresh: counts.fresh,
                         reused: counts.reused,
                         current_scope: attempts.some((attempt) =>
-                            attempt.reviewType.trim().toLowerCase() === reviewType
+                            (countNextStepWork('visit:next-step-review-cycle-guard-diagnostics:event:174'), attempt.reviewType.trim().toLowerCase() === reviewType
                             && attempt.scopeHash === scopeHash
-                            && attempt.currentScope
+                            && attempt.currentScope)
                         )
-                    }))
-            ])
+                    })))
+            ]))
     );
 
     return {
@@ -201,10 +203,11 @@ function formatReviewCycleAttemptDiagnosticsSummary(diagnostics: ReviewCycleAtte
         return null;
     }
     const freshReusedText = Object.entries(diagnostics.fresh_reused_by_review_type)
-        .map(([reviewType, counts]) => `${reviewType}:fresh=${counts.fresh},reused=${counts.reused}`)
+        .map(([reviewType, counts]) => (countNextStepWork('visit:next-step-review-cycle-guard-diagnostics:event:203'), `${reviewType}:fresh=${counts.fresh},reused=${counts.reused}`))
         .join('|');
     const scopeHashText = Object.entries(diagnostics.top_scope_hashes_by_review_type)
         .map(([reviewType, scopeHashes]) => {
+            countNextStepWork('visit:next-step-review-cycle-guard-diagnostics:event:206');
             const topScopeHashes = scopeHashes
                 .map((counts) =>
                     `${counts.scope_hash}:total=${counts.total},failed=${counts.failed},passed=${counts.passed},pending=${counts.pending},fresh=${counts.fresh},reused=${counts.reused},current_scope=${counts.current_scope}`
@@ -223,7 +226,7 @@ function formatReviewCycleAttemptDiagnosticsSummary(diagnostics: ReviewCycleAtte
         `reused_non_test_reviews=${diagnostics.reused_non_test_review_count}`,
         freshReusedText ? `fresh_reused_by_type=${freshReusedText}` : null,
         scopeHashText ? `top_scope_hashes_by_type=${scopeHashText}` : null
-    ].filter((entry): entry is string => Boolean(entry)).join('; ');
+    ].filter((entry): entry is string => (countNextStepWork('visit:next-step-review-cycle-guard-diagnostics:event:218'), Boolean(entry))).join('; ');
 }
 
 export function extendReviewCycleGuardEvaluation(

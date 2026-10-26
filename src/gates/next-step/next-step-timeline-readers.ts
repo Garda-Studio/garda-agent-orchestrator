@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import {
     type TimelineEventEntry
 } from '../completion/completion-evidence';
@@ -7,6 +8,7 @@ export function findLatestTimelineEvent(
     predicate: (entry: TimelineEventEntry) => boolean
 ): TimelineEventEntry | null {
     for (let index = events.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:next-step-timeline-readers:event:9');
         const entry = events[index];
         if (predicate(entry)) {
             return entry;

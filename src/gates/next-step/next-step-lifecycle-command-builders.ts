@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import { fileSha256, isOrchestratorSourceCheckout } from '../shared/helpers';
 import { isSourceCheckoutGeneratedRuntimeArtifactPath, splitGeneratedRuntimeControlPlaneArtifacts } from '../shared/generated-runtime-artifacts';
 import { normalizeDirtyWorkspaceBaseline } from '../workspace/dirty-worktree-protection';
@@ -132,7 +133,7 @@ function readGitPaths(repoRoot: string, args: string[]): string[] | null {
             stdio: ['ignore', 'pipe', 'ignore'],
             timeout: 10000
         });
-        return splitNulRecords(String(output || '')).map((entry) => normalizePath(entry)).filter(Boolean);
+        return splitNulRecords(String(output || '')).map((entry) => (countNextStepWork('visit:next-step-lifecycle-command-builders:event:135'), normalizePath(entry))).filter(Boolean);
     } catch {
         return null;
     }
@@ -491,6 +492,7 @@ export function getTaskModeDirtyWorkspaceBaselineFileHashes(
     }
     const normalized: Record<string, string> = {};
     for (const [filePath, hash] of Object.entries(fileHashes as Record<string, unknown>)) {
+        countNextStepWork('visit:next-step-lifecycle-command-builders:event:493');
         const normalizedPath = normalizeWorkspaceRelativePath(repoRoot, filePath);
         const normalizedHash = typeof hash === 'string' ? hash.trim().toLowerCase() : '';
         if (normalizedPath && normalizedHash) {
@@ -634,6 +636,7 @@ export function getPostPreflightRuleFileNames(
     const effectiveDepth = getEffectiveDepthForPostPreflightRules(preflight, taskMode);
     const fileNames = new Set<string>(selectTaskEntryRulePackFileNames({ effectiveDepth }));
     for (const [reviewType, required] of Object.entries(requiredReviews)) {
+        countNextStepWork('visit:next-step-lifecycle-command-builders:event:636');
         if (required !== true) {
             continue;
         }

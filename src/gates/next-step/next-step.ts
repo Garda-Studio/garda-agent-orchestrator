@@ -1,5 +1,4 @@
-import { measureNextStepPhase } from '../../core/next-step-measurement';
-import { withNextStepMeasurement } from '../../core/next-step-measurement';
+import { countNextStepWork, countNextStepArrayCopy, measureNextStepPhase, withNextStepMeasurement } from '../../core/next-step-measurement';
 import { formatInstalledBundleMaintenanceGuidance } from '../protected-control-plane/installed-bundle-guard';
 import { ExpectedRedEvidenceError, taskRequiresExpectedRed } from '../test-first/expected-red-evidence';
 import { resolveAuthoritativeReviewValidationObligations } from '../review-context/review-context-coverage';
@@ -659,6 +658,7 @@ function addNormalizedReviewTypes(target: Set<string>, value: unknown): void {
     }
     if (isPlainRecord(value)) {
         for (const [key, enabled] of Object.entries(value)) {
+            countNextStepWork('visit:next-step:event:661');
             if (enabled === true || isPlainRecord(enabled)) {
                 const reviewType = normalizeReviewTypeValue(key);
                 if (reviewType) {
@@ -672,6 +672,7 @@ function addNormalizedReviewTypes(target: Set<string>, value: unknown): void {
 function readLatestReviewGateOverrideSkippedReviewTypes(eventsRoot: string, taskId: string): Set<string> {
     const orderedEvents = readOrderedTaskEvents(path.join(eventsRoot, `${taskId}.jsonl`)).events;
     for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:next-step:event:674');
         const event = orderedEvents[index];
         const eventType = String(event.event_type || '').trim();
         if (eventType !== 'REVIEW_GATE_PASSED' && eventType !== 'REVIEW_GATE_PASSED_WITH_OVERRIDE') {
@@ -750,8 +751,8 @@ function readLastCompilePlanDriftExtraFiles(options: {
         }
     });
     if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(inspection.status)) return [];
-    const taskModeEntry = bindingEvents.filter(event => event.event_type === 'TASK_MODE_ENTERED').at(-1);
-    const lastCompile = bindingEvents.filter(event => event.event_type !== 'TASK_MODE_ENTERED').at(-1);
+    const taskModeEntry = bindingEvents.filter(event => (countNextStepWork('visit:next-step:event:753'), event.event_type === 'TASK_MODE_ENTERED')).at(-1);
+    const lastCompile = bindingEvents.filter(event => (countNextStepWork('visit:next-step:event:754'), event.event_type !== 'TASK_MODE_ENTERED')).at(-1);
     const entryIntegrity = isPlainRecord(taskModeEntry?.integrity) ? taskModeEntry.integrity : null;
     const compileIntegrity = isPlainRecord(lastCompile?.integrity) ? lastCompile.integrity : null;
     const entryDetails = isPlainRecord(taskModeEntry?.details) ? taskModeEntry.details : null;
@@ -782,6 +783,7 @@ function readLatestTaskEventSequence(
     const expectedTypes = new Set(eventTypes.map((eventType) => String(eventType || '').trim().toUpperCase()));
     const orderedEvents = readOrderedTaskEvents(path.join(eventsRoot, `${taskId}.jsonl`)).events;
     for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:next-step:event:784');
         const event = orderedEvents[index];
         const eventType = String(event.event_type || '').trim().toUpperCase();
         if (!expectedTypes.has(eventType)) continue;
@@ -794,11 +796,11 @@ function readLatestTaskEventSequence(
 
 function hasPassedCompletionBeforeNoOpEvent(eventsRoot: string, taskId: string, noOpEventSha256: string): boolean {
     const events = readTaskTimelineJsonlEntries(path.join(eventsRoot, `${taskId}.jsonl`))
-        .map((entry) => entry.record)
-        .filter((record): record is Readonly<Record<string, unknown>> => record !== null);
-    const noOpIndex = events.findIndex((event) => event.event_type === 'NO_OP_RECORDED'
+        .map((entry) => (countNextStepWork('visit:next-step:event:796'), entry.record))
+        .filter((record): record is Readonly<Record<string, unknown>> => (countNextStepWork('visit:next-step:event:796'), record !== null));
+    const noOpIndex = events.findIndex((event) => (countNextStepWork('visit:next-step:event:799'), event.event_type === 'NO_OP_RECORDED'
         && isPlainRecord(event.integrity)
-        && event.integrity.event_sha256 === noOpEventSha256);
+        && event.integrity.event_sha256 === noOpEventSha256));
     if (noOpIndex < 0) {
         return false;
     }
@@ -881,7 +883,8 @@ function hasFullSuiteTimeoutWarningLifecyclePolicy(
         `${taskId}.jsonl`
     );
     const orderedEvents = readOrderedTaskEvents(taskEventPath);
-    return [...orderedEvents.events].reverse().some((event: TaskAuditEvent) => {
+    return countNextStepArrayCopy('visit:next-step:copy:884', countNextStepArrayCopy('visit:next-step:copy:884', [...orderedEvents.events]).reverse()).some((event: TaskAuditEvent) => {
+        countNextStepWork('visit:next-step:event:884');
         if (String(event.event_type || '').trim() !== 'FULL_SUITE_VALIDATION_WARNED') {
             return false;
         }
@@ -1120,6 +1123,7 @@ function readFullSuiteTargetedDiagnosticEvidence(options: {
         return { available: false, reason: null };
     }
     for (let index = events.length - 1; index > failedIndex; index -= 1) {
+        countNextStepWork('visit:next-step:event:1122');
         const event = events[index];
         if (String(event.task_id || '').trim() !== options.taskId) {
             continue;
@@ -1153,6 +1157,7 @@ function findLatestCurrentTaskEventIndex(
     eventType: string
 ): number {
     for (let index = events.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:next-step:event:1155');
         const event = events[index];
         if (
             String(event.task_id || '').trim() === taskId
@@ -1284,6 +1289,7 @@ function resolveTimelineBoundReviewDependencyGraph(
     const timeline = readOrderedTaskEvents(path.join(eventsRoot, `${taskId}.jsonl`)).events;
     let latestPreflightEvent: (typeof timeline)[number] | undefined;
     for (let index = timeline.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:next-step:event:1286');
         const event = timeline[index];
         if (String(event.event_type || '').trim().toUpperCase() === 'PREFLIGHT_CLASSIFIED') {
             latestPreflightEvent = event;
@@ -1323,6 +1329,7 @@ function resolveTimelineBoundReviewDependencyGraph(
 function resolveTaskQueueCaseMismatch(taskEntries: Map<string, TaskQueueEntry>, taskId: string): string | null {
     const normalizedTaskId = taskId.toLowerCase();
     for (const entryTaskId of taskEntries.keys()) {
+        countNextStepWork('visit:next-step:event:1325');
         if (entryTaskId !== taskId && entryTaskId.toLowerCase() === normalizedTaskId) {
             return entryTaskId;
         }
@@ -2504,6 +2511,7 @@ function getPreflightTriggerFileHashes(
     }
     const hashes: Record<string, string> = {};
     for (const [filePath, hash] of Object.entries(value as Record<string, unknown>)) {
+        countNextStepWork('visit:next-step:event:2506');
         const normalizedPath = normalizeWorkspaceRelativePath(repoRoot, filePath);
         const normalizedHash = String(hash || '').trim().toLowerCase();
         if (normalizedPath && /^[0-9a-f]{64}$/u.test(normalizedHash)) {

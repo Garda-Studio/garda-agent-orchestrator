@@ -1,3 +1,4 @@
+import { countNextStepArrayCopy, countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { normalizeReviewReceiptReviewerProvenance } from '../../gate-runtime/review-context';
@@ -83,9 +84,10 @@ function findLatestEventTaskSequenceForTypes(
     if (!events) {
         return null;
     }
-    const normalizedEventTypes = new Set(eventTypes.map((eventType) => eventType.trim().toUpperCase()));
+    const normalizedEventTypes = new Set(eventTypes.map((eventType) => (countNextStepWork('visit:task-audit-summary-review-integrity:86'), eventType.trim().toUpperCase())));
     let latestSequence: number | null = null;
     for (const event of events) {
+        countNextStepWork('visit:task-audit-summary-review-integrity:88');
         if (!normalizedEventTypes.has(String(event.event_type || '').trim().toUpperCase())) {
             continue;
         }
@@ -119,9 +121,10 @@ function findFreshReviewTelemetryIssue(options: {
         return `${options.reviewType}: current required-reviews gate telemetry is not after the current compile telemetry`;
     }
     let lastReason: string | null = null;
-    for (const event of [...options.events].sort((left, right) =>
-        (readEventTaskSequence(right) ?? 0) - (readEventTaskSequence(left) ?? 0)
+    for (const event of countNextStepArrayCopy('visit:task-audit-summary-review-integrity:copy:124', [...options.events]).sort((left, right) =>
+        (countNextStepWork('visit:task-audit-summary-review-integrity:122'), (readEventTaskSequence(right) ?? 0) - (readEventTaskSequence(left) ?? 0))
     )) {
+        countNextStepWork('visit:task-audit-summary-review-integrity:122');
         if (String(event.event_type || '').trim().toUpperCase() !== 'REVIEW_RECORDED') {
             continue;
         }
@@ -190,6 +193,7 @@ function findFreshReviewerInvocationTelemetryIssue(options: {
         return `${options.reviewType}: reviewer invocation provenance does not match receipt`;
     }
     for (const event of options.events) {
+        countNextStepWork('visit:task-audit-summary-review-integrity:192');
         if (String(event.event_type || '').trim().toUpperCase() !== 'REVIEWER_INVOCATION_ATTESTED') { continue; }
         const integrity = isPlainRecord(event.integrity) ? event.integrity : {};
         const taskSequence = readEventTaskSequence(event);
@@ -211,7 +215,7 @@ function discoverReviewIntegrityObservationTypes(
     currentPreflight?: Record<string, unknown> | null
 ): string[] {
     return collectEffectiveReviewTypeIds(currentPreflight)
-        .filter((reviewType) => reviewIntegrityArtifactExists(reviewsRoot, taskId, reviewType))
+        .filter((reviewType) => (countNextStepWork('visit:task-audit-summary-review-integrity:213'), reviewIntegrityArtifactExists(reviewsRoot, taskId, reviewType)))
         .sort();
 }
 
@@ -228,6 +232,7 @@ function collectReviewIntegrityIssues(options: {
         ['REVIEW_GATE_PASSED', 'REVIEW_GATE_PASSED_WITH_OVERRIDE']
     );
     for (const reviewType of options.requiredReviewTypes) {
+        countNextStepWork('visit:task-audit-summary-review-integrity:230');
         const receiptPath = path.join(options.reviewsRoot, `${options.taskId}-${reviewType}-receipt.json`);
         const reviewPath = path.join(options.reviewsRoot, `${options.taskId}-${reviewType}.md`);
         const reviewContextPath = getCanonicalReviewContextPath(options.reviewsRoot, options.taskId, reviewType);
@@ -262,7 +267,7 @@ function collectReviewIntegrityIssues(options: {
                     reviewType,
                     label: `Review receipt for '${reviewType}'`
                 });
-                issues.push(...laneEvidenceViolations.map((violation) => `${reviewType}: ${violation}`));
+                issues.push(...laneEvidenceViolations.map((violation) => (countNextStepWork('visit:task-audit-summary-review-integrity:265'), `${reviewType}: ${violation}`)));
             } catch (error) {
                 issues.push(
                     `${reviewType}: custom review lane binding cannot be validated: `
@@ -538,7 +543,7 @@ function collectReviewIntegrityIssues(options: {
             }
         }
     }
-    return [...new Set(issues)].sort((left, right) => left.localeCompare(right));
+    return [...new Set(issues)].sort((left, right) => (countNextStepWork('visit:task-audit-summary-review-integrity:541'), left.localeCompare(right)));
 }
 
 export function buildReviewIntegrityAttestation(options: {
@@ -559,7 +564,7 @@ function buildReviewIntegrityAttestationUnlocked(options: {
         options.requiredReviews,
         options.currentPreflight
     );
-    const rawRequiredReviewCount = Object.values(options.requiredReviews || {}).filter((required) => required === true).length;
+    const rawRequiredReviewCount = Object.values(options.requiredReviews || {}).filter((required) => (countNextStepWork('visit:task-audit-summary-review-integrity:562'), required === true)).length;
     const requiredReviewCount = requiredReviewTypes.length;
     const observationReviewTypes = requiredReviewCount > 0
         ? requiredReviewTypes
@@ -692,7 +697,7 @@ function buildReviewIntegrityAttestationUnlocked(options: {
 function stringArrayField(source: Record<string, unknown>, field: string): string[] {
     const value = source[field];
     return Array.isArray(value)
-        ? value.map((entry) => String(entry || '').trim()).filter(Boolean)
+        ? value.map((entry) => (countNextStepWork('visit:task-audit-summary-review-integrity:695'), String(entry || '').trim())).filter(Boolean)
         : [];
 }
 
@@ -723,9 +728,10 @@ export function collectReviewAuthorshipAttestationIssues(
     const derivedFalseTypes: string[] = [];
     const derivedNonBooleanTypes: string[] = [];
     const derivedUnknownTypes = Object.keys(attestationValues)
-        .map((entry) => entry.trim().toLowerCase())
-        .filter((entry) => entry && !requiredTypeSet.has(entry));
+        .map((entry) => (countNextStepWork('visit:task-audit-summary-review-integrity:725'), entry.trim().toLowerCase()))
+        .filter((entry) => (countNextStepWork('visit:task-audit-summary-review-integrity:725'), entry && !requiredTypeSet.has(entry)));
     for (const reviewType of requiredReviewTypes) {
+        countNextStepWork('visit:task-audit-summary-review-integrity:728');
         if (!Object.hasOwn(attestationValues, reviewType)) {
             derivedMissingTypes.push(reviewType);
             continue;
@@ -755,19 +761,24 @@ export function collectReviewAuthorshipAttestationIssues(
         issues.add(`review authorship attestation status is ${status || 'UNKNOWN'}`);
     }
     for (const reviewType of [...new Set([...falseTypes, ...derivedFalseTypes])]) {
+        countNextStepWork('visit:task-audit-summary-review-integrity:757');
         issues.add(`${reviewType}: review authorship attestation is false; delegated reviewer authorship is not honestly attested`);
     }
     for (const reviewType of [...new Set([...missingTypes, ...derivedMissingTypes])]) {
+        countNextStepWork('visit:task-audit-summary-review-integrity:760');
         issues.add(`${reviewType}: review authorship attestation is missing`);
     }
     for (const reviewType of [...new Set([...unknownTypes, ...derivedUnknownTypes])]) {
+        countNextStepWork('visit:task-audit-summary-review-integrity:763');
         issues.add(`${reviewType}: review authorship attestation contains an unknown review type`);
     }
     for (const reviewType of [...new Set([...nonBooleanTypes, ...derivedNonBooleanTypes])]) {
+        countNextStepWork('visit:task-audit-summary-review-integrity:766');
         issues.add(`${reviewType}: review authorship attestation value is not boolean`);
     }
     for (const violation of stringArrayField(attestation, 'violations')) {
+        countNextStepWork('visit:task-audit-summary-review-integrity:769');
         issues.add(`review authorship attestation violation: ${violation}`);
     }
-    return [...issues].sort((left, right) => left.localeCompare(right));
+    return [...issues].sort((left, right) => (countNextStepWork('visit:task-audit-summary-review-integrity:772'), left.localeCompare(right)));
 }

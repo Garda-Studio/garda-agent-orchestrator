@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import {
     readTaskTimelineJsonlEntries,
@@ -329,6 +330,7 @@ function lookupDelegatedReviewRoutingShaAfterCompile(
     const timelinePath = path.join(eventsRoot, `${taskId}.jsonl`);
     const entries = readTaskTimelineJsonlEntries(timelinePath);
     for (let index = entries.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:next-step-reviewer-launch-evidence-telemetry:event:331');
         try {
             const event = entries[index].record;
             if (!event) {

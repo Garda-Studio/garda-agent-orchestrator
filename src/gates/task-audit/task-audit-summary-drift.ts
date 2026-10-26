@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -157,7 +158,7 @@ function readUnstagedChangedFiles(repoRoot: string, auditedFiles: string[]): str
         throw new Error(reason);
     }
     return canonicalPathList(splitNulRecords(String(result.stdout || ''))
-        .map((entry) => toPosix(entry.trim()))
+        .map((entry) => (countNextStepWork('visit:task-audit-summary-drift:event:159'), toPosix(entry.trim())))
         .filter(Boolean));
 }
 

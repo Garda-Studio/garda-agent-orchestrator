@@ -1,3 +1,4 @@
+import { countNextStepWork, countNextStepArrayCopy } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -165,7 +166,7 @@ function buildReviewCycleAutoSplitPromptContent(
     });
     const suggestedFollowupTaskId = allocateParentDerivedTaskIds({
         parentTaskId: taskId,
-        existingTaskIds: [...taskEntries.keys(), ...suggestedChildTaskIds],
+        existingTaskIds: countNextStepArrayCopy('visit:next-step-review-cycle-guard-operator-block:copy:168', [...taskEntries.keys(), ...suggestedChildTaskIds]),
         kind: 'followup',
         count: 1
     })[0];
@@ -316,8 +317,8 @@ export function buildReviewCycleOperatorBlock(
 ): NextStepReviewCycleBlock {
     const countsByReviewType = Object.fromEntries(
         Object.entries(evaluation.counts_by_review_type)
-            .sort(([left], [right]) => left.localeCompare(right))
-            .map(([reviewType, counts]) => [
+            .sort(([left], [right]) => (countNextStepWork('visit:next-step-review-cycle-guard-operator-block:event:318'), left.localeCompare(right)))
+            .map(([reviewType, counts]) => (countNextStepWork('visit:next-step-review-cycle-guard-operator-block:event:318'), [
                 reviewType,
                 {
                     total: counts.total,
@@ -325,7 +326,7 @@ export function buildReviewCycleOperatorBlock(
                     passed: counts.passed,
                     pending: counts.pending
                 }
-            ])
+            ]))
     );
     const hasReviewCyclePressureViolation = evaluation.violations.some((violation) =>
         violation.metric === 'failed_non_test_review_count'

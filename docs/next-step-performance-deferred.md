@@ -1,5 +1,13 @@
 # Deferred next-step optimizations
 
+Round 6b supersedes the P2, P3 and P5 deferral decisions below; those sections
+retain historical analysis, not reasons to defer the accepted implementation.
+Within an invocation, consumers may share one checked observation, provided the
+A1 final dependency check rejects changed inputs before output and effects.
+Across invocations, only an authenticated Q4 record bound to freshly checked
+input digests and all relevant identities may supply a derived result. The P6
+cross-invocation timeline checkpoint remains deferred.
+
 ## P2: navigation audit projection
 
 Round 6 consumer inspection at 537beb12 found that the audit is consumed on every

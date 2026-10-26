@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import { sha256RedactedJsonPayload } from '../../core/redaction';
 import {
     getReviewExecutionDependencies,
@@ -326,8 +327,8 @@ function canonicalRequiredReviewTypes(
     dependencyGraph?: CompiledReviewDependencyGraph | null
 ): string[] {
     const required = Object.entries(requiredReviews)
-        .filter(([, enabled]) => enabled === true)
-        .map(([reviewType]) => normalizeReviewType(reviewType, 'required review type'));
+        .filter(([, enabled]) => (countNextStepWork('visit:review-remediation-recovery-routing:event:328'), enabled === true))
+        .map(([reviewType]) => (countNextStepWork('visit:review-remediation-recovery-routing:event:328'), normalizeReviewType(reviewType, 'required review type')));
     if (dependencyGraph) {
         const requiredSet = new Set(required);
         const missingFromGraph = required.filter((reviewType) => !dependencyGraph.nodes.includes(reviewType));

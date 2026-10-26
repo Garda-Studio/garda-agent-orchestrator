@@ -1,3 +1,4 @@
+import { countNextStepWork, countNextStepArrayCopy } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import type { TaskCycleStatusSnapshot } from '../../validators/status';
 import type { EffectiveReviewExecutionPolicyMode } from '../../core/review-execution-policy';
@@ -133,14 +134,14 @@ function buildWorkflowConfigAuditSummary(input: BuildFinalCloseoutArtifactInput)
             ? 'audited'
             : 'unaudited';
     const firstTimestamp = provenance.records[0]?.timestamp_utc || null;
-    const sources = [...new Set(provenance.records.map((record) => record.mutation_source))].sort();
-    const fields = [...new Set(provenance.records.flatMap((record) => record.changed_fields))].sort();
+    const sources = countNextStepArrayCopy('visit:task-audit-summary-closeout-artifact:copy:136', [...new Set(provenance.records.map((record) => (countNextStepWork('visit:task-audit-summary-closeout-artifact:event:136'), record.mutation_source)))]).sort();
+    const fields = countNextStepArrayCopy('visit:task-audit-summary-closeout-artifact:copy:137', [...new Set(provenance.records.flatMap((record) => (countNextStepWork('visit:task-audit-summary-closeout-artifact:event:137'), record.changed_fields)))]).sort();
     return {
         status,
         changed_files: changes.changed_files,
         audited_files: provenance.audited_files,
         unaudited_files: provenance.unaudited_files,
-        records: provenance.records.map((record) => ({
+        records: provenance.records.map((record) => (countNextStepWork('visit:task-audit-summary-closeout-artifact:event:143'), ({
             timestamp_utc: record.timestamp_utc,
             mutation_source: record.mutation_source,
             actor: record.actor,
@@ -149,7 +150,7 @@ function buildWorkflowConfigAuditSummary(input: BuildFinalCloseoutArtifactInput)
             active_task_ids: record.active_task_ids,
             active_task_id: record.active_task_id,
             audit_path: record.audit_path
-        })),
+        }))),
         visible_summary_line: status === 'none'
             ? 'Workflow-config audit: no in-task workflow-config changes detected.'
             : status === 'audited'
@@ -298,12 +299,13 @@ function normalizeForecastExcludedReasons(value: unknown): Record<string, number
     }
     const entries: [string, number][] = [];
     for (const [reason, count] of Object.entries(value)) {
+        countNextStepWork('visit:task-audit-summary-closeout-artifact:event:300');
         const normalizedCount = normalizeOptionalNumber(count);
         if (normalizedCount != null && normalizedCount > 0) {
             entries.push([reason, normalizedCount]);
         }
     }
-    return Object.fromEntries(entries.sort(([left], [right]) => left.localeCompare(right)));
+    return Object.fromEntries(entries.sort(([left], [right]) => (countNextStepWork('visit:task-audit-summary-closeout-artifact:event:306'), left.localeCompare(right))));
 }
 
 function normalizeRepairTaskProposal(value: unknown): FinalCloseoutFullSuiteTimeoutSummary['repair_task_proposal'] {
@@ -327,7 +329,7 @@ function normalizeRepairTaskProposal(value: unknown): FinalCloseoutFullSuiteTime
 
 function formatForecastExcludedReasons(reasons: Record<string, number>): string {
     const parts = Object.entries(reasons)
-        .map(([reason, count]) => `${reason}=${count}`);
+        .map(([reason, count]) => (countNextStepWork('visit:task-audit-summary-closeout-artifact:event:329'), `${reason}=${count}`));
     return parts.length > 0 ? ` (${parts.join(', ')})` : '';
 }
 

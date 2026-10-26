@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import { createHash } from 'node:crypto';
 
 import { sha256RedactedJsonPayload } from '../../core/redaction';
@@ -203,7 +204,7 @@ function assertExactKeys(
 }
 
 function withoutHash<T extends Record<string, unknown>>(value: T, hashKey: keyof T): Record<string, unknown> {
-    return Object.fromEntries(Object.entries(value).filter(([key]) => key !== hashKey));
+    return Object.fromEntries(Object.entries(value).filter(([key]) => (countNextStepWork('visit:review-remediation-validation-evidence:event:206'), key !== hashKey)));
 }
 
 function validateCanonicalPath(value: unknown, label: string, violations: string[]): string | null {
@@ -462,6 +463,7 @@ export function getReviewRemediationDeltaClassificationViolations(
     } else {
         const readableOperationsByPath = new Map<string, Set<string>>();
         for (const [index, page] of readableDiff.pages.entries()) {
+            countNextStepWork('visit:review-remediation-validation-evidence:event:464');
             const { page_sha256: pageSha256, ...pageWithoutHash } = page;
             const normalizedPagePath = normalizePath(page.path);
             if (!normalizedPagePath || normalizedPagePath !== page.path) {

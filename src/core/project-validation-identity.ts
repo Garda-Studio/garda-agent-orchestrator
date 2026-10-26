@@ -1,3 +1,4 @@
+import { countNextStepWork } from './next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -46,6 +47,7 @@ export function readObservedValidationFile(root: string, relative: string, maxim
         if (before.dev !== after.dev || before.ino !== after.ino || before.birthtimeNs !== after.birthtimeNs || after.nlink !== 1n
             || before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs || offset !== Number(before.size)) throw new Error(`Validation input changed during read: ${relative}`);
         const bytes = buffer.subarray(0, offset);
+        countNextStepWork('file_hash:' + target);
         return { bytes, modified_ns: before.mtimeNs.toString(), changed_ns: before.ctimeNs.toString(),
             created_ns: before.birthtimeNs.toString(), identity: { path: relative, sha256: validationDigest(bytes), size: bytes.length,
             identity: `${before.dev}:${before.ino}:${before.birthtimeNs}` } };

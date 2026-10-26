@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -63,6 +64,7 @@ function getLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): {
 
         const entries = readTaskTimelineJsonlEntries(timelinePath);
         for (let index = entries.length - 1; index >= 0; index -= 1) {
+            countNextStepWork('visit:task_mode_timeline_event');
             const parsed = entries[index].record;
             if (!parsed) {
                 continue;
@@ -124,6 +126,7 @@ function getLatestTaskModeTimelineMetadata(repoRoot: string, taskId: string): {
 }
 
 export function getTaskModeEvidence(repoRoot: string, taskId: string | null, artifactPath = ''): TaskModeEvidenceResult {
+    countNextStepWork('derive:task_mode_evidence');
     const result: TaskModeEvidenceResult = {
         task_id: taskId,
         evidence_path: null,

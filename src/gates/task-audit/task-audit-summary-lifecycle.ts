@@ -1,3 +1,4 @@
+import { countNextStepArrayCopy, countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import { assertValidTaskId, inspectTaskEventFile, readTaskTimelineJsonlEntries, withTaskTimelineReadSnapshot } from '../../gate-runtime/task-events';
 import { parseTaskQueueEntriesFromContent } from '../../core/task-queue-read';
@@ -77,14 +78,14 @@ export function getLifecycleGates(
     compileGateRequired = true
 ): LifecycleGateSpec[] {
     const gates = BASE_LIFECYCLE_GATES
-        .filter((entry) => compileGateRequired || entry.gate !== 'compile-gate')
-        .map((entry) => ({
+        .filter((entry) => (countNextStepWork('visit:task-audit-summary-lifecycle:79'), compileGateRequired || entry.gate !== 'compile-gate'))
+        .map((entry) => (countNextStepWork('visit:task-audit-summary-lifecycle:79'), ({
             gate: entry.gate,
             pass_event: entry.pass_event,
-            fail_events: [...entry.fail_events]
-        }));
+            fail_events: countNextStepArrayCopy('visit:task-audit-summary-lifecycle:copy:85', [...entry.fail_events])
+        })));
     if (fullSuiteValidationEnabled) {
-        const completionIndex = gates.findIndex((entry) => entry.gate === 'completion-gate');
+        const completionIndex = gates.findIndex((entry) => (countNextStepWork('visit:task-audit-summary-lifecycle:87'), entry.gate === 'completion-gate'));
         const fullSuiteGate = {
             gate: 'full-suite-validation',
             pass_event: 'FULL_SUITE_VALIDATION_PASSED',
@@ -97,7 +98,7 @@ export function getLifecycleGates(
         }
     }
     if (projectMemoryImpactRequired) {
-        const currentCompletionIndex = gates.findIndex((entry) => entry.gate === 'completion-gate');
+        const currentCompletionIndex = gates.findIndex((entry) => (countNextStepWork('visit:task-audit-summary-lifecycle:100'), entry.gate === 'completion-gate'));
         const projectMemoryGate = {
             gate: 'project-memory-impact',
             pass_event: PROJECT_MEMORY_IMPACT_ASSESSED_EVENT,
@@ -116,12 +117,14 @@ function parseOrderedTaskEvents(taskEventFile: string): OrderedTaskEvents {
     const events: TaskAuditEvent[] = [];
 
     for (const entry of readTaskTimelineJsonlEntries(taskEventFile)) {
+        countNextStepWork('visit:task-audit-summary-lifecycle:118');
         if (entry.record) {
             events.push(entry.record as TaskAuditEvent);
         }
     }
 
     events.sort((a, b) => {
+        countNextStepWork('visit:audit_ordered_event_comparison');
         const ta = parseTimestamp(a.timestamp_utc);
         const tb = parseTimestamp(b.timestamp_utc);
         return ta.getTime() - tb.getTime();
@@ -137,7 +140,7 @@ function parseOrderedTaskEvents(taskEventFile: string): OrderedTaskEvents {
 
 function cloneOrderedTaskEvents(result: TaskTimelineDeepReadonly<OrderedTaskEvents>): OrderedTaskEvents {
     return {
-        events: [...result.events] as TaskAuditEvent[],
+        events: countNextStepArrayCopy('visit:audit_ordered_event_copy', [...result.events]) as TaskAuditEvent[],
         count: result.count,
         firstEventUtc: result.firstEventUtc,
         lastEventUtc: result.lastEventUtc
@@ -179,6 +182,7 @@ function findLatestEventForTypes(
     let latestSequenced: { event: TaskAuditEvent; eventType: string; sequence: number } | null = null;
     let latestUnsequenced: { event: TaskAuditEvent; eventType: string } | null = null;
     for (let index = 0; index < events.length; index += 1) {
+        countNextStepWork('visit:task-audit-summary-lifecycle:181');
         const event = events[index];
         const eventType = String(event.event_type || '');
         if (!wantedTypes.has(eventType)) {
@@ -249,6 +253,7 @@ export function hasCurrentCycleReviewProgress(events: ReadonlyArray<TaskAuditEve
     let latestCompileIndex = -1;
     let latestCompileSequence: number | null = null;
     for (let index = 0; index < events.length; index += 1) {
+        countNextStepWork('visit:task-audit-summary-lifecycle:251');
         const eventType = String(events[index].event_type || '').trim().toUpperCase();
         if (eventType !== 'COMPILE_GATE_PASSED' && eventType !== 'COMPILE_GATE_FAILED') {
             continue;
@@ -274,6 +279,7 @@ export function hasCurrentCycleReviewProgress(events: ReadonlyArray<TaskAuditEve
         return true;
     }
     return events.some((event, index) => {
+        countNextStepWork('visit:task-audit-summary-lifecycle:276');
         const eventType = String(event.event_type || '').trim().toUpperCase();
         const isReviewOrCompletionEvent = eventType.startsWith('REVIEW_')
             || eventType.startsWith('REVIEWER_')
@@ -311,19 +317,19 @@ export function buildCompletionReviewOrderBlocker(
     repoRoot: string,
     reviewDependencyGraph: CompiledReviewDependencyGraph | null = null
 ): BlockerEntry | null {
-    if (!Object.values(requiredReviews).some((required) => required === true)) {
+    if (!Object.values(requiredReviews).some((required) => (countNextStepWork('visit:task-audit-summary-lifecycle:314'), required === true))) {
         return null;
     }
     if (reviewDependencyGraph) {
         const dependencyOrderViolation = getReviewDependencyTimelineOrderViolations(
             reviewDependencyGraph,
-            events.map((event, index) => ({
+            events.map((event, index) => (countNextStepWork('visit:task-audit-summary-lifecycle:320'), ({
                 event_type: String(event.event_type || '').trim().toUpperCase(),
                 sequence: readTaskEventSequence(event) ?? index + 1,
                 details: event.details && typeof event.details === 'object'
                     ? event.details as Record<string, unknown>
                     : null
-            }))
+            })))
         )[0];
         if (dependencyOrderViolation) {
             return {
@@ -348,6 +354,7 @@ export function buildCompletionReviewOrderBlocker(
     );
     if (reviewGatePass) {
         for (let index = events.length - 1; index >= 0; index -= 1) {
+            countNextStepWork('visit:task-audit-summary-lifecycle:350');
             const event = events[index];
             if (!taskEventOccursAfter(event, reviewGatePass.event, currentCycle)) {
                 continue;
@@ -378,6 +385,7 @@ export function buildCompletionReviewOrderBlocker(
         return null;
     }
     for (let index = events.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:task-audit-summary-lifecycle:380');
         const event = events[index];
         if (!taskEventOccursAfter(event, completionPass.event, currentCycle)) {
             continue;
@@ -409,13 +417,13 @@ export function resolveFullSuiteValidationRequirementForCurrentCycle(
 ): boolean {
     if (!currentCycle?.compile_gate_timestamp) {
         return resolveFullSuiteValidationRequirementForOrderedTaskEvents(
-            events.map((event) => String(event.event_type || '')),
+            events.map((event) => (countNextStepWork('visit:task-audit-summary-lifecycle:412'), String(event.event_type || ''))),
             liveFullSuiteValidationEnabled
         ).required;
     }
 
     const currentCycleFullSuiteEventTypes = events
-        .filter((event) => shouldIncludeFullSuiteTelemetryForCurrentCycle(
+        .filter((event) => (countNextStepWork('visit:task-audit-summary-lifecycle:417'), shouldIncludeFullSuiteTelemetryForCurrentCycle(
             String(event.event_type || ''),
             event.timestamp_utc,
             event.details && typeof event.details === 'object'
@@ -423,9 +431,9 @@ export function resolveFullSuiteValidationRequirementForCurrentCycle(
                 : null,
             currentCycle,
             repoRoot
-        ))
-        .map((event) => String(event.event_type || '').trim().toUpperCase())
-        .filter((eventType) => eventType.startsWith('FULL_SUITE_VALIDATION_'));
+        )))
+        .map((event) => (countNextStepWork('visit:task-audit-summary-lifecycle:417'), String(event.event_type || '').trim().toUpperCase()))
+        .filter((eventType) => (countNextStepWork('visit:task-audit-summary-lifecycle:417'), eventType.startsWith('FULL_SUITE_VALIDATION_')));
 
     if (currentCycleFullSuiteEventTypes.length > 0) {
         return resolveFullSuiteValidationRequirementForOrderedTaskEvents(
@@ -448,6 +456,7 @@ export function hasCurrentCycleProjectMemoryImpactEvent(
         fail_events: [PROJECT_MEMORY_IMPACT_BLOCKED_EVENT]
     };
     return events.some((event) => {
+        countNextStepWork('visit:task-audit-summary-lifecycle:450');
         const eventType = String(event.event_type || '').trim().toUpperCase();
         if (eventType !== PROJECT_MEMORY_IMPACT_ASSESSED_EVENT && eventType !== PROJECT_MEMORY_IMPACT_BLOCKED_EVENT) {
             return false;
@@ -537,6 +546,7 @@ export function buildLifecycleGateOutcomes(
     const blockers: BlockerEntry[] = [];
 
     for (const gateSpec of lifecycleGates) {
+        countNextStepWork('visit:task-audit-summary-lifecycle:539');
         const resolvedGate = resolveLifecycleGateStatus(gateSpec, events, currentCycle, repoRoot);
         gates.push(resolvedGate.gateOutcome);
         if (resolvedGate.blocker) {
@@ -579,27 +589,27 @@ export function readNativeDecomposedParentFacts(repoRoot: string, taskId: string
     const children = extractExplicitLinkedChildTaskIds(parent.notes, entries.keys(), id);
     const eventsRoot = joinOrchestratorPath(root, 'runtime/task-events'), timeline = path.join(eventsRoot, id + '.jsonl');
     return withTaskTimelineReadSnapshot(eventsRoot, id, () => {
-        const events = readTaskTimelineJsonlEntries(timeline).map(entry => entry.record).filter(isPlainRecord);
-        const decomposition = [...events].reverse().find(event => event.event_type === 'STRICT_DECOMPOSITION_DECISION_RECORDED');
-        const completion = [...events].reverse().find(event => event.event_type === 'DECOMPOSED_PARENT_COMPLETED');
-        const hasSplit = events.some(event => event.event_type === 'STRICT_DECOMPOSITION_DECISION_RECORDED'
-            && isPlainRecord(event.details) && event.details.decision === 'split-required');
+        const events = readTaskTimelineJsonlEntries(timeline).map(entry => (countNextStepWork('visit:task-audit-summary-lifecycle:582'), entry.record)).filter(isPlainRecord);
+        const decomposition = countNextStepArrayCopy('visit:task-audit-summary-lifecycle:copy:594', countNextStepArrayCopy('visit:task-audit-summary-lifecycle:copy:594', [...events]).reverse()).find(event => (countNextStepWork('visit:task-audit-summary-lifecycle:583'), event.event_type === 'STRICT_DECOMPOSITION_DECISION_RECORDED'));
+        const completion = countNextStepArrayCopy('visit:task-audit-summary-lifecycle:copy:595', countNextStepArrayCopy('visit:task-audit-summary-lifecycle:copy:595', [...events]).reverse()).find(event => (countNextStepWork('visit:task-audit-summary-lifecycle:584'), event.event_type === 'DECOMPOSED_PARENT_COMPLETED'));
+        const hasSplit = events.some(event => (countNextStepWork('visit:task-audit-summary-lifecycle:585'), event.event_type === 'STRICT_DECOMPOSITION_DECISION_RECORDED'
+            && isPlainRecord(event.details) && event.details.decision === 'split-required'));
         const inspection = inspectTaskEventFile(timeline, id);
         const nativeTimelineIntact = ['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(inspection.status) && inspection.violations.length === 0;
         const ordinaryTimeline = nativeTimelineIntact || ['MISSING', 'EMPTY', 'LEGACY_ONLY'].includes(inspection.status);
         if (!hasSplit && !completion && !isTaskQueueDecomposedStatus(parent.status) && ordinaryTimeline) return null;
-        const failedGates = new Map(BASE_LIFECYCLE_GATES.flatMap(gate => gate.fail_events.map(type => [type, gate.gate] as const)));
+        const failedGates = new Map(BASE_LIFECYCLE_GATES.flatMap(gate => gate.fail_events.map(type => (countNextStepWork('visit:task-audit-summary-lifecycle:591'), [type, gate.gate] as const))));
         failedGates.set('FULL_SUITE_VALIDATION_FAILED', 'full-suite-validation');
         failedGates.set(PROJECT_MEMORY_IMPACT_BLOCKED_EVENT, 'project-memory-impact');
         const facts: DecomposedParentAuditFacts = {
             taskId: id, taskStatus: parent.status, childTaskIds: children,
-            completedChildTaskIds: children.filter(child => isTaskQueueDoneStatus(entries.get(child)?.status ?? null)),
+            completedChildTaskIds: children.filter(child => (countNextStepWork('visit:task-audit-summary-lifecycle:596'), isTaskQueueDoneStatus(entries.get(child)?.status ?? null))),
             childGraphComplete: false, decomposition: nativeParentReference(decomposition, id),
             completion: nativeParentReference(completion, id),
-            historicalFailures: [...new Set(events.filter(event => event.outcome === 'FAIL')
-                .map(event => failedGates.get(String(event.event_type)) || String(event.event_type)))],
-            fullSuiteRequired: events.some(event => ['FULL_SUITE_VALIDATION_PASSED', 'FULL_SUITE_VALIDATION_WARNED', 'FULL_SUITE_VALIDATION_FAILED'].includes(String(event.event_type)))
-                || resolveFullSuiteValidationRequirementForOrderedTaskEvents(events.map(event => String(event.event_type)), true).required,
+            historicalFailures: countNextStepArrayCopy('visit:task-audit-summary-lifecycle:copy:610', [...new Set(events.filter(event => (countNextStepWork('visit:task-audit-summary-lifecycle:599'), event.outcome === 'FAIL'))
+                .map(event => (countNextStepWork('visit:task-audit-summary-lifecycle:599'), failedGates.get(String(event.event_type)) || String(event.event_type))))]),
+            fullSuiteRequired: events.some(event => (countNextStepWork('visit:task-audit-summary-lifecycle:601'), ['FULL_SUITE_VALIDATION_PASSED', 'FULL_SUITE_VALIDATION_WARNED', 'FULL_SUITE_VALIDATION_FAILED'].includes(String(event.event_type))))
+                || resolveFullSuiteValidationRequirementForOrderedTaskEvents(events.map(event => (countNextStepWork('visit:task-audit-summary-lifecycle:602'), String(event.event_type))), true).required,
             projectMemoryRequired: null
         };
         const result: NativeDecomposedParentFacts = { facts, requirements: deriveDecomposedParentAuditRequirements(facts), childSources: [] };
@@ -621,19 +631,19 @@ export function readNativeDecomposedParentFacts(repoRoot: string, taskId: string
                 || details.task_summary_sha256 !== decision.task_summary_sha256
                 || details.work_package_contract_sha256 !== decision.work_package_contract_sha256
                 || JSON.stringify(details.proposed_child_task_ids) !== JSON.stringify(proposed)
-                || proposed.length !== children.length || children.some(child => !proposed.includes(child))
+                || proposed.length !== children.length || children.some(child => (countNextStepWork('visit:task-audit-summary-lifecycle:624'), !proposed.includes(child)))
                 || !['INFO', 'PASS'].includes(String(completion?.outcome)) || !['INFO', 'PASS'].includes(String(decomposition?.outcome))
                 || done.previous_status !== 'DECOMPOSED' || done.new_status !== 'DONE' || done.reason !== 'explicit_children_done') {
                 throw new Error('Native decomposition, completion and explicit child graph do not match.');
             }
-            const laterEntry = events.some(event => ['TASK_MODE_ENTERED', 'TASK_RESET', 'TASK_DISCARDED'].includes(String(event.event_type))
-                && Number(isPlainRecord(event.integrity) ? event.integrity.task_sequence : 0) > facts.completion!.sequence);
+            const laterEntry = events.some(event => (countNextStepWork('visit:task-audit-summary-lifecycle:629'), ['TASK_MODE_ENTERED', 'TASK_RESET', 'TASK_DISCARDED'].includes(String(event.event_type))
+                && Number(isPlainRecord(event.integrity) ? event.integrity.task_sequence : 0) > facts.completion!.sequence));
             if (laterEntry) throw new Error('Native parent completion is stale for its current cycle.');
-            facts.childGraphComplete = children.every(child => entries.has(child) && isTaskQueueDoneStatus(entries.get(child)?.status ?? null));
+            facts.childGraphComplete = children.every(child => (countNextStepWork('visit:task-audit-summary-lifecycle:632'), entries.has(child) && isTaskQueueDoneStatus(entries.get(child)?.status ?? null)));
             result.requirements = deriveDecomposedParentAuditRequirements(facts);
             if (result.requirements.status !== 'REQUIRES_PROOF') return result;
-            result.childSources = mergeNativeChildSources(children.map(child => observeChildSources
-                ? observeChildSources(child) : [readNativeChildSourceAcceptance(root, child)]));
+            result.childSources = mergeNativeChildSources(children.map(child => (countNextStepWork('visit:task-audit-summary-lifecycle:635'), observeChildSources
+                ? observeChildSources(child) : [readNativeChildSourceAcceptance(root, child)])));
             if (!readNativeParentInput(root, artifactPath).equals(artifactBytes)
                 || !readNativeParentInput(root, queuePath).equals(queueBytes)) throw new Error('Canonical parent inputs changed during selection.');
             assertTaskTimelineReadSnapshotCurrent(timeline, snapshot);

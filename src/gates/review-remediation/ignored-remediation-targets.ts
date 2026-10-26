@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -410,6 +411,7 @@ function extractGuardedTargetsFromValue(value: unknown, targets: GuardedIgnoredR
             continue;
         }
         for (const entry of entries) {
+            countNextStepWork('visit:ignored-remediation-targets:event:412');
             if (!isPlainRecord(entry)) {
                 continue;
             }

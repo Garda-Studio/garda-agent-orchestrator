@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import { readTaskTimelineJsonlEntries } from '../../gate-runtime/timeline/task-events-helpers';
 
@@ -48,6 +49,7 @@ function readTimelineEvents(eventsRoot: string, taskId: string): ReadonlyArray<R
     }
     const events: Array<Readonly<Record<string, unknown>>> = [];
     for (const entry of readTaskTimelineJsonlEntries(timelinePath)) {
+        countNextStepWork('visit:next-step-review-invocation-evidence:50');
         if (!entry.record) {
             return null;
         }
@@ -65,6 +67,7 @@ function timelineHasMatchingDelegatedReviewInvocationAttestationFromSnapshot(
         return false;
     }
     for (let index = events.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:next-step-review-invocation-evidence:67');
         const event = events[index];
         if (String(event.event_type || '').trim() !== REVIEW_EVIDENCE_REQUIRED_PROVENANCE_EVENT_TYPE) {
             continue;

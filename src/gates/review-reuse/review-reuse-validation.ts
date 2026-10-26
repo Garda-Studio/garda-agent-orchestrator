@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import { resolveHistoricalGroupedReuseWindow } from './review-reuse-historical-window';
 import {
@@ -403,6 +404,7 @@ function findHistoricalReviewRecordedEventForLatestReceiptCandidate(options: {
     }
     const expectedReceiptPath = gateHelpers.normalizePath(options.candidate.telemetryReceiptPath).toLowerCase();
     for (let index = options.timelineEvents.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:review-reuse-validation:event:405');
         const event = options.timelineEvents[index];
         if (
             event.sequence >= options.latestCompilePassSequence
@@ -698,7 +700,7 @@ export function validateHistoricalReviewReuseCandidate(options: {
         };
     }
 
-    const historicalInvocationEvent = options.timelineEvents.find((entry) => (
+    const historicalInvocationEvent = options.timelineEvents.find((entry) => (countNextStepWork('visit:review-reuse-validation:event:701'), (
         entry.sequence < options.latestCompilePassSequence
         && entry.event_type === 'REVIEWER_INVOCATION_ATTESTED'
         && entry.integrity
@@ -717,7 +719,7 @@ export function validateHistoricalReviewReuseCandidate(options: {
         && String(entry.details?.review_context_sha256 || entry.details?.reviewContextSha256 || '').trim().toLowerCase() === expectedInvocationContextSha256
         && String(entry.details?.review_tree_state_sha256 || entry.details?.reviewTreeStateSha256 || '').trim().toLowerCase() === expectedReviewTreeStateSha256
         && String(entry.details?.routing_event_sha256 || entry.details?.routingEventSha256 || '').trim().toLowerCase() === historicalReviewerProvenance.routing_event_sha256
-    ));
+    )));
     if (!historicalInvocationEvent) {
         return {
             accepted: false,

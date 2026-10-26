@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../core/next-step-measurement';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 
@@ -18,6 +19,7 @@ export function fileSha256(filePath: string): string | null {
     if (!filePath) {
         return null;
     }
+    countNextStepWork('file_hash:' + filePath);
     try {
         if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
             return null;

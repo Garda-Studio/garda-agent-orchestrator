@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as os from 'node:os';
-import { withNextStepMeasurement, type NextStepMeasurement } from '../../../src/core/next-step-measurement';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { appendTaskEvent, readTaskTimelineBoundedJsonlTail, withTaskTimelineReadSnapshot } from '../../../src/gate-runtime/task-events';
+import { readOrderedTaskEvents } from '../../../src/gates/task-audit/task-audit-summary-lifecycle';
+import { reviewCorrectionWasSuperseded } from '../../../src/gates/next-step/next-step-review-correction-supersession';
+import { countNextStepArrayCopy, withNextStepMeasurement, type NextStepMeasurement } from '../../../src/core/next-step-measurement';
 
 test('measurement counts actual direct and helper process boundaries and restores native functions', () => {
     const native = require('node:child_process') as typeof import('node:child_process');
@@ -79,4 +84,126 @@ test('process counters distinguish enumerable environment inputs', () => {
     const calls = Object.entries(measurement!.work).filter(([key]) => key.startsWith('process:'));
     assert.equal(calls.length, 2);
     assert.ok(calls.every(([, count]) => count === 1));
+});
+
+test('payload diagnostics count real reads and parses without changing caller hooks and restore on throws', () => {
+    const fs = require('node:fs') as typeof import('node:fs');
+    const path = require('node:path') as typeof import('node:path');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-measurement-'));
+    const file = path.join(root, 'input.json');
+    fs.writeFileSync(file, '{"value":1}');
+    const originals = { readFileSync: fs.readFileSync, openSync: fs.openSync, readSync: fs.readSync, closeSync: fs.closeSync, parse: JSON.parse };
+    const run = () => {
+        let getterCalls = 0, reviverCalls = 0, coercions = 0;
+        const options = { get encoding() { getterCalls += 1; return 'utf8' as const; } };
+        const result = fs.readFileSync(file, options);
+        const parsed = JSON.parse({ toString() { coercions += 1; return result; } } as unknown as string,
+            (_key, value: unknown) => { reviverCalls += 1; return value; });
+        const fd = fs.openSync(file, 'r');
+        try {
+            const buffer = Buffer.alloc(20);
+            fs.readSync(fd, buffer, 0, 3, null); fs.readSync(fd, buffer, 3, 8, null);
+        } finally { fs.closeSync(fd); }
+        return { getterCalls, reviverCalls, coercions, parsed };
+    };
+    try {
+        const plain = run();
+        let measurement: NextStepMeasurement | undefined;
+        assert.deepEqual(withNextStepMeasurement(run, value => { measurement = value; }), plain);
+        assert.equal(measurement?.work['payload_read:' + file], 2);
+        assert.equal(measurement?.work.json_parse_total, 1);
+        let emptyMeasurement: NextStepMeasurement | undefined;
+        fs.writeFileSync(file, '');
+        withNextStepMeasurement(() => {
+            const fd = fs.openSync(file, 'r');
+            try { fs.readSync(fd, Buffer.alloc(1), 0, 1, null); fs.readSync(fd, Buffer.alloc(1), 0, 1, null); }
+            finally { fs.closeSync(fd); }
+        }, value => { emptyMeasurement = value; });
+        assert.equal(emptyMeasurement?.work['payload_read:' + file], 1);
+        const failure = new Error('reviver failed');
+        assert.throws(() => withNextStepMeasurement(() => JSON.parse('{}', () => { throw failure; }), () => {}), error => error === failure);
+        for (const key of ['readFileSync', 'openSync', 'readSync', 'closeSync'] as const) assert.equal(fs[key], originals[key]);
+        assert.equal(JSON.parse, originals.parse);
+    } finally { fs.unlinkSync(file); fs.rmdirSync(root); }
+});
+
+
+test('array-copy diagnostics preserve values, accessors, proxy traps and revoked proxies', () => {
+    const run = (measured: boolean) => {
+        let reads = 0, traps = 0, serializations = 0;
+        const source = [1, 2, 3];
+        Object.defineProperty(source, '1', { get() { reads += 1; return 2; }, enumerable: true });
+        Object.defineProperty(source, 'toJSON', { value() { serializations += 1; return []; } });
+        const proxy = new Proxy(source, {
+            get(target, key, receiver) { traps += 1; return Reflect.get(target, key, receiver); },
+            getOwnPropertyDescriptor(target, key) { traps += 1; return Reflect.getOwnPropertyDescriptor(target, key); }
+        });
+        let measurement: NextStepMeasurement | undefined;
+        const action = () => {
+            const copy = countNextStepArrayCopy('array_copy', [...proxy]);
+            assert.deepEqual(copy, [1, 2, 3]);
+            assert.equal(countNextStepArrayCopy('opaque_array_copy', proxy), proxy);
+            const revoked = Proxy.revocable(source, {});
+            revoked.revoke();
+            assert.equal(countNextStepArrayCopy('revoked_array_copy', revoked.proxy), revoked.proxy);
+            return copy;
+        };
+        const value = measured ? withNextStepMeasurement(action, result => { measurement = result; }) : action();
+        return { value, reads, traps, serializations, measurement };
+    };
+    const { measurement, ...observed } = run(true);
+    const { measurement: unmeasured, ...plain } = run(false);
+    assert.equal(unmeasured, undefined);
+    assert.deepEqual(observed, plain);
+    assert.equal(measurement?.work.array_copy, 3);
+    assert.equal(measurement?.work.array_copy_measurement_opaque, 2);
+    assert.equal(measurement?.work.opaque_array_copy, undefined);
+    assert.equal(measurement?.work.revoked_array_copy, undefined);
+});
+
+test('cached timeline consumers count every copied event while preserving their independent results', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-measurement-timeline-'));
+    const taskId = 'T-MEASUREMENT-COPY';
+    try {
+        for (let index = 0; index < 3; index += 1) {
+            const event = appendTaskEvent(root, taskId, 'TEST_EVENT', 'PASS', 'Measurement event', { index },
+                { passThru: true, lowNoiseRuntimeWrites: true });
+            assert.equal(event?.commit_status, 'committed');
+        }
+        const eventsRoot = path.join(root, 'runtime', 'task-events');
+        const timelinePath = path.join(eventsRoot, taskId + '.jsonl');
+        const correctionPath = path.join(root, 'correction.md');
+        fs.writeFileSync(correctionPath, 'Unreferenced correction package');
+        let measurement: NextStepMeasurement | undefined;
+        withNextStepMeasurement(() => withTaskTimelineReadSnapshot(eventsRoot, taskId, () => {
+            const first = readOrderedTaskEvents(timelinePath);
+            const second = readOrderedTaskEvents(timelinePath);
+            assert.deepEqual(first, second);
+            assert.notEqual(first.events, second.events);
+            first.events.pop();
+            assert.equal(second.events.length, 3);
+            const limits = { maxBytes: 1024 * 1024, maxLines: 100, maxEvents: 100, maxParseAttempts: 100 };
+            const firstTail = readTaskTimelineBoundedJsonlTail(timelinePath, limits);
+            const secondTail = readTaskTimelineBoundedJsonlTail(timelinePath, limits);
+            assert.deepEqual(firstTail, secondTail);
+            assert.notEqual(firstTail.records[0], secondTail.records[0]);
+            firstTail.records.pop();
+            assert.equal(secondTail.records.length, 3);
+            assert.equal(reviewCorrectionWasSuperseded(eventsRoot, taskId, 'code', correctionPath), false);
+            assert.equal(reviewCorrectionWasSuperseded(eventsRoot, taskId, 'code', correctionPath), false);
+        }), value => { measurement = value; });
+        assert.equal(measurement?.work['visit:audit_ordered_event_copy'], 6);
+        const lifecycleCopies = Object.entries(measurement!.work)
+            .filter(([key]) => key === 'visit:audit_ordered_event_copy' || key.startsWith('visit:task-audit-summary-lifecycle:copy:'))
+            .reduce((sum, [, count]) => sum + count, 0);
+        assert.equal(lifecycleCopies, 6);
+        assert.equal(measurement?.work['visit:next-step-review-correction-supersession:event:38'], 6);
+        assert.equal(measurement?.work['visit:timeline_cloned_event'], 6);
+        assert.ok(measurement!.work['visit:timeline_memoized_object'] > 3);
+        assert.ok(measurement!.work['visit:timeline_memoized_child'] > 3);
+        assert.equal(measurement?.work.timeline_parse, 1);
+        assert.equal(measurement?.work['timeline_payload_read:' + timelinePath], 1);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
 });

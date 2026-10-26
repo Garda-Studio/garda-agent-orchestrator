@@ -1,3 +1,4 @@
+import { countNextStepWork, countNextStepArrayCopy } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -143,7 +144,7 @@ function qualifyMemory(root: string, taskId: string, events: Event[], completion
     }
     const input = { repoRoot: root, taskId, preflightPath: preflight, changedFiles };
     const evidence = getProjectMemoryImpactLifecycleEvidence(input);
-    const event = [...events].reverse().find(item => item.event_type === 'PROJECT_MEMORY_IMPACT_ASSESSED');
+    const event = countNextStepArrayCopy('visit:task-audit-summary-parent-obligation-proofs:copy:146', countNextStepArrayCopy('visit:task-audit-summary-parent-obligation-proofs:copy:146', [...events]).reverse()).find(item => (countNextStepWork('visit:task-audit-summary-parent-obligation-proofs:event:146'), item.event_type === 'PROJECT_MEMORY_IMPACT_ASSESSED'));
     if (evidence.evidence_status !== 'CURRENT' || !event || event.outcome !== 'PASS' || sequence(event) <= completionSequence) {
         throw new Error('Original parent memory evidence is missing, stale or not natively assessed after child completion.');
     }
@@ -162,7 +163,7 @@ function qualifyMemory(root: string, taskId: string, events: Event[], completion
 
 function qualifyCommands(root: string, taskId: string, original: Event[], events: Event[], completionSequence: number): void {
     const contracts = original.filter(event => ORIGINAL_SUITE_EVENTS.has(String(event.event_type)))
-        .map(event => event.details);
+        .map(event => (countNextStepWork('visit:task-audit-summary-parent-obligation-proofs:event:164'), event.details));
     if (contracts.length === 0) contracts.push(readUnexecutedOriginalCommand(root, taskId, original));
     const sourceFields = runGit(root, ['--no-replace-objects', 'show', '--no-patch', '--format=%H%n%T%n%P', 'HEAD'], { timeoutMs: 10000, maxBuffer: 4096 }).trim().split(/\r?\n/u);
     const source = { commitSha: sourceFields[0], treeSha: sourceFields[1], parentCommitSha: sourceFields[2]?.split(' ')[0] || null };
@@ -173,8 +174,8 @@ function qualifyCommands(root: string, taskId: string, original: Event[], events
         if (coverage !== null && typeof coverage !== 'string') throw new Error('Original command coverage identity is invalid.');
         const key = JSON.stringify([command, coverage]);
         if (checked.has(key)) continue;
-        const latest = [...events].reverse().find(item => item.event_type === 'INTERMEDIATE_COMMAND_RUN'
-            && isPlainRecord(item.details) && item.details.command === command);
+        const latest = countNextStepArrayCopy('visit:task-audit-summary-parent-obligation-proofs:copy:176', countNextStepArrayCopy('visit:task-audit-summary-parent-obligation-proofs:copy:176', [...events]).reverse()).find(item => (countNextStepWork('visit:task-audit-summary-parent-obligation-proofs:event:176'), item.event_type === 'INTERMEDIATE_COMMAND_RUN'
+            && isPlainRecord(item.details) && item.details.command === command));
         const proof = latest?.details;
         if (!latest || !['PASS', 'PASSED'].includes(String(latest.outcome)) || sequence(latest) <= completionSequence || !isPlainRecord(proof)
             || typeof proof.artifact_path !== 'string' || typeof proof.artifact_sha256 !== 'string') {
@@ -271,8 +272,8 @@ function readParentObligations(repoRoot: string, taskId: string, scope: ParentRe
             const timeline = path.join(eventsRoot, id + '.jsonl'), inspection = inspectTaskEventFile(timeline, id);
             if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(inspection.status) || inspection.violations.length) throw new Error('Original parent timeline is not intact.');
             const snapshot = captureTaskTimelineReadSnapshotSha256(timeline);
-            const events = readTaskTimelineJsonlEntries(timeline).map(entry => entry.record).filter(isPlainRecord);
-            const original = events.filter(event => sequence(event) <= native.facts.decomposition!.sequence);
+            const events = readTaskTimelineJsonlEntries(timeline).map(entry => (countNextStepWork('visit:task-audit-summary-parent-obligation-proofs:event:274'), entry.record)).filter(isPlainRecord);
+            const original = events.filter(event => (countNextStepWork('visit:task-audit-summary-parent-obligation-proofs:event:275'), sequence(event) <= native.facts.decomposition!.sequence));
             const completion = native.facts.completion!.sequence;
             const needsDeclaration = native.requirements.requiredProofs.includes('full-suite-composition')
                 && !original.some(event => ORIGINAL_SUITE_EVENTS.has(String(event.event_type)));

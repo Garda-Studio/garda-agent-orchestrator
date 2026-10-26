@@ -46,7 +46,7 @@
 
 - Repeated review-artifact reads reuse the parsed immutable JSON within an authenticated read snapshot; path, identity and publication checks still run on every read. Iterative cloning preserves deeply nested JSON, own property names and fresh frozen views.
 
-- Opt-in `GARDA_NEXT_STEP_TIMING=1` reports inclusive navigation phase timings and work counts to stderr without changing navigator text or JSON. The benchmark reports first-process and warm-process timings with phase samples.
+- Opt-in `GARDA_NEXT_STEP_TIMING=1` reports inclusive navigation phase timings and work counts to stderr without changing navigator text or JSON. Work counters include raw file reads, JSON parsing, scope hashes and processed history objects. History budgets exercise authenticated review cycles, remediation baselines and real completion; timing samples remain informational.
 
 - Garda Compact keeps large command output manageable: preview Git results, files and searches, then page through or search the retained output.
 - Navigation, CLI startup and report loading do less repeated work through shared reads, caching and lazy loading.

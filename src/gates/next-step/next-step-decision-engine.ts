@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 export const NEXT_STEP_DECISION_CHECKPOINT_PRECEDENCE = Object.freeze([
     'task-metadata-validation',
     'task-id-casing',
@@ -76,7 +77,7 @@ function cloneAndFreezeProjectionValue<T>(value: T, ancestors: readonly object[]
         throw new Error('Next-step decision routes must contain plain objects and arrays only.');
     }
     const snapshot = Object.fromEntries(
-        Object.entries(value).map(([key, entry]) => [key, cloneAndFreezeProjectionValue(entry, nextAncestors)])
+        Object.entries(value).map(([key, entry]) => (countNextStepWork('visit:next-step-decision-engine:event:79'), [key, cloneAndFreezeProjectionValue(entry, nextAncestors)]))
     );
     return Object.freeze(snapshot) as T;
 }
@@ -90,6 +91,7 @@ export function createAuthenticatedNextStepStateProjection<TRoute>(options: {
     }
     let pendingReached = false;
     for (const [index, candidate] of options.candidates.entries()) {
+        countNextStepWork('visit:next-step-decision-engine:event:92');
         const expectedCheckpoint = NEXT_STEP_DECISION_CHECKPOINT_PRECEDENCE[index];
         if (candidate.checkpoint !== expectedCheckpoint) {
             throw new Error(

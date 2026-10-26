@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import { createHash } from 'node:crypto';
 import { declaredFileRole, type FileRoleBindings } from '../../core/file-role-bindings';
 
@@ -309,8 +310,8 @@ function classifyFromBaseline(options: {
         reviewTreeStateSha256: deltaBase.review_tree_state_sha256,
         changedFiles: allFiles
     });
-    const baselineEntries = new Map(deltaBase.entries.map((entry) => [entry.path, entry]));
-    const currentEntries = new Map(currentSnapshot.entries.map((entry) => [entry.path, entry]));
+    const baselineEntries = new Map(deltaBase.entries.map((entry) => (countNextStepWork('visit:review-remediation-delta:event:312'), [entry.path, entry])));
+    const currentEntries = new Map(currentSnapshot.entries.map((entry) => (countNextStepWork('visit:review-remediation-delta:event:313'), [entry.path, entry])));
     const structuralPatterns = compilePatterns(
         options.structuralTestPathRegexes,
         'structural test path policy'

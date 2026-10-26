@@ -1,3 +1,4 @@
+import { countNextStepArrayCopy, countNextStepWork } from '../../core/next-step-measurement';
 import {
     buildReviewVerdictTokenSet,
     extractReviewVerdictSectionTokenMatch,
@@ -275,7 +276,7 @@ function recordReviewAttemptFreshReuse(
 }
 
 function sortRecord<T>(record: Record<string, T>): Record<string, T> {
-    return Object.fromEntries(Object.entries(record).sort(([left], [right]) => left.localeCompare(right)));
+    return Object.fromEntries(Object.entries(record).sort(([left], [right]) => (countNextStepWork('visit:task-audit-summary-review-attempts:event:279'), left.localeCompare(right))));
 }
 
 interface ReviewAttemptDiagnosticInput {
@@ -299,7 +300,7 @@ function buildReviewAttemptCycleSummaryLine(summary: Pick<
         return null;
     }
     const scopeHashText = Object.entries(summary.scope_hash_count_by_review_type || {})
-        .map(([reviewType, count]) => `${reviewType}=${count}`)
+        .map(([reviewType, count]) => (countNextStepWork('visit:task-audit-summary-review-attempts:event:302'), `${reviewType}=${count}`))
         .join(', ');
     return `Review cycle attempts: total=${summary.total_attempts}; non_test=${summary.total_non_test_attempts ?? 0}; ` +
         `current_scope_non_test=${summary.current_scope_non_test_attempts ?? 0}; ` +
@@ -322,6 +323,7 @@ function buildReviewAttemptDiagnostics(
     let reusedNonTestAttempts = 0;
 
     for (const attempt of attempts) {
+        countNextStepWork('visit:task-audit-summary-review-attempts:event:325');
         const reviewType = attempt.reviewType.trim().toLowerCase();
         if (!reviewType) {
             continue;
@@ -371,9 +373,9 @@ function buildReviewAttemptDiagnostics(
         scopeHashCounts.set(attempt.scopeHash, scopeCounts);
     }
 
-    const sortedScopeHashEntries = [...scopeHashCountsByType.entries()].sort(([left], [right]) => left.localeCompare(right));
+    const sortedScopeHashEntries = countNextStepArrayCopy('visit:task-audit-summary-review-attempts:copy:375', [...scopeHashCountsByType.entries()]).sort(([left], [right]) => (countNextStepWork('visit:task-audit-summary-review-attempts:event:375'), left.localeCompare(right)));
     return {
-        total_attempts: attempts.filter((attempt) => !attempt.reusedExistingReview).length,
+        total_attempts: attempts.filter((attempt) => (countNextStepWork('visit:task-audit-summary-review-attempts:event:377'), !attempt.reusedExistingReview)).length,
         total_non_test_attempts: totalNonTestAttempts,
         current_scope_total_attempts: currentScopeTotalAttempts,
         current_scope_non_test_attempts: currentScopeNonTestAttempts,
@@ -382,15 +384,15 @@ function buildReviewAttemptDiagnostics(
         current_scope_counts_by_review_type: sortRecord(Object.fromEntries(currentScopeCountsByType.entries())),
         fresh_reused_by_review_type: sortRecord(Object.fromEntries(freshReusedByType.entries())),
         scope_hash_count_by_review_type: Object.fromEntries(
-            sortedScopeHashEntries.map(([reviewType, scopeHashCounts]) => [reviewType, scopeHashCounts.size])
+            sortedScopeHashEntries.map(([reviewType, scopeHashCounts]) => (countNextStepWork('visit:task-audit-summary-review-attempts:event:386'), [reviewType, scopeHashCounts.size]))
         ),
         top_scope_hashes_by_review_type: Object.fromEntries(
-            sortedScopeHashEntries.map(([reviewType, scopeHashCounts]) => [
+            sortedScopeHashEntries.map(([reviewType, scopeHashCounts]) => (countNextStepWork('visit:task-audit-summary-review-attempts:event:389'), [
                 reviewType,
                 [...scopeHashCounts.values()]
                     .sort((left, right) => right.total - left.total || left.scope_hash.localeCompare(right.scope_hash))
                     .slice(0, 5)
-            ])
+            ]))
         )
     };
 }
@@ -610,6 +612,7 @@ export function buildReviewAttemptSummary(options: {
         let fallbackAttemptCount = 0;
 
         for (const event of options.timelineEvents || []) {
+            countNextStepWork('visit:audit_review_attempt_event');
             const eventAttempt = summarizeReviewAttemptFromEvent(
                 event,
                 artifactIndex,
@@ -668,6 +671,7 @@ export function buildReviewAttemptSummary(options: {
                 reviewType,
                 currentPreflightFingerprints
             )) {
+                countNextStepWork('visit:task-audit-summary-review-attempts:event:667');
                 const fallbackEvidenceKey = buildReviewAttemptEvidenceKey(
                     fallbackAttempt.receiptSha256,
                     fallbackAttempt.reviewArtifactSha256,
@@ -711,7 +715,7 @@ export function buildReviewAttemptSummary(options: {
 
         const reviewTypes = [...attemptCounts.values()]
             .filter((entry) => entry.total_attempts > 0)
-            .sort((left, right) => left.review_type.localeCompare(right.review_type));
+            .sort((left, right) => (countNextStepWork('visit:task-audit-summary-review-attempts:event:714'), left.review_type.localeCompare(right.review_type)));
         if (reviewTypes.length === 0 && diagnosticAttempts.length === 0) {
             return null;
         }

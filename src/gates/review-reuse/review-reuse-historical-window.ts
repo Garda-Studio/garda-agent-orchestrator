@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import { inspectTaskEventFile } from '../../gate-runtime/task-events';
 import { withTaskTimelineFileReadSnapshot } from '../../gate-runtime/timeline/task-timeline-read-snapshot';
 import type { ReviewReceipt } from '../../gate-runtime/review-context';
@@ -52,12 +53,12 @@ function resolveNativeWindow(options: HistoricalGroupedReuseWindowOptions, timel
     });
     if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(inspection.status)) return null;
     const sourceHash = hash(options.sourceEvent.integrity?.event_sha256);
-    const currentCompileHash = hash(options.timelineEvents.find(event => (
+    const currentCompileHash = hash(options.timelineEvents.find(event => (countNextStepWork('visit:review-reuse-historical-window:event:55'), (
         event.sequence === options.latestCompilePassSequence
-    ))?.integrity?.event_sha256);
+    )))?.integrity?.event_sha256);
     if (!sourceHash || !currentCompileHash || !hash(options.receiptSha256)) return null;
-    const sourceIndex = nativeEvents.findIndex(event => eventHash(event) === sourceHash);
-    const currentCompileIndex = nativeEvents.findIndex(event => eventHash(event) === currentCompileHash);
+    const sourceIndex = nativeEvents.findIndex(event => (countNextStepWork('visit:review-reuse-historical-window:event:59'), eventHash(event) === sourceHash));
+    const currentCompileIndex = nativeEvents.findIndex(event => (countNextStepWork('visit:review-reuse-historical-window:event:60'), eventHash(event) === currentCompileHash));
     const source = nativeEvents[sourceIndex];
     const sourceDetails = detailsOf(source);
     const currentCompile = nativeEvents[currentCompileIndex];
@@ -91,7 +92,7 @@ function resolveNativeWindow(options: HistoricalGroupedReuseWindowOptions, timel
         ? normalizePath(value).toLowerCase() : normalizePath(value);
     if (pathKey(compilePath) !== pathKey(classifiedPath)) return null;
     const compileHash = eventHash(compile);
-    const normalizedCompile = options.timelineEvents.find(event => hash(event.integrity?.event_sha256) === compileHash);
+    const normalizedCompile = options.timelineEvents.find(event => (countNextStepWork('visit:review-reuse-historical-window:event:94'), hash(event.integrity?.event_sha256) === compileHash));
     if (!normalizedCompile || normalizedCompile.sequence >= options.sourceEvent.sequence) return null;
 
     const originalReceiptHash = hash(options.receipt.reused_from_receipt_sha256);
@@ -107,6 +108,7 @@ function resolveNativeWindow(options: HistoricalGroupedReuseWindowOptions, timel
     }
     if (originalIndex < 0) return null;
     for (let index = originalIndex + 1; index < nativeEvents.length; index += 1) {
+        countNextStepWork('visit:review-reuse-historical-window:event:109');
         const event = nativeEvents[index];
         if (event.event_type !== 'REVIEW_CYCLE_RESTARTED' || event.actor !== 'gate') continue;
         // A newer restart requires newer review evidence even when it preserves the lane mode.
@@ -118,7 +120,7 @@ function resolveNativeWindow(options: HistoricalGroupedReuseWindowOptions, timel
         if (!isPlainRecord(lane) || lane.invalidated === true || lane.mode !== options.receipt.review_execution_mode) return null;
     }
     return {
-        events: options.timelineEvents.filter(event => event.sequence <= options.sourceEvent.sequence),
+        events: options.timelineEvents.filter(event => (countNextStepWork('visit:review-reuse-historical-window:event:121'), event.sequence <= options.sourceEvent.sequence)),
         compileSequence: normalizedCompile.sequence
     };
 }

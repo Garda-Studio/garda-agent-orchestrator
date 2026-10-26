@@ -1,3 +1,4 @@
+import { seedAuthenticatedReviewerLaunchFixture } from '../../gates/next-step/next-step-reviewer-launch-fixtures';
 /**
  * Test helpers: rule/config seeding, artifact writers, evidence builders,
  * and gate-lifecycle orchestration for test fixtures.
@@ -1045,6 +1046,8 @@ function buildReceiptBackedReviewContextFixture(
     reviewKey: string,
     reviewerEvidence: ReturnType<typeof resolveDefaultReviewerEvidence>,
     options: {
+        reviewExecutionContract?: Parameters<typeof buildReviewContext>[0]['reviewExecutionContract'];
+        reviewExecutionValidationAuthority?: Parameters<typeof buildReviewContext>[0]['reviewExecutionValidationAuthority'];
         allowLegacyManualReviewContext?: boolean;
         legacyMarkdownArtifact?: boolean;
     } = {}
@@ -1063,6 +1066,8 @@ function buildReceiptBackedReviewContextFixture(
             reviewType: reviewKey,
             depth: 2,
             preflightPath,
+            reviewExecutionContract: options.reviewExecutionContract,
+            reviewExecutionValidationAuthority: options.reviewExecutionValidationAuthority,
             tokenEconomyConfigPath: path.join(repoRoot, 'garda-agent-orchestrator', 'live', 'config', 'token-economy.json'),
             scopedDiffMetadataPath: path.join(reviewsRoot, `${taskId}-${reviewKey}-scoped.json`),
             outputPath: reviewContextPath,
@@ -1410,10 +1415,11 @@ function buildFixtureFindingsReport(options: {
     reviewExecution: ReviewerRemediationCoverageDeclaration;
     findingSeverity: 'critical' | 'high' | 'medium' | 'low' | null;
     findingDescription?: string;
+    findingEvidenceFile?: string;
     residualRisk?: boolean;
     caseResolutions?: Readonly<Record<string, unknown>>;
 }): Record<string, unknown> {
-    const defaultEvidenceFile = options.coverageContract.obligations.find((entry) => entry.kind === 'file')?.target
+    const defaultEvidenceFile = options.findingEvidenceFile || options.coverageContract.obligations.find((entry) => entry.kind === 'file')?.target
         || 'src/app.ts';
     const findingId = 'F-001';
     const finding = {
@@ -1425,7 +1431,9 @@ function buildFixtureFindingsReport(options: {
             location: `${defaultEvidenceFile}:1`,
             observation: 'The fixture intentionally records an active finding.'
         }],
-        coverage_obligation_ids: options.coverageContract.obligations.map((obligation) => obligation.id)
+        coverage_obligation_ids: options.coverageContract.obligations
+            .filter(obligation => !options.findingEvidenceFile || (obligation.kind === 'file' && obligation.target === options.findingEvidenceFile))
+            .map((obligation) => obligation.id)
     };
     const findingIds = options.findingSeverity ? [findingId] : [];
     const residualRisk = {
@@ -1467,7 +1475,7 @@ function buildFixtureFindingsReport(options: {
                             location: `${evidenceFile}:1`,
                             observation: `Concrete fixture evidence covers ${obligation.kind} ${obligation.target} for receipt-backed review behavior.`
                         }],
-                        finding_ids: findingIds,
+                        finding_ids: options.findingEvidenceFile && obligation.target !== options.findingEvidenceFile ? [] : findingIds,
                         ...(resolution !== undefined ? { case_resolution: resolution } : {})
                     };
                 })
@@ -1494,6 +1502,7 @@ function buildFixtureFindingsContent(options: {
     reviewExecution: ReviewerRemediationCoverageDeclaration;
     verdict: string;
     findingDescription?: string;
+    findingEvidenceFile?: string;
     findingSeverity?: 'critical' | 'high' | 'medium' | 'low' | null;
     residualRisk?: boolean;
     caseResolutions?: Readonly<Record<string, unknown>>;
@@ -1506,6 +1515,7 @@ function buildFixtureFindingsContent(options: {
         coverageContract: options.coverageContract,
         reviewExecution: options.reviewExecution,
         findingDescription: options.findingDescription,
+        findingEvidenceFile: options.findingEvidenceFile,
         findingSeverity: options.findingSeverity === undefined
             ? (/\bFAILED\b/u.test(options.verdict) ? 'high' : null)
             : options.findingSeverity,
@@ -1551,10 +1561,16 @@ export function writeReceiptBackedReviewArtifact(
     verdict: string,
     contentLines?: string[],
     options: {
+        reviewExecutionContract?: Parameters<typeof buildReviewContext>[0]['reviewExecutionContract'];
+        reviewExecutionValidationAuthority?: Parameters<typeof buildReviewContext>[0]['reviewExecutionValidationAuthority'];
         allowLegacyManualReviewContext?: boolean;
+        findingEvidenceFile?: string;
         findingSeverity?: 'critical' | 'high' | 'medium' | 'low' | null;
         legacyMarkdownArtifact?: boolean;
         preserveExistingReviewContext?: boolean;
+        authenticatedNavigatorLaunch?: boolean;
+        beforeReceipt?: () => void;
+        skipReceipt?: boolean;
         rawArtifactContent?: boolean;
         residualRisk?: boolean;
         caseResolutions?: Readonly<Record<string, unknown>>;
@@ -1582,6 +1598,7 @@ export function writeReceiptBackedReviewArtifact(
     ].join('\n');
     const artifactPath = path.join(reviewsRoot, `${taskId}-${reviewKey}.md`);
     const reviewContextPath = path.join(reviewsRoot, `${taskId}-${reviewKey}-review-context.json`);
+    if (options.authenticatedNavigatorLaunch) prepareScopedDiffFixture(repoRoot, path.join(reviewsRoot, `${taskId}-preflight.json`), reviewKey);
     const existingReviewContextText = options.preserveExistingReviewContext === true
         ? fs.readFileSync(reviewContextPath, 'utf8')
         : null;
@@ -1613,6 +1630,7 @@ export function writeReceiptBackedReviewArtifact(
             verdict,
             findingDescription: explicitContent || undefined,
             findingSeverity: options.findingSeverity,
+            findingEvidenceFile: options.findingEvidenceFile,
             residualRisk: options.residualRisk,
             caseResolutions: options.caseResolutions
         });
@@ -1621,12 +1639,17 @@ export function writeReceiptBackedReviewArtifact(
     const artifactHash = crypto.createHash('sha256').update(content).digest('hex');
 
     const orchestratorRoot = path.join(repoRoot, 'garda-agent-orchestrator');
-    const skillId = reviewKey === 'test' ? 'testing-strategy' : 'code-review';
+    const nativeLane = options.authenticatedNavigatorLaunch
+        ? JSON.parse(fs.readFileSync(path.join(reviewsRoot, taskId + '-preflight.json'), 'utf8'))
+            .effective_review_snapshot.lanes.find((lane: { id: string }) => lane.id === reviewKey) : null;
+    const skillIds: string[] = nativeLane?.definition.skill_ids || [reviewKey === 'test' ? 'testing-strategy' : 'code-review'];
+    for (const skillId of skillIds) {
     appendTaskEvent(orchestratorRoot, taskId, 'REVIEW_PHASE_STARTED', 'INFO', 'review started', {
         review_type: reviewKey
     });
     appendTaskEvent(orchestratorRoot, taskId, 'SKILL_SELECTED', 'INFO', 'selected', {skill_id: skillId});
     appendTaskEvent(orchestratorRoot, taskId, 'SKILL_REFERENCE_LOADED', 'INFO', 'loaded', {reference_path: `/live/skills/${skillId}/SKILL.md`});
+    }
     const routedEvent = appendTaskEvent(orchestratorRoot, taskId, 'REVIEWER_DELEGATION_ROUTED', 'INFO', 'delegated', {
         review_type: reviewKey,
         reviewer_execution_mode: reviewerEvidence.executionMode,
@@ -1635,7 +1658,20 @@ export function writeReceiptBackedReviewArtifact(
         delegation_used: reviewerEvidence.executionMode === 'delegated_subagent',
         ...launchReviewExecutionBindings
     }, {passThru: true});
-    const launchEvidence = seedCompletedReviewerLaunchFixture({
+    const authenticatedLaunch = options.authenticatedNavigatorLaunch ? seedAuthenticatedReviewerLaunchFixture({
+        repoRoot, taskId, reviewType: reviewKey, reviewerIdentity: reviewerEvidence.reviewerIdentity,
+        reviewExecutionBindings: launchReviewExecutionBindings, uniqueAttempt: true, provider: 'Codex',
+        reviewContextPath, reviewTreeStateSha256: reviewTreeStateSha256 || undefined, includeInvocation: false,
+        reviewOutputPath: path.join(orchestratorRoot, 'runtime/tmp/reviews', taskId, reviewKey, 'review-output.md'),
+        appendEvent: (_root, id, type, outcome, details) => {
+            const event = appendTaskEvent(orchestratorRoot, id, type, outcome || 'INFO', type,
+                { ...details, ...launchReviewExecutionBindings }, { passThru: true });
+            assert.ok(event?.integrity?.event_sha256);
+            return { task_sequence: event.integrity.task_sequence,
+                prev_event_sha256: event.integrity.prev_event_sha256 ?? null, event_sha256: event.integrity.event_sha256 };
+        }
+    }) : null;
+    const launchEvidence = authenticatedLaunch || seedCompletedReviewerLaunchFixture({
         repoRoot,
         taskId,
         reviewKey,
@@ -1675,20 +1711,28 @@ export function writeReceiptBackedReviewArtifact(
         reviewer_identity: reviewerEvidence.reviewerIdentity,
         review_context_sha256: reviewContextHash,
         review_tree_state_sha256: reviewTreeStateSha256,
-        routing_event_sha256: routedEvent?.integrity?.event_sha256,
+        routing_event_sha256: authenticatedLaunch?.routeIntegrity.event_sha256 || routedEvent?.integrity?.event_sha256,
         reviewer_launch_artifact_path: path.normalize(launchEvidence.launchArtifactPath).replace(/\\/g, '/'),
         reviewer_launch_artifact_sha256: launchEvidence.launchArtifactSha256,
         reviewer_launch_attestation_source: launchEvidence.attestationSource,
         reviewer_launch_tool: launchEvidence.launchTool,
         provider_invocation_id: launchEvidence.providerInvocationId,
-        launch_prepared_at_utc: TEST_REVIEW_LAUNCH_PREPARED_AT_UTC,
-        delegation_started_at_utc: TEST_REVIEW_LAUNCHED_AT_UTC,
-        launched_at_utc: TEST_REVIEW_LAUNCHED_AT_UTC,
-        launch_completed_at_utc: TEST_REVIEW_LAUNCH_COMPLETED_AT_UTC,
+        launch_prepared_at_utc: authenticatedLaunch?.launchPreparedAtUtc || TEST_REVIEW_LAUNCH_PREPARED_AT_UTC,
+        delegation_started_at_utc: authenticatedLaunch?.delegationStartedAtUtc || TEST_REVIEW_LAUNCHED_AT_UTC,
+        launched_at_utc: authenticatedLaunch?.delegationStartedAtUtc || TEST_REVIEW_LAUNCHED_AT_UTC,
+        launch_completed_at_utc: authenticatedLaunch?.launchCompletedAtUtc || TEST_REVIEW_LAUNCH_COMPLETED_AT_UTC,
         launch_input_mode: launchEvidence.launchInputMode,
         launch_input_sha256: launchEvidence.launchInputSha256,
         copy_paste_reviewer_launch_prompt_sha256: launchEvidence.copyPastePromptSha256,
-        invocation_attested_at_utc: TEST_REVIEW_INVOCATION_ATTESTED_AT_UTC,
+        invocation_attested_at_utc: authenticatedLaunch?.invocationAttestedAtUtc || TEST_REVIEW_INVOCATION_ATTESTED_AT_UTC,
+        ...(authenticatedLaunch ? {
+            execution_provider: 'Codex',
+            reviewer_launch_attempt_id: authenticatedLaunch.reviewerLaunchAttemptId,
+            reviewer_launch_input_artifact_path: authenticatedLaunch.launchInputArtifactPath.replace(/\\/gu, '/'),
+            reviewer_launch_input_artifact_sha256: authenticatedLaunch.launchInputArtifactSha256,
+            reviewer_launch_input_pinned_event_sha256: authenticatedLaunch.pinnedInputIntegrity.event_sha256,
+            reviewer_launch_input_pinned_event_task_sequence: authenticatedLaunch.pinnedInputIntegrity.task_sequence
+        } : {}),
         ...launchReviewExecutionBindings
     };
     const invocationEvent = appendTaskEvent(
@@ -1832,6 +1876,8 @@ export function writeReceiptBackedReviewArtifact(
     const receiptPayloadSha256 = crypto.createHash('sha256').update(receiptPayload).digest('hex');
     const receiptSnapshotPath = artifactPath.replace(/\.md$/, `-receipt-${receiptPayloadSha256}.json`);
     const artifactSnapshotPath = artifactPath.replace(/\.md$/, `-artifact-${artifactHash}.md`);
+    options.beforeReceipt?.();
+    if (options.skipReceipt) return;
     fs.writeFileSync(receiptPath, receiptPayload, 'utf8');
     fs.writeFileSync(receiptSnapshotPath, receiptPayload, 'utf8');
     fs.writeFileSync(artifactSnapshotPath, content, 'utf8');

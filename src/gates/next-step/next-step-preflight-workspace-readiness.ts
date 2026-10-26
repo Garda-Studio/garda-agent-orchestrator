@@ -1,3 +1,4 @@
+import { countNextStepWork, countNextStepArrayCopy } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -97,6 +98,7 @@ function hasCommandOnlyConfigAuditChain(options: {
     const boundRecords = new Set<string>();
     // Inspect the complete current cycle, including mutations that return to the baseline.
     for (const entry of options.taskCycleEntries) {
+        countNextStepWork('visit:next-step-preflight-workspace-readiness:event:99');
         const event = entry.record;
         const prepared = event?.event_type === 'WORKFLOW_CONFIG_MUTATION_PREPARED';
         if (!prepared && event?.event_type !== 'WORKFLOW_CONFIG_MUTATION_AUDITED') continue;
@@ -131,6 +133,7 @@ function hasCommandOnlyConfigAuditChain(options: {
     if (preparedRecords.size !== boundRecords.size) return false;
     // Audit publication holds the workflow lock; event publication may interleave after commit.
     for (const [recordHash, record] of records) {
+        countNextStepWork('visit:next-step-preflight-workspace-readiness:event:133');
         if (!boundRecords.has(recordHash) || !isPlainRecord(record)) continue;
         const beforeHash = normalizeWorkflowConfigSha256(record.before_sha256);
         const afterHash = normalizeWorkflowConfigSha256(record.after_sha256);
@@ -193,7 +196,7 @@ function canCloseAuthenticatedNoOpBesideProtectedBaseline(
                 ? snapshot?.config_hashes.workflow_config || null : null,
             preflightHash: configHashes[relativePath] || null,
             taskEntryHash,
-            taskCycleEntries: entries.slice(taskEntryIndex + 1)
+            taskCycleEntries: countNextStepArrayCopy('visit:next-step-preflight-workspace-readiness:copy:196', entries.slice(taskEntryIndex + 1))
         }));
     } catch {
         // Missing or malformed evidence cannot widen the existing protected-scope allowance.
@@ -228,6 +231,7 @@ function hasPreservedZeroDiffAuditWorkspace(
 
         const sourcePaths = snapshot.resolution_sources as unknown as Record<string, unknown>;
         for (const [name, expectedHash] of Object.entries(snapshot.config_hashes)) {
+            countNextStepWork('visit:next-step-preflight-workspace-readiness:event:230');
             if (name === 'workflow_config') continue;
             const sourcePath = sourcePaths[name];
             if (!sourcePath) {
@@ -252,11 +256,11 @@ function hasPreservedZeroDiffAuditWorkspace(
         let entryIndex = entries.length - 1;
         while (entryIndex >= 0 && entries[entryIndex].record?.event_type !== 'TASK_MODE_ENTERED') entryIndex -= 1;
         if (entryIndex < 0 || entries[entryIndex].record?.outcome !== 'PASS') return false;
-        const cycleEntries = entries.slice(entryIndex + 1);
-        const mutations = cycleEntries.filter((entry) => (
+        const cycleEntries = countNextStepArrayCopy('visit:next-step-preflight-workspace-readiness:copy:255', entries.slice(entryIndex + 1));
+        const mutations = cycleEntries.filter((entry) => (countNextStepWork('visit:next-step-preflight-workspace-readiness:event:256'), (
             entry.record?.event_type === 'WORKFLOW_CONFIG_MUTATION_PREPARED'
                 || entry.record?.event_type === 'WORKFLOW_CONFIG_MUTATION_AUDITED'
-        ));
+        )));
         if (mutations.some((entry) => {
             const record = entry.record;
             const details = record && isPlainRecord(record.details) ? record.details : {};
@@ -298,7 +302,7 @@ export function hasAuthenticatedZeroDiffAuditScope(
             dirtyWorkspaceBaselineChangedFiles: taskMode.dirty_workspace_baseline?.changed_files || [],
             dirtyWorkspaceBaselineFileHashes: Object.fromEntries(Object.entries(
                 taskMode.dirty_workspace_baseline?.file_hashes || {}
-            ).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
+            ).filter((entry): entry is [string, string] => (countNextStepWork('visit:next-step-preflight-workspace-readiness:event:299'), typeof entry[1] === 'string'))),
             allowDocsOnlyDelta: false, workspaceSnapshotRequest
         }).ready) return false;
         return canCloseAuthenticatedNoOpBesideProtectedBaseline(repoRoot, preflight,
@@ -925,6 +929,7 @@ function getWorkflowConfigFileHashes(repoRoot: string, preflight: Record<string,
         : {};
     const hashes: WorkflowConfigFileHashes = {};
     for (const [rawPath, rawHash] of Object.entries(rawHashes)) {
+        countNextStepWork('visit:next-step-preflight-workspace-readiness:event:927');
         const normalizedPath = normalizeWorkspaceRelativePath(repoRoot, rawPath);
         if (!normalizedPath) {
             continue;

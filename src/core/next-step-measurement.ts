@@ -8,8 +8,20 @@ export interface NextStepMeasurement {
 }
 let active: NextStepMeasurement | null = null;
 
-export function countNextStepWork(name: string): void {
-    if (active) active.work[name] = (active.work[name] || 0) + 1;
+export function countNextStepWork(name: string, amount = 1): void {
+    if (active) active.work[name] = (active.work[name] || 0) + amount;
+}
+
+/** Count actual array-copy results without touching caller getters or proxy traps. */
+export function countNextStepArrayCopy<T>(name: string, value: T): T {
+    if (active) {
+        if (types.isProxy(value)) countNextStepWork('array_copy_measurement_opaque');
+        else if (Array.isArray(value)) {
+            const length = Object.getOwnPropertyDescriptor(value, 'length');
+            if (length && 'value' in length && typeof length.value === 'number') countNextStepWork(name, length.value);
+        }
+    }
+    return value;
 }
 
 export function measureNextStepPhase<T>(name: string, action: () => T): T {
@@ -91,12 +103,71 @@ function captureProcessWork(): () => void {
     return restore;
 }
 
+// Observe raw readers as well as canonical snapshots, so diagnostics expose bypasses.
+function capturePayloadWork(): () => void {
+    type Api = Record<string, (...args: unknown[]) => unknown>;
+    const native = require('node:fs') as Api;
+    const json = JSON as unknown as Api;
+    const originals: Array<{ api: Api; name: string; original: (...args: unknown[]) => unknown }> = [];
+    const descriptors = new Map<number, { path: string; observed: boolean }>();
+    let wholeFileDepth = 0;
+    const fileName = (value: unknown): string | null => typeof value === 'string' ? path.resolve(value)
+        : typeof value === 'number' ? descriptors.get(value)?.path || null : null;
+    const wrap = (api: Api, name: string, invoke: (original: (...args: unknown[]) => unknown, self: unknown, args: unknown[]) => unknown) => {
+        const original = api[name]; originals.push({ api, name, original });
+        api[name] = function (this: unknown, ...args: unknown[]) { return invoke(original, this, args); };
+    };
+    const restore = () => {
+        for (const { api, name, original } of [...originals].reverse()) {
+            try { if (api[name] !== original) api[name] = original; }
+            catch { countNextStepWork('payload_measurement_unavailable'); }
+        }
+    };
+    try {
+        wrap(native, 'openSync', (original, self, args) => {
+            const result = Reflect.apply(original, self, args);
+            if (typeof result === 'number' && typeof args[0] === 'string')
+                descriptors.set(result, { path: path.resolve(args[0]), observed: false });
+            return result;
+        });
+        wrap(native, 'closeSync', (original, self, args) => {
+            try { return Reflect.apply(original, self, args); }
+            finally { if (typeof args[0] === 'number') descriptors.delete(args[0]); }
+        });
+        wrap(native, 'readSync', (original, self, args) => {
+            const result = Reflect.apply(original, self, args);
+            const descriptor = typeof args[0] === 'number' ? descriptors.get(args[0]) : undefined;
+            if (!wholeFileDepth && descriptor && typeof result === 'number' && result >= 0 && !descriptor.observed) {
+                countNextStepWork('payload_read:' + descriptor.path); descriptor.observed = true;
+            }
+            return result;
+        });
+        wrap(native, 'readFileSync', (original, self, args) => {
+            const name = fileName(args[0]);
+            wholeFileDepth += 1;
+            try {
+                const result = Reflect.apply(original, self, args);
+                if (name) countNextStepWork('payload_read:' + name);
+                else countNextStepWork('payload_read:opaque');
+                return result;
+            } finally { wholeFileDepth -= 1; }
+        });
+        wrap(json, 'parse', (original, self, args) => {
+            countNextStepWork('json_parse_total');
+            return Reflect.apply(original, self, args);
+        });
+    } catch { restore(); countNextStepWork('payload_measurement_unavailable'); }
+    return restore;
+}
+
 export function withNextStepMeasurement<T>(action: () => T, receive?: (value: NextStepMeasurement) => void): T {
     if (active || (!receive && process.env.GARDA_NEXT_STEP_TIMING !== '1')) return action();
     const measurement: NextStepMeasurement = { phases_ms: {}, work: {} };
     active = measurement;
     const restoreProcessWork = captureProcessWork();
+    const restorePayloadWork = capturePayloadWork();
     try { return measureNextStepPhase('total', action); } finally {
+        restorePayloadWork();
         restoreProcessWork();
         active = null;
         // Diagnostics must never change a navigation result or mask its original exception.

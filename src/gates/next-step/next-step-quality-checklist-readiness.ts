@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import type { ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -125,15 +126,16 @@ function currentAnswersTemplatePolicySha256(options: {
     }
     const bindingFingerprints = options.binding.active_rule_fingerprints;
     const templateFingerprints = options.template.active_rule_fingerprints;
-    const bindingRuleIds = options.binding.active_rule_ids.map((entry) => String(entry || '').trim());
-    const templateRuleIds = options.template.active_rule_ids.map((entry) => String(entry || '').trim());
+    const bindingRuleIds = options.binding.active_rule_ids.map((entry) => (countNextStepWork('visit:next-step-quality-checklist-readiness:128'), String(entry || '').trim()));
+    const templateRuleIds = options.template.active_rule_ids.map((entry) => (countNextStepWork('visit:next-step-quality-checklist-readiness:129'), String(entry || '').trim()));
     if (
-        bindingRuleIds.some((ruleId) => !ruleId)
+        bindingRuleIds.some((ruleId) => (countNextStepWork('visit:next-step-quality-checklist-readiness:131'), !ruleId))
         || JSON.stringify(bindingRuleIds) !== JSON.stringify(templateRuleIds)
     ) {
         return null;
     }
     const fingerprints = bindingRuleIds.map((ruleId) => {
+        countNextStepWork('visit:next-step-quality-checklist-readiness:136');
         const bindingFingerprint = String(bindingFingerprints[ruleId] || '')
             .trim()
             .toLowerCase();
@@ -144,7 +146,7 @@ function currentAnswersTemplatePolicySha256(options: {
             ? [ruleId, bindingFingerprint]
             : null;
     });
-    if (fingerprints.some((entry) => entry === null)) {
+    if (fingerprints.some((entry) => (countNextStepWork('visit:next-step-quality-checklist-readiness:147'), entry === null))) {
         return null;
     }
     return createHash('sha256').update(JSON.stringify({
@@ -198,7 +200,7 @@ function qualityChecklistAnswersMaterializationRequired(options: {
             binding.schema_version !== 1
             || binding.event_source !== 'quality-checklist-answers-template-binding'
             || normalizePath(binding.answers_path) !== normalizePath(answersPath)
-            || scalarKeys.some((key) => binding[key] !== template[key])
+            || scalarKeys.some((key) => (countNextStepWork('visit:next-step-quality-checklist-readiness:201'), binding[key] !== template[key]))
             || JSON.stringify(binding.active_rule_ids) !== JSON.stringify(template.active_rule_ids)
             || !expectedPolicySha256
             || binding.answers_template_policy_sha256 !== expectedPolicySha256
@@ -208,6 +210,7 @@ function qualityChecklistAnswersMaterializationRequired(options: {
         const bindingSha256 = fileSha256(bindingPath);
         const eventsRoot = joinOrchestratorPath(options.repoRoot, path.join('runtime', 'task-events'));
         return !readTaskTimelineEventLikes(eventsRoot, options.taskId).some((event) => {
+            countNextStepWork('visit:next-step-quality-checklist-readiness:210');
             if (String(event.event_type || '') !== 'QUALITY_CHECKLIST_ANSWERS_TEMPLATE_BINDING_RECORDED') {
                 return false;
             }
@@ -237,6 +240,7 @@ function resolveBoundQualityChecklistAnswersPath(options: {
     const eventsRoot = joinOrchestratorPath(options.repoRoot, path.join('runtime', 'task-events'));
     const events = readTaskTimelineEventLikes(eventsRoot, options.taskId);
     for (let index = events.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:next-step-quality-checklist-readiness:239');
         const event = events[index];
         if (String(event.event_type || '') !== 'QUALITY_CHECKLIST_ANSWERS_TEMPLATE_BINDING_RECORDED') continue;
         const details = isPlainRecord(event.details) ? event.details : {};
@@ -288,7 +292,7 @@ function preflightChangedFiles(preflight: Record<string, unknown> | null): strin
         return [];
     }
     return preflight.changed_files
-        .map((entry) => String(entry || '').replace(/\\/g, '/').trim())
+        .map((entry) => (countNextStepWork('visit:next-step-quality-checklist-readiness:290'), String(entry || '').replace(/\\/g, '/').trim()))
         .filter(Boolean);
 }
 
@@ -311,7 +315,7 @@ function formatQualityChecklistActions(actions: unknown): string | null {
         return null;
     }
     const normalizedActions = actions
-        .map((entry) => String(entry || '').trim())
+        .map((entry) => (countNextStepWork('visit:next-step-quality-checklist-readiness:313'), String(entry || '').trim()))
         .filter(Boolean);
     if (normalizedActions.length === 0) {
         return null;
@@ -335,6 +339,7 @@ function reviewRecordedFailed(details: Record<string, unknown>): boolean {
         return true;
     }
     for (const candidate of [details.review_artifact_snapshot_path]) {
+        countNextStepWork('visit:next-step-quality-checklist-readiness:337');
         const artifactPath = String(candidate || '').trim();
         if (!artifactPath || !fileExists(artifactPath)) continue;
         const verdictMatch = fs.readFileSync(artifactPath, 'utf8')
@@ -414,6 +419,7 @@ function assertActiveQuestionReferencePathIsSafe(pathValue: string, repoRoot: st
     }
     let currentPath = absoluteRoot;
     for (const segment of relativePath.split(path.sep).filter(Boolean)) {
+        countNextStepWork('visit:next-step-quality-checklist-readiness:416');
         currentPath = path.join(currentPath, segment);
         if (!fs.existsSync(currentPath)) break;
         if (fs.lstatSync(currentPath).isSymbolicLink()) {
@@ -435,7 +441,7 @@ function combineMaterializationErrors(
     first: string | null,
     second: string | null
 ): string | null {
-    return [first, second].filter((value): value is string => !!value).join(' ') || null;
+    return [first, second].filter((value): value is string => (countNextStepWork('visit:next-step-quality-checklist-readiness:438'), !!value)).join(' ') || null;
 }
 
 interface QualityChecklistTemplateMaterialization {
@@ -465,6 +471,7 @@ function reviewFailureCadence(repoRoot: string, taskId: string, reviewFailureCad
     const checklistPasses: number[] = [];
     const reviewFailures: Array<{ index: number; reviewType: string }> = [];
     events.forEach((event, index) => {
+        countNextStepWork('visit:next-step-quality-checklist-readiness:467');
         const details = isPlainRecord(event.details) ? event.details : {};
         if (String(event.event_type || '') === 'QUALITY_CHECKLIST_RECORDED') {
             const status = String(details.status || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
@@ -475,12 +482,12 @@ function reviewFailureCadence(repoRoot: string, taskId: string, reviewFailureCad
         if (!reviewRecordedFailed(details)) return;
         reviewFailures.push({ index, reviewType: String(details.review_type || '').trim().toLowerCase() });
     });
-    const firstTestFailure = reviewFailures.find((failure) => failure.reviewType === 'test');
+    const firstTestFailure = reviewFailures.find((failure) => (countNextStepWork('visit:next-step-quality-checklist-readiness:478'), failure.reviewType === 'test'));
     const testResetConsumed = !!firstTestFailure
-        && checklistPasses.some((index) => index > firstTestFailure.index);
+        && checklistPasses.some((index) => (countNextStepWork('visit:next-step-quality-checklist-readiness:480'), index > firstTestFailure.index));
     const testResetPending = !!firstTestFailure && !testResetConsumed;
     const latestChecklistPass = checklistPasses.at(-1) ?? -1;
-    const failureCount = reviewFailures.filter((failure) => failure.index > latestChecklistPass).length;
+    const failureCount = reviewFailures.filter((failure) => (countNextStepWork('visit:next-step-quality-checklist-readiness:483'), failure.index > latestChecklistPass)).length;
     const hasBaseline = latestChecklistPass >= 0;
     return {
         due: !hasBaseline || testResetPending || failureCount >= reviewFailureCadenceInterval,
@@ -695,8 +702,8 @@ export function readQualityChecklistReadiness(options: {
         let rejection: string | undefined;
         try {
             const answer = Array.isArray(readinessOptions.artifact?.answers)
-                ? readinessOptions.artifact.answers.find(entry => isPlainRecord(entry)
-                    && entry.rule_id === TRUST_BOUNDARY_ANALYSIS_RULE_ID) : null;
+                ? readinessOptions.artifact.answers.find(entry => (countNextStepWork('visit:next-step-quality-checklist-readiness:698'), isPlainRecord(entry)
+                    && entry.rule_id === TRUST_BOUNDARY_ANALYSIS_RULE_ID)) : null;
             const current = inspectQualityValidationPhases({ repoRoot: options.repoRoot, taskId: options.taskId,
                 preflight: options.preflight!, preflightSha256: options.preflightSha256, inspection: options.inspection,
                 matrixRequired: assessTrustBoundaryAnalysisApplicability(options.preflight).required,
@@ -910,10 +917,10 @@ export function readQualityChecklistReadiness(options: {
                 answersPath: templateMaterialization.answersPath
             });
             const completedTemplate = assessment.status === 'current' && assessment.template
-                && assessment.template.answers.every((answer) => (
+                && assessment.template.answers.every((answer) => (countNextStepWork('visit:next-step-quality-checklist-readiness:913'), (
                     String(answer.status || '').trim().length > 0
                     && String(answer.answer || '').trim().length > 0
-                ));
+                )));
             if (!completedTemplate || !assessment.template) {
                 return null;
             }
@@ -997,7 +1004,7 @@ export function readQualityChecklistReadiness(options: {
                 `skipped_by_scope=${skippedByScopeRuleCount}. ` +
                 `Read-only active questions: ${activeRules
                     .slice(0, 12)
-                    .map((rule) => `${rule.id}: ${String(rule.prompt || '').trim().slice(0, 160)}`)
+                    .map((rule) => (countNextStepWork('visit:next-step-quality-checklist-readiness:998'), `${rule.id}: ${String(rule.prompt || '').trim().slice(0, 160)}`))
                     .join(' | ')}. ` +
                 `Complete active-question reference: ${normalizePath(path.relative(options.repoRoot, activeQuestionReferencePath))}.` +
                 ruleSetDiagnosticSuffix,

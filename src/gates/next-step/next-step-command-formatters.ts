@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 
 import {
@@ -210,6 +211,7 @@ export function formatNextStepText(result: NextStepResult): string {
             lines.push('  none');
         } else {
             for (const [reviewType, counts] of countEntries) {
+                countNextStepWork('visit:next-step-command-formatters:event:212');
                 lines.push(`  ${formatNextStepInlineValue(reviewType)}: total=${counts.total}; passed=${counts.passed}; failed=${counts.failed}; pending=${counts.pending}`);
             }
         }
@@ -219,6 +221,7 @@ export function formatNextStepText(result: NextStepResult): string {
             lines.push('  none');
         } else {
             for (const [reviewType, counts] of currentScopeEntries) {
+                countNextStepWork('visit:next-step-command-formatters:event:221');
                 lines.push(`  ${formatNextStepInlineValue(reviewType)}: total=${counts.total}; passed=${counts.passed}; failed=${counts.failed}; pending=${counts.pending}`);
             }
         }
@@ -228,6 +231,7 @@ export function formatNextStepText(result: NextStepResult): string {
             lines.push('  none');
         } else {
             for (const [reviewType, counts] of freshReuseEntries) {
+                countNextStepWork('visit:next-step-command-formatters:event:230');
                 lines.push(`  ${formatNextStepInlineValue(reviewType)}: fresh=${counts.fresh}; reused=${counts.reused}`);
             }
         }
@@ -237,6 +241,7 @@ export function formatNextStepText(result: NextStepResult): string {
             lines.push('  none');
         } else {
             for (const [reviewType, scopeHashes] of scopeHashEntries) {
+                countNextStepWork('visit:next-step-command-formatters:event:239');
                 const uniqueCount = block.scope_hash_count_by_review_type[reviewType] ?? scopeHashes.length;
                 const topScopeHashes = scopeHashes
                     .map((entry) =>
@@ -486,6 +491,7 @@ export function formatNextStepText(result: NextStepResult): string {
         lines.push(`CloseoutMarkdown: ${result.final_report.closeout_markdown_path}`);
         lines.push('FinalReportOrder:');
         for (const [index, entry] of result.final_report.required_order.entries()) {
+            countNextStepWork('visit:next-step-command-formatters:event:488');
             lines.push(`  ${index + 1}. ${entry}`);
         }
     }

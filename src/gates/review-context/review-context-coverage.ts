@@ -52,6 +52,7 @@ export function buildAuthoritativeReviewCoverageContract(options: {
     preflight: Record<string, unknown>;
     repoRoot: string;
 }): AuthoritativeReviewCoverageContract {
+    countNextStepWork('derive:authoritative_coverage_scope');
     const scope = resolveAuthoritativeReviewCoverageScope(options);
     return {
         ...scope,
@@ -98,6 +99,7 @@ export function resolveAuthoritativeReviewValidationObligations(options: {
 }
 
 export function buildDeclaredReviewCoverageContract(options: Parameters<typeof resolveAuthoritativeReviewValidationObligations>[0]) {
+    countNextStepWork('derive:coverage_contract');
     const scope = resolveAuthoritativeReviewCoverageScope(options);
     const validationObligations = resolveAuthoritativeReviewValidationObligations(options);
     return { ...scope, validationObligations, contract: buildReviewCoverageContract({

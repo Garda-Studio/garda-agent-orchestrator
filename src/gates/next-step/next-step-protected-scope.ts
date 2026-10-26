@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as childProcess from 'node:child_process';
@@ -44,7 +45,7 @@ function excludeAuditedLifecycleWorkflowFiles(
         currentFileHashes: Object.fromEntries(scope.workflowConfigFiles.map(file => [file, fileSha256(path.resolve(repoRoot, file))]))
     });
     const migrated = new Set(provenance.records
-        .filter(record => record.mutation_source === 'lifecycle').map(record => record.config_path));
+        .filter(record => (countNextStepWork('visit:next-step-protected-scope:event:46'), record.mutation_source === 'lifecycle')).map(record => (countNextStepWork('visit:next-step-protected-scope:event:46'), record.config_path)));
     const protectedFiles = scope.protectedFiles.filter(file => !migrated.has(file));
     return protectedFiles.length === 0 ? null : {
         changedFiles: scope.changedFiles.filter(file => !migrated.has(file)),

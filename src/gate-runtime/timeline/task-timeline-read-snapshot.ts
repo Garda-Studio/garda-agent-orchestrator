@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import { createHash, type Hash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import * as fs from 'node:fs';
@@ -318,6 +319,7 @@ function deepFreezeMemoizedValue<T>(value: T): T {
             );
         }
         objectCount += 1;
+        countNextStepWork('visit:timeline_memoized_object');
         if (objectCount > MAX_TASK_TIMELINE_MEMOIZED_OBJECTS) {
             throw new Error(
                 `Task timeline memoized value exceeds the ${MAX_TASK_TIMELINE_MEMOIZED_OBJECTS} object limit.`
@@ -336,6 +338,7 @@ function deepFreezeMemoizedValue<T>(value: T): T {
             );
         }
         for (const child of Object.values(current.value)) {
+            countNextStepWork('visit:timeline_memoized_child');
             if (child != null && typeof child === 'object') {
                 pending.push({ value: child, depth: current.depth + 1 });
             }
@@ -512,6 +515,7 @@ function readAuthenticatedTaskTimelineBoundedJsonlTail<T>(
 }
 
 function captureTaskTimelineRead(snapshot: ActiveTaskTimelineReadSnapshot): CachedTaskTimelineRead {
+    countNextStepWork('timeline_capture:' + snapshot.timelinePath);
     if (!isEventsRootBoundaryCurrent(snapshot)) {
         return invalidCachedRead();
     }
@@ -568,6 +572,7 @@ function captureTaskTimelineRead(snapshot: ActiveTaskTimelineReadSnapshot): Cach
         ) {
             return invalidCachedRead();
         }
+        countNextStepWork('timeline_payload_read:' + snapshot.timelinePath);
         const content = readTaskTimelineDescriptorPayload(
             fileDescriptor,
             openedIdentityBeforeRead.size
@@ -589,6 +594,7 @@ function captureTaskTimelineRead(snapshot: ActiveTaskTimelineReadSnapshot): Cach
         ) {
             return invalidCachedRead();
         }
+        countNextStepWork('timeline_bytes', content.length);
         const sha256State = createHash('sha256').update(content);
         return {
             state: 'valid',
@@ -1357,7 +1363,7 @@ export function readTaskTimelineTextFile(filePath: string): string {
 function cloneBoundedResult<T>(result: BoundedJsonlTailResult<T>): BoundedJsonlTailResult<T> {
     return {
         ...result,
-        records: result.records.map((record) => structuredClone(record)),
+        records: result.records.map((record) => { countNextStepWork('visit:timeline_cloned_event'); return structuredClone(record); }),
         limits: { ...result.limits }
     };
 }

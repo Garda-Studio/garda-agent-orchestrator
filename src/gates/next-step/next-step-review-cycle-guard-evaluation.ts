@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -108,7 +109,7 @@ export function readReviewCycleGuardEvaluation(
     const currentScopeEvaluation = evaluateReviewCycleGuard(
         reviewCycleGuardConfig,
         {
-            attempts: reviewCycleAttempts.attempts.filter((attempt) => attempt.currentScope),
+            attempts: reviewCycleAttempts.attempts.filter((attempt) => (countNextStepWork('visit:next-step-review-cycle-guard-evaluation:event:111'), attempt.currentScope)),
             timelineValid: reviewCycleAttempts.timelineValid
         }
     );

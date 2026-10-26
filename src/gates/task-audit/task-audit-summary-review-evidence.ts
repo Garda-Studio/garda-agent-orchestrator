@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { withReviewArtifactReadBarrier } from '../../gate-runtime/review-artifacts';
@@ -116,6 +117,7 @@ function shouldValidateRequiredReviewArtifactForCurrentCycle(
 
     const compileGateTime = parseTimestamp(currentCycle.compile_gate_timestamp).getTime();
     for (let index = events.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:task-audit-summary-review-evidence:event:118');
         const event = events[index];
         const eventTime = parseTimestamp(event.timestamp_utc).getTime();
         if (eventTime > 0 && compileGateTime > 0 && eventTime < compileGateTime) {

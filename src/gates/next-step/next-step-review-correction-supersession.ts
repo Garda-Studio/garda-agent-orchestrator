@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import { isPlainRecord } from '../../core/records';
 import { readReviewArtifactFileSha256 } from '../../gate-runtime/review-artifacts';
@@ -36,6 +37,7 @@ export function reviewCorrectionWasSuperseded(
             let correctionSequence = 0;
             let superseded = false;
             for (const { record: event } of readTaskTimelineJsonlEntries(timelinePath)) {
+                countNextStepWork('visit:next-step-review-correction-supersession:event:38');
                 if (!event) {
                     continue;
                 }

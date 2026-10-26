@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { runGit, runGitBinary } from '../../core/git-helpers';
@@ -25,7 +26,7 @@ export type ValidationEvidenceInspection = 'active' | 'retained_completed';
 
 /** Results may be evaluated late; execution recency is established by native START order. */
 export function latestValidationRecipeAttempt<T extends ValidationEvent>(events: readonly T[], recipeId: string): T | undefined {
-    const cycle = events.slice(events.map(event => event.event_type).lastIndexOf('TASK_MODE_ENTERED') + 1).reverse();
+    const cycle = events.slice(events.map(event => { countNextStepWork('visit:validation_timeline_query_event'); return event.event_type; }).lastIndexOf('TASK_MODE_ENTERED') + 1).reverse();
     const started = cycle.find(event => event.event_type === 'PROJECT_VALIDATION_STARTED'
         && event.details?.recipe_id === recipeId);
     return started && cycle.find(event => event.details?.recipe_id === recipeId
@@ -184,16 +185,17 @@ export function readValidationEventSnapshot(repoRoot: string, taskId: string,
     if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(eventInspection.status)) throw new Error('Validation timeline integrity failed');
     const lines = timeline.bytes.toString('utf8').split(/\r?\n/u).filter(Boolean);
     if (lines.length > MAXIMUM_EVENTS) throw new Error('Validation timeline exceeds event bound');
-    const events = lines.map(line => JSON.parse(line) as ValidationEvent);
-    const modeIndex = events.map(event => event.event_type).lastIndexOf('TASK_MODE_ENTERED');
-    const classifiedIndex = events.map(event => event.event_type).lastIndexOf('PREFLIGHT_CLASSIFIED');
+        countNextStepWork('validation_timeline_parse');
+    const events = lines.map(line => { countNextStepWork('visit:validation_timeline_parse_event'); return JSON.parse(line) as ValidationEvent; });
+    const modeIndex = events.map(event => { countNextStepWork('visit:validation_timeline_query_event'); return event.event_type; }).lastIndexOf('TASK_MODE_ENTERED');
+    const classifiedIndex = events.map(event => { countNextStepWork('visit:validation_timeline_query_event'); return event.event_type; }).lastIndexOf('PREFLIGHT_CLASSIFIED');
     const classifiedEvent = events[classifiedIndex];
     const preflightSequence = classifiedEvent?.integrity?.task_sequence;
     if (modeIndex < 0 || classifiedIndex <= modeIndex || !Number.isSafeInteger(preflightSequence) || Number(preflightSequence) < 1)
         throw new Error('Validation requires the current task-mode canonical preflight');
     if (inspection === 'retained_completed') {
-        const cycleStart = Math.max(events.map(event => event.event_type).lastIndexOf('TASK_MODE_ENTERED'),
-            events.map(event => event.event_type).lastIndexOf('PREFLIGHT_CLASSIFIED'));
+        const cycleStart = Math.max(events.map(event => { countNextStepWork('visit:validation_timeline_query_event'); return event.event_type; }).lastIndexOf('TASK_MODE_ENTERED'),
+            events.map(event => { countNextStepWork('visit:validation_timeline_query_event'); return event.event_type; }).lastIndexOf('PREFLIGHT_CLASSIFIED'));
         const completions = events.slice(cycleStart + 1).filter(event => event.event_type === 'COMPLETION_GATE_PASSED');
         const completion = completions[0]?.details;
         if (cycleStart < 0 || completions.length !== 1 || completion?.status !== 'PASSED' || completion.outcome !== 'PASS'

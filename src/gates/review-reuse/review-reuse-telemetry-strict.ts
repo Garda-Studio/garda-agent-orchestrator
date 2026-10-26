@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 // Extracted from review-reuse-telemetry.ts; keep behavior changes covered by facade tests.
 import * as path from 'node:path';
 import {
@@ -236,6 +237,7 @@ function resolveStrictCurrentReviewArtifactSha256(
 function findStrictCurrentReuseRecordedEvent(input: StrictReusedReviewEvidenceValidationInput): StrictEventEvidence {
     let lastReason: string | null = null;
     for (let index = input.events.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:review-reuse-telemetry-strict:event:238');
         const event = input.events[index];
         if (
             normalizeEventType(event.event_type) === 'REVIEW_RECORDED'
@@ -315,6 +317,7 @@ function findStrictHistoricalReviewRecordedSourceEvent(
 ): StrictEventEvidence & ({ valid: true; details: Record<string, unknown> } | { valid: false }) {
     let lastReason: string | null = null;
     for (let index = input.events.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:review-reuse-telemetry-strict:event:317');
         const event = input.events[index];
         if (normalizeEventType(event.event_type) !== 'REVIEW_RECORDED') {
             continue;
@@ -440,6 +443,7 @@ function findStrictHistoricalReviewerInvocationEvent(input: StrictReusedReviewEv
     const expectedPrevEventSha256 = normalizeLowerString(provenance.prev_event_sha256) || null;
     const expectedInvocationContextSha256 = normalizeLowerString(provenance.review_context_sha256);
     for (let index = input.events.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:review-reuse-telemetry-strict:event:442');
         const event = input.events[index];
         if (normalizeEventType(event.event_type) !== 'REVIEWER_INVOCATION_ATTESTED') {
             continue;

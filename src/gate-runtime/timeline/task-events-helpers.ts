@@ -114,6 +114,7 @@ function assertTaskTimelineJsonStructure(
 
 function parseTaskTimelineJsonObject(rawLine: string): Record<string, unknown> | null {
     try {
+        countNextStepWork('json_parse_verified_timeline_event');
         const parsed = JSON.parse(rawLine) as unknown;
         return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
             ? parsed as Record<string, unknown>
@@ -166,6 +167,7 @@ function splitTaskTimelineJsonlLines(content: string): string[] {
 function buildTaskTimelineJsonlEntries(content: string): TaskTimelineParsedJsonlEntries {
     countNextStepWork('timeline_parse');
     const rawLines = splitTaskTimelineJsonlLines(content);
+    countNextStepWork('timeline_events', rawLines.length);
     const entries: TaskTimelineJsonlEntry[] = [];
     const structureBudget: TaskTimelineJsonStructureBudget = {
         containerCount: 0,

@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { isPlainRecord } from '../../core/records';
@@ -54,6 +55,7 @@ export function collectKnownRequiredReviewTypes(
 ): string[] {
     const reviewTypes = new Set<string>();
     for (const [reviewType, required] of Object.entries(requiredReviews || {})) {
+        countNextStepWork('visit:task-audit-summary-review-common:event:56');
         const normalizedReviewType = normalizeKnownReviewType(reviewType, currentPreflight);
         if (required === true && normalizedReviewType) {
             reviewTypes.add(normalizedReviewType);
@@ -67,8 +69,8 @@ export function collectUnsafeRequiredReviewTypeIssues(
     currentPreflight?: Record<string, unknown> | null
 ): string[] {
     return Object.entries(requiredReviews || {})
-        .filter(([reviewType, required]) => required === true && !normalizeKnownReviewType(reviewType, currentPreflight))
-        .map(([reviewType]) => `unsafe or unknown required review type ignored: ${JSON.stringify(reviewType)}`)
+        .filter(([reviewType, required]) => (countNextStepWork('visit:task-audit-summary-review-common:event:69'), required === true && !normalizeKnownReviewType(reviewType, currentPreflight)))
+        .map(([reviewType]) => (countNextStepWork('visit:task-audit-summary-review-common:event:69'), `unsafe or unknown required review type ignored: ${JSON.stringify(reviewType)}`))
         .sort();
 }
 

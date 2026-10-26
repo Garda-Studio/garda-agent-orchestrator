@@ -1,4 +1,4 @@
-import { measureNextStepPhase } from '../../core/next-step-measurement';
+import { countNextStepWork, countNextStepArrayCopy, measureNextStepPhase } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import { getValidationTerminalViolations } from '../review/validation-terminal';
 import {
@@ -129,7 +129,7 @@ export function buildReviewCoverageAuditSummary(options: {
         ? options.taskQueueEntries ?? readTaskQueueEntries(repoRoot)
         : null;
     const taskQueueRows = taskQueueEntries
-        ? [...taskQueueEntries.values()].map(({ taskId, notes }) => ({ taskId, notes }))
+        ? countNextStepArrayCopy('visit:task-audit-summary-review-coverage:copy:132', [...taskQueueEntries.values()]).map(({ taskId, notes }) => (countNextStepWork('visit:task-audit-summary-review-coverage:event:132'), ({ taskId, notes })))
         : undefined;
     const inspection = preflight
         && readTaskQueueStatusToken(taskQueueEntries?.get(options.taskId)?.status ?? null) === 'DONE'
@@ -146,6 +146,7 @@ export function buildReviewCoverageAuditSummary(options: {
             const receiptContextSha256 = String(receipt?.review_context_sha256 || '').trim().toLowerCase();
             const receiptPreflightSha256 = String(receipt?.preflight_sha256 || '').trim().toLowerCase();
             const recordedEventMatches = (options.orderedEvents || []).some((event) => {
+                countNextStepWork('visit:task-audit-summary-review-coverage:event:148');
                 if (String(event.event_type || '').trim() !== 'REVIEW_RECORDED') {
                     return false;
                 }
@@ -370,18 +371,19 @@ export function buildReviewCoverageAuditSummary(options: {
             content: JSON.stringify(safeReadJson(path.join(options.reviewsRoot, `${options.taskId}-${lane}.md`))),
             receipt: safeReadJson(path.join(options.reviewsRoot, `${options.taskId}-${lane}-receipt.json`))
         }])) });
-    const incomplete = entries.filter((entry) => entry.status === 'INCOMPLETE');
+    const incomplete = entries.filter((entry) => (countNextStepWork('visit:task-audit-summary-review-coverage:event:373'), entry.status === 'INCOMPLETE'));
     const omitted = [...new Set(incomplete.flatMap((entry) =>
         entry.omitted_obligation_ids.map((id) => `${entry.review_type}:${id}`)
     ))].sort();
     const status = validationViolations.length > 0 ? 'INCOMPLETE' : entries.length === 0
         ? 'NOT_REQUIRED'
         : incomplete.length > 0 ? 'INCOMPLETE' : 'COMPLETE';
-    const totals = entries.reduce((acc, entry) => ({
+    const totals = entries.reduce((acc, entry) => (countNextStepWork('visit:task-audit-summary-review-coverage:event:380'), ({
         completed: acc.completed + entry.completed_obligation_count,
         required: acc.required + entry.obligation_count
-    }), { completed: 0, required: 0 });
+    })), { completed: 0, required: 0 });
     const executionModes = entries.reduce((acc, entry) => {
+        countNextStepWork('visit:task-audit-summary-review-coverage:event:384');
         if (entry.review_execution_mode === 'FULL') acc.full_count += 1;
         else if (entry.review_execution_mode === 'DELTA') acc.delta_count += 1;
         else acc.legacy_unknown_count += 1;

@@ -86,11 +86,14 @@ export function seedAuthenticatedReviewerLaunchFixture(options: {
     includeInvocation?: boolean;
     reviewOutputPath?: string;
     launchArtifactPath?: string;
+    reviewExecutionBindings?: object;
+    uniqueAttempt?: boolean;
+    provider?: string;
 }): AuthenticatedReviewerLaunchFixture {
     const reviewContextSha256 = fileSha256(options.reviewContextPath);
     const launchTool = 'test-subagent-spawn';
     const attestationSource = 'test-subagent-spawn';
-    const providerInvocationId = `test-${options.reviewType}-invocation`;
+    const providerInvocationId = `test-${options.reviewType}-invocation${options.uniqueAttempt ? ":" + reviewContextSha256 : ""}`;
     const launchPreparedAtUtc = '2026-04-28T00:00:00.000Z';
     const delegationStartedAtUtc = '2026-04-28T00:00:01.000Z';
     const launchCompletedAtUtc = '2026-04-28T00:00:12.000Z';
@@ -107,7 +110,7 @@ export function seedAuthenticatedReviewerLaunchFixture(options: {
     );
     const launchInputArtifactPath = path.join(path.dirname(launchArtifactPath), 'reviewer-launch-input.json');
     const reviewerLaunchAttemptId = deterministicUuidV4(
-        `${options.taskId}:${options.reviewType}:${options.reviewerIdentity}`
+        `${options.taskId}:${options.reviewType}:${options.reviewerIdentity}${options.uniqueAttempt ? ":" + reviewContextSha256 : ""}`
     );
     const copyPastePrompt = `Delegated ${options.reviewType} reviewer launch prompt for ${options.taskId}.`;
     const copyPastePromptSha256 = sha256Text(copyPastePrompt);
@@ -123,6 +126,7 @@ export function seedAuthenticatedReviewerLaunchFixture(options: {
         'REVIEWER_DELEGATION_ROUTED',
         'INFO',
         {
+            ...options.reviewExecutionBindings,
             task_id: options.taskId,
             review_type: options.reviewType,
             reviewer_execution_mode: 'delegated_subagent',
@@ -146,6 +150,7 @@ export function seedAuthenticatedReviewerLaunchFixture(options: {
         'REVIEWER_LAUNCH_PREPARED',
         'INFO',
         {
+            ...options.reviewExecutionBindings,
             task_id: options.taskId,
             review_type: options.reviewType,
             reviewer_execution_mode: 'delegated_subagent',
@@ -167,6 +172,7 @@ export function seedAuthenticatedReviewerLaunchFixture(options: {
     writeJson(launchInputArtifactPath, {
         schema_version: 1,
         evidence_type: 'delegated_reviewer_launch_input',
+        ...options.reviewExecutionBindings,
         task_id: options.taskId,
         review_type: options.reviewType,
         reviewer_execution_mode: 'delegated_subagent',
@@ -192,6 +198,7 @@ export function seedAuthenticatedReviewerLaunchFixture(options: {
         'REVIEWER_LAUNCH_INPUT_PINNED',
         'INFO',
         {
+            ...options.reviewExecutionBindings,
             task_id: options.taskId,
             review_type: options.reviewType,
             reviewer_execution_mode: 'delegated_subagent',
@@ -213,6 +220,7 @@ export function seedAuthenticatedReviewerLaunchFixture(options: {
         'REVIEWER_DELEGATION_STARTED',
         'INFO',
         {
+            ...options.reviewExecutionBindings,
             task_id: options.taskId,
             review_type: options.reviewType,
             reviewer_execution_mode: 'delegated_subagent',
@@ -232,6 +240,8 @@ export function seedAuthenticatedReviewerLaunchFixture(options: {
         schema_version: 1,
         evidence_type: 'delegated_reviewer_launch',
         attestation_state: 'launched',
+        ...(options.provider ? { provider: options.provider } : {}),
+        ...options.reviewExecutionBindings,
         task_id: options.taskId,
         review_type: options.reviewType,
         reviewer_execution_mode: 'delegated_subagent',
@@ -276,6 +286,7 @@ export function seedAuthenticatedReviewerLaunchFixture(options: {
         'REVIEWER_LAUNCH_COMPLETED',
         'INFO',
         {
+            ...options.reviewExecutionBindings,
             task_id: options.taskId,
             review_type: options.reviewType,
             reviewer_execution_mode: 'delegated_subagent',
@@ -300,6 +311,7 @@ export function seedAuthenticatedReviewerLaunchFixture(options: {
             'REVIEWER_INVOCATION_ATTESTED',
             'INFO',
             {
+                ...options.reviewExecutionBindings,
                 task_id: options.taskId,
                 review_type: options.reviewType,
                 reviewer_execution_mode: 'delegated_subagent',

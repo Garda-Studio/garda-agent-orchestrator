@@ -1,3 +1,4 @@
+import { countNextStepWork, countNextStepArrayCopy } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 
 import { sha256RedactedJsonPayload } from '../../core/redaction';
@@ -291,8 +292,8 @@ function buildPathLineInventory(
             }
         }
     }
-    return [...entries.values()].sort((left, right) =>
-        left.path.localeCompare(right.path) || left.line - right.line
+    return countNextStepArrayCopy('visit:review-remediation-baseline:copy:294', [...entries.values()]).sort((left, right) =>
+        (countNextStepWork('visit:review-remediation-baseline:event:294'), left.path.localeCompare(right.path) || left.line - right.line)
     );
 }
 
@@ -667,6 +668,7 @@ function buildAcceptedItemContracts(
 ): Map<string, AcceptedItemContract> {
     const contracts = new Map<string, AcceptedItemContract>();
     for (const [index, value] of (artifact.accepted_findings as unknown[]).entries()) {
+        countNextStepWork('visit:review-remediation-baseline:event:669');
         const subject = `accepted_findings[${index}]`;
         if (!isRecord(value)) {
             violations.push(`${subject} must be an object.`);
@@ -706,6 +708,7 @@ function buildAcceptedItemContracts(
         }
     }
     for (const [index, value] of (artifact.accepted_residual_risks as unknown[]).entries()) {
+        countNextStepWork('visit:review-remediation-baseline:event:708');
         const subject = `accepted_residual_risks[${index}]`;
         if (!isRecord(value)) {
             violations.push(`${subject} must be an object.`);
@@ -746,6 +749,7 @@ function validateFixNowItems(
 ): void {
     const seenIds = new Set<string>();
     for (const [index, value] of (artifact.fix_now_items as unknown[]).entries()) {
+        countNextStepWork('visit:review-remediation-baseline:event:748');
         const subject = `fix_now_items[${index}]`;
         if (!isRecord(value)) {
             violations.push(`${subject} must be an object.`);
@@ -857,6 +861,7 @@ function readDispositionFixNowItems(
     const fixNowItems: ReviewFindingsDispositionArtifactItem[] = [];
     const seenIds = new Set<string>();
     for (const [index, value] of parsed.items.entries()) {
+        countNextStepWork('visit:review-remediation-baseline:event:859');
         if (!isRecord(value) || value.action !== 'fix_now') {
             continue;
         }

@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isPlainRecord } from '../../core/records';
@@ -33,6 +34,7 @@ export function getLatestTaskSequenceForEventTypes(eventsRoot: string, taskId: s
         const wanted = new Set(eventTypes);
         let latestSequence: number | null = null;
         for (const timelineEntry of readTaskTimelineJsonlEntries(timelinePath)) {
+            countNextStepWork('visit:next-step-reviewer-launch-evidence-shared:35');
             const event = timelineEntry.record;
             if (!event) {
                 return null;
@@ -58,6 +60,7 @@ export function getLatestTaskSequenceForEventTypes(eventsRoot: string, taskId: s
 
 export function getArtifactStringField(artifact: Record<string, unknown>, ...fieldNames: string[]): string {
     for (const fieldName of fieldNames) {
+        countNextStepWork('visit:next-step-reviewer-launch-evidence-shared:60');
         const rawValue = artifact[fieldName];
         if (typeof rawValue === 'string' && rawValue.trim()) {
             return rawValue.trim();

@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import { createHash } from 'node:crypto';
 import { isUtf8 } from 'node:buffer';
 import * as fs from 'node:fs';
@@ -512,6 +513,7 @@ export function getReviewRemediationDeltaBaseViolations(
     let lineHashCount = 0;
     let redactedTextBytes = 0;
     for (const [index, entryValue] of base.entries.entries()) {
+        countNextStepWork('visit:review-remediation-delta-contract:event:514');
         if (!entryValue || typeof entryValue !== 'object' || Array.isArray(entryValue)) {
             violations.push(`delta_base.entries[${index}] must be an object.`);
             continue;

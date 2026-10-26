@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -99,6 +100,7 @@ export function createReviewAttemptArtifactIndex(
     const entriesByFileName = new Map<string, ReviewsIndexEntry>();
     const duplicateFileNames = new Set<string>();
     for (const entry of taskEntries) {
+        countNextStepWork('visit:attempt_index_entry');
         if (entriesByFileName.has(entry.fileName)) {
             duplicateFileNames.add(entry.fileName);
         } else {
@@ -184,7 +186,7 @@ export function createReviewAttemptArtifactIndex(
             const normalizedReviewType = normalizeReviewType(reviewType);
             const prefix = `${safeTaskId}-${normalizedReviewType}-receipt-`;
             return Object.freeze(taskEntries
-                .map((entry) => entry.fileName)
+                .map((entry) => { countNextStepWork('visit:attempt_receipt_query_entry'); return entry.fileName; })
                 .filter((fileName) => (
                     fileName.startsWith(prefix)
                     && fileName.endsWith('.json')

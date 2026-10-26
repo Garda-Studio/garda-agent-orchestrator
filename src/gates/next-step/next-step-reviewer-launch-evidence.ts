@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 
 import {
@@ -1179,9 +1180,10 @@ function timelineHasDelegatedReviewInvocationForCurrentContextFromSnapshot(
         return false;
     }
     const events = readTaskTimelineJsonlEntries(timelinePath)
-        .flatMap((entry) => entry.record ? [entry.record] : []);
+        .flatMap((entry) => (countNextStepWork('visit:next-step-reviewer-launch-evidence:event:1181'), entry.record ? [entry.record] : []));
     let routingSequence: number | null = null;
     for (let index = events.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:next-step-reviewer-launch-evidence:event:1184');
         const event = events[index];
         if (String(event.event_type || '').trim() !== 'REVIEWER_DELEGATION_ROUTED') {
             continue;
@@ -1204,6 +1206,7 @@ function timelineHasDelegatedReviewInvocationForCurrentContextFromSnapshot(
         return false;
     }
     for (let index = events.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:next-step-reviewer-launch-evidence:event:1206');
         const event = events[index];
         if (String(event.event_type || '').trim() !== 'REVIEWER_INVOCATION_ATTESTED') {
             continue;

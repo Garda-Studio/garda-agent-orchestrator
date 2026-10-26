@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as zlib from 'node:zlib';
@@ -94,7 +95,7 @@ function cloneReviewsIndex(index: ReviewsIndex): ReviewsIndex {
             : {}),
         generatedAtMs: index.generatedAtMs,
         entries_sha256: index.entries_sha256 ?? computeEntriesSha256(index.entries),
-        entries: index.entries.map((entry) => ({ ...entry }))
+        entries: index.entries.map((entry) => { countNextStepWork('visit:review_index_clone_entry'); return { ...entry }; })
     };
 }
 
@@ -211,7 +212,7 @@ function isReviewsIndexEntry(value: unknown): value is ReviewsIndexEntry {
 }
 
 function createTaskScopedIndexView(index: ReviewsIndex, taskId: string): ReviewsIndex {
-    const entries = index.entries.filter((entry) => entry.taskId === taskId);
+    const entries = index.entries.filter((entry) => { countNextStepWork('visit:review_index_task_entry'); return entry.taskId === taskId; });
     return {
         version: index.version,
         directoryMtimeMs: index.directoryMtimeMs,
@@ -271,13 +272,13 @@ function readIndexFile(
         if (raw.entries_sha256 !== computeEntriesSha256(entries)) {
             return null;
         }
-        const fileNames = new Set(entries.map((entry) => entry.fileName));
+        const fileNames = new Set(entries.map((entry) => { countNextStepWork('visit:review_index_name_entry'); return entry.fileName; }));
         if (fileNames.size !== entries.length) {
             return null;
         }
         const scopedEntries = taskId === null
             ? entries
-            : entries.filter((entry) => entry.taskId === taskId);
+            : entries.filter((entry) => { countNextStepWork('visit:review_index_task_entry'); return entry.taskId === taskId; });
         const entriesRequiringDiskAuthorization = scopedEntries.filter((entry) => (
             !entriesPendingRemoval.has(entry.fileName)
             && parseKnownReviewArtifactTaskId(entry.fileName, KNOWN_SUFFIXES) !== entry.taskId
@@ -304,7 +305,7 @@ function readIndexFile(
                         )
                     )
                 ))
-                .map((entry) => entry.fileName),
+                .map((entry) => { countNextStepWork('visit:review_index_name_entry'); return entry.fileName; }),
             reviewsRootRealPath
         );
         const entriesAreAuthorized = entriesRequiringDiskAuthorization.every((entry) => {
@@ -497,6 +498,7 @@ function collectSnapshotBackedReviewTypeIdsFromFileNames(
 ): ReadonlyMap<string, readonly string[]> {
     const reviewTypeIdsByTask = new Map<string, readonly string[]>();
     for (const fileName of fileNames) {
+        countNextStepWork('visit:review_index_file');
         const taskId = parseKnownReviewArtifactTaskId(fileName, ['-preflight.json']);
         if (!taskId) {
             continue;
@@ -857,6 +859,7 @@ function rebuildIndexScope(reviewsDir: string, taskId: string | null): ReviewsIn
         reviewsRootRealPath
     );
     for (const fileName of scopedCandidates) {
+        countNextStepWork('visit:review_index_candidate');
         const parsed = parseSnapshotAuthorizedReviewArtifactFromDisk(
             fileName,
             reviewTypeIdsByTask,
@@ -1337,7 +1340,7 @@ export function invalidateIndex(reviewsDir: string): void {
  * Get all entries for a specific task id.
  */
 export function entriesForTask(index: ReviewsIndex, taskId: string): ReviewsIndexEntry[] {
-    return index.entries.filter(e => e.taskId === taskId);
+    return index.entries.filter(e => { countNextStepWork('visit:review_index_task_entry'); return e.taskId === taskId; });
 }
 
 /**
@@ -1363,6 +1366,7 @@ export function taskIds(index: ReviewsIndex): string[] {
 export function groupByTask(index: ReviewsIndex): Map<string, ReviewsIndexEntry[]> {
     const groups = new Map<string, ReviewsIndexEntry[]>();
     for (const entry of index.entries) {
+        countNextStepWork('visit:review_index_entry');
         const group = groups.get(entry.taskId) || [];
         group.push(entry);
         groups.set(entry.taskId, group);

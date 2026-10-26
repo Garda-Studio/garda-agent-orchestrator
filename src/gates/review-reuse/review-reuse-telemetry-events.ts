@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 // Extracted from review-reuse-telemetry.ts; keep behavior changes covered by facade tests.
 import { normalizePath } from '../shared/helpers';
 import {
@@ -244,6 +245,7 @@ export function findMatchingHistoricalReviewRecordedTelemetryEvent<T extends Rev
     options: Omit<HistoricalReviewRecordedTelemetryMatchInput, 'event'>
 ): T | null {
     for (let index = events.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:review-reuse-telemetry-events:event:246');
         const event = events[index];
         const taskSequence = normalizeTaskSequence(event.integrity);
         if (options.maxTaskSequenceExclusive != null && taskSequence != null && taskSequence >= options.maxTaskSequenceExclusive) {
@@ -265,6 +267,7 @@ export function findMatchingReviewReuseRecordedTelemetryEvent<T extends ReviewRe
     options: Omit<ReviewReuseTelemetryMatchInput, 'event'>
 ): T | null {
     for (let index = events.length - 1; index >= 0; index -= 1) {
+        countNextStepWork('visit:review-reuse-telemetry-events:event:267');
         const event = events[index];
         const eventSequence = normalizeEventSequence(event.sequence);
         if (options.minEventSequenceExclusive != null && eventSequence != null && eventSequence <= options.minEventSequenceExclusive) {

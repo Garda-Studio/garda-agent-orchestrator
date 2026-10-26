@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import { formatInstalledBundleMaintenanceGuidance } from '../protected-control-plane/installed-bundle-guard';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -824,7 +825,7 @@ function isOriginalEntryImplementationRefresh(events: TimelineEventEntry[], pref
         return false;
     }
     const earlierBoundaries = events.filter(
-        (entry) => entry.sequence < preflightSequence && COHERENT_CYCLE_BOUNDARY_EVENTS.has(entry.event_type)
+        (entry) => (countNextStepWork('visit:next-step-preflight-recovery:event:826'), entry.sequence < preflightSequence && COHERENT_CYCLE_BOUNDARY_EVENTS.has(entry.event_type))
     );
     // Re-entry and review/completion recovery still require their native durable receipt.
     return earlierBoundaries.length > 0 && earlierBoundaries.every(
@@ -1161,6 +1162,7 @@ function getLatestTimelineSequence(eventsRoot: string, taskId: string, eventType
     const events = collectOrderedTimelineEvents(timelinePath, errors);
     let latestSequence: number | null = null;
     for (const event of events) {
+        countNextStepWork('visit:next-step-preflight-recovery:event:1163');
         if (event.event_type !== eventType) {
             continue;
         }

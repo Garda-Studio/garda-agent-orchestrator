@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -86,6 +87,7 @@ export function getSafeWorktreePathState(
     options: SafeWorktreePathStateOptions = {}
 ): SafeWorktreePathState {
     const resolvedPath = resolveRepoRelativePath(repoRoot, relativeFile);
+    countNextStepWork('scope_path_state:' + (resolvedPath || relativeFile));
     if (!resolvedPath) {
         return normalizePath(relativeFile) ? { status: 'outside_repo' } : { status: 'missing' };
     }

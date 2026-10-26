@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileSha256 } from '../shared/helpers';
@@ -23,6 +24,7 @@ export function readPreflightSummary(reviewsRoot: string, taskId: string): Prefl
 
     if (preflight?.required_reviews && typeof preflight.required_reviews === 'object') {
         for (const [key, value] of Object.entries(preflight.required_reviews as Record<string, unknown>)) {
+            countNextStepWork('visit:task-audit-summary-preflight-collection:event:25');
             requiredReviews[key] = value === true;
         }
     }
@@ -106,6 +108,7 @@ export function readProfileReviewDecisions(
         : [];
     const decisionTypes = new Set(decisions.map((decision) => decision.review_type));
     for (const [reviewType, isRequired] of Object.entries(requiredReviews)) {
+        countNextStepWork('visit:task-audit-summary-preflight-collection:event:108');
         if (isRequired && !decisionTypes.has(reviewType)) {
             decisions.push({
                 review_type: reviewType,

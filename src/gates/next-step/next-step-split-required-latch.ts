@@ -1,3 +1,4 @@
+import { countNextStepWork, countNextStepArrayCopy } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -337,18 +338,18 @@ function readPersistedSplitRequiredEventState(params: {
         && String(details.guard_kind || '') === params.guardKind
     );
     return {
-        latchEventRecorded: timeline.some((event) => (
+        latchEventRecorded: timeline.some((event) => (countNextStepWork('visit:next-step-split-required-latch:event:340'), (
             event.event_type === 'SPLIT_REQUIRED_LATCHED'
             && String(event.details?.status || '') === SPLIT_REQUIRED_STATUS
             && matchesArtifact(event.details || {})
-        )),
-        statusEventRecorded: timeline.some((event) => (
+        ))),
+        statusEventRecorded: timeline.some((event) => (countNextStepWork('visit:next-step-split-required-latch:event:345'), (
             event.event_type === 'STATUS_CHANGED'
             && String(event.details?.previous_status || '') === params.previousStatus
             && String(event.details?.new_status || '') === SPLIT_REQUIRED_STATUS
             && String(event.details?.reason || '') === 'auto_split_guard_latched'
             && matchesArtifact(event.details || {})
-        ))
+        )))
     };
 }
 
@@ -509,6 +510,7 @@ export function readSplitRequiredLatchEvidence(params: {
     const timeline = collectOrderedTimelineEvents(path.join(params.eventsRoot, `${params.taskId}.jsonl`), timelineErrors);
     const normalizedArtifactPath = normalizePath(artifactPath);
     const hasLatchEvent = timeline.some((event) => {
+        countNextStepWork('visit:next-step-split-required-latch:event:511');
         const details = event.details || {};
         return event.event_type === 'SPLIT_REQUIRED_LATCHED'
             && String(details.status || '') === SPLIT_REQUIRED_STATUS
@@ -528,6 +530,7 @@ export function readSplitRequiredLatchEvidence(params: {
         };
     }
     const hasStatusEvent = statusSyncOutcome !== 'updated' || timeline.some((event) => {
+        countNextStepWork('visit:next-step-split-required-latch:event:530');
         const details = event.details || {};
         return event.event_type === 'STATUS_CHANGED'
             && String(details.previous_status || '') === previousStatus
@@ -570,7 +573,8 @@ export function hasSplitRequiredClearedEvidence(params: {
     const timelineErrors: string[] = [];
     const timeline = collectOrderedTimelineEvents(path.join(params.eventsRoot, `${params.taskId}.jsonl`), timelineErrors);
     const normalizedArtifactPath = normalizePath(params.latchEvidence.artifact_path);
-    const latchEvent = [...timeline].reverse().find((event) => {
+    const latchEvent = countNextStepArrayCopy('visit:next-step-split-required-latch:copy:573', countNextStepArrayCopy('visit:next-step-split-required-latch:copy:573', [...timeline]).reverse()).find((event) => {
+        countNextStepWork('visit:next-step-split-required-latch:event:573');
         const details = event.details || {};
         return event.event_type === 'SPLIT_REQUIRED_LATCHED'
             && String(details.status || '') === SPLIT_REQUIRED_STATUS
@@ -583,6 +587,7 @@ export function hasSplitRequiredClearedEvidence(params: {
     }
 
     return timeline.some((event) => {
+        countNextStepWork('visit:next-step-split-required-latch:event:585');
         const details = event.details || {};
         return event.sequence > latchEvent.sequence
             && event.event_type === 'SPLIT_REQUIRED_CLEARED'
@@ -679,7 +684,8 @@ export function assessReviewCycleContinuationSplitLatchClearance(params: {
         return invalid(`review-cycle latch timeline is unreadable (${timelineErrors.join('; ')})`);
     }
     const normalizedLatchPath = normalizePath(params.latchEvidence.artifact_path);
-    const latchEvent = [...timeline].reverse().find((event) => {
+    const latchEvent = countNextStepArrayCopy('visit:next-step-split-required-latch:copy:682', countNextStepArrayCopy('visit:next-step-split-required-latch:copy:682', [...timeline]).reverse()).find((event) => {
+        countNextStepWork('visit:next-step-split-required-latch:event:682');
         const details = event.details || {};
         return event.event_type === 'SPLIT_REQUIRED_LATCHED'
             && String(details.guard_kind || '') === 'review_cycle'
@@ -691,6 +697,7 @@ export function assessReviewCycleContinuationSplitLatchClearance(params: {
     }
     const normalizedContinuationPath = normalizePath(continuation.artifact_path);
     const approvalEvent = timeline.find((event) => {
+        countNextStepWork('visit:next-step-split-required-latch:event:693');
         const details = event.details || {};
         return event.sequence > latchEvent.sequence
             && event.event_type === 'REVIEW_CYCLE_CONTINUATION_APPROVED'
@@ -701,6 +708,7 @@ export function assessReviewCycleContinuationSplitLatchClearance(params: {
         return invalid('review-cycle continuation approval does not follow the bound split-required latch');
     }
     const continuationAlreadyConsumed = timeline.some((event) => {
+        countNextStepWork('visit:next-step-split-required-latch:event:703');
         const details = event.details || {};
         const nextStatus = String(details.new_status || '').trim();
         return event.sequence > approvalEvent.sequence
@@ -751,7 +759,8 @@ export function hasReviewCycleContinuationClearedEvidence(params: {
         return false;
     }
     const normalizedLatchPath = normalizePath(params.latchEvidence.artifact_path);
-    const latchEvent = [...timeline].reverse().find((event) => {
+    const latchEvent = countNextStepArrayCopy('visit:next-step-split-required-latch:copy:754', countNextStepArrayCopy('visit:next-step-split-required-latch:copy:754', [...timeline]).reverse()).find((event) => {
+        countNextStepWork('visit:next-step-split-required-latch:event:754');
         const details = event.details || {};
         return event.event_type === 'SPLIT_REQUIRED_LATCHED'
             && String(details.guard_kind || '') === 'review_cycle'
@@ -762,6 +771,7 @@ export function hasReviewCycleContinuationClearedEvidence(params: {
         return false;
     }
     return timeline.some((event) => {
+        countNextStepWork('visit:next-step-split-required-latch:event:764');
         const details = event.details || {};
         const nextStatus = String(details.new_status || '').trim();
         return event.sequence > latchEvent.sequence
@@ -791,7 +801,8 @@ export function hasCompletedDecomposedParentAfterSplitRequiredClear(params: {
     const timelineErrors: string[] = [];
     const timeline = collectOrderedTimelineEvents(path.join(params.eventsRoot, `${params.taskId}.jsonl`), timelineErrors);
     const normalizedArtifactPath = normalizePath(params.latchEvidence.artifact_path);
-    const latchEvent = [...timeline].reverse().find((event) => {
+    const latchEvent = countNextStepArrayCopy('visit:next-step-split-required-latch:copy:794', countNextStepArrayCopy('visit:next-step-split-required-latch:copy:794', [...timeline]).reverse()).find((event) => {
+        countNextStepWork('visit:next-step-split-required-latch:event:794');
         const details = event.details || {};
         return event.event_type === 'SPLIT_REQUIRED_LATCHED'
             && String(details.status || '') === SPLIT_REQUIRED_STATUS
@@ -804,6 +815,7 @@ export function hasCompletedDecomposedParentAfterSplitRequiredClear(params: {
     }
 
     const clearEvent = timeline.find((event) => {
+        countNextStepWork('visit:next-step-split-required-latch:event:806');
         const details = event.details || {};
         return event.sequence > latchEvent.sequence
             && event.event_type === 'SPLIT_REQUIRED_CLEARED'
@@ -816,6 +828,7 @@ export function hasCompletedDecomposedParentAfterSplitRequiredClear(params: {
     }
 
     return timeline.some((event) => {
+        countNextStepWork('visit:next-step-split-required-latch:event:818');
         const details = event.details || {};
         return event.sequence > clearEvent.sequence
             && event.event_type === 'DECOMPOSED_PARENT_COMPLETED'
@@ -831,7 +844,8 @@ export function hasGateOwnedDecomposedParentCompletionEvidence(params: {
 }): boolean {
     const timelineErrors: string[] = [];
     const timeline = collectOrderedTimelineEvents(path.join(params.eventsRoot, `${params.taskId}.jsonl`), timelineErrors);
-    const completionEvent = [...timeline].reverse().find((event) => {
+    const completionEvent = countNextStepArrayCopy('visit:next-step-split-required-latch:copy:834', countNextStepArrayCopy('visit:next-step-split-required-latch:copy:834', [...timeline]).reverse()).find((event) => {
+        countNextStepWork('visit:next-step-split-required-latch:event:834');
         const details = event.details || {};
         return event.event_type === 'DECOMPOSED_PARENT_COMPLETED'
             && String(details.previous_status || '') === 'DECOMPOSED'
@@ -842,6 +856,7 @@ export function hasGateOwnedDecomposedParentCompletionEvidence(params: {
         return false;
     }
     return timeline.some((event) => {
+        countNextStepWork('visit:next-step-split-required-latch:event:844');
         const details = event.details || {};
         return event.sequence < completionEvent.sequence
             && event.event_type === 'STATUS_CHANGED'

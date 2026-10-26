@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import { createHash } from 'node:crypto';
 
 import { redactSensitiveData } from '../../core/redaction';
@@ -295,6 +296,7 @@ export function buildReviewRemediationReadableDiffEvidence(
         for (const line of file.lines) {
             const chunks = splitUtf8Text(line.text, REVIEW_REMEDIATION_DELTA_DIFF_PAGE_MAX_BYTES);
             for (const [index, chunk] of chunks.entries()) {
+                countNextStepWork('visit:review-remediation-readable-diff:event:297');
                 const chunkBytes = Buffer.byteLength(chunk, 'utf8');
                 if (pageLines.length > 0 && pageBytes + chunkBytes > REVIEW_REMEDIATION_DELTA_DIFF_PAGE_MAX_BYTES) {
                     flush();

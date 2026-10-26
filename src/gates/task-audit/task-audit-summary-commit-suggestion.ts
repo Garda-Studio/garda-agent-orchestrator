@@ -1,3 +1,4 @@
+import { countNextStepWork, countNextStepArrayCopy } from '../../core/next-step-measurement';
 import { getNodeGateCommandPrefix } from '../../materialization/command-constants';
 import { toPosix } from '../shared/helpers';
 import type { TaskQueueMetadata } from './task-audit-summary-collectors';
@@ -82,7 +83,8 @@ function inferCommitScope(changedFiles: string[], taskMetadata: TaskQueueMetadat
 
     let bestScope: string | null = null;
     let bestScore = -1;
-    for (const [scope, score] of [...scopeScores.entries()].sort((left, right) => left[0].localeCompare(right[0]))) {
+    for (const [scope, score] of countNextStepArrayCopy('visit:task-audit-summary-commit-suggestion:copy:85', [...scopeScores.entries()]).sort((left, right) => (countNextStepWork('visit:task-audit-summary-commit-suggestion:event:85'), left[0].localeCompare(right[0])))) {
+        countNextStepWork('visit:task-audit-summary-commit-suggestion:event:85');
         if (score > bestScore || (score === bestScore && bestScope != null && scope.localeCompare(bestScope) < 0)) {
             bestScope = scope;
             bestScore = score;

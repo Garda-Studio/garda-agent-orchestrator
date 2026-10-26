@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import type { BoundedJsonlTailResult } from '../../core/bounded-jsonl-tail';
 import {
@@ -89,6 +90,7 @@ export function getLatestTaskSequenceForEventTypes(
         const wanted = new Set(eventTypes);
         let latestSequence: number | null = null;
         for (const event of window.events) {
+            countNextStepWork('visit:latest_task_sequence_event');
             if (!wanted.has(String(event.event_type || '').trim())) {
                 continue;
             }
@@ -127,6 +129,7 @@ export function getLatestReviewEventSequence(
     const normalizedReviewType = reviewType.trim().toLowerCase();
     let latestSequence: number | null = null;
     for (const event of events) {
+        countNextStepWork('visit:latest_review_sequence_event');
         if (String(event.event_type || '').trim().toUpperCase() !== normalizedEventType) {
             continue;
         }
