@@ -51,3 +51,26 @@ extract pure derivations accepting an immutable authenticated evidence graph,
 including exact source content and the active/completed inspection mode; retain
 all boundary checks on every access. Include mutation-between-consumer tests
 for every captured dependency before adding such a cache.
+
+## P5: filesystem and process memoization
+
+The P1 real-navigation budgets already observe one identical Git invocation and
+one Windows ACL probe per path. Existing workspace snapshots and the ACL cache
+account for those bounds. No duplicate process call in this fixture requires a
+new cache.
+
+Retain `getSafeWorktreePathState` and `fileSha256` semantics. The former resolves
+the root and target, checks link targets and rechecks symlink identity after
+reading. The latter checks expected identity, opens a descriptor, hashes all
+bytes, and compares descriptor and path identity before/after the read. Caching
+by pathname or metadata would replace fresh byte/path observations with a new
+freshness assumption. The hard requirement to miss on every input change has
+not been proven for that change, including parent junction replacement,
+same-size writes, timestamp restoration and permissions changing between reads.
+
+Future work may share immutable bytes already captured by authenticated readers,
+while retaining fresh descriptor/path/authority checks, or introduce a writer
+exclusion protocol covering every dependent source and path component. A cache
+must include hash options, expected identity, resolved root, every symlink/junction
+component, target bytes and authorization dependencies. It must preserve the
+existing fail-closed result if any of them change during a navigation call.
