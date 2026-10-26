@@ -13,6 +13,8 @@
 
 ### Clearer interface and task guidance
 
+- Completed closeout navigation clears obsolete review-launch suggestions from text and JSON while retaining accepted review evidence.
+
 - Deployed bundles include findings contracts, parent completion, release readiness, run methods, and their linked contributor/task-plan guides, so public documentation links resolve locally.
 
 - Protected update drift now guides agents to read-only installation inspection and operator maintenance while keeping self-guard on, and names the rollback command for returning to the pre-update bundle. Authenticated rebinding of an active task after a bundle update remains deferred.

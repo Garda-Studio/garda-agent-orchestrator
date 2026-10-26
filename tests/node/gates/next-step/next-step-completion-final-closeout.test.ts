@@ -1077,6 +1077,14 @@ describe('gates/next-step', () => {
 
         assert.match(result.reason, /canonical final closeout is materialized/i);
 
+        const projectedReview = JSON.parse(JSON.stringify(result)).review;
+        assert.deepEqual(projectedReview.launchable_review_types, []);
+        assert.deepEqual(projectedReview.blocked_review_lanes, []);
+        assert.deepEqual(projectedReview.blocked_review_dependencies, []);
+        assert.equal(projectedReview.next_review_type, null);
+        assert.equal(projectedReview.failed_review_type, null);
+        assert.doesNotMatch(text, /ReviewLaunchableBatch:|NextReview:|BlockedReviewLanes:/);
+
         assert.ok(text.includes('Review trust: INDEPENDENT_AUDITED via DELEGATED_SUBAGENT; independent reviewer launch attested.'));
 
         assert.ok(text.includes('1. short agent-authored summary of what changed'));

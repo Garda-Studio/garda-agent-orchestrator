@@ -2073,6 +2073,16 @@ function buildResult(params: {
     });
     return renderNextStepOutput({
         ...params,
+        review: params.status === 'DONE' && params.nextGate === null
+            ? {
+                ...params.review,
+                launchable_review_types: [],
+                blocked_review_lanes: [],
+                blocked_review_dependencies: [],
+                next_review_type: null,
+                failed_review_type: null
+            }
+            : params.review,
         invalidationImpact,
         knownNonBlockingSignals,
         taskQueueStatusContract: buildTaskQueueStatusContract(params.taskId)
