@@ -1,4 +1,3 @@
-import { countNextStepWork } from './next-step-measurement';
 import * as childProcess from 'node:child_process';
 
 export interface RunGitOptions {
@@ -45,7 +44,7 @@ function isAllowedGitFailure(error: unknown, options: RunGitOptions): boolean {
 }
 
 export function runGit(repoRoot: string, args: string[], options: RunGitOptions = {}): string {
-    countNextStepWork('git:' + JSON.stringify(args));
+
     try {
         return childProcess.execFileSync('git', ['-C', repoRoot, ...args], {
             encoding: 'utf8',
@@ -66,7 +65,7 @@ export function runGitBinary(
     args: string[],
     options: RunGitBinaryOptions = {}
 ): Buffer {
-    countNextStepWork('git_binary:' + JSON.stringify(args));
+
     try {
         return childProcess.execFileSync('git', ['-C', repoRoot, ...args], {
             input: options.input,

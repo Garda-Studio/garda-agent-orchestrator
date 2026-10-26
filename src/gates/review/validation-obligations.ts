@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import { readValidationFile, validationDigest } from '../../core/project-validation-identity';
 import { resolveValidationSemanticReviewLanes, type EffectiveReviewSnapshot } from '../../policy/effective-review-snapshot';
@@ -18,6 +19,7 @@ export function readValidationReviewObligations(options: {
     repoRoot: string; taskId: string; preflightPath: string; taskModePath?: string;
     inspection?: ValidationEvidenceInspection;
 }): ValidationReviewObligations {
+    countNextStepWork('derive:readValidationReviewObligations');
     const preflightPath = resolveCurrentNoOpPreflightPath(options.repoRoot, options.taskId, options.preflightPath);
     const retained = readValidationFile(options.repoRoot,
         path.relative(path.resolve(options.repoRoot), preflightPath).replace(/\\/gu, '/'));

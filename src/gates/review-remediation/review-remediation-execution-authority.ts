@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 
 import { readJsonFile } from '../../core/json';
@@ -219,6 +220,7 @@ function buildAuthority(
 export function resolvePersistedRemediationReviewExecutionAuthority(
     options: PersistedRemediationReviewExecutionAuthorityOptions
 ): ReviewRemediationReviewContractValidationAuthority | null {
+    countNextStepWork('derive:resolvePersistedRemediationReviewExecutionAuthority');
     if (options.reviewExecution.source === 'initial_full') {
         return null;
     }

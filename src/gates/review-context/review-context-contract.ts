@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import type { ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 import * as fs from 'node:fs';
 import { extractFilePathFromDiffLine, parseUnifiedDiff } from '../../gate-runtime/scoped-diff';
@@ -706,6 +707,7 @@ export interface ReviewContextContractValidationOptions {
 export function getReviewContextContractViolations(
     options: ReviewContextContractValidationOptions
 ): string[] {
+    countNextStepWork('derive:getReviewContextContractViolations');
     const reviewContext = options.reviewContext;
     if (!reviewContext || typeof reviewContext !== 'object' || Array.isArray(reviewContext)) {
         return [];

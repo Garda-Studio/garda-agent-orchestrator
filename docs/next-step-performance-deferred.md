@@ -54,10 +54,12 @@ for every captured dependency before adding such a cache.
 
 ## P5: filesystem and process memoization
 
-The P1 real-navigation budgets already observe one identical Git invocation and
-one Windows ACL probe per path. Existing workspace snapshots and the ACL cache
-account for those bounds. No duplicate process call in this fixture requires a
-new cache.
+The initial counters covered only Git helper calls and icacls, omitting direct
+Git calls and native SID probes. Independent review rejected the resulting claim
+that duplicate process work was already bounded. Measurement now captures actual
+synchronous Node process boundaries, keyed by command, arguments, working
+directory, options and environment (only their digest is emitted). Duplicate
+process work remains an open optimization; no process cache is introduced.
 
 Retain `getSafeWorktreePathState` and `fileSha256` semantics. The former resolves
 the root and target, checks link targets and rechecks symlink identity after

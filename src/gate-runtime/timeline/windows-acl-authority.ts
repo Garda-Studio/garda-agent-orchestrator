@@ -1,4 +1,3 @@
-import { countNextStepWork } from '../../core/next-step-measurement';
 import * as childProcess from 'node:child_process';
 import * as path from 'node:path';
 import { getWindowsNativeEnvironment, getWindowsSystemDirectory, WINDOWS_NATIVE_POWERSHELL_BOOTSTRAP } from '../../core/windows-native-environment';
@@ -99,7 +98,7 @@ function resolveTrustedPrincipalNames(): ReadonlySet<string> | null {
 
 export function inspectTrustedWindowsWriteAuthority(filePath: string): boolean {
     for (let attempt = 0; attempt < ACL_INSPECTION_MAX_ATTEMPTS; attempt += 1) {
-        countNextStepWork('icacls:' + filePath);
+
         const result = childProcess.spawnSync(path.join(getWindowsSystemDirectory(), 'icacls.exe'), [filePath], {
             encoding: 'utf8', maxBuffer: 256 * 1024, timeout: ACL_INSPECTION_TIMEOUT_MS, windowsHide: true
         });

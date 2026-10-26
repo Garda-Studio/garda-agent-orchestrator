@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import {
     buildReviewCoverageContract,
     type ReviewCoverageContract
@@ -66,6 +67,7 @@ export function resolveAuthoritativeReviewValidationObligations(options: {
     reviewType: string; preflight: Record<string, unknown>; repoRoot: string; preflightPath?: string; taskModePath?: string;
     inspection?: ValidationEvidenceInspection;
 }) {
+    countNextStepWork('derive:resolveAuthoritativeReviewValidationObligations');
     const taskId = String(options.preflight.task_id ?? '');
     const expectedRed = taskRequiresExpectedRed(options.repoRoot, taskId);
     const declaredOrMatrix = currentProjectValidationAuthority(options.repoRoot, options.preflight)

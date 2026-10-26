@@ -1,3 +1,4 @@
+import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -156,6 +157,7 @@ interface QualityAnalysisOptions {
 }
 
 function readBoundQualityAnalysis(options: QualityAnalysisOptions, requireObservedExecution: boolean): ReviewContextTrustBoundaryAnalysis {
+    countNextStepWork('derive:readBoundQualityAnalysis');
     const applicability = assessTrustBoundaryAnalysisApplicability(options.preflight);
     const base: ReviewContextTrustBoundaryAnalysisBase = {
         required: applicability.required,
