@@ -1,5 +1,12 @@
 export const PUBLIC_BUNDLE_ASSETS = Object.freeze([
     'NOTICE',
+    'CONTRIBUTING.md',
+    'docs/contributor-workflow.md',
+    'docs/task-plan-workflow.md',
+    'docs/findings-contracts.md',
+    'docs/parent-task-completion.md',
+    'docs/release-readiness.md',
+    'docs/run-methods.md',
     'SECURITY.md',
     'TRADEMARKS.md',
     'docs/assets/garda-github-social-preview.png',

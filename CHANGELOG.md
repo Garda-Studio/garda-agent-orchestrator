@@ -13,6 +13,8 @@
 
 ### Clearer interface and task guidance
 
+- Deployed bundles include findings contracts, parent completion, release readiness, run methods, and their linked contributor/task-plan guides, so public documentation links resolve locally.
+
 - Protected update drift now guides agents to read-only installation inspection and operator maintenance while keeping self-guard on, and names the rollback command for returning to the pre-update bundle. Authenticated rebinding of an active task after a bundle update remains deferred.
 - Task-mode rebind commands include planned paths and current task changes, preserving unchanged pre-entry work outside the task scope.
 - Protected task entry probes key-store writes before publishing task-mode evidence, so an existing filesystem permission failure preserves the active entry and can be retried after restoring access. Late publication-failure recovery remains fail-closed.
