@@ -2741,3 +2741,27 @@ test('parsed review payload reuse rejects changed inputs and never crosses read 
         assert.equal(readReviewArtifactJsonSnapshot(artifact).value, null);
     });
 });
+
+test('parsed review payload clones preserve deeply nested JSON and own prototype keys', context => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-json-deep-cache-'));
+    context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const reviewsDir = createReviewsDir(root);
+    const artifact = path.join(reviewsDir, 'T-DEEP-preflight.json');
+    fs.writeFileSync(artifact, '{"child":'.repeat(2000) + '{"__proto__":{"safe":true},"array":[null,-0]}' + '}'.repeat(2000));
+    withReviewArtifactReadSnapshot(reviewsDir, () => {
+        const first = readReviewArtifactJsonSnapshot(artifact), second = readReviewArtifactJsonSnapshot(artifact);
+        assert.equal(first.valid, true); assert.equal(second.valid, true);
+        let left = first.value as Record<string, unknown>, right = second.value as Record<string, unknown>;
+        for (let depth = 0; depth < 2000; depth += 1) {
+            assert.notEqual(left, right); assert.ok(Object.isFrozen(left)); assert.ok(Object.isFrozen(right));
+            left = left.child as Record<string, unknown>; right = right.child as Record<string, unknown>;
+        }
+        assert.notEqual(left, right); assert.ok(Object.isFrozen(left)); assert.ok(Object.isFrozen(right));
+        assert.equal(Object.getPrototypeOf(left), Object.prototype);
+        assert.equal(Object.hasOwn(left, '__proto__'), true);
+        assert.ok(Object.isFrozen(left.__proto__)); assert.notEqual(left.__proto__, right.__proto__);
+        assert.deepEqual(left.__proto__, { safe: true });
+        assert.ok(Object.isFrozen(left.array)); assert.notEqual(left.array, right.array);
+        assert.ok(Object.is((left.array as unknown[])[1], -0));
+    });
+});

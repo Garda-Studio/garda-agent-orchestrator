@@ -44,7 +44,7 @@
 
 - The launcher enables Node’s compile cache outside the workspace, with ordinary compilation as a fallback. Gate handlers load on demand, and next-step no longer loads unrelated handler groups. Help and CLI output stay unchanged.
 
-- Repeated review-artifact reads reuse the parsed immutable JSON within an authenticated read snapshot; path, identity and publication checks still run on every read.
+- Repeated review-artifact reads reuse the parsed immutable JSON within an authenticated read snapshot; path, identity and publication checks still run on every read. Iterative cloning preserves deeply nested JSON, own property names and fresh frozen views.
 
 - Opt-in `GARDA_NEXT_STEP_TIMING=1` reports inclusive navigation phase timings and work counts to stderr without changing navigator text or JSON. The benchmark reports first-process and warm-process timings with phase samples.
 

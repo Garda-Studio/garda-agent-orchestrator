@@ -668,6 +668,28 @@ function freezeReviewArtifactJson(value: unknown): unknown {
     return Object.freeze(value);
 }
 
+// JSON payloads contain only primitives, arrays and ordinary own data properties.
+// Iteration preserves fresh identities without structuredClone's lower depth limit.
+function cloneFrozenReviewArtifactJson(value: unknown): unknown {
+    if (value === null || typeof value !== 'object') return value;
+    const root: Record<string, unknown> | unknown[] = Array.isArray(value) ? [] : {};
+    const pending = [{ source: value, target: root }];
+    while (pending.length) {
+        const { source, target } = pending.pop()!;
+        for (const [key, nested] of Object.entries(source)) {
+            const child: unknown = nested !== null && typeof nested === 'object'
+                ? (Array.isArray(nested) ? [] : {}) : nested;
+            // Define own keys, including __proto__, with JSON.parse semantics.
+            Object.defineProperty(target, key, { value: child, enumerable: true, writable: true, configurable: true });
+            if (nested !== null && typeof nested === 'object') {
+                pending.push({ source: nested, target: child as Record<string, unknown> | unknown[] });
+            }
+        }
+        Object.freeze(target);
+    }
+    return root;
+}
+
 function positiveReviewArtifactSnapshotLimit(value: unknown, fallback: number): number {
     const parsed = Number(value ?? fallback);
     return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
@@ -1161,7 +1183,7 @@ export function readReviewArtifactJsonSnapshot(filePath: string): ReviewArtifact
         parsedReviewArtifactPayloads.set(fileSnapshot.content, parsed);
     }
     return { active: true, sha256: fileSnapshot.sha256, valid: parsed.valid,
-        value: parsed.valid ? freezeReviewArtifactJson(structuredClone(parsed.value)) : null };
+        value: parsed.valid ? cloneFrozenReviewArtifactJson(parsed.value) : null };
 }
 
 export function readReviewArtifactJsonFile(filePath: string): unknown {
