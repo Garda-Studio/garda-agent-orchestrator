@@ -19,7 +19,7 @@
 
 - Protected task entry probes key-store writes before publishing task-mode evidence, so an existing filesystem permission failure preserves the active entry and can be retried after restoring access. Late publication-failure recovery remains fail-closed.
 
-- Installed Garda bundle code is rejected from task scopes and staged bundle files cannot be committed, even with approval. Doctor and update identify tracked bundle files and show how to untrack them; Garda source development remains supported.
+- Installed Garda bundle code is rejected from task scopes and staged bundle paths cannot be committed, even with approval; case-varied bundle names are covered on every platform. Doctor and update identify tracked bundle files and show how to untrack them; Garda source development remains supported.
 
 - The local UI has a refreshed layout, readable task tables and a remembered light, dark or system theme.
 - TASK.md queue writers use compact rows and header-sized separators, so a long Notes cell no longer pads every other row. Legacy padded tables remain readable and compact on the next queue write; integrity checks and escaped pipes are preserved.

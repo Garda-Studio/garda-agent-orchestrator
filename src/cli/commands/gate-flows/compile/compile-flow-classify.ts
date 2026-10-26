@@ -1,3 +1,4 @@
+import { splitGeneratedRuntimeControlPlaneArtifacts } from '../../../../gates/shared/generated-runtime-artifacts';
 import { assertNoInstalledBundleScope } from '../../../../gates/protected-control-plane/installed-bundle-guard';
 import * as fs from 'node:fs';
 import { freezeProjectValidationAdmission } from '../../../../gates/project-validation/authority';
@@ -366,7 +367,10 @@ export function runClassifyChangeCommand(options: ClassifyChangeCommandOptions):
     try {
     const explicitChangedFilesProvided = options.changedFiles !== undefined;
     const explicitChangedFiles = expandValueList(options.changedFiles, { splitDelimiters: true });
-    assertNoInstalledBundleScope(repoRoot, explicitChangedFiles);
+    // Generated evidence is excluded by the snapshot, never admitted as task implementation scope.
+    const explicitReviewableFiles = splitGeneratedRuntimeControlPlaneArtifacts(explicitChangedFiles
+        .map(file => path.relative(repoRoot, path.resolve(repoRoot, file)))).reviewableFiles;
+    assertNoInstalledBundleScope(repoRoot, explicitReviewableFiles);
     const includeUntracked = parseBooleanOption(options.includeUntracked, options.useStaged ? false : true);
     const requestedDetectionSource = String(options.detectionSource || '').trim().toLowerCase();
     const requestedSplitCheckpointRange = parseSplitCheckpointDetectionSource(requestedDetectionSource);

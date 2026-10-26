@@ -382,9 +382,13 @@ export function buildOrchestratorWorkRestartCommand(
         const expected = baseline?.file_hashes[file];
         return !expected || fileSha256(path.resolve(repoRoot, file)) !== expected;
     }) : [];
+    // Legacy entries without a readable Git workspace still need their existing fallback scope.
+    const fallbackScope = !current?.reliable && plannedChangedFiles.length === 0 && additionalPlannedChangedFiles.length === 0
+        ? getTaskModeDirtyWorkspaceBaselineCommandChangedFiles(repoRoot, taskMode)
+        : [];
     const isSourceCheckout = isOrchestratorSourceCheckout(repoRoot);
     const restartScopeFiles = splitGeneratedRuntimeControlPlaneArtifacts([
-        ...plannedChangedFiles, ...additionalPlannedChangedFiles, ...taskChangedFiles
+        ...plannedChangedFiles, ...additionalPlannedChangedFiles, ...taskChangedFiles, ...fallbackScope
     ], { isSourceCheckout }).reviewableFiles.filter(file => !isSourceCheckoutGeneratedRuntimeArtifactPath(file, isSourceCheckout));
     const mergedPlannedChangedFiles = expandDirectoryPlaceholdersForCommand(repoRoot, restartScopeFiles);
     const workflowConfigFileSet = includeWorkflowConfigWork

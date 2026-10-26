@@ -1826,7 +1826,7 @@ describe('gates/next-step protected recovery', () => {
         assert.doesNotMatch(result.reason, /protected workflow-config recovery signal/);
     });
 
-    it('prefers current workspace scope over stale planned files in protected recovery command', () => {
+    it('G3 preserves planned files together with current workspace scope in protected recovery command', () => {
         const repoRoot = makeTempRepo();
         initGitRepo(repoRoot, { gitignoreContent: 'node_modules/\n' });
         writeJson(path.join(repoRoot, 'package.json'), { name: 'garda-agent-orchestrator' });
@@ -1869,7 +1869,7 @@ describe('gates/next-step protected recovery', () => {
         assert.ok(command.includes('--operator-confirmed-at-utc "<ISO-8601 timestamp>"'));
         assert.ok(command.includes('--planned-changed-file "src/app.ts"'));
         assert.ok(!command.includes(`--planned-changed-file "${runtimeReviewRelativePath}"`));
-        assert.ok(!command.includes('--planned-changed-file "src/stale-planned.ts"'));
+        assert.ok(command.includes('--planned-changed-file "src/stale-planned.ts"'));
         assert.ok(!command.includes('T-EVIL'));
         assert.ok(!command.includes('gate classify-change'));
     });

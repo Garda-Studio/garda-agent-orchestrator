@@ -9,6 +9,9 @@ import {
 } from '../../core/provider-registry';
 import { getNodeBundleCliCommand, getNodeGateCommandPrefix } from '../command-constants';
 
+export const INSTALLED_BUNDLE_OWNERSHIP_RULE =
+    'In installed projects, never edit, stage or commit files under the Garda bundle, even with operator approval. Record Garda defects in the orchestrator problems log instead of patching Garda inside the project. Change live/config settings only through existing workflow commands. Garda source-checkout development remains supported through orchestrator-work.';
+
 export const REVIEW_LAUNCH_NAVIGATION_INSTRUCTION =
     'Use next-step review navigation output before reviewer launch: `ReviewLaunchableBatch` / `launchable_review_types` list lanes that may be launched now, `BlockedReviewLanes` / `blocked_review_lanes` list dependency reasons, `NextReview` remains legacy single-lane compatibility, failed current reviews take remediation priority, and enabled full-suite validation blocks `test` review until current full-suite PASS evidence exists.';
 
@@ -112,7 +115,7 @@ export function buildTaskStartSnippetSection(runtimeProviderLabel: string, route
     const bundleName = resolveBundleName();
     return [
         '## Copy-Paste Start Commands',
-        'In installed projects, never edit, stage or commit files under the Garda bundle, even with operator approval. Record Garda defects in the orchestrator problems log instead of patching Garda inside the project. Change live/config settings only through existing workflow commands. Garda source-checkout development remains supported through orchestrator-work.',
+        INSTALLED_BUNDLE_OWNERSHIP_RULE,
         `- First/resume command (source checkout): \`${buildSourceNextStepSnippet()}\``,
         `- First/resume command (deployed workspace): \`${buildBundleNextStepSnippet()}\``,
         '- Use the same `next-step` command before the first gate, after every suggested command, and after any gate failure. Do not start with `compile-gate`, guess flags, or read default config templates when `next-step` can inspect task evidence.',

@@ -19,6 +19,7 @@ import {
     COMMIT_GUARD_EXTRA_MARKERS_ENV,
     COMMIT_GUARD_START,
     extractManagedBlockFromContent,
+    INSTALLED_BUNDLE_OWNERSHIP_RULE,
     isAntigravityEntrypointPath,
     MANAGED_END,
     MANAGED_START,
@@ -31,7 +32,7 @@ export function buildCanonicalManagedBlock(canonicalFile: string, entrypointTemp
         throw new Error('Entrypoint template managed block is missing; cannot build canonical entrypoint.');
     }
     const canonicalBlock = restoreEntrypointRuleLinks(baseBlock)
-        .replace(/^# .+$/m, `# ${canonicalFile}`)
+        .replace(/^# .+$/m, `# ${canonicalFile}\n\n${INSTALLED_BUNDLE_OWNERSHIP_RULE}`)
         .replace(
             /At setup, source of truth is selected via `-SourceOfTruth` \([^)]+\)\./,
             `At setup, source of truth is selected via \`-SourceOfTruth\` (\`${formatProviderIdList('`, `')}\`).`
@@ -71,6 +72,7 @@ export function buildRedirectManagedBlock(
         `# ${targetFile}`,
         '',
         'This file is a redirect.',
+        INSTALLED_BUNDLE_OWNERSHIP_RULE,
         `Canonical source of truth for agent workflow rules: \`${canonicalFile}\`.`,
         '',
         `Hard stop: read \`${canonicalFile}\` first and follow its routing links before responding to anything.`,
@@ -86,7 +88,7 @@ export function buildRedirectManagedBlock(
         `After opening downstream workflow files, record them via \`node bin/garda.js gate load-rule-pack ...\` in a self-hosted source checkout, or \`node ${resolveBundleName()}/bin/garda.js gate load-rule-pack ...\` inside a materialized/deployed workspace.`,
         `Before each required reviewer invocation, run \`node bin/garda.js gate build-review-context ...\` in a self-hosted source checkout, or \`node ${resolveBundleName()}/bin/garda.js gate build-review-context ...\` inside a materialized/deployed workspace; completion for code-changing tasks expects review-skill telemetry from that step. ${REVIEWER_FRESH_CONTEXT_LAUNCH_INSTRUCTION} ${REVIEWER_CLEANUP_AFTER_RECEIPT_INSTRUCTION} Downstream \`test\` review must wait for current-cycle PASS evidence from every required upstream non-\`test\` review.`,
         ...targetSpecificInstructions,
-        `Ignored orchestration control-plane files (for example \`TASK.md\`, \`${resolveBundleName()}/runtime/**\`, and \`${resolveBundleName()}/live/docs/changes/CHANGELOG.md\`) are expected local artifacts; never \`git add -f\` them unless the user explicitly asks to version orchestrator internals.`,
+        `Ignored orchestration control-plane files (for example \`TASK.md\`, \`${resolveBundleName()}/runtime/**\`, and \`${resolveBundleName()}/live/docs/changes/CHANGELOG.md\`) are expected local artifacts; never \`git add -f\` them in an installed project, even with operator approval.`,
         providerBridgeSection,
         MANAGED_END
     ].join('\r\n');
@@ -97,7 +99,7 @@ export function buildCommitGuardManagedBlock() {
     return `${COMMIT_GUARD_START}
 # Installed bundle ownership is independent of commit approval.
 if ! node -e 'try { process.exit(require(process.cwd()+"/package.json").name === "garda-agent-orchestrator" ? 0 : 1); } catch { process.exit(1); }'; then
-  git diff --cached --quiet -- ':(top)garda-agent-orchestrator/'
+  git diff --cached --quiet -- ':(top,icase)garda-agent-orchestrator'
   garda_bundle_status=$?
   if [ "$garda_bundle_status" != "0" ]; then
     echo "Commit blocked: installed Garda bundle files cannot be committed. Record Garda defects in the orchestrator problems log."

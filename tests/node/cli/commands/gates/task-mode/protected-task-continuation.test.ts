@@ -431,7 +431,7 @@ test('G2 EPERM key-store probe preserves the active entry and next-step never de
             return nativeWrite(...args);
         });
         assert.throws(() => f.continue({ operatorConfirmed: 'yes', operatorConfirmedAtUtc: new Date().toISOString() }),
-            /write access to .git\/garda-private/);
+            /write access to .git\/garda-private|read-only Git metadata/);
         assert.deepEqual(fs.readFileSync(f.artifactPath), before);
         assert.deepEqual(fs.readFileSync(timelinePath), timelineBefore);
         t.mock.restoreAll();

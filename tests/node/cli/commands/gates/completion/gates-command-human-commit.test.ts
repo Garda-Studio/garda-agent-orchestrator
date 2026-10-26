@@ -759,9 +759,39 @@ test('G1 installed commit hook rejects bundle staging even with GARDA_ALLOW_COMM
         process.env.GARDA_ALLOW_COMMIT = '1';
         try {
             assert.throws(() => runGit(root, ['commit', '-m', 'direct bundle patch']), /installed Garda bundle files cannot be committed/);
+            runGit(root, ['reset', '--', file]);
+            const objectId = runGit(root, ['hash-object', '-w', '--', file]).stdout.trim();
+            runGit(root, ['update-index', '--add', '--cacheinfo', '100644', objectId, 'GARDA-AGENT-ORCHESTRATOR/dist/formatter.js']);
+            assert.throws(() => runGit(root, ['commit', '-m', 'case-alias bundle patch']), /installed Garda bundle files cannot be committed/);
+            runGit(root, ['update-index', '--force-remove', 'GARDA-AGENT-ORCHESTRATOR/dist/formatter.js']);
+            runGit(root, ['update-index', '--add', '--cacheinfo', '120000', objectId, 'garda-agent-orchestrator']);
+            assert.throws(() => runGit(root, ['commit', '-m', 'replace bundle root with symlink']), /installed Garda bundle files cannot be committed/);
+
+
             fs.writeFileSync(path.join(root, 'package.json'), '{"name":"garda-agent-orchestrator"}');
             runGit(root, ['add', 'package.json']);
             assert.doesNotThrow(() => runGit(root, ['commit', '-m', 'source checkout development']));
         } finally { if (previous === undefined) delete process.env.GARDA_ALLOW_COMMIT; else process.env.GARDA_ALLOW_COMMIT = previous; }
     } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test('G1 installed hook rejects staged bundle removals even with approval', () => {
+    const root = fixture();
+    const previous = process.env.GARDA_ALLOW_COMMIT;
+    try {
+        const file = 'garda-agent-orchestrator/dist/formatter.js';
+        fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true }); fs.writeFileSync(path.join(root, file), 'preserve bundle');
+        runGit(root, ['add', '-f', file]); runGit(root, ['commit', '-m', 'historical tracked bundle fixture']);
+        const hook = path.join(root, '.git/hooks/pre-commit');
+        fs.writeFileSync(hook, '#!/usr/bin/env bash\n' + buildCommitGuardManagedBlock() + '\n'); fs.chmodSync(hook, 0o755);
+        process.env.GARDA_ALLOW_COMMIT = '1';
+        runGit(root, ['rm', '-r', '--cached', '--', ':(top,icase)garda-agent-orchestrator']);
+        assert.throws(() => runGit(root, ['commit', '-m', 'untrack installed bundle']), /installed Garda bundle files cannot be committed/);
+        assert.equal(runGit(root, ['ls-files', '--', 'garda-agent-orchestrator/']).stdout.trim(), '');
+        assert.equal(fs.readFileSync(path.join(root, file), 'utf8'), 'preserve bundle');
+    } finally {
+        if (previous === undefined) delete process.env.GARDA_ALLOW_COMMIT; else process.env.GARDA_ALLOW_COMMIT = previous;
+        fs.rmSync(root, { recursive: true, force: true });
+    }
 });

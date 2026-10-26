@@ -1999,7 +1999,7 @@ describe('G1 tracked installed bundle warning', () => {
             const before = runGit(projectRoot, ['ls-files', '-z']);
             const result = runUpdate({ targetRoot: projectRoot, bundleRoot, initAnswersPath: answersPath,
                 skipVerify: true, skipManifestValidation: true, dryRun: true });
-            assert.match(result.updateAnnouncementWarnings.join('\n'), /git rm -r --cached -- "garda-agent-orchestrator\/"/);
+            assert.match(result.updateAnnouncementWarnings.join('\n'), /git rm -r --cached -- ":\(top,icase\)garda-agent-orchestrator"/);
             assert.equal(runGit(projectRoot, ['ls-files', '-z']), before);
         } finally { fs.rmSync(projectRoot, { recursive: true, force: true }); }
     });

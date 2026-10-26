@@ -586,7 +586,16 @@ test('G1 doctor warns on tracked bundle and provides a disk-preserving untrack c
         runGit(ws.tmpDir, ['init']);
         runGit(ws.tmpDir, ['add', '-f', 'garda-agent-orchestrator/']);
         const result = runDoctor({ targetRoot: ws.tmpDir, sourceOfTruth: 'Claude' });
-        assert.match(formatDoctorResult(result), /git rm -r --cached -- "garda-agent-orchestrator\/"/);
+        assert.match(formatDoctorResult(result), /Installed Garda bundle files are tracked/);
+        const tracked = runGit(ws.tmpDir, ['ls-files', '-z']).split('\0').filter(Boolean)[0];
+        const objectId = runGit(ws.tmpDir, ['rev-parse', `:${tracked}`]).trim();
+        runGit(ws.tmpDir, ['rm', '-r', '--cached', '--', 'garda-agent-orchestrator/']);
+        runGit(ws.tmpDir, ['update-index', '--add', '--cacheinfo', '100644', objectId,
+            tracked.replace('garda-agent-orchestrator/', 'GARDA-AGENT-ORCHESTRATOR/')]);
+        const aliasResult = formatDoctorResult(runDoctor({ targetRoot: ws.tmpDir, sourceOfTruth: 'Claude' }));
+        assert.match(aliasResult, /Installed Garda bundle files are tracked/);
+        assert.match(aliasResult, /git rm -r --cached -- ":\(top,icase\)garda-agent-orchestrator"/);
+
         fs.writeFileSync(path.join(ws.tmpDir, 'package.json'), '{"name":"garda-agent-orchestrator"}');
         assert.doesNotMatch(formatDoctorResult(runDoctor({ targetRoot: ws.tmpDir, sourceOfTruth: 'Claude' })), /Installed Garda bundle files are tracked/);
     } finally { fs.rmSync(ws.tmpDir, { recursive: true, force: true }); }

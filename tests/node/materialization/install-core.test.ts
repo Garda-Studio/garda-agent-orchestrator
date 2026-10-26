@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { runInstall } from '../../../src/materialization/install';
+import { runInit } from '../../../src/materialization/init';
 import {
     getLegacyUninstallBackupGitignoreEntry,
     UNINSTALL_BACKUP_GITIGNORE_COMMENT,
@@ -36,6 +37,27 @@ describe('runInstall — core deploy and invariants', () => {
             `# ${legacyBundleName}:commit-guard-end`
         ].join('\n');
     }
+
+    it('G1 installs bundle ownership rules without an operator-approval staging exception', () => {
+        const { projectRoot, bundleRoot } = setupTestWorkspace(repoRoot);
+        try {
+            const answersPath = writeInitAnswers(bundleRoot, { AssistantLanguage: 'English', AssistantBrevity: 'concise',
+                SourceOfTruth: 'Claude', EnforceNoAutoCommit: 'false', ClaudeOrchestratorFullAccess: 'false',
+                TokenEconomyEnabled: 'true', CollectedVia: 'CLI_NONINTERACTIVE' });
+            runInstall({ targetRoot: projectRoot, bundleRoot, runInit: true, sourceOfTruth: 'Claude',
+                assistantLanguage: 'English', assistantBrevity: 'concise', initAnswersPath: answersPath,
+                initRunner(options) {
+                    assert.match(fs.readFileSync(path.join(projectRoot, 'CLAUDE.md'), 'utf8'), /even with operator approval/);
+                    runInit({ ...options, bundleRoot, lifecycleLockAlreadyHeld: true });
+                } });
+            for (const relative of ['CLAUDE.md', ...['00-core.md', '35-strict-coding-rules.md', '40-commands.md', '80-task-workflow.md']
+                .map(name => 'garda-agent-orchestrator/live/docs/agent-rules/' + name)]) {
+                const rules = fs.readFileSync(path.join(projectRoot, relative), 'utf8');
+                assert.match(rules, /even with operator approval/);
+                assert.doesNotMatch(rules, /unless the user explicitly (?:asks to version|requests versioning) orchestrator internals/);
+            }
+        } finally { fs.rmSync(projectRoot, { recursive: true, force: true }); }
+    });
 
     it('deploys TASK.md and creates entrypoint files', () => {
         const { projectRoot, bundleRoot } = setupTestWorkspace(repoRoot);

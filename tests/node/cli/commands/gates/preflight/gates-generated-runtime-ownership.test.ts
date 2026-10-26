@@ -79,6 +79,16 @@ function createFixture(t: TestContext, prefix: string, state: GitState) {
 }
 
 describe('generated runtime ownership in native Git scope', () => {
+    it('G1 preserves generated receipt exclusion while rejecting installed implementation scope', t => {
+        const { repoRoot, taskId } = createFixture(t, 'tools', 'tracked');
+        const receipt = 'garda-agent-orchestrator/runtime/reviews/ignored-receipt.json';
+        writeFile(repoRoot, receipt, '{}\n'); writeFile(repoRoot, 'src/app.js', 'const app = 2;\n');
+        const result = JSON.parse(runClassifyChangeCommand({ repoRoot, taskId,
+            changedFiles: ['src/app.js', receipt], emitMetrics: false }).outputText);
+        assert.deepEqual(result.changed_files, ['src/app.js']);
+        assert.ok(result.triggers.ignored_generated_runtime_files.includes(receipt));
+    });
+
     for (const prefix of ['tools', 'src']) {
         for (const state of ['tracked', 'untracked', 'staged', 'rename'] as const) {
             it(`retains ${prefix} ${state} source in automatic and explicit scopes`, async (t) => {

@@ -476,7 +476,9 @@ function captureProjectContinuity(projectRoot: string) {
     const operatorNotes = taskContent.slice(taskContent.indexOf('## Operator Notes'));
     assert.match(operatorNotes, /^## Operator Notes\n/u);
     return { files: preserved.map(file => ({ path: file, bytes: fs.readFileSync(path.join(projectRoot, file)) })),
-        queueRows: queue.rows.map(row => row.rawLine), operatorNotes,
+        // Round 4 F3 intentionally compacts legacy padding on the next queue write.
+        // Compare every cell verbatim after delimiter padding, preserving values and inner whitespace.
+        queueRows: queue.rows.map(row => row.cells.map(cell => cell.trimmed)), operatorNotes,
         mode: fs.readFileSync(modePath), timeline: fs.readFileSync(timelinePath),
         head: runGit(projectRoot, ['rev-parse', 'HEAD']).stdout,
         staged: runGit(projectRoot, ['diff', '--cached', '--binary', '--', 'units/order.widget', 'checks/order.case']).stdout,

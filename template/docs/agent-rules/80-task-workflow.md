@@ -228,7 +228,7 @@ After an explicit decision, keep `CAND-001` with its decision reference and add 
 - Terminal non-active statuses (`DONE`, `BLOCKED`, `SPLIT_REQUIRED`, `DECOMPOSED`) require full cleanup of temporary reviewer/specialist logs after required artifacts are persisted.
 - Gate-owned status sync is the only normal updater for active lifecycle status cells. Final reporting must not ask the implementation agent to manually synchronize `TASK.md` status; stale queue-vs-gate diagnostics should name the gate evidence or explicit operator reset/discard command.
 - Documentation impact updates are required when behavior/contracts/ops docs changed.
-- Required changelog or evidence updates to ignored orchestrator paths must stay local on disk; do not use `git add -f` unless the user explicitly requests versioning orchestrator internals.
+- Required changelog or evidence updates to ignored orchestrator paths must stay local on disk; do not use `git add -f` in an installed project, even with operator approval.
 ### Final User Report And Commit
 
 - Workspace-local `workflow-config.local_commit.enabled` is OFF by default, including legacy workspaces. Only explicit operator-approved `workflow set --local-commit-enabled true --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>"` grants authority. The matching audit is authenticated and bound to this workspace and Git metadata. Copies and agent-written flags cannot authorize a commit. Audited unrelated setting changes preserve the grant; OFF rotates its authentication key and revokes previous receipts. Failed permission publication fails closed and requires a new explicit setting command.
