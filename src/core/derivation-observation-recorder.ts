@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto';
 import { types } from 'node:util';
 import { cloneFrozenJson } from './immutable-json';
 import { countNextStepWork, describeProcessInputs } from './next-step-measurement';
-import { reduceClosedQualityAnalysis, type ClosedQualityEvidence } from './closed-quality-analysis';
 import type { InvocationReadMemoKey } from './invocation-read-observation';
 
 export interface RecordedObservation {
@@ -34,7 +33,6 @@ const frames = new AsyncLocalStorage<readonly Frame[]>();
 const nativePermit = new AsyncLocalStorage<boolean>();
 const replayers = new WeakMap<RecordedObservation, () => string>();
 const publishableCaptures = new WeakSet<object>();
-const closedPlanBindings = new WeakMap<object, ClosedObservationPlan>();
 const kinds = new Set(['file-bytes', 'path-state', 'path-absence', 'native-realpath',
     'process-result', 'acl-verdict', 'directory-enumeration', 'timeline-query', 'workspace-auth', 'code-closure', 'process-query']);
 const guardInstallFailures = new Set<string>();
@@ -230,8 +228,7 @@ export function isPublishableObservationCapture(capture: unknown): boolean {
 // Closed operation plans are implemented below. They receive validated data, never callbacks.
 export type ClosedObservationPlan = { readonly operation: 'json-parse'; readonly text: string }
     | { readonly operation: 'copy-json'; readonly value: unknown }
-    | { readonly operation: 'quality-artifact-json'; readonly path: string; readonly text: string; readonly sha256: string }
-    | { readonly operation: 'quality-analysis'; readonly evidence: ClosedQualityEvidence; readonly requireObservedExecution: boolean };
+    | { readonly operation: 'quality-artifact-json'; readonly path: string; readonly text: string; readonly sha256: string };
 
 let closedPlanMemo: InvocationReadMemoKey<unknown> | undefined;
 
@@ -253,8 +250,6 @@ function runClosedPlan(input: ClosedObservationPlan, key: string,
             return cloneFrozenJson(JSON.parse(input.text) as unknown);
         }
         if (input.operation === 'copy-json') return cloneFrozenJson(input.value);
-        if (input.operation === 'quality-analysis') return cloneFrozenJson(
-            reduceClosedQualityAnalysis(input.evidence, input.requireObservedExecution));
         throw new Error('Unknown closed observation plan.');
     }).value;
 }
@@ -276,18 +271,13 @@ export function executeClosedObservationPlan(plan: ClosedObservationPlan): Obser
         ? Object.freeze({ returned: true as const, value: cloneFrozenJson(captured.outcome.value) })
         : Object.freeze(captured.outcome);
     const result = Object.freeze({ ...captured, outcome, cacheable });
-    if (cacheable) { publishableCaptures.add(result); closedPlanBindings.set(result, input); }
+    if (cacheable) publishableCaptures.add(result);
     return result;
 }
 
 // Persistent wrappers make late recorder entry unable to hide ordinary module-property calls.
 // Pre-install aliases and unsupported callback closures still fail the publication seal above.
 installDerivationIoGuard();
-
-/** Read-only identity from the actual sealed execution; decoded/copied captures cannot forge it. */
-export function readSealedObservationPlan(capture: unknown): ClosedObservationPlan | null {
-    return capture !== null && typeof capture === 'object' ? closedPlanBindings.get(capture) ?? null : null;
-}
 
 /** Deterministic loader edges for the fixed operations, before a cross-process code identity is captured. */
 export function prepareClosedObservationPlanModules(): void {

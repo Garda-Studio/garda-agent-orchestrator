@@ -18,7 +18,7 @@ import {
     hasTestFirstExpectedRedDeclaration,
     TEST_FIRST_EXPECTED_RED_MARKER
 } from '../test-first/test-first-declaration';
-import { readOrderedTaskEvents } from '../task-audit/task-audit-summary-lifecycle';
+import { readImmutableOrderedTaskEvents } from '../task-audit/task-audit-summary-lifecycle';
 import { inspectRecipeExpectedRedRoute } from '../project-validation/focused';
 import { buildScopeContentFingerprint } from '../compile/compile-gate';
 import { readTaskOwnedIntermediateExecutionEvidence, type NativeIntermediateExecutionEntry } from '../review/focused-intermediate-evidence';
@@ -115,7 +115,7 @@ function inspectNativeExpectedFailureProgress(options: TestFirstExpectedFailureR
     if (inspection.status !== 'PASS' && inspection.status !== 'PASS_WITH_LEGACY_PREFIX') {
         return null;
     }
-    const events = readOrderedTaskEvents(timelinePath).events;
+    const events = readImmutableOrderedTaskEvents(timelinePath).events;
     if (events.length > MAX_TIMELINE_EVENTS) {
         return null;
     }

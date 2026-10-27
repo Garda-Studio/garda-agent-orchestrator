@@ -16,7 +16,7 @@ import {
 import {
     toPosix
 } from '../../gates/shared/helpers';
-import { readOrderedTaskEvents } from '../../gates/task-audit/task-audit-summary-lifecycle';
+import { readImmutableOrderedTaskEvents } from '../../gates/task-audit/task-audit-summary-lifecycle';
 import {
     resolveWorkspaceSnapshotRequest,
     type WorkspaceSnapshotRequest
@@ -659,7 +659,7 @@ function readTaskQualityChecklistActionHistory(
         return [];
     }
     try {
-        return readOrderedTaskEvents(eventPath).events
+        return readImmutableOrderedTaskEvents(eventPath).events
             .filter((event) => String(event.event_type || '').toUpperCase() === 'QUALITY_CHECKLIST_RECORDED')
             .filter((event) => {
                 const details = typeof event.details === 'object' && event.details !== null && !Array.isArray(event.details)

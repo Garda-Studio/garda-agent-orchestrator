@@ -1,9 +1,11 @@
-import { readTaskTimelineRouteQuery } from '../../gate-runtime/timeline/task-events-integrity';
+import { selectVerifiedEvents, verifiedEventPosition } from '../../gate-runtime/timeline/task-verified-event-index';
+import { readInvocationVerifiedEventIndex, readTaskTimelineRouteQuery } from '../../gate-runtime/timeline/task-events-integrity';
 import { routeLatestSequence } from '../../gate-runtime/timeline/task-route-query';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import type { BoundedJsonlTailResult } from '../../core/bounded-jsonl-tail';
 import {
+    captureTaskTimelineReadSnapshotByteLength,
     readTaskTimelineBoundedJsonlTail,
     taskTimelineAwareFileExists,
     withTaskTimelineReadSnapshot
@@ -87,7 +89,7 @@ export function getLatestTaskSequenceForEventTypes(
         }
         const route = readTaskTimelineRouteQuery(timelinePath, taskId);
         if (route) return routeLatestSequence(route, eventTypes, true);
-        const window = readTaskTimelineEventWindow(eventsRoot, taskId);
+        const window = readImmutableTaskTimelineEventWindow(eventsRoot, taskId);
         if (window.invalidJson) {
             return null;
         }
@@ -150,4 +152,38 @@ export function getLatestReviewEventSequence(
         }
     }
     return latestSequence;
+}
+
+/** Internal view; the public window continues to deliver mutable copies. */
+export function readImmutableTaskTimelineEventWindow(eventsRoot: string, taskId: string): Omit<TaskTimelineEventWindow, 'events'> & { readonly events: readonly ReviewReuseTelemetryEventLike[] } {
+    const file = path.join(eventsRoot, `${taskId}.jsonl`);
+    const indexed = readInvocationVerifiedEventIndex(file, taskId);
+    if (!indexed) return readTaskTimelineEventWindow(eventsRoot, taskId);
+    const limits = NEXT_STEP_REVIEW_TIMELINE_READ_LIMITS;
+    const total = captureTaskTimelineReadSnapshotByteLength(file), bytesRead = Math.min(total, limits.maxBytes);
+    const sourceStart = total - bytesRead;
+    let low = 0, high = indexed.startBytes.length;
+    if (sourceStart > 0) while (low < high) {
+        const middle = Math.floor((low + high) / 2);
+        if (indexed.startBytes[middle] <= sourceStart) low = middle + 1; else high = middle;
+    }
+    const lineStart = Math.max(low, indexed.events.length - limits.maxLines);
+    const retainedLineCount = indexed.events.length - lineStart;
+    const eventStart = Math.max(lineStart, indexed.events.length - Math.min(limits.maxEvents, limits.maxParseAttempts));
+    const events = eventStart === 0 ? indexed.events : Object.freeze(indexed.events.slice(eventStart));
+    return { events: events as readonly ReviewReuseTelemetryEventLike[], invalidJson: false,
+        truncated: sourceStart > 0 || lineStart > low || eventStart > lineStart,
+        bytesRead, retainedLineCount, parseAttempts: events.length };
+}
+
+export function readImmutableTaskTimelineEventLikes(eventsRoot: string, taskId: string,
+    eventType?: string, matching: 'exact' | 'trimmed' | 'normalized' = 'exact'): readonly ReviewReuseTelemetryEventLike[] {
+    if (!eventType) return readImmutableTaskTimelineEventWindow(eventsRoot, taskId).events;
+    const file = path.join(eventsRoot, `${taskId}.jsonl`), indexed = readInvocationVerifiedEventIndex(file, taskId);
+    // Callers retain their native predicates and short-circuit behavior. An unverified
+    // bounded stream may contain non-record JSON values; never inspect it eagerly.
+    if (!indexed) return readTaskTimelineEventLikes(eventsRoot, taskId);
+    const window = readImmutableTaskTimelineEventWindow(eventsRoot, taskId);
+    const first = window.events[0], floor = first ? verifiedEventPosition(first) ?? 0 : indexed.events.length;
+    return selectVerifiedEvents(indexed, [eventType], { trimmed: matching === 'trimmed', normalized: matching === 'normalized' }).filter(event => verifiedEventPosition(event)! >= floor);
 }

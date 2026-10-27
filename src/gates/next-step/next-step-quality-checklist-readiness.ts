@@ -51,7 +51,7 @@ import {
     assessTrustBoundaryAnalysisApplicability,
     TRUST_BOUNDARY_ANALYSIS_RULE_ID
 } from '../../core/trust-boundary-analysis';
-import { readTaskTimelineEventLikes } from './next-step-review-timeline-evidence';
+import { readImmutableTaskTimelineEventLikes } from './next-step-review-timeline-evidence';
 import { currentProjectValidationAuthority } from '../project-validation/authority';
 import { readQualityValidationPhaseAnalysis } from '../review-context/review-context-trust-boundary-analysis';
 import { inspectQualityValidationPhases, type QualityValidationPhases } from '../quality-checklist/quality-checklist-validation-phases';
@@ -211,7 +211,7 @@ function qualityChecklistAnswersMaterializationRequired(options: {
         }
         const bindingSha256 = fileSha256(bindingPath);
         const eventsRoot = joinOrchestratorPath(options.repoRoot, path.join('runtime', 'task-events'));
-        return !readTaskTimelineEventLikes(eventsRoot, options.taskId).some((event) => {
+        return !readImmutableTaskTimelineEventLikes(eventsRoot, options.taskId, 'QUALITY_CHECKLIST_ANSWERS_TEMPLATE_BINDING_RECORDED').some((event) => {
             countNextStepWork('visit:next-step-quality-checklist-readiness:210');
             if (String(event.event_type || '') !== 'QUALITY_CHECKLIST_ANSWERS_TEMPLATE_BINDING_RECORDED') {
                 return false;
@@ -240,7 +240,7 @@ function resolveBoundQualityChecklistAnswersPath(options: {
     }
     const repairPrefix = `${normalizePath(defaultPath)}.repair.json`;
     const eventsRoot = joinOrchestratorPath(options.repoRoot, path.join('runtime', 'task-events'));
-    const events = readTaskTimelineEventLikes(eventsRoot, options.taskId);
+    const events = readImmutableTaskTimelineEventLikes(eventsRoot, options.taskId, 'QUALITY_CHECKLIST_ANSWERS_TEMPLATE_BINDING_RECORDED');
     for (let index = events.length - 1; index >= 0; index -= 1) {
         countNextStepWork('visit:next-step-quality-checklist-readiness:239');
         const event = events[index];
@@ -473,7 +473,7 @@ function reviewFailureCadence(repoRoot: string, taskId: string, reviewFailureCad
         return selectReviewCadence(declaredRequired ? captured.declaredRequired : captured.ordinary, reviewFailureCadenceInterval);
     }
     countNextStepWork('cadence_legacy_fallback');
-    const events = readTaskTimelineEventLikes(eventsRoot, taskId);
+    const events = readImmutableTaskTimelineEventLikes(eventsRoot, taskId);
     const checklistPasses: number[] = [];
     const reviewFailures: Array<{ index: number; reviewType: string }> = [];
     events.forEach((event, index) => {

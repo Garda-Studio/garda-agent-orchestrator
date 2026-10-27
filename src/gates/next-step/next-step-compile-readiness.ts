@@ -1,9 +1,8 @@
+import { collectImmutableTimelineEvents as collectOrderedTimelineEvents } from './next-step-timeline-readers';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import {
-    collectOrderedTimelineEvents
-} from '../completion/completion-evidence';
+
 import {
     formatCompileInfraRecoveryHintLine
 } from '../compile/compile-infra-recovery-hints';
@@ -64,11 +63,11 @@ function protectedCompileFailureWasRecoveredByTaskModeRestart(
     }
     const latestCompileFailure = findLatestTimelineEvent(
         timeline,
-        (entry) => entry.event_type === 'COMPILE_GATE_FAILED'
+        'COMPILE_GATE_FAILED'
     );
     const latestTaskMode = findLatestTimelineEvent(
         timeline,
-        (entry) => entry.event_type === 'TASK_MODE_ENTERED'
+        'TASK_MODE_ENTERED'
     );
     return !!latestCompileFailure
         && !!latestTaskMode
@@ -381,11 +380,11 @@ function getStaleCompileScopeDriftFailureReason(params: {
     const timeline = collectOrderedTimelineEvents(path.join(params.eventsRoot, `${params.taskId}.jsonl`), timelineErrors);
     const latestCompileFailure = findLatestTimelineEvent(
         timeline,
-        (entry) => entry.event_type === 'COMPILE_GATE_FAILED'
+        'COMPILE_GATE_FAILED'
     );
     const latestPreflight = findLatestTimelineEvent(
         timeline,
-        (entry) => entry.event_type === 'PREFLIGHT_CLASSIFIED'
+        'PREFLIGHT_CLASSIFIED'
     );
     if (latestCompileFailure && latestPreflight && latestCompileFailure.sequence < latestPreflight.sequence) {
         staleReasons.push(

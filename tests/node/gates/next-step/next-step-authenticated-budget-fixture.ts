@@ -29,6 +29,11 @@ export function measureHistoryRoute(state: Pick<AuthenticatedHistoryFixture, 're
     const result = withNextStepMeasurement(() => resolveNextStep(state), measurement => { measured = measurement; });
     const elapsedMs = performance.now() - started;
     if (!measured) throw new Error('Real next-step measurement was not captured.');
+    assert.deepEqual(Object.keys(measured.work).filter(key => /^(?:visit:)?q4_/u.test(key)), [],
+        'Navigation must not execute removed persisted quality-cache work');
+    for (const key of ['visit:validation_timeline_parse_event', 'visit:timeline_cloned_event', 'visit:audit_ordered_event_copy'])
+        assert.equal(measured.work[key] || 0, 0, route + ': duplicate timeline work: ' + key);
+
     const scope = new Set(state.files.map(file => normalizedPath(path.join(state.repoRoot, file))));
     const oldArtifacts = new Set(state.historicalArtifacts.map(normalizedPath));
     const counters: Record<string, number> = {}, artifactsByPath: Record<string, number> = {}, artifactsByCycle: Record<string, number> = {};

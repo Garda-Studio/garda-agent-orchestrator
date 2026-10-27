@@ -1,4 +1,4 @@
-import { beginPersistedQualityTimelinePass, type PersistedQualityTimelineQuery } from './task-persisted-quality-query';
+import { beginVerifiedEventIndexPass, type VerifiedTaskEventIndex } from './task-verified-event-index';
 import { beginClosedReviewVerifiedPass, type ClosedReviewVerifiedCapture } from './task-closed-review-query';
 import { beginCadenceVerifiedPass } from './task-cadence-runtime';
 import type { ReviewCadenceWindow } from '../review/review-cadence-window';
@@ -56,7 +56,6 @@ interface IntegrityEvent {
     lineNumber: number;
 }
 interface CapturedIntegrityInspection {
-    persistedQualityQuery: PersistedQualityTimelineQuery | null;
     result: InspectTaskEventResult;
     events: IntegrityEvent[];
     closedReviews: ClosedReviewVerifiedCapture | null;
@@ -65,6 +64,10 @@ interface CapturedIntegrityInspection {
     navigationQueries: NavigationTimelineQuery | null;
     routeQueries: TaskRouteQuery | null;
 }
+
+// The canonical parser has already frozen/bounded source records. Keep optional index
+// wrappers outside that graph so they cannot tighten its depth/object acceptance bounds.
+const verifiedEventIndices = new WeakMap<object, VerifiedTaskEventIndex>();
 
 const INTEGRITY_INSPECTION_MEMOIZATION_KEY = createTaskTimelineMemoizationKey<CapturedIntegrityInspection>(
     'integrity-inspection'
@@ -190,7 +193,7 @@ function inspectTaskEventFileUncached(
     let validationQueries = capturedQueries ? beginValidationTimelineQueryPass() : null;
     let navigation = capturedQueries ? beginNavigationTimelineQueryPass() : null;
     let routePass = capturedQueries ? beginRouteVerifiedPass() : null;
-    let persistedQuality = capturedQueries ? beginPersistedQualityTimelinePass() : null;
+    let indexed = capturedQueries && isInvocationReadObservationActive() ? beginVerifiedEventIndexPass() : null;
     let cadenceOffsetsAvailable = true;
 
     try {
@@ -199,7 +202,6 @@ function inspectTaskEventFileUncached(
             result.events_scanned++;
 
             const event = timelineEntry.record;
-            try { persistedQuality?.accept(event); } catch { persistedQuality = null; }
             // These field updates are fused into the one mandatory timeline_events pass.
             // All collectors receive the same native nonempty ordinal, including malformed rows.
             const nonemptyOrdinal = result.events_scanned - 1;
@@ -232,6 +234,7 @@ function inspectTaskEventFileUncached(
             }
 
             result.matching_events++;
+            try { indexed?.accept(event, startByte ?? -1); } catch { indexed = null; }
             const integrity = event.integrity;
             if (!integrity || typeof integrity !== 'object') {
                 if (integrityStarted) {
@@ -345,8 +348,8 @@ function inspectTaskEventFileUncached(
         capturedQueries.validationQueries = validationQueries?.finish(authenticated) ?? null;
         capturedQueries.navigationQueries = navigation?.finish(delivered.status.startsWith('PASS')) ?? null;
         capturedQueries.routeQueries = routePass?.finish(delivered.status, readTaskTimelineSnapshotByteLength(taskEventFile)) ?? null;
-        try { capturedQueries.persistedQualityQuery = persistedQuality?.finish(delivered.status) ?? null; }
-        catch { capturedQueries.persistedQualityQuery = null; } // Optional projection failure retains native verification.
+        const index = indexed?.finish(authenticated);
+        if (index) verifiedEventIndices.set(delivered, index);
 
     }
     return delivered;
@@ -460,7 +463,6 @@ function captureIntegrityInspection(taskEventFile: string, taskId: string): Task
         () => {
             const events: IntegrityEvent[] = [];
             const queries: Omit<CapturedIntegrityInspection, 'result' | 'events'> = {
-                persistedQualityQuery: null,
                 closedReviews: null, cadence: null, validationQueries: null,
                 navigationQueries: null, routeQueries: null
             };
@@ -555,10 +557,14 @@ export function readTaskTimelineRouteQuery(taskEventFile: string, taskId: string
     } catch { return null; }
 }
 
-export function readTaskTimelinePersistedQualityQuery(file: string, taskId: string): PersistedQualityTimelineQuery | null {
+/** Fully verified immutable view retained within A1's dependency-check lifetime. */
+export function readInvocationVerifiedEventIndex(file: string, taskId: string): VerifiedTaskEventIndex | null {
     if (!isInvocationReadObservationActive()) return null;
     if (!isTaskTimelineReadSnapshotActive(file)) return withTaskTimelineFileReadSnapshot(file,
-        () => readTaskTimelinePersistedQualityQuery(file, taskId));
-    const captured = captureIntegrityInspection(file, taskId);
-    return captured.valid && captured.exists ? captured.value?.persistedQualityQuery ?? null : null;
+        () => readInvocationVerifiedEventIndex(file, taskId));
+    try {
+        const captured = captureIntegrityInspection(file, taskId);
+        return captured.valid && captured.exists && captured.value
+            ? verifiedEventIndices.get(captured.value.result) ?? null : null;
+    } catch { return null; } // Native readers retain their original rejection diagnostics.
 }

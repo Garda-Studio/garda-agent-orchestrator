@@ -1,9 +1,9 @@
+import { collectImmutableTimelineEvents as collectOrderedTimelineEvents } from './next-step-timeline-readers';
 import * as path from 'node:path';
 
 import { buildTaskPlanDiagnostics } from '../diagnostics/task-plan-diagnostics';
 import type { TaskModeArtifact } from '../task-mode/task-mode-contracts';
 import {
-    collectOrderedTimelineEvents,
     type TimelineEventEntry
 } from '../completion/completion-evidence';
 import {
@@ -69,7 +69,7 @@ export function readStartupCycleReadiness(
 
     const latestTaskMode = findLatestTimelineEvent(
         events,
-        (entry) => entry.event_type === 'TASK_MODE_ENTERED'
+        'TASK_MODE_ENTERED'
     );
     if (!latestTaskMode) {
         return {

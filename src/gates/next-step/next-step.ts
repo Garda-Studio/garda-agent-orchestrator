@@ -71,7 +71,7 @@ import {
     type GateOutcome
 } from '../task-audit/task-audit-summary-collectors';
 import {
-    readOrderedTaskEvents,
+    readImmutableOrderedTaskEvents,
     type TaskAuditEvent
 } from '../task-audit/task-audit-summary-lifecycle';
 import {
@@ -672,7 +672,7 @@ function addNormalizedReviewTypes(target: Set<string>, value: unknown): void {
 }
 
 function readLatestReviewGateOverrideSkippedReviewTypes(eventsRoot: string, taskId: string): Set<string> {
-    const orderedEvents = readOrderedTaskEvents(path.join(eventsRoot, `${taskId}.jsonl`)).events;
+    const orderedEvents = readImmutableOrderedTaskEvents(path.join(eventsRoot, `${taskId}.jsonl`)).events;
     for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
         countNextStepWork('visit:next-step:event:674');
         const event = orderedEvents[index];
@@ -783,7 +783,7 @@ function readLatestTaskEventSequence(
     ignoreEvent?: (event: Readonly<Record<string, unknown>>) => boolean
 ): number | null {
     const expectedTypes = new Set(eventTypes.map((eventType) => String(eventType || '').trim().toUpperCase()));
-    const orderedEvents = readOrderedTaskEvents(path.join(eventsRoot, `${taskId}.jsonl`)).events;
+    const orderedEvents = readImmutableOrderedTaskEvents(path.join(eventsRoot, `${taskId}.jsonl`)).events;
     for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
         countNextStepWork('visit:next-step:event:784');
         const event = orderedEvents[index];
@@ -884,7 +884,7 @@ function hasFullSuiteTimeoutWarningLifecyclePolicy(
         joinOrchestratorPath(repoRoot, path.join('runtime', 'task-events')),
         `${taskId}.jsonl`
     );
-    const orderedEvents = readOrderedTaskEvents(taskEventPath);
+    const orderedEvents = readImmutableOrderedTaskEvents(taskEventPath);
     return countNextStepArrayCopy('visit:next-step:copy:884', countNextStepArrayCopy('visit:next-step:copy:884', [...orderedEvents.events]).reverse()).some((event: TaskAuditEvent) => {
         countNextStepWork('visit:next-step:event:884');
         if (String(event.event_type || '').trim() !== 'FULL_SUITE_VALIDATION_WARNED') {
@@ -1119,7 +1119,7 @@ function readFullSuiteTargetedDiagnosticEvidence(options: {
         return { available: false, reason: null };
     }
     const timelinePath = path.join(options.eventsRoot, `${options.taskId}.jsonl`);
-    const events = readOrderedTaskEvents(timelinePath).events;
+    const events = readImmutableOrderedTaskEvents(timelinePath).events;
     const failedIndex = findLatestCurrentTaskEventIndex(events, options.taskId, 'FULL_SUITE_VALIDATION_FAILED');
     if (failedIndex < 0) {
         return { available: false, reason: null };
@@ -1288,7 +1288,7 @@ function resolveTimelineBoundReviewDependencyGraph(
     if (!preflight?.effective_review_snapshot) {
         return undefined;
     }
-    const timeline = readOrderedTaskEvents(path.join(eventsRoot, `${taskId}.jsonl`)).events;
+    const timeline = readImmutableOrderedTaskEvents(path.join(eventsRoot, `${taskId}.jsonl`)).events;
     let latestPreflightEvent: (typeof timeline)[number] | undefined;
     for (let index = timeline.length - 1; index >= 0; index -= 1) {
         countNextStepWork('visit:next-step:event:1286');

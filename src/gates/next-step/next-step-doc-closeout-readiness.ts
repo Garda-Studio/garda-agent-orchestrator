@@ -1,3 +1,4 @@
+import { collectImmutableTimelineEvents as collectOrderedTimelineEvents } from './next-step-timeline-readers';
 import * as path from 'node:path';
 import { declaredFileRole, isTestScopePath } from '../../core/file-role-bindings';
 import { resolveReviewReuseClassificationConfig } from '../review-reuse/review-reuse';
@@ -35,7 +36,6 @@ import {
     safeReadJson
 } from '../task-audit/task-audit-summary-collectors';
 import {
-    collectOrderedTimelineEvents,
     type TimelineEventEntry
 } from '../completion/completion-evidence';
 import {
@@ -91,7 +91,7 @@ export interface PreflightCycleReadinessOptions {
 
 export interface NextStepCloseoutTimelineSnapshot {
     timelinePath: string;
-    events: TimelineEventEntry[];
+    events: readonly TimelineEventEntry[];
     errors: string[];
 }
 
@@ -139,7 +139,7 @@ function collectCloseoutTimelineEvents(
     eventsRoot: string,
     taskId: string,
     snapshot?: NextStepCloseoutTimelineSnapshot
-): TimelineEventEntry[] {
+): readonly TimelineEventEntry[] {
     const expectedTimelinePath = path.resolve(eventsRoot, `${taskId}.jsonl`);
     const resolvedSnapshotPath = snapshot
         ? path.resolve(snapshot.timelinePath)
@@ -176,7 +176,7 @@ export function isProjectMemoryEvidenceCurrentForCloseout(input: {
     );
     const latestDocImpact = findLatestTimelineEvent(
         events,
-        (entry) => entry.event_type === 'DOC_IMPACT_ASSESSED'
+        'DOC_IMPACT_ASSESSED'
     );
     return !latestProjectMemoryImpact
         || !latestDocImpact
@@ -202,11 +202,11 @@ function getProjectMemoryOrderOnlyRecoveryReason(
     const events = collectCloseoutTimelineEvents(eventsRoot, taskId, timelineSnapshot);
     const latestPreflight = findLatestTimelineEvent(
         events,
-        (entry) => entry.event_type === 'PREFLIGHT_CLASSIFIED'
+        'PREFLIGHT_CLASSIFIED'
     );
     const latestCompletionFailure = findLatestTimelineEvent(
         events,
-        (entry) => entry.event_type === 'COMPLETION_GATE_FAILED'
+        'COMPLETION_GATE_FAILED'
     );
     const latestProjectMemoryImpact = findLatestTimelineEvent(
         events,
@@ -214,7 +214,7 @@ function getProjectMemoryOrderOnlyRecoveryReason(
     );
     const latestDocImpact = findLatestTimelineEvent(
         events,
-        (entry) => entry.event_type === 'DOC_IMPACT_ASSESSED'
+        'DOC_IMPACT_ASSESSED'
     );
     if (
         !latestPreflight
@@ -347,15 +347,15 @@ function getPassedOrdinaryDocsOnlyDocImpactUpdatedFiles(
     }
     const latestPreflight = findLatestTimelineEvent(
         events,
-        (entry) => entry.event_type === 'PREFLIGHT_CLASSIFIED'
+        'PREFLIGHT_CLASSIFIED'
     );
     const latestDocImpactAssessed = findLatestTimelineEvent(
         events,
-        (entry) => entry.event_type === 'DOC_IMPACT_ASSESSED'
+        'DOC_IMPACT_ASSESSED'
     );
     const latestCompletionFailure = findLatestTimelineEvent(
         events,
-        (entry) => entry.event_type === 'COMPLETION_GATE_FAILED'
+        'COMPLETION_GATE_FAILED'
     );
     if (
         !latestPreflight
@@ -465,7 +465,7 @@ export function readPreflightCycleReadiness(
 
     const latestPreflight = findLatestTimelineEvent(
         events,
-        (entry) => entry.event_type === 'PREFLIGHT_CLASSIFIED'
+        'PREFLIGHT_CLASSIFIED'
     );
     if (!latestPreflight) {
         return {
@@ -476,7 +476,7 @@ export function readPreflightCycleReadiness(
 
     const latestTaskMode = findLatestTimelineEvent(
         events,
-        (entry) => entry.event_type === 'TASK_MODE_ENTERED'
+        'TASK_MODE_ENTERED'
     );
     if (latestTaskMode && latestPreflight.sequence < latestTaskMode.sequence) {
         return {
@@ -487,7 +487,7 @@ export function readPreflightCycleReadiness(
 
     const latestShellSmoke = findLatestTimelineEvent(
         events,
-        (entry) => entry.event_type === 'SHELL_SMOKE_PREFLIGHT_RECORDED'
+        'SHELL_SMOKE_PREFLIGHT_RECORDED'
     );
     if (latestShellSmoke && latestPreflight.sequence < latestShellSmoke.sequence) {
         return {
@@ -498,7 +498,7 @@ export function readPreflightCycleReadiness(
 
     const latestCompletionFailure = findLatestTimelineEvent(
         events,
-        (entry) => entry.event_type === 'COMPLETION_GATE_FAILED'
+        'COMPLETION_GATE_FAILED'
     );
     if (
         latestCompletionFailure

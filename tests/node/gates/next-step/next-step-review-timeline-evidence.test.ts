@@ -3,11 +3,13 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
+import { withInvocationReadObservation } from '../../../../src/core/invocation-read-observation';
 
 import {
     getLatestTaskSequenceForEventTypes,
     NEXT_STEP_REVIEW_TIMELINE_READ_LIMITS,
     readTaskTimelineEventLikes,
+    readImmutableTaskTimelineEventLikes,
     readTaskTimelineEventWindow
 } from '../../../../src/gates/next-step/next-step-review-timeline-evidence';
 
@@ -68,5 +70,28 @@ test('next-step review timeline reader fails closed on malformed retained JSON',
         assert.equal(getLatestTaskSequenceForEventTypes(root, taskId, ['REVIEW_RECORDED']), null);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+
+test('unverified indexed-selector fallback retains native short-circuit and malformed-record failures', t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-next-step-lazy-timeline-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const taskId = 'T-LAZY-SELECTOR', file = path.join(root, taskId + '.jsonl');
+    for (const matching of ['exact', 'trimmed', 'normalized'] as const) {
+        for (const malformedFirst of [false, true]) {
+            const rows = [JSON.stringify({ event_type: 'REVIEW_GATE_FAILED' }), 'null'];
+            fs.writeFileSync(file, (malformedFirst ? rows.reverse() : rows).join('\n') + '\n');
+            withInvocationReadObservation(() => {
+                const native = readTaskTimelineEventLikes(root, taskId);
+                const selected = readImmutableTaskTimelineEventLikes(root, taskId, 'REVIEW_GATE_FAILED', matching);
+                const find = (events: typeof selected) => events.some(event => event.event_type === 'REVIEW_GATE_FAILED');
+                if (malformedFirst) {
+                    assert.throws(() => find(native), TypeError); assert.throws(() => find(selected), TypeError);
+                } else {
+                    assert.equal(find(native), true); assert.equal(find(selected), true);
+                }
+            });
+        }
     }
 });

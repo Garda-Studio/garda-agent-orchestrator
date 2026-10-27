@@ -1,5 +1,3 @@
-import type { PersistentDerivationMode } from '../../../../src/core/persisted-derivation-mode';
-import { measurePersistedHistoryModes, type PersistentModeRouteMeasurement } from './next-step-persisted-mode-fixture';
 import { getReviewsRoot } from '../../cli/commands/gates/review-cycle/gates-review-cycle-fixtures';
 import { isPlainRecord } from '../../../../src/core/records';
 import { fileSha256 } from '../../../../src/core/file-hashing';
@@ -9,13 +7,13 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { buildTaskAuditSummary } from '../../../../src/gates/task-audit/task-audit-summary';
 import { createAuthenticatedNextStepHistoryFixture, completeAuthenticatedHistoryFixture } from './next-step-authenticated-history-fixture';
-import { type HistoryRouteMeasurement } from './next-step-authenticated-budget-fixture';
+import { measureHistoryRoute, type HistoryRouteMeasurement } from './next-step-authenticated-budget-fixture';
 
 export interface HistorySample {
     cycles: number;
     lanes: number;
-    mode: PersistentDerivationMode;
-    routes: PersistentModeRouteMeasurement[];
+    mode: 'navigation';
+    routes: HistoryRouteMeasurement[];
     materializedBytes: Record<string, number>;
 }
 
@@ -25,15 +23,13 @@ function assertNoReportHistory(route: HistoryRouteMeasurement): void {
     assert.equal(route.counters['visit:audit_review_attempt_event'] || 0, 0, route.route + ':attempt-history');
 }
 
-/** Construction/assertions stay outside TODO, so malformed evidence cannot count as RED. */
+/** Native construction and route assertions prevent malformed evidence from satisfying the work budget. */
 export async function collectAuthenticatedHistorySamples(cycles: number, lanes = 3, proveHistory = false): Promise<HistorySample[]> {
-    const grouped = new Map<PersistentDerivationMode, PersistentModeRouteMeasurement[]>([
-        ['disabled', []], ['force-miss', []], ['ordinary', []]
-    ]);
-    const measure = (state: Parameters<typeof measurePersistedHistoryModes>[0], route: string) => {
-        const results = measurePersistedHistoryModes(state, route);
-        for (const result of results) grouped.get(result.persistenceMode)!.push(result);
-        return results;
+    const routes: HistoryRouteMeasurement[] = [];
+    const measure = (state: Parameters<typeof measureHistoryRoute>[0], route: string) => {
+        const measured = measureHistoryRoute(state, route);
+        routes.push(measured);
+        return [measured];
     };
     const fixture = await createAuthenticatedNextStepHistoryFixture(cycles, lanes, active => {
         for (const measured of measure(active, 'active-review')) {
@@ -109,5 +105,7 @@ export async function collectAuthenticatedHistorySamples(cycles: number, lanes =
     const mandatoryBytes = materializedBytes.json + materializedBytes.markdown + materializedBytes.report + materializedBytes.ledger;
     for (const route of [...done, ...drift]) assert.equal(route.counters.terminal_materialized_bytes_hashed, mandatoryBytes,
         route.route + ': every current materialized byte remains authenticated');
-    return [...grouped].map(([mode, routes]) => ({ cycles, lanes, mode, routes, materializedBytes }));
+    assert.equal(fs.existsSync(path.join(fixture.repoRoot, '.git/garda-private/derived-quality-v1')), false,
+        'Native owners and navigation must not publish the removed Q4 store');
+    return [{ cycles, lanes, mode: 'navigation', routes, materializedBytes }];
 }

@@ -1,4 +1,3 @@
-import { inheritParentInvocationLeafMemo } from './invocation-read-observation';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -143,7 +142,6 @@ function assertPathCurrent(original: InvocationPathObservation): void {
 export function readInvocationPathObservation(filePath: string): InvocationPathObservation | null {
     if (!isInvocationReadObservationActive()) return null;
     const absolute = path.resolve(filePath);
-    inheritParentInvocationLeafMemo(PATH_OBSERVATIONS, absolute);
     return memoizeInvocationRead(PATH_OBSERVATIONS, absolute, () => {
         const parent = path.dirname(absolute);
         if (parent !== absolute) readInvocationPathObservation(parent);
@@ -226,7 +224,6 @@ export function readInvocationFileContent(filePath: string, maximumBytes = Infin
         throw new Error('Invocation alias does not match observed target: ' + alias.path);
     }
     const memoId = process.platform === 'win32' ? realPath.toLowerCase() : realPath;
-    inheritParentInvocationLeafMemo(FILE_CONTENTS, memoId);
     const content = memoizeInvocationRead(FILE_CONTENTS, memoId, () => observeDerivationInput('file-bytes', 1,
         { path: canonical.path }, () => captureContent(canonical),
         value => fingerprintObservationData({ sha256: value.sha256, size: value.size }))).value;

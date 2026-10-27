@@ -1,3 +1,4 @@
+import { verifiedIndexForEvents, selectVerifiedEvents } from '../../gate-runtime/timeline/task-verified-event-index';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -22,7 +23,7 @@ import {
 } from '../shared/helpers';
 import { getChangedTestPathsTargetedByCommandTokens, isFocusedIntermediateCommand } from '../shared/focused-intermediate-command-grammar';
 import { declaredValidationTestPaths, readFocusedRecipeEntry } from '../project-validation/focused';
-import { readValidationEventSnapshot, type ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
+import { readImmutableValidationEventSnapshot, type ValidationEvidenceInspection } from '../project-validation/attempt-evidence';
 import { validationPaths } from '../project-validation/authority';
 
 const INTERMEDIATE_COMMAND_SOURCES = new Set(['node-test', 'targeted-test', 'typecheck', 'validation']);
@@ -264,7 +265,7 @@ export function readBoundIntermediateCommandEvidence(options: BoundIntermediateC
                 || typeof record.execution_id !== 'string' || !record.execution_id
                 || record.execution_id !== details.execution_id) throw new Error('Selected execution event binding differs.');
             selectionBinding = record.selected_case_binding;
-            const current = readValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection);
+            const current = readImmutableValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection);
             if (options.expectedFailure) {
                 // RED predates the implementation preflight. Authenticate its original native facts,
                 // while the caller checks that each selected test source is still unchanged.
@@ -534,7 +535,9 @@ function readIntermediateEvidence(options: IntermediateEvidenceOptions, executio
             truncated: true
         };
     }
-    const latestTaskModeSequence = events.reduce<number | null>((latest, event) => {
+    const indexed = verifiedIndexForEvents(events);
+    const taskModes = indexed ? selectVerifiedEvents(indexed, ['TASK_MODE_ENTERED'], { trimmed: true }) : events;
+    const latestTaskModeSequence = taskModes.reduce<number | null>((latest, event) => {
         countNextStepWork('visit:focused_intermediate_task_mode_event');
         if (String(event.event_type || '').trim() !== 'TASK_MODE_ENTERED') {
             return latest;
@@ -565,9 +568,10 @@ function readIntermediateEvidence(options: IntermediateEvidenceOptions, executio
     let rejectedCandidateCount = 0;
     let eligibleCount = 0;
     let scanLimitReached = false;
-    for (let index = events.length - 1; index >= 0; index -= 1) {
+    const candidates = indexed ? selectVerifiedEvents(indexed, ['INTERMEDIATE_COMMAND_RUN', 'PROJECT_VALIDATION_RESULTS_EVALUATED'], { trimmed: true, ordered: true }) : events;
+    for (let index = candidates.length - 1; index >= 0; index -= 1) {
         countNextStepWork('visit:focused_intermediate_event');
-        const event = events[index];
+        const event = candidates[index];
         if (!['INTERMEDIATE_COMMAND_RUN', 'PROJECT_VALIDATION_RESULTS_EVALUATED'].includes(String(event.event_type || '').trim())) {
             continue;
         }
@@ -613,7 +617,8 @@ function readIntermediateEvidence(options: IntermediateEvidenceOptions, executio
         if (!executionOnly && bound.entry.selected_case_binding) {
             try {
                 const entry = bound.entry;
-                const attempts = events.filter(attempt => {
+                const attemptEvents = indexed ? selectVerifiedEvents(indexed, ['INTERMEDIATE_COMMAND_RUN', 'INTERMEDIATE_COMMAND_STARTED'], { ordered: true }) : events;
+                const attempts = attemptEvents.filter(attempt => {
                     countNextStepWork('visit:focused_intermediate_attempt_event');
                     const data = isPlainRecord(attempt.details) ? attempt.details : {};
                     return ['INTERMEDIATE_COMMAND_RUN', 'INTERMEDIATE_COMMAND_STARTED'].includes(String(attempt.event_type))
@@ -654,7 +659,7 @@ function readIntermediateEvidence(options: IntermediateEvidenceOptions, executio
         if (entries.length >= maxEntries) {
             for (let surplusIndex = index - 1; surplusIndex >= 0; surplusIndex -= 1) {
                 countNextStepWork('visit:focused_intermediate_surplus_event');
-                const surplusEvent = events[surplusIndex];
+                const surplusEvent = candidates[surplusIndex];
                 if (!['INTERMEDIATE_COMMAND_RUN', 'PROJECT_VALIDATION_RESULTS_EVALUATED'].includes(String(surplusEvent.event_type || '').trim())) {
                     continue;
                 }
@@ -701,7 +706,7 @@ function readIntermediateEvidence(options: IntermediateEvidenceOptions, executio
     }
     if (!executionOnly && entries.some(entry => entry.selected_case_binding)) {
         try {
-            if (readValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection).timeline_sha256 !== timelineSha256)
+            if (readImmutableValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection).timeline_sha256 !== timelineSha256)
                 throw new Error('Focused native timeline changed during evidence inspection.');
             for (const entry of entries) if (entry.selected_case_binding)
                 assertCurrentIntermediateSelection(options.repoRoot, entry.selected_case_binding, entry.focused_test_paths);
@@ -725,7 +730,7 @@ export function readTaskOwnedFocusedIntermediateEvidence(options: IntermediateEv
 export function readCurrentNativeFocusedCommand(repoRoot: string, taskId: string,
     command: string): FocusedIntermediateEvidenceEntry | null {
     try {
-        const current = readValidationEventSnapshot(repoRoot, taskId);
+        const current = readImmutableValidationEventSnapshot(repoRoot, taskId);
         const relative = normalizePath(path.relative(repoRoot, current.preflight_path));
         const file = readValidationFile(repoRoot, relative, MAX_NATIVE_PREFLIGHT_BYTES);
         if (file.identity.sha256 !== current.preflight_sha256) return null;
@@ -781,7 +786,7 @@ export function readCurrentNativeFocusedCommand(repoRoot: string, taskId: string
             // Scope relevance cannot erase other actual test operands from the focused invocation.
             if (allTargets.size !== 1) return null;
         }
-        if (readValidationEventSnapshot(repoRoot, taskId).timeline_sha256 !== current.timeline_sha256) return null;
+        if (readImmutableValidationEventSnapshot(repoRoot, taskId).timeline_sha256 !== current.timeline_sha256) return null;
         return entry ?? null;
     } catch { return null; }
 }
@@ -800,7 +805,7 @@ export function readTaskOwnedIntermediateExecutionEvidence(options: Omit<Interme
         return rejected('Native execution requires current preflight and source-content bindings.');
     }
     try {
-        const snapshot = readValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection);
+        const snapshot = readImmutableValidationEventSnapshot(options.repoRoot, options.taskId, options.inspection);
         const timeline = validationPaths(options.repoRoot, options.taskId).timeline;
         if (path.resolve(options.repoRoot, options.expectedPreflightPath) !== path.resolve(snapshot.preflight_path)
             || options.expectedPreflightSha256 !== snapshot.preflight_sha256

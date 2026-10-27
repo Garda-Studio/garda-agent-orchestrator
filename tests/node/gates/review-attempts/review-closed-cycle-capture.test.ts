@@ -226,8 +226,7 @@ test('Q5 cold navigation consumes the native producer outcome across processes',
         const script = [
             'const {resolveNextStep}=require(' + JSON.stringify(require.resolve('../../../../src/gates/next-step')) + ');',
             'const {withNextStepMeasurement}=require(' + JSON.stringify(require.resolve('../../../../src/core/next-step-measurement')) + ');',
-            'const {withPersistentDerivationMode}=require(' + JSON.stringify(require.resolve('../../../../src/core/persisted-derivation-mode')) + ');',
-            'let work;const result=withPersistentDerivationMode("disabled",()=>withNextStepMeasurement(()=>resolveNextStep(' + JSON.stringify({ repoRoot: state.repoRoot, taskId: state.taskId }) + '),value=>work=value.work));',
+            'let work;const result=withNextStepMeasurement(()=>resolveNextStep(' + JSON.stringify({ repoRoot: state.repoRoot, taskId: state.taskId }) + '),value=>work=value.work);',
             'process.stdout.write(JSON.stringify({nextGate:result.next_gate,accepted:work["closed-review-summary:accepted"]||0}));'
         ].join('\n');
         const child = spawnSync(process.execPath, ['-r', require.resolve('../../../../src/bin/garda/derivation-source-receipts'), '-e', script],

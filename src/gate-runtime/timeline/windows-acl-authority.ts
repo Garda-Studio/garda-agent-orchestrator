@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { lstatFileIdentitySync } from '../../core/file-stat';
 import { countNextStepWork } from '../../core/next-step-measurement';
-import { createInvocationReadMemoKey, inheritParentInvocationLeafMemo, isInvocationReadObservationActive, memoizeInvocationRead, registerInvocationDependency } from '../../core/invocation-read-observation';
+import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead, registerInvocationDependency } from '../../core/invocation-read-observation';
 import { observeDerivationInput, fingerprintObservationData, markDerivationNonCacheable } from '../../core/derivation-observation-recorder';
 import * as childProcess from 'node:child_process';
 import * as path from 'node:path';
@@ -192,7 +192,6 @@ function inspectAclObservation(filePath: string, phase: 'initial' | 'final'): Wi
 
 function inspectInvocationWindowsWriteAuthority(filePath: string): boolean {
     const absolute = path.resolve(filePath), memoId = absolute.toLowerCase();
-    inheritParentInvocationLeafMemo(INVOCATION_ACL_OBSERVATIONS, memoId);
     const observation = memoizeInvocationRead(INVOCATION_ACL_OBSERVATIONS, memoId, () => {
         let environmentSha256: string | null = null;
         try { environmentSha256 = fingerprintObservationData(process.env); }
@@ -239,7 +238,7 @@ export function inspectTrustedWindowsWriteAuthority(filePath: string): boolean {
     return false;
 }
 
-/** Preserve the native cached-name verdict, but never serialize it without fresh SID evidence. */
+/** Preserve the native cached-name verdict while binding A1 to fresh SID evidence. */
 function captureFreshPrincipalWitness(cached: ReadonlySet<string> | null, phase: 'initial' | 'final'): string | null {
     countNextStepWork('acl_principal_probe:' + phase);
     const output = inspectNativeSids(TRUSTED_PRINCIPALS_SCRIPT);
@@ -248,13 +247,13 @@ function captureFreshPrincipalWitness(cached: ReadonlySet<string> | null, phase:
         if (!Array.isArray(names) || names.length !== 6) throw new Error('Missing native principals.');
         const fresh = new Set<string>();
         for (const name of names) {
-            countNextStepWork('visit:q4_acl_principal');
+            countNextStepWork('visit:acl_principal');
             if (typeof name !== 'string') throw new Error('Invalid native principal.');
             if (/^[\x20-\x7e]+$/u.test(name)) fresh.add(name.toLowerCase());
         }
         if (!cached || cached.size !== fresh.size) throw new Error('Cached principal binding differs.');
         for (const name of cached) {
-            countNextStepWork('visit:q4_acl_cached_principal');
+            countNextStepWork('visit:acl_cached_principal');
             if (!fresh.has(name)) throw new Error('Cached principal binding differs.');
         }
         return createHash('sha256').update(output!).digest('hex');

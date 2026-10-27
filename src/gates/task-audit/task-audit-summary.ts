@@ -71,7 +71,7 @@ import {
     getLifecycleGates,
     hasCurrentCycleReviewProgress,
     hasCurrentCycleProjectMemoryImpactEvent,
-    readOrderedTaskEvents,
+    readImmutableOrderedTaskEvents,
     readNavigationOrderedTaskEvents,
     resolveFullSuiteValidationRequirementForCurrentCycle
 } from './task-audit-summary-lifecycle';
@@ -435,7 +435,7 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
     const taskFileExists = fs.existsSync(taskPath) && fs.statSync(taskPath).isFile();
     const taskEventFile = path.join(eventsRoot, `${safeTaskId}.jsonl`);
     const navigationQuery = inspectReviewHistory ? null : readTaskTimelineNavigationQuery(taskEventFile, safeTaskId);
-    const orderedEvents = inspectReviewHistory ? readOrderedTaskEvents(taskEventFile)
+    const orderedEvents = inspectReviewHistory ? readImmutableOrderedTaskEvents(taskEventFile, safeTaskId)
         : readNavigationOrderedTaskEvents(taskEventFile, safeTaskId);
     const events = orderedEvents.events;
     const readNativeFileOrderedEvents = () => readTaskTimelineJsonlEntries(taskEventFile)

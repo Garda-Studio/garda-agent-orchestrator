@@ -712,3 +712,18 @@ it('Q5 focused evidence shares the verified immutable navigation timeline', () =
         assert.equal(measurement?.work['visit:audit_ordered_event_comparison'] || 0, 0);
     } finally { fs.rmSync(f.repoRoot, { recursive: true, force: true }); }
 });
+
+it('indexed selected-case validation avoids reparsing history across real focused evidence consumers', async () => {
+    const f = await symbolicFixture();
+    try {
+        const native = f.selected(); assert.ok(native.entries.length > 0);
+        let measurement: NextStepMeasurement | undefined;
+        withNextStepMeasurement(() => withInvocationReadObservation(() => {
+            assert.deepEqual(f.selected(), native); assert.deepEqual(f.selected(), native);
+        }), value => { measurement = value; });
+        assert.equal(measurement!.work.timeline_verify, 1);
+        assert.equal(measurement!.work.timeline_parse, 1);
+        assert.equal(measurement!.work['visit:validation_timeline_parse_event'] || 0, 0);
+        assert.equal(measurement!.work['visit:audit_ordered_event_copy'] || 0, 0);
+    } finally { fs.rmSync(f.repoRoot, { recursive: true, force: true }); }
+});

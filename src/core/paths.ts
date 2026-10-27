@@ -1,4 +1,3 @@
-import { inheritParentInvocationLeafMemo } from './invocation-read-observation';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { observeDerivationInput, fingerprintObservationData, markDerivationNonCacheable } from './derivation-observation-recorder';
@@ -21,7 +20,6 @@ function nativeRealpathErrorCode(error: unknown): string {
 export function readNativeRealpath(pathValue: string): string {
     if (!isInvocationReadObservationActive()) return fs.realpathSync.native(pathValue);
     const resolved = path.resolve(pathValue);
-    inheritParentInvocationLeafMemo(NATIVE_REALPATH_OBSERVATIONS, resolved);
     const observation = memoizeInvocationRead(NATIVE_REALPATH_OBSERVATIONS, resolved, () => {
         readInvocationPathObservation(resolved);
         countNextStepWork('native_realpath_observation:' + resolved);

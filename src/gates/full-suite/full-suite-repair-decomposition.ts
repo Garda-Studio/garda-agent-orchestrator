@@ -10,7 +10,7 @@ import {
     type TaskQueueEntry
 } from '../next-step/next-step-task-queue';
 import { joinOrchestratorPath } from '../shared/helpers';
-import { readOrderedTaskEvents } from '../task-audit/task-audit-summary-lifecycle';
+import { readImmutableOrderedTaskEvents } from '../task-audit/task-audit-summary-lifecycle';
 import { readImmutableRegularFileSnapshot } from './full-suite-repair-capture';
 import {
     hasRepairChildScopeDeclaration,
@@ -162,7 +162,7 @@ function latestFullSuiteLifecycleRequiresRepair(eventsRoot: string, parentTaskId
         'FULL_SUITE_VALIDATION_WARNED',
         'FULL_SUITE_VALIDATION_SKIPPED'
     ]);
-    const events = readOrderedTaskEvents(taskEventPath).events;
+    const events = readImmutableOrderedTaskEvents(taskEventPath).events;
     for (let index = events.length - 1; index >= 0; index -= 1) {
         const event = events[index];
         if (!fullSuiteEventTypes.has(String(event.event_type || '').trim())) {

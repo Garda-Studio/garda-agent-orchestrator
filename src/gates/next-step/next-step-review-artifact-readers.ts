@@ -111,8 +111,8 @@ import {
     readReviewOutputCorrectionArtifact
 } from '../review/review-output-correction';
 import {
-    readTaskTimelineEventLikes,
-    readTaskTimelineEventWindow,
+    readImmutableTaskTimelineEventLikes,
+    readImmutableTaskTimelineEventWindow,
     withNextStepReviewEvidenceSnapshot
 } from './next-step-review-timeline-evidence';
 import { reviewCorrectionWasSuperseded } from './next-step-review-correction-supersession';
@@ -354,7 +354,7 @@ function resolveCurrentReviewFollowUpMaterializationBinding(
         ? readReviewArtifactFileSha256(preflightPath)
         : null;
     const eventsRoot = joinOrchestratorPath(repoRoot, path.join('runtime', 'task-events'));
-    const timelineWindow = readTaskTimelineEventWindow(eventsRoot, parentTaskId);
+    const timelineWindow = readImmutableTaskTimelineEventWindow(eventsRoot, parentTaskId);
     // A bounded tail can still prove the latest compile when that event is retained.
     // Missing compile evidence remains fail-closed below.
     const latestCompileEvent = timelineWindow.invalidJson
@@ -591,7 +591,7 @@ export function resolveAuthenticatedReviewReceiptSnapshot(options: {
                 ]
             };
         }
-        const window = readTaskTimelineEventWindow(eventsRoot, options.taskId);
+        const window = readImmutableTaskTimelineEventWindow(eventsRoot, options.taskId);
         // Historical events may be outside the bounded tail. The receipt and
         // its compile boundary must both be present below to accept the scope.
         if (window.invalidJson) {
@@ -970,7 +970,7 @@ export function discoverGroupedFollowUpArtifactPaths(options: {
     }
     const eventsRoot = joinOrchestratorPath(options.repoRoot, path.join('runtime', 'task-events'));
     const integrity = inspectTaskEventFile(path.join(eventsRoot, `${options.parentTaskId}.jsonl`), options.parentTaskId);
-    const window = readTaskTimelineEventWindow(eventsRoot, options.parentTaskId);
+    const window = readImmutableTaskTimelineEventWindow(eventsRoot, options.parentTaskId);
     const compile = latestSuccessfulCompileBefore(window.events, Number.MAX_SAFE_INTEGER);
     if (integrity.violations.length > 0 || !['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(integrity.status)
         || window.invalidJson || !compile || compile.timestamp !== currentBinding.compileTimestamp) {
@@ -2551,7 +2551,7 @@ export function readReviewArtifactState(
                     const reviewerInvocationEventSha256 = String(
                         correction.artifact.binding.reviewer_invocation_event_sha256 || ''
                     ).trim().toLowerCase();
-                    const timelineEvents = readTaskTimelineEventLikes(
+                    const timelineEvents = readImmutableTaskTimelineEventLikes(
                         path.join(path.dirname(reviewsRoot), 'task-events'),
                         taskId
                     );

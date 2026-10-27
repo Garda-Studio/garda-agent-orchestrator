@@ -173,3 +173,8 @@ export function navigationAcknowledgements(query: NavigationTimelineQuery): read
     }
     return values;
 }
+
+/** Attach the shared canonical index view without rebuilding navigation facts. */
+export function bindNavigationEventArray(query: NavigationTimelineQuery, events: readonly object[]): void {
+    arrays.set(events, query);
+}

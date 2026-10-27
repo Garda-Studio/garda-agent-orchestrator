@@ -1,4 +1,3 @@
-import { executePersistentQualityPlan, type QualityPersistenceContext } from '../derived-state/persisted-quality-operation';
 import { executeClosedObservationPlan, unwrapObservationCapture } from '../../core/derivation-observation-recorder';
 import { describeProcessInputs } from '../../core/next-step-measurement';
 import * as fs from 'node:fs';
@@ -49,10 +48,8 @@ export function readReviewValidationBytes(filePath: string): Buffer {
     return bytes;
 }
 
-export function parseObservedQualityArtifactJson(filePath: string, bytes: Buffer, sha256: string,
-    persistence?: QualityPersistenceContext): unknown {
+export function parseObservedQualityArtifactJson(filePath: string, bytes: Buffer, sha256: string): unknown {
     if (!isInvocationReadObservationActive()) return JSON.parse(bytes.toString('utf8')) as unknown;
     const plan = { operation: 'quality-artifact-json' as const, path: filePath, text: bytes.toString('utf8'), sha256 };
-    return cloneJson(persistence ? executePersistentQualityPlan(plan, persistence)
-        : unwrapObservationCapture(executeClosedObservationPlan(plan)));
+    return cloneJson(unwrapObservationCapture(executeClosedObservationPlan(plan)));
 }

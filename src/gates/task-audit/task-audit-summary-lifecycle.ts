@@ -1,5 +1,5 @@
-import { readTaskTimelineNavigationQuery } from '../../gate-runtime/timeline/task-events-integrity';
-import { navigationOrderedEvents, navigationQueryForEvents, navigationLatestEvent, navigationLatestReview,
+import { readInvocationVerifiedEventIndex, readTaskTimelineNavigationQuery } from '../../gate-runtime/timeline/task-events-integrity';
+import { bindNavigationEventArray, navigationOrderedEvents, navigationQueryForEvents, navigationLatestEvent, navigationLatestReview,
     navigationDependencyWitnesses, navigationEventSequence, FULL_SUITE_TYPES } from '../../gate-runtime/timeline/task-navigation-query';
 import { countNextStepArrayCopy, countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
@@ -173,12 +173,30 @@ export function readOrderedTaskEvents(taskEventFile: string): OrderedTaskEvents 
     return parseOrderedTaskEvents(taskEventFile);
 }
 
+/** Internal full audit retains its original checks but need not copy the verified event array. */
+export function readImmutableOrderedTaskEvents(taskEventFile: string, taskId = path.basename(taskEventFile, '.jsonl')): OrderedTaskEvents {
+    const indexed = readInvocationVerifiedEventIndex(taskEventFile, taskId);
+    if (!indexed) return readOrderedTaskEvents(taskEventFile);
+    const events = indexed.ordered;
+    return { events: events as TaskAuditEvent[], count: events.length,
+        firstEventUtc: events.length ? formatTimestamp(events[0].timestamp_utc) : null,
+        lastEventUtc: events.length ? formatTimestamp(events[events.length - 1].timestamp_utc) : null };
+}
+
 /** Internal navigation can share the verified monotonic view; public/full-audit arrays stay native. */
 export function readNavigationOrderedTaskEvents(taskEventFile: string, taskId: string): OrderedTaskEvents {
     const query = readTaskTimelineNavigationQuery(taskEventFile, taskId);
     const events = query && navigationOrderedEvents(query);
-    if (!query || !events) return readOrderedTaskEvents(taskEventFile);
-    return { events: events as TaskAuditEvent[], count: query.count,
+    const indexed = readInvocationVerifiedEventIndex(taskEventFile, taskId);
+    if (!query || !events) {
+        if (!indexed) return readOrderedTaskEvents(taskEventFile);
+        const ordered = indexed.ordered;
+        return { events: ordered as TaskAuditEvent[], count: ordered.length,
+            firstEventUtc: ordered.length ? formatTimestamp(ordered[0].timestamp_utc) : null,
+            lastEventUtc: ordered.length ? formatTimestamp(ordered[ordered.length - 1].timestamp_utc) : null };
+    }
+    if (indexed) bindNavigationEventArray(query, indexed.ordered);
+    return { events: (indexed?.ordered ?? events) as TaskAuditEvent[], count: query.count,
         firstEventUtc: query.firstEventUtc, lastEventUtc: query.lastEventUtc };
 }
 

@@ -1,4 +1,3 @@
-import { publishQualityDerivationsAfterNativeOwner } from '../../../../gates/quality-checklist/quality-derived-state-publication';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -620,7 +619,6 @@ export async function runBuildReviewContextCommand(
             reviewerIdentity: currentPassReviewEvidence.reviewerIdentity,
             reason: currentPassReviewEvidence.reason
         });
-        publishQualityDerivationsAfterNativeOwner(repoRoot, taskId, preflightPath);
         return persistedQualityCommandResult;
     }
     const result = buildReviewContext({
@@ -716,6 +714,5 @@ export async function runBuildReviewContextCommand(
             || currentPassReviewEvidence?.reason
             || 'current PASS reuse check not run'
     });
-    publishQualityDerivationsAfterNativeOwner(repoRoot, taskId, preflightPath);
     return persistedQualityCommandResult;
 }

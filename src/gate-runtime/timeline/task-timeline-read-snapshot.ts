@@ -1407,9 +1407,19 @@ export function readTaskTimelineBoundedJsonlTail<T>(
     limits: BoundedJsonlTailLimits
 ): BoundedJsonlTailResult<T> {
     const normalizedLimits = normalizeBoundedJsonlTailLimits(limits);
+    if (!getActiveSnapshot(filePath)) return readAuthenticatedTaskTimelineBoundedJsonlTail<T>(filePath, normalizedLimits);
+    return cloneBoundedResult(readImmutableTaskTimelineBoundedJsonlTail<T>(filePath, normalizedLimits) as BoundedJsonlTailResult<T>);
+}
+
+/** Internal readonly delivery; mutable public callers retain the explicit copy above. */
+export function readImmutableTaskTimelineBoundedJsonlTail<T>(
+    filePath: string,
+    limits: BoundedJsonlTailLimits
+): TaskTimelineDeepReadonly<BoundedJsonlTailResult<T>> {
+    const normalizedLimits = normalizeBoundedJsonlTailLimits(limits);
     const snapshot = getActiveSnapshot(filePath);
     if (!snapshot) {
-        return readAuthenticatedTaskTimelineBoundedJsonlTail<T>(filePath, normalizedLimits);
+        return deepFreezeMemoizedValue(readAuthenticatedTaskTimelineBoundedJsonlTail<T>(filePath, normalizedLimits)) as TaskTimelineDeepReadonly<BoundedJsonlTailResult<T>>;
     }
     const cachedRead = getCachedRead(snapshot);
     if (cachedRead.state !== 'valid' || !cachedRead.content) {
@@ -1426,7 +1436,7 @@ export function readTaskTimelineBoundedJsonlTail<T>(
             normalizedLimits
         )
     );
-    const clonedResult = cloneBoundedResult(result) as BoundedJsonlTailResult<T>;
+
     if (!isInvocationReadObservationActive()) revalidateCachedRead(snapshot, cachedRead);
     if (
         snapshot.cachedRead !== cachedRead
@@ -1435,7 +1445,7 @@ export function readTaskTimelineBoundedJsonlTail<T>(
     ) {
         return failChangedSnapshot(cachedRead, snapshot.timelinePath);
     }
-    return clonedResult;
+    return result as TaskTimelineDeepReadonly<BoundedJsonlTailResult<T>>;
 }
 
 export interface TaskTimelineByteLine {

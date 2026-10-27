@@ -118,9 +118,8 @@ test('Q7 real active, required-review, DONE and drift routes preserve complete n
                     assert.equal(drifted ? expected.next_gate : expected.status, drifted ? 'post-done-drift' : 'DONE');
                     const script = [
                         'const {resolveNextStep}=require(' + JSON.stringify(require.resolve('../../../../src/gates/next-step')) + ');',
-                        'const {withPersistentDerivationMode}=require(' + JSON.stringify(require.resolve('../../../../src/core/persisted-derivation-mode')) + ');',
                         'const {withNextStepMeasurement}=require(' + JSON.stringify(require.resolve('../../../../src/core/next-step-measurement')) + ');',
-                        'let work;const result=withPersistentDerivationMode("disabled",()=>withNextStepMeasurement(()=>resolveNextStep(' + JSON.stringify({ repoRoot: fixture.repoRoot, taskId: fixture.taskId }) + '),value=>work=value.work));',
+                        'let work;const result=withNextStepMeasurement(()=>resolveNextStep(' + JSON.stringify({ repoRoot: fixture.repoRoot, taskId: fixture.taskId }) + '),value=>work=value.work);',
                         'process.stdout.write(JSON.stringify({result,selected:work.terminal_materialized_projection_selected||0}));'
                     ].join('\n');
                     const child = spawnSync(process.execPath, ['-r', require.resolve('../../../../src/bin/garda/derivation-source-receipts'), '-e', script],

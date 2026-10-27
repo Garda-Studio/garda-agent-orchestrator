@@ -484,6 +484,13 @@ test('validates bounded-tail limits before snapshot root or timeline I/O', () =>
             }),
             /maxBytes must be a positive safe integer/
         );
+        for (const key of ['maxBytes', 'maxLines', 'maxEvents', 'maxParseAttempts'] as const) {
+            for (const invalid of [-1, 0.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+                assert.throws(() => readTaskTimelineBoundedJsonlTail(timelinePath, {
+                    maxBytes: 1024, maxLines: 8, maxEvents: 8, maxParseAttempts: 8, [key]: invalid
+                }), new RegExp(key + ' must be a positive safe integer'));
+            }
+        }
         assert.equal(lstatCalls, 0);
     } finally {
         fsModule.lstatSync = originalLstatSync;

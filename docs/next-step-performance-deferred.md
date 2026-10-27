@@ -4,9 +4,8 @@ Round 6b supersedes the original P2, P3 and P5 deferral decisions. This document
 describes the implemented boundaries and the remaining concrete fallback cases.
 Within an invocation, consumers may share one checked observation, provided the
 A1 final dependency check rejects changed inputs before output and effects.
-Across invocations, Q4 recomputation records require authentication, freshly
-checked input digests and all relevant identities. Gate-owned closed-cycle
-outcomes have the separate navigation boundary described below. The P6
+Quality derivations are recomputed from checked inputs in each invocation.
+Gate-owned closed-cycle outcomes have the separate navigation boundary described below. The P6
 cross-invocation timeline checkpoint remains deferred.
 
 ## Q2: checked invocation observations
@@ -96,22 +95,19 @@ comparison rejects the altered JSON. That exact comparison and its history work
 remain on this fallback. Tasks without a materialized result retain their existing
 terminal behavior.
 
-## Q4: authenticated persisted derivations
+## Verified timeline queries and removed quality persistence
 
-The implemented records cover fixed quality parsing and reduction operations.
-Native acquisition of source, context and authority evidence remains live.
-Authenticated private records bind workspace, task, lane, cycle, mode, parameters,
-policy/plan and loaded code to the observed dependency digests. Readers validate
-current observations before selecting a result; invalid, missing or mismatched
-records take the native derivation path. A selected record's dependencies also
-participate in the invocation's final check.
+Navigation builds a deeply frozen index while verifying its timeline. Consumers
+share ordered records and event-type selectors within that invocation instead of
+re-reading JSONL or copying every event. Full integrity verification and the final
+dependency check remain mandatory. Public APIs that promise mutable records keep
+that contract; consumers copy only the records they need to modify.
 
-The dependency recorder supports checked bytes, absence, filtered directory names,
-file kind/link identity, process results, ACL verdicts and verified timeline
-queries. Unrecorded I/O or an unsealed callback cannot publish a reusable result.
-Code-only preparation resolves native lazy imports before binding the complete
-transitive code graph, so a fresh CLI process can consume a native producer's
-record. It does not waive code, input or final freshness checks.
+The persisted quality-derivation cache was removed after measurement showed its
+code and dependency validation cost exceeded the derivation it replaced. Quality
+parsing and reduction now use the existing checked per-invocation observations.
+The shared dependency recorder and loaded-code identity remain for their other
+consumers, including authenticated closed-cycle and terminal summaries.
 
 ## Superseded Round 6 decisions
 

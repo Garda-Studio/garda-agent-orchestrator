@@ -1,6 +1,8 @@
+import { readTaskTimelineValidationJsonLinesCompatible } from '../../gate-runtime/timeline/task-events-helpers';
+import { verifiedIndexForEvents, verifiedEventPosition } from '../../gate-runtime/timeline/task-verified-event-index';
 import { isInvocationReadObservationActive } from '../../core/invocation-read-observation';
 import { cloneJson } from '../../core/immutable-json';
-import { readTaskTimelineValidationQuery } from '../../gate-runtime/timeline/task-events-integrity';
+import { readInvocationVerifiedEventIndex, readTaskTimelineValidationQuery } from '../../gate-runtime/timeline/task-events-integrity';
 import { beginValidationTimelineQueryPass, type ValidationTimelineQuery } from '../../gate-runtime/timeline/validation-timeline-query';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
@@ -30,7 +32,13 @@ export type ValidationEvidenceInspection = 'active' | 'retained_completed';
 
 /** Results may be evaluated late; execution recency is established by native START order. */
 export function latestValidationRecipeAttempt<T extends ValidationEvent>(events: readonly T[], recipeId: string): T | undefined {
-    const cycle = events.slice(events.map(event => { countNextStepWork('visit:validation_timeline_query_event'); return event.event_type; }).lastIndexOf('TASK_MODE_ENTERED') + 1).reverse();
+    const indexed = verifiedIndexForEvents(events);
+    let mode = indexed?.lastIndexByType.TASK_MODE_ENTERED ?? -1;
+    if (!indexed) for (let i = events.length - 1; i >= 0; i--) {
+        countNextStepWork('visit:validation_timeline_query_event');
+        if (events[i].event_type === 'TASK_MODE_ENTERED') { mode = i; break; }
+    }
+    const cycle = events.slice(mode + 1).reverse();
     const started = cycle.find(event => event.event_type === 'PROJECT_VALIDATION_STARTED'
         && event.details?.recipe_id === recipeId);
     return started && cycle.find(event => event.details?.recipe_id === recipeId
@@ -177,6 +185,13 @@ function validateStagedWorktreeBytes(repoRoot: string, staged: ReadonlyMap<strin
 }
 
 export function readValidationEventSnapshot(repoRoot: string, taskId: string,
+    inspection: ValidationEvidenceInspection = 'active') {
+    const snapshot = readImmutableValidationEventSnapshot(repoRoot, taskId, inspection);
+    return { ...snapshot, events: cloneJson(snapshot.events) as ValidationEvent[] };
+}
+
+/** Internal immutable evidence; callers that mutate must use the public snapshot above. */
+export function readImmutableValidationEventSnapshot(repoRoot: string, taskId: string,
     inspection: ValidationEvidenceInspection = 'active'): {
         events: ValidationEvent[]; preflight_path: string; preflight_sha256: string; scope_content_sha256: string;
         preflight_sequence: number; timeline_sha256: string; changed_files: string[];
@@ -192,20 +207,37 @@ export function readValidationEventSnapshot(repoRoot: string, taskId: string,
     const timeline = readValidationFile(repoRoot, paths.timeline, MAXIMUM_CONTROL_BYTES);
     const eventInspection = inspectTaskEventFile(path.join(repoRoot, paths.timeline), taskId);
     if (!['PASS', 'PASS_WITH_LEGACY_PREFIX'].includes(eventInspection.status)) throw new Error('Validation timeline integrity failed');
-    const lines = timeline.bytes.toString('utf8').split(/\r?\n/u).filter(Boolean);
-    if (lines.length > MAXIMUM_EVENTS) throw new Error('Validation timeline exceeds event bound');
+    const timelinePath = path.join(repoRoot, paths.timeline);
+    const captured = readInvocationVerifiedEventIndex(timelinePath, taskId);
+    // Whitespace-only rows differ in validation JSONL; retain the exact native rejection.
+    const indexed = captured && readTaskTimelineValidationJsonLinesCompatible(timelinePath) ? captured : null;
+    const events: ValidationEvent[] = indexed ? indexed.events as ValidationEvent[] : (() => {
+        const lines = timeline.bytes.toString('utf8').split(/\r?\n/u).filter(Boolean);
+        if (lines.length > MAXIMUM_EVENTS) throw new Error('Validation timeline exceeds event bound');
         countNextStepWork('validation_timeline_parse');
-    const events = lines.map(line => { countNextStepWork('visit:validation_timeline_parse_event'); return JSON.parse(line) as ValidationEvent; });
-    const modeIndex = events.map(event => { countNextStepWork('visit:validation_timeline_query_event'); return event.event_type; }).lastIndexOf('TASK_MODE_ENTERED');
-    const classifiedIndex = events.map(event => { countNextStepWork('visit:validation_timeline_query_event'); return event.event_type; }).lastIndexOf('PREFLIGHT_CLASSIFIED');
+        return lines.map(line => { countNextStepWork('visit:validation_timeline_parse_event'); return JSON.parse(line) as ValidationEvent; });
+    })();
+    if (events.length > MAXIMUM_EVENTS) throw new Error('Validation timeline exceeds event bound');
+    const lastType = (type: string): number => {
+        if (indexed) return indexed.lastIndexByType[type] ?? -1;
+        for (let i = events.length - 1; i >= 0; i--) {
+            countNextStepWork('visit:validation_timeline_query_event');
+            if (events[i].event_type === type) return i;
+        }
+        return -1;
+    };
+    const modeIndex = lastType('TASK_MODE_ENTERED');
+    const classifiedIndex = lastType('PREFLIGHT_CLASSIFIED');
     const classifiedEvent = events[classifiedIndex];
     const preflightSequence = classifiedEvent?.integrity?.task_sequence;
     if (modeIndex < 0 || classifiedIndex <= modeIndex || !Number.isSafeInteger(preflightSequence) || Number(preflightSequence) < 1)
         throw new Error('Validation requires the current task-mode canonical preflight');
     if (inspection === 'retained_completed') {
-        const cycleStart = Math.max(events.map(event => { countNextStepWork('visit:validation_timeline_query_event'); return event.event_type; }).lastIndexOf('TASK_MODE_ENTERED'),
-            events.map(event => { countNextStepWork('visit:validation_timeline_query_event'); return event.event_type; }).lastIndexOf('PREFLIGHT_CLASSIFIED'));
-        const completions = events.slice(cycleStart + 1).filter(event => event.event_type === 'COMPLETION_GATE_PASSED');
+        const cycleStart = Math.max(modeIndex, classifiedIndex);
+        const completions = indexed
+            ? ((indexed.byType.COMPLETION_GATE_PASSED ?? []) as readonly ValidationEvent[]).filter(event =>
+                event.event_type === 'COMPLETION_GATE_PASSED' && verifiedEventPosition(event)! > cycleStart)
+            : events.slice(cycleStart + 1).filter(event => event.event_type === 'COMPLETION_GATE_PASSED');
         const completion = completions[0]?.details;
         if (cycleStart < 0 || completions.length !== 1 || completion?.status !== 'PASSED' || completion.outcome !== 'PASS'
             || typeof completion.preflight_path !== 'string' || path.resolve(completion.preflight_path) !== path.resolve(preflightPath))

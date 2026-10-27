@@ -46,10 +46,10 @@ test('Q1 authenticated history budget uses real navigation routes', { timeout: 3
         for (const sample of await collectAuthenticatedHistorySamples(cycles, 3, cycles === 2)) {
             retainSample(sample);
             context.diagnostic(JSON.stringify({ cycles, lanes: 3, mode: sample.mode, routes: sample.routes.map(route => ({ route: route.route,
-                elapsed_ms: route.elapsedMs, phases_ms: route.phasesMs, hits: route.persistenceHits, misses: route.persistenceMisses })) }));
+                elapsed_ms: route.elapsedMs, phases_ms: route.phasesMs })) }));
         }
     }
-    for (const mode of ['disabled', 'force-miss', 'ordinary'] as const) {
+    const mode = 'navigation';
     const short = samples.find(sample => sample.cycles === 2 && sample.mode === mode)!;
     const long = samples.find(sample => sample.cycles === 16 && sample.mode === mode)!;
     await context.test(mode + ': indexed route selectors retain constant work on real authenticated history', () => {
@@ -84,6 +84,16 @@ test('Q1 authenticated history budget uses real navigation routes', { timeout: 3
     const growing = [...new Set(changed.filter(entry => entry.long > entry.short).map(entry => entry.counter))];
     context.diagnostic('Q1 ' + mode + ' growing counters: ' + JSON.stringify(growing));
     context.diagnostic('Q1 ' + mode + ' remaining counter differences: ' + JSON.stringify(changed));
+    await context.test(mode + ': consumers share one verified index without duplicate timeline parsing or copies', () => {
+        for (const sample of samples) for (const route of sample.routes) {
+            assert.equal(route.counters.timeline_verify, 1, route.route + ': full integrity verification remains live');
+            assert.ok(route.counters.timeline_events > 0, route.route + ': real history was visited');
+            assert.equal(route.counters['visit:verified_timeline_index_event'], route.counters.timeline_events,
+                route.route + ': canonical fixture events enter the shared index exactly once');
+            for (const key of ['visit:validation_timeline_parse_event', 'visit:timeline_cloned_event',
+                'visit:audit_ordered_event_copy']) assert.equal(route.counters[key] || 0, 0, route.route + ':' + key);
+        }
+    });
     await context.test(mode + ': authenticated artifact reads and parsing do not multiply with closed cycles', () => {
         for (let index = 0; index < short.routes.length; index++)
             assertStableAuthenticatedArtifactWork(short.routes[index], long.routes[index]);
@@ -92,7 +102,6 @@ test('Q1 authenticated history budget uses real navigation routes', { timeout: 3
             assert.equal(route.counters.timeline_parse, 1);
         }
     });
-    }
     context.diagnostic('Full per-path/per-cycle counters: ' + reportPath);
 });
 

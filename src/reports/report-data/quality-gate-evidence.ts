@@ -15,7 +15,7 @@ import {
     stringSha256,
     toPosix
 } from '../../gates/shared/helpers';
-import { readOrderedTaskEvents } from '../../gates/task-audit/task-audit-summary-lifecycle';
+import { readImmutableOrderedTaskEvents } from '../../gates/task-audit/task-audit-summary-lifecycle';
 import {
     resolveWorkspaceSnapshotRequest,
     type WorkspaceSnapshotRequest
@@ -271,7 +271,7 @@ function readQualityChecklistTimelineEvidence(options: {
         new Set(['all-tasks.jsonl'])
     );
     for (const eventFile of eventFiles) {
-        const events = readOrderedTaskEvents(eventFile.path).events;
+        const events = readImmutableOrderedTaskEvents(eventFile.path).events;
         for (const event of events) {
             if (toText(event.event_type).toUpperCase() !== 'QUALITY_CHECKLIST_RECORDED') {
                 continue;

@@ -36,7 +36,7 @@ import {
     getLatestTaskSequenceForEventTypes,
     getTimelineEventTaskSequence,
     isPlainRecord,
-    readTaskTimelineEventLikes,
+    readImmutableTaskTimelineEventLikes,
     withNextStepReviewEvidenceSnapshot
 } from './next-step-review-timeline-evidence';
 import type {
@@ -263,7 +263,7 @@ function latestReviewGateFailureIsAuthorshipAttestationOnly(
     taskId: string,
     latestReviewGateFailureSequence: number
 ): boolean {
-    const event = readTaskTimelineEventLikes(eventsRoot, taskId)
+    const event = readImmutableTaskTimelineEventLikes(eventsRoot, taskId, 'REVIEW_GATE_FAILED', 'trimmed')
         .find((candidate) => (countNextStepWork('visit:next-step-review-evidence:259'), (
             String(candidate.event_type || '').trim() === 'REVIEW_GATE_FAILED'
             && getTimelineEventTaskSequence(candidate) === latestReviewGateFailureSequence
@@ -299,7 +299,8 @@ export function getHiddenReviewTimingTrustRemediation(
         const completeTimeline = state.reusedExistingReview
             ? readCompleteReviewTimelineEvidence(eventsRoot, taskId)
             : null;
-        const timelineEvents = completeTimeline?.events ?? readTaskTimelineEventLikes(eventsRoot, taskId);
+        const timelineEvents = completeTimeline?.events
+            ?? readImmutableTaskTimelineEventLikes(eventsRoot, taskId, 'REVIEWER_INVOCATION_ATTESTED', 'normalized');
         const latestCompileSequence = completeTimeline
             ? completeTimeline.latestCompileSequence
             : getLatestTaskSequenceForEventTypes(eventsRoot, taskId, ['COMPILE_GATE_PASSED']);
@@ -404,7 +405,7 @@ export function findStrictSequentialUpstreamNeedingCurrentCycleReuse(params: {
         return null;
     }
     const timelineEvents = readTaskTimelineRouteQuery(path.join(params.eventsRoot, `${params.taskId}.jsonl`), params.taskId)
-        ?? readTaskTimelineEventLikes(params.eventsRoot, params.taskId);
+        ?? readImmutableTaskTimelineEventLikes(params.eventsRoot, params.taskId);
     const stateByReviewType = new Map(params.reviewStates.map((state) => (countNextStepWork('visit:next-step-review-evidence:400'), [state.reviewType, state])));
     const upstreamReviewTypes = getReviewExecutionDependencies(
         params.targetReviewType,
@@ -506,7 +507,7 @@ export function findReviewGateStaleUpstreamRecovery(params: {
         return null;
     }
     const timelineEvents = readTaskTimelineRouteQuery(path.join(params.eventsRoot, `${params.taskId}.jsonl`), params.taskId)
-        ?? readTaskTimelineEventLikes(params.eventsRoot, params.taskId);
+        ?? readImmutableTaskTimelineEventLikes(params.eventsRoot, params.taskId);
     const stateByReviewType = new Map(params.reviewStates.map((state) => (countNextStepWork('visit:next-step-review-evidence:500'), [state.reviewType, state])));
     for (const downstreamReviewType of params.requiredReviewTypes) {
         countNextStepWork('visit:next-step-review-evidence:501');
@@ -592,7 +593,7 @@ export function findDownstreamReviewNeedingDependencyRebind(params: {
 }): { downstreamState: ReviewArtifactState; upstreamReviewType: string } | null {
     return withNextStepReviewEvidenceSnapshot(params.eventsRoot, params.taskId, () => {
     const timelineEvents = readTaskTimelineRouteQuery(path.join(params.eventsRoot, `${params.taskId}.jsonl`), params.taskId)
-        ?? readTaskTimelineEventLikes(params.eventsRoot, params.taskId);
+        ?? readImmutableTaskTimelineEventLikes(params.eventsRoot, params.taskId);
     if (Array.isArray(timelineEvents) ? timelineEvents.length === 0 : !routeHasBoundedEvents(timelineEvents as TaskRouteQuery)) {
         return null;
     }

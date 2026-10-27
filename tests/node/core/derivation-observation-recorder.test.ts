@@ -17,7 +17,6 @@ import { createHash } from 'node:crypto';
 import { parseObservedQualityArtifactJson, readReviewValidationBytes } from '../../../src/gates/review-context/review-validation-invocation';
 import { readReviewContextTrustBoundaryAnalysis } from '../../../src/gates/review-context/review-context-trust-boundary-analysis';
 import { resolveDefaultQualityChecklistArtifactPath } from '../../../src/gates/quality-checklist';
-import type { ClosedQualityEvidence } from '../../../src/core/closed-quality-analysis';
 
 function temporary<T>(callback: (root: string) => T): T {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-q4-recorder-'));
@@ -239,25 +238,6 @@ test('real quality analysis invokes the fixed artifact parse without suppressing
     assert.ok(analysis.violations.length > 0);
     assert.equal(measured?.work['derive:closed_quality_json_parse'], 1);
 }));
-
-test('sealed quality reduction keys complete captured values and separates strict and soft modes', () => {
-    const evidence: ClosedQualityEvidence = {
-        base: { required: true, applicability_reasons: ['declared-validation-contract'],
-            rule_id: 'trust_boundary_adversarial_analysis', artifact_path: 'quality.json', artifact_sha256: 'a'.repeat(64),
-            recorded_artifact_sha256: 'a'.repeat(64), binding_event_sha256: 'b'.repeat(64) },
-        violations: [], observedExecutionViolationIndex: 0, matrixSha256: null, matrix: [], phases: null
-    };
-    withInvocationReadObservation(() => {
-        const soft = executeClosedObservationPlan({ operation: 'quality-analysis', evidence, requireObservedExecution: false });
-        const strict = executeClosedObservationPlan({ operation: 'quality-analysis', evidence, requireObservedExecution: true });
-        assert.equal((unwrapObservationCapture(soft) as { status: string }).status, 'current');
-        assert.equal((unwrapObservationCapture(strict) as { status: string }).status, 'invalid');
-        assert.equal(isPublishableObservationCapture(soft), true);
-        evidence.violations.push('changed captured input');
-        const changed = executeClosedObservationPlan({ operation: 'quality-analysis', evidence, requireObservedExecution: false });
-        assert.equal((unwrapObservationCapture(changed) as { status: string }).status, 'invalid');
-    });
-});
 
 test('a warmed child using an aliased reader never makes an arbitrary enclosing graph publishable', () => temporary(root => {
     const target = path.join(root, 'value'); fs.writeFileSync(target, 'value');

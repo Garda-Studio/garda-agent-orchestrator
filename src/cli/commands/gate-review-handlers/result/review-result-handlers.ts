@@ -1,4 +1,3 @@
-import { publishQualityDerivationsAfterNativeOwner } from '../../../../gates/quality-checklist/quality-derived-state-publication';
 import { publishClosedReviewAfterGate, type ClosedReviewGateCapture } from '../../../../gates/review-attempts/review-closed-cycle-gate-hooks';
 import { admitNativeReviewCadence } from '../../../../gates/review-attempts/review-cadence-admission';
 import { createHash } from 'node:crypto';
@@ -2566,7 +2565,6 @@ async function recordReviewReceiptFromArtifacts(options: {
             remediationBaselineEvidence,
             correctionAcceptance: options.correctionAcceptance
         });
-        publishQualityDerivationsAfterNativeOwner(options.repoRoot, options.taskId, options.preflightPath);
         return persistedReceiptPath;
     } catch (error: unknown) {
         try {
