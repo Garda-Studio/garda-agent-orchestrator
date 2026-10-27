@@ -83,8 +83,10 @@ export function beginVerifiedEventIndexPass() {
         finish(verified: boolean): VerifiedTaskEventIndex | null {
             if (!verified) return null;
             // Audit uses a stable timestamp sort. Preserve ties and legacy timestamps.
-            const ordered = monotonic ? events : [...events].sort((a, b) =>
-                parseTimestamp(a.timestamp_utc).getTime() - parseTimestamp(b.timestamp_utc).getTime());
+            const ordered = monotonic ? events : [...events].sort((a, b) => {
+                countNextStepWork('visit:audit_ordered_event_comparison');
+                return parseTimestamp(a.timestamp_utc).getTime() - parseTimestamp(b.timestamp_utc).getTime();
+            });
             for (const list of Object.values(byType)) Object.freeze(list);
             for (const list of Object.values(byTrimmedType)) Object.freeze(list);
             for (const list of Object.values(normalizedByType)) Object.freeze(list);

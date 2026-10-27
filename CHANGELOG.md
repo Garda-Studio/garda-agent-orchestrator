@@ -49,7 +49,7 @@
 - Reviewer launch navigation selects verified restart and pinned-input evidence without repeated full-history scans; stale recovery still authenticates every candidate it needs.
 - Read-only next-step navigation shares checked scope bytes, path observations, Git results and per-object Windows ACL evidence within each invocation. A final dependency check rejects changed inputs before returning the decision; action execution retains its existing live checks.
 
-- Opt-in next-step diagnostics count direct synchronous Node processes without invoking caller getters, proxy traps or serialization hooks.
+- Opt-in next-step diagnostics count direct synchronous Node processes without invoking caller getters, proxy traps or serialization hooks. Timestamp sorting in the shared timeline index retains its comparison counts.
 
 - Remediation authority reuses the invocation's verified timeline and complete contract derivation. The final dependency check rejects mid-call changes; standalone observers and append preconditions retain their live checks. Each new invocation verifies the full timeline.
 
