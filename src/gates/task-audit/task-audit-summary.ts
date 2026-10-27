@@ -92,7 +92,7 @@ import {
     collectEvidenceArtifacts,
     collectRequiredReviewBlockers
 } from './task-audit-summary-review-evidence';
-import { buildFinalCloseoutArtifact } from './task-audit-summary-closeout-artifact';
+import { buildFinalCloseoutArtifact, buildFinalCloseoutVerification, prepareFinalCloseoutScopeVerification, verifyWorkflowConfigAudit, type FinalCloseoutVerification } from './task-audit-summary-closeout-artifact';
 import {
     readPreflightSummary,
     readProfileReviewDecisions
@@ -378,6 +378,15 @@ function filterNotRequiredEvidenceArtifacts(
     });
 }
 
+export type TaskAuditVerificationResult = Pick<TaskAuditSummaryResult,
+    'task_id' | 'status' | 'integrity_status' | 'point_in_time_snapshot' | 'gates' | 'blockers' | 'changed_files'>
+    & { final_closeout: FinalCloseoutVerification };
+
+/** Native completion proof: all full-audit checks, without an unused closeout report. */
+export function buildTaskAuditVerification(options: TaskAuditSummaryOptions): TaskAuditVerificationResult {
+    return buildTaskAuditSummaryForPurpose(options, true, true);
+}
+
 export function buildTaskAuditSummary(options: TaskAuditSummaryOptions): TaskAuditSummaryResult {
     return buildTaskAuditSummaryForPurpose(options, true);
 }
@@ -387,7 +396,10 @@ export function buildNavigationTaskAuditSummary(options: TaskAuditSummaryOptions
     return buildTaskAuditSummaryForPurpose(options, false);
 }
 
-function buildTaskAuditSummaryForPurpose(options: TaskAuditSummaryOptions, inspectReviewHistory: boolean): TaskAuditSummaryResult {
+function buildTaskAuditSummaryForPurpose(options: TaskAuditSummaryOptions, inspectReviewHistory: boolean, verificationOnly: true): TaskAuditVerificationResult;
+function buildTaskAuditSummaryForPurpose(options: TaskAuditSummaryOptions, inspectReviewHistory: boolean, verificationOnly?: false): TaskAuditSummaryResult;
+function buildTaskAuditSummaryForPurpose(options: TaskAuditSummaryOptions, inspectReviewHistory: boolean, verificationOnly: boolean): TaskAuditSummaryResult | TaskAuditVerificationResult;
+function buildTaskAuditSummaryForPurpose(options: TaskAuditSummaryOptions, inspectReviewHistory: boolean, verificationOnly = false): TaskAuditSummaryResult | TaskAuditVerificationResult {
     return measureNextStepPhase('audit', () => {
     const repoRoot = path.resolve(options.repoRoot);
     const safeTaskId = assertValidTaskId(options.taskId);
@@ -406,7 +418,7 @@ function buildTaskAuditSummaryForPurpose(options: TaskAuditSummaryOptions, inspe
     return withTaskTimelineReadSnapshot(eventsRoot, safeTaskId, () => (
         withReviewArtifactReadBarrier(reviewsRoot, () => (
             withTaskIndexReadSnapshot(reviewsRoot, safeTaskId, () => (
-                buildTaskAuditSummaryFromSnapshot(options, inspectReviewHistory)
+                buildTaskAuditSummaryFromSnapshot(options, inspectReviewHistory, verificationOnly)
             ))
         ))
     ));
@@ -414,7 +426,10 @@ function buildTaskAuditSummaryForPurpose(options: TaskAuditSummaryOptions, inspe
     });
 }
 
-function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, inspectReviewHistory: boolean): TaskAuditSummaryResult {
+function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, inspectReviewHistory: boolean, verificationOnly: true): TaskAuditVerificationResult;
+function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, inspectReviewHistory: boolean, verificationOnly?: false): TaskAuditSummaryResult;
+function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, inspectReviewHistory: boolean, verificationOnly: boolean): TaskAuditSummaryResult | TaskAuditVerificationResult;
+function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, inspectReviewHistory: boolean, verificationOnly = false): TaskAuditSummaryResult | TaskAuditVerificationResult {
     const repoRoot = path.resolve(options.repoRoot);
     const workspaceSnapshotRequest = resolveWorkspaceSnapshotRequest(
         repoRoot,
@@ -424,9 +439,16 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
     const eventsRoot = resolveEventsRoot(repoRoot, options.eventsRoot);
     const reviewsRoot = resolveReviewsRoot(repoRoot, options.reviewsRoot);
     const lazyReports = !inspectReviewHistory && isInvocationReadObservationActive();
-    const reportValue = <T>(name: string, build: () => T): (() => T) => createReportProjectionValue(name, lazyReports, build,
-        action => withTaskTimelineReadSnapshot(eventsRoot, safeTaskId, () => withReviewArtifactReadBarrier(reviewsRoot,
-            () => withTaskIndexReadSnapshot(reviewsRoot, safeTaskId, action))));
+    const reportValue = <T>(name: string, build: () => T): (() => T) => {
+        const create = () => createReportProjectionValue(name, lazyReports, build,
+            action => withTaskTimelineReadSnapshot(eventsRoot, safeTaskId, () => withReviewArtifactReadBarrier(reviewsRoot,
+                () => withTaskIndexReadSnapshot(reviewsRoot, safeTaskId, action))));
+        if (verificationOnly && ['task-cycle-diagnostics', 'closeout'].includes(name)) {
+            let read: (() => T) | undefined;
+            return () => (read ??= create())();
+        }
+        return create();
+    };
     const liveFullSuiteValidationEnabled = loadFullSuiteValidationConfig(repoRoot).enabled;
     const liveReviewExecutionPolicyMode = loadReviewExecutionPolicyConfig(repoRoot).mode;
     const reviewCycleExcludedReviewTypes = readReviewCycleExcludedReviewTypes(repoRoot);
@@ -1043,6 +1065,21 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
         commitCommandSuggestion: getCommitPresentation().commitCommandSuggestion,
         workspaceSnapshotRequest
     }));
+
+    if (verificationOnly) {
+        const finishScopeVerification = prepareFinalCloseoutScopeVerification({
+            repoRoot, changedFiles, workspaceSnapshotRequest, taskMode, preflight, currentCycle
+        });
+        verifyWorkflowConfigAudit({ repoRoot, taskId: safeTaskId, taskMode, workspaceSnapshotRequest });
+        const finalCloseout = buildFinalCloseoutVerification({ repoRoot, eventsRoot, taskId: safeTaskId,
+            currentCycle, preflight, finalReportContract, finalCloseoutJsonPath,
+            finalCloseoutMarkdownPath, finalUserReportPath });
+        finishScopeVerification();
+        return {
+            task_id: safeTaskId, status, integrity_status: integrityStatus, point_in_time_snapshot: pointInTimeSnapshot,
+            gates, blockers, changed_files: changedFiles, final_closeout: finalCloseout
+        };
+    }
 
     const result: TaskAuditSummaryResult = {
         task_id: safeTaskId,

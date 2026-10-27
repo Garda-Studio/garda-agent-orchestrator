@@ -168,6 +168,30 @@ function ownerCurrent(selection: OwnedDisposableArtifactPreviewSelection, intent
     return owner;
 }
 
+/** Recheck native owner and journal after a completed audit and immediately before removal. */
+export function assertOwnedDisposableRecoveryOwnerCurrent(options: OwnedDisposableArtifactJournalSelection,
+    previous: OwnedDisposableRecoveryAuthority): void {
+    const native = readOwnedDisposableRetirementIntent(options);
+    if (native.file.identity !== previous.journal.identity || native.file.sha256 !== previous.journal.sha256
+        || previous.owners.some(owner => owner.authorityIdentity !== native.authorityIdentity)) {
+        throw new Error('Disposable recovery intent or private authority changed before removal.');
+    }
+    const intent = readIntent(native.intent, native.selection, options.ownershipDigest, native.authorityIdentity);
+    if (intent.roots.length !== previous.owners.length) throw new Error('Disposable recovery owner membership changed before removal.');
+    for (const [index, root] of intent.roots.entries()) {
+        const owner = ownerCurrent(native.selection, root, native.authorityIdentity), expected = previous.owners[index];
+        if (owner.ownerFile.identity !== expected.ownerFile.identity || owner.ownerSha256 !== expected.ownerSha256
+            || scratchBindingIdentity(owner.ownerFile.binding) !== scratchBindingIdentity(expected.ownerFile.binding)) {
+            throw new Error('Disposable recovery owner changed before removal.');
+        }
+    }
+    const current = readOwnedDisposableRetirementIntent(options);
+    if (current.file.identity !== native.file.identity || current.file.sha256 !== native.file.sha256
+        || current.authorityIdentity !== native.authorityIdentity) {
+        throw new Error('Disposable recovery intent changed before removal.');
+    }
+}
+
 // This authenticates metadata only: remaining-tree validation and signed progress are still required before recovery.
 export function readOwnedDisposableArtifactRecoveryAuthority(options: OwnedDisposableArtifactJournalSelection): OwnedDisposableRecoveryAuthority {
     const native = readOwnedDisposableRetirementIntent(options), intent = readIntent(native.intent, native.selection,

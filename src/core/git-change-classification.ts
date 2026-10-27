@@ -3,11 +3,59 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { TextDecoder } from 'node:util';
 
-import { isGitExitFailure, runGitBinary } from './git-helpers';
+import { isGitExitFailure, runGitBinary as runNativeGitBinary, type RunGitBinaryOptions } from './git-helpers';
+import { withNativeInvocationGitRead } from './invocation-git-observation';
+import { createInvocationReadMemoKey, memoizeInvocationRead, registerInvocationDependency,
+    requiresInvocationContentByteValidation } from './invocation-read-observation';
+import { describeProcessInputs } from './next-step-measurement';
 import { parsePorcelainV1Z, splitNulRecords } from './git-path-output';
 import { normalizeLineEndings } from './line-endings';
 import { isPathInsideRoot, isPathRealpathInsideRoot } from './paths';
 import { DEFAULT_GIT_TIMEOUT_MS } from './subprocess';
+
+interface ClassificationGitRead {
+    readonly output: Buffer;
+    minimumTimeoutMs: number;
+}
+const CLASSIFICATION_GIT_READS = createInvocationReadMemoKey<Map<string, ClassificationGitRead>>('strict-classification-git-reads');
+
+/** Share identical successful native queries only within a checked synchronous read phase. */
+function runGitBinary(repoRoot: string, args: string[], options: RunGitBinaryOptions = {}): Buffer {
+    if (!requiresInvocationContentByteValidation() || !Number.isSafeInteger(options.timeoutMs)
+        || (options.timeoutMs ?? 0) <= 0 || Buffer.isBuffer(options.input)) {
+        return runNativeGitBinary(repoRoot, args, options);
+    }
+    const snapshot = { repoRoot, args, input: options.input, maxBuffer: options.maxBuffer,
+        allowFailure: options.allowFailure, allowedFailureExitCodes: options.allowedFailureExitCodes,
+        cwd: process.cwd(), environment: process.env };
+    const description = describeProcessInputs(snapshot);
+    if (description.opaque) return runNativeGitBinary(repoRoot, args, options);
+    const reads = memoizeInvocationRead(CLASSIFICATION_GIT_READS, '', () => new Map<string, ClassificationGitRead>()).value;
+    const previous = reads.get(description.text);
+    if (previous) {
+        previous.minimumTimeoutMs = Math.min(previous.minimumTimeoutMs, options.timeoutMs!);
+        return Buffer.from(previous.output);
+    }
+    const output = withNativeInvocationGitRead(() => runNativeGitBinary(repoRoot, args, options));
+    const savedArgs = [...args], savedOptions: RunGitBinaryOptions = { ...options,
+        allowedFailureExitCodes: options.allowedFailureExitCodes && [...options.allowedFailureExitCodes] };
+    const entry: ClassificationGitRead = { output: Buffer.from(output), minimumTimeoutMs: options.timeoutMs! };
+    reads.set(description.text, entry);
+    registerInvocationDependency(entry, () => {
+        const input = () => describeProcessInputs({ repoRoot, args: savedArgs, input: savedOptions.input,
+            maxBuffer: savedOptions.maxBuffer, allowFailure: savedOptions.allowFailure,
+            allowedFailureExitCodes: savedOptions.allowedFailureExitCodes, cwd: process.cwd(), environment: process.env });
+        const before = input();
+        if (before.opaque || before.text !== description.text) throw new Error('Git classification command inputs changed during recovery read.');
+        const current = withNativeInvocationGitRead(() => runNativeGitBinary(repoRoot, savedArgs,
+            { ...savedOptions, timeoutMs: entry.minimumTimeoutMs }));
+        const after = input();
+        if (after.opaque || after.text !== description.text || !current.equals(entry.output)) {
+            throw new Error('Git classification evidence changed during recovery read.');
+        }
+    });
+    return Buffer.from(entry.output);
+}
 
 export const GIT_EOL_CHANGE_POLICY = Object.freeze({
     schemaVersion: 1,

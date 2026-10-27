@@ -4,12 +4,16 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileSha256 } from '../../../src/core/file-hashing';
+import { readInvocationFileContent } from '../../../src/core/invocation-file-observation';
+import { readTaskTimelineFileSnapshot, withTaskTimelineReadSnapshot } from '../../../src/gate-runtime/timeline/task-timeline-read-snapshot';
+import { readReviewArtifactFileSnapshot, withReviewArtifactReadSnapshot } from '../../../src/gate-runtime/review/review-artifacts';
 import { fileSha256 as runtimeFileSha256 } from '../../../src/gate-runtime/hash';
 import { readObservedValidationFile } from '../../../src/core/project-validation-identity';
 import { statFileIdentitySync } from '../../../src/core/file-stat';
 import { getSafeWorktreePathState } from '../../../src/gates/workspace/worktree-path-state';
 import {
-    assertInvocationDependenciesCurrent, createInvocationReadMemoKey, memoizeInvocationRead, withInvocationReadObservation
+    assertInvocationDependenciesCurrent, createInvocationReadMemoKey, memoizeInvocationRead, withInvocationReadObservation,
+    withStrictInvocationReadObservation
 } from '../../../src/core/invocation-read-observation';
 import { withNextStepMeasurement, type NextStepMeasurement } from '../../../src/core/next-step-measurement';
 
@@ -228,4 +232,66 @@ test('memo keys preserve typed ownership, first errors and invocation lifetime w
         });
     }
     assert.equal(builds, 2);
+});
+
+
+test('strict read phase rehashes actual bytes even when path metadata stays unchanged', t => {
+    const root = fixture(t), file = path.join(root, 'source.txt');
+    fs.writeFileSync(file, 'original bytes');
+    const native = require('node:fs') as typeof fs, open = native.openSync, read = native.readSync, close = native.closeSync;
+    const descriptors = new Set<number>();
+    let returnChangedBytes = false, changedRead = false;
+    t.mock.method(native, 'openSync', ((...args: unknown[]) => {
+        const descriptor = Reflect.apply(open, native, args) as number;
+        if (typeof args[0] === 'string' && path.resolve(args[0]) === path.resolve(file)) descriptors.add(descriptor);
+        return descriptor;
+    }) as typeof fs.openSync);
+    t.mock.method(native, 'closeSync', ((descriptor: number) => {
+        descriptors.delete(descriptor); return close(descriptor);
+    }) as typeof fs.closeSync);
+    t.mock.method(native, 'readSync', ((...args: unknown[]) => {
+        const count = Reflect.apply(read, native, args) as number, buffer = args[1];
+        if (returnChangedBytes && descriptors.has(args[0] as number) && count > 0 && Buffer.isBuffer(buffer)) {
+            buffer[Number(args[2]) || 0] ^= 1; changedRead = true;
+        }
+        return count;
+    }) as typeof fs.readSync);
+    assert.throws(() => withStrictInvocationReadObservation(() => {
+        assert.ok(readInvocationFileContent(file));
+        returnChangedBytes = true;
+    }), /Invocation file bytes changed/u);
+    assert.equal(changedRead, true, 'the final check must read bytes again');
+    t.mock.restoreAll();
+    assert.equal(fs.readFileSync(file, 'utf8'), 'original bytes');
+});
+
+
+for (const kind of ['timeline', 'review'] as const) test(`strict ${kind} snapshot rechecks bytes when metadata is unchanged`, t => {
+    const root = fixture(t), file = path.join(root, kind === 'timeline' ? 'T-STRICT-1.jsonl' : 'review.json');
+    fs.writeFileSync(file, kind === 'timeline' ? '{"event_type":"EXAMPLE"}\n' : '{"status":"PASS"}\n');
+    const native = require('node:fs') as typeof fs, open = native.openSync, read = native.readSync, close = native.closeSync;
+    const descriptors = new Set<number>(); let changed = false, changedRead = false;
+    t.mock.method(native, 'openSync', ((...args: unknown[]) => {
+        const descriptor = Reflect.apply(open, native, args) as number;
+        if (typeof args[0] === 'string' && path.resolve(args[0]) === path.resolve(file)) descriptors.add(descriptor);
+        return descriptor;
+    }) as typeof fs.openSync);
+    t.mock.method(native, 'closeSync', ((descriptor: number) => {
+        descriptors.delete(descriptor); return close(descriptor);
+    }) as typeof fs.closeSync);
+    t.mock.method(native, 'readSync', ((...args: unknown[]) => {
+        const count = Reflect.apply(read, native, args) as number, buffer = args[1];
+        if (changed && descriptors.has(args[0] as number) && count > 0 && Buffer.isBuffer(buffer)) {
+            buffer[Number(args[2]) || 0] ^= 1; changedRead = true;
+        }
+        return count;
+    }) as typeof fs.readSync);
+    assert.throws(() => withStrictInvocationReadObservation(() => kind === 'timeline'
+        ? withTaskTimelineReadSnapshot(root, 'T-STRICT-1', () => {
+            assert.equal(readTaskTimelineFileSnapshot(file).valid, true); changed = true;
+        })
+        : withReviewArtifactReadSnapshot(root, () => {
+            assert.equal(readReviewArtifactFileSnapshot(file).valid, true); changed = true;
+        })), /changed|unavailable|invalidated/iu);
+    assert.equal(changedRead, true, 'the final check must read bytes again');
 });

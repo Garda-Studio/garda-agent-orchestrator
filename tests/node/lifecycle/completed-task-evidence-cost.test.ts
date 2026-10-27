@@ -170,7 +170,7 @@ test('completed recovery read snapshot bounds real Git discovery across nested r
     });
     assert.equal(result, 'read-only result');
     t.diagnostic(`Real Git calls: independent proof=${ordinaryCalls}, eight nested reads plus publication=${calls}`);
-    assert.ok(calls <= ordinaryCalls * 2, `nested completed proof discovery repeated: ${calls} > ${ordinaryCalls * 2}`);
+    assert.ok(calls <= Math.floor(ordinaryCalls * 1.5), `nested completed proof discovery repeated: ${calls} > ${Math.floor(ordinaryCalls * 1.5)}`);
     fs.writeFileSync(path.join(fixture.root, 'example.txt'), 'changed after the completed read operation\n');
     assert.equal(inspectCompletedTaskEvidence({ repoRoot: fixture.root, taskId }).eligible, false);
 });
@@ -193,3 +193,133 @@ for (const drift of ['queue', 'compact evidence', 'worktree'] as const) {
         assert.equal(inspectCompletedTaskEvidence({ repoRoot: fixture.root, taskId }).eligible, false);
     });
 }
+
+test('native completed audit verification matches full audit decisions and closeout header', t => {
+    const fixture = committedFixture(t, TASK_IDS.slice(0, 1)), taskId = TASK_IDS[0];
+    const audit = require('../../../src/gates/task-audit/task-audit-summary') as typeof import('../../../src/gates/task-audit/task-audit-summary');
+    for (const changed of [false, true]) {
+        if (changed) fs.writeFileSync(path.join(fixture.root, 'example.txt'), 'changed after completion\n');
+        const options = { repoRoot: fixture.root, taskId };
+        const full = audit.buildTaskAuditSummary(options), verification = audit.buildTaskAuditVerification(options);
+        assert.deepEqual(verification, {
+            task_id: full.task_id, status: full.status, integrity_status: full.integrity_status,
+            point_in_time_snapshot: full.point_in_time_snapshot, gates: full.gates, blockers: full.blockers,
+            changed_files: full.changed_files, final_closeout: {
+                status: full.final_closeout.status, cycle_binding: full.final_closeout.cycle_binding,
+                artifact_paths: full.final_closeout.artifact_paths
+            }
+        });
+    }
+});
+
+test('native completed audit verification preserves mapped missing optional policy rejection', t => {
+    const fixture = committedFixture(t, TASK_IDS.slice(0, 1)), taskId = TASK_IDS[0];
+    const audit = require('../../../src/gates/task-audit/task-audit-summary') as typeof import('../../../src/gates/task-audit/task-audit-summary');
+    const config = path.join(fixture.bundleRoot, 'live', 'config', 'garda.config.json');
+    fs.mkdirSync(path.dirname(config), { recursive: true });
+    fs.writeFileSync(config, JSON.stringify({ configs: { 'optional-skill-selection-policy': 'optional-skill-selection-policy.json' } }));
+    for (const build of [audit.buildTaskAuditSummary, audit.buildTaskAuditVerification]) {
+        assert.throws(() => build({ repoRoot: fixture.root, taskId }), /Managed optional skill selection policy config is missing/u);
+    }
+});
+
+test('native completed audit verification keeps late classification rejection after earlier scope checks', t => {
+    const fixture = committedFixture(t, TASK_IDS.slice(0, 1)), taskId = TASK_IDS[0];
+    const audit = require('../../../src/gates/task-audit/task-audit-summary') as typeof import('../../../src/gates/task-audit/task-audit-summary');
+    const optional = require('../../../src/gates/task-audit/task-audit-summary-collectors') as typeof import('../../../src/gates/task-audit/task-audit-summary-collectors');
+    const original = optional.readOptionalSkillsSummary;
+    const config = path.join(fixture.bundleRoot, 'live', 'config', 'paths.json');
+    const before = fs.existsSync(config) ? fs.readFileSync(config) : null;
+    for (const build of [audit.buildTaskAuditSummary, audit.buildTaskAuditVerification]) {
+        if (before) fs.writeFileSync(config, before); else fs.rmSync(config, { force: true });
+        const domains = require('../../../src/gates/scope/domain-scope-fingerprints') as typeof import('../../../src/gates/scope/domain-scope-fingerprints');
+        const buildDomains = domains.buildDomainScopeFingerprints;
+        let armed = false, changed = false;
+        t.mock.method(optional, 'readOptionalSkillsSummary', (...args: Parameters<typeof original>) => {
+            const value = original(...args); armed = true; return value;
+        });
+        t.mock.method(domains, 'buildDomainScopeFingerprints', (...args: Parameters<typeof buildDomains>) => {
+            if (armed && !changed) {
+                fs.mkdirSync(path.dirname(config), { recursive: true });
+                fs.writeFileSync(config, '{ invalid late classification'); changed = true;
+            }
+            return buildDomains(...args);
+        });
+        assert.throws(() => build({ repoRoot: fixture.root, taskId }));
+        assert.equal(changed, true, 'invalid classification is introduced at the late domain check');
+        t.mock.restoreAll();
+    }
+});
+
+
+test('completed recovery read snapshot rejects changed Git configuration before returning', t => {
+    const fixture = committedFixture(t, TASK_IDS.slice(0, 1)), taskId = TASK_IDS[0];
+    let entered = false;
+    assert.throws(() => completedReadSnapshot(fixture.root, () => {
+        assert.equal(inspectCompletedTaskEvidence({ repoRoot: fixture.root, taskId }).eligible, true);
+        entered = true;
+        execFileSync('git', ['config', 'core.eol', 'crlf'], { cwd: fixture.root });
+        return 'must not escape';
+    }), /Git classification evidence changed|Invocation Git observation changed|Completed evidence changed/u);
+    assert.equal(entered, true, 'a real native proof must precede the config mutation');
+});
+
+
+test('completed recovery read snapshot rejects a newly missing required policy', t => {
+    const fixture = committedFixture(t, TASK_IDS.slice(0, 1)), taskId = TASK_IDS[0];
+    const config = path.join(fixture.bundleRoot, 'live', 'config', 'garda.config.json');
+    let entered = false;
+    assert.throws(() => completedReadSnapshot(fixture.root, () => {
+        assert.equal(inspectCompletedTaskEvidence({ repoRoot: fixture.root, taskId }).eligible, true);
+        entered = true;
+        fs.mkdirSync(path.dirname(config), { recursive: true });
+        fs.writeFileSync(config, JSON.stringify({ configs: { 'optional-skill-selection-policy': 'optional-skill-selection-policy.json' } }));
+        return 'must not escape';
+    }), /Completed evidence changed|Invocation file observation changed|Invocation file bytes changed/u);
+    assert.equal(entered, true, 'the real first proof must succeed before the policy input changes');
+});
+
+
+test('completed audit observes signed workflow migration authority before returning', t => {
+    const fixture = committedFixture(t, TASK_IDS.slice(0, 1)), taskId = TASK_IDS[0];
+    const relativeConfig = 'garda-agent-orchestrator/live/config/workflow-config.json';
+    const configPath = path.join(fixture.root, ...relativeConfig.split('/'));
+    const modePath = path.join(fixture.bundleRoot, 'runtime', 'reviews', `${taskId}-task-mode.json`);
+    const mode = JSON.parse(fs.readFileSync(modePath, 'utf8')) as Record<string, unknown>;
+    const beforeHash = '0'.repeat(64);
+    mode.workflow_config_file_hashes = { [relativeConfig]: beforeHash };
+    fs.writeFileSync(modePath, JSON.stringify(mode));
+    const auth = require('../../../src/core/auth/local-commit-availability') as typeof import('../../../src/core/auth/local-commit-availability');
+    const record = auth.authenticateWorkflowMigration(fixture.root, {
+        event_source: 'workflow-config-set', command: 'lifecycle configuration migration',
+        mutation_source: 'lifecycle', migration_version: 1, permissions_preserved: true,
+        config_path: relativeConfig, before_sha256: beforeHash, after_sha256: computeFileSha256(configPath),
+        changed_fields: ['full_suite_validation.enabled'], active_task_ids: [taskId], active_task_id: taskId
+    });
+    assert.equal(auth.isAuthenticatedWorkflowMigration(fixture.root, record), true);
+    fs.writeFileSync(path.join(fixture.bundleRoot, 'runtime', 'workflow-config-audit.jsonl'), JSON.stringify(record) + '\n');
+    const keyPath = path.join(fixture.root, '.git', 'garda-private', 'workflow-migration-key');
+    const originalKey = fs.readFileSync(keyPath);
+    const audit = require('../../../src/gates/task-audit/task-audit-summary') as typeof import('../../../src/gates/task-audit/task-audit-summary');
+    const observations = require('../../../src/core/invocation-read-observation') as typeof import('../../../src/core/invocation-read-observation');
+    const options = { repoRoot: fixture.root, taskId };
+    for (const [name, build] of [['full', audit.buildTaskAuditSummary], ['verification', audit.buildTaskAuditVerification]] as const) {
+        assert.throws(() => observations.withStrictInvocationReadObservation(() => {
+            build(options);
+            fs.appendFileSync(keyPath, '\n');
+        }), /Invocation file (?:observation|bytes) changed/u, `${name} audit must retain its migration-key observation`);
+        fs.writeFileSync(keyPath, originalKey);
+    }
+    // Exercise the actual completed-evidence path used by recovery as well.
+    const full = audit.buildTaskAuditSummary(options);
+    assert.equal(full.status, 'PASS', JSON.stringify(full.blockers));
+    synchronizeFinalCloseoutArtifacts(full);
+    const accepted = inspectCompletedTaskEvidence({ repoRoot: fixture.root, taskId });
+    assert.equal(accepted.eligible, true, accepted.reasons.join());
+    assert.throws(() => completedReadSnapshot(fixture.root, () => {
+        const current = inspectCompletedTaskEvidence({ repoRoot: fixture.root, taskId });
+        assert.equal(current.eligible, true, current.reasons.join());
+        fs.appendFileSync(keyPath, '\n');
+        return 'must not escape';
+    }), /Invocation file (?:observation|bytes) changed/u);
+});
