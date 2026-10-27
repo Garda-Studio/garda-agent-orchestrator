@@ -1,3 +1,4 @@
+import { readStartupCycleReadiness } from '../../../src/gates/next-step/next-step-startup-readiness';
 import { getHiddenReviewTimingTrustRemediation } from '../../../src/gates/next-step/next-step-review-evidence';
 import type { ReviewArtifactState } from '../../../src/gates/next-step/next-step-review-artifact-readers';
 import test, { type TestContext } from 'node:test';
@@ -186,4 +187,30 @@ test('timing consumers share verified events without cloning a full timeline per
     assert.equal(measured!.work.timeline_verify, 1);
     assert.equal(measured!.work['visit:verified_timeline_index_event'], 3);
     assert.equal(measured!.work['visit:timeline_cloned_event'] || 0, 0);
+});
+
+
+test('real startup readiness queries event types without revisiting unrelated history', t => {
+    const samples: { output: ReturnType<typeof readStartupCycleReadiness>; visits: number }[] = [];
+    for (const cycles of [2, 16]) {
+        const f = fixture(t);
+        f.append('TASK_MODE_ENTERED');
+        f.append('RULE_PACK_LOADED', { stage: 'TASK_ENTRY' });
+        f.append('TASK_MODE_ENTERED');
+        f.append('RULE_PACK_LOADED', { stage: 'POST_PREFLIGHT' });
+        for (let cycle = 0; cycle < cycles; cycle++) f.append('TEST_EVENT', { cycle });
+        const taskModePath = path.join(f.root, 'missing-task-mode.json');
+        const native = readStartupCycleReadiness(f.root, f.eventsRoot, f.taskId, taskModePath);
+        assert.equal(native.nextGate, 'load-rule-pack');
+        let measured: NextStepMeasurement | undefined;
+        const output = withNextStepMeasurement(() => withInvocationReadObservation(() =>
+            readStartupCycleReadiness(f.root, f.eventsRoot, f.taskId, taskModePath)
+        ), value => { measured = value; });
+        assert.deepEqual(output, native);
+        assert.equal(measured!.work.timeline_verify, 1);
+        assert.equal(measured!.work['visit:verified_timeline_index_event'], cycles + 4);
+        samples.push({ output, visits: measured!.work['visit:next-step-timeline-readers:event:9'] || 0 });
+    }
+    assert.deepEqual(samples[0].output, samples[1].output);
+    assert.equal(samples[0].visits, samples[1].visits);
 });

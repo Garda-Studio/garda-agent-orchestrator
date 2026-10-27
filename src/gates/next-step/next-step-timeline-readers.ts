@@ -9,9 +9,12 @@ import {
 
 export function findLatestTimelineEvent(
     events: readonly TimelineEventEntry[],
-    predicate: string | ((entry: TimelineEventEntry) => boolean)
+    predicate: string | ((entry: TimelineEventEntry) => boolean),
+    requiredEventType?: string
 ): TimelineEventEntry | null {
-    const candidates = typeof predicate === 'string' ? normalizedEventsOfType(events, predicate) ?? events : events;
+    // A supplied type must be required by the predicate; unindexed streams retain native traversal.
+    const type = typeof predicate === 'string' ? predicate : requiredEventType;
+    const candidates = type === undefined ? events : normalizedEventsOfType(events, type) ?? events;
     const matches = typeof predicate === 'string' ? (entry: TimelineEventEntry) => entry.event_type === predicate : predicate;
     for (let index = candidates.length - 1; index >= 0; index -= 1) {
         countNextStepWork('visit:next-step-timeline-readers:event:9');

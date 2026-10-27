@@ -45,7 +45,7 @@
 
 - Within read-only navigation, review consumers share captured quality, validation, task-mode, scope and contract derivations. Lane, inspection and strictness contracts stay separate; input changes are rejected before output and public results remain isolated. Accessor-bearing inputs keep native evaluation, and dirty-baseline memo keys bind property enumerability.
 
-- Navigation shares an immutable index of verified timeline events across its readers, avoiding repeated parsing and full-history copies while retaining full integrity verification and final input checks. Quality derivations stay within the current invocation; the slower persisted quality cache has been removed.
+- Navigation shares an immutable index of verified timeline events across its readers, avoiding repeated parsing and full-history copies while retaining full integrity verification and final input checks. Quality derivations stay within the current invocation; the slower persisted quality cache has been removed. Startup readiness selects only relevant event types while preserving cycle boundaries and stage checks.
 - Reviewer launch navigation selects verified restart and pinned-input evidence without repeated full-history scans; stale recovery still authenticates every candidate it needs.
 - Read-only next-step navigation shares checked scope bytes, path observations, Git results and per-object Windows ACL evidence within each invocation. A final dependency check rejects changed inputs before returning the decision; action execution retains its existing live checks.
 

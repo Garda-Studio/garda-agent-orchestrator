@@ -89,11 +89,13 @@ export function readStartupCycleReadiness(
     };
     const latestRulePack = findLatestTimelineEvent(
         events,
-        (entry) => isStartupRulePackEvent(entry) && entry.sequence > latestTaskMode.sequence
+        (entry) => isStartupRulePackEvent(entry) && entry.sequence > latestTaskMode.sequence,
+        'RULE_PACK_LOADED'
     );
     const latestReviewPhaseStarted = findLatestTimelineEvent(
         events,
-        (entry) => entry.event_type === 'REVIEW_PHASE_STARTED' && entry.sequence > latestTaskMode.sequence
+        (entry) => entry.event_type === 'REVIEW_PHASE_STARTED' && entry.sequence > latestTaskMode.sequence,
+        'REVIEW_PHASE_STARTED'
     );
     const latestPostPreflightRulePackFailureBeforeLateStartup = latestRulePack && latestReviewPhaseStarted
         ? findLatestTimelineEvent(
@@ -102,7 +104,8 @@ export function readStartupCycleReadiness(
                 entry.event_type === 'RULE_PACK_LOAD_FAILED'
                 && String(entry.details?.stage || '').trim().toUpperCase() === 'POST_PREFLIGHT'
                 && entry.sequence > latestReviewPhaseStarted.sequence
-                && entry.sequence < latestRulePack.sequence
+                && entry.sequence < latestRulePack.sequence,
+            'RULE_PACK_LOAD_FAILED'
         )
         : null;
 
@@ -118,7 +121,8 @@ export function readStartupCycleReadiness(
             (entry) =>
                 entry.event_type === 'SHELL_SMOKE_PREFLIGHT_RECORDED'
                 && entry.sequence > latestTaskMode.sequence
-                && entry.sequence < latestReviewPhaseStarted.sequence
+                && entry.sequence < latestReviewPhaseStarted.sequence,
+            'SHELL_SMOKE_PREFLIGHT_RECORDED'
         );
         const latestPreReviewHandshake = latestPreReviewShellSmoke
             ? findLatestTimelineEvent(
@@ -126,7 +130,8 @@ export function readStartupCycleReadiness(
                 (entry) =>
                     entry.event_type === 'HANDSHAKE_DIAGNOSTICS_RECORDED'
                     && entry.sequence > latestTaskMode.sequence
-                    && entry.sequence < latestPreReviewShellSmoke.sequence
+                    && entry.sequence < latestPreReviewShellSmoke.sequence,
+                'HANDSHAKE_DIAGNOSTICS_RECORDED'
             )
             : null;
         const latestPreReviewRulePack = latestPreReviewHandshake
@@ -135,7 +140,8 @@ export function readStartupCycleReadiness(
                 (entry) =>
                     isStartupRulePackEvent(entry)
                     && entry.sequence > latestTaskMode.sequence
-                    && entry.sequence < latestPreReviewHandshake.sequence
+                    && entry.sequence < latestPreReviewHandshake.sequence,
+                'RULE_PACK_LOADED'
             )
             : null;
 
@@ -190,7 +196,8 @@ export function readStartupCycleReadiness(
 
     const latestHandshake = findLatestTimelineEvent(
         events,
-        (entry) => entry.event_type === 'HANDSHAKE_DIAGNOSTICS_RECORDED' && entry.sequence > latestRulePack.sequence
+        (entry) => entry.event_type === 'HANDSHAKE_DIAGNOSTICS_RECORDED' && entry.sequence > latestRulePack.sequence,
+        'HANDSHAKE_DIAGNOSTICS_RECORDED'
     );
     if (!latestHandshake) {
         return {
@@ -211,7 +218,8 @@ export function readStartupCycleReadiness(
 
     const latestShellSmoke = findLatestTimelineEvent(
         events,
-        (entry) => entry.event_type === 'SHELL_SMOKE_PREFLIGHT_RECORDED' && entry.sequence > latestHandshake.sequence
+        (entry) => entry.event_type === 'SHELL_SMOKE_PREFLIGHT_RECORDED' && entry.sequence > latestHandshake.sequence,
+        'SHELL_SMOKE_PREFLIGHT_RECORDED'
     );
     if (!latestShellSmoke) {
         return {
