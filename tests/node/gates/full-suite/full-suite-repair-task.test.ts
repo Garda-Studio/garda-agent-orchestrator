@@ -1,3 +1,5 @@
+import { readTaskQueueStatusToken } from '../../../../src/core/task-queue/task-queue-status';
+import { parseCanonicalActiveTaskQueue, parseTaskMdTableRow, replaceTaskMdTableCell } from '../../../../src/core/task-md-table';
 import { afterEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as childProcess from 'node:child_process';
@@ -145,13 +147,13 @@ function setTaskStatus(repoRoot: string, taskId: string, nextStatus: string): vo
     const content = fs.readFileSync(taskPath, 'utf8');
     let replaced = false;
     const lines = content.split('\n').map((line) => {
-        if (!line.startsWith(`| ${taskId} |`)) {
+        if (parseTaskMdTableRow(line)[0]?.trimmed !== taskId) {
             return line;
         }
-        const cells = line.split('|');
-        cells[2] = ` ${nextStatus} `;
+        const updated = replaceTaskMdTableCell(line, 1, ` ${nextStatus} `);
+        assert.ok(updated);
         replaced = true;
-        return cells.join('|');
+        return updated;
     });
     assert.equal(replaced, true, `expected TASK.md row for ${taskId}`);
     fs.writeFileSync(taskPath, lines.join('\n'), 'utf8');
@@ -343,7 +345,8 @@ describe('full-suite repair task materialization', () => {
         ]);
         const untrackedPaths = (manifest.untracked_files as Array<Record<string, unknown>>).map((entry) => entry.path);
         assert.deepEqual(untrackedPaths, ['garda-agent-orchestrator/runtime/tmp/T-FULL-SUITE-REPAIR-scratch.log']);
-        assert.ok(fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8').includes(`| ${CHILD_TASK_ID} | TODO |`));
+        const queue = parseCanonicalActiveTaskQueue(fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8'));
+        assert.equal(readTaskQueueStatusToken(queue.rows.find(row => row.taskId === CHILD_TASK_ID)?.status ?? null), 'TODO');
         assert.match(fs.readFileSync(path.join(repoRoot, 'TASK.md'), 'utf8'), new RegExp(`\\| ${TASK_ID} \\| .*SPLIT_REQUIRED .*\\|`));
         markRepairChildDone(repoRoot);
 

@@ -32,7 +32,7 @@ function diffSummary(root: string, files: string[], source = 'explicit_changed_f
         path.join(root, 'garda-agent-orchestrator/runtime/reviews/T-413-preflight.json'));
 }
 
-function legacyCacheFingerprint(root: string, filePath: string, content: string | null, source: string): string {
+function legacyCacheFingerprint(root: string, filePath: string, content: string | null, source: string, version = 'v9'): string {
     const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
     const normalizedRoot = path.resolve(root).replace(/\\/gu, '/');
     const params = {
@@ -49,7 +49,7 @@ function legacyCacheFingerprint(root: string, filePath: string, content: string 
                 '--diff-filter=ACDMRTUXB']).stdout.trimEnd(), `S|A||${filePath}`].join('\n')
             : `W|M||${filePath}|${state}`;
     const head = runGitFixtureCommand(root, ['rev-parse', 'HEAD']).stdout.trim();
-    return sha256(['v7', source, head, sha256(descriptor), '0', '0', sha256(JSON.stringify(params))].join('|'));
+    return sha256([version, source, head, sha256(descriptor), '0', '0', sha256(JSON.stringify(params))].join('|'));
 }
 
 describe('Git path consumers', () => {
@@ -150,7 +150,10 @@ describe('Git path consumers', () => {
             for (const source of ['git_auto', 'explicit_changed_files']) {
                 const files = source === 'explicit_changed_files' ? [filePath] : [];
                 const current = computeSnapshotFingerprint(root, source, false, files).fingerprint;
+                // Compare old path parsing within the current envelope version. Version 7
+                // is independently invalidated even for ordinary ASCII by the v9 migration.
                 const legacy = legacyCacheFingerprint(root, filePath, content, source);
+                assert.notEqual(current, legacyCacheFingerprint(root, filePath, content, source, 'v7'));
                 if (filePath === 'ascii.txt') assert.equal(current, legacy);
                 else assert.notEqual(current, legacy);
             }
