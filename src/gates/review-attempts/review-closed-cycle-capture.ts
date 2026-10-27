@@ -1,3 +1,7 @@
+import { prepareClosedObservationPlanModules } from '../../core/derivation-observation-recorder';
+import { prepareRuntimeMutationGenerationCode } from '../../gate-runtime/runtime-mutation-generation';
+import { prepareTaskEventSummaryCode } from '../../gate-runtime/timeline/task-events-io-summary';
+import { isAuthenticatedReviewRestartEvent } from '../../gate-runtime/review/review-restart-boundary';
 import { captureLoadedCodeClosure } from '../../core/loaded-code-identity';
 import { resolveTaskModeArtifactPath } from '../task-mode/task-mode-artifact';
 /** Native composition. Full replay is reachable only from captureClosedReviewGate(). */
@@ -66,6 +70,11 @@ function captureProducerModules() {
     const roots = ['./review-closed-cycle-capture', './review-closed-cycle-storage', './review-closed-cycle-summary',
         './review-history-integrity', '../next-step/next-step-review-cycle-guard-attempts', './review-attempt-artifact-index'];
     for (const modulePath of roots) require(modulePath);
+    // Prepare the native writer's fixed lazy code edges before binding the complete closure.
+    // This performs no evidence reads and does not replace any freshness or code check.
+    prepareClosedObservationPlanModules();
+    prepareRuntimeMutationGenerationCode();
+    prepareTaskEventSummaryCode();
     return captureLoadedCodeClosure('garda.closed-review-code.v1', roots.map(modulePath => require.resolve(modulePath)));
 }
 function timelineEvent(entry: CapturedClosedReviewEvent): TimelineEventEntry {
@@ -108,7 +117,8 @@ function nativeSourceAllowed(request: ClosedReviewGateCaptureRequest, source: Ca
     }
     if (request.kind === 'restart') {
         if (!['REVIEW_CYCLE_RESTARTED', 'COHERENT_CYCLE_RESTARTED'].includes(String(raw.event_type))
-            || raw.actor !== 'orchestrator' || raw.outcome !== 'PASS') throw new Error('History restart source is not native success.');
+            || raw.actor !== 'orchestrator' || raw.outcome !== 'PASS'
+            || !isAuthenticatedReviewRestartEvent(raw, request.taskId)) throw new Error('History restart source is not native success.');
         for (const [pathKey, shaKey] of [['restart_artifact_path', 'restart_artifact_sha256'], ['task_mode_path', 'task_mode_sha256'],
             ['preflight_path', 'preflight_sha256'], ['compile_evidence_path', 'compile_evidence_sha256']]) {
             const sourceFile = captureFile(path.resolve(request.repoRoot, String(details[pathKey] || ''))); files.push(sourceFile);
@@ -138,7 +148,8 @@ function captureInputs(repoRoot: string, eventsRoot: string, taskId: string, con
         producerBundleSha256: code.sha256, producerPolicySha256: closedReviewDigest(JSON.stringify(['garda.closed-review-capture.v1',
             workflow.bytes === null ? null : closedReviewDigest(workflow.bytes), config])),
         taskModeBytes: taskMode.bytes, preflightBytes: preflight.bytes, config, fingerprints,
-        restartEventSha256: queryCapture.latestRestart?.sha256 ?? null, query: queryCapture.query });
+        restartEventSha256: queryCapture.latestRestart && isAuthenticatedReviewRestartEvent(queryCapture.latestRestart.record, taskId)
+            ? queryCapture.latestRestart.sha256 : null, query: queryCapture.query });
     return { queryCapture, timelinePath, timelineSha, auth, reviewsRoot, files, binding, config, fingerprints, preflight, code };
 }
 

@@ -730,7 +730,7 @@ describe('next-step refactor contract baseline', () => {
         );
     });
 
-    it('reads one large reviews index snapshot without per-lane directory scans', () => {
+    it('does not load the unrelated large reviews index or scan history for task-start navigation', () => {
         const repoRoot = makeContractRepo();
         seedStartedTask(repoRoot, TASK_ID);
         const root = reviewsRoot(repoRoot);
@@ -753,6 +753,7 @@ describe('next-step refactor contract baseline', () => {
 
         const fsModule = require('node:fs') as typeof fs;
         const originalReadFileSync = fsModule.readFileSync;
+        const originalOpenSync = fsModule.openSync;
         const originalReaddirSync = fsModule.readdirSync;
         let indexReadCount = 0;
         let reviewsDirectoryReadCount = 0;
@@ -762,6 +763,10 @@ describe('next-step refactor contract baseline', () => {
             }
             return originalReadFileSync(targetPath, options as never);
         }) as typeof fsModule.readFileSync;
+        fsModule.openSync = ((targetPath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+            if (path.resolve(String(targetPath)) === path.resolve(indexPath)) indexReadCount += 1;
+            return originalOpenSync(targetPath, flags, mode);
+        }) as typeof fsModule.openSync;
         fsModule.readdirSync = ((targetPath: fs.PathLike, options?: unknown) => {
             if (path.resolve(String(targetPath)) === path.resolve(root)) {
                 reviewsDirectoryReadCount += 1;
@@ -773,10 +778,11 @@ describe('next-step refactor contract baseline', () => {
             assert.equal(result.next_gate, 'record-strict-decomposition-decision');
         } finally {
             fsModule.readFileSync = originalReadFileSync;
+            fsModule.openSync = originalOpenSync;
             fsModule.readdirSync = originalReaddirSync;
         }
 
-        assert.equal(indexReadCount, 1);
+        assert.equal(indexReadCount, 0);
         assert.equal(reviewsDirectoryReadCount, 0);
     });
 

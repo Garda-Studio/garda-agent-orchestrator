@@ -1,4 +1,5 @@
 /** Compact query projection fed only inside the canonical full integrity pass. */
+import { isAuthenticatedReviewRestartEvent } from '../review/review-restart-boundary';
 import { createHash } from 'node:crypto';
 import type { TaskEventAppendState } from './task-events-io-types';
 export interface ReviewSourceIdentity { sha256: string; lineOrdinal: number; }
@@ -73,7 +74,8 @@ export function beginClosedReviewVerifiedPass(taskId: string) {
                 }
             } else if (eventType === 'REVIEW_CYCLE_RESTARTED' || eventType === 'COHERENT_CYCLE_RESTARTED') {
                 latestRestart = captured;
-                if (record.event_type === eventType && sha(nativeSha) && record.actor === 'orchestrator' && record.outcome === 'PASS') unclosedReviews.length = 0;
+                if (record.event_type === eventType && sha(nativeSha) && record.actor === 'orchestrator' && record.outcome === 'PASS'
+                    && isAuthenticatedReviewRestartEvent(record, taskId)) unclosedReviews.length = 0;
             }
         },
         finish(verified: boolean): ClosedReviewVerifiedCapture | null {

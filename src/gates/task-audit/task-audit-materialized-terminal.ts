@@ -1,3 +1,7 @@
+import { prepareRuntimeMutationGenerationCode } from '../../gate-runtime/runtime-mutation-generation';
+import { prepareTaskEventSummaryCode } from '../../gate-runtime/timeline/task-events-io-summary';
+import { prepareClosedObservationPlanModules } from '../../core/derivation-observation-recorder';
+import { prepareBoundarySourceEvidenceModules } from '../../core/trust-boundary-source-evidence';
 import { captureLoadedCodeClosure } from '../../core/loaded-code-identity';
 /** Optional materialized acceleration. Every existing checked file is still read and hashed. */
 import * as path from 'node:path';
@@ -79,6 +83,12 @@ function rendererSemanticsBinding(): RendererSemanticsBinding {
         };
         registerInvocationDependency(parameters, assertParametersCurrent);
         for (const id of RENDERER_MODULES) { countNextStepWork('visit:terminal-materialized:renderer-root'); require(id); }
+        // Native quality acquisition can reach these fixed lazy edges after a projection miss.
+        // Prepare code only; all input reads, identity checks and final validation stay live.
+        prepareClosedObservationPlanModules();
+        prepareBoundarySourceEvidenceModules();
+        prepareRuntimeMutationGenerationCode();
+        prepareTaskEventSummaryCode();
         const code = captureLoadedCodeClosure('garda.terminal-renderer-code.v1', RENDERER_MODULES.map(id => require.resolve(id)));
         return Object.freeze({ sha256: digest(JSON.stringify([VERSION, code.sha256, parameters.text])),
             assertCurrent() { code.assertCurrent(); assertParametersCurrent(); } });

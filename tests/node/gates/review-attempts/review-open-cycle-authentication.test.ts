@@ -16,7 +16,17 @@ import { publishClosedReviewHistory } from '../../../../src/gates/review-attempt
 import { readReviewCycleGuardEvaluation } from '../../../../src/gates/next-step/next-step-review-cycle-guard-evaluation';
 
 const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
-for (const refreshPreflight of [false, true]) test('earlier same-cycle receipts remain authenticated, preflight refresh=' + refreshPreflight, () => {
+const scenarios: { name: string; refreshPreflight?: boolean; restart?: string; field?: string; replacement?: string; closed?: boolean }[] = [
+    { name: 'same preflight' }, { name: 'refreshed preflight', refreshPreflight: true }
+];
+for (const restart of ['REVIEW_CYCLE_RESTARTED', 'COHERENT_CYCLE_RESTARTED']) {
+    for (const field of ['task_id', 'event_type', 'status']) {
+        scenarios.push({ name: restart + ' missing ' + field, restart, field });
+        scenarios.push({ name: restart + ' wrong ' + field, restart, field, replacement: 'wrong' });
+    }
+    scenarios.push({ name: restart + ' authenticated boundary', restart, closed: true });
+}
+for (const scenario of scenarios) test('earlier review receipt authentication: ' + scenario.name, () => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-open-cycle-'));
     try {
         execFileSync('git', ['init', '--quiet', repoRoot]);
@@ -36,7 +46,17 @@ for (const refreshPreflight of [false, true]) test('earlier same-cycle receipts 
         classify(0);
         const receipts: string[] = [];
         for (let attempt = 0; attempt < 2; attempt++) {
-            if (refreshPreflight && attempt === 1) classify(1);
+            if (scenario.refreshPreflight && attempt === 1) classify(1);
+            if (scenario.restart && attempt === 1) {
+                const details: Record<string, unknown> = { task_id: taskId, event_type: scenario.restart,
+                    status: 'PASSED', invalidated_review_types: ['code'] };
+                if (scenario.field) {
+                    if (scenario.replacement) details[scenario.field] = scenario.replacement;
+                    else delete details[scenario.field];
+                }
+                appendMandatoryTaskEvent(bundle, taskId, scenario.restart, 'PASS', 'Restart between native records', details,
+                    { actor: 'orchestrator' });
+            }
             const body = '## Verdict\nREVIEW PASSED\n\nEvidence ' + attempt + '\n', digest = sha(body);
             const artifact = path.join(reviews, taskId + '-code-artifact-' + digest + '.md');
             fs.writeFileSync(artifact, body);
@@ -71,8 +91,13 @@ for (const refreshPreflight of [false, true]) test('earlier same-cycle receipts 
         const changed = sample(true), native = sample(false);
         assert.equal(native.result.evaluation.should_block, true);
         assert.ok(native.result.evaluation.violations.some(violation => violation.metric === 'timeline_integrity'));
-        assert.deepEqual(changed.result, native.result, 'no authenticated restart closed the first attempt');
-        assert.equal(changed.accepted, 0, 'a compact result cannot skip another attempt in the same cycle');
+        if (scenario.closed) {
+            assert.equal(changed.accepted, 1, 'A8 permits unused archives only after an authenticated native boundary');
+            assert.equal(changed.result.evaluation.should_block, false);
+        } else {
+            assert.deepEqual(changed.result, native.result, 'no authenticated restart closed the first attempt');
+            assert.equal(changed.accepted, 0, 'a compact result cannot skip another attempt in the same cycle');
+        }
         fs.writeFileSync(receipts[0], original);
         assert.equal(sample(true).accepted, 1);
     } finally { fs.rmSync(repoRoot, { recursive: true, force: true }); }

@@ -2,10 +2,9 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-export function isAuthenticatedReviewRestartBoundary(
+export function isAuthenticatedReviewRestartEvent(
     event: Record<string, unknown>,
     taskId: string,
-    reviewType: string,
     afterTaskSequence = 0
 ): boolean {
     const eventType = String(event.event_type || '').trim();
@@ -25,6 +24,18 @@ export function isAuthenticatedReviewRestartBoundary(
     ) {
         return false;
     }
+    return true;
+}
+
+export function isAuthenticatedReviewRestartBoundary(
+    event: Record<string, unknown>,
+    taskId: string,
+    reviewType: string,
+    afterTaskSequence = 0
+): boolean {
+    if (!isAuthenticatedReviewRestartEvent(event, taskId, afterTaskSequence)) return false;
+    const eventType = String(event.event_type || '').trim();
+    const details = isPlainRecord(event.details) ? event.details : {};
     if (eventType === 'COHERENT_CYCLE_RESTARTED') {
         return true;
     }

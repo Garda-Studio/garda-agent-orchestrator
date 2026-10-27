@@ -383,7 +383,7 @@ function resolveCompiledTestTarget(
     return null;
 }
 
-function resolveSelectedTestFiles(buildResult: BuildResult, compiledTestFiles: string[], fileTargets: string[]): string[] {
+export function resolveSelectedTestFiles(buildResult: BuildResult, compiledTestFiles: string[], fileTargets: string[]): string[] {
     if (fileTargets.length === 0) {
         return compiledTestFiles;
     }

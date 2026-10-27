@@ -5,7 +5,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { collectAuthenticatedHistorySamples, type HistorySample } from './next-step-authenticated-samples-fixture';
-import { comparableHistoryCounters, measureHistoryRoute } from './next-step-authenticated-budget-fixture';
+import { assertStableAuthenticatedArtifactWork, comparableHistoryCounters, measureHistoryRoute } from './next-step-authenticated-budget-fixture';
 import { createAuthenticatedNextStepHistoryFixture } from './next-step-authenticated-history-fixture';
 import { buildTaskAuditSummary } from '../../../../src/gates/task-audit/task-audit-summary';
 import { readReviewCycleGuardEvaluation } from '../../../../src/gates/next-step/next-step-review-cycle-guard-evaluation';
@@ -85,9 +85,8 @@ test('Q1 authenticated history budget uses real navigation routes', { timeout: 3
     context.diagnostic('Q1 ' + mode + ' growing counters: ' + JSON.stringify(growing));
     context.diagnostic('Q1 ' + mode + ' remaining counter differences: ' + JSON.stringify(changed));
     await context.test(mode + ': authenticated artifact reads and parsing do not multiply with closed cycles', () => {
-        const repeatedArtifactWork = changed.filter(entry => /^(artifact_bytes|artifact_json_parse):/u.test(entry.counter)
-            || /^payload_read:.*(?:receipt|findings-validation|findings-disposition|remediation-baseline)/u.test(entry.counter));
-        assert.deepEqual(repeatedArtifactWork, []);
+        for (let index = 0; index < short.routes.length; index++)
+            assertStableAuthenticatedArtifactWork(short.routes[index], long.routes[index]);
         for (const sample of samples.filter(sample => sample.mode === mode)) for (const route of sample.routes) {
             assert.equal(route.counters['timeline_payload_read:task'], 1);
             assert.equal(route.counters.timeline_parse, 1);

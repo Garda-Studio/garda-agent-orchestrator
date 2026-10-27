@@ -219,3 +219,31 @@ test('Q5 native publisher rejects loaded reducer A after its executable becomes 
         { encoding: 'utf8', timeout: 30_000 });
     assert.equal(result.status, 0, result.stdout + result.stderr);
 });
+
+
+test('Q5 cold navigation consumes the native producer outcome across processes', async t => {
+    const cold = (state: { repoRoot: string; taskId: string }, nextGate: string) => {
+        const script = [
+            'const {resolveNextStep}=require(' + JSON.stringify(require.resolve('../../../../src/gates/next-step')) + ');',
+            'const {withNextStepMeasurement}=require(' + JSON.stringify(require.resolve('../../../../src/core/next-step-measurement')) + ');',
+            'const {withPersistentDerivationMode}=require(' + JSON.stringify(require.resolve('../../../../src/core/persisted-derivation-mode')) + ');',
+            'let work;const result=withPersistentDerivationMode("disabled",()=>withNextStepMeasurement(()=>resolveNextStep(' + JSON.stringify({ repoRoot: state.repoRoot, taskId: state.taskId }) + '),value=>work=value.work));',
+            'process.stdout.write(JSON.stringify({nextGate:result.next_gate,accepted:work["closed-review-summary:accepted"]||0}));'
+        ].join('\n');
+        const child = spawnSync(process.execPath, ['-r', require.resolve('../../../../src/bin/garda/derivation-source-receipts'), '-e', script],
+            { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+        assert.equal(child.status, 0, child.stdout + child.stderr);
+        assert.deepEqual(JSON.parse(child.stdout), { nextGate, accepted: 1 }, 'fresh navigation must consume the authenticated producer result');
+    };
+    const fixture = await createAuthenticatedNextStepHistoryFixture(1, 1, active => cold(active, 'record-review-result'));
+    t.after(() => fs.rmSync(fixture.repoRoot, { recursive: true, force: true }));
+    cold(fixture, 'required-reviews-check');
+    const receipt = fixture.historicalArtifacts.find(file => /-receipt-[a-f0-9]{64}\.json$/u.test(file));
+    assert.ok(receipt);
+    const bytes = fs.readFileSync(receipt);
+    try {
+        fs.appendFileSync(receipt, ' ');
+        cold(fixture, 'required-reviews-check');
+        assert.equal(buildTaskAuditSummary(fixture).status, 'BLOCKED', 'A8 archive corruption remains rejected by full audit');
+    } finally { fs.writeFileSync(receipt, bytes); }
+});

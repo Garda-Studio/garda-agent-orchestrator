@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { formatNextStepText } from '../../../../src/gates/next-step/next-step-command-formatters';
 import * as path from 'node:path';
@@ -71,4 +72,16 @@ export function comparableHistoryCounters(measurement: HistoryRouteMeasurement):
     // Full timeline integrity still consumes all bytes/events exactly once.
     return Object.fromEntries(Object.entries(measurement.counters)
         .filter(([key]) => key !== 'timeline_bytes' && key !== 'timeline_events'));
+}
+
+
+/** Permanent guard for redundant native artifact acquisition, independent of mandatory input byte sizes. */
+export function assertStableAuthenticatedArtifactWork(short: HistoryRouteMeasurement, long: HistoryRouteMeasurement): void {
+    const a = short.counters, b = long.counters;
+    for (const counter of new Set([...Object.keys(a), ...Object.keys(b)])) {
+        if (/^(artifact_bytes|artifact_json_parse):/u.test(counter)
+            || /^payload_read:.*(?:receipt|findings-validation|findings-disposition|remediation-baseline)/u.test(counter)) {
+            assert.equal(b[counter] || 0, a[counter] || 0, long.route + ': redundant artifact work: ' + counter);
+        }
+    }
 }

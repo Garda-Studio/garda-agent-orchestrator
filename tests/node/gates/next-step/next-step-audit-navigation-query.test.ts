@@ -17,7 +17,14 @@ function assertNativeStatus(fixture: AuthenticatedHistoryFixture) {
     assert.equal(query?.ordered, true, 'The real fixture must exercise the verified ordered view.');
     const full = buildTaskAuditSummary(fixture);
     let measurement: NextStepMeasurement | undefined;
-    const navigation = withNextStepMeasurement(() => withInvocationReadObservation(() => buildNavigationTaskAuditSummary(fixture)),
+    const navigation = withNextStepMeasurement(() => withInvocationReadObservation(() => {
+        const summary = buildNavigationTaskAuditSummary(fixture);
+        // This comparison consumes report fields, so materialize them while their
+        // checked invocation is still alive; the escape rejection stays enforced.
+        assert.deepEqual(summary.final_closeout.review_integrity_attestation, full.final_closeout.review_integrity_attestation);
+        assert.deepEqual(summary.final_closeout.orchestrator_defect_capture, full.final_closeout.orchestrator_defect_capture);
+        return summary;
+    }),
         value => { measurement = value; });
     for (const key of ['status', 'integrity_status', 'events_count', 'first_event_utc', 'last_event_utc', 'gates',
         'blockers', 'required_reviews', 'review_coverage_summary'] as const) {
@@ -46,7 +53,9 @@ test('Q5 real active required-review and completed audits preserve complete stat
         const full = buildTaskAuditSummary(fixture);
         const navigation = withInvocationReadObservation(() => {
             assert.equal(readTaskTimelineNavigationQuery(path.join(bundle, 'runtime/task-events', fixture.taskId + '.jsonl'), fixture.taskId)?.ordered, true);
-            return buildNavigationTaskAuditSummary(fixture);
+            const summary = buildNavigationTaskAuditSummary(fixture);
+            assert.deepEqual(summary.final_closeout.review_integrity_attestation, full.final_closeout.review_integrity_attestation);
+            return summary;
         });
         assert.equal(navigation.status, 'BLOCKED');
         assert.deepEqual(navigation.final_closeout.review_integrity_attestation, full.final_closeout.review_integrity_attestation);

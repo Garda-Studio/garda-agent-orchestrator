@@ -85,3 +85,8 @@ export function readBoundarySourceEvidence(options: {
     });
     return { sourceEvidence, violations };
 }
+
+/** Stabilize this fixed lazy loader edge before capturing transitive executable identity. */
+export function prepareBoundarySourceEvidenceModules(): void {
+    require('./project-validation-identity');
+}

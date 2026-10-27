@@ -4,6 +4,7 @@ import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { withInvocationReadObservation } from '../../../../src/core/invocation-read-observation';
 import { formatFinalCloseoutMarkdown, formatFinalUserReport } from '../../../../src/gates/task-audit/task-audit-summary-renderers';
 import { synchronizeFinalCloseoutArtifacts } from '../../../../src/gates/task-audit/task-audit-summary-closeout-sync';
@@ -106,6 +107,32 @@ test('Q7 real active, required-review, DONE and drift routes preserve complete n
     fs.appendFileSync(path.join(fixture.repoRoot, fixture.files[0]), 'export const q7drift = true;\n');
     const drift = assertEquivalent(fixture); assert.equal(drift.result.next_gate, 'post-done-drift'); assertNoReportHistory(drift.work);
     restore();
+    await t.test('Q7 cold terminal navigation preserves native results with present or missing projection', () => {
+        try {
+            for (const projectionPresent of [true, false]) {
+                for (const drifted of [false, true]) {
+                    restore();
+                    if (!projectionPresent) fs.rmSync(paths(fixture).projection);
+                    if (drifted) fs.appendFileSync(path.join(fixture.repoRoot, fixture.files[0]), 'export const coldDrift = true;\n');
+                    const expected = resolveNextStep(fixture);
+                    assert.equal(drifted ? expected.next_gate : expected.status, drifted ? 'post-done-drift' : 'DONE');
+                    const script = [
+                        'const {resolveNextStep}=require(' + JSON.stringify(require.resolve('../../../../src/gates/next-step')) + ');',
+                        'const {withPersistentDerivationMode}=require(' + JSON.stringify(require.resolve('../../../../src/core/persisted-derivation-mode')) + ');',
+                        'const {withNextStepMeasurement}=require(' + JSON.stringify(require.resolve('../../../../src/core/next-step-measurement')) + ');',
+                        'let work;const result=withPersistentDerivationMode("disabled",()=>withNextStepMeasurement(()=>resolveNextStep(' + JSON.stringify({ repoRoot: fixture.repoRoot, taskId: fixture.taskId }) + '),value=>work=value.work));',
+                        'process.stdout.write(JSON.stringify({result,selected:work.terminal_materialized_projection_selected||0}));'
+                    ].join('\n');
+                    const child = spawnSync(process.execPath, ['-r', require.resolve('../../../../src/bin/garda/derivation-source-receipts'), '-e', script],
+                        { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+                    assert.equal(child.status, 0, child.stdout + child.stderr);
+                    const actual = JSON.parse(child.stdout) as { result: NextStepResult; selected: number };
+                    assert.deepEqual(stable(actual.result), stable(expected));
+                    assert.equal(actual.selected, projectionPresent ? 1 : 0, 'fresh process selects the native projection when present');
+                }
+            }
+        } finally { restore(); }
+    });
     await t.test('Q7 materialized old ledger without new projection uses existing checks without history rebuild', () => {
         try {
             fs.rmSync(paths(fixture).projection, { force: true });

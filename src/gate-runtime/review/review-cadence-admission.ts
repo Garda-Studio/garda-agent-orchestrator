@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { isPlainRecord } from '../../core/records';
 import { redactSensitiveData, sha256RedactedJsonPayload } from '../../core/redaction';
 import { countNextStepWork } from '../../core/next-step-measurement';
-import { buildEventIntegrityHash, inspectTaskEventFile } from '../task-events';
+import { buildEventIntegrityHash, inspectTaskEventFile } from '../timeline/task-events';
 import { assertTaskTimelineReadSnapshotCurrent,
     readTaskTimelineFileMetadataSnapshot, captureTaskTimelineReadSnapshotByteLength, assertTaskTimelineAppendPrecondition, withTaskTimelineFileReadSnapshot } from '../timeline/task-timeline-read-snapshot';
 import { decodeClosedReviewEnvelope, encodeClosedReviewEnvelope, resolveClosedReviewAuthentication,

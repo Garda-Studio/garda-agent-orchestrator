@@ -90,8 +90,8 @@ function resolveLaunchWithoutUnusedIgnoreReads(repoRoot: string): ReturnType<typ
     try {
         const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
         assert.equal(ignoreCalls, 2, 'full route retains only the two required ignored-file queries');
-        assert.equal(trackedWorkspaceReadCalls, 1, 'resolveNextStep shares one successful tracked workspace read');
-        assert.equal(untrackedWorkspaceReadCalls, 1, 'resolveNextStep shares one successful untracked workspace read');
+        assert.equal(trackedWorkspaceReadCalls, 2, 'one shared tracked workspace observation plus the required A1 final freshness read');
+        assert.equal(untrackedWorkspaceReadCalls, 2, 'one shared untracked workspace observation plus the required A1 final freshness read');
         return result;
     } finally {
         childProcess.spawnSync = originalSpawnSync;

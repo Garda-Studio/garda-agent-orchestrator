@@ -1184,9 +1184,9 @@ describe('gates/next-step startup routing', () => {
             const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
 
             assert.equal(result.next_gate, 'classify-change', result.reason);
-            assert.equal(gitCommands.filter((args) => args.includes('status')).length, 1);
-            assert.equal(gitCommands.filter((args) => args.includes('config')).length, 1);
-            assert.equal(gitCommands.filter((args) => args.includes('--numstat')).length, 1);
+            assert.equal(gitCommands.filter((args) => args.includes('status')).length, 2, 'one shared observation plus the required A1 final freshness read');
+            assert.equal(gitCommands.filter((args) => args.includes('config')).length, 2, 'one shared observation plus the required A1 final freshness read');
+            assert.equal(gitCommands.filter((args) => args.includes('--numstat')).length, 2, 'one shared observation plus the required A1 final freshness read');
         } finally {
             childProcessModule.spawnSync = originalSpawnSync;
             childProcessModule.execFileSync = originalExecFileSync;

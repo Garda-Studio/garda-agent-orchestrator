@@ -1,11 +1,12 @@
 # Deferred next-step optimizations
 
-Round 6b supersedes the P2, P3 and P5 deferral decisions below; those sections
-retain historical analysis, not reasons to defer the accepted implementation.
+Round 6b supersedes the original P2, P3 and P5 deferral decisions. This document
+describes the implemented boundaries and the remaining concrete fallback cases.
 Within an invocation, consumers may share one checked observation, provided the
 A1 final dependency check rejects changed inputs before output and effects.
-Across invocations, only an authenticated Q4 record bound to freshly checked
-input digests and all relevant identities may supply a derived result. The P6
+Across invocations, Q4 recomputation records require authentication, freshly
+checked input digests and all relevant identities. Gate-owned closed-cycle
+outcomes have the separate navigation boundary described below. The P6
 cross-invocation timeline checkpoint remains deferred.
 
 ## Q2: checked invocation observations
@@ -14,8 +15,7 @@ Read-only navigation now shares scope path and byte observations, equivalent Git
 reads and separate ACL evidence for each inspected object. Retained timeline and
 review owners participate in the final dependency check even after their nested
 snapshot closes. Each invocation starts fresh; metadata is not a cross-call cache.
-The real 64-file fixture performs 64 scope observations and 64 hashes with one or
-five review lanes. Standalone gates retain their existing read paths.
+Standalone gates retain their existing read paths.
 
 The new observation does not span the executing resolver of --execute-effects.
 A concrete native WIP regression has a required Git clean filter that keeps the
@@ -65,82 +65,62 @@ existing callback checks remain. Current receipt, context, report and classifica
 inputs retain their native checks and final byte/path dependencies. Initial-full
 contracts keep their original no-timeline path. No cross-call verification is cached.
 
-## P2: navigation audit projection
+## Q5: gate-owned closed-cycle outcomes
 
-Round 6 consumer inspection at 537beb12 found that the audit is consumed on every
-normal navigation route, including routes that do not consume the final report.
-`resolveNextStepDecisionRoute` reads:
+Native gates authenticate review evidence before publishing a navigation summary.
+Only an authenticated restart with matching task, event and status bindings can
+close earlier attempts. Navigation checks the summary's current authority and
+continues authenticating open-cycle evidence and every older artifact explicitly
+referenced by a current rule. Missing or invalid acceleration follows the native
+path; it is not evidence of success.
 
-- lifecycle gate outcomes for full suite, compile, required reviews, completion,
-  startup and preflight decisions;
-- required review flags and scope category for launch planning and trust;
-- `status` in the common result's `auditStatus` (text and JSON);
-- final-report status/blocker and all blockers for terminal task routing;
-- the full final-closeout artifact for retained final-report comparison.
+Completion and explicit audit still validate the full closed archive. Historical
+Markdown used by the current quality-checklist cadence rule also remains a live
+input when old events lack signed cadence admissions. Inferring a pass from an
+unsigned event status alone would miss a FAILED verdict in its referenced report.
+The existing bounded legacy cadence window is retained.
 
-`buildTaskAuditSummaryFromSnapshot` derives status from lifecycle failures,
-coverage, required-review evidence, integrity, project-memory evidence,
-post-completion drift, supporting-gate gaps and finalization-lock state. Removing
-the audit on a pre-review or launch route is therefore not output preserving.
-Report-only calculations also perform authenticated artifact and workspace
-reads. It has not been established that suppressing them preserves every
-fail-closed exception and snapshot-boundary check.
+## Q7: navigation and report projections
 
-Retain the current implementation. A future change must first separate a common
-authenticated evidence collection from projections. Navigation and full audit
-must consume the same evidence and identical status reducer; full-report-only
-formatting may then be lazy within the authenticated invocation. Never allow a
-lazy getter to escape its snapshot or run after a navigation effect mutates the
-workspace. Compare full text/JSON, exceptions, changed-source rejection,
-artifact-generation changes, finalization locks and active/completed paths,
-including a mutation between consumers. Counts must demonstrate that the
-expensive evidence graph is collected once rather than merely renaming the
-full audit operation. No audit check or output field is removed by this deferral.
+Navigation retains the authenticated evidence and status/blocker reducers it
+consumes. Report-only formatting is lazy within the checked invocation; it cannot
+escape its owner. Current terminal materializations can use an authenticated
+projection bound to the closeout JSON, Markdown, final report, ledger bytes and
+complete renderer code/runtime identity. Every current file is still checked.
+Missing or invalid acceleration follows the native validation path.
 
-## P3: broader derived-review memoization
+A concrete fallback remains when an existing materialized report has neither a
+usable projection nor its ledger. Adding an otherwise unused property to the
+closeout JSON leaves renderer output unchanged, but the native exact-current-summary
+comparison rejects the altered JSON. That exact comparison and its history work
+remain on this fallback. Tasks without a materialized result retain their existing
+terminal behavior.
 
-The implemented cache covers JSON parsing of the private immutable payload
-captured by the existing review-artifact snapshot. Every access still enters
-`readReviewArtifactCanonicalSnapshot`; invalidation, path resolution, file
-identity, publication generation and read budgets remain authoritative. Buffers
-never escape (the public byte reader copies them); new snapshots use new buffers.
-Returned JSON remains a fresh deeply frozen value, preserving existing identity
-semantics. Invalid JSON is cached only for those same captured bytes.
+## Q4: authenticated persisted derivations
 
-Memoizing whole review-state, coverage, validation-obligation, quality-analysis
-or remediation-authority functions is deferred. Their explicit arguments do not
-contain every dependency: they also read source bytes, current task-mode and
-preflight authority, command sources, timeline restart provenance and other
-artifacts. A key of path/mtime or serialized arguments is insufficient. First
-extract pure derivations accepting an immutable authenticated evidence graph,
-including exact source content and the active/completed inspection mode; retain
-all boundary checks on every access. Include mutation-between-consumer tests
-for every captured dependency before adding such a cache.
+The implemented records cover fixed quality parsing and reduction operations.
+Native acquisition of source, context and authority evidence remains live.
+Authenticated private records bind workspace, task, lane, cycle, mode, parameters,
+policy/plan and loaded code to the observed dependency digests. Readers validate
+current observations before selecting a result; invalid, missing or mismatched
+records take the native derivation path. A selected record's dependencies also
+participate in the invocation's final check.
 
-## P5: filesystem and process memoization
+The dependency recorder supports checked bytes, absence, filtered directory names,
+file kind/link identity, process results, ACL verdicts and verified timeline
+queries. Unrecorded I/O or an unsealed callback cannot publish a reusable result.
+Code-only preparation resolves native lazy imports before binding the complete
+transitive code graph, so a fresh CLI process can consume a native producer's
+record. It does not waive code, input or final freshness checks.
 
-The initial counters covered only Git helper calls and icacls, omitting direct
-Git calls and native SID probes. Independent review rejected the resulting claim
-that duplicate process work was already bounded. Measurement now captures actual
-synchronous Node process boundaries, keyed by command, arguments, working
-directory, options and environment (only their digest is emitted). Duplicate
-process work remains an open optimization; no process cache is introduced.
+## Superseded Round 6 decisions
 
-Retain `getSafeWorktreePathState` and `fileSha256` semantics. The former resolves
-the root and target, checks link targets and rechecks symlink identity after
-reading. The latter checks expected identity, opens a descriptor, hashes all
-bytes, and compares descriptor and path identity before/after the read. Caching
-by pathname or metadata would replace fresh byte/path observations with a new
-freshness assumption. The hard requirement to miss on every input change has
-not been proven for that change, including parent junction replacement,
-same-size writes, timestamp restoration and permissions changing between reads.
-
-Future work may share immutable bytes already captured by authenticated readers,
-while retaining fresh descriptor/path/authority checks, or introduce a writer
-exclusion protocol covering every dependent source and path component. A cache
-must include hash options, expected identity, resolved root, every symlink/junction
-component, target bytes and authorization dependencies. It must preserve the
-existing fail-closed result if any of them change during a navigation call.
+The original P2/P3/P5 deferrals described consumers that repeatedly acquired
+implicit inputs and checked freshness independently. Round 6b replaces those
+premises with authenticated invocation observations, immutable derivations and the
+final dependency check described above. Those original deferrals do not apply to
+the implemented work. Cross-call reuse still requires current byte and identity
+validation; pathname, file metadata or serialized arguments alone are not proof.
 
 ## P6: cross-call incremental timeline verification
 

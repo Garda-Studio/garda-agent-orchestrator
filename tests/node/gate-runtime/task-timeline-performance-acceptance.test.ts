@@ -25,7 +25,10 @@ const SCENARIO_HEAP_GROWTH_SAMPLE_BUDGET_BYTES = 2 * 1024 * 1024;
 const SCENARIO_HEAP_GROWTH_PAYLOAD_MULTIPLIER = 32;
 const OVERLAPPING_INVOCATION_COUNT = 2;
 // Direct seeding leaves the append index cold; its first reconstruction adds paired path checks.
-const COLD_APPEND_INDEX_AUTHORITY_CHECKS = 22;
+// The first integrity query checks the cadence-head container (one lstat)
+// and revalidates the route-query byte length (two lstat/two realpath).
+const INTEGRITY_QUERY_AUTHORITY_CHECKS = { lstat: 3, realpath: 2 };
+const COLD_APPEND_INDEX_AUTHORITY_CHECKS = { lstat: 25, realpath: 24 };
 const tempRoots: string[] = [];
 
 interface TimelineFixture {
@@ -78,6 +81,7 @@ interface BufferAllocationProbe {
     fullPayloadAllocationSizes: () => number[];
     fullPayloadConcatCount: () => number;
     fullPayloadStringConversionCount: () => number;
+    fullPayloadConversionsByAllocation: () => number[];
     restore: () => void;
 }
 
@@ -373,7 +377,13 @@ function installBufferAllocationProbe(fullPayloadThreshold: number): BufferAlloc
     const originalToString = bufferPrototype.toString;
     const originalSubarray = bufferPrototype.subarray;
     const originalSlice = bufferPrototype.slice;
-    const observedAllocations = new WeakSet<Buffer>();
+    const observedAllocations = new WeakMap<Buffer, { conversions: number }>();
+    const allocationConversions: Array<{ conversions: number }> = [];
+    const observeAllocation = (buffer: Buffer): void => {
+        const counter = { conversions: 0 };
+        observedAllocations.set(buffer, counter);
+        allocationConversions.push(counter);
+    };
     let fullPayloadAllocations = 0;
     const fullPayloadAllocationSizes: number[] = [];
     let fullPayloadConcats = 0;
@@ -384,7 +394,7 @@ function installBufferAllocationProbe(fullPayloadThreshold: number): BufferAlloc
         if (size >= fullPayloadThreshold) {
             fullPayloadAllocations += 1;
             fullPayloadAllocationSizes.push(size);
-            observedAllocations.add(result);
+            observeAllocation(result);
         }
         return result;
     }) as typeof Buffer.alloc;
@@ -394,7 +404,7 @@ function installBufferAllocationProbe(fullPayloadThreshold: number): BufferAlloc
         if (size >= fullPayloadThreshold) {
             fullPayloadAllocations += 1;
             fullPayloadAllocationSizes.push(size);
-            observedAllocations.add(result);
+            observeAllocation(result);
         }
         return result;
     }) as typeof Buffer.allocUnsafe;
@@ -403,7 +413,7 @@ function installBufferAllocationProbe(fullPayloadThreshold: number): BufferAlloc
         if (size >= fullPayloadThreshold) {
             fullPayloadAllocations += 1;
             fullPayloadAllocationSizes.push(size);
-            observedAllocations.add(result);
+            observeAllocation(result);
         }
         return result;
     }) as typeof Buffer.allocUnsafeSlow;
@@ -412,7 +422,7 @@ function installBufferAllocationProbe(fullPayloadThreshold: number): BufferAlloc
         const result = originalConcat(list, totalLength);
         if (resolvedLength >= fullPayloadThreshold) {
             fullPayloadConcats += 1;
-            observedAllocations.add(result);
+            observeAllocation(result);
         }
         return result;
     }) as typeof Buffer.concat;
@@ -421,13 +431,14 @@ function installBufferAllocationProbe(fullPayloadThreshold: number): BufferAlloc
         if (result.byteLength >= fullPayloadThreshold) {
             fullPayloadAllocations += 1;
             fullPayloadAllocationSizes.push(result.byteLength);
-            observedAllocations.add(result);
+            observeAllocation(result);
         }
         return result;
     }) as typeof Buffer.from;
     const observeView = (source: Buffer, view: Buffer): Buffer => {
-        if (observedAllocations.has(source) && view.byteLength >= fullPayloadThreshold) {
-            observedAllocations.add(view);
+        const counter = observedAllocations.get(source);
+        if (counter && view.byteLength >= fullPayloadThreshold) {
+            observedAllocations.set(view, counter);
         }
         return view;
     };
@@ -439,8 +450,10 @@ function installBufferAllocationProbe(fullPayloadThreshold: number): BufferAlloc
     } as typeof Buffer.prototype.slice;
     bufferPrototype.toString = function (this: Buffer, ...args: unknown[]) {
         // Native Windows ACL subprocess output is not a measured payload allocation.
-        if (observedAllocations.has(this)) {
+        const counter = observedAllocations.get(this);
+        if (counter) {
             fullPayloadStringConversions += 1;
+            counter.conversions += 1;
         }
         return Reflect.apply(originalToString, this, args) as string;
     } as typeof Buffer.prototype.toString;
@@ -450,6 +463,7 @@ function installBufferAllocationProbe(fullPayloadThreshold: number): BufferAlloc
         fullPayloadAllocationSizes: () => [...fullPayloadAllocationSizes],
         fullPayloadConcatCount: () => fullPayloadConcats,
         fullPayloadStringConversionCount: () => fullPayloadStringConversions,
+        fullPayloadConversionsByAllocation: () => allocationConversions.map(counter => counter.conversions),
         restore: () => {
             bufferModule.alloc = originalAlloc;
             bufferModule.allocUnsafe = originalAllocUnsafe;
@@ -475,6 +489,7 @@ test('payload conversion probe counts full buffer views and excludes unrelated n
         payload.subarray(0, 32).toString();
         assert.equal(probe.fullPayloadAllocationCount(), 1);
         assert.equal(probe.fullPayloadStringConversionCount(), 3);
+        assert.deepEqual(probe.fullPayloadConversionsByAllocation(), [3]);
     } finally {
         probe.restore();
     }
@@ -550,11 +565,11 @@ function assertStableScenarioLatency(samplesMs: number[]): { medianMs: number; p
 function assertAppendAuthoritySamples(
     samples: Array<{ lstat: number; realpath: number }>,
     baseline: { lstat: number; realpath: number },
-    coldIndexChecks: number
+    coldIndexChecks: { lstat: number; realpath: number }
 ): void {
     assert.deepEqual(samples, Array.from({ length: LATENCY_SAMPLE_COUNT }, (_, index) => ({
-        lstat: baseline.lstat + (index === 0 ? coldIndexChecks : 0),
-        realpath: baseline.realpath + (index === 0 ? coldIndexChecks : 0)
+        lstat: baseline.lstat + (index === 0 ? coldIndexChecks.lstat : 0),
+        realpath: baseline.realpath + (index === 0 ? coldIndexChecks.realpath : 0)
     })));
 }
 
@@ -672,10 +687,10 @@ test('multi-megabyte read-only invocation captures and allocates the canonical p
         assert.equal(allocationProbe.fullPayloadConcatCount(), 0);
         assert.equal(allocationProbe.fullPayloadStringConversionCount(), LATENCY_SAMPLE_COUNT);
         assert.deepEqual(authorityCallMetrics(ioProbe.metrics), {
-            pathLstatCount: 32 * LATENCY_SAMPLE_COUNT,
+            pathLstatCount: (32 + INTEGRITY_QUERY_AUTHORITY_CHECKS.lstat) * LATENCY_SAMPLE_COUNT,
             pathStatCount: 0,
             descriptorStatCount: 2 * LATENCY_SAMPLE_COUNT,
-            pathRealpathCount: 32 * LATENCY_SAMPLE_COUNT,
+            pathRealpathCount: (32 + INTEGRITY_QUERY_AUTHORITY_CHECKS.realpath) * LATENCY_SAMPLE_COUNT,
             pathExistsCount: 0,
             pathAccessCount: 0,
             pathReadlinkCount: 0,
@@ -763,7 +778,7 @@ function verifyCanonicalSelfWrite(context: TestContext, fixtureSize: 'small' | '
     const taskId = `T-PERFORMANCE-REPEATED-APPEND-${fixtureSize === 'small' ? 'SMALL' : 'LARGE'}`;
     const fixture = fixtureSize === 'small' ? seedSmallTimeline(taskId) : seedLargeIntegrityTimeline(taskId);
     const initialByteLength = fs.statSync(fixture.timelinePath).size;
-    const coldIndexChecks = fixtureSize === 'small' ? 0 : COLD_APPEND_INDEX_AUTHORITY_CHECKS;
+    const coldIndexChecks = fixtureSize === 'small' ? { lstat: 0, realpath: 0 } : COLD_APPEND_INDEX_AUTHORITY_CHECKS;
     if (fixtureSize === 'multi-megabyte') assert.ok(initialByteLength >= MULTI_MEGABYTE_FIXTURE_BYTES);
     withTaskTimelineReadSnapshot(fixture.eventsRoot, taskId, () => {
         assert.equal(inspectTaskEventFile(fixture.timelinePath, taskId).status, 'PASS');
@@ -820,10 +835,10 @@ function verifyCanonicalSelfWrite(context: TestContext, fixtureSize: 'small' | '
         assert.equal(allocationProbe.fullPayloadStringConversionCount(), generationByteLengths.length);
         assertAppendAuthoritySamples(appendAuthoritySamples, { lstat: 31, realpath: 30 }, coldIndexChecks);
         assert.deepEqual(authorityCallMetrics(ioProbe.metrics), {
-            pathLstatCount: (32 * LATENCY_SAMPLE_COUNT) + 4 + coldIndexChecks,
+            pathLstatCount: (32 * LATENCY_SAMPLE_COUNT) + 4 + INTEGRITY_QUERY_AUTHORITY_CHECKS.lstat + coldIndexChecks.lstat,
             pathStatCount: 2 * LATENCY_SAMPLE_COUNT,
             descriptorStatCount: (5 * LATENCY_SAMPLE_COUNT) + 2,
-            pathRealpathCount: (31 * LATENCY_SAMPLE_COUNT) + 4 + coldIndexChecks,
+            pathRealpathCount: (31 * LATENCY_SAMPLE_COUNT) + 4 + INTEGRITY_QUERY_AUTHORITY_CHECKS.realpath + coldIndexChecks.realpath,
             pathExistsCount: 0,
             pathAccessCount: 0,
             pathReadlinkCount: 0,
@@ -844,7 +859,7 @@ async function verifyOverlappingInvocations(context: TestContext, fixtureSize: '
     const taskId = `T-PERFORMANCE-OVERLAPPING-${fixtureSize === 'small' ? 'SMALL' : 'LARGE'}`;
     const fixture = fixtureSize === 'small' ? seedSmallTimeline(taskId) : seedLargeIntegrityTimeline(taskId);
     const initialByteLength = fs.statSync(fixture.timelinePath).size;
-    const coldIndexChecks = fixtureSize === 'small' ? 0 : COLD_APPEND_INDEX_AUTHORITY_CHECKS;
+    const coldIndexChecks = fixtureSize === 'small' ? { lstat: 0, realpath: 0 } : COLD_APPEND_INDEX_AUTHORITY_CHECKS;
     if (fixtureSize === 'multi-megabyte') assert.ok(initialByteLength >= MULTI_MEGABYTE_FIXTURE_BYTES);
     withTaskTimelineReadSnapshot(fixture.eventsRoot, taskId, () => {
         readTaskTimelineTextFile(fixture.timelinePath);
@@ -943,13 +958,22 @@ async function verifyOverlappingInvocations(context: TestContext, fixtureSize: '
         assert.equal(allocationProbe.fullPayloadAllocationCount(), generationByteLengths.length);
         assert.deepEqual(allocationProbe.fullPayloadAllocationSizes(), generationByteLengths);
         assert.equal(allocationProbe.fullPayloadConcatCount(), 0);
-        assert.equal(allocationProbe.fullPayloadStringConversionCount(), generationByteLengths.length);
+        // Every cycle still captures all three authenticated generations. The middle
+        // capture is used for append byte limits, not text; only a cold large-file
+        // append-index rebuild consumes that text. Count each allocation separately
+        // so an extra conversion cannot hide behind an unused generation.
+        const expectedConversions = generationByteLengths.map((_, index) => (
+            index % 3 !== 1 || (fixtureSize === 'multi-megabyte' && index === 1) ? 1 : 0
+        ));
+        assert.deepEqual(allocationProbe.fullPayloadConversionsByAllocation(), expectedConversions);
+        assert.equal(allocationProbe.fullPayloadStringConversionCount(),
+            expectedConversions.reduce<number>((sum, count) => sum + count, 0));
         assertAppendAuthoritySamples(appendAuthoritySamples, { lstat: 41, realpath: 40 }, coldIndexChecks);
         assert.deepEqual(authorityCallMetrics(ioProbe.metrics), {
-            pathLstatCount: (41 * LATENCY_SAMPLE_COUNT) + coldIndexChecks,
+            pathLstatCount: (41 * LATENCY_SAMPLE_COUNT) + coldIndexChecks.lstat,
             pathStatCount: 2 * LATENCY_SAMPLE_COUNT,
             descriptorStatCount: 9 * LATENCY_SAMPLE_COUNT,
-            pathRealpathCount: (40 * LATENCY_SAMPLE_COUNT) + coldIndexChecks,
+            pathRealpathCount: (40 * LATENCY_SAMPLE_COUNT) + coldIndexChecks.realpath,
             pathExistsCount: 0,
             pathAccessCount: 0,
             pathReadlinkCount: 0,

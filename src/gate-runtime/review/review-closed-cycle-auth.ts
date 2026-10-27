@@ -7,7 +7,7 @@ import { lstatFileIdentitySync } from '../../core/file-stat';
 import { bindContainedDestination, ensureContainedDirectory, writeContainedFile } from '../../core/contained-filesystem';
 import { readTransactionBytes } from '../../core/file-transaction-journal';
 import { readInvocationPathObservation, readInvocationFileContent, observedInvocationValue } from '../../core/invocation-file-observation';
-import { acquireFilesystemLock, releaseFilesystemLock } from '../task-events-locking';
+import { acquireFilesystemLock, releaseFilesystemLock } from '../timeline/task-events-locking';
 import { countNextStepWork } from '../../core/next-step-measurement';
 
 export const CLOSED_REVIEW_NAVIGATION_LIMIT = 256 * 1024;

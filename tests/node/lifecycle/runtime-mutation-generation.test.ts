@@ -374,7 +374,10 @@ const ROOT_WRITER_COVERAGE = Object.freeze({
 const JOURNAL_OWNER_PATTERN = /(?:withLifecycleRuntimeMutationGeneration(?:ForPath)?|beginRuntimeMutationGeneration)/u;
 // T-438 audited be35bac6's diagnostic text and legacy hook-name deltas; writer ownership is unchanged.
 // Audited 478a4f54's blocking append error-cause propagation; writer ownership and journal semantics are unchanged.
-const BOUNDED_MUTATION_SURFACE_SHA256 = '8e8010781eb2052329261c74e1e8320ec4c485f931c6ee24ea9e5feaaaaf7c64';
+// Round 6/6b audit since 7c41a217: review-artifact changes affect checked reads only.
+// Merge 5705a5a3 retires guides through existing contained removal, rollback and lifecycle ownership.
+// Install mode/text and update reporting retain their existing writer and generation owners.
+const BOUNDED_MUTATION_SURFACE_SHA256 = 'f31e79f2c1966d6c7f4df53def162b2ed6de860daecf03f06e4b7a072c1a9c8c';
 const READ_ONLY_FS_OPERATIONS = new Set([
     'access', 'accessSync', 'close', 'closeSync', 'exists', 'existsSync',
     'fstat', 'fstatSync', 'lstat', 'lstatSync', 'open', 'opendir', 'opendirSync',

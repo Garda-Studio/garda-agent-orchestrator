@@ -99,6 +99,13 @@ export async function collectAuthenticatedHistorySamples(cycles: number, lanes =
         assertNoReportHistory(route);
         assert.equal(route.counters.terminal_materialized_projection_selected, 1, 'drift selects the native owner projection');
     }
+    // Optional local Q8 diagnostic retention: reuse these actual native fixtures for
+    // mutation testing of the permanent guard without replaying every producing gate.
+    const retainedRoot = process.env.GARDA_Q1_RETAIN_FIXTURE_PATH;
+    if (retainedRoot) {
+        fs.mkdirSync(retainedRoot, { recursive: true });
+        fs.writeFileSync(path.join(retainedRoot, `cycles-${cycles}-lanes-${lanes}.json`), JSON.stringify(fixture));
+    }
     const mandatoryBytes = materializedBytes.json + materializedBytes.markdown + materializedBytes.report + materializedBytes.ledger;
     for (const route of [...done, ...drift]) assert.equal(route.counters.terminal_materialized_bytes_hashed, mandatoryBytes,
         route.route + ': every current materialized byte remains authenticated');

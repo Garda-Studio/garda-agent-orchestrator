@@ -1,10 +1,10 @@
 import { describe, it, before, after } from 'node:test';
+import { withNextStepMeasurement, type NextStepMeasurement } from '../../../../src/core/next-step-measurement';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
-import { createRequire } from 'node:module';
 
 import { normalizeReviewCatalog } from '../../../../src/core/review-catalog';
 import type { ReviewCapabilitiesConfigMap } from '../../../../src/core/review-capabilities';
@@ -76,7 +76,6 @@ import {
 import { initGitRepo } from '../git-fixtures';
 
 const TASK_ID = 'T-NEXT-1';
-const nodeRequire = createRequire(__filename);
 const DEFAULT_APP_SOURCE = 'export const value = 1;\n';
 const PREFLIGHT_CHANGED_APP_SOURCE = 'export const value = 1;\n// Review routing fixture change.\n';
 const FOCUSED_COMMAND_TIMEOUT_MS = process.platform === 'win32' ? 120_000 : 60_000;
@@ -2246,7 +2245,7 @@ describe('gates/next-step', { concurrency: 2 }, () => {
         assert.match(result.title, /Prepare 'security' review context/);
     });
 
-    it('reads TASK.md once per next-step evaluation across review lanes with multiple follow-up fingerprints', () => {
+    it('shares one TASK.md observation across review lanes while retaining native parent audit reads', () => {
         const repoRoot = makeTempRepo({ currentSkillBinding: true, currentSkillIds: ['code-review', 'security-review'] });
         seedStartedTask(repoRoot, TASK_ID);
         writePreflight(repoRoot, TASK_ID, { ...ALL_REVIEW_FLAGS, code: true, security: true }, {
@@ -2283,28 +2282,21 @@ describe('gates/next-step', { concurrency: 2 }, () => {
         assert.equal(materializedByLane[1].status, 'MATERIALIZED', materializedByLane[1].output_lines.join('\n'));
         assert.deepEqual(materializedByLane[1].created_task_ids, [`${TASK_ID}-F4`, `${TASK_ID}-F5`]);
         const taskPath = path.join(repoRoot, 'TASK.md');
-        const mutableFs = nodeRequire('node:fs') as typeof fs;
-        const originalReadFileSync = mutableFs.readFileSync;
-        let taskReads = 0;
-        const taskReadStacks: string[] = [];
-        mutableFs.readFileSync = ((file: Parameters<typeof fs.readFileSync>[0], ...args: unknown[]) => {
-            if (typeof file === 'string' && path.resolve(file) === path.resolve(taskPath)) {
-                taskReads += 1;
-                taskReadStacks.push(new Error('Task queue read').stack || '');
-            }
-            return originalReadFileSync(file as never, ...(args as never[]));
-        }) as typeof fs.readFileSync;
-        try {
-            for (let evaluation = 1; evaluation <= 2; evaluation++) {
-                const result = resolveNextStep({ taskId: TASK_ID, repoRoot });
-                assert.notEqual(result.next_gate, 'materialize-review-follow-up-tasks');
-                assert.notEqual(result.status, 'FAILED', `${result.next_gate}: ${result.title} :: ${result.reason}`);
-                assert.equal(taskReads, evaluation, 'each evaluation reads one fresh task queue snapshot\n' + taskReadStacks.join('\n'));
-            }
-        } finally {
-            mutableFs.readFileSync = originalReadFileSync;
+        for (let evaluation = 1; evaluation <= 2; evaluation++) {
+            let measurement: NextStepMeasurement | undefined;
+            const result = withNextStepMeasurement(
+                () => resolveNextStep({ taskId: TASK_ID, repoRoot }),
+                value => { measurement = value; }
+            );
+            assert.notEqual(result.next_gate, 'materialize-review-follow-up-tasks');
+            assert.notEqual(result.status, 'FAILED', `${result.next_gate}: ${result.title} :: ${result.reason}`);
+            assert.ok(measurement);
+            // Q2 hashes one shared queue observation regardless of lanes/fingerprints.
+            // Native parent-obligation qualification separately reads its input and
+            // lifecycle facts; retain and count both, rather than hiding descriptor I/O.
+            assert.equal(measurement.work['payload_read:' + taskPath], 3);
+            assert.equal(measurement.work['file_hash:' + taskPath], 1);
         }
-        assert.equal(taskReads, 2);
     });
 
     it('rejects stale materialized follow-up artifacts without current TASK.md fingerprint rows', () => {

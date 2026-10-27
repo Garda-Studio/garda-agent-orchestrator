@@ -40,7 +40,7 @@
 
 - Navigation defers unused report calculations and reuses authenticated terminal reports while preserving audit blockers, current evidence checks and final report output.
 
-- Navigation consumes authenticated outcomes of closed review cycles. Every review attempt in an open cycle and all currently referenced evidence remain authenticated; explicit audit and completion reject corrupted closed archive evidence. Missing or mismatched outcomes use the existing checks.
+- Navigation consumes authenticated outcomes of closed review cycles. Missing or mismatched restart task, event or status bindings cannot close a review cycle. Cold CLI processes prepare native lazy code dependencies before authenticating persisted navigation summaries. Every review attempt in an open cycle and all currently referenced evidence remain authenticated; explicit audit and completion reject corrupted closed archive evidence. Missing or mismatched outcomes use the existing checks.
 - Navigation and validation share event selections collected during full timeline verification, preserving recipe identity, ordering, cancellation and current evidence checks.
 
 - Within read-only navigation, review consumers share captured quality, validation, task-mode, scope and contract derivations. Lane, inspection and strictness contracts stay separate; input changes are rejected before output and public results remain isolated. Accessor-bearing inputs keep native evaluation, and dirty-baseline memo keys bind property enumerability.
