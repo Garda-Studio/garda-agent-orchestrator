@@ -1,3 +1,4 @@
+import { publishQualityDerivationsAfterNativeOwner } from '../../../../gates/quality-checklist/quality-derived-state-publication';
 import { captureClosedReviewGate } from '../../../../gates/review-attempts/review-closed-cycle-capture';
 import { publishClosedReviewAfterGate } from '../../../../gates/review-attempts/review-closed-cycle-gate-hooks';
 import * as fs from 'node:fs';
@@ -145,6 +146,7 @@ export function appendRestartCompletedEvidence(input: {
         { actor: 'orchestrator' }
     );
     publishClosedReviewAfterGate(captureClosedReviewGate, { repoRoot: input.repoRoot, taskId: input.taskId, kind: 'restart' }, admittedRestart);
+    publishQualityDerivationsAfterNativeOwner(input.repoRoot, input.taskId, input.preflightPath);
     return artifactPath;
 }
 

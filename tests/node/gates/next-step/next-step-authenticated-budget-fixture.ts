@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { formatNextStepText } from '../../../../src/gates/next-step/next-step-command-formatters';
 import * as path from 'node:path';
 import { withNextStepMeasurement, type NextStepMeasurement } from '../../../../src/core/next-step-measurement';
 import { resolveNextStep } from '../../../../src/gates/next-step';
@@ -5,6 +7,8 @@ import type { AuthenticatedHistoryFixture } from './next-step-authenticated-hist
 
 export interface HistoryRouteMeasurement {
     route: string;
+    outputJsonSha256: string;
+    outputTextSha256: string;
     nextGate: string | null;
     reason: string;
     status: string;
@@ -57,7 +61,9 @@ export function measureHistoryRoute(state: Pick<AuthenticatedHistoryFixture, 're
     counters.json_parse_outside_verified_timeline = (counters.json_parse_total || 0) - (counters.json_parse_verified_timeline_event || 0);
     delete counters.json_parse_total;
     delete counters.json_parse_verified_timeline_event;
-    return { route, nextGate: result.next_gate, reason: result.reason, status: result.status, auditStatus: result.audit_status,
+    const stableOutput = { ...result, generated_utc: '<generated>' };
+    const sha = (text: string) => createHash('sha256').update(text).digest('hex');
+    return { route, outputJsonSha256: sha(JSON.stringify(stableOutput)), outputTextSha256: sha(formatNextStepText(stableOutput)), nextGate: result.next_gate, reason: result.reason, status: result.status, auditStatus: result.audit_status,
         elapsedMs, phasesMs: measured.phases_ms, counters: Object.fromEntries(Object.entries(counters).sort()), artifactsByPath, artifactsByCycle };
 }
 

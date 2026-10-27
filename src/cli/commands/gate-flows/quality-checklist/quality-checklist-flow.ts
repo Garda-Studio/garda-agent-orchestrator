@@ -1,3 +1,4 @@
+import { publishQualityDerivationsAfterNativeOwner } from '../../../../gates/quality-checklist/quality-derived-state-publication';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -251,6 +252,9 @@ export function runQualityChecklistCommand(options: QualityChecklistCommandOptio
     const outputLines = formatQualityChecklistResult(artifact);
     outputLines.push(`QualityChecklistArtifactPath: ${gateHelpers.normalizePath(artifactPath)}`);
     outputLines.push(`QualityChecklistArtifactSha256: ${artifactHash}`);
+    if (artifact.status !== 'ACTION_REQUIRED' && artifact.status !== 'CONFIG_ERROR')
+        publishQualityDerivationsAfterNativeOwner(repoRoot, artifact.task_id, artifact.preflight_path);
+
 
     return {
         outputLines,

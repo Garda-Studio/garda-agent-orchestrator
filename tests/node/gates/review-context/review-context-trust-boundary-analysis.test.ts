@@ -843,6 +843,7 @@ describe('review-context trust-boundary handoff', () => {
             assert.match(String(analysis.binding_event_sha256), /^[a-f0-9]{64}$/u);
             assert.equal(analysis.matrix.length, 1);
             const promptSection = buildTrustBoundaryAnalysisMarkdown(analysis).join('\n');
+            assert.ok(promptSection.split('\n').includes(`- ${analysis.matrix[0].boundary_id} — ${analysis.matrix[0].boundary}`));
             assert.match(promptSection, /Trust-Boundary Analysis/u);
             assert.match(promptSection, /Mutable reviewer output to authenticated receipt/u);
             assert.match(promptSection, /\[other\]/u);

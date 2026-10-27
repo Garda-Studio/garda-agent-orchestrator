@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import { types } from 'node:util';
 import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead, registerInvocationDependency } from './invocation-read-observation';
 import { describeProcessInputs } from './next-step-measurement';
+import { observeDerivationInput, fingerprintObservationData } from './derivation-observation-recorder';
 
 type NativeExec = (this: unknown, ...args: unknown[]) => unknown;
 type GitValue = string | Buffer | import('node:child_process').SpawnSyncReturns<string | Buffer>;
@@ -151,7 +152,15 @@ export function withInvocationGitReadObservation<T>(callback: () => T): T {
                 const self = this;
                 const observation = memoizeInvocationRead(GIT_RESULTS, input.text, () => {
                     const savedArgs = cloneData(args) as unknown[];
-                    const entry = capture(() => Reflect.apply(original, self, args));
+                    const entry = observeDerivationInput('process-result', 1, { command: input.text },
+                        () => capture(() => Reflect.apply(original, self, args)),
+                        result => fingerprintObservationData(result === null ? null
+                            : 'error' in result ? { failure: result.failure } : { output: result.fingerprint }),
+                        () => {
+                            const current = describeProcessInputs({ name, args: savedArgs, cwd: process.cwd(), environment: process.env });
+                            if (current.opaque || current.text !== input.text) throw new Error('Recorded Git command inputs changed.');
+                            return capture(() => Reflect.apply(original, self, savedArgs));
+                        });
                     if (!entry) throw new Error('Git observation did not return a native command result.');
                     registerInvocationDependency(entry, () => {
                         const current = describeProcessInputs({ name, args: savedArgs, cwd: process.cwd(), environment: process.env });

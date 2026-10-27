@@ -71,3 +71,8 @@ export function refreshTimelineSummaryForCommittedEvent(
         process.stderr.write(`WARNING: ${warning}\n`);
     }
 }
+
+/** Resolve summary code without writing or refreshing a summary. */
+export function prepareTaskEventSummaryCode(): void {
+    require('./timeline-summary');
+}

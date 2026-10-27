@@ -883,3 +883,8 @@ export async function withRuntimeMutationGenerationAsync<T>(
         throw error;
     }
 }
+
+/** Resolve the existing lazy dependency without scheduling work or changing mutation state. */
+export function prepareRuntimeMutationGenerationCode(): void {
+    require('../runtime/sqlite-catalog/sqlite-catalog-reconciliation');
+}

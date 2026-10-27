@@ -1,8 +1,10 @@
+import { inheritParentInvocationLeafMemo } from './invocation-read-observation';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { lstatFileIdentitySync, statFileIdentitySync } from './file-stat';
 import { countNextStepWork } from './next-step-measurement';
+import { observeDerivationInput, fingerprintObservationData, markDerivationNonCacheable } from './derivation-observation-recorder';
 import {
     createInvocationReadMemoKey, isInvocationReadObservationActive,
     memoizeInvocationRead, registerInvocationDependency
@@ -97,6 +99,33 @@ function capturePath(filePath: string): InvocationPathObservation {
     return Object.freeze({ path: filePath, stat, identity, realPath, linkTarget, targetStat, completeTargetStat, targetIdentity });
 }
 
+function observationErrorData(error: unknown): unknown {
+    const code = error && typeof error === 'object' ? Object.getOwnPropertyDescriptor(error, 'code') : null;
+    if (code && 'value' in code && typeof code.value === 'string') return { code: code.value };
+    markDerivationNonCacheable('opaque-native-path-error');
+    return { code: null };
+}
+function statObservationData(result: InvocationObservedValue<fs.Stats | fs.BigIntStats>): unknown {
+    if ('error' in result) return { error: observationErrorData(result.error) };
+    const stat = result.value;
+    const directory = stat.isDirectory();
+    return { dev: String(stat.dev), ino: String(stat.ino), mode: String(stat.mode), uid: String(stat.uid),
+        gid: String(stat.gid), rdev: String(stat.rdev), birthtime: String('birthtimeNs' in stat ? stat.birthtimeNs : stat.birthtimeMs),
+        directory, file: stat.isFile(), link: stat.isSymbolicLink(),
+        ...(!directory ? { nlink: String(stat.nlink), size: String(stat.size),
+            mtime: String('mtimeNs' in stat ? stat.mtimeNs : stat.mtimeMs),
+            ctime: String('ctimeNs' in stat ? stat.ctimeNs : stat.ctimeMs) } : {}) };
+}
+function pathObservationFingerprint(observation: InvocationPathObservation): string {
+    const text = (value: InvocationObservedValue<string | null>): unknown => 'error' in value
+        ? { error: observationErrorData(value.error) } : { value: value.value };
+    return fingerprintObservationData({ path: observation.path,
+        stat: statObservationData(observation.stat), identity: statObservationData(observation.identity),
+        realPath: text(observation.realPath), linkTarget: text(observation.linkTarget),
+        targetStat: statObservationData(observation.targetStat), completeTargetStat: statObservationData(observation.completeTargetStat),
+        targetIdentity: statObservationData(observation.targetIdentity) });
+}
+
 function assertPathCurrent(original: InvocationPathObservation): void {
     const current = capturePath(original.path);
     if (!sameResult(original.stat, current.stat, sameStat)
@@ -114,10 +143,12 @@ function assertPathCurrent(original: InvocationPathObservation): void {
 export function readInvocationPathObservation(filePath: string): InvocationPathObservation | null {
     if (!isInvocationReadObservationActive()) return null;
     const absolute = path.resolve(filePath);
+    inheritParentInvocationLeafMemo(PATH_OBSERVATIONS, absolute);
     return memoizeInvocationRead(PATH_OBSERVATIONS, absolute, () => {
         const parent = path.dirname(absolute);
         if (parent !== absolute) readInvocationPathObservation(parent);
-        const observation = capturePath(absolute);
+        const observation = observeDerivationInput('path-state', 1, { path: absolute },
+            () => capturePath(absolute), pathObservationFingerprint);
         registerInvocationDependency(observation, () => assertPathCurrent(observation));
         return observation;
     }).value;
@@ -195,7 +226,10 @@ export function readInvocationFileContent(filePath: string, maximumBytes = Infin
         throw new Error('Invocation alias does not match observed target: ' + alias.path);
     }
     const memoId = process.platform === 'win32' ? realPath.toLowerCase() : realPath;
-    const content = memoizeInvocationRead(FILE_CONTENTS, memoId, () => captureContent(canonical)).value;
+    inheritParentInvocationLeafMemo(FILE_CONTENTS, memoId);
+    const content = memoizeInvocationRead(FILE_CONTENTS, memoId, () => observeDerivationInput('file-bytes', 1,
+        { path: canonical.path }, () => captureContent(canonical),
+        value => fingerprintObservationData({ sha256: value.sha256, size: value.size }))).value;
     if (!sameStat(identity, content.identity)) {
         throw new Error('Invocation alias does not match retained content: ' + alias.path);
     }

@@ -1,5 +1,7 @@
+import { inheritParentInvocationLeafMemo } from './invocation-read-observation';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { observeDerivationInput, fingerprintObservationData, markDerivationNonCacheable } from './derivation-observation-recorder';
 import { countNextStepWork } from './next-step-measurement';
 import { observedInvocationValue, readInvocationPathObservation, type InvocationObservedValue } from './invocation-file-observation';
 import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead, registerInvocationDependency } from './invocation-read-observation';
@@ -19,10 +21,21 @@ function nativeRealpathErrorCode(error: unknown): string {
 export function readNativeRealpath(pathValue: string): string {
     if (!isInvocationReadObservationActive()) return fs.realpathSync.native(pathValue);
     const resolved = path.resolve(pathValue);
+    inheritParentInvocationLeafMemo(NATIVE_REALPATH_OBSERVATIONS, resolved);
     const observation = memoizeInvocationRead(NATIVE_REALPATH_OBSERVATIONS, resolved, () => {
         readInvocationPathObservation(resolved);
         countNextStepWork('native_realpath_observation:' + resolved);
-        const original = captureNativeRealpath(pathValue);
+        const original = observeDerivationInput('native-realpath', 1, { path: resolved },
+            () => captureNativeRealpath(pathValue), result => {
+                if ('value' in result) return fingerprintObservationData({ value: result.value });
+                const code = result.error && typeof result.error === 'object'
+                    ? Object.getOwnPropertyDescriptor(result.error, 'code') : null;
+                if (!code || !('value' in code) || typeof code.value !== 'string') {
+                    markDerivationNonCacheable('opaque-native-realpath-error');
+                    return fingerprintObservationData({ error: null });
+                }
+                return fingerprintObservationData({ error: code.value });
+            });
         registerInvocationDependency(original, () => {
             countNextStepWork('native_realpath_final_validation:' + resolved);
             const current = captureNativeRealpath(pathValue);

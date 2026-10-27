@@ -36,11 +36,12 @@ export function measureNextStepPhase<T>(name: string, action: () => T): T {
 
 // Serialize data descriptors only. Diagnostics must not execute caller-controlled
 // getters, proxy traps or toJSON hooks. Opaque metadata is never evidence of equality.
-export function describeProcessInputs(inputs: unknown): { text: string; opaque: boolean } {
+export function describeProcessInputs(inputs: unknown, visit?: (kind: 'value' | 'field') => void): { text: string; opaque: boolean } {
     let opaque = false, remaining = 10_000;
     const ancestors = new Set<object>();
     const unknown = () => { opaque = true; return 'opaque'; };
     const encode = (value: unknown, depth: number): string => {
+        visit?.('value');
         if (depth > 32 || --remaining < 0) return unknown();
         if (value === null) return 'null';
         if (typeof value === 'string') return JSON.stringify(value);
@@ -57,6 +58,7 @@ export function describeProcessInputs(inputs: unknown): { text: string; opaque: 
         ancestors.add(value);
         const descriptors = Object.getOwnPropertyDescriptors(value);
         const fields = Object.keys(descriptors).map(key => {
+            visit?.('field');
             const descriptor = descriptors[key];
             return JSON.stringify(key) + ':enumerable=' + String(descriptor.enumerable) + ':'
                 + ('value' in descriptor ? encode(descriptor.value, depth + 1) : unknown());

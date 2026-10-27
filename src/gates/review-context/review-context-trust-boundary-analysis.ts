@@ -1,3 +1,5 @@
+import { executePersistentQualityPlan } from '../derived-state/persisted-quality-operation';
+import { cloneJson } from '../../core/immutable-json';
 import { countNextStepWork, describeProcessInputs } from '../../core/next-step-measurement';
 import { readTaskTimelineValidationQuery } from '../../gate-runtime/timeline/task-events-integrity';
 import * as path from 'node:path';
@@ -5,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { createInvocationReadMemoKey, isInvocationReadObservationActive } from '../../core/invocation-read-observation';
 import {
     readReviewValidationBytes, readQualityArtifactLstat,
-    readQualityArtifactStat, readReviewValidationNode
+    readQualityArtifactStat, readReviewValidationNode, parseObservedQualityArtifactJson
 } from './review-validation-invocation';
 import { currentProjectValidationAuthority } from '../project-validation/authority';
 import { validationDigest } from '../../core/project-validation-identity';
@@ -285,7 +287,8 @@ function captureBoundQualityEvidence(options: QualityAnalysisOptions): BoundQual
     };
     let artifact: Record<string, unknown>;
     try {
-        const parsed = JSON.parse(artifactBytes.toString('utf8'));
+        const parsed = parseObservedQualityArtifactJson(artifactPath, artifactBytes, artifactSha256,
+            describeProcessInputs(options).opaque ? undefined : { ...options, artifactPath });
         if (!isRecord(parsed)) {
             return { terminal: invalidAnalysis(hashedBoundBase, ['Quality-checklist artifact must be a JSON object.']) };
         }
@@ -380,7 +383,10 @@ function readBoundQualityAnalysis(options: QualityAnalysisOptions, requireObserv
         () => [qualityEvidenceIdentity(options), requireObservedExecution], () => {
             const evidence = readReviewValidationNode(QUALITY_EVIDENCE, () => qualityEvidenceIdentity(options),
                 () => captureBoundQualityEvidence(options));
-            return deriveBoundQualityAnalysis(evidence, requireObservedExecution);
+            const plan = { operation: 'quality-analysis' as const, evidence, requireObservedExecution };
+            const artifactPath = 'terminal' in evidence ? evidence.terminal.artifact_path : evidence.base.artifact_path;
+            if (!artifactPath || describeProcessInputs(plan).opaque) return deriveBoundQualityAnalysis(evidence, requireObservedExecution);
+            return cloneJson(executePersistentQualityPlan(plan, { ...options, artifactPath })) as ReviewContextTrustBoundaryAnalysis;
         });
 }
 

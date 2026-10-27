@@ -1,3 +1,5 @@
+import { captureInvocationMemoTrace } from '../../../src/core/derivation-observation-recorder';
+import { encodePersistentDependencies, replayPersistentDependencies } from '../../../src/gates/derived-state/persisted-derivation-adapters';
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import * as childProcess from 'node:child_process';
@@ -5,7 +7,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { getWindowsSystemDirectory } from '../../../src/core/windows-native-environment';
-import { assertInvocationDependenciesCurrent, withInvocationReadObservation } from '../../../src/core/invocation-read-observation';
+import { assertInvocationDependenciesCurrent, probeOptionalInvocationReads, withInvocationReadObservation } from '../../../src/core/invocation-read-observation';
 import { withNextStepMeasurement, type NextStepMeasurement } from '../../../src/core/next-step-measurement';
 import { inspectTrustedWindowsWriteAuthority } from '../../../src/gate-runtime/timeline/windows-acl-authority';
 import { readTaskTimelineTextFile } from '../../../src/gate-runtime/timeline/task-events';
@@ -160,4 +162,61 @@ test('active ACL observation preserves unchanged indeterminate rejection but rej
             assert.equal(attempts, becomesValid ? 3 : 4);
         }
     } finally { native.spawnSync = original; }
+});
+
+
+test('persistent ACL replay requires fresh native principals and A1 rejects a mid-call principal change', windowsOnly, t => {
+    const { file } = fixture(t);
+    assert.equal(inspectTrustedWindowsWriteAuthority(file), true);
+    const native = require('node:child_process') as typeof childProcess;
+    const original = native.spawnSync;
+    let changed = false, probes = 0;
+    try {
+        native.spawnSync = ((command: string, args: readonly string[] = [], options?: childProcess.SpawnSyncOptions) => {
+            const result = original(command, args, options);
+            if (path.basename(command).toLowerCase() !== 'powershell.exe' || !args.includes('-EncodedCommand')) return result;
+            const script = Buffer.from(String(args.at(-1)), 'base64').toString('utf16le');
+            if (!script.includes('$names = @(')) return result;
+            probes++;
+            assert.equal(result.status, 0, 'native principal probe must succeed before fault injection');
+            const names = JSON.parse(String(result.stdout)) as string[];
+            assert.equal(names.length, 6);
+            if (!changed) return result;
+            names[1] = 'S-1-5-21-999999999-999999999-999999999-9999';
+            const stdout = JSON.stringify(names);
+            return { ...result, stdout, output: [null, stdout, String(result.stderr || '')] };
+        }) as typeof childProcess.spawnSync;
+        const capture = () => withInvocationReadObservation(() => captureInvocationMemoTrace(() =>
+            inspectTrustedWindowsWriteAuthority(file)));
+        const first = capture();
+        assert.deepEqual(first.outcome, { returned: true, value: true });
+        const dependencies = encodePersistentDependencies(first.trace);
+        assert.ok(dependencies);
+        assert.ok(dependencies.some(dependency => dependency.kind === 'acl-verdict'));
+        assert.ok(probes >= 2, 'initial and final checks must both observe native principals');
+        changed = true;
+        const stale = capture();
+        assert.deepEqual(stale.outcome, first.outcome, 'the standalone native cached-name verdict stays unchanged');
+        assert.equal(encodePersistentDependencies(stale.trace), null, 'changed principal evidence cannot authorize persistence');
+        assert.equal(withInvocationReadObservation(() => replayPersistentDependencies(dependencies)), false);
+        changed = false;
+        assert.throws(() => withInvocationReadObservation(() => {
+            assert.equal(inspectTrustedWindowsWriteAuthority(file), true);
+            changed = true;
+        }), /Invocation Windows ACL observation changed/);
+    } finally { native.spawnSync = original; }
+});
+
+
+test('selected Q4 probes share native ACL observations while retaining every validation boundary', windowsOnly, t => {
+    const { file } = fixture(t); let measured!: NextStepMeasurement;
+    withNextStepMeasurement(() => withInvocationReadObservation(() => {
+        for (let index = 0; index < 3; index++) {
+            const candidate = probeOptionalInvocationReads(() => inspectTrustedWindowsWriteAuthority(file));
+            assert.ok(candidate); assert.equal(candidate.value, true); candidate.select();
+        }
+        assert.equal(inspectTrustedWindowsWriteAuthority(file), true);
+    }), value => { measured = value; });
+    assert.equal(measured.work['acl_probe:initial:' + file], 1);
+    assert.equal(measured.work['acl_probe:final:' + file], 5, 'First child, three selections and final A1 all check the native ACL');
 });

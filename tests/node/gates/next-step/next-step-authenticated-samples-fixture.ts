@@ -1,3 +1,5 @@
+import type { PersistentDerivationMode } from '../../../../src/core/persisted-derivation-mode';
+import { measurePersistedHistoryModes, type PersistentModeRouteMeasurement } from './next-step-persisted-mode-fixture';
 import { getReviewsRoot } from '../../cli/commands/gates/review-cycle/gates-review-cycle-fixtures';
 import { isPlainRecord } from '../../../../src/core/records';
 import { fileSha256 } from '../../../../src/core/file-hashing';
@@ -7,13 +9,13 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { buildTaskAuditSummary } from '../../../../src/gates/task-audit/task-audit-summary';
 import { createAuthenticatedNextStepHistoryFixture, completeAuthenticatedHistoryFixture } from './next-step-authenticated-history-fixture';
-import { measureHistoryRoute, type HistoryRouteMeasurement } from './next-step-authenticated-budget-fixture';
+import { type HistoryRouteMeasurement } from './next-step-authenticated-budget-fixture';
 
 export interface HistorySample {
     cycles: number;
     lanes: number;
-    mode: 'disabled';
-    routes: HistoryRouteMeasurement[];
+    mode: PersistentDerivationMode;
+    routes: PersistentModeRouteMeasurement[];
     materializedBytes: Record<string, number>;
 }
 
@@ -24,23 +26,30 @@ function assertNoReportHistory(route: HistoryRouteMeasurement): void {
 }
 
 /** Construction/assertions stay outside TODO, so malformed evidence cannot count as RED. */
-export async function collectAuthenticatedHistorySample(cycles: number, lanes = 3, proveHistory = false): Promise<HistorySample> {
-    const routes: HistoryRouteMeasurement[] = [];
+export async function collectAuthenticatedHistorySamples(cycles: number, lanes = 3, proveHistory = false): Promise<HistorySample[]> {
+    const grouped = new Map<PersistentDerivationMode, PersistentModeRouteMeasurement[]>([
+        ['disabled', []], ['force-miss', []], ['ordinary', []]
+    ]);
+    const measure = (state: Parameters<typeof measurePersistedHistoryModes>[0], route: string) => {
+        const results = measurePersistedHistoryModes(state, route);
+        for (const result of results) grouped.get(result.persistenceMode)!.push(result);
+        return results;
+    };
     const fixture = await createAuthenticatedNextStepHistoryFixture(cycles, lanes, active => {
-        const measured = measureHistoryRoute(active, 'active-review');
-        assert.equal(measured.nextGate, 'record-review-result');
-        assertNoReportHistory(measured);
-        routes.push(measured);
+        for (const measured of measure(active, 'active-review')) {
+            assert.equal(measured.nextGate, 'record-review-result');
+            assertNoReportHistory(measured);
+        }
     });
-    const required = measureHistoryRoute(fixture, 'required-reviews-check');
+    for (const required of measure(fixture, 'required-reviews-check')) {
     assert.equal(required.nextGate, 'required-reviews-check', required.reason);
     assertNoReportHistory(required);
-    routes.push(required);
     if (lanes === 3) {
         assert.ok(fixture.testBaselinePath);
         const relative = path.relative(fixture.repoRoot, fixture.testBaselinePath).replace(/\\/gu, '/');
         assert.ok(required.artifactsByPath['payload_read:' + relative] > 0,
             'Current DELTA review must consume its authenticated retained baseline.');
+    }
     }
     if (proveHistory) {
         const audit = buildTaskAuditSummary(fixture);
@@ -77,19 +86,21 @@ export async function collectAuthenticatedHistorySample(cycles: number, lanes = 
     };
     assert.ok(fs.existsSync(materializedFiles.projection), 'Q7 real native owner must publish terminal acceleration');
     const materializedBytes = Object.fromEntries(Object.entries(materializedFiles).map(([name, file]) => [name, fs.statSync(file).size]));
-    const done = measureHistoryRoute(fixture, 'DONE');
-    assert.equal(done.status, 'DONE');
-    assertNoReportHistory(done);
-    assert.equal(done.counters.terminal_materialized_projection_selected, 1, 'DONE selects the native owner projection');
-    routes.push(done);
+    const done = measure(fixture, 'DONE');
+    for (const route of done) {
+        assert.equal(route.status, 'DONE');
+        assertNoReportHistory(route);
+        assert.equal(route.counters.terminal_materialized_projection_selected, 1, 'DONE selects the native owner projection');
+    }
     fs.appendFileSync(path.join(fixture.repoRoot, fixture.files[0]), 'export const drift = true;\n');
-    const drift = measureHistoryRoute(fixture, 'post-done-drift');
-    assert.equal(drift.nextGate, 'post-done-drift');
-    assertNoReportHistory(drift);
-    assert.equal(drift.counters.terminal_materialized_projection_selected, 1, 'drift selects the native owner projection');
+    const drift = measure(fixture, 'post-done-drift');
+    for (const route of drift) {
+        assert.equal(route.nextGate, 'post-done-drift');
+        assertNoReportHistory(route);
+        assert.equal(route.counters.terminal_materialized_projection_selected, 1, 'drift selects the native owner projection');
+    }
     const mandatoryBytes = materializedBytes.json + materializedBytes.markdown + materializedBytes.report + materializedBytes.ledger;
-    for (const route of [done, drift]) assert.equal(route.counters.terminal_materialized_bytes_hashed, mandatoryBytes,
+    for (const route of [...done, ...drift]) assert.equal(route.counters.terminal_materialized_bytes_hashed, mandatoryBytes,
         route.route + ': every current materialized byte remains authenticated');
-    routes.push(drift);
-    return { cycles, lanes, mode: 'disabled', routes, materializedBytes };
+    return [...grouped].map(([mode, routes]) => ({ cycles, lanes, mode, routes, materializedBytes }));
 }

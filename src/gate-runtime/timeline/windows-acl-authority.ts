@@ -2,7 +2,8 @@ import * as fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { lstatFileIdentitySync } from '../../core/file-stat';
 import { countNextStepWork } from '../../core/next-step-measurement';
-import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead, registerInvocationDependency } from '../../core/invocation-read-observation';
+import { createInvocationReadMemoKey, inheritParentInvocationLeafMemo, isInvocationReadObservationActive, memoizeInvocationRead, registerInvocationDependency } from '../../core/invocation-read-observation';
+import { observeDerivationInput, fingerprintObservationData, markDerivationNonCacheable } from '../../core/derivation-observation-recorder';
 import * as childProcess from 'node:child_process';
 import * as path from 'node:path';
 import { getWindowsNativeEnvironment, getWindowsSystemDirectory, WINDOWS_NATIVE_POWERSHELL_BOOTSTRAP } from '../../core/windows-native-environment';
@@ -132,6 +133,7 @@ interface WindowsAclObservation {
     readonly identity: WindowsAclObjectIdentity;
     readonly outputSha256: string | null;
     readonly fallbackDescriptor: string | null;
+    readonly principalWitness: string | null;
     readonly trusted: boolean;
 }
 
@@ -160,8 +162,10 @@ function inspectAclObservation(filePath: string, phase: 'initial' | 'final'): Wi
         if (result.status !== 0 || result.error || !output.split(/\r?\n/u).some(line => line.lastIndexOf(':(') >= 0)) continue;
         let trusted = !windowsAclOutputHasExplicitWriteGrant(output);
         let fallbackDescriptor: string | null = null;
+        let principalWitness: string | null = null;
         if (!trusted) {
             const names = resolveTrustedPrincipalNames();
+            principalWitness = captureFreshPrincipalWitness(names, phase);
             trusted = !!names && windowsAclOutputHasOnlyTrustedExplicitGrants(output, filePath, names);
             if (!trusted) {
                 countNextStepWork('acl_sid_probe:' + phase + ':' + filePath);
@@ -175,25 +179,36 @@ function inspectAclObservation(filePath: string, phase: 'initial' | 'final'): Wi
                     trusted = parsed.trusted;
                     fallbackDescriptor = parsed.descriptor;
                 } catch {
-                    return Object.freeze({ filePath, identity, trusted: false, outputSha256: null, fallbackDescriptor: null });
+                    return Object.freeze({ filePath, identity, trusted: false, outputSha256: null, fallbackDescriptor: null, principalWitness: null });
                 }
             }
         }
         if (!sameAclObject(identity, aclObjectIdentity(filePath))) throw new Error('Invocation Windows ACL object changed: ' + filePath);
-        return Object.freeze({ filePath, identity, trusted, fallbackDescriptor,
+        return Object.freeze({ filePath, identity, trusted, fallbackDescriptor, principalWitness,
             outputSha256: createHash('sha256').update(bytes).digest('hex') });
     }
-    return Object.freeze({ filePath, identity, trusted: false, outputSha256: null, fallbackDescriptor: null });
+    return Object.freeze({ filePath, identity, trusted: false, outputSha256: null, fallbackDescriptor: null, principalWitness: null });
 }
 
 function inspectInvocationWindowsWriteAuthority(filePath: string): boolean {
     const absolute = path.resolve(filePath), memoId = absolute.toLowerCase();
+    inheritParentInvocationLeafMemo(INVOCATION_ACL_OBSERVATIONS, memoId);
     const observation = memoizeInvocationRead(INVOCATION_ACL_OBSERVATIONS, memoId, () => {
-        const original = inspectAclObservation(absolute, 'initial');
+        let environmentSha256: string | null = null;
+        try { environmentSha256 = fingerprintObservationData(process.env); }
+        catch { markDerivationNonCacheable('opaque-acl-environment'); }
+        const original = observeDerivationInput('acl-verdict', 1, { path: absolute, platform: process.platform, environmentSha256 },
+            () => inspectAclObservation(absolute, 'initial'), value => fingerprintObservationData({
+                trusted: value.trusted, outputSha256: value.outputSha256, fallbackDescriptor: value.fallbackDescriptor, principalWitness: value.principalWitness,
+                identity: { dev: String(value.identity.dev), ino: String(value.identity.ino), mode: String(value.identity.mode),
+                    birthtimeNs: String(value.identity.birthtimeNs), realPath: value.identity.realPath }
+            }), () => inspectAclObservation(absolute, 'final'));
         registerInvocationDependency(original, () => {
+            if (environmentSha256 !== null && fingerprintObservationData(process.env) !== environmentSha256) throw new Error('Invocation Windows ACL environment changed.');
             const current = inspectAclObservation(original.filePath, 'final');
             // Unchanged indeterminate evidence retains the original fail-closed verdict.
             if (original.outputSha256 !== current.outputSha256
+                || original.principalWitness !== current.principalWitness
                 || original.fallbackDescriptor !== current.fallbackDescriptor
                 || original.trusted !== current.trusted || !sameAclObject(original.identity, current.identity)) {
                 throw new Error('Invocation Windows ACL observation changed: ' + original.filePath);
@@ -222,4 +237,29 @@ export function inspectTrustedWindowsWriteAuthority(filePath: string): boolean {
         return inspectNativeSids(EXPLICIT_SIDS_SCRIPT, filePath) === 'trusted';
     }
     return false;
+}
+
+/** Preserve the native cached-name verdict, but never serialize it without fresh SID evidence. */
+function captureFreshPrincipalWitness(cached: ReadonlySet<string> | null, phase: 'initial' | 'final'): string | null {
+    countNextStepWork('acl_principal_probe:' + phase);
+    const output = inspectNativeSids(TRUSTED_PRINCIPALS_SCRIPT);
+    try {
+        const names: unknown = output ? JSON.parse(output) : null;
+        if (!Array.isArray(names) || names.length !== 6) throw new Error('Missing native principals.');
+        const fresh = new Set<string>();
+        for (const name of names) {
+            countNextStepWork('visit:q4_acl_principal');
+            if (typeof name !== 'string') throw new Error('Invalid native principal.');
+            if (/^[\x20-\x7e]+$/u.test(name)) fresh.add(name.toLowerCase());
+        }
+        if (!cached || cached.size !== fresh.size) throw new Error('Cached principal binding differs.');
+        for (const name of cached) {
+            countNextStepWork('visit:q4_acl_cached_principal');
+            if (!fresh.has(name)) throw new Error('Cached principal binding differs.');
+        }
+        return createHash('sha256').update(output!).digest('hex');
+    } catch {
+        markDerivationNonCacheable('acl-principal-fresh-witness-unavailable-or-different');
+        return null;
+    }
 }
