@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { runClassifyChangeCommand } from '../../../../../../src/cli/commands/gates';
+import { serializeTaskPlan } from '../../../../../../src/schemas/task-plan';
 import {
     captureExpectedError,
     createTempRepo,
@@ -62,7 +63,14 @@ function seedBalancedProfileConfig(repoRoot: string, apiCapability: boolean, pro
     }, null, 2), 'utf8');
 }
 
-function prepareTask(repoRoot: string, taskId: string, notes: string, apiCapability: boolean, profileName = 'balanced'): void {
+function prepareTask(
+    repoRoot: string,
+    taskId: string,
+    notes: string,
+    apiCapability: boolean,
+    profileName = 'balanced',
+    planRequiredReviews: string[] | null = null
+): void {
     seedBalancedProfileConfig(repoRoot, apiCapability, profileName);
     fs.mkdirSync(path.join(repoRoot, 'tests'), { recursive: true });
     fs.writeFileSync(path.join(repoRoot, 'tests', 'app.test.ts'), 'export const suite = true;\n', 'utf8');
@@ -75,12 +83,28 @@ function prepareTask(repoRoot: string, taskId: string, notes: string, apiCapabil
         'Add guarded local UI policy API flow'
     );
     seedInitAnswers(repoRoot);
+    let planPath: string | undefined;
+    if (planRequiredReviews) {
+        planPath = path.join(getReviewsRoot(repoRoot), `${taskId}-task-plan.json`);
+        fs.mkdirSync(path.dirname(planPath), { recursive: true });
+        fs.writeFileSync(planPath, serializeTaskPlan({
+            schema_version: 1,
+            task_id: taskId,
+            status: 'approved',
+            goal: 'Add guarded local profile preview flow',
+            scope_files: ['src/app.ts', 'tests/app.test.ts'],
+            risk_level: 'medium',
+            required_reviews: planRequiredReviews,
+            steps: [{ id: 'implement', title: 'Implement the flow' }]
+        }), 'utf8');
+    }
     runEnterTaskMode({
         repoRoot,
         taskId,
         requestedDepth: 2,
         effectiveDepth: 2,
-        taskSummary: 'Add guarded local profile preview flow'
+        taskSummary: 'Add guarded local profile preview flow',
+        ...(planPath ? { planPath } : {})
     });
     assert.equal(loadTaskEntryRulePack(repoRoot, taskId).exitCode, 0);
     runHandshakeForTask(repoRoot, taskId);
@@ -178,4 +202,59 @@ describe('classify-change task required-review metadata', () => {
             fs.rmSync(repoRoot, { recursive: true, force: true });
         }
     });
+function classify(repoRoot: string, taskId: string): Record<string, any> {
+        return JSON.parse(runClassifyChangeCommand({
+            repoRoot,
+            taskId,
+            taskIntent: 'Add guarded local profile preview flow',
+            changedFiles: ['src/app.ts', 'tests/app.test.ts'],
+            outputPath: path.join(getReviewsRoot(repoRoot), `${taskId}-preflight.json`),
+            emitMetrics: false
+        }).outputText) as Record<string, any>;
+    }
+
+    it('applies review lanes declared in the approved attached task plan', { concurrency: false }, () => {
+        const repoRoot = createTempRepo();
+        const taskId = 'T-plan-required-api';
+        try {
+            prepareTask(repoRoot, taskId, 'Scope: local UI action flow.', true, 'balanced', ['code', 'api', 'test']);
+            const payload = classify(repoRoot, taskId);
+            assert.equal(payload.triggers.api_intent, false);
+            assert.deepEqual(payload.task_required_review_declaration, {
+                source: 'task_plan',
+                declared_reviews: ['code', 'api', 'test'],
+                applied_reviews: ['code', 'api', 'test']
+            });
+            assert.equal(payload.required_reviews.api, true);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('combines Notes and plan declarations', { concurrency: false }, () => {
+        const repoRoot = createTempRepo();
+        const taskId = 'T-plan-and-notes-required';
+        try {
+            prepareTask(repoRoot, taskId, 'Required reviews: code, test.', true, 'balanced', ['api']);
+            const payload = classify(repoRoot, taskId);
+            assert.equal(payload.task_required_review_declaration.source, 'task_queue_notes_and_task_plan');
+            assert.deepEqual(payload.task_required_review_declaration.applied_reviews, ['code', 'test', 'api']);
+            for (const lane of ['code', 'test', 'api']) assert.equal(payload.required_reviews[lane], true, lane);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('fails preflight when the plan declares an unavailable lane', { concurrency: false }, () => {
+        const repoRoot = createTempRepo();
+        const taskId = 'T-plan-required-api-unavailable';
+        try {
+            prepareTask(repoRoot, taskId, 'Scope: local UI action flow.', false, 'balanced', ['code', 'api']);
+            const error = captureExpectedError(() => classify(repoRoot, taskId));
+            assert.match(error.message, /review lane 'api' is unavailable because review-capabilities.api is not enabled./);
+        } finally {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        }
+    });
 });
+

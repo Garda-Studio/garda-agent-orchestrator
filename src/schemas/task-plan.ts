@@ -52,6 +52,7 @@ export interface TaskPlan {
     acceptance_criteria?: string[];
     verification_expectations?: string[];
     out_of_scope?: string[];
+    required_reviews?: string[];
     validation_strategy?: TaskPlanValidationStrategy;
     notes?: string;
     created_by?: string;
@@ -99,6 +100,13 @@ export const taskPlanSchema: Record<string, unknown> = Object.freeze({
             type: 'array',
             items: { type: 'string', minLength: 1 },
             description: 'Explicit exclusions that reviewers should not treat as active defects by default.'
+        },
+        required_reviews: {
+            type: 'array',
+            items: { type: 'string', pattern: '^[a-z][a-z0-9_-]*$' },
+            uniqueItems: true,
+            minItems: 1,
+            description: 'Review lanes this task must run in addition to the classified ones (lane ids from review-capabilities). classify-change applies them like the TASK.md "Required reviews:" Notes marker.'
         },
         steps: {
             type: 'array',
@@ -221,6 +229,25 @@ function validateAcyclicStepDependencies(steps: TaskPlanStep[]): void {
     }
 }
 
+const REVIEW_LANE_ID_PATTERN = /^[a-z][a-z0-9_-]*$/u;
+
+// Lane availability is checked by classify-change against review-capabilities; here only the shape is validated.
+function validateRequiredReviews(input: unknown): string[] {
+    const lanes = normalizeStringArray(input, 'required_reviews', { unique: false }).map((lane) => lane.toLowerCase());
+    if (lanes.length === 0) {
+        throw new Error('required_reviews must list at least one review lane when present.');
+    }
+    for (const [index, lane] of lanes.entries()) {
+        if (!REVIEW_LANE_ID_PATTERN.test(lane)) {
+            throw new Error(`required_reviews[${index}] must be a review lane id, got '${lane}'.`);
+        }
+        if (lanes.indexOf(lane) !== index) {
+            throw new Error(`required_reviews lists lane '${lane}' more than once.`);
+        }
+    }
+    return lanes;
+}
+
 export function validateTaskPlan(input: unknown): TaskPlan {
     const raw = ensurePlainObject(input, 'task-plan');
 
@@ -287,6 +314,10 @@ export function validateTaskPlan(input: unknown): TaskPlan {
 
     if (raw.out_of_scope !== undefined) {
         plan.out_of_scope = normalizeStringArray(raw.out_of_scope, 'out_of_scope', { allowScalar: true });
+    }
+
+    if (raw.required_reviews !== undefined) {
+        plan.required_reviews = validateRequiredReviews(raw.required_reviews);
     }
 
     if (raw.validation_strategy !== undefined) {
