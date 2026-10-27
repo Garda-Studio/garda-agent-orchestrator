@@ -1,3 +1,5 @@
+import { readNavigationAuditCycle } from '../task-audit/task-audit-summary-navigation';
+import { readMaterializedTerminalProjection } from '../task-audit/task-audit-materialized-terminal';
 import * as fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
@@ -230,6 +232,22 @@ export function readReadyFinalReportSummary(
         return null;
     }
 
+    const materialized = readMaterializedTerminalProjection(repoRoot, closeoutJsonPath, taskId);
+    const expectedCycle = readNavigationAuditCycle(summary);
+    if (materialized && finalCloseoutMatchesCurrentCycle(expectedCycle,
+        { cycle_binding: materialized.projection.cycle_binding }, repoRoot, reviewsRoot, taskId, eventsRoot)) {
+        return {
+            closeout_json_path: toRepoDisplayPath(repoRoot, closeoutJsonPath),
+            closeout_markdown_path: toRepoDisplayPath(repoRoot, closeoutMarkdownPath),
+            final_user_report_path: toRepoDisplayPath(repoRoot, finalUserReportPath),
+            final_user_report_body: materialized.reportBody,
+            final_user_report_sha256: materialized.projection.artifacts.report_sha256,
+            required_order: buildFinalReportOrder(summary),
+            commit_command_suggestion: summary.final_report_contract.commit_command_suggestion,
+            commit_question: summary.final_report_contract.commit_question
+        };
+    }
+
     const closeout = safeReadJson(closeoutJsonPath);
     if (!isPlainRecord(closeout)) {
         return null;
@@ -240,31 +258,26 @@ export function readReadyFinalReportSummary(
     if (String(closeout.status || '').trim().toUpperCase() !== 'READY') {
         return null;
     }
-    if (!finalCloseoutMatchesCurrentCycle(summary.final_closeout.cycle_binding, closeout, repoRoot, reviewsRoot, taskId, eventsRoot)) {
+    if (!finalCloseoutMatchesCurrentCycle(expectedCycle, closeout, repoRoot, reviewsRoot, taskId, eventsRoot)) {
         return null;
     }
-    const generatedUtc = typeof closeout.generated_utc === 'string' ? closeout.generated_utc : '';
-    const expectedCloseout = { ...summary.final_closeout, generated_utc: generatedUtc, artifact_state: 'MATERIALIZED' as const };
-    const expectedAttestation = expectedCloseout.review_integrity_attestation;
-    const expectedJson = `${JSON.stringify(expectedCloseout, null, 2)}\n`;
-    const exactCurrentSummaryMatch = !!generatedUtc
-        && !!expectedAttestation
-        && expectedAttestation.completion_allowed === true
-        && fs.readFileSync(closeoutJsonPath, 'utf8') === expectedJson;
-    const materializedLedgerMatch = !exactCurrentSummaryMatch
-        && finalCloseoutMatchesMaterializedLedger(
-            reviewsRoot,
-            taskId,
-            closeout,
-            closeoutJsonPath,
-            closeoutMarkdownPath
-        );
-    if (!exactCurrentSummaryMatch && !materializedLedgerMatch) {
-        return null;
+    // Old materialized closeouts remain on their existing authenticated ledger path.
+    // This path parses/checks stored report bytes but never rebuilds review history.
+    const materializedLedgerMatch = finalCloseoutMatchesMaterializedLedger(
+        reviewsRoot, taskId, closeout, closeoutJsonPath, closeoutMarkdownPath);
+    let canonicalCloseout: TaskAuditSummaryResult['final_closeout'];
+    if (materializedLedgerMatch) {
+        canonicalCloseout = closeout as unknown as TaskAuditSummaryResult['final_closeout'];
+    } else {
+        // Preserve exact-summary alternative for materialized records without a valid ledger.
+        // It consumes the full current comparison by contract, not an A6 waiver.
+        const generatedUtc = typeof closeout.generated_utc === 'string' ? closeout.generated_utc : '';
+        const expectedCloseout = { ...summary.final_closeout, generated_utc: generatedUtc, artifact_state: 'MATERIALIZED' as const };
+        const expectedAttestation = expectedCloseout.review_integrity_attestation;
+        if (!generatedUtc || !expectedAttestation || expectedAttestation.completion_allowed !== true
+            || fs.readFileSync(closeoutJsonPath, 'utf8') !== `${JSON.stringify(expectedCloseout, null, 2)}\n`) return null;
+        canonicalCloseout = expectedCloseout;
     }
-    const canonicalCloseout = exactCurrentSummaryMatch
-        ? expectedCloseout
-        : closeout as unknown as TaskAuditSummaryResult['final_closeout'];
     const expectedMarkdown = `${formatFinalCloseoutMarkdown(canonicalCloseout)}\n`;
     if (fs.readFileSync(closeoutMarkdownPath, 'utf8') !== expectedMarkdown) {
         return null;
@@ -357,8 +370,11 @@ export function readPostDoneWorkspaceDriftDecision(
     if (stagedScopeDecision) {
         return { blocked: stagedScopeDecision.blocked, reason: stagedScopeDecision.reason };
     }
-    const closeout = safeReadJson(finalCloseoutJsonPath);
-    const implementationSummary = isPlainRecord(closeout?.implementation_summary) ? closeout.implementation_summary : null;
+    const terminal = readMaterializedTerminalProjection(repoRoot, finalCloseoutJsonPath,
+        path.basename(finalCloseoutJsonPath).replace(/-final-closeout\.json$/u, ''));
+    const closeout = terminal ? null : safeReadJson(finalCloseoutJsonPath);
+    const implementationSummary = terminal?.projection.implementation_summary
+        ?? (isPlainRecord(closeout?.implementation_summary) ? closeout.implementation_summary : null);
     const expectedAuditedScopeContentSha256 = normalizeSha256(implementationSummary?.scope_content_sha256);
     const expectedAuditedChangedFilesSha256 = normalizeSha256(implementationSummary?.changed_files_sha256);
     if (auditedChangedFiles.length > 0 && (!expectedAuditedScopeContentSha256 || !expectedAuditedChangedFilesSha256)) {

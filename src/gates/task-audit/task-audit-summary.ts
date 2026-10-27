@@ -1,6 +1,8 @@
+import { isInvocationReadObservationActive } from '../../core/invocation-read-observation';
 import { readTaskTimelineNavigationQuery } from '../../gate-runtime/timeline/task-events-integrity';
 import { navigationRawEvents, navigationQueryForEvents, navigationLatestEvent, navigationEventSequence,
     type NavigationTimelineQuery } from '../../gate-runtime/timeline/task-navigation-query';
+import { createReportProjectionValue, bindNavigationAuditCycle } from './task-audit-summary-navigation';
 import { countNextStepArrayCopy, measureNextStepPhase, countNextStepWork } from '../../core/next-step-measurement';
 import { getReviewHistoryIntegrityViolations } from '../review-attempts/review-history-integrity';
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
@@ -421,6 +423,10 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
     const safeTaskId = assertValidTaskId(options.taskId);
     const eventsRoot = resolveEventsRoot(repoRoot, options.eventsRoot);
     const reviewsRoot = resolveReviewsRoot(repoRoot, options.reviewsRoot);
+    const lazyReports = !inspectReviewHistory && isInvocationReadObservationActive();
+    const reportValue = <T>(name: string, build: () => T): (() => T) => createReportProjectionValue(name, lazyReports, build,
+        action => withTaskTimelineReadSnapshot(eventsRoot, safeTaskId, () => withReviewArtifactReadBarrier(reviewsRoot,
+            () => withTaskIndexReadSnapshot(reviewsRoot, safeTaskId, action))));
     const liveFullSuiteValidationEnabled = loadFullSuiteValidationConfig(repoRoot).enabled;
     const liveReviewExecutionPolicyMode = loadReviewExecutionPolicyConfig(repoRoot).mode;
     const reviewCycleExcludedReviewTypes = readReviewCycleExcludedReviewTypes(repoRoot);
@@ -519,12 +525,12 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
         : lifecycleEvents.some((event) => (countNextStepWork('visit:task-audit-summary:482'), String(event.event_type || '').trim().toUpperCase() === 'COMPLETION_GATE_PASSED'));
     const projectMemoryImpactRequired = projectMemoryImpactEvidence.required
         && (!hasCompletionPassEvent || hasCurrentProjectMemoryImpactEvent);
-    const workspaceStatusSnapshot = getTaskCycleStatusSnapshot(
+    const getWorkspaceStatusSnapshot = reportValue('task-cycle-status', () => getTaskCycleStatusSnapshot(
         repoRoot,
         safeTaskId,
         undefined,
         options.taskQueueEntries
-    );
+    ));
     const lifecycleGates = getLifecycleGates(
         fullSuiteValidationRequiredForLifecycle,
         projectMemoryImpactRequired,
@@ -602,14 +608,14 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
     const changedFiles = auditedChangedFiles.changedFiles;
     const changedFilesCount = changedFiles.length;
     const preflightChangedLinesTotal = preflightSummary.changedLinesTotal;
-    const changeMetrics = buildFinalCloseoutChangeMetrics({
+    const getChangeMetrics = reportValue('change-metrics', () => buildFinalCloseoutChangeMetrics({
         repoRoot,
         preflightChangedFiles: preflightSummary.changedFiles,
         preflightChangedLinesTotal,
         finalTrackedChangedFiles: changedFiles,
         workspaceSnapshotRequest
-    });
-    const changedLinesTotal = changeMetrics.final_tracked_changed_lines_total ?? preflightChangedLinesTotal;
+    }));
+    const getChangedLinesTotal = () => getChangeMetrics().final_tracked_changed_lines_total ?? preflightChangedLinesTotal;
     const finalCloseoutJsonPath = path.join(reviewsRoot, `${safeTaskId}-final-closeout.json`);
     const finalCloseoutMarkdownPath = path.join(reviewsRoot, `${safeTaskId}-final-closeout.md`);
     const finalUserReportPath = path.join(reviewsRoot, `${safeTaskId}-final-user-report.md`);
@@ -708,34 +714,34 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
             timelineEvents: events,
             initialIssues: reviewAuthorshipAttestationIssues
         });
-        const reviewAttemptSummary = buildReviewAttemptSummary({
+        const getReviewAttemptSummary = reportValue('review-attempts', () => buildReviewAttemptSummary({
             reviewsRoot,
             taskId: safeTaskId,
             timelineEvents: events,
             currentPreflight: preflight,
             excludedReviewTypes: reviewCycleExcludedReviewTypes
-        });
-        const reviewFindingsAudit = buildReviewFindingsAuditSummary({
+        }));
+        const getReviewFindingsAudit = reportValue('review-findings', () => buildReviewFindingsAuditSummary({
             repoRoot,
             reviewsRoot,
             taskId: safeTaskId,
             requiredReviews,
             currentPreflight: preflight,
             timelineEvents: events,
-            reviewAttemptSummary,
+            reviewAttemptSummary: getReviewAttemptSummary(),
             currentCycle,
             reviewIntegrityAttestation,
             timelineIntegrityStatus: integrityStatus,
             currentPreflightSha256: preflightSha256,
             taskQueueEntries: options.taskQueueEntries
-        });
-        const reviewTimingAudit = buildReviewTimingAuditSummary(
+        }));
+        const getReviewTimingAudit = reportValue('review-timing', () => buildReviewTimingAuditSummary(
             reviewsRoot,
             safeTaskId,
             events,
             repoRoot,
             preflight
-        );
+        ));
         const reviewCoverageSummary = buildReviewCoverageAuditSummary({
             reviewsRoot,
             taskId: safeTaskId,
@@ -746,10 +752,10 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
         return {
             evidence,
             requiredReviewBlockers,
-            reviewAttemptSummary,
-            reviewFindingsAudit,
+            get reviewAttemptSummary() { return getReviewAttemptSummary(); },
+            get reviewFindingsAudit() { return getReviewFindingsAudit(); },
             reviewIntegrityAttestation,
-            reviewTimingAudit,
+            get reviewTimingAudit() { return getReviewTimingAudit(); },
             reviewCoverageSummary,
             reviewTrustSummary,
             reviewVerdicts
@@ -789,11 +795,11 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
     if (completionReviewOrderBlocker) {
         blockers.push(completionReviewOrderBlocker);
     }
-    const tokenEconomy = buildTokenEconomySummary(safeTaskId, events, repoRoot, reviewsRoot);
-    const taskCycleDiagnostics = buildTaskCycleDiagnostics({
+    const getTokenEconomy = reportValue('token-economy', () => buildTokenEconomySummary(safeTaskId, events, repoRoot, reviewsRoot));
+    const getTaskCycleDiagnostics = reportValue('task-cycle-diagnostics', () => buildTaskCycleDiagnostics({
         taskId: safeTaskId,
-        workspaceStatusSnapshot
-    });
+        workspaceStatusSnapshot: getWorkspaceStatusSnapshot()
+    }));
     const evidence = reviewSnapshot.evidence;
     const hasFailedGate = gates.some((g) => (countNextStepWork('visit:task-audit-summary:757'), g.status === 'FAIL'));
     const failedGateNames = gates.filter((g) => (countNextStepWork('visit:task-audit-summary:758'), g.status === 'FAIL')).map((g) => (countNextStepWork('visit:task-audit-summary:758'), g.gate));
@@ -901,7 +907,8 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
         status = 'INCOMPLETE';
     }
 
-    const commitGuardEnabled = workspaceStatusSnapshot.enforceNoAutoCommit === true;
+    const getCommitPresentation = reportValue('commit-presentation', () => {
+    const commitGuardEnabled = getWorkspaceStatusSnapshot().enforceNoAutoCommit === true;
     const committableChangedFiles = resolveCommittableChangedFiles(repoRoot, workspaceSnapshotRequest);
     const rawCommitCandidateChangedFiles = committableChangedFiles == null
         ? changedFiles.filter((changedFile) => (countNextStepWork('visit:task-audit-summary:864'), !isLocalControlPlaneCommitPath(changedFile)))
@@ -932,12 +939,11 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
             : 'Local commit permission is disabled. Enable it through an explicitly approved audited workflow set before committing.'
         : NO_COMMIT_CONFIRMATION_MESSAGE;
     
+        return { commitCommandTemplate, commitCommandSuggestion, commitQuestionText };
+    });
     const {
         reviewVerdicts,
         reviewTrustSummary,
-        reviewAttemptSummary,
-        reviewFindingsAudit,
-        reviewTimingAudit,
         reviewIntegrityAttestation
     } = reviewSnapshot;
     const reviewIntegrityBlocker = hasCompletionPass && reviewIntegrityAttestation.completion_allowed === false
@@ -952,6 +958,7 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
     if (status === 'PASS' && reviewIntegrityBlocker) {
         status = 'BLOCKED';
     }
+    const getOptionalSkillsSummary = reportValue('optional-skills', () => {
     const optionalSkillsPath = path.join(reviewsRoot, `${safeTaskId}-optional-skill-selection.json`);
     const bundleRoot = path.dirname(path.dirname(reviewsRoot));
     const taskEventsTimelineEvidence = readOptionalSkillSelectionTimelineEvidence(bundleRoot, safeTaskId, taskEventFile);
@@ -965,6 +972,8 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
         safeReadJson(optionalSkillsPath),
         taskEventsTimelineEvidence
     );
+        return optionalSkillsSummary;
+    });
     const implementationSummaryRequirements = [
         'path mode',
         'review result status',
@@ -991,11 +1000,11 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
             'verbatim Garda final user report'
         ],
         implementation_summary_requirements: implementationSummaryRequirements,
-        commit_command_template: commitCommandTemplate,
-        commit_command_suggestion: commitCommandSuggestion,
-        commit_question: commitQuestionText
+        get commit_command_template() { return getCommitPresentation().commitCommandTemplate; },
+        get commit_command_suggestion() { return getCommitPresentation().commitCommandSuggestion; },
+        get commit_question() { return getCommitPresentation().commitQuestionText; }
     };
-    const finalCloseout = buildFinalCloseoutArtifact({
+    const getFinalCloseout = reportValue('closeout', () => buildFinalCloseoutArtifact({
         repoRoot,
         eventsRoot,
         taskId: safeTaskId,
@@ -1012,32 +1021,32 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
         docsSummary,
         changedFiles,
         changedFilesCount,
-        changedLinesTotal,
-        changeMetrics,
+        changedLinesTotal: getChangedLinesTotal(),
+        changeMetrics: getChangeMetrics(),
         scopeCategory,
         reviewTrustSummary,
-        reviewTimingAudit,
+        reviewTimingAudit: reviewSnapshot.reviewTimingAudit,
         reviewIntegrityAttestation,
-        reviewAttemptSummary,
-        reviewFindingsAudit,
+        reviewAttemptSummary: reviewSnapshot.reviewAttemptSummary,
+        reviewFindingsAudit: reviewSnapshot.reviewFindingsAudit,
         reviewCoverageSummary: reviewSnapshot.reviewCoverageSummary,
-        optionalSkillsSummary,
+        optionalSkillsSummary: getOptionalSkillsSummary(),
         fullSuiteValidation,
         fullSuiteValidationRequiredForLifecycle,
         reviewExecutionPolicyMode,
         projectMemoryImpactEvidence,
         orchestratorDefectCapture,
-        tokenEconomy,
-        taskCycleDiagnostics,
-        workspaceStatusSnapshot,
-        commitCommandTemplate,
-        commitCommandSuggestion,
+        tokenEconomy: getTokenEconomy(),
+        taskCycleDiagnostics: getTaskCycleDiagnostics(),
+        workspaceStatusSnapshot: getWorkspaceStatusSnapshot(),
+        commitCommandTemplate: getCommitPresentation().commitCommandTemplate,
+        commitCommandSuggestion: getCommitPresentation().commitCommandSuggestion,
         workspaceSnapshotRequest
-    });
+    }));
 
-    return {
+    const result: TaskAuditSummaryResult = {
         task_id: safeTaskId,
-        generated_utc: finalCloseout.generated_utc,
+        get generated_utc() { return getFinalCloseout().generated_utc; },
         status,
         events_count: orderedEvents.count,
         first_event_utc: orderedEvents.firstEventUtc,
@@ -1046,18 +1055,35 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
         gates,
         changed_files: changedFiles,
         changed_files_count: changedFilesCount,
-        changed_lines_total: changedLinesTotal,
+        get changed_lines_total() { return getChangedLinesTotal(); },
         required_reviews: requiredReviews,
         scope_category: scopeCategory,
         profile_review_decisions: profileReviewDecisions,
         evidence,
         blockers,
         point_in_time_snapshot: pointInTimeSnapshot,
-        task_cycle_diagnostics: taskCycleDiagnostics,
-        review_attempt_summary: reviewAttemptSummary,
-        review_findings_audit: reviewFindingsAudit,
+        get task_cycle_diagnostics() { return getTaskCycleDiagnostics(); },
+        get review_attempt_summary() { return reviewSnapshot.reviewAttemptSummary; },
+        get review_findings_audit() { return reviewSnapshot.reviewFindingsAudit; },
         review_coverage_summary: reviewSnapshot.reviewCoverageSummary,
         final_report_contract: finalReportContract,
-        final_closeout: finalCloseout
+        get final_closeout() { return getFinalCloseout(); }
     };
+    if (lazyReports) {
+        const materializedLedgerPath = path.join(path.dirname(reviewsRoot), 'task-ledger', `${safeTaskId}.json`);
+        if (hasCompletionPass && !hasMaterializedFinalCloseoutArtifact && !fs.existsSync(finalUserReportPath) && !fs.existsSync(materializedLedgerPath)) {
+            countNextStepWork('terminal_legacy_without_materialized_result');
+            getFinalCloseout(); // A6 permits eager legacy computation when no materialized result exists.
+        }
+        bindNavigationAuditCycle(result, currentCycle ? {
+            preflight_path: currentCycle.preflight_path, preflight_sha256: currentCycle.preflight_sha256,
+            compile_gate_timestamp: currentCycle.compile_gate_timestamp
+        } : auditedNoOpLifecycle && noOpEvidenceForLifecycle.evidence_status === 'PASS' && noOpEventSha256
+            && noOpEvidenceForLifecycle.evidence_hash && noOpEvidenceForLifecycle.preflight_path && noOpEvidenceForLifecycle.preflight_sha256 ? {
+                preflight_path: noOpEvidenceForLifecycle.preflight_path, preflight_sha256: noOpEvidenceForLifecycle.preflight_sha256,
+                compile_gate_timestamp: null, no_op_sha256: noOpEvidenceForLifecycle.evidence_hash, no_op_event_sha256: noOpEventSha256
+            } : null);
+        return result;
+    }
+    return { ...result, final_report_contract: { ...result.final_report_contract } };
 }

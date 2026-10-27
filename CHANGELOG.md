@@ -38,6 +38,8 @@
 
 ### Faster everyday work
 
+- Navigation defers unused report calculations and reuses authenticated terminal reports while preserving audit blockers, current evidence checks and final report output.
+
 - Navigation consumes authenticated outcomes of closed review cycles. Every review attempt in an open cycle and all currently referenced evidence remain authenticated; explicit audit and completion reject corrupted closed archive evidence. Missing or mismatched outcomes use the existing checks.
 - Navigation and validation share event selections collected during full timeline verification, preserving recipe identity, ordering, cancellation and current evidence checks.
 

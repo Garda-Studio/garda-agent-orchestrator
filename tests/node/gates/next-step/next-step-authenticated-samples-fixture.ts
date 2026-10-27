@@ -1,3 +1,4 @@
+import { getReviewsRoot } from '../../cli/commands/gates/review-cycle/gates-review-cycle-fixtures';
 import { isPlainRecord } from '../../../../src/core/records';
 import { fileSha256 } from '../../../../src/core/file-hashing';
 import { readTaskTimelineEvents } from '../../cli/commands/gates/review-cycle/gates-review-cycle-fixtures';
@@ -13,6 +14,13 @@ export interface HistorySample {
     lanes: number;
     mode: 'disabled';
     routes: HistoryRouteMeasurement[];
+    materializedBytes: Record<string, number>;
+}
+
+function assertNoReportHistory(route: HistoryRouteMeasurement): void {
+    for (const name of ['closeout', 'review-attempts', 'review-findings', 'review-timing', 'change-metrics'])
+        assert.equal(route.counters['report_projection:' + name] || 0, 0, route.route + ':' + name);
+    assert.equal(route.counters['visit:audit_review_attempt_event'] || 0, 0, route.route + ':attempt-history');
 }
 
 /** Construction/assertions stay outside TODO, so malformed evidence cannot count as RED. */
@@ -21,10 +29,12 @@ export async function collectAuthenticatedHistorySample(cycles: number, lanes = 
     const fixture = await createAuthenticatedNextStepHistoryFixture(cycles, lanes, active => {
         const measured = measureHistoryRoute(active, 'active-review');
         assert.equal(measured.nextGate, 'record-review-result');
+        assertNoReportHistory(measured);
         routes.push(measured);
     });
     const required = measureHistoryRoute(fixture, 'required-reviews-check');
     assert.equal(required.nextGate, 'required-reviews-check', required.reason);
+    assertNoReportHistory(required);
     routes.push(required);
     if (lanes === 3) {
         assert.ok(fixture.testBaselinePath);
@@ -59,12 +69,27 @@ export async function collectAuthenticatedHistorySample(cycles: number, lanes = 
         assert.ok(corrections.every(item => item.audit_scope === 'SUPERSEDED_CYCLE'
             && item.superseded_by_compile_event_sha256 === compileSha256), JSON.stringify(corrections));
     }
+    const reviewsRoot = getReviewsRoot(fixture.repoRoot), prefix = path.join(reviewsRoot, fixture.taskId);
+    const materializedFiles = {
+        json: prefix + '-final-closeout.json', markdown: prefix + '-final-closeout.md',
+        report: prefix + '-final-user-report.md', projection: prefix + '-final-navigation.json',
+        ledger: path.join(path.dirname(reviewsRoot), 'task-ledger', fixture.taskId + '.json')
+    };
+    assert.ok(fs.existsSync(materializedFiles.projection), 'Q7 real native owner must publish terminal acceleration');
+    const materializedBytes = Object.fromEntries(Object.entries(materializedFiles).map(([name, file]) => [name, fs.statSync(file).size]));
     const done = measureHistoryRoute(fixture, 'DONE');
     assert.equal(done.status, 'DONE');
+    assertNoReportHistory(done);
+    assert.equal(done.counters.terminal_materialized_projection_selected, 1, 'DONE selects the native owner projection');
     routes.push(done);
     fs.appendFileSync(path.join(fixture.repoRoot, fixture.files[0]), 'export const drift = true;\n');
     const drift = measureHistoryRoute(fixture, 'post-done-drift');
     assert.equal(drift.nextGate, 'post-done-drift');
+    assertNoReportHistory(drift);
+    assert.equal(drift.counters.terminal_materialized_projection_selected, 1, 'drift selects the native owner projection');
+    const mandatoryBytes = materializedBytes.json + materializedBytes.markdown + materializedBytes.report + materializedBytes.ledger;
+    for (const route of [done, drift]) assert.equal(route.counters.terminal_materialized_bytes_hashed, mandatoryBytes,
+        route.route + ': every current materialized byte remains authenticated');
     routes.push(drift);
-    return { cycles, lanes, mode: 'disabled', routes };
+    return { cycles, lanes, mode: 'disabled', routes, materializedBytes };
 }

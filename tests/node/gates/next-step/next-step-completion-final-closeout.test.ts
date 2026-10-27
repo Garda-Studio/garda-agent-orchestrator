@@ -1611,7 +1611,8 @@ describe('gates/next-step', () => {
             args.includes('--numstat') && !args.includes('--')
         ));
 
-        assert.equal(gitAutoNumstatCommands.length, 1);
+        assert.equal(gitAutoNumstatCommands.length, 2, 'one shared observation plus the required A1 final freshness read');
+        assert.deepEqual(gitAutoNumstatCommands[1], gitAutoNumstatCommands[0]);
 
     });
 

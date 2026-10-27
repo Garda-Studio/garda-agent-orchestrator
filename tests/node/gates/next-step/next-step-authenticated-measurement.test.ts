@@ -62,6 +62,20 @@ test('Q1 authenticated history budget uses real navigation routes', { timeout: 3
                 assert.equal(b.counters[key] || 0, a.counters[key] || 0, b.route + ':' + key);
         }
     });
+    await context.test('Q7 terminal report object projections are flat on the existing 2/16-cycle fixtures', () => {
+        for (const route of ['DONE', 'post-done-drift']) {
+            const a = short.routes.find(sample => sample.route === route)!;
+            const b = long.routes.find(sample => sample.route === route)!;
+            assert.equal(b.counters['visit:terminal-materialized:parsed-value'], a.counters['visit:terminal-materialized:parsed-value'], route);
+            context.diagnostic(JSON.stringify({ route, samples: [short, long].map(sample => ({
+                cycles: sample.cycles, file_bytes: sample.materializedBytes,
+                bytes_hashed: sample.routes.find(value => value.route === route)!.counters.terminal_materialized_bytes_hashed,
+                parsed_values: sample.routes.find(value => value.route === route)!.counters['visit:terminal-materialized:parsed-value']
+            })) }));
+        }
+    });
+    // The complete Q1 comparison below still includes all mandatory materialized bytes.
+    // Flat report-object counts do not waive byte growth or establish a green matrix.
     const changed = differences(short, long);
     const growing = [...new Set(changed.filter(entry => entry.long > entry.short).map(entry => entry.counter))];
     context.diagnostic('Q1 growing counters: ' + JSON.stringify(growing));

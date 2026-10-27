@@ -1,3 +1,4 @@
+import { readMaterializedTerminalProjection } from './task-audit-materialized-terminal';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import * as fs from 'node:fs';
@@ -88,15 +89,18 @@ function isInternalCloseoutEvidencePath(normalizedPath: string): boolean {
         || normalizedPath.startsWith(PROJECT_MEMORY_ROOT);
 }
 
-function readFinalCloseoutImplementationSummary(finalCloseoutJsonPath: string): Record<string, unknown> | null {
+function readFinalCloseoutImplementationSummary(finalCloseoutJsonPath: string, repoRoot: string): Record<string, unknown> | null {
+    const terminal = readMaterializedTerminalProjection(repoRoot, finalCloseoutJsonPath,
+        path.basename(finalCloseoutJsonPath).replace(/-final-closeout\.json$/u, ''));
+    if (terminal) return terminal.projection.implementation_summary;
     const closeout = safeReadJson(finalCloseoutJsonPath);
     return closeout && typeof closeout.implementation_summary === 'object' && !Array.isArray(closeout.implementation_summary)
         ? closeout.implementation_summary as Record<string, unknown>
         : null;
 }
 
-function readFinalCloseoutAuditedScopeProvenance(finalCloseoutJsonPath: string): Record<string, unknown> | null {
-    const implementationSummary = readFinalCloseoutImplementationSummary(finalCloseoutJsonPath);
+function readFinalCloseoutAuditedScopeProvenance(finalCloseoutJsonPath: string, repoRoot: string): Record<string, unknown> | null {
+    const implementationSummary = readFinalCloseoutImplementationSummary(finalCloseoutJsonPath, repoRoot);
     const provenance = implementationSummary?.audited_scope_provenance;
     return provenance && typeof provenance === 'object' && !Array.isArray(provenance)
         ? provenance as Record<string, unknown>
@@ -282,7 +286,7 @@ export function evaluateStagedPostDoneAuditedScope(options: {
     const authenticatedWorkspaceSnapshotRequest = options.workspaceSnapshotRequest
         ? resolveWorkspaceSnapshotRequest(options.repoRoot, options.workspaceSnapshotRequest)
         : undefined;
-    const provenance = readFinalCloseoutAuditedScopeProvenance(options.finalCloseoutJsonPath);
+    const provenance = readFinalCloseoutAuditedScopeProvenance(options.finalCloseoutJsonPath, options.repoRoot);
     if (!isStagedScopeProvenance(provenance)) {
         return null;
     }
@@ -294,7 +298,7 @@ export function evaluateStagedPostDoneAuditedScope(options: {
         .filter((entry) => implementationSet.has(entry)));
     const expectedChangedFilesSha256 = normalizeOptionalHash(provenance?.changed_files_sha256);
     const expectedScopeContentSha256 = normalizeOptionalHash(provenance?.scope_content_sha256);
-    const implementationSummary = readFinalCloseoutImplementationSummary(options.finalCloseoutJsonPath);
+    const implementationSummary = readFinalCloseoutImplementationSummary(options.finalCloseoutJsonPath, options.repoRoot);
     const actualImplementationFilesSha256 = changedFilesSha256(implementationFiles);
     const extraScope = provenance?.closeout_extra_scope;
     const extraFiles = extraScope && typeof extraScope === 'object' && !Array.isArray(extraScope)
@@ -749,7 +753,7 @@ function buildPostDoneAuditedScopeDriftBlocker(
     if (auditedFiles.length === 0) {
         return null;
     }
-    const implementationSummary = readFinalCloseoutImplementationSummary(finalCloseoutJsonPath);
+    const implementationSummary = readFinalCloseoutImplementationSummary(finalCloseoutJsonPath, repoRoot);
     const expectedScopeContentSha256 = normalizeOptionalHash(implementationSummary?.scope_content_sha256);
     const expectedChangedFilesSha256 = normalizeOptionalHash(implementationSummary?.changed_files_sha256);
     if (!expectedScopeContentSha256 || !expectedChangedFilesSha256) {

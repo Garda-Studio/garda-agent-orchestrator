@@ -1,3 +1,4 @@
+import { publishMaterializedTerminalProjection } from './task-audit-materialized-terminal';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { writeFileAtomically } from '../../core/filesystem';
@@ -106,5 +107,7 @@ export function synchronizeFinalCloseoutArtifacts(
         }
         updateEvidenceArtifactState(summary.evidence, 'task-ledger', ledgerPath, false);
     }
+    try { publishMaterializedTerminalProjection(summary, path.dirname(bundleRoot)); }
+    catch { /* Optional acceleration: all existing materialized checks remain available. */ }
     return summary;
 }
