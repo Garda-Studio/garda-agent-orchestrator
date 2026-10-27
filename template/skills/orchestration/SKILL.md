@@ -48,9 +48,9 @@ Default task navigator is `node garda-agent-orchestrator/bin/garda.js next-step 
 
 A leading `[plan]` token in TASK.md Notes or an explicit operator request asks the agent to investigate and prepare a ready structured plan before `enter-task-mode`. Preparation uses the existing `task plan` commands outside task execution; it is not a new navigator stage or gate.
 
-Load full details only on demand: use `task plan --help` and the packaged `docs/task-plan-workflow.md` guide when preparing or consuming a plan. In a source checkout use `node bin/garda.js task plan --help`; in a deployed workspace use `node garda-agent-orchestrator/bin/garda.js task plan --help`. Keep ordinary task context to the short discovery hint and selected task rows.
+Load full details only on demand: use `task plan --help` and the packaged `docs/task-plan-workflow.md` guide when preparing or consuming a plan. Run it with the CLI prefix that `next-step` prints, for example `node garda-agent-orchestrator/bin/garda.js task plan --help`. Keep ordinary task context to the short discovery hint and selected task rows.
 
-For one task, read its existing plan through `task plan show <task-id>`, investigate the task intent and relevant files, then author or edit a workspace input JSON. Include ready-plan acceptance criteria, verification expectations and out-of-scope boundaries. Save with `task plan save <task-id> --input <file>` and read back through `show`; `approved` means ready, not operator-signed, and no human plan confirmation is required.
+For one task, read its existing plan through `task plan show <task-id>`, investigate the task intent and relevant files, then author or edit a workspace input JSON, starting from the template `garda-agent-orchestrator/template/templates/task-plan.json`. The saved plan lives at `garda-agent-orchestrator/runtime/reviews/<task-id>-task-plan.json`. List review lanes the task must run in its `required_reviews` field; an approved attached plan makes them binding exactly like the Notes marker. Include ready-plan acceptance criteria, verification expectations and out-of-scope boundaries. Save with `task plan save <task-id> --input <file>` and read back through `show`; `approved` means ready, not operator-signed, and no human plan confirmation is required.
 
 For multiple TODO tasks, `task plan list --missing` finds absent JSON plans for literal leading `[plan]` Notes tokens. Use `list` to inspect existing draft, ready or invalid plans, then investigate, author and save each selected task separately. An explicit one-task request does not require retagging other rows. Saving leaves statuses untouched and does not execute planned tasks.
 
@@ -127,6 +127,7 @@ Create or update plans only for tasks that have never started; retained start ev
 ## Canonical Workflow
 1. Select highest-priority `TODO` task in `TASK.md`; successful `enter-task-mode` reconciles it to `IN_PROGRESS`.
    - Before entering task mode, satisfy any leading `[plan]` Notes token or explicit plan-preparation request through the Requested Plan Preparation guidance above. Preparation alone does not authorize execution of the selected tasks.
+   - If the task needs review lanes that classification may not select, declare them in the row's Notes before `classify-change` with the exact sentence `Required reviews: code, security, api, test.` (lane IDs from `review-capabilities`). Preflight adds them to the classified lanes; a disabled declared lane blocks preflight. An approved attached JSON plan can declare the same lanes in `required_reviews`; lanes from both sources are combined. Lanes written only in a Markdown working plan or a draft plan are not binding; to change the declaration after preflight, correct the Notes or plan and follow the restart route that `next-step` prints.
 2. If no `TODO` exists, create a task from current user request; successful `enter-task-mode` then reconciles it to `IN_PROGRESS`.
 3. Resolve requested depth and record requested/effective depth in non-status `TASK.md` notes.
 4. Run the default navigator and repeat it after every command:
@@ -235,11 +236,9 @@ Create or update plans only for tasks that have never started; retained start ev
     1. concise implementation summary (include depth, path mode, review result status, docs updated)
        - do not paste the full final-closeout markdown or duplicate its complete section order in chat; link or name the canonical artifact when useful, then report only the status, key changes, validations, and commit readiness;
        - Do not add an agent-authored output-compaction line to the implementation summary or final user report at any depth. Command-output compaction and diagnostic/statistics telemetry remain active; character-based estimates are not measured model-token savings.
-    2. commit suggestion as exact command form, defaulting to conventional style: `git commit -m "<type>(<scope>): <summary>"`
-       - if `final_closeout.commit_command_suggestion` is populated, use it verbatim by default; otherwise fall back to the conventional template above.
-    3. explicit follow-up question: `Do you want me to commit now? (yes/no)`
+    2. the commit guidance from the Garda final report, verbatim: the task-bound native `gate human-commit --task-id "<task-id>" --message "<message>"` command (`final_closeout.commit_command_suggestion`), or the printed reason why no commit is available.
 28. Close spawned reviewer/specialist agents when platform supports agent lifecycle controls.
-29. Never commit unless user explicitly requests commit.
+29. Commit only through the task-bound native command that the Garda final report prints (`gate human-commit --task-id "<task-id>" --message "<message>"`). With an authenticated workspace-local ON grant, run it after completion/task-audit PASS without asking the commit question again; with OFF or missing authority, do not commit and report the printed enablement guidance. Never suggest or run a plain `git commit`.
 
 ## Reviewer Agent Execution (Platform-Agnostic)
 - Apply this section on every platform.
@@ -345,7 +344,7 @@ Create or update plans only for tasks that have never started; retained start ev
 - Do not set `DONE` without passing compile gate, `required-reviews-check`, `doc-impact-gate`, and `completion-gate`.
 - Do not continue after compile/review when scope changed; rerun preflight and full mandatory gates.
 - Do not use `git add -f` to stage ignored orchestration control-plane files just because gates or changelog rules mention them.
-- Do not change final report order: review integrity attestation -> implementation summary -> `git commit -m` suggestion -> `Do you want me to commit now? (yes/no)`.
+- Do not change final report order: review integrity attestation -> implementation summary -> verbatim Garda commit guidance. Do not add a commit question that the final report does not print.
 - Final report review integrity attestation must state whether independent review completed, whether fake/fallback/same-agent/legacy/missing/unverifiable review artifacts were observed, whether completion is review-attested, and why completion is or is not allowed.
 - Do not leave reviewer/specialist agents open after review completion (when platform supports agent lifecycle controls).
 

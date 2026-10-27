@@ -48,6 +48,8 @@ import {
 import { detectCodeChanged } from '../../../../gates/preflight/preflight-code-change';
 import {
     applyTaskRequiredReviewDeclaration,
+    mergeTaskRequiredReviewDeclarations,
+    resolveTaskPlanRequiredReviewDeclaration,
     resolveTaskRequiredReviewDeclaration
 } from '../../../../gates/preflight/classify-change-task-required-reviews';
 import {
@@ -293,26 +295,32 @@ function readApprovedTaskPlanScopeFiles(
     taskId: string,
     taskModeEvidence: ReturnType<typeof getTaskModeEvidence>
 ): string[] {
+    const plan = readApprovedTaskPlan(repoRoot, taskId, taskModeEvidence);
+    return plan ? normalizePortablePathList(plan.scope_files) : [];
+}
+
+/** The task-mode-bound plan when it is approved, for this task and unchanged since entry; otherwise null. */
+function readApprovedTaskPlan(
+    repoRoot: string,
+    taskId: string,
+    taskModeEvidence: ReturnType<typeof getTaskModeEvidence>
+): ReturnType<typeof validateTaskPlan> | null {
     const planMetadata = taskModeEvidence.plan;
     if (!planMetadata?.plan_path || !planMetadata.plan_sha256) {
-        return [];
+        return null;
     }
     try {
         const planFilePath = gateHelpers.resolvePathInsideRepo(planMetadata.plan_path, repoRoot, { allowMissing: false });
         if (!planFilePath || !fs.existsSync(planFilePath) || !fs.statSync(planFilePath).isFile()) {
-            return [];
+            return null;
         }
         const validatedPlan = validateTaskPlan(JSON.parse(fs.readFileSync(planFilePath, 'utf8')));
         if (validatedPlan.task_id !== taskId || !isApprovedPlan(validatedPlan)) {
-            return [];
+            return null;
         }
-        const currentDigest = computeTaskPlanDigest(validatedPlan);
-        if (currentDigest !== planMetadata.plan_sha256) {
-            return [];
-        }
-        return normalizePortablePathList(validatedPlan.scope_files);
+        return computeTaskPlanDigest(validatedPlan) === planMetadata.plan_sha256 ? validatedPlan : null;
     } catch {
-        return [];
+        return null;
     }
 }
 
@@ -590,11 +598,18 @@ export function runClassifyChangeCommand(options: ClassifyChangeCommandOptions):
         const rawTaskProfile = taskModeEvidence.task_profile || taskQueueMetadata?.profile || null;
         const profilesConfigPath = path.join(orchestratorRoot, 'live', 'config', 'profiles.json');
         try {
-            const taskRequiredReviewDeclaration = resolveTaskRequiredReviewDeclaration({
-                taskId: resolvedTaskId,
-                notes: taskQueueMetadata?.notes,
-                reviewCapabilities
-            });
+            const taskRequiredReviewDeclaration = mergeTaskRequiredReviewDeclarations(
+                resolveTaskRequiredReviewDeclaration({
+                    taskId: resolvedTaskId,
+                    notes: taskQueueMetadata?.notes,
+                    reviewCapabilities
+                }),
+                resolveTaskPlanRequiredReviewDeclaration({
+                    taskId: resolvedTaskId,
+                    requiredReviews: readApprovedTaskPlan(repoRoot, resolvedTaskId, taskModeEvidence)?.required_reviews,
+                    reviewCapabilities
+                })
+            );
             if (taskRequiredReviewDeclaration) {
                 result.task_required_review_declaration = taskRequiredReviewDeclaration;
                 applyTaskRequiredReviewDeclaration(result.required_reviews, taskRequiredReviewDeclaration);

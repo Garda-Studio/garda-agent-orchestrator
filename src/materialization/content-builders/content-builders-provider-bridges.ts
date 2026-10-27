@@ -1,6 +1,6 @@
 import { resolveBundleName } from '../../core/constants';
 import {
-    buildDualCliActiveProfileGuidance,
+    buildActiveProfileGuidance,
     buildNextStepNavigatorGuidance,
     buildTaskStartNavigatorPrompt,
     NOT_EVERY_REQUEST_IS_A_TASK_RULE
@@ -17,11 +17,10 @@ import {
     REVIEWER_FRESH_CONTEXT_LAUNCH_INSTRUCTION,
     REVIEWER_SESSION_REUSE_BOUNDARY_INSTRUCTION
 } from '../../gate-runtime/reviewer-session-contract';
-import { getNodeGateCommandPrefix } from '../command-constants';
+import { getGardaCliCommand, getGardaGateCommandPrefix, type GardaCliMode } from '../command-constants';
 import {
     ANTIGRAVITY_INDEPENDENT_REVIEW_UNAVAILABLE_STOP_INSTRUCTION,
-    buildBundleNextStepSnippet,
-    buildSourceNextStepSnippet,
+    buildNextStepSnippet,
     buildTaskStartSnippetSection,
     getDelegationRequiredProviderLaunchLines,
     getReviewSkillBridgeHost,
@@ -41,9 +40,12 @@ const PHASE_SCOPED_RESUME_GUIDANCE = `## Phase-Scoped Resume Context
 export function buildProviderOrchestratorAgentContent(
     providerLabel: string,
     canonicalFile: string,
-    bridgePath: string
+    bridgePath: string,
+    cliMode: GardaCliMode = 'deployed'
 ): string {
     void providerLabel;
+    const cli = getGardaCliCommand(cliMode);
+    const gate = getGardaGateCommandPrefix(cliMode);
     const providerEntry = getRequiredProviderEntryByBridgePath(bridgePath);
     const runtimeProviderLabel = providerEntry.displayLabel;
     const runtimeIdentityInstruction = `pin runtime identity with ` +
@@ -64,9 +66,9 @@ Required:
 2. Start every task with ${buildTaskStartNavigatorPrompt()}
 3. ${buildFreshMainAgentStartBannerSentence()}
 4. ${START_BANNER_GATE_LIST_RULE}
-5. Run \`${buildBundleNextStepSnippet()}\` as the default task loop in deployed workspaces, or \`${buildSourceNextStepSnippet()}\` in this source checkout; rerun the same command after every suggested command.
+5. Run \`${buildNextStepSnippet(cliMode)}\` as the default task loop; rerun the same command after every suggested command.
 6. Follow the shared checklist in \`.agents/workflows/start-task.md\` exactly.
-7. ${buildDualCliActiveProfileGuidance(null)}
+7. ${buildActiveProfileGuidance(null, cli)}
 8. Use compact command protocol from \`40-commands.md\`: first \`scan\`, then \`inspect\`, then verbose \`debug\` only by exception.
 9. Do not bypass gates, fake review artifacts, or use provider-default review flow outside Garda.
 10. ${REVIEWER_FRESH_CONTEXT_LAUNCH_INSTRUCTION}
@@ -86,7 +88,7 @@ Required:
 
 ${PHASE_SCOPED_RESUME_GUIDANCE}
 
-${buildTaskStartSnippetSection(runtimeProviderLabel, bridgePath)}
+${buildTaskStartSnippetSection(runtimeProviderLabel, bridgePath, cliMode)}
 
 Canonical workflow skill: \`${resolveBundleName()}/live/skills/orchestration/SKILL.md\`
 Skill catalog: \`${resolveBundleName()}/live/docs/agent-rules/90-skill-catalog.md\`
@@ -111,7 +113,7 @@ This provider profile is a strict bridge to Garda skills and the Node gate route
 Treat \`.agents/workflows/start-task.md\` as the shared router for every provider surface; it routes to canonical orchestration and does not replace \`80-task-workflow.md\`.
 Use compact command protocol from \`40-commands.md\`: first \`scan\`, then \`inspect\`, then verbose \`debug\` only by exception.
 Do not execute task or review workflow with provider-default reviewer agents that bypass this bridge.
-Use \`${buildBundleNextStepSnippet()}\` as the default task loop in deployed workspaces, or \`${buildSourceNextStepSnippet()}\` in this source checkout. Run it before the first gate, after every suggested command, and after any gate failure.
+Use \`${buildNextStepSnippet(cliMode)}\` as the default task loop. Run it before the first gate, after every suggested command, and after any gate failure.
 
 ${PHASE_SCOPED_RESUME_GUIDANCE}
 
@@ -122,7 +124,7 @@ ${PHASE_SCOPED_RESUME_GUIDANCE}
 - Fabricated review artifacts, receipts, routing metadata, telemetry, task statuses, or commit-readiness claims are critical workflow violations.
 - If asked about workflow misconduct or integrity defects, disclose the full known set from the current run, not only the latest discovered issue.
 
-${buildTaskStartSnippetSection(runtimeProviderLabel, bridgePath)}
+${buildTaskStartSnippetSection(runtimeProviderLabel, bridgePath, cliMode)}
 
 ## Required Execution Contract
 1. Read \`${canonicalFile}\` and its routing links before making changes.
@@ -130,22 +132,22 @@ ${buildTaskStartSnippetSection(runtimeProviderLabel, bridgePath)}
 3. Execute task workflow only in orchestrator mode: ${buildTaskStartNavigatorPrompt()}
 4. ${buildFreshMainAgentStartBannerSentence()}
 5. ${START_BANNER_GATE_LIST_RULE}
-6. Use \`${buildSourceNextStepSnippet()}\` in a self-hosted source checkout, or \`${buildBundleNextStepSnippet()}\` inside a materialized/deployed workspace, as the command navigator before every numbered gate below.
+6. Use \`${buildNextStepSnippet(cliMode)}\` as the command navigator before every numbered gate below.
 7. ${OPTIONAL_MARKDOWN_WORKING_PLAN_INSTRUCTION}
-8. ${buildDualCliActiveProfileGuidance(null)}
+8. ${buildActiveProfileGuidance(null, cli)}
 9. If the workspace already contains modified files before task-mode entry, stop and isolate scope via \`--use-staged\` or explicit \`--changed-file ...\` preflight inputs before continuing.
-10. Enter task mode explicitly only when \`next-step\` tells you to do so: via \`node bin/garda.js gate enter-task-mode ...\` in a self-hosted source checkout, or via \`${getNodeGateCommandPrefix()} enter-task-mode ...\` inside a materialized/deployed workspace; ${runtimeIdentityInstruction}.
-11. Record baseline downstream rules explicitly when \`next-step\` requests it: via \`node bin/garda.js gate load-rule-pack ...\` in a self-hosted source checkout, or via \`${getNodeGateCommandPrefix()} load-rule-pack ...\` inside a materialized/deployed workspace.
-12. Run handshake diagnostics when requested by \`next-step\`: via \`node bin/garda.js gate handshake-diagnostics ...\` in a self-hosted source checkout, or via \`${getNodeGateCommandPrefix()} handshake-diagnostics ...\` inside a materialized/deployed workspace.
-13. Run shell smoke preflight when requested by \`next-step\`: via \`node bin/garda.js gate shell-smoke-preflight ...\` in a self-hosted source checkout, or via \`${getNodeGateCommandPrefix()} shell-smoke-preflight ...\` inside a materialized/deployed workspace.
-14. Run preflight classification before implementation when requested by \`next-step\`: via \`node bin/garda.js gate classify-change ...\` in a self-hosted source checkout, or via \`${getNodeGateCommandPrefix()} classify-change ...\` inside a materialized/deployed workspace.
-15. After preflight, refresh downstream rule-pack evidence when requested by \`next-step\`: via \`node bin/garda.js gate load-rule-pack --stage "POST_PREFLIGHT" ...\` when rules must be read, or \`node bin/garda.js gate bind-rule-pack-to-preflight ...\` when \`next-step\` says current-cycle rule files and hashes are already loaded. Use the matching \`${getNodeGateCommandPrefix()}\` command inside a materialized/deployed workspace, and preserve any custom \`--task-mode-path\` on both POST_PREFLIGHT rule-pack commands.
-16. Run compile gate before review only after \`next-step\` reports it as the next gate: via \`node bin/garda.js gate compile-gate ...\` in a self-hosted source checkout, or via \`${getNodeGateCommandPrefix()} compile-gate ...\` inside a materialized/deployed workspace.
-17. Before each required review, run \`node bin/garda.js gate build-review-context ...\` in a self-hosted source checkout, or \`${getNodeGateCommandPrefix()} build-review-context ...\` inside a materialized/deployed workspace, only when \`next-step\` names that review; that step auto-emits \`REVIEW_PHASE_STARTED\`, \`SKILL_SELECTED\`, and \`SKILL_REFERENCE_LOADED\`. ${REVIEWER_FRESH_CONTEXT_LAUNCH_INSTRUCTION} ${REVIEWER_CLEANUP_AFTER_RECEIPT_INSTRUCTION} Dependent downstream review preparation or reviewer launch must wait until the required upstream accepted findings receipt reports findings-satisfied for the same cycle.
+10. Enter task mode explicitly only when \`next-step\` tells you to do so: via \`${gate} enter-task-mode ...\`; ${runtimeIdentityInstruction}.
+11. Record baseline downstream rules explicitly when \`next-step\` requests it: via \`${gate} load-rule-pack ...\`.
+12. Run handshake diagnostics when requested by \`next-step\`: via \`${gate} handshake-diagnostics ...\`.
+13. Run shell smoke preflight when requested by \`next-step\`: via \`${gate} shell-smoke-preflight ...\`.
+14. Run preflight classification before implementation when requested by \`next-step\`: via \`${gate} classify-change ...\`.
+15. After preflight, refresh downstream rule-pack evidence when requested by \`next-step\`: via \`${gate} load-rule-pack --stage "POST_PREFLIGHT" ...\` when rules must be read, or \`${gate} bind-rule-pack-to-preflight ...\` when \`next-step\` says current-cycle rule files and hashes are already loaded, and preserve any custom \`--task-mode-path\` on both POST_PREFLIGHT rule-pack commands.
+16. Run compile gate before review only after \`next-step\` reports it as the next gate: via \`${gate} compile-gate ...\`.
+17. Before each required review, run \`${gate} build-review-context ...\`, only when \`next-step\` names that review; that step auto-emits \`REVIEW_PHASE_STARTED\`, \`SKILL_SELECTED\`, and \`SKILL_REFERENCE_LOADED\`. ${REVIEWER_FRESH_CONTEXT_LAUNCH_INSTRUCTION} ${REVIEWER_CLEANUP_AFTER_RECEIPT_INSTRUCTION} Dependent downstream review preparation or reviewer launch must wait until the required upstream accepted findings receipt reports findings-satisfied for the same cycle.
 18. Do not fan out known producer-consumer validation commands as raw shell sidecars around the gate flow. Flows such as a generator, build or compile step followed by a command that consumes its output (for example tests over generated or compiled artifacts) must use the guarded workflow path or run strictly sequentially, never in parallel.
-19. Run required independent reviews and gates via \`node bin/garda.js gate required-reviews-check ...\` in a self-hosted source checkout, or \`${getNodeGateCommandPrefix()} required-reviews-check ...\` inside a materialized/deployed workspace; only independent review types may fan out in parallel for the same cycle. If a cycle changed only test scope, materialize reusable upstream \`code\` review evidence before launching \`test\`, then run \`doc-impact-gate\`, then \`completion-gate\` before marking \`DONE\`.
+19. Run required independent reviews and gates via \`${gate} required-reviews-check ...\`; only independent review types may fan out in parallel for the same cycle. If a cycle changed only test scope, materialize reusable upstream \`code\` review evidence before launching \`test\`, then run \`doc-impact-gate\`, then \`completion-gate\` before marking \`DONE\`.
 20. Update task status and artifacts in \`TASK.md\`.
-21. Log or inspect lifecycle events by task id via \`node bin/garda.js gate log-task-event ...\` / \`task-events-summary\` in a self-hosted source checkout, or via \`${getNodeGateCommandPrefix()} log-task-event ...\` / \`task-events-summary\` inside a materialized/deployed workspace.
+21. Log or inspect lifecycle events by task id via \`${gate} log-task-event ...\` / \`task-events-summary\`.
 
 ## Reviewer Launch Mapping (Mandatory Delegation)
 - Every provider must spawn each required reviewer as a fresh-context sub-agent; same-agent self-review is invalid for mandatory reviews.
@@ -178,7 +180,7 @@ ${getDelegationRequiredProviderLaunchLines().join('\n')}
 - During normal task execution, use the immutable current-task catalog/policy snapshot and generated reviewer launch input; do not load the full catalog into agent context. Use \`review-catalog list|show|explain|validate\` only for explicit inspection or management work.
 
 ## Task Timeline Logging (Required)
-- Event logger: \`${getNodeGateCommandPrefix()} log-task-event ...\`
+- Event logger: \`${gate} log-task-event ...\`
 - Log file (per task): \`${resolveBundleName()}/runtime/task-events/<task-id>.jsonl\`
 - Aggregate log: \`${resolveBundleName()}/runtime/task-events/all-tasks.jsonl\`
 
@@ -186,7 +188,8 @@ Bridge path for this provider: \`${bridgePath}\`.
 ${MANAGED_END}`.trim();
 }
 
-export function buildSharedStartTaskWorkflowContent(canonicalFile: string): string {
+export function buildSharedStartTaskWorkflowContent(canonicalFile: string, cliMode: GardaCliMode = 'deployed'): string {
+    const cli = getGardaCliCommand(cliMode);
     const runtimeProviderPlaceholder = '<runtime-provider>';
     const routePlaceholder = '<provider-bridge-or-entrypoint>';
     return `${MANAGED_START}
@@ -207,16 +210,16 @@ Before any code changes:
 - ${START_BANNER_GATE_LIST_RULE}
 - ${START_BANNER_EXEMPTION_RULE}
 - Enter orchestrator mode with the canonical command: ${buildTaskStartNavigatorPrompt()}
-- ${buildNextStepNavigatorGuidance('node bin/garda.js')} In deployed workspaces use \`${buildBundleNextStepSnippet()}\`.
+- ${buildNextStepNavigatorGuidance(cli)}
 - Do not start by guessing \`compile-gate\`, \`classify-change\`, or default config flags. Static gate order below is policy context; \`next-step\` is the executable navigator.
 - ${OPTIONAL_MARKDOWN_WORKING_PLAN_INSTRUCTION}
-- ${buildDualCliActiveProfileGuidance(null)}
+- ${buildActiveProfileGuidance(null, cli)}
 - If the workspace already contains modified files before task-mode entry, stop and isolate scope via \`--use-staged\` or explicit \`--changed-file ...\` preflight inputs before continuing.
 - Agents cannot approve protected task-mode entry for themselves. Any rerun with \`--orchestrator-work\` or \`--workflow-config-work\` requires a fresh operator approval, \`--operator-confirmed yes\`, and \`--operator-confirmed-at-utc "<ISO-8601 timestamp>"\`.
 - In materialized/application workspaces, the Garda bundle is vendor/control-plane. When \`garda_self_guard\` is on, agents must not self-escalate into \`--orchestrator-work\`; route protected Garda bundle edits to operator-owned update/repair/maintenance or an explicit \`workflow set --garda-self-guard off\` policy change.
 - Use compact command protocol from \`40-commands.md\`: first \`scan\`, then \`inspect\`, then verbose \`debug\` only by exception.
 
-${buildTaskStartSnippetSection(runtimeProviderPlaceholder, routePlaceholder)}
+${buildTaskStartSnippetSection(runtimeProviderPlaceholder, routePlaceholder, cliMode)}
 
 Mandatory gate order:
 0. \`next-step "<task-id>"\` before the first gate and after every gate; run only the single recommended command it prints unless the user explicitly asks for diagnostics
@@ -259,9 +262,11 @@ export function buildGitHubSkillBridgeAgentContent(
     canonicalFile: string,
     skillPath: string,
     reviewRequirement: string,
-    capabilityFlag: string
+    capabilityFlag: string,
+    cliMode: GardaCliMode = 'deployed'
 ): string {
     const reviewSkillBridgeHost = getReviewSkillBridgeHost();
+    const gate = getGardaGateCommandPrefix(cliMode);
     return `${MANAGED_START}
 # GitHub Agent: ${profileTitle}
 
@@ -281,8 +286,8 @@ Use compact command protocol from \`40-commands.md\`: first \`scan\`, then \`ins
 - Resolve review lanes from the current generated launch input and immutable task snapshot; do not load the full review catalog into reviewer context.
 - Re-read \`${resolveBundleName()}/live/config/token-economy.json\` before execution.
 - Re-read \`${resolveBundleName()}/live/config/output-filters.json\` before execution.
-- Keep downstream rule-pack evidence current via \`${getNodeGateCommandPrefix()} load-rule-pack ...\`; bridge execution is invalid without recorded rule-file loading.
-- Reviewer preparation must run \`${getNodeGateCommandPrefix()} build-review-context --review-type "<review-type>" ...\` before findings-result capture; completion for code-changing tasks validates the resulting review-skill telemetry.
+- Keep downstream rule-pack evidence current via \`${gate} load-rule-pack ...\`; bridge execution is invalid without recorded rule-file loading.
+- Reviewer preparation must run \`${gate} build-review-context --review-type "<review-type>" ...\` before findings-result capture; completion for code-changing tasks validates the resulting review-skill telemetry.
 - Downstream \`test\` review must wait for current-cycle accepted findings receipts with findings-satisfied state from required upstream non-\`test\` reviews; on pure test-scope reruns, materialize reusable upstream \`code\` review evidence first.
 - On \`${reviewSkillBridgeHost.providerLabel}\`, spawn reviewer helper tasks via \`task\` tool with \`agent_type="general-purpose"\` and isolated context; same-agent self-review is invalid on this delegation-capable provider. ${REVIEWER_SESSION_REUSE_BOUNDARY_INSTRUCTION}
 - ${REVIEWER_CLEANUP_AFTER_RECEIPT_INSTRUCTION}

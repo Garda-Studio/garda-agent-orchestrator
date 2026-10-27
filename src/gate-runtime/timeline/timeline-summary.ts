@@ -13,6 +13,7 @@ import { withFilesystemLock } from './task-events-locking';
 import { detectCodeChanged } from '../../core/preflight-code-change';
 import { loadFullSuiteValidationConfig } from '../../core/full-suite-validation-config';
 import { parseTaskIdJsonlFileName, RESERVED_TASK_EVENT_TIMELINE_NAMES } from '../../core/task-ids';
+import { resolveGardaCliPrefix } from '../../core/garda-cli-prefix';
 const SUMMARY_VERSION = 2;
 const SUMMARY_FILE_NAME = '.timeline-summary.json';
 const SUMMARY_LOCK_FILE_NAME = '.timeline-summary.lock';
@@ -103,6 +104,7 @@ export interface TimelineWarningDetail {
 
 interface TimelineIssueInput {
     taskId: string;
+    cliPrefix?: string;
     fileName: string;
     timelinePath: string;
     taskStatus?: string | null;
@@ -579,24 +581,25 @@ function buildTimelineRepairGuidance(
     kind: TimelineIssueKind,
     taskId: string,
     timelinePath: string,
-    taskStatus?: string | null
+    taskStatus?: string | null,
+    cliPrefix = 'node bin/garda.js'
 ): string {
     const displayPath = timelinePath.replace(/\\/g, '/');
     switch (kind) {
         case 'INVALID':
-            return `inspect ${displayPath}; remove or restore malformed/foreign records, then run node bin/garda.js repair rebuild-indexes --confirm --repo-root "."`;
+            return `inspect ${displayPath}; remove or restore malformed/foreign records, then run ${cliPrefix} repair rebuild-indexes --confirm --repo-root "."`;
         case 'LEGACY':
-            return `keep as historical evidence or replay/re-enter ${taskId} through current gates; then run node bin/garda.js repair rebuild-indexes --confirm --repo-root "."`;
+            return `keep as historical evidence or replay/re-enter ${taskId} through current gates; then run ${cliPrefix} repair rebuild-indexes --confirm --repo-root "."`;
         case 'INTEGRITY_FAILED':
             return `treat ${displayPath} as tampered/corrupt evidence; restore from trusted backup or reset the task before rebuilding indexes`;
         case 'INCOMPLETE':
             if (taskStatus === 'BLOCKED') {
-                return `resolve the active BLOCKED task state for ${taskId} in TASK.md, then resume with node bin/garda.js next-step "${taskId}" --repo-root "."`;
+                return `resolve the active BLOCKED task state for ${taskId} in TASK.md, then resume with ${cliPrefix} next-step "${taskId}" --repo-root "."`;
             }
             if (taskStatus === 'SPLIT_REQUIRED') {
-                return `complete the SPLIT_REQUIRED decomposition path for ${taskId} in TASK.md, then resume with node bin/garda.js next-step "${taskId}" --repo-root "."`;
+                return `complete the SPLIT_REQUIRED decomposition path for ${taskId} in TASK.md, then resume with ${cliPrefix} next-step "${taskId}" --repo-root "."`;
             }
-            return `resume ${taskId} with node bin/garda.js next-step "${taskId}" --repo-root "." and complete the missing lifecycle gates`;
+            return `resume ${taskId} with ${cliPrefix} next-step "${taskId}" --repo-root "." and complete the missing lifecycle gates`;
         default:
             return `inspect ${displayPath}`;
     }
@@ -657,7 +660,7 @@ function buildTimelineWarningDetail(input: TimelineIssueInput): TimelineWarningD
         return null;
     }
 
-    const repairGuidance = buildTimelineRepairGuidance(kind, input.taskId, input.timelinePath, input.taskStatus);
+    const repairGuidance = buildTimelineRepairGuidance(kind, input.taskId, input.timelinePath, input.taskStatus, input.cliPrefix);
     const boundedDetails = buildBoundedIssueDetails(details);
     const statusLayerNote = input.statusSurface === true
         ? ' Note: task-cycle diagnostic; workspace readiness is evaluated separately.'
@@ -705,6 +708,7 @@ export function collectTimelineSummaryForStatus(
     options: TimelineSummaryCollectionOptions = {}
 ): StatusTimelineSummary {
     const eventsRoot = path.join(bundlePath, 'runtime', 'task-events');
+    const cliPrefix = resolveGardaCliPrefix(path.dirname(path.resolve(bundlePath)));
     const fullSuiteValidationEnabled = loadFullSuiteValidationConfig(bundlePath).enabled;
     if (!fs.existsSync(eventsRoot)) {
         return { taskCount: 0, healthy: 0, warnings: [], warningDetails: [] };
@@ -746,6 +750,7 @@ export function collectTimelineSummaryForStatus(
         if (cached && isTimelineSummaryEntryCurrent(cached, timelinePath, fullSuiteValidationEnabled)) {
             const issue = buildTimelineWarningDetail({
                 taskId,
+                cliPrefix,
                 fileName,
                 timelinePath,
                 taskStatus,
@@ -778,6 +783,7 @@ export function collectTimelineSummaryForStatus(
                 const inspectResult = inspectTaskEventFile(timelinePath, taskId);
                 const issue = buildTimelineWarningDetail({
                     taskId,
+                    cliPrefix,
                     fileName,
                     timelinePath,
                     taskStatus,
@@ -798,6 +804,7 @@ export function collectTimelineSummaryForStatus(
             } else {
                 const issue = buildTimelineWarningDetail({
                     taskId,
+                    cliPrefix,
                     fileName,
                     timelinePath,
                     taskStatus,
@@ -816,6 +823,7 @@ export function collectTimelineSummaryForStatus(
             const msg = err instanceof Error ? err.message : String(err);
             const issue = buildTimelineWarningDetail({
                 taskId,
+                cliPrefix,
                 fileName,
                 timelinePath,
                 taskStatus,
@@ -846,6 +854,7 @@ export function collectTimelineSummaryForDoctor(
     options: TimelineSummaryCollectionOptions = {}
 ): DoctorTimelineSummary {
     const eventsRoot = path.join(bundlePath, 'runtime', 'task-events');
+    const cliPrefix = resolveGardaCliPrefix(path.dirname(path.resolve(bundlePath)));
     const fullSuiteValidationEnabled = loadFullSuiteValidationConfig(bundlePath).enabled;
     if (!fs.existsSync(eventsRoot)) {
         return { evidence: [], warnings: [] };
@@ -886,6 +895,7 @@ export function collectTimelineSummaryForDoctor(
 
             const issue = classifyTimelineIssue({
                 taskId,
+                cliPrefix,
                 fileName,
                 timelinePath,
                 taskStatus,
@@ -924,6 +934,7 @@ export function collectTimelineSummaryForDoctor(
 
             const issue = classifyTimelineIssue({
                 taskId,
+                cliPrefix,
                 fileName,
                 timelinePath,
                 taskStatus,
@@ -939,6 +950,7 @@ export function collectTimelineSummaryForDoctor(
             const msg = err instanceof Error ? err.message : String(err);
             warnings.push(classifyTimelineIssue({
                 taskId,
+                cliPrefix,
                 fileName,
                 timelinePath,
                 taskStatus,

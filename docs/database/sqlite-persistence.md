@@ -434,7 +434,7 @@ cutover because sustained reliability plus tested export, backup, restore,
 downgrade, and rollback paths were not available.
 
 The T-1000-4 local benchmark and the resulting adaptive adoption boundary are
-recorded in [SQLite Query Adoption Evidence](./sqlite-query-adoption-evidence.md).
+recorded in [SQLite Query Adoption Evidence](https://github.com/Garda-Studio/garda-agent-orchestrator/blob/master/docs/database/sqlite-query-adoption-evidence.md).
 
 ## Authority Cutover Decision
 

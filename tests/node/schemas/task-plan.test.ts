@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
+import { getRepoRoot } from '../../../scripts/node-foundation/build';
 
 import {
     TASK_PLAN_SCHEMA_VERSION,
@@ -567,4 +571,24 @@ test('detectPlanDrift collapses duplicate slashes', () => {
     const result = detectPlanDrift({ plan, actualFiles: ['src/a.ts'] });
     assert.equal(result.status, 'NO_DRIFT');
     assert.deepEqual(result.matched_files, ['src/a.ts']);
+});
+
+test('validateTaskPlan accepts required_reviews and normalizes lane ids', () => {
+    const plan = validateTaskPlan({ ...minimalValidPlan(), required_reviews: ['Code', 'api'] });
+    assert.deepEqual(plan.required_reviews, ['code', 'api']);
+    assert.equal(validateTaskPlan(minimalValidPlan()).required_reviews, undefined);
+});
+
+test('validateTaskPlan rejects empty, duplicate or malformed required_reviews', () => {
+    assert.throws(() => validateTaskPlan({ ...minimalValidPlan(), required_reviews: [] }), /at least one review lane/);
+    assert.throws(() => validateTaskPlan({ ...minimalValidPlan(), required_reviews: ['api', 'API'] }), /more than once/);
+    assert.throws(() => validateTaskPlan({ ...minimalValidPlan(), required_reviews: ['api lane'] }), /review lane id/);
+});
+
+test('the shipped task-plan template is a valid plan that shows required_reviews', () => {
+    const template = JSON.parse(fs.readFileSync(path.join(getRepoRoot(), 'template', 'templates', 'task-plan.json'), 'utf8'));
+    const plan = validateTaskPlan(template);
+    assert.ok(Array.isArray(plan.required_reviews) && plan.required_reviews.length > 0);
+    const result = validateAgainstSchema(template, taskPlanSchema);
+    assert.ok(result.valid, `Errors: ${result.errors.map((e) => e.message).join('; ')}`);
 });

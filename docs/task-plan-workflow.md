@@ -149,6 +149,12 @@ Important boundaries:
 - Reviewer context treats a missing optional Markdown working plan, and a missing task-mode JSON plan in non-plan-guided execution, as neutral `not_provided` context. Reviewers must not turn that absence into an active finding, deferred finding, residual risk, or no-plan waiver requirement. If a JSON task plan was explicitly attached and is missing, stale, invalid, or contradictory, that attached-plan problem is still reviewable.
 - Do not create a retrospective Markdown plan only to satisfy a reviewer or completion gate.
 
+### Plan Template And Required Review Lanes
+
+Start a new plan from `<bundle>/template/templates/task-plan.json`, edit it in a workspace file, set `status` to `approved`, and save it with `task plan save <task-id> --input <file>`. The saved canonical plan lives at `<bundle>/runtime/reviews/<task-id>-task-plan.json`; read it back with `task plan show <task-id>`.
+
+`required_reviews` (optional) lists review lanes that must run in addition to the lanes classification selects, using lane IDs from `review-capabilities` (for example `code`, `security`, `api`, `test`). When the plan is approved and attached at task entry, `classify-change` applies these lanes exactly like the TASK.md Notes marker `Required reviews: code, security, api, test.`; lanes from both sources are combined. An unknown lane, or a lane disabled in `live/config/review-capabilities.json`, blocks preflight instead of being skipped. Lanes written only in a Markdown working plan or a draft plan are not binding. Omit the field when the classified lanes are enough.
+
 ### Complete Ready JSON Example
 
 ```json
@@ -163,6 +169,7 @@ Important boundaries:
     "CHANGELOG.md"
   ],
   "risk_level": "low",
+  "required_reviews": ["code", "test"],
   "acceptance_criteria": [
     "Valid plans with forward step references are accepted",
     "Unknown dependencies and dependency cycles are rejected with useful diagnostics"

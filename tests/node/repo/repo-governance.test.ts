@@ -276,11 +276,11 @@ test('source-checkout generated router files stay synced with builder output whe
     const repoRoot = getRepoRoot();
     const normalize = (content: string) => content.replace(/\r\n/g, '\n').trim();
     const generatedFiles = [
-        ['.agents/workflows/start-task.md', buildSharedStartTaskWorkflowContent('AGENTS.md')],
-        ['.github/agents/orchestrator.md', buildProviderOrchestratorAgentContent('GitHub Copilot', 'AGENTS.md', '.github/agents/orchestrator.md')],
-        ['.windsurf/agents/orchestrator.md', buildProviderOrchestratorAgentContent('Windsurf', 'AGENTS.md', '.windsurf/agents/orchestrator.md')],
-        ['.junie/agents/orchestrator.md', buildProviderOrchestratorAgentContent('Junie', 'AGENTS.md', '.junie/agents/orchestrator.md')],
-        ['.antigravity/agents/orchestrator.md', buildProviderOrchestratorAgentContent('Antigravity', 'AGENTS.md', '.antigravity/agents/orchestrator.md')]
+        ['.agents/workflows/start-task.md', buildSharedStartTaskWorkflowContent('AGENTS.md', 'source')],
+        ['.github/agents/orchestrator.md', buildProviderOrchestratorAgentContent('GitHub Copilot', 'AGENTS.md', '.github/agents/orchestrator.md', 'source')],
+        ['.windsurf/agents/orchestrator.md', buildProviderOrchestratorAgentContent('Windsurf', 'AGENTS.md', '.windsurf/agents/orchestrator.md', 'source')],
+        ['.junie/agents/orchestrator.md', buildProviderOrchestratorAgentContent('Junie', 'AGENTS.md', '.junie/agents/orchestrator.md', 'source')],
+        ['.antigravity/agents/orchestrator.md', buildProviderOrchestratorAgentContent('Antigravity', 'AGENTS.md', '.antigravity/agents/orchestrator.md', 'source')]
     ] as const;
     for (const [relativePath, expectedContent] of generatedFiles) {
         assertRepoFileIgnoredAndNotTracked(relativePath);

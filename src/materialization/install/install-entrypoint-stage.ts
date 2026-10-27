@@ -1,6 +1,8 @@
 import * as path from 'node:path';
-import { ALL_AGENT_ENTRYPOINT_FILES } from '../../core/constants';
+import * as fs from 'node:fs';
+import { ALL_AGENT_ENTRYPOINT_FILES, isRecognizedPackageName } from '../../core/constants';
 import { pathExists, readTextFile } from '../../core/filesystem';
+import type { GardaCliMode } from '../command-constants';
 import {
     SHARED_START_TASK_WORKFLOW_RELATIVE_PATH,
     getGitHubSkillBridgeProfileDefinitions,
@@ -21,8 +23,24 @@ import type {
     ProviderOrchestratorProfile
 } from './install-contracts';
 
+/**
+ * Generated guidance names the source CLI only inside the Garda source checkout itself.
+ * Detection must not depend on a built `bin/garda.js`, which is untracked and appears only after the build.
+ */
+export function resolveInstallCliMode(targetRoot: string): GardaCliMode {
+    if (!pathExists(path.join(targetRoot, 'src', 'index.ts'))) return 'deployed';
+    try {
+        const manifest: unknown = JSON.parse(fs.readFileSync(path.join(targetRoot, 'package.json'), 'utf8'));
+        return manifest !== null && typeof manifest === 'object' && 'name' in manifest
+            && isRecognizedPackageName(manifest.name) ? 'source' : 'deployed';
+    } catch {
+        return 'deployed';
+    }
+}
+
 export interface RunInstallPrimaryEntrypointStageOptions {
     sourceRoot: string;
+    cliMode?: GardaCliMode;
     canonicalEntryFile: string;
     redirectEntryFiles: readonly string[];
     providerBridgePaths: readonly string[];
@@ -37,14 +55,16 @@ export function runInstallPrimaryEntrypointStage(
         canonicalEntryFile,
         redirectEntryFiles,
         providerBridgePaths,
-        filesystem
+        filesystem,
+        cliMode = 'deployed'
     } = options;
     const managedEntrypointTemplateContent = readTextFile(
         path.join(sourceRoot, 'entrypoints', 'canonical-rule-index.md')
     );
     const canonicalBlock = buildCanonicalManagedBlock(
         canonicalEntryFile,
-        managedEntrypointTemplateContent
+        managedEntrypointTemplateContent,
+        cliMode
     );
     filesystem.applyEntrypointManagedBlock(canonicalEntryFile, canonicalBlock);
 
@@ -52,7 +72,8 @@ export function runInstallPrimaryEntrypointStage(
         const redirectBlock = buildRedirectManagedBlock(
             redirectFile,
             canonicalEntryFile,
-            [...providerBridgePaths]
+            [...providerBridgePaths],
+            cliMode
         );
         filesystem.applyEntrypointManagedBlock(redirectFile, redirectBlock);
     }
@@ -68,6 +89,7 @@ export interface RunInstallProviderEntrypointStageOptions {
     reviewSkillBridgeHostEntrypoint: string;
     providerBridgePaths: readonly string[];
     filesystem: InstallFilesystemStage;
+    cliMode?: GardaCliMode;
 }
 
 export interface InstallProviderEntrypointStageResult {
@@ -89,18 +111,20 @@ export function runInstallProviderEntrypointStage(
         filesystem
     } = options;
     const { metrics } = filesystem;
+    const cliMode = options.cliMode ?? resolveInstallCliMode(targetRoot);
 
     for (const profile of providerOrchestratorProfiles) {
         const block = buildProviderOrchestratorAgentContent(
             profile.providerLabel,
             canonicalEntryFile,
-            profile.orchestratorRelativePath
+            profile.orchestratorRelativePath,
+            cliMode
         );
         filesystem.applyEntrypointManagedBlock(profile.orchestratorRelativePath, block);
     }
     filesystem.applyEntrypointManagedBlock(
         SHARED_START_TASK_WORKFLOW_RELATIVE_PATH,
-        buildSharedStartTaskWorkflowContent(canonicalEntryFile)
+        buildSharedStartTaskWorkflowContent(canonicalEntryFile, cliMode)
     );
 
     for (const profile of githubSkillBridgeProfiles) {
@@ -109,7 +133,8 @@ export function runInstallProviderEntrypointStage(
             canonicalEntryFile,
             profile.skillPath,
             profile.reviewRequirement,
-            profile.capabilityFlag
+            profile.capabilityFlag,
+            cliMode
         );
         filesystem.applyEntrypointManagedBlock(profile.relativePath, block);
     }
@@ -240,7 +265,8 @@ export function runInstallProviderEntrypointStage(
             const redirectBlock = buildRedirectManagedBlock(
                 relativePath,
                 canonicalEntryFile,
-                allBridgePaths
+                allBridgePaths,
+                cliMode
             );
             if (
                 filesystem.syncManagedBlockOnDisk(
@@ -257,7 +283,8 @@ export function runInstallProviderEntrypointStage(
             const bridgeBlock = buildProviderOrchestratorAgentContent(
                 profile.providerLabel,
                 canonicalEntryFile,
-                profile.orchestratorRelativePath
+                profile.orchestratorRelativePath,
+                cliMode
             );
             if (
                 filesystem.syncManagedBlockOnDisk(
@@ -278,7 +305,8 @@ export function runInstallProviderEntrypointStage(
                 canonicalEntryFile,
                 skillProfile.skillPath,
                 skillProfile.reviewRequirement,
-                skillProfile.capabilityFlag
+                skillProfile.capabilityFlag,
+                cliMode
             );
             if (
                 filesystem.syncManagedBlockOnDisk(

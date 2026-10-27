@@ -8,6 +8,7 @@ import {
     writeContainedFile
 } from '../../core/contained-filesystem';
 import { pathExists, readTextFile } from '../../core/filesystem';
+import { RETIRED_PUBLIC_BUNDLE_ASSETS } from '../../core/public-bundle-assets';
 import {
     BUNDLE_SYNC_ITEMS,
     assertCopySourceTree,
@@ -50,6 +51,8 @@ interface PlannedBundleSyncItem {
     destinationPath: string;
     sourceIsDirectory: boolean;
     isNodeRuntimeDir: boolean;
+    /** The source no longer ships this item; sync removes it (backed up like any other item). */
+    retire?: boolean;
 }
 
 interface ApplyAvailableUpdateOptions {
@@ -325,6 +328,22 @@ function collectExistingSourceSyncItems(sourceRoot: string): string[] {
     });
 }
 
+// Retired assets may still ship in the npm package root, but they are never part of a deployed bundle.
+function collectRetiredSyncItems(deployedBundleRoot: string): string[] {
+    return RETIRED_PUBLIC_BUNDLE_ASSETS.filter((item) => pathExists(path.join(deployedBundleRoot, item)));
+}
+
+function planRetiredBundleSyncItems(deployedBundleRoot: string, retiredItems: string[]): PlannedBundleSyncItem[] {
+    return retiredItems.map((item) => ({
+        item,
+        sourcePath: '',
+        destinationPath: path.join(deployedBundleRoot, item),
+        sourceIsDirectory: false,
+        isNodeRuntimeDir: false,
+        retire: true
+    }));
+}
+
 function preflightBundleSyncPlan(
     targetRoot: string, deployedBundleRoot: string, sourceRoot: string,
     syncBackupRoot: string, plannedSyncItems: PlannedBundleSyncItem[], rollbackSyncItems: string[]
@@ -338,7 +357,7 @@ function preflightBundleSyncPlan(
     if (fs.existsSync(versionSourcePath)) assertCopySourceTree(versionSourcePath);
 
     for (const plan of plannedSyncItems) {
-        assertCopySourceTree(plan.sourcePath);
+        if (!plan.retire) assertCopySourceTree(plan.sourcePath);
         bindContainedDestination(targetRoot, plan.destinationPath);
         if (fs.existsSync(plan.destinationPath)) assertCopySourceTree(plan.destinationPath);
     }
@@ -456,6 +475,10 @@ function writeUpdateSentinelPhase(
 function syncPlannedBundleItem(
     plan: PlannedBundleSyncItem, runningScriptPath: string | null, targetRoot: string
 ): void {
+    if (plan.retire) {
+        removeContainedPath(targetRoot, plan.destinationPath, true);
+        return;
+    }
     assertCopySourceTree(plan.sourcePath);
     if (plan.sourceIsDirectory) {
         if (plan.isNodeRuntimeDir) {
@@ -483,6 +506,7 @@ function detectSyncSurfaceDrift(sourceRoot: string, deployedBundleRoot: string):
             driftedItems.push(item);
         }
     }
+    driftedItems.push(...collectRetiredSyncItems(deployedBundleRoot));
 
     return driftedItems;
 }
@@ -611,9 +635,13 @@ async function applyAvailableUpdateUnjournaled(options: ApplyAvailableUpdateOpti
         }
 
         const sourceSyncItems = collectExistingSourceSyncItems(source.sourceRoot);
-        const plannedSyncItems = planBundleSyncItems(source.sourceRoot, deployedBundleRoot, sourceSyncItems);
+        const retiredSyncItems = collectRetiredSyncItems(deployedBundleRoot);
+        const plannedSyncItems = [
+            ...planBundleSyncItems(source.sourceRoot, deployedBundleRoot, sourceSyncItems),
+            ...planRetiredBundleSyncItems(deployedBundleRoot, retiredSyncItems)
+        ];
         const plannedSyncItemNames = plannedSyncItems.map((plan) => plan.item);
-        const rollbackSyncItemNames = collectRollbackSyncItems(sourceSyncItems, deployedBundleRoot);
+        const rollbackSyncItemNames = collectRollbackSyncItems([...sourceSyncItems, ...retiredSyncItems], deployedBundleRoot);
         const syncPreexistingMap = Object.fromEntries(
             rollbackSyncItemNames.map((item) => [item, fs.existsSync(path.join(deployedBundleRoot, item))])
         ) as Record<string, boolean>;
@@ -625,10 +653,10 @@ async function applyAvailableUpdateUnjournaled(options: ApplyAvailableUpdateOpti
         let destructiveSyncStarted = false;
 
         try {
-            result.syncItemsDetected += sourceSyncItems.length;
+            result.syncItemsDetected += sourceSyncItems.length + retiredSyncItems.length;
 
             if (dryRun) {
-                result.syncedItems.push(...sourceSyncItems);
+                result.syncedItems.push(...sourceSyncItems, ...retiredSyncItems);
                 result.checkUpdateResult = 'DRY_RUN_UPDATE_AVAILABLE';
             } else {
                 for (const item of rollbackSyncItemNames) {

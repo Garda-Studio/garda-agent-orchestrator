@@ -15,7 +15,7 @@ import {
 } from '../../../src/lifecycle/check-update';
 import { runUpdate } from '../../../src/lifecycle/update';
 import { getUpdateRollbackItems } from '../../../src/lifecycle/update/update';
-import { PUBLIC_BUNDLE_ASSETS } from '../../../src/core/public-bundle-assets';
+import { PUBLIC_BUNDLE_ASSETS, RETIRED_PUBLIC_BUNDLE_ASSETS } from '../../../src/core/public-bundle-assets';
 import { verifySyncedItemsRestoredFromBackup } from '../../../src/lifecycle/check-update/check-update-bundle-sync';
 import { runDoctor } from '../../../src/validators/doctor';
 import { TEST_COMPILE_GATE_COMMAND, writeTestCompileFixture } from '../cli/commands/gate-test-repo-bootstrap';
@@ -1063,6 +1063,38 @@ describe('runCheckUpdate', () => {
             assert.equal(fs.readFileSync(existingDoc, 'utf8'), 'previous architecture\n');
             assert.equal(fs.existsSync(newDoc), false);
             assert.equal(fs.readFileSync(path.join(bundleRoot, 'VERSION'), 'utf8').trim(), '0.0.1');
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
+    it('removes retired maintainer guides on update and restores them on rollback', async () => {
+        const { projectRoot, bundleRoot } = setupCheckUpdateWorkspace(repoRoot, '0.0.1');
+        try {
+            const retired = path.join(bundleRoot, 'docs', 'manual-ci.md');
+            fs.mkdirSync(path.dirname(retired), { recursive: true });
+            fs.writeFileSync(retired, 'previous maintainer guide\n');
+            const rollbackItems = getUpdateRollbackItems(projectRoot, path.join(bundleRoot, 'init-answers.json'));
+            for (const item of RETIRED_PUBLIC_BUNDLE_ASSETS) {
+                assert.ok(rollbackItems.includes(`garda-agent-orchestrator/${item}`), item);
+            }
+            await assert.rejects(runCheckUpdate({
+                targetRoot: projectRoot, bundleRoot, sourcePath: repoRoot,
+                noPrompt: true, apply: true, trustOverride: true,
+                updateRunner: () => {
+                    assert.equal(fs.existsSync(retired), false, 'sync must remove the retired guide');
+                    throw new Error('Simulated retired-asset lifecycle failure');
+                }
+            }), /sync rollback completed.*Simulated retired-asset lifecycle failure/);
+            assert.equal(fs.readFileSync(retired, 'utf8'), 'previous maintainer guide\n');
+
+            const result = await runCheckUpdate({
+                targetRoot: projectRoot, bundleRoot, sourcePath: repoRoot,
+                noPrompt: true, apply: true, trustOverride: true, updateRunner: () => {}
+            });
+            assert.equal(result.updateApplied, true);
+            assert.equal(fs.existsSync(retired), false);
+            assert.ok(result.syncedItems.includes('docs/manual-ci.md'));
         } finally {
             removePathRecursive(projectRoot);
         }

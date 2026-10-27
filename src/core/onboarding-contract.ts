@@ -1,11 +1,10 @@
-import { resolveBundleName } from './constants';
-
 export const RECOMMENDED_UI_ACTIONS_COMMAND = 'garda ui --actions';
 
 export const NOT_EVERY_REQUEST_IS_A_TASK_RULE =
     'Not every request is a task: answer questions, explanations, reviews of existing code, read-only commands, status checks and Garda setup (`agent-init`) directly, without a `TASK.md` row or task mode. '
     + 'Change code or config only through task mode for a `TASK.md` row that already exists or that the user explicitly asks to add. '
-    + 'If a change is needed and no row matches, propose a row (ID, title, scope) or a `CAND-<number>` candidate and wait for the user\'s decision; never add a row and enter it without that decision.';
+    + 'If a change is needed and no row matches, propose a row (ID, title, scope) or a `CAND-<number>` candidate and wait for the user\'s decision; never add a row and enter it without that decision. '
+    + 'Rows that Garda materializes itself when next-step instructs (required review follow-ups through `materialize-review-follow-up-tasks`, linked repair children) are part of the approved work: create them without asking.';
 
 export function buildTaskStartNavigatorPrompt(taskId = '<task-id>'): string {
     return `Execute task ${taskId} from TASK.md strictly through the orchestrator. Use \`next-step\` as the navigator; when independent review is required, launch a sub-agent using your internal tools.`;
@@ -16,13 +15,6 @@ export function buildActiveProfileGuidance(activeProfile?: string | null, cliCom
         ? `Current active profile: ${activeProfile}.`
         : 'Active profile selection comes from the workspace profile config.';
     return `${prefix} Inspect, switch, or create profiles with \`${cliCommand} profile current|list|use|create --target-root "."\`.`;
-}
-
-export function buildDualCliActiveProfileGuidance(activeProfile?: string | null): string {
-    const prefix = activeProfile
-        ? `Current active profile: ${activeProfile}.`
-        : 'Active profile selection comes from the workspace profile config.';
-    return `${prefix} Inspect, switch, or create profiles with \`node bin/garda.js profile current|list|use|create --target-root "."\` in a self-hosted source checkout, or \`node ${resolveBundleName()}/bin/garda.js profile current|list|use|create --target-root "."\` inside a materialized/deployed workspace.`;
 }
 
 export function buildNextStepNavigatorGuidance(cliCommand = 'node bin/garda.js'): string {

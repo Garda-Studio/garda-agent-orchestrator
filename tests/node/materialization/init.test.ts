@@ -1252,7 +1252,7 @@ describe('runInit', () => {
             const pmDir = path.join(bundleRoot, 'live', 'docs', 'project-memory');
             fs.writeFileSync(path.join(pmDir, 'custom.md'), 'custom');
 
-            // Second init — support dirs (docs/changes, docs/reviews, docs/tasks) get re-synced
+            // Second init — support dirs (docs/reviews) get re-synced; docs/changes is create-only
             runInit({
                 targetRoot: projectRoot,
                 bundleRoot,
@@ -1265,6 +1265,55 @@ describe('runInit', () => {
             assert.ok(fs.existsSync(path.join(pmDir, 'custom.md')),
                 'docs/project-memory must not be affected by docs/* support directory sync');
             assert.equal(fs.readFileSync(path.join(pmDir, 'custom.md'), 'utf8'), 'custom');
+        } finally {
+            fs.rmSync(projectRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('seeds the project change log once and never ships Garda task history', () => {
+        const { projectRoot, bundleRoot } = setupTestWorkspace(repoRoot);
+        try {
+            const initOptions = {
+                targetRoot: projectRoot,
+                bundleRoot,
+                assistantLanguage: 'English',
+                assistantBrevity: 'concise',
+                sourceOfTruth: 'Claude'
+            } as const;
+            runInit(initOptions);
+            const changelogPath = path.join(bundleRoot, 'live', 'docs', 'changes', 'CHANGELOG.md');
+            const seeded = fs.readFileSync(changelogPath, 'utf8');
+            assert.match(seeded, /^# Change Log/u);
+            assert.doesNotMatch(seeded, /\bT-\d{3}|Current baseline|release notes/u);
+            assert.equal(fs.existsSync(path.join(bundleRoot, 'live', 'docs', 'tasks')), false);
+
+            const projectEntry = `${seeded}\n- Checkout: idempotent order submission.\n`;
+            fs.writeFileSync(changelogPath, projectEntry);
+            runInit(initOptions);
+            assert.equal(fs.readFileSync(changelogPath, 'utf8'), projectEntry,
+                'reinit and update must not overwrite the project-owned change log');
+
+            // A change log still holding the pre-1.4.4 Garda baseline is migrated once; project lines stay.
+            fs.writeFileSync(changelogPath, [
+                '# Change Log', '', 'Current baseline:', '',
+                '- runtime is Node-only',
+                '- Checkout: idempotent order submission.',
+                '', 'For source-level release notes, see the repository root `CHANGELOG.md`.', ''
+            ].join('\n'));
+            runInit(initOptions);
+            assert.equal(fs.readFileSync(changelogPath, 'utf8'), projectEntry);
+
+            // Garda's shipped task log is removed on update; an edited copy belongs to the project and stays.
+            const taskLogPath = path.join(bundleRoot, 'live', 'docs', 'tasks', 'TASKS.md');
+            const shippedTaskLog = fs.readFileSync(path.join(repoRoot, 'tests', 'node', 'materialization', 'fixtures', 'legacy-garda-task-log.md'), 'utf8');
+            fs.mkdirSync(path.dirname(taskLogPath), { recursive: true });
+            fs.writeFileSync(taskLogPath, shippedTaskLog.replace(/\n/g, '\r\n'));
+            runInit(initOptions);
+            assert.equal(fs.existsSync(path.dirname(taskLogPath)), false);
+            fs.mkdirSync(path.dirname(taskLogPath), { recursive: true });
+            fs.writeFileSync(taskLogPath, `${shippedTaskLog}| T-900 | TODO | P2 | docs | Project row | team | 2026-10-26 | n/a | kept |\n`);
+            runInit(initOptions);
+            assert.ok(fs.existsSync(taskLogPath));
         } finally {
             fs.rmSync(projectRoot, { recursive: true, force: true });
         }

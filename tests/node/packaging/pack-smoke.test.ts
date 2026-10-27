@@ -494,6 +494,10 @@ test('npm pack -> install -> CLI invoke smoke test', () => {
             fs.readFileSync(installedLegacyTemplatePath, 'utf8').includes('# CLAUDE.md'),
             'generated legacy template/CLAUDE.md must be provider-specific only inside the packed package'
         );
+        const installedLegacyTemplate = fs.readFileSync(installedLegacyTemplatePath, 'utf8');
+        assert.equal(installedLegacyTemplate.includes('{{GARDA_CLI}}'), false,
+            'legacy template/CLAUDE.md is copied verbatim by older CLIs and must not keep the CLI placeholder');
+        assert.ok(installedLegacyTemplate.includes('node garda-agent-orchestrator/bin/garda.js gate load-rule-pack'));
 
         // 2. --version prints the correct version
         const versionStartedAt = performance.now();

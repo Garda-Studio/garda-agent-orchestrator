@@ -34,7 +34,7 @@ Before an authorized GitHub-hosted run, the owner checks the shared allowance an
 
 After failure, inspect the exact failed job's logs before retrying. Run only the failed check, suite, OS, and runtime variant. Successful jobs and the full matrix must not be repeated without separate approval. An existing run retains its original commit; a fixed commit requires a new authorized filtered run. If the workflow cannot select the failed variant, prepare narrow manual selection first. A blocked billing/quota result is not a test failure and cannot be resolved with retries.
 
-Required status checks must correspond to the current reviewed commit and agreed validation scope. A job that did not run is not PASS. Before configuring protection, owners must ensure the manually authorized workflow can report the required checks without forcing an unapproved full matrix. Native task evidence and maintainer review are required independently of CI; see [CONTRIBUTING.md](../CONTRIBUTING.md#required-evidence-for-fixes).
+Required status checks must correspond to the current reviewed commit and agreed validation scope. A job that did not run is not PASS. Before configuring protection, owners must ensure the manually authorized workflow can report the required checks without forcing an unapproved full matrix. Native task evidence and maintainer review are required independently of CI; see [CONTRIBUTING.md](https://github.com/Garda-Studio/garda-agent-orchestrator/blob/master/CONTRIBUTING.md#required-evidence-for-fixes).
 
 ### Required Checks
 

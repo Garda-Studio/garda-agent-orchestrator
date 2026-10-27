@@ -31,6 +31,7 @@ import type {
     RunInstallOptions
 } from './install/install-contracts';
 import {
+    resolveInstallCliMode,
     runInstallPrimaryEntrypointStage,
     runInstallProviderEntrypointStage
 } from './install/install-entrypoint-stage';
@@ -235,8 +236,10 @@ export function runInstall(options: RunInstallOptions) {
             answerDependentOnly,
             filesystem
         });
+        const cliMode = resolveInstallCliMode(targetRoot);
         runInstallPrimaryEntrypointStage({
             sourceRoot,
+            cliMode,
             canonicalEntryFile,
             redirectEntryFiles,
             providerBridgePaths,
@@ -259,7 +262,8 @@ export function runInstall(options: RunInstallOptions) {
             providerMinimalism,
             reviewSkillBridgeHostEntrypoint,
             providerBridgePaths,
-            filesystem
+            filesystem,
+            cliMode
         });
         const ignoreSettings = runInstallIgnoreStage({
             targetRoot,

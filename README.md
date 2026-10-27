@@ -189,17 +189,17 @@ See [Update availability](docs/configuration.md#update-availability) for cache a
 | Document | Description |
 |---|---|
 | **[HOW_TO.md](HOW_TO.md)** | Step-by-step user guide |
-| **[CONTRIBUTING.md](CONTRIBUTING.md)** | Contribution policy, required native fix evidence, and PR review |
-| **[docs/contributor-workflow.md](docs/contributor-workflow.md)** | Fork, local setup, task lifecycle, scoped checks, and evidence handoff |
+| **[CONTRIBUTING.md](https://github.com/Garda-Studio/garda-agent-orchestrator/blob/master/CONTRIBUTING.md)** | Contribution policy, required native fix evidence, and PR review |
+| **[docs/contributor-workflow.md](https://github.com/Garda-Studio/garda-agent-orchestrator/blob/master/docs/contributor-workflow.md)** | Fork, local setup, task lifecycle, scoped checks, and evidence handoff |
 | **[docs/run-methods.md](docs/run-methods.md)** | Choose between global install, one-off execution, and source checkout |
 | **[docs/cli-reference.md](docs/cli-reference.md)** | Complete CLI command reference |
 | **[docs/architecture.md](docs/architecture.md)** | Design, runtime model, deployed files |
 | **[docs/configuration.md](docs/configuration.md)** | Token economy, output filters, review capabilities, and review catalog management |
 | **[docs/findings-contracts.md](docs/findings-contracts.md)** | Findings-only review lifecycle, policy, recovery, and legacy migration |
-| **[docs/node-platform-foundation.md](docs/node-platform-foundation.md)** | Node foundation, execution model, validators, and build/test skeleton |
+| **[docs/node-platform-foundation.md](https://github.com/Garda-Studio/garda-agent-orchestrator/blob/master/docs/node-platform-foundation.md)** | Node foundation, execution model, validators, and build/test skeleton |
 | **[docs/database/sqlite-persistence.md](docs/database/sqlite-persistence.md)** | Workspace-local derived SQLite catalog, authority boundary, recovery, and maintenance contract |
-| **[docs/database/sqlite-query-adoption-evidence.md](docs/database/sqlite-query-adoption-evidence.md)** | Benchmark evidence for adopted and rejected SQLite query paths |
-| **[docs/release-readiness.md](docs/release-readiness.md)** | Versioned static release checklist and package handoff contract |
+| **[docs/database/sqlite-query-adoption-evidence.md](https://github.com/Garda-Studio/garda-agent-orchestrator/blob/master/docs/database/sqlite-query-adoption-evidence.md)** | Benchmark evidence for adopted and rejected SQLite query paths |
+| **[docs/release-readiness.md](https://github.com/Garda-Studio/garda-agent-orchestrator/blob/master/docs/release-readiness.md)** | Versioned static release checklist and package handoff contract |
 | **[docs/work-example.md](docs/work-example.md)** | Task lifecycle walkthrough |
 | **[docs/task-plan-workflow.md](docs/task-plan-workflow.md)** | Optional planning guide and worked plan example |
 | **[docs/threat-model.md](docs/threat-model.md)** | Trust boundaries and security assumptions |

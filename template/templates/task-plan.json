@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "task_id": "<task-id>",
+  "status": "draft",
+  "goal": "<one-sentence outcome of the task>",
+  "scope_files": [
+    "<path/of/a/file/to/change>"
+  ],
+  "risk_level": "low",
+  "required_reviews": [
+    "code",
+    "test"
+  ],
+  "acceptance_criteria": [
+    "<observable behavior that must hold when the task is done>"
+  ],
+  "verification_expectations": [
+    "<focused tests or commands that prove the criteria>"
+  ],
+  "out_of_scope": [
+    "<related work this task deliberately does not do>"
+  ],
+  "steps": [
+    {
+      "id": "implement",
+      "title": "<first execution step>",
+      "files": [
+        "<path/of/a/file/to/change>"
+      ]
+    }
+  ],
+  "notes": "Optional fields: required_reviews (review lanes that must run in addition to the classified ones; remove it when classification is enough), acceptance_criteria, verification_expectations, out_of_scope, validation_strategy. Set status to approved when the plan is ready, then save it with `task plan save <task-id> --input <file>`."
+}

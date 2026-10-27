@@ -4,8 +4,10 @@ import {
     type ReviewCapabilityKey
 } from '../../core/review-capabilities';
 
+export type TaskRequiredReviewDeclarationSource = 'task_queue_notes' | 'task_plan' | 'task_queue_notes_and_task_plan';
+
 export interface TaskRequiredReviewDeclaration {
-    source: 'task_queue_notes';
+    source: TaskRequiredReviewDeclarationSource;
     declared_reviews: ReviewCapabilityKey[];
     applied_reviews: ReviewCapabilityKey[];
 }
@@ -74,25 +76,62 @@ export function resolveTaskRequiredReviewDeclaration(
         throw invalidDeclaration(options.taskId, `lane '${duplicateLane}' is declared more than once.`);
     }
 
+    return buildDeclaration(options.taskId, declaredReviews, options.reviewCapabilities, 'task_queue_notes',
+        (reason) => invalidDeclaration(options.taskId, reason));
+}
+
+function buildDeclaration(
+    taskId: string,
+    declaredReviews: readonly string[],
+    reviewCapabilities: Partial<ReviewCapabilities>,
+    source: TaskRequiredReviewDeclarationSource,
+    invalid: (reason: string) => Error
+): TaskRequiredReviewDeclaration {
     const unknownLane = declaredReviews.find((lane) => !REVIEW_CAPABILITY_KEYS.includes(lane as ReviewCapabilityKey));
     if (unknownLane) {
-        throw invalidDeclaration(options.taskId, `unknown lane '${unknownLane}'.`);
+        throw invalid(`unknown lane '${unknownLane}'.`);
     }
 
     const typedReviews = declaredReviews as ReviewCapabilityKey[];
-    const unavailableLane = typedReviews.find((lane) => options.reviewCapabilities[lane] !== true);
+    const unavailableLane = typedReviews.find((lane) => reviewCapabilities[lane] !== true);
     if (unavailableLane) {
         throw new Error(
-            `Task '${options.taskId}' required-review declaration cannot be honored: review lane '${unavailableLane}' `
+            `Task '${taskId}' required-review declaration cannot be honored: review lane '${unavailableLane}' `
             + `is unavailable because review-capabilities.${unavailableLane} is not enabled.`
         );
     }
 
     return {
-        source: 'task_queue_notes',
+        source,
         declared_reviews: [...typedReviews],
         applied_reviews: [...typedReviews]
     };
+}
+
+/** Lanes declared in the task's approved, authenticated JSON plan (`required_reviews`). */
+export function resolveTaskPlanRequiredReviewDeclaration(options: {
+    taskId: string;
+    requiredReviews: readonly string[] | null | undefined;
+    reviewCapabilities: Partial<ReviewCapabilities>;
+}): TaskRequiredReviewDeclaration | null {
+    if (!options.requiredReviews || options.requiredReviews.length === 0) {
+        return null;
+    }
+    return buildDeclaration(options.taskId, options.requiredReviews, options.reviewCapabilities, 'task_plan',
+        (reason) => new Error(`Task '${options.taskId}' has invalid task-plan required_reviews: ${reason} `
+            + `Allowed lanes: ${formatAllowedReviewLanes()}.`));
+}
+
+/** Union of the Notes and plan declarations; a lane declared in either source is required. */
+export function mergeTaskRequiredReviewDeclarations(
+    notesDeclaration: TaskRequiredReviewDeclaration | null,
+    planDeclaration: TaskRequiredReviewDeclaration | null
+): TaskRequiredReviewDeclaration | null {
+    if (!notesDeclaration || !planDeclaration) {
+        return notesDeclaration || planDeclaration;
+    }
+    const lanes = [...new Set([...notesDeclaration.declared_reviews, ...planDeclaration.declared_reviews])];
+    return { source: 'task_queue_notes_and_task_plan', declared_reviews: lanes, applied_reviews: [...lanes] };
 }
 
 export function applyTaskRequiredReviewDeclaration(

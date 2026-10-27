@@ -365,7 +365,7 @@ describe('init materialization stages', () => {
             });
 
             assert.equal(result.ruleSourceMap.length, RULE_FILES.length);
-            assert.equal(result.copiedSupportDirs, 6);
+            assert.equal(result.copiedSupportDirs, 5);
             assert.equal(result.seededDirs, 1);
             assert.ok(fs.existsSync(path.join(
                 workspace.liveRoot,

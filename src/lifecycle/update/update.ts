@@ -1,4 +1,5 @@
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
+import { RETIRED_PUBLIC_BUNDLE_ASSETS } from '../../core/public-bundle-assets';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -82,7 +83,7 @@ function bindPreSyncBundleToSnapshot(targetRoot: string, bundleRoot: string, sna
     if (!Number.isFinite(backupCreatedAt) || backupCreatedAt < acquiredAt || backupCreatedAt > startedAt) {
         throw new Error('Update sync backup metadata belongs to a different lifecycle operation.');
     }
-    const allowedItems = new Set<string>([...BUNDLE_SYNC_ITEMS, 'live/version.json']);
+    const allowedItems = new Set<string>([...BUNDLE_SYNC_ITEMS, ...RETIRED_PUBLIC_BUNDLE_ASSETS, 'live/version.json']);
     const plannedItems = sentinel.plannedSyncItems;
     if (!Array.isArray(plannedItems) || !plannedItems.every((item) => typeof item === 'string' && allowedItems.has(item))
         || new Set(plannedItems).size !== plannedItems.length
@@ -177,7 +178,8 @@ export function getUpdateRollbackItems(rootPath: string, initAnswersResolvedPath
         '.git/hooks/pre-commit',
         resolveBundleName() + '/live',
         resolveBundleName() + '/live/docs/project-memory',
-        ...BUNDLE_SYNC_ITEMS.map((item) => `${resolveBundleName()}/${item}`)
+        ...BUNDLE_SYNC_ITEMS.map((item) => `${resolveBundleName()}/${item}`),
+        ...RETIRED_PUBLIC_BUNDLE_ASSETS.map((item) => `${resolveBundleName()}/${item}`)
     ];
 
     const rootResolved = path.resolve(rootPath);
@@ -215,6 +217,20 @@ function hasLegacyOuterUpdateLock(normalizedTarget: string, bundleRoot: string):
             && ownerTarget === normalizedTarget;
     } catch {
         return false;
+    }
+}
+
+function removeRetiredPublicBundleAssets(targetRoot: string, bundleRoot: string): void {
+    for (const item of RETIRED_PUBLIC_BUNDLE_ASSETS) {
+        const assetPath = path.join(bundleRoot, item);
+        let stat: fs.Stats;
+        try {
+            stat = fs.lstatSync(assetPath);
+        } catch {
+            continue;
+        }
+        // Only ordinary files are retired here; anything else stays for the operator to inspect.
+        if (stat.isFile() && stat.nlink === 1) removeContainedPath(targetRoot, assetPath, false);
     }
 }
 
@@ -286,6 +302,8 @@ function runValidatedUpdate(
         writeRollbackRecords(rollbackSnapshotPath, rollbackRecords);
         rollbackRecordCount = rollbackRecords.length;
         rollbackSnapshotCreated = true;
+        // An older runtime may have synced these guides before this lifecycle; the snapshot above restores them on rollback.
+        removeRetiredPublicBundleAssets(normalizedTarget, bundleRoot);
     }
 
     const stageResult = executeUpdatePipelineStages({

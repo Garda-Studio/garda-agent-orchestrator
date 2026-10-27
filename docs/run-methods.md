@@ -9,7 +9,7 @@ Current package version source in this repository: `VERSION`.
 Use this when testing the repository itself without packing or installing.
 Compile first so `src/bin/garda.ts` is emitted as `bin/garda.js` and can launch the built runtime.
 
-For a fresh source contribution, follow the [contributor workflow](contributor-workflow.md). It uses the checkout's own CLI, creates ignored local workflow files through setup, and completes real agent onboarding before task execution. Run `npm ci` before the initial build. The commands below illustrate a scripted workspace; completion flags must describe onboarding steps that actually occurred.
+For a fresh source contribution, follow the [contributor workflow](https://github.com/Garda-Studio/garda-agent-orchestrator/blob/master/docs/contributor-workflow.md). It uses the checkout's own CLI, creates ignored local workflow files through setup, and completes real agent onboarding before task execution. Run `npm ci` before the initial build. The commands below illustrate a scripted workspace; completion flags must describe onboarding steps that actually occurred.
 
 ```text
 cd D:\Projects\garda-agent-orchestrator
@@ -214,7 +214,7 @@ limits. Any earlier started, completed, failed, cancelled or uncertain staging
 refuses restaging. Current staging
 requires successful validation and a queued npm step with null execution timestamps.
 Missing staging records fail closed, even if the provider's job count is complete.
-See [publication history guard](release-readiness.md#publication-history-guard)
+See [publication history guard](https://github.com/Garda-Studio/garda-agent-orchestrator/blob/master/docs/release-readiness.md#publication-history-guard)
 for the exact chronology and evidence requirements.
 
 The validate job selects the latest manual CI run for the exact release commit,

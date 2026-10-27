@@ -198,6 +198,7 @@ import {
 import {
     buildReviewRemediationDeltaBase
 } from '../../../../gates/review-remediation/review-remediation-delta-contract';
+import { resolveGardaCliPrefix } from '../../../../core/garda-cli-prefix';
 
 export function restoreReviewerLaunchArtifactTextForResultRollback(
     artifactPath: string,
@@ -3744,7 +3745,7 @@ async function handleRecordReviewOutputCorrectionTransportUnlocked(gateArgv: str
         ) {
             console.log(`REVIEW_OUTPUT_CORRECTION_TRANSPORT_ALREADY_RECORDED: ${reviewType}`);
             console.log(`SelectedTransport: ${correctionArtifact.recovery.selected_transport}`);
-            console.log(`NextStep: node bin/garda.js next-step "${taskId}" --repo-root "."`);
+            console.log(`NextStep: ${resolveGardaCliPrefix(repoRoot)} next-step "${taskId}" --repo-root "."`);
             return;
         }
         if (attestationMatches) {
@@ -3786,7 +3787,7 @@ async function handleRecordReviewOutputCorrectionTransportUnlocked(gateArgv: str
                 });
                 console.log(`REVIEW_OUTPUT_CORRECTION_TRANSPORT_RECOVERED: ${reviewType}`);
                 console.log(`SelectedTransport: ${correctionArtifact.recovery.selected_transport}`);
-                console.log(`NextStep: node bin/garda.js next-step "${taskId}" --repo-root "."`);
+                console.log(`NextStep: ${resolveGardaCliPrefix(repoRoot)} next-step "${taskId}" --repo-root "."`);
                 return;
             }
         }
@@ -3821,7 +3822,7 @@ async function handleRecordReviewOutputCorrectionTransportUnlocked(gateArgv: str
         console.log(`REVIEW_OUTPUT_CORRECTION_TRANSPORT_RECORDED: ${reviewType}`);
         console.log(`SessionAvailability: ${sessionAvailability}`);
         console.log(`SelectedTransport: ${persisted.artifact.recovery.selected_transport}`);
-        console.log(`NextStep: node bin/garda.js next-step "${taskId}" --repo-root "."`);
+        console.log(`NextStep: ${resolveGardaCliPrefix(repoRoot)} next-step "${taskId}" --repo-root "."`);
     } catch (error) {
         if (!correctionTransportEventMatchesPersistedSelection({
             timelinePath,
@@ -4074,7 +4075,7 @@ async function handleRecordReviewOutputCorrectionResponseUnlocked(gateArgv: stri
     if (existingEvent) {
         console.log(`REVIEW_OUTPUT_CORRECTION_RESPONSE_ALREADY_ATTESTED: ${reviewType}`);
         console.log(`ProviderResponseEventSha256: ${existingEvent.integrity?.event_sha256 || ''}`);
-        console.log(`NextStep: node bin/garda.js next-step "${taskId}" --repo-root "."`);
+        console.log(`NextStep: ${resolveGardaCliPrefix(repoRoot)} next-step "${taskId}" --repo-root "."`);
         return;
     }
     const event = await emitReviewOutputCorrectionTransportEventAsync(
@@ -4114,7 +4115,7 @@ async function handleRecordReviewOutputCorrectionResponseUnlocked(gateArgv: stri
     console.log(`REVIEW_OUTPUT_CORRECTION_RESPONSE_ATTESTED: ${reviewType}`);
     console.log(`ProviderResponseSha256: ${providerResponseSha256}`);
     console.log(`ProviderResponseEventSha256: ${event.integrity?.event_sha256 || ''}`);
-    console.log(`NextStep: node bin/garda.js next-step "${taskId}" --repo-root "."`);
+    console.log(`NextStep: ${resolveGardaCliPrefix(repoRoot)} next-step "${taskId}" --repo-root "."`);
 }
 
 async function handleRecordReviewOutputCorrectionResponse(gateArgv: string[]): Promise<void> {
@@ -4495,7 +4496,7 @@ async function handleRecordReviewOutputCorrectionInvocationUnlocked(gateArgv: st
         console.log(`DelegationStartedEventSha256: ${delegationStartedEventSha256}`);
         console.log(
             'NextStep: wait for the delegated correction reviewer to return, then rerun ' +
-            `node bin/garda.js next-step "${taskId}" --repo-root "."`
+            `${resolveGardaCliPrefix(repoRoot)} next-step "${taskId}" --repo-root "."`
         );
         return;
     }
@@ -4637,7 +4638,7 @@ async function handleRecordReviewOutputCorrectionInvocationUnlocked(gateArgv: st
     console.log(`CorrectionInvocationEventSha256: ${invocationEventSha256}`);
     console.log(`ProviderResponseSha256: ${providerResponseSha256}`);
     console.log(`ProviderResponseEventSha256: ${correctionResponseEventSha256}`);
-    console.log(`NextStep: node bin/garda.js next-step "${taskId}" --repo-root "."`);
+    console.log(`NextStep: ${resolveGardaCliPrefix(repoRoot)} next-step "${taskId}" --repo-root "."`);
 }
 
 async function handleRecordReviewOutputCorrectionInvocation(gateArgv: string[]): Promise<void> {

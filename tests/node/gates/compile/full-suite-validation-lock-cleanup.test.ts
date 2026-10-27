@@ -44,7 +44,7 @@ describe('full-suite generated lock timeout cleanup diagnostics', () => {
             assert.equal(fs.existsSync(lockPath), true);
             assert.match(
                 formatGeneratedLockCleanupObservation(observations[0]),
-                /recommended_next_command=Run `node bin\/garda\.js doctor --target-root "\."`/
+                /recommended_next_command=Run `node garda-agent-orchestrator\/bin\/garda\.js doctor --target-root "\."`/
             );
         });
     });

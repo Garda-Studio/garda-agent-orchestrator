@@ -8,7 +8,7 @@ import {
     copyContainedFile,
     removeBoundContainedPath
 } from '../../core/contained-filesystem';
-import { PUBLIC_BUNDLE_ASSETS } from '../../core/public-bundle-assets';
+import { PUBLIC_BUNDLE_ASSETS, RETIRED_PUBLIC_BUNDLE_ASSETS } from '../../core/public-bundle-assets';
 import {
     isPathInsideRoot,
     isPathRealpathInsideRoot
@@ -196,6 +196,13 @@ function copyPublicBundleAssets(sourceRoot: string, destinationRoot: string, rep
         } else if (replaceExisting) {
             removeBoundContainedPath(bindContainedDestination(destinationRoot, destination.path));
         }
+    }
+    if (!replaceExisting) return;
+    for (const item of RETIRED_PUBLIC_BUNDLE_ASSETS) {
+        const retired = bindContainedDestination(destinationRoot, path.join(destinationRoot, item));
+        if (retired.missingAt) continue;
+        if (!fs.lstatSync(retired.path).isFile()) throw new Error(`Retired bundle asset must be an ordinary file: ${retired.path}`);
+        removeBoundContainedPath(retired);
     }
 }
 

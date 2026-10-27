@@ -1598,7 +1598,7 @@ test('getStatusSnapshot warns about incomplete task timelines', () => {
         assert.equal(snapshot.timelineWarningDetails?.length, 1);
         assert.equal(snapshot.timelineWarningDetails?.[0]?.kind, 'INCOMPLETE');
         assert.ok(snapshot.timelineWarnings.some((warning) => warning.includes('INCOMPLETE timeline: T-001.jsonl')));
-        assert.ok(snapshot.timelineWarnings.some((warning) => warning.includes('Repair: resume T-001 with node bin/garda.js next-step "T-001" --repo-root "."')));
+        assert.ok(snapshot.timelineWarnings.some((warning) => warning.includes('Repair: resume T-001 with node garda-agent-orchestrator/bin/garda.js next-step "T-001" --repo-root "."')));
         assert.ok(snapshot.timelineWarnings.some((warning) => warning.includes('task-cycle diagnostic; workspace readiness is evaluated separately')));
         assert.ok(output.includes('TaskTimelines: 0/1 complete'));
     } finally {
@@ -1681,7 +1681,7 @@ test('getStatusSnapshot distinguishes active blocked incomplete timelines from a
         ));
         assert.ok(snapshot.timelineWarnings.some((warning) =>
             warning.includes('INCOMPLETE timeline: T-021.jsonl')
-            && warning.includes('Repair: resume T-021 with node bin/garda.js next-step "T-021" --repo-root "."')
+            && warning.includes('Repair: resume T-021 with node garda-agent-orchestrator/bin/garda.js next-step "T-021" --repo-root "."')
         ));
     } finally {
         cleanupStatusTempDir(tmpDir);
