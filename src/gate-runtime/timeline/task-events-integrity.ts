@@ -1,7 +1,7 @@
 import { beginPersistedQualityTimelinePass, type PersistedQualityTimelineQuery } from './task-persisted-quality-query';
 import { beginClosedReviewVerifiedPass, type ClosedReviewVerifiedCapture } from './task-closed-review-query';
 import { beginCadenceVerifiedPass } from './task-cadence-runtime';
-import type { ReviewCadenceWindow } from '../../gates/review-attempts/review-cadence-window';
+import type { ReviewCadenceWindow } from '../review/review-cadence-window';
 import { beginValidationTimelineQueryPass, bindValidationTimelineQuery, type ValidationTimelineQuery } from './validation-timeline-query';
 import { beginNavigationTimelineQueryPass, type NavigationTimelineQuery } from './task-navigation-query';
 import { beginRouteVerifiedPass, type TaskRouteQuery } from './task-route-query';

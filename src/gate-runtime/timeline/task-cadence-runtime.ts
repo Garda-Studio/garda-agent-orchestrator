@@ -6,9 +6,9 @@ import { bindContainedDestination, assertContainedDestination, writeContainedFil
 import { readTransactionBytes } from '../../core/file-transaction-journal';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import { assertCanonicalTaskId } from '../../core/task-ids';
-import { readClosedReviewBytes, resolveClosedReviewAuthentication, type ClosedReviewAuthentication } from '../../gates/review-attempts/review-closed-cycle-auth';
-import { advanceCadenceHead, bootstrapCadenceHead, readCoveredReviewCadenceFailure, verifyCadenceHead } from '../../gates/review-attempts/review-cadence-admission';
-import { ReviewCadenceWindowAccumulator } from '../../gates/review-attempts/review-cadence-window';
+import { readClosedReviewBytes, resolveClosedReviewAuthentication, type ClosedReviewAuthentication } from '../review/review-closed-cycle-auth';
+import { advanceCadenceHead, bootstrapCadenceHead, readCoveredReviewCadenceFailure, verifyCadenceHead } from '../review/review-cadence-admission';
+import { ReviewCadenceWindowAccumulator } from '../review/review-cadence-window';
 import { captureTaskTimelineReadSnapshotByteLength, readTaskTimelineFileMetadataSnapshot,
     assertTaskTimelineAppendPrecondition } from './task-timeline-read-snapshot';
 

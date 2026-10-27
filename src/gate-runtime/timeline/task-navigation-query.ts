@@ -3,7 +3,7 @@ import { countNextStepWork } from '../../core/next-step-measurement';
 import { isPlainRecord } from '../../core/records';
 import { isAcceptedReviewTimelineRecord, type CompiledReviewDependencyGraph,
     type ReviewDependencyTimelineEventLike } from '../../core/review-dependency-graph';
-import { parseTimestamp, formatTimestamp } from '../../gates/task-events-summary/task-events-summary-parsing';
+import { parseTimestamp, formatTimestamp } from '../../core/event-timestamps';
 
 type Event = Readonly<Record<string, unknown>>;
 export interface NavigationTimelineQuery {
