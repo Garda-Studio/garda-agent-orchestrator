@@ -43,7 +43,14 @@ for (const lanes of [1, 5]) test('Q1 scope observation at ' + lanes + ' lanes', 
 
 test('Q1 authenticated history budget uses real navigation routes', { timeout: 3_600_000 }, async context => {
     for (const cycles of process.env.GARDA_Q1_INCLUDE_MIDPOINT === '1' ? [2, 8, 16] : [2, 16]) {
-        for (const sample of await collectAuthenticatedHistorySamples(cycles, 3, cycles === 2)) {
+        const completedCycles: number[] = [];
+        const measuredSamples = await collectAuthenticatedHistorySamples(cycles, 3, cycles === 2, completed => {
+            completedCycles.push(completed);
+            // Emit real fixture progress: test-context diagnostics are buffered until this long test finishes.
+            console.log(`Q1 history fixture: completed cycle ${completed}/${cycles}`);
+        });
+        assert.deepEqual(completedCycles, Array.from({ length: cycles }, (_, index) => index + 1));
+        for (const sample of measuredSamples) {
             retainSample(sample);
             context.diagnostic(JSON.stringify({ cycles, lanes: 3, mode: sample.mode, routes: sample.routes.map(route => ({ route: route.route,
                 elapsed_ms: route.elapsedMs, phases_ms: route.phasesMs })) }));

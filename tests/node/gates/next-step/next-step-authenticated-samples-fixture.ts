@@ -24,7 +24,7 @@ function assertNoReportHistory(route: HistoryRouteMeasurement): void {
 }
 
 /** Native construction and route assertions prevent malformed evidence from satisfying the work budget. */
-export async function collectAuthenticatedHistorySamples(cycles: number, lanes = 3, proveHistory = false): Promise<HistorySample[]> {
+export async function collectAuthenticatedHistorySamples(cycles: number, lanes = 3, proveHistory = false, onCycle?: (completed: number) => void): Promise<HistorySample[]> {
     const routes: HistoryRouteMeasurement[] = [];
     const measure = (state: Parameters<typeof measureHistoryRoute>[0], route: string) => {
         const measured = measureHistoryRoute(state, route);
@@ -36,7 +36,7 @@ export async function collectAuthenticatedHistorySamples(cycles: number, lanes =
             assert.equal(measured.nextGate, 'record-review-result');
             assertNoReportHistory(measured);
         }
-    });
+    }, onCycle);
     for (const required of measure(fixture, 'required-reviews-check')) {
     assert.equal(required.nextGate, 'required-reviews-check', required.reason);
     assertNoReportHistory(required);

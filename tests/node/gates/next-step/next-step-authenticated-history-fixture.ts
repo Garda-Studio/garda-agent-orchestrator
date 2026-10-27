@@ -92,7 +92,7 @@ function appendRestart(state: AuthenticatedHistoryFixture, cycle: number, expect
 }
 
 /** Native validation plus real content-addressed receipts consumed by audit history. */
-export async function createAuthenticatedNextStepHistoryFixture(cycles = 16, laneCount = 3, onActive?: (state: AuthenticatedHistoryFixture) => void): Promise<AuthenticatedHistoryFixture> {
+export async function createAuthenticatedNextStepHistoryFixture(cycles = 16, laneCount = 3, onActive?: (state: AuthenticatedHistoryFixture) => void, onCycle?: (completed: number) => void): Promise<AuthenticatedHistoryFixture> {
     assert.ok(Number.isInteger(cycles) && cycles > 0);
     assert.ok([1, 3, 5].includes(laneCount));
     const repoRoot = fixture.createTempRepo(), taskId = 'T-BENCH-NATIVE';
@@ -169,6 +169,7 @@ export async function createAuthenticatedNextStepHistoryFixture(cycles = 16, lan
                 state.artifactCycles[absolute] ??= cycle;
             }
         }
+        onCycle?.(cycle + 1);
     }
     for (const lane of lanes) fixture.writeReceiptBackedReviewArtifact(repoRoot, taskId, lane, verdict(lane, true), undefined,
         { authenticatedNavigatorLaunch: true,
