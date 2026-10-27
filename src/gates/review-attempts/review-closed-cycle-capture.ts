@@ -223,12 +223,18 @@ export function readCapturedClosedReviewGuard(input: { repoRoot: string; eventsR
             return readClosedReviewHistory({ repoRoot: input.repoRoot, binding: captured.binding, query: captured.queryCapture.query,
                 validateCurrentReferences: () => {
                     const currentSha = captured.preflight.bytes && closedReviewDigest(captured.preflight.bytes);
+                    const authenticated = new Set<string>();
+                    for (const source of captured.queryCapture.unclosedReviews) {
+                        countNextStepWork('visit:closed-review-capture:unclosed-review');
+                        authenticateEvent(input.repoRoot, input.taskId, reader, source);
+                        authenticated.add(source.sha256);
+                    }
                     for (const source of Object.values(captured.queryCapture.currentReviews)) {
                         countNextStepWork('visit:closed-review-capture:current-lane');
                         const details = isPlainRecord(source.record.details) ? source.record.details : {};
                         const preflightSha = details.preflight_sha256 ?? details.preflightSha256;
                         if (typeof preflightSha !== 'string') return false; // Ambiguous legacy currentness uses native path.
-                        if (preflightSha !== currentSha) continue;
+                        if (preflightSha !== currentSha || authenticated.has(source.sha256)) continue;
                         authenticateEvent(input.repoRoot, input.taskId, reader, source);
                     }
                     return true;

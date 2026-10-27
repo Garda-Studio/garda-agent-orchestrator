@@ -1,3 +1,4 @@
+import { latestValidationRecipeAttempt } from '../../../src/gates/project-validation/attempt-evidence';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -98,7 +99,7 @@ test('failed integrity never exposes authenticated current queries', () => {
     } finally { f.cleanup(); }
 });
 
-test('current recipe head uses file order and original cross-recipe attempt matching', () => {
+test('current recipe head uses file order and preserves native recipe identity', () => {
     const f = fixture();
     try {
         f.append('TASK_MODE_ENTERED'); f.append('PREFLIGHT_CLASSIFIED');
@@ -109,11 +110,38 @@ test('current recipe head uses file order and original cross-recipe attempt matc
         f.append('COMPLETION_GATE_PASSED'); f.append('COMPLETION_GATE_PASSED');
         withInvocationReadObservation(() => withTaskTimelineReadSnapshot(f.eventsRoot, f.taskId, () => {
             const query = readTaskTimelineValidationQuery(f.timeline, f.taskId, true)!.query;
-            assert.equal(query.recipeAttemptsAfterMode.first.event_type, 'PROJECT_VALIDATION_RESULTS_EVALUATED');
-            assert.equal((query.recipeAttemptsAfterMode.first.details as Record<string, unknown>).recipe_id, 'foreign');
+            assert.equal(query.recipeAttemptsAfterMode.first.event_type, 'PROJECT_VALIDATION_STARTED');
+            assert.equal((query.recipeAttemptsAfterMode.first.details as Record<string, unknown>).recipe_id, 'first');
             assert.equal((query.latestQuality!.event.details as Record<string, unknown>).artifact_hash, 'last');
             assert.equal(query.completionCount, 2);
             assert.equal(query.latestTaskMode?.ordinal, 0);
+        }));
+    } finally { f.cleanup(); }
+});
+
+
+test('native verified recipe heads keep recipe identity and strict attempt-id equality', () => {
+    const f = fixture();
+    try {
+        f.append('TASK_MODE_ENTERED'); f.append('PREFLIGHT_CLASSIFIED');
+        f.append('PROJECT_VALIDATION_STARTED', { recipe_id: 'recipe-a', attempt_id: 'shared' });
+        f.append('PROJECT_VALIDATION_STARTED', { recipe_id: 'recipe-b', attempt_id: 'shared' });
+        f.append('PROJECT_VALIDATION_RESULTS_EVALUATED', { recipe_id: 'recipe-b', attempt_id: 'shared' });
+        f.append('PROJECT_VALIDATION_STARTED', { recipe_id: 'typed', attempt_id: 1 });
+        f.append('PROJECT_VALIDATION_RESULTS_EVALUATED', { recipe_id: 'typed', attempt_id: '1' });
+        const events = fs.readFileSync(f.timeline, 'utf8').trim().split('\n').map(line => JSON.parse(line)) as
+            Array<{ event_type: string; details?: Record<string, unknown> }>;
+        withInvocationReadObservation(() => withTaskTimelineReadSnapshot(f.eventsRoot, f.taskId, () => {
+            assert.equal(inspectTaskEventFile(f.timeline, f.taskId).status, 'PASS');
+            const current = readTaskTimelineValidationQuery(f.timeline, f.taskId, true); assert.ok(current);
+            for (const recipe of ['recipe-a', 'recipe-b', 'typed']) {
+                const native = latestValidationRecipeAttempt(events, recipe); assert.ok(native);
+                assert.deepEqual(current.query.recipeAttemptsAfterMode[recipe], native);
+                assert.deepEqual(current.query.recipeAttemptsAfterClassification[recipe], native);
+            }
+            assert.equal(current.query.recipeAttemptsAfterMode['recipe-a'].event_type, 'PROJECT_VALIDATION_STARTED');
+            assert.equal(readValidationAttemptMultiplicity(current.query, 'shared')?.started.count, 2,
+                'global attempt multiplicity still rejects ambiguous shared executions');
         }));
     } finally { f.cleanup(); }
 });

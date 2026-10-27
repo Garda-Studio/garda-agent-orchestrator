@@ -22,6 +22,8 @@ export interface ClosedReviewVerifiedCapture {
     latestRestart: CapturedClosedReviewEvent | null;
     latestTaskMode: CapturedClosedReviewEvent | null;
     currentReviews: Record<string, CapturedClosedReviewEvent>;
+    /** Earlier corrections/re-records remain current until an authenticated native restart. */
+    unclosedReviews: CapturedClosedReviewEvent[];
 }
 const relevant = new Set<ClosedReviewSourceType>(['REVIEW_RECORDED', 'REVIEW_CYCLE_RESTARTED', 'COHERENT_CYCLE_RESTARTED',
     'PREFLIGHT_CLASSIFIED', 'TASK_MODE_ENTERED', 'TASK_RESET', 'TASK_DISCARDED']);
@@ -34,6 +36,7 @@ export function beginClosedReviewVerifiedPass(taskId: string) {
     let latestReview: ReviewSourceIdentity | null = null, previousReview: ReviewSourceIdentity | null = null;
     let latestRestart: CapturedClosedReviewEvent | null = null, publication: ClosedReviewPublication | null = null;
     const currentReviews: Record<string, CapturedClosedReviewEvent> = Object.create(null);
+    const unclosedReviews: CapturedClosedReviewEvent[] = [];
     let latestTaskMode: CapturedClosedReviewEvent | null = null;
     let unsupported = false;
     const appendState: TaskEventAppendState = { matching_events: 0, parse_errors: 0, last_integrity_sequence: null, last_event_sha256: null };
@@ -61,19 +64,23 @@ export function beginClosedReviewVerifiedPass(taskId: string) {
             sourceEvent = captured; sourceType = eventType as ClosedReviewSourceType;
             if (eventType === 'TASK_MODE_ENTERED') latestTaskMode = captured;
             if (eventType === 'REVIEW_RECORDED') {
+                unclosedReviews.push(captured);
                 previousReview = latestReview; latestReview = { sha256: identity, lineOrdinal };
                 const lane = String(details?.review_type || details?.reviewType || '').trim().toLowerCase();
                 if (!lane) unsupported = true;
                 else {
                     Object.defineProperty(currentReviews, lane, { value: captured, enumerable: true, writable: true, configurable: true });
                 }
-            } else if (eventType === 'REVIEW_CYCLE_RESTARTED' || eventType === 'COHERENT_CYCLE_RESTARTED') latestRestart = captured;
+            } else if (eventType === 'REVIEW_CYCLE_RESTARTED' || eventType === 'COHERENT_CYCLE_RESTARTED') {
+                latestRestart = captured;
+                if (record.event_type === eventType && sha(nativeSha) && record.actor === 'orchestrator' && record.outcome === 'PASS') unclosedReviews.length = 0;
+            }
         },
         finish(verified: boolean): ClosedReviewVerifiedCapture | null {
             if (!verified || unsupported || !sourceEvent || !sourceType) return null;
             return { query: { timelineValid: true, taskId, semanticQuerySha256: hash.digest('hex'),
                 source: { sha256: sourceEvent.sha256, lineOrdinal: sourceEvent.lineOrdinal }, sourceEventType: sourceType,
-                latestReview, previousReview, latestPublication: publication, appendState }, sourceEvent, latestRestart, latestTaskMode, currentReviews };
+                latestReview, previousReview, latestPublication: publication, appendState }, sourceEvent, latestRestart, latestTaskMode, currentReviews, unclosedReviews };
         }
     };
 }

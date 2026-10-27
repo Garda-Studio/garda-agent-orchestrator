@@ -92,10 +92,12 @@ export function beginValidationTimelineQueryPass(): {
         const type = record.event_type;
         if (!['PROJECT_VALIDATION_STARTED', 'PROJECT_VALIDATION_COMPLETED', 'PROJECT_VALIDATION_RESULTS_EVALUATED'].includes(type as string)) return;
         countNextStepWork('validation_projection_recipe_head_update');
-        const body = details(record), key = attemptKey(body?.attempt_id);
-        if (key === null) { recipeQueryCompatible = false; return; }
+        const body = details(record), attempt = attemptKey(body?.attempt_id);
+        if (attempt === null) { recipeQueryCompatible = false; return; }
+        if (typeof body?.recipe_id !== 'string') return;
+        const key = JSON.stringify([body.recipe_id, attempt]);
         target.latest.set(key, record);
-        if (type === 'PROJECT_VALIDATION_STARTED' && typeof body?.recipe_id === 'string') target.starts.set(body.recipe_id, key);
+        if (type === 'PROJECT_VALIDATION_STARTED') target.starts.set(body.recipe_id, key);
     }
     function compact(target: RecipeScope): Readonly<Record<string, ValidationQueryEvent>> {
         const result: Record<string, ValidationQueryEvent> = Object.create(null) as Record<string, ValidationQueryEvent>;
