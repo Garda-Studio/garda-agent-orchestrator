@@ -4,6 +4,7 @@ import * as path from 'node:path';
 
 import { redactHostname } from '../../../../core/redaction';
 import * as gateHelpers from '../../../../gates/shared/helpers';
+import { resolveGardaCliPrefix } from '../../../../core/garda-cli-prefix';
 
 const FULL_SUITE_GENERATED_LOCKS = Object.freeze([
     '.scripts-build.lock',
@@ -205,7 +206,7 @@ export function cleanupGeneratedLocksAfterTimedOutFullSuite(
             ...commonObservation,
             removed: false,
             reason: resolveRetainedGeneratedLockReason(ownerMetadata, ownerAlive, ownerHostMatchesCurrent),
-            recommended_next_command: buildRetainedGeneratedLockRecommendation(ownerMetadata, ownerAlive, ownerHostMatchesCurrent)
+            recommended_next_command: buildRetainedGeneratedLockRecommendation(ownerMetadata, ownerAlive, ownerHostMatchesCurrent, resolveGardaCliPrefix(resolvedRoot))
         });
     }
 
@@ -267,13 +268,14 @@ function resolveRetainedGeneratedLockReason(
 function buildRetainedGeneratedLockRecommendation(
     ownerMetadata: GeneratedLockOwnerMetadata,
     ownerAlive: boolean | null,
-    ownerHostMatchesCurrent: boolean | null
+    ownerHostMatchesCurrent: boolean | null,
+    cliPrefix: string
 ): string {
     if (ownerMetadata.metadata_status === 'missing'
         || ownerMetadata.metadata_status === 'read_error'
         || ownerMetadata.metadata_status === 'invalid_json'
         || ownerMetadata.metadata_status === 'invalid_shape') {
-        return 'Run `node bin/garda.js doctor --target-root "."` and inspect the retained generated lock owner metadata before manual cleanup.';
+        return `Run \`${cliPrefix} doctor --target-root "."\` and inspect the retained generated lock owner metadata before manual cleanup.`;
     }
     if (ownerHostMatchesCurrent === false) {
         return 'Verify the foreign-host owner is gone before cleanup; do not remove this lock automatically from the local timeout handler.';

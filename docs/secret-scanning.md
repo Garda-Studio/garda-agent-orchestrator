@@ -25,7 +25,7 @@ full lowercase run commit SHA, type `I authorize this selected run`, and select
 `gitleaks`, `ubuntu-latest` and Node `24`. The explicit `all` choice maps to that
 same single-job Linux set. Repository, SHA and authorization have no defaults.
 The shared selector rejects foreign or malformed inputs before scanning; a failed
-or cancelled authorization prevents the scan. See [manual selection](manual-ci.md).
+or cancelled authorization prevents the scan. See [manual selection](https://github.com/Garda-Studio/garda-agent-orchestrator/blob/master/docs/manual-ci.md).
 
 The workflow checks out the exact run SHA without persisting Git credentials,
 retains the full commit history with `fetch-depth: 0`, downloads

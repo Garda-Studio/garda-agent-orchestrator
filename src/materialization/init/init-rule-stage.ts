@@ -32,6 +32,8 @@ import type {
     RuleSourceMapEntry
 } from './init-contracts';
 import { copyDirectoryRecursive } from './init-filesystem';
+import { migrateLegacyProjectChangelog } from './legacy-project-changelog';
+import { removeLegacyTaskLog } from './legacy-task-log';
 import {
     MANAGED_CONFIG_NAMES,
     selectCompileGateCommandForGuidance
@@ -196,9 +198,10 @@ function copySupportDirectories(options: RunInitRuleStageOptions): number {
         'skills',
         'schemas',
         'docs/changes',
-        'docs/reviews',
-        'docs/tasks'
+        'docs/reviews'
     ];
+    // Project-owned files: seeded once, never overwritten by init, reinit or update.
+    const createOnlyDirectories = new Set(['docs/changes']);
     const managedConfigFileNames = new Set(
         MANAGED_CONFIG_NAMES.map((configName) => `${configName}.json`.toLowerCase())
     );
@@ -223,14 +226,27 @@ function copySupportDirectories(options: RunInitRuleStageOptions): number {
                             managedConfigFileNames.has(path.basename(destPath).toLowerCase())
                             && pathExists(destPath)
                         )
-                        : undefined
+                        : createOnlyDirectories.has(relDir)
+                            ? (_srcPath, destPath) => !pathExists(destPath)
+                            : undefined
                 }
             );
+            if (relDir === 'docs/changes') migrateLegacyProjectChangelogFile(options, srcDir, destDir);
         }
         copiedSupportDirs++;
     }
+    if (!options.dryRun) removeLegacyTaskLog(options.targetRoot, options.liveRoot);
 
     return copiedSupportDirs;
+}
+
+function migrateLegacyProjectChangelogFile(options: RunInitRuleStageOptions, srcDir: string, destDir: string): void {
+    const skeletonPath = path.join(srcDir, 'CHANGELOG.md');
+    const changelogPath = path.join(destDir, 'CHANGELOG.md');
+    if (!pathExists(skeletonPath) || !pathExists(changelogPath)) return;
+    const current = readTextFile(changelogPath);
+    const migrated = migrateLegacyProjectChangelog(current, readTextFile(skeletonPath));
+    if (migrated !== null && migrated !== current) writeContainedFile(options.targetRoot, changelogPath, migrated);
 }
 
 export function runInitRuleStage(

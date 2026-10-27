@@ -623,6 +623,7 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
 
         const latchRoute = resolvePermanentSplitRequiredLatchRoute({
             taskId: options.taskId,
+            cliPrefix: options.cliPrefix,
             restoreResult: {
                 outcome: restoreResult.outcome,
                 errorMessage: restoreResult.error_message
@@ -756,6 +757,7 @@ export function resolveTaskQueueTerminalDecisionRoute(options: {
             : null;
         const splitRoute = resolveSplitRequiredTaskQueueRoute({
             taskId: options.taskId,
+            cliPrefix: options.cliPrefix,
             latchValid: latchEvidence.valid,
             latchInvalidReason: latchEvidence.reason,
             hasChildren,

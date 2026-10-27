@@ -1,11 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { runInstall } from '../../../src/materialization/install';
 import { runInit } from '../../../src/materialization/init';
+import { resolveInstallCliMode } from '../../../src/materialization/install/install-entrypoint-stage';
 import {
+    buildSharedStartTaskWorkflowContent,
     getLegacyUninstallBackupGitignoreEntry,
     UNINSTALL_BACKUP_GITIGNORE_COMMENT,
     getUninstallBackupGitignoreEntry,
@@ -86,6 +89,72 @@ describe('runInstall — core deploy and invariants', () => {
                 assert.doesNotMatch(guidance, /when the user explicitly requests orchestrator-source changes/, relative);
             }
         } finally { fs.rmSync(projectRoot, { recursive: true, force: true }); }
+    });
+
+    // Every provider bridge variant and redirect entrypoint is installed guidance and must stay project-neutral.
+    for (const [sourceOfTruth, expectedSurface] of [
+        ['Claude', 'AGENTS.md'],
+        ['GitHubCopilot', '.github/agents/orchestrator.md'],
+        ['Windsurf', '.windsurf/agents/orchestrator.md'],
+        ['Junie', '.junie/agents/orchestrator.md'],
+        ['Antigravity', '.antigravity/agents/orchestrator.md']
+    ] as const) it(`installs guidance without Garda-internal content (${sourceOfTruth})`, () => {
+        const { projectRoot, bundleRoot } = setupTestWorkspace(repoRoot);
+        try {
+            const answersPath = writeInitAnswers(bundleRoot, { AssistantLanguage: 'English', AssistantBrevity: 'concise',
+                SourceOfTruth: sourceOfTruth, EnforceNoAutoCommit: 'false', ClaudeOrchestratorFullAccess: 'false',
+                TokenEconomyEnabled: 'true', CollectedVia: 'CLI_NONINTERACTIVE', ActiveAgentFiles: 'CLAUDE.md, AGENTS.md' });
+            runInstall({ targetRoot: projectRoot, bundleRoot, runInit: true, sourceOfTruth,
+                assistantLanguage: 'English', assistantBrevity: 'concise', initAnswersPath: answersPath,
+                initRunner(options) { runInit({ ...options, bundleRoot, lifecycleLockAlreadyHeld: true }); } });
+            const installedGuidance: string[] = [];
+            const walk = (directory: string) => {
+                for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+                    const absolute = path.join(directory, entry.name);
+                    const relative = path.relative(projectRoot, absolute).replace(/\\/gu, '/');
+                    const insideBundle = relative === 'garda-agent-orchestrator' || relative.startsWith('garda-agent-orchestrator/');
+                    const bundleGuidance = relative === 'garda-agent-orchestrator' || relative === 'garda-agent-orchestrator/live'
+                        || relative.startsWith('garda-agent-orchestrator/live/');
+                    if (entry.isDirectory()) {
+                        if (relative !== '.git' && (!insideBundle || bundleGuidance)) walk(absolute);
+                    } else if (entry.name.endsWith('.md') && (!insideBundle || bundleGuidance)) installedGuidance.push(relative);
+                }
+            };
+            walk(projectRoot);
+            for (const surface of ['.agents/workflows/start-task.md', expectedSurface]) {
+                assert.ok(installedGuidance.includes(surface), `${surface} missing: ${installedGuidance.join(', ')}`);
+            }
+            // Placeholder IDs used by shipped examples; any other task ID is Garda's own history.
+            const illustrativeTaskIds = new Set(['T-001', 'T-003', 'T-022', 'T-042', 'T-100', 'T-105', 'T-200']);
+            const leaks: string[] = [];
+            for (const relative of installedGuidance) {
+                const guidance = fs.readFileSync(path.join(projectRoot, relative), 'utf8');
+                for (const marker of [/self-hosted/iu, /source[- ]checkout/iu, /bundle source itself/iu, /`node bin\/garda\.js/u, /\{\{GARDA_CLI\}\}/u]) {
+                    if (marker.test(guidance)) leaks.push(`${relative}: ${marker.source}`);
+                }
+                for (const taskId of guidance.match(/\bT-\d{3,4}\b/gu) || []) {
+                    if (!illustrativeTaskIds.has(taskId)) leaks.push(`${relative}: ${taskId}`);
+                }
+            }
+            assert.deepEqual([...new Set(leaks)], []);
+            assert.equal(fs.existsSync(path.join(bundleRoot, 'live', 'docs', 'tasks')), false);
+        } finally { fs.rmSync(projectRoot, { recursive: true, force: true }); }
+    });
+
+    it('names the source CLI only inside the Garda source checkout', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'garda-cli-mode-'));
+        try {
+            fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'garda-agent-orchestrator' }));
+            assert.equal(resolveInstallCliMode(root), 'deployed', 'a Garda-named package without sources is not a source checkout');
+            fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+            fs.writeFileSync(path.join(root, 'src', 'index.ts'), 'export {};\n');
+            // A fresh clone before the build has no bin/garda.js yet and is still the source checkout.
+            assert.equal(resolveInstallCliMode(root), 'source');
+            fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'my-app' }));
+            assert.equal(resolveInstallCliMode(root), 'deployed');
+            assert.match(buildSharedStartTaskWorkflowContent('AGENTS.md', 'source'), /`node bin\/garda\.js next-step/u);
+            assert.doesNotMatch(buildSharedStartTaskWorkflowContent('AGENTS.md'), /`node bin\/garda\.js|self-hosted|source checkout/iu);
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
     });
 
     it('deploys TASK.md and creates entrypoint files', () => {

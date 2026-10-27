@@ -11,6 +11,7 @@ import {
     normalizePath
 } from '../shared/helpers';
 import { safeReadJson } from '../task-audit/task-audit-summary-collectors';
+import { resolveGardaCliPrefix } from '../../core/garda-cli-prefix';
 
 export const SPLIT_REQUIRED_WIP_SCHEMA_VERSION = 1;
 
@@ -196,15 +197,19 @@ export function getHeadCommit(repoRoot: string): string {
     return runGit(repoRoot, ['rev-parse', 'HEAD']).trim();
 }
 
-export function buildRestoreCommands(taskId: string, manifestPath: string): SplitRequiredWipManifest['restore_commands'] {
+export function buildRestoreCommands(
+    taskId: string,
+    manifestPath: string,
+    cliPrefix = 'node bin/garda.js'
+): SplitRequiredWipManifest['restore_commands'] {
     const displayManifestPath = normalizePath(manifestPath);
     return {
-        list: `node bin/garda.js gate list-split-required-wip --task-id "${taskId}" --repo-root "."`,
-        preview_full: `node bin/garda.js gate restore-split-required-wip --task-id "${taskId}" --manifest-path "${displayManifestPath}" --dry-run --repo-root "."`,
-        restore_full: `node bin/garda.js gate restore-split-required-wip --task-id "${taskId}" --manifest-path "${displayManifestPath}" --repo-root "."`,
-        preview_partial_template: `node bin/garda.js gate restore-split-required-wip --task-id "${taskId}" --manifest-path "${displayManifestPath}" --include-path "<repo/path>" --dry-run --repo-root "."`,
-        restore_partial_template: `node bin/garda.js gate restore-split-required-wip --task-id "${taskId}" --manifest-path "${displayManifestPath}" --include-path "<repo/path>" --repo-root "."`,
-        retire: `node bin/garda.js gate retire-split-required-wip --task-id "${taskId}" --manifest-path "${displayManifestPath}" --reason "<why this WIP is no longer needed>" --repo-root "."`
+        list: `${cliPrefix} gate list-split-required-wip --task-id "${taskId}" --repo-root "."`,
+        preview_full: `${cliPrefix} gate restore-split-required-wip --task-id "${taskId}" --manifest-path "${displayManifestPath}" --dry-run --repo-root "."`,
+        restore_full: `${cliPrefix} gate restore-split-required-wip --task-id "${taskId}" --manifest-path "${displayManifestPath}" --repo-root "."`,
+        preview_partial_template: `${cliPrefix} gate restore-split-required-wip --task-id "${taskId}" --manifest-path "${displayManifestPath}" --include-path "<repo/path>" --dry-run --repo-root "."`,
+        restore_partial_template: `${cliPrefix} gate restore-split-required-wip --task-id "${taskId}" --manifest-path "${displayManifestPath}" --include-path "<repo/path>" --repo-root "."`,
+        retire: `${cliPrefix} gate retire-split-required-wip --task-id "${taskId}" --manifest-path "${displayManifestPath}" --reason "<why this WIP is no longer needed>" --repo-root "."`
     };
 }
 
@@ -297,6 +302,6 @@ export function buildSplitRequiredWipManifest(
         untracked_files: params.untrackedFiles,
         unrelated_untracked_files: params.unrelatedVisibleUntrackedFiles,
         ignored_runtime_artifacts: params.ignoredRuntimeArtifacts,
-        restore_commands: buildRestoreCommands(params.taskId, params.manifestPath)
+        restore_commands: buildRestoreCommands(params.taskId, params.manifestPath, resolveGardaCliPrefix(params.repoRoot))
     };
 }

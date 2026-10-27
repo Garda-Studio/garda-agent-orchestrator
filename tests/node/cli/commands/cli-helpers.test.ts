@@ -49,7 +49,7 @@ import {
 import { dispatchCliCommand } from '../../../../src/cli/commands/command-dispatch';
 import { handleUninstall } from '../../../../src/cli/commands/workspace/workspace-maintenance-command';
 import { DEFAULT_SOURCE_OF_TRUTH } from '../../../../src/core/constants';
-import { PUBLIC_BUNDLE_ASSETS } from '../../../../src/core/public-bundle-assets';
+import { PUBLIC_BUNDLE_ASSETS, RETIRED_PUBLIC_BUNDLE_ASSETS } from '../../../../src/core/public-bundle-assets';
 import { buildDefaultRetentionPolicy, RETENTION_POLICY_DEFAULTS } from '../../../../src/lifecycle/cleanup';
 import { MANAGED_END, MANAGED_START } from '../../../../src/materialization/content-builders';
 
@@ -638,9 +638,19 @@ test('bundle deployment and refresh copy public assets without copying unrelated
             fs.writeFileSync(path.join(sourceRoot, item), `second ${item}\n`);
         }
         fs.writeFileSync(path.join(destination, 'docs', 'local-notes.md'), 'preserved local WIP');
+        // Retired maintainer guides left by an older bundle are removed even while the source still ships them.
+        for (const item of RETIRED_PUBLIC_BUNDLE_ASSETS) {
+            for (const root of [sourceRoot, destination]) {
+                fs.mkdirSync(path.dirname(path.join(root, item)), { recursive: true });
+                fs.writeFileSync(path.join(root, item), `retired ${item}\n`);
+            }
+        }
         syncBundleItems(sourceRoot, destination);
         for (const item of PUBLIC_BUNDLE_ASSETS) {
             assert.equal(fs.readFileSync(path.join(destination, item), 'utf8'), `second ${item}\n`);
+        }
+        for (const item of RETIRED_PUBLIC_BUNDLE_ASSETS) {
+            assert.equal(fs.existsSync(path.join(destination, item)), false, item);
         }
         assert.equal(fs.existsSync(path.join(destination, 'docs', 'private-audit.md')), false);
         assert.equal(fs.readFileSync(path.join(destination, 'docs', 'local-notes.md'), 'utf8'), 'preserved local WIP');

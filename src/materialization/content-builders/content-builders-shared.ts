@@ -7,10 +7,15 @@ import {
     getProviderEntries,
     getRequiredReviewSkillBridgeHostEntry
 } from '../../core/provider-registry';
-import { getNodeBundleCliCommand, getNodeGateCommandPrefix } from '../command-constants';
+import {
+    getGardaCliCommand,
+    getGardaGateCommandPrefix,
+    getNodeBundleCliCommand,
+    type GardaCliMode
+} from '../command-constants';
 
 export const INSTALLED_BUNDLE_OWNERSHIP_RULE =
-    'In installed projects, never edit, stage or commit Garda\'s own bundle files (code, `bin/`, `dist/`, `src/`, templates, managed rules and settings), even with operator approval. Exception: when the rules require it, update `garda-agent-orchestrator/live/docs/project-memory/` and `garda-agent-orchestrator/live/docs/changes/CHANGELOG.md` on disk; never stage or commit them. Write files under `garda-agent-orchestrator/runtime/` only where a gate or next-step instructs (for example quality-checklist answers); never stage or commit them. Record Garda defects in the `TASK.md` orchestrator-problems section instead of patching Garda inside the project. Change live/config settings only through existing workflow commands. Garda source-checkout development remains supported through orchestrator-work.';
+    'In installed projects, never edit, stage or commit Garda\'s own bundle files (code, `bin/`, `dist/`, `src/`, templates, managed rules and settings), even with operator approval. Exception: when the rules require it, update `garda-agent-orchestrator/live/docs/project-memory/` and `garda-agent-orchestrator/live/docs/changes/CHANGELOG.md` on disk; never stage or commit them. Write files under `garda-agent-orchestrator/runtime/` only where a gate or next-step instructs (for example quality-checklist answers); never stage or commit them. Record Garda defects in the `TASK.md` orchestrator-problems section instead of patching Garda inside the project. Change live/config settings only through existing workflow commands.';
 
 export const REVIEW_LAUNCH_NAVIGATION_INSTRUCTION =
     'Use next-step review navigation output before reviewer launch: `ReviewLaunchableBatch` / `launchable_review_types` list lanes that may be launched now, `BlockedReviewLanes` / `blocked_review_lanes` list dependency reasons, `NextReview` remains legacy single-lane compatibility, failed current reviews take remediation priority, and enabled full-suite validation blocks `test` review until current full-suite PASS evidence exists.';
@@ -40,10 +45,6 @@ export function getReviewSkillBridgeHost(): { bridgePath: string; providerLabel:
         bridgePath,
         providerLabel: hostEntry.displayLabel
     };
-}
-
-function getSourceGateCommandPrefix(): string {
-    return 'node bin/garda.js gate';
 }
 
 export { buildBundleRelativePath };
@@ -101,30 +102,25 @@ function buildTaskEntryRulePackSnippet(commandPrefix: string, bundleName = resol
     ].join(' ');
 }
 
-export function buildSourceNextStepSnippet(): string {
-    return 'node bin/garda.js next-step "<task-id>" --repo-root "."';
+export function buildNextStepSnippet(cliMode: GardaCliMode = 'deployed'): string {
+    return `${getGardaCliCommand(cliMode)} next-step "<task-id>" --repo-root "."`;
 }
 
-export function buildBundleNextStepSnippet(): string {
-    return `${getNodeBundleCliCommand()} next-step "<task-id>" --repo-root "."`;
-}
-
-export function buildTaskStartSnippetSection(runtimeProviderLabel: string, routeTarget: string): string {
-    const sourcePrefix = getSourceGateCommandPrefix();
-    const bundlePrefix = getNodeGateCommandPrefix();
+export function buildTaskStartSnippetSection(
+    runtimeProviderLabel: string,
+    routeTarget: string,
+    cliMode: GardaCliMode = 'deployed'
+): string {
+    const gatePrefix = getGardaGateCommandPrefix(cliMode);
     const bundleName = resolveBundleName();
     return [
         '## Copy-Paste Start Commands',
         INSTALLED_BUNDLE_OWNERSHIP_RULE,
-        `- First/resume command (source checkout): \`${buildSourceNextStepSnippet()}\``,
-        `- First/resume command (deployed workspace): \`${buildBundleNextStepSnippet()}\``,
+        `- First/resume command: \`${buildNextStepSnippet(cliMode)}\``,
         '- Use the same `next-step` command before the first gate, after every suggested command, and after any gate failure. Do not start with `compile-gate`, guess flags, or read default config templates when `next-step` can inspect task evidence.',
-        `- Source checkout (\`--provider\`): \`${buildEnterTaskModeSnippet(sourcePrefix, `--provider "${runtimeProviderLabel}"`)}\``,
-        `- Source checkout (\`--provider\` + \`--routed-to\`, optional telemetry): \`${buildEnterTaskModeSnippet(sourcePrefix, `--provider "${runtimeProviderLabel}" --routed-to "${routeTarget}"`)}\``,
-        `- Source checkout (\`TASK_ENTRY\` rules): \`${buildTaskEntryRulePackSnippet(sourcePrefix, bundleName)}\``,
-        `- Deployed workspace (\`--provider\`): \`${buildEnterTaskModeSnippet(bundlePrefix, `--provider "${runtimeProviderLabel}"`)}\``,
-        `- Deployed workspace (\`--provider\` + \`--routed-to\`, optional telemetry): \`${buildEnterTaskModeSnippet(bundlePrefix, `--provider "${runtimeProviderLabel}" --routed-to "${routeTarget}"`)}\``,
-        `- Deployed workspace (\`TASK_ENTRY\` rules): \`${buildTaskEntryRulePackSnippet(bundlePrefix, bundleName)}\``,
+        `- Task-mode entry (\`--provider\`): \`${buildEnterTaskModeSnippet(gatePrefix, `--provider "${runtimeProviderLabel}"`)}\``,
+        `- Task-mode entry (\`--provider\` + \`--routed-to\`, optional telemetry): \`${buildEnterTaskModeSnippet(gatePrefix, `--provider "${runtimeProviderLabel}" --routed-to "${routeTarget}"`)}\``,
+        `- \`TASK_ENTRY\` rules: \`${buildTaskEntryRulePackSnippet(gatePrefix, bundleName)}\``,
         `- Required runtime identity: use \`--provider "${runtimeProviderLabel}"\`; add \`--routed-to "${routeTarget}"\` only when route telemetry must be pinned.`
     ].join('\n');
 }

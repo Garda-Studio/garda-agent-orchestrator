@@ -198,6 +198,36 @@ describe('Update failure-path tests', () => {
         }
     });
 
+    it('retires maintainer guides in the update lifecycle and restores them when it fails', () => {
+        const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
+        try {
+            // An older runtime's sync may leave retired guides in the bundle before the new lifecycle runs.
+            const retired = path.join(bundleRoot, 'docs', 'manual-ci.md');
+            fs.mkdirSync(path.dirname(retired), { recursive: true });
+            fs.writeFileSync(retired, 'maintainer guide synced by an older runtime\n');
+            assert.throws(
+                () => runUpdate({
+                    targetRoot: projectRoot,
+                    bundleRoot,
+                    initAnswersPath: answersPath,
+                    skipVerify: false,
+                    skipManifestValidation: true,
+                    verifyRunner: () => {
+                        assert.equal(fs.existsSync(retired), false, 'lifecycle must remove the retired guide');
+                        throw new Error('VERIFY_GATE_FAIL');
+                    }
+                }),
+                /rollback completed successfully.*VERIFY_GATE_FAIL/
+            );
+            assert.equal(fs.readFileSync(retired, 'utf8'), 'maintainer guide synced by an older runtime\n');
+
+            runUpdate({ targetRoot: projectRoot, bundleRoot, initAnswersPath: answersPath, skipVerify: true, skipManifestValidation: true });
+            assert.equal(fs.existsSync(retired), false);
+        } finally {
+            removePathRecursive(projectRoot);
+        }
+    });
+
     it('rolls back on manifest validation failure and restores filesystem state', () => {
         const { projectRoot, bundleRoot, answersPath } = setupUpdateWorkspace(repoRoot);
         try {

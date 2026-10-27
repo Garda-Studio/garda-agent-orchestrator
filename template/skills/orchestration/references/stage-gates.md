@@ -67,7 +67,7 @@ Pass criteria:
 - Required findings receipts are satisfied, no `fix_now` item remains unresolved, and every required follow-up is materialized.
 - Completion finalization reconciles the task to `DONE`.
 - Artifact contract fields are valid for path mode, findings validation, locked dispositions, lane evidence, and recovery bindings.
-- User report is delivered in mandatory order: review integrity attestation -> implementation summary -> conventional-style `git commit -m "<type>(<scope>): <summary>"` suggestion -> `Do you want me to commit now? (yes/no)`.
+- User report is delivered in mandatory order: review integrity attestation -> implementation summary -> verbatim Garda commit guidance (the task-bound native `gate human-commit` command, or the printed reason why no commit is available).
 
 ## Failure Policy
 - Any failed gate blocks next gates.

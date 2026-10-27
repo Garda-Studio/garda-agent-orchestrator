@@ -249,9 +249,8 @@ manifest snapshots retain their existing 16 MiB limits.
 | Path | Purpose |
 |---|---|
 | `live/docs/agent-rules/00..90` | Canonical rule set |
-| `live/docs/changes/CHANGELOG.md` | Local changelog |
+| `live/docs/changes/CHANGELOG.md` | Project change log; created once, never overwritten |
 | `live/docs/reviews/TEMPLATE.md` | Review template |
-| `live/docs/tasks/TASKS.md` | Internal task reference |
 | `live/config/review-capabilities.json` | Enabled review types |
 | `live/config/paths.json` | Preflight roots and trigger regexes |
 | `live/config/token-economy.json` | Token economy settings |

@@ -773,20 +773,25 @@ describe('cross-provider-router-matrix: drift detection', () => {
         assert.ok(agentsTemplate.includes('generic root entrypoint surface'));
     });
 
-    it('gate command prefix is consistent across bridge content — both forms present', () => {
+    it('gate command prefix matches the install mode across bridge content', () => {
         for (const profile of PROVIDER_BRIDGE_PROFILES) {
             if (profile.orchestratorRelativePath === '.antigravity/agents/orchestrator.md') continue;
-            const content = buildProviderOrchestratorAgentContent(
+            const deployed = buildProviderOrchestratorAgentContent(
                 profile.providerLabel, 'CLAUDE.md', profile.orchestratorRelativePath
             );
             assert.ok(
-                content.includes('node garda-agent-orchestrator/bin/garda.js gate'),
+                deployed.includes('node garda-agent-orchestrator/bin/garda.js gate'),
                 `${profile.providerLabel} bridge missing bundle gate command form`
             );
-            assert.ok(
-                content.includes('node bin/garda.js gate'),
-                `${profile.providerLabel} bridge missing self-hosted gate command form`
+            assert.equal(deployed.includes('node bin/garda.js'), false,
+                `${profile.providerLabel} installed bridge must not name the source CLI`);
+            const source = buildProviderOrchestratorAgentContent(
+                profile.providerLabel, 'CLAUDE.md', profile.orchestratorRelativePath, 'source'
             );
+            assert.ok(source.includes('node bin/garda.js gate'),
+                `${profile.providerLabel} source-checkout bridge missing source gate command form`);
+            assert.equal(source.includes('node garda-agent-orchestrator/bin/garda.js gate enter-task-mode'), false,
+                `${profile.providerLabel} source-checkout bridge must not route task entry to the deployed bundle`);
         }
     });
 

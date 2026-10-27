@@ -15,3 +15,13 @@ export function getNodeInteractiveUpdateCommand(): string {
 export function getNodeNonInteractiveUpdateCommand(): string {
     return `${getNodeBundleCliCommand()} update --target-root "." --init-answers-path "${resolveBundleName()}/runtime/init-answers.json" --apply --no-prompt`;
 }
+
+/** Which CLI generated guidance names: the deployed bundle, or the Garda source checkout itself. */
+export type GardaCliMode = 'deployed' | 'source';
+export const GARDA_SOURCE_CLI_COMMAND = 'node bin/garda.js';
+export function getGardaCliCommand(mode: GardaCliMode = 'deployed'): string {
+    return mode === 'source' ? GARDA_SOURCE_CLI_COMMAND : getNodeBundleCliCommand();
+}
+export function getGardaGateCommandPrefix(mode: GardaCliMode = 'deployed'): string {
+    return `${getGardaCliCommand(mode)} gate`;
+}

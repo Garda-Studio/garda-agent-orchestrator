@@ -44,7 +44,6 @@ Primary entry point: selected source-of-truth entrypoint (depends on configured 
     │   ├── docs/agent-rules/**   # Canonical rule set used by selected source-of-truth routing
     │   ├── docs/changes/CHANGELOG.md
     │   ├── docs/reviews/TEMPLATE.md
-    │   ├── docs/tasks/TASKS.md
     │   ├── skills/**             # Skills in a common format: skill.json + SKILL.md + optional references/agents
     │   ├── USAGE.md              # Post-init usage instructions for the selected assistant language
     │   ├── project-discovery.md  # Auto-detected stack and command signals
@@ -105,4 +104,4 @@ Primary entry point: selected source-of-truth entrypoint (depends on configured 
 - In normal project deployments, local orchestration control-plane files are expected to stay gitignored.
 - This includes `TASK.md`, installer-managed provider bridge files, `garda-agent-orchestrator/runtime/**`, and internal orchestrator docs such as `garda-agent-orchestrator/live/docs/changes/CHANGELOG.md`.
 - Their absence from `git status`, staged diff, or PR scope is normal and must not be treated as a workflow failure.
-- Only stage or version `TASK.md` or provider bridge files when the user explicitly requests it, or when the current repository is the orchestrator bundle source itself. In an installed project, never stage or version paths under `garda-agent-orchestrator/`, even on request.
+- Only stage or version `TASK.md` or provider bridge files when the user explicitly requests it. In an installed project, never stage or version paths under `garda-agent-orchestrator/`, even on request.

@@ -9,7 +9,7 @@ import {
     REVIEWER_CLEANUP_AFTER_RECEIPT_INSTRUCTION,
     REVIEWER_FRESH_CONTEXT_LAUNCH_INSTRUCTION
 } from '../../gate-runtime/reviewer-session-contract';
-import { getNodeHumanCommitCommand } from '../command-constants';
+import { getGardaCliCommand, getGardaGateCommandPrefix, getNodeHumanCommitCommand, type GardaCliMode } from '../command-constants';
 import {
     addAntigravityCanonicalStopInstruction,
     ANTIGRAVITY_INDEPENDENT_REVIEW_UNAVAILABLE_STOP_INSTRUCTION,
@@ -26,12 +26,18 @@ import {
     restoreEntrypointRuleLinks
 } from './content-builders-shared';
 
-export function buildCanonicalManagedBlock(canonicalFile: string, entrypointTemplateContent: string): string {
+export function buildCanonicalManagedBlock(
+    canonicalFile: string,
+    entrypointTemplateContent: string,
+    cliMode: GardaCliMode = 'deployed'
+): string {
     const baseBlock = extractManagedBlockFromContent(entrypointTemplateContent, MANAGED_START, MANAGED_END);
     if (!baseBlock) {
         throw new Error('Entrypoint template managed block is missing; cannot build canonical entrypoint.');
     }
     const canonicalBlock = restoreEntrypointRuleLinks(baseBlock)
+        // The template names the deployed CLI so older runtimes render a working command; source mode swaps it.
+        .split(getGardaCliCommand('deployed')).join(getGardaCliCommand(cliMode))
         .replace(/^# .+$/m, `# ${canonicalFile}\n\n${INSTALLED_BUNDLE_OWNERSHIP_RULE}`)
         .replace(
             /At setup, source of truth is selected via `-SourceOfTruth` \([^)]+\)\./,
@@ -43,8 +49,10 @@ export function buildCanonicalManagedBlock(canonicalFile: string, entrypointTemp
 export function buildRedirectManagedBlock(
     targetFile: string,
     canonicalFile: string,
-    providerBridgePaths: string[] | null | undefined
+    providerBridgePaths: string[] | null | undefined,
+    cliMode: GardaCliMode = 'deployed'
 ): string {
+    const gate = getGardaGateCommandPrefix(cliMode);
     const providerLines = [];
     const bridgeToLabel = new Map(
         getProviderBridgeEntries().map((e) => [
@@ -85,8 +93,8 @@ export function buildRedirectManagedBlock(
         'If the workspace already contains modified files before task-mode entry, stop and isolate scope via `--use-staged` or explicit `--changed-file ...` preflight inputs before continuing.',
         'Use compact command protocol from `40-commands.md`: first `scan`, then `inspect`, then verbose `debug` only by exception.',
         'Treat `.agents/workflows/start-task.md` as the shared start-task router for root entrypoints and provider bridges; it routes to the canonical workflow and does not replace `80-task-workflow.md`.',
-        `After opening downstream workflow files, record them via \`node bin/garda.js gate load-rule-pack ...\` in a self-hosted source checkout, or \`node ${resolveBundleName()}/bin/garda.js gate load-rule-pack ...\` inside a materialized/deployed workspace.`,
-        `Before each required reviewer invocation, run \`node bin/garda.js gate build-review-context ...\` in a self-hosted source checkout, or \`node ${resolveBundleName()}/bin/garda.js gate build-review-context ...\` inside a materialized/deployed workspace; completion for code-changing tasks expects review-skill telemetry from that step. ${REVIEWER_FRESH_CONTEXT_LAUNCH_INSTRUCTION} ${REVIEWER_CLEANUP_AFTER_RECEIPT_INSTRUCTION} Downstream \`test\` review must wait for current-cycle PASS evidence from every required upstream non-\`test\` review.`,
+        `After opening downstream workflow files, record them via \`${gate} load-rule-pack ...\`.`,
+        `Before each required reviewer invocation, run \`${gate} build-review-context ...\`; completion for code-changing tasks expects review-skill telemetry from that step. ${REVIEWER_FRESH_CONTEXT_LAUNCH_INSTRUCTION} ${REVIEWER_CLEANUP_AFTER_RECEIPT_INSTRUCTION} Downstream \`test\` review must wait for current-cycle PASS evidence from every required upstream non-\`test\` review.`,
         ...targetSpecificInstructions,
         `Ignored orchestration control-plane files (for example \`TASK.md\`, \`${resolveBundleName()}/runtime/**\`, and \`${resolveBundleName()}/live/docs/changes/CHANGELOG.md\`) are expected local artifacts; never \`git add -f\` them in an installed project, even with operator approval.`,
         providerBridgeSection,

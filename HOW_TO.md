@@ -289,7 +289,7 @@ If you work on this repository itself in IntelliJ IDEA/WebStorm, open the root `
 - **[docs/cli-reference.md](docs/cli-reference.md)** — Complete CLI command reference
 - **[docs/findings-contracts.md](docs/findings-contracts.md)** — Findings-only review lifecycle and legacy migration
 - **[docs/database/sqlite-persistence.md](docs/database/sqlite-persistence.md)** — Workspace-local SQLite projection, recovery, and authority boundary
-- **[docs/database/sqlite-query-adoption-evidence.md](docs/database/sqlite-query-adoption-evidence.md)** — Measured SQLite query adoption evidence
-- **[docs/release-readiness.md](docs/release-readiness.md)** — Versioned release checklist and package handoff contract
+- **[docs/database/sqlite-query-adoption-evidence.md](https://github.com/Garda-Studio/garda-agent-orchestrator/blob/master/docs/database/sqlite-query-adoption-evidence.md)** — Measured SQLite query adoption evidence
+- **[docs/release-readiness.md](https://github.com/Garda-Studio/garda-agent-orchestrator/blob/master/docs/release-readiness.md)** — Versioned release checklist and package handoff contract
 - **[docs/work-example.md](docs/work-example.md)** — Task lifecycle walkthrough
 - **[CHANGELOG.md](CHANGELOG.md)** — Full changelog

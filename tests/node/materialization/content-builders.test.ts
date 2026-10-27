@@ -495,6 +495,16 @@ describe('migrateDepthToProfileRow', () => {
 });
 
 describe('buildCanonicalManagedBlock', () => {
+    it('renders the template CLI per install mode', () => {
+        const template = `${MANAGED_START}\n# canonical-rule-index.md\nrecord them via \`node garda-agent-orchestrator/bin/garda.js gate load-rule-pack ...\`.\n${MANAGED_END}`;
+        const deployed = buildCanonicalManagedBlock('AGENTS.md', template);
+        assert.ok(deployed.includes('`node garda-agent-orchestrator/bin/garda.js gate load-rule-pack ...`'));
+        assert.equal(/\{\{GARDA_CLI\}\}|node bin\/garda\.js/u.test(deployed), false);
+        const source = buildCanonicalManagedBlock('AGENTS.md', template, 'source');
+        assert.ok(source.includes('`node bin/garda.js gate load-rule-pack ...`'));
+        assert.equal(/\{\{GARDA_CLI\}\}|garda-agent-orchestrator\/bin\/garda\.js/u.test(source), false);
+    });
+
     it('replaces neutral template title with canonical file', () => {
         const neutralTemplateContent = `${MANAGED_START}\n# canonical-rule-index.md\nSome content\n${MANAGED_END}`;
         const result = buildCanonicalManagedBlock('AGENTS.md', neutralTemplateContent);
@@ -563,6 +573,16 @@ ${MANAGED_END}`;
 });
 
 describe('buildRedirectManagedBlock', () => {
+    it('names exactly one CLI per install mode', () => {
+        const deployed = buildRedirectManagedBlock('AGENTS.md', 'CLAUDE.md', ['.github/agents/orchestrator.md']);
+        assert.ok(deployed.includes('`node garda-agent-orchestrator/bin/garda.js gate load-rule-pack ...`'));
+        assert.ok(deployed.includes('`node garda-agent-orchestrator/bin/garda.js gate build-review-context ...`'));
+        assert.equal(/node bin\/garda\.js|self-hosted|source checkout|materialized\/deployed/iu.test(deployed), false);
+        const source = buildRedirectManagedBlock('AGENTS.md', 'CLAUDE.md', ['.github/agents/orchestrator.md'], 'source');
+        assert.ok(source.includes('`node bin/garda.js gate load-rule-pack ...`'));
+        assert.equal(source.includes('node garda-agent-orchestrator/bin/garda.js gate load-rule-pack'), false);
+    });
+
     it('generates redirect with provider bridge lines', () => {
         const result = buildRedirectManagedBlock(
             'AGENTS.md', 'CLAUDE.md',
@@ -735,15 +755,14 @@ describe('buildProviderOrchestratorAgentContent', () => {
     it('includes exact copy-paste task-start snippets in full provider bridges', () => {
         const result = buildProviderOrchestratorAgentContent('GitHub Copilot', 'AGENTS.md', '.github/agents/orchestrator.md');
         assert.ok(result.includes('Copy-Paste Start Commands'));
-        assert.ok(result.includes('First/resume command (source checkout): `node bin/garda.js next-step "<task-id>" --repo-root "."`'));
-        assert.ok(result.includes('First/resume command (deployed workspace): `node garda-agent-orchestrator/bin/garda.js next-step "<task-id>" --repo-root "."`'));
-        assert.ok(result.includes('node bin/garda.js profile current|list|use|create --target-root "."'));
+        assert.equal(result.includes('node bin/garda.js'), false);
+        assert.ok(result.includes('First/resume command: `node garda-agent-orchestrator/bin/garda.js next-step "<task-id>" --repo-root "."`'));
         assert.ok(result.includes('node garda-agent-orchestrator/bin/garda.js profile current|list|use|create --target-root "."'));
-        assert.ok(result.includes('node bin/garda.js gate enter-task-mode --task-id "<task-id>"'));
+        assert.ok(result.includes('node garda-agent-orchestrator/bin/garda.js gate enter-task-mode --task-id "<task-id>"'));
         assert.ok(result.includes('--provider "GitHub Copilot"'));
         assert.ok(result.includes('--routed-to ".github/agents/orchestrator.md"'));
         assert.ok(result.includes('Required runtime identity: use `--provider "GitHub Copilot"`'));
-        assert.ok(result.includes('node bin/garda.js gate load-rule-pack --task-id "<task-id>" --stage "TASK_ENTRY"'));
+        assert.ok(result.includes('node garda-agent-orchestrator/bin/garda.js gate load-rule-pack --task-id "<task-id>" --stage "TASK_ENTRY"'));
         assert.ok(result.includes('node garda-agent-orchestrator/bin/garda.js gate enter-task-mode --task-id "<task-id>"'));
         assert.ok(result.includes('node garda-agent-orchestrator/bin/garda.js gate enter-task-mode --task-id "<task-id>" --entry-mode "EXPLICIT_TASK_EXECUTION" --requested-depth "<1|2|3>" --task-summary "<task summary>" --provider "GitHub Copilot" --repo-root "."'));
         assert.ok(result.includes('node garda-agent-orchestrator/bin/garda.js gate enter-task-mode --task-id "<task-id>" --entry-mode "EXPLICIT_TASK_EXECUTION" --requested-depth "<1|2|3>" --task-summary "<task summary>" --provider "GitHub Copilot" --routed-to ".github/agents/orchestrator.md" --repo-root "."'));
@@ -755,14 +774,13 @@ describe('buildProviderOrchestratorAgentContent', () => {
     it('includes exact copy-paste task-start snippets in compact provider bridges too', () => {
         const result = buildProviderOrchestratorAgentContent('Antigravity', 'AGENTS.md', '.antigravity/agents/orchestrator.md');
         assert.ok(result.includes('Copy-Paste Start Commands'));
-        assert.ok(result.includes('First/resume command (source checkout): `node bin/garda.js next-step "<task-id>" --repo-root "."`'));
-        assert.ok(result.includes('First/resume command (deployed workspace): `node garda-agent-orchestrator/bin/garda.js next-step "<task-id>" --repo-root "."`'));
-        assert.ok(result.includes('node bin/garda.js profile current|list|use|create --target-root "."'));
+        assert.equal(result.includes('node bin/garda.js'), false);
+        assert.ok(result.includes('First/resume command: `node garda-agent-orchestrator/bin/garda.js next-step "<task-id>" --repo-root "."`'));
         assert.ok(result.includes('node garda-agent-orchestrator/bin/garda.js profile current|list|use|create --target-root "."'));
         assert.ok(result.includes('--provider "Antigravity"'));
         assert.ok(result.includes('--routed-to ".antigravity/agents/orchestrator.md"'));
         assert.ok(result.includes('Required runtime identity: use `--provider "Antigravity"`'));
-        assert.ok(result.includes('node bin/garda.js gate load-rule-pack --task-id "<task-id>" --stage "TASK_ENTRY"'));
+        assert.ok(result.includes('node garda-agent-orchestrator/bin/garda.js gate load-rule-pack --task-id "<task-id>" --stage "TASK_ENTRY"'));
         assert.ok(result.includes('node garda-agent-orchestrator/bin/garda.js gate enter-task-mode --task-id "<task-id>" --entry-mode "EXPLICIT_TASK_EXECUTION" --requested-depth "<1|2|3>" --task-summary "<task summary>" --provider "Antigravity" --repo-root "."'));
         assert.ok(result.includes('node garda-agent-orchestrator/bin/garda.js gate enter-task-mode --task-id "<task-id>" --entry-mode "EXPLICIT_TASK_EXECUTION" --requested-depth "<1|2|3>" --task-summary "<task summary>" --provider "Antigravity" --routed-to ".antigravity/agents/orchestrator.md" --repo-root "."'));
         for (const ruleFileSnippet of TASK_ENTRY_RULE_FILE_SNIPPETS) {
@@ -781,6 +799,7 @@ describe('buildSharedStartTaskWorkflowContent', () => {
     it('builds a compact checklist that routes every surface to canonical orchestration gates', () => {
         const result = buildSharedStartTaskWorkflowContent('AGENTS.md');
         assert.ok(result.includes('# Start Task'));
+        assert.equal(/node bin\/garda\.js|self-hosted|source checkout/iu.test(result), false);
         assert.ok(result.includes('next-step "<task-id>"'));
         assert.ok(result.includes('Static gate order below is policy context'));
         assert.ok(result.includes('gate enter-task-mode'));
@@ -795,7 +814,6 @@ describe('buildSharedStartTaskWorkflowContent', () => {
         assert.ok(result.includes('Execute task <task-id> from TASK.md strictly through the orchestrator.'));
         assert.ok(result.includes('Use `next-step` as the navigator'));
         assert.ok(result.includes('launch a sub-agent using your internal tools'));
-        assert.ok(result.includes('node bin/garda.js profile current|list|use|create --target-root "."'));
         assert.ok(result.includes('node garda-agent-orchestrator/bin/garda.js profile current|list|use|create --target-root "."'));
         assert.ok(result.includes('start marker'));
         assert.ok(result.includes('Garda captures my mind'));
@@ -830,11 +848,11 @@ describe('buildSharedStartTaskWorkflowContent', () => {
     it('includes exact copy-paste task-start snippets for provider and routed task entry', () => {
         const result = buildSharedStartTaskWorkflowContent('AGENTS.md');
         assert.ok(result.includes('Copy-Paste Start Commands'));
-        assert.ok(result.includes('node bin/garda.js gate enter-task-mode --task-id "<task-id>"'));
+        assert.equal(result.includes('node bin/garda.js'), false);
+        assert.ok(result.includes('node garda-agent-orchestrator/bin/garda.js gate enter-task-mode --task-id "<task-id>"'));
         assert.ok(result.includes('--provider "<runtime-provider>"'));
         assert.ok(result.includes('--routed-to "<provider-bridge-or-entrypoint>"'));
         assert.ok(result.includes('Required runtime identity: use `--provider "<runtime-provider>"`'));
-        assert.ok(result.includes('node bin/garda.js gate load-rule-pack --task-id "<task-id>" --stage "TASK_ENTRY"'));
         assert.ok(result.includes('node garda-agent-orchestrator/bin/garda.js gate load-rule-pack --task-id "<task-id>" --stage "TASK_ENTRY"'));
         assert.ok(result.includes('node garda-agent-orchestrator/bin/garda.js gate enter-task-mode --task-id "<task-id>" --entry-mode "EXPLICIT_TASK_EXECUTION" --requested-depth "<1|2|3>" --task-summary "<task summary>" --provider "<runtime-provider>" --repo-root "."'));
         assert.ok(result.includes('node garda-agent-orchestrator/bin/garda.js gate enter-task-mode --task-id "<task-id>" --entry-mode "EXPLICIT_TASK_EXECUTION" --requested-depth "<1|2|3>" --task-summary "<task summary>" --provider "<runtime-provider>" --routed-to "<provider-bridge-or-entrypoint>" --repo-root "."'));
