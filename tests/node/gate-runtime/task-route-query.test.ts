@@ -1,3 +1,7 @@
+import { routeLatestReviewRestartIndex, routeFirstReviewRestartAfter, routeLaunchDiscoveryIndices,
+    routeLaunchInputPinIndices } from '../../../src/gate-runtime/timeline/task-route-query';
+import { isAuthenticatedReviewRestartBoundary } from '../../../src/gates/review/review-restart-boundary';
+import { readTaskTimelineJsonlEntries } from '../../../src/gate-runtime/timeline/task-events-helpers';
 import { withNextStepMeasurement, type NextStepMeasurement } from '../../../src/core/next-step-measurement';
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
@@ -185,4 +189,38 @@ test('native preflight readers preserve decisions and append order without consu
         }), value => { measured = value; });
         assert.equal(measured!.work['visit:route_query_witness_comparison'] || 0, 0);
     }
+});
+
+test('native restart and pin indexes keep first-boundary order, duplicates and preserved lanes', t => {
+    const f = fixture(t);
+    const details = { task_id: f.taskId, review_type: 'code', prepared_launch_event_sha256: 'a'.repeat(64) };
+    f.append('REVIEWER_LAUNCH_PREPARED');
+    f.append('REVIEWER_LAUNCH_INPUT_PINNED', details);
+    const restart = (lanes: string[], type = 'REVIEW_CYCLE_RESTARTED') => appendMandatoryTaskEvent(f.bundle,
+        f.taskId, type, 'PASS', 'Restart selector test.', { task_id: f.taskId, event_type: type,
+            status: 'PASSED', invalidated_review_types: lanes }, { actor: 'orchestrator' });
+    restart(['test']);
+    f.append('REVIEWER_LAUNCH_INPUT_PINNED', details);
+    restart(['code']);
+    f.append('REVIEWER_LAUNCH_INPUT_PINNED', details);
+    f.append('REVIEWER_LAUNCH_PREPARED');
+    restart([], 'COHERENT_CYCLE_RESTARTED');
+    f.append('REVIEWER_LAUNCH_PREPARED');
+    f.observe(() => {
+        assert.equal(inspectTaskEventFile(f.timeline, f.taskId).status, 'PASS');
+        const query = readTaskTimelineRouteQuery(f.timeline, f.taskId); assert.ok(query);
+        const entries = readTaskTimelineJsonlEntries(f.timeline);
+        for (const lane of ['code', 'test', 'unseen']) {
+            const nativeBoundaries = entries.flatMap((entry, ordinal) => entry.record
+                && isAuthenticatedReviewRestartBoundary(entry.record, f.taskId, lane) ? [ordinal] : []);
+            assert.equal(routeLatestReviewRestartIndex(query, f.taskId, lane), nativeBoundaries.at(-1) ?? -1);
+            for (const after of [-1, 0, 2, 4, 7, 8]) assert.equal(
+                routeFirstReviewRestartAfter(query, f.taskId, lane, after),
+                nativeBoundaries.find(ordinal => ordinal > after) ?? -1);
+        }
+        assert.deepEqual([...routeLaunchInputPinIndices(query, f.taskId, 'code', 'a'.repeat(64), 0)], [1, 3]);
+        assert.deepEqual([...routeLaunchInputPinIndices(query, f.taskId, 'code', 'a'.repeat(64), 4)], [5]);
+        assert.deepEqual([...routeLaunchDiscoveryIndices(query, 4)], [8, 6]);
+        assert.deepEqual([...routeLaunchDiscoveryIndices(query, -1)], [8, 6, 0]);
+    });
 });

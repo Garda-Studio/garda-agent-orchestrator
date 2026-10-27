@@ -1,3 +1,7 @@
+import { withInvocationReadObservation } from '../../../../src/core/invocation-read-observation';
+import { withNextStepMeasurement, type NextStepMeasurement } from '../../../../src/core/next-step-measurement';
+import { withTaskTimelineFileReadSnapshot } from '../../../../src/gate-runtime/timeline/task-timeline-read-snapshot';
+import { inspectTaskEventFile, readTaskTimelineRouteQuery } from '../../../../src/gate-runtime/timeline/task-events-integrity';
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
@@ -66,7 +70,8 @@ function appendEvent(
     repoRoot: string,
     taskId: string,
     eventType: string,
-    details: Record<string, unknown> = {}
+    details: Record<string, unknown> = {},
+    envelope: { actor?: string; outcome?: string } = {}
 ): { task_sequence: number; prev_event_sha256: string | null; event_sha256: string } {
     const timelinePath = path.join(eventsRoot(repoRoot), `${taskId}.jsonl`);
     const existingLines = fs.existsSync(timelinePath)
@@ -87,6 +92,7 @@ function appendEvent(
         event_type: eventType,
         outcome: 'PASS',
         actor: 'gate',
+        ...envelope,
         message: eventType,
         timestamp_utc: '2026-06-01T00:00:00.000Z',
         details,
@@ -873,4 +879,161 @@ describe('next-step reviewer launch evidence helpers', () => {
             /^ProviderLaunchTarget: Codex; /
         );
     });
+});
+
+function observeLaunch<T>(repoRoot: string, read: () => T): T {
+    return withInvocationReadObservation(() => withTaskTimelineFileReadSnapshot(
+        path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`), read));
+}
+function appendLaunchRestart(repoRoot: string, lanes: unknown[] = [REVIEW_TYPE],
+    type = 'REVIEW_CYCLE_RESTARTED', details: Record<string, unknown> = {},
+    envelope: { actor?: string; outcome?: string } = {}): void {
+    appendEvent(repoRoot, TASK_ID, type, { task_id: TASK_ID, event_type: type,
+        status: 'PASSED', invalidated_review_types: lanes, ...details }, { actor: 'orchestrator', ...envelope });
+}
+
+describe('native verified launch selectors', () => {
+    it('performs identical consumer work at 2 and 16 preserved-lane cycles without eager stale discovery', () => {
+        const counts: Record<string, number>[] = [];
+        for (const cycles of [2, 16]) {
+            const repoRoot = makeTempRepo();
+            const contextPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-${REVIEW_TYPE}-review-context.json`);
+            for (let cycle = 0; cycle < cycles; cycle++) {
+                writeJson(contextPath, { task_id: TASK_ID, review_type: REVIEW_TYPE, cycle });
+                const launch = seedPreparedLaunchArtifact(repoRoot, contextPath);
+                overwriteLaunchedArtifact(repoRoot, contextPath, launch.launchArtifactPath,
+                    launch.preparedLaunchEventSha256, launch.routingEventSha256);
+                // Code evidence is deliberately preserved. A global reset shortcut would
+                // incorrectly discard the current launch and break the parity assertion.
+                appendLaunchRestart(repoRoot, ['test']);
+            }
+            const state = makeReviewState(contextPath);
+            const read = () => ({ evidence: getCurrentReviewerLaunchArtifactEvidenceForInvocation(
+                repoRoot, eventsRoot(repoRoot), TASK_ID, state),
+                routing: timelineHasDelegatedReviewRoutingAfterCompile(eventsRoot(repoRoot),
+                    TASK_ID, REVIEW_TYPE, REVIEWER_IDENTITY) });
+            const native = read();
+            assert.equal(native.evidence.state, 'launched');
+            assert.equal(native.routing, true);
+            let measurement: NextStepMeasurement | undefined;
+            withNextStepMeasurement(() => observeLaunch(repoRoot, () => {
+                const timeline = path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`);
+                assert.equal(inspectTaskEventFile(timeline, TASK_ID).status, 'PASS');
+                assert.ok(readTaskTimelineRouteQuery(timeline, TASK_ID), 'must use the real verifier index');
+                assert.deepEqual(read(), native);
+            }), value => { measurement = value; });
+            const work = measurement!.work;
+            assert.equal(work['visit:route_query_native_launch_scan'] || 0, 0);
+            assert.equal(work['visit:route_query_launch_discovery_candidate'] || 0, 0);
+            assert.ok(work['visit:route_query_input_pin_candidate'] > 0);
+            assert.ok(work['visit:route_query_telemetry_candidate'] > 0);
+            // Full canonical verification remains history-sized and is deliberately outside
+            // this consumer budget. Include every launch selector/field-processing counter.
+            counts.push(Object.fromEntries(Object.entries(work).filter(([name]) =>
+                name.startsWith('visit:route_query_') || name.startsWith('visit:next-step-reviewer-launch-'))));
+        }
+        assert.deepEqual(counts[1], counts[0]);
+    });
+
+    for (const scenario of [
+        { name: 'invalidated code lane', lanes: ['code'], blocked: true },
+        { name: 'preserved code lane', lanes: ['test'], blocked: false },
+        { name: 'coherent restart invalidates every lane', type: 'COHERENT_CYCLE_RESTARTED', lanes: [], blocked: true },
+        { name: 'untrusted actor', envelope: { actor: 'gate' }, blocked: false },
+        { name: 'non-passing outcome', envelope: { outcome: 'FAIL' }, blocked: false },
+        { name: 'foreign detail task', details: { task_id: 'T-foreign' }, blocked: false },
+        { name: 'wrong detail event', details: { event_type: 'COHERENT_CYCLE_RESTARTED' }, blocked: false },
+        { name: 'wrong detail status', details: { status: 'FAILED' }, blocked: false },
+        { name: 'lane case remains significant', lanes: ['CODE'], blocked: false },
+        { name: 'opaque lane coercion uses native fallback', lanes: [{ toString: null }], blocked: false, fallback: true }
+    ]) it(`preserves restart authentication: ${scenario.name}`, () => {
+        const repoRoot = makeTempRepo();
+        const contextPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-${REVIEW_TYPE}-review-context.json`);
+        writeJson(contextPath, { task_id: TASK_ID, review_type: REVIEW_TYPE });
+        seedPreparedLaunchArtifact(repoRoot, contextPath);
+        appendLaunchRestart(repoRoot, scenario.lanes, scenario.type, scenario.details, scenario.envelope);
+        const read = () => ({ evidence: getCurrentReviewerLaunchArtifactEvidenceForInvocation(repoRoot,
+            eventsRoot(repoRoot), TASK_ID, makeReviewState(contextPath)),
+            routing: timelineHasDelegatedReviewRoutingAfterCompile(eventsRoot(repoRoot), TASK_ID,
+                REVIEW_TYPE, REVIEWER_IDENTITY) });
+        const native = read();
+        assert.equal(native.evidence.state, scenario.blocked ? 'missing_or_invalid' : 'prepared');
+        assert.equal(native.routing, !scenario.blocked);
+        observeLaunch(repoRoot, () => {
+            const timeline = path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`);
+            assert.equal(inspectTaskEventFile(timeline, TASK_ID).status, 'PASS');
+            assert.equal(readTaskTimelineRouteQuery(timeline, TASK_ID) === null, scenario.fallback === true);
+            assert.deepEqual(read(), native);
+        });
+    });
+
+    it('retains legacy-prefix fallback, current artifact authentication and restart cancellation', () => {
+        for (const legacy of [false, true]) {
+            const repoRoot = makeTempRepo();
+            const timeline = path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`);
+            if (legacy) fs.writeFileSync(timeline, JSON.stringify({ task_id: TASK_ID, event_type: 'LEGACY_NOTE' }) + '\n');
+            const contextPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-${REVIEW_TYPE}-review-context.json`);
+            writeJson(contextPath, { task_id: TASK_ID, review_type: REVIEW_TYPE });
+            seedPreparedLaunchArtifact(repoRoot, contextPath);
+            const read = () => getCurrentReviewerLaunchArtifactEvidenceForInvocation(repoRoot,
+                eventsRoot(repoRoot), TASK_ID, makeReviewState(contextPath));
+            observeLaunch(repoRoot, () => {
+                assert.equal(inspectTaskEventFile(timeline, TASK_ID).status, legacy ? 'PASS_WITH_LEGACY_PREFIX' : 'PASS');
+                assert.equal(readTaskTimelineRouteQuery(timeline, TASK_ID) === null, legacy);
+                assert.equal(read().state, 'prepared');
+            });
+            const inputPath = reviewScratchPath(repoRoot, TASK_ID, REVIEW_TYPE, 'reviewer-launch-input.json');
+            const original = fs.readFileSync(inputPath);
+            fs.appendFileSync(inputPath, ' ');
+            assert.equal(observeLaunch(repoRoot, read).state, 'missing_or_invalid');
+            fs.writeFileSync(inputPath, original);
+            assert.equal(observeLaunch(repoRoot, read).state, 'prepared');
+            appendLaunchRestart(repoRoot);
+            assert.equal(observeLaunch(repoRoot, read).state, 'missing_or_invalid');
+        }
+    });
+
+    it('rejects malformed and integrity-tampered current timelines instead of serving an index', () => {
+        for (const malformed of [false, true]) {
+            const repoRoot = makeTempRepo();
+            const contextPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-${REVIEW_TYPE}-review-context.json`);
+            writeJson(contextPath, { task_id: TASK_ID, review_type: REVIEW_TYPE });
+            seedPreparedLaunchArtifact(repoRoot, contextPath);
+            const timeline = path.join(eventsRoot(repoRoot), `${TASK_ID}.jsonl`);
+            if (malformed) fs.appendFileSync(timeline, '{broken json\n');
+            else fs.writeFileSync(timeline, fs.readFileSync(timeline, 'utf8').replace('COMPILE_GATE_PASSED', 'COMPILE_GATE_FAILED'));
+            observeLaunch(repoRoot, () => {
+                assert.equal(inspectTaskEventFile(timeline, TASK_ID).status, 'FAILED');
+                assert.equal(readTaskTimelineRouteQuery(timeline, TASK_ID), null);
+                assert.equal(getCurrentReviewerLaunchArtifactEvidenceForInvocation(repoRoot,
+                    eventsRoot(repoRoot), TASK_ID, makeReviewState(contextPath)).state, 'missing_or_invalid');
+            });
+        }
+    });
+});
+
+it('discovers the same stale orphan after the current routing candidate has no launch', () => {
+    const repoRoot = makeTempRepo();
+    const contextPath = path.join(reviewsRoot(repoRoot), `${TASK_ID}-${REVIEW_TYPE}-review-context.json`);
+    writeJson(contextPath, { task_id: TASK_ID, review_type: REVIEW_TYPE });
+    const launch = seedPreparedLaunchArtifact(repoRoot, contextPath);
+    const control = JSON.parse(fs.readFileSync(launch.launchArtifactPath, 'utf8')) as Record<string, unknown>;
+    writeJson(launch.launchArtifactPath, { ...control,
+        review_output_path: reviewScratchPath(repoRoot, TASK_ID, REVIEW_TYPE, 'absent-output.md') });
+    overwriteLaunchedArtifact(repoRoot, contextPath, launch.launchArtifactPath,
+        launch.preparedLaunchEventSha256, launch.routingEventSha256);
+    // A newer compile/routing leaves the old completed launch relevant for orphan recovery.
+    seedCompileAndRouting(repoRoot, fileSha256(contextPath));
+    const read = () => getCurrentReviewerLaunchArtifactEvidenceForInvocation(repoRoot,
+        eventsRoot(repoRoot), TASK_ID, makeReviewState(contextPath));
+    const native = read();
+    assert.equal(native.state, 'orphaned');
+    assert.equal(native.orphanedReason, 'completed_launch_missing_review_output');
+    let measurement: NextStepMeasurement | undefined;
+    withNextStepMeasurement(() => observeLaunch(repoRoot, () => assert.deepEqual(read(), native)),
+        value => { measurement = value; });
+    assert.ok(measurement!.work['visit:route_query_launch_discovery_candidate'] > 0);
+    // The historical input remains a current dependency of orphan recovery.
+    fs.appendFileSync(reviewScratchPath(repoRoot, TASK_ID, REVIEW_TYPE, 'reviewer-launch-input.json'), ' ');
+    assert.equal(observeLaunch(repoRoot, read).state, 'missing_or_invalid');
 });

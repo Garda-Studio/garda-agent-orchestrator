@@ -1,3 +1,4 @@
+import { isAuthenticatedReviewRestartBoundary } from '../review/review-restart-boundary';
 import { isInvocationReadObservationActive } from '../../core/invocation-read-observation';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import { cloneJson } from '../../core/immutable-json';
@@ -15,6 +16,8 @@ interface State {
     reused: Map<string, Row>; routing: Map<string, Row>; attestations: Map<string, Row[]>; launchPrepared: Map<string, Row[]>; telemetry: Map<string, Row[]>; artifactBindings: Map<string, Row[]>;
     preflight: Map<string, Row>; prefix: Record<string, Row | undefined>; first: Map<string, Row>;
     split: Row[]; last: Row | null;
+    coherentRestarts: Map<string, Row[]>; laneRestarts: Map<string, Row[]>;
+    allLaunchPrepared: Row[]; launchInputPins: Map<string, Row[]>;
     witnesses: Map<Row, WitnessLink>; witnessHead: WitnessLink | null; witnessTail: WitnessLink | null;
 }
 const states = new WeakMap<TaskRouteQuery, State>();
@@ -63,6 +66,7 @@ export function beginRouteVerifiedPass() {
     const s: State = { count: 0, bytes: 0, exact: new Map(), sha: new Map(), latest: new Map(),
         lanes: new Map(), prepared: new Map(), reused: new Map(), routing: new Map(), attestations: new Map(), launchPrepared: new Map(), telemetry: new Map(), artifactBindings: new Map(),
         preflight: new Map(), prefix: {}, first: new Map(), split: [], last: null,
+        coherentRestarts: new Map(), laneRestarts: new Map(), allLaunchPrepared: [], launchInputPins: new Map(),
         witnesses: new Map(), witnessHead: null, witnessTail: null };
     let unavailable = false;
     let finished = false;
@@ -107,6 +111,26 @@ export function beginRouteVerifiedPass() {
                 firstString(details.routing_event_sha256, details.routingEventSha256).toLowerCase());
             const artifactRows = s.artifactBindings.get(artifactKey) ?? [];
             artifactRows.push(row); s.artifactBindings.set(artifactKey, artifactRows);
+            // The very same predicate as the native consumer owns actor, outcome, detail
+            // binding and lane preservation. A coercion failure disables this optional query.
+            if (type === 'COHERENT_CYCLE_RESTARTED' || type === 'REVIEW_CYCLE_RESTARTED') {
+                const task = text(event.task_id);
+                if (type === 'COHERENT_CYCLE_RESTARTED') {
+                    if (isAuthenticatedReviewRestartBoundary(event, task, '')) appendRow(s.coherentRestarts, task, row);
+                } else if (Array.isArray(details.invalidated_review_types)) {
+                    for (const lane of new Set(details.invalidated_review_types.map(text))) {
+                        if (isAuthenticatedReviewRestartBoundary(event, task, lane)) appendRow(s.laneRestarts, key(task, lane), row);
+                    }
+                }
+            }
+            // Discovery deliberately uses first-string aliases and no lane/mode filter,
+            // unlike the stricter prepared-event validator below.
+            if (type === 'REVIEWER_LAUNCH_PREPARED') s.allLaunchPrepared.push(row);
+            if (type === 'REVIEWER_LAUNCH_INPUT_PINNED') {
+                appendRow(s.launchInputPins, key(firstString(details.task_id, details.taskId),
+                    firstString(details.review_type, details.reviewType),
+                    firstString(details.prepared_launch_event_sha256, details.preparedLaunchEventSha256).toLowerCase()), row);
+            }
             if (type === 'REVIEWER_LAUNCH_PREPARED' && text(details.reviewer_execution_mode) === 'delegated_subagent') {
                 const k = key(text(details.review_type), lower(details.review_context_sha256 || details.reviewContextSha256),
                     lower(details.routing_event_sha256));
@@ -267,5 +291,51 @@ export function* routeArtifactBindingIndices(query: TaskRouteQuery, task: string
     const rows = state(query).artifactBindings.get(key(task, lane, contextSha, routingSha)) ?? [];
     for (let index = rows.length - 1; index >= 0 && rows[index].ordinal > after; index--) {
         countNextStepWork('visit:route_query_artifact_binding_candidate'); yield rows[index].ordinal;
+    }
+}
+
+function appendRow(rowsByKey: Map<string, Row[]>, name: string, row: Row): void {
+    const rows = rowsByKey.get(name) ?? []; rows.push(row); rowsByKey.set(name, rows);
+}
+function lastOrdinal(rows: readonly Row[] | undefined): number {
+    return rows?.length ? rows[rows.length - 1].ordinal : -1;
+}
+export function routeLatestReviewRestartIndex(query: TaskRouteQuery, task: string, lane: string): number {
+    countNextStepWork('visit:route_query_restart_lookup');
+    const s = state(query);
+    return Math.max(lastOrdinal(s.coherentRestarts.get(task)), lastOrdinal(s.laneRestarts.get(key(task, lane))));
+}
+function firstOrdinalAfter(rows: readonly Row[] | undefined, after: number): number {
+    // The current-cycle case is constant work even with many preserved-lane restarts.
+    if (!rows?.length || rows[rows.length - 1].ordinal <= after) return -1;
+    let lo = 0, hi = rows.length;
+    while (lo < hi) {
+        countNextStepWork('visit:route_query_restart_search');
+        const mid = lo + Math.floor((hi - lo) / 2);
+        if (rows[mid].ordinal <= after) lo = mid + 1; else hi = mid;
+    }
+    return rows[lo].ordinal;
+}
+export function routeFirstReviewRestartAfter(query: TaskRouteQuery, task: string, lane: string, after: number): number {
+    countNextStepWork('visit:route_query_restart_lookup');
+    const s = state(query);
+    const coherent = firstOrdinalAfter(s.coherentRestarts.get(task), after);
+    const review = firstOrdinalAfter(s.laneRestarts.get(key(task, lane)), after);
+    return coherent < 0 ? review : review < 0 ? coherent : Math.min(coherent, review);
+}
+export function* routeLaunchDiscoveryIndices(query: TaskRouteQuery, after: number): Iterable<number> {
+    const rows = state(query).allLaunchPrepared;
+    for (let index = rows.length - 1; index >= 0 && rows[index].ordinal > after; index--) {
+        countNextStepWork('visit:route_query_launch_discovery_candidate'); yield rows[index].ordinal;
+    }
+}
+export function* routeLaunchInputPinIndices(query: TaskRouteQuery, task: string, lane: string,
+    preparedSha: string, after: number): Iterable<number> {
+    const boundary = routeFirstReviewRestartAfter(query, task, lane, after);
+    const rows = state(query).launchInputPins.get(key(task, lane, preparedSha)) ?? [];
+    for (const row of rows) {
+        countNextStepWork('visit:route_query_input_pin_candidate');
+        if (boundary >= 0 && row.ordinal >= boundary) break;
+        if (row.ordinal > after) yield row.ordinal;
     }
 }

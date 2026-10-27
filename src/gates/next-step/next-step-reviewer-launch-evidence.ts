@@ -1,5 +1,5 @@
 import { readTaskTimelineRouteQuery } from '../../gate-runtime/timeline/task-events-integrity';
-import { routeInvocationCandidates, bindRouteEntryView, routeQueryForEntries, routeEventIndexBySha, routePreparedLaunchIndices, routeArtifactBindingIndices } from '../../gate-runtime/timeline/task-route-query';
+import { routeInvocationCandidates, bindRouteEntryView, routeQueryForEntries, routeEventIndexBySha, routePreparedLaunchIndices, routeArtifactBindingIndices, routeLaunchDiscoveryIndices, routeLaunchInputPinIndices } from '../../gate-runtime/timeline/task-route-query';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 
@@ -43,6 +43,7 @@ import {
     fileExists,
     getArtifactStringField,
     getLatestTaskSequenceForEventTypes,
+    getLatestReviewerRestartBoundaryIndex,
     isPlainRecord,
     stringSha256
 } from './next-step-reviewer-launch-evidence-shared';
@@ -124,8 +125,11 @@ function findPreparedReviewerLaunchInputPin(options: {
     if (!preparedInputArtifactPath) {
         return null;
     }
-    for (let index = options.preparedEventIndex + 1; index < options.lines.length; index += 1) {
-        countNextStepWork('visit:route_query_native_launch_scan');
+    const route = routeQueryForEntries(options.lines);
+    const indices = route ? routeLaunchInputPinIndices(route, options.taskId, options.reviewType,
+        options.preparedLaunchEventSha256, options.preparedEventIndex)
+        : nativeForwardEntryIndices(options.lines, options.preparedEventIndex);
+    for (const index of indices) {
         try {
             const event = options.lines[index].record;
             if (!event) {
@@ -439,21 +443,8 @@ export function timelineHasDelegatedReviewRoutingAfterCompile(
     const launchQuery = readTaskTimelineRouteQuery(timelinePath, taskId);
     if (launchQuery) bindRouteEntryView(launchQuery, lines);
         const routingEventIndex = findReviewerRoutingEventIndexBySha(lines, reviewType, routingEventSha256);
-        for (let index = lines.length - 1; index > routingEventIndex; index -= 1) {
-            countNextStepWork('visit:route_query_native_launch_scan');
-            try {
-                const event = lines[index].record;
-                if (!event) {
-                    continue;
-                }
-                if (isAuthenticatedReviewRestartBoundary(event, taskId, reviewType)) {
-                    return false;
-                }
-            } catch {
-                // Timeline integrity is verified above.
-            }
-        }
-        return routingEventIndex >= 0;
+        return routingEventIndex >= 0
+            && getLatestReviewerRestartBoundaryIndex(lines, taskId, reviewType) <= routingEventIndex;
     });
 }
 
@@ -510,91 +501,74 @@ function getCurrentReviewerLaunchArtifactEvidenceForInvocationFromSnapshot(
     const lines = readTaskTimelineJsonlEntries(timelinePath);
     const launchQuery = readTaskTimelineRouteQuery(timelinePath, taskId);
     if (launchQuery) bindRouteEntryView(launchQuery, lines);
-    let latestRestartBoundaryIndex = -1;
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-        countNextStepWork('visit:route_query_native_launch_scan');
-        try {
-            const event = lines[index].record;
-            if (!event) {
-                continue;
-            }
-            if (isAuthenticatedReviewRestartBoundary(event, taskId, state.reviewType)) {
-                latestRestartBoundaryIndex = index;
-                break;
-            }
-        } catch {
-            // Timeline integrity is verified above.
-        }
-    }
+    const latestRestartBoundaryIndex = getLatestReviewerRestartBoundaryIndex(lines, taskId, state.reviewType);
     const currentRoutingEventIndex = currentRoutingEventSha256
         ? findReviewerRoutingEventIndexBySha(lines, state.reviewType, currentRoutingEventSha256)
         : -1;
     const currentRoutingIsAfterRestartBoundary = currentRoutingEventIndex > latestRestartBoundaryIndex;
-    const invocationCandidates: Array<{
-        reviewContextSha256: string;
-        routingEventSha256: string;
-        stale: boolean;
-    }> = currentRoutingEventSha256 && currentRoutingIsAfterRestartBoundary
-        ? reviewContextSha256Candidates.map((reviewContextSha256) => ({
-            reviewContextSha256,
-            routingEventSha256: currentRoutingEventSha256,
-            stale: false
-        }))
-        : [];
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-        countNextStepWork('visit:route_query_native_launch_scan');
-        try {
-            const event = lines[index].record;
-            if (!event) {
-                continue;
+    // Current evidence is tried before discovering stale attempts. The old eager walk
+    // computed all stale tuples even when the first current tuple returned successfully.
+    function* invocationCandidates(): Iterable<{
+        reviewContextSha256: string; routingEventSha256: string; stale: boolean;
+    }> {
+        const seen = new Set<string>();
+        const candidateKey = (context: string, routing: string) => JSON.stringify([context, routing]);
+        if (currentRoutingEventSha256 && currentRoutingIsAfterRestartBoundary) {
+            for (const reviewContextSha256 of reviewContextSha256Candidates) {
+                seen.add(candidateKey(reviewContextSha256, currentRoutingEventSha256));
+                yield { reviewContextSha256, routingEventSha256: currentRoutingEventSha256, stale: false };
             }
-            if (isAuthenticatedReviewRestartBoundary(event, taskId, state.reviewType)) {
-                break;
+        }
+        const discoveryIndices = launchQuery ? routeLaunchDiscoveryIndices(launchQuery, latestRestartBoundaryIndex)
+            : nativeReverseEntryIndices(lines);
+        for (const index of discoveryIndices) {
+            try {
+                const event = lines[index].record;
+                if (!event) {
+                    continue;
+                }
+                if (isAuthenticatedReviewRestartBoundary(event, taskId, state.reviewType)) {
+                    break;
+                }
+                if (String(event.event_type || '').trim() !== 'REVIEWER_LAUNCH_PREPARED') {
+                    continue;
+                }
+                const details = isPlainRecord(event.details) ? event.details : {};
+                const reviewContextSha256 = getArtifactStringField(
+                    details,
+                    'review_context_sha256',
+                    'reviewContextSha256'
+                ).toLowerCase();
+                const routingEventSha256 = getArtifactStringField(
+                    details,
+                    'routing_event_sha256',
+                    'routingEventSha256'
+                ).toLowerCase();
+                const routingEventIndex = findReviewerRoutingEventIndexBySha(
+                    lines,
+                    state.reviewType,
+                    routingEventSha256
+                );
+                if (
+                    !/^[0-9a-f]{64}$/.test(reviewContextSha256)
+                    || !/^[0-9a-f]{64}$/.test(routingEventSha256)
+                    || routingEventIndex <= latestRestartBoundaryIndex
+                    || (
+                        reviewContextSha256Candidates.includes(reviewContextSha256)
+                        && routingEventSha256 === currentRoutingEventSha256
+                    )
+                    || seen.has(candidateKey(reviewContextSha256, routingEventSha256))
+                ) {
+                    continue;
+                }
+                seen.add(candidateKey(reviewContextSha256, routingEventSha256));
+                yield { reviewContextSha256, routingEventSha256, stale: true };
+            } catch {
+                // Timeline integrity is verified above.
             }
-            if (String(event.event_type || '').trim() !== 'REVIEWER_LAUNCH_PREPARED') {
-                continue;
-            }
-            const details = isPlainRecord(event.details) ? event.details : {};
-            const reviewContextSha256 = getArtifactStringField(
-                details,
-                'review_context_sha256',
-                'reviewContextSha256'
-            ).toLowerCase();
-            const routingEventSha256 = getArtifactStringField(
-                details,
-                'routing_event_sha256',
-                'routingEventSha256'
-            ).toLowerCase();
-            const routingEventIndex = findReviewerRoutingEventIndexBySha(
-                lines,
-                state.reviewType,
-                routingEventSha256
-            );
-            if (
-                !/^[0-9a-f]{64}$/.test(reviewContextSha256)
-                || !/^[0-9a-f]{64}$/.test(routingEventSha256)
-                || routingEventIndex <= latestRestartBoundaryIndex
-                || (
-                    reviewContextSha256Candidates.includes(reviewContextSha256)
-                    && routingEventSha256 === currentRoutingEventSha256
-                )
-                || invocationCandidates.some((candidate) => (
-                    candidate.reviewContextSha256 === reviewContextSha256
-                    && candidate.routingEventSha256 === routingEventSha256
-                ))
-            ) {
-                continue;
-            }
-            invocationCandidates.push({
-                reviewContextSha256,
-                routingEventSha256,
-                stale: true
-            });
-        } catch {
-            // Timeline integrity is verified above.
         }
     }
-    for (const invocationCandidate of invocationCandidates) {
+    for (const invocationCandidate of invocationCandidates()) {
         const { reviewContextSha256, routingEventSha256 } = invocationCandidate;
     const preparedIndices = launchQuery
         ? routePreparedLaunchIndices(launchQuery, state.reviewType, reviewContextSha256, routingEventSha256)
@@ -1417,5 +1391,11 @@ export function buildProviderNativeReviewerLaunchTargetSummary(taskMode: Record<
 function* nativeReverseEntryIndices(lines: readonly TaskTimelineJsonlEntry[]): Iterable<number> {
     for (let index = lines.length - 1; index >= 0; index--) {
         countNextStepWork('visit:route_query_native_prepared_fallback'); yield index;
+    }
+}
+
+function* nativeForwardEntryIndices(lines: readonly TaskTimelineJsonlEntry[], after: number): Iterable<number> {
+    for (let index = after + 1; index < lines.length; index++) {
+        countNextStepWork('visit:route_query_native_launch_scan'); yield index;
     }
 }

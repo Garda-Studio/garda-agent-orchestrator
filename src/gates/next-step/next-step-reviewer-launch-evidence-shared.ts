@@ -1,10 +1,11 @@
+import { isAuthenticatedReviewRestartBoundary } from '../review/review-restart-boundary';
 import { readTaskTimelineRouteQuery } from '../../gate-runtime/timeline/task-events-integrity';
-import { routeLatestSequence } from '../../gate-runtime/timeline/task-route-query';
+import { routeLatestSequence, routeQueryForEntries, routeLatestReviewRestartIndex } from '../../gate-runtime/timeline/task-route-query';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isPlainRecord } from '../../core/records';
-import { readTaskTimelineJsonlEntries } from '../../gate-runtime/timeline/task-events-helpers';
+import { readTaskTimelineJsonlEntries, type TaskTimelineJsonlEntry } from '../../gate-runtime/timeline/task-events-helpers';
 import { taskTimelineAwareFileExists } from '../../gate-runtime/timeline/task-timeline-read-snapshot';
 import { withNextStepReviewEvidenceSnapshot } from './next-step-review-timeline-evidence';
 export { isPlainRecord };
@@ -79,4 +80,19 @@ export function getEventTaskSequence(event: Record<string, unknown>): number | n
         ? integrity.task_sequence
         : Number(integrity?.task_sequence);
     return Number.isInteger(sequence) && sequence > 0 ? sequence : null;
+}
+
+/** Native fallback remains available for legacy prefixes and failed optional indexes. */
+export function getLatestReviewerRestartBoundaryIndex(lines: readonly TaskTimelineJsonlEntry[],
+    taskId: string, reviewType: string): number {
+    const route = routeQueryForEntries(lines);
+    if (route) return routeLatestReviewRestartIndex(route, taskId, reviewType);
+    for (let index = lines.length - 1; index >= 0; index--) {
+        countNextStepWork('visit:route_query_native_launch_scan');
+        try {
+            const event = lines[index].record;
+            if (event && isAuthenticatedReviewRestartBoundary(event, taskId, reviewType)) return index;
+        } catch { /* Preserve the native malformed-event fallback. */ }
+    }
+    return -1;
 }
