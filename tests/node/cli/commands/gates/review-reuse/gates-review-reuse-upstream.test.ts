@@ -37,7 +37,6 @@ import {
     seedTaskQueue,
     writeCompilePassEvidence,
     writePreflight,
-    writeReceiptBackedReviewArtifact,
     runGit,
     getReviewTreeStateSha256FromFixtureContext,
     updateLatestHistoricalReviewRecordedDetails
