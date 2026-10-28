@@ -92,14 +92,18 @@ test('next-step benchmark validates inputs and reports stable process timings', 
     assert.equal(fs.readFileSync(counterPath, 'utf8'), '2');
 });
 
-test('next-step benchmark accepts the real CLI output contract', { timeout: 30_000 }, (context) => {
+// This contract checks six real CLI processes, not a latency budget; hosted Windows coverage adds startup work.
+const realCliContractTimeoutMs = process.platform === 'win32' ? 120_000 : 30_000;
+
+test('next-step benchmark accepts the real CLI output contract', { timeout: realCliContractTimeoutMs }, (context) => {
     const repoRoot = getRepoRoot();
     const fixture = createGateFixture();
     context.after(() => fixture.cleanup());
     const run = spawnSync(process.execPath, [
         path.join(repoRoot, 'scripts', 'benchmark-next-step.cjs'),
         'T-BENCH-UNDECLARED', fixture.repoRoot, '6'
-    ], { cwd: repoRoot, encoding: 'utf8', timeout: 25_000 });
+    ], { cwd: repoRoot, encoding: 'utf8', timeout: realCliContractTimeoutMs - 5_000 });
+    assert.ifError(run.error);
     assert.equal(run.status, 0, run.stderr);
     const report = JSON.parse(run.stdout) as {
         task_id: string;
